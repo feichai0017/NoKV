@@ -7,11 +7,10 @@ import (
 	"cloud_distributed_storage/Backend/mq"
 	dbcli "cloud_distributed_storage/Backend/service/dbproxy/client"
 	"cloud_distributed_storage/Backend/service/dbproxy/orm"
-	"cloud_distributed_storage/Backend/store/ceph"
+	"cloud_distributed_storage/Backend/store/minio"
 	"cloud_distributed_storage/Backend/store/s3"
 	"cloud_distributed_storage/Backend/util"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
 	"io"
 	"io/ioutil"
 	"log"
@@ -19,6 +18,8 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // UploadHandler: handle file upload
@@ -102,8 +103,8 @@ func UploadHandler(c *gin.Context) {
 		// save file into ceph
 
 		data, _ := ioutil.ReadAll(newFile)
-		cephPath := cfg.CephRootDir + fileMeta.FileSha1
-		_ = ceph.PutObject("userfile", cephPath, data)
+		cephPath := cfg.MinioRootDir + fileMeta.FileSha1
+		_ = minio.PutObject("filestore", cephPath, data, "application/octet-stream")
 		fileMeta.Location = cephPath
 		if err != nil {
 			c.JSON(http.StatusOK, util.NewRespMsg(-1, "Failed to save data into Ceph", nil))

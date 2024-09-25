@@ -4,7 +4,6 @@ import (
 	rPool "cloud_distributed_storage/Backend/cache/redis"
 	"cloud_distributed_storage/Backend/common"
 	cfg "cloud_distributed_storage/Backend/config"
-	dblayer "cloud_distributed_storage/Backend/database"
 	"cloud_distributed_storage/Backend/service/account/proto"
 	dbcli "cloud_distributed_storage/Backend/service/dbproxy/client"
 	"cloud_distributed_storage/Backend/util"
@@ -112,8 +111,8 @@ func (u *User) DeleteAccount(ctx context.Context, req *proto.ReqDeleteAccount, r
 	password := req.Password
 
 	encPassword := util.Sha1([]byte(password + cfg.Pwd_salt))
-	pwdChecked := dblayer.UserSignIn(username, encPassword)
-	if !pwdChecked {
+	pwdChecked, err := dbcli.UserLogin(username, encPassword)
+	if err != nil || !pwdChecked.Suc {
 		res.Code = common.StatusLoginFailed
 		res.Message = "AUTHENTICATION FAILED"
 		return nil

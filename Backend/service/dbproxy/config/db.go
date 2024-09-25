@@ -3,10 +3,10 @@ package config
 import "fmt"
 
 var (
-	MySQLSource = "root:119742@tcp(localhost:3301)/fileserver?charset=utf8"
+	TiDBSource = "root:@tcp(localhost:4000)/fileserver?charset=utf8"
 )
 
 func UpdateDBHost(host string) {
-	MySQLSource = fmt.Sprintf("root:119742@tcp(%s:3301)/fileserver?charset=utf8", host)
-	fmt.Println("Updated MySQLSource:", MySQLSource) // Debug log
+	TiDBSource = fmt.Sprintf("root:@tcp(%s:4000)/fileserver?charset=utf8", host)
+	fmt.Println("Updated TiDBSource:", TiDBSource) // Debug log
 }

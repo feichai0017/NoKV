@@ -4,18 +4,19 @@ import (
 	"cloud_distributed_storage/Backend/common"
 	cfg "cloud_distributed_storage/Backend/config"
 	dbcli "cloud_distributed_storage/Backend/service/dbproxy/client"
-	"cloud_distributed_storage/Backend/store/ceph"
+	minio "cloud_distributed_storage/Backend/store/minio"
 	s3Client "cloud_distributed_storage/Backend/store/s3"
 	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	_ "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	_ "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gin-gonic/gin"
 )
 
 func GeneratePresignedURL(bucketName, objectKey string, expiry time.Duration) (string, error) {
@@ -51,7 +52,7 @@ func DownloadURLHandler(c *gin.Context) {
 
 	// TODO: 判断文件存在S3，还是Ceph，还是在本地
 	if strings.HasPrefix(tblFile.FileAddr.String, cfg.TempLocalRootDir) ||
-		strings.HasPrefix(tblFile.FileAddr.String, cfg.CephRootDir) {
+		strings.HasPrefix(tblFile.FileAddr.String, cfg.MinioRootDir) {
 		username := c.Request.FormValue("username")
 		token := c.Request.FormValue("token")
 		tmpURL := fmt.Sprintf("http://%s/file/download?filehash=%s&username=%s&token=%s",
@@ -94,10 +95,9 @@ func DownloadHandler(c *gin.Context) {
 	if strings.HasPrefix(uniqFile.FileAddr.String, cfg.TempLocalRootDir) {
 		// 本地文件， 直接下载
 		c.FileAttachment(uniqFile.FileAddr.String, userFile.FileName)
-	} else if strings.HasPrefix(uniqFile.FileAddr.String, cfg.CephRootDir) {
-		// ceph中的文件，通过ceph api先下载
-		bucket := ceph.GetCephBucket("userfile")
-		data, _ := bucket.Get(uniqFile.FileAddr.String)
+	} else if strings.HasPrefix(uniqFile.FileAddr.String, cfg.MinioRootDir) {
+		// minio中的文件，通过minio api先下载
+		data, _ := minio.GetObject("filestore", uniqFile.FileAddr.String)
 		//	c.Header("content-type", "application/octect-stream")
 		c.Header("content-disposition", "attachment; filename=\""+userFile.FileName+"\"")
 		c.Data(http.StatusOK, "application/octect-stream", data)

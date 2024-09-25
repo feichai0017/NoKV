@@ -7,12 +7,10 @@ import (
 	cfg "cloud_distributed_storage/Backend/config"
 	"cloud_distributed_storage/Backend/mq"
 	dbcli "cloud_distributed_storage/Backend/service/dbproxy/client"
-	"cloud_distributed_storage/Backend/store/ceph"
+	minio "cloud_distributed_storage/Backend/store/minio"
 	"cloud_distributed_storage/Backend/util"
 	"encoding/json"
 	"fmt"
-	"github.com/garyburd/redigo/redis"
-	"github.com/gin-gonic/gin"
 	"io"
 	"io/ioutil"
 	"log"
@@ -23,6 +21,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
+	"github.com/gin-gonic/gin"
 )
 
 // MultipartUploadInfo : 初始化信息
@@ -217,29 +218,29 @@ func CompleteUploadHandler(c *gin.Context) {
 	// 6. 判断存储策略
 	var storageType string
 	if isImportantFile(fmeta) {
-		storageType = "ceph"
+		storageType = "minio"
 	} else {
 		storageType = "s3"
 	}
 
 	// 7. 根据存储策略保存文件
 	switch storageType {
-	case "ceph":
-		// 保存文件到Ceph
+	case "minio":
+		// 保存文件到Minio
 		data, err := ioutil.ReadFile(destPath)
 		if err != nil {
 			log.Println(err.Error())
 			c.JSON(http.StatusInternalServerError, gin.H{"code": -3, "msg": "读取文件失败", "data": nil})
 			return
 		}
-		cephPath := cfg.CephRootDir + filehash
-		err = ceph.PutObject("userfile", cephPath, data)
+		minioPath := cfg.MinioRootDir + filehash
+		err = minio.PutObject("filestore", minioPath, data, "application/octet-stream")
 		if err != nil {
 			log.Println(err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"code": -4, "msg": "上传到Ceph失败", "data": nil})
+			c.JSON(http.StatusInternalServerError, gin.H{"code": -4, "msg": "上传到Minio失败", "data": nil})
 			return
 		}
-		fmeta.Location = cephPath
+		fmeta.Location = minioPath
 	case "s3":
 		// 文件写入S3存储
 		// 判断写入S3为同步还是异步

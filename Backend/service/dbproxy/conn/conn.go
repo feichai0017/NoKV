@@ -1,4 +1,4 @@
-package mysql
+package tidb
 
 import (
 	cfg "cloud_distributed_storage/Backend/service/dbproxy/config"
@@ -13,7 +13,7 @@ var db *sql.DB
 
 func InitDBConn() error {
 	var err error
-	db, err = sql.Open("mysql", cfg.MySQLSource)
+	db, err = sql.Open("mysql", cfg.TiDBSource)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %v", err)
 	}
@@ -21,10 +21,10 @@ func InitDBConn() error {
 	db.SetMaxOpenConns(1000)
 	err = db.Ping()
 	if err != nil {
-		return fmt.Errorf("failed to connect to MySQL: %v", err)
+		return fmt.Errorf("failed to connect to TiDB: %v", err)
 	}
 
-	log.Println("Successfully connected to MySQL database")
+	log.Println("Successfully connected to TiDB database")
 	return nil
 }
 
