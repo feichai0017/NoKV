@@ -34,11 +34,12 @@ require (
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.6 // indirect
-	github.com/rogpeppe/go-internal v1.11.0 // indirect
+	github.com/richardlehane/msoleps v1.0.3 // indirect
 	github.com/rs/xid v1.6.0 // indirect
+	github.com/youpy/go-riff v0.1.0 // indirect
+	github.com/zaf/g711 v0.0.0-20190814101024-76a4a538f52b // indirect
 	go.opentelemetry.io/otel v1.26.0 // indirect
 	go.opentelemetry.io/otel/metric v1.26.0 // indirect
 	go.opentelemetry.io/otel/trace v1.26.0 // indirect
@@ -100,6 +101,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v0.0.0-20201106050909-4977a11b4351 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20240201131950-da5b75280b06
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -110,6 +112,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
+	github.com/otiai10/gosseract/v2 v2.4.1
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
@@ -118,10 +121,13 @@ require (
 	github.com/russross/blackfriday/v2 v2.0.1 // indirect
 	github.com/sergi/go-diff v1.1.0 // indirect
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
+	github.com/tealeg/xlsx v1.0.5
 	github.com/tmc/langchaingo v0.1.12
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
+	github.com/unidoc/unioffice v1.36.0
 	github.com/xanzy/ssh-agent v0.3.0 // indirect
+	github.com/youpy/go-wav v0.3.2
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
