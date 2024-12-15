@@ -1,21 +1,5 @@
-
-
-node_modules/
-Frontend/node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-package-lock.json
-yarn.lock
-
-Backend/.env
-
+.vscode
+work_test
+testdata
 .idea
-
-.vite
-docker/config/
-docker/data/
-docker/logs/
-
-### VS Code ###
-.vscode/
+.DS_Store
