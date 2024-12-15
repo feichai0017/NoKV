@@ -1,18 +1,18 @@
-# Distributed KV Store MIT 6.5840 Architecture
+# Distributed KV Store
 
 <p align="center">
   <img src="./Frontend/public/images/logo.png" alt="Project Logo" width="200"/>
 </p>
 
 ![Status](https://img.shields.io/badge/status-active-success.svg)
-![Language](https://img.shields.io/badge/language-go-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Language](https://img.shields.io/badge/language-go1.23-blue.svg)
+![License](https://img.shields.io/badge/license-Apache2.0-yellow.svg)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 
 A distributed file system built with Go, incorporating distributed systems concepts from MIT 6.5840 course, featuring advanced key-value storage, consensus mechanisms, and fault tolerance.
 
 ## Table of Contents
-- [Distributed KV Store MIT 6.5840 Architecture](#distributed-kv-store-mit-65840-architecture)
+- [Distributed KV Store](#distributed-kv-store)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Architecture](#architecture)
