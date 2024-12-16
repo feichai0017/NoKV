@@ -19,17 +19,12 @@ A distributed file system built with Go, incorporating distributed systems conce
     - [Key Components:](#key-components)
   - [Key Features](#key-features)
   - [Tech Stack](#tech-stack)
-    - [Backend](#backend)
-    - [Frontend](#frontend)
-    - [Infrastructure](#infrastructure)
+    - [Core Storage Engine](#core-storage-engine)
+    - [Key Components](#key-components-1)
+    - [Development Tools](#development-tools)
   - [Implementation Details](#implementation-details)
-    - [Raft Consensus](#raft-consensus)
-    - [Sharding Manager](#sharding-manager)
-    - [Key-Value Store](#key-value-store)
+    - [LSM-tree Structure](#lsm-tree-structure)
   - [Installation](#installation)
-  - [Usage](#usage)
-    - [API Examples](#api-examples)
-    - [Command Line Interface](#command-line-interface)
   - [Contributing](#contributing)
   - [License](#license)
 
@@ -61,57 +56,31 @@ The system is built on three main layers:
 
 ## Tech Stack
 
-### Backend
-- **Language**: Go 1.21+
-- **Framework**: Gin
-- **Consensus Protocol**: Raft implementation
-- **Storage**: 
-  - MinIO for object storage
-  - Redis for caching
-  - MySQL for metadata
+### Core Storage Engine
+- LSM-tree based storage structure
+- Written in Go
+- Optimized for write-intensive workloads
 
-### Frontend
-- **Framework**: React.js
-- **State Management**: Redux
-- **UI Components**: Material-UI
+### Key Components
+- Block-based SSTable format
+- Two-level cache system (index & block)
+- Efficient compaction strategies
+- Bloom filter support
 
-### Infrastructure
-- **Containerization**: Docker
-- **Orchestration**: Kubernetes
-- **Service Discovery**: Consul
-- **Monitoring**: Prometheus & Grafana
+### Development Tools
+- Go 1.21+
+- Docker for containerization
+- Make for build automation
 
 ## Implementation Details
 
-### Raft Consensus
+### LSM-tree Structure
 ```go
-type RaftNode struct {
-    mu sync.Mutex
-    peers []string
-    currentTerm int
-    votedFor int
-    log []LogEntry
-    // ... other Raft-specific fields
-}
-```
-
-### Sharding Manager
-```go
-type ShardManager struct {
-    mu sync.Mutex
-    shards map[int]*Shard
-    config *ShardConfig
-    // ... sharding-related fields
-}
-```
-
-### Key-Value Store
-```go
-type KVStore struct {
-    mu sync.Mutex
-    db map[string]string
-    raft *RaftNode
-    // ... storage-related fields
+// Core components of the LSM-tree
+type levelManager struct {
+    levels []*levelHandler  // Multiple levels of SSTable storage
+    cache  *cache          // Two-level cache system
+    opt    *Options        // Configuration options
 }
 ```
 
@@ -119,8 +88,8 @@ type KVStore struct {
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/distributed-file-system.git
-cd distributed-file-system
+git clone https://github.com/feichai0017/NoKV.git
+cd NoKV
 ```
 
 2. Install dependencies:
@@ -139,32 +108,7 @@ cp config.example.yaml config.yaml
 docker-compose up -d
 ```
 
-## Usage
 
-### API Examples
-
-```go
-// Initialize client
-client := dfs.NewClient("localhost:8080")
-
-// Store file
-err := client.Put("key", data)
-
-// Retrieve file
-data, err := client.Get("key")
-
-// Delete file
-err := client.Delete("key")
-```
-
-### Command Line Interface
-```bash
-# Start a node
-./dfs-server --port 8080 --raft-port 9000
-
-# Add a new node to cluster
-./dfs-cli join --addr localhost:8080
-```
 
 ## Contributing
 
