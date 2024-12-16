@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hardcore-os/corekv/lsm"
-	"github.com/hardcore-os/corekv/utils"
+	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
@@ -36,6 +36,8 @@ type (
 		blockWrites int32
 		vhead       *utils.ValuePtr
 		logRotates  int32
+		isClosed    uint32
+		orc         *oracle
 	}
 )
 
@@ -43,19 +45,6 @@ var (
 	head = []byte("!corekv!head") // For storing value offset for replay.
 )
 
-/**
-SSTableMaxSz:        1024,
-MemTableSize:        1024,
-BlockSize:           1024,
-BloomFalsePositive:  0,
-BaseLevelSize:       10 << 20,
-LevelSizeMultiplier: 10,
-BaseTableSize:       2 << 20,
-TableSizeMultiplier: 2,
-NumLevelZeroTables:  15,
-MaxLevelNum:         7,
-NumCompactors:       3,
-*/
 // Open DB
 // TODO 这里是不是要上一个目录锁比较好，防止多个进程打开同一个目录?
 func Open(opt *Options) *DB {
@@ -81,6 +70,8 @@ func Open(opt *Options) *DB {
 	})
 	// 初始化统计信息
 	db.stats = newStats(opt)
+
+	db.orc = newOracle(*opt)
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
@@ -104,6 +95,7 @@ func (db *DB) Close() error {
 	if err := db.stats.close(); err != nil {
 		return err
 	}
+	atomic.StoreUint32(&db.isClosed, 1)
 	return nil
 }
 
@@ -147,7 +139,6 @@ func (db *DB) Get(key []byte) (*utils.Entry, error) {
 		entry *utils.Entry
 		err   error
 	)
-	key = utils.KeyWithTs(key, math.MaxUint32)
 	// 从LSM中查询entry，这时不确定entry是不是值指针
 	if entry, err = db.lsm.Get(key); err != nil {
 		return entry, err
@@ -164,11 +155,33 @@ func (db *DB) Get(key []byte) (*utils.Entry, error) {
 		entry.Value = utils.SafeCopy(nil, result)
 	}
 
-	if lsm.IsDeletedOrExpired(entry) {
+	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
 	}
 	entry.Key = originKey
 	return entry, nil
+}
+
+// 判断是否过期 是可删除
+func isDeletedOrExpiredByEntry(e *utils.Entry) bool {
+	if e.Value == nil {
+		return true
+	}
+	if e.ExpiresAt == 0 {
+		return false
+	}
+
+	return e.ExpiresAt <= uint64(time.Now().Unix())
+}
+
+func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
+	if meta&utils.BitDelete > 0 {
+		return true
+	}
+	if expiresAt == 0 {
+		return false
+	}
+	return expiresAt <= uint64(time.Now().Unix())
 }
 
 func (db *DB) Info() *Stats {
@@ -305,6 +318,16 @@ func (db *DB) doWrites(lc *utils.Closer) {
 	}
 }
 
+// getMemtables returns the current memtables and get references.
+func (db *DB) getMemTables() ([]*lsm.MemTable, func()) {
+	ml, fn := db.lsm.GetMemTables()
+	rm := make([]*lsm.MemTable, len(ml))
+	for _, mt := range ml {
+		rm = append(rm, mt)
+	}
+	return rm, fn
+}
+
 // writeRequests is called serially by only one goroutine.
 func (db *DB) writeRequests(reqs []*request) error {
 	if len(reqs) == 0 {
@@ -403,4 +426,12 @@ func (db *DB) pushHead(ft flushTask) error {
 		Value: val,
 	})
 	return nil
+}
+
+func (db *DB) valueThreshold() int64 {
+	return atomic.LoadInt64(&db.opt.ValueThreshold)
+}
+
+func (db *DB) IsClosed() bool {
+	return atomic.LoadUint32(&db.isClosed) == 1
 }

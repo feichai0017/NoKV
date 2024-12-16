@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardcore-os/corekv/utils"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 func TestAPI(t *testing.T) {

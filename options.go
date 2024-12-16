@@ -15,6 +15,8 @@ type Options struct {
 	ValueLogMaxEntries  uint32
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
+
+	DetectConflicts bool
 }
 
 // NewDefaultOptions 返回默认的options
