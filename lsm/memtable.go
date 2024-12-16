@@ -18,6 +18,8 @@ import (
 
 const walFileExt string = ".wal"
 
+type MemTable = memTable
+
 // MemTable
 type memTable struct {
 	lsm        *LSM
@@ -173,4 +175,14 @@ func (m *memTable) replayFunction(opt *Options) func(*utils.Entry, *utils.ValueP
 		m.sl.Add(e)
 		return nil
 	}
+}
+
+// IncrRef increases the refcount
+func (mt *memTable) IncrRef() {
+	mt.sl.IncrRef()
+}
+
+// DecrRef decrements the refcount, deallocating the Skiplist when done using it
+func (mt *memTable) DecrRef() {
+	mt.sl.DecrRef()
 }
