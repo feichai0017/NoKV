@@ -51,8 +51,8 @@ func newOracle(opt Options) *oracle {
 		//
 		// WaterMarks must be 64-bit aligned for atomic package, hence we must use pointers here.
 		// See https://golang.org/pkg/sync/atomic/#pkg-note-BUG.
-		readMark:  &utils.WaterMark{Name: "corekv.PendingReads"},
-		txnMark:   &utils.WaterMark{Name: "corekv.TxnTimestamp"},
+		readMark:  &utils.WaterMark{Name: "NoKV.PendingReads"},
+		txnMark:   &utils.WaterMark{Name: "NoKV.TxnTimestamp"},
 		closer:    utils.NewCloserInitial(2),
 		nextTxnTs: 1,
 	}

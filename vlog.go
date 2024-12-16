@@ -25,7 +25,7 @@ import (
 
 const discardStatsFlushThreshold = 100
 
-var lfDiscardStatsKey = []byte("!corekv!discard") // For storing lfDiscardStats
+var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
 
 // valueLog
 type valueLog struct {

@@ -14,7 +14,7 @@ import (
 )
 
 type (
-	// coreKV对外提供的功能集合
+	// NoKV对外提供的功能集合
 	CoreAPI interface {
 		Set(data *utils.Entry) error
 		Get(key []byte) (*utils.Entry, error)
@@ -42,7 +42,7 @@ type (
 )
 
 var (
-	head = []byte("!corekv!head") // For storing value offset for replay.
+	head = []byte("!NoKV!head") // For storing value offset for replay.
 )
 
 // Open DB
