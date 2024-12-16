@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
- func runCorekvTest(t *testing.T, opts *Options, test func(t *testing.T, db *DB)) {
-	 dir, err := ioutil.TempDir("", "corekv-test")
+ func runNoKVTest(t *testing.T, opts *Options, test func(t *testing.T, db *DB)) {
+	 dir, err := ioutil.TempDir("", "NoKV-test")
 	 require.NoError(t, err)
 	 defer removeDir(dir)
 	 if opts == nil {
@@ -54,7 +54,7 @@ import (
  }
  
  func TestTxnSimple(t *testing.T) {
-	 runCorekvTest(t, nil, func(t *testing.T, db *DB) {
+	 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 		 txn := db.NewTransaction(true)
  
 		 for i := 0; i < 10; i++ {
@@ -97,7 +97,7 @@ import (
 		 wg.Wait()
 	 }
 	 t.Run("disk mode", func(t *testing.T) {
-		 runCorekvTest(t, nil, func(t *testing.T, db *DB) {
+		 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 			 test(t, db)
 		 })
 	 })
@@ -105,7 +105,7 @@ import (
  
  /******
  func TestTxnVersions(t *testing.T) {
-	 runCorekvTest(t, nil, func(t *testing.T, db *DB) {
+	 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 		 k := []byte("key")
 		 for i := 1; i < 10; i++ {
 			 txn := db.NewTransaction(true)
@@ -200,7 +200,7 @@ import (
  ****/
  
  func TestTxnWriteSkew(t *testing.T) {
-	 runCorekvTest(t, nil, func(t *testing.T, db *DB) {
+	 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 		 // Accounts
 		 ax := []byte("x")
 		 ay := []byte("y")
@@ -323,7 +323,7 @@ import (
 			 var wg sync.WaitGroup
 			 wg.Add(numGo)
 			 setCount = 0
-			 runCorekvTest(t, nil, func(t *testing.T, db *DB) {
+			 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 				 for j := 0; j < numGo; j++ {
 					 go fn(&wg, db)
 				 }

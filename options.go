@@ -2,7 +2,7 @@ package NoKV
 
 import "github.com/feichai0017/NoKV/utils"
 
-// Options corekv 总的配置文件
+// Options NoKV 总的配置文件
 type Options struct {
 	ValueThreshold      int64
 	WorkDir             string

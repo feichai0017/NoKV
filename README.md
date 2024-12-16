@@ -30,14 +30,13 @@ A distributed file system built with Go, incorporating distributed systems conce
 
 ## Overview
 
-This project implements a distributed file system using Go, incorporating key concepts from MIT's 6.5840 distributed systems course. It features a robust key-value storage framework with Raft consensus, sharding, and fault tolerance mechanisms.
+This project implements a distributed file system using Go, incorporating key concepts from MIT's 6.2840 distributed systems course. It features a robust key-value storage framework with Raft consensus, sharding, and fault tolerance mechanisms.
 
 ## Architecture
 
 The system is built on three main layers:
-1. **Client Layer**: RESTful API interface and web frontend
-2. **Consensus Layer**: Raft-based consensus mechanism for consistency
-3. **Storage Layer**: Distributed key-value store with sharding
+1. **Consensus Layer**: Raft-based consensus mechanism for consistency
+2. **Storage Layer**: Distributed key-value store with sharding
 
 ### Key Components:
 - **Raft Consensus**: Implementation of the Raft protocol for leader election and log replication
@@ -86,26 +85,8 @@ type levelManager struct {
 
 ## Installation
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/feichai0017/NoKV.git
-cd NoKV
-```
-
-2. Install dependencies:
-```bash
-go mod tidy
-```
-
-3. Configure the system:
-```bash
-cp config.example.yaml config.yaml
-# Edit config.yaml with your settings
-```
-
-4. Start the services:
-```bash
-docker-compose up -d
+go get github.com/feichai0017/NoKV
 ```
 
 
