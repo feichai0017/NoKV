@@ -1,4 +1,4 @@
-# Distributed KV Store
+# NoKV
 
 <p align="center">
   <img src="./Frontend/public/images/logo.png" alt="Project Logo" width="200"/>
@@ -9,68 +9,92 @@
 ![License](https://img.shields.io/badge/license-Apache2.0-yellow.svg)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 
-A distributed file system built with Go, incorporating distributed systems concepts from MIT 6.5840 course, featuring advanced key-value storage, consensus mechanisms, and fault tolerance.
+A high-performance embedded key-value storage engine based on LSM Tree with MVCC transaction support.
 
 ## Table of Contents
-- [Distributed KV Store](#distributed-kv-store)
+- [NoKV](#nokv)
   - [Table of Contents](#table-of-contents)
-  - [Overview](#overview)
   - [Architecture](#architecture)
-    - [Key Components:](#key-components)
-  - [Key Features](#key-features)
-  - [Tech Stack](#tech-stack)
-    - [Core Storage Engine](#core-storage-engine)
-    - [Key Components](#key-components-1)
-    - [Development Tools](#development-tools)
+    - [Core Components](#core-components)
+    - [Key Features](#key-features)
+  - [Performance Optimizations](#performance-optimizations)
+  - [Future Plans](#future-plans)
+    - [Distributed Implementation](#distributed-implementation)
   - [Implementation Details](#implementation-details)
     - [LSM-tree Structure](#lsm-tree-structure)
   - [Installation](#installation)
   - [Contributing](#contributing)
   - [License](#license)
 
-## Overview
-
-This project implements a distributed file system using Go, incorporating key concepts from MIT's 6.2840 distributed systems course. It features a robust key-value storage framework with Raft consensus, sharding, and fault tolerance mechanisms.
-
 ## Architecture
 
-The system is built on three main layers:
-1. **Consensus Layer**: Raft-based consensus mechanism for consistency
-2. **Storage Layer**: Distributed key-value store with sharding
+### Core Components
 
-### Key Components:
-- **Raft Consensus**: Implementation of the Raft protocol for leader election and log replication
-- **Sharding Manager**: Handles data partitioning and distribution
-- **Recovery System**: Manages node failures and data recovery
-- **Distributed Lock Service**: Ensures distributed mutual exclusion
+1. **Storage Engine**
+   - LSM Tree based storage
+   - Separated value log for large values
+   - Two-phase compaction strategy
+   - Bloom filters for efficient lookups
 
-## Key Features
+2. **Transaction System**
+   - MVCC (Multi-Version Concurrency Control)
+   - Optimistic concurrency control
+   - Conflict detection
+   - Timestamp-based versioning
 
-- **Distributed Consensus**: Raft-based leader election and log replication
-- **Sharded Storage**: Horizontal scaling with dynamic sharding
-- **Fault Tolerance**: Automatic recovery from node failures
-- **Consistency Guarantees**: Strong consistency through Raft consensus
-- **Atomic Operations**: Support for atomic multi-key transactions
-- **Load Balancing**: Dynamic request distribution across nodes
+3. **Memory Management**
+   - SkipList-based MemTable
+   - Two-phase memory to disk transition
+   - Configurable memory limits
+   - Efficient garbage collection
 
-## Tech Stack
+### Key Features
 
-### Core Storage Engine
-- LSM-tree based storage structure
-- Written in Go
-- Optimized for write-intensive workloads
+- ACID transactions
+- Range queries support
+- Configurable compression
+- Write-ahead logging
+- Crash recovery
+- Efficient compaction
+- Iterator support
 
-### Key Components
-- Block-based SSTable format
-- Two-level cache system (index & block)
-- Efficient compaction strategies
-- Bloom filter support
+## Performance Optimizations
 
-### Development Tools
-- Go 1.21+
-- Docker for containerization
-- Make for build automation
+1. **Memory Optimization**
+   - Separate storage for large values
+   - Bloom filters for negative lookups
+   - Efficient memory table implementation
 
+2. **Disk Optimization**
+   - Batch processing for writes
+   - Level-based compaction
+   - Sequential disk writes
+   - Efficient merge operations
+
+3. **Concurrency**
+   - Lock-free read operations
+   - Concurrent compaction
+   - Parallel transaction processing
+
+## Future Plans
+
+### Distributed Implementation
+The next phase will extend NoKV into a distributed system with:
+
+1. **Consensus Layer**
+   - Raft-based replication
+   - Leader election
+   - Log synchronization
+
+2. **Sharding**
+   - Range-based sharding
+   - Dynamic shard rebalancing
+   - Cross-shard transactions
+
+3. **Cluster Management**
+   - Node discovery
+   - Health monitoring
+   - Auto failover
 ## Implementation Details
 
 ### LSM-tree Structure
