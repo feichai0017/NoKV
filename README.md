@@ -1,8 +1,8 @@
 # NoKV
 
-<p align="center">
-  <img src="./Frontend/public/images/logo.png" alt="Project Logo" width="200"/>
-</p>
+<div align="center">
+  <img src="./img/logo.svg" width="200" height="200" alt="NoKV Logo">
+</div>
 
 ![Status](https://img.shields.io/badge/status-active-success.svg)
 ![Language](https://img.shields.io/badge/language-go1.23-blue.svg)
