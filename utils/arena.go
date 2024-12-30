@@ -130,11 +130,10 @@
  // nil, then the zero offset is returned.
  func (s *Arena) getNodeOffset(nd *node) uint32 {
 	 if nd == nil {
-		 return 0 //返回空指针
+		 return 0 //return nil pointer
 	 }
-	 //implement me here！！！
-	 //获取某个节点,在 arena 当中的偏移量
-	 //unsafe.Pointer等价于void*,uintptr可以专门把void*的对于地址转化为数值型变量
+	 //get the offset of node in the arena
+	 //unsafe.Pointer is equivalent to void*, uintptr can convert the address of void* to a numeric variable
 	 return uint32(uintptr(unsafe.Pointer(nd)) - uintptr(unsafe.Pointer(&s.buf[0])))
  }
  
