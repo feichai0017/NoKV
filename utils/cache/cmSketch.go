@@ -21,13 +21,13 @@ func newCmSketch(numCounters int64) *cmSketch {
 		panic("cmSketch: invalid numCounters")
 	}
 
-	// numCounters 一定是二次幂，也就一定是1后面有 n 个 0
+	// numCounters must be a power of 2, which means it must be 1 followed by n 0s
 	numCounters = next2Power(numCounters)
-	// mask 一定是0111...111
+	// mask must be 0111...111
 	sketch := &cmSketch{mask: uint64(numCounters - 1)}
 	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	// 初始化4行
+	// initialize 4 rows
 	// 0000,0000|0000,0000|0000,0000
 	// 0000,0000|0000,0000|0000,0000
 	// 0000,0000|0000,0000|0000,0000
@@ -42,7 +42,7 @@ func newCmSketch(numCounters int64) *cmSketch {
 }
 
 func (s *cmSketch) Increment(hashed uint64) {
-	// 对于每一行进行相同操作
+	// do the same operation for each row
 	for i := range s.rows {
 		s.rows[i].increment((hashed ^ s.seed[i]) & s.mask)
 	}
@@ -74,7 +74,7 @@ func (s *cmSketch) Clear() {
 	}
 }
 
-// 快速计算大于 X，且最接近 X 的二次幂
+// quickly calculate the next power of 2 that is greater than X
 func next2Power(x int64) int64 {
 	x--
 	x |= x >> 1

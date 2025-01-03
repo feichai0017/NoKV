@@ -27,21 +27,21 @@ func newSLRU(data map[uint64]*list.Element, stageOneCap, stageTwoCap int) *segme
 }
 
 func (slru *segmentedLRU) add(newitem storeItem) {
-	// 先进来的都放 stageOne
+	// first add to stageOne
 	newitem.stage = 1
 
-	// 如果 stageOne 没满，整个 LFU 区域也没满
+	// if stageOne is not full, or the whole LFU is not full
 	if slru.stageOne.Len() < slru.stageOneCap || slru.Len() < slru.stageOneCap+slru.stageTwoCap {
 		slru.data[newitem.key] = slru.stageOne.PushFront(&newitem)
 		return
 	}
 
-	//走到这里说明 StageOne 满了，或者整个 LFU都满了
-	//那么需要从 StageOne 淘汰数据了
+	//if we reach here, it means StageOne is full, or the whole LFU is full
+	//then we need to evict data from StageOne
 	e := slru.stageOne.Back()
 	item := e.Value.(*storeItem)
 
-	//这里淘汰就是真的淘汰了
+	//here we really evict the item
 	delete(slru.data, item.key)
 
 	*item = newitem
@@ -53,13 +53,13 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 func (slru *segmentedLRU) get(v *list.Element) {
 	item := v.Value.(*storeItem)
 
-	// 若访问的缓存数据，已经在 StageTwo，只需要按照 LRU 规则提前即可
+	// if the item is already in stageTwo, just move it to the front
 	if item.stage == STAGE_TWO {
 		slru.stageTwo.MoveToFront(v)
 		return
 	}
 
-	// 若访问的数据还在 StageOne，那么再次被访问到，就需要提升到 StageTwo 阶段了
+	// if the item is still in stageOne, then we need to move it to stageTwo
 	if slru.stageTwo.Len() < slru.stageTwoCap {
 		slru.stageOne.Remove(v)
 		item.stage = STAGE_TWO
@@ -67,9 +67,9 @@ func (slru *segmentedLRU) get(v *list.Element) {
 		return
 	}
 
-	// 新数据加入 StageTwo，需要淘汰旧数据
-	// StageTwo 中淘汰的数据不会消失，会进入 StageOne
-	// StageOne 中，访问频率更低的数据，有可能会被淘汰
+	// new data add to stageTwo, we need to evict old data
+	// the data evicted from stageTwo will not disappear, it will be moved to stageOne
+	// the data in stageOne, with lower access frequency, may be evicted
 	back := slru.stageTwo.Back()
 	bitem := back.Value.(*storeItem)
 
@@ -90,12 +90,13 @@ func (slru *segmentedLRU) Len() int {
 }
 
 func (slru *segmentedLRU) victim() *storeItem {
-	//如果 slru 的容量未满，不需要淘汰
+	//if the capacity of slru is not full, no need to evict
 	if slru.Len() < slru.stageOneCap+slru.stageTwoCap {
 		return nil
 	}
 
-	// 如果已经满了，则需要从20%的区域淘汰数据，这里直接从尾部拿最后一个元素即可
+	// if the capacity of slru is full, we need to evict data from 20% of the area
+	// here we just take the last element from the tail
 	v := slru.stageOne.Back()
 	return v.Value.(*storeItem)
 }
