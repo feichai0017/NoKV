@@ -27,19 +27,19 @@ func newWindowLRU(size int, data map[uint64]*list.Element) *windowLRU {
 }
 
 func (lru *windowLRU) add(newitem storeItem) (eitem storeItem, evicted bool) {
-	// 如果 window 部分容量未满，直接插入
+	// if window part is not full, just insert
 	if lru.list.Len() < lru.cap {
 		lru.data[newitem.key] = lru.list.PushFront(&newitem)
 		return storeItem{}, false
 	}
-	//如果 widow 部分容量已满，按照 lru 规则从尾部淘汰
+	// if window part is full, evict the last item by lru rule
 	evictItem := lru.list.Back()
 	item := evictItem.Value.(*storeItem)
 
-	// 从 slice 中删除该条数据
+	// delete the item from slice
 	delete(lru.data, item.key)
 
-	// 这里直接对 evictItem 和 *item 赋值，避免向runtime 再次申请空间
+	// assign the item to evictItem, avoid to apply memory from runtime
 	eitem, *item = *item, newitem
 
 	lru.data[item.key] = evictItem
