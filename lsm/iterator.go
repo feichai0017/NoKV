@@ -20,7 +20,7 @@ func (it *Item) Entry() *utils.Entry {
 	return it.e
 }
 
-// 创建迭代器
+// create iterators
 func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 	iter := &Iterator{}
 	iter.iters = make([]utils.Iterator, 0)
@@ -50,7 +50,7 @@ func (iter *Iterator) Close() error {
 func (iter *Iterator) Seek(key []byte) {
 }
 
-// 内存表迭代器
+// memtable iterator
 type memIterator struct {
 	innerIter utils.Iterator
 }
@@ -76,7 +76,7 @@ func (iter *memIterator) Close() error {
 func (iter *memIterator) Seek(key []byte) {
 }
 
-// levelManager上的迭代器
+// Iterator on levelManager
 type levelIterator struct {
 	it    *utils.Item
 	iters []*Iterator
@@ -103,7 +103,7 @@ func (iter *levelIterator) Close() error {
 func (iter *levelIterator) Seek(key []byte) {
 }
 
-// ConcatIterator 将table 数组链接成一个迭代器，这样迭代效率更高
+// ConcatIterator merge multiple iterators into one
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
 	cur     utils.Iterator

@@ -181,14 +181,14 @@ func (m *MmapFile) Delete() error {
 	}
 
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	m.Data = nil
 	if err := m.Fd.Truncate(0); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := m.Fd.Close(); err != nil {
-		return fmt.Errorf("while close file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while close file: %s, error: %v", m.Fd.Name(), err)
 	}
 	return os.Remove(m.Fd.Name())
 }
@@ -199,10 +199,10 @@ func (m *MmapFile) Close() error {
 		return nil
 	}
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	return m.Fd.Close()
 }
@@ -221,13 +221,13 @@ func SyncDir(dir string) error {
 	return nil
 }
 
-// Truncature 兼容接口
+// Truncature compatible interface
 func (m *MmapFile) Truncature(maxSz int64) error {
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := m.Fd.Truncate(maxSz); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.Fd.Name(), err)
 	}
 
 	var err error
@@ -235,7 +235,7 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	return err
 }
 
-// ReName 兼容接口
+// ReName compatible interface
 func (m *MmapFile) ReName(name string) error {
 	return nil
 }
