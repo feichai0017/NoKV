@@ -16,12 +16,9 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
   - [Table of Contents](#table-of-contents)
   - [Architecture](#architecture)
     - [Core Components](#core-components)
-    - [Key Features](#key-features)
+    - [Advanced Features](#advanced-features)
   - [Performance Optimizations](#performance-optimizations)
-  - [Future Plans](#future-plans)
-    - [Distributed Implementation](#distributed-implementation)
   - [Implementation Details](#implementation-details)
-    - [LSM-tree Structure](#lsm-tree-structure)
   - [Installation](#installation)
   - [Contributing](#contributing)
   - [License](#license)
@@ -32,15 +29,17 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
 
 1. **Storage Engine**
    - LSM Tree based storage
-   - Separated value log for large values
+   - Whiskey KV separation for large values
+   - Hot Ring cache for frequently accessed data
    - Two-phase compaction strategy
    - Bloom filters for efficient lookups
 
 2. **Transaction System**
    - MVCC (Multi-Version Concurrency Control)
    - Optimistic concurrency control
-   - Conflict detection
+   - Conflict detection and resolution
    - Timestamp-based versioning
+   - Snapshot isolation
 
 3. **Memory Management**
    - SkipList-based MemTable
@@ -48,22 +47,33 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
    - Configurable memory limits
    - Efficient garbage collection
 
-### Key Features
+### Advanced Features
 
-- ACID transactions
-- Range queries support
-- Configurable compression
-- Write-ahead logging
-- Crash recovery
-- Efficient compaction
-- Iterator support
+1. **Whisckey KV Separation**
+   - Separate storage for large values
+   - Reduced write amplification
+   - Efficient space utilization
+   - Optimized for mixed workloads
+
+2. **Hot Ring Cache**
+   - In-memory cache for hot keys
+   - LRU-based eviction policy
+   - Configurable cache size
+   - Automatic hot spot detection
+
+3. **MVCC Transaction**
+   - Serializable isolation level
+   - Read-write conflict detection
+   - Non-blocking reads
+   - Lock-free implementation
 
 ## Performance Optimizations
 
 1. **Memory Optimization**
-   - Separate storage for large values
+   - Hot Ring cache for frequent access
    - Bloom filters for negative lookups
    - Efficient memory table implementation
+   - Smart memory allocation
 
 2. **Disk Optimization**
    - Batch processing for writes
@@ -76,44 +86,15 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
    - Concurrent compaction
    - Parallel transaction processing
 
-## Future Plans
-
-### Distributed Implementation
-The next phase will extend NoKV into a distributed system with:
-
-1. **Consensus Layer**
-   - Raft-based replication
-   - Leader election
-   - Log synchronization
-
-2. **Sharding**
-   - Range-based sharding
-   - Dynamic shard rebalancing
-   - Cross-shard transactions
-
-3. **Cluster Management**
-   - Node discovery
-   - Health monitoring
-   - Auto failover
 ## Implementation Details
 
-### LSM-tree Structure
-```go
-// Core components of the LSM-tree
-type levelManager struct {
-    levels []*levelHandler  // Multiple levels of SSTable storage
-    cache  *cache          // Two-level cache system
-    opt    *Options        // Configuration options
-}
-```
+The storage engine is built on a Log-Structured Merge Tree (LSM Tree) architecture, which provides excellent write performance while maintaining good read performance. The LSM Tree is organized in multiple levels, with each level containing sorted data files (SSTables). The system employs a leveled compaction strategy to manage data across different levels efficiently.
 
 ## Installation
 
 ```bash
 go get github.com/feichai0017/NoKV
 ```
-
-
 
 ## Contributing
 

@@ -41,7 +41,7 @@ func (iter *DBIterator) Rewind() {
 	}
 }
 func (iter *DBIterator) Item() utils.Item {
-	// 检查从lsm拿到的value是否是value ptr,是则从vlog中拿值
+	// check if the value is a value ptr, if so, read from vlog
 	e := iter.iitr.Item().Entry()
 	var value []byte
 

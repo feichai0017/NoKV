@@ -16,7 +16,7 @@ type Item interface {
 }
 
 // Options _
-// TODO 可能被重构
+// TODO maybe add more options in future
 type Options struct {
 	Prefix []byte
 	IsAsc  bool

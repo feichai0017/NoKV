@@ -15,7 +15,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// SSTable 文件的内存封装
+// SSTable file wrapper
 type SSTable struct {
 	lock           *sync.RWMutex
 	f              *MmapFile
@@ -29,21 +29,21 @@ type SSTable struct {
 	createdAt      time.Time
 }
 
-// OpenSStable 打开一个 sst文件
+// OpenSStable open a sst file
 func OpenSStable(opt *Options) *SSTable {
 	omf, err := OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	utils.Err(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
 
-// Init 初始化
+// Init initialize
 func (ss *SSTable) Init() error {
 	var ko *pb.BlockOffset
 	var err error
 	if ko, err = ss.initTable(); err != nil {
 		return err
 	}
-	// 从文件中获取创建时间
+	// get create time from file
 	stat, _ := ss.f.Fd.Stat()
 	statType := stat.Sys().(*syscall.Stat_t)
 	ss.createdAt = time.Unix(statType.Ctim.Sec, statType.Ctim.Nsec)
