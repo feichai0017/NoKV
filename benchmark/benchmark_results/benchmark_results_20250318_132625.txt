@@ -1,0 +1,333 @@
+=== Benchmark Results ===
+Generated at: 2025-03-18 13:26:25
+
+=== NoKV Write ===
+Start Time: 2025-03-18 13:26:05
+End Time: 2025-03-18 13:26:05
+Total Duration: 37.208µs
+Average Time per Operation: 37.208µs
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== NoKV Write ===
+Start Time: 2025-03-18 13:26:05
+End Time: 2025-03-18 13:26:05
+Total Duration: 190.75µs
+Average Time per Operation: 1.907µs
+Total Operations: 100
+Total Data Size: 0.01 MB
+Memory Allocations: 100
+Memory Bytes: 10000
+
+=== NoKV Write ===
+Start Time: 2025-03-18 13:26:05
+End Time: 2025-03-18 13:26:05
+Total Duration: 33.892084ms
+Average Time per Operation: 3.389µs
+Total Operations: 10000
+Total Data Size: 0.95 MB
+Memory Allocations: 10000
+Memory Bytes: 1000000
+
+=== NoKV Write ===
+Start Time: 2025-03-18 13:26:05
+End Time: 2025-03-18 13:26:07
+Total Duration: 1.702623459s
+Average Time per Operation: 5.039µs
+Total Operations: 337873
+Total Data Size: 32.22 MB
+Memory Allocations: 337873
+Memory Bytes: 33787300
+
+=== Badger Write ===
+Start Time: 2025-03-18 13:26:07
+End Time: 2025-03-18 13:26:07
+Total Duration: 35.875µs
+Average Time per Operation: 35.875µs
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== Badger Write ===
+Start Time: 2025-03-18 13:26:07
+End Time: 2025-03-18 13:26:07
+Total Duration: 366.209µs
+Average Time per Operation: 3.662µs
+Total Operations: 100
+Total Data Size: 0.01 MB
+Memory Allocations: 100
+Memory Bytes: 10000
+
+=== Badger Write ===
+Start Time: 2025-03-18 13:26:07
+End Time: 2025-03-18 13:26:07
+Total Duration: 33.634791ms
+Average Time per Operation: 3.363µs
+Total Operations: 10000
+Total Data Size: 0.95 MB
+Memory Allocations: 10000
+Memory Bytes: 1000000
+
+=== Badger Write ===
+Start Time: 2025-03-18 13:26:07
+End Time: 2025-03-18 13:26:08
+Total Duration: 1.015046917s
+Average Time per Operation: 3.299µs
+Total Operations: 307600
+Total Data Size: 29.34 MB
+Memory Allocations: 307600
+Memory Bytes: 30760000
+
+=== NoKV Read ===
+Start Time: 2025-03-18 13:26:08
+End Time: 2025-03-18 13:26:09
+Total Duration: 7.083µs
+Average Time per Operation: 7.083µs
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== NoKV Read ===
+Start Time: 2025-03-18 13:26:09
+End Time: 2025-03-18 13:26:09
+Total Duration: 586.042µs
+Average Time per Operation: 5.86µs
+Total Operations: 100
+Total Data Size: 0.01 MB
+Memory Allocations: 100
+Memory Bytes: 10000
+
+=== NoKV Read ===
+Start Time: 2025-03-18 13:26:09
+End Time: 2025-03-18 13:26:10
+Total Duration: 40.75175ms
+Average Time per Operation: 4.075µs
+Total Operations: 10000
+Total Data Size: 0.95 MB
+Memory Allocations: 10000
+Memory Bytes: 1000000
+
+=== NoKV Read ===
+Start Time: 2025-03-18 13:26:10
+End Time: 2025-03-18 13:26:11
+Total Duration: 1.084003917s
+Average Time per Operation: 4.147µs
+Total Operations: 261348
+Total Data Size: 24.92 MB
+Memory Allocations: 261348
+Memory Bytes: 26134800
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:11
+End Time: 2025-03-18 13:26:12
+Total Duration: 8.583µs
+Average Time per Operation: 8.583µs
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:12
+End Time: 2025-03-18 13:26:12
+Total Duration: 99.042µs
+Average Time per Operation: 2.2µs
+Total Operations: 45
+Total Data Size: 0.00 MB
+Memory Allocations: 45
+Memory Bytes: 4500
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:12
+End Time: 2025-03-18 13:26:12
+Total Duration: 2.352334ms
+Average Time per Operation: 1.065µs
+Total Operations: 2208
+Total Data Size: 0.21 MB
+Memory Allocations: 2208
+Memory Bytes: 220800
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:12
+End Time: 2025-03-18 13:26:13
+Total Duration: 75.012333ms
+Average Time per Operation: 724ns
+Total Operations: 103544
+Total Data Size: 9.87 MB
+Memory Allocations: 103544
+Memory Bytes: 10354400
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:13
+End Time: 2025-03-18 13:26:14
+Total Duration: 960.958376ms
+Average Time per Operation: 776ns
+Total Operations: 1237351
+Total Data Size: 118.00 MB
+Memory Allocations: 1237351
+Memory Bytes: 123735100
+
+=== Badger Read ===
+Start Time: 2025-03-18 13:26:14
+End Time: 2025-03-18 13:26:16
+Total Duration: 1.111690084s
+Average Time per Operation: 739ns
+Total Operations: 1503580
+Total Data Size: 143.39 MB
+Memory Allocations: 1503580
+Memory Bytes: 150358000
+
+=== NoKV Batch Write ===
+Start Time: 2025-03-18 13:26:16
+End Time: 2025-03-18 13:26:16
+Total Duration: 2.167166ms
+Average Time per Operation: 2.167166ms
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== NoKV Batch Write ===
+Start Time: 2025-03-18 13:26:16
+End Time: 2025-03-18 13:26:16
+Total Duration: 2.570208ms
+Average Time per Operation: 25.702µs
+Total Operations: 100
+Total Data Size: 0.01 MB
+Memory Allocations: 100
+Memory Bytes: 10000
+
+=== NoKV Batch Write ===
+Start Time: 2025-03-18 13:26:16
+End Time: 2025-03-18 13:26:16
+Total Duration: 39.88725ms
+Average Time per Operation: 3.988µs
+Total Operations: 10000
+Total Data Size: 0.95 MB
+Memory Allocations: 10000
+Memory Bytes: 1000000
+
+=== NoKV Batch Write ===
+Start Time: 2025-03-18 13:26:16
+End Time: 2025-03-18 13:26:17
+Total Duration: 667.766417ms
+Average Time per Operation: 2.306µs
+Total Operations: 289574
+Total Data Size: 27.62 MB
+Memory Allocations: 289574
+Memory Bytes: 28957400
+
+=== NoKV Batch Write ===
+Start Time: 2025-03-18 13:26:17
+End Time: 2025-03-18 13:26:18
+Total Duration: 1.260707251s
+Average Time per Operation: 2.475µs
+Total Operations: 509355
+Total Data Size: 48.58 MB
+Memory Allocations: 509355
+Memory Bytes: 50935500
+
+=== Badger Batch Write ===
+Start Time: 2025-03-18 13:26:18
+End Time: 2025-03-18 13:26:18
+Total Duration: 865.166µs
+Average Time per Operation: 865.166µs
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 100
+
+=== Badger Batch Write ===
+Start Time: 2025-03-18 13:26:18
+End Time: 2025-03-18 13:26:18
+Total Duration: 811.458µs
+Average Time per Operation: 8.114µs
+Total Operations: 100
+Total Data Size: 0.01 MB
+Memory Allocations: 100
+Memory Bytes: 10000
+
+=== Badger Batch Write ===
+Start Time: 2025-03-18 13:26:18
+End Time: 2025-03-18 13:26:18
+Total Duration: 8.692083ms
+Average Time per Operation: 869ns
+Total Operations: 10000
+Total Data Size: 0.95 MB
+Memory Allocations: 10000
+Memory Bytes: 1000000
+
+=== Badger Batch Write ===
+Start Time: 2025-03-18 13:26:18
+End Time: 2025-03-18 13:26:19
+Total Duration: 1.00233075s
+Average Time per Operation: 1.153µs
+Total Operations: 868887
+Total Data Size: 82.86 MB
+Memory Allocations: 868887
+Memory Bytes: 86888700
+
+=== NoKV Range Query ===
+Start Time: 2025-03-18 13:26:19
+End Time: 2025-03-18 13:26:20
+Total Duration: 5.842417ms
+Average Time per Operation: 5.842417ms
+Total Operations: 1
+Total Data Size: 0.00 MB
+Memory Allocations: 1
+Memory Bytes: 0
+
+=== NoKV Range Query ===
+Start Time: 2025-03-18 13:26:20
+End Time: 2025-03-18 13:26:20
+Total Duration: 500.625ms
+Average Time per Operation: 5.959821ms
+Total Operations: 84
+Total Data Size: 0.00 MB
+Memory Allocations: 84
+Memory Bytes: 0
+
+=== NoKV Range Query ===
+Start Time: 2025-03-18 13:26:20
+End Time: 2025-03-18 13:26:22
+Total Duration: 1.206684958s
+Average Time per Operation: 6.094368ms
+Total Operations: 198
+Total Data Size: 0.00 MB
+Memory Allocations: 198
+Memory Bytes: 0
+
+=== Badger Range Query ===
+Start Time: 2025-03-18 13:26:22
+End Time: 2025-03-18 13:26:23
+Total Duration: 23.377667ms
+Average Time per Operation: 23.377667ms
+Total Operations: 1
+Total Data Size: 9.54 MB
+Memory Allocations: 1
+Memory Bytes: 10000000
+
+=== Badger Range Query ===
+Start Time: 2025-03-18 13:26:23
+End Time: 2025-03-18 13:26:24
+Total Duration: 586.024125ms
+Average Time per Operation: 23.440965ms
+Total Operations: 25
+Total Data Size: 238.42 MB
+Memory Allocations: 25
+Memory Bytes: 250000000
+
+=== Badger Range Query ===
+Start Time: 2025-03-18 13:26:24
+End Time: 2025-03-18 13:26:25
+Total Duration: 1.195177542s
+Average Time per Operation: 24.391378ms
+Total Operations: 49
+Total Data Size: 467.30 MB
+Memory Allocations: 49
+Memory Bytes: 490000000
+
