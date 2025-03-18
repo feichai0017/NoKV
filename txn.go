@@ -51,8 +51,8 @@ func newOracle(opt Options) *oracle {
 		//
 		// WaterMarks must be 64-bit aligned for atomic package, hence we must use pointers here.
 		// See https://golang.org/pkg/sync/atomic/#pkg-note-BUG.
-		readMark:  &utils.WaterMark{Name: "NoKV.PendingReads"},
-		txnMark:   &utils.WaterMark{Name: "NoKV.TxnTimestamp"},
+		readMark:  &utils.WaterMark{Name: "corekv.PendingReads"},
+		txnMark:   &utils.WaterMark{Name: "corekv.TxnTimestamp"},
 		closer:    utils.NewCloserInitial(2),
 		nextTxnTs: 1,
 	}
@@ -428,11 +428,24 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		txn.addReadKey(key)
 	}
 
+	// 使用事务的readTs作为时间戳查询
 	seek := utils.KeyWithTs(key, txn.readTs)
-	vs, err := txn.db.Get(seek)
+	vs, err := txn.db.lsm.Get(seek)
 	if err != nil {
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
+	// 处理值指针
+    if vs != nil && utils.IsValuePtr(vs) {
+        var vp utils.ValuePtr
+        vp.Decode(vs.Value)
+        result, cb, err := txn.db.vlog.read(&vp)
+        defer utils.RunCallback(cb)
+        if err != nil {
+            return nil, err
+        }
+        vs.Value = utils.SafeCopy(nil, result)
+    }
+	
 	if vs.Value == nil && vs.Meta == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
