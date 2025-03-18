@@ -346,7 +346,7 @@ func (vlog *valueLog) doRunGC(lf *file.LogFile, discardRatio float64) (err error
 	return nil
 }
 
-//重写
+// 重写
 func (vlog *valueLog) rewrite(f *file.LogFile) error {
 	vlog.filesLock.RLock()
 	maxFid := vlog.maxFid
@@ -1145,7 +1145,7 @@ func (vlog *valueLog) pickLog(head *utils.ValuePtr) (files []*file.LogFile) {
 	return files
 }
 
-//sampler 采样器
+// sampler 采样器
 type sampler struct {
 	lf            *file.LogFile
 	sizeRatio     float64

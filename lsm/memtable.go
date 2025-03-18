@@ -39,7 +39,7 @@ func (lsm *LSM) NewMemtable() *memTable {
 		FID:      newFid,
 		FileName: mtFilePath(lsm.option.WorkDir, newFid),
 	}
-	return &memTable{wal: file.OpenWalFile(fileOpt), sl: utils.NewSkiplist(int64(1 << 20)), lsm: lsm}
+	return &memTable{wal: file.OpenWalFile(fileOpt), sl: utils.NewSkiplist(int64(64 << 20)), lsm: lsm}
 }
 
 // Close
@@ -82,7 +82,7 @@ func (m *memTable) Size() int64 {
 	return m.sl.MemSize()
 }
 
-//recovery
+// recovery
 func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	// 从 工作目录中获取所有文件
 	files, err := ioutil.ReadDir(lsm.option.WorkDir)

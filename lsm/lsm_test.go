@@ -83,7 +83,7 @@ func TestHitStorage(t *testing.T) {
 	hitBloom := func() {
 		ee := utils.BuildEntry()
 		// 查询不存在的key 如果命中则说明一定不存在
-		v, err := lsm.levels.levels[0].tables[0].Serach(ee.Key, &ee.Version)
+		v, err := lsm.levels.levels[0].tables[0].Search(ee.Key, &ee.Version)
 		utils.CondPanic(v != nil, fmt.Errorf("[hitBloom] v != nil"))
 		utils.CondPanic(err != utils.ErrKeyNotFound, fmt.Errorf("[hitBloom] err != utils.ErrKeyNotFound"))
 	}

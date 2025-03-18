@@ -1,0 +1,41 @@
+
+=== Benchmark Results ===
+Time: 2025-03-18 03:06:19
+
+Write Operations:
+NoKV Write:   359966	      5240 ns/op
+Batch Write:   492181	      2597 ns/op
+Concurrent Write:        0	               NaN ns/op
+
+Read Operations:
+NoKV Read:   282512	      4359 ns/op
+Range Query:      172	   6477965 ns/op
+Concurrent Read:        0	               NaN ns/op
+
+=== Benchmark Results ===
+Time: 2025-03-18 03:07:22
+
+Write Operations:
+NoKV Write:   377998	      4954 ns/op
+Batch Write:   468314	      2618 ns/op
+Concurrent Write:        0	               NaN ns/op
+
+Read Operations:
+NoKV Read:   226818	      4488 ns/op
+Range Query:      188	   6204454 ns/op
+Concurrent Read:        0	               NaN ns/op
+
+=== Benchmark Results ===
+Time: 2025-03-18 03:08:36
+
+Write Operations:
+NoKV Write:   317775	      5063 ns/op
+Badger Write:   300297	      3592 ns/op
+NoKV Batch Write:   410770	      2643 ns/op
+Badger Batch Write:   917781	      1212 ns/op
+
+Read Operations:
+NoKV Read:   250653	      4220 ns/op
+Badger Read:  1350816	       753.7 ns/op
+NoKV Range Query:      204	   5616015 ns/op
+Badger Range Query:       48	  24240563 ns/op
