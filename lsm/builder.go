@@ -82,12 +82,15 @@ func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 			data: make([]byte, tb.opt.BlockSize), // TODO 加密block后块的大小会增加，需要预留一些填充位置
 		}
 	}
+	// 记录key的hash值
 	tb.keyHashes = append(tb.keyHashes, utils.Hash(utils.ParseKey(key)))
 
+	// 更新maxVersion
 	if version := utils.ParseTs(key); version > tb.maxVersion {
 		tb.maxVersion = version
 	}
 
+	// 计算key的diff
 	var diffKey []byte
 	if len(tb.curBlock.baseKey) == 0 {
 		tb.curBlock.baseKey = append(tb.curBlock.baseKey[:0], key...)
@@ -240,6 +243,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(bd.size)})
+	// 将builder的数据写入到sst文件中
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
 	utils.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))

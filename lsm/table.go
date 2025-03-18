@@ -69,8 +69,8 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	return t
 }
 
-// Serach 从table中查找key
-func (t *table) Serach(key []byte, maxVs *uint64) (entry *utils.Entry, err error) {
+// Search 从table中查找key
+func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
 	// 获取索引

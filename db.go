@@ -135,6 +135,9 @@ func (db *DB) Get(key []byte) (*utils.Entry, error) {
 	}
 
 	originKey := key
+	// 添加时间戳用于查询
+	key = utils.KeyWithTs(key, math.MaxUint32)
+
 	var (
 		entry *utils.Entry
 		err   error
@@ -245,7 +248,7 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	return req, nil
 }
 
-//   Check(kv.BatchSet(entries))
+// Check(kv.BatchSet(entries))
 func (db *DB) batchSet(entries []*utils.Entry) error {
 	req, err := db.sendToWriteCh(entries)
 	if err != nil {
