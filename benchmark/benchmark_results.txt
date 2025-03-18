@@ -39,3 +39,18 @@ NoKV Read:   250653	      4220 ns/op
 Badger Read:  1350816	       753.7 ns/op
 NoKV Range Query:      204	   5616015 ns/op
 Badger Range Query:       48	  24240563 ns/op
+
+=== Benchmark Results ===
+Time: 2025-03-18 03:55:12
+
+Write Operations:
+NoKV Write:   376083	      4931 ns/op
+Badger Write:   307966	      3490 ns/op
+NoKV Batch Write:   469431	      2447 ns/op
+Badger Batch Write:   904002	      1231 ns/op
+
+Read Operations:
+NoKV Read:   306385	      3977 ns/op
+Badger Read:  1659656	       727.6 ns/op
+NoKV Range Query:      211	   5773141 ns/op
+Badger Range Query:       46	  26029593 ns/op

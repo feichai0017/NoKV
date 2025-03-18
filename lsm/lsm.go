@@ -1,8 +1,9 @@
 package lsm
 
 import (
-	"github.com/feichai0017/NoKV/utils"
 	"sync"
+
+	"github.com/feichai0017/NoKV/utils"
 )
 
 // LSM _
@@ -16,7 +17,7 @@ type LSM struct {
 	maxMemFID  uint32
 }
 
-//Options _
+// Options _
 type Options struct {
 	WorkDir      string
 	MemTableSize int64
