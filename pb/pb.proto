@@ -2,6 +2,7 @@
 syntax = "proto3";
 
 package pb;
+option go_package = "github.com/feichai0017/NoKV/pb";
 
 message KV {
   bytes key = 1;

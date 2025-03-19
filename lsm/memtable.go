@@ -3,7 +3,6 @@ package lsm
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,7 +84,7 @@ func (m *memTable) Size() int64 {
 // recovery
 func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	// 从 工作目录中获取所有文件
-	files, err := ioutil.ReadDir(lsm.option.WorkDir)
+	files, err := os.ReadDir(lsm.option.WorkDir)
 	if err != nil {
 		utils.Panic(err)
 		return nil, nil

@@ -3,3 +3,7 @@ work_test
 testdata
 .idea
 .DS_Store
+
+test_results
+benchmark/benchmark_data/*
+benchmark/benchmark_results.txt
