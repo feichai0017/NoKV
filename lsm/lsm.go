@@ -64,11 +64,11 @@ func (lsm *LSM) Close() error {
 // NewLSM _
 func NewLSM(opt *Options) *LSM {
 	lsm := &LSM{option: opt}
-	// 初始化levelManager
+	// initialize levelManager
 	lsm.levels = lsm.initLevelManager(opt)
-	// 启动DB恢复过程加载wal，如果没有恢复内容则创建新的内存表
+	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
 	lsm.memTable, lsm.immutables = lsm.recovery()
-	// 初始化closer 用于资源回收的信号控制
+	// initialize closer for resource recycling signal control
 	lsm.closer = utils.NewCloser()
 	return lsm
 }
@@ -87,11 +87,11 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	// 优雅关闭
+	// graceful shutdown
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-	// 检查当前memtable是否写满，是的话创建新的memtable,并将当前内存表写到immutables中
-	// 否则写入当前memtable中
+	// check if the current memtable is full, if so, create a new memtable, and write the current memtable to immutables
+	// otherwise, write to the current memtable
 	if int64(lsm.memTable.wal.Size())+
 		int64(utils.EstimateWalCodecSize(entry)) > lsm.option.MemTableSize {
 		lsm.Rotate()
@@ -100,17 +100,17 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 	if err = lsm.memTable.set(entry); err != nil {
 		return err
 	}
-	// 检查是否存在immutable需要刷盘，
+	// check if there are immutables that need to be flushed, if so, flush them
 	for _, immutable := range lsm.immutables {
 		if err = lsm.levels.flush(immutable); err != nil {
 			return err
 		}
-		// TODO 这里问题很大，应该是用引用计数的方式回收
+		// TODO there is a big problem here, should use reference counting to recycle
 		err = immutable.close()
 		utils.Panic(err)
 	}
 	if len(lsm.immutables) != 0 {
-		// TODO 将lsm的immutables队列置空，这里可以优化一下节省内存空间，还可以限制一下immut table的大小为固定值
+		// TODO optimize this to save memory space, and limit the size of immut table to a fixed value
 		lsm.immutables = make([]*memTable, 0)
 	}
 	return err

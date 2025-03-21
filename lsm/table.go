@@ -34,7 +34,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 		err error
 	)
 	fid := utils.FID(tableName)
-	// 对builder存在的情况 把buf flush到磁盘
+	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
 		if t, err = builder.flush(lm, tableName); err != nil {
 			utils.Err(err)
@@ -42,25 +42,25 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 		}
 	} else {
 		t = &table{lm: lm, fid: fid}
-		// 如果没有builder 则创打开一个已经存在的sst文件
+		// if builder is nil, open an existing sst file
 		t.ss = file.OpenSStable(&file.Options{
 			FileName: tableName,
 			Dir:      lm.opt.WorkDir,
 			Flag:     os.O_CREATE | os.O_RDWR,
 			MaxSz:    int(sstSize)})
 	}
-	// 先要引用一下，否则后面使用迭代器会导致引用状态错误
+	// first reference, otherwise the reference state will be incorrect
 	t.IncrRef()
-	//  初始化sst文件，把index加载进来
+	// initialize the sst file, load the index
 	if err := t.ss.Init(); err != nil {
 		utils.Err(err)
 		return nil
 	}
 
-	// 获取sst的最大key 需要使用迭代器
-	itr := t.NewIterator(&utils.Options{}) // 默认是降序
+	// get the max key of sst, need to use iterator
+	itr := t.NewIterator(&utils.Options{}) // default is descending
 	defer itr.Close()
-	// 定位到初始位置就是最大的key
+	// locate to the initial position is the max key
 	itr.Rewind()
 	utils.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
 	maxKey := itr.Item().Entry().Key
@@ -69,13 +69,13 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	return t
 }
 
-// Search 从table中查找key
+// Search search for a key in the table
 func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
-	// 获取索引
+	// get the index
 	idx := t.ss.Indexs()
-	// 检查key是否存在
+	// check if the key exists
 	bloomFilter := utils.Filter(idx.BloomFilter)
 	if t.ss.HasBloomFilter() && !bloomFilter.MayContainKey(key) {
 		return nil, utils.ErrKeyNotFound
