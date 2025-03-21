@@ -16,8 +16,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-// ManifestFile 维护sst文件元信息的文件
-// manifest 比较特殊，不能使用mmap，需要保证实时的写入
+// ManifestFile maintain the metadata of sst files
+// manifest is special, cannot use mmap, need to ensure real-time writing
 type ManifestFile struct {
 	opt                       *Options
 	f                         *os.File
@@ -26,7 +26,7 @@ type ManifestFile struct {
 	manifest                  *Manifest
 }
 
-// Manifest NoKV 元数据状态维护
+// Manifest NoKV metadata state maintenance
 type Manifest struct {
 	Levels    []levelManifest
 	Tables    map[uint64]TableManifest
@@ -34,27 +34,27 @@ type Manifest struct {
 	Deletions int
 }
 
-// TableManifest 包含sst的基本信息
+// TableManifest contains the basic information of sst
 type TableManifest struct {
 	Level    uint8
-	Checksum []byte // 方便今后扩展
+	Checksum []byte // for future extensions
 }
 type levelManifest struct {
 	Tables map[uint64]struct{} // Set of table id's
 }
 
-//TableMeta sst 的一些元信息
+//TableMeta some metadata of sst
 type TableMeta struct {
 	ID       uint64
 	Checksum []byte
 }
 
-// OpenManifestFile 打开manifest文件
+// OpenManifestFile open the manifest file
 func OpenManifestFile(opt *Options) (*ManifestFile, error) {
 	path := filepath.Join(opt.Dir, utils.ManifestFilename)
 	mf := &ManifestFile{lock: sync.Mutex{}, opt: opt}
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	// 如果打开失败 则尝试创建一个新的 manifest file
+	// if open failed, try to create a new manifest file
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return mf, err
@@ -71,7 +71,7 @@ func OpenManifestFile(opt *Options) (*ManifestFile, error) {
 		return mf, nil
 	}
 
-	// 如果打开 则对manifest文件重放
+	// if open successfully, replay the manifest file
 	manifest, truncOffset, err := ReplayManifestFile(f)
 	if err != nil {
 		_ = f.Close()
@@ -91,7 +91,7 @@ func OpenManifestFile(opt *Options) (*ManifestFile, error) {
 	return mf, nil
 }
 
-// ReplayManifestFile 对已经存在的manifest文件重新应用所有状态变更
+// ReplayManifestFile replay all state changes on the existing manifest file
 func ReplayManifestFile(fp *os.File) (ret *Manifest, truncOffset int64, err error) {
 	r := &bufReader{reader: bufio.NewReader(fp)}
 	var magicBuf [8]byte

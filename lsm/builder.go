@@ -70,7 +70,7 @@ func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
 	}
-	// 检查是否需要分配一个新的 block
+	// check if need to allocate a new block
 	if tb.tryFinishBlock(e) {
 		if isStale {
 			// This key will be added to tableIndex and it is stale.
@@ -79,18 +79,18 @@ func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 		tb.finishBlock()
 		// Create a new block and start writing.
 		tb.curBlock = &block{
-			data: make([]byte, tb.opt.BlockSize), // TODO 加密block后块的大小会增加，需要预留一些填充位置
+			data: make([]byte, tb.opt.BlockSize), // TODO encrypt the block, the size of the block will increase, need to reserve some padding position
 		}
 	}
-	// 记录key的hash值
+	// record the hash value of the key
 	tb.keyHashes = append(tb.keyHashes, utils.Hash(utils.ParseKey(key)))
 
-	// 更新maxVersion
+	// update the maxVersion
 	if version := utils.ParseTs(key); version > tb.maxVersion {
 		tb.maxVersion = version
 	}
 
-	// 计算key的diff
+	// calculate the diff of the key
 	var diffKey []byte
 	if len(tb.curBlock.baseKey) == 0 {
 		tb.curBlock.baseKey = append(tb.curBlock.baseKey[:0], key...)
@@ -173,7 +173,7 @@ func (tb *tableBuilder) AddKey(e *utils.Entry) {
 
 // Close closes the TableBuilder.
 func (tb *tableBuilder) Close() {
-	// 结合内存分配器
+	// combine the memory allocator
 }
 func (tb *tableBuilder) finishBlock() {
 	if tb.curBlock == nil || len(tb.curBlock.entryOffsets) == 0 {
@@ -190,10 +190,9 @@ func (tb *tableBuilder) finishBlock() {
 	tb.append(utils.U32ToBytes(uint32(len(checksum))))
 	tb.estimateSz += tb.curBlock.estimateSz
 	tb.blockList = append(tb.blockList, tb.curBlock)
-	// TODO: 预估整理builder写入磁盘后，sst文件的大小
+	// TODO: estimate the size of the sst file after the builder is serialized to disk
 	tb.keyCount += uint32(len(tb.curBlock.entryOffsets))
-	tb.curBlock = nil // 表示当前block 已经被序列化到内存
-	return
+	tb.curBlock = nil // indicates that the current block has been serialized to memory
 }
 
 // append appends to curBlock.data
@@ -210,7 +209,7 @@ func (tb *tableBuilder) allocate(need int) []byte {
 		if bb.end+need > sz {
 			sz = bb.end + need
 		}
-		tmp := make([]byte, sz) // todo 这里可以使用内存分配器来提升性能
+		tmp := make([]byte, sz) // todo use memory allocator to improve performance
 		copy(tmp, bb.data)
 		bb.data = tmp
 	}
@@ -233,17 +232,17 @@ func (tb *tableBuilder) keyDiff(newKey []byte) []byte {
 	return newKey[i:]
 }
 
-// TODO: 这里存在多次的用户空间拷贝过程，需要优化
+// TODO: there are multiple user space copy processes, need to optimize
 func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
 	bd := tb.done()
 	t = &table{lm: lm, fid: utils.FID(tableName)}
-	// 如果没有builder 则创打开一个已经存在的sst文件
+	// if builder is nil, open an existing sst file
 	t.ss = file.OpenSStable(&file.Options{
 		FileName: tableName,
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(bd.size)})
-	// 将builder的数据写入到sst文件中
+	// write the data of builder to the sst file
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
 	utils.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))

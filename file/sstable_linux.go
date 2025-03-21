@@ -56,7 +56,7 @@ func (ss *SSTable) Init() error {
 	return nil
 }
 
-// SetMaxKey max 需要使用table的迭代器，来获取最后一个block的最后一个key
+// SetMaxKey max need use table's iterator, to get the last block's last key
 func (ss *SSTable) SetMaxKey(maxKey []byte) {
 	ss.maxKey = maxKey
 }
@@ -100,7 +100,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	return nil, errors.New("read index fail, offset is nil")
 }
 
-// Close 关闭
+// Close
 func (ss *SSTable) Close() error {
 	return ss.f.Close()
 }
@@ -110,17 +110,17 @@ func (ss *SSTable) Indexs() *pb.TableIndex {
 	return ss.idxTables
 }
 
-// MaxKey 当前最大的key
+// MaxKey current max key
 func (ss *SSTable) MaxKey() []byte {
 	return ss.maxKey
 }
 
-// MinKey 当前最小的key
+// MinKey current min key
 func (ss *SSTable) MinKey() []byte {
 	return ss.minKey
 }
 
-// FID 获取fid
+// FID get fid
 func (ss *SSTable) FID() uint64 {
 	return ss.fid
 }
@@ -154,7 +154,7 @@ func (ss *SSTable) Bytes(off, sz int) ([]byte, error) {
 	return ss.f.Bytes(off, sz)
 }
 
-// Size 返回底层文件的尺寸
+// Size return the size of the underlying file
 func (ss *SSTable) Size() int64 {
 	fileStats, err := ss.f.Fd.Stat()
 	utils.Panic(err)
