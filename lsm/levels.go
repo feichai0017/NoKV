@@ -10,12 +10,12 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// initLevelManager 初始化函数
+// initLevelManager initialize the levelManager
 func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
-	lm := &levelManager{lsm: lsm} // 反引用
+	lm := &levelManager{lsm: lsm} // dereference lsm
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
-	// 读取manifest文件构建管理器
+	// read the manifest file to build the manager
 	if err := lm.loadManifest(); err != nil {
 		panic(err)
 	}
@@ -24,7 +24,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 }
 
 type levelManager struct {
-	maxFID       uint64 // 已经分配出去的最大fid，只要创建了memtable 就算已分配
+	maxFID       uint64 // the maximum fid that has been allocated, as long as a memtable is created, it is considered allocated
 	opt          *Options
 	cache        *cache
 	manifestFile *file.ManifestFile
@@ -62,11 +62,11 @@ func (lm *levelManager) Get(key []byte) (*utils.Entry, error) {
 		entry *utils.Entry
 		err   error
 	)
-	// L0层查询
+	// L0 layer query
 	if entry, err = lm.levels[0].Get(key); entry != nil {
 		return entry, err
 	}
-	// L1-7层查询
+	// L1-7 layer query
 	for level := 1; level < lm.opt.MaxLevelNum; level++ {
 		ld := lm.levels[level]
 		if entry, err = ld.Get(key); entry != nil {
@@ -94,13 +94,13 @@ func (lm *levelManager) build() error {
 	}
 
 	manifest := lm.manifestFile.GetManifest()
-	// 对比manifest 文件的正确性
+	// compare the correctness of the manifest file
 	if err := lm.manifestFile.RevertToManifest(utils.LoadIDMap(lm.opt.WorkDir)); err != nil {
 		return err
 	}
-	// 逐一加载sstable 的index block 构建cache
+	// load the index block of each sstable to build the cache
 	lm.cache = newCache(lm.opt)
-	// TODO 初始化的时候index 结构放在了table中，相当于全部加载到了内存，减少了一次读磁盘，但增加了内存消耗
+	// TODO initialize the index structure in the table, which is equivalent to loading all of them into memory, reducing one read disk, but increasing memory consumption
 	var maxFID uint64
 	for fID, tableInfo := range manifest.Tables {
 		fileName := utils.FileNameSSTable(lm.opt.WorkDir, fID)
@@ -111,42 +111,42 @@ func (lm *levelManager) build() error {
 		lm.levels[tableInfo.Level].add(t)
 		lm.levels[tableInfo.Level].addSize(t) // 记录一个level的文件总大小
 	}
-	// 对每一层进行排序
+	// sort each level
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
 		lm.levels[i].Sort()
 	}
-	// 得到最大的fid值
+	// get the maximum fid value
 	atomic.AddUint64(&lm.maxFID, maxFID)
 	return nil
 }
 
-// 向L0层flush一个sstable
+// flush a sstable to L0 layer
 func (lm *levelManager) flush(immutable *memTable) (err error) {
-	// 分配一个fid
+	// allocate a fid
 	fid := immutable.wal.Fid()
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
-	// 构建一个 builder
+	// build a builder
 	builder := newTableBuiler(lm.opt)
 	iter := immutable.sl.NewSkipListIterator()
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
 		builder.add(entry, false)
 	}
-	// 创建一个 table 对象
+	// create a table object
 	table := openTable(lm, sstName, builder)
 	err = lm.manifestFile.AddTableMeta(0, &file.TableMeta{
 		ID:       fid,
 		Checksum: []byte{'m', 'o', 'c', 'k'},
 	})
-	// manifest写入失败直接panic
+	// panic if manifest write fails
 	utils.Panic(err)
-	// 更新manifest文件
+	// update the manifest file
 	lm.levels[0].add(table)
 	return
 }
 
-//--------- level处理器 -------
+//--------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
 	levelNum       int
@@ -198,13 +198,11 @@ func (lh *levelHandler) numTables() int {
 }
 
 func (lh *levelHandler) Get(key []byte) (*utils.Entry, error) {
-	// 如果是第0层文件则进行特殊处理
+	// if it is the 0th layer file, handle it specially
 	if lh.levelNum == 0 {
-		// TODO: logic...
-		// 获取可能存在key的sst
+		// get the sst that may contain the key
 		return lh.searchL0SST(key)
 	} else {
-		// TODO: logic...
 		return lh.searchLNSST(key)
 	}
 }

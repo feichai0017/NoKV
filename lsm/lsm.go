@@ -41,10 +41,9 @@ type Options struct {
 
 // Close  _
 func (lsm *LSM) Close() error {
-	// 等待全部合并过程的结束
-	// 等待全部api调用过程结束
+	// wait for all api calls to finish
 	lsm.closer.Close()
-	// TODO 需要加锁保证并发安全
+	// TODO need to lock to ensure concurrency safety
 	if lsm.memTable != nil {
 		if err := lsm.memTable.close(); err != nil {
 			return err
@@ -127,7 +126,7 @@ func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
 		entry *utils.Entry
 		err   error
 	)
-	// 从内存表中查询,先查活跃表，在查不变表
+	// query from the memtable, first query the active table, then query the immutable table
 	if entry, err = lsm.memTable.Get(key); entry != nil && entry.Value != nil {
 		return entry, err
 	}
@@ -137,7 +136,7 @@ func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
 			return entry, err
 		}
 	}
-	// 从level manger查询
+	// query from the level manager
 	return lsm.levels.Get(key)
 }
 
