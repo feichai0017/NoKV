@@ -59,7 +59,7 @@ func OpenManifestFile(opt *Options) (*ManifestFile, error) {
 		if !os.IsNotExist(err) {
 			return mf, err
 		}
-		m := createManifest()
+		m := createManifest()// create a new empty manifest
 		fp, netCreations, err := helpRewrite(opt.Dir, m)
 		utils.CondPanic(netCreations == 0, errors.Wrap(err, utils.ErrReWriteFailure.Error()))
 		if err != nil {
@@ -304,7 +304,7 @@ func (mf *ManifestFile) Close() error {
 	return nil
 }
 
-// AddChanges 对外暴露的写比那更丰富
+// AddChanges: public method
 func (mf *ManifestFile) AddChanges(changesParam []*pb.ManifestChange) error {
 	return mf.addChanges(changesParam)
 }
@@ -315,7 +315,7 @@ func (mf *ManifestFile) addChanges(changesParam []*pb.ManifestChange) error {
 		return err
 	}
 
-	// TODO 锁粒度可以优化
+	// TODO optimize the lock granularity
 	mf.lock.Lock()
 	defer mf.lock.Unlock()
 	if err := applyChangeSet(mf.manifest, &changes); err != nil {

@@ -83,7 +83,7 @@ func (m *memTable) Size() int64 {
 
 // recovery
 func (lsm *LSM) recovery() (*memTable, []*memTable) {
-	// 从 工作目录中获取所有文件
+	// get all files in the working directory
 	files, err := os.ReadDir(lsm.option.WorkDir)
 	if err != nil {
 		utils.Panic(err)
@@ -91,14 +91,14 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	}
 	var fids []uint64
 	maxFid := lsm.levels.maxFID
-	// 识别 后缀为.wal的文件
+	// identify files with the suffix .wal
 	for _, file := range files {
 		if !strings.HasSuffix(file.Name(), walFileExt) {
 			continue
 		}
 		fsz := len(file.Name())
 		fid, err := strconv.ParseUint(file.Name()[:fsz-len(walFileExt)], 10, 64)
-		// 考虑 wal文件的存在 更新maxFid
+		// consider the existence of the wal file and update maxFid
 		if maxFid < fid {
 			maxFid = fid
 		}
@@ -108,12 +108,12 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		}
 		fids = append(fids, fid)
 	}
-	// 排序一下子
+	// sort the fids
 	sort.Slice(fids, func(i, j int) bool {
 		return fids[i] < fids[j]
 	})
 	imms := []*memTable{}
-	// 遍历fid 做处理
+	// iterate the fids and do the processing
 	for _, fid := range fids {
 		mt, err := lsm.openMemTable(fid)
 		utils.CondPanic(err != nil, err)
@@ -121,10 +121,10 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 			// mt.DecrRef()
 			continue
 		}
-		// TODO 如果最后一个跳表没写满会怎么样？这不就浪费空间了吗
+		// TODO what if the last skiplist is not full?
 		imms = append(imms, mt)
 	}
-	// 更新最终的maxfid，初始化一定是串行执行的，因此不需要原子操作
+	// update the final maxfid, initialization is always executed serially, so no atomic operation is needed
 	lsm.levels.maxFID = maxFid
 	return lsm.NewMemtable(), imms
 }

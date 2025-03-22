@@ -67,7 +67,7 @@ func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
 	if flag == os.O_RDONLY {
 		writable = false
 	}
-	// 如果 sst文件层被打开过，则使用其文件原来的大小
+	// if the sst file layer has been opened, use its original size
 	if fileInfo, err := fd.Stat(); err == nil && fileInfo != nil && fileInfo.Size() > 0 {
 		maxSz = int(fileInfo.Size())
 	}
