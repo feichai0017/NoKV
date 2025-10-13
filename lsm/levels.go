@@ -2,11 +2,13 @@ package lsm
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -24,10 +26,10 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 }
 
 type levelManager struct {
-	maxFID       uint64 // the maximum fid that has been allocated, as long as a memtable is created, it is considered allocated
+	maxFID       uint64
 	opt          *Options
 	cache        *cache
-	manifestFile *file.ManifestFile
+	manifestMgr  *manifest.Manager
 	levels       []*levelHandler
 	lsm          *LSM
 	compactState *compactStatus
@@ -37,7 +39,7 @@ func (lm *levelManager) close() error {
 	if err := lm.cache.close(); err != nil {
 		return err
 	}
-	if err := lm.manifestFile.Close(); err != nil {
+	if err := lm.manifestMgr.Close(); err != nil {
 		return err
 	}
 	for i := range lm.levels {
@@ -80,7 +82,7 @@ func (lm *levelManager) loadCache() {
 
 }
 func (lm *levelManager) loadManifest() (err error) {
-	lm.manifestFile, err = file.OpenManifestFile(&file.Options{Dir: lm.opt.WorkDir})
+	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir)
 	return err
 }
 func (lm *levelManager) build() error {
@@ -93,23 +95,19 @@ func (lm *levelManager) build() error {
 		})
 	}
 
-	manifest := lm.manifestFile.GetManifest()
-	// compare the correctness of the manifest file
-	if err := lm.manifestFile.RevertToManifest(utils.LoadIDMap(lm.opt.WorkDir)); err != nil {
-		return err
-	}
-	// load the index block of each sstable to build the cache
+	version := lm.manifestMgr.Current()
 	lm.cache = newCache(lm.opt)
-	// TODO initialize the index structure in the table, which is equivalent to loading all of them into memory, reducing one read disk, but increasing memory consumption
 	var maxFID uint64
-	for fID, tableInfo := range manifest.Tables {
-		fileName := utils.FileNameSSTable(lm.opt.WorkDir, fID)
-		if fID > maxFID {
-			maxFID = fID
+	for level, files := range version.Levels {
+		for _, meta := range files {
+			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
+			if meta.FileID > maxFID {
+				maxFID = meta.FileID
+			}
+			t := openTable(lm, fileName, nil)
+			lm.levels[level].add(t)
+			lm.levels[level].addSize(t)
 		}
-		t := openTable(lm, fileName, nil)
-		lm.levels[tableInfo.Level].add(t)
-		lm.levels[tableInfo.Level].addSize(t) // 记录一个level的文件总大小
 	}
 	// sort each level
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
@@ -133,21 +131,33 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		entry := iter.Item().Entry()
 		builder.add(entry, false)
 	}
-	// create a table object
 	table := openTable(lm, sstName, builder)
-	err = lm.manifestFile.AddTableMeta(0, &file.TableMeta{
-		ID:       fid,
-		Checksum: []byte{'m', 'o', 'c', 'k'},
-	})
-	// panic if manifest write fails
-	utils.Panic(err)
-	// update the manifest file
+	if table == nil {
+		return fmt.Errorf("failed to build sstable %s", sstName)
+	}
+	meta := &manifest.FileMeta{
+		Level:     0,
+		FileID:    fid,
+		Size:      uint64(table.Size()),
+		Smallest:  utils.SafeCopy(nil, table.ss.MinKey()),
+		Largest:   utils.SafeCopy(nil, table.ss.MaxKey()),
+		CreatedAt: uint64(time.Now().Unix()),
+	}
+	edit := manifest.Edit{
+		Type:   manifest.EditAddFile,
+		File:   meta,
+		LogSeg: immutable.segmentID,
+	}
+	if err := lm.manifestMgr.LogEdit(edit); err != nil {
+		return err
+	}
 	lm.levels[0].add(table)
+	lm.levels[0].addSize(table)
 	utils.Err(lm.lsm.wal.RemoveSegment(uint32(fid)))
-	return
+	return nil
 }
 
-//--------- levelHandler ---------
+// --------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
 	levelNum       int
