@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
-	"math"
 	"sync/atomic"
 )
 
@@ -113,55 +112,34 @@ func (it *TxnIterator) Close() {
 		return
 	}
 	it.closed = true
-	if it.iitr == nil {
-		atomic.AddInt32(&it.txn.numIterators, -1)
-		return
-	}
-
-	it.iitr.Close()
-
-	// TODO: We could handle this error.
-	_ = it.txn.db.vlog.decrIteratorCount()
 	atomic.AddInt32(&it.txn.numIterators, -1)
 }
 
 // Next would advance the iterator by one. Always check it.Valid() after a Next()
 // to ensure you have access to a valid it.Item().
 func (it *TxnIterator) Next() {
-	if it.iitr == nil {
-		return
-	}
-	it.iitr.Next()
+	it.item = nil
 }
 
 // Seek would seek to the provided key if present. If absent, it would seek to the next
 // smallest key greater than the provided key if iterating in the forward direction.
 // Behavior would be reversed if iterating backwards.
 func (it *TxnIterator) Seek(key []byte) uint64 {
-	if it.iitr == nil {
-		return it.latestTs
-	}
-	if len(key) > 0 {
-		it.txn.addReadKey(key)
-	}
-
 	it.lastKey = it.lastKey[:0]
 	if len(key) == 0 {
-		key = it.opt.Prefix
-	}
-	if len(key) == 0 {
-		it.iitr.Rewind()
+		it.item = nil
 		return it.latestTs
 	}
 
-	if !it.opt.Reverse {
-		// Using maxUint64 instead of it.readTs because we want seek to return latestTs of the key.
-		// All the keys with ts > readTs will be discarded for iteration by the prefetch function.
-		key = utils.KeyWithTs(key, math.MaxUint64)
-	} else {
-		key = utils.KeyWithTs(key, 0)
+	item, err := it.txn.Get(key)
+	if err != nil {
+		it.item = nil
+		return it.latestTs
 	}
-	it.iitr.Seek(key)
+	it.item = item
+	if entry := item.Entry(); entry != nil {
+		it.latestTs = entry.Version
+	}
 
 	return it.latestTs
 }
@@ -170,5 +148,5 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 // smallest key if iterating forward, and largest if iterating backward. It does not keep track of
 // whether the cursor started with a Seek().
 func (it *TxnIterator) Rewind() {
-	it.Seek(nil)
+	it.item = nil
 }

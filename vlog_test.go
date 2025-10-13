@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,33 +58,30 @@ func TestVlogBase(t *testing.T) {
 	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
 
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
-	buf1, lf1, err1 := log.readValueBytes(b.Ptrs[0])
-	buf2, lf2, err2 := log.readValueBytes(b.Ptrs[1])
+	payload1, unlock1, err1 := log.manager.Read(b.Ptrs[0])
+	payload2, unlock2, err2 := log.manager.Read(b.Ptrs[1])
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	// 关闭会调的锁
-	defer utils.RunCallback(log.getUnlockCallback(lf1))
-	defer utils.RunCallback((log.getUnlockCallback(lf2)))
-	e1, err = lf1.DecodeEntry(buf1, b.Ptrs[0].Offset)
+	defer utils.RunCallback(unlock1)
+	defer utils.RunCallback(unlock2)
+	entry1, err := wal.DecodeEntry(payload1)
 	require.NoError(t, err)
-	// 从vlog文件中通过指指针反序列化回 entry对象
-	e2, err = lf1.DecodeEntry(buf2, b.Ptrs[1].Offset)
+	entry2, err := wal.DecodeEntry(payload2)
 	require.NoError(t, err)
 
 	// 比较entry对象是否相等
-	readEntries := []utils.Entry{*e1, *e2}
+	readEntries := []utils.Entry{*entry1, *entry2}
 	require.EqualValues(t, []utils.Entry{
 		{
-			Key:    []byte("samplekey"),
-			Value:  []byte(val1),
-			Meta:   utils.BitValuePointer,
-			Offset: b.Ptrs[0].Offset,
+			Key:   []byte("samplekey"),
+			Value: []byte(val1),
+			Meta:  utils.BitValuePointer,
 		},
 		{
-			Key:    []byte("samplekeyb"),
-			Value:  []byte(val2),
-			Meta:   utils.BitValuePointer,
-			Offset: b.Ptrs[1].Offset,
+			Key:   []byte("samplekeyb"),
+			Value: []byte(val2),
+			Meta:  utils.BitValuePointer,
 		},
 	}, readEntries)
 }
