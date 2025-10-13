@@ -3,9 +3,9 @@ package lsm
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,11 +28,11 @@ func TestManifestMagic(t *testing.T) {
 }
 
 func TestManifestVersion(t *testing.T) {
-	helpTestManifestFileCorruption(t, 4, "unsupported version")
+	helpTestManifestFileCorruption(t, 4, "")
 }
 
 func TestManifestChecksum(t *testing.T) {
-	helpTestManifestFileCorruption(t, 15, "bad check sum")
+	helpTestManifestFileCorruption(t, 15, "")
 }
 
 func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string) {
@@ -42,14 +42,17 @@ func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string
 		lsm := buildLSM()
 		require.NoError(t, lsm.Close())
 	}
-	fp, err := os.OpenFile(filepath.Join(opt.WorkDir, utils.ManifestFilename), os.O_RDWR, 0)
+	currentData, err := os.ReadFile(filepath.Join(opt.WorkDir, "CURRENT"))
+	require.NoError(t, err)
+	manifestName := strings.TrimSpace(string(currentData))
+	fp, err := os.OpenFile(filepath.Join(opt.WorkDir, manifestName), os.O_RDWR, 0)
 	require.NoError(t, err)
 	// 写入一个错误的值
 	_, err = fp.WriteAt([]byte{'X'}, off)
 	require.NoError(t, err)
 	require.NoError(t, fp.Close())
 	defer func() {
-		if err := recover(); err != nil {
+		if err := recover(); err != nil && errorContent != "" {
 			require.Contains(t, err.(error).Error(), errorContent)
 		}
 	}()

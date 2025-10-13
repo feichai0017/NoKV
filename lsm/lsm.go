@@ -97,7 +97,7 @@ func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
-	for i :=  range n {
+	for i := range n {
 		go lsm.levels.runCompacter(i)
 	}
 }

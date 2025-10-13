@@ -26,6 +26,8 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
 ## Documentation
 
 - [Architecture & Design Overview](docs/architecture.md)
+- [MemTable Flush Pipeline](docs/flush.md)
+- [Manifest & VersionEdit](docs/manifest.md)
 
 ## Architecture
 

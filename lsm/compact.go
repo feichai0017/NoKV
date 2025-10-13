@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -397,9 +398,37 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}()
 	changeSet := buildChangeSet(&cd, newTables)
 
-	// 删除之前先更新manifest文件
-	if err := lm.manifestFile.AddChanges(changeSet.Changes); err != nil {
-		return err
+	// 更新 manifest
+	for _, ch := range changeSet.Changes {
+		switch ch.Op {
+		case pb.ManifestChange_CREATE:
+			tbl := findTableByID(newTables, ch.Id)
+			if tbl == nil {
+				continue
+			}
+			add := manifest.Edit{
+				Type: manifest.EditAddFile,
+				File: &manifest.FileMeta{
+					Level:     int(ch.Level),
+					FileID:    tbl.fid,
+					Size:      uint64(tbl.Size()),
+					Smallest:  utils.SafeCopy(nil, tbl.ss.MinKey()),
+					Largest:   utils.SafeCopy(nil, tbl.ss.MaxKey()),
+					CreatedAt: uint64(time.Now().Unix()),
+				},
+			}
+			if err := lm.manifestMgr.LogEdit(add); err != nil {
+				return err
+			}
+		case pb.ManifestChange_DELETE:
+			del := manifest.Edit{
+				Type: manifest.EditDeleteFile,
+				File: &manifest.FileMeta{FileID: ch.Id},
+			}
+			if err := lm.manifestMgr.LogEdit(del); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
@@ -436,6 +465,15 @@ func tablesToString(tables []*table) []string {
 	return res
 }
 
+func findTableByID(tables []*table, fid uint64) *table {
+	for _, t := range tables {
+		if t.fid == fid {
+			return t
+		}
+	}
+	return nil
+}
+
 // buildChangeSet _
 func buildChangeSet(cd *compactDef, newTables []*table) pb.ManifestChangeSet {
 	changes := []*pb.ManifestChange{}
@@ -451,7 +489,6 @@ func buildChangeSet(cd *compactDef, newTables []*table) pb.ManifestChangeSet {
 	return pb.ManifestChangeSet{Changes: changes}
 }
 
-//
 func newDeleteChange(id uint64) *pb.ManifestChange {
 	return &pb.ManifestChange{
 		Id: id,
