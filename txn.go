@@ -432,20 +432,23 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	seek := utils.KeyWithTs(key, txn.readTs)
 	vs, err := txn.db.lsm.Get(seek)
 	if err != nil {
+		if err == utils.ErrKeyNotFound {
+			return nil, err
+		}
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
 	// 处理值指针
-    if vs != nil && utils.IsValuePtr(vs) {
-        var vp utils.ValuePtr
-        vp.Decode(vs.Value)
-        result, cb, err := txn.db.vlog.read(&vp)
-        defer utils.RunCallback(cb)
-        if err != nil {
-            return nil, err
-        }
-        vs.Value = utils.SafeCopy(nil, result)
-    }
-	
+	if vs != nil && utils.IsValuePtr(vs) {
+		var vp utils.ValuePtr
+		vp.Decode(vs.Value)
+		result, cb, err := txn.db.vlog.read(&vp)
+		defer utils.RunCallback(cb)
+		if err != nil {
+			return nil, err
+		}
+		vs.Value = utils.SafeCopy(nil, result)
+	}
+
 	if vs.Value == nil && vs.Meta == 0 {
 		return nil, utils.ErrKeyNotFound
 	}

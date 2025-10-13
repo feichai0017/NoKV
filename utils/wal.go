@@ -64,6 +64,7 @@ func WalCodec(buf *bytes.Buffer, e *Entry) int {
 		KeyLen:    uint32(len(e.Key)),
 		ValueLen:  uint32(len(e.Value)),
 		ExpiresAt: e.ExpiresAt,
+		Meta:      e.Meta,
 	}
 
 	hash := crc32.New(CastagnoliCrcTable)
