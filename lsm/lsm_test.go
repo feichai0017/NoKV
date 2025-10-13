@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 )
 
 var (
@@ -260,7 +261,12 @@ func buildLSM() *LSM {
 	// init DB Basic Test
 	c := make(chan map[uint32]int64, 16)
 	opt.DiscardStatsCh = &c
-	lsm := NewLSM(opt)
+	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
+	if err != nil {
+		panic(err)
+	}
+	lsm := NewLSM(opt, wlog)
+	lsm.SetDiscardStatsCh(&c)
 	return lsm
 }
 

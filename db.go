@@ -10,6 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
 )
 
@@ -29,6 +30,7 @@ type (
 		sync.RWMutex
 		opt         *Options
 		lsm         *lsm.LSM
+		wal         *wal.Manager
 		vlog        *valueLog
 		stats       *Stats
 		flushChan   chan flushTask // For flushing memtables.
@@ -50,8 +52,12 @@ var (
 func Open(opt *Options) *DB {
 	c := utils.NewCloser()
 	db := &DB{opt: opt}
-	// 初始化vlog结构
-	db.initVLog()
+
+	wlog, err := wal.Open(wal.Config{
+		Dir: opt.WorkDir,
+	})
+	utils.Panic(err)
+	db.wal = wlog
 	// 初始化LSM结构
 	db.lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:             opt.WorkDir,
@@ -66,8 +72,10 @@ func Open(opt *Options) *DB {
 		NumLevelZeroTables:  15,
 		MaxLevelNum:         7,
 		NumCompactors:       1,
-		DiscardStatsCh:      &(db.vlog.lfDiscardStats.flushChan),
-	})
+	}, wlog)
+	// 初始化vlog结构
+	db.initVLog()
+	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// 初始化统计信息
 	db.stats = newStats(opt)
 
@@ -90,6 +98,9 @@ func (db *DB) Close() error {
 		return err
 	}
 	if err := db.vlog.close(); err != nil {
+		return err
+	}
+	if err := db.wal.Close(); err != nil {
 		return err
 	}
 	if err := db.stats.close(); err != nil {

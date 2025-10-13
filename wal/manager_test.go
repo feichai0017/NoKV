@@ -1,0 +1,241 @@
+package wal_test
+
+import (
+	"io"
+	"os"
+	"sort"
+	"testing"
+
+	"github.com/feichai0017/NoKV/wal"
+)
+
+func TestManagerAppendAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	entries := [][]byte{
+		[]byte("hello"),
+		[]byte("world"),
+		[]byte("zoom"),
+	}
+	if _, err := m.Append(entries...); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// reopen and replay
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer m.Close()
+
+	var got [][]byte
+	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
+		cp := make([]byte, len(payload))
+		copy(cp, payload)
+		got = append(got, cp)
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	if len(got) != len(entries) {
+		t.Fatalf("entries mismatch: want %d got %d", len(entries), len(got))
+	}
+	for i := range entries {
+		if string(entries[i]) != string(got[i]) {
+			t.Fatalf("entry %d mismatch: want %q got %q", i, entries[i], got[i])
+		}
+	}
+}
+
+func TestManagerRotate(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	payload := []byte("record")
+	if _, err := m.Append(payload); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := m.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := m.Append(payload); err != nil {
+		t.Fatalf("append after rotate: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync after rotate: %v", err)
+	}
+	files, err := m.ListSegments()
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 segments, got %d (%v)", len(files), files)
+	}
+}
+
+func TestManagerReplayHandlesTruncate(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.Append([]byte("alpha"), []byte("beta")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	files, err := m.ListSegments()
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list segments err=%v files=%v", err, files)
+	}
+	active := files[len(files)-1]
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Truncate最后两个字节，保持至少一条完整记录。
+	info, err := os.Stat(active)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if err := os.Truncate(active, info.Size()-2); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer m.Close()
+
+	var count int
+	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
+		count++
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected at least one record before truncation")
+	}
+}
+
+func TestManagerReplayChecksumError(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.Append([]byte("gamma")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	files, err := m.ListSegments()
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list segments err=%v files=%v", err, files)
+	}
+	path := files[0]
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Corrupt checksum
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open segment: %v", err)
+	}
+	if _, err := f.Seek(-2, io.SeekEnd); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	if _, err := f.Write([]byte{0x12, 0x34}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.Close()
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer m.Close()
+
+	err = m.Replay(func(_ wal.EntryInfo, payload []byte) error { return nil })
+	if err == nil {
+		t.Fatalf("expected checksum error")
+	}
+}
+
+func TestManagerCloseIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	if _, err := m.Append([]byte("x")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close again: %v", err)
+	}
+}
+
+// Helper verifying segments sorted order.
+func TestManagerListSegmentsSorted(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir, SegmentSize: 128})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	for i := 0; i < 5; i++ {
+		payload := []byte("payload-" + string(rune('a'+i)))
+		if _, err := m.Append(payload); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		if i%2 == 1 {
+			if err := m.Rotate(); err != nil {
+				t.Fatalf("rotate: %v", err)
+			}
+		}
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	files, err := m.ListSegments()
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	if !sort.StringsAreSorted(files) {
+		t.Fatalf("files not sorted: %v", files)
+	}
+}

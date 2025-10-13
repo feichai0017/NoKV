@@ -20,8 +20,12 @@ A high-performance embedded key-value storage engine based on LSM Tree with MVCC
   - [Performance Optimizations](#performance-optimizations)
   - [Implementation Details](#implementation-details)
   - [Installation](#installation)
-  - [Contributing](#contributing)
-  - [License](#license)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Documentation
+
+- [Architecture & Design Overview](docs/architecture.md)
 
 ## Architecture
 

@@ -7,3 +7,5 @@ testdata
 test_results
 benchmark/benchmark_data/*
 benchmark/benchmark_results.txt
+
+.gocache

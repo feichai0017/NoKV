@@ -123,7 +123,7 @@ func (lm *levelManager) build() error {
 // flush a sstable to L0 layer
 func (lm *levelManager) flush(immutable *memTable) (err error) {
 	// allocate a fid
-	fid := immutable.wal.Fid()
+	fid := uint64(immutable.segmentID)
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
 	// build a builder
@@ -143,6 +143,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	utils.Panic(err)
 	// update the manifest file
 	lm.levels[0].add(table)
+	utils.Err(lm.lsm.wal.RemoveSegment(uint32(fid)))
 	return
 }
 
