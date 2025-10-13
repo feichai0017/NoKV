@@ -38,21 +38,17 @@
 - 控制写入管线（批处理、发送到 WAL + MemTable + flush 管线）。
 - 管理关闭流程：阻塞新请求 → flush → 停 compaction → 关闭日志。
 
-### 3.2 WAL 子系统
-- 由 `wal.Manager` 模块负责，顺序日志记录所有写入（支持批量）。
-- 轮转策略：写入量达到上限或 flush 后按段切换；段命名沿用 `00001.wal` 形式。
-- 与 MemTable flush 协调：直到对应 SST 落盘并 manifest 更新后才可调用 `RemoveSegment` 删除段文件。
-- Crash 恢复：按 `CURRENT` 找到 manifest，再通过 `Replay/ReplaySegment` 顺序重放 WAL 记录。
+### 3.2 WAL 子系统 (`wal/manager.go`)
+- 由独立的 `wal.Manager` 统一管理段文件：`Append`、`Sync`、`Rotate`、`Replay` 均已实现并配套单测。
+- 段命名固定为 `%05d.wal`，位于 `options.WorkDir/wal/`；达到阈值或 flush 完成后可调用 `Rotate`。
+- Flush 任务在完成安装后，通过 manager 的 API 标记并删除旧段（与 Manifest 记录联合保障持久性）。
+- Crash 恢复：Open 时按 `CURRENT` → manifest → `wal.Manager.Replay` 顺序重放，重建 MemTable。
 
-### 3.3 MemTable / Immutable 表
+### 3.3 MemTable / Flush 管线 (`lsm/flush`)
 - 活跃 MemTable 使用 SkipList；达到阈值后被冻结成 Immutable。
-- Immutable 被 flush 到 L0，生成新的 SST。
-- Flush 管线状态机：
-  1. `Freeze`：截断 WAL，记录 flush 任务。
-  2. `Build SST`：读 SkipList 生成 TableBuilder → 写临时文件。
-  3. `Install`：rename 临时文件，写入 manifest。
-  4. `Release`：标记 WAL 可回收。
-- 失败策略：保留 WAL + temp 文件，重启后可重试。
+- `flush.Manager` 已落地四阶段状态机：`Prepare → Build → Install → Release`，持久化 flush 元数据并与 manifest/wal 协作。
+- Flush 失败会保留临时文件与任务描述，重启后可恢复执行；成功后触发 WAL 段释放。
+- 后续任务：在安装阶段补充更多观测点（时延、队列长度），并与 compaction 做调度协调。
 
 ### 3.4 SSTable 管理 (`lsm/`)
 - L0~Ln 层次结构，采用 size-tiered/leveling 混合策略。
@@ -60,19 +56,16 @@
 - `Cache` 预加载 Bloom / Index，减少随机 IO。
 - Compaction：根据层级大小、Overlap、冷热点调度。
 
-### 3.5 Manifest 管理 (`file/manifest.go`)
-- 仿 RocksDB `VersionEdit`：所有表/日志变动写入 `MANIFEST-xxxx`。
-- `CURRENT` 原子切换，保证 crash 后仍指向一致版本。
-- 具备回滚/重放能力，manifest 损坏时可回退到上一版本。
+### 3.5 Manifest 管理 (`manifest/manager.go`)
+- 采用 VersionEdit + CURRENT 的结构，所有 SST/WAL/ValueLog 事件通过 `manifest.Manager.LogEdit` 记录。
+- Open 时读取 CURRENT → MANIFEST 构造 Version，并在必要时重写 manifest 以控制体积。
+- rewrite、CURRENT 原子切换等边界情况已有测试覆盖；后续需补充对 ValueLog head/删除事件的记录。
 
-### 3.6 ValueLog 子系统 (`vlog.go`)
-- 保存大 Value 或带 TTL 数据，记录 `ValuePtr`（Fid, Offset, Len）。
-- GC 流程：
-  1. 收集 discard stats（来自 compaction 及事务）。
-  2. 选择回收候选段（废弃比例达到阈值）。
-  3. 顺序扫描存活 entry，写入新段，更新 manifest。
-  4. 删除旧文件（需确保无活跃迭代器 / Txn 引用）。
-- Crash 恢复：读取 `!NoKV!head` checkpoint，必要时重放全部 ValueLog。
+### 3.6 ValueLog 子系统 (`vlog/manager.go` + `vlog.go`)
+- ValueLog 现由 `vlog.Manager` 统一管理段的 Append/Rotate/Read/Remove，写入格式复用 WAL 编码。
+- GC 重构完成：通过 WAL 解码顺序扫描旧段、重写有效 entry、批量写回并删除原文件；迭代器/事务引用计数全流程可用。
+- Crash 恢复：Open 时由 manager 读取现有段和写入 offset，再结合 `!NoKV!head` 与 manifest state 恢复写指针。
+- 下一步需将 GC 操作（head 更新、删除列表）纳入 manifest VersionEdit，确保崩溃后也能复原 manager 状态。
 
 ### 3.7 Oracle / 事务 (`txn.go`)
 - MVCC 时间戳分配、冲突检测、潜在快照隔离点。
@@ -108,9 +101,9 @@
 - 失败重试、暂停/恢复能力。
 
 ### 4.4 ValueLog GC
-- 每个 ValueLog 段维护活跃引用计数。
-- GC 期间若遇到活跃迭代器/事务，延后删除。
-- GC 生成的新段需写 manifest；旧段删除后更新 discard stats。
+- manager 维护段引用计数；GC 期间若存在活跃迭代器/事务，会延迟删除。
+- rewrite 通过 WAL 编码重放旧段并写回有效 entry，完成后调用 `manager.Remove` 删除原段。
+- TODO：将 GC edit（删除、head 更新）写入 manifest，打通全量恢复链路，并结合 discard stats 优化候选选择。
 
 ### 4.5 Crash Recovery
 1. 读取 `CURRENT` 找到 manifest。
@@ -151,13 +144,20 @@
 
 ## 7. 开发阶段拆分
 
-1. **WAL 重构**：顺序写 + 生命周期管理 + 回放测试。
-2. **Flush 管线**：MemTable 状态机、临时文件、manifest 集成。
-3. **Manifest/Version**：CURRENT、VersionEdit、回滚。
-4. **ValueLog 重构**：读写流程、GC、discard stats。
-5. **Compaction 框架**：调度器、backpressure、指标。
-6. **事务/迭代器完善**：引用计数、一致性测试。
-7. **完整恢复/压力测试**：崩溃模拟、并发混合 workload。
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 1. WAL 重构 | ✅ 已完成 | `wal.Manager` + Replay 流程上线并覆盖单测 |
+| 2. Flush 管线 | ✅ 已完成 | `lsm/flush.Manager` 负责状态机、任务恢复、与 WAL 协同 |
+| 3. Manifest/Version | ✅ 已完成 | `manifest.Manager` 管理 VersionEdit、CURRENT 切换 |
+| 4. ValueLog 重构 | ✅ 已完成 | `vlog.Manager` + WAL 编码 + GC 重写逻辑落地 |
+| 5. Compaction 框架 | ⏳ 进行中 | 需实现任务调度、backpressure、stats 汇总 |
+| 6. 事务/迭代器完善 | ⏳ 计划中 | Snapshot、多版本 iterator、冲突检测指标等 |
+| 7. 完整恢复/压力测试 | ⏳ 计划中 | 崩溃恢复脚本、混合 workload、CLI/metrics 工具 |
+
+后续里程碑聚焦于：  
+1. **Compaction 调度器**：统一管理 level/size 配额，与 ValueLog discard stats 协同。  
+2. **Manifest ↔ ValueLog 联动**：在 VersionEdit 中记录 head/删段信息，补齐崩溃恢复闭环。  
+3. **观测性与工具**：完善指标、命令行工具与压测场景，靠近 RocksDB/Badger 的运维体验。
 
 每阶段需保证 `go test ./...` 通过，新增针对性单测及集成测试。
 
