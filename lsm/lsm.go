@@ -1,8 +1,10 @@
 package lsm
 
 import (
+	"errors"
 	"sync"
 
+	"github.com/feichai0017/NoKV/lsm/flush"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -16,6 +18,8 @@ type LSM struct {
 	option     *Options
 	closer     *utils.Closer
 	wal        *wal.Manager
+	flushMgr   *flush.Manager
+	flushWG    sync.WaitGroup
 	maxMemFID  uint32
 }
 
@@ -45,6 +49,8 @@ type Options struct {
 func (lsm *LSM) Close() error {
 	// wait for all api calls to finish
 	lsm.closer.Close()
+	lsm.flushMgr.Close()
+	lsm.flushWG.Wait()
 	// TODO need to lock to ensure concurrency safety
 	if lsm.memTable != nil {
 		if err := lsm.memTable.close(); err != nil {
@@ -73,10 +79,15 @@ func (lsm *LSM) SetDiscardStatsCh(ch *chan map[uint32]int64) {
 // NewLSM _
 func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 	lsm := &LSM{option: opt, wal: walMgr}
+	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
 	lsm.levels = lsm.initLevelManager(opt)
 	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
 	lsm.memTable, lsm.immutables = lsm.recovery()
+	lsm.startFlushWorkers(1)
+	for _, mt := range lsm.immutables {
+		lsm.submitFlush(mt)
+	}
 	// initialize closer for resource recycling signal control
 	lsm.closer = utils.NewCloser()
 	return lsm
@@ -86,7 +97,7 @@ func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
-	for i := 0; i < n; i++ {
+	for i :=  range n {
 		go lsm.levels.runCompacter(i)
 	}
 }
@@ -109,19 +120,6 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 	if err = lsm.memTable.set(entry); err != nil {
 		return err
 	}
-	// check if there are immutables that need to be flushed, if so, flush them
-	for _, immutable := range lsm.immutables {
-		if err = lsm.levels.flush(immutable); err != nil {
-			return err
-		}
-		// TODO there is a big problem here, should use reference counting to recycle
-		err = immutable.close()
-		utils.Panic(err)
-	}
-	if len(lsm.immutables) != 0 {
-		// TODO optimize this to save memory space, and limit the size of immut table to a fixed value
-		lsm.immutables = make([]*memTable, 0)
-	}
 	return err
 }
 
@@ -136,13 +134,19 @@ func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
 		entry *utils.Entry
 		err   error
 	)
-	// query from the memtable, first query the active table, then query the immutable table
-	if entry, err = lsm.memTable.Get(key); entry != nil && entry.Value != nil {
-		return entry, err
+	lsm.lock.RLock()
+	active := lsm.memTable
+	immutables := append([]*memTable(nil), lsm.immutables...)
+	lsm.lock.RUnlock()
+
+	if active != nil {
+		if entry, err = active.Get(key); entry != nil && entry.Value != nil {
+			return entry, err
+		}
 	}
 
-	for i := len(lsm.immutables) - 1; i >= 0; i-- {
-		if entry, err = lsm.immutables[i].Get(key); entry != nil && entry.Value != nil {
+	for i := len(immutables) - 1; i >= 0; i-- {
+		if entry, err = immutables[i].Get(key); entry != nil && entry.Value != nil {
 			return entry, err
 		}
 	}
@@ -163,8 +167,12 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 }
 
 func (lsm *LSM) Rotate() {
-	lsm.immutables = append(lsm.immutables, lsm.memTable)
+	lsm.lock.Lock()
+	old := lsm.memTable
+	lsm.immutables = append(lsm.immutables, old)
 	lsm.memTable = lsm.NewMemtable()
+	lsm.lock.Unlock()
+	lsm.submitFlush(old)
 }
 
 func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
@@ -187,4 +195,51 @@ func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
 		}
 	}
 
+}
+
+func (lsm *LSM) submitFlush(mt *memTable) {
+	if mt == nil {
+		return
+	}
+	_, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt})
+	utils.Panic(err)
+}
+
+func (lsm *LSM) startFlushWorkers(n int) {
+	if n <= 0 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		lsm.flushWG.Add(1)
+		go func() {
+			defer lsm.flushWG.Done()
+			for {
+				task, ok := lsm.flushMgr.Next()
+				if !ok {
+					return
+				}
+				mt, _ := task.Data.(*memTable)
+				if mt == nil {
+					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable"))
+					continue
+				}
+				err := lsm.levels.flush(mt)
+				if err != nil {
+					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err)
+					continue
+				}
+				lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil)
+				lsm.lock.Lock()
+				for idx, imm := range lsm.immutables {
+					if imm == mt {
+						lsm.immutables = append(lsm.immutables[:idx], lsm.immutables[idx+1:]...)
+						break
+					}
+				}
+				lsm.lock.Unlock()
+				_ = mt.close()
+				lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil)
+			}
+		}()
+	}
 }
