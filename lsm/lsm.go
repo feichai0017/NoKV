@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 )
 
 // LSM _
@@ -14,6 +15,7 @@ type LSM struct {
 	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
+	wal        *wal.Manager
 	maxMemFID  uint32
 }
 
@@ -60,9 +62,17 @@ func (lsm *LSM) Close() error {
 	return nil
 }
 
+// SetDiscardStatsCh updates the discard stats channel used during compaction.
+func (lsm *LSM) SetDiscardStatsCh(ch *chan map[uint32]int64) {
+	lsm.option.DiscardStatsCh = ch
+	if lsm.levels != nil {
+		lsm.levels.opt.DiscardStatsCh = ch
+	}
+}
+
 // NewLSM _
-func NewLSM(opt *Options) *LSM {
-	lsm := &LSM{option: opt}
+func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
+	lsm := &LSM{option: opt, wal: walMgr}
 	// initialize levelManager
 	lsm.levels = lsm.initLevelManager(opt)
 	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
@@ -91,7 +101,7 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 	defer lsm.closer.Done()
 	// check if the current memtable is full, if so, create a new memtable, and write the current memtable to immutables
 	// otherwise, write to the current memtable
-	if int64(lsm.memTable.wal.Size())+
+	if lsm.memTable.walSize+
 		int64(utils.EstimateWalCodecSize(entry)) > lsm.option.MemTableSize {
 		lsm.Rotate()
 	}
