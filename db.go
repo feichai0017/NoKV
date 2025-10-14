@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -40,6 +41,7 @@ type (
 		logRotates  int32
 		isClosed    uint32
 		orc         *oracle
+		hot         *hotring.HotRing
 	}
 )
 
@@ -79,6 +81,13 @@ func Open(opt *Options) *DB {
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// 初始化统计信息
 	db.stats = newStats(db)
+
+	if opt.HotRingEnabled {
+		db.hot = hotring.NewHotRing(opt.HotRingBits, nil)
+		if opt.HotRingTopK <= 0 {
+			opt.HotRingTopK = 16
+		}
+	}
 
 	db.orc = newOracle(*opt)
 	// 启动 sstable 的合并压缩过程
@@ -174,6 +183,7 @@ func (db *DB) Get(key []byte) (*utils.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	entry.Key = originKey
+	db.recordRead(originKey)
 	return entry, nil
 }
 
@@ -231,6 +241,13 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 
 	// Pick a log file and run GC
 	return db.vlog.runGC(discardRatio, &head)
+}
+
+func (db *DB) recordRead(key []byte) {
+	if db == nil || db.hot == nil || len(key) == 0 {
+		return
+	}
+	db.hot.Touch(string(key))
 }
 
 func (db *DB) shouldWriteValueToLSM(e *utils.Entry) bool {
@@ -382,10 +399,6 @@ func (db *DB) writeRequests(reqs []*request) error {
 			continue
 		}
 		count += len(b.Entries)
-		if err != nil {
-			done(err)
-			return errors.Wrap(err, "writeRequests")
-		}
 		if err := db.writeToLSM(b); err != nil {
 			done(err)
 			return errors.Wrap(err, "writeRequests")

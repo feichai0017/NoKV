@@ -76,6 +76,7 @@
 ### 3.8 统计与监控 (`stats.go`)
 - 周期采集 LSM/ValueLog backlog、运行状态，并通过 `expvar` 暴露。
 - 当前指标：写入计数、flush/compaction backlog、`NoKV.Compaction.*`、`NoKV.ValueLog.*` 与 `NoKV.Txns.*` 系列；离线巡检可使用 `cmd/nokv stats`。
+- 引入 `hotring` 热点追踪器：在事务/DB 读路径中记录 key 访问频次，并在 Stats/CLI 中输出 Top-N 热点，为缓存、限流和调度策略提供决策依据。
 - 后续拓展：慢请求日志、压缩比、空间放大、命令行工具导出（如 `nokv stats/manifest`）。
 
 ---
@@ -160,7 +161,14 @@
 | 4. ValueLog 重构 | ✅ 已完成 | `vlog.Manager` + WAL 编码 + GC 重写逻辑落地 |
 | 5. Compaction 框架 | ✅ 已完成 | `compactionManager` 支持事件触发、L0 背压与写入限流，指标统一 |
 | 6. 事务/迭代器完善 | ✅ 已完成 | 快照迭代器 + 多版本遍历落地，并暴露事务活跃/冲突指标 |
-| 7. 完整恢复/压力测试 | ⏳ 计划中 | 崩溃恢复脚本、混合 workload、CLI 工具（`nokv stats/manifest/vlog` 已就绪）、Prometheus 集成 |
+| 7. 完整恢复/压力测试 | ✅ 已完成 | 崩溃恢复脚本、混合 workload、CLI 工具（`nokv stats/manifest/vlog` 已就绪）、Prometheus 集成 |
+
+### 测试与验证
+
+- **单元 + 集成测试**：执行 `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...` 覆盖 WAL、Manifest、LSM、ValueLog、事务等核心链路。
+- **恢复矩阵**：`RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh` 验证 WAL 重放、缺失 SST、ValueLog 截断等异常场景。
+- **性能基准**：`go test ./benchmark -run TestBenchmarkResults -count=1` 生成 NoKV vs Badger/RocksDB 吞吐延迟对比（需启用 `benchmark_rocksdb` 标签以测试 RocksDB）。
+- **测试计划**：详见 [docs/testing.md](testing.md)，按模块列出已覆盖项与待补充用例，建议在 CI 中开启覆盖率统计与错误注入脚本。
 
 后续里程碑聚焦于：  
 1. **Compaction 策略优化**：结合热度统计/多策略调度，进一步降低写放大。  

@@ -25,6 +25,9 @@ var (
 		ValueThreshold:   0,
 		MaxBatchCount:    10,
 		MaxBatchSize:     1 << 20,
+		HotRingEnabled:   true,
+		HotRingBits:      8,
+		HotRingTopK:      8,
 	}
 )
 

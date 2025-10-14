@@ -18,8 +18,14 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
+	if _, err := db.Get([]byte("stats-key")); err != nil {
+		t.Fatalf("get: %v", err)
+	}
 
 	snap := db.Info().Snapshot()
+	if len(snap.HotKeys) == 0 {
+		t.Fatalf("expected hot key stats to be populated")
+	}
 
 	if snap.FlushPending != db.lsm.FlushPending() {
 		t.Fatalf("snapshot flush pending mismatch: %d vs %d", snap.FlushPending, db.lsm.FlushPending())

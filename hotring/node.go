@@ -68,16 +68,17 @@ func (n *Node) GetHead() *HeadPointer {
 }
 
 func (n *Node) GetCounter() int32 {
-	return n.count
+	return atomic.LoadInt32(&n.count)
 }
 
 func (n *Node) ResetCounter() {
-	n.count = 0
+	atomic.StoreInt32(&n.count, 0)
 }
 
 func (n *Node) SetHead(hp *HeadPointer) {
 	for {
-		if atomic.CompareAndSwapPointer(&n.hp, n.hp, unsafe.Pointer(hp)) {
+		cur := atomic.LoadPointer(&n.hp)
+		if atomic.CompareAndSwapPointer(&n.hp, cur, unsafe.Pointer(hp)) {
 			return
 		}
 	}
@@ -85,7 +86,8 @@ func (n *Node) SetHead(hp *HeadPointer) {
 
 func (n *Node) SetNext(next *Node) {
 	for {
-		if atomic.CompareAndSwapPointer(&n.next, n.next, unsafe.Pointer(next)) {
+		cur := atomic.LoadPointer(&n.next)
+		if atomic.CompareAndSwapPointer(&n.next, cur, unsafe.Pointer(next)) {
 			return
 		}
 	}

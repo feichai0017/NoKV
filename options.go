@@ -17,14 +17,20 @@ type Options struct {
 	MaxTableSize        int64
 
 	DetectConflicts bool
+	HotRingEnabled  bool
+	HotRingBits     uint8
+	HotRingTopK     int
 }
 
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:      "./work_test",
-		MemTableSize: 1024,
-		SSTableMaxSz: 1 << 30,
+		WorkDir:        "./work_test",
+		MemTableSize:   1024,
+		SSTableMaxSz:   1 << 30,
+		HotRingEnabled: true,
+		HotRingBits:    12,
+		HotRingTopK:    16,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt

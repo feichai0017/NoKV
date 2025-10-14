@@ -188,6 +188,9 @@ func (it *TxnIterator) advance() {
 		it.item = &Item{e: materialized}
 		if it.txn != nil {
 			it.txn.addReadKey(it.item.Entry().Key)
+			if it.txn.db != nil {
+				it.txn.db.recordRead(it.item.Entry().Key)
+			}
 		}
 		it.latestTs = materialized.Version
 		return
@@ -241,7 +244,7 @@ func (it *TxnIterator) Valid() bool {
 // ValidForPrefix returns false when iteration is done
 // or when the current key is not prefixed by the specified prefix.
 func (it *TxnIterator) ValidForPrefix(prefix []byte) bool {
-    return it.Valid() && bytes.HasPrefix(utils.ParseKey(it.item.Entry().Key), prefix)
+	return it.Valid() && bytes.HasPrefix(utils.ParseKey(it.item.Entry().Key), prefix)
 }
 
 // Close would close the iterator. It is important to call this when you're done with iteration.
