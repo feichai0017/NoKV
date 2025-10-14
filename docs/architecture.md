@@ -104,14 +104,16 @@
 ### 4.4 ValueLog GC
 - manager 维护段引用计数；GC 期间若存在活跃迭代器/事务，会延迟删除。
 - rewrite 通过 WAL 编码重放旧段并写回有效 entry，完成后调用 `manager.Remove` 删除原段。
-- TODO：将 GC edit（删除、head 更新）写入 manifest，打通全量恢复链路，并结合 discard stats 优化候选选择。
+- Manifest 记录 ValueLog head 与删段事件；启动时自动回收标记为无效的段，并结合 discard stats 选择候选。
 
 ### 4.5 Crash Recovery
 1. 读取 `CURRENT` 找到 manifest。
 2. 重放 manifest 构造 Version state。
 3. 扫描 WAL：重放所有 entry → 恢复 MemTable。
 4. 若 ValueLog `head` 落后，按 checkpoint 继续 replay。
-5. 修复未完成的 flush/compaction：检查临时文件、补写 manifest。
+5. 修复未完成的 flush/compaction：检查临时文件、补写 manifest（缺失 `.sst` 会在恢复时被移除）。
+6. 恢复测试矩阵详见 `docs/recovery.md`，涵盖 WAL 重放、ValueLog 段回收、Manifest 残留清理与 CURRENT rewrite 崩溃等场景。
+7. 单测在设置 `RECOVERY_TRACE_METRICS=1` 时会输出结构化 `RECOVERY_METRIC` 日志，可结合 `scripts/recovery_scenarios.sh` 收集并分析恢复过程指标。
 
 ### 4.6 关闭流程
 1. 阻塞新写（`blockWrites`）。
@@ -138,6 +140,7 @@
   - `NoKV.Compaction.RunsTotal / LastDurationMs`
   - `NoKV.ValueLog.GcRuns / SegmentsRemoved / HeadUpdates`
   - `NoKV.Txns.{Active,Started,Committed,Conflicts}`
+- 恢复测试阶段可通过 `RECOVERY_TRACE_METRICS` 收集额外指标（GC 清理、manifest rewrite、WAL replay 等），并由 `scripts/recovery_scenarios.sh` 自动归档日志。
 - 日志：关键阶段打 info/error，支持 trace 调试。
 - 运维工具：
   - `nokv stats` / `nokv manifest` / `nokv vlog`

@@ -49,17 +49,35 @@ func newStats(db *DB) *Stats {
 		closer:               utils.NewCloser(),
 		interval:             5 * time.Second,
 		EntryNum:             0,
-		flushPending:         expvar.NewInt("NoKV.Stats.Flush.Pending"),
-		compactionBacklog:    expvar.NewInt("NoKV.Stats.Compaction.Backlog"),
-		compactionMaxScore:   expvar.NewFloat("NoKV.Stats.Compaction.MaxScore"),
-		valueLogSegments:     expvar.NewInt("NoKV.Stats.ValueLog.Segments"),
-		valueLogPendingDel:   expvar.NewInt("NoKV.Stats.ValueLog.PendingDeletes"),
-		valueLogDiscardQueue: expvar.NewInt("NoKV.Stats.ValueLog.DiscardQueue"),
-		txnActive:            expvar.NewInt("NoKV.Txns.Active"),
-		txnStarted:           expvar.NewInt("NoKV.Txns.Started"),
-		txnCommitted:         expvar.NewInt("NoKV.Txns.Committed"),
-		txnConflicts:         expvar.NewInt("NoKV.Txns.Conflicts"),
+		flushPending:         reuseInt("NoKV.Stats.Flush.Pending"),
+		compactionBacklog:    reuseInt("NoKV.Stats.Compaction.Backlog"),
+		compactionMaxScore:   reuseFloat("NoKV.Stats.Compaction.MaxScore"),
+		valueLogSegments:     reuseInt("NoKV.Stats.ValueLog.Segments"),
+		valueLogPendingDel:   reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
+		valueLogDiscardQueue: reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
+		txnActive:            reuseInt("NoKV.Txns.Active"),
+		txnStarted:           reuseInt("NoKV.Txns.Started"),
+		txnCommitted:         reuseInt("NoKV.Txns.Committed"),
+		txnConflicts:         reuseInt("NoKV.Txns.Conflicts"),
 	}
+}
+
+func reuseInt(name string) *expvar.Int {
+	if v := expvar.Get(name); v != nil {
+		if iv, ok := v.(*expvar.Int); ok {
+			return iv
+		}
+	}
+	return expvar.NewInt(name)
+}
+
+func reuseFloat(name string) *expvar.Float {
+	if v := expvar.Get(name); v != nil {
+		if fv, ok := v.(*expvar.Float); ok {
+			return fv
+		}
+	}
+	return expvar.NewFloat(name)
 }
 
 // StartStats runs periodic collection of internal backlog metrics.
