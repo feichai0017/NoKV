@@ -29,14 +29,16 @@ type FileMeta struct {
 type ValueLogMeta struct {
 	FileID uint32
 	Offset uint64
+	Valid  bool
 }
 
 // Version represents current manifest state.
 type Version struct {
-	Levels     map[int][]FileMeta
-	LogSegment uint32
-	LogOffset  uint64
-	ValueLogs  map[uint32]ValueLogMeta
+	Levels       map[int][]FileMeta
+	LogSegment   uint32
+	LogOffset    uint64
+	ValueLogs    map[uint32]ValueLogMeta
+	ValueLogHead ValueLogMeta
 }
 
 // Edit operation types.
@@ -46,7 +48,8 @@ const (
 	EditAddFile EditType = iota
 	EditDeleteFile
 	EditLogPointer
-	EditValueLog
+	EditValueLogHead
+	EditDeleteValueLog
 )
 
 // Edit describes a single metadata operation.
@@ -168,9 +171,23 @@ func (m *Manager) apply(edit Edit) {
 	case EditLogPointer:
 		m.version.LogSegment = edit.LogSeg
 		m.version.LogOffset = edit.LogOffset
-	case EditValueLog:
+	case EditValueLogHead:
 		if edit.ValueLog != nil {
-			m.version.ValueLogs[edit.ValueLog.FileID] = *edit.ValueLog
+			meta := *edit.ValueLog
+			meta.Valid = true
+			m.version.ValueLogs[meta.FileID] = meta
+			m.version.ValueLogHead = meta
+		}
+	case EditDeleteValueLog:
+		if edit.ValueLog != nil {
+			meta := m.version.ValueLogs[edit.ValueLog.FileID]
+			meta.FileID = edit.ValueLog.FileID
+			meta.Offset = 0
+			meta.Valid = false
+			m.version.ValueLogs[edit.ValueLog.FileID] = meta
+			if m.version.ValueLogHead.FileID == edit.ValueLog.FileID {
+				m.version.ValueLogHead = ValueLogMeta{}
+			}
 		}
 	}
 }
@@ -194,10 +211,11 @@ func (m *Manager) Current() Version {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := Version{
-		LogSegment: m.version.LogSegment,
-		LogOffset:  m.version.LogOffset,
-		Levels:     make(map[int][]FileMeta),
-		ValueLogs:  make(map[uint32]ValueLogMeta),
+		LogSegment:   m.version.LogSegment,
+		LogOffset:    m.version.LogOffset,
+		Levels:       make(map[int][]FileMeta),
+		ValueLogs:    make(map[uint32]ValueLogMeta),
+		ValueLogHead: m.version.ValueLogHead,
 	}
 	for level, files := range m.version.Levels {
 		cp.Levels[level] = append([]FileMeta(nil), files[:len(files)]...)
@@ -218,6 +236,32 @@ func (m *Manager) Close() error {
 	return nil
 }
 
+// LogValueLogHead records the active value log head pointer.
+func (m *Manager) LogValueLogHead(fid uint32, offset uint64) error {
+	meta := &ValueLogMeta{
+		FileID: fid,
+		Offset: offset,
+		Valid:  true,
+	}
+	return m.LogEdit(Edit{Type: EditValueLogHead, ValueLog: meta})
+}
+
+// LogValueLogDelete records value log segment deletion.
+func (m *Manager) LogValueLogDelete(fid uint32) error {
+	meta := &ValueLogMeta{
+		FileID: fid,
+		Valid:  false,
+	}
+	return m.LogEdit(Edit{Type: EditDeleteValueLog, ValueLog: meta})
+}
+
+// ValueLogHead returns the latest persisted value log head.
+func (m *Manager) ValueLogHead() ValueLogMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.version.ValueLogHead
+}
+
 // Internal encoding helpers
 func writeEdit(w io.Writer, edit Edit) error {
 	buf := make([]byte, 0, 64)
@@ -236,10 +280,14 @@ func writeEdit(w io.Writer, edit Edit) error {
 	case EditLogPointer:
 		buf = binary.AppendUvarint(buf, uint64(edit.LogSeg))
 		buf = binary.AppendUvarint(buf, edit.LogOffset)
-	case EditValueLog:
+	case EditValueLogHead:
 		if edit.ValueLog != nil {
 			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
 			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
+		}
+	case EditDeleteValueLog:
+		if edit.ValueLog != nil {
+			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
 		}
 	}
 	// length prefix
@@ -297,7 +345,7 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 		pos += n
 		edit.LogSeg = uint32(seg)
 		edit.LogOffset = off
-	case EditValueLog:
+	case EditValueLogHead:
 		if pos < len(data) {
 			fid64, n := binary.Uvarint(data[pos:])
 			pos += n
@@ -306,6 +354,15 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 			edit.ValueLog = &ValueLogMeta{
 				FileID: uint32(fid64),
 				Offset: offset,
+				Valid:  true,
+			}
+		}
+	case EditDeleteValueLog:
+		if pos < len(data) {
+			fid64, n := binary.Uvarint(data[pos:])
+			pos += n
+			edit.ValueLog = &ValueLogMeta{
+				FileID: uint32(fid64),
 			}
 		}
 	}

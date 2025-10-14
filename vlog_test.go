@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"os"
 	"testing"
@@ -140,4 +141,29 @@ func getItemValue(t *testing.T, item *utils.Entry) (val []byte) {
 		return nil
 	}
 	return v
+}
+
+func TestManifestHeadMatchesValueLogHead(t *testing.T) {
+	clearDir()
+	opt.ValueThreshold = 0
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := utils.NewEntry([]byte("manifest-head"), []byte("value"))
+	entry.Key = utils.KeyWithTs(entry.Key, math.MaxUint32)
+	if err := db.batchSet([]*utils.Entry{entry}); err != nil {
+		t.Fatalf("batchSet: %v", err)
+	}
+
+	head := db.vlog.manager.Head()
+	if meta, ok := db.lsm.ValueLogHead(); !ok {
+		t.Fatalf("expected manifest head")
+	} else {
+		if meta.Fid != head.Fid {
+			t.Fatalf("manifest fid %d does not match manager %d", meta.Fid, head.Fid)
+		}
+		if meta.Offset != head.Offset {
+			t.Fatalf("manifest offset %d does not match manager %d", meta.Offset, head.Offset)
+		}
+	}
 }

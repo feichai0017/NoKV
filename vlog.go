@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -26,6 +27,12 @@ const discardStatsFlushThreshold = 100
 
 var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
 
+var (
+	valueLogGCRuns          = expvar.NewInt("NoKV.ValueLog.GcRuns")
+	valueLogSegmentsRemoved = expvar.NewInt("NoKV.ValueLog.SegmentsRemoved")
+	valueLogHeadUpdates     = expvar.NewInt("NoKV.ValueLog.HeadUpdates")
+)
+
 type valueLog struct {
 	dirPath            string
 	manager            *vlogpkg.Manager
@@ -36,6 +43,41 @@ type valueLog struct {
 	opt                Options
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
+}
+
+type valueLogMetrics struct {
+	Segments       int
+	PendingDeletes int
+	DiscardQueue   int
+	Head           utils.ValuePtr
+}
+
+func (vlog *valueLog) metrics() valueLogMetrics {
+	if vlog == nil || vlog.manager == nil {
+		return valueLogMetrics{}
+	}
+	stats := valueLogMetrics{
+		Segments: len(vlog.manager.ListFIDs()),
+		Head:     vlog.manager.Head(),
+	}
+
+	if vlog.lfDiscardStats != nil {
+		stats.DiscardQueue = len(vlog.lfDiscardStats.flushChan)
+	}
+
+	vlog.filesToDeleteLock.Lock()
+	stats.PendingDeletes = len(vlog.filesToBeDeleted)
+	vlog.filesToDeleteLock.Unlock()
+
+	return stats
+}
+
+func (vlog *valueLog) recordValueLogDelete(fid uint32) {
+	if err := vlog.db.lsm.LogValueLogDelete(fid); err != nil {
+		utils.Err(fmt.Errorf("log value log delete fid %d: %v", fid, err))
+		return
+	}
+	valueLogSegmentsRemoved.Add(1)
 }
 
 func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
@@ -80,6 +122,7 @@ func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
 				if removeErr := vlog.manager.Remove(fid); removeErr != nil {
 					return removeErr
 				}
+				vlog.recordValueLogDelete(fid)
 				continue
 			}
 			return err
@@ -94,7 +137,9 @@ func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
 	}
 
 	head := vlog.manager.Head()
-	vlog.db.vhead = &head
+	if vlog.db.vhead == nil || vlog.db.vhead.IsZero() {
+		vlog.db.vhead = &head
+	}
 	if err := vlog.populateDiscardStats(); err != nil {
 		fmt.Printf("Failed to populate discard stats: %s\n", err)
 	}
@@ -199,7 +244,11 @@ func (vlog *valueLog) doRunGC(lf *file.LogFile, discardRatio float64) (err error
 		return err
 	}
 
-	return vlog.rewrite(lf)
+	if err = vlog.rewrite(lf); err != nil {
+		return err
+	}
+	valueLogGCRuns.Add(1)
+	return nil
 }
 
 func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
@@ -387,7 +436,10 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 	vlog.filesToDeleteLock.Unlock()
 
 	if deleteNow {
-		return vlog.manager.Remove(f.FID)
+		if err := vlog.manager.Remove(f.FID); err != nil {
+			return err
+		}
+		vlog.recordValueLogDelete(f.FID)
 	}
 	return nil
 }
@@ -410,6 +462,7 @@ func (vlog *valueLog) decrIteratorCount() error {
 		if err := vlog.manager.Remove(fid); err != nil {
 			return err
 		}
+		vlog.recordValueLogDelete(fid)
 	}
 	return nil
 }
@@ -786,6 +839,7 @@ func (db *DB) initVLog() {
 		opt:       *db.opt,
 		garbageCh: make(chan struct{}, 1),
 	}
+	db.vhead = vp
 	if err := vlog.open(vp, db.replayFunction()); err != nil {
 		utils.Panic(err)
 	}
@@ -793,8 +847,13 @@ func (db *DB) initVLog() {
 }
 
 func (db *DB) getHead() (*utils.ValuePtr, uint64) {
-	var vptr utils.ValuePtr
-	return &vptr, 0
+	vp, ok := db.lsm.ValueLogHead()
+	if !ok {
+		var zero utils.ValuePtr
+		return &zero, 0
+	}
+	ptr := vp
+	return &ptr, uint64(ptr.Offset)
 }
 
 func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
@@ -844,8 +903,27 @@ func (db *DB) updateHead(ptrs []*utils.ValuePtr) {
 		return
 	}
 
-	utils.CondPanic(ptr.Less(db.vhead), fmt.Errorf("ptr.Less(db.vhead) is true"))
-	db.vhead = ptr
+	if db.vlog == nil || db.vlog.manager == nil {
+		return
+	}
+	head := db.vlog.manager.Head()
+	if head.IsZero() {
+		return
+	}
+
+	next := &utils.ValuePtr{
+		Fid:    head.Fid,
+		Offset: head.Offset,
+	}
+	if db.vhead != nil && next.Less(db.vhead) {
+		utils.CondPanic(true, fmt.Errorf("value log head regression: prev=%+v next=%+v", db.vhead, next))
+	}
+	db.vhead = next
+	if err := db.lsm.LogValueLogHead(next); err != nil {
+		utils.Err(fmt.Errorf("log value log head: %w", err))
+	} else {
+		valueLogHeadUpdates.Add(1)
+	}
 }
 
 type lfDiscardStats struct {

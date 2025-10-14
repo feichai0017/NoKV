@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -62,50 +61,6 @@ func (cd *compactDef) unlockLevels() {
 	cd.thisLevel.RUnlock()
 }
 
-// runCompacter 启动一个compacter
-func (lm *levelManager) runCompacter(id int) {
-	defer lm.lsm.closer.Done()
-	randomDelay := time.NewTimer(time.Duration(rand.Int31n(1000)) * time.Millisecond)
-	select {
-	case <-randomDelay.C:
-	case <-lm.lsm.closer.CloseSignal:
-		randomDelay.Stop()
-		return
-	}
-	//TODO 这个值有待验证
-	ticker := time.NewTicker(50000 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		// Can add a done channel or other stuff.
-		case <-ticker.C:
-			lm.runOnce(id)
-		case <-lm.lsm.closer.CloseSignal:
-			return
-		}
-	}
-}
-
-// runOnce
-func (lm *levelManager) runOnce(id int) bool {
-	prios := lm.pickCompactLevels()
-	if id == 0 {
-		// 0号协程 总是倾向于压缩l0层
-		prios = moveL0toFront(prios)
-	}
-	for _, p := range prios {
-		if id == 0 && p.level == 0 {
-			// 对于l0 无论得分多少都要运行
-		} else if p.adjusted < 1.0 {
-			// 对于其他level 如果等分小于 则不执行
-			break
-		}
-		if lm.run(id, p) {
-			return true
-		}
-	}
-	return false
-}
 func moveL0toFront(prios []compactionPriority) []compactionPriority {
 	idx := -1
 	for i, p := range prios {
@@ -123,20 +78,6 @@ func moveL0toFront(prios []compactionPriority) []compactionPriority {
 		return out
 	}
 	return prios
-}
-
-// run 执行一个优先级指定的合并任务
-func (lm *levelManager) run(id int, p compactionPriority) bool {
-	err := lm.doCompact(id, p)
-	switch err {
-	case nil:
-		return true
-	case utils.ErrFillTables:
-		// 什么也不做，此时合并过程被忽略
-	default:
-		log.Printf("[taskID:%d] While running doCompact: %v\n ", id, err)
-	}
-	return false
 }
 
 // doCompact 选择level的某些表合并到目标level
@@ -452,6 +393,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			len(newTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
 			dur.Round(time.Millisecond))
 	}
+	lm.recordCompactionMetrics(time.Since(timeStart))
 	return nil
 }
 
