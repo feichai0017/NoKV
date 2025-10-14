@@ -71,10 +71,11 @@
 - MVCC 时间戳分配、冲突检测、潜在快照隔离点。
 - `WaterMark` 追踪读写上限，配合 discardTs 决定可回收版本。
 - 事务 commit 复用 DB 写入流水线，保证 WAL / MemTable / ValueLog 原子性。
+- 事务迭代器基于 `readTs` 构建 LSM 快照，并合并自身 pending writes，支持多版本遍历与一致快照视图。
 
 ### 3.8 统计与监控 (`stats.go`)
 - 周期采集 LSM/ValueLog backlog、运行状态，并通过 `expvar` 暴露。
-- 当前指标：写入计数、flush/compaction backlog、`NoKV.Compaction.*` 与 `NoKV.ValueLog.*` 系列；离线巡检可使用 `cmd/nokv stats`。
+- 当前指标：写入计数、flush/compaction backlog、`NoKV.Compaction.*`、`NoKV.ValueLog.*` 与 `NoKV.Txns.*` 系列；离线巡检可使用 `cmd/nokv stats`。
 - 后续拓展：慢请求日志、压缩比、空间放大、命令行工具导出（如 `nokv stats/manifest`）。
 
 ---
@@ -90,7 +91,7 @@
 4. MemTable 达阈值 → 冻结 → flush 管线。
 
 ### 4.2 读路径
-1. 构建多层迭代器：Txn pending writes → active MemTable → Immutable tables → SST levels → ValueLog（按需）。
+1. 构建多层迭代器：Txn pending writes → `readTs` 快照（MemTable/Immutable/SST）→ ValueLog（按需）。
 2. 判断 tombstone / TTL，过滤内部 key（`!NoKV!` 前缀）。
 3. 事务读取使用 `readTs`，过滤版本。
 
@@ -136,6 +137,7 @@
 - 当前通过 `expvar` 与 `cmd/nokv stats` 导出的关键指标：
   - `NoKV.Compaction.RunsTotal / LastDurationMs`
   - `NoKV.ValueLog.GcRuns / SegmentsRemoved / HeadUpdates`
+  - `NoKV.Txns.{Active,Started,Committed,Conflicts}`
 - 日志：关键阶段打 info/error，支持 trace 调试。
 - 运维工具：
   - `nokv stats` / `nokv manifest` / `nokv vlog`
@@ -154,7 +156,7 @@
 | 3. Manifest/Version | ✅ 已完成 | `manifest.Manager` 管理 VersionEdit、CURRENT 切换 |
 | 4. ValueLog 重构 | ✅ 已完成 | `vlog.Manager` + WAL 编码 + GC 重写逻辑落地 |
 | 5. Compaction 框架 | ✅ 已完成 | `compactionManager` 支持事件触发、L0 背压与写入限流，指标统一 |
-| 6. 事务/迭代器完善 | ⏳ 计划中 | Snapshot、多版本 iterator、冲突检测指标等 |
+| 6. 事务/迭代器完善 | ✅ 已完成 | 快照迭代器 + 多版本遍历落地，并暴露事务活跃/冲突指标 |
 | 7. 完整恢复/压力测试 | ⏳ 计划中 | 崩溃恢复脚本、混合 workload、CLI 工具（`nokv stats/manifest/vlog` 已就绪）、Prometheus 集成 |
 
 后续里程碑聚焦于：  

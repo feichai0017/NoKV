@@ -96,6 +96,10 @@ func runStatsCmd(w io.Writer, args []string) error {
 		fmt.Fprintf(w, "ValueLog.Head          fid=%d offset=%d len=%d\n",
 			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
 	}
+	fmt.Fprintf(w, "Txns.Active            %d\n", snap.TxnsActive)
+	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
+	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
+	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
 	return nil
 }
 
@@ -313,10 +317,22 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	var intVal int64
 	setInt("NoKV.Stats.ValueLog.Segments", &intVal)
 	snap.ValueLogSegments = int(intVal)
+	intVal = 0
 	setInt("NoKV.Stats.ValueLog.PendingDeletes", &intVal)
 	snap.ValueLogPendingDel = int(intVal)
+	intVal = 0
 	setInt("NoKV.Stats.ValueLog.DiscardQueue", &intVal)
 	snap.ValueLogDiscardQueue = int(intVal)
+	setInt("NoKV.Txns.Active", &snap.TxnsActive)
+	intVal = 0
+	setInt("NoKV.Txns.Started", &intVal)
+	snap.TxnsStarted = uint64(intVal)
+	intVal = 0
+	setInt("NoKV.Txns.Committed", &intVal)
+	snap.TxnsCommitted = uint64(intVal)
+	intVal = 0
+	setInt("NoKV.Txns.Conflicts", &intVal)
+	snap.TxnsConflicts = uint64(intVal)
 	return snap
 }
 

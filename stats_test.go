@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"expvar"
-	"math"
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
@@ -10,14 +9,14 @@ import (
 
 func TestStatsCollectSnapshots(t *testing.T) {
 	clearDir()
+	opt.DetectConflicts = true
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := utils.NewEntry([]byte("stats-key"), []byte("stats-value"))
-	entry.Key = utils.KeyWithTs(entry.Key, math.MaxUint32)
-
-	if err := db.batchSet([]*utils.Entry{entry}); err != nil {
-		t.Fatalf("batchSet: %v", err)
+	if err := db.Update(func(txn *Txn) error {
+		return txn.SetEntry(utils.NewEntry([]byte("stats-key"), []byte("stats-value")))
+	}); err != nil {
+		t.Fatalf("update: %v", err)
 	}
 
 	snap := db.Info().Snapshot()
@@ -47,5 +46,20 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Stats.ValueLog.DiscardQueue").(*expvar.Int).Value(); got != int64(vstats.DiscardQueue) {
 		t.Fatalf("value log discard queue mismatch expvar=%d metrics=%d", got, vstats.DiscardQueue)
+	}
+	if snap.TxnsActive != 0 {
+		t.Fatalf("expected zero active txns, got %d", snap.TxnsActive)
+	}
+	if snap.TxnsCommitted == 0 || snap.TxnsStarted == 0 {
+		t.Fatalf("expected txn counters to be populated, snapshot=%+v", snap)
+	}
+	if got := expvar.Get("NoKV.Txns.Active").(*expvar.Int).Value(); got != snap.TxnsActive {
+		t.Fatalf("txn active mismatch expvar=%d snapshot=%d", got, snap.TxnsActive)
+	}
+	if got := expvar.Get("NoKV.Txns.Started").(*expvar.Int).Value(); got != int64(snap.TxnsStarted) {
+		t.Fatalf("txn started mismatch expvar=%d snapshot=%d", got, snap.TxnsStarted)
+	}
+	if got := expvar.Get("NoKV.Txns.Committed").(*expvar.Int).Value(); got != int64(snap.TxnsCommitted) {
+		t.Fatalf("txn committed mismatch expvar=%d snapshot=%d", got, snap.TxnsCommitted)
 	}
 }

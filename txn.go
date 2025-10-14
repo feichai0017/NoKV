@@ -36,6 +36,11 @@ type oracle struct {
 
 	// closer is used to stop watermarks.
 	closer *utils.Closer
+
+	txnStarted   uint64
+	txnCommitted uint64
+	txnConflicts uint64
+	txnActive    int64
 }
 
 type committedTxn struct {
@@ -63,6 +68,39 @@ func newOracle(opt Options) *oracle {
 
 func (o *oracle) Stop() {
 	o.closer.SignalAndWait()
+}
+
+type txnMetrics struct {
+	Started   uint64
+	Committed uint64
+	Conflicts uint64
+	Active    int64
+}
+
+func (o *oracle) trackTxnStart() {
+	atomic.AddUint64(&o.txnStarted, 1)
+	atomic.AddInt64(&o.txnActive, 1)
+}
+
+func (o *oracle) trackTxnCommit() {
+	atomic.AddUint64(&o.txnCommitted, 1)
+}
+
+func (o *oracle) trackTxnConflict() {
+	atomic.AddUint64(&o.txnConflicts, 1)
+}
+
+func (o *oracle) trackTxnFinish() {
+	atomic.AddInt64(&o.txnActive, -1)
+}
+
+func (o *oracle) txnMetricsSnapshot() txnMetrics {
+	return txnMetrics{
+		Started:   atomic.LoadUint64(&o.txnStarted),
+		Committed: atomic.LoadUint64(&o.txnCommitted),
+		Conflicts: atomic.LoadUint64(&o.txnConflicts),
+		Active:    atomic.LoadInt64(&o.txnActive),
+	}
 }
 
 func (o *oracle) readTs() uint64 {
@@ -242,7 +280,6 @@ func (pi *pendingWritesIterator) Rewind() {
 }
 
 func (pi *pendingWritesIterator) Seek(key []byte) {
-	key = utils.ParseKey(key)
 	pi.nextIdx = sort.Search(len(pi.entries), func(idx int) bool {
 		cmp := bytes.Compare(pi.entries[idx].Key, key)
 		if !pi.reversed {
@@ -255,7 +292,7 @@ func (pi *pendingWritesIterator) Seek(key []byte) {
 func (pi *pendingWritesIterator) Key() []byte {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
-	return utils.KeyWithTs(entry.Key, pi.readTs)
+	return entry.Key
 }
 
 func (pi *pendingWritesIterator) Value() utils.ValueStruct {
@@ -265,7 +302,7 @@ func (pi *pendingWritesIterator) Value() utils.ValueStruct {
 		Value:     entry.Value,
 		Meta:      entry.Meta,
 		ExpiresAt: entry.ExpiresAt,
-		Version:   pi.readTs,
+		Version:   utils.ParseTs(entry.Key),
 	}
 }
 
@@ -283,9 +320,10 @@ func (txn *Txn) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
 	}
 	entries := make([]*utils.Entry, 0, len(txn.pendingWrites))
 	for _, e := range txn.pendingWrites {
-		entries = append(entries, e)
+		dup := *e
+		dup.Key = utils.KeyWithTs(utils.SafeCopy(nil, e.Key), txn.readTs)
+		entries = append(entries, &dup)
 	}
-	// Number of pending writes per transaction shouldn't be too big in general.
 	sort.Slice(entries, func(i, j int) bool {
 		cmp := bytes.Compare(entries[i].Key, entries[j].Key)
 		if !reversed {
@@ -493,6 +531,7 @@ func (txn *Txn) Discard() {
 	txn.discarded = true
 
 	txn.db.orc.doneRead(txn)
+	txn.db.orc.trackTxnFinish()
 
 }
 
@@ -507,6 +546,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 
 	commitTs, conflict := orc.newCommitTs(txn)
 	if conflict {
+		orc.trackTxnConflict()
 		return nil, utils.ErrConflict
 	}
 
@@ -551,6 +591,9 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	}
 	ret := func() error {
 		err := req.Wait()
+		if err == nil {
+			orc.trackTxnCommit()
+		}
 		// Wait before marking commitTs as done.
 		// We can't defer doneCommit above, because it is being called from a
 		// callback here.
@@ -685,6 +728,7 @@ func (db *DB) newTransaction(update bool) *Txn {
 		}
 		txn.pendingWrites = make(map[string]*utils.Entry)
 	}
+	db.orc.trackTxnStart()
 	txn.readTs = db.orc.readTs()
 
 	return txn
