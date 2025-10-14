@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/lsm/flush"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -135,6 +136,22 @@ func (lsm *LSM) ValueLogHead() (utils.ValuePtr, bool) {
 		return utils.ValuePtr{}, false
 	}
 	return utils.ValuePtr{Fid: meta.FileID, Offset: uint32(meta.Offset)}, true
+}
+
+// ValueLogStatus returns manifest tracked value log metadata.
+func (lsm *LSM) ValueLogStatus() map[uint32]manifest.ValueLogMeta {
+	if lsm.levels == nil {
+		return nil
+	}
+	return lsm.levels.ValueLogStatus()
+}
+
+// CurrentVersion returns a snapshot of manifest version state.
+func (lsm *LSM) CurrentVersion() manifest.Version {
+	if lsm.levels == nil || lsm.levels.manifestMgr == nil {
+		return manifest.Version{}
+	}
+	return lsm.levels.manifestMgr.Current()
 }
 
 // NewLSM _

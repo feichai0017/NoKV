@@ -5,9 +5,12 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
@@ -166,4 +169,25 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 			t.Fatalf("manifest offset %d does not match manager %d", meta.Offset, head.Offset)
 		}
 	}
+}
+
+func TestValueLogReconcileManifestRemovesInvalid(t *testing.T) {
+	tmp := t.TempDir()
+	mgr, err := vlogpkg.Open(vlogpkg.Config{Dir: tmp, FileMode: utils.DefaultFileMode, MaxSize: 1 << 20})
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	require.NoError(t, mgr.Rotate())
+
+	vlog := &valueLog{
+		dirPath: tmp,
+		manager: mgr,
+	}
+
+	vlog.reconcileManifest(map[uint32]manifest.ValueLogMeta{
+		0: {FileID: 0, Valid: false},
+	})
+
+	_, err = os.Stat(filepath.Join(tmp, "00000.vlog"))
+	require.Error(t, err)
 }

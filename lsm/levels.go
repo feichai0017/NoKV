@@ -3,6 +3,7 @@ package lsm
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -100,9 +101,15 @@ func (lm *levelManager) build() error {
 	version := lm.manifestMgr.Current()
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
+	var missing []manifest.FileMeta
 	for level, files := range version.Levels {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
+			if _, err := os.Stat(fileName); err != nil {
+				utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
+				missing = append(missing, meta)
+				continue
+			}
 			if meta.FileID > maxFID {
 				maxFID = meta.FileID
 			}
@@ -117,6 +124,14 @@ func (lm *levelManager) build() error {
 	}
 	// get the maximum fid value
 	atomic.AddUint64(&lm.maxFID, maxFID)
+
+	for _, meta := range missing {
+		metaCopy := meta
+		_ = lm.manifestMgr.LogEdit(manifest.Edit{
+			Type: manifest.EditDeleteFile,
+			File: &metaCopy,
+		})
+	}
 	return nil
 }
 
@@ -175,6 +190,10 @@ func (lm *levelManager) LogValueLogDelete(fid uint32) error {
 
 func (lm *levelManager) ValueLogHead() manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
+}
+
+func (lm *levelManager) ValueLogStatus() map[uint32]manifest.ValueLogMeta {
+	return lm.manifestMgr.ValueLogStatus()
 }
 
 func (lm *levelManager) compactionStats() (int64, float64) {

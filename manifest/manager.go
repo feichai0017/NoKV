@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"maps"
 	"bufio"
 	"encoding/binary"
 	"fmt"
@@ -218,11 +219,9 @@ func (m *Manager) Current() Version {
 		ValueLogHead: m.version.ValueLogHead,
 	}
 	for level, files := range m.version.Levels {
-		cp.Levels[level] = append([]FileMeta(nil), files[:len(files)]...)
+		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
-	for fid, meta := range m.version.ValueLogs {
-		cp.ValueLogs[fid] = meta
-	}
+	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
 	return cp
 }
 
@@ -260,6 +259,15 @@ func (m *Manager) ValueLogHead() ValueLogMeta {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.version.ValueLogHead
+}
+
+// ValueLogStatus returns a copy of all tracked value log segment metadata.
+func (m *Manager) ValueLogStatus() map[uint32]ValueLogMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[uint32]ValueLogMeta, len(m.version.ValueLogs))
+	maps.Copy(out, m.version.ValueLogs)
+	return out
 }
 
 // Internal encoding helpers

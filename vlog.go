@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
@@ -70,6 +71,31 @@ func (vlog *valueLog) metrics() valueLogMetrics {
 	vlog.filesToDeleteLock.Unlock()
 
 	return stats
+}
+
+func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta) {
+	if vlog == nil || vlog.manager == nil || len(status) == 0 {
+		return
+	}
+	existing := make(map[uint32]struct{})
+	for _, fid := range vlog.manager.ListFIDs() {
+		existing[fid] = struct{}{}
+	}
+	for fid, meta := range status {
+		if !meta.Valid {
+			if _, ok := existing[fid]; ok {
+				if err := vlog.manager.Remove(fid); err != nil {
+					utils.Err(fmt.Errorf("value log reconcile remove fid %d: %v", fid, err))
+					continue
+				}
+				delete(existing, fid)
+			}
+			continue
+		}
+		if _, ok := existing[fid]; !ok {
+			utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
+		}
+	}
 }
 
 func (vlog *valueLog) recordValueLogDelete(fid uint32) {
@@ -826,6 +852,8 @@ func (db *DB) initVLog() {
 	})
 	utils.Panic(err)
 
+	status := db.lsm.ValueLogStatus()
+
 	vlog := &valueLog{
 		dirPath:          vlogDir,
 		manager:          manager,
@@ -839,6 +867,7 @@ func (db *DB) initVLog() {
 		opt:       *db.opt,
 		garbageCh: make(chan struct{}, 1),
 	}
+	vlog.reconcileManifest(status)
 	db.vhead = vp
 	if err := vlog.open(vp, db.replayFunction()); err != nil {
 		utils.Panic(err)
