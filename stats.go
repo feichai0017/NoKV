@@ -22,6 +22,10 @@ type Stats struct {
 	valueLogSegments     *expvar.Int
 	valueLogPendingDel   *expvar.Int
 	valueLogDiscardQueue *expvar.Int
+	txnActive            *expvar.Int
+	txnStarted           *expvar.Int
+	txnCommitted         *expvar.Int
+	txnConflicts         *expvar.Int
 }
 
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
@@ -33,6 +37,10 @@ type StatsSnapshot struct {
 	ValueLogPendingDel   int            `json:"vlog_pending_deletes"`
 	ValueLogDiscardQueue int            `json:"vlog_discard_queue"`
 	ValueLogHead         utils.ValuePtr `json:"vlog_head"`
+	TxnsActive           int64          `json:"txns_active"`
+	TxnsStarted          uint64         `json:"txns_started"`
+	TxnsCommitted        uint64         `json:"txns_committed"`
+	TxnsConflicts        uint64         `json:"txns_conflicts"`
 }
 
 func newStats(db *DB) *Stats {
@@ -47,6 +55,10 @@ func newStats(db *DB) *Stats {
 		valueLogSegments:     expvar.NewInt("NoKV.Stats.ValueLog.Segments"),
 		valueLogPendingDel:   expvar.NewInt("NoKV.Stats.ValueLog.PendingDeletes"),
 		valueLogDiscardQueue: expvar.NewInt("NoKV.Stats.ValueLog.DiscardQueue"),
+		txnActive:            expvar.NewInt("NoKV.Txns.Active"),
+		txnStarted:           expvar.NewInt("NoKV.Txns.Started"),
+		txnCommitted:         expvar.NewInt("NoKV.Txns.Committed"),
+		txnConflicts:         expvar.NewInt("NoKV.Txns.Conflicts"),
 	}
 }
 
@@ -89,6 +101,10 @@ func (s *Stats) collect() {
 	s.valueLogSegments.Set(int64(snap.ValueLogSegments))
 	s.valueLogPendingDel.Set(int64(snap.ValueLogPendingDel))
 	s.valueLogDiscardQueue.Set(int64(snap.ValueLogDiscardQueue))
+	s.txnActive.Set(snap.TxnsActive)
+	s.txnStarted.Set(int64(snap.TxnsStarted))
+	s.txnCommitted.Set(int64(snap.TxnsCommitted))
+	s.txnConflicts.Set(int64(snap.TxnsConflicts))
 }
 
 // Snapshot returns a point-in-time metrics snapshot without mutating state.
@@ -111,6 +127,13 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLogPendingDel = stats.PendingDeletes
 		snap.ValueLogDiscardQueue = stats.DiscardQueue
 		snap.ValueLogHead = stats.Head
+	}
+	if s.db.orc != nil {
+		tm := s.db.orc.txnMetricsSnapshot()
+		snap.TxnsActive = tm.Active
+		snap.TxnsStarted = tm.Started
+		snap.TxnsCommitted = tm.Committed
+		snap.TxnsConflicts = tm.Conflicts
 	}
 	return snap
 }

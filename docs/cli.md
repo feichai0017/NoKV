@@ -13,6 +13,7 @@ go install ./cmd/nokv
 - `nokv stats --workdir <dir>`  
   打开指定 `WorkDir`，拉取一次离线指标快照。若服务已对外暴露 `expvar`，可使用
   `nokv stats --expvar http://host:port/debug/vars` 直接读取线上指标。支持 `--json` 输出 JSON。
+  输出包含 flush/compaction backlog、ValueLog 状态，以及 `Txns.{Active,Started,Committed,Conflicts}` 等事务指标。
 
 - `nokv manifest --workdir <dir>`  
   解析 `CURRENT` 与 Manifest，输出各层文件统计、ValueLog Head 以及段状态。支持 `--json`。
