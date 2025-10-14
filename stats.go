@@ -3,6 +3,7 @@ package NoKV
 import (
 	"expvar"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/utils"
@@ -17,11 +18,30 @@ type Stats struct {
 	EntryNum int64 // TODO: wire real value stats.
 
 	flushPending         *expvar.Int
+	flushQueueLen        *expvar.Int
+	flushActive          *expvar.Int
+	flushWaitMs          *expvar.Float
+	flushBuildMs         *expvar.Float
+	flushReleaseMs       *expvar.Float
+	flushCompleted       *expvar.Int
 	compactionBacklog    *expvar.Int
 	compactionMaxScore   *expvar.Float
 	valueLogSegments     *expvar.Int
 	valueLogPendingDel   *expvar.Int
 	valueLogDiscardQueue *expvar.Int
+	walActiveSegment     *expvar.Int
+	walSegmentCount      *expvar.Int
+	walSegmentsRemoved   *expvar.Int
+	writeQueueDepth      *expvar.Int
+	writeQueueEntries    *expvar.Int
+	writeQueueBytes      *expvar.Int
+	writeBatchAvgEntries *expvar.Float
+	writeBatchAvgBytes   *expvar.Float
+	writeRequestWaitMs   *expvar.Float
+	writeValueLogMs      *expvar.Float
+	writeApplyMs         *expvar.Float
+	writeBatchesTotal    *expvar.Int
+	writeThrottle        *expvar.Int
 	txnActive            *expvar.Int
 	txnStarted           *expvar.Int
 	txnCommitted         *expvar.Int
@@ -35,18 +55,37 @@ type HotKeyStat struct {
 
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
-	FlushPending         int64          `json:"flush_pending"`
-	CompactionBacklog    int64          `json:"compaction_backlog"`
-	CompactionMaxScore   float64        `json:"compaction_max_score"`
-	ValueLogSegments     int            `json:"vlog_segments"`
-	ValueLogPendingDel   int            `json:"vlog_pending_deletes"`
-	ValueLogDiscardQueue int            `json:"vlog_discard_queue"`
-	ValueLogHead         utils.ValuePtr `json:"vlog_head"`
-	TxnsActive           int64          `json:"txns_active"`
-	TxnsStarted          uint64         `json:"txns_started"`
-	TxnsCommitted        uint64         `json:"txns_committed"`
-	TxnsConflicts        uint64         `json:"txns_conflicts"`
-	HotKeys              []HotKeyStat   `json:"hot_keys,omitempty"`
+	FlushPending          int64          `json:"flush_pending"`
+	FlushQueueLength      int64          `json:"flush_queue_length"`
+	FlushActive           int64          `json:"flush_active"`
+	FlushWaitMs           float64        `json:"flush_wait_ms"`
+	FlushBuildMs          float64        `json:"flush_build_ms"`
+	FlushReleaseMs        float64        `json:"flush_release_ms"`
+	FlushCompleted        int64          `json:"flush_completed"`
+	CompactionBacklog     int64          `json:"compaction_backlog"`
+	CompactionMaxScore    float64        `json:"compaction_max_score"`
+	ValueLogSegments      int            `json:"vlog_segments"`
+	ValueLogPendingDel    int            `json:"vlog_pending_deletes"`
+	ValueLogDiscardQueue  int            `json:"vlog_discard_queue"`
+	ValueLogHead          utils.ValuePtr `json:"vlog_head"`
+	WALActiveSegment      int64          `json:"wal_active_segment"`
+	WALSegmentCount       int64          `json:"wal_segment_count"`
+	WALSegmentsRemoved    uint64         `json:"wal_segments_removed"`
+	WriteQueueDepth       int64          `json:"write_queue_depth"`
+	WriteQueueEntries     int64          `json:"write_queue_entries"`
+	WriteQueueBytes       int64          `json:"write_queue_bytes"`
+	WriteAvgBatchEntries  float64        `json:"write_avg_batch_entries"`
+	WriteAvgBatchBytes    float64        `json:"write_avg_batch_bytes"`
+	WriteAvgRequestWaitMs float64        `json:"write_avg_request_wait_ms"`
+	WriteAvgValueLogMs    float64        `json:"write_avg_vlog_ms"`
+	WriteAvgApplyMs       float64        `json:"write_avg_apply_ms"`
+	WriteBatchesTotal     int64          `json:"write_batches_total"`
+	WriteThrottleActive   bool           `json:"write_throttle_active"`
+	TxnsActive            int64          `json:"txns_active"`
+	TxnsStarted           uint64         `json:"txns_started"`
+	TxnsCommitted         uint64         `json:"txns_committed"`
+	TxnsConflicts         uint64         `json:"txns_conflicts"`
+	HotKeys               []HotKeyStat   `json:"hot_keys,omitempty"`
 }
 
 func newStats(db *DB) *Stats {
@@ -56,11 +95,30 @@ func newStats(db *DB) *Stats {
 		interval:             5 * time.Second,
 		EntryNum:             0,
 		flushPending:         reuseInt("NoKV.Stats.Flush.Pending"),
+		flushQueueLen:        reuseInt("NoKV.Stats.Flush.QueueLength"),
+		flushActive:          reuseInt("NoKV.Stats.Flush.Active"),
+		flushWaitMs:          reuseFloat("NoKV.Stats.Flush.WaitMs"),
+		flushBuildMs:         reuseFloat("NoKV.Stats.Flush.BuildMs"),
+		flushReleaseMs:       reuseFloat("NoKV.Stats.Flush.ReleaseMs"),
+		flushCompleted:       reuseInt("NoKV.Stats.Flush.Completed"),
 		compactionBacklog:    reuseInt("NoKV.Stats.Compaction.Backlog"),
 		compactionMaxScore:   reuseFloat("NoKV.Stats.Compaction.MaxScore"),
 		valueLogSegments:     reuseInt("NoKV.Stats.ValueLog.Segments"),
 		valueLogPendingDel:   reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
 		valueLogDiscardQueue: reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
+		walActiveSegment:     reuseInt("NoKV.Stats.WAL.ActiveSegment"),
+		walSegmentCount:      reuseInt("NoKV.Stats.WAL.Segments"),
+		walSegmentsRemoved:   reuseInt("NoKV.Stats.WAL.Removed"),
+		writeQueueDepth:      reuseInt("NoKV.Stats.Write.QueueDepth"),
+		writeQueueEntries:    reuseInt("NoKV.Stats.Write.QueueEntries"),
+		writeQueueBytes:      reuseInt("NoKV.Stats.Write.QueueBytes"),
+		writeBatchAvgEntries: reuseFloat("NoKV.Stats.Write.BatchAvgEntries"),
+		writeBatchAvgBytes:   reuseFloat("NoKV.Stats.Write.BatchAvgBytes"),
+		writeRequestWaitMs:   reuseFloat("NoKV.Stats.Write.RequestWaitMs"),
+		writeValueLogMs:      reuseFloat("NoKV.Stats.Write.ValueLogMs"),
+		writeApplyMs:         reuseFloat("NoKV.Stats.Write.ApplyMs"),
+		writeBatchesTotal:    reuseInt("NoKV.Stats.Write.Batches"),
+		writeThrottle:        reuseInt("NoKV.Stats.Write.Throttle"),
 		txnActive:            reuseInt("NoKV.Txns.Active"),
 		txnStarted:           reuseInt("NoKV.Txns.Started"),
 		txnCommitted:         reuseInt("NoKV.Txns.Committed"),
@@ -141,11 +199,34 @@ func (s *Stats) run() {
 func (s *Stats) collect() {
 	snap := s.Snapshot()
 	s.flushPending.Set(snap.FlushPending)
+	s.flushQueueLen.Set(snap.FlushQueueLength)
+	s.flushActive.Set(snap.FlushActive)
+	s.flushWaitMs.Set(snap.FlushWaitMs)
+	s.flushBuildMs.Set(snap.FlushBuildMs)
+	s.flushReleaseMs.Set(snap.FlushReleaseMs)
+	s.flushCompleted.Set(snap.FlushCompleted)
 	s.compactionBacklog.Set(snap.CompactionBacklog)
 	s.compactionMaxScore.Set(snap.CompactionMaxScore)
 	s.valueLogSegments.Set(int64(snap.ValueLogSegments))
 	s.valueLogPendingDel.Set(int64(snap.ValueLogPendingDel))
 	s.valueLogDiscardQueue.Set(int64(snap.ValueLogDiscardQueue))
+	s.walActiveSegment.Set(snap.WALActiveSegment)
+	s.walSegmentCount.Set(snap.WALSegmentCount)
+	s.walSegmentsRemoved.Set(int64(snap.WALSegmentsRemoved))
+	s.writeQueueDepth.Set(snap.WriteQueueDepth)
+	s.writeQueueEntries.Set(snap.WriteQueueEntries)
+	s.writeQueueBytes.Set(snap.WriteQueueBytes)
+	s.writeBatchAvgEntries.Set(snap.WriteAvgBatchEntries)
+	s.writeBatchAvgBytes.Set(snap.WriteAvgBatchBytes)
+	s.writeRequestWaitMs.Set(snap.WriteAvgRequestWaitMs)
+	s.writeValueLogMs.Set(snap.WriteAvgValueLogMs)
+	s.writeApplyMs.Set(snap.WriteAvgApplyMs)
+	s.writeBatchesTotal.Set(snap.WriteBatchesTotal)
+	if snap.WriteThrottleActive {
+		s.writeThrottle.Set(1)
+	} else {
+		s.writeThrottle.Set(0)
+	}
 	s.txnActive.Set(snap.TxnsActive)
 	s.txnStarted.Set(int64(snap.TxnsStarted))
 	s.txnCommitted.Set(int64(snap.TxnsCommitted))
@@ -161,8 +242,43 @@ func (s *Stats) Snapshot() StatsSnapshot {
 
 	// Flush backlog (pending flush tasks).
 	if s.db.lsm != nil {
-		snap.FlushPending = s.db.lsm.FlushPending()
+		fstats := s.db.lsm.FlushMetrics()
+		snap.FlushPending = fstats.Pending
+		snap.FlushQueueLength = fstats.Queue
+		snap.FlushActive = fstats.Active
+		if fstats.WaitCount > 0 {
+			snap.FlushWaitMs = float64(fstats.WaitNs) / float64(fstats.WaitCount) / 1e6
+		}
+		if fstats.BuildCount > 0 {
+			snap.FlushBuildMs = float64(fstats.BuildNs) / float64(fstats.BuildCount) / 1e6
+		}
+		if fstats.ReleaseCount > 0 {
+			snap.FlushReleaseMs = float64(fstats.ReleaseNs) / float64(fstats.ReleaseCount) / 1e6
+		}
+		snap.FlushCompleted = fstats.Completed
 		snap.CompactionBacklog, snap.CompactionMaxScore = s.db.lsm.CompactionStats()
+	}
+
+	if s.db.writeMetrics != nil {
+		wsnap := s.db.writeMetrics.snapshot()
+		snap.WriteQueueDepth = wsnap.QueueLen
+		snap.WriteQueueEntries = wsnap.QueueEntries
+		snap.WriteQueueBytes = wsnap.QueueBytes
+		snap.WriteAvgBatchEntries = wsnap.AvgBatchEntries
+		snap.WriteAvgBatchBytes = wsnap.AvgBatchBytes
+		snap.WriteAvgRequestWaitMs = wsnap.AvgRequestWaitMs
+		snap.WriteAvgValueLogMs = wsnap.AvgValueLogMs
+		snap.WriteAvgApplyMs = wsnap.AvgApplyMs
+		snap.WriteBatchesTotal = wsnap.Batches
+	}
+	snap.WriteThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
+
+	if s.db.wal != nil {
+		if wstats := s.db.wal.Metrics(); wstats != nil {
+			snap.WALActiveSegment = int64(wstats.ActiveSegment)
+			snap.WALSegmentCount = int64(wstats.SegmentCount)
+			snap.WALSegmentsRemoved = wstats.RemovedSegments
+		}
 	}
 
 	// Value log backlog.

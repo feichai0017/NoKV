@@ -116,7 +116,11 @@ func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
 	if err := vlog.write([]*request{req}); err != nil {
 		return nil, err
 	}
-	return req.Ptrs[0], nil
+	if len(req.Ptrs) == 0 {
+		return nil, errors.New("valueLog.newValuePtr: missing value pointer")
+	}
+	vp := req.Ptrs[0]
+	return &vp, nil
 }
 
 func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
@@ -192,7 +196,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 		req.Ptrs = req.Ptrs[:0]
 		for _, e := range req.Entries {
 			if vlog.db.shouldWriteValueToLSM(e) {
-				req.Ptrs = append(req.Ptrs, &utils.ValuePtr{})
+				req.Ptrs = append(req.Ptrs, utils.ValuePtr{})
 				continue
 			}
 			payload := wal.EncodeEntry(&buf, e)
@@ -200,7 +204,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 			if err != nil {
 				return err
 			}
-			req.Ptrs = append(req.Ptrs, ptr)
+			req.Ptrs = append(req.Ptrs, *ptr)
 
 			if int(ptr.Offset)+int(ptr.Len) > vlog.opt.ValueLogFileSize {
 				if err := vlog.manager.Rotate(); err != nil {
@@ -907,7 +911,7 @@ func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
 			nv = vp.Encode()
 			meta = meta | utils.BitValuePointer
 		}
-		db.updateHead([]*utils.ValuePtr{vp})
+		db.updateHead([]utils.ValuePtr{*vp})
 
 		v := utils.ValueStruct{
 			Value:     nv,
@@ -919,16 +923,20 @@ func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
 	}
 }
 
-func (db *DB) updateHead(ptrs []*utils.ValuePtr) {
-	var ptr *utils.ValuePtr
+func (db *DB) updateHead(ptrs []utils.ValuePtr) {
+	var (
+		ptr   utils.ValuePtr
+		found bool
+	)
 	for i := len(ptrs) - 1; i >= 0; i-- {
 		p := ptrs[i]
 		if !p.IsZero() {
 			ptr = p
+			found = true
 			break
 		}
 	}
-	if ptr == nil || ptr.IsZero() {
+	if !found || ptr.IsZero() {
 		return
 	}
 
@@ -1022,11 +1030,12 @@ var requestPool = sync.Pool{
 }
 
 type request struct {
-	Entries []*utils.Entry
-	Ptrs    []*utils.ValuePtr
-	Wg      sync.WaitGroup
-	Err     error
-	ref     int32
+	Entries   []*utils.Entry
+	Ptrs      []utils.ValuePtr
+	Wg        sync.WaitGroup
+	Err       error
+	ref       int32
+	enqueueAt time.Time
 }
 
 func (req *request) reset() {
@@ -1035,6 +1044,7 @@ func (req *request) reset() {
 	req.Wg = sync.WaitGroup{}
 	req.Err = nil
 	req.ref = 0
+	req.enqueueAt = time.Time{}
 }
 
 func (vlog *valueLog) waitOnGC(lc *utils.Closer) {

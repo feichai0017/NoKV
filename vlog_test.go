@@ -65,8 +65,8 @@ func TestVlogBase(t *testing.T) {
 	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
 
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
-	payload1, unlock1, err1 := log.manager.Read(b.Ptrs[0])
-	payload2, unlock2, err2 := log.manager.Read(b.Ptrs[1])
+	payload1, unlock1, err1 := log.manager.Read(&b.Ptrs[0])
+	payload2, unlock2, err2 := log.manager.Read(&b.Ptrs[1])
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	// 关闭会调的锁

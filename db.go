@@ -1,7 +1,6 @@
 package NoKV
 
 import (
-	"expvar"
 	"fmt"
 	"math"
 	"sync"
@@ -29,28 +28,30 @@ type (
 	// DB 对外暴露的接口对象 全局唯一，持有各种资源句柄
 	DB struct {
 		sync.RWMutex
-		opt         *Options
-		lsm         *lsm.LSM
-		wal         *wal.Manager
-		vlog        *valueLog
-		stats       *Stats
-		flushChan   chan flushTask // For flushing memtables.
-		writeCh     chan *request
-		batchCh     chan *writeBatch
-		applyCh 	chan *writeBatch
-		writeCloser *utils.Closer
-		blockWrites int32
-		vhead       *utils.ValuePtr
-		logRotates  int32
-		isClosed    uint32
-		orc         *oracle
-		hot         *hotring.HotRing
+		opt         	*Options
+		lsm         	*lsm.LSM
+		wal         	*wal.Manager
+		vlog        	*valueLog
+		stats       	*Stats
+		flushChan   	chan flushTask // For flushing memtables.
+		writeCh     	chan *request
+		batchCh     	chan *writeBatch
+		applyCh 		chan *writeBatch
+		writeCloser 	*utils.Closer
+		blockWrites 	int32
+		vhead       	*utils.ValuePtr
+		logRotates  	int32
+		isClosed    	uint32
+		orc         	*oracle
+		hot         	*hotring.HotRing
+		writeMetrics 	*writeMetrics
 	}
 	
 	writeBatch struct {
-		reqs 	[]*request
+		reqs    []*request
 		entries int
-		size 	int64
+		size    int64
+		waitNs  int64
 	}
 )
 
@@ -59,17 +60,21 @@ var (
 )
 
 
+var writeBatchPool = sync.Pool{
+	New: func() any { return &writeBatch{} },
+}
+
 const (
-	defaultWriteBatchMaxCount 	= 64
-	defaultWriteBatchMaxSize 	= 1 << 20
-	defaultWriteBatchDelay 		= 2 * time.Millisecond
+	defaultWriteBatchMaxCount = 64
+	defaultWriteBatchMaxSize  = 1 << 20
+	defaultWriteBatchDelay    = 2 * time.Millisecond
 )
 
 // Open DB
 // TODO 这里是不是要上一个目录锁比较好，防止多个进程打开同一个目录?
 func Open(opt *Options) *DB {
 	c := utils.NewCloser()
-	db := &DB{opt: opt, writeCloser: c}
+	db := &DB{opt: opt, writeCloser: c, writeMetrics: newWriteMetrics()}
 	db.initWriteBatchOptions()
 
 	wlog, err := wal.Open(wal.Config{
@@ -293,6 +298,7 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	req := requestPool.Get().(*request)
 	req.reset()
 	req.Entries = entries
+	req.enqueueAt = time.Now()
 	req.Wg.Add(1)
 	req.IncrRef()     // for db write
 	db.writeCh <- req // Handled in doWrites.
@@ -325,13 +331,41 @@ func (db *DB) batchSet(entries []*utils.Entry) error {
 	return req.Wait()
 }
 
+func getWriteBatch() *writeBatch {
+	batch := writeBatchPool.Get().(*writeBatch)
+	batch.reset()
+	return batch
+}
+
+func (wb *writeBatch) reset() {
+	if wb == nil {
+		return
+	}
+	if wb.reqs != nil {
+		wb.reqs = wb.reqs[:0]
+	}
+	wb.entries = 0
+	wb.size = 0
+	wb.waitNs = 0
+}
+
+func (wb *writeBatch) release() {
+	if wb == nil {
+		return
+	}
+	wb.reqs = nil
+	wb.entries = 0
+	wb.size = 0
+	wb.waitNs = 0
+	writeBatchPool.Put(wb)
+}
+
+
 func (db *DB) doWrites(lc *utils.Closer) {
 	defer lc.Done()
 	lc.Add(2)
 	go db.processValueLogBatches(lc)
 	go db.applyBatches(lc)
-	
-	reqLen := new(expvar.Int)
 	
 	var (
 		pending      []*request
@@ -378,18 +412,29 @@ func (db *DB) doWrites(lc *utils.Closer) {
 		if len(pending) == 0 {
 			return
 		}
-		batch := &writeBatch{
-			reqs:    pending,
-			entries: pendingCount,
-			size:    pendingSize,
+		now := time.Now()
+			batch := getWriteBatch()
+			batch.entries = pendingCount
+			batch.size = pendingSize
+			batch.reqs = append(batch.reqs[:0], pending...)
+			if len(batch.reqs) > 0 {
+				var waitSum int64
+				for _, req := range batch.reqs {
+					if !req.enqueueAt.IsZero() {
+						waitSum += now.Sub(req.enqueueAt).Nanoseconds()
+						req.enqueueAt = time.Time{}
+					}
+				}
+				batch.waitNs = waitSum
+				db.writeMetrics.recordBatch(len(batch.reqs), batch.entries, batch.size, waitSum)
+			}
+			db.batchCh <- batch
+			pending = pending[:0]
+			pendingCount = 0
+			pendingSize = 0
+			db.writeMetrics.updateQueue(0, 0, 0)
+			stopTimer()
 		}
-		db.batchCh <- batch
-		pending = nil
-		pendingCount = 0
-		pendingSize = 0
-		reqLen.Set(0)
-		stopTimer()
-	}
 
 	for {
 		var timerC <-chan time.Time
@@ -407,7 +452,7 @@ func (db *DB) doWrites(lc *utils.Closer) {
 				pendingSize += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
 			}
 			pendingCount += len(r.Entries)
-			reqLen.Set(int64(len(pending)))
+			db.writeMetrics.updateQueue(len(pending), pendingCount, pendingSize)
 
 			if len(pending) == 1 {
 				resetTimer()
@@ -469,12 +514,16 @@ func (db *DB) processValueLogBatches(lc *utils.Closer) {
 	defer lc.Done()
 	for batch := range db.batchCh {
 		if len(batch.reqs) == 0 {
+			batch.release()
 			continue
 		}
+		start := time.Now()
 		if err := db.vlog.write(batch.reqs); err != nil {
 			completeRequests(batch.reqs, err)
+			batch.release()
 			continue
 		}
+		db.writeMetrics.recordValueLog(time.Since(start))
 		db.applyCh <- batch
 	}
 	close(db.applyCh)
@@ -483,9 +532,16 @@ func (db *DB) processValueLogBatches(lc *utils.Closer) {
 func (db *DB) applyBatches(lc *utils.Closer) {
 	defer lc.Done()
 	for batch := range db.applyCh {
+		if len(batch.reqs) == 0 {
+			batch.release()
+			continue
+		}
+		start := time.Now()
 		if err := db.applyWriteBatch(batch); err != nil {
 			utils.Err(fmt.Errorf("applyWriteBatch: %v", err))
 		}
+		db.writeMetrics.recordApply(time.Since(start))
+		batch.release()
 	}
 }
 
