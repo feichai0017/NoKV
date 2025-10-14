@@ -1,6 +1,10 @@
 package NoKV
 
-import "github.com/feichai0017/NoKV/utils"
+import (
+	"time"
+
+	"github.com/feichai0017/NoKV/utils"
+)
 
 // Options NoKV 总的配置文件
 type Options struct {
@@ -16,6 +20,10 @@ type Options struct {
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
 
+	WriteBatchMaxCount int
+	WriteBatchMaxSize  int64
+	WriteBatchDelay    time.Duration
+
 	DetectConflicts bool
 	HotRingEnabled  bool
 	HotRingBits     uint8
@@ -25,13 +33,17 @@ type Options struct {
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:        "./work_test",
-		MemTableSize:   1024,
-		SSTableMaxSz:   1 << 30,
-		HotRingEnabled: true,
-		HotRingBits:    12,
-		HotRingTopK:    16,
+		WorkDir:            "./work_test",
+		MemTableSize:       1024,
+		SSTableMaxSz:       1 << 30,
+		HotRingEnabled:     true,
+		HotRingBits:        12,
+		HotRingTopK:        16,
+		WriteBatchMaxCount: 64,
+		WriteBatchMaxSize:  1 << 20,
+		WriteBatchDelay:    2 * time.Millisecond,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt
 }
+
