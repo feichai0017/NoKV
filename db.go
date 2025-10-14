@@ -73,11 +73,12 @@ func Open(opt *Options) *DB {
 		MaxLevelNum:         7,
 		NumCompactors:       1,
 	}, wlog)
+	db.lsm.SetThrottleCallback(db.applyThrottle)
 	// 初始化vlog结构
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// 初始化统计信息
-	db.stats = newStats(opt)
+	db.stats = newStats(db)
 
 	db.orc = newOracle(*opt)
 	// 启动 sstable 的合并压缩过程
@@ -88,7 +89,7 @@ func Open(opt *Options) *DB {
 	db.flushChan = make(chan flushTask, 16)
 	go db.doWrites(c)
 	// 启动 info 统计过程
-	go db.stats.StartStats()
+	db.stats.StartStats()
 	return db
 }
 
@@ -257,6 +258,22 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	req.IncrRef()     // for db write
 	db.writeCh <- req // Handled in doWrites.
 	return req, nil
+}
+
+func (db *DB) applyThrottle(enable bool) {
+	var val int32
+	if enable {
+		val = 1
+	}
+	prev := atomic.SwapInt32(&db.blockWrites, val)
+	if prev == val {
+		return
+	}
+	if enable {
+		utils.Err(fmt.Errorf("write throttle enabled due to L0 backlog"))
+	} else {
+		utils.Err(fmt.Errorf("write throttle released"))
+	}
 }
 
 // Check(kv.BatchSet(entries))

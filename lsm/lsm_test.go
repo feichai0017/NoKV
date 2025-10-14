@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,7 +78,7 @@ func TestHitStorage(t *testing.T) {
 	// 命中非L0层
 	hitNotL0 := func() {
 		// 通过压缩将compact生成非L0数据, 会命中l6层
-		lsm.levels.runOnce(0)
+		lsm.levels.compaction.runOnce(0)
 		baseTest(t, lsm, 128)
 	}
 	// 命中bf
@@ -90,6 +91,39 @@ func TestHitStorage(t *testing.T) {
 	}
 
 	runTest(1, hitMemtable, hitL0, hitNotL0, hitBloom)
+}
+
+func TestLSMThrottleCallback(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	var (
+		mu     sync.Mutex
+		events []bool
+	)
+	lsm.SetThrottleCallback(func(on bool) {
+		mu.Lock()
+		events = append(events, on)
+		mu.Unlock()
+	})
+
+	lsm.throttleWrites(true)
+	lsm.throttleWrites(true)
+	lsm.throttleWrites(false)
+	lsm.throttleWrites(false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("unexpected throttle events: %+v", events)
+	}
+	if !events[0] {
+		t.Fatalf("expected first throttle event to enable writes")
+	}
+	if events[1] {
+		t.Fatalf("expected second throttle event to disable throttling")
+	}
 }
 
 // Testparameter 测试异常参数
@@ -115,7 +149,7 @@ func TestCompact(t *testing.T) {
 		baseTest(t, lsm, 128)
 		// 直接触发压缩执行
 		fid := lsm.levels.maxFID + 1
-		lsm.levels.runOnce(1)
+		lsm.levels.compaction.runOnce(1)
 		for _, t := range lsm.levels.levels[6].tables {
 			if t.fid == fid {
 				ok = true

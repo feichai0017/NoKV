@@ -73,9 +73,9 @@
 - 事务 commit 复用 DB 写入流水线，保证 WAL / MemTable / ValueLog 原子性。
 
 ### 3.8 统计与监控 (`stats.go`)
-- 维护基础计数：写入、删除、活跃 entry、flush/compaction 队列。
-- 暴露至 expvar / Prometheus，便于生产环境观测。
-- 后续拓展：慢请求日志、压缩比、空间放大等指标。
+- 周期采集 LSM/ValueLog backlog、运行状态，并通过 `expvar` 暴露。
+- 当前指标：写入计数、flush/compaction backlog、`NoKV.Compaction.*` 与 `NoKV.ValueLog.*` 系列；离线巡检可使用 `cmd/nokv stats`。
+- 后续拓展：慢请求日志、压缩比、空间放大、命令行工具导出（如 `nokv stats/manifest`）。
 
 ---
 
@@ -95,9 +95,9 @@
 3. 事务读取使用 `readTs`，过滤版本。
 
 ### 4.3 Flush / Compaction
-同 3.3/3.4 所述，需具备：
-- 背压机制（限制 L0 table 数、flush 并发）。
-- Compaction 任务调度器（优先 L0→L1，再逐层）。
+同 3.3/3.4 所述，现已具备：
+- 背压机制：`compactionManager` 根据 L0 backlog 触发写入限流（`blockWrites`）。
+- Compaction 调度：事件驱动（flush、周期性）+ 优先级调度，优先处理 L0→L1。
 - 失败重试、暂停/恢复能力。
 
 ### 4.4 ValueLog GC
@@ -133,9 +133,12 @@
 ## 6. 监控与工具
 
 - Metrics：写入 TPS、flush backlog、compaction 延迟、value log GC 比例等。
+- 当前通过 `expvar` 与 `cmd/nokv stats` 导出的关键指标：
+  - `NoKV.Compaction.RunsTotal / LastDurationMs`
+  - `NoKV.ValueLog.GcRuns / SegmentsRemoved / HeadUpdates`
 - 日志：关键阶段打 info/error，支持 trace 调试。
 - 运维工具：
-  - `nokv manifest dump`
+  - `nokv stats` / `nokv manifest` / `nokv vlog`
   - `nokv sst inspect`
   - `nokv vlog gc --dry-run`
   - `nokv repair`（快速校验与修复）。
@@ -150,12 +153,12 @@
 | 2. Flush 管线 | ✅ 已完成 | `lsm/flush.Manager` 负责状态机、任务恢复、与 WAL 协同 |
 | 3. Manifest/Version | ✅ 已完成 | `manifest.Manager` 管理 VersionEdit、CURRENT 切换 |
 | 4. ValueLog 重构 | ✅ 已完成 | `vlog.Manager` + WAL 编码 + GC 重写逻辑落地 |
-| 5. Compaction 框架 | ⏳ 进行中 | 需实现任务调度、backpressure、stats 汇总 |
+| 5. Compaction 框架 | ✅ 已完成 | `compactionManager` 支持事件触发、L0 背压与写入限流，指标统一 |
 | 6. 事务/迭代器完善 | ⏳ 计划中 | Snapshot、多版本 iterator、冲突检测指标等 |
-| 7. 完整恢复/压力测试 | ⏳ 计划中 | 崩溃恢复脚本、混合 workload、CLI/metrics 工具 |
+| 7. 完整恢复/压力测试 | ⏳ 计划中 | 崩溃恢复脚本、混合 workload、CLI 工具（`nokv stats/manifest/vlog` 已就绪）、Prometheus 集成 |
 
 后续里程碑聚焦于：  
-1. **Compaction 调度器**：统一管理 level/size 配额，与 ValueLog discard stats 协同。  
+1. **Compaction 策略优化**：结合热度统计/多策略调度，进一步降低写放大。  
 2. **Manifest ↔ ValueLog 联动**：在 VersionEdit 中记录 head/删段信息，补齐崩溃恢复闭环。  
 3. **观测性与工具**：完善指标、命令行工具与压测场景，靠近 RocksDB/Badger 的运维体验。
 

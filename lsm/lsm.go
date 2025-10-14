@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/lsm/flush"
 	"github.com/feichai0017/NoKV/utils"
@@ -21,6 +22,9 @@ type LSM struct {
 	flushMgr   *flush.Manager
 	flushWG    sync.WaitGroup
 	maxMemFID  uint32
+
+	throttleFn func(bool)
+	throttled  int32
 }
 
 // Options _
@@ -48,6 +52,7 @@ type Options struct {
 // Close  _
 func (lsm *LSM) Close() error {
 	// wait for all api calls to finish
+	lsm.throttleWrites(false)
 	lsm.closer.Close()
 	lsm.flushMgr.Close()
 	lsm.flushWG.Wait()
@@ -76,6 +81,62 @@ func (lsm *LSM) SetDiscardStatsCh(ch *chan map[uint32]int64) {
 	}
 }
 
+// SetThrottleCallback registers a callback used to toggle write throttling at the DB layer.
+func (lsm *LSM) SetThrottleCallback(fn func(bool)) {
+	lsm.throttleFn = fn
+}
+
+func (lsm *LSM) throttleWrites(on bool) {
+	fn := lsm.throttleFn
+	if fn == nil {
+		return
+	}
+	if on {
+		if atomic.CompareAndSwapInt32(&lsm.throttled, 0, 1) {
+			fn(true)
+		}
+		return
+	}
+	if atomic.CompareAndSwapInt32(&lsm.throttled, 1, 0) {
+		fn(false)
+	}
+}
+
+// FlushPending returns the number of pending flush tasks.
+func (lsm *LSM) FlushPending() int64 {
+	if lsm == nil || lsm.flushMgr == nil {
+		return 0
+	}
+	return lsm.flushMgr.Stats().Pending
+}
+
+// CompactionStats returns (#pending candidates, max adjusted score).
+func (lsm *LSM) CompactionStats() (int64, float64) {
+	if lsm == nil || lsm.levels == nil {
+		return 0, 0
+	}
+	return lsm.levels.compactionStats()
+}
+
+// LogValueLogHead persists value log head pointer via manifest.
+func (lsm *LSM) LogValueLogHead(ptr *utils.ValuePtr) error {
+	return lsm.levels.LogValueLogHead(ptr)
+}
+
+// LogValueLogDelete records removal of a value log segment.
+func (lsm *LSM) LogValueLogDelete(fid uint32) error {
+	return lsm.levels.LogValueLogDelete(fid)
+}
+
+// ValueLogHead returns the persisted head pointer, if any.
+func (lsm *LSM) ValueLogHead() (utils.ValuePtr, bool) {
+	meta := lsm.levels.ValueLogHead()
+	if !meta.Valid {
+		return utils.ValuePtr{}, false
+	}
+	return utils.ValuePtr{Fid: meta.FileID, Offset: uint32(meta.Offset)}, true
+}
+
 // NewLSM _
 func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 	lsm := &LSM{option: opt, wal: walMgr}
@@ -98,7 +159,7 @@ func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
 	for i := range n {
-		go lsm.levels.runCompacter(i)
+		go lsm.levels.compaction.start(i)
 	}
 }
 

@@ -22,6 +22,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 		panic(err)
 	}
 	lm.build()
+	lm.compaction = newCompactionManager(lm)
 	return lm
 }
 
@@ -33,6 +34,7 @@ type levelManager struct {
 	levels       []*levelHandler
 	lsm          *LSM
 	compactState *compactStatus
+	compaction   *compactionManager
 }
 
 func (lm *levelManager) close() error {
@@ -154,7 +156,44 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	lm.levels[0].add(table)
 	lm.levels[0].addSize(table)
 	utils.Err(lm.lsm.wal.RemoveSegment(uint32(fid)))
+	if lm.compaction != nil {
+		lm.compaction.trigger("flush")
+	}
 	return nil
+}
+
+func (lm *levelManager) LogValueLogHead(ptr *utils.ValuePtr) error {
+	if ptr == nil {
+		return nil
+	}
+	return lm.manifestMgr.LogValueLogHead(ptr.Fid, uint64(ptr.Offset))
+}
+
+func (lm *levelManager) LogValueLogDelete(fid uint32) error {
+	return lm.manifestMgr.LogValueLogDelete(fid)
+}
+
+func (lm *levelManager) ValueLogHead() manifest.ValueLogMeta {
+	return lm.manifestMgr.ValueLogHead()
+}
+
+func (lm *levelManager) compactionStats() (int64, float64) {
+	if lm == nil {
+		return 0, 0
+	}
+	prios := lm.pickCompactLevels()
+	var max float64
+	for _, p := range prios {
+		if p.adjusted > max {
+			max = p.adjusted
+		}
+	}
+	return int64(len(prios)), max
+}
+
+func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
+	compactionRunsTotal.Add(1)
+	compactionLastDurationMs.Set(duration.Milliseconds())
 }
 
 // --------- levelHandler ---------
