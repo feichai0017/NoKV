@@ -37,6 +37,11 @@ type Options struct {
 	BlockSize int
 	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
 	BloomFalsePositive float64
+	
+	// Block cache controls.
+	BlockCacheSize        int
+	BlockCacheHotFraction float64
+	BloomCacheSize        int
 
 	// compact
 	NumCompactors       int
@@ -125,6 +130,14 @@ func (lsm *LSM) CompactionStats() (int64, float64) {
 		return 0, 0
 	}
 	return lsm.levels.compactionStats()
+}
+
+// CacheMetrics returns read-path cache hit statistics.
+func (lsm *LSM) CacheMetrics() CacheMetrics {
+	if lsm == nil || lsm.levels == nil {
+		return CacheMetrics{}
+	}
+	return lsm.levels.cacheMetrics()
 }
 
 // LogValueLogHead persists value log head pointer via manifest.

@@ -46,6 +46,10 @@ type Stats struct {
 	txnStarted           *expvar.Int
 	txnCommitted         *expvar.Int
 	txnConflicts         *expvar.Int
+	blockL0HitRate       *expvar.Float
+	blockL1HitRate       *expvar.Float
+	bloomHitRate         *expvar.Float
+	iteratorReuses       *expvar.Int
 }
 
 type HotKeyStat struct {
@@ -86,6 +90,10 @@ type StatsSnapshot struct {
 	TxnsCommitted         uint64         `json:"txns_committed"`
 	TxnsConflicts         uint64         `json:"txns_conflicts"`
 	HotKeys               []HotKeyStat   `json:"hot_keys,omitempty"`
+	BlockL0HitRate        float64        `json:"block_l0_hit_rate"`
+	BlockL1HitRate        float64        `json:"block_l1_hit_rate"`
+	BloomHitRate          float64        `json:"bloom_hit_rate"`
+	IteratorReused        uint64         `json:"iterator_reused"`
 }
 
 func newStats(db *DB) *Stats {
@@ -123,6 +131,10 @@ func newStats(db *DB) *Stats {
 		txnStarted:           reuseInt("NoKV.Txns.Started"),
 		txnCommitted:         reuseInt("NoKV.Txns.Committed"),
 		txnConflicts:         reuseInt("NoKV.Txns.Conflicts"),
+		blockL0HitRate:       reuseFloat("NoKV.Stats.Cache.L0HitRate"),
+		blockL1HitRate:       reuseFloat("NoKV.Stats.Cache.L1HitRate"),
+		bloomHitRate:         reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
+		iteratorReuses:       reuseInt("NoKV.Stats.Iterator.Reused"),
 	}
 	if expvar.Get("NoKV.Stats.HotKeys") == nil {
 		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
@@ -231,6 +243,10 @@ func (s *Stats) collect() {
 	s.txnStarted.Set(int64(snap.TxnsStarted))
 	s.txnCommitted.Set(int64(snap.TxnsCommitted))
 	s.txnConflicts.Set(int64(snap.TxnsConflicts))
+	s.blockL0HitRate.Set(snap.BlockL0HitRate)
+	s.blockL1HitRate.Set(snap.BlockL1HitRate)
+	s.bloomHitRate.Set(snap.BloomHitRate)
+	s.iteratorReuses.Set(int64(snap.IteratorReused))
 }
 
 // Snapshot returns a point-in-time metrics snapshot without mutating state.
@@ -304,6 +320,21 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		for _, item := range s.db.hot.TopN(topK) {
 			snap.HotKeys = append(snap.HotKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
+	}
+	if s.db != nil && s.db.lsm != nil {
+		cm := s.db.lsm.CacheMetrics()
+		if total := cm.L0Hits + cm.L0Misses; total > 0 {
+			snap.BlockL0HitRate = float64(cm.L0Hits) / float64(total)
+		}
+		if total := cm.L1Hits + cm.L1Misses; total > 0 {
+			snap.BlockL1HitRate = float64(cm.L1Hits) / float64(total)
+		}
+		if total := cm.BloomHits + cm.BloomMisses; total > 0 {
+			snap.BloomHitRate = float64(cm.BloomHits) / float64(total)
+		}
+	}
+	if s.db != nil && s.db.iterPool != nil {
+		snap.IteratorReused = s.db.iterPool.reused()
 	}
 	return snap
 }

@@ -79,6 +79,50 @@ func (h *HotRing) Touch(key string) int32 {
 	return node.Increment()
 }
 
+// Frequency returns the current access counter for key without mutating state.
+func (h *HotRing) Frequency(key string) int32 {
+	if h == nil || key == "" {
+		return 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	node := h.searchLocked(key, false)
+	if node == nil {
+		return 0
+	}
+	return node.GetCounter()
+}
+
+// TouchAndClamp increments the counter if below the provided limit and reports
+// whether the key should be considered throttled.
+func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited bool) {
+	if h == nil || key == "" {
+		return 0, false
+	}
+	if limit <= 0 {
+		return h.Touch(key), false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	node := h.searchLocked(key, false)
+	if node == nil {
+		node, inserted := h.insertLocked(key, key)
+		if !inserted || node == nil {
+			return 0, false
+		}
+		node.ResetCounter()
+		count = node.Increment()
+		return count, count >= limit
+	}
+	current := node.GetCounter()
+	if current >= limit {
+		return current, true
+	}
+	count = node.Increment()
+	return count, count >= limit
+}
+
+
 // Search returns the node for key, incrementing its counter.
 func (h *HotRing) Search(key string) *Node {
 	h.mu.RLock()
@@ -183,6 +227,38 @@ func (h *HotRing) TopN(n int) []Item {
 	} else {
 		items = append([]Item(nil), items...)
 	}
+	return items
+}
+// KeysAbove returns all keys whose counters are at least threshold.
+func (h *HotRing) KeysAbove(threshold int32) []Item {
+	if h == nil || threshold <= 0 {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var items []Item
+	for _, head := range h.tables {
+		if head == nil {
+			continue
+		}
+		node := head
+		for {
+			if cnt := node.GetCounter(); cnt >= threshold {
+				items = append(items, Item{Key: node.key, Count: cnt})
+			}
+			next := node.Next()
+			if next == nil || next == head {
+				break
+			}
+			node = next
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].Count > items[j].Count
+	})
 	return items
 }
 

@@ -28,22 +28,30 @@ type Options struct {
 	HotRingEnabled  bool
 	HotRingBits     uint8
 	HotRingTopK     int
+
+	// Block cache configuration for read path optimization. The cache keeps a
+	// two-tier layout (hot LRU + cold CLOCK) and currently targets L0/L1.
+	BlockCacheSize        int
+	BlockCacheHotFraction float64
+	BloomCacheSize        int
 }
 
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:            "./work_test",
-		MemTableSize:       1024,
-		SSTableMaxSz:       1 << 30,
-		HotRingEnabled:     true,
-		HotRingBits:        12,
-		HotRingTopK:        16,
-		WriteBatchMaxCount: 64,
-		WriteBatchMaxSize:  1 << 20,
-		WriteBatchDelay:    2 * time.Millisecond,
+		WorkDir:               "./work_test",
+		MemTableSize:          1024,
+		SSTableMaxSz:          1 << 30,
+		HotRingEnabled:        true,
+		HotRingBits:           12,
+		HotRingTopK:           16,
+		WriteBatchMaxCount:    64,
+		WriteBatchMaxSize:     1 << 20,
+		WriteBatchDelay:       2 * time.Millisecond,
+		BlockCacheSize:        4096,
+		BlockCacheHotFraction: 0.25,
+		BloomCacheSize:        1024,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt
 }
-

@@ -21,6 +21,7 @@ type table struct {
 	lm  *levelManager
 	fid uint64
 	ref int32 // For file garbage collection. Atomic.
+	lvl int
 }
 
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
@@ -74,10 +75,19 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error
 	defer t.DecrRef()
 	// get the index
 	idx := t.ss.Indexs()
-	// check if the key exists
-	bloomFilter := utils.Filter(idx.BloomFilter)
-	if t.ss.HasBloomFilter() && !bloomFilter.MayContainKey(key) {
-		return nil, utils.ErrKeyNotFound
+	if t.ss.HasBloomFilter() {
+		var bloomFilter utils.Filter
+		if cached, ok := t.lm.cache.getBloom(t.fid); ok {
+			bloomFilter = cached
+		} else {
+			bloomFilter = utils.Filter(idx.BloomFilter)
+			if len(bloomFilter) > 0 {
+				t.lm.cache.addBloom(t.fid, bloomFilter)
+			}
+		}
+		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(key) {
+			return nil, utils.ErrKeyNotFound
+		}
 	}
 	iter := t.NewIterator(&utils.Options{})
 	defer iter.Close()
@@ -122,10 +132,8 @@ func (t *table) block(idx int) (*block, error) {
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	blk, ok := t.lm.cache.blocks.Get(key)
-	if ok && blk != nil {
-		b, _ = blk.(*block)
-		return b, nil
+	if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
+		return cached, nil
 	}
 
 	var ko pb.BlockOffset
@@ -167,7 +175,7 @@ func (t *table) block(idx int) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.blocks.Set(key, b)
+	t.lm.cache.addBlock(t.lvl, key, b)
 
 	return b, nil
 }
@@ -359,7 +367,7 @@ func (t *table) DecrRef() error {
 	if newRef == 0 {
 		// TODO 从缓存中删除
 		for i := 0; i < len(t.ss.Indexs().GetOffsets()); i++ {
-			t.lm.cache.blocks.Del(t.blockCacheKey(i))
+			t.lm.cache.dropBlock(t.blockCacheKey(i))
 		}
 		if err := t.Delete(); err != nil {
 			return err

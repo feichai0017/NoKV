@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"testing"
 	"text/tabwriter"
 	"time"
@@ -30,6 +31,12 @@ var (
 	benchmarkResults []BenchmarkResult
 )
 
+type readScenarioResult struct {
+	Name string
+	QPS  float64
+	P99  time.Duration
+}
+
 // Clear benchmark directory
 func clearBenchDir() {
 	fmt.Printf("Clearing benchmark directory: %s\n", benchDir)
@@ -41,7 +48,7 @@ func clearBenchDir() {
 func generateData(num int) [][]byte {
 	fmt.Printf("Generating %d test data entries\n", num)
 	data := make([][]byte, num)
-	for i := 0; i < num; i++ {
+	for i := range num {
 		key := fmt.Sprintf("key%d", i)
 		value := make([]byte, 100)
 		rand.Read(value)
@@ -148,6 +155,70 @@ func BenchmarkBadgerWrite(b *testing.B) {
 
 	benchmarkResults = append(benchmarkResults, result)
 }
+
+func runCacheReadScenario(t *testing.T, label string, cacheSize, bloomSize int) readScenarioResult {
+	t.Helper()
+	clearBenchDir()
+	cfg := *opt
+	cfg.BlockCacheSize = cacheSize
+	cfg.BloomCacheSize = bloomSize
+	if cacheSize == 0 {
+		cfg.BlockCacheHotFraction = 0
+	}
+	db := NoKV.Open(&cfg)
+	defer db.Close()
+
+	const numKeys = 5000
+	keys := generateData(numKeys)
+	value := make([]byte, 128)
+	for i := 0; i < numKeys; i++ {
+		rand.Read(value)
+		if err := db.Set(utils.NewEntry(keys[i], value)); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+	}
+
+	// Warm up to populate caches before measurement.
+	for i := 0; i < 1000; i++ {
+		if _, err := db.Get(keys[rand.Intn(numKeys)]); err != nil {
+			t.Fatalf("warmup get: %v", err)
+		}
+	}
+
+	const reads = 2000
+	durations := make([]time.Duration, reads)
+	start := time.Now()
+	for i := 0; i < reads; i++ {
+		key := keys[i%numKeys]
+		opStart := time.Now()
+		if _, err := db.Get(key); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		durations[i] = time.Since(opStart)
+	}
+	total := time.Since(start)
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	p99Index := int(float64(len(durations))*0.99) - 1
+	if p99Index < 0 {
+		p99Index = 0
+	}
+	if p99Index >= len(durations) {
+		p99Index = len(durations) - 1
+	}
+	return readScenarioResult{
+		Name: label,
+		QPS:  float64(reads) / total.Seconds(),
+		P99:  durations[p99Index],
+	}
+}
+
+func TestCacheReadScenarios(t *testing.T) {
+	enabled := runCacheReadScenario(t, "cache-enabled", opt.BlockCacheSize, opt.BloomCacheSize)
+	disabled := runCacheReadScenario(t, "cache-disabled", 0, 0)
+	t.Logf("%s: QPS=%.2f P99=%s", enabled.Name, enabled.QPS, enabled.P99)
+	t.Logf("%s: QPS=%.2f P99=%s", disabled.Name, disabled.QPS, disabled.P99)
+}
+
 
 // NoKV Read Benchmark
 func BenchmarkNoKVRead(b *testing.B) {

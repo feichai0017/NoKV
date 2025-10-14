@@ -8,7 +8,15 @@ import (
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
+	pool *iteratorPool
+	ctx  *iteratorContext
+
+	entry    utils.Entry
+	item     Item
+	valueBuf []byte
+	valid    bool
 }
+
 type Item struct {
 	e *utils.Entry
 }
@@ -17,63 +25,122 @@ func (it *Item) Entry() *utils.Entry {
 	return it.e
 }
 func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
-	iters := make([]utils.Iterator, 0)
-	iters = append(iters, db.lsm.NewIterators(opt)...)
-
-	res := &DBIterator{
-		vlog: db.vlog,
-		iitr: lsm.NewMergeIterator(iters, opt.IsAsc),
+	if opt == nil {
+		opt = &utils.Options{}
 	}
-	return res
+	ctx := db.iterPool.get()
+	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
+	itr := &DBIterator{
+		vlog: db.vlog,
+		pool: db.iterPool,
+		ctx:  ctx,
+	}
+	itr.item.e = &itr.entry
+	itr.iitr = lsm.NewMergeIterator(ctx.iters, opt.IsAsc)
+	return itr
 }
 
 func (iter *DBIterator) Next() {
+	if iter == nil || iter.iitr == nil {
+		return
+	}
 	iter.iitr.Next()
-	for ; iter.Valid() && iter.Item() == nil; iter.iitr.Next() {
-	}
+	iter.populate()
 }
+
 func (iter *DBIterator) Valid() bool {
-	return iter.iitr.Valid()
+	if iter == nil {
+		return false
+	}
+	return iter.valid
 }
+
 func (iter *DBIterator) Rewind() {
+	if iter == nil || iter.iitr == nil {
+		return
+	}
 	iter.iitr.Rewind()
-	for ; iter.Valid() && iter.Item() == nil; iter.iitr.Next() {
-	}
+	iter.populate()
 }
-func (iter *DBIterator) Item() utils.Item {
-	// check if the value is a value ptr, if so, read from vlog
-	e := iter.iitr.Item().Entry()
-	var value []byte
 
-	if e != nil && utils.IsValuePtr(e) {
-		var vp utils.ValuePtr
-		vp.Decode(e.Value)
-		result, cb, err := iter.vlog.read(&vp)
-		defer utils.RunCallback(cb)
-		if err != nil {
-			return nil
-		}
-		value = utils.SafeCopy(nil, result)
+func (iter *DBIterator) Seek(key []byte) {
+	if iter == nil || iter.iitr == nil {
+		return
 	}
+	iter.iitr.Seek(key)
+	iter.populate()
+}
 
-	if e.IsDeletedOrExpired() || value == nil {
+func (iter *DBIterator) Item() utils.Item {
+	if iter == nil || !iter.valid {
 		return nil
 	}
+	return &iter.item
+}
 
-	res := &utils.Entry{
-		Key:          e.Key,
-		Value:        value,
-		ExpiresAt:    e.ExpiresAt,
-		Meta:         e.Meta,
-		Version:      e.Version,
-		Offset:       e.Offset,
-		Hlen:         e.Hlen,
-		ValThreshold: e.ValThreshold,
-	}
-	return res
-}
 func (iter *DBIterator) Close() error {
-	return iter.iitr.Close()
+	if iter == nil {
+		return nil
+	}
+	var err error
+	if iter.iitr != nil {
+		err = iter.iitr.Close()
+		iter.iitr = nil
+	}
+	iter.valid = false
+	iter.valueBuf = iter.valueBuf[:0]
+	if iter.pool != nil && iter.ctx != nil {
+		iter.pool.put(iter.ctx)
+	}
+	iter.ctx = nil
+	return err
 }
-func (iter *DBIterator) Seek(key []byte) {
+
+func (iter *DBIterator) populate() {
+	iter.valid = false
+	if iter == nil || iter.iitr == nil {
+		return
+	}
+	for iter.iitr.Valid() {
+		item := iter.iitr.Item()
+		if item == nil {
+			iter.iitr.Next()
+			continue
+		}
+		if iter.materialize(item.Entry()) {
+			iter.valid = true
+			return
+		}
+		iter.iitr.Next()
+	}
+}
+
+func (iter *DBIterator) materialize(src *utils.Entry) bool {
+	if iter == nil || src == nil {
+		return false
+	}
+	if src.IsDeletedOrExpired() {
+		return false
+	}
+	iter.entry = *src
+	if utils.IsValuePtr(src) {
+		var vp utils.ValuePtr
+		vp.Decode(src.Value)
+		val, cb, err := iter.vlog.read(&vp)
+		if cb != nil {
+			defer utils.RunCallback(cb)
+		}
+		if err != nil || len(val) == 0 {
+			return false
+		}
+		iter.valueBuf = append(iter.valueBuf[:0], val...)
+		iter.entry.Value = iter.valueBuf
+	} else {
+		if src.Value == nil || src.IsDeletedOrExpired() {
+			return false
+		}
+		iter.entry.Value = src.Value
+	}
+	iter.item.e = &iter.entry
+	return true
 }
