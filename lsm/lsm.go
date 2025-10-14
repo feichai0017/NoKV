@@ -111,6 +111,14 @@ func (lsm *LSM) FlushPending() int64 {
 	return lsm.flushMgr.Stats().Pending
 }
 
+// FlushMetrics returns detailed flush manager statistics.
+func (lsm *LSM) FlushMetrics() flush.Metrics {
+	if lsm == nil || lsm.flushMgr == nil {
+		return flush.Metrics{}
+	}
+	return lsm.flushMgr.Stats()
+}
+
 // CompactionStats returns (#pending candidates, max adjusted score).
 func (lsm *LSM) CompactionStats() (int64, float64) {
 	if lsm == nil || lsm.levels == nil {
@@ -279,8 +287,11 @@ func (lsm *LSM) submitFlush(mt *memTable) {
 	if mt == nil {
 		return
 	}
-	_, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt})
-	utils.Panic(err)
+	mt.IncrRef()
+	if _, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt}); err != nil {
+		mt.DecrRef()
+		utils.Panic(err)
+	}
 }
 
 func (lsm *LSM) startFlushWorkers(n int) {
@@ -301,22 +312,25 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable"))
 					continue
 				}
-				err := lsm.levels.flush(mt)
-				if err != nil {
-					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err)
-					continue
-				}
-				lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil)
-				lsm.lock.Lock()
-				for idx, imm := range lsm.immutables {
-					if imm == mt {
-						lsm.immutables = append(lsm.immutables[:idx], lsm.immutables[idx+1:]...)
-						break
+
+				func() {
+					defer mt.DecrRef()
+					if err := lsm.levels.flush(mt); err != nil {
+						lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err)
+						return
 					}
-				}
-				lsm.lock.Unlock()
-				_ = mt.close()
-				lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil)
+					lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil)
+					lsm.lock.Lock()
+					for idx, imm := range lsm.immutables {
+						if imm == mt {
+							lsm.immutables = append(lsm.immutables[:idx], lsm.immutables[idx+1:]...)
+							break
+						}
+					}
+					lsm.lock.Unlock()
+					_ = mt.close()
+					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil)
+				}()
 			}
 		}()
 	}

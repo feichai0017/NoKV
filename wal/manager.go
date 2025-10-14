@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -34,17 +35,25 @@ type EntryInfo struct {
 	Length    uint32
 }
 
+// Metrics captures runtime information about WAL manager state.
+type Metrics struct {
+	ActiveSegment   uint32
+	SegmentCount    int
+	RemovedSegments uint64
+}
+
 // Manager provides append-only WAL segments with replay support.
 type Manager struct {
-	cfg Config
+	cfg 			Config
 
-	mu          sync.Mutex
-	active      *os.File
-	activeID    uint32
-	activeSize  int64
-	closed      bool
-	crcTable    *crc32.Table
-	segmentSize int64
+	mu              sync.Mutex
+	active          *os.File
+	activeID        uint32
+	activeSize      int64
+	closed          bool
+	crcTable        *crc32.Table
+	segmentSize     int64
+	removedSegments uint64
 }
 
 // Open creates or resumes a WAL manager.
@@ -353,5 +362,26 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 // RemoveSegment deletes a WAL segment from disk.
 func (m *Manager) RemoveSegment(id uint32) error {
 	path := m.segmentPath(id)
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	atomic.AddUint64(&m.removedSegments, 1)
+	return nil
+}
+
+// Metrics returns a snapshot of WAL manager statistics.
+func (m *Manager) Metrics() *Metrics {
+	if m == nil {
+		return nil
+	}
+	files, err := m.ListSegments()
+	count := 0
+	if err == nil {
+		count = len(files)
+	}
+	return &Metrics{
+		ActiveSegment:   m.ActiveSegment(),
+		SegmentCount:    count,
+		RemovedSegments: atomic.LoadUint64(&m.removedSegments),
+	}
 }
