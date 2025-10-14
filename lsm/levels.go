@@ -215,6 +215,13 @@ func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
 	compactionLastDurationMs.Set(duration.Milliseconds())
 }
 
+func (lm *levelManager) cacheMetrics() CacheMetrics {
+	if lm == nil || lm.cache == nil {
+		return CacheMetrics{}
+	}
+	return lm.cache.metricsSnapshot()
+}
+
 // --------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
@@ -236,11 +243,17 @@ func (lh *levelHandler) close() error {
 func (lh *levelHandler) add(t *table) {
 	lh.Lock()
 	defer lh.Unlock()
+	t.lvl = lh.levelNum
 	lh.tables = append(lh.tables, t)
 }
 func (lh *levelHandler) addBatch(ts []*table) {
 	lh.Lock()
 	defer lh.Unlock()
+	for _, t := range ts {
+		if t != nil {
+			t.lvl = lh.levelNum
+		}
+	}
 	lh.tables = append(lh.tables, ts...)
 }
 
@@ -374,6 +387,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	for _, t := range toAdd {
 		lh.addSize(t)
 		t.IncrRef()
+		t.lvl = lh.levelNum
 		newTables = append(newTables, t)
 	}
 

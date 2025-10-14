@@ -14,14 +14,20 @@ type TxnIterator struct {
 	txn    *Txn
 	readTs uint64
 
-	opt  IteratorOptions
-	item *Item
+	opt      IteratorOptions
+	item     Item
+	entry    utils.Entry
+	valueBuf []byte
 
 	lastKey []byte // Used to skip over multiple versions of the same key.
 
 	closed bool
 
 	latestTs uint64
+
+	pool  *iteratorPool
+	ctx   *iteratorContext
+	valid bool
 }
 
 type IteratorOptions struct {
@@ -95,7 +101,6 @@ func (ri *readTsIterator) Seek(key []byte) {
 
 // NewIterator 方法会生成一个新的事务迭代器。
 // 在 Option 中，可以设置只迭代 Key，或者迭代 Key-Value
-
 func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 	if txn.discarded {
 		panic("Transaction has already been discarded")
@@ -106,7 +111,17 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 
 	atomic.AddInt32(&txn.numIterators, 1)
 
-	var iters []utils.Iterator
+	var (
+		ctx   *iteratorContext
+		iters []utils.Iterator
+	)
+	if txn.db != nil && txn.db.iterPool != nil {
+		ctx = txn.db.iterPool.get()
+		iters = ctx.iters[:0]
+	}
+	if iters == nil {
+		iters = make([]utils.Iterator, 0)
+	}
 	if itr := txn.newPendingWritesIterator(opt.Reverse); itr != nil {
 		iters = append(iters, itr)
 	}
@@ -119,13 +134,19 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 	for _, iter := range txn.db.lsm.NewIterators(lsmOpt) {
 		iters = append(iters, newReadTsIterator(iter, txn.readTs))
 	}
+	if ctx != nil {
+		ctx.iters = iters
+	}
 
 	ti := &TxnIterator{
 		txn:    txn,
 		iitr:   lsm.NewMergeIterator(iters, opt.Reverse),
 		opt:    opt,
 		readTs: txn.readTs,
+		pool:   txn.db.iterPool,
+		ctx:    ctx,
 	}
+	ti.item.e = &ti.entry
 	ti.advance()
 	return ti
 }
@@ -144,7 +165,7 @@ func (txn *Txn) NewKeyIterator(key []byte, opt IteratorOptions) *TxnIterator {
 }
 
 func (it *TxnIterator) advance() {
-	it.item = nil
+	it.valid = false
 	for it.iitr != nil && it.iitr.Valid() {
 		item := it.iitr.Item()
 		if item == nil || item.Entry() == nil {
@@ -179,66 +200,70 @@ func (it *TxnIterator) advance() {
 				continue
 			}
 		}
-		materialized := it.materializeEntry(entry)
-		if materialized == nil {
-			it.iitr.Next()
-			continue
-		}
-		it.lastKey = append(it.lastKey[:0], userKey...)
-		it.item = &Item{e: materialized}
-		if it.txn != nil {
-			it.txn.addReadKey(it.item.Entry().Key)
-			if it.txn.db != nil {
-				it.txn.db.recordRead(it.item.Entry().Key)
+		if !it.materializeEntry(entry) {
+				it.iitr.Next()
+				continue
 			}
+			it.lastKey = append(it.lastKey[:0], userKey...)
+			it.valid = true
+			if it.txn != nil {
+				it.txn.addReadKey(it.entry.Key)
+				if it.txn.db != nil {
+					it.txn.db.recordRead(it.entry.Key)
+				}
+			}
+			it.latestTs = it.entry.Version
+			return
 		}
-		it.latestTs = materialized.Version
-		return
-	}
-	it.latestTs = 0
+		it.latestTs = 0
 }
 
-func (it *TxnIterator) materializeEntry(entry *utils.Entry) *utils.Entry {
+func (it *TxnIterator) materializeEntry(entry *utils.Entry) bool {
+	if entry == nil {
+		return false
+	}
 	userKey := utils.ParseKey(entry.Key)
 	version := utils.ParseTs(entry.Key)
-	dst := &utils.Entry{
-		Key:       utils.SafeCopy(nil, userKey),
-		Value:     nil,
-		Meta:      entry.Meta,
-		ExpiresAt: entry.ExpiresAt,
-		Version:   version,
-	}
+	it.entry.Key = append(it.entry.Key[:0], userKey...)
+	it.entry.Meta = entry.Meta
+	it.entry.ExpiresAt = entry.ExpiresAt
+	it.entry.Version = version
 	if utils.IsValuePtr(entry) {
 		var vp utils.ValuePtr
 		vp.Decode(entry.Value)
 		val, cb, err := it.txn.db.vlog.read(&vp)
 		if err != nil {
 			utils.RunCallback(cb)
-			return nil
+			return false
 		}
-		dst.Value = utils.SafeCopy(nil, val)
+		it.valueBuf = append(it.valueBuf[:0], val...)
 		utils.RunCallback(cb)
+		if len(it.valueBuf) == 0 {
+			return false
+		}
+		it.entry.Value = it.valueBuf
 	} else {
-		dst.Value = utils.SafeCopy(nil, entry.Value)
+		it.entry.Value = append(it.entry.Value[:0], entry.Value...)
 	}
-	if isDeletedOrExpired(dst.Meta, dst.ExpiresAt) {
-		return nil
+	if isDeletedOrExpired(it.entry.Meta, it.entry.ExpiresAt) {
+		return false
 	}
-	return dst
+	it.item.e = &it.entry
+	return true
 }
 
 // Item returns pointer to the current key-value pair.
 // This item is only valid until it.Next() gets called.
 func (it *TxnIterator) Item() *Item {
-	if it.item == nil {
+	if !it.valid {
 		return nil
 	}
-	return it.item
+	return &it.item
 }
 
 // Valid returns false when iteration is done.
 func (it *TxnIterator) Valid() bool {
-	return it.item != nil
+	return it.valid
 }
 
 // ValidForPrefix returns false when iteration is done
@@ -256,6 +281,12 @@ func (it *TxnIterator) Close() {
 	if it.iitr != nil {
 		_ = it.iitr.Close()
 	}
+	it.valid = false
+	it.valueBuf = it.valueBuf[:0]
+	if it.pool != nil && it.ctx != nil {
+		it.pool.put(it.ctx)
+	}
+	it.ctx = nil
 	atomic.AddInt32(&it.txn.numIterators, -1)
 }
 
@@ -263,7 +294,7 @@ func (it *TxnIterator) Close() {
 // to ensure you have access to a valid it.Item().
 func (it *TxnIterator) Next() {
 	if it.iitr == nil {
-		it.item = nil
+		it.valid = false
 		it.latestTs = 0
 		return
 	}
@@ -280,7 +311,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 	}
 	it.lastKey = it.lastKey[:0]
 	if it.iitr == nil {
-		it.item = nil
+		it.valid = false
 		it.latestTs = 0
 		return it.latestTs
 	}
@@ -309,7 +340,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 func (it *TxnIterator) Rewind() {
 	it.lastKey = it.lastKey[:0]
 	if it.iitr == nil {
-		it.item = nil
+		it.valid = false
 		it.latestTs = 0
 		return
 	}

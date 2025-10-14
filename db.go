@@ -28,23 +28,24 @@ type (
 	// DB 对外暴露的接口对象 全局唯一，持有各种资源句柄
 	DB struct {
 		sync.RWMutex
-		opt         	*Options
-		lsm         	*lsm.LSM
-		wal         	*wal.Manager
-		vlog        	*valueLog
-		stats       	*Stats
-		flushChan   	chan flushTask // For flushing memtables.
-		writeCh     	chan *request
-		batchCh     	chan *writeBatch
-		applyCh 		chan *writeBatch
-		writeCloser 	*utils.Closer
-		blockWrites 	int32
-		vhead       	*utils.ValuePtr
-		logRotates  	int32
-		isClosed    	uint32
-		orc         	*oracle
-		hot         	*hotring.HotRing
-		writeMetrics 	*writeMetrics
+		opt          *Options
+		lsm          *lsm.LSM
+		wal          *wal.Manager
+		vlog         *valueLog
+		stats        *Stats
+		flushChan    chan flushTask // For flushing memtables.
+		writeCh      chan *request
+		batchCh      chan *writeBatch
+		applyCh      chan *writeBatch
+		writeCloser  *utils.Closer
+		blockWrites  int32
+		vhead        *utils.ValuePtr
+		logRotates   int32
+		isClosed     uint32
+		orc          *oracle
+		hot          *hotring.HotRing
+		writeMetrics *writeMetrics
+		iterPool     *iteratorPool
 	}
 	
 	writeBatch struct {
@@ -58,7 +59,6 @@ type (
 var (
 	head = []byte("!NoKV!head") // For storing value offset for replay.
 )
-
 
 var writeBatchPool = sync.Pool{
 	New: func() any { return &writeBatch{} },
@@ -76,6 +76,19 @@ func Open(opt *Options) *DB {
 	c := utils.NewCloser()
 	db := &DB{opt: opt, writeCloser: c, writeMetrics: newWriteMetrics()}
 	db.initWriteBatchOptions()
+	
+	if db.opt.BlockCacheSize < 0 {
+		db.opt.BlockCacheSize = 0
+	}
+	if db.opt.BlockCacheSize == 0 {
+		// Disable caches explicitly when set to zero, otherwise fall back to default.
+		db.opt.BlockCacheHotFraction = 0
+	} else if db.opt.BlockCacheHotFraction <= 0 || db.opt.BlockCacheHotFraction >= 1 {
+		db.opt.BlockCacheHotFraction = 0.25
+	}
+	if db.opt.BloomCacheSize < 0 {
+		db.opt.BloomCacheSize = 0
+	}
 
 	wlog, err := wal.Open(wal.Config{
 		Dir: opt.WorkDir,
@@ -84,24 +97,28 @@ func Open(opt *Options) *DB {
 	db.wal = wlog
 	// 初始化LSM结构
 	db.lsm = lsm.NewLSM(&lsm.Options{
-		WorkDir:             opt.WorkDir,
-		MemTableSize:        opt.MemTableSize,
-		SSTableMaxSz:        opt.SSTableMaxSz,
-		BlockSize:           8 * 1024,
-		BloomFalsePositive:  0, //0.01,
-		BaseLevelSize:       10 << 20,
-		LevelSizeMultiplier: 10,
-		BaseTableSize:       5 << 20,
-		TableSizeMultiplier: 2,
-		NumLevelZeroTables:  15,
-		MaxLevelNum:         7,
-		NumCompactors:       1,
+		WorkDir:               opt.WorkDir,
+		MemTableSize:          opt.MemTableSize,
+		SSTableMaxSz:          opt.SSTableMaxSz,
+		BlockSize:             8 * 1024,
+		BloomFalsePositive:    0, //0.01,
+		BaseLevelSize:         10 << 20,
+		LevelSizeMultiplier:   10,
+		BaseTableSize:         5 << 20,
+		TableSizeMultiplier:   2,
+		NumLevelZeroTables:    15,
+		MaxLevelNum:           7,
+		NumCompactors:         1,
+		BlockCacheSize:        db.opt.BlockCacheSize,
+		BlockCacheHotFraction: db.opt.BlockCacheHotFraction,
+		BloomCacheSize:        db.opt.BloomCacheSize,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	// 初始化vlog结构
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// 初始化统计信息
+	db.iterPool = newIteratorPool()
 	db.stats = newStats(db)
 
 	if opt.HotRingEnabled {
@@ -360,7 +377,6 @@ func (wb *writeBatch) release() {
 	writeBatchPool.Put(wb)
 }
 
-
 func (db *DB) doWrites(lc *utils.Closer) {
 	defer lc.Done()
 	lc.Add(2)
@@ -413,28 +429,28 @@ func (db *DB) doWrites(lc *utils.Closer) {
 			return
 		}
 		now := time.Now()
-			batch := getWriteBatch()
-			batch.entries = pendingCount
-			batch.size = pendingSize
-			batch.reqs = append(batch.reqs[:0], pending...)
-			if len(batch.reqs) > 0 {
-				var waitSum int64
-				for _, req := range batch.reqs {
-					if !req.enqueueAt.IsZero() {
-						waitSum += now.Sub(req.enqueueAt).Nanoseconds()
-						req.enqueueAt = time.Time{}
-					}
+		batch := getWriteBatch()
+		batch.entries = pendingCount
+		batch.size = pendingSize
+		batch.reqs = append(batch.reqs[:0], pending...)
+		if len(batch.reqs) > 0 {
+			var waitSum int64
+			for _, req := range batch.reqs {
+				if !req.enqueueAt.IsZero() {
+					waitSum += now.Sub(req.enqueueAt).Nanoseconds()
+					req.enqueueAt = time.Time{}
 				}
-				batch.waitNs = waitSum
-				db.writeMetrics.recordBatch(len(batch.reqs), batch.entries, batch.size, waitSum)
 			}
-			db.batchCh <- batch
-			pending = pending[:0]
-			pendingCount = 0
-			pendingSize = 0
-			db.writeMetrics.updateQueue(0, 0, 0)
-			stopTimer()
+			batch.waitNs = waitSum
+			db.writeMetrics.recordBatch(len(batch.reqs), batch.entries, batch.size, waitSum)
 		}
+		db.batchCh <- batch
+		pending = pending[:0]
+		pendingCount = 0
+		pendingSize = 0
+		db.writeMetrics.updateQueue(0, 0, 0)
+		stopTimer()
+	}
 
 	for {
 		var timerC <-chan time.Time

@@ -36,6 +36,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 		if snap.WriteThrottleActive {
 			t.Fatalf("expected throttle to be disabled in snapshot")
 		}
+		if snap.IteratorReused != db.iterPool.reused() {
+			t.Fatalf("expected iterator reuse snapshot to match pool, snap=%d pool=%d", snap.IteratorReused, db.iterPool.reused())
+		}
 
 	if snap.FlushPending != db.lsm.FlushPending() {
 		t.Fatalf("snapshot flush pending mismatch: %d vs %d", snap.FlushPending, db.lsm.FlushPending())
@@ -104,6 +107,18 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)
+	}
+	if v := expvar.Get("NoKV.Stats.Cache.L0HitRate"); v == nil {
+		t.Fatalf("expected L0 hit rate metric to be exported")
+	}
+	if v := expvar.Get("NoKV.Stats.Cache.L1HitRate"); v == nil {
+		t.Fatalf("expected L1 hit rate metric to be exported")
+	}
+	if v := expvar.Get("NoKV.Stats.Cache.BloomHitRate"); v == nil {
+		t.Fatalf("expected bloom hit rate metric to be exported")
+	}
+	if v := expvar.Get("NoKV.Stats.Iterator.Reused"); v == nil {
+		t.Fatalf("expected iterator reuse metric to be exported")
 	}
 	if snap.TxnsActive != 0 {
 		t.Fatalf("expected zero active txns, got %d", snap.TxnsActive)

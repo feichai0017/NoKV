@@ -32,3 +32,44 @@ func TestHotRingTouchAndTopN(t *testing.T) {
 		}
 	}
 }
+
+func TestHotRingFrequencyAndClamp(t *testing.T) {
+	r := NewHotRing(4, nil)
+	if freq := r.Frequency("missing"); freq != 0 {
+		t.Fatalf("expected zero frequency for missing key, got %d", freq)
+	}
+	if count, limited := r.TouchAndClamp("hot", 3); count != 1 || limited {
+		t.Fatalf("expected count=1 limited=false, got count=%d limited=%v", count, limited)
+	}
+	if count, limited := r.TouchAndClamp("hot", 3); count != 2 || limited {
+		t.Fatalf("expected count=2 limited=false, got count=%d limited=%v", count, limited)
+	}
+	if count, limited := r.TouchAndClamp("hot", 3); !limited || count != 3 {
+		t.Fatalf("expected limit reached at 3, got count=%d limited=%v", count, limited)
+	}
+	if freq := r.Frequency("hot"); freq != 3 {
+		t.Fatalf("expected frequency 3, got %d", freq)
+	}
+	r.Touch("warm")
+	r.Touch("warm")
+	r.Touch("cool")
+	above := r.KeysAbove(2)
+	if len(above) == 0 {
+		t.Fatalf("expected keys above threshold")
+	}
+	foundHot := false
+	for _, item := range above {
+		if item.Key == "hot" {
+			foundHot = true
+			if item.Count < 3 {
+				t.Fatalf("expected hot count >=3, got %d", item.Count)
+			}
+		}
+		if item.Count < 2 {
+			t.Fatalf("expected all returned items to be >=2, got %+v", item)
+		}
+	}
+	if !foundHot {
+		t.Fatalf("expected hot key to be reported above threshold")
+	}
+}
