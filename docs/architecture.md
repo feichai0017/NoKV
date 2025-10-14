@@ -141,6 +141,7 @@
   - `NoKV.Compaction.RunsTotal / LastDurationMs`
   - `NoKV.ValueLog.GcRuns / SegmentsRemoved / HeadUpdates`
   - `NoKV.Txns.{Active,Started,Committed,Conflicts}`
+- Hot Ring 热点追踪：读路径会将 key 访问频次上报至 hotring，`StatsSnapshot` 与 `nokv stats` 输出 Top-N 热点，为缓存、限流与调度提供依据。
 - 恢复测试阶段可通过 `RECOVERY_TRACE_METRICS` 收集额外指标（GC 清理、manifest rewrite、WAL replay 等），并由 `scripts/recovery_scenarios.sh` 自动归档日志。
 - 日志：关键阶段打 info/error，支持 trace 调试。
 - 运维工具：
@@ -151,31 +152,45 @@
 
 ---
 
-## 7. 开发阶段拆分
-
-| 阶段 | 状态 | 说明 |
-|------|------|------|
-| 1. WAL 重构 | ✅ 已完成 | `wal.Manager` + Replay 流程上线并覆盖单测 |
-| 2. Flush 管线 | ✅ 已完成 | `lsm/flush.Manager` 负责状态机、任务恢复、与 WAL 协同 |
-| 3. Manifest/Version | ✅ 已完成 | `manifest.Manager` 管理 VersionEdit、CURRENT 切换 |
-| 4. ValueLog 重构 | ✅ 已完成 | `vlog.Manager` + WAL 编码 + GC 重写逻辑落地 |
-| 5. Compaction 框架 | ✅ 已完成 | `compactionManager` 支持事件触发、L0 背压与写入限流，指标统一 |
-| 6. 事务/迭代器完善 | ✅ 已完成 | 快照迭代器 + 多版本遍历落地，并暴露事务活跃/冲突指标 |
-| 7. 完整恢复/压力测试 | ✅ 已完成 | 崩溃恢复脚本、混合 workload、CLI 工具（`nokv stats/manifest/vlog` 已就绪）、Prometheus 集成 |
+## 7. 开发与优化规划
 
 ### 测试与验证
 
-- **单元 + 集成测试**：执行 `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...` 覆盖 WAL、Manifest、LSM、ValueLog、事务等核心链路。
-- **恢复矩阵**：`RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh` 验证 WAL 重放、缺失 SST、ValueLog 截断等异常场景。
-- **性能基准**：`go test ./benchmark -run TestBenchmarkResults -count=1` 生成 NoKV vs Badger/RocksDB 吞吐延迟对比（需启用 `benchmark_rocksdb` 标签以测试 RocksDB）。
-- **测试计划**：详见 [docs/testing.md](testing.md)，按模块列出已覆盖项与待补充用例，建议在 CI 中开启覆盖率统计与错误注入脚本。
+- **单元 + 集成测试**：`GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
+- **恢复矩阵**：`RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh`
+- **性能基准**：`go test ./benchmark -run TestBenchmarkResults -count=1`（启用 `benchmark_rocksdb` 标签可对比 RocksDB）
+- **测试计划文档**：详见 [docs/testing.md](testing.md)
 
-后续里程碑聚焦于：  
-1. **Compaction 策略优化**：结合热度统计/多策略调度，进一步降低写放大。  
-2. **Manifest ↔ ValueLog 联动**：在 VersionEdit 中记录 head/删段信息，补齐崩溃恢复闭环。  
-3. **观测性与工具**：完善指标、命令行工具与压测场景，靠近 RocksDB/Badger 的运维体验。
+### 吞吐优化路线图
 
-每阶段需保证 `go test ./...` 通过，新增针对性单测及集成测试。
+**写路径**
+- 批处理与流水线化：共享 WAL append，批量 apply 到 memtable，降低锁切换。
+- 并行 WAL/ValueLog：将 Encode/CRC 放入独立线程或 I/O ring，主线程仅负责复制。
+- 动态 MemTable：依据写入压力扩容 arena，提升 flush 前聚合度。
+
+**读路径**
+- Block/Page Cache：引入分段 LRU/LFU 组合缓存，结合 hotring 预热热点 block。
+- 前置 Filter：补充 prefix/partitioned Bloom，加速 miss 判定。
+- 迭代器复用：迭代器池化与 block index 预取，降低 CPU/GC 开销。
+
+**Compaction / LSM**
+- 自适应调度：根据热点与写压选择 leveled/universal 等策略。
+- 并发 compaction：按 level 动态调整 `NumCompactors`，缓解 L0 积压。
+- 压缩与 block size：支持 Snappy/ZSTD 等多算法与 per-level 参数。
+
+**ValueLog**
+- WAL/ValueLog 分离：探索异步写入与 checksum pipeline，减少同步等待。
+- GC 启发式：结合 discard stats、热点 key 触发 GC。
+
+**并发控制**
+- 锁粒度细化：拆分全局锁到分片/列族级。
+- 读写分流：提供只读 memtable 快照与 key cache，降低写锁争用。
+
+**配置 / 部署**
+- 高吞吐 profile：预设大 memtable、多 compactor、批量阈值等组合。
+- IO 栈优化：direct I/O、预分配、mmap rewrite 等降低 syscall 成本。
+
+以上优化需要配套基准与回归测试验证，逐步向 RocksDB/Badger 的吞吐逼近。
 
 ---
 

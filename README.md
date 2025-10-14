@@ -1,123 +1,102 @@
-# NoKV
+# 🚀 NoKV – High-Performance LSM KV Engine
 
 <div align="center">
-  <img src="./img/logo.svg" width="200" height="200" alt="NoKV Logo">
+  <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
+  <p>
+    <a href="https://github.com/feichai0017/NoKV/actions">
+      <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status"/>
+    </a>
+    <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
+    <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
+    <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version"/>
+  </p>
+  <p><strong>LSM Tree • ValueLog • MVCC • Hot-Key Tracking</strong></p>
 </div>
 
-![Status](https://img.shields.io/badge/status-active-success.svg)
-![Language](https://img.shields.io/badge/language-go1.23-blue.svg)
-![License](https://img.shields.io/badge/license-Apache2.0-yellow.svg)
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+---
 
-A high-performance embedded key-value storage engine based on LSM Tree with MVCC transaction support.
+## ✨ Highlights
 
-## 目录 / Table of Contents
-- [Overview](#overview)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-  - [Data Path](#data-path)
-  - [Transactions](#transactions)
-  - [Compaction & Storage](#compaction--storage)
-- [Reliability & Recovery](#reliability--recovery)
-- [Tooling](#tooling)
-- [Benchmarking](#benchmarking)
-- [Development](#development)
-- [Documentation](#documentation)
-- [License](#license)
+- 🔁 **LSM + ValueLog** hybrid design inspired by RocksDB & Badger  
+- ⚡ **MVCC transactions** with snapshot isolation & conflict detection  
+- 🔥 **Hot Ring collector** for real-time hot-key analytics (exposed via `nokv stats`)  
+- ♻️ **Resilient recovery**: WAL / Manifest / ValueLog replay with scripted scenarios  
+- 🛠️ **CLI toolchain**: inspect stats, manifest, vlog segments in seconds  
 
-## Overview
+---
 
-NoKV 是一款基于 LSM-Tree 的嵌入式 KV 引擎，提供：
-- **高吞吐写入路径**：WAL 追加 + MemTable 缓冲 + 分层 SST 持久化。
-- **Whiskey 风格 ValueLog**：大 Value 单独落盘，降低写放大。
-- **MVCC 事务**：乐观并发控制、快照级读视图和冲突检测。
-- **可观测性与恢复**：Manifest/WAL/ValueLog 三管齐下，支持细粒度恢复脚本。
-
-目标是向 RocksDB / Badger 的工业化质量靠拢，同时保持 Go 项目的易用性。
-
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 go get github.com/feichai0017/NoKV
 
-go test ./...                   # 运行单元测试
-./scripts/recovery_scenarios.sh # 一键验证崩溃恢复矩阵
+go test ./...                   # 单元 + 集成测试
+./scripts/recovery_scenarios.sh # 一键覆盖 WAL/Manifest/ValueLog 恢复矩阵
 ```
 
-默认脚本会把 `go test` 指标缓存到 `artifacts/recovery/`，并启用 `RECOVERY_TRACE_METRICS=1`
-输出结构化恢复日志，方便排查与归档。
+> 运行脚本时默认输出结构化 `RECOVERY_METRIC` 日志至 `artifacts/recovery/`，方便集成 CI。
 
-## Architecture
+---
 
-系统结构详见 [docs/architecture.md](docs/architecture.md)，下列为核心模块概览。
+## 🧱 Architecture Glimpse
 
-### Data Path
-- **Write-Ahead Log (WAL)**：顺序写磁盘，提供崩溃后重放能力。
-- **MemTable**：基于 SkipList 的内存排序表，支持快照迭代。
-- **SSTable**：多层级 LSM 文件，包含 Bloom Filter、Index 与数据块。
-- **Manifest / CURRENT**：记录版本状态与 ValueLog 元信息，保障元数据一致性。
+| 模块 | 亮点 |
+| ---- | ---- |
+| **WAL** | 顺序写 + 段切换；崩溃后重放 MemTable |
+| **MemTable** | SkipList + Arena；flush pipeline 四阶段状态机 |
+| **SSTable** | leveled/size-tiered 混合 compaction；索引、Bloom 缓存 |
+| **ValueLog** | 大 value 分离、GC 重写、head 指针持久化 |
+| **Oracle / Txn** | MVCC 时间戳、冲突检测、事务迭代器快照 |
+| **Hot Ring** | 读路径统计热点 key， Stats/CLI 输出 Top-N，为缓存/调度提供信号 |
 
-### Transactions
-- **MVCC Engine**：基于时间戳的快照读 + 乐观写，冲突时回滚。
-- **Snapshot Iterators**：事务可跨 MemTable、Immutable MemTable 与 SST 层遍历。
-- **Conflict Detection**：轻量级冲突表，定位写写冲突与读写冲突。
+完整设计详见 [docs/architecture.md](docs/architecture.md)。
 
-### Compaction & Storage
-- **Flush Pipeline**：后台异步将 MemTable 刷至 L0，并记录 VersionEdit。
-- **Compaction Manager**：基于 backlog 的调度器，带写入限流与优先级。
-- **ValueLog Manager**：管理大 Value 的段轮换、GC 与 head 指针持久化。
-- **Hot Ring Cache**：常驻热点读缓存，减少跨层读取。
+---
 
-## Reliability & Recovery
+## 🔍 Observability & Recovery
 
-恢复流程遵循 `CURRENT → Manifest → WAL/ValueLog` 的顺序，并在单测中覆盖以下场景：
-- WAL 重放恢复未 flush 写入。
-- ValueLog GC 遗留段清理。
-- 缺失 `.sst` 的 Manifest 回滚。
-- Manifest rewrite 崩溃时沿用旧 CURRENT。
+- `cmd/nokv stats`：离线/在线拉取 backlog 指标、热点 Key、ValueLog 状态  
+- `cmd/nokv manifest` / `cmd/nokv vlog`：检查 manifest 层级与 vlog 段  
+- `scripts/recovery_scenarios.sh`：覆盖 WAL 重放、缺失 SST、ValueLog 截断等场景  
+- `RECOVERY_TRACE_METRICS=1`：调试模式输出结构化恢复指标  
 
-运行 `./scripts/recovery_scenarios.sh` 可串行覆盖上述用例，测试默认启用
-`RECOVERY_TRACE_METRICS`，输出如：
+---
 
-```
-RECOVERY_METRIC wal_replay={"key":"wal-crash-key","recovered_len":15,...}
-```
+## 📊 Benchmarking
 
-日志文件位于 `artifacts/recovery/<TestName>.log`，便于接入 CI 构建产物或自定义分析。
-更多细节与扩展计划详见 [docs/recovery.md](docs/recovery.md)。
+- `go test ./benchmark -run TestBenchmarkResults -count=1`  
+  生成 NoKV vs Badger 写入/读取/批量/范围扫描对比，并写入 `benchmark/benchmark_results/*.txt`  
+- RocksDB 对比：  
+  ```bash
+  go env -w CGO_ENABLED=1
+  go get github.com/tecbot/gorocksdb
+  go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
+  ```
 
-## Tooling
+---
 
-- `cmd/nokv`: 提供 `stats`、`manifest`、`vlog` 等调试命令。
-- `scripts/recovery_scenarios.sh`: 恢复矩阵的一键执行脚本。
-- `utils/cache`, `utils/mmap`: 基础设施组件，可单独复用。
-- 指标导出：通过 `expvar` 暴露 `NoKV.*` 统计，配合后台任务/GC 状态监控。
+## 🛠️ Development Guide
 
-## Benchmarking
+| 项目 | 说明 |
+| ---- | ---- |
+| 语言 | Go 1.23+ |
+| 测试 | 提交前请确保 `go test ./...` 全绿，并补充针对性用例 |
+| 性能 | `benchmark/` 提供基准测试骨架，欢迎扩展 workload |
+| 贡献 | 欢迎 PR，与我们一同完善下一代 Go KV 引擎 🧑‍💻 |
 
-- 运行 `GOCACHE=$(pwd)/.gocache go test ./benchmark -run TestBenchmarkResults -count=1`
-  可生成 NoKV vs Badger 的写入、读取、批量写与范围扫描对比，并把概要表格输出到终端。
-- 明细会写入 `benchmark_results/benchmark_results_<timestamp>.txt`，包含各项延迟、吞吐与内存指标。
-- 需要与 RocksDB 对比时，先安装 `librocksdb` 与 gorocksdb 绑定：
-  1. `go env -w CGO_ENABLED=1`, `go get github.com/tecbot/gorocksdb`；
-  2. 本地 RocksDB headers/libs 可通过包管理器或源码编译安装；
-  3. 运行 `GOCACHE=$(pwd)/.gocache GOMODCACHE=$(pwd)/.gomodcache go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1`。
-- 未启用 `benchmark_rocksdb` 标签时，RocksDB 基准会自动跳过。
-
-## Development
-
-- 语言版本：Go 1.23+
-- 测试规范：提交前确保 `go test ./...` 通过，并在相关模块补充针对性单元测试。
-- 性能基准：`benchmark/` 下提供基础压测，后续将结合恢复脚本扩展压力测试矩阵。
-- 贡献流程：详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## Documentation
-
+相关文档：
 - [Architecture & Design Overview](docs/architecture.md)
-- [Crash Recovery Verification Plan](docs/recovery.md)
-- [MemTable Flush Pipeline](docs/flush.md)
+- [Testing & Validation Plan](docs/testing.md)
+- [Crash Recovery Verification](docs/recovery.md)
+- [Flush Pipeline](docs/flush.md)
 - [Manifest & VersionEdit](docs/manifest.md)
 
-## License
+---
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 📄 License
+
+Apache-2.0. 详见 [LICENSE](LICENSE)。
+
+<div align="center">
+  <sub>Made with ❤️ for high-throughput, embeddable storage.</sub>
+</div>
