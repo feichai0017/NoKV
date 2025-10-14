@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+	"text/tabwriter"
 	"time"
 
 	"github.com/dgraph-io/badger/v3"
@@ -53,6 +54,8 @@ func generateData(num int) [][]byte {
 func BenchmarkNoKVWrite(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "NoKV Write",
+		Engine:    "NoKV",
+		Operation: "Write",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== NoKV Write Benchmark ===\n")
@@ -97,6 +100,8 @@ func BenchmarkNoKVWrite(b *testing.B) {
 func BenchmarkBadgerWrite(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "Badger Write",
+		Engine:    "Badger",
+		Operation: "Write",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== Badger Write Benchmark ===\n")
@@ -148,6 +153,8 @@ func BenchmarkBadgerWrite(b *testing.B) {
 func BenchmarkNoKVRead(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "NoKV Read",
+		Engine:    "NoKV",
+		Operation: "Read",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== NoKV Read Benchmark ===\n")
@@ -199,6 +206,8 @@ func BenchmarkNoKVRead(b *testing.B) {
 func BenchmarkBadgerRead(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "Badger Read",
+		Engine:    "Badger",
+		Operation: "Read",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== Badger Read Benchmark ===\n")
@@ -261,6 +270,8 @@ func BenchmarkBadgerRead(b *testing.B) {
 func BenchmarkNoKVBatchWrite(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "NoKV Batch Write",
+		Engine:    "NoKV",
+		Operation: "BatchWrite",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== NoKV Batch Write Benchmark ===\n")
@@ -300,15 +311,15 @@ func BenchmarkNoKVBatchWrite(b *testing.B) {
 
 	result.EndTime = time.Now()
 	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
+	result.TotalOperations = int64(numBatches * batchSize)
+	result.DataSize = float64(numBatches*batchSize*100) / 1024 / 1024
+	result.MemoryStats.Allocations = int64(numBatches * batchSize)
+	result.MemoryStats.Bytes = int64(numBatches * batchSize * 100)
 
 	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Total Duration: %v\n", duration)
 	fmt.Printf("Average Time per Batch: %v\n", duration/time.Duration(numBatches))
-	fmt.Printf("Total Entries: %d\n", b.N)
+	fmt.Printf("Total Entries: %d\n", numBatches*batchSize)
 	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
 
 	benchmarkResults = append(benchmarkResults, result)
@@ -318,6 +329,8 @@ func BenchmarkNoKVBatchWrite(b *testing.B) {
 func BenchmarkBadgerBatchWrite(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "Badger Batch Write",
+		Engine:    "Badger",
+		Operation: "BatchWrite",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== Badger Batch Write Benchmark ===\n")
@@ -364,15 +377,15 @@ func BenchmarkBadgerBatchWrite(b *testing.B) {
 
 	result.EndTime = time.Now()
 	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
+	result.TotalOperations = int64(numBatches * batchSize)
+	result.DataSize = float64(numBatches*batchSize*100) / 1024 / 1024
+	result.MemoryStats.Allocations = int64(numBatches * batchSize)
+	result.MemoryStats.Bytes = int64(numBatches * batchSize * 100)
 
 	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Total Duration: %v\n", duration)
 	fmt.Printf("Average Time per Batch: %v\n", duration/time.Duration(numBatches))
-	fmt.Printf("Total Entries: %d\n", b.N)
+	fmt.Printf("Total Entries: %d\n", numBatches*batchSize)
 	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
 
 	benchmarkResults = append(benchmarkResults, result)
@@ -382,6 +395,8 @@ func BenchmarkBadgerBatchWrite(b *testing.B) {
 func BenchmarkNoKVRangeQuery(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "NoKV Range Query",
+		Engine:    "NoKV",
+		Operation: "RangeQuery",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== NoKV Range Query Benchmark ===\n")
@@ -443,6 +458,8 @@ func BenchmarkNoKVRangeQuery(b *testing.B) {
 func BenchmarkBadgerRangeQuery(b *testing.B) {
 	result := BenchmarkResult{
 		Name:      "Badger Range Query",
+		Engine:    "Badger",
+		Operation: "RangeQuery",
 		StartTime: time.Now(),
 	}
 	fmt.Printf("\n=== Badger Range Query Benchmark ===\n")
@@ -537,6 +554,17 @@ func TestBenchmarkResults(t *testing.T) {
 	testing.Benchmark(BenchmarkBadgerBatchWrite)
 	testing.Benchmark(BenchmarkNoKVRangeQuery)
 	testing.Benchmark(BenchmarkBadgerRangeQuery)
+	testing.Benchmark(BenchmarkRocksDBWrite)
+	testing.Benchmark(BenchmarkRocksDBRead)
+	testing.Benchmark(BenchmarkRocksDBBatchWrite)
+	testing.Benchmark(BenchmarkRocksDBRangeQuery)
+
+	if len(benchmarkResults) > 0 {
+		fmt.Printf("\nBenchmark Summary (ops/sec, latency):\n")
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		writeSummaryTable(tw, benchmarkResults)
+		fmt.Println()
+	}
 
 	// Write results to file
 	if err := WriteResults(benchmarkResults); err != nil {

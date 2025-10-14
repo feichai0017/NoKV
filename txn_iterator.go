@@ -186,6 +186,9 @@ func (it *TxnIterator) advance() {
 		}
 		it.lastKey = append(it.lastKey[:0], userKey...)
 		it.item = &Item{e: materialized}
+		if it.txn != nil {
+			it.txn.addReadKey(it.item.Entry().Key)
+		}
 		it.latestTs = materialized.Version
 		return
 	}
@@ -227,7 +230,6 @@ func (it *TxnIterator) Item() *Item {
 	if it.item == nil {
 		return nil
 	}
-	it.txn.addReadKey(it.item.Entry().Key)
 	return it.item
 }
 
@@ -270,6 +272,9 @@ func (it *TxnIterator) Next() {
 // smallest key greater than the provided key if iterating in the forward direction.
 // Behavior would be reversed if iterating backwards.
 func (it *TxnIterator) Seek(key []byte) uint64 {
+	if len(key) > 0 && it.txn != nil {
+		it.txn.addReadKey(key)
+	}
 	it.lastKey = it.lastKey[:0]
 	if it.iitr == nil {
 		it.item = nil
