@@ -168,7 +168,7 @@ func runCacheReadScenario(t *testing.T, label string, cacheSize, bloomSize int) 
 	db := NoKV.Open(&cfg)
 	defer db.Close()
 
-	const numKeys = 5000
+	const numKeys = 5000000
 	keys := generateData(numKeys)
 	value := make([]byte, 128)
 	for i := 0; i < numKeys; i++ {
@@ -185,11 +185,11 @@ func runCacheReadScenario(t *testing.T, label string, cacheSize, bloomSize int) 
 		}
 	}
 
-	const reads = 2000
+	const reads = 200000
 	durations := make([]time.Duration, reads)
 	start := time.Now()
 	for i := 0; i < reads; i++ {
-		key := keys[i%numKeys]
+		key := keys[rand.Intn(numKeys)]
 		opStart := time.Now()
 		if _, err := db.Get(key); err != nil {
 			t.Fatalf("get: %v", err)

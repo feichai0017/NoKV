@@ -54,14 +54,14 @@ go test ./benchmark -run TestBenchmarkResults -count=1
 
 ---
 
-## 4. 待办与改进建议
+## 4. 已落地的强化项
 
-1. **错误注入与压力测试**：为 WAL、Manifest、ValueLog 引入随机 IO 错误与并发压力，补齐上表中的“待补充方向”。
-2. **事务长压场景**：编写长事务 + 大批量冲突的专用测试，覆盖 `CommitWith`、managed 模式。
-3. **CLI/工具测试**：为 `cmd/nokv` 增加 Golden Test 或端到端流程，保障调试工具质量。
-4. **Benchmark 规范化**：拆分冷启动与热态数据，固定并发、预热时长，引入资源监控（CPU/内存/IO）。
-5. **覆盖率监控**：在 CI 中启用 `go test -coverprofile` 并按模块输出覆盖率，结合上述矩阵持续跟踪。
+1. **错误注入与压力测试**：`wal/manager_test.go` 覆盖段截断、校验和损坏、重复关闭等异常；`manifest/manager_test.go` 校验 ValueLog head/删除的重放顺序；`vlog/gc_test.go` 在 GC 期间模拟并发访问，确保引用计数正确。
+2. **事务长压场景**：`txn_test.go` 与 `txn_iterator_test.go` 涵盖长事务、冲突检测、快照一致性；`txn_metrics_test.go` 验证统计指标在并发场景下的正确性。
+3. **CLI/工具测试**：`cmd/nokv/main_test.go` 通过 Golden JSON 检查 `stats`、`manifest`、`vlog` 子命令输出，保证诊断工具在真实磁盘上可用。
+4. **Benchmark 规范化**：`benchmark/benchmark_test.go` 与 `benchmark/rocksdb_benchmark_test.go` 将冷/热场景拆分，并提供与 Badger、RocksDB 的对照结果，可直接纳入性能回归。
+5. **覆盖率与 CI 信号**：`scripts/recovery_scenarios.sh` 聚合恢复场景日志，配合 `RECOVERY_TRACE_METRICS` 环境变量生成结构化指标；`stats.go` 的快照结构提供稳定的监控字段，可在 CI 中抓取并回归比较。
 
 ---
 
-通过本测试计划，可对 NoKV 的关键路径进行可持续验证，并为后续扩展（多列族、快照、备份等）打下基础。执行过程中如有新增模块或测试场景，应同步更新此文档与自动化脚本。 
+通过本测试计划，可对 NoKV 的关键路径进行可持续验证，并为后续扩展（多列族、快照、备份等）打下基础。执行过程中如有新增模块或测试场景，应同步更新此文档与自动化脚本。
