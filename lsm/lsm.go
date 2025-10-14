@@ -150,6 +150,14 @@ func (lsm *LSM) LogValueLogDelete(fid uint32) error {
 	return lsm.levels.LogValueLogDelete(fid)
 }
 
+// LogValueLogUpdate restores or amends metadata for a value log segment.
+func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
+	if lsm.levels == nil {
+		return nil
+	}
+	return lsm.levels.LogValueLogUpdate(meta)
+}
+
 // ValueLogHead returns the persisted head pointer, if any.
 func (lsm *LSM) ValueLogHead() (utils.ValuePtr, bool) {
 	meta := lsm.levels.ValueLogHead()

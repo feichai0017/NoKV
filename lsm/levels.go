@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -141,10 +142,20 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	fid := uint64(immutable.segmentID)
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
+	iter := immutable.sl.NewSkipListIterator()
+	defer iter.Close()
+
+	iter.Rewind()
+	if !iter.Valid() {
+		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+
 	// build a builder
 	builder := newTableBuiler(lm.opt)
-	iter := immutable.sl.NewSkipListIterator()
-	for iter.Rewind(); iter.Valid(); iter.Next() {
+	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
 		builder.add(entry, false)
 	}
@@ -170,7 +181,9 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	lm.levels[0].add(table)
 	lm.levels[0].addSize(table)
-	utils.Err(lm.lsm.wal.RemoveSegment(uint32(fid)))
+	if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if lm.compaction != nil {
 		lm.compaction.trigger("flush")
 	}
@@ -186,6 +199,13 @@ func (lm *levelManager) LogValueLogHead(ptr *utils.ValuePtr) error {
 
 func (lm *levelManager) LogValueLogDelete(fid uint32) error {
 	return lm.manifestMgr.LogValueLogDelete(fid)
+}
+
+func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
+	if meta == nil {
+		return nil
+	}
+	return lm.manifestMgr.LogValueLogUpdate(*meta)
 }
 
 func (lm *levelManager) ValueLogHead() manifest.ValueLogMeta {

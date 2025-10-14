@@ -100,6 +100,58 @@ func TestManagerValueLog(t *testing.T) {
 	}
 }
 
+func TestManagerValueLogUpdate(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := mgr.LogValueLogHead(3, 2048); err != nil {
+		t.Fatalf("log head: %v", err)
+	}
+	if err := mgr.LogValueLogDelete(3); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	meta := manifest.ValueLogMeta{FileID: 3, Offset: 2048, Valid: true}
+	if err := mgr.LogValueLogUpdate(meta); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	current := mgr.Current()
+	restored, ok := current.ValueLogs[3]
+	if !ok {
+		t.Fatalf("expected fid 3 metadata after update")
+	}
+	if !restored.Valid || restored.Offset != 2048 {
+		t.Fatalf("unexpected restored meta: %+v", restored)
+	}
+	head := mgr.ValueLogHead()
+	if head.Valid {
+		t.Fatalf("expected head to remain cleared after update: %+v", head)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+
+	current = mgr.Current()
+	restored, ok = current.ValueLogs[3]
+	if !ok {
+		t.Fatalf("expected fid 3 metadata after reopen")
+	}
+	if !restored.Valid || restored.Offset != 2048 {
+		t.Fatalf("unexpected metadata after reopen: %+v", restored)
+	}
+}
+
 func TestManagerCorruptManifest(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir)

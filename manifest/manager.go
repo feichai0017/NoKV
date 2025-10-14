@@ -51,6 +51,7 @@ const (
 	EditLogPointer
 	EditValueLogHead
 	EditDeleteValueLog
+	EditUpdateValueLog
 )
 
 // Edit describes a single metadata operation.
@@ -190,6 +191,18 @@ func (m *Manager) apply(edit Edit) {
 				m.version.ValueLogHead = ValueLogMeta{}
 			}
 		}
+	case EditUpdateValueLog:
+		if edit.ValueLog != nil {
+			meta := *edit.ValueLog
+			m.version.ValueLogs[meta.FileID] = meta
+			if m.version.ValueLogHead.FileID == meta.FileID {
+				if meta.Valid {
+					m.version.ValueLogHead = meta
+				} else {
+					m.version.ValueLogHead = ValueLogMeta{}
+				}
+			}
+		}
 	}
 }
 
@@ -254,6 +267,12 @@ func (m *Manager) LogValueLogDelete(fid uint32) error {
 	return m.LogEdit(Edit{Type: EditDeleteValueLog, ValueLog: meta})
 }
 
+// LogValueLogUpdate records an updated value log metadata entry.
+func (m *Manager) LogValueLogUpdate(meta ValueLogMeta) error {
+	cp := meta
+	return m.LogEdit(Edit{Type: EditUpdateValueLog, ValueLog: &cp})
+}
+
 // ValueLogHead returns the latest persisted value log head.
 func (m *Manager) ValueLogHead() ValueLogMeta {
 	m.mu.Lock()
@@ -296,6 +315,16 @@ func writeEdit(w io.Writer, edit Edit) error {
 	case EditDeleteValueLog:
 		if edit.ValueLog != nil {
 			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
+		}
+	case EditUpdateValueLog:
+		if edit.ValueLog != nil {
+			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
+			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
+			if edit.ValueLog.Valid {
+				buf = append(buf, 1)
+			} else {
+				buf = append(buf, 0)
+			}
 		}
 	}
 	// length prefix
@@ -371,6 +400,23 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 			pos += n
 			edit.ValueLog = &ValueLogMeta{
 				FileID: uint32(fid64),
+			}
+		}
+	case EditUpdateValueLog:
+		if pos < len(data) {
+			fid64, n := binary.Uvarint(data[pos:])
+			pos += n
+			offset, n := binary.Uvarint(data[pos:])
+			pos += n
+			valid := false
+			if pos < len(data) {
+				valid = data[pos] == 1
+				pos++
+			}
+			edit.ValueLog = &ValueLogMeta{
+				FileID: uint32(fid64),
+				Offset: offset,
+				Valid:  valid,
 			}
 		}
 	}

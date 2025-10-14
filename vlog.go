@@ -98,12 +98,31 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 	}
 }
 
-func (vlog *valueLog) recordValueLogDelete(fid uint32) {
+func (vlog *valueLog) removeValueLogFile(fid uint32) error {
+	if vlog == nil || vlog.db == nil || vlog.db.lsm == nil {
+		return fmt.Errorf("valueLog.removeValueLogFile: missing dependencies")
+	}
+	status := vlog.db.lsm.ValueLogStatus()
+	var (
+		meta    manifest.ValueLogMeta
+		hasMeta bool
+	)
+	if status != nil {
+		meta, hasMeta = status[fid]
+	}
 	if err := vlog.db.lsm.LogValueLogDelete(fid); err != nil {
-		utils.Err(fmt.Errorf("log value log delete fid %d: %v", fid, err))
-		return
+		return errors.Wrapf(err, "log value log delete fid %d", fid)
+	}
+	if err := vlog.manager.Remove(fid); err != nil {
+		if hasMeta {
+			if errRestore := vlog.db.lsm.LogValueLogUpdate(&meta); errRestore != nil {
+				utils.Err(fmt.Errorf("value log delete rollback fid %d: %v", fid, errRestore))
+			}
+		}
+		return errors.Wrapf(err, "remove value log fid %d", fid)
 	}
 	valueLogSegmentsRemoved.Add(1)
+	return nil
 }
 
 func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
@@ -149,10 +168,9 @@ func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
 		start := time.Now()
 		if err := vlog.replayLog(lf, offset, replayFn, fid == activeFID); err != nil {
 			if err == utils.ErrDeleteVlogFile {
-				if removeErr := vlog.manager.Remove(fid); removeErr != nil {
+				if removeErr := vlog.removeValueLogFile(fid); removeErr != nil {
 					return removeErr
 				}
-				vlog.recordValueLogDelete(fid)
 				continue
 			}
 			return err
@@ -430,10 +448,7 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 
 	batchSize := 1024
 	for i := 0; i < len(wb); {
-		end := i + batchSize
-		if end > len(wb) {
-			end = len(wb)
-		}
+		end := min(i + batchSize, len(wb))
 		if err := vlog.db.batchSet(wb[i:end]); err != nil {
 			if err == utils.ErrTxnTooBig {
 				if batchSize <= 1 {
@@ -466,10 +481,9 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 	vlog.filesToDeleteLock.Unlock()
 
 	if deleteNow {
-		if err := vlog.manager.Remove(f.FID); err != nil {
+		if err := vlog.removeValueLogFile(f.FID); err != nil {
 			return err
 		}
-		vlog.recordValueLogDelete(f.FID)
 	}
 	return nil
 }
@@ -489,10 +503,9 @@ func (vlog *valueLog) decrIteratorCount() error {
 	vlog.filesToDeleteLock.Unlock()
 
 	for _, fid := range fids {
-		if err := vlog.manager.Remove(fid); err != nil {
+		if err := vlog.removeValueLogFile(fid); err != nil {
 			return err
 		}
-		vlog.recordValueLogDelete(fid)
 	}
 	return nil
 }
@@ -1024,7 +1037,7 @@ func (vlog *valueLog) flushDiscardStats() {
 }
 
 var requestPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new(request)
 	},
 }

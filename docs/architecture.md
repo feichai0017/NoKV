@@ -59,13 +59,12 @@
 ### 3.5 Manifest 管理 (`manifest/manager.go`)
 - 采用 VersionEdit + CURRENT 的结构，所有 SST/WAL/ValueLog 事件通过 `manifest.Manager.LogEdit` 记录。
 - Open 时读取 CURRENT → MANIFEST 构造 Version，并在必要时重写 manifest 以控制体积。
-- rewrite、CURRENT 原子切换等边界情况已有测试覆盖；后续需补充对 ValueLog head/删除事件的记录。
+- ValueLog GC 过程中产生的 head 更新与段删除同样持久化在 Manifest（`LogValueLogHead`/`LogValueLogDelete`），重启即可恢复到最近一次 GC 状态。
 
 ### 3.6 ValueLog 子系统 (`vlog/manager.go` + `vlog.go`)
 - ValueLog 现由 `vlog.Manager` 统一管理段的 Append/Rotate/Read/Remove，写入格式复用 WAL 编码。
 - GC 重构完成：通过 WAL 解码顺序扫描旧段、重写有效 entry、批量写回并删除原文件；迭代器/事务引用计数全流程可用。
-- Crash 恢复：Open 时由 manager 读取现有段和写入 offset，再结合 `!NoKV!head` 与 manifest state 恢复写指针。
-- 下一步需将 GC 操作（head 更新、删除列表）纳入 manifest VersionEdit，确保崩溃后也能复原 manager 状态。
+- Crash 恢复：Open 时由 manager 读取现有段和写入 offset，再结合 `!NoKV!head` 与 manifest state 恢复写指针；与 3.5 配合可以在崩溃后复原 head 与删除记录。
 
 ### 3.7 Oracle / 事务 (`txn.go`)
 - MVCC 时间戳分配、冲突检测、潜在快照隔离点。
@@ -91,51 +90,7 @@
 3. 若 value 需分离，先写入 ValueLog，记录 `ValuePtr`。
 4. MemTable 达阈值 → 冻结 → flush 管线。
 
-### 4.2 读路径
-1. 构建多层迭代器：Txn pending writes → `readTs` 快照（MemTable/Immutable/SST）→ ValueLog（按需）。
-2. 判断 tombstone / TTL，过滤内部 key（`!NoKV!` 前缀）。
-3. 事务读取使用 `readTs`，过滤版本。
-
-### 4.3 Flush / Compaction
-同 3.3/3.4 所述，现已具备：
-- 背压机制：`compactionManager` 根据 L0 backlog 触发写入限流（`blockWrites`）。
-- Compaction 调度：事件驱动（flush、周期性）+ 优先级调度，优先处理 L0→L1。
-- 失败重试、暂停/恢复能力。
-
-### 4.4 ValueLog GC
-- manager 维护段引用计数；GC 期间若存在活跃迭代器/事务，会延迟删除。
-- rewrite 通过 WAL 编码重放旧段并写回有效 entry，完成后调用 `manager.Remove` 删除原段。
-- Manifest 记录 ValueLog head 与删段事件；启动时自动回收标记为无效的段，并结合 discard stats 选择候选。
-
-### 4.5 Crash Recovery
-1. 读取 `CURRENT` 找到 manifest。
-2. 重放 manifest 构造 Version state。
-3. 扫描 WAL：重放所有 entry → 恢复 MemTable。
-4. 若 ValueLog `head` 落后，按 checkpoint 继续 replay。
-5. 修复未完成的 flush/compaction：检查临时文件、补写 manifest（缺失 `.sst` 会在恢复时被移除）。
-6. 恢复测试矩阵详见 `docs/recovery.md`，涵盖 WAL 重放、ValueLog 段回收、Manifest 残留清理与 CURRENT rewrite 崩溃等场景。
-7. 单测在设置 `RECOVERY_TRACE_METRICS=1` 时会输出结构化 `RECOVERY_METRIC` 日志，可结合 `scripts/recovery_scenarios.sh` 收集并分析恢复过程指标。
-
-### 4.6 关闭流程
-1. 阻塞新写（`blockWrites`）。
-2. Flush 活跃 MemTable / ValueLog buffer。
-3. 停止 compaction、GC、统计后台任务。
-4. 顺序关闭 WAL、SST cache、Manifest、ValueLog。
-5. 更新 CURRENT、写关闭标记（可选），防止脏退出。
-
----
-
-## 5. 并发与资源管理
-
-- **引用计数**：MemTable、SST、ValueLog 段、迭代器需统一引用管理。
-- **锁粒度**：WAL 使用独立互斥，Manifest 更新串行化；Compaction 使用细粒度读写锁。
-- **后台任务协调**：Flush / Compaction / ValueLog GC 使用共享 `Throttle` 控制并发，支持动态限速。
-- **错误处理**：避免直接 Panic，返回错误或触发重试/降级。
-
----
-
-## 6. 监控与工具
-
+@@ -139,80 +138,73 @@
 - Metrics：写入 TPS、flush backlog、compaction 延迟、value log GC 比例等。
 - 当前通过 `expvar` 与 `cmd/nokv stats` 导出的关键指标：
   - `NoKV.Compaction.RunsTotal / LastDurationMs`
@@ -161,36 +116,29 @@
 - **性能基准**：`go test ./benchmark -run TestBenchmarkResults -count=1`（启用 `benchmark_rocksdb` 标签可对比 RocksDB）
 - **测试计划文档**：详见 [docs/testing.md](testing.md)
 
-### 吞吐优化路线图
+### 吞吐优化现状
 
-**写路径**
-- 批处理与流水线化：共享 WAL append，批量 apply 到 memtable，降低锁切换。
-- 并行 WAL/ValueLog：将 Encode/CRC 放入独立线程或 I/O ring，主线程仅负责复制。
-- 动态 MemTable：依据写入压力扩容 arena，提升 flush 前聚合度。
+**写路径流水线**
+- `db.doWrites` 将前端请求聚合为批次，引入定时器上限（`WriteBatchDelay`）与计数/字节阈值，统一发送到流水线。
+- `processValueLogBatches` 与 `applyBatches` 形成双通道并行：ValueLog 写入异步落盘后再进入 LSM 应用阶段，WAL/ValueLog/LSM 分工明确。
+- `applyThrottle` 与 `lsm.throttleWrites` 在 L0 backlog 超限时动态开启写限流，缓解 flush/compaction 压力。
+- MemTable arena 根据 `MemTableSize` 自动扩展（`arenaSizeFor`），保障高峰期的聚合能力。
 
-**读路径**
-- Block/Page Cache：引入分段 LRU/LFU 组合缓存，结合 hotring 预热热点 block。
-- 前置 Filter：补充 prefix/partitioned Bloom，加速 miss 判定。
-- 迭代器复用：迭代器池化与 block index 预取，降低 CPU/GC 开销。
+**后台调度与限流**
+- `lsm/compaction_manager.go` 按优先级调度任务，并在 backlog 变化时触发写限流开关，避免 L0 积压。
+- flush 管线的 `Manager` 记录任务状态，失败自动重试并与 Manifest/WAL 协同释放旧段。
 
-**Compaction / LSM**
-- 自适应调度：根据热点与写压选择 leveled/universal 等策略。
-- 并发 compaction：按 level 动态调整 `NumCompactors`，缓解 L0 积压。
-- 压缩与 block size：支持 Snappy/ZSTD 等多算法与 per-level 参数。
+**读路径与缓存策略**
+- `lsm/cache.go` 引入热/冷分段缓存：热区使用 LRU，冷区使用 CLOCK，提高热点块命中率。
+- Bloom Filter 在首次加载后存入 `bloomCache`，结合 `MayContainKey` 提前过滤 miss。
+- `iteratorPool` 复用迭代器上下文，事务与 DB 迭代器均共享池化资源。
+- `db.recordRead` 通过 `hotring.HotRing` 记录热点 key，指标由 `Stats`/`nokv stats` 暴露，便于预热缓存或调度策略。
 
-**ValueLog**
-- WAL/ValueLog 分离：探索异步写入与 checksum pipeline，减少同步等待。
-- GC 启发式：结合 discard stats、热点 key 触发 GC。
+**ValueLog 管线**
+- ValueLog 写入与 GC 由 `vlog.Manager` 承担，引用计数确保迭代器/事务安全，GC 结果即时更新 Manifest，重启即可恢复。
 
-**并发控制**
-- 锁粒度细化：拆分全局锁到分片/列族级。
-- 读写分流：提供只读 memtable 快照与 key cache，降低写锁争用。
-
-**配置 / 部署**
-- 高吞吐 profile：预设大 memtable、多 compactor、批量阈值等组合。
-- IO 栈优化：direct I/O、预分配、mmap rewrite 等降低 syscall 成本。
-
-以上优化需要配套基准与回归测试验证，逐步向 RocksDB/Badger 的吞吐逼近。
+**后续可选优化**
+- 压缩算法、IO 栈参数与更多 compaction 策略仍可按场景继续演进，但当前单机路径已具备批量写、并行日志、读缓存与限流等主干能力。
 
 ---
 
