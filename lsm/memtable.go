@@ -1,9 +1,10 @@
 package lsm
 
 import (
+	"slices"
 	"bytes"
+	"math"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -25,6 +26,22 @@ type memTable struct {
 	walSize    int64
 }
 
+const defaultArenaBase = int64(64 << 20)
+
+func arenaSizeFor(memTableSize int64) int64 {
+	base := memTableSize
+	if base <= 0 {
+		base = defaultArenaBase
+	}
+	if base < defaultArenaBase {
+		base = defaultArenaBase
+	}
+	if base > math.MaxInt64/2 {
+		return math.MaxInt64
+	}
+	return base * 2
+}
+
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
 func (lsm *LSM) NewMemtable() *memTable {
 	newFid := atomic.AddUint64(&(lsm.levels.maxFID), 1)
@@ -32,7 +49,7 @@ func (lsm *LSM) NewMemtable() *memTable {
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
-		sl:        utils.NewSkiplist(int64(64 << 20)),
+		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
 		buf:       &bytes.Buffer{},
 		walSize:   0,
 	}
@@ -91,7 +108,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		}
 		fids = append(fids, fid)
 	}
-	sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+	slices.Sort(fids)
 
 	if len(fids) == 0 {
 		lsm.levels.maxFID = maxFid
@@ -123,7 +140,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 	mt := &memTable{
 		lsm:       lsm,
 		segmentID: uint32(fid),
-		sl:        utils.NewSkiplist(int64(1 << 20)),
+		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
 		buf:       &bytes.Buffer{},
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(_ wal.EntryInfo, payload []byte) error {
