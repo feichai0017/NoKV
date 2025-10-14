@@ -49,6 +49,9 @@ func getTestOptions(dir string) *Options {
 		MaxBatchCount:    20,
 		MaxBatchSize:     1 << 20,
 		DetectConflicts:  true,
+		HotRingEnabled:   true,
+		HotRingBits:      8,
+		HotRingTopK:      8,
 	}
 	return opt
 }

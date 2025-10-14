@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -177,16 +176,13 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	return t.ss.Bytes(off, sz)
 }
 
-// blockCacheKey is used to store blocks in the block cache.
-func (t *table) blockCacheKey(idx int) []byte {
-	utils.CondPanic(t.fid >= math.MaxUint32, fmt.Errorf("t.fid >= math.MaxUint32"))
-	utils.CondPanic(uint32(idx) >= math.MaxUint32, fmt.Errorf("uint32(idx) >=  math.MaxUint32"))
+const maxUint32 = uint64(math.MaxUint32)
 
-	buf := make([]byte, 8)
-	// Assume t.ID does not overflow uint32.
-	binary.BigEndian.PutUint32(buf[:4], uint32(t.fid))
-	binary.BigEndian.PutUint32(buf[4:], uint32(idx))
-	return buf
+// blockCacheKey is used to store blocks in the block cache.
+func (t *table) blockCacheKey(idx int) uint64 {
+	utils.CondPanic(t.fid > maxUint32, fmt.Errorf("table fid %d exceeds 32-bit limit", t.fid))
+	utils.CondPanic(idx < 0 || uint64(idx) > maxUint32, fmt.Errorf("invalid block index %d", idx))
+	return (t.fid << 32) | uint64(uint32(idx))
 }
 
 type tableIterator struct {

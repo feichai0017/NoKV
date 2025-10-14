@@ -66,6 +66,15 @@ func MemHashString(str string) uint64 {
 	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
 }
 
+// BytesToString converts a byte slice to string without extra allocation.
+// The caller must ensure the slice won't be mutated while the string is in use.
+func BytesToString(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
 // SafeCopy does append(a[:0], src...).
 func SafeCopy(a, src []byte) []byte {
 	return append(a[:0], src...)

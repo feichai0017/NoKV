@@ -100,6 +100,12 @@ func runStatsCmd(w io.Writer, args []string) error {
 	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
 	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
 	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
+	if len(snap.HotKeys) > 0 {
+		fmt.Fprintln(w, "HotKeys:")
+		for _, hk := range snap.HotKeys {
+			fmt.Fprintf(w, "  - key=%q count=%d\n", hk.Key, hk.Count)
+		}
+	}
 	return nil
 }
 
@@ -333,6 +339,41 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	intVal = 0
 	setInt("NoKV.Txns.Conflicts", &intVal)
 	snap.TxnsConflicts = uint64(intVal)
+	if raw, ok := data["NoKV.Stats.HotKeys"]; ok {
+		switch v := raw.(type) {
+		case []any:
+			for _, elem := range v {
+				if kv, ok := elem.(map[string]any); ok {
+					key, _ := kv["key"].(string)
+					var count int32
+					switch c := kv["count"].(type) {
+					case float64:
+						count = int32(c)
+					case int64:
+						count = int32(c)
+					case map[string]any:
+						if inner, ok := c["value"].(float64); ok {
+							count = int32(inner)
+						}
+					}
+					snap.HotKeys = append(snap.HotKeys, NoKV.HotKeyStat{Key: key, Count: count})
+				}
+			}
+		case map[string]any:
+			for key, val := range v {
+				var count int32
+				switch c := val.(type) {
+				case float64:
+					count = int32(c)
+				case map[string]any:
+					if inner, ok := c["value"].(float64); ok {
+						count = int32(inner)
+					}
+				}
+				snap.HotKeys = append(snap.HotKeys, NoKV.HotKeyStat{Key: key, Count: count})
+			}
+		}
+	}
 	return snap
 }
 

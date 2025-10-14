@@ -28,6 +28,11 @@ type Stats struct {
 	txnConflicts         *expvar.Int
 }
 
+type HotKeyStat struct {
+	Key   string `json:"key"`
+	Count int32  `json:"count"`
+}
+
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
 	FlushPending         int64          `json:"flush_pending"`
@@ -41,10 +46,11 @@ type StatsSnapshot struct {
 	TxnsStarted          uint64         `json:"txns_started"`
 	TxnsCommitted        uint64         `json:"txns_committed"`
 	TxnsConflicts        uint64         `json:"txns_conflicts"`
+	HotKeys              []HotKeyStat   `json:"hot_keys,omitempty"`
 }
 
 func newStats(db *DB) *Stats {
-	return &Stats{
+	s := &Stats{
 		db:                   db,
 		closer:               utils.NewCloser(),
 		interval:             5 * time.Second,
@@ -60,6 +66,27 @@ func newStats(db *DB) *Stats {
 		txnCommitted:         reuseInt("NoKV.Txns.Committed"),
 		txnConflicts:         reuseInt("NoKV.Txns.Conflicts"),
 	}
+	if expvar.Get("NoKV.Stats.HotKeys") == nil {
+		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
+			if db == nil || db.hot == nil {
+				return []map[string]any{}
+			}
+			topK := db.opt.HotRingTopK
+			if topK <= 0 {
+				topK = 16
+			}
+			items := db.hot.TopN(topK)
+			out := make([]map[string]any, 0, len(items))
+			for _, item := range items {
+				out = append(out, map[string]any{
+					"key":   item.Key,
+					"count": item.Count,
+				})
+			}
+			return out
+		}))
+	}
+	return s
 }
 
 func reuseInt(name string) *expvar.Int {
@@ -152,6 +179,15 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.TxnsStarted = tm.Started
 		snap.TxnsCommitted = tm.Committed
 		snap.TxnsConflicts = tm.Conflicts
+	}
+	if s.db != nil && s.db.hot != nil {
+		topK := s.db.opt.HotRingTopK
+		if topK <= 0 {
+			topK = 16
+		}
+		for _, item := range s.db.hot.TopN(topK) {
+			snap.HotKeys = append(snap.HotKeys, HotKeyStat{Key: item.Key, Count: item.Count})
+		}
 	}
 	return snap
 }
