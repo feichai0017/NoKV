@@ -1,48 +1,108 @@
-# Crash Recovery Verification Plan
+# Crash Recovery Playbook
 
-Phase 7 的首要目标是把“崩溃—重启—校验”流程自动化，确保 WAL、Manifest、ValueLog
-在各种中断点都能恢复到一致状态。这里列出需要覆盖的场景与验证要点，后续测试脚本 /
-集成测试可直接按矩阵实现。
+This playbook documents how NoKV rebuilds state after a crash and which automated checks ensure correctness. It ties together WAL replay, manifest reconciliation, ValueLog GC, and flush pipelines—mirroring RocksDB's layered recovery while incorporating Badger-style value log hygiene.
 
-## 1. 关键中断点
+---
 
-| 类别 | 中断瞬间 | 期望恢复行为 | 关键检查 |
-|------|----------|--------------|----------|
-| WAL flush | 写入已落 WAL，但 MemTable/Manifest 尚未安装 | 重放 WAL，确保数据仍存在；无重复写入 | 数据一致、WAL 重放指针推进 |
-| Flush install | Manifest 写入 VersionEdit，但 SST 暂未 rename | 重启时发现缺失文件并回滚 Edit | Manifest/Level 列表不包含挂起文件 |
-| ValueLog append | ValueLog 新增 entry，head 未更新 | Restart 后继续从旧 head 写入，并能读取写入数据 | head 校验、读数据一致 |
-| ValueLog rotate | 新段创建但 Manifest 未记录 head | 重启时识别 active FID，避免重复重放 | active FID 匹配，数据完整 |
-| ValueLog GC | Manifest 标记删段，但文件未删除 | 重启时自动删除遗留 `.vlog` 文件 | 文件清理，Manifest 与磁盘一致 |
-| Manifest rewrite | CURRENT 切换，旧文件保留 | 读取最新 CURRENT，旧 manifest 可忽略 | CURRENT 指向文件存在，Version 正确 |
+## 1. Recovery Phases
 
-## 2. 自动化策略
+```mermaid
+flowchart TD
+    Start[DB.Open]
+    Verify[runRecoveryChecks]
+    Manifest[manifest.Open → replay]
+    VLog[valueLog.recover]
+    WAL[wal.Manager.Replay]
+    Flush[Recreate memtables]
+    Stats[Stats.StartStats]
 
-1. **测试框架**：在 `db_recovery_test.go` 中按场景构造数据 → 精确注入故障（删除文件、
-   截断、跳过 Close）→ 再次 `Open` → 断言状态。当前已覆盖：
-   - `TestRecoveryRemovesStaleValueLogSegment`：验证 manifest 标记删除后，重启时自动清理遗留 `.vlog`。
-   - `TestRecoveryWALReplayRestoresData`：验证 WAL 重放能恢复尚未 flush 的写入。
-   - `TestRecoveryCleansMissingSSTFromManifest`：验证缺失的 `.sst` 会在恢复时从 manifest 中移除。
-   - `TestRecoveryManifestRewriteCrash`：验证 manifest rewrite 崩溃后仍沿用旧 CURRENT，且临时文件被清理。
-2. **故障注入方法**：
-   - 直接操作磁盘文件（`os.Remove`, `truncate`）模拟 crash。
-   - 通过守护线程 kill 进程或跳过 `Close()`，验证未清理资源也能恢复。
-   - 针对 ValueLog GC，可手动调用 `lsm.LogValueLogDelete` 并保留 `.vlog` 文件，模拟
-     manifest 已写、文件未删。
-3. **断言工具**：
-   - 重启后使用新的 CLI（`nokv stats/manifest/vlog --json`）或单元测试内部 API
-     (`db.Info().Snapshot()`, `db.lsm.ValueLogStatus()`)，确认各项指标。
-   - 比较写入数据与期待值；检查活跃 head、段列表、WAL replay 指针等。
+    Start --> Verify --> Manifest --> VLog --> WAL --> Flush --> Stats
+```
 
-## 3. 输出与脚本化
+1. **Directory verification** – `DB.runRecoveryChecks` calls `manifest.Verify`, `wal.VerifyDir`, and initialises the vlog directory. Missing directories fail fast.
+2. **Manifest replay** – `manifest.Open` reads `CURRENT`, replays `EditAddFile/DeleteFile`, `EditLogPointer`, and vlog edits into an in-memory `Version`.
+3. **ValueLog reconciliation** – `valueLog.recover` scans existing `.vlog` files, drops segments marked invalid, and restores the head pointer from manifest metadata.
+4. **WAL replay** – `wal.Manager.Replay` processes segments newer than the manifest checkpoint, rebuilding memtables and pending vlog data.
+5. **Flush backlog** – Immutable memtables recreated from WAL are resubmitted to `flush.Manager`; temporary `.sst.tmp` files are either reinstalled or cleaned up.
+6. **Stats bootstrap** – the metrics goroutine restarts so CLI commands immediately reflect queue backlogs and GC status.
 
-- 集成测试通过后，编写 `scripts/recovery_scenarios.sh`（或 Go-based driver）串行执行
-  所有场景，供 CI / 手工诊断使用。
-- 当前仓库已提供 `scripts/recovery_scenarios.sh`，运行 `./scripts/recovery_scenarios.sh`
-  可依次验证四个 crash 场景（默认复用仓库根目录下的 `.gocache`）。
-- 脚本会开启 `RECOVERY_TRACE_METRICS`，将每个场景的 `RECOVERY_METRIC` 日志保存到
-  `artifacts/recovery/<TestName>.log`，便于后续分析；手动调试时同样可以通过
-  `RECOVERY_TRACE_METRICS=1 go test -run TestRecovery... -v ./...` 查看指标。
-- 将每个场景的关键指标写入日志，便于压测或 Prometheus 接入时复用。
+This mirrors RocksDB's `DBImpl::Recover` while extending to handle value log metadata automatically.
 
-以上规划完成后，可进入实现阶段：先落地最小集成测试（例如 ValueLog GC 遗留段、WAL
-重放），再逐步扩展到全套故障注入矩阵。*** End Patch
+---
+
+## 2. Failure Scenarios & Expected Outcomes
+
+| Failure Point | Example Simulation | Expected Recovery Behaviour | Tests |
+| --- | --- | --- | --- |
+| WAL tail truncation | truncate last 2 bytes of `000005.wal` | Replay stops at truncated record, previously flushed SST remains intact | `wal/manager_test.go::TestReplayTruncatedTail` |
+| Flush crash before install | crash after writing `.sst.tmp` | WAL replay rebuilds memtable; temp file removed; no manifest edit present | `db_recovery_test.go::TestRecoveryWALReplayRestoresData` |
+| Flush crash after install | crash after logging manifest edit but before WAL release | Manifest still lists SST; recovery verifies file exists and releases WAL on reopen | `db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest` |
+| ValueLog GC crash | delete edit written, file still on disk | Recovery removes stale `.vlog` file and keeps manifest consistent | `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` |
+| Manifest rewrite crash | new MANIFEST written, CURRENT not updated | Recovery keeps using old manifest; stale temp file cleaned | `db_recovery_test.go::TestRecoveryManifestRewriteCrash` |
+| Transaction in-flight | crash between WAL append and memtable update | WAL replay reapplies entry; transactions remain atomic because commit order is WAL → vlog → memtable | `txn_test.go::TestTxnCommitPersists` |
+
+---
+
+## 3. Automation & Tooling
+
+### 3.1 Go Test Matrix
+
+```bash
+GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./... -run 'Recovery'
+```
+
+- Exercises WAL replay, manifest cleanup, vlog GC, and managed transaction recovery.
+- Set `RECOVERY_TRACE_METRICS=1` to emit structured logs (key/value pairs) for each scenario.
+
+### 3.2 Shell Script Harness
+
+`scripts/recovery_scenarios.sh` orchestrates the matrix end-to-end:
+1. Spins up a temporary database, injects writes, and crashes at chosen checkpoints.
+2. Reopens the database and validates via CLI (`nokv stats`, `nokv manifest`, `nokv vlog`).
+3. Archives logs under `artifacts/recovery/<scenario>.log` for CI inspection.
+
+### 3.3 CLI Validation
+
+- `nokv manifest --workdir <dir>`: confirm WAL checkpoint, level files, vlog head.
+- `nokv stats --workdir <dir>`: observe flush backlog drop to zero after replay.
+- `nokv vlog --workdir <dir>`: ensure stale segments disappear after GC recovery.
+
+These commands give the same insight as RocksDB's `ldb manifest_dump` or Badger's CLI but with JSON output for automation.
+
+---
+
+## 4. Metrics Emitted During Recovery
+
+When `RECOVERY_TRACE_METRICS=1`:
+- `RECOVERY_METRIC phase="manifest" ...` – manifest replay progress.
+- `RECOVERY_METRIC phase="wal" segment=... offset=...` – WAL records applied.
+- `RECOVERY_METRIC phase="vlog_gc" fid=... action="delete"` – vlog cleanup status.
+
+`StatsSnapshot` also exposes:
+- `NoKV.Flush.Queue` – remaining flush tasks.
+- `NoKV.ValueLog.HeadFID` – head file after recovery.
+- `NoKV.Txns.Active` – should reset to zero post-recovery.
+
+---
+
+## 5. Comparison with RocksDB & Badger
+
+| Aspect | RocksDB | BadgerDB | NoKV |
+| --- | --- | --- | --- |
+| WAL replay | `DBImpl::RecoverLogFiles` replays per log number | Journal (value log) is replayed into LSM | Dedicated WAL manager with manifest checkpoint, plus vlog trim |
+| Manifest reconciliation | Removes missing files, handles CURRENT rewrite | Minimal manifest (mainly tables) | Tracks SST + vlog metadata; auto-cleans missing SST/vlog |
+| Value log recovery | Optional (BlobDB) requires external blob manifest | Primary log, re-scanned on start | Manifest-backed head + discard stats to avoid rescan |
+| Tooling | `ldb` for manifest dump | `badger` CLI | `nokv` CLI with JSON output |
+
+NoKV inherits RocksDB's strict manifest semantics and Badger's value log durability, yielding deterministic restart behaviour even under mixed workloads.
+
+---
+
+## 6. Extending the Matrix
+
+Future enhancements to cover:
+- **Compaction crash** – simulate partial compaction output and verify manifest rollback.
+- **Prefetch queue state** – ensure hot-key prefetch map resets cleanly.
+- **Raft integration** – once replication is added, validate raft log catch-up interacts correctly with WAL replay.
+
+Contributions adding new recovery scenarios should update this document and the shell harness to keep observability aligned.

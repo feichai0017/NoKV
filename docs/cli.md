@@ -1,33 +1,64 @@
-# CLI 工具 (`cmd/nokv`)
+# CLI (`cmd/nokv`) Reference
 
-`nokv` CLI 提供对运行中或离线的 NoKV 实例进行巡检的能力，覆盖指标、Manifest 以及 ValueLog 状态。
+The `nokv` command provides operational visibility similar to RocksDB's `ldb` and Badger's `badger` CLI, but emits JSON to integrate easily with scripts and CI pipelines.
 
-## 安装
+---
+
+## Installation
 
 ```bash
 go install ./cmd/nokv
 ```
 
-## 子命令
+Use `GOBIN` if you prefer a custom binary directory.
 
-- `nokv stats --workdir <dir>`  
-  打开指定 `WorkDir`，拉取一次离线指标快照。若服务已对外暴露 `expvar`，可使用
-  `nokv stats --expvar http://host:port/debug/vars` 直接读取线上指标。支持 `--json` 输出 JSON。
-  输出包含 flush/compaction backlog、ValueLog 状态，以及 `Txns.{Active,Started,Committed,Conflicts}` 等事务指标。
+---
 
-- `nokv manifest --workdir <dir>`  
-  解析 `CURRENT` 与 Manifest，输出各层文件统计、ValueLog Head 以及段状态。支持 `--json`。
+## Shared Flags
 
-- `nokv vlog --workdir <dir>`  
-  查看 ValueLog 段列表、活跃段及写入头指针，便于确认 GC 是否生效，同样支持 `--json`。
+- `--workdir <path>` – location of the NoKV database (must contain `CURRENT`).
+- `--json` – emit structured JSON (default is human-readable tables).
+- `--expvar <url>` – for `stats` command, pull metrics from a running process exposing `expvar`.
 
-## 示例
+---
+
+## Subcommands
+
+### `nokv stats`
+
+- Reads `StatsSnapshot` either offline (`--workdir`) or via HTTP (`--expvar`).
+- Output fields include:
+  - `flush.queue`, `flush.wait_ms`, `flush.build_ms`
+  - `compaction.backlog`, `wal.active_segment`, `wal.removed_segments`
+  - `value_log.head_fid`, `value_log.gc_runs`
+  - `txns.active`, `txns.committed`, `txns.conflicts`
+  - `hot_keys` (Top-N hits captured by `hotring`)
+- Example:
 
 ```bash
-nokv stats --workdir ./work_test
-nokv manifest --workdir ./work_test --json
-nokv vlog --workdir ./work_test
+nokv stats --workdir ./testdata/db --json | jq '.flush.queue'
 ```
 
-输出内容可用于快速核对 flush backlog、Compaction backlog、ValueLog GC 进度等关键指标。结合 `expvar`
-采集，可以将 CLI 融入巡检脚本或运维流水线。
+### `nokv manifest`
+
+- Parses the manifest using `manifest.Manager.Version()`.
+- Reports per-level file counts, smallest/largest keys, WAL checkpoint, and ValueLog metadata.
+- Helpful for verifying flush/compaction results and ensuring manifest rewrites succeeded.
+
+### `nokv vlog`
+
+- Lists vlog segments with status flags (`active`, `candidate_for_gc`, `deleted`).
+- Shows head file/offset and pending GC actions.
+- Use after running GC or recovery to confirm stale segments are purged.
+
+---
+
+## Integration Tips
+
+- Combine with `RECOVERY_TRACE_METRICS=1` to cross-check logs: run tests, then inspect CLI output to ensure metrics match expectations.
+- In CI, capture JSON output and diff against golden files to detect regressions (see `cmd/nokv/main_test.go`).
+- When comparing against RocksDB/Badger, treat `nokv manifest` + `nokv vlog` as equivalents to `ldb manifest_dump` and Badger's `badger` `inspect vlog` commands.
+
+---
+
+For architecture context, see [architecture.md](architecture.md) and the module deep dives.
