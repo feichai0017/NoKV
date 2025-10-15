@@ -29,11 +29,11 @@ HotRing
 
 ```mermaid
 flowchart LR
-    Key(key) -->|hash| Bucket[table[index]]
-    Bucket --> Node1
-    Node1 --> Node2
-    Node2 --> Node3
-    Node3 --> Node1
+  Key(key) -->|hash| Bucket["table[index]"]
+  Bucket --> Node1
+  Node1 --> Node2
+  Node2 --> Node3
+  Node3 --> Node1
 ```
 
 ---
