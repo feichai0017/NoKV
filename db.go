@@ -116,7 +116,8 @@ func Open(opt *Options) *DB {
 	utils.Panic(db.runRecoveryChecks())
 
 	wlog, err := wal.Open(wal.Config{
-		Dir: opt.WorkDir,
+		Dir:         opt.WorkDir,
+		SyncOnWrite: opt.SyncWrites,
 	})
 	utils.Panic(err)
 	db.wal = wlog

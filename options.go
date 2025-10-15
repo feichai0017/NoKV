@@ -29,6 +29,8 @@ type Options struct {
 	HotRingBits     uint8
 	HotRingTopK     int
 
+	SyncWrites bool
+
 	// Block cache configuration for read path optimization. The cache keeps a
 	// two-tier layout (hot LRU + cold CLOCK) and currently targets L0/L1.
 	BlockCacheSize        int
@@ -51,6 +53,7 @@ func NewDefaultOptions() *Options {
 		BlockCacheSize:        4096,
 		BlockCacheHotFraction: 0.25,
 		BloomCacheSize:        1024,
+		SyncWrites:            false,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt

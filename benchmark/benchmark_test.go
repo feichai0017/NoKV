@@ -1,586 +1,832 @@
 package benchmark
 
 import (
+	"encoding/csv"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"text/tabwriter"
 	"time"
 
-	"github.com/dgraph-io/badger/v3"
-	"github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/utils"
+	badger "github.com/dgraph-io/badger/v4"
+	"github.com/dgraph-io/badger/v4/options"
+	NoKV "github.com/feichai0017/NoKV"
 )
+
+// ------------------------------ Flags & Config ------------------------------
 
 var (
-	benchDir = "benchmark_data"
-	opt      = &NoKV.Options{
-		WorkDir:             benchDir,
-		MemTableSize:        64 << 20, // 64MB
-		SSTableMaxSz:        2 << 30,  // 2GB
-		ValueLogFileSize:    1 << 30,  // 1GB
-		ValueLogMaxEntries:  100000,
-		ValueThreshold:      1 << 20, // 1MB
-		MaxBatchCount:       10000,
-		MaxBatchSize:        10 << 20, // 10MB
-		VerifyValueChecksum: true,
-		DetectConflicts:     true,
-	}
-	benchmarkResults []BenchmarkResult
+	fBenchDir   = flag.String("benchdir", "benchmark_data", "benchmark working directory")
+	fSeed       = flag.Int64("seed", 42, "random seed for data generation")
+	fSyncWrites = flag.Bool("sync", true, "sync writes (fsync) for both engines")
+	fConc       = flag.Int("conc", 0, "concurrency (0 => use GOMAXPROCS)")
+	fRounds     = flag.Int("rounds", 1, "repeat the whole suite N rounds")
+
+	fValueSize      = flag.Int("valsz", 100, "value size (bytes)")
+	fPreloadEntries = flag.Int("preload", 100000, "preload entries for read/range")
+	fWriteOps       = flag.Int("write_ops", 500000, "number of single-write ops")
+	fReadOps        = flag.Int("read_ops", 2000000, "number of read ops")
+	fBatchEntries   = flag.Int("batch_entries", 2000000, "total entries for batch write")
+	fBatchSize      = flag.Int("batch_size", 1000, "batch size per transaction")
+	fRangeQueries   = flag.Int("range_q", 2000, "number of range queries")
+	fRangeWindow    = flag.Int("range_win", 100, "range window per query (items)")
+
+	fMode = flag.String("mode", "warm", "read/range mode: warm|cold|both")
+
+	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
+	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")
+	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression: none|snappy|zstd")
 )
 
-type readScenarioResult struct {
-	Name string
-	QPS  float64
-	P99  time.Duration
+type workloadConfig struct {
+	ValueSize      int
+	PreloadEntries int
+	WriteOps       int
+	ReadOps        int
+	BatchEntries   int
+	BatchSize      int
+	RangeQueries   int
+	RangeWindow    int
+	Seed           int64
+	SyncWrites     bool
+	Conc           int
+	Mode           string
+	Dir            string
+	BadgerBlockMB  int
+	BadgerIndexMB  int
+	BadgerComp     string
 }
 
-// Clear benchmark directory
-func clearBenchDir() {
-	fmt.Printf("Clearing benchmark directory: %s\n", benchDir)
-	os.RemoveAll(benchDir)
-	os.MkdirAll(benchDir, 0755)
-}
+var wl workloadConfig
 
-// Generate test data
-func generateData(num int) [][]byte {
-	fmt.Printf("Generating %d test data entries\n", num)
-	data := make([][]byte, num)
-	for i := range num {
-		key := fmt.Sprintf("key%d", i)
-		value := make([]byte, 100)
-		rand.Read(value)
-		data[i] = []byte(key)
-	}
-	return data
-}
+const benchmarkEnvKey = "NOKV_RUN_BENCHMARKS"
 
-// NoKV Write Benchmark
-func BenchmarkNoKVWrite(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "NoKV Write",
-		Engine:    "NoKV",
-		Operation: "Write",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== NoKV Write Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
+var allResults []BenchmarkResult
 
-	clearBenchDir()
-	db := NoKV.Open(opt)
-	defer db.Close()
+// ------------------------------ Utilities ------------------------------
 
-	keys := generateData(b.N)
-	entries := make([]*utils.Entry, b.N)
-	for i := 0; i < b.N; i++ {
-		value := make([]byte, 100)
-		rand.Read(value)
-		entries[i] = utils.NewEntry(keys[i], value)
-	}
-	b.ResetTimer()
-
-	start := time.Now()
-	for i := 0; i < b.N; i++ {
-		if err := db.Set(entries[i]); err != nil {
-			b.Fatal(err)
-		}
-	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Entry: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Entries: %d\n", b.N)
-	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
-
-	benchmarkResults = append(benchmarkResults, result)
-}
-
-// Badger Write Benchmark
-func BenchmarkBadgerWrite(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "Badger Write",
-		Engine:    "Badger",
-		Operation: "Write",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== Badger Write Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	opts := badger.DefaultOptions(benchDir)
-	opts.Logger = nil
-	db, err := badger.Open(opts)
+func must(err error) {
 	if err != nil {
-		b.Fatal(err)
+		panic(err)
 	}
-	defer db.Close()
-
-	keys := generateData(b.N)
-	values := make([][]byte, b.N)
-	for i := 0; i < b.N; i++ {
-		values[i] = make([]byte, 100)
-		rand.Read(values[i])
-	}
-	b.ResetTimer()
-
-	start := time.Now()
-	for i := 0; i < b.N; i++ {
-		key := keys[i]
-		value := values[i]
-		err := db.Update(func(txn *badger.Txn) error {
-			return txn.Set(key, value)
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Entry: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Entries: %d\n", b.N)
-	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
-
-	benchmarkResults = append(benchmarkResults, result)
 }
 
-
-// NoKV Read Benchmark
-func BenchmarkNoKVRead(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "NoKV Read",
-		Engine:    "NoKV",
-		Operation: "Read",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== NoKV Read Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	db := NoKV.Open(opt)
-	defer db.Close()
-
-	num := 100000
-	fmt.Printf("Preparing %d test entries\n", num)
-	data := generateData(num)
-	for i := 0; i < num; i++ {
-		key := data[i]
-		value := make([]byte, 100)
-		rand.Read(value)
-		e := utils.NewEntry(key, value)
-		if err := db.Set(e); err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ResetTimer()
-	start := time.Now()
-	for i := 0; i < b.N; i++ {
-		key := data[i%num]
-		if _, err := db.Get(key); err != nil {
-			b.Fatal(err)
-		}
-	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Query: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Queries: %d\n", b.N)
-
-	benchmarkResults = append(benchmarkResults, result)
+func ensureCleanDir(dir string) error {
+	_ = os.RemoveAll(dir)
+	return os.MkdirAll(dir, 0o755)
 }
 
-// Badger Read Benchmark
-func BenchmarkBadgerRead(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "Badger Read",
-		Engine:    "Badger",
-		Operation: "Read",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== Badger Read Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	opts := badger.DefaultOptions(benchDir)
-	opts.Logger = nil
-	db, err := badger.Open(opts)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer db.Close()
-
-	num := 100000
-	fmt.Printf("Preparing %d test entries\n", num)
-	data := generateData(num)
-	for i := 0; i < num; i++ {
-		key := data[i]
-		value := make([]byte, 100)
-		rand.Read(value)
-		err := db.Update(func(txn *badger.Txn) error {
-			return txn.Set(key, value)
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ResetTimer()
-	start := time.Now()
-	for i := 0; i < b.N; i++ {
-		key := data[i%num]
-		err := db.View(func(txn *badger.Txn) error {
-			_, err := txn.Get(key)
-			return err
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(b.N*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(b.N * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Query: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Queries: %d\n", b.N)
-
-	benchmarkResults = append(benchmarkResults, result)
+func engineDir(engine, suffix string) string {
+	return filepath.Join(wl.Dir, fmt.Sprintf("%s_%s", engine, suffix))
 }
 
-// NoKV Batch Write Benchmark
-func BenchmarkNoKVBatchWrite(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "NoKV Batch Write",
-		Engine:    "NoKV",
-		Operation: "BatchWrite",
-		StartTime: time.Now(),
+func concurrency() int {
+	if *fConc > 0 {
+		return *fConc
 	}
-	fmt.Printf("\n=== NoKV Batch Write Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
+	return runtime.GOMAXPROCS(0)
+}
 
-	clearBenchDir()
-	db := NoKV.Open(opt)
-	defer db.Close()
-
-	batchSize := 1000
-	numBatches := b.N / batchSize
-	if numBatches == 0 {
-		numBatches = 1
-	}
-	fmt.Printf("Batch Size: %d\n", batchSize)
-	fmt.Printf("Total Batches: %d\n", numBatches)
-
-	data := generateData(batchSize)
-	b.ResetTimer()
-
-	start := time.Now()
-	for i := 0; i < numBatches; i++ {
-		entries := make([]*utils.Entry, batchSize)
-		for j := 0; j < batchSize; j++ {
-			key := data[j]
-			value := make([]byte, 100)
-			rand.Read(value)
-			entries[j] = utils.NewEntry(key, value)
+func parallelDo(t *testing.T, nWorkers, total int, work func(start, end int) error) {
+	t.Helper()
+	if nWorkers <= 1 || total <= 1 {
+		if err := work(0, total); err != nil {
+			t.Fatalf("work failed: %v", err)
 		}
-		for _, e := range entries {
-			if err := db.Set(e); err != nil {
-				b.Fatal(err)
+		return
+	}
+	per := (total + nWorkers - 1) / nWorkers
+	var wg sync.WaitGroup
+	errCh := make(chan error, nWorkers)
+	for w := range nWorkers {
+		start := w * per
+		end := start + per
+		if start >= total {
+			break
+		}
+		if end > total {
+			end = total
+		}
+		wg.Add(1)
+		go func(s, e int) {
+			defer wg.Done()
+			if err := work(s, e); err != nil {
+				errCh <- err
 			}
+		}(start, end)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("parallel work failed: %v", err)
 		}
 	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(numBatches * batchSize)
-	result.DataSize = float64(numBatches*batchSize*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(numBatches * batchSize)
-	result.MemoryStats.Bytes = int64(numBatches * batchSize * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Batch: %v\n", duration/time.Duration(numBatches))
-	fmt.Printf("Total Entries: %d\n", numBatches*batchSize)
-	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
-
-	benchmarkResults = append(benchmarkResults, result)
 }
 
-// Badger Batch Write Benchmark
-func BenchmarkBadgerBatchWrite(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "Badger Batch Write",
-		Engine:    "Badger",
-		Operation: "BatchWrite",
-		StartTime: time.Now(),
+func nowStr() string { return time.Now().Format("2006-01-02 15:04:05") }
+
+// ------------------------------ Engine Openers ------------------------------
+
+func openBadgerAt(dir string) (*badger.DB, error) {
+	if err := ensureCleanDir(dir); err != nil {
+		return nil, fmt.Errorf("badger ensure dir: %w", err)
 	}
-	fmt.Printf("\n=== Badger Batch Write Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	opts := badger.DefaultOptions(benchDir)
-	opts.Logger = nil
-	db, err := badger.Open(opts)
-	if err != nil {
-		b.Fatal(err)
+	comp := options.None
+	switch strings.ToLower(wl.BadgerComp) {
+	case "none":
+		comp = options.None
+	case "snappy":
+		comp = options.Snappy
+	case "zstd":
+		comp = options.ZSTD
+	default:
+		comp = options.None
 	}
-	defer db.Close()
+	opts := badger.DefaultOptions(dir).
+		WithLogger(nil).
+		WithSyncWrites(wl.SyncWrites).
+		WithCompression(comp).
+		WithBlockCacheSize(int64(wl.BadgerBlockMB) << 20).
+		WithIndexCacheSize(int64(wl.BadgerIndexMB) << 20)
+	return badger.Open(opts)
+}
 
-	batchSize := 1000
-	numBatches := b.N / batchSize
-	if numBatches == 0 {
-		numBatches = 1
+func openNoKVAt(dir string) (*NoKV.DB, error) {
+	if err := ensureCleanDir(dir); err != nil {
+		return nil, fmt.Errorf("nokv ensure dir: %w", err)
 	}
-	fmt.Printf("Batch Size: %d\n", batchSize)
-	fmt.Printf("Total Batches: %d\n", numBatches)
+	opt := &NoKV.Options{
+		WorkDir:             dir,
+		MemTableSize:        64 << 20,
+		SSTableMaxSz:        1 << 30,
+		ValueLogFileSize:    1 << 30,
+		ValueLogMaxEntries:  100000,
+		ValueThreshold:      1 << 20,
+		MaxBatchCount:       10000,
+		MaxBatchSize:        16 << 20,
+		VerifyValueChecksum: true,
+		DetectConflicts:     true,
+		SyncWrites: 		 wl.SyncWrites,
+	}
+	return NoKV.Open(opt), nil
+}
 
-	data := generateData(batchSize)
-	b.ResetTimer()
+// ------------------------------ Streaming Preload ------------------------------
 
-	start := time.Now()
-	for i := 0; i < numBatches; i++ {
-		err := db.Update(func(txn *badger.Txn) error {
-			for j := 0; j < batchSize; j++ {
-				key := data[j]
-				value := make([]byte, 100)
-				rand.Read(value)
-				if err := txn.Set(key, value); err != nil {
+func preloadNoKV(t *testing.T, db *NoKV.DB, total, batch, valSize int, seed int64, keyPrefix string) {
+	t.Helper()
+	rng := rand.New(rand.NewSource(seed))
+	buf := make([]byte, valSize)
+	for i := 0; i < total; i += batch {
+		end := min(i + batch, total)
+		err := db.Update(func(txn *NoKV.Txn) error {
+			for j := i; j < end; j++ {
+				key := fmt.Appendf(nil, "%s%016d", keyPrefix, j)
+				if _, err := rng.Read(buf); err != nil {
+					return err
+				}
+				val := append([]byte(nil), buf...)
+				if err := txn.Set(key, val); err != nil {
 					return err
 				}
 			}
 			return nil
 		})
 		if err != nil {
-			b.Fatal(err)
+			t.Fatalf("NoKV preload failed: %v", err)
 		}
 	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(numBatches * batchSize)
-	result.DataSize = float64(numBatches*batchSize*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(numBatches * batchSize)
-	result.MemoryStats.Bytes = int64(numBatches * batchSize * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Batch: %v\n", duration/time.Duration(numBatches))
-	fmt.Printf("Total Entries: %d\n", numBatches*batchSize)
-	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
-
-	benchmarkResults = append(benchmarkResults, result)
 }
 
-// NoKV Range Query Benchmark
-func BenchmarkNoKVRangeQuery(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "NoKV Range Query",
-		Engine:    "NoKV",
-		Operation: "RangeQuery",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== NoKV Range Query Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	db := NoKV.Open(opt)
-	defer db.Close()
-
-	num := 100000
-	fmt.Printf("Preparing %d test entries\n", num)
-	for i := 0; i < num; i++ {
-		key := fmt.Sprintf("key%d", i)
-		value := make([]byte, 100)
-		rand.Read(value)
-		e := utils.NewEntry([]byte(key), value)
-		if err := db.Set(e); err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ResetTimer()
-	start := time.Now()
-	totalItems := 0
-	for i := 0; i < b.N; i++ {
-		iter := db.NewIterator(&utils.Options{
-			Prefix: []byte("key"),
-			IsAsc:  true,
-		})
-		defer iter.Close()
-
-		count := 0
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			_ = iter.Item()
-			count++
-		}
-		totalItems += count
-	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(totalItems*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(totalItems * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Query: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Queries: %d\n", b.N)
-	fmt.Printf("Total Scanned Items: %d\n", totalItems)
-	fmt.Printf("Average Items per Query: %d\n", totalItems/b.N)
-
-	benchmarkResults = append(benchmarkResults, result)
-}
-
-// Badger Range Query Benchmark
-func BenchmarkBadgerRangeQuery(b *testing.B) {
-	result := BenchmarkResult{
-		Name:      "Badger Range Query",
-		Engine:    "Badger",
-		Operation: "RangeQuery",
-		StartTime: time.Now(),
-	}
-	fmt.Printf("\n=== Badger Range Query Benchmark ===\n")
-	fmt.Printf("Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-
-	clearBenchDir()
-	opts := badger.DefaultOptions(benchDir)
-	opts.Logger = nil
-	db, err := badger.Open(opts)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer db.Close()
-
-	num := 100000
-	fmt.Printf("Preparing %d test entries\n", num)
-	for i := 0; i < num; i++ {
-		key := fmt.Sprintf("key%d", i)
-		value := make([]byte, 100)
-		rand.Read(value)
+func preloadBadger(t *testing.T, db *badger.DB, total, batch, valSize int, seed int64, keyPrefix string) {
+	t.Helper()
+	rng := rand.New(rand.NewSource(seed))
+	buf := make([]byte, valSize)
+	for i := 0; i < total; i += batch {
+		end := min(i + batch, total)
 		err := db.Update(func(txn *badger.Txn) error {
-			return txn.Set([]byte(key), value)
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ResetTimer()
-	start := time.Now()
-	totalItems := 0
-	for i := 0; i < b.N; i++ {
-		err := db.View(func(txn *badger.Txn) error {
-			opts := badger.DefaultIteratorOptions
-			opts.Prefix = []byte("key")
-			it := txn.NewIterator(opts)
-			defer it.Close()
-
-			count := 0
-			for it.Rewind(); it.Valid(); it.Next() {
-				_ = it.Item()
-				count++
+			for j := i; j < end; j++ {
+				key := fmt.Appendf(nil, "%s%016d", keyPrefix, j)
+				if _, err := rng.Read(buf); err != nil {
+					return err
+				}
+				val := append([]byte(nil), buf...)
+				if err := txn.Set(key, val); err != nil {
+					return err
+				}
 			}
-			totalItems += count
 			return nil
 		})
 		if err != nil {
-			b.Fatal(err)
+			t.Fatalf("Badger preload failed: %v", err)
 		}
 	}
-	duration := time.Since(start)
-
-	result.EndTime = time.Now()
-	result.TotalDuration = duration
-	result.TotalOperations = int64(b.N)
-	result.DataSize = float64(totalItems*100) / 1024 / 1024
-	result.MemoryStats.Allocations = int64(b.N)
-	result.MemoryStats.Bytes = int64(totalItems * 100)
-
-	fmt.Printf("End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Total Duration: %v\n", duration)
-	fmt.Printf("Average Time per Query: %v\n", duration/time.Duration(b.N))
-	fmt.Printf("Total Queries: %d\n", b.N)
-	fmt.Printf("Total Scanned Items: %d\n", totalItems)
-	fmt.Printf("Average Items per Query: %d\n", totalItems/b.N)
-
-	benchmarkResults = append(benchmarkResults, result)
 }
 
-// Test benchmark results
-func TestBenchmarkResults(t *testing.T) {
-	fmt.Printf("\n=== Starting Benchmark Tests ===\n")
-	fmt.Printf("Test Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Printf("Test Directory: %s\n", benchDir)
-	fmt.Printf("Configuration:\n")
-	fmt.Printf("  MemTableSize: %d MB\n", opt.MemTableSize>>20)
-	fmt.Printf("  SSTableMaxSz: %d GB\n", opt.SSTableMaxSz>>30)
-	fmt.Printf("  ValueLogFileSize: %d GB\n", opt.ValueLogFileSize>>30)
-	fmt.Printf("  ValueThreshold: %d MB\n", opt.ValueThreshold>>20)
-	fmt.Printf("  MaxBatchCount: %d\n", opt.MaxBatchCount)
-	fmt.Printf("  MaxBatchSize: %d MB\n", opt.MaxBatchSize>>20)
-	fmt.Printf("  VerifyValueChecksum: %v\n", opt.VerifyValueChecksum)
-	fmt.Printf("  DetectConflicts: %v\n", opt.DetectConflicts)
-	fmt.Printf("\n")
+// ------------------------------ Bench Workloads ------------------------------
 
-	// Run all benchmarks
-	testing.Benchmark(BenchmarkNoKVWrite)
-	testing.Benchmark(BenchmarkBadgerWrite)
-	testing.Benchmark(BenchmarkNoKVRead)
-	testing.Benchmark(BenchmarkBadgerRead)
-	testing.Benchmark(BenchmarkNoKVBatchWrite)
-	testing.Benchmark(BenchmarkBadgerBatchWrite)
-	testing.Benchmark(BenchmarkNoKVRangeQuery)
-	testing.Benchmark(BenchmarkBadgerRangeQuery)
-	testing.Benchmark(BenchmarkRocksDBWrite)
-	testing.Benchmark(BenchmarkRocksDBRead)
-	testing.Benchmark(BenchmarkRocksDBBatchWrite)
-	testing.Benchmark(BenchmarkRocksDBRangeQuery)
+func benchNoKVWrite(t *testing.T) {
+	t.Helper()
+	fmt.Printf("\n=== NoKV Write (sync=%v) ===\n", wl.SyncWrites)
+	dir := engineDir("nokv", "write")
+	db, err := openNoKVAt(dir)
+	if err != nil {
+		t.Fatalf("open nokv: %v", err)
+	}
+	defer db.Close()
 
-	if len(benchmarkResults) > 0 {
-		fmt.Printf("\nBenchmark Summary (ops/sec, latency):\n")
-		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		writeSummaryTable(tw, benchmarkResults)
-		fmt.Println()
+	start := time.Now()
+	W := concurrency()
+	total := wl.WriteOps
+	parallelDo(t, W, total, func(s, e int) error {
+		rng := rand.New(rand.NewSource(wl.Seed + int64(s)))
+		val := make([]byte, wl.ValueSize)
+		for i := s; i < e; i++ {
+			if _, err := rng.Read(val); err != nil {
+				return fmt.Errorf("rand: %w", err)
+			}
+			key := fmt.Appendf(nil, "key-w-%016d", i)
+			if err := db.Update(func(txn *NoKV.Txn) error {
+				return txn.Set(key, append([]byte(nil), val...))
+			}); err != nil {
+				return fmt.Errorf("nokv write: %w", err)
+			}
+		}
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "NoKV Write",
+		Engine:          "NoKV",
+		Operation:       "Write",
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchBadgerWrite(t *testing.T) {
+	t.Helper()
+	fmt.Printf("\n=== Badger Write (sync=%v) ===\n", wl.SyncWrites)
+	dir := engineDir("badger", "write")
+	db, err := openBadgerAt(dir)
+	if err != nil {
+		t.Fatalf("open badger: %v", err)
+	}
+	defer db.Close()
+
+	start := time.Now()
+	W := concurrency()
+	total := wl.WriteOps
+	parallelDo(t, W, total, func(s, e int) error {
+		rng := rand.New(rand.NewSource(wl.Seed + int64(s)))
+		val := make([]byte, wl.ValueSize)
+		for i := s; i < e; i++ {
+			if _, err := rng.Read(val); err != nil {
+				return fmt.Errorf("rand: %w", err)
+			}
+			key := fmt.Appendf(nil, "key-w-%016d", i)
+			if err := db.Update(func(txn *badger.Txn) error {
+				return txn.Set(key, append([]byte(nil), val...))
+			}); err != nil {
+				return fmt.Errorf("badger write: %w", err)
+			}
+		}
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "Badger Write",
+		Engine:          "Badger",
+		Operation:       "Write",
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchNoKVBatchWrite(t *testing.T) {
+	t.Helper()
+	fmt.Printf("\n=== NoKV BatchWrite (sync=%v, batch=%d) ===\n", wl.SyncWrites, wl.BatchSize)
+	dir := engineDir("nokv", "batchwrite")
+	db, err := openNoKVAt(dir)
+	if err != nil {
+		t.Fatalf("open nokv: %v", err)
+	}
+	defer db.Close()
+
+	start := time.Now()
+	total := wl.BatchEntries
+	batch := wl.BatchSize
+	if batch <= 0 {
+		batch = total
+	}
+	rng := rand.New(rand.NewSource(wl.Seed))
+	buf := make([]byte, wl.ValueSize)
+
+	for i := 0; i < total; i += batch {
+		end := min(i + batch, total)
+		err := db.Update(func(txn *NoKV.Txn) error {
+			for j := i; j < end; j++ {
+				key := fmt.Appendf(nil, "key-b-%016d", j)
+				if _, err := rng.Read(buf); err != nil {
+					return err
+				}
+				val := append([]byte(nil), buf...)
+				if err := txn.Set(key, val); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("nokv batch write: %v", err)
+		}
+	}
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "NoKV BatchWrite",
+		Engine:          "NoKV",
+		Operation:       "BatchWrite",
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchBadgerBatchWrite(t *testing.T) {
+	t.Helper()
+	fmt.Printf("\n=== Badger BatchWrite (sync=%v, batch=%d) ===\n", wl.SyncWrites, wl.BatchSize)
+	dir := engineDir("badger", "batchwrite")
+	db, err := openBadgerAt(dir)
+	if err != nil {
+		t.Fatalf("open badger: %v", err)
+	}
+	defer db.Close()
+
+	start := time.Now()
+	total := wl.BatchEntries
+	batch := wl.BatchSize
+	if batch <= 0 {
+		batch = total
+	}
+	rng := rand.New(rand.NewSource(wl.Seed))
+	buf := make([]byte, wl.ValueSize)
+
+	for i := 0; i < total; i += batch {
+		end := min(i + batch, total)
+		err := db.Update(func(txn *badger.Txn) error {
+			for j := i; j < end; j++ {
+				key := fmt.Appendf(nil, "key-b-%016d", j)
+				if _, err := rng.Read(buf); err != nil {
+					return err
+				}
+				val := append([]byte(nil), buf...)
+				if err := txn.Set(key, val); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("badger batch write: %v", err)
+		}
+	}
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "Badger BatchWrite",
+		Engine:          "Badger",
+		Operation:       "BatchWrite",
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchNoKVRead(t *testing.T, mode string) {
+	t.Helper()
+	fmt.Printf("\n=== NoKV Read (%s, sync=%v) ===\n", strings.ToUpper(mode), wl.SyncWrites)
+	dir := engineDir("nokv", "read")
+	db, err := openNoKVAt(dir)
+	if err != nil {
+		t.Fatalf("open nokv: %v", err)
 	}
 
-	// Write results to file
-	if err := WriteResults(benchmarkResults); err != nil {
-		t.Errorf("Failed to write benchmark results: %v", err)
+	preloadNoKV(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-r-")
+
+	if mode == "cold" {
+		db.Close()
+		db, err = openNoKVAt(dir)
+		if err != nil {
+			t.Fatalf("reopen nokv: %v", err)
+		}
+	}
+	defer db.Close()
+
+	start := time.Now()
+	total := wl.ReadOps
+	W := concurrency()
+
+	parallelDo(t, W, total, func(s, e int) error {
+		for i := s; i < e; i++ {
+			key := fmt.Appendf(nil, "key-r-%016d", i%wl.PreloadEntries)
+			if err := db.View(func(txn *NoKV.Txn) error {
+				item, err := txn.Get(key)
+				if err != nil {
+					return err
+				}
+				if item == nil || item.Entry() == nil || len(item.Entry().Value) == 0 {
+					return fmt.Errorf("missing value for key")
+				}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("nokv read: %w", err)
+			}
+		}
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "NoKV Read",
+		Engine:          "NoKV",
+		Operation:       "Read",
+		Mode:            mode,
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchBadgerRead(t *testing.T, mode string) {
+	t.Helper()
+	fmt.Printf("\n=== Badger Read (%s, sync=%v) ===\n", strings.ToUpper(mode), wl.SyncWrites)
+	dir := engineDir("badger", "read")
+	db, err := openBadgerAt(dir)
+	if err != nil {
+		t.Fatalf("open badger: %v", err)
+	}
+
+	preloadBadger(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-r-")
+
+	if mode == "cold" {
+		db.Close()
+		db, err = openBadgerAt(dir)
+		if err != nil {
+			t.Fatalf("reopen badger: %v", err)
+		}
+	}
+	defer db.Close()
+
+	start := time.Now()
+	total := wl.ReadOps
+	W := concurrency()
+
+	parallelDo(t, W, total, func(s, e int) error {
+		for i := s; i < e; i++ {
+			key := fmt.Appendf(nil, "key-r-%016d", i%wl.PreloadEntries)
+			if err := db.View(func(txn *badger.Txn) error {
+				item, err := txn.Get(key)
+				if err != nil {
+					return err
+				}
+				_, err = item.ValueCopy(nil)
+				return err
+			}); err != nil {
+				return fmt.Errorf("badger read: %w", err)
+			}
+		}
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "Badger Read",
+		Engine:          "Badger",
+		Operation:       "Read",
+		Mode:            mode,
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(total),
+		DataSize:        float64(total*wl.ValueSize) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchNoKVRange(t *testing.T, mode string) {
+	t.Helper()
+	fmt.Printf("\n=== NoKV RangeQuery (%s, window=%d) ===\n", strings.ToUpper(mode), wl.RangeWindow)
+	dir := engineDir("nokv", "range")
+	db, err := openNoKVAt(dir)
+	if err != nil {
+		t.Fatalf("open nokv: %v", err)
+	}
+
+	preloadNoKV(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-g-")
+
+	if mode == "cold" {
+		db.Close()
+		db, err = openNoKVAt(dir)
+		if err != nil {
+			t.Fatalf("reopen nokv: %v", err)
+		}
+	}
+	defer db.Close()
+
+	start := time.Now()
+	totalQ := wl.RangeQueries
+	var totalItems int64
+
+	W := concurrency()
+	var mu sync.Mutex
+
+	parallelDo(t, W, totalQ, func(s, e int) error {
+		localCount := int64(0)
+		for i := s; i < e; i++ {
+			if err := db.View(func(txn *NoKV.Txn) error {
+				it := txn.NewIterator(NoKV.IteratorOptions{
+					Prefix: []byte("key-g-"),
+				})
+				defer it.Close()
+				cnt := 0
+				for it.Rewind(); it.Valid() && cnt < wl.RangeWindow; it.Next() {
+					item := it.Item()
+					if item == nil || item.Entry() == nil {
+						break
+					}
+					_ = item.Entry().Value
+					cnt++
+				}
+				localCount += int64(cnt)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("nokv range: %w", err)
+			}
+		}
+		mu.Lock()
+		totalItems += localCount
+		mu.Unlock()
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "NoKV RangeQuery",
+		Engine:          "NoKV",
+		Operation:       "RangeQuery",
+		Mode:            mode,
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(totalQ),
+		DataSize:        float64(totalItems*int64(wl.ValueSize)) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+func benchBadgerRange(t *testing.T, mode string) {
+	t.Helper()
+	fmt.Printf("\n=== Badger RangeQuery (%s, window=%d) ===\n", strings.ToUpper(mode), wl.RangeWindow)
+	dir := engineDir("badger", "range")
+	db, err := openBadgerAt(dir)
+	if err != nil {
+		t.Fatalf("open badger: %v", err)
+	}
+
+	preloadBadger(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-g-")
+
+	if mode == "cold" {
+		db.Close()
+		db, err = openBadgerAt(dir)
+		if err != nil {
+			t.Fatalf("reopen badger: %v", err)
+		}
+	}
+	defer db.Close()
+
+	start := time.Now()
+	totalQ := wl.RangeQueries
+	var totalItems int64
+
+	W := concurrency()
+	var mu sync.Mutex
+
+	parallelDo(t, W, totalQ, func(s, e int) error {
+		local := int64(0)
+		for i := s; i < e; i++ {
+			if err := db.View(func(txn *badger.Txn) error {
+				opts := badger.DefaultIteratorOptions
+				opts.Prefix = []byte("key-g-")
+				opts.PrefetchValues = false
+				it := txn.NewIterator(opts)
+				defer it.Close()
+				cnt := 0
+				for it.Rewind(); it.ValidForPrefix(opts.Prefix) && cnt < wl.RangeWindow; it.Next() {
+					item := it.Item()
+					if item == nil {
+						break
+					}
+					cnt++
+				}
+				local += int64(cnt)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("badger range: %w", err)
+			}
+		}
+		mu.Lock()
+		totalItems += local
+		mu.Unlock()
+		return nil
+	})
+	dur := time.Since(start)
+
+	res := BenchmarkResult{
+		Name:            "Badger RangeQuery",
+		Engine:          "Badger",
+		Operation:       "RangeQuery",
+		Mode:            mode,
+		StartTime:       start,
+		EndTime:         start.Add(dur),
+		TotalDuration:   dur,
+		TotalOperations: int64(totalQ),
+		DataSize:        float64(totalItems*int64(wl.ValueSize)) / (1024 * 1024),
+	}
+	res.Finalize()
+	allResults = append(allResults, res)
+}
+
+// ------------------------------ Reporting ------------------------------
+
+func writeResultsJSONCSV(results []BenchmarkResult, baseDir string) error {
+	jsPath := filepath.Join(baseDir, "benchmark_results.json")
+	csPath := filepath.Join(baseDir, "benchmark_results.csv")
+
+	jsFile, err := os.Create(jsPath)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(jsFile)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(results); err != nil {
+		_ = jsFile.Close()
+		return err
+	}
+	_ = jsFile.Close()
+
+	csFile, err := os.Create(csPath)
+	if err != nil {
+		return err
+	}
+	w := csv.NewWriter(csFile)
+	defer csFile.Close()
+	defer w.Flush()
+
+	if err := w.Write([]string{"name", "engine", "operation", "mode", "ops_per_sec", "avg_latency_ns", "total_ops", "data_mb", "duration_ns", "start", "end"}); err != nil {
+		return err
+	}
+	for _, r := range results {
+		if err := w.Write([]string{
+			r.Name,
+			r.Engine,
+			r.Operation,
+			r.Mode,
+			fmt.Sprintf("%.0f", r.Throughput),
+			fmt.Sprintf("%.0f", r.AvgLatencyNS),
+			fmt.Sprintf("%d", r.TotalOperations),
+			fmt.Sprintf("%.2f", r.DataSize),
+			fmt.Sprintf("%d", r.TotalDuration.Nanoseconds()),
+			r.StartTime.Format(time.RFC3339),
+			r.EndTime.Format(time.RFC3339),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ------------------------------ Test Entry ------------------------------
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+
+	wl = workloadConfig{
+		ValueSize:      *fValueSize,
+		PreloadEntries: *fPreloadEntries,
+		WriteOps:       *fWriteOps,
+		ReadOps:        *fReadOps,
+		BatchEntries:   *fBatchEntries,
+		BatchSize:      *fBatchSize,
+		RangeQueries:   *fRangeQueries,
+		RangeWindow:    *fRangeWindow,
+		Seed:           *fSeed,
+		SyncWrites:     *fSyncWrites,
+		Conc:           *fConc,
+		Mode:           strings.ToLower(*fMode),
+		Dir:            *fBenchDir,
+		BadgerBlockMB:  *fBadgerBlockMB,
+		BadgerIndexMB:  *fBadgerIndexMB,
+		BadgerComp:     strings.ToLower(*fBadgerCompression),
+	}
+
+	os.Exit(m.Run())
+}
+
+func TestBenchmarkResults(t *testing.T) {
+	if os.Getenv(benchmarkEnvKey) != "1" {
+		t.Skipf("set %s=1 to run benchmark suite", benchmarkEnvKey)
+	}
+
+	allResults = allResults[:0]
+
+	fmt.Printf("\n=== Benchmark Suite @ %s ===\n", nowStr())
+	fmt.Printf("Dir=%s seed=%d sync=%v conc=%d rounds=%d mode=%s\n", wl.Dir, wl.Seed, wl.SyncWrites, concurrency(), *fRounds, wl.Mode)
+	fmt.Printf("ValueSize=%dB preload=%d writeOps=%d readOps=%d batchEntries=%d batchSize=%d rangeQ=%d window=%d\n",
+		wl.ValueSize, wl.PreloadEntries, wl.WriteOps, wl.ReadOps, wl.BatchEntries, wl.BatchSize, wl.RangeQueries, wl.RangeWindow)
+	fmt.Printf("Badger: block=%dMB index=%dMB comp=%s\n\n", wl.BadgerBlockMB, wl.BadgerIndexMB, wl.BadgerComp)
+
+	for r := 1; r <= *fRounds; r++ {
+		fmt.Printf("---- Round %d ----\n", r)
+
+		benchNoKVWrite(t)
+		benchBadgerWrite(t)
+
+		switch wl.Mode {
+		case "warm":
+			benchNoKVRead(t, "warm")
+			benchBadgerRead(t, "warm")
+			benchNoKVRange(t, "warm")
+			benchBadgerRange(t, "warm")
+		case "cold":
+			benchNoKVRead(t, "cold")
+			benchBadgerRead(t, "cold")
+			benchNoKVRange(t, "cold")
+			benchBadgerRange(t, "cold")
+		case "both":
+			benchNoKVRead(t, "warm")
+			benchBadgerRead(t, "warm")
+			benchNoKVRange(t, "warm")
+			benchBadgerRange(t, "warm")
+			benchNoKVRead(t, "cold")
+			benchBadgerRead(t, "cold")
+			benchNoKVRange(t, "cold")
+			benchBadgerRange(t, "cold")
+		default:
+			t.Fatalf("unknown mode: %s", wl.Mode)
+		}
+	}
+
+	sort.SliceStable(allResults, func(i, j int) bool {
+		ri, rj := allResults[i], allResults[j]
+		key := func(r BenchmarkResult) string {
+			return strings.Join([]string{r.Name, r.Engine, r.Operation, r.Mode, r.StartTime.Format(time.RFC3339Nano)}, "|")
+		}
+		return key(ri) < key(rj)
+	})
+
+	fmt.Printf("\nBenchmark Summary:\n")
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	writeSummaryTable(tw, allResults)
+	fmt.Println()
+
+	must(os.MkdirAll(wl.Dir, 0o755))
+	if err := writeResultsJSONCSV(allResults, wl.Dir); err != nil {
+		t.Fatalf("write results failed: %v", err)
 	}
 }
