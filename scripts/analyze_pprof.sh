@@ -14,26 +14,41 @@ CPU_PROF="cpu.prof"
 MEM_PROF="mem.prof"
 GRAPH_DPI="${GRAPH_DPI:-200}"
 
-generate_svg() {
+# Generates an SVG flame graph.
+generate_flame_svg() {
+    local output_path="$1"
+    shift
+    # Use -svg which defaults to a flame graph.
+    if ! go tool pprof -svg "$@" > "$output_path"; then
+        echo "Error generating flame graph for $output_path"
+        return 1
+    fi
+}
+
+# Generates an SVG call graph.
+generate_call_graph_svg() {
     local output_path="$1"
     shift
     local tmp_dot
 
-    if command -v dot >/dev/null 2>&1; then
-        tmp_dot=$(mktemp)
-        if ! go tool pprof -dot "$@" > "$tmp_dot"; then
-            rm -f "$tmp_dot"
-            return 1
-        fi
-        if ! dot -Tsvg -Gdpi="$GRAPH_DPI" "$tmp_dot" > "$output_path"; then
-            rm -f "$tmp_dot"
-            return 1
-        fi
-        rm -f "$tmp_dot"
-        return 0
+    if ! command -v dot >/dev/null 2>&1; then
+        echo "Graphviz 'dot' command not found. Skipping call graph generation for $output_path."
+        return 1
     fi
 
-    go tool pprof -svg "$@" > "$output_path"
+    tmp_dot=$(mktemp)
+    if ! go tool pprof -dot "$@" > "$tmp_dot"; then
+        echo "Error running 'go tool pprof -dot' for $output_path"
+        rm -f "$tmp_dot"
+        return 1
+    fi
+    if ! dot -Tsvg -Gdpi="$GRAPH_DPI" "$tmp_dot" > "$output_path"; then
+        echo "Error running 'dot' for $output_path"
+        rm -f "$tmp_dot"
+        return 1
+    fi
+    rm -f "$tmp_dot"
+    return 0
 }
 
 echo "Starting pprof generation and analysis..."
@@ -58,22 +73,17 @@ echo ""
 if [ -f "$CPU_PROF" ]; then
     echo "Analyzing CPU profile: $CPU_PROF"
     echo "Generating CPU flame graph..."
-    if generate_svg "$OUTPUT_DIR/cpu_flame.svg" "$CPU_PROF"; then
+    if generate_flame_svg "$OUTPUT_DIR/cpu_flame.svg" "$CPU_PROF"; then
         echo "CPU flame graph generated: $OUTPUT_DIR/cpu_flame.svg"
     else
         echo "Error generating CPU flame graph."
     fi
 
     echo "Generating CPU call graph..."
-    if command -v dot >/dev/null 2>&1; then
-        if generate_svg "$OUTPUT_DIR/cpu_call.svg" "$CPU_PROF"; then
-            echo "CPU call graph generated: $OUTPUT_DIR/cpu_call.svg"
-        else
-            echo "Error generating CPU call graph."
-        fi
+    if generate_call_graph_svg "$OUTPUT_DIR/cpu_call.svg" "$CPU_PROF"; then
+        echo "CPU call graph generated: $OUTPUT_DIR/cpu_call.svg"
     else
-        echo "Graphviz 'dot' command not found. Skipping CPU call graph generation."
-        echo "Please install Graphviz (e.g., 'sudo apt-get install graphviz' or 'brew install graphviz') to generate call graphs."
+        echo "Error generating CPU call graph."
     fi
 else
     echo "CPU profile '$CPU_PROF' not found. Skipping CPU analysis."
@@ -85,39 +95,31 @@ echo ""
 if [ -f "$MEM_PROF" ]; then
     echo "Analyzing Memory profile: $MEM_PROF"
     echo "Generating Memory flame graph (alloc_space)..."
-    if generate_svg "$OUTPUT_DIR/mem_alloc_flame.svg" -alloc_space "$MEM_PROF"; then
+    if generate_flame_svg "$OUTPUT_DIR/mem_alloc_flame.svg" -alloc_space "$MEM_PROF"; then
         echo "Memory alloc_space flame graph generated: $OUTPUT_DIR/mem_alloc_flame.svg"
     else
         echo "Error generating Memory alloc_space flame graph."
     fi
 
     echo "Generating Memory call graph (alloc_space)..."
-    if command -v dot >/dev/null 2>&1; then
-        if generate_svg "$OUTPUT_DIR/mem_alloc_call.svg" -alloc_space "$MEM_PROF"; then
-            echo "Memory alloc_space call graph generated: $OUTPUT_DIR/mem_alloc_call.svg"
-        else
-            echo "Error generating Memory alloc_space call graph."
-        fi
+    if generate_call_graph_svg "$OUTPUT_DIR/mem_alloc_call.svg" -alloc_space "$MEM_PROF"; then
+        echo "Memory alloc_space call graph generated: $OUTPUT_DIR/mem_alloc_call.svg"
     else
-        echo "Graphviz 'dot' command not found. Skipping Memory call graph generation."
+        echo "Error generating Memory alloc_space call graph."
     fi
 
     echo "Generating Memory flame graph (inuse_space)..."
-    if generate_svg "$OUTPUT_DIR/mem_inuse_flame.svg" -inuse_space "$MEM_PROF"; then
+    if generate_flame_svg "$OUTPUT_DIR/mem_inuse_flame.svg" -inuse_space "$MEM_PROF"; then
         echo "Memory inuse_space flame graph generated: $OUTPUT_DIR/mem_inuse_flame.svg"
     else
         echo "Error generating Memory inuse_space flame graph."
     fi
 
     echo "Generating Memory call graph (inuse_space)..."
-    if command -v dot >/dev/null 2>&1; then
-        if generate_svg "$OUTPUT_DIR/mem_inuse_call.svg" -inuse_space "$MEM_PROF"; then
-            echo "Memory inuse_space call graph generated: $OUTPUT_DIR/mem_inuse_call.svg"
-        else
-            echo "Error generating Memory inuse_space call graph."
-        fi
+    if generate_call_graph_svg "$OUTPUT_DIR/mem_inuse_call.svg" -inuse_space "$MEM_PROF"; then
+        echo "Memory inuse_space call graph generated: $OUTPUT_DIR/mem_inuse_call.svg"
     else
-        echo "Graphviz 'dot' command not found. Skipping Memory call graph generation."
+        echo "Error generating Memory inuse_space call graph."
     fi
 
 else
