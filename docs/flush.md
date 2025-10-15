@@ -1,98 +1,109 @@
-# MemTable Flush Pipeline Design
+# MemTable Flush Pipeline
 
-## 1. 目标
+NoKV's flush subsystem translates immutable memtables into persisted SSTables while coordinating WAL checkpoints and ValueLog discard statistics. The code lives in [`lsm/flush`](../lsm/flush) and is tightly integrated with `DB.doWrites` and `manifest.Manager`.
 
-1. **可靠性**：冻结后的 MemTable 必须原子地写入 SST，在失败或崩溃时能够重试或修复。
-2. **可恢复性**：“准备 → 构建 → 安装 → 释放” 各阶段可被崩溃恢复逻辑识别并继续执行。
-3. **可观测性**：提供 flush 队列、阶段状态、耗时等指标以支持调试与调优。
+---
 
-## 2. 状态机
+## 1. Responsibilities
+
+1. **Reliability** – ensure immutables become SSTables atomically, and failures are recoverable.
+2. **Coordination** – release WAL segments only after manifest commits, and feed discard stats to ValueLog GC.
+3. **Observability** – expose queue depth, stage durations, and task counts through `Stats.collect` and the CLI.
+
+Compared with RocksDB: the stage transitions mirror RocksDB's flush job lifecycle (`PickMemTable`, `WriteLevel0Table`, `InstallMemTable`), while the discard stats channel is inspired by Badger's integration with vlog GC.
+
+---
+
+## 2. Stage Machine
 
 ```mermaid
-flowchart TD
+flowchart LR
     Active[Active MemTable]
-    Prepare[Stage Prepare]
-    Build[Stage Build]
-    Install[Stage Install]
-    Release[Stage Release]
+    Immutable[Immutable MemTable]
+    FlushQ[flush.Manager queue]
+    Build[StageBuild]
+    Install[StageInstall]
+    Release[StageRelease]
 
-    Active -->|size >= threshold| Prepare
-    Prepare --> Build
-    Build --> Install
-    Install --> Release
-
-    subgraph Details
-        Prepare -->|lock segment / enqueue| Build
-        Build -->|write temp SST + checksum| Install
-        Install -->|rename + manifest| Release
-        Release -->|remove WAL + notify GC| Active
-    end
+    Active -->|threshold reached| Immutable --> FlushQ
+    FlushQ --> Build --> Install --> Release --> Active
 ```
 
-崩溃恢复时读取 `manifest` 和 flush 元信息：
-1. 若任务停留在 PREPARE/BUILD：重新构建并尝试完成 BUILD。
-2. 若处于 INSTALL，检查是否已经 `rename` 成功；若 manifest 记录缺失则重试安装；若已记录则完成 release。
+- **StagePrepare** – `Manager.Submit` assigns a task ID, records enqueue time, and bumps queue metrics.
+- **StageBuild** – `Manager.Next` hands tasks to background workers. `buildTable` serialises data into a temporary `.sst.tmp` using `lsm/builder.go`.
+- **StageInstall** – manifest edits (`EditAddFile`, `EditLogPointer`) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.
+- **StageRelease** – metrics record release duration, discard stats are flushed to `valueLog.lfDiscardStats`, and `wal.Manager.Remove` drops obsolete segments.
 
-## 3. FlushManager 接口
+`Manager.Update` transitions between stages and collects timing data (`WaitNs`, `BuildNs`, `ReleaseNs`). These appear as `NoKV.Flush.Queue`, `NoKV.Flush.BuildAvgMs`, etc., in CLI output.
+
+---
+
+## 3. Key Types
 
 ```go
 type Task struct {
+    ID        uint64
     SegmentID uint32
-    Mem       *memTable
-    Stage     Stage   // prepare/build/install/release
-    TempFile  string
-    SSTName   string
+    Stage     Stage
+    Data      any      // memtable pointer, temp file info, etc.
     Err       error
 }
 
-type Manager interface {
-    Submit(task Task) error
-    Next() (Task, bool)
-    Update(task Task) error
-    Recover() error
-    Stats() Metrics
-    Close() error
+type Manager struct {
+    queue []*Task
+    active map[uint64]*Task
+    cond  *sync.Cond
+    // atomic metrics fields (pending, queueLen, waitNs...)
 }
 ```
 
-实现建议：
-- `Submit` 在 PREPARE 阶段调用，记录任务与 WAL 段引用（build flush queue + manifest edit staging）。
-- `Next` 由后台 worker 调用，获取待 BUILD 的任务。
-- `Update` 在各阶段结束时更新状态：
-  - `Update(BuildComplete)`：保存临时文件路径。
-  - `Update(InstallComplete)`：写 manifest 并设置 `SSTName`。
-  - `Update(Release)`：调用 `wal.RemoveSegment`，清理任务。
-- `Recover` 重启时读取 flush 元信息（可写入单独 `flush_manifest` 文件或 manifest VersionEdit 中），恢复未完成任务。
+- `Stage` enumerates `StagePrepare`, `StageBuild`, `StageInstall`, `StageRelease`.
+- `Metrics` aggregates pending/active counts and nanosecond accumulators; the CLI converts them to human-friendly durations.
+- The queue uses condition variables to coordinate between background workers and producers; the design avoids busy waiting, unlike some RocksDB flush queues.
 
-## 4. 与 WAL / Manifest 的协同
+---
 
-- PREPARE 阶段不移除 WAL 段，仅记录 segmentID。
-- INSTALL 阶段写 manifest，包含 `AddFile`（新 SST）与 `LogPointer`（WAL segment boundary）。
-- RELEASE 阶段 manifest 更新成功后才允许 `wal.RemoveSegment`。
-- manifest 必须记录 flush task 的完成点（SegmentID + SST 信息），以便恢复。
+## 4. Execution Path in Code
 
-## 5. 测试矩阵
+1. `DB.applyBatches` detects when the active memtable is full and hands it to `lsm.LSM.scheduleFlush`, which calls `flush.Manager.Submit`.
+2. Background goroutines call `Next` to retrieve tasks; `lsm.(*LSM).runFlushMemTable` performs the build and install phases.
+3. `lsm.(*LSM).installLevel0Table` writes the manifest edit and renames the SST (atomic `os.Rename`, same as RocksDB's flush job).
+4. After install, `valueLog.updateDiscardStats` is called so GC can reclaim vlog entries belonging to dropped keys.
+5. Once release completes, `wal.Manager.Remove` evicts segments whose entries are fully represented in SSTs, matching RocksDB's `LogFileManager::PurgeObsoleteLogs`.
 
-1. 正常 flush：单个 MemTable → SST → manifest → WAL 删除。
-2. flush 过程中崩溃：
-   - BUILD 前崩溃：重启后继续 flush，WAL 仍保留。
-   - BUILD 中崩溃：临时文件可能存在；恢复后需要清理并重建。
-   - INSTALL 前崩溃：临时文件存在但未 rename；恢复后重新 INSTALL。
-   - INSTALL 后崩溃：SST 已存在但 manifest 未更新；需要幂等处理。
-3. 并发 flush：多个 MemTable 同时 flush，验证 flush 队列顺序和 WAL 删除。
-4. Manifest 同步：模拟 manifest写失败或 rename失败，确保 flush 可回滚或重试。
+---
 
-## 6. 后续扩展
+## 5. Recovery Considerations
 
-- Backpressure：根据 L0 表数量 / flush 队列长度对前台写入施加压力。
-- Metrics：flush latency、队列长度、WAL 剩余段数。
-- 集成 ValueLog：释放阶段同步 discard stats，驱动 ValueLog GC。
+- **Before Install** – temp files remain in `tmp/`. On restart, no manifest entry exists, so `lsm.LSM.replayManifest` ignores them and the memtable is rebuilt from WAL.
+- **After Install but before Release** – manifest records the SST while WAL segments may still exist. Recovery sees the edit, ensures the file exists, and release metrics resume from StageRelease.
+- **Metrics** – because timing data is stored atomically in the manager, recovery resets counters but does not prevent the CLI from reporting backlog immediately after restart.
 
-## 7. 下一步实施计划
+RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visibility.
 
-1. 在 `docs/` 中补充 manifest/flush 交互详细说明。
-2. 实现 `FlushManager` 骨架与内存任务队列，配套单元测试（无实际 SST 写入）。
-3. 将 LSM 中现有 flush 流程改为使用 `FlushManager`，逐步接入 SST builder、manifest。
-4. 完成崩溃恢复、WAL 段回收和并发 flush 相关测试。
+---
 
-Flush 管线完成后，可继续推进 Manifest VersionEdit 重构（阶段 3）。 
+## 6. Observability & CLI
+
+- `StatsSnapshot.Flush.Queue` – number of pending tasks.
+- `StatsSnapshot.Flush.WaitMs` – average wait time before build.
+- `StatsSnapshot.Flush.BuildMs` – average build duration.
+- `StatsSnapshot.Flush.Completed` – cumulative tasks finished.
+
+The CLI command `nokv stats --workdir <dir>` prints these metrics alongside compaction and transaction statistics, enabling operators to detect stalled flush workers or WAL backlog quickly.
+
+---
+
+## 7. Interplay with ValueLog GC
+
+Flush completion sends discard stats via `db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))`. ValueLog GC uses this feed to determine how much of each vlog segment is obsolete, similar to Badger's discard ratio heuristic. Without flush-driven stats, vlog GC would have to rescan SSTables, so this channel is crucial for keeping GC cheap.
+
+---
+
+## 8. Testing Matrix
+
+- `lsm/flush/manager_test.go` (implicit via `lsm/lsm_test.go`) validates stage transitions and metrics.
+- `db_recovery_test.go` covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.
+- Future additions: inject write failures during `StageBuild` to test retry logic, analogous to RocksDB's simulated IO errors.
+
+See the [recovery plan](recovery.md) and [testing matrix](testing.md) for more context.
