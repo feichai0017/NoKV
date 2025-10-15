@@ -37,6 +37,9 @@ type levelManager struct {
 	lsm          *LSM
 	compactState *compactStatus
 	compaction   *compactionManager
+	logPtrMu     sync.RWMutex
+	logPtrSeg    uint32
+	logPtrOffset uint64
 }
 
 func (lm *levelManager) close() error {
@@ -100,6 +103,7 @@ func (lm *levelManager) build() error {
 	}
 
 	version := lm.manifestMgr.Current()
+	lm.setLogPointer(version.LogSegment, version.LogOffset)
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
 	var missing []manifest.FileMeta
@@ -179,6 +183,11 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	if err := lm.manifestMgr.LogEdit(edit); err != nil {
 		return err
 	}
+	pointerEdit := manifest.Edit{Type: manifest.EditLogPointer, LogSeg: immutable.segmentID, LogOffset: uint64(immutable.walSize)}
+	if err := lm.manifestMgr.LogEdit(pointerEdit); err != nil {
+		return err
+	}
+	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize))
 	lm.levels[0].add(table)
 	lm.levels[0].addSize(table)
 	if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -214,6 +223,19 @@ func (lm *levelManager) ValueLogHead() manifest.ValueLogMeta {
 
 func (lm *levelManager) ValueLogStatus() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
+}
+
+func (lm *levelManager) setLogPointer(seg uint32, offset uint64) {
+	lm.logPtrMu.Lock()
+	lm.logPtrSeg = seg
+	lm.logPtrOffset = offset
+	lm.logPtrMu.Unlock()
+}
+
+func (lm *levelManager) logPointer() (uint32, uint64) {
+	lm.logPtrMu.RLock()
+	defer lm.logPtrMu.RUnlock()
+	return lm.logPtrSeg, lm.logPtrOffset
 }
 
 func (lm *levelManager) compactionStats() (int64, float64) {

@@ -1,13 +1,15 @@
 package manifest
 
 import (
-	"maps"
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -345,6 +347,10 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 	if _, err := io.ReadFull(r, data); err != nil {
 		return Edit{}, err
 	}
+	return decodeEdit(data)
+}
+
+func decodeEdit(data []byte) (Edit, error) {
 	if len(data) < len(editMagic)+1 {
 		return Edit{}, fmt.Errorf("manifest entry too short")
 	}
@@ -367,6 +373,9 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 		pos += n
 		created, n := binary.Uvarint(data[pos:])
 		pos += n
+		if pos > len(data) {
+			return Edit{}, fmt.Errorf("manifest add/delete truncated")
+		}
 		edit.File = &FileMeta{
 			Level:     int(level),
 			FileID:    fileID,
@@ -380,6 +389,9 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 		pos += n
 		off, n := binary.Uvarint(data[pos:])
 		pos += n
+		if pos > len(data) {
+			return Edit{}, fmt.Errorf("manifest log pointer truncated")
+		}
 		edit.LogSeg = uint32(seg)
 		edit.LogOffset = off
 	case EditValueLogHead:
@@ -388,6 +400,9 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 			pos += n
 			offset, n := binary.Uvarint(data[pos:])
 			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest value log head truncated")
+			}
 			edit.ValueLog = &ValueLogMeta{
 				FileID: uint32(fid64),
 				Offset: offset,
@@ -398,6 +413,9 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 		if pos < len(data) {
 			fid64, n := binary.Uvarint(data[pos:])
 			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest value log delete truncated")
+			}
 			edit.ValueLog = &ValueLogMeta{
 				FileID: uint32(fid64),
 			}
@@ -408,6 +426,9 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 			pos += n
 			offset, n := binary.Uvarint(data[pos:])
 			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest value log update truncated")
+			}
 			valid := false
 			if pos < len(data) {
 				valid = data[pos] == 1
@@ -421,6 +442,64 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 		}
 	}
 	return edit, nil
+}
+
+// Verify ensures manifest and CURRENT pointer are well-formed. It truncates any
+// partially written edits left at the end of the manifest file.
+func Verify(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("manifest: directory required")
+	}
+	tmp := filepath.Join(dir, "CURRENT.tmp")
+	if _, err := os.Stat(tmp); err == nil {
+		_ = os.Remove(tmp)
+	}
+
+	currentPath := filepath.Join(dir, currentFileName)
+	data, err := os.ReadFile(currentPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return fmt.Errorf("manifest: read CURRENT: %w", err)
+	}
+	name := strings.TrimSpace(string(data))
+	if name == "" {
+		return fmt.Errorf("manifest: CURRENT empty")
+	}
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("manifest: open %s: %w", name, err)
+	}
+	defer f.Close()
+
+	reader := bufio.NewReader(f)
+	var offset int64
+	for {
+		pos := offset
+		var length uint32
+		if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			if err == io.ErrUnexpectedEOF {
+				return f.Truncate(pos)
+			}
+			return fmt.Errorf("manifest: read length at %d: %w", pos, err)
+		}
+		payload := make([]byte, length)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return f.Truncate(pos)
+			}
+			return fmt.Errorf("manifest: read payload at %d: %w", pos, err)
+		}
+		if _, err := decodeEdit(payload); err != nil {
+			return fmt.Errorf("manifest: invalid edit at %d: %w", pos, err)
+		}
+		offset = pos + int64(length) + 4
+	}
 }
 
 func appendUint64(dst []byte, v uint64) []byte {

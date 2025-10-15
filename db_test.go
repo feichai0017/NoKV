@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAPI(t *testing.T) {
@@ -90,4 +91,36 @@ func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 	if string(req.Entries[0].Key) != "a" {
 		t.Fatalf("entry data mutated with caller slice")
 	}
+}
+
+func TestDirectoryLockPreventsConcurrentOpen(t *testing.T) {
+	dir := t.TempDir()
+	opt := &Options{
+		WorkDir:          dir,
+		ValueThreshold:   1 << 10,
+		MemTableSize:     1 << 12,
+		SSTableMaxSz:     1 << 20,
+		ValueLogFileSize: 1 << 18,
+		MaxBatchCount:    16,
+		MaxBatchSize:     1 << 20,
+	}
+
+	db := Open(opt)
+
+	didPanic := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				didPanic = true
+			}
+		}()
+		Open(opt)
+	}()
+
+	require.True(t, didPanic, "expected second Open to panic due to directory lock")
+
+	require.NoError(t, db.Close())
+
+	db2 := Open(opt)
+	require.NoError(t, db2.Close())
 }

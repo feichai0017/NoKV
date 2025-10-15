@@ -3,6 +3,7 @@ package wal
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -357,6 +358,73 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 		return err
 	}
 	return m.replayFile(id, path, fn)
+}
+
+// VerifyDir scans WAL segments in the provided directory, truncating any
+// partially written records left behind by crashes and validating their
+// checksums.
+func VerifyDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("wal: directory required")
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		if err := verifySegment(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifySegment(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	var offset int64
+	for {
+		start := offset
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			if err == io.ErrUnexpectedEOF {
+				return f.Truncate(start)
+			}
+			return fmt.Errorf("wal verify length %s: %w", filepath.Base(path), err)
+		}
+		length := binary.BigEndian.Uint32(lenBuf[:])
+		payload := make([]byte, length)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return f.Truncate(start)
+			}
+			return fmt.Errorf("wal verify payload %s: %w", filepath.Base(path), err)
+		}
+		var crcBuf [4]byte
+		if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return f.Truncate(start)
+			}
+			return fmt.Errorf("wal verify checksum %s: %w", filepath.Base(path), err)
+		}
+		expected := binary.BigEndian.Uint32(crcBuf[:])
+		actual := crc32.Checksum(payload, utils.CastagnoliCrcTable)
+		if expected != actual {
+			return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), start)
+		}
+		offset = start + int64(length) + 8
+	}
 }
 
 // RemoveSegment deletes a WAL segment from disk.
