@@ -87,14 +87,16 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 
 ## 🧩 Module Breakdown
 
-| Module | Responsibilities | Source |
-| --- | --- | --- |
-| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) |
-| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) |
-| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints. | [`manifest/`](./manifest) |
-| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) |
-| Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) |
-| Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) |
+| Module | Responsibilities | Source | Docs |
+| --- | --- | --- | --- |
+| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) | [WAL internals](docs/wal.md) |
+| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md) |
+| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
+| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
+| Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) | [Transactions & MVCC](docs/txn.md) |
+| HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
+| Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
+| Filesystem | mmap-backed file helpers shared by WAL/SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
 
 Each module has a dedicated document under `docs/` describing APIs, diagrams, and recovery notes.
 
@@ -166,8 +168,14 @@ Benchmark artefacts are written to `benchmark/benchmark_results/*.txt` for easy 
 | Architecture deep dive | [docs/architecture.md](docs/architecture.md) |
 | WAL internals | [docs/wal.md](docs/wal.md) |
 | Flush pipeline | [docs/flush.md](docs/flush.md) |
+| Memtable lifecycle | [docs/memtable.md](docs/memtable.md) |
+| Transactions & MVCC | [docs/txn.md](docs/txn.md) |
 | Manifest semantics | [docs/manifest.md](docs/manifest.md) |
 | ValueLog manager | [docs/vlog.md](docs/vlog.md) |
+| Cache & bloom filters | [docs/cache.md](docs/cache.md) |
+| Hot key analytics | [docs/hotring.md](docs/hotring.md) |
+| Stats & observability | [docs/stats.md](docs/stats.md) |
+| File abstractions | [docs/file.md](docs/file.md) |
 | Crash recovery playbook | [docs/recovery.md](docs/recovery.md) |
 | Testing matrix | [docs/testing.md](docs/testing.md) |
 | CLI reference | [docs/cli.md](docs/cli.md) |
