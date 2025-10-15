@@ -2,9 +2,12 @@ package NoKV
 
 import (
 	"expvar"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStatsCollectSnapshots(t *testing.T) {
@@ -26,19 +29,19 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if len(snap.HotKeys) == 0 {
 		t.Fatalf("expected hot key stats to be populated")
 	}
-	
+
 	if snap.WALSegmentCount == 0 {
-			t.Fatalf("expected wal segment count to be tracked")
-		}
-		if snap.WriteBatchesTotal == 0 {
-			t.Fatalf("expected write batch metrics to be recorded, snapshot=%+v", snap)
-		}
-		if snap.WriteThrottleActive {
-			t.Fatalf("expected throttle to be disabled in snapshot")
-		}
-		if snap.IteratorReused != db.iterPool.reused() {
-			t.Fatalf("expected iterator reuse snapshot to match pool, snap=%d pool=%d", snap.IteratorReused, db.iterPool.reused())
-		}
+		t.Fatalf("expected wal segment count to be tracked")
+	}
+	if snap.WriteBatchesTotal == 0 {
+		t.Fatalf("expected write batch metrics to be recorded, snapshot=%+v", snap)
+	}
+	if snap.WriteThrottleActive {
+		t.Fatalf("expected throttle to be disabled in snapshot")
+	}
+	if snap.IteratorReused != db.iterPool.reused() {
+		t.Fatalf("expected iterator reuse snapshot to match pool, snap=%d pool=%d", snap.IteratorReused, db.iterPool.reused())
+	}
 
 	if snap.FlushPending != db.lsm.FlushPending() {
 		t.Fatalf("snapshot flush pending mismatch: %d vs %d", snap.FlushPending, db.lsm.FlushPending())
@@ -134,5 +137,63 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Txns.Committed").(*expvar.Int).Value(); got != int64(snap.TxnsCommitted) {
 		t.Fatalf("txn committed mismatch expvar=%d snapshot=%d", got, snap.TxnsCommitted)
+	}
+}
+
+func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
+	clearDir()
+	opt.DetectConflicts = true
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	// Create a WAL record so that rotation and removal have work to do.
+	require.NoError(t, db.Update(func(txn *Txn) error {
+		return txn.SetEntry(utils.NewEntry([]byte("wal-metrics"), []byte("value")))
+	}))
+
+	require.NoError(t, db.wal.Rotate())
+
+	segments, err := db.wal.ListSegments()
+	require.NoError(t, err)
+	if len(segments) < 1 {
+		t.Fatalf("expected at least one WAL segment after rotation")
+	}
+
+	var removedID uint32
+	_, err = fmt.Sscanf(filepath.Base(segments[0]), "%05d.wal", &removedID)
+	require.NoError(t, err)
+	require.NoError(t, db.wal.RemoveSegment(removedID))
+
+	db.applyThrottle(true)
+	defer db.applyThrottle(false)
+
+	snap := db.Info().Snapshot()
+	if !snap.WriteThrottleActive {
+		t.Fatalf("expected write throttle to report active")
+	}
+	if snap.WALSegmentsRemoved == 0 {
+		t.Fatalf("expected WAL removal metric to be populated")
+	}
+	if snap.WALSegmentCount == 0 {
+		t.Fatalf("expected WAL segment count to remain positive")
+	}
+
+	db.stats.collect()
+	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
+		t.Fatalf("expected WAL removal expvar to match snapshot: got=%d want=%d", got, snap.WALSegmentsRemoved)
+	}
+	if got := expvar.Get("NoKV.Stats.Write.Throttle").(*expvar.Int).Value(); got != 1 {
+		t.Fatalf("expected write throttle expvar to be 1 while throttled, got %d", got)
+	}
+
+	db.applyThrottle(false)
+	snapAfter := db.Info().Snapshot()
+	if snapAfter.WriteThrottleActive {
+		t.Fatalf("expected write throttle to be cleared after release")
+	}
+
+	db.stats.collect()
+	if got := expvar.Get("NoKV.Stats.Write.Throttle").(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected write throttle expvar to reset after release, got %d", got)
 	}
 }
