@@ -56,6 +56,9 @@ func TestRunStatsCmd(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &snap); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
+	if snap.Entries == 0 {
+		t.Fatalf("expected entry count > 0")
+	}
 	if snap.ValueLogSegments == 0 {
 		t.Fatalf("expected value log segments > 0")
 	}

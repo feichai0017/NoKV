@@ -26,6 +26,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 
 	snap := db.Info().Snapshot()
+	if snap.Entries == 0 {
+		t.Fatalf("expected entry count to be populated")
+	}
 	if len(snap.HotKeys) == 0 {
 		t.Fatalf("expected hot key stats to be populated")
 	}
@@ -48,7 +51,10 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 
 	db.stats.collect()
-
+	
+	if got := expvar.Get("NoKV.Stats.Entries").(*expvar.Int).Value(); got != snap.Entries {
+		t.Fatalf("entry count mismatch expvar=%d snapshot=%d", got, snap.Entries)
+	}
 	if got := expvar.Get("NoKV.Stats.Flush.Pending").(*expvar.Int).Value(); got != snap.FlushPending {
 		t.Fatalf("flush pending mismatch expvar=%d snapshot=%d", got, snap.FlushPending)
 	}

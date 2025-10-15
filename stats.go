@@ -15,8 +15,9 @@ type Stats struct {
 	once     sync.Once
 	interval time.Duration
 
-	EntryNum int64 // TODO: wire real value stats.
-
+	EntryNum int64 // Mirrors Entries for backwards compatibility.
+	
+	entries              *expvar.Int
 	flushPending         *expvar.Int
 	flushQueueLen        *expvar.Int
 	flushActive          *expvar.Int
@@ -59,6 +60,7 @@ type HotKeyStat struct {
 
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
+	Entries               int64          `json:"entries"`
 	FlushPending          int64          `json:"flush_pending"`
 	FlushQueueLength      int64          `json:"flush_queue_length"`
 	FlushActive           int64          `json:"flush_active"`
@@ -102,6 +104,7 @@ func newStats(db *DB) *Stats {
 		closer:               utils.NewCloser(),
 		interval:             5 * time.Second,
 		EntryNum:             0,
+		entries:              reuseInt("NoKV.Stats.Entries"),
 		flushPending:         reuseInt("NoKV.Stats.Flush.Pending"),
 		flushQueueLen:        reuseInt("NoKV.Stats.Flush.QueueLength"),
 		flushActive:          reuseInt("NoKV.Stats.Flush.Active"),
@@ -210,6 +213,7 @@ func (s *Stats) run() {
 // collect snapshots background queues and propagates them to expvar.
 func (s *Stats) collect() {
 	snap := s.Snapshot()
+	s.entries.Set(snap.Entries)
 	s.flushPending.Set(snap.FlushPending)
 	s.flushQueueLen.Set(snap.FlushQueueLength)
 	s.flushActive.Set(snap.FlushActive)
@@ -247,6 +251,7 @@ func (s *Stats) collect() {
 	s.blockL1HitRate.Set(snap.BlockL1HitRate)
 	s.bloomHitRate.Set(snap.BloomHitRate)
 	s.iteratorReuses.Set(int64(snap.IteratorReused))
+	atomic.StoreInt64(&s.EntryNum, snap.Entries)
 }
 
 // Snapshot returns a point-in-time metrics snapshot without mutating state.
@@ -335,6 +340,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 	if s.db != nil && s.db.iterPool != nil {
 		snap.IteratorReused = s.db.iterPool.reused()
+	}
+	if s.db != nil && s.db.lsm != nil {
+		snap.Entries = s.db.lsm.EntryCount()
 	}
 	return snap
 }
