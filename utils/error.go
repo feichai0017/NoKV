@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"log"
 	"os"
 	"path"
@@ -10,6 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 var (
@@ -137,7 +138,7 @@ func Panic(err error) {
 }
 
 // Panic2 _
-func Panic2(_ interface{}, err error) {
+func Panic2(_ any, err error) {
 	Panic(err)
 }
 

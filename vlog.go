@@ -81,7 +81,15 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 	for _, fid := range vlog.manager.ListFIDs() {
 		existing[fid] = struct{}{}
 	}
+	var (
+		maxTracked uint32
+		maxValid   uint32
+		hasValid   bool
+	)
 	for fid, meta := range status {
+		if fid > maxTracked {
+			maxTracked = fid
+		}
 		if !meta.Valid {
 			if _, ok := existing[fid]; ok {
 				if err := vlog.manager.Remove(fid); err != nil {
@@ -89,12 +97,34 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 					continue
 				}
 				delete(existing, fid)
+				valueLogSegmentsRemoved.Add(1)
 			}
 			continue
 		}
-		if _, ok := existing[fid]; !ok {
-			utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
+		hasValid = true
+		if fid > maxValid {
+			maxValid = fid
 		}
+		if _, ok := existing[fid]; ok {
+			delete(existing, fid)
+			continue
+		}
+		utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
+	}
+	if !hasValid {
+		return
+	}
+	threshold := maxValid
+	for fid := range existing {
+		if fid <= threshold {
+			continue
+		}
+		if err := vlog.manager.Remove(fid); err != nil {
+			utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d: %v", fid, err))
+			continue
+		}
+		valueLogSegmentsRemoved.Add(1)
+		utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d", fid))
 	}
 }
 
@@ -459,7 +489,7 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 
 	batchSize := 1024
 	for i := 0; i < len(wb); {
-		end := min(i + batchSize, len(wb))
+		end := min(i+batchSize, len(wb))
 		if err := vlog.db.batchSet(wb[i:end]); err != nil {
 			if err == utils.ErrTxnTooBig {
 				if batchSize <= 1 {

@@ -34,6 +34,7 @@ var (
 func TestBase(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
+	defer lsm.Close()
 	test := func() {
 		// 基准测试
 		baseTest(t, lsm, 128)
@@ -45,14 +46,17 @@ func TestBase(t *testing.T) {
 // TestClose 测试优雅关闭
 func TestClose(t *testing.T) {
 	clearDir()
-	lsm := buildLSM()
-	lsm.StartCompacter()
 	test := func() {
-		baseTest(t, lsm, 128)
-		utils.Err(lsm.Close())
+		first := buildLSM()
+		first.StartCompacter()
+		baseTest(t, first, 128)
+		utils.Err(first.Close())
+
 		// 重启后可正常工作才算成功
-		lsm = buildLSM()
-		baseTest(t, lsm, 128)
+		reopened := buildLSM()
+		reopened.StartCompacter()
+		defer reopened.Close()
+		baseTest(t, reopened, 128)
 	}
 	// 运行N次测试多个sst的影响
 	runTest(1, test)
@@ -62,6 +66,7 @@ func TestClose(t *testing.T) {
 func TestHitStorage(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
+	defer lsm.Close()
 	e := utils.BuildEntry()
 	lsm.Set(e)
 	// 命中内存表
@@ -130,6 +135,7 @@ func TestLSMThrottleCallback(t *testing.T) {
 func TestPsarameter(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
+	defer lsm.Close()
 	testNil := func() {
 		utils.CondPanic(lsm.Set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
 		_, err := lsm.Get(nil)
@@ -143,6 +149,7 @@ func TestPsarameter(t *testing.T) {
 func TestCompact(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
+	defer lsm.Close()
 	ok := false
 	l0TOLMax := func() {
 		// 正常触发即可
@@ -254,10 +261,10 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//caseList = append(caseList, e)
 
 	// 随机构建数据进行测试
-	lsm.Set(e)
+	utils.Err(lsm.Set(e))
 	for i := 1; i < n; i++ {
 		ee := utils.BuildEntry()
-		lsm.Set(ee)
+		utils.Err(lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}
 	// 从levels中进行GET
@@ -307,7 +314,7 @@ func buildLSM() *LSM {
 // 运行测试用例
 func runTest(n int, testFunList ...func()) {
 	for _, f := range testFunList {
-		for i := 0; i < n; i++ {
+		for range n {
 			f()
 		}
 	}

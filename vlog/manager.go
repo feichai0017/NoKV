@@ -227,13 +227,37 @@ func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {
 func (m *Manager) Remove(fid uint32) error {
 	m.filesLock.Lock()
 	lf, ok := m.files[fid]
-	if ok {
-		delete(m.files, fid)
-	}
-	m.filesLock.Unlock()
 	if !ok {
+		m.filesLock.Unlock()
 		return nil
 	}
+	delete(m.files, fid)
+
+	var maxID uint32
+	for id := range m.files {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	atomic.StoreUint32(&m.maxFid, maxID)
+
+	if fid == m.activeID {
+		if len(m.files) == 0 {
+			m.active = nil
+			m.activeID = 0
+			m.offset = 0
+		} else {
+			m.activeID = maxID
+			m.active = m.files[maxID]
+			if m.active != nil {
+				if size := m.active.Size(); size >= 0 {
+					m.offset = uint32(size)
+				}
+			}
+		}
+	}
+	m.filesLock.Unlock()
+
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 	if err := lf.Close(); err != nil {
