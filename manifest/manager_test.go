@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -219,4 +220,59 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 	if !head.Valid || head.FileID != 2 || head.Offset != 4096 {
 		t.Fatalf("unexpected replay head: %+v", head)
 	}
+}
+
+func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := mgr.LogEdit(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 11}}); err != nil {
+		t.Fatalf("log edit: %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatalf("read current: %v", err)
+	}
+	path := filepath.Join(dir, string(current))
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat manifest: %v", err)
+	}
+	before := info.Size()
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open append: %v", err)
+	}
+	if err := binary.Write(f, binary.LittleEndian, uint32(24)); err != nil {
+		t.Fatalf("write length: %v", err)
+	}
+	if _, err := f.Write([]byte("NoK")); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	f.Close()
+
+	if err := manifest.Verify(dir); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after verify: %v", err)
+	}
+	if info.Size() != before {
+		t.Fatalf("expected manifest truncated to %d, got %d", before, info.Size())
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after verify: %v", err)
+	}
+	defer mgr.Close()
 }

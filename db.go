@@ -1,17 +1,22 @@
 package NoKV
 
 import (
+	stderrors "errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 )
 
 type (
@@ -29,6 +34,7 @@ type (
 	DB struct {
 		sync.RWMutex
 		opt              *Options
+		dirLock          *utils.DirLock
 		lsm              *lsm.LSM
 		wal              *wal.Manager
 		vlog             *valueLog
@@ -85,7 +91,6 @@ const (
 )
 
 // Open DB
-// TODO 这里是不是要上一个目录锁比较好，防止多个进程打开同一个目录?
 func Open(opt *Options) *DB {
 	c := utils.NewCloser()
 	db := &DB{opt: opt, writeCloser: c, writeMetrics: newWriteMetrics()}
@@ -103,6 +108,12 @@ func Open(opt *Options) *DB {
 	if db.opt.BloomCacheSize < 0 {
 		db.opt.BloomCacheSize = 0
 	}
+	
+	lock, err := utils.AcquireDirLock(opt.WorkDir)
+	utils.Panic(err)
+	db.dirLock = lock
+
+	utils.Panic(db.runRecoveryChecks())
 
 	wlog, err := wal.Open(wal.Config{
 		Dir: opt.WorkDir,
@@ -169,11 +180,38 @@ func Open(opt *Options) *DB {
 	return db
 }
 
+func (db *DB) runRecoveryChecks() error {
+	if db == nil || db.opt == nil {
+		return fmt.Errorf("recovery checks: options not initialized")
+	}
+	if err := manifest.Verify(db.opt.WorkDir); err != nil {
+		if !stderrors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := wal.VerifyDir(db.opt.WorkDir); err != nil {
+		return err
+	}
+	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
+	cfg := vlogpkg.Config{
+		Dir:      vlogDir,
+		FileMode: utils.DefaultFileMode,
+		MaxSize:  int64(db.opt.ValueLogFileSize),
+	}
+	if err := vlogpkg.VerifyDir(cfg); err != nil {
+		if !stderrors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+
 func (db *DB) Close() error {
 	if db.writeCloser != nil {
 		db.writeCloser.Close()
 	}
-	
+
 	if db.prefetchCh != nil {
 		close(db.prefetchCh)
 		db.prefetchWG.Wait()
@@ -192,6 +230,13 @@ func (db *DB) Close() error {
 	}
 	if err := db.stats.close(); err != nil {
 		return err
+	}
+	
+	if db.dirLock != nil {
+		if err := db.dirLock.Release(); err != nil {
+			return err
+		}
+		db.dirLock = nil
 	}
 	atomic.StoreUint32(&db.isClosed, 1)
 	return nil
@@ -306,7 +351,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 				Value: []byte{},
 			}
 		} else {
-			return errors.Wrap(err, "Retrieving head from on-disk LSM")
+			return pkgerrors.Wrap(err, "Retrieving head from on-disk LSM")
 		}
 	}
 
@@ -633,7 +678,7 @@ func (db *DB) applyWriteBatch(batch *writeBatch) error {
 		count += len(b.Entries)
 		if err := db.writeToLSM(b); err != nil {
 			done(err)
-			return errors.Wrap(err, "writeRequests")
+			return pkgerrors.Wrap(err, "writeRequests")
 		}
 		db.Lock()
 		db.updateHead(b.Ptrs)
@@ -705,7 +750,7 @@ func (db *DB) initWriteBatchOptions() {
 
 func (db *DB) writeToLSM(b *request) error {
 	if len(b.Ptrs) != len(b.Entries) {
-		return errors.Errorf("Ptrs and Entries don't match: %+v", b)
+		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
 	}
 
 	for i, entry := range b.Entries {
@@ -750,7 +795,7 @@ type flushTask struct {
 func (db *DB) pushHead(ft flushTask) error {
 	// Ensure we never push a zero valued head pointer.
 	if ft.vptr.IsZero() {
-		return errors.New("Head should not be zero")
+		return stderrors.New("Head should not be zero")
 	}
 
 	fmt.Printf("Storing value log head: %+v\n", ft.vptr)

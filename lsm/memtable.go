@@ -1,10 +1,11 @@
 package lsm
 
 import (
-	"slices"
 	"bytes"
 	"math"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -109,6 +110,20 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		fids = append(fids, fid)
 	}
 	slices.Sort(fids)
+	
+	if seg, _ := lsm.levels.logPointer(); seg > 0 {
+		cleaned := make([]uint64, 0, len(fids))
+		for _, fid := range fids {
+			if fid <= uint64(seg) {
+				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
+					utils.Err(errors.Wrapf(err, "remove wal segment %d", fid))
+				}
+				continue
+			}
+			cleaned = append(cleaned, fid)
+		}
+		fids = cleaned
+	}
 
 	if len(fids) == 0 {
 		lsm.levels.maxFID = maxFid

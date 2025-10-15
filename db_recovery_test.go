@@ -198,6 +198,10 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	_ = db.stats.close()
 	_ = db.vlog.manager.Close()
 	_ = db.wal.Close()
+	if db.dirLock != nil {
+		_ = db.dirLock.Release()
+		db.dirLock = nil
+	}
 
 	db2 := Open(opt)
 	defer db2.Close()

@@ -1,9 +1,13 @@
 package vlog
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 )
 
 func TestManagerAppendRead(t *testing.T) {
@@ -158,5 +162,54 @@ func TestManagerRewind(t *testing.T) {
 	}
 	if vp.Fid != head.Fid || vp.Offset < head.Offset {
 		t.Fatalf("append after rewind produced unexpected pointer: %+v head=%+v", vp, head)
+	}
+}
+
+func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	var buf bytes.Buffer
+	entry1 := utils.NewEntry([]byte("k1"), []byte("value-data"))
+	firstEncoded := wal.EncodeEntry(&buf, entry1)
+	ptr1, err := mgr.Append(firstEncoded)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	buf.Reset()
+	entry2 := utils.NewEntry([]byte("k2"), []byte("partial"))
+	secondEncoded := wal.EncodeEntry(&buf, entry2)
+	if _, err := mgr.Append(secondEncoded); err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.vlog"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list files err=%v files=%v", err, files)
+	}
+	info, err := os.Stat(files[0])
+	if err != nil {
+		t.Fatalf("stat vlog: %v", err)
+	}
+	if err := os.Truncate(files[0], info.Size()-5); err != nil {
+		t.Fatalf("truncate vlog: %v", err)
+	}
+
+	if err := VerifyDir(Config{Dir: dir}); err != nil {
+		t.Fatalf("verify dir: %v", err)
+	}
+
+	infoAfter, err := os.Stat(files[0])
+	if err != nil {
+		t.Fatalf("stat after verify: %v", err)
+	}
+	wantSize := int64(ptr1.Offset + ptr1.Len)
+	if infoAfter.Size() != wantSize {
+		t.Fatalf("expected truncated size %d, got %d", wantSize, infoAfter.Size())
 	}
 }

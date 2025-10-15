@@ -1,19 +1,22 @@
 package vlog
 
 import (
-	"slices"
+	"bufio"
 	"encoding/binary"
+	stderrors "errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 )
 
 type Config struct {
@@ -37,16 +40,16 @@ type Manager struct {
 // failures in the value-log manager. They are no-ops in production code and are
 // guarded by the Manager's internal locking to avoid data races when set.
 type ManagerTestingHooks struct {
-		BeforeAppend func(*Manager, []byte) error
-		BeforeRotate func(*Manager) error
+	BeforeAppend func(*Manager, []byte) error
+	BeforeRotate func(*Manager) error
 }
 
 // SetTestingHooks installs testing callbacks on the manager. It is intended for
 // use in tests only and should not be used by production code.
 func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
-		m.filesLock.Lock()
-		defer m.filesLock.Unlock()
-		m.hooks = h
+	m.filesLock.Lock()
+	defer m.filesLock.Unlock()
+	m.hooks = h
 }
 
 func Open(cfg Config) (*Manager, error) {
@@ -214,7 +217,7 @@ func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {
 	lf, ok := m.files[fid]
 	if !ok {
 		m.filesLock.RUnlock()
-		return nil, nil, errors.Errorf("value log file %d not found", fid)
+		return nil, nil, pkgerrors.Errorf("value log file %d not found", fid)
 	}
 	lf.Lock.RLock()
 	m.filesLock.RUnlock()
@@ -256,6 +259,183 @@ func (m *Manager) Head() utils.ValuePtr {
 	}
 }
 
+// VerifyDir scans all value log segments and truncates any partially written
+// records left behind due to crashes. It validates checksums to ensure future
+// replays operate on consistent data.
+func VerifyDir(cfg Config) error {
+	if cfg.Dir == "" {
+		return fmt.Errorf("vlog verify: dir required")
+	}
+	if cfg.FileMode == 0 {
+		cfg.FileMode = utils.DefaultFileMode
+	}
+	if cfg.MaxSize == 0 {
+		cfg.MaxSize = int64(1 << 29)
+	}
+	files, err := filepath.Glob(filepath.Join(cfg.Dir, "*.vlog"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		lf := &file.LogFile{}
+		if err := lf.Open(&file.Options{
+			FID:      extractFID(path),
+			FileName: path,
+			Dir:      cfg.Dir,
+			Flag:     os.O_CREATE | os.O_RDWR,
+			MaxSz:    int(cfg.MaxSize),
+		}); err != nil {
+			if stderrors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		valid, err := sanitizeValueLog(lf)
+		closeErr := lf.Close()
+		if err != nil && !stderrors.Is(err, utils.ErrTruncate) {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if int64(valid) < info.Size() {
+			if err := os.Truncate(path, int64(valid)); err != nil {
+				utils.Err(fmt.Errorf("value log verify truncate %s: %w", path, err))
+			}
+		}
+	}
+	return nil
+}
+
+func extractFID(path string) uint64 {
+	var fid uint64
+	fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid)
+	return fid
+}
+
+func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
+	if lf == nil {
+		return 0, fmt.Errorf("sanitize value log: nil log file")
+	}
+	start, err := firstNonZeroOffset(lf)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := lf.Seek(int64(start), io.SeekStart); err != nil {
+		return 0, err
+	}
+	reader := bufio.NewReader(lf.FD())
+	offset := start
+	validEnd := offset
+	for {
+		entryOffset := offset
+		tee := utils.NewHashReader(reader)
+		headerBytes := 0
+		readVarint := func() (uint64, error) {
+			val, err := binary.ReadUvarint(tee)
+			headerBytes = tee.BytesRead
+			return val, err
+		}
+		klen, err := readVarint()
+		if err != nil {
+			if err == io.EOF {
+				return validEnd, nil
+			}
+			if err == io.ErrUnexpectedEOF {
+				return validEnd, nil
+			}
+			return 0, err
+		}
+		vlen, err := readVarint()
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, nil
+			}
+			return 0, err
+		}
+		if klen > uint64(1<<32) || vlen > uint64(1<<32) {
+			return validEnd, utils.ErrTruncate
+		}
+		if _, err := readVarint(); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, nil
+			}
+			return 0, err
+		}
+		if _, err := readVarint(); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, nil
+			}
+			return 0, err
+		}
+		key := make([]byte, int(klen))
+		if _, err := io.ReadFull(tee, key); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, utils.ErrTruncate
+			}
+			return 0, err
+		}
+		val := make([]byte, int(vlen))
+		if _, err := io.ReadFull(tee, val); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, utils.ErrTruncate
+			}
+			return 0, err
+		}
+		var crcBuf [crc32.Size]byte
+		if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return validEnd, utils.ErrTruncate
+			}
+			return 0, err
+		}
+		expected := utils.BytesToU32(crcBuf[:])
+		if expected != tee.Sum32() {
+			return validEnd, utils.ErrTruncate
+		}
+		recordLen := uint32(headerBytes) + uint32(len(key)) + uint32(len(val)) + crc32.Size
+		validEnd = entryOffset + recordLen
+		offset = validEnd
+	}
+}
+
+func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
+	size := lf.Size()
+	start := int64(utils.VlogHeaderSize)
+	if size <= start {
+		return uint32(start), nil
+	}
+	buf := make([]byte, 1<<20)
+	fd := lf.FD()
+	for offset := start; offset < size; {
+		toRead := len(buf)
+		if rem := size - offset; rem < int64(toRead) {
+			toRead = int(rem)
+		}
+		n, err := fd.ReadAt(buf[:toRead], offset)
+		if n > 0 {
+			for i := 0; i < n; i++ {
+				if buf[i] != 0 {
+					return uint32(offset) + uint32(i), nil
+				}
+			}
+			offset += int64(n)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return uint32(start), err
+		}
+	}
+	return uint32(start), nil
+}
+
 // Rewind rolls back the active head to the provided pointer, truncating any bytes
 // beyond it and removing files created after the pointer's file. It is primarily
 // used to recover from value log write failures so that partially written
@@ -290,7 +470,7 @@ func (m *Manager) Rewind(ptr utils.ValuePtr) error {
 	m.filesLock.Unlock()
 
 	if !ok {
-		return errors.Errorf("rewind: value log file %d not found", ptr.Fid)
+		return pkgerrors.Errorf("rewind: value log file %d not found", ptr.Fid)
 	}
 
 	var firstErr error

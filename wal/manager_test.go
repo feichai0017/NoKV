@@ -1,8 +1,10 @@
 package wal_test
 
 import (
+	"encoding/binary"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 
@@ -237,5 +239,60 @@ func TestManagerListSegmentsSorted(t *testing.T) {
 	}
 	if !sort.StringsAreSorted(files) {
 		t.Fatalf("files not sorted: %v", files)
+	}
+}
+
+func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	payloads := [][]byte{[]byte("alpha"), []byte("beta")}
+	if _, err := m.Append(payloads...); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list segments err=%v files=%v", err, files)
+	}
+	f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open segment: %v", err)
+	}
+	if err := binary.Write(f, binary.BigEndian, uint32(16)); err != nil {
+		t.Fatalf("write length: %v", err)
+	}
+	if _, err := f.Write([]byte("bad")); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	f.Close()
+
+	if err := wal.VerifyDir(dir); err != nil {
+		t.Fatalf("verify dir: %v", err)
+	}
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen after verify: %v", err)
+	}
+	defer m.Close()
+
+	count := 0
+	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
+		count++
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if count != len(payloads) {
+		t.Fatalf("expected %d entries after verify, got %d", len(payloads), count)
 	}
 }
