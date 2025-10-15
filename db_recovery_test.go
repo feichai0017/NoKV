@@ -81,6 +81,67 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	})
 }
 
+func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
+	dir := t.TempDir()
+	opt := &Options{
+		WorkDir:          dir,
+		ValueThreshold:   0,
+		MemTableSize:     1 << 12,
+		SSTableMaxSz:     1 << 20,
+		ValueLogFileSize: 1 << 14,
+		MaxBatchCount:    100,
+		MaxBatchSize:     1 << 20,
+	}
+
+	db := Open(opt)
+	key := []byte("orphan-key")
+	val := make([]byte, 512)
+	require.NoError(t, db.Set(utils.NewEntry(key, val)))
+	headPtr := db.vlog.manager.Head()
+	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
+	headCopy := headPtr
+	require.NoError(t, db.lsm.LogValueLogHead(&headCopy))
+	before := db.lsm.ValueLogStatus()
+	beforeInfo := make(map[uint32]bool, len(before))
+	for fid, meta := range before {
+		beforeInfo[fid] = meta.Valid
+	}
+	require.NoError(t, db.Close())
+
+	orphanFID := uint32(123)
+	orphanPath := filepath.Join(dir, "vlog", fmt.Sprintf("%05d.vlog", orphanFID))
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o666))
+
+	db2 := Open(opt)
+	defer db2.Close()
+
+	headMeta, hasHead := db2.lsm.ValueLogHead()
+	status := db2.lsm.ValueLogStatus()
+	statusInfo := make(map[uint32]bool, len(status))
+	for fid, meta := range status {
+		statusInfo[fid] = meta.Valid
+	}
+	remainingFIDs := db2.vlog.manager.ListFIDs()
+
+	_, err := os.Stat(orphanPath)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err), "expected orphan value log file to be deleted on recovery")
+
+	for _, fid := range remainingFIDs {
+		require.NotEqual(t, orphanFID, fid)
+	}
+
+	logRecoveryMetric(t, "value_log_orphan_cleanup", map[string]any{
+		"orphan_fid":        orphanFID,
+		"orphan_path":       orphanPath,
+		"pre_status_valid":  beforeInfo,
+		"post_status_valid": statusInfo,
+		"head_meta":         headMeta,
+		"head_present":      hasHead,
+		"fids_remaining":    remainingFIDs,
+	})
+}
+
 func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
@@ -94,8 +155,8 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	}
 
 	db := Open(opt)
-	for i := 0; i < 256; i++ {
-		key := []byte(fmt.Sprintf("sst-crash-%03d", i))
+	for i := range 256 {
+		key := fmt.Appendf(nil, "sst-crash-%03d", i)
 		val := make([]byte, 128)
 		require.NoError(t, db.Set(utils.NewEntry(key, val)))
 	}

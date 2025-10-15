@@ -205,10 +205,7 @@ func (tb *tableBuilder) allocate(need int) []byte {
 	bb := tb.curBlock
 	if len(bb.data[bb.end:]) < need {
 		// We need to reallocate.
-		sz := 2 * len(bb.data)
-		if bb.end+need > sz {
-			sz = bb.end + need
-		}
+		sz := max(bb.end + need, 2 * len(bb.data))
 		tmp := make([]byte, sz) // todo use memory allocator to improve performance
 		copy(tmp, bb.data)
 		bb.data = tmp
@@ -297,6 +294,13 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 	}
 	tableIndex.KeyCount = tb.keyCount
 	tableIndex.MaxVersion = tb.maxVersion
+	if tb.staleDataSize > 0 {
+		if tb.staleDataSize > math.MaxUint32 {
+			tableIndex.StaleDataSize = math.MaxUint32
+		} else {
+			tableIndex.StaleDataSize = uint32(tb.staleDataSize)
+		}
+	}
 	tableIndex.Offsets = tb.writeBlockOffsets(tableIndex)
 	var dataSize uint32
 	for i := range tb.blockList {

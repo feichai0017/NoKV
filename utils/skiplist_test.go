@@ -13,7 +13,7 @@ import (
 
 func RandString(len int) string {
 	bytes := make([]byte, len)
-	for i := 0; i < len; i++ {
+	for i := range len {
 		b := r.Intn(26) + 65
 		bytes[i] = byte(b)
 	}
@@ -47,7 +47,7 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 	list := NewSkiplist(100000000)
 	key, val := "", ""
 	maxTime := 1000
-	for i := 0; i < maxTime; i++ {
+	for i := range maxTime {
 		//number := rand.Intn(10000)
 		key, val = RandString(10), fmt.Sprintf("Val%d", i)
 		entry := NewEntry([]byte(key), []byte(val))
@@ -60,7 +60,7 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 func TestDrawList(t *testing.T) {
 	list := NewSkiplist(1000)
 	n := 12
-	for i:=0; i<n; i++ {
+	for range n {
 		index := strconv.Itoa(r.Intn(90)+10)
 		key := index + RandString(8)
 		entryRand := NewEntry([]byte(key), []byte(index))
@@ -76,9 +76,9 @@ func TestConcurrentBasic(t *testing.T) {
 	l := NewSkiplist(100000000)
 	var wg sync.WaitGroup
 	key := func(i int) []byte {
-		return []byte(fmt.Sprintf("Keykeykey%05d", i))
+		return fmt.Appendf(nil, "Keykeykey%05d", i)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -88,7 +88,7 @@ func TestConcurrentBasic(t *testing.T) {
 	wg.Wait()
 
 	// Check values. Concurrent reads.
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -107,9 +107,9 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 	l := NewSkiplist(100000000)
 	var wg sync.WaitGroup
 	key := func(i int) []byte {
-		return []byte(fmt.Sprintf("keykeykey%05d", i))
+		return fmt.Appendf(nil, "keykeykey%05d", i)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -119,7 +119,7 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 	wg.Wait()
 
 	// Check values. Concurrent reads.
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
