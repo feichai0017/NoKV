@@ -1,141 +1,130 @@
-# Manifest & VersionEdit Design
+# Manifest & Version Management
 
-## 1. 目标
-
-1. **一致性**：所有 SST/WAL/ValueLog 元数据通过 manifest 序列化，保证 crash 后恢复到最新一致状态。
-2. **原子性**：采用 VersionEdit + CURRENT 文件，确保 manifest 切换时要么完成，要么可以回滚。
-3. **可扩展**：支持后续添加列族、多表、快照等元信息。
+The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV's implementation (`manifest/manager.go`) borrows RocksDB's `VersionEdit + CURRENT` pattern while adding metadata required for value separation.
 
 ---
 
-## 2. 文件结构
+## 1. File Layout
 
-```
+```text
 WorkDir/
-  CURRENT             -> manifest 文件名（例如 MANIFEST-000123）
-  MANIFEST-000123     VersionEdit 序列，记录 AddFile/DeleteFile/WAL 指针等
-  MANIFEST-000124     后续生成的新文件
-  logs/00001.wal      WAL 段文件
-  tables/00001.sst    SST 文件
-  vlog/00001.vlog     ValueLog 段
-  tmp/                临时文件目录（flush/compaction/manifest rewrite）
+  CURRENT             # stores the active MANIFEST file name
+  MANIFEST-000001     # log of manifest edits
+  MANIFEST-000002     # newer file after rewrite
 ```
 
-CURRENT 是一个小文件，保存当前活跃 manifest 名称。更新 CURRENT 时使用 `fsync` 确保原子性。
+- `CURRENT` is atomically swapped via `CURRENT.tmp` → `CURRENT` rename.
+- Each `MANIFEST-*` contains a series of binary edits prefixed by the magic string `"NoKV"`.
+- During `manifest.Open`, `loadCurrent` opens the file referenced by CURRENT; if missing, `createNew` bootstraps an empty manifest.
 
 ---
 
-## 3. VersionEdit 格式（初稿）
+## 2. Edit Types
 
-每个 VersionEdit 记录以下操作集合：
-
-```
-message VersionEdit {
-  repeated FileEdit file_edits = 1;
-  optional uint32 log_segment = 2;   // 最新 WAL 段
-  optional uint64 log_offset = 3;    // 该段写入偏移
-  repeated ValueLogEdit vlog_edits = 4;
-  optional bytes checksum = 5;
-}
-
-message FileEdit {
-  enum Type { ADD = 0; DELETE = 1; }
-  Type op = 1;
-  uint32 level = 2;
-  uint64 file_id = 3;
-  uint64 size = 4;
-  bytes smallest = 5;
-  bytes largest = 6;
-  uint64 created_at = 7;
-}
-
-message ValueLogEdit {
-  enum Type { GC_REMOVE = 0; HEAD_UPDATE = 1; }
-  Type op = 1;
-  uint32 fid = 2;
-  uint64 offset = 3;
-}
+```go
+type EditType uint8
+const (
+    EditAddFile EditType = iota
+    EditDeleteFile
+    EditLogPointer
+    EditValueLogHead
+    EditDeleteValueLog
+    EditUpdateValueLog
+)
 ```
 
-实际可根据需要扩展（例如记录 Bloom checksum、compaction 输出等）。
+Each edit serialises one logical action:
+- `EditAddFile` / `EditDeleteFile` – manage SST metadata (`FileMeta`: level, fileID, size, key bounds, timestamps).
+- `EditLogPointer` – persists the latest WAL segment + offset checkpoint, analogous to RocksDB's `log_number` and `prev_log_number` fields.
+- `EditValueLogHead` – records the head pointer for vlog append, ensuring recovery resumes from the correct file/offset.
+- `EditDeleteValueLog` – marks a vlog segment logically deleted (GC has reclaimed it).
+- `EditUpdateValueLog` – updates metadata for a specific vlog file (used during GC rewrites).
+
+`manifest.Manager.apply` interprets each edit and updates the in-memory `Version` structure, which is consumed by LSM initialisation and value log recovery.
 
 ---
 
-## 4. 状态机
+## 3. Version Structure
 
-### 4.1 VersionManager
-
-```
-type Manager interface {
-    Recover() (Version, error)
-    LogEdit(edit VersionEdit) error
-    Current() Version
-    Close() error
-}
-
+```go
 type Version struct {
-    Levels map[int][]FileMeta
-    LogSegment uint32
-    LogOffset uint64
-    ValueLogs map[uint32]ValueLogMeta
+    Levels       map[int][]FileMeta
+    LogSegment   uint32
+    LogOffset    uint64
+    ValueLogs    map[uint32]ValueLogMeta
+    ValueLogHead ValueLogMeta
 }
 ```
 
-关键流程：
-1. **Recover**：读取 CURRENT → 打开 manifest → 依次读取 VersionEdit → 应用到内存 Version。
-2. **LogEdit**：将新的 edit 追加到 manifest，并在成功后更新内存 Version。必要时 rewrite（当日志太大/删除过多时）。
-3. **Rewrite**：生成全量 snapshot manifest（与 RocksDB 类似），写临时文件并原子 rename + 更新 CURRENT。
+- `Levels` mirrors the LSM tree levels; during recovery `lsm.LSM` loads files per level.
+- `LogSegment`/`LogOffset` ensure WAL replay starts exactly where persistent state ended.
+- `ValueLogs` holds metadata for every known vlog file; `ValueLogHead` caches the active head for quick access.
 
-### 4.2 Flush 集成
-
-Flush 安装阶段的操作：
-1. 构建 `VersionEdit`：AddFile(level=0, file_id,范围)，同时记录当前 WAL 段信息（log_segment/log_offset）用作 checkpoint。
-2. 调用 `LogEdit`，成功后才 rename 临时 SST → 正式文件。
-3. Stage Release 时再 `wal.RemoveSegment` 等操作。
-
-崩溃恢复：
-- 若 manifest 中存在 AddFile，但 SST 文件不存在／rename 未完成 ⇒ 删除该 Edit（可在恢复阶段检测并清理）。
-- 若 manifest 缺失 AddFile，但磁盘有临时文件 ⇒ 重新安装或清理临时文件后重试 flush。
+Compared with RocksDB: RocksDB's manifest stores blob file metadata when `BlobDB` is enabled. NoKV integrates vlog metadata natively to avoid a separate blob manifest.
 
 ---
 
-## 5. 崩溃恢复流程
+## 4. Lifecycle
 
-1. 读取 CURRENT → 打开MANIFEST → 重放 VersionEdit，构建 Version。
-2. 根据 Version 构造 level handler、SST 缓存、ValueLog 状态。
-3. 通过 WAL 重放（从 Version.LogSegment/Offset 之后开始），恢复 memtable。
-4. 如果存在未完成 flush 任务（manifest 中有 AddFile 但 WAL 段未释放，或者 tmp SST 仍在），需要根据临时文件/metadata 重新提交 flush 队列。
+```mermaid
+sequenceDiagram
+    participant DB
+    participant Manifest
+    participant CURRENT
+    DB->>Manifest: Open(dir)
+    Manifest->>CURRENT: read file name
+    Manifest->>Manifest: replay edits → Version
+    DB->>Manifest: LogEdit(EditAddFile+LogPointer)
+    Manifest->>Manifest: append edit
+    Manifest-->>DB: updated Version
+    Note over Manifest,CURRENT: On rewrite -> write tmp -> rename CURRENT
+```
 
----
-
-## 6. 测试矩阵
-
-1. **顺序操作**：AddFile/DeleteFile/WAL 指针更新，恢复后 Version 正确。
-2. **Rewrite**：触发 rewrite，确保 CURRENT 原子切换；模拟 rewrite 崩溃（tmp 文件存在、CURRENT 指向旧文件）。
-3. **Flush 崩溃**：
-   - VersionEdit 写入后崩溃：重启时 manifest 已记录 AddFile，应完成 Release。
-   - 生成临时 SST 后崩溃，manifest 未记录：恢复流程应清理 temp 并重新 flush。
-4. **WAL 指针**：确保 log_segment/log_offset 记录准确；恢复后 WAL replay 从正确位置开始。
-5. **ValueLog 编辑**：记录 GC 删除、head 更新；恢复后 GC 状态一致。
-
----
-
-## 7. 实现步骤建议
-
-1. 在 `manifest/` 目录实现 `Manager` + `VersionEdit` 编解码（可以使用 protobuf 或自定义编码）。
-2. 调整 `levelManager.flush` 使用 `LogEdit` 记录数据，而不是直接操作 manifest 结构。
-3. 重写 `lsm.initLevelManager`/`recovery`，使用 `Manager.Recover()` 获取 Version。
-4. 加入 rewrite 逻辑，控制 manifest 大小。
-5. 单元测试覆盖上述矩阵；增加命令行工具（后续阶段）支持 dump manifest。
+- **Open/Rebuild** – `replay` reads all edits, applying them sequentially (`bufio.Reader` ensures streaming). If any edit fails to decode, recovery aborts so operators can inspect the manifest, similar to RocksDB's strictness.
+- **LogEdit** – obtains the mutex, appends the encoded edit, flushes, and updates the in-memory `Version` before returning.
+- **Rewrite** – when compactions delete many files, a rewrite compacts the manifest: write a new file with the full version, rename, then update `CURRENT`. Tests (`manifest/manager_test.go::TestRewrite`) cover crashes between these steps.
+- **Close** – flushes and closes the underlying file handle; the version stays available for introspection via `Manager.Version()` (used by CLI).
 
 ---
 
-## 8. 后续扩展
+## 5. Interaction with Other Modules
 
-- 记录 compaction 历史（从哪个 level→哪个 level）。
-- 支持列族（Column Family）：Version 中携带多 CF 的 FileEdit。
-- 与 ValueLog 进一步协作：GC 计划、discard stats checkpoint。
-- 提供 manifest dump 工具，便于运维分析。
+| Module | Manifest usage |
+| --- | --- |
+| `lsm` | `installLevel0Table` logs `EditAddFile` + `EditLogPointer` to checkpoint WAL progress. Compaction deletes old files via `EditDeleteFile`. |
+| `wal` | Manifest's log pointer tells WAL replay where to resume. |
+| `vlog` | `valueLog.rewrite` writes `EditUpdateValueLog` / `EditDeleteValueLog` after GC, ensuring stale segments are not reopened. |
+| `CLI` | `nokv manifest` reads `manifest.Manager.Version()` and prints levels, vlog head, and deletion status. |
 
-完成 Manifest 重构后，可继续 ValueLog 重构，确保 WAL→MemTable→Flush→Manifest→ValueLog 整体链路闭合。 
+Badger keeps a separate `value.log` directory without manifest-level bookkeeping; NoKV's integrated manifest avoids scanning the filesystem during recovery.
 
+---
+
+## 6. Recovery Scenarios
+
+1. **Missing SST file** – if `MANIFEST` references `000123.sst` but the file is absent, `db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest` verifies that recovery removes the edit, mimicking RocksDB's lost table handling.
+2. **ValueLog deletion** – `TestRecoveryRemovesStaleValueLogSegment` ensures `EditDeleteValueLog` entries trigger file removal during recovery.
+3. **Manifest rewrite crash** – `TestRecoveryManifestRewriteCrash` simulates a crash after writing the new manifest but before updating `CURRENT`; recovery still points to the old manifest and resumes safely, exactly like RocksDB's two-phase rewrite.
+4. **Stale WAL pointer** – WAL replay respects `LogSegment/Offset`; tests cover truncated WALs to confirm idempotency.
+
+---
+
+## 7. CLI Output
+
+`nokv manifest --workdir <dir> --json` prints:
+- Level file counts and key ranges.
+- `wal_log_segment` / `wal_log_offset` checkpoint.
+- `value_log_head` metadata.
+- List of vlog files with `valid` status (mirroring RocksDB's blob file dump).
+
+This structured output enables automated validation in CI and ad-hoc audits.
+
+---
+
+## 8. Extensibility
+
+- **Column families** – add a column family identifier to `FileMeta` and extend edits accordingly, as RocksDB does.
+- **Snapshots** – persistent snapshots can be derived from manifest versions (keep a copy of the current Version and WAL pointer).
+- **Remote manifests** – similar to RocksDB's remote compaction, storing manifests in object storage is straightforward because edits are append-only.
+
+For end-to-end recovery context, see [recovery.md](recovery.md) and the [architecture overview](architecture.md).

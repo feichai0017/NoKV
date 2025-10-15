@@ -1,82 +1,120 @@
-# ValueLog Design Overview
+# ValueLog Subsystem
 
-## 1. Goals
+NoKV separates large values into sequential value-log (vlog) segments to keep SSTables compact. The architecture blends RocksDB's blob file concepts with Badger's dedicated vlog manager, while remaining fully integrated with manifest metadata and flush discard statistics.
 
-1. **顺序写入 + 快速回放**：所有大尺寸 Value 顺序写入 ValueLog 段文件（`.vlog`），崩溃恢复时能够按段重放并恢复 head。
-2. **安全 GC**：通过 discard stats 与 manifest/WAL 协同，只在确认段不再引用后执行回收。
-3. **统一管理**：引入独立的 `Manager` 负责段的打开、轮转、引用计数、删除，避免业务层直接操作底层文件。
+---
 
-## 2. 目录结构
+## 1. Directory Layout
 
-```
+```text
 WorkDir/
   vlog/
-    00001.vlog
-    00002.vlog
-  vlog/CURRENT.head      # 可选，记录 head checkpoint（Fid,Offset）
+    000001.vlog
+    000002.vlog
+  vlog/CURRENT.head (optional checkpoint written by manifest)
 ```
 
-## 3. Log 记录格式
+- Vlog segments live under `workdir/vlog/` and follow `%06d.vlog` naming (see `vlog/manager.go`).
+- `valueLog` (in [`vlog.go`](../vlog.go)) orchestrates append, read, rotation, and GC using `vlog.Manager`.
+- The head pointer (fid + offset) is recorded in the manifest so recovery knows where to resume appends.
 
-沿用现有结构：
-```
+---
+
+## 2. Record Format
+
+```text
 | Header | Key | Value | CRC |
-Header = Meta + KeyLen + ValueLen + ExpiresAt (varint 编码)
+Header = Meta + KeyLen + ValueLen + ExpiresAt (varint encoded)
 ```
 
-## 4. Manager 接口
+Payload encoding mirrors WAL entries (shared helpers in `utils`). The CRC allows truncated or corrupted records to be detected during replay; invalid tails are truncated, mimicking Badger's recovery behaviour.
+
+---
+
+## 3. Core Types & API
 
 ```go
-type Config struct {
-    Dir         string
-    SegmentSize int64
-    FileMode    os.FileMode
+type valueLog struct {
+    filesMap map[uint32]*logFile
+    lfDiscardStats discardStats
+    writableLog   *logFile
+    lock          sync.RWMutex
 }
 
 type Manager interface {
-    Open() error
-    Close() error
-    Writer() (*SegmentWriter, error)
-    Reader(fid uint32) (*SegmentReader, error)
-    Rotate() (uint32, error)
+    Open(cfg Config) (*Manager, error)
+    Append(data []byte) (fid uint32, offset uint64, err error)
+    Read(fid uint32, offset uint64) ([]byte, error)
+    Rotate() error
     Remove(fid uint32) error
-    List() ([]uint32, error)
-    Stats() Metrics
+    Head() ValuePtr
 }
 ```
 
-### 4.1 段 writer
-- 负责 Append（返回 offset、长度、新 ValuePtr）。
-- 达到 SegmentSize 时触发 Rotate。
-- 提供 Sync/Close（对应 vlog `sync()`/`close()`）。
+- `valueLog.newValuePtr` writes entries to the active segment and returns `utils.ValuePtr` (fid, offset, length, version, meta).
+- `valueLog.get` reads and decodes the payload using `Manager.OpenReadOnly` semantics.
+- `valueLog.doRunGC` scans discard stats, rewrites live entries into new segments, and schedules obsolete segments for removal.
 
-### 4.2 段 reader
-- 单段只负责顺序读取，提供 `ReadAt(ptr)` 返回原始 WAL payload。
-- 回放时从 offset + len 继续读取，遇到截断/CRC 错误即停止。
+The manager keeps the file map and active writer locked under RWMutex so reads can proceed concurrently with appends, similar to Badger's concurrency model.
 
-## 5. 生命周期
+---
 
-1. **Open**：扫描目录、构建 `fid -> LogFile` 映射、记录最大 fid。
-2. **Append**：写入活跃段，必要时 `Rotate()` 创建新段。
-3. **Read**：读取任意段，按 ValuePtr 定位数据。
-4. **GC**：在 manifest/flush 确认段可删除后，调用 `Remove(fid)`。
-5. **头部管理**：Manager 可维护 head（Fid/Offset），用于 crash 后快速跳过已重放区域。
+## 4. Lifecycle
 
-## 6. 与现有模块协同
+```mermaid
+sequenceDiagram
+    participant DB
+    participant VLog as valueLog
+    participant Manifest
+    participant GC as GC Worker
+    DB->>VLog: newValuePtr(entry)
+    VLog->>VLog: Append to active segment
+    VLog-->>DB: ValuePtr(fid,offset)
+    DB->>Manifest: LogEdit(ValueLogHead)
+    Flush->>VLog: discard stats (from flush manager)
+    GC->>VLog: doRunGC()
+    VLog->>Manifest: EditDeleteValueLog/EditUpdateValueLog
+```
 
-- **WAL**：WAL flush 为 SST/manifest 提供顺序保障；ValueLog append 前应确保 WAL 记录成功。
-- **Manifest**：VersionEdit 记录最新 head / 删除的 ValueLog 段，以便恢复。
-- **Flush/Compaction**：在收集 discard stats 时增加 ValueLog 引用，GC 完成后记录 delete edit。
+- Writes – `processValueLogBatches` executes before WAL append; the returned `ValuePtr` is embedded into the WAL payload so replay can restore vlog metadata.
+- GC – triggered by discard stats or manual CLI. Live records are copied to fresh segments; old files are closed, manifest receives delete edits, and files are removed.
+- Recovery – `valueLog.replay` enumerates vlog files, builds `filesMap`, and reconciles with manifest metadata (dropping files marked invalid). The head pointer from manifest ensures appends continue from the right offset.
 
-## 7. 重构计划
+---
 
-1. **Manager 实现**：抽取旧 `valueLog` 中的段管理逻辑（filesMap、maxFid、create/delete 等）。
-2. **Write/Read 接入**：`valueLog.newValuePtr` 与 `valueLog.read` 改用 Manager Append/Read。
-3. **head & GC**：重新设计 head Checkpoint，与 manifest 协同；GC 时引用计数由 Manager 跟踪。
-4. **恢复流程**：Open 时按 head + manifest 重放 ValueLog；检测不完整记录并截断。
-5. **测试矩阵**：写入/读回、截断容错、GC 前后数据一致、崩溃恢复、多迭代器引用。
+## 5. Integration with LSM & Transactions
 
-未来可扩展：
-- 压缩/加密策略；
-- 段冷热分层；
-- ValueLog 快照导出。
+- `lsm` flush completion calls `db.vlog.lfDiscardStats.push` to update discard ratios for keys being compacted out.
+- `Txn.Get` fetches values through `valueLog.get` when encountering a `ValuePtr`, so snapshot isolation includes vlog-backed entries transparently.
+- WAL replay reconstructs both memtables and vlog pointers, guaranteeing transactional atomicity (`Txn.Commit` writes both WAL + vlog before memtable mutation).
+
+This mirrors Badger's pattern but adds manifest-backed checkpoints to avoid scanning directories after crashes.
+
+---
+
+## 6. Observability & CLI
+
+- Metrics: `NoKV.ValueLog.GcRuns`, `SegmentsRemoved`, `HeadUpdates`, exposed via `Stats.collect`.
+- CLI: `nokv vlog --workdir <dir> --json` prints active segment, head offset, and each segment's status (valid, gc_candidate, etc.).
+- Recovery traces: enabling `RECOVERY_TRACE_METRICS` logs vlog head adjustments and GC progress.
+
+---
+
+## 7. GC Strategy
+
+1. Flush manager emits discard stats (key ranges / counts).
+2. `valueLog.pickLogfile` selects a segment exceeding the discard ratio threshold.
+3. `rewrite` copies surviving entries into the current head segment, updating manifest via `EditUpdateValueLog`.
+4. `removeFiles` deletes fully reclaimed segments and logs `EditDeleteValueLog` so recovery does not reopen them.
+
+Compared with RocksDB: when using `blob_db`, RocksDB tracks blob files separately and requires a dedicated GC job. NoKV's vlog GC is lighter-weight and leverages flush metadata so it does not need to scan SSTables.
+
+---
+
+## 8. Failure Scenarios
+
+- **Crash during append** – WAL still has the entry; on restart `valueLog.recover` trims partial records and WAL replay replays the value pointer.
+- **Crash after GC delete edit but before file removal** – `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` ensures the file is removed on next open.
+- **Manifest rewrite with vlog edits** – tests ensure vlog metadata persists across manifest compaction, mirroring RocksDB's blob metadata behaviour.
+
+For the full recovery matrix, see [recovery.md](recovery.md).
