@@ -85,7 +85,8 @@ func runStatsCmd(w io.Writer, args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(snap)
 	}
-
+	
+	fmt.Fprintf(w, "Entries               %d\n", snap.Entries)
 	fmt.Fprintf(w, "Flush.Pending          %d\n", snap.FlushPending)
 	fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.CompactionBacklog)
 	fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.CompactionMaxScore)
@@ -316,7 +317,8 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 			}
 		}
 	}
-
+	
+	setInt("NoKV.Stats.Entries", &snap.Entries)
 	setInt("NoKV.Stats.Flush.Pending", &snap.FlushPending)
 	setInt("NoKV.Stats.Compaction.Backlog", &snap.CompactionBacklog)
 	setFloat("NoKV.Stats.Compaction.MaxScore", &snap.CompactionMaxScore)
