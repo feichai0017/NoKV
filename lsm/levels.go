@@ -242,6 +242,22 @@ func (lm *levelManager) cacheMetrics() CacheMetrics {
 	return lm.cache.metricsSnapshot()
 }
 
+func (lm *levelManager) prefetch(key []byte, hot bool) {
+	if lm == nil || len(key) == 0 {
+		return
+	}
+	if len(lm.levels) == 0 {
+		return
+	}
+	// Always probe L0 because ranges may overlap.
+	_ = lm.levels[0].prefetch(key, hot)
+	for level := 1; level < len(lm.levels); level++ {
+		if lm.levels[level].prefetch(key, hot) {
+			break
+		}
+	}
+}
+
 // --------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
@@ -307,6 +323,33 @@ func (lh *levelHandler) Get(key []byte) (*utils.Entry, error) {
 	} else {
 		return lh.searchLNSST(key)
 	}
+}
+
+func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
+	if lh == nil || len(key) == 0 {
+		return false
+	}
+	if lh.levelNum == 0 {
+		var hit bool
+		for _, table := range lh.tables {
+			if table == nil {
+				continue
+			}
+			if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
+				utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+				continue
+			}
+			if table.prefetchBlockForKey(key, hot) {
+				hit = true
+			}
+		}
+		return hit
+	}
+	table := lh.getTable(key)
+	if table == nil {
+		return false
+	}
+	return table.prefetchBlockForKey(key, hot)
 }
 
 func (lh *levelHandler) Sort() {

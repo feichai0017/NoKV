@@ -28,24 +28,33 @@ type (
 	// DB 对外暴露的接口对象 全局唯一，持有各种资源句柄
 	DB struct {
 		sync.RWMutex
-		opt          *Options
-		lsm          *lsm.LSM
-		wal          *wal.Manager
-		vlog         *valueLog
-		stats        *Stats
-		flushChan    chan flushTask // For flushing memtables.
-		writeCh      chan *request
-		batchCh      chan *writeBatch
-		applyCh      chan *writeBatch
-		writeCloser  *utils.Closer
-		blockWrites  int32
-		vhead        *utils.ValuePtr
-		logRotates   int32
-		isClosed     uint32
-		orc          *oracle
-		hot          *hotring.HotRing
-		writeMetrics *writeMetrics
-		iterPool     *iteratorPool
+		opt              *Options
+		lsm              *lsm.LSM
+		wal              *wal.Manager
+		vlog             *valueLog
+		stats            *Stats
+		flushChan        chan flushTask // For flushing memtables.
+		writeCh          chan *request
+		batchCh          chan *writeBatch
+		applyCh          chan *writeBatch
+		writeCloser      *utils.Closer
+		blockWrites      int32
+		vhead            *utils.ValuePtr
+		logRotates       int32
+		isClosed         uint32
+		orc              *oracle
+		hot              *hotring.HotRing
+		writeMetrics     *writeMetrics
+		iterPool         *iteratorPool
+		prefetchCh       chan prefetchRequest
+		prefetchWG       sync.WaitGroup
+		prefetchMu       sync.Mutex
+		prefetchPend     map[string]struct{}
+		prefetched       map[string]time.Time
+		prefetchClamp    int32
+		prefetchWarm     int32
+		prefetchHot      int32
+		prefetchCooldown time.Duration
 	}
 	
 	writeBatch struct {
@@ -62,6 +71,11 @@ var (
 
 var writeBatchPool = sync.Pool{
 	New: func() any { return &writeBatch{} },
+}
+
+type prefetchRequest struct {
+	key string
+	hot bool
 }
 
 const (
@@ -126,6 +140,18 @@ func Open(opt *Options) *DB {
 		if opt.HotRingTopK <= 0 {
 			opt.HotRingTopK = 16
 		}
+		db.prefetchClamp = 64
+		db.prefetchWarm = 4
+		db.prefetchHot = 16
+		if db.prefetchHot <= db.prefetchWarm {
+			db.prefetchHot = db.prefetchWarm + 4
+		}
+		db.prefetchCooldown = 15 * time.Second
+		db.prefetchPend = make(map[string]struct{})
+		db.prefetched = make(map[string]time.Time)
+		db.prefetchCh = make(chan prefetchRequest, 128)
+		db.prefetchWG.Add(1)
+		go db.prefetchLoop()
 	}
 
 	db.orc = newOracle(*opt)
@@ -147,6 +173,13 @@ func (db *DB) Close() error {
 	if db.writeCloser != nil {
 		db.writeCloser.Close()
 	}
+	
+	if db.prefetchCh != nil {
+		close(db.prefetchCh)
+		db.prefetchWG.Wait()
+		db.prefetchCh = nil
+	}
+	
 	db.vlog.lfDiscardStats.closer.Close()
 	if err := db.lsm.Close(); err != nil {
 		return err
@@ -291,7 +324,91 @@ func (db *DB) recordRead(key []byte) {
 	if db == nil || db.hot == nil || len(key) == 0 {
 		return
 	}
-	db.hot.Touch(string(key))
+	skey := string(key)
+	if db.prefetchCh == nil {
+		db.hot.Touch(skey)
+		return
+	}
+	clamp := db.prefetchClamp
+	if clamp <= 0 {
+		clamp = db.prefetchHot
+		if clamp <= 0 {
+			clamp = db.prefetchWarm
+		}
+		if clamp <= 0 {
+			clamp = 1
+		}
+	}
+	count, _ := db.hot.TouchAndClamp(skey, clamp)
+	if db.prefetchHot > 0 && count >= db.prefetchHot {
+		db.enqueuePrefetch(skey, true)
+		return
+	}
+	if db.prefetchWarm > 0 && count >= db.prefetchWarm {
+		db.enqueuePrefetch(skey, false)
+	}
+}
+
+func (db *DB) enqueuePrefetch(key string, hot bool) {
+	if db == nil || db.prefetchCh == nil || key == "" {
+		return
+	}
+	now := time.Now()
+	db.prefetchMu.Lock()
+	if expiry, ok := db.prefetched[key]; ok {
+		if expiry.After(now) {
+			db.prefetchMu.Unlock()
+			return
+		}
+		delete(db.prefetched, key)
+	}
+	if _, pending := db.prefetchPend[key]; pending {
+		db.prefetchMu.Unlock()
+		return
+	}
+	db.prefetchPend[key] = struct{}{}
+	db.prefetchMu.Unlock()
+
+	req := prefetchRequest{key: key, hot: hot}
+	select {
+	case db.prefetchCh <- req:
+	default:
+		db.prefetchMu.Lock()
+		delete(db.prefetchPend, key)
+		db.prefetchMu.Unlock()
+	}
+}
+
+func (db *DB) prefetchLoop() {
+	defer db.prefetchWG.Done()
+	for req := range db.prefetchCh {
+		db.executePrefetch(req)
+	}
+}
+
+func (db *DB) executePrefetch(req prefetchRequest) {
+	if db == nil {
+		return
+	}
+	key := req.key
+	if key == "" {
+		db.prefetchMu.Lock()
+		delete(db.prefetchPend, key)
+		db.prefetchMu.Unlock()
+		return
+	}
+	if db.lsm != nil {
+		internal := utils.KeyWithTs([]byte(key), math.MaxUint32)
+		db.lsm.Prefetch(internal, req.hot)
+	}
+	db.prefetchMu.Lock()
+	delete(db.prefetchPend, key)
+	if db.prefetchCooldown > 0 {
+		db.prefetched[key] = time.Now().Add(db.prefetchCooldown)
+	} else {
+		delete(db.prefetched, key)
+	}
+	db.prefetchMu.Unlock()
 }
 
 func (db *DB) shouldWriteValueToLSM(e *utils.Entry) bool {

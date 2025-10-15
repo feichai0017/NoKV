@@ -126,6 +126,10 @@ func (t *table) getEntry(key, block []byte, idx int) (entry *utils.Entry, err er
 
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
+	return t.loadBlock(idx, true)
+}
+
+func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	utils.CondPanic(idx < 0, fmt.Errorf("idx=%d", idx))
 	if idx >= len(t.ss.Indexs().Offsets) {
 		return nil, errors.New("block out of index")
@@ -133,6 +137,9 @@ func (t *table) block(idx int) (*block, error) {
 	var b *block
 	key := t.blockCacheKey(idx)
 	if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
+		if hot {
+			t.lm.cache.addBlockWithTier(t.lvl, key, cached, true)
+		}
 		return cached, nil
 	}
 
@@ -175,10 +182,48 @@ func (t *table) block(idx int) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.addBlock(t.lvl, key, b)
+	t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
 
 	return b, nil
 }
+
+func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
+	if t == nil || len(key) == 0 {
+		return false
+	}
+	t.IncrRef()
+	defer t.DecrRef()
+
+	offsets := t.ss.Indexs().GetOffsets()
+	if len(offsets) == 0 {
+		return false
+	}
+	var (
+		idx int
+		ko  pb.BlockOffset
+	)
+	idx = sort.Search(len(offsets), func(i int) bool {
+		utils.CondPanic(!t.offsets(&ko, i), fmt.Errorf("table.prefetch idx=%d", i))
+		if i == len(offsets) {
+			return true
+		}
+		return utils.CompareKeys(ko.GetKey(), key) > 0
+	})
+	switch {
+	case idx <= 0:
+		idx = 0
+	case idx >= len(offsets):
+		idx = len(offsets) - 1
+	default:
+		idx = idx - 1
+	}
+	if idx < 0 || idx >= len(offsets) {
+		return false
+	}
+	_, err := t.loadBlock(idx, hot)
+	return err == nil
+}
+
 
 func (t *table) read(off, sz int) ([]byte, error) {
 	return t.ss.Bytes(off, sz)

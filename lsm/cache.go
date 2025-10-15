@@ -128,10 +128,14 @@ func (c *cache) getBlock(level int, key uint64) (*block, bool) {
 }
 
 func (c *cache) addBlock(level int, key uint64, blk *block) {
-	if c == nil || c.blocks == nil {
-		return
-	}
-	c.blocks.add(level, key, blk)
+	c.addBlockWithTier(level, key, blk, true)
+}
+
+func (c *cache) addBlockWithTier(level int, key uint64, blk *block, hot bool) {
+		if c == nil || c.blocks == nil {
+			return
+		}
+		c.blocks.addWithTier(level, key, blk, hot)
 }
 
 func (c *cache) dropBlock(key uint64) {
@@ -209,6 +213,13 @@ func (c *blockCache) get(level int, key uint64) (*block, bool) {
 }
 
 func (c *blockCache) add(level int, key uint64, blk *block) {
+	if c == nil {
+		return
+	}
+	c.addWithTier(level, key, blk, true)
+}
+
+func (c *blockCache) addWithTier(level int, key uint64, blk *block, hot bool) {
 	if c == nil || blk == nil {
 		return
 	}
@@ -218,6 +229,19 @@ func (c *blockCache) add(level int, key uint64, blk *block) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if hot || c.hotCap == 0 {
+		c.promoteLocked(key, blk)
+		return
+	}
+	if elem, ok := c.hotData[key]; ok {
+		elem.Value.(*blockEntry).data = blk
+		c.hotList.MoveToFront(elem)
+		return
+	}
+	if c.cold != nil {
+		c.cold.add(key, blk)
+		return
+	}
 	c.promoteLocked(key, blk)
 }
 
