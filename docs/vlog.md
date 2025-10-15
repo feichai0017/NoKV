@@ -1,82 +1,151 @@
-# ValueLog Design Overview
+# Value Log (vlog) Design
 
-## 1. Goals
+NoKV keeps the LSM tree lean by separating large values into sequential **value log** (vlog) files. The module is split between
 
-1. **顺序写入 + 快速回放**：所有大尺寸 Value 顺序写入 ValueLog 段文件（`.vlog`），崩溃恢复时能够按段重放并恢复 head。
-2. **安全 GC**：通过 discard stats 与 manifest/WAL 协同，只在确认段不再引用后执行回收。
-3. **统一管理**：引入独立的 `Manager` 负责段的打开、轮转、引用计数、删除，避免业务层直接操作底层文件。
+- [`vlog/manager.go`](../vlog/manager.go) – owns the open file set, append/rotate/read primitives, and crash recovery helpers.
+- [`vlog.go`](../vlog.go) – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).
 
-## 2. 目录结构
+The design echoes BadgerDB's value log while remaining manifest-driven like RocksDB's `blob_db`: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.
 
-```
-WorkDir/
+---
+
+## 1. Directory Layout & Naming
+
+```text
+<workdir>/
   vlog/
+    00000.vlog
     00001.vlog
-    00002.vlog
-  vlog/CURRENT.head      # 可选，记录 head checkpoint（Fid,Offset）
+    ...
 ```
 
-## 3. Log 记录格式
+* Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go#L53-L92) discovers existing segments at open.
+* `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go#L298-L307) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
+* Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go#L76-L125).
 
-沿用现有结构：
+---
+
+## 2. Record Format
+
+The vlog reuses `wal.EncodeEntry`, so entries written to the value log and the WAL are byte-identical.
+
 ```
-| Header | Key | Value | CRC |
-Header = Meta + KeyLen + ValueLen + ExpiresAt (varint 编码)
++--------+---------+------------+-------------+-----------+-------+
+| Meta   | KeyLen  | ValueLen   | ExpiresAt   | Key bytes | Value |
++--------+---------+------------+-------------+-----------+-------+
+                                             + CRC32 (4 B)
 ```
 
-## 4. Manager 接口
+* Header fields are varint-encoded (`utils.Header.Encode`).
+* `file.LogFile.EncodeEntry`/`DecodeEntry` perform the layout work, and each append finishes with a CRC32 to detect torn writes.
+* `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L348-L418) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
+
+---
+
+## 3. Manager API Surface
 
 ```go
-type Config struct {
-    Dir         string
-    SegmentSize int64
-    FileMode    os.FileMode
-}
-
-type Manager interface {
-    Open() error
-    Close() error
-    Writer() (*SegmentWriter, error)
-    Reader(fid uint32) (*SegmentReader, error)
-    Rotate() (uint32, error)
-    Remove(fid uint32) error
-    List() ([]uint32, error)
-    Stats() Metrics
-}
+mgr, _ := vlog.Open(vlog.Config{Dir: "...", MaxSize: 1<<29})
+ptr, _ := mgr.Append(payload)
+_ = mgr.Rotate()        // when ptr.Offset+ptr.Len exceeds MaxSize
+val, unlock, _ := mgr.Read(ptr)
+unlock()                // release read lock
+_ = mgr.Rewind(*ptr)    // rollback partially written batch
+_ = mgr.Remove(fid)     // close + delete file
 ```
 
-### 4.1 段 writer
-- 负责 Append（返回 offset、长度、新 ValuePtr）。
-- 达到 SegmentSize 时触发 Rotate。
-- 提供 Sync/Close（对应 vlog `sync()`/`close()`）。
+Key behaviours:
 
-### 4.2 段 reader
-- 单段只负责顺序读取，提供 `ReadAt(ptr)` 返回原始 WAL payload。
-- 回放时从 offset + len 继续读取，遇到截断/CRC 错误即停止。
+1. **Append + Rotate** – [`Manager.Append`](../vlog/manager.go#L108-L160) writes into the active file and bumps the in-memory offset. Rotation calls [`Manager.Rotate`](../vlog/manager.go#L162-L198), syncing the old file via `file.LogFile.DoneWriting` before creating the next `%05d.vlog`.
+2. **Crash recovery** – [`Manager.Rewind`](../vlog/manager.go#L437-L520) truncates the active file and removes newer files when a write batch fails mid-flight. `valueLog.write` uses this to guarantee idempotent WAL/value log ordering.
+3. **Safe reads** – [`Manager.Read`](../vlog/manager.go#L200-L226) grabs a per-file `RWMutex`, copies the bytes into a new slice, and hands back an unlock function so callers release the file lock quickly.
+4. **Verification** – [`VerifyDir`](../vlog/manager.go#L308-L411) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
 
-## 5. 生命周期
+Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.
 
-1. **Open**：扫描目录、构建 `fid -> LogFile` 映射、记录最大 fid。
-2. **Append**：写入活跃段，必要时 `Rotate()` 创建新段。
-3. **Read**：读取任意段，按 ValuePtr 定位数据。
-4. **GC**：在 manifest/flush 确认段可删除后，调用 `Remove(fid)`。
-5. **头部管理**：Manager 可维护 head（Fid/Offset），用于 crash 后快速跳过已重放区域。
+---
 
-## 6. 与现有模块协同
+## 4. Integration with DB Writes
 
-- **WAL**：WAL flush 为 SST/manifest 提供顺序保障；ValueLog append 前应确保 WAL 记录成功。
-- **Manifest**：VersionEdit 记录最新 head / 删除的 ValueLog 段，以便恢复。
-- **Flush/Compaction**：在收集 discard stats 时增加 ValueLog 引用，GC 完成后记录 delete edit。
+```mermaid
+sequenceDiagram
+    participant Batch as writeBatch
+    participant VLog as valueLog.write
+    participant Mgr as vlog.Manager
+    participant WAL as wal.Manager
+    participant Mem as MemTable
+    Batch->>VLog: processValueLogBatches(entries)
+    VLog->>Mgr: Append(payload)
+    Mgr-->>VLog: ValuePtr(fid, offset, len)
+    VLog->>Mgr: Rotate? (threshold)
+    VLog-->>Batch: Ptr list
+    Batch->>WAL: Append(entries+ptrs)
+    Batch->>Mem: apply to skiplist
+```
 
-## 7. 重构计划
+1. [`valueLog.write`](../vlog.go#L240-L272) iterates through batched entries. For entries staying in LSM (`shouldWriteValueToLSM`), it records a zero `ValuePtr`. Others are encoded via `wal.EncodeEntry` and appended to the vlog.
+2. If the append would exceed `Options.ValueLogFileSize`, the manager rotates before continuing. The WAL append happens **after** the value log append so that crash replay observes consistent pointers.
+3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L139-L209) exercises both append- and rotate-failure paths.
+4. `Txn.Commit` piggybacks on the same pipeline: pending writes are turned into entries and routed through `processValueLogBatches` before the WAL write, ensuring MVCC correctness.
 
-1. **Manager 实现**：抽取旧 `valueLog` 中的段管理逻辑（filesMap、maxFid、create/delete 等）。
-2. **Write/Read 接入**：`valueLog.newValuePtr` 与 `valueLog.read` 改用 Manager Append/Read。
-3. **head & GC**：重新设计 head Checkpoint，与 manifest 协同；GC 时引用计数由 Manager 跟踪。
-4. **恢复流程**：Open 时按 head + manifest 重放 ValueLog；检测不完整记录并截断。
-5. **测试矩阵**：写入/读回、截断容错、GC 前后数据一致、崩溃恢复、多迭代器引用。
+Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.
 
-未来可扩展：
-- 压缩/加密策略；
-- 段冷热分层；
-- ValueLog 快照导出。
+---
+
+## 5. Discard Statistics & GC
+
+```mermaid
+flowchart LR
+    FlushMgr -- obsolete ptrs --> DiscardStats
+    DiscardStats -->|batch json| writeCh
+    writeCh --> valueLog.newValuePtr (lfDiscardStatsKey)
+    valueLog -- GC trigger --> Manager
+```
+
+* `lfDiscardStats` aggregates per-file discard counts from `lsm.FlushTable` completion (`valueLog.lfDiscardStats.push` inside `lsm/flush`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
+* `valueLog.flushDiscardStats` consumes those stats, ensuring they are persisted even across crashes. During recovery `valueLog.populateDiscardStats` replays the JSON payload to repopulate the in-memory map.
+* GC uses `discardRatio = discardedBytes/totalBytes` from [`valueLog.sample`](../vlog.go#L644-L704). If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog.go#L316-L417) rewrites live entries into the current head (using `Manager.Append`) and then [`valueLog.rewrite`](../vlog.go#L418-L531) schedules deletion edits in the manifest.
+* Completed deletions are logged via `lsm.LogValueLogDelete` so the manifest can skip them during replay. When GC rotates to a new head, `valueLog.updateHead` records the pointer and bumps the `NoKV.ValueLog.HeadUpdates` counter.
+
+RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.
+
+---
+
+## 6. Recovery Semantics
+
+1. `DB.Open` restores the manifest and fetches the last persisted head pointer.
+2. [`valueLog.open`](../vlog.go#L175-L224) launches `flushDiscardStats` and iterates every vlog file via [`valueLog.replayLog`](../vlog.go#L706-L866). Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.
+3. `valueLog.replayLog` streams entries, invoking the provided `replayFn` (usually WAL re-application) for any value that should be materialised into the memtable.
+4. `Manager.VerifyDir` trims torn records so replay never sees corrupt payloads.
+5. After replay, `valueLog.populateDiscardStats` rehydrates discard counters from the persisted JSON entry if present.
+
+The flow matches Badger's recovery (scan vlog → replay WAL) but adds manifest-backed head checks, similar to RocksDB's reliance on `MANIFEST` to mark blob files live or obsolete.
+
+---
+
+## 7. Observability & CLI
+
+* Metrics in [`stats.go`](../stats.go#L12-L126) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
+* `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/manager.go#L308-L411) before describing segments.
+* Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases.
+
+---
+
+## 8. Quick Comparison
+
+| Capability | RocksDB BlobDB | BadgerDB | NoKV |
+| --- | --- | --- | --- |
+| Head tracking | In MANIFEST (blob log number + offset) | Internal to vlog directory | Manifest entry via `EditValueLogHead` |
+| GC trigger | Compaction sampling, blob garbage score | Discard stats from LSM tables | Discard stats flushed through `lfDiscardStats` |
+| Failure recovery | Blob DB and WAL coordinate two-phase commits | Replays value log then LSM | Rewind-on-error + manifest-backed deletes |
+| Read path | Separate blob cache | Direct read + checksum | `Manager.Read` with copy + per-file lock |
+
+By anchoring the vlog state in the manifest and exposing rewind/verify primitives, NoKV maintains the determinism of RocksDB while keeping Badger's simple sequential layout.
+
+---
+
+## 9. Further Reading
+
+* [`docs/recovery.md`](recovery.md#value-log-recovery) – failure matrix covering append crashes, GC interruptions, and manifest rewrites.
+* [`docs/cache.md`](cache.md#value-pointer-reads) – how vlog-backed entries interact with the block cache.
+* [`docs/stats.md`](stats.md#value-log-metrics) – metric names surfaced for monitoring.

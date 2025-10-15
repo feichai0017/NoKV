@@ -8,20 +8,36 @@
     </a>
     <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
-    <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version"/>
   </p>
   <p><strong>LSM Tree • ValueLog • MVCC • Hot-Key Tracking</strong></p>
 </div>
+
+NoKV is a Go-native storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, structured observability, and ready-to-use CLI tooling.
+
+---
+
+## 🌐 Table of Contents
+
+- [Highlights](#-highlights)
+- [Quick Start](#-quick-start)
+- [Architecture Overview](#-architecture-overview)
+- [Module Breakdown](#-module-breakdown)
+- [Example Flow](#-example-flow)
+- [Observability & CLI](#-observability--cli)
+- [Comparison: RocksDB vs Badger vs NoKV](#-comparison-rocksdb-vs-badger-vs-nokv)
+- [Testing & Benchmarks](#-testing--benchmarks)
+- [Documentation](#-documentation)
+- [License](#-license)
 
 ---
 
 ## ✨ Highlights
 
-- 🔁 **LSM + ValueLog** hybrid design inspired by RocksDB & Badger  
-- ⚡ **MVCC transactions** with snapshot isolation & conflict detection  
-- 🔥 **Hot Ring collector** for real-time hot-key analytics (exposed via `nokv stats`)  
-- ♻️ **Resilient recovery**: WAL / Manifest / ValueLog replay with scripted scenarios  
-- 🛠️ **CLI toolchain**: inspect stats, manifest, vlog segments in seconds  
+- 🔁 **Hybrid LSM + ValueLog** – WAL + MemTable durability like RocksDB, large values separated into vlog segments like Badger.
+- ⚡ **MVCC transactions** – snapshot isolation with conflict detection via `oracle`, iterator snapshots, and managed/unmanaged modes.
+- 🔥 **Hot-key analytics** – `hotring` surfaces frequently accessed keys, powering prefetchers and CLI visibility.
+- ♻️ **Robust recovery** – manifest + WAL checkpoints + vlog GC metadata guarantee restart determinism.
+- 🛠️ **First-class tooling** – `nokv` CLI and `expvar` snapshots expose internals without extra dependencies.
 
 ---
 
@@ -30,72 +46,145 @@
 ```bash
 go get github.com/feichai0017/NoKV
 
-go test ./...                   # 单元 + 集成测试
-./scripts/recovery_scenarios.sh # 一键覆盖 WAL/Manifest/ValueLog 恢复矩阵
+go test ./...                   # unit + integration tests
+RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+
+# Optional: compare performance
+go test ./benchmark -run TestBenchmarkResults -count=1
 ```
 
-> 运行脚本时默认输出结构化 `RECOVERY_METRIC` 日志至 `artifacts/recovery/`，方便集成 CI。
+> Scripts emit structured `RECOVERY_METRIC` logs under `artifacts/recovery/`, ready for CI upload.
 
 ---
 
-## 🧱 Architecture Glimpse
+## 🧱 Architecture Overview
 
-| 模块 | 亮点 |
-| ---- | ---- |
-| **WAL** | 顺序写 + 段切换；崩溃后重放 MemTable |
-| **MemTable** | SkipList + Arena；flush pipeline 四阶段状态机 |
-| **SSTable** | leveled/size-tiered 混合 compaction；索引、Bloom 缓存 |
-| **ValueLog** | 大 value 分离、GC 重写、head 指针持久化 |
-| **Oracle / Txn** | MVCC 时间戳、冲突检测、事务迭代器快照 |
-| **Hot Ring** | 读路径统计热点 key， Stats/CLI 输出 Top-N，为缓存/调度提供信号 |
+```mermaid
+graph TD
+    Client[Client API / Txn] -->|Set/Get| DBCore
+    DBCore -->|Append| WAL
+    DBCore -->|Insert| MemTable
+    DBCore -->|ValuePtr| ValueLog
+    MemTable -->|Flush Task| FlushMgr
+    FlushMgr -->|Build SST| SSTBuilder
+    SSTBuilder -->|LogEdit| Manifest
+    Manifest -->|Version| LSMLevels
+    LSMLevels -->|Compaction| Compactor
+    FlushMgr -->|Discard Stats| ValueLog
+    ValueLog -->|GC updates| Manifest
+    DBCore -->|Stats/HotKeys| Observability
+```
 
-完整设计详见 [docs/architecture.md](docs/architecture.md)。
+Key ideas:
+- **Durability path** – WAL first, memtable second. ValueLog writes occur before WAL append so crash replay can fully rebuild state.
+- **Metadata** – manifest stores SST topology, WAL checkpoints, and vlog head/deletion metadata.
+- **Background workers** – flush manager handles `Prepare → Build → Install → Release`, compaction reduces level overlap, and value log GC rewrites segments based on discard stats.
+- **Transactions** – MVCC timestamps ensure consistent reads; commit reuses the same write pipeline as standalone writes.
 
----
-
-## 🔍 Observability & Recovery
-
-- `cmd/nokv stats`：离线/在线拉取 backlog 指标、热点 Key、ValueLog 状态  
-- `cmd/nokv manifest` / `cmd/nokv vlog`：检查 manifest 层级与 vlog 段  
-- `scripts/recovery_scenarios.sh`：覆盖 WAL 重放、缺失 SST、ValueLog 截断等场景  
-- `RECOVERY_TRACE_METRICS=1`：调试模式输出结构化恢复指标  
-
----
-
-## 📊 Benchmarking
-
-- `go test ./benchmark -run TestBenchmarkResults -count=1`  
-  生成 NoKV vs Badger 写入/读取/批量/范围扫描对比，并写入 `benchmark/benchmark_results/*.txt`  
-- RocksDB 对比：  
-  ```bash
-  go env -w CGO_ENABLED=1
-  go get github.com/tecbot/gorocksdb
-  go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
-  ```
+Dive deeper in [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## 🛠️ Development Guide
+## 🧩 Module Breakdown
 
-| 项目 | 说明 |
-| ---- | ---- |
-| 语言 | Go 1.23+ |
-| 测试 | 提交前请确保 `go test ./...` 全绿，并补充针对性用例 |
-| 性能 | `benchmark/` 提供基准测试骨架，欢迎扩展 workload |
-| 贡献 | 欢迎 PR，与我们一同完善下一代 Go KV 引擎 🧑‍💻 |
+| Module | Responsibilities | Source | Docs |
+| --- | --- | --- | --- |
+| WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) | [WAL internals](docs/wal.md) |
+| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md) |
+| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
+| ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
+| Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) | [Transactions & MVCC](docs/txn.md) |
+| HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
+| Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
+| Filesystem | mmap-backed file helpers shared by WAL/SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
 
-相关文档：
-- [Architecture & Design Overview](docs/architecture.md)
-- [Testing & Validation Plan](docs/testing.md)
-- [Crash Recovery Verification](docs/recovery.md)
-- [Flush Pipeline](docs/flush.md)
-- [Manifest & VersionEdit](docs/manifest.md)
+Each module has a dedicated document under `docs/` describing APIs, diagrams, and recovery notes.
+
+---
+
+## 🔄 Example Flow
+
+### Batched Write + Flush
+1. `DB.doWrites` batches incoming sets (default 64 entries or 1 MiB).
+2. Large values go into ValueLog via `processValueLogBatches`, returning `ValuePtr` metadata.
+3. `wal.Manager.Append` persists the batch; offsets embed value pointers for replay.
+4. MemTable applies the batch. Once full, it freezes and enters the flush queue.
+5. `flush.Manager` builds an SST, logs `EditAddFile` + `EditLogPointer`, and releases WAL segments.
+6. Discard stats push into ValueLog GC so stale vlog entries can be reclaimed.
+
+### Crash Mid-Flush
+- On restart, manifest replay ensures only fully installed SSTs remain referenced.
+- WAL replay rebuilds the memtable for any incomplete flush.
+- ValueLog recovery trims partial records and resumes at the recorded head pointer.
+
+More scenarios (including transaction recovery) are covered in [docs/architecture.md](docs/architecture.md#9-example-scenarios) and [docs/recovery.md](docs/recovery.md).
+
+---
+
+## 📡 Observability & CLI
+
+- `Stats.StartStats` publishes metrics via `expvar` (flush backlog, WAL segments, vlog GC stats, txn counters).
+- `cmd/nokv` offers:
+  - `nokv stats --workdir <dir> [--json]`
+  - `nokv manifest --workdir <dir>`
+  - `nokv vlog --workdir <dir>`
+- Hot keys tracked by `hotring` appear in both expvar and CLI output, enabling cache warmup strategies.
+
+Details in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
+
+---
+
+## ⚖️ Comparison: RocksDB vs Badger vs NoKV
+
+| Aspect | RocksDB | BadgerDB | NoKV |
+| --- | --- | --- | --- |
+| Language | C++ | Go | Go (no CGO dependencies) |
+| Durability path | WAL → MemTable → SST | ValueLog doubles as WAL | WAL → MemTable + ValueLog (hybrid) |
+| Manifest | VersionEdit + CURRENT | Minimal (tables only) | VersionEdit + vlog metadata + WAL checkpoints |
+| Transactions | WriteBatch / optional txn library | Managed optimistic transactions | Built-in MVCC with oracle & iterators |
+| Value separation | Optional blob DB | Core design | Core design with manifest-backed head |
+| Observability | PerfContext, `ldb` | Prometheus metrics | expvar + `nokv` CLI + recovery traces |
+| Hot key analytics | External | Limited | Built-in hotring with prefetch hook |
+
+NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and adds MVCC/observability tailored for Go services.
+
+---
+
+## 🧪 Testing & Benchmarks
+
+- **Unit & integration** – `go test ./...`
+- **Recovery harness** – `RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh`
+- **Benchmarks** – `go test ./benchmark -run TestBenchmarkResults -count=1`
+- **Docs** – see [docs/testing.md](docs/testing.md) for module-by-module coverage and future work.
+
+Benchmark artefacts are written to `benchmark/benchmark_results/*.txt` for easy comparison across runs.
+
+---
+
+## 📚 Documentation
+
+| Topic | Document |
+| --- | --- |
+| Architecture deep dive | [docs/architecture.md](docs/architecture.md) |
+| WAL internals | [docs/wal.md](docs/wal.md) |
+| Flush pipeline | [docs/flush.md](docs/flush.md) |
+| Memtable lifecycle | [docs/memtable.md](docs/memtable.md) |
+| Transactions & MVCC | [docs/txn.md](docs/txn.md) |
+| Manifest semantics | [docs/manifest.md](docs/manifest.md) |
+| ValueLog manager | [docs/vlog.md](docs/vlog.md) |
+| Cache & bloom filters | [docs/cache.md](docs/cache.md) |
+| Hot key analytics | [docs/hotring.md](docs/hotring.md) |
+| Stats & observability | [docs/stats.md](docs/stats.md) |
+| File abstractions | [docs/file.md](docs/file.md) |
+| Crash recovery playbook | [docs/recovery.md](docs/recovery.md) |
+| Testing matrix | [docs/testing.md](docs/testing.md) |
+| CLI reference | [docs/cli.md](docs/cli.md) |
 
 ---
 
 ## 📄 License
 
-Apache-2.0. 详见 [LICENSE](LICENSE)。
+Apache-2.0. See [LICENSE](LICENSE).
 
 <div align="center">
   <sub>Made with ❤️ for high-throughput, embeddable storage.</sub>
