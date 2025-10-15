@@ -77,7 +77,38 @@ sequenceDiagram
 Compared with RocksDB:
 - NoKV reuses the canonical WAL→MemTable→SST path but coordinates ValueLog pointers like Badger to keep hot keys in LSM while parking large values on sequential vlog segments.
 
----
+```mermaid
+sequenceDiagram
+    participant Client
+    participant DB as DB.doWrites
+    participant WAL as wal.Manager
+    participant VLog as valueLog
+    participant Mem as MemTable
+    participant Flush as flush.Manager
+    participant Manifest
+    participant Levels as LSM Levels
+    participant GC as ValueLog GC
+    Client->>DB: Set(key,value)
+    DB->>DB: aggregate into writeBatch
+    DB->>VLog: optional value separation (processValueLogBatches)
+    DB->>WAL: Append(batch)
+    WAL-->>DB: EntryInfo (segment,offset)
+    DB->>Mem: applyBatch (mutate active skiplist)
+    Mem-->>Flush: freeze when full
+    Flush->>Manifest: StageInstall → LogEdit(AddFile, LogPointer)
+    Manifest-->>Flush: success
+    Flush->>Levels: Install SST
+    Flush->>WAL: Release segments
+    Flush->>GC: send discard stats
+```
+
+1. **Batching** – `DB.doWrites` drains `writeCh` and aggregates requests based on `Options.WriteBatch*` thresholds.
+2. **Value separation** – `processValueLogBatches` writes large payloads to vlog segments (Badger-style) and embeds `ValuePtr` metadata into WAL/LSM entries.
+3. **Durability** – `wal.Manager.Append` writes `[length|payload|crc]` tuples; rotation occurs when `segmentSize` would be exceeded.
+4. **MemTable apply** – `applyBatches` mutates the active skiplist, and immutable tables are handed to `lsm.flush.Manager`.
+5. **Flush pipeline** – the manager enforces `Prepare → Build → Install → Release` stages with metrics for queueing and build latency.
+6. **Manifest + WAL checkpoint** – `manifest.Manager.LogEdit` persists the new SST plus WAL pointer. Only after success do we rename temp SST files and release WAL segments.
+7. **Discard stats → ValueLog** – flush completion pushes discard statistics back to `valueLog` so GC can evict obsolete vlog segments.
 
 ## 4. Read Path & Iterators
 
@@ -157,6 +188,20 @@ Badger similarly exposes value log GC and LSM compactions, but NoKV emphasises s
 | GC | Compaction-driven | Value log GC + discard stats | LSM compaction + vlog GC using discard stats from flush manager |
 
 NoKV positions itself between the two: it adopts RocksDB's manifest/WAL discipline and Badger's value separation, while contributing additional observability and MVCC semantics without CGO dependencies.
+
+---
+
+## 9. Subsystem Deep Dives
+
+For detailed walkthroughs of individual modules, refer to:
+
+* [Memtable design](memtable.md) – skiplist arena sizing, WAL coupling, and recovery.
+* [Transactions & MVCC](txn.md) – oracle timestamps, conflict detection, and commit flow.
+* [Value log design](vlog.md) – updated manager semantics, discard stats, and GC.
+* [Cache & bloom filters](cache.md) – hot/cold block caches and observability counters.
+* [HotRing overview](hotring.md) – hot key tracking and throttling.
+* [Stats & observability](stats.md) – expvar pipeline and CLI integration.
+* [File abstractions](file.md) – mmap helpers underpinning WAL/SST/vlog layers.
 
 ---
 
