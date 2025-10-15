@@ -261,6 +261,17 @@ func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
 	return lsm.levels.Get(key)
 }
 
+// Prefetch warms cache layers for the key by issuing targeted block loads.
+func (lsm *LSM) Prefetch(key []byte, hot bool) {
+	if len(key) == 0 {
+		return
+	}
+	if lsm == nil || lsm.levels == nil {
+		return
+	}
+	lsm.levels.prefetch(key, hot)
+}
+
 func (lsm *LSM) MemSize() int64 {
 	return lsm.memTable.Size()
 }
