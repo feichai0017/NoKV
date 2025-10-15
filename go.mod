@@ -1,6 +1,6 @@
 module github.com/feichai0017/NoKV
 
-go 1.23.1
+go 1.23
 
 require (
 	github.com/cespare/xxhash/v2 v2.1.2
