@@ -161,7 +161,11 @@ func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
 	req.Entries = []*utils.Entry{e}
 	req.Wg.Add(1)
 	req.IncrRef()
-	defer req.DecrRef()
+	defer func() {
+		req.Entries = nil // Break the link to avoid resetting the entry.
+		req.DecrRef()
+	}()
+
 	if err := vlog.write([]*request{req}); err != nil {
 		return nil, err
 	}
@@ -234,6 +238,7 @@ func (vlog *valueLog) read(vp *utils.ValuePtr) ([]byte, func(), error) {
 		unlock()
 		return nil, nil, err
 	}
+	defer entry.DecrRef()
 	return entry.Value, unlock, nil
 }
 
@@ -442,7 +447,8 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 			return nil
 		}
 
-		ne := new(utils.Entry)
+		ne := utils.EntryPool.Get().(*utils.Entry)
+		ne.IncrRef()
 		ne.Meta = 0
 		ne.ExpiresAt = e.ExpiresAt
 		ne.Key = append(ne.Key[:0], e.Key...)
@@ -945,12 +951,11 @@ func (db *DB) getHead() (*utils.ValuePtr, uint64) {
 
 func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
 	toLSM := func(k []byte, vs utils.ValueStruct) {
-		db.lsm.Set(&utils.Entry{
-			Key:       k,
-			Value:     vs.Value,
-			ExpiresAt: vs.ExpiresAt,
-			Meta:      vs.Meta,
-		})
+		e := utils.NewEntry(k, vs.Value)
+		e.ExpiresAt = vs.ExpiresAt
+		e.Meta = vs.Meta
+		db.lsm.Set(e)
+		e.DecrRef()
 	}
 
 	return func(e *utils.Entry, vp *utils.ValuePtr) error {
@@ -1120,4 +1125,29 @@ type reason struct {
 	total   float64
 	discard float64
 	count   int
+}
+
+func (req *request) IncrRef() {
+	atomic.AddInt32(&req.ref, 1)
+}
+
+func (req *request) DecrRef() {
+	nRef := atomic.AddInt32(&req.ref, -1)
+	if nRef > 0 {
+		return
+	}
+	// Call DecrRef on all entries to release them back to the pool.
+	for _, e := range req.Entries {
+		e.DecrRef()
+	}
+	req.Entries = nil
+	req.Ptrs = nil
+	requestPool.Put(req)
+}
+
+func (req *request) Wait() error {
+	req.Wg.Wait()
+	err := req.Err
+	req.DecrRef() // DecrRef after writing to DB.
+	return err
 }

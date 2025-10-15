@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/pkg/errors"
 )
@@ -398,7 +399,7 @@ func (txn *Txn) modify(e *utils.Entry) error {
 		txn.conflictKeys[fp] = struct{}{}
 	}
 
-	txn.pendingWrites[string(e.Key)] = e
+	txn.pendingWrites[unsafe.String(unsafe.SliceData(e.Key), len(e.Key))] = e
 	return nil
 }
 
@@ -429,11 +430,13 @@ func (txn *Txn) SetEntry(e *utils.Entry) error {
 // The current transaction keeps a reference to the key byte slice argument.
 // Users must not modify the key until the end of the transaction.
 func (txn *Txn) Delete(key []byte) error {
-	e := &utils.Entry{
-		Key:  key,
-		Meta: utils.BitDelete,
+	e := utils.NewEntry(key, nil)
+	e.Meta = utils.BitDelete
+	if err := txn.modify(e); err != nil {
+		e.DecrRef()
+		return err
 	}
-	return txn.modify(e)
+	return nil
 }
 
 // Get looks for key and returns corresponding Item.
@@ -448,7 +451,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item = new(Item)
 	item.e = new(utils.Entry)
 	if txn.update {
-		if e, has := txn.pendingWrites[string(key)]; has && bytes.Equal(key, e.Key) {
+		if e, has := txn.pendingWrites[unsafe.String(unsafe.SliceData(key), len(key))]; has && bytes.Equal(key, e.Key) {
 			if isDeletedOrExpired(e.Meta, e.ExpiresAt) {
 				return nil, utils.ErrKeyNotFound
 			}
@@ -532,6 +535,14 @@ func (txn *Txn) Discard() {
 	}
 	txn.discarded = true
 
+	// Release entries in pendingWrites.
+	if txn.update {
+		for _, e := range txn.pendingWrites {
+			e.DecrRef()
+		}
+		txn.pendingWrites = nil
+	}
+
 	txn.db.orc.doneRead(txn)
 	txn.db.orc.trackTxnFinish()
 
@@ -585,6 +596,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	for _, e := range txn.pendingWrites {
 		processEntry(e)
 	}
+	txn.pendingWrites = nil // Clear the map to prevent double-free in Discard.
 
 	req, err := txn.db.sendToWriteCh(entries)
 	if err != nil {

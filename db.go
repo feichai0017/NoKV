@@ -244,11 +244,10 @@ func (db *DB) Close() error {
 
 func (db *DB) Del(key []byte) error {
 	// 写入一个值为nil的entry 作为墓碑消息实现删除
-	return db.Set(&utils.Entry{
-		Key:       key,
-		Value:     nil,
-		ExpiresAt: 0,
-	})
+	e := utils.NewEntry(key, nil)
+	err := db.Set(e)
+	e.DecrRef()
+	return err
 }
 func (db *DB) Set(data *utils.Entry) error {
 	if data == nil || len(data.Key) == 0 {
@@ -346,14 +345,12 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	val, err := db.lsm.Get(headKey)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
-			val = &utils.Entry{
-				Key:   headKey,
-				Value: []byte{},
-			}
+			val = utils.NewEntry(headKey, []byte{})
 		} else {
 			return pkgerrors.Wrap(err, "Retrieving head from on-disk LSM")
 		}
 	}
+	defer val.DecrRef()
 
 	// 内部key head 一定是value ptr 不需要检查内容
 	var head utils.ValuePtr
@@ -764,26 +761,7 @@ func (db *DB) writeToLSM(b *request) error {
 	}
 	return nil
 }
-func (req *request) IncrRef() {
-	atomic.AddInt32(&req.ref, 1)
-}
 
-func (req *request) DecrRef() {
-	nRef := atomic.AddInt32(&req.ref, -1)
-	if nRef > 0 {
-		return
-	}
-	req.Entries = nil
-	req.Ptrs = nil
-	requestPool.Put(req)
-}
-
-func (req *request) Wait() error {
-	req.Wg.Wait()
-	err := req.Err
-	req.DecrRef() // DecrRef after writing to DB.
-	return err
-}
 
 // 结构体
 type flushTask struct {
@@ -804,10 +782,9 @@ func (db *DB) pushHead(ft flushTask) error {
 	// Pick the max commit ts, so in case of crash, our read ts would be higher than all the
 	// commits.
 	headTs := utils.KeyWithTs(head, uint64(time.Now().Unix()/1e9))
-	ft.mt.Add(&utils.Entry{
-		Key:   headTs,
-		Value: val,
-	})
+	e := utils.NewEntry(headTs, val)
+	ft.mt.Add(e)
+	e.DecrRef()
 	return nil
 }
 

@@ -45,16 +45,11 @@ func TestVlogBase(t *testing.T) {
 	const val2 = "samplevalb012345678901234567890123"
 	require.True(t, int64(len(val1)) >= db.opt.ValueThreshold)
 
-	e1 := &utils.Entry{
-		Key:   []byte("samplekey"),
-		Value: []byte(val1),
-		Meta:  utils.BitValuePointer,
-	}
-	e2 := &utils.Entry{
-		Key:   []byte("samplekeyb"),
-		Value: []byte(val2),
-		Meta:  utils.BitValuePointer,
-	}
+	e1 := utils.NewEntry([]byte("samplekey"), []byte(val1))
+	e1.Meta = utils.BitValuePointer
+
+	e2 := utils.NewEntry([]byte("samplekeyb"), []byte(val2))
+	e2.Meta = utils.BitValuePointer
 
 	// 构建一个批量请求的request
 	b := new(request)
@@ -62,6 +57,8 @@ func TestVlogBase(t *testing.T) {
 
 	// 直接写入vlog中
 	log.write([]*request{b})
+	e1.DecrRef()
+	e2.DecrRef()
 	require.Len(t, b.Ptrs, 2)
 	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
 
@@ -75,23 +72,19 @@ func TestVlogBase(t *testing.T) {
 	defer utils.RunCallback(unlock2)
 	entry1, err := wal.DecodeEntry(payload1)
 	require.NoError(t, err)
+	defer entry1.DecrRef()
 	entry2, err := wal.DecodeEntry(payload2)
 	require.NoError(t, err)
+	defer entry2.DecrRef()
 
-	// 比较entry对象是否相等
-	readEntries := []utils.Entry{*entry1, *entry2}
-	require.EqualValues(t, []utils.Entry{
-		{
-			Key:   []byte("samplekey"),
-			Value: []byte(val1),
-			Meta:  utils.BitValuePointer,
-		},
-		{
-			Key:   []byte("samplekeyb"),
-			Value: []byte(val2),
-			Meta:  utils.BitValuePointer,
-		},
-	}, readEntries)
+	// Compare the fields we care about.
+	require.Equal(t, []byte("samplekey"), entry1.Key)
+	require.Equal(t, []byte(val1), entry1.Value)
+	require.Equal(t, utils.BitValuePointer, entry1.Meta)
+
+	require.Equal(t, []byte("samplekeyb"), entry2.Key)
+	require.Equal(t, []byte(val2), entry2.Value)
+	require.Equal(t, utils.BitValuePointer, entry2.Meta)
 }
 
 func clearDir() {
@@ -114,16 +107,22 @@ func TestValueGC(t *testing.T) {
 	kv := Open(opt)
 	defer kv.Close()
 	sz := 32 << 10
-	kvList := []*utils.Entry{}
+	kvList := make([]*utils.Entry, 0, 100)
+	defer func() {
+		for _, e := range kvList {
+			e.DecrRef()
+		}
+	}()
+
 	for i := 0; i < 100; i++ {
 		e := newRandEntry(sz)
-		kvList = append(kvList, &utils.Entry{
-			Key:       e.Key,
-			Value:     e.Value,
-			Meta:      e.Meta,
-			ExpiresAt: e.ExpiresAt,
-		})
+		eCopy := utils.NewEntry(e.Key, e.Value)
+		eCopy.Meta = e.Meta
+		eCopy.ExpiresAt = e.ExpiresAt
+		kvList = append(kvList, eCopy)
+
 		require.NoError(t, kv.Set(e))
+		e.DecrRef()
 	}
 	kv.RunValueLogGC(0.9)
 	for _, e := range kvList {
@@ -133,6 +132,7 @@ func TestValueGC(t *testing.T) {
 		require.NotNil(t, val)
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
 		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
+		item.DecrRef()
 	}
 }
 

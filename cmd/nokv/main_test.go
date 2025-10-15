@@ -15,9 +15,11 @@ func TestRunManifestCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	if err := db.Set(utils.NewEntry([]byte("cli-manifest"), []byte("value"))); err != nil {
+	e := utils.NewEntry([]byte("cli-manifest"), []byte("value"))
+	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
+	e.DecrRef()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -41,9 +43,11 @@ func TestRunStatsCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	if err := db.Set(utils.NewEntry([]byte("cli-stats"), []byte("value"))); err != nil {
+	e := utils.NewEntry([]byte("cli-stats"), []byte("value"))
+	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
+	e.DecrRef()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -70,9 +74,11 @@ func TestRunVlogCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	if err := db.Set(utils.NewEntry([]byte("cli-vlog"), []byte("value"))); err != nil {
+	e := utils.NewEntry([]byte("cli-vlog"), []byte("value"))
+	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
+	e.DecrRef()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

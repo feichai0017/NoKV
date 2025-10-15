@@ -40,10 +40,12 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 
 	db := Open(opt)
 
-	for i := 0; i < 48; i++ {
+	for i := range 48 {
 		val := make([]byte, 512)
-		key := []byte(fmt.Sprintf("key-%03d", i))
-		require.NoError(t, db.Set(utils.NewEntry(key, val)))
+		key := fmt.Appendf(nil, "key-%03d", i)
+		e := utils.NewEntry(key, val)
+		require.NoError(t, db.Set(e))
+		e.DecrRef()
 	}
 	fids := db.vlog.manager.ListFIDs()
 	require.GreaterOrEqual(t, len(fids), 2)
@@ -96,7 +98,10 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	db := Open(opt)
 	key := []byte("orphan-key")
 	val := make([]byte, 512)
-	require.NoError(t, db.Set(utils.NewEntry(key, val)))
+	e := utils.NewEntry(key, val)
+	require.NoError(t, db.Set(e))
+	e.DecrRef()
+
 	headPtr := db.vlog.manager.Head()
 	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
 	headCopy := headPtr
@@ -158,7 +163,9 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	for i := range 256 {
 		key := fmt.Appendf(nil, "sst-crash-%03d", i)
 		val := make([]byte, 128)
-		require.NoError(t, db.Set(utils.NewEntry(key, val)))
+		e := utils.NewEntry(key, val)
+		require.NoError(t, db.Set(e))
+		e.DecrRef()
 	}
 	require.NoError(t, db.Close())
 
@@ -202,7 +209,9 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	}
 
 	db := Open(opt)
-	require.NoError(t, db.Set(utils.NewEntry([]byte("rewrite-key"), []byte("rewrite-val"))))
+	e := utils.NewEntry([]byte("rewrite-key"), []byte("rewrite-val"))
+	require.NoError(t, db.Set(e))
+	e.DecrRef()
 	require.NoError(t, db.Close())
 
 	current := filepath.Join(dir, "CURRENT")
@@ -223,6 +232,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	tmpExists := false
 	item, err := db2.Get([]byte("rewrite-key"))
 	require.NoError(t, err)
+	defer item.DecrRef()
 	require.Equal(t, []byte("rewrite-val"), item.Value)
 
 	_, err = os.Stat(tmp)
@@ -253,7 +263,9 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	db := Open(opt)
 	key := []byte("wal-crash-key")
 	val := []byte("wal-crash-value")
-	require.NoError(t, db.Set(utils.NewEntry(key, val)))
+	e := utils.NewEntry(key, val)
+	require.NoError(t, db.Set(e))
+	e.DecrRef()
 
 	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
 	_ = db.stats.close()
@@ -269,6 +281,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 
 	item, err := db2.Get(key)
 	require.NoError(t, err)
+	defer item.DecrRef()
 	require.Equal(t, val, item.Value)
 	logRecoveryMetric(t, "wal_replay", map[string]any{
 		"key":           string(key),
