@@ -39,9 +39,7 @@ func DecodeEntry(data []byte) (*utils.Entry, error) {
 		return nil, err
 	}
 
-	e := &utils.Entry{}
-	e.Key = buf[:h.KeyLen]
-	e.Value = buf[h.KeyLen:]
+	e := utils.NewEntry(buf[:h.KeyLen], buf[h.KeyLen:])
 	e.ExpiresAt = h.ExpiresAt
 	e.Meta = h.Meta
 

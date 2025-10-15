@@ -464,6 +464,7 @@ func (s *Skiplist) Draw(align bool) {
 type SkipListIterator struct {
 	list *Skiplist
 	n    *node
+	e    Entry
 }
 
 func (s *SkipListIterator) Rewind() {
@@ -471,13 +472,13 @@ func (s *SkipListIterator) Rewind() {
 }
 
 func (s *SkipListIterator) Item() Item {
-	return &Entry{
-		Key:       s.Key(),
-		Value:     s.Value().Value,
-		ExpiresAt: s.Value().ExpiresAt,
-		Meta:      s.Value().Meta,
-		Version:   s.Value().Version,
-	}
+	vs := s.Value()
+	s.e.Key = s.Key()
+	s.e.Value = vs.Value
+	s.e.ExpiresAt = vs.ExpiresAt
+	s.e.Meta = vs.Meta
+	s.e.Version = vs.Version
+	return &s.e
 }
 
 // Close frees the resources held by the iterator

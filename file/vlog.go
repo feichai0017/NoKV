@@ -1,10 +1,7 @@
 package file
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"math"
 	"os"
@@ -142,46 +139,5 @@ func (lf *LogFile) Sync() error {
 	return lf.f.Sync()
 }
 
-// encodeEntry will encode entry to the buf
-// layout of entry
-// +--------+-----+-------+-------+
-// | header | key | value | crc32 |
-// +--------+-----+-------+-------+
-func (lf *LogFile) EncodeEntry(e *utils.Entry, buf *bytes.Buffer, offset uint32) (int, error) {
-	h := utils.Header{
-		KLen:      uint32(len(e.Key)),
-		VLen:      uint32(len(e.Value)),
-		ExpiresAt: e.ExpiresAt,
-		Meta:      e.Meta,
-	}
 
-	hash := crc32.New(utils.CastagnoliCrcTable)
-	writer := io.MultiWriter(buf, hash)
 
-	// encode header.
-	var headerEnc [utils.MaxHeaderSize]byte
-	sz := h.Encode(headerEnc[:])
-	utils.Panic2(writer.Write(headerEnc[:sz]))
-	// Encryption is disabled so writing directly to the buffer.
-	utils.Panic2(writer.Write(e.Key))
-	utils.Panic2(writer.Write(e.Value))
-	// write crc32 hash.
-	var crcBuf [crc32.Size]byte
-	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
-	utils.Panic2(buf.Write(crcBuf[:]))
-	// return encoded length.
-	return len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf), nil
-}
-func (lf *LogFile) DecodeEntry(buf []byte, offset uint32) (*utils.Entry, error) {
-	var h utils.Header
-	hlen := h.Decode(buf)
-	kv := buf[hlen:]
-	e := &utils.Entry{
-		Meta:      h.Meta,
-		ExpiresAt: h.ExpiresAt,
-		Offset:    offset,
-		Key:       kv[:h.KLen],
-		Value:     kv[h.KLen : h.KLen+h.VLen],
-	}
-	return e, nil
-}

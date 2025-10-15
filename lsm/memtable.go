@@ -73,13 +73,13 @@ func (m *memTable) set(entry *utils.Entry) error {
 
 func (m *memTable) Get(key []byte) (*utils.Entry, error) {
 	vs := m.sl.Search(key)
-	e := &utils.Entry{
-		Key:       key,
-		Value:     vs.Value,
-		ExpiresAt: vs.ExpiresAt,
-		Meta:      vs.Meta,
-		Version:   vs.Version,
-	}
+	e := utils.EntryPool.Get().(*utils.Entry)
+	e.Key = key
+	e.Value = vs.Value
+	e.ExpiresAt = vs.ExpiresAt
+	e.Meta = vs.Meta
+	e.Version = vs.Version
+	e.IncrRef()
 	return e, nil
 }
 
@@ -167,6 +167,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 			mt.maxVersion = ts
 		}
 		mt.sl.Add(entry)
+		entry.DecrRef()
 		mt.walSize += int64(len(payload)) + 8
 		return nil
 	})

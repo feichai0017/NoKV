@@ -2,8 +2,16 @@ package utils
 
 import (
 	"encoding/binary"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+var EntryPool = sync.Pool{
+	New: func() any {
+		return &Entry{}
+	},
+}
 
 type ValueStruct struct {
 	Meta      byte
@@ -59,14 +67,41 @@ type Entry struct {
 	Offset       uint32
 	Hlen         int // Length of the header.
 	ValThreshold int64
+
+	ref int32
+}
+
+func (e *Entry) IncrRef() {
+	atomic.AddInt32(&e.ref, 1)
+}
+
+func (e *Entry) DecrRef() {
+	nRef := atomic.AddInt32(&e.ref, -1)
+	if nRef > 0 {
+		return
+	}
+	e.reset()
+	EntryPool.Put(e)
+}
+
+func (e *Entry) reset() {
+	e.Key = nil
+	e.Value = nil
+	e.ExpiresAt = 0
+	e.Meta = 0
+	e.Version = 0
+	e.Offset = 0
+	e.Hlen = 0
+	e.ValThreshold = 0
 }
 
 // NewEntry_
 func NewEntry(key, value []byte) *Entry {
-	return &Entry{
-		Key:   key,
-		Value: value,
-	}
+	e := EntryPool.Get().(*Entry)
+	e.Key = key
+	e.Value = value
+	e.IncrRef()
+	return e
 }
 
 // Entry_

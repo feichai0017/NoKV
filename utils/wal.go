@@ -6,6 +6,15 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
+	"sync"
+)
+
+var (
+	crc32Pool = sync.Pool{
+		New: func() any {
+			return crc32.New(CastagnoliCrcTable)
+		},
+	}
 )
 
 // LogEntry
@@ -67,15 +76,25 @@ func WalCodec(buf *bytes.Buffer, e *Entry) int {
 		Meta:      e.Meta,
 	}
 
-	hash := crc32.New(CastagnoliCrcTable)
-	writer := io.MultiWriter(buf, hash)
+	// Get hasher from pool and schedule it to be returned.
+	hash := crc32Pool.Get().(hash.Hash32)
+	hash.Reset()
+	defer crc32Pool.Put(hash)
 
 	// encode header.
 	var headerEnc [maxHeaderSize]byte
 	sz := h.Encode(headerEnc[:])
-	Panic2(writer.Write(headerEnc[:sz]))
-	Panic2(writer.Write(e.Key))
-	Panic2(writer.Write(e.Value))
+
+	// Write directly to buffer and hasher, avoiding io.MultiWriter allocation.
+	Panic2(buf.Write(headerEnc[:sz]))
+	Panic2(hash.Write(headerEnc[:sz]))
+
+	Panic2(buf.Write(e.Key))
+	Panic2(hash.Write(e.Key))
+
+	Panic2(buf.Write(e.Value))
+	Panic2(hash.Write(e.Value))
+
 	// write crc32 hash.
 	var crcBuf [crc32.Size]byte
 	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())

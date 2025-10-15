@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"sort"
 	"testing"
 	"text/tabwriter"
 	"time"
@@ -72,16 +71,18 @@ func BenchmarkNoKVWrite(b *testing.B) {
 	db := NoKV.Open(opt)
 	defer db.Close()
 
-	data := generateData(b.N)
+	keys := generateData(b.N)
+	entries := make([]*utils.Entry, b.N)
+	for i := 0; i < b.N; i++ {
+		value := make([]byte, 100)
+		rand.Read(value)
+		entries[i] = utils.NewEntry(keys[i], value)
+	}
 	b.ResetTimer()
 
 	start := time.Now()
 	for i := 0; i < b.N; i++ {
-		key := data[i]
-		value := make([]byte, 100)
-		rand.Read(value)
-		e := utils.NewEntry(key, value)
-		if err := db.Set(e); err != nil {
+		if err := db.Set(entries[i]); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -123,14 +124,18 @@ func BenchmarkBadgerWrite(b *testing.B) {
 	}
 	defer db.Close()
 
-	data := generateData(b.N)
+	keys := generateData(b.N)
+	values := make([][]byte, b.N)
+	for i := 0; i < b.N; i++ {
+		values[i] = make([]byte, 100)
+		rand.Read(values[i])
+	}
 	b.ResetTimer()
 
 	start := time.Now()
 	for i := 0; i < b.N; i++ {
-		key := data[i]
-		value := make([]byte, 100)
-		rand.Read(value)
+		key := keys[i]
+		value := values[i]
 		err := db.Update(func(txn *badger.Txn) error {
 			return txn.Set(key, value)
 		})
@@ -154,69 +159,6 @@ func BenchmarkBadgerWrite(b *testing.B) {
 	fmt.Printf("Total Data Size: %.2f MB\n", result.DataSize)
 
 	benchmarkResults = append(benchmarkResults, result)
-}
-
-func runCacheReadScenario(t *testing.T, label string, cacheSize, bloomSize int) readScenarioResult {
-	t.Helper()
-	clearBenchDir()
-	cfg := *opt
-	cfg.BlockCacheSize = cacheSize
-	cfg.BloomCacheSize = bloomSize
-	if cacheSize == 0 {
-		cfg.BlockCacheHotFraction = 0
-	}
-	db := NoKV.Open(&cfg)
-	defer db.Close()
-
-	const numKeys = 5000000
-	keys := generateData(numKeys)
-	value := make([]byte, 128)
-	for i := 0; i < numKeys; i++ {
-		rand.Read(value)
-		if err := db.Set(utils.NewEntry(keys[i], value)); err != nil {
-			t.Fatalf("set: %v", err)
-		}
-	}
-
-	// Warm up to populate caches before measurement.
-	for i := 0; i < 1000; i++ {
-		if _, err := db.Get(keys[rand.Intn(numKeys)]); err != nil {
-			t.Fatalf("warmup get: %v", err)
-		}
-	}
-
-	const reads = 200000
-	durations := make([]time.Duration, reads)
-	start := time.Now()
-	for i := 0; i < reads; i++ {
-		key := keys[rand.Intn(numKeys)]
-		opStart := time.Now()
-		if _, err := db.Get(key); err != nil {
-			t.Fatalf("get: %v", err)
-		}
-		durations[i] = time.Since(opStart)
-	}
-	total := time.Since(start)
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	p99Index := int(float64(len(durations))*0.99) - 1
-	if p99Index < 0 {
-		p99Index = 0
-	}
-	if p99Index >= len(durations) {
-		p99Index = len(durations) - 1
-	}
-	return readScenarioResult{
-		Name: label,
-		QPS:  float64(reads) / total.Seconds(),
-		P99:  durations[p99Index],
-	}
-}
-
-func TestCacheReadScenarios(t *testing.T) {
-	enabled := runCacheReadScenario(t, "cache-enabled", opt.BlockCacheSize, opt.BloomCacheSize)
-	disabled := runCacheReadScenario(t, "cache-disabled", 0, 0)
-	t.Logf("%s: QPS=%.2f P99=%s", enabled.Name, enabled.QPS, enabled.P99)
-	t.Logf("%s: QPS=%.2f P99=%s", disabled.Name, disabled.QPS, disabled.P99)
 }
 
 

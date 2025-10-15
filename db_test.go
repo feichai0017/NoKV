@@ -20,11 +20,13 @@ func TestAPI(t *testing.T) {
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
+		e.DecrRef()
 		// 查询
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
 		} else {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
+			entry.DecrRef()
 		}
 	}
 
@@ -58,11 +60,13 @@ func TestAPI(t *testing.T) {
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
+		e.DecrRef()
 		// 查询
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
 		} else {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
+			entry.DecrRef()
 		}
 	}
 }

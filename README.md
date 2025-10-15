@@ -159,6 +159,25 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 
 Benchmark artefacts are written to `benchmark/benchmark_results/*.txt` for easy comparison across runs.
 
+### Performance Profiles
+
+To analyze CPU and memory usage, run the `analyze_pprof.sh` script in the `scripts/` directory. This script generates SVG visualizations (flame graphs and call graphs) in the `pprof_output/` directory.
+
+**Usage:**
+```bash
+./scripts/analyze_pprof.sh
+```
+
+**Generated Profiles:**
+- **CPU Flame Graph:** [pprof_output/cpu_flame.svg](pprof_output/cpu_flame.svg)
+- **CPU Call Graph:** [pprof_output/cpu_call.svg](pprof_output/cpu_call.svg)
+- **Memory (Alloc Space) Flame Graph:** [pprof_output/mem_alloc_flame.svg](pprof_output/mem_alloc_flame.svg)
+- **Memory (Alloc Space) Call Graph:** [pprof_output/mem_alloc_call.svg](pprof_output/mem_alloc_call.svg)
+- **Memory (Inuse Space) Flame Graph:** [pprof_output/mem_inuse_flame.svg](pprof_output/mem_inuse_flame.svg)
+- **Memory (Inuse Space) Call Graph:** [pprof_output/mem_inuse_call.svg](pprof_output/mem_inuse_call.svg)
+
+---
+
 ---
 
 ## 📚 Documentation

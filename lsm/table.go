@@ -6,7 +6,6 @@ import (
 	"math"
 	"os"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -63,7 +62,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// locate to the initial position is the max key
 	itr.Rewind()
 	utils.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
-	maxKey := itr.Item().Entry().Key
+	maxKey := append([]byte(nil), itr.Item().Entry().Key...)
 	t.ss.SetMaxKey(maxKey)
 
 	return t
@@ -109,20 +108,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error
 func (t *table) indexKey() uint64 {
 	return t.fid
 }
-func (t *table) getEntry(key, block []byte, idx int) (entry *utils.Entry, err error) {
-	if len(block) == 0 {
-		return nil, utils.ErrKeyNotFound
-	}
-	dataStr := string(block)
-	blocks := strings.Split(dataStr, ",")
-	if idx >= 0 && idx < len(blocks) {
-		return &utils.Entry{
-			Key:   key,
-			Value: []byte(blocks[idx]),
-		}, nil
-	}
-	return nil, utils.ErrKeyNotFound
-}
+
 
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
