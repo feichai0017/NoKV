@@ -81,10 +81,7 @@ func (c *cache) close() error { return nil }
 
 func newCache(opt *Options) *cache {
 	metrics := &cacheMetrics{}
-	hotCap := opt.BlockCacheSize
-	if hotCap < 0 {
-		hotCap = 0
-	}
+	hotCap := max(opt.BlockCacheSize, 0)
 	hotFraction := opt.BlockCacheHotFraction
 	if hotCap == 0 || hotFraction <= 0 || hotFraction >= 1 {
 		hotFraction = 0
