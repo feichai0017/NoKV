@@ -96,10 +96,12 @@ Badger follows the same ordering (value log first, then write batch). RocksDB's 
 
 ```mermaid
 flowchart LR
-    FlushMgr -- obsolete ptrs --> DiscardStats
-    DiscardStats -->|batch json| writeCh
-    writeCh --> valueLog.newValuePtr (lfDiscardStatsKey)
-    valueLog -- GC trigger --> Manager
+  FlushMgr -- "obsolete ptrs" --> DiscardStats
+  DiscardStats -->|"batch json"| writeCh
+  valuePtr["valueLog.newValuePtr(lfDiscardStatsKey)"]
+  writeCh --> valuePtr
+  valueLog -- "GC trigger" --> Manager
+
 ```
 
 * `lfDiscardStats` aggregates per-file discard counts from `lsm.FlushTable` completion (`valueLog.lfDiscardStats.push` inside `lsm/flush`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
