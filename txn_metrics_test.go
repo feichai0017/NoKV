@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"expvar"
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
@@ -25,5 +26,29 @@ func TestTxnConflictMetrics(t *testing.T) {
 
 		metrics := db.orc.txnMetricsSnapshot()
 		require.GreaterOrEqual(t, metrics.Conflicts, uint64(1))
+	})
+}
+
+func TestTxnMetricsTrackLongRunningTxn(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		baseline := db.Info().Snapshot()
+
+		txn := db.NewTransaction(true)
+
+		activeSnap := db.Info().Snapshot()
+		require.Equal(t, baseline.TxnsActive+1, activeSnap.TxnsActive)
+		require.GreaterOrEqual(t, activeSnap.TxnsStarted, baseline.TxnsStarted+1)
+
+		require.NoError(t, txn.SetEntry(utils.NewEntry([]byte("long-txn"), []byte("value"))))
+		require.NoError(t, txn.Commit())
+
+		committedSnap := db.Info().Snapshot()
+		require.Equal(t, baseline.TxnsActive, committedSnap.TxnsActive)
+		require.GreaterOrEqual(t, committedSnap.TxnsCommitted, baseline.TxnsCommitted+1)
+
+		db.stats.collect()
+		require.Equal(t, int64(committedSnap.TxnsActive), expvar.Get("NoKV.Txns.Active").(*expvar.Int).Value())
+		require.Equal(t, int64(committedSnap.TxnsStarted), expvar.Get("NoKV.Txns.Started").(*expvar.Int).Value())
+		require.Equal(t, int64(committedSnap.TxnsCommitted), expvar.Get("NoKV.Txns.Committed").(*expvar.Int).Value())
 	})
 }
