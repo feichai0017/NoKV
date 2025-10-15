@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# This script automates the analysis of Go pprof profiles (CPU and Memory)
+# This script automates the generation and analysis of Go pprof profiles (CPU and Memory)
 # and generates SVG visualizations (flame graphs and call graphs).
 
 # Dependencies:
@@ -13,11 +13,23 @@ OUTPUT_DIR="pprof_output"
 CPU_PROF="cpu.prof"
 MEM_PROF="mem.prof"
 
-echo "Starting pprof analysis..."
+echo "Starting pprof generation and analysis..."
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 echo "Output will be saved in: $OUTPUT_DIR"
+
+# --- Generate Profiles ---
+echo "Generating CPU and Memory profiles by running benchmarks..."
+go test -bench=. -cpuprofile="$CPU_PROF" -memprofile="$MEM_PROF" ./benchmark
+if [ $? -eq 0 ]; then
+    echo "Profiles generated successfully: $CPU_PROF, $MEM_PROF"
+else
+    echo "Error generating profiles. Aborting analysis."
+    exit 1
+fi
+
+echo ""
 
 # --- Analyze CPU Profile ---
 if [ -f "$CPU_PROF" ]; then
@@ -66,7 +78,7 @@ if [ -f "$MEM_PROF" ]; then
             echo "Memory alloc_space call graph generated: $OUTPUT_DIR/mem_alloc_call.svg"
         else
             echo "Error generating Memory alloc_space call graph."
-        fi
+        }
     else
         echo "Graphviz 'dot' command not found. Skipping Memory call graph generation."
     fi
