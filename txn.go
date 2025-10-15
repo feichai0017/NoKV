@@ -648,8 +648,9 @@ func (txn *Txn) Commit() error {
 	}
 	// If batchSet failed, LSM would not have been updated. So, no need to rollback anything.
 
-	// TODO: What if some of the txns successfully make it to value log, but others fail.
-	// Nothing gets updated to LSM, until a restart happens.
+	// Value-log errors are surfaced via req.Wait(); the value-log manager rewinds
+	// partial batches before the error is returned so the LSM state remains
+	// unchanged on failure.
 	return txnCb()
 }
 

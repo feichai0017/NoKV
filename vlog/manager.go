@@ -1,6 +1,7 @@
 package vlog
 
 import (
+	"slices"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -29,6 +30,23 @@ type Manager struct {
 	active    *file.LogFile
 	activeID  uint32
 	offset    uint32
+	hooks     ManagerTestingHooks
+}
+
+// ManagerTestingHooks provides callbacks that are used only in tests to inject
+// failures in the value-log manager. They are no-ops in production code and are
+// guarded by the Manager's internal locking to avoid data races when set.
+type ManagerTestingHooks struct {
+		BeforeAppend func(*Manager, []byte) error
+		BeforeRotate func(*Manager) error
+}
+
+// SetTestingHooks installs testing callbacks on the manager. It is intended for
+// use in tests only and should not be used by production code.
+func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
+		m.filesLock.Lock()
+		defer m.filesLock.Unlock()
+		m.hooks = h
 }
 
 func Open(cfg Config) (*Manager, error) {
@@ -125,6 +143,12 @@ func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
 
+	if hook := m.hooks.BeforeAppend; hook != nil {
+		if err := hook(m, data); err != nil {
+			return nil, err
+		}
+	}
+
 	if m.active == nil {
 		if _, err := m.create(m.maxFid + 1); err != nil {
 			return nil, err
@@ -147,6 +171,11 @@ func (m *Manager) Rotate() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
 
+	if hook := m.hooks.BeforeRotate; hook != nil {
+		if err := hook(m); err != nil {
+			return err
+		}
+	}
 	if m.active != nil {
 		if err := m.active.DoneWriting(m.offset); err != nil {
 			return err
@@ -227,6 +256,68 @@ func (m *Manager) Head() utils.ValuePtr {
 	}
 }
 
+// Rewind rolls back the active head to the provided pointer, truncating any bytes
+// beyond it and removing files created after the pointer's file. It is primarily
+// used to recover from value log write failures so that partially written
+// batches don't leave garbage in the log.
+func (m *Manager) Rewind(ptr utils.ValuePtr) error {
+	var (
+		extra []struct {
+			lf   *file.LogFile
+			name string
+		}
+		active *file.LogFile
+	)
+
+	m.filesLock.Lock()
+	for fid, lf := range m.files {
+		if fid > ptr.Fid {
+			extra = append(extra, struct {
+				lf   *file.LogFile
+				name string
+			}{lf: lf, name: lf.FileName()})
+			delete(m.files, fid)
+		}
+	}
+	lf, ok := m.files[ptr.Fid]
+	if ok {
+		active = lf
+		m.active = lf
+		m.activeID = ptr.Fid
+		m.maxFid = ptr.Fid
+		m.offset = ptr.Offset
+	}
+	m.filesLock.Unlock()
+
+	if !ok {
+		return errors.Errorf("rewind: value log file %d not found", ptr.Fid)
+	}
+
+	var firstErr error
+	for _, item := range extra {
+		item.lf.Lock.Lock()
+		if err := item.lf.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		item.lf.Lock.Unlock()
+		if err := os.Remove(item.name); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	active.Lock.Lock()
+	if err := active.Truncate(int64(ptr.Offset)); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := active.Init(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	active.AddSize(ptr.Offset)
+	active.Lock.Unlock()
+
+	return firstErr
+}
+
 func (m *Manager) Close() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
@@ -248,7 +339,7 @@ func (m *Manager) ListFIDs() []uint32 {
 	for fid := range m.files {
 		fids = append(fids, fid)
 	}
-	sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+	slices.Sort(fids)
 	return fids
 }
 

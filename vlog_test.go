@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,11 +95,17 @@ func TestVlogBase(t *testing.T) {
 }
 
 func clearDir() {
-	_, err := os.Stat(opt.WorkDir)
-	if err == nil {
-		os.RemoveAll(opt.WorkDir)
+	if opt == nil {
+		return
 	}
-	os.Mkdir(opt.WorkDir, os.ModePerm)
+	if opt.WorkDir != "" {
+		_ = os.RemoveAll(opt.WorkDir)
+	}
+	dir, err := os.MkdirTemp("", "nokv-vlog-test-")
+	if err != nil {
+		panic(err)
+	}
+	opt.WorkDir = dir
 }
 
 func TestValueGC(t *testing.T) {
@@ -127,6 +134,78 @@ func TestValueGC(t *testing.T) {
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
 		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
 	}
+}
+
+func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
+	clearDir()
+	cfg := *opt
+	db := Open(&cfg)
+	defer db.Close()
+
+	head := db.vlog.manager.Head()
+	var calls int
+	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+		BeforeAppend: func(m *vlogpkg.Manager, data []byte) error {
+			calls++
+			if calls == 2 {
+				return errors.New("append failure")
+			}
+			return nil
+		},
+	})
+	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+
+	req := requestPool.Get().(*request)
+	req.reset()
+	entries := []*utils.Entry{
+		utils.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 64)),
+		utils.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 64)),
+	}
+	req.loadEntries(entries)
+	req.IncrRef()
+	defer req.DecrRef()
+
+	err := db.vlog.write([]*request{req})
+	require.Error(t, err)
+	require.Equal(t, head, db.vlog.manager.Head())
+	require.Len(t, req.Ptrs, 0)
+}
+
+func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
+	clearDir()
+	cfg := *opt
+	db := Open(&cfg)
+	defer db.Close()
+
+	head := db.vlog.manager.Head()
+	db.vlog.opt.ValueLogFileSize = 256
+	var rotates int
+	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+		BeforeRotate: func(m *vlogpkg.Manager) error {
+			rotates++
+			if rotates == 1 {
+				return errors.New("rotate failure")
+			}
+			return nil
+		},
+	})
+	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+
+	req := requestPool.Get().(*request)
+	req.reset()
+	entries := []*utils.Entry{
+		utils.NewEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
+		utils.NewEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
+	}
+	req.loadEntries(entries)
+	req.IncrRef()
+	defer req.DecrRef()
+
+	err := db.vlog.write([]*request{req})
+	require.Error(t, err)
+	require.Equal(t, head, db.vlog.manager.Head())
+	require.Len(t, req.Ptrs, 0)
+	require.Equal(t, 1, rotates)
 }
 
 func newRandEntry(sz int) *utils.Entry {
