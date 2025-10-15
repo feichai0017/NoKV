@@ -209,6 +209,17 @@ func (vlog *valueLog) read(vp *utils.ValuePtr) ([]byte, func(), error) {
 
 func (vlog *valueLog) write(reqs []*request) error {
 	var buf bytes.Buffer
+	head := vlog.manager.Head()
+
+	fail := func(err error, context string) error {
+		for _, req := range reqs {
+			req.Ptrs = req.Ptrs[:0]
+		}
+		if rewindErr := vlog.manager.Rewind(head); rewindErr != nil {
+			utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
+		}
+		return err
+	}
 
 	for _, req := range reqs {
 		req.Ptrs = req.Ptrs[:0]
@@ -220,13 +231,13 @@ func (vlog *valueLog) write(reqs []*request) error {
 			payload := wal.EncodeEntry(&buf, e)
 			ptr, err := vlog.manager.Append(payload)
 			if err != nil {
-				return err
+				return fail(err, "rewind value log after append failure")
 			}
 			req.Ptrs = append(req.Ptrs, *ptr)
 
 			if int(ptr.Offset)+int(ptr.Len) > vlog.opt.ValueLogFileSize {
 				if err := vlog.manager.Rotate(); err != nil {
-					return err
+					return fail(err, "rewind value log after rotate failure")
 				}
 				atomic.AddInt32(&vlog.db.logRotates, 1)
 			}
@@ -1058,6 +1069,15 @@ func (req *request) reset() {
 	req.Err = nil
 	req.ref = 0
 	req.enqueueAt = time.Time{}
+}
+
+func (req *request) loadEntries(entries []*utils.Entry) {
+	if cap(req.Entries) < len(entries) {
+		req.Entries = make([]*utils.Entry, len(entries))
+	} else {
+		req.Entries = req.Entries[:len(entries)]
+	}
+	copy(req.Entries, entries)
 }
 
 func (vlog *valueLog) waitOnGC(lc *utils.Closer) {

@@ -382,7 +382,7 @@ func (db *DB) doWrites(lc *utils.Closer) {
 	lc.Add(2)
 	go db.processValueLogBatches(lc)
 	go db.applyBatches(lc)
-	
+
 	var (
 		pending      []*request
 		pendingCount int
@@ -612,6 +612,7 @@ func (req *request) DecrRef() {
 		return
 	}
 	req.Entries = nil
+	req.Ptrs = nil
 	requestPool.Put(req)
 }
 

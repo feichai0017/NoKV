@@ -13,7 +13,7 @@ func TestAPI(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 	// 写入
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := utils.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
 		if err := db.Set(e); err != nil {
@@ -27,7 +27,7 @@ func TestAPI(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		key, _ := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		if err := db.Del([]byte(key)); err != nil {
 			t.Fatal(err)
@@ -51,7 +51,7 @@ func TestAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := utils.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
 		if err := db.Set(e); err != nil {
@@ -64,5 +64,30 @@ func TestAPI(t *testing.T) {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
 		}
 	}
+}
 
+func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
+	req := requestPool.Get().(*request)
+	req.reset()
+	defer func() {
+		req.Entries = nil
+		req.Ptrs = nil
+		requestPool.Put(req)
+	}()
+
+	e1 := &utils.Entry{Key: []byte("a")}
+	e2 := &utils.Entry{Key: []byte("b")}
+	src := []*utils.Entry{e1, e2}
+	req.loadEntries(src)
+
+	if len(req.Entries) != len(src) {
+		t.Fatalf("expected %d entries, got %d", len(src), len(req.Entries))
+	}
+	if &req.Entries[0] == &src[0] {
+		t.Fatalf("request reused caller backing array")
+	}
+	src[0] = &utils.Entry{Key: []byte("z")}
+	if string(req.Entries[0].Key) != "a" {
+		t.Fatalf("entry data mutated with caller slice")
+	}
 }

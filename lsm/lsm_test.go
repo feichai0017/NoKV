@@ -348,10 +348,17 @@ func tricky(tables []*table) {
 		table.ss.SetCreatedAt(&t)
 	}
 }
+
 func clearDir() {
-	_, err := os.Stat(opt.WorkDir)
-	if err == nil {
-		os.RemoveAll(opt.WorkDir)
+	if opt == nil {
+		return
 	}
-	os.Mkdir(opt.WorkDir, os.ModePerm)
+	if opt.WorkDir != "" {
+		_ = os.RemoveAll(opt.WorkDir)
+	}
+	dir, err := os.MkdirTemp("", "nokv-lsm-test-")
+	if err != nil {
+		panic(err)
+	}
+	opt.WorkDir = dir
 }

@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
+	vlogpkg "github.com/feichai0017/NoKV/vlog"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -343,4 +346,35 @@ func TestConflict(t *testing.T) {
 	t.Run("ItrSeek", func(t *testing.T) {
 		runTest(t, testAndSetItr)
 	})
+}
+
+func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
+	clearDir()
+	cfg := *opt
+	db := Open(&cfg)
+	defer db.Close()
+
+	head := db.vlog.manager.Head()
+	var calls int
+	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+		BeforeAppend: func(m *vlogpkg.Manager, data []byte) error {
+			calls++
+			if calls == 1 {
+				return errors.New("append failure")
+			}
+			return nil
+		},
+	})
+	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+
+	err := db.Update(func(txn *Txn) error {
+		return txn.Set([]byte("txn-key"), bytes.Repeat([]byte("v"), 256))
+	})
+	if err == nil {
+		t.Fatalf("expected error from value log failure")
+	}
+
+	require.Equal(t, head, db.vlog.manager.Head())
+	_, err = db.Get([]byte("txn-key"))
+	require.Equal(t, utils.ErrKeyNotFound, err)
 }
