@@ -473,7 +473,6 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 		return nil, utils.ErrTxnTooBig
 	}
 
-	// TODO 尝试使用对象复用，后面entry对象也应该使用
 	req := requestPool.Get().(*request)
 	req.reset()
 	req.Entries = entries

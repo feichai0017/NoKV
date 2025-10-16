@@ -163,6 +163,7 @@ func openBadgerAt(dir string, clean bool) (*badger.DB, error) {
 		WithCompression(comp).
 		WithBlockCacheSize(int64(wl.BadgerBlockMB) << 20).
 		WithIndexCacheSize(int64(wl.BadgerIndexMB) << 20)
+		opts = opts.WithValueThreshold(1 << 20) // force values <=1MB into LSM
 	return badger.Open(opts)
 }
 
@@ -186,7 +187,7 @@ func openNoKVAt(dir string, clean bool) (*NoKV.DB, error) {
 		MaxBatchCount:       10000,
 		MaxBatchSize:        16 << 20,
 		VerifyValueChecksum: true,
-		DetectConflicts:     true,
+		DetectConflicts:     false,
 		SyncWrites:          wl.SyncWrites,
 	}
 	return NoKV.Open(opt), nil
