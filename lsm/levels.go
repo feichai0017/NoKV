@@ -264,6 +264,32 @@ func (lm *levelManager) cacheMetrics() CacheMetrics {
 	return lm.cache.metricsSnapshot()
 }
 
+func (lm *levelManager) maxVersion() uint64 {
+	if lm == nil {
+		return 0
+	}
+
+	var max uint64
+	for _, lh := range lm.levels {
+		if lh == nil {
+			continue
+		}
+		lh.RLock()
+		for _, tbl := range lh.tables {
+			if tbl == nil || tbl.ss == nil {
+				continue
+			}
+			if idx := tbl.ss.Indexs(); idx != nil {
+				if v := idx.GetMaxVersion(); v > max {
+					max = v
+				}
+			}
+		}
+		lh.RUnlock()
+	}
+	return max
+}
+
 func (lm *levelManager) prefetch(key []byte, hot bool) {
 	if lm == nil || len(key) == 0 {
 		return

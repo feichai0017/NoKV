@@ -26,7 +26,7 @@ import (
 var (
 	fBenchDir   = flag.String("benchdir", "benchmark_data", "benchmark working directory")
 	fSeed       = flag.Int64("seed", 42, "random seed for data generation")
-	fSyncWrites = flag.Bool("sync", true, "sync writes (fsync) for both engines")
+	fSyncWrites = flag.Bool("sync", false, "sync writes (fsync) for both engines")
 	fConc       = flag.Int("conc", 0, "concurrency (0 => use GOMAXPROCS)")
 	fRounds     = flag.Int("rounds", 1, "repeat the whole suite N rounds")
 
@@ -39,7 +39,7 @@ var (
 	fRangeQueries   = flag.Int("range_q", 2000, "number of range queries")
 	fRangeWindow    = flag.Int("range_win", 100, "range window per query (items)")
 
-	fMode = flag.String("mode", "warm", "read/range mode: warm|cold|both")
+	fMode = flag.String("mode", "both", "read/range mode: warm|cold|both")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")
@@ -136,9 +136,15 @@ func nowStr() string { return time.Now().Format("2006-01-02 15:04:05") }
 
 // ------------------------------ Engine Openers ------------------------------
 
-func openBadgerAt(dir string) (*badger.DB, error) {
-	if err := ensureCleanDir(dir); err != nil {
-		return nil, fmt.Errorf("badger ensure dir: %w", err)
+func openBadgerAt(dir string, clean bool) (*badger.DB, error) {
+	if clean {
+		if err := ensureCleanDir(dir); err != nil {
+			return nil, fmt.Errorf("badger ensure dir: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("badger open dir: %w", err)
+		}
 	}
 	comp := options.None
 	switch strings.ToLower(wl.BadgerComp) {
@@ -160,9 +166,15 @@ func openBadgerAt(dir string) (*badger.DB, error) {
 	return badger.Open(opts)
 }
 
-func openNoKVAt(dir string) (*NoKV.DB, error) {
-	if err := ensureCleanDir(dir); err != nil {
-		return nil, fmt.Errorf("nokv ensure dir: %w", err)
+func openNoKVAt(dir string, clean bool) (*NoKV.DB, error) {
+	if clean {
+		if err := ensureCleanDir(dir); err != nil {
+			return nil, fmt.Errorf("nokv ensure dir: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("nokv open dir: %w", err)
+		}
 	}
 	opt := &NoKV.Options{
 		WorkDir:             dir,
@@ -175,7 +187,7 @@ func openNoKVAt(dir string) (*NoKV.DB, error) {
 		MaxBatchSize:        16 << 20,
 		VerifyValueChecksum: true,
 		DetectConflicts:     true,
-		SyncWrites: 		 wl.SyncWrites,
+		SyncWrites:          wl.SyncWrites,
 	}
 	return NoKV.Open(opt), nil
 }
@@ -187,7 +199,7 @@ func preloadNoKV(t *testing.T, db *NoKV.DB, total, batch, valSize int, seed int6
 	rng := rand.New(rand.NewSource(seed))
 	buf := make([]byte, valSize)
 	for i := 0; i < total; i += batch {
-		end := min(i + batch, total)
+		end := min(i+batch, total)
 		err := db.Update(func(txn *NoKV.Txn) error {
 			for j := i; j < end; j++ {
 				key := fmt.Appendf(nil, "%s%016d", keyPrefix, j)
@@ -212,7 +224,7 @@ func preloadBadger(t *testing.T, db *badger.DB, total, batch, valSize int, seed 
 	rng := rand.New(rand.NewSource(seed))
 	buf := make([]byte, valSize)
 	for i := 0; i < total; i += batch {
-		end := min(i + batch, total)
+		end := min(i+batch, total)
 		err := db.Update(func(txn *badger.Txn) error {
 			for j := i; j < end; j++ {
 				key := fmt.Appendf(nil, "%s%016d", keyPrefix, j)
@@ -238,7 +250,7 @@ func benchNoKVWrite(t *testing.T) {
 	t.Helper()
 	fmt.Printf("\n=== NoKV Write (sync=%v) ===\n", wl.SyncWrites)
 	dir := engineDir("nokv", "write")
-	db, err := openNoKVAt(dir)
+	db, err := openNoKVAt(dir, true)
 	if err != nil {
 		t.Fatalf("open nokv: %v", err)
 	}
@@ -283,7 +295,7 @@ func benchBadgerWrite(t *testing.T) {
 	t.Helper()
 	fmt.Printf("\n=== Badger Write (sync=%v) ===\n", wl.SyncWrites)
 	dir := engineDir("badger", "write")
-	db, err := openBadgerAt(dir)
+	db, err := openBadgerAt(dir, true)
 	if err != nil {
 		t.Fatalf("open badger: %v", err)
 	}
@@ -328,7 +340,7 @@ func benchNoKVBatchWrite(t *testing.T) {
 	t.Helper()
 	fmt.Printf("\n=== NoKV BatchWrite (sync=%v, batch=%d) ===\n", wl.SyncWrites, wl.BatchSize)
 	dir := engineDir("nokv", "batchwrite")
-	db, err := openNoKVAt(dir)
+	db, err := openNoKVAt(dir, true)
 	if err != nil {
 		t.Fatalf("open nokv: %v", err)
 	}
@@ -344,7 +356,7 @@ func benchNoKVBatchWrite(t *testing.T) {
 	buf := make([]byte, wl.ValueSize)
 
 	for i := 0; i < total; i += batch {
-		end := min(i + batch, total)
+		end := min(i+batch, total)
 		err := db.Update(func(txn *NoKV.Txn) error {
 			for j := i; j < end; j++ {
 				key := fmt.Appendf(nil, "key-b-%016d", j)
@@ -382,7 +394,7 @@ func benchBadgerBatchWrite(t *testing.T) {
 	t.Helper()
 	fmt.Printf("\n=== Badger BatchWrite (sync=%v, batch=%d) ===\n", wl.SyncWrites, wl.BatchSize)
 	dir := engineDir("badger", "batchwrite")
-	db, err := openBadgerAt(dir)
+	db, err := openBadgerAt(dir, true)
 	if err != nil {
 		t.Fatalf("open badger: %v", err)
 	}
@@ -398,7 +410,7 @@ func benchBadgerBatchWrite(t *testing.T) {
 	buf := make([]byte, wl.ValueSize)
 
 	for i := 0; i < total; i += batch {
-		end := min(i + batch, total)
+		end := min(i+batch, total)
 		err := db.Update(func(txn *badger.Txn) error {
 			for j := i; j < end; j++ {
 				key := fmt.Appendf(nil, "key-b-%016d", j)
@@ -436,7 +448,7 @@ func benchNoKVRead(t *testing.T, mode string) {
 	t.Helper()
 	fmt.Printf("\n=== NoKV Read (%s, sync=%v) ===\n", strings.ToUpper(mode), wl.SyncWrites)
 	dir := engineDir("nokv", "read")
-	db, err := openNoKVAt(dir)
+	db, err := openNoKVAt(dir, true)
 	if err != nil {
 		t.Fatalf("open nokv: %v", err)
 	}
@@ -444,8 +456,8 @@ func benchNoKVRead(t *testing.T, mode string) {
 	preloadNoKV(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-r-")
 
 	if mode == "cold" {
-		db.Close()
-		db, err = openNoKVAt(dir)
+		_ = db.Close()
+		db, err = openNoKVAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen nokv: %v", err)
 		}
@@ -495,7 +507,7 @@ func benchBadgerRead(t *testing.T, mode string) {
 	t.Helper()
 	fmt.Printf("\n=== Badger Read (%s, sync=%v) ===\n", strings.ToUpper(mode), wl.SyncWrites)
 	dir := engineDir("badger", "read")
-	db, err := openBadgerAt(dir)
+	db, err := openBadgerAt(dir, true)
 	if err != nil {
 		t.Fatalf("open badger: %v", err)
 	}
@@ -503,8 +515,8 @@ func benchBadgerRead(t *testing.T, mode string) {
 	preloadBadger(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-r-")
 
 	if mode == "cold" {
-		db.Close()
-		db, err = openBadgerAt(dir)
+		_ = db.Close()
+		db, err = openBadgerAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen badger: %v", err)
 		}
@@ -552,7 +564,7 @@ func benchNoKVRange(t *testing.T, mode string) {
 	t.Helper()
 	fmt.Printf("\n=== NoKV RangeQuery (%s, window=%d) ===\n", strings.ToUpper(mode), wl.RangeWindow)
 	dir := engineDir("nokv", "range")
-	db, err := openNoKVAt(dir)
+	db, err := openNoKVAt(dir, true)
 	if err != nil {
 		t.Fatalf("open nokv: %v", err)
 	}
@@ -560,8 +572,8 @@ func benchNoKVRange(t *testing.T, mode string) {
 	preloadNoKV(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-g-")
 
 	if mode == "cold" {
-		db.Close()
-		db, err = openNoKVAt(dir)
+		_ = db.Close()
+		db, err = openNoKVAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen nokv: %v", err)
 		}
@@ -624,7 +636,7 @@ func benchBadgerRange(t *testing.T, mode string) {
 	t.Helper()
 	fmt.Printf("\n=== Badger RangeQuery (%s, window=%d) ===\n", strings.ToUpper(mode), wl.RangeWindow)
 	dir := engineDir("badger", "range")
-	db, err := openBadgerAt(dir)
+	db, err := openBadgerAt(dir, true)
 	if err != nil {
 		t.Fatalf("open badger: %v", err)
 	}
@@ -632,8 +644,8 @@ func benchBadgerRange(t *testing.T, mode string) {
 	preloadBadger(t, db, wl.PreloadEntries, wl.BatchSize, wl.ValueSize, wl.Seed, "key-g-")
 
 	if mode == "cold" {
-		db.Close()
-		db, err = openBadgerAt(dir)
+		_ = db.Close()
+		db, err = openBadgerAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen badger: %v", err)
 		}
@@ -786,6 +798,8 @@ func TestBenchmarkResults(t *testing.T) {
 
 		benchNoKVWrite(t)
 		benchBadgerWrite(t)
+		benchNoKVBatchWrite(t)
+		benchBadgerBatchWrite(t)
 
 		switch wl.Mode {
 		case "warm":

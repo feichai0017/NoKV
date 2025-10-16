@@ -67,6 +67,24 @@ func newOracle(opt Options) *oracle {
 	return orc
 }
 
+func (o *oracle) initCommitState(committed uint64) {
+	if o == nil || committed == 0 {
+		return
+	}
+
+	o.Lock()
+	if committed >= o.nextTxnTs {
+		o.nextTxnTs = committed + 1
+	}
+	if committed > o.lastCleanupTs {
+		o.lastCleanupTs = committed
+	}
+	o.Unlock()
+
+	o.readMark.SetDoneUntil(committed)
+	o.txnMark.SetDoneUntil(committed)
+}
+
 func (o *oracle) Stop() {
 	o.closer.SignalAndWait()
 }

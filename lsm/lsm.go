@@ -140,6 +140,37 @@ func (lsm *LSM) CacheMetrics() CacheMetrics {
 	return lsm.levels.cacheMetrics()
 }
 
+// MaxVersion returns the largest commit timestamp known to the LSM tree.
+func (lsm *LSM) MaxVersion() uint64 {
+	if lsm == nil {
+		return 0
+	}
+
+	var max uint64
+
+	lsm.lock.RLock()
+	if lsm.memTable != nil && lsm.memTable.maxVersion > max {
+		max = lsm.memTable.maxVersion
+	}
+	for _, mt := range lsm.immutables {
+		if mt == nil {
+			continue
+		}
+		if mt.maxVersion > max {
+			max = mt.maxVersion
+		}
+	}
+	lsm.lock.RUnlock()
+
+	if lm := lsm.levels; lm != nil {
+		if v := lm.maxVersion(); v > max {
+			max = v
+		}
+	}
+
+	return max
+}
+
 // LogValueLogHead persists value log head pointer via manifest.
 func (lsm *LSM) LogValueLogHead(ptr *utils.ValuePtr) error {
 	return lsm.levels.LogValueLogHead(ptr)
