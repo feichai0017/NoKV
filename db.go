@@ -140,6 +140,7 @@ func Open(opt *Options) *DB {
 		BloomCacheSize:        db.opt.BloomCacheSize,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
+	recoveredVersion := db.lsm.MaxVersion()
 	// 初始化vlog结构
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
@@ -167,6 +168,7 @@ func Open(opt *Options) *DB {
 	}
 
 	db.orc = newOracle(*opt)
+	db.orc.initCommitState(recoveredVersion)
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
