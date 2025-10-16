@@ -166,7 +166,7 @@ func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
 		return nil, err
 	}
 	m.offset += uint32(len(data))
-	m.active.AddSize(m.offset)
+	
 	return &utils.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
 }
 
@@ -516,7 +516,6 @@ func (m *Manager) Rewind(ptr utils.ValuePtr) error {
 	if err := active.Init(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	active.AddSize(ptr.Offset)
 	active.Lock.Unlock()
 
 	return firstErr

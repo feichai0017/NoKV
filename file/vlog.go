@@ -86,7 +86,11 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	return nil
 }
 func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
-	return lf.f.AppendBuffer(offset, buf)
+	err = lf.f.AppendBuffer(offset, buf)
+	if err == nil {
+		atomic.StoreUint32(&lf.size, offset+uint32(len(buf)))
+	}
+	return err
 }
 func (lf *LogFile) Truncate(offset int64) error {
 	return lf.f.Truncature(offset)
@@ -98,9 +102,7 @@ func (lf *LogFile) Close() error {
 func (lf *LogFile) Size() int64 {
 	return int64(atomic.LoadUint32(&lf.size))
 }
-func (lf *LogFile) AddSize(offset uint32) {
-	atomic.StoreUint32(&lf.size, offset)
-}
+
 
 // 完成log文件的初始化
 func (lf *LogFile) Bootstrap() error {

@@ -19,6 +19,9 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	lm := &levelManager{lsm: lsm} // dereference lsm
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
+	if lm.opt.IngestCompactBatchSize <= 0 {
+		lm.opt.IngestCompactBatchSize = 4
+	}
 	// read the manifest file to build the manager
 	if err := lm.loadManifest(); err != nil {
 		panic(err)
@@ -311,8 +314,10 @@ type levelHandler struct {
 	sync.RWMutex
 	levelNum       int
 	tables         []*table
+	ingest         []*table
 	totalSize      int64
 	totalStaleSize int64
+	ingestSize     int64
 	lm             *levelManager
 }
 
@@ -330,6 +335,31 @@ func (lh *levelHandler) add(t *table) {
 	t.lvl = lh.levelNum
 	lh.tables = append(lh.tables, t)
 }
+
+func (lh *levelHandler) addIngest(t *table) {
+	if t == nil {
+		return
+	}
+	lh.Lock()
+	defer lh.Unlock()
+	t.lvl = lh.levelNum
+	lh.ingest = append(lh.ingest, t)
+	lh.ingestSize += t.Size()
+}
+
+func (lh *levelHandler) addIngestBatch(ts []*table) {
+	lh.Lock()
+	defer lh.Unlock()
+	for _, t := range ts {
+		if t == nil {
+			continue
+		}
+		t.lvl = lh.levelNum
+		lh.ingest = append(lh.ingest, t)
+		lh.ingestSize += t.Size()
+	}
+}
+
 func (lh *levelHandler) addBatch(ts []*table) {
 	lh.Lock()
 	defer lh.Unlock()
@@ -344,7 +374,7 @@ func (lh *levelHandler) addBatch(ts []*table) {
 func (lh *levelHandler) getTotalSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalSize
+	return lh.totalSize + lh.ingestSize
 }
 
 func (lh *levelHandler) addSize(t *table) {
@@ -357,10 +387,26 @@ func (lh *levelHandler) subtractSize(t *table) {
 	lh.totalStaleSize -= int64(t.StaleDataSize())
 }
 
+func (lh *levelHandler) subtractIngestSize(t *table) {
+	lh.ingestSize -= t.Size()
+}
+
 func (lh *levelHandler) numTables() int {
 	lh.RLock()
 	defer lh.RUnlock()
 	return len(lh.tables)
+}
+
+func (lh *levelHandler) numIngestTables() int {
+	lh.RLock()
+	defer lh.RUnlock()
+	return len(lh.ingest)
+}
+
+func (lh *levelHandler) ingestDataSize() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.ingestSize
 }
 
 func (lh *levelHandler) Get(key []byte) (*utils.Entry, error) {
@@ -369,6 +415,9 @@ func (lh *levelHandler) Get(key []byte) (*utils.Entry, error) {
 		// get the sst that may contain the key
 		return lh.searchL0SST(key)
 	} else {
+		if entry, err := lh.searchIngestSST(key); entry != nil {
+			return entry, err
+		}
 		return lh.searchLNSST(key)
 	}
 }
@@ -393,6 +442,21 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 		}
 		return hit
 	}
+	lh.RLock()
+		ingest := append([]*table(nil), lh.ingest...)
+		lh.RUnlock()
+		for _, table := range ingest {
+			if table == nil {
+				continue
+			}
+			if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
+				utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+				continue
+			}
+			if table.prefetchBlockForKey(key, hot) {
+				return true
+			}
+		}
 	table := lh.getTable(key)
 	if table == nil {
 		return false
@@ -415,6 +479,11 @@ func (lh *levelHandler) Sort() {
 			return utils.CompareKeys(lh.tables[i].ss.MinKey(), lh.tables[j].ss.MinKey()) < 0
 		})
 	}
+	if len(lh.ingest) > 1 {
+		sort.Slice(lh.ingest, func(i, j int) bool {
+			return utils.CompareKeys(lh.ingest[i].ss.MinKey(), lh.ingest[j].ss.MinKey()) < 0
+		})
+	}
 }
 
 func (lh *levelHandler) searchL0SST(key []byte) (*utils.Entry, error) {
@@ -426,6 +495,30 @@ func (lh *levelHandler) searchL0SST(key []byte) (*utils.Entry, error) {
 	}
 	return nil, utils.ErrKeyNotFound
 }
+
+func (lh *levelHandler) searchIngestSST(key []byte) (*utils.Entry, error) {
+	lh.RLock()
+	defer lh.RUnlock()
+	if len(lh.ingest) == 0 {
+		return nil, utils.ErrKeyNotFound
+	}
+	var version uint64
+	for i := len(lh.ingest) - 1; i >= 0; i-- {
+		table := lh.ingest[i]
+		if table == nil {
+			continue
+		}
+		if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
+			utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+			continue
+		}
+		if entry, err := table.Search(key, &version); err == nil {
+			return entry, nil
+		}
+	}
+	return nil, utils.ErrKeyNotFound
+}
+
 func (lh *levelHandler) searchLNSST(key []byte) (*utils.Entry, error) {
 	table := lh.getTable(key)
 	var version uint64
@@ -531,6 +624,19 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
+	
+	if len(lh.ingest) > 0 {
+		var newIngest []*table
+		for _, t := range lh.ingest {
+			_, found := toDelMap[t.fid]
+			if !found {
+				newIngest = append(newIngest, t)
+				continue
+			}
+			lh.subtractIngestSize(t)
+		}
+		lh.ingest = newIngest
+	}
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
@@ -545,8 +651,12 @@ func (lh *levelHandler) iterators() []utils.Iterator {
 		return iteratorsReversed(lh.tables, topt)
 	}
 
-	if len(lh.tables) == 0 {
-		return nil
+	var itrs []utils.Iterator
+	if len(lh.ingest) > 0 {
+		itrs = append(itrs, iteratorsReversed(lh.ingest, topt)...)
 	}
-	return []utils.Iterator{NewConcatIterator(lh.tables, topt)}
+	if len(lh.tables) > 0 {
+		itrs = append(itrs, NewConcatIterator(lh.tables, topt))
+	}
+	return itrs
 }

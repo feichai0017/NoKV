@@ -24,7 +24,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-const discardStatsFlushThreshold = 100
+const (
+	discardStatsFlushThreshold = 100
+	valueLogHeadLogInterval    = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
+)
 
 var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
 
@@ -934,6 +937,11 @@ func (db *DB) initVLog() {
 	}
 	vlog.reconcileManifest(status)
 	db.vhead = vp
+	if vp != nil {
+		db.lastLoggedHead = *vp
+	} else {
+		db.lastLoggedHead = utils.ValuePtr{}
+	}
 	if err := vlog.open(vp, db.replayFunction()); err != nil {
 		utils.Panic(err)
 	}
@@ -1008,19 +1016,43 @@ func (db *DB) updateHead(ptrs []utils.ValuePtr) {
 		return
 	}
 
-	next := &utils.ValuePtr{
-		Fid:    head.Fid,
-		Offset: head.Offset,
-	}
+	next := &utils.ValuePtr{Fid: head.Fid, Offset: head.Offset}
 	if db.vhead != nil && next.Less(db.vhead) {
 		utils.CondPanic(true, fmt.Errorf("value log head regression: prev=%+v next=%+v", db.vhead, next))
 	}
 	db.vhead = next
+	if !db.shouldPersistHead(next) {
+		return
+	}
 	if err := db.lsm.LogValueLogHead(next); err != nil {
 		utils.Err(fmt.Errorf("log value log head: %w", err))
-	} else {
-		valueLogHeadUpdates.Add(1)
+		return
 	}
+	valueLogHeadUpdates.Add(1)
+	db.lastLoggedHead = *next
+}
+
+func (db *DB) shouldPersistHead(next *utils.ValuePtr) bool {
+	if db == nil || next == nil || next.IsZero() {
+		return false
+	}
+	if db.headLogDelta == 0 {
+		return true
+	}
+	last := db.lastLoggedHead
+	if last.IsZero() {
+		return true
+	}
+	if next.Fid != last.Fid {
+		return true
+	}
+	if next.Offset < last.Offset {
+		return true
+	}
+	if next.Offset-last.Offset >= db.headLogDelta {
+		return true
+	}
+	return false
 }
 
 type lfDiscardStats struct {
