@@ -159,7 +159,6 @@ func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
 	req := requestPool.Get().(*request)
 	req.reset()
 	req.Entries = []*utils.Entry{e}
-	req.Wg.Add(1)
 	req.IncrRef()
 	defer func() {
 		req.Entries = nil // Break the link to avoid resetting the entry.
@@ -223,7 +222,9 @@ func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
 		vlog.db.vhead = &head
 	}
 	if err := vlog.populateDiscardStats(); err != nil {
-		fmt.Printf("Failed to populate discard stats: %s\n", err)
+		if err != utils.ErrKeyNotFound {
+			fmt.Printf("Failed to populate discard stats: %s\n", err)
+		}
 	}
 	return nil
 }
@@ -879,9 +880,6 @@ func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[uint32]int64
 	vs, err := vlog.db.Get(key)
 	if err != nil {
-		if err == utils.ErrKeyNotFound {
-			return nil
-		}
 		return err
 	}
 	if vs.Meta == 0 && len(vs.Value) == 0 {
@@ -1094,19 +1092,19 @@ var requestPool = sync.Pool{
 type request struct {
 	Entries   []*utils.Entry
 	Ptrs      []utils.ValuePtr
-	Wg        sync.WaitGroup
 	Err       error
 	ref       int32
 	enqueueAt time.Time
+	doneCh    chan error
 }
 
 func (req *request) reset() {
 	req.Entries = req.Entries[:0]
 	req.Ptrs = req.Ptrs[:0]
-	req.Wg = sync.WaitGroup{}
 	req.Err = nil
 	req.ref = 0
 	req.enqueueAt = time.Time{}
+	req.doneCh = nil
 }
 
 func (req *request) loadEntries(entries []*utils.Entry) {
@@ -1149,7 +1147,15 @@ func (req *request) DecrRef() {
 }
 
 func (req *request) Wait() error {
-	req.Wg.Wait()
+	if req.doneCh != nil {
+		err, ok := <-req.doneCh
+		if ok {
+			req.Err = err
+		} else if req.Err != nil {
+			err = req.Err
+		}
+		req.Err = err
+	}
 	err := req.Err
 	req.DecrRef() // DecrRef after writing to DB.
 	return err
