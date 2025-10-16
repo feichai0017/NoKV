@@ -24,6 +24,7 @@ type compactionPriority struct {
 	adjusted     float64
 	dropPrefixes [][]byte
 	t            targets
+	ingestOnly   bool
 }
 
 // 归并目标
@@ -49,6 +50,7 @@ type compactDef struct {
 	thisSize int64
 
 	dropPrefixes [][]byte
+	ingestOnly   bool
 }
 
 func (cd *compactDef) lockLevels() {
@@ -94,6 +96,28 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 		t:            p.t,
 		thisLevel:    lm.levels[l],
 		dropPrefixes: p.dropPrefixes,
+		ingestOnly:   p.ingestOnly,
+	}
+
+	var cleanup bool
+	defer func() {
+		if cleanup {
+			lm.compactState.delete(cd)
+		}
+	}()
+
+	if p.ingestOnly && l > 0 {
+		cd.nextLevel = cd.thisLevel
+		if !lm.fillTablesIngest(&cd) {
+			return utils.ErrFillTables
+		}
+		cleanup = true
+		if err := lm.runCompactDef(id, l, cd); err != nil {
+			log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, cd)
+			return err
+		}
+		log.Printf("[Compactor: %d] Ingest compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+		return nil
 	}
 
 	// 如果是第0层 对齐单独填充处理
@@ -101,6 +125,15 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 		cd.nextLevel = lm.levels[p.t.baseLevel]
 		if !lm.fillTablesL0(&cd) {
 			return utils.ErrFillTables
+		}
+		cleanup = true
+		if cd.nextLevel.levelNum != 0 {
+			if err := lm.moveToIngest(&cd); err != nil {
+				log.Printf("[Compactor: %d] LOG Move to ingest FAILED with error: %+v: %+v", id, err, cd)
+				return err
+			}
+			log.Printf("[Compactor: %d] Moved %d tables from L0 to ingest buffer of L%d", id, len(cd.top), cd.nextLevel.levelNum)
+			return nil
 		}
 	} else {
 		cd.nextLevel = cd.thisLevel
@@ -111,9 +144,15 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 		if !lm.fillTables(&cd) {
 			return utils.ErrFillTables
 		}
+		cleanup = true
+		// 继续执行常规归并
+		if err := lm.runCompactDef(id, l, cd); err != nil {
+			log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+			return err
+		}
+		log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+		return nil
 	}
-	// 完成合并后 从合并状态中删除
-	defer lm.compactState.delete(cd) // Remove the ranges from compaction status.
 
 	// 执行合并计划
 	if err := lm.runCompactDef(id, l, cd); err != nil {
@@ -121,35 +160,51 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
 		return err
 	}
-
 	log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
 	return nil
 }
 
+
 // pickCompactLevel 选择合适的level执行合并，返回判断的优先级
 func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 	t := lm.levelTargets()
-	addPriority := func(level int, score float64) {
+	addPriority := func(level int, score float64, ingest bool) {
 		pri := compactionPriority{
-			level:    level,
-			score:    score,
-			adjusted: score,
-			t:        t,
+			level:      level,
+			score:      score,
+			adjusted:   score,
+			t:          t,
+			ingestOnly: ingest,
 		}
 		prios = append(prios, pri)
 	}
 
 	// 根据l0表的table数量来对压缩提权
-	addPriority(0, float64(lm.levels[0].numTables())/float64(lm.opt.NumLevelZeroTables))
+	addPriority(0, float64(lm.levels[0].numTables())/float64(lm.opt.NumLevelZeroTables), false)
 
 	// 非l0 层都根据大小计算优先级
 	for i := 1; i < len(lm.levels); i++ {
+		lvl := lm.levels[i]
+		if lvl.numIngestTables() > 0 {
+			denom := t.fileSz[i]
+			if denom <= 0 {
+				denom = lm.opt.BaseTableSize
+				if denom <= 0 {
+					denom = 1
+				}
+			}
+			ingestScore := float64(lvl.ingestDataSize()) / float64(denom)
+			if ingestScore < 1.0 {
+				ingestScore = 1.0
+			}
+			addPriority(i, ingestScore+1.0, true)
+			continue
+		}
 		// 处于压缩状态的sst 不能计算在内
 		delSize := lm.compactState.delSize(i)
-		l := lm.levels[i]
-		sz := l.getTotalSize() - delSize
+		sz := lvl.getTotalSize() - delSize
 		// score的计算是 扣除正在合并的表后的尺寸与目标sz的比值
-		addPriority(i, float64(sz)/float64(t.targetSz[i]))
+		addPriority(i, float64(sz)/float64(t.targetSz[i]), false)
 	}
 	utils.CondPanic(len(prios) != len(lm.levels), errors.New("[pickCompactLevels] len(prios) != len(lm.levels)"))
 
@@ -295,6 +350,52 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	}
 	return false
 }
+
+func (lm *levelManager) fillTablesIngest(cd *compactDef) bool {
+	cd.lockLevels()
+	defer cd.unlockLevels()
+
+	totalIngest := cd.thisLevel.numIngestTables()
+	if totalIngest == 0 {
+		return false
+	}
+	batchSize := lm.opt.IngestCompactBatchSize
+	if batchSize <= 0 || batchSize > totalIngest {
+		batchSize = totalIngest
+	}
+	top := make([]*table, batchSize)
+	copy(top, cd.thisLevel.ingest[:batchSize])
+	cd.top = top
+	cd.thisSize = 0
+	for _, t := range cd.top {
+		if t == nil {
+			continue
+		}
+		cd.thisSize += t.Size()
+	}
+	cd.thisRange = getKeyRange(cd.top...)
+
+	left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
+	if right > left {
+		cd.bot = make([]*table, right-left)
+		copy(cd.bot, cd.nextLevel.tables[left:right])
+	} else {
+		cd.bot = []*table{}
+	}
+	cd.nextRange = cd.thisRange
+	if len(cd.bot) > 0 {
+		cd.nextRange.extend(getKeyRange(cd.bot...))
+	}
+
+	if lm.compactState.overlapsWith(cd.thisLevel.levelNum, cd.thisRange) {
+		return false
+	}
+	if len(cd.bot) > 0 && lm.compactState.overlapsWith(cd.nextLevel.levelNum, cd.nextRange) {
+		return false
+	}
+	return lm.compactState.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
+}
+
 
 // compact older tables first.
 func (lm *levelManager) sortByHeuristic(tables []*table, cd *compactDef) {
@@ -654,6 +755,69 @@ func (lm *levelManager) fillTablesL0(cd *compactDef) bool {
 		return true
 	}
 	return lm.fillTablesL0ToL0(cd)
+}
+
+func (lm *levelManager) moveToIngest(cd *compactDef) error {
+	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
+		return errors.New("invalid compaction definition for ingest move")
+	}
+	if len(cd.top) == 0 {
+		return nil
+	}
+	for _, tbl := range cd.top {
+		if tbl == nil {
+			continue
+		}
+		del := manifest.Edit{
+			Type: manifest.EditDeleteFile,
+			File: &manifest.FileMeta{FileID: tbl.fid},
+		}
+		if err := lm.manifestMgr.LogEdit(del); err != nil {
+			return err
+		}
+		add := manifest.Edit{
+			Type: manifest.EditAddFile,
+			File: &manifest.FileMeta{
+				Level:     cd.nextLevel.levelNum,
+				FileID:    tbl.fid,
+				Size:      uint64(tbl.Size()),
+				Smallest:  utils.SafeCopy(nil, tbl.ss.MinKey()),
+				Largest:   utils.SafeCopy(nil, tbl.ss.MaxKey()),
+				CreatedAt: uint64(time.Now().Unix()),
+			},
+		}
+		if err := lm.manifestMgr.LogEdit(add); err != nil {
+			return err
+		}
+	}
+
+	toDel := make(map[uint64]struct{}, len(cd.top))
+	for _, tbl := range cd.top {
+		if tbl == nil {
+			continue
+		}
+		toDel[tbl.fid] = struct{}{}
+	}
+	cd.thisLevel.Lock()
+	var remaining []*table
+	for _, tbl := range cd.thisLevel.tables {
+		if _, found := toDel[tbl.fid]; found {
+			cd.thisLevel.subtractSize(tbl)
+			continue
+		}
+		remaining = append(remaining, tbl)
+	}
+	cd.thisLevel.tables = remaining
+	cd.thisLevel.Unlock()
+
+	cd.nextLevel.addIngestBatch(cd.top)
+	if cd.nextLevel.levelNum > 0 {
+		cd.nextLevel.Sort()
+	}
+	if lm.compaction != nil {
+		lm.compaction.trigger("ingest-buffer")
+	}
+	return nil
 }
 
 func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {

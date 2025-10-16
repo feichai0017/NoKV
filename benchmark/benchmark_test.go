@@ -39,7 +39,7 @@ var (
 	fRangeQueries   = flag.Int("range_q", 2000, "number of range queries")
 	fRangeWindow    = flag.Int("range_win", 100, "range window per query (items)")
 
-	fMode = flag.String("mode", "both", "read/range mode: warm|cold|both")
+	fMode = flag.String("mode", "warm", "read/range mode: warm|cold|both")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")
@@ -163,7 +163,7 @@ func openBadgerAt(dir string, clean bool) (*badger.DB, error) {
 		WithCompression(comp).
 		WithBlockCacheSize(int64(wl.BadgerBlockMB) << 20).
 		WithIndexCacheSize(int64(wl.BadgerIndexMB) << 20)
-		opts = opts.WithValueThreshold(1 << 20) // force values <=1MB into LSM
+		//opts = opts.WithValueThreshold(1 << 20) // force values <=1MB into LSM
 	return badger.Open(opts)
 }
 
@@ -183,7 +183,7 @@ func openNoKVAt(dir string, clean bool) (*NoKV.DB, error) {
 		SSTableMaxSz:        1 << 30,
 		ValueLogFileSize:    1 << 30,
 		ValueLogMaxEntries:  100000,
-		ValueThreshold:      1 << 20,
+		ValueThreshold:      32,
 		MaxBatchCount:       10000,
 		MaxBatchSize:        16 << 20,
 		VerifyValueChecksum: true,

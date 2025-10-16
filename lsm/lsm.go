@@ -51,7 +51,9 @@ type Options struct {
 	BaseTableSize       int64
 	NumLevelZeroTables  int
 	MaxLevelNum         int
-
+	
+	IngestCompactBatchSize int
+	
 	DiscardStatsCh *chan map[uint32]int64
 }
 

@@ -151,15 +151,33 @@ func TestCompact(t *testing.T) {
 	lsm := buildLSM()
 	defer lsm.Close()
 	ok := false
+	hasTable := func(lh *levelHandler, fid uint64) bool {
+		for _, t := range lh.tables {
+			if t.fid == fid {
+				return true
+			}
+		}
+		for _, t := range lh.ingest {
+			if t.fid == fid {
+				return true
+			}
+		}
+		return false
+	}
 	l0TOLMax := func() {
 		// 正常触发即可
 		baseTest(t, lsm, 128)
 		// 直接触发压缩执行
-		fid := lsm.levels.maxFID + 1
+		before := make(map[uint64]struct{})
+		for _, tbl := range lsm.levels.levels[0].tables {
+			before[tbl.fid] = struct{}{}
+		}
 		lsm.levels.compaction.runOnce(1)
-		for _, t := range lsm.levels.levels[6].tables {
-			if t.fid == fid {
+		ok = false
+		for fid := range before {
+			if hasTable(lsm.levels.levels[6], fid) {
 				ok = true
+				break
 			}
 		}
 		utils.CondPanic(!ok, fmt.Errorf("[l0TOLMax] fid not found"))
@@ -177,12 +195,7 @@ func TestCompact(t *testing.T) {
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
 		utils.Err(err)
-		ok = false
-		for _, t := range lsm.levels.levels[0].tables {
-			if t.fid == fid {
-				ok = true
-			}
-		}
+		ok = hasTable(lsm.levels.levels[0], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
 	}
 	nextCompact := func() {
@@ -197,31 +210,51 @@ func TestCompact(t *testing.T) {
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
 		utils.Err(err)
-		ok = false
-		for _, t := range lsm.levels.levels[1].tables {
-			if t.fid == fid {
-				ok = true
-			}
-		}
+		ok = hasTable(lsm.levels.levels[1], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
 	}
 
 	maxToMax := func() {
 		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID + 1
+		prevMax := lsm.levels.maxFID
 		cd := buildCompactDef(lsm, 6, 6, 6)
 		// 非常tricky的处理方法，为了能通过检查
 		tricky(cd.thisLevel.tables)
 		ok := lsm.levels.fillTables(cd)
+		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
+			pri := compactionPriority{
+				level:      6,
+				ingestOnly: true,
+				t:          lsm.levels.levelTargets(),
+				score:      2,
+				adjusted:   2,
+			}
+			utils.Err(lsm.levels.doCompact(0, pri))
+			tricky(cd.thisLevel.tables)
+			ok = lsm.levels.fillTables(cd)
+		}
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 6, *cd)
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
 		utils.Err(err)
 		ok = false
-		for _, t := range lsm.levels.levels[6].tables {
-			if t.fid == fid {
-				ok = true
+		if hasTable(lsm.levels.levels[6], prevMax+1) {
+			ok = true
+		} else {
+			for _, tbl := range lsm.levels.levels[6].tables {
+				if tbl.fid > prevMax {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				for _, tbl := range lsm.levels.levels[6].ingest {
+					if tbl.fid > prevMax {
+						ok = true
+						break
+					}
+				}
 			}
 		}
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] fid not found"))

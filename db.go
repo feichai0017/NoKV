@@ -42,6 +42,8 @@ type (
 		flushChan        chan flushTask // For flushing memtables.
 		blockWrites      int32
 		vhead            *utils.ValuePtr
+		lastLoggedHead   utils.ValuePtr
+		headLogDelta     uint32
 		logRotates       int32
 		isClosed         uint32
 		orc              *oracle
@@ -94,6 +96,7 @@ const (
 // Open DB
 func Open(opt *Options) *DB {
 	db := &DB{opt: opt, writeMetrics: newWriteMetrics()}
+	db.headLogDelta = valueLogHeadLogInterval
 	db.initWriteBatchOptions()
 
 	if db.opt.BlockCacheSize < 0 {
@@ -123,21 +126,22 @@ func Open(opt *Options) *DB {
 	db.wal = wlog
 	// 初始化LSM结构
 	db.lsm = lsm.NewLSM(&lsm.Options{
-		WorkDir:               opt.WorkDir,
-		MemTableSize:          opt.MemTableSize,
-		SSTableMaxSz:          opt.SSTableMaxSz,
-		BlockSize:             8 * 1024,
-		BloomFalsePositive:    0, //0.01,
-		BaseLevelSize:         10 << 20,
-		LevelSizeMultiplier:   10,
-		BaseTableSize:         5 << 20,
-		TableSizeMultiplier:   2,
-		NumLevelZeroTables:    15,
-		MaxLevelNum:           7,
-		NumCompactors:         1,
-		BlockCacheSize:        db.opt.BlockCacheSize,
-		BlockCacheHotFraction: db.opt.BlockCacheHotFraction,
-		BloomCacheSize:        db.opt.BloomCacheSize,
+		WorkDir:                opt.WorkDir,
+		MemTableSize:           opt.MemTableSize,
+		SSTableMaxSz:           opt.SSTableMaxSz,
+		BlockSize:              8 * 1024,
+		BloomFalsePositive:     0, //0.01,
+		BaseLevelSize:          10 << 20,
+		LevelSizeMultiplier:    10,
+		BaseTableSize:          5 << 20,
+		TableSizeMultiplier:    2,
+		NumLevelZeroTables:     15,
+		MaxLevelNum:            7,
+		NumCompactors:          1,
+		IngestCompactBatchSize: 4,
+		BlockCacheSize:         db.opt.BlockCacheSize,
+		BlockCacheHotFraction:  db.opt.BlockCacheHotFraction,
+		BloomCacheSize:         db.opt.BloomCacheSize,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	recoveredVersion := db.lsm.MaxVersion()
