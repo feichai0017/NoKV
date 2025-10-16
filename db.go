@@ -40,10 +40,6 @@ type (
 		vlog             *valueLog
 		stats            *Stats
 		flushChan        chan flushTask // For flushing memtables.
-		writeCh          chan *request
-		batchCh          chan *writeBatch
-		applyCh          chan *writeBatch
-		writeCloser      *utils.Closer
 		blockWrites      int32
 		vhead            *utils.ValuePtr
 		logRotates       int32
@@ -51,6 +47,8 @@ type (
 		orc              *oracle
 		hot              *hotring.HotRing
 		writeMetrics     *writeMetrics
+		commitQueue      commitQueue
+		commitLock       chan struct{}
 		iterPool         *iteratorPool
 		prefetchCh       chan prefetchRequest
 		prefetchWG       sync.WaitGroup
@@ -62,22 +60,25 @@ type (
 		prefetchHot      int32
 		prefetchCooldown time.Duration
 	}
-	
-	writeBatch struct {
-		reqs    []*request
-		entries int
-		size    int64
-		waitNs  int64
+
+	commitQueue struct {
+		sync.Mutex
+		requests     []*commitRequest
+		totalEntries int
+		totalBytes   int64
+	}
+
+	commitRequest struct {
+		req        *request
+		done       chan error
+		entryCount int
+		size       int64
 	}
 )
 
 var (
 	head = []byte("!NoKV!head") // For storing value offset for replay.
 )
-
-var writeBatchPool = sync.Pool{
-	New: func() any { return &writeBatch{} },
-}
 
 type prefetchRequest struct {
 	key string
@@ -92,10 +93,9 @@ const (
 
 // Open DB
 func Open(opt *Options) *DB {
-	c := utils.NewCloser()
-	db := &DB{opt: opt, writeCloser: c, writeMetrics: newWriteMetrics()}
+	db := &DB{opt: opt, writeMetrics: newWriteMetrics()}
 	db.initWriteBatchOptions()
-	
+
 	if db.opt.BlockCacheSize < 0 {
 		db.opt.BlockCacheSize = 0
 	}
@@ -108,7 +108,7 @@ func Open(opt *Options) *DB {
 	if db.opt.BloomCacheSize < 0 {
 		db.opt.BloomCacheSize = 0
 	}
-	
+
 	lock, err := utils.AcquireDirLock(opt.WorkDir)
 	utils.Panic(err)
 	db.dirLock = lock
@@ -117,7 +117,7 @@ func Open(opt *Options) *DB {
 
 	wlog, err := wal.Open(wal.Config{
 		Dir:         opt.WorkDir,
-		SyncOnWrite: opt.SyncWrites,
+		SyncOnWrite: false,
 	})
 	utils.Panic(err)
 	db.wal = wlog
@@ -172,12 +172,8 @@ func Open(opt *Options) *DB {
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
-	c.Add(1)
-	db.writeCh = make(chan *request)
-	db.batchCh = make(chan *writeBatch, 4)
-	db.applyCh = make(chan *writeBatch, 4)
+	db.commitLock = make(chan struct{}, 1)
 	db.flushChan = make(chan flushTask, 16)
-	go db.doWrites(c)
 	// 启动 info 统计过程
 	db.stats.StartStats()
 	return db
@@ -209,11 +205,7 @@ func (db *DB) runRecoveryChecks() error {
 	return nil
 }
 
-
 func (db *DB) Close() error {
-	if db.writeCloser != nil {
-		db.writeCloser.Close()
-	}
 
 	if db.prefetchCh != nil {
 		close(db.prefetchCh)
@@ -272,7 +264,15 @@ func (db *DB) Set(data *utils.Entry) error {
 		data.Meta |= utils.BitValuePointer
 		data.Value = vp.Encode()
 	}
-	return db.lsm.Set(data)
+	if err := db.lsm.Set(data); err != nil {
+		return err
+	}
+	if db.opt.SyncWrites {
+		if err := db.wal.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (db *DB) Get(key []byte) (*utils.Entry, error) {
 	if len(key) == 0 {
@@ -464,10 +464,10 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	if atomic.LoadInt32(&db.blockWrites) == 1 {
 		return nil, utils.ErrBlockedWrites
 	}
-	var count, size int64
+	var size int64
+	count := int64(len(entries))
 	for _, e := range entries {
 		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
-		count++
 	}
 	if count >= db.opt.MaxBatchCount || size >= db.opt.MaxBatchSize {
 		return nil, utils.ErrTxnTooBig
@@ -477,9 +477,22 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	req.reset()
 	req.Entries = entries
 	req.enqueueAt = time.Now()
-	req.Wg.Add(1)
-	req.IncrRef()     // for db write
-	db.writeCh <- req // Handled in doWrites.
+	done := make(chan error, 1)
+	req.doneCh = done
+	req.IncrRef() // for db write
+
+	cr := &commitRequest{
+		req:        req,
+		done:       done,
+		entryCount: int(count),
+		size:       size,
+	}
+
+	db.enqueueCommitRequest(cr)
+
+	if db.tryBecomeCommitLeader() {
+		db.processCommitQueue()
+	}
 	return req, nil
 }
 
@@ -509,226 +522,147 @@ func (db *DB) batchSet(entries []*utils.Entry) error {
 	return req.Wait()
 }
 
-func getWriteBatch() *writeBatch {
-	batch := writeBatchPool.Get().(*writeBatch)
-	batch.reset()
-	return batch
-}
-
-func (wb *writeBatch) reset() {
-	if wb == nil {
+func (db *DB) enqueueCommitRequest(cr *commitRequest) {
+	if cr == nil {
 		return
 	}
-	if wb.reqs != nil {
-		wb.reqs = wb.reqs[:0]
-	}
-	wb.entries = 0
-	wb.size = 0
-	wb.waitNs = 0
+	db.commitQueue.Lock()
+	db.commitQueue.requests = append(db.commitQueue.requests, cr)
+	db.commitQueue.totalEntries += cr.entryCount
+	db.commitQueue.totalBytes += cr.size
+	qLen := len(db.commitQueue.requests)
+	qEntries := db.commitQueue.totalEntries
+	qBytes := db.commitQueue.totalBytes
+	db.commitQueue.Unlock()
+	db.writeMetrics.updateQueue(qLen, qEntries, qBytes)
 }
 
-func (wb *writeBatch) release() {
-	if wb == nil {
+func (db *DB) tryBecomeCommitLeader() bool {
+	if db.commitLock == nil {
+		return false
+	}
+	select {
+	case db.commitLock <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (db *DB) releaseCommitLeader() {
+	if db.commitLock == nil {
 		return
 	}
-	wb.reqs = nil
-	wb.entries = 0
-	wb.size = 0
-	wb.waitNs = 0
-	writeBatchPool.Put(wb)
+	select {
+	case <-db.commitLock:
+	default:
+	}
 }
 
-func (db *DB) doWrites(lc *utils.Closer) {
-	defer lc.Done()
-	lc.Add(2)
-	go db.processValueLogBatches(lc)
-	go db.applyBatches(lc)
-
-	var (
-		pending      []*request
-		pendingCount int
-		pendingSize  int64
-		maxCount     = db.opt.WriteBatchMaxCount
-		maxSize      = db.opt.WriteBatchMaxSize
-		delay        = db.opt.WriteBatchDelay
-		timer        *time.Timer
-		timerActive  bool
-	)
-	resetTimer := func() {
-		if delay <= 0 {
-			return
-		}
-		if timer == nil {
-			timer = time.NewTimer(delay)
-		} else {
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(delay)
-		}
-		timerActive = true
-	}
-
-	stopTimer := func() {
-		if delay <= 0 || !timerActive || timer == nil {
-			return
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timerActive = false
-	}
-
-	flush := func() {
-		if len(pending) == 0 {
-			return
-		}
-		now := time.Now()
-		batch := getWriteBatch()
-		batch.entries = pendingCount
-		batch.size = pendingSize
-		batch.reqs = append(batch.reqs[:0], pending...)
-		if len(batch.reqs) > 0 {
-			var waitSum int64
-			for _, req := range batch.reqs {
-				if !req.enqueueAt.IsZero() {
-					waitSum += now.Sub(req.enqueueAt).Nanoseconds()
-					req.enqueueAt = time.Time{}
-				}
-			}
-			batch.waitNs = waitSum
-			db.writeMetrics.recordBatch(len(batch.reqs), batch.entries, batch.size, waitSum)
-		}
-		db.batchCh <- batch
-		pending = pending[:0]
-		pendingCount = 0
-		pendingSize = 0
-		db.writeMetrics.updateQueue(0, 0, 0)
-		stopTimer()
-	}
-
+func (db *DB) processCommitQueue() {
 	for {
-		var timerC <-chan time.Time
-		if timerActive && timer != nil {
-			timerC = timer.C
-		}
-
-		select {
-		case r := <-db.writeCh:
-			if r == nil {
-				continue
-			}
-			pending = append(pending, r)
-			for _, e := range r.Entries {
-				pendingSize += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
-			}
-			pendingCount += len(r.Entries)
-			db.writeMetrics.updateQueue(len(pending), pendingCount, pendingSize)
-
-			if len(pending) == 1 {
-				resetTimer()
-			}
-
-			if (maxCount > 0 && pendingCount >= maxCount) || (maxSize > 0 && pendingSize >= maxSize) || len(pending) >= 3*utils.KVWriteChCapacity {
-				flush()
-			}
-		case <-timerC:
-			timerActive = false
-			flush()
-		case <-lc.CloseSignal:
-			stopTimer()
-			flush()
-			close(db.batchCh)
+		db.commitQueue.Lock()
+		if len(db.commitQueue.requests) == 0 {
+			db.releaseCommitLeader()
+			db.commitQueue.Unlock()
 			return
 		}
+		reqs := db.commitQueue.requests
+		db.commitQueue.requests = nil
+		db.commitQueue.totalEntries = 0
+		db.commitQueue.totalBytes = 0
+		db.commitQueue.Unlock()
+		db.writeMetrics.updateQueue(0, 0, 0)
+		db.handleCommitRequests(reqs)
 	}
 }
 
-// getMemtables returns the current memtables and get references.
-func (db *DB) getMemTables() ([]*lsm.MemTable, func()) {
-	ml, fn := db.lsm.GetMemTables()
-	rm := make([]*lsm.MemTable, len(ml))
-	for _, mt := range ml {
-		rm = append(rm, mt)
-	}
-	return rm, fn
-}
-
-// writeRequests is called serially by only one goroutine.
-func (db *DB) applyWriteBatch(batch *writeBatch) error {
-	if batch == nil || len(batch.reqs) == 0 {
-		return nil
+func (db *DB) handleCommitRequests(reqs []*commitRequest) {
+	if len(reqs) == 0 {
+		return
 	}
 
-	done := func(err error) {
-		completeRequests(batch.reqs, err)
-	}
-	var count int
-	for _, b := range batch.reqs {
-		if len(b.Entries) == 0 {
+	requests := make([]*request, 0, len(reqs))
+	var (
+		totalEntries int
+		totalSize    int64
+		waitSum      int64
+	)
+	now := time.Now()
+	for _, cr := range reqs {
+		if cr == nil || cr.req == nil {
 			continue
 		}
-		count += len(b.Entries)
-		if err := db.writeToLSM(b); err != nil {
-			done(err)
+		r := cr.req
+		requests = append(requests, r)
+		totalEntries += len(r.Entries)
+		totalSize += cr.size
+		if !r.enqueueAt.IsZero() {
+			waitSum += now.Sub(r.enqueueAt).Nanoseconds()
+			r.enqueueAt = time.Time{}
+		}
+	}
+
+	if len(requests) == 0 {
+		db.finishCommitRequests(reqs, nil)
+		return
+	}
+
+	db.writeMetrics.recordBatch(len(requests), totalEntries, totalSize, waitSum)
+
+	start := time.Now()
+	if err := db.vlog.write(requests); err != nil {
+		db.finishCommitRequests(reqs, err)
+		return
+	}
+	db.writeMetrics.recordValueLog(time.Since(start))
+
+	start = time.Now()
+	if err := db.applyRequests(requests); err != nil {
+		db.finishCommitRequests(reqs, err)
+		return
+	}
+	db.writeMetrics.recordApply(time.Since(start))
+
+	if db.opt.SyncWrites {
+		if err := db.wal.Sync(); err != nil {
+			db.finishCommitRequests(reqs, err)
+			return
+		}
+	}
+
+	db.finishCommitRequests(reqs, nil)
+}
+
+func (db *DB) applyRequests(reqs []*request) error {
+	for _, r := range reqs {
+		if r == nil || len(r.Entries) == 0 {
+			continue
+		}
+		if err := db.writeToLSM(r); err != nil {
 			return pkgerrors.Wrap(err, "writeRequests")
 		}
 		db.Lock()
-		db.updateHead(b.Ptrs)
+		db.updateHead(r.Ptrs)
 		db.Unlock()
 	}
-	done(nil)
 	return nil
 }
 
-func (db *DB) processValueLogBatches(lc *utils.Closer) {
-	defer lc.Done()
-	for batch := range db.batchCh {
-		if len(batch.reqs) == 0 {
-			batch.release()
+func (db *DB) finishCommitRequests(reqs []*commitRequest, err error) {
+	for _, cr := range reqs {
+		if cr == nil || cr.req == nil {
 			continue
 		}
-		start := time.Now()
-		if err := db.vlog.write(batch.reqs); err != nil {
-			completeRequests(batch.reqs, err)
-			batch.release()
-			continue
+		cr.req.Err = err
+		switch {
+		case cr.done != nil:
+			cr.done <- err
+			close(cr.done)
+		case cr.req.doneCh != nil:
+			cr.req.doneCh <- err
+			close(cr.req.doneCh)
 		}
-		db.writeMetrics.recordValueLog(time.Since(start))
-		db.applyCh <- batch
-	}
-	close(db.applyCh)
-}
-
-func (db *DB) applyBatches(lc *utils.Closer) {
-	defer lc.Done()
-	for batch := range db.applyCh {
-		if len(batch.reqs) == 0 {
-			batch.release()
-			continue
-		}
-		start := time.Now()
-		if err := db.applyWriteBatch(batch); err != nil {
-			utils.Err(fmt.Errorf("applyWriteBatch: %v", err))
-		}
-		db.writeMetrics.recordApply(time.Since(start))
-		batch.release()
-	}
-}
-
-func completeRequests(reqs []*request, err error) {
-	for _, r := range reqs {
-		if r == nil {
-			continue
-		}
-		r.Err = err
-		r.Wg.Done()
 	}
 }
 

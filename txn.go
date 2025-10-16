@@ -568,15 +568,18 @@ func (txn *Txn) Discard() {
 
 func (txn *Txn) commitAndSend() (func() error, error) {
 	orc := txn.db.orc
-	// Ensure that the order in which we get the commit timestamp is the same as
-	// the order in which we push these updates to the write channel. So, we
-	// acquire a writeChLock before getting a commit timestamp, and only release
-	// it after pushing the entries to it.
-	orc.writeChLock.Lock()
-	defer orc.writeChLock.Unlock()
+	var entries []*utils.Entry
+	var commitTs uint64
 
-	commitTs, conflict := orc.newCommitTs(txn)
+	// The following logic has to be guarded by a lock, because we are using
+	// a single nextTxnTs to apply to all the entries in a transaction.
+	// So, we get a commit timestamp, and apply it to all entries, before
+	// releasing the lock.
+	orc.writeChLock.Lock()
+	var conflict bool
+	commitTs, conflict = orc.newCommitTs(txn)
 	if conflict {
+		orc.writeChLock.Unlock()
 		orc.trackTxnConflict()
 		return nil, utils.ErrConflict
 	}
@@ -590,31 +593,19 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 		setVersion(e)
 	}
 
-	entries := make([]*utils.Entry, 0, len(txn.pendingWrites))
-
+	entries = make([]*utils.Entry, 0, len(txn.pendingWrites))
 	processEntry := func(e *utils.Entry) {
 		// Suffix the keys with commit ts, so the key versions are sorted in
 		// descending order of commit timestamp.
 		e.Key = utils.KeyWithTs(e.Key, e.Version)
-		// Add bitTxn only if these entries are part of a transaction. We
-		// support SetEntryAt(..) in managed mode which means a single
-		// transaction can have entries with different timestamps. If entries
-		// in a single transaction have different timestamps, we don't add the
-		// transaction markers.
-
 		entries = append(entries, e)
 	}
 
-	// The following debug information is what led to determining the cause of
-	// bank txn violation bug, and it took a whole bunch of effort to narrow it
-	// down to here. So, keep this around for at least a couple of months.
-	// var b strings.Builder
-	// fmt.Fprintf(&b, "Read: %d. Commit: %d. reads: %v. writes: %v. Keys: ",
-	// 	txn.readTs, commitTs, txn.reads, txn.conflictKeys)
 	for _, e := range txn.pendingWrites {
 		processEntry(e)
 	}
 	txn.pendingWrites = nil // Clear the map to prevent double-free in Discard.
+	orc.writeChLock.Unlock()
 
 	req, err := txn.db.sendToWriteCh(entries)
 	if err != nil {
