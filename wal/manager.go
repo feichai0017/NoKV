@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	defaultSegmentSize = 64 << 20 // 64 MiB
-	minSegmentSize     = 64 << 10 // 64 KiB
+	defaultSegmentSize = 64 << 20  // 64 MiB
+	minSegmentSize     = 64 << 10  // 64 KiB
+	defaultBufferSize  = 256 << 10 // 256 KiB
 )
 
 // Config controls WAL manager behaviour.
@@ -27,6 +28,7 @@ type Config struct {
 	SegmentSize int64
 	FileMode    os.FileMode
 	SyncOnWrite bool
+	BufferSize  int
 }
 
 // EntryInfo describes an entry written to WAL.
@@ -45,7 +47,7 @@ type Metrics struct {
 
 // Manager provides append-only WAL segments with replay support.
 type Manager struct {
-	cfg 			Config
+	cfg Config
 
 	mu              sync.Mutex
 	active          *os.File
@@ -55,6 +57,8 @@ type Manager struct {
 	crcTable        *crc32.Table
 	segmentSize     int64
 	removedSegments uint64
+	bufferSize      int
+	writer          *bufio.Writer
 }
 
 // Open creates or resumes a WAL manager.
@@ -76,10 +80,16 @@ func Open(cfg Config) (*Manager, error) {
 		segSize = minSegmentSize
 	}
 
+	bufSize := cfg.BufferSize
+	if bufSize <= 0 {
+		bufSize = defaultBufferSize
+	}
+
 	m := &Manager{
 		cfg:         cfg,
 		crcTable:    utils.CastagnoliCrcTable,
 		segmentSize: segSize,
+		bufferSize:  bufSize,
 	}
 	if err := m.openLatestSegment(); err != nil {
 		return nil, err
@@ -113,6 +123,11 @@ func (m *Manager) segmentPath(id uint32) string {
 }
 
 func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
+	if m.writer != nil {
+		if err := m.writer.Flush(); err != nil {
+			return err
+		}
+	}
 	if m.active != nil {
 		if err := m.active.Sync(); err != nil {
 			return err
@@ -152,6 +167,7 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	} else {
 		m.activeSize = size
 	}
+	m.writer = bufio.NewWriterSize(f, m.bufferSize)
 	return nil
 }
 
@@ -180,16 +196,16 @@ func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
 		length := uint32(len(p))
 		var hdr [4]byte
 		binary.BigEndian.PutUint32(hdr[:], length)
-		if _, err := m.active.Write(hdr[:]); err != nil {
+		if _, err := m.writer.Write(hdr[:]); err != nil {
 			return nil, err
 		}
-		if _, err := m.active.Write(p); err != nil {
+		if _, err := m.writer.Write(p); err != nil {
 			return nil, err
 		}
 		var crcBuf [4]byte
 		sum := crc32.Checksum(p, m.crcTable)
 		binary.BigEndian.PutUint32(crcBuf[:], sum)
-		if _, err := m.active.Write(crcBuf[:]); err != nil {
+		if _, err := m.writer.Write(crcBuf[:]); err != nil {
 			return nil, err
 		}
 		m.activeSize += int64(length) + 8
@@ -198,10 +214,13 @@ func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
 			Offset:    offset,
 			Length:    length,
 		}
-		if m.cfg.SyncOnWrite {
-			if err := m.active.Sync(); err != nil {
-				return nil, err
-			}
+	}
+	if m.cfg.SyncOnWrite {
+		if err := m.writer.Flush(); err != nil {
+			return nil, err
+		}
+		if err := m.active.Sync(); err != nil {
+			return nil, err
 		}
 	}
 	return results, nil
@@ -235,6 +254,11 @@ func (m *Manager) Sync() error {
 	defer m.mu.Unlock()
 	if m.closed {
 		return fmt.Errorf("wal: manager closed")
+	}
+	if m.writer != nil {
+		if err := m.writer.Flush(); err != nil {
+			return err
+		}
 	}
 	return m.active.Sync()
 }
@@ -337,6 +361,12 @@ func (m *Manager) Close() error {
 	m.closed = true
 	if m.active == nil {
 		return nil
+	}
+	if m.writer != nil {
+		if err := m.writer.Flush(); err != nil {
+			m.active.Close()
+			return err
+		}
 	}
 	if err := m.active.Sync(); err != nil {
 		m.active.Close()

@@ -879,6 +879,9 @@ func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[uint32]int64
 	vs, err := vlog.db.Get(key)
 	if err != nil {
+		if err == utils.ErrKeyNotFound {
+			return nil
+		}
 		return err
 	}
 	if vs.Meta == 0 && len(vs.Value) == 0 {
