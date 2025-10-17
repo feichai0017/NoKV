@@ -15,3 +15,5 @@ benchmark/benchmark_results/
 cpu.pprof
 mem.pprof
 benchmark.test
+
+AGENTS.md

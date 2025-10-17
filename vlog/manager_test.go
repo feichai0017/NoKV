@@ -181,6 +181,7 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	buf.Reset()
 	entry2 := utils.NewEntry([]byte("k2"), []byte("partial"))
 	secondEncoded := wal.EncodeEntry(&buf, entry2)
+	secondLen := len(secondEncoded)
 	if _, err := mgr.Append(secondEncoded); err != nil {
 		t.Fatalf("append second: %v", err)
 	}
@@ -192,11 +193,8 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("list files err=%v files=%v", err, files)
 	}
-	info, err := os.Stat(files[0])
-	if err != nil {
-		t.Fatalf("stat vlog: %v", err)
-	}
-	if err := os.Truncate(files[0], info.Size()-5); err != nil {
+	partialSize := int64(ptr1.Offset) + int64(ptr1.Len) + int64(secondLen) - 5
+	if err := os.Truncate(files[0], partialSize); err != nil {
 		t.Fatalf("truncate vlog: %v", err)
 	}
 

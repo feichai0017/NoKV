@@ -39,7 +39,7 @@ var (
 	fRangeQueries   = flag.Int("range_q", 2000, "number of range queries")
 	fRangeWindow    = flag.Int("range_win", 100, "range window per query (items)")
 
-	fMode = flag.String("mode", "warm", "read/range mode: warm|cold|both")
+	fMode = flag.String("mode", "both", "read/range mode: warm|cold|both")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")

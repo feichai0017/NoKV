@@ -53,3 +53,66 @@ func DecodeEntry(data []byte) (*utils.Entry, error) {
 	}
 	return e, nil
 }
+
+// DecodeValueSlice parses a value log payload and returns a slice referencing the encoded value.
+// The returned slice aliases the provided data. Callers must not use it after invoking the callback
+// returned by vlog.Manager.Read.
+func DecodeValueSlice(data []byte) ([]byte, utils.WalHeader, error) {
+	var h utils.WalHeader
+	var idx int
+
+	readVarint := func() (uint64, error) {
+		val, n := binary.Uvarint(data[idx:])
+		if n > 0 {
+			idx += n
+			return val, nil
+		}
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	keyLen, err := readVarint()
+	if err != nil {
+		return nil, utils.WalHeader{}, err
+	}
+	h.KeyLen = uint32(keyLen)
+
+	valueLen, err := readVarint()
+	if err != nil {
+		return nil, utils.WalHeader{}, err
+	}
+	h.ValueLen = uint32(valueLen)
+
+	meta, err := readVarint()
+	if err != nil {
+		return nil, utils.WalHeader{}, err
+	}
+	if meta > 255 {
+		return nil, utils.WalHeader{}, io.ErrUnexpectedEOF
+	}
+	h.Meta = byte(meta)
+
+	expiresAt, err := readVarint()
+	if err != nil {
+		return nil, utils.WalHeader{}, err
+	}
+	h.ExpiresAt = expiresAt
+
+	totalLen := int(h.KeyLen) + int(h.ValueLen)
+	if totalLen < 0 {
+		return nil, utils.WalHeader{}, io.ErrUnexpectedEOF
+	}
+	payloadEnd := idx + totalLen
+	checksumEnd := payloadEnd + crc32.Size
+	if payloadEnd < idx || checksumEnd > len(data) {
+		return nil, utils.WalHeader{}, io.ErrUnexpectedEOF
+	}
+
+	expected := binary.BigEndian.Uint32(data[payloadEnd:checksumEnd])
+	actual := crc32.Checksum(data[:payloadEnd], utils.CastagnoliCrcTable)
+	if expected != actual {
+		return nil, utils.WalHeader{}, utils.ErrBadChecksum
+	}
+
+	valueStart := idx + int(h.KeyLen)
+	return data[valueStart:payloadEnd], h, nil
+}
