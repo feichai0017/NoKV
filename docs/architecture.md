@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | [`db.go`](../db.go) | Entry point that wires WAL, LSM, ValueLog, HotRing, Stats, Oracle. | `DB.doWrites`, `DB.initVLog`, `DB.prefetchLoop`, `DB.Close`. | `db_test.go`, `db_recovery_test.go`, `txn_test.go` |
 | [`wal/`](../wal) | Append-only log segments with CRC, rotation, replay. | `wal.Manager`, `Append`, `Replay`, `VerifyDir`. | `wal/manager_test.go` |
-| [`lsm/`](../lsm) | MemTable, flush pipeline, levelled files, compaction scheduler. | `lsm.LSM`, `lsm/flush.Manager`, `lsm.compactionManager`. | `lsm/lsm_test.go`, `lsm/compact_test.go` |
+| [`lsm/`](../lsm) | MemTable, flush pipeline, levelled files, compaction scheduler (see [compaction.md](compaction.md)). | `lsm.LSM`, `lsm/flush.Manager`, `lsm.compactionManager`. | `lsm/lsm_test.go`, `lsm/compact_test.go`, `lsm/compaction_cache_test.go` |
 | [`manifest/`](../manifest) | Versioned metadata (files, WAL checkpoints, vlog head) stored in `MANIFEST-*`. | `manifest.Manager`, `manifest.Edit`, `manifest.Version`. | `manifest/manager_test.go` |
 | [`vlog/`](../vlog) + [`vlog.go`](../vlog.go) | Value-log segments, head tracking, GC, discard stats. | `vlog.Manager`, `valueLog.write`, `valueLog.doRunGC`. | `vlog/vlog_test.go`, `vlog/gc_test.go` |
 | [`txn.go`](../txn.go) | MVCC timestamps, conflict detection, managed transactions, iterator snapshots. | `oracle`, `Txn`, `Txn.ReadTs`, `Txn.Commit`. | `txn_test.go`, `txn_iterator_test.go` |
@@ -143,7 +143,7 @@ flowchart LR
 | Component | Source | Purpose | Notable Metrics |
 | --- | --- | --- | --- |
 | Flush Manager | `lsm/flush.Manager` | Coordinates immutable memtables; exposes queue length and stage latency. | `Flush.Queue`, `Flush.BuildNs`, `Flush.Completed` |
-| Compaction Manager | `lsm.compactionManager` | Prioritises L0 size, overlap, and level fanout. | `NoKV.Compaction.RunsTotal`, `LastDurationMs` |
+| Compaction Manager | `lsm.compactionManager` | Prioritises L0 size, ingest buffer backlog, and level fanout (details in [compaction.md](compaction.md)). | `NoKV.Compaction.RunsTotal`, `LastDurationMs` |
 | ValueLog GC | `valueLog.doRunGC` + `vlog.Manager` | Rewrites live entries into new vlog segments based on discard stats. | `NoKV.ValueLog.GcRuns`, `SegmentsRemoved`, `HeadUpdates` |
 | Prefetch Loop | `DB.prefetchLoop` | Uses HotRing signals to schedule asynchronous reads into `prefetched` cache. | `Stats.HotKeys` with timestamps |
 | Stats Sampler | `Stats.StartStats` | Polls flush, compaction, WAL, transaction metrics and publishes via `expvar`. | `NoKV.Txns.*`, `NoKV.Flush.*`, etc. |
@@ -196,6 +196,7 @@ NoKV positions itself between the two: it adopts RocksDB's manifest/WAL discipli
 For detailed walkthroughs of individual modules, refer to:
 
 * [Memtable design](memtable.md) – skiplist arena sizing, WAL coupling, and recovery.
+* [Compaction & cache strategy](compaction.md) – ingest buffers, priority scoring, and cache telemetry.
 * [Transactions & MVCC](txn.md) – oracle timestamps, conflict detection, and commit flow.
 * [Value log design](vlog.md) – updated manager semantics, discard stats, and GC.
 * [Cache & bloom filters](cache.md) – hot/cold block caches and observability counters.

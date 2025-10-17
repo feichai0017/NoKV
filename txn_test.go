@@ -15,6 +15,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var DefaultIteratorOptions = IteratorOptions{
+	Reverse:     false,
+	AllVersions: false,
+}
+
 func runNoKVTest(t *testing.T, opts *Options, test func(t *testing.T, db *DB)) {
 	dir, err := os.MkdirTemp("", "NoKV-test")
 	require.NoError(t, err)
@@ -109,101 +114,97 @@ func TestTxnReadAfterWrite(t *testing.T) {
 	})
 }
 
-/******
- func TestTxnVersions(t *testing.T) {
-	 runNoKVTest(t, nil, func(t *testing.T, db *DB) {
-		 k := []byte("key")
-		 for i := 1; i < 10; i++ {
-			 txn := db.NewTransaction(true)
+func TestTxnVersions(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		k := []byte("key")
+		for i := 1; i < 10; i++ {
+			txn := db.NewTransaction(true)
 
-			 require.NoError(t, txn.SetEntry(utils.NewEntry(k, []byte(fmt.Sprintf("valversion=%d", i)))))
-			 require.NoError(t, txn.Commit())
-			 require.Equal(t, uint64(i), db.orc.readTs())
-		 }
+			require.NoError(t, txn.SetEntry(utils.NewEntry(k, []byte(fmt.Sprintf("valversion=%d", i)))))
+			require.NoError(t, txn.Commit())
+			require.Equal(t, uint64(i), db.orc.readTs())
+		}
 
-		 checkIterator := func(itr utils.Iterator, i int) {
-			 defer itr.Close()
-			 count := 0
-			 for itr.Rewind(); itr.Valid(); itr.Next() {
-				 item := itr.Item()
-				 require.Equal(t, k, item.Entry().Key)
+		checkIterator := func(itr *TxnIterator, i int) {
+			defer itr.Close()
+			count := 0
+			for itr.Rewind(); itr.Valid(); itr.Next() {
+				item := itr.Item()
+				require.Equal(t, k, item.Entry().Key)
 
-				 val := item.Entry().Value
-				 exp := fmt.Sprintf("valversion=%d", i)
-				 require.Equal(t, exp, string(val), "i=%d", i)
-				 count++
-			 }
-			 require.Equal(t, 1, count, "i=%d", i) // Should only loop once.
-		 }
+				val := item.Entry().Value
+				exp := fmt.Sprintf("valversion=%d", i)
+				require.Equal(t, exp, string(val), "i=%d", i)
+				count++
+			}
+			require.Equal(t, 1, count, "i=%d", i) // Should only loop once.
+		}
 
-		 checkAllVersions := func(itr utils.Iterator, i int) {
-			 version := uint64(i)
+		checkAllVersions := func(itr *TxnIterator, i int) {
+			version := uint64(i)
 
+			count := 0
+			for itr.Rewind(); itr.Valid(); itr.Next() {
+				item := itr.Item()
+				require.Equal(t, k, item.Entry().Key)
+				require.Equal(t, version, item.Entry().Version)
 
-			 count := 0
-			 for itr.Rewind(); itr.Valid(); itr.Next() {
-				 item := itr.Item()
-				 require.Equal(t, k, item.Entry().Key)
-				 require.Equal(t, version, item.Entry().Version)
+				val := item.Entry().Value
+				exp := fmt.Sprintf("valversion=%d", version)
+				require.Equal(t, exp, string(val), "v=%d", version)
+				count++
 
-				 val := item.Entry().Value
-				 exp := fmt.Sprintf("valversion=%d", version)
-				 require.Equal(t, exp, string(val), "v=%d", version)
-				 count++
+				version--
+			}
+			require.Equal(t, i, count, "i=%d", i) // Should loop as many times as i.
+		}
 
-				 version--
+		for i := 1; i < 10; i++ {
+			txn := db.NewTransaction(true)
+			txn.readTs = uint64(i) // Read version at i.
 
-			 }
-			 require.Equal(t, i, count, "i=%d", i) // Should loop as many times as i.
-		 }
+			item, err := txn.Get(k)
+			require.NoError(t, err)
 
-		 for i := 1; i < 10; i++ {
-			 txn := db.NewTransaction(true)
-			 txn.readTs = uint64(i) // Read version at i.
+			val := item.Entry().Value
+			require.Equal(t, []byte(fmt.Sprintf("valversion=%d", i)), val,
+				"Expected versions to match up at i=%d", i)
 
-			 item, err := txn.Get(k)
-			 require.NoError(t, err)
+			// Try retrieving the latest version forward and reverse.
+			itr := txn.NewIterator(DefaultIteratorOptions)
+			checkIterator(itr, i)
 
-			 val := item.Entry().Value
-			 require.Equal(t, []byte(fmt.Sprintf("valversion=%d", i)), val,
-				 "Expected versions to match up at i=%d", i)
+			opt := DefaultIteratorOptions
+			opt.Reverse = true
+			itr = txn.NewIterator(opt)
+			checkIterator(itr, i)
 
-			 // Try retrieving the latest version forward and reverse.
-			 itr := txn.NewIterator(DefaultIteratorOptions)
-			 checkIterator(itr, i)
+			// Now try retrieving all versions forward and reverse.
+			opt = DefaultIteratorOptions
+			opt.AllVersions = true
+			itr = txn.NewIterator(opt)
+			checkAllVersions(itr, i)
+			itr.Close()
 
-			 opt := DefaultIteratorOptions
-			 opt.Reverse = true
-			 itr = txn.NewIterator(opt)
-			 checkIterator(itr, i)
+			opt = DefaultIteratorOptions
+			opt.AllVersions = true
+			opt.Reverse = true
+			itr = txn.NewIterator(opt)
+			checkAllVersions(itr, i)
+			itr.Close()
 
-			 // Now try retrieving all versions forward and reverse.
-			 opt = DefaultIteratorOptions
-			 opt.AllVersions = true
-			 itr = txn.NewIterator(opt)
-			 checkAllVersions(itr, i)
-			 itr.Close()
+			txn.Discard()
+		}
+		txn := db.NewTransaction(true)
+		defer txn.Discard()
+		item, err := txn.Get(k)
+		require.NoError(t, err)
 
-			 opt = DefaultIteratorOptions
-			 opt.AllVersions = true
-			 opt.Reverse = true
-			 itr = txn.NewIterator(opt)
-			 checkAllVersions(itr, i)
-			 itr.Close()
-
-			 txn.Discard()
-		 }
-		 txn := db.NewTransaction(true)
-		 defer txn.Discard()
-		 item, err := txn.Get(k)
-		 require.NoError(t, err)
-
-		 val, err := item.ValueCopy(nil)
-		 require.NoError(t, err)
-		 require.Equal(t, []byte("valversion=9"), val)
-	 })
- }
- ****/
+		val, err := item.ValueCopy(nil)
+		require.NoError(t, err)
+		require.Equal(t, []byte("valversion=9"), val)
+	})
+}
 
 func TestTxnWriteSkew(t *testing.T) {
 	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
@@ -269,11 +270,6 @@ func TestTxnWriteSkew(t *testing.T) {
 func TestConflict(t *testing.T) {
 	key := []byte("foo")
 	setCount := uint32(0)
-
-	var DefaultIteratorOptions = IteratorOptions{
-		Reverse:     false,
-		AllVersions: false,
-	}
 
 	testAndSet := func(wg *sync.WaitGroup, db *DB) {
 		defer wg.Done()

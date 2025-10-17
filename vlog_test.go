@@ -136,6 +136,52 @@ func TestValueGC(t *testing.T) {
 	}
 }
 
+func TestValueLogIterateReleasesEntries(t *testing.T) {
+	clearDir()
+	db := Open(opt)
+	defer db.Close()
+
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+	val := bytes.Repeat([]byte("x"), 128)
+	require.NoError(t, txn.SetEntry(utils.NewEntry([]byte("iter-key"), val)))
+	require.NoError(t, txn.Commit())
+
+	vlog := db.vlog
+	active := vlog.manager.ActiveFID()
+	lf, ok := vlog.manager.LogFile(active)
+	require.True(t, ok, "active log file missing")
+
+	var captured []*utils.Entry
+	_, err := vlog.iterate(lf, utils.ValueLogHeaderSize, func(e *utils.Entry, vp *utils.ValuePtr) error {
+		captured = append(captured, e)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotZero(t, len(captured), "expected to capture at least one entry")
+
+	for _, e := range captured {
+		if len(e.Key) != 0 || len(e.Value) != 0 {
+			t.Fatalf("expected entry to be reset after DecrRef")
+		}
+	}
+}
+
+func TestDecodeWalEntryReleasesEntries(t *testing.T) {
+	orig := utils.NewEntry([]byte("decode-key"), []byte("decode-val"))
+	buf := &bytes.Buffer{}
+	payload := wal.EncodeEntry(buf, orig)
+	orig.DecrRef()
+
+	entry, _, _, err := decodeWalEntry(payload)
+	require.NoError(t, err)
+	entry.DecrRef()
+
+	if len(entry.Key) != 0 || len(entry.Value) != 0 {
+		t.Fatalf("expected decoded entry to reset after DecrRef")
+	}
+}
+
 func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	clearDir()
 	cfg := *opt

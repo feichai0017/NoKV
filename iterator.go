@@ -24,6 +24,20 @@ type Item struct {
 func (it *Item) Entry() *utils.Entry {
 	return it.e
 }
+
+// ValueCopy returns a copy of the current value into dst (if provided).
+// Mirrors Badger's semantics to aid callers expecting defensive copies.
+func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
+	if it == nil || it.e == nil {
+		return nil, utils.ErrKeyNotFound
+	}
+	val := it.e.Value
+	if len(val) == 0 {
+		return dst[:0], nil
+	}
+	dst = append(dst[:0], val...)
+	return dst, nil
+}
 func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
