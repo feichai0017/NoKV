@@ -72,6 +72,7 @@ func Open(cfg Config) (*Manager, error) {
 	if err := mgr.populate(); err != nil {
 		return nil, err
 	}
+	fresh := false
 	if len(mgr.files) == 0 {
 		lf, err := mgr.create(0)
 		if err != nil {
@@ -79,16 +80,21 @@ func Open(cfg Config) (*Manager, error) {
 		}
 		mgr.active = lf
 		mgr.activeID = 0
+		fresh = true
 	} else {
 		mgr.activeID = mgr.maxFid
 		mgr.active = mgr.files[mgr.activeID]
 	}
 	if mgr.active != nil {
-		off, err := mgr.active.Seek(0, io.SeekEnd)
-		if err != nil {
-			return nil, err
+		if fresh {
+			mgr.offset = uint32(utils.ValueLogHeaderSize)
+		} else {
+			off, err := mgr.active.Seek(0, io.SeekEnd)
+			if err != nil {
+				return nil, err
+			}
+			mgr.offset = uint32(off)
 		}
-		mgr.offset = uint32(off)
 	}
 	return mgr, nil
 }
@@ -166,7 +172,7 @@ func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
 		return nil, err
 	}
 	m.offset += uint32(len(data))
-	
+
 	return &utils.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
 }
 
@@ -207,9 +213,7 @@ func (m *Manager) Read(ptr *utils.ValuePtr) ([]byte, func(), error) {
 		unlock()
 		return nil, nil, err
 	}
-	data := make([]byte, len(buf))
-	copy(data, buf)
-	return data, unlock, nil
+	return buf, unlock, nil
 }
 
 func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {

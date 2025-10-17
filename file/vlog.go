@@ -93,7 +93,17 @@ func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	return err
 }
 func (lf *LogFile) Truncate(offset int64) error {
-	return lf.f.Truncature(offset)
+	if err := lf.f.Truncature(offset); err != nil {
+		return err
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > math.MaxUint32 {
+		offset = math.MaxUint32
+	}
+	atomic.StoreUint32(&lf.size, uint32(offset))
+	return nil
 }
 func (lf *LogFile) Close() error {
 	return lf.f.Close()
@@ -103,10 +113,18 @@ func (lf *LogFile) Size() int64 {
 	return int64(atomic.LoadUint32(&lf.size))
 }
 
-
 // 完成log文件的初始化
 func (lf *LogFile) Bootstrap() error {
-	// TODO 是否需要初始化一些内容给vlog文件?
+	if lf == nil {
+		return fmt.Errorf("logfile bootstrap: nil receiver")
+	}
+	// Reserve header region and ensure it is zeroed even when the file is preallocated.
+	if utils.ValueLogHeaderSize > 0 {
+		header := make([]byte, utils.ValueLogHeaderSize)
+		if err := lf.Write(0, header); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -140,6 +158,3 @@ func (lf *LogFile) FD() *os.File {
 func (lf *LogFile) Sync() error {
 	return lf.f.Sync()
 }
-
-
-

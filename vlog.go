@@ -237,19 +237,17 @@ func (vlog *valueLog) read(vp *utils.ValuePtr) ([]byte, func(), error) {
 	if err != nil {
 		return nil, unlock, err
 	}
-	entry, err := wal.DecodeEntry(data)
+	val, _, err := wal.DecodeValueSlice(data)
 	if err != nil {
 		unlock()
 		return nil, nil, err
 	}
-	defer entry.DecrRef()
-	return entry.Value, unlock, nil
+	return val, unlock, nil
 }
 
 func (vlog *valueLog) write(reqs []*request) error {
 	var buf bytes.Buffer
 	head := vlog.manager.Head()
-
 	fail := func(err error, context string) error {
 		for _, req := range reqs {
 			req.Ptrs = req.Ptrs[:0]
@@ -774,8 +772,6 @@ func (vlog *valueLog) iterate(lf *file.LogFile, offset uint32, fn utils.LogEntry
 
 		var vp utils.ValuePtr
 		vp.Len = uint32(int(e.Hlen) + len(e.Key) + len(e.Value) + crc32.Size)
-		read.recordOffset += vp.Len
-
 		vp.Offset = e.Offset
 		vp.Fid = lf.FID
 		validEndOffset = read.recordOffset
