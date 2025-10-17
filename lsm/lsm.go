@@ -37,7 +37,7 @@ type Options struct {
 	BlockSize int
 	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
 	BloomFalsePositive float64
-	
+
 	// Block cache controls.
 	BlockCacheSize        int
 	BlockCacheHotFraction float64
@@ -51,9 +51,9 @@ type Options struct {
 	BaseTableSize       int64
 	NumLevelZeroTables  int
 	MaxLevelNum         int
-	
+
 	IngestCompactBatchSize int
-	
+
 	DiscardStatsCh *chan map[uint32]int64
 }
 
@@ -132,6 +132,14 @@ func (lsm *LSM) CompactionStats() (int64, float64) {
 		return 0, 0
 	}
 	return lsm.levels.compactionStats()
+}
+
+// CompactionDurations returns the last and max compaction durations (ms) and run count.
+func (lsm *LSM) CompactionDurations() (float64, float64, uint64) {
+	if lsm == nil || lsm.levels == nil {
+		return 0, 0, 0
+	}
+	return lsm.levels.compactionDurations()
 }
 
 // CacheMetrics returns read-path cache hit statistics.
