@@ -173,7 +173,8 @@ func (it *TxnIterator) advance() {
 			continue
 		}
 		entry := item.Entry()
-		userKey := utils.ParseKey(entry.Key)
+		baseKey := utils.ParseKey(entry.Key)
+		cf, userKey, _ := utils.DecodeKeyCF(baseKey)
 		version := utils.ParseTs(entry.Key)
 		if version > it.readTs {
 			it.iitr.Next()
@@ -200,31 +201,31 @@ func (it *TxnIterator) advance() {
 				continue
 			}
 		}
-		if !it.materializeEntry(entry) {
-				it.iitr.Next()
-				continue
-			}
-			it.lastKey = append(it.lastKey[:0], userKey...)
-			it.valid = true
-			if it.txn != nil {
-				it.txn.addReadKey(it.entry.Key)
-				if it.txn.db != nil {
-					it.txn.db.recordRead(it.entry.Key)
-				}
-			}
-			it.latestTs = it.entry.Version
-			return
+		if !it.materializeEntry(entry, cf, userKey, version) {
+			it.iitr.Next()
+			continue
 		}
-		it.latestTs = 0
+		it.lastKey = append(it.lastKey[:0], userKey...)
+		it.valid = true
+		if it.txn != nil {
+			encoded := utils.EncodeKeyWithCF(it.entry.CF, it.entry.Key)
+			it.txn.addReadKey(encoded)
+			if it.txn.db != nil {
+				it.txn.db.recordRead(it.entry.Key)
+			}
+		}
+		it.latestTs = it.entry.Version
+		return
+	}
+	it.latestTs = 0
 }
 
-func (it *TxnIterator) materializeEntry(entry *utils.Entry) bool {
+func (it *TxnIterator) materializeEntry(entry *utils.Entry, cf utils.ColumnFamily, userKey []byte, version uint64) bool {
 	if entry == nil {
 		return false
 	}
-	userKey := utils.ParseKey(entry.Key)
-	version := utils.ParseTs(entry.Key)
 	it.entry.Key = append(it.entry.Key[:0], userKey...)
+	it.entry.CF = cf
 	it.entry.Meta = entry.Meta
 	it.entry.ExpiresAt = entry.ExpiresAt
 	it.entry.Version = version
@@ -307,7 +308,8 @@ func (it *TxnIterator) Next() {
 // Behavior would be reversed if iterating backwards.
 func (it *TxnIterator) Seek(key []byte) uint64 {
 	if len(key) > 0 && it.txn != nil {
-		it.txn.addReadKey(key)
+		encoded := utils.EncodeKeyWithCF(utils.CFDefault, key)
+		it.txn.addReadKey(encoded)
 	}
 	it.lastKey = it.lastKey[:0]
 	if it.iitr == nil {

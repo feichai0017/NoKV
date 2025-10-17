@@ -683,7 +683,8 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 		r.total += esz
 		r.count++
 
-		entry, err := vlog.db.Get(e.Key)
+		cf, userKey, _ := utils.SplitInternalKey(e.Key)
+		entry, err := vlog.db.GetCF(cf, userKey)
 		if err != nil {
 			return err
 		}
@@ -894,9 +895,8 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 }
 
 func (vlog *valueLog) populateDiscardStats() error {
-	key := utils.KeyWithTs(lfDiscardStatsKey, math.MaxUint64)
 	var statsMap map[uint32]int64
-	vs, err := vlog.db.Get(key)
+	vs, err := vlog.db.GetCF(utils.CFDefault, lfDiscardStatsKey)
 	if err != nil {
 		return err
 	}
@@ -1107,7 +1107,7 @@ func (vlog *valueLog) flushDiscardStats() {
 		}
 
 		entries := []*utils.Entry{{
-			Key:   utils.KeyWithTs(lfDiscardStatsKey, 1),
+			Key:   utils.InternalKey(utils.CFDefault, lfDiscardStatsKey, 1),
 			Value: encodedDS,
 		}}
 		req, err := vlog.db.sendToWriteCh(entries)

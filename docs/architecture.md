@@ -229,6 +229,59 @@ For detailed walkthroughs of individual modules, refer to:
 - **Column families** – manifest edits and flush manager structures are ready to carry additional column family identifiers.
 - **Backup / snapshot** – exposing `manifest.Version` as a serialisable checkpoint mirrors RocksDB's `Checkpoint` API and can coexist with vlog archival.
 
+---
+
+## 11. Distributed KV TODO Roadmap
+
+This roadmap follows the TinyKV phases and expands each into concrete, testable work items for NoKV.
+
+### Phase 0 — Column Families & Raw KV Surface
+- **Done**: Extend `utils.Entry`, write pipeline, and WAL paths with a `columnFamily` tag while keeping default CF compatibility.
+- **Done**: Define CF identifiers (`default`, `lock`, `write`) and helper routines analogous to TinyKV's `KeyWithCF`.
+- **Done**: Update `DB.Set/Get/Del/NewIterator` to accept CF-aware options and add mixed-CF coverage in unit tests.
+- Document CF key layout in `docs/cli.md` / `docs/testing.md`; add CLI flag for CF stats if useful.
+
+### Phase 1 — Raft Core (TinyKV Project2A)
+- Introduce `raft/` package: persistent log abstraction, `RaftLog`, state machine (`Follower`, `Candidate`, `Leader`), `Step` handlers for `Msg{Hup,Beat,Propose,Append,Heartbeat,Vote}`.
+- Implement ticking (`tickElection`, `tickHeartbeat`) and configurable timeouts; integrate with existing `utils.WaterMark` for proposal tracking.
+- Add unit tests mirroring TinyKV labs (single-node commit, leader election, log replication corner cases).
+
+### Phase 2 — Raft KV Integration (TinyKV Project2B)
+- Build `raftstore` layer that wires `RawNode` to storage: persist ready state (entries, hard state, snapshots) using NoKV's WAL/manifest directories.
+- Bridge raft apply pipeline with `DB.doWrites`, ensuring proposals translate into batched engine writes; introduce proposal queue keyed by region/peer.
+- Implement message transport interfaces (local mock + hook for future RPC); add integration tests for failover & replay.
+
+### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
+- Surface truncated index/term in manifest; provide APIs to discard obsolete raft log segments and rewrite snapshots.
+- Implement snapshot generation/apply routines leveraging existing SST + vlog export/import; handle partial apply via manifest checkpoints.
+- Add tests covering snapshot catch-up, log compaction thresholds, and restart after snapshot transfer interruptions.
+
+### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
+- Model `RegionMeta`, peer lifecycle, and peer state machine; maintain region ranges inside manifest or dedicated metadata store.
+- Implement conf change handling (add/remove peers) and leadership transfer atop raft core; guard with epoch/version checks.
+- Support split flow: detect split triggers, stage new region metadata, create raft peers, and atomically update manifests/SST ownership.
+- Provide test harness for region splits, membership churn, and log application ordering.
+
+### Phase 5 — Cluster Scheduler (TinyKV Project3C)
+- Introduce scheduler service tracking store stats, region heartbeats, and pending tasks.
+- Implement balance/peer-move operators, heartbeat processing, and failure detection; reuse existing metrics/CLI for visibility.
+- Add simulation tests to validate scheduling decisions under skewed load, down stores, and region hot spots.
+
+### Phase 6 — Distributed MVCC & 2PC (TinyKV Project4)
+- Extend MVCC layer to operate across regions: lock table persistence (`lock` CF), write records (`write` CF), and data (`default` CF).
+- Implement handlers for `KvGet`, `KvPrewrite`, `KvCommit`, `KvScan`, `KvCheckTxnStatus`, `KvBatchRollback`, `KvResolveLock` through raft proposals.
+- Wire primary/secondary lock resolution, TTL management, and latch manager; add integration tests mirroring TinyKV txn suites.
+
+### Phase 7 — Observability, Tooling & Docs
+- Expose raft/region/txn metrics via `Stats` and CLI (`nokv raft`, `nokv regions`); integrate with recovery traces.
+- Document deployment guidance (`docs/distributed.md`), update testing matrix, and describe operational runbooks (snapshots, log GC, scheduler tuning).
+- Provide reproducible scenarios (scripts or benchmarks) to validate leader transfer, failover, and transaction conflict handling end-to-end.
+
+### Cross-Cutting Work
+- Build a deterministic multi-node test harness (in-process transport, chaos injections).
+- Ensure `go test ./...` covers new packages and add CI workflows executing TinyKV-style acceptance criteria.
+- Maintain backward compatibility for single-node embedding by gating distributed components behind configuration flags.
+
 For deeper implementation details, continue with module-specific documents:
 - [WAL subsystem](wal.md)
 - [Flush pipeline](flush.md)
