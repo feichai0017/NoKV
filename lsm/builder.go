@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	proto "google.golang.org/protobuf/proto"
 )
 
 type tableBuilder struct {
@@ -205,7 +206,7 @@ func (tb *tableBuilder) allocate(need int) []byte {
 	bb := tb.curBlock
 	if len(bb.data[bb.end:]) < need {
 		// We need to reallocate.
-		sz := max(bb.end + need, 2 * len(bb.data))
+		sz := max(bb.end+need, 2*len(bb.data))
 		tmp := make([]byte, sz) // todo use memory allocator to improve performance
 		copy(tmp, bb.data)
 		bb.data = tmp
@@ -306,7 +307,7 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 	for i := range tb.blockList {
 		dataSize += uint32(tb.blockList[i].end)
 	}
-	data, err := tableIndex.Marshal()
+	data, err := proto.Marshal(tableIndex)
 	utils.Panic(err)
 	return data, dataSize
 }

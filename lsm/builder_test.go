@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
+	proto "google.golang.org/protobuf/proto"
 )
 
 func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
@@ -24,6 +25,6 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	require.NotEmpty(t, bd.index)
 
 	var tableIndex pb.TableIndex
-	require.NoError(t, tableIndex.Unmarshal(bd.index))
+	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
 	require.Equal(t, uint32(builder.staleDataSize), tableIndex.GetStaleDataSize())
 }
