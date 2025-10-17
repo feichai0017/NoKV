@@ -415,3 +415,128 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 	require.True(t, ok)
 	require.Greater(t, ptrAfter.AppliedIndex, ptrBaseline.AppliedIndex)
 }
+
+func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
+	const raftGroupID = uint64(1)
+	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
+	defer raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
+
+	net := newMemoryNetwork()
+	dbDir := filepath.Join(t.TempDir(), "ready-fail-db")
+	db := openDBAt(t, dbDir)
+
+	rc := myraft.Config{
+		ID:              1,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   math.MaxUint64,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	}
+	peer, err := raftstore.NewPeer(&raftstore.Config{
+		RaftConfig: rc,
+		Transport:  net,
+		Apply:      applyToDB(db),
+		WAL:        db.WAL(),
+		Manifest:   db.Manifest(),
+		GroupID:    raftGroupID,
+	})
+	require.NoError(t, err)
+	net.Register(peer)
+
+	require.NoError(t, peer.Bootstrap([]myraft.Peer{{ID: 1}}))
+
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	leader, ok := net.Leader()
+	require.True(t, ok)
+	require.Equal(t, uint64(1), leader)
+
+	ptrBefore, ptrPresent := db.Manifest().RaftPointer(raftGroupID)
+
+	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointSkipManifest)
+	payload, err := proto.Marshal(&pb.KV{
+		Key:   []byte("ready-fail-key"),
+		Value: []byte("ready-fail-value"),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, net.Propose(leader, payload))
+	for i := 0; i < 8; i++ {
+		net.Tick()
+		net.Flush()
+	}
+
+	ptrAfterFail, ptrAfterPresent := db.Manifest().RaftPointer(raftGroupID)
+	if ptrPresent {
+		require.True(t, ptrAfterPresent, "manifest pointer should exist when it existed before failpoint")
+		require.Equal(t, ptrBefore, ptrAfterFail, "manifest pointer must not advance under failpoint")
+	} else {
+		require.False(t, ptrAfterPresent, "manifest pointer should remain absent under failpoint")
+	}
+
+	require.NoError(t, db.WAL().Rotate())
+	snapBeforeCrash := db.Info().Snapshot()
+	require.Equal(t, int64(1), snapBeforeCrash.RaftLagWarnThreshold)
+	payloadLag, err := proto.Marshal(&pb.KV{
+		Key:   []byte("ready-fail-key-lag"),
+		Value: []byte("ready-fail-value-lag"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, net.Propose(leader, payloadLag))
+	for i := 0; i < 6; i++ {
+		net.Tick()
+		net.Flush()
+	}
+	snapBeforeCrash = db.Info().Snapshot()
+	t.Logf("pre-crash snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d", snapBeforeCrash.RaftLagWarning, snapBeforeCrash.RaftMaxLagSegments, snapBeforeCrash.RaftLaggingGroups, snapBeforeCrash.WALActiveSegment, snapBeforeCrash.WALActiveSize)
+	require.True(t, snapBeforeCrash.RaftLagWarning, "stats snapshot should flag raft lag while manifest lags")
+	require.GreaterOrEqual(t, snapBeforeCrash.RaftMaxLagSegments, snapBeforeCrash.RaftLagWarnThreshold)
+	require.Greater(t, snapBeforeCrash.RaftLaggingGroups, 0)
+
+	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
+
+	entry, err := db.GetCF(utils.CFDefault, []byte("ready-fail-key"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("ready-fail-value"), entry.Value)
+	entry.DecrRef()
+
+	require.NoError(t, db.Close())
+
+	dbRestart := openDBAt(t, dbDir)
+	t.Cleanup(func() { _ = dbRestart.Close() })
+
+	netRestart := newMemoryNetwork()
+	rc2 := rc
+	peerRestart, err := raftstore.NewPeer(&raftstore.Config{
+		RaftConfig: rc2,
+		Transport:  netRestart,
+		Apply:      applyToDB(dbRestart),
+		WAL:        dbRestart.WAL(),
+		Manifest:   dbRestart.Manifest(),
+		GroupID:    raftGroupID,
+	})
+	require.NoError(t, err)
+	netRestart.Register(peerRestart)
+	require.NoError(t, peerRestart.Bootstrap([]myraft.Peer{{ID: 1}}))
+
+	ptrRecovered, recovered := dbRestart.Manifest().RaftPointer(raftGroupID)
+	require.True(t, recovered, "manifest pointer should be recorded after restart")
+	if ptrPresent {
+		require.GreaterOrEqual(t, ptrRecovered.AppliedIndex, ptrBefore.AppliedIndex)
+		require.NotEqual(t, ptrBefore, ptrRecovered, "recovery should advance manifest pointer beyond failpoint snapshot")
+	} else {
+		require.Greater(t, ptrRecovered.AppliedIndex, uint64(0))
+	}
+	require.Greater(t, ptrRecovered.Segment, uint32(0))
+
+	entry2, err := dbRestart.GetCF(utils.CFDefault, []byte("ready-fail-key"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("ready-fail-value"), entry2.Value)
+	entry2.DecrRef()
+
+	recoveredSnap := dbRestart.Info().Snapshot()
+	t.Logf("recovered snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d ptr=%+v", recoveredSnap.RaftLagWarning, recoveredSnap.RaftMaxLagSegments, recoveredSnap.RaftLaggingGroups, recoveredSnap.WALActiveSegment, recoveredSnap.WALActiveSize, ptrRecovered)
+	require.False(t, recoveredSnap.RaftLagWarning, "lag warning should clear after manifest catches up")
+}

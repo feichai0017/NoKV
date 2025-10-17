@@ -111,6 +111,13 @@ func runStatsCmd(w io.Writer, args []string) error {
 		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
 			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)
 		fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.RaftMinLogSegment, snap.RaftMaxLogSegment)
+		if snap.RaftLagWarnThreshold > 0 {
+			fmt.Fprintf(w, "Raft.LagThreshold      %d segments\n", snap.RaftLagWarnThreshold)
+		}
+		if snap.RaftLagWarning {
+			fmt.Fprintf(w, "Raft.Warning           lagging=%d maxLag=%d (threshold=%d)\n",
+				snap.RaftLaggingGroups, snap.RaftMaxLagSegments, snap.RaftLagWarnThreshold)
+		}
 	}
 	fmt.Fprintf(w, "Txns.Active            %d\n", snap.TxnsActive)
 	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)

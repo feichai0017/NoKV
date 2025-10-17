@@ -19,5 +19,6 @@ func openDBAt(t *testing.T, dir string) *NoKV.DB {
 	opt.SSTableMaxSz = 1 << 20
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
+	opt.RaftLagWarnSegments = 1
 	return NoKV.Open(opt)
 }

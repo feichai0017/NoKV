@@ -257,6 +257,12 @@ func (ws *walStorage) updatePointer(ptr manifest.RaftLogPointer) error {
 	if ws.pointer == ptr {
 		return nil
 	}
+	if shouldSkipManifestUpdate() {
+		// Simulate a crash after WAL append but before the manifest pointer
+		// advances. The in-memory pointer intentionally stays stale so that
+		// recovery logic must replay WAL records to catch up.
+		return nil
+	}
 	if ws.manifest != nil {
 		if err := ws.manifest.LogRaftPointer(ptr); err != nil {
 			return err

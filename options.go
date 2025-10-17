@@ -36,6 +36,11 @@ type Options struct {
 	BlockCacheSize        int
 	BlockCacheHotFraction float64
 	BloomCacheSize        int
+
+	// RaftLagWarnSegments determines how many WAL segments a follower can lag
+	// behind the active segment before stats surfaces a warning. Zero disables
+	// the alert.
+	RaftLagWarnSegments int64
 }
 
 // NewDefaultOptions 返回默认的options
@@ -54,6 +59,7 @@ func NewDefaultOptions() *Options {
 		BlockCacheHotFraction: 0.25,
 		BloomCacheSize:        1024,
 		SyncWrites:            false,
+		RaftLagWarnSegments:   8,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt

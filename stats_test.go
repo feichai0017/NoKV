@@ -141,6 +141,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if got := expvar.Get("NoKV.Stats.WAL.ActiveSegment").(*expvar.Int).Value(); got != snap.WALActiveSegment {
 		t.Fatalf("wal active segment mismatch expvar=%d snapshot=%d", got, snap.WALActiveSegment)
 	}
+	if got := expvar.Get("NoKV.Stats.WAL.ActiveSize").(*expvar.Int).Value(); got != snap.WALActiveSize {
+		t.Fatalf("wal active size mismatch expvar=%d snapshot=%d", got, snap.WALActiveSize)
+	}
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)
 	}
@@ -168,6 +171,17 @@ func TestStatsCollectSnapshots(t *testing.T) {
 		t.Fatalf("expected raft max segment metric to be exported")
 	} else if got := v.(*expvar.Int).Value(); got != int64(snap.RaftMaxLogSegment) {
 		t.Fatalf("raft max segment mismatch expvar=%d snapshot=%d", got, snap.RaftMaxLogSegment)
+	}
+	if snap.RaftLagWarnThreshold != db.opt.RaftLagWarnSegments {
+		t.Fatalf("expected raft lag threshold to match options: got=%d want=%d", snap.RaftLagWarnThreshold, db.opt.RaftLagWarnSegments)
+	}
+	if v := expvar.Get("NoKV.Stats.Raft.LagWarning"); v == nil {
+		t.Fatalf("expected raft lag warning metric to be exported")
+	} else if got := v.(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected raft lag warning expvar to be zero, got %d", got)
+	}
+	if snap.RaftLagWarning {
+		t.Fatalf("expected raft lag warning flag to be false with no groups")
 	}
 	if got := expvar.Get("NoKV.Stats.Compaction.LastDurationMs").(*expvar.Float).Value(); got != snap.CompactionLastDurationMs {
 		t.Fatalf("compaction last duration mismatch expvar=%f snapshot=%f", got, snap.CompactionLastDurationMs)

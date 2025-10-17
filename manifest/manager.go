@@ -37,14 +37,16 @@ type ValueLogMeta struct {
 
 // RaftLogPointer tracks WAL progress for a raft group.
 type RaftLogPointer struct {
-	GroupID       uint64
-	Segment       uint32
-	Offset        uint64
-	AppliedIndex  uint64
-	AppliedTerm   uint64
-	Committed     uint64
-	SnapshotIndex uint64
-	SnapshotTerm  uint64
+	GroupID        uint64
+	Segment        uint32
+	Offset         uint64
+	AppliedIndex   uint64
+	AppliedTerm    uint64
+	Committed      uint64
+	SnapshotIndex  uint64
+	SnapshotTerm   uint64
+	TruncatedIndex uint64
+	TruncatedTerm  uint64
 }
 
 // Version represents current manifest state.
@@ -321,6 +323,36 @@ func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
 	return m.LogEdit(Edit{Type: EditRaftPointer, Raft: &cp})
 }
 
+// LogRaftTruncate records the log truncation point (index/term) for a raft
+// group without altering other pointer metadata. If the truncation matches the
+// existing checkpoint, the call is a no-op.
+func (m *Manager) LogRaftTruncate(groupID, index, term uint64) error {
+	if groupID == 0 {
+		return fmt.Errorf("manifest: raft truncate requires group id")
+	}
+	var ptr RaftLogPointer
+	m.mu.Lock()
+	existing, ok := m.version.RaftPointers[groupID]
+	if ok {
+		ptr = existing
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		if index == 0 && term == 0 {
+			return nil
+		}
+		ptr.GroupID = groupID
+	}
+	if ptr.TruncatedIndex == index && ptr.TruncatedTerm == term {
+		return nil
+	}
+	ptr.GroupID = groupID
+	ptr.TruncatedIndex = index
+	ptr.TruncatedTerm = term
+	return m.LogRaftPointer(ptr)
+}
+
 // RaftPointer returns the last persisted raft WAL pointer for the given group.
 func (m *Manager) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
 	m.mu.Lock()
@@ -385,6 +417,8 @@ func writeEdit(w io.Writer, edit Edit) error {
 			buf = binary.AppendUvarint(buf, edit.Raft.Committed)
 			buf = binary.AppendUvarint(buf, edit.Raft.SnapshotIndex)
 			buf = binary.AppendUvarint(buf, edit.Raft.SnapshotTerm)
+			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedIndex)
+			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedTerm)
 		}
 	}
 	// length prefix
@@ -519,15 +553,33 @@ func decodeEdit(data []byte) (Edit, error) {
 			if pos > len(data) {
 				return Edit{}, fmt.Errorf("manifest raft pointer truncated")
 			}
+			var truncatedIdx uint64
+			var truncatedTerm uint64
+			if pos < len(data) {
+				truncatedIdx, n = binary.Uvarint(data[pos:])
+				pos += n
+				if pos > len(data) {
+					return Edit{}, fmt.Errorf("manifest raft pointer truncated index overflow")
+				}
+			}
+			if pos < len(data) {
+				truncatedTerm, n = binary.Uvarint(data[pos:])
+				pos += n
+				if pos > len(data) {
+					return Edit{}, fmt.Errorf("manifest raft pointer truncated term overflow")
+				}
+			}
 			edit.Raft = &RaftLogPointer{
-				GroupID:       groupID,
-				Segment:       uint32(seg),
-				Offset:        off,
-				AppliedIndex:  appliedIdx,
-				AppliedTerm:   appliedTerm,
-				Committed:     committed,
-				SnapshotIndex: snapIdx,
-				SnapshotTerm:  snapTerm,
+				GroupID:        groupID,
+				Segment:        uint32(seg),
+				Offset:         off,
+				AppliedIndex:   appliedIdx,
+				AppliedTerm:    appliedTerm,
+				Committed:      committed,
+				SnapshotIndex:  snapIdx,
+				SnapshotTerm:   snapTerm,
+				TruncatedIndex: truncatedIdx,
+				TruncatedTerm:  truncatedTerm,
 			}
 		}
 	}

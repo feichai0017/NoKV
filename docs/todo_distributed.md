@@ -4,6 +4,8 @@
 - Ready 流程已经接入 WAL typed record，Raft entries / HardState / Snapshot 经由 `wal.Manager.AppendRecords` 写入，并在 manifest 中记录 `EditRaftPointer`。
 - `raftstore` 默认使用新的 `walStorage`（复用 `db.WAL()` 与 `db.Manifest()`）落盘；原有 `DiskStorage` 仅作为回退选项。
 - LSM 在回收 WAL segment 前会遍历所有 raft 指针，确保慢 follower 的进度安全；新增的 `wal_storage_test.go` 覆盖了 entries、HardState、Snapshot 的重启恢复。
+- Ready failpoint 扩展到真实 Ready 管线，可注入 manifest 漏更新并配合 failover 测试；慢 follower backlog 指标支持阈值和 CLI 告警输出。
+- Manifest 现支持 `LogRaftTruncate` 记录 truncated index/term，`raftstore` 引入 snapshot resend 队列，用于后续 follower 重连时的快照补发。
 
 ## 现状概览
 - WAL/manifest 成为所有写入的单一事实来源：提交 Ready 时与普通写入共享批量和 fsync，崩溃恢复统一从 WAL 重建。
@@ -61,5 +63,6 @@
 ## Phase 3 — Log GC & Snapshot Prep (work-in-progress)
 - [ ] Ready pipeline Snapshot resend：为 follower 提供 snapshot + 增量补写，补充注入/互斥测试。
 - [ ] Manifest 记录 truncated index/term，并提供 API/discard 流程（配合 WAL GC）。
+  - [x] `LogRaftTruncate` API 写入并持久化 truncated index/term。
 - [ ] 多 raft 组指针管理：统计每组 backlog、提供 CLI 过滤查看。
 - [ ] 设计 snapshot 文件布局（temp → durable）、失败回滚策略，并把场景加入 `db_recovery_test.go`。
