@@ -106,6 +106,12 @@ func runStatsCmd(w io.Writer, args []string) error {
 		fmt.Fprintf(w, "ValueLog.Head          fid=%d offset=%d len=%d\n",
 			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
 	}
+	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WALActiveSegment, snap.WALSegmentCount, snap.WALSegmentsRemoved)
+	if snap.RaftGroupCount > 0 {
+		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
+			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)
+		fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.RaftMinLogSegment, snap.RaftMaxLogSegment)
+	}
 	fmt.Fprintf(w, "Txns.Active            %d\n", snap.TxnsActive)
 	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
 	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
@@ -352,6 +358,19 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	intVal = 0
 	setInt("NoKV.Stats.ValueLog.DiscardQueue", &intVal)
 	snap.ValueLogDiscardQueue = int(intVal)
+	intVal = 0
+	setInt("NoKV.Stats.Raft.Groups", &intVal)
+	snap.RaftGroupCount = int(intVal)
+	intVal = 0
+	setInt("NoKV.Stats.Raft.LaggingGroups", &intVal)
+	snap.RaftLaggingGroups = int(intVal)
+	setInt("NoKV.Stats.Raft.MaxLagSegments", &snap.RaftMaxLagSegments)
+	intVal = 0
+	setInt("NoKV.Stats.Raft.MinSegment", &intVal)
+	snap.RaftMinLogSegment = uint32(intVal)
+	intVal = 0
+	setInt("NoKV.Stats.Raft.MaxSegment", &intVal)
+	snap.RaftMaxLogSegment = uint32(intVal)
 	setInt("NoKV.Txns.Active", &snap.TxnsActive)
 	intVal = 0
 	setInt("NoKV.Txns.Started", &intVal)

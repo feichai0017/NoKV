@@ -42,6 +42,11 @@ type Stats struct {
 	walActiveSegment     *expvar.Int
 	walSegmentCount      *expvar.Int
 	walSegmentsRemoved   *expvar.Int
+	raftGroupCount       *expvar.Int
+	raftLaggingGroups    *expvar.Int
+	raftMaxLagSegments   *expvar.Int
+	raftMinSegment       *expvar.Int
+	raftMaxSegment       *expvar.Int
 	writeQueueDepth      *expvar.Int
 	writeQueueEntries    *expvar.Int
 	writeQueueBytes      *expvar.Int
@@ -101,6 +106,11 @@ type StatsSnapshot struct {
 	WALActiveSegment         int64                           `json:"wal_active_segment"`
 	WALSegmentCount          int64                           `json:"wal_segment_count"`
 	WALSegmentsRemoved       uint64                          `json:"wal_segments_removed"`
+	RaftGroupCount           int                             `json:"raft_group_count"`
+	RaftLaggingGroups        int                             `json:"raft_lagging_groups"`
+	RaftMinLogSegment        uint32                          `json:"raft_min_log_segment"`
+	RaftMaxLogSegment        uint32                          `json:"raft_max_log_segment"`
+	RaftMaxLagSegments       int64                           `json:"raft_max_lag_segments"`
 	WriteQueueDepth          int64                           `json:"write_queue_depth"`
 	WriteQueueEntries        int64                           `json:"write_queue_entries"`
 	WriteQueueBytes          int64                           `json:"write_queue_bytes"`
@@ -154,6 +164,11 @@ func newStats(db *DB) *Stats {
 		walActiveSegment:     reuseInt("NoKV.Stats.WAL.ActiveSegment"),
 		walSegmentCount:      reuseInt("NoKV.Stats.WAL.Segments"),
 		walSegmentsRemoved:   reuseInt("NoKV.Stats.WAL.Removed"),
+		raftGroupCount:       reuseInt("NoKV.Stats.Raft.Groups"),
+		raftLaggingGroups:    reuseInt("NoKV.Stats.Raft.LaggingGroups"),
+		raftMaxLagSegments:   reuseInt("NoKV.Stats.Raft.MaxLagSegments"),
+		raftMinSegment:       reuseInt("NoKV.Stats.Raft.MinSegment"),
+		raftMaxSegment:       reuseInt("NoKV.Stats.Raft.MaxSegment"),
 		writeQueueDepth:      reuseInt("NoKV.Stats.Write.QueueDepth"),
 		writeQueueEntries:    reuseInt("NoKV.Stats.Write.QueueEntries"),
 		writeQueueBytes:      reuseInt("NoKV.Stats.Write.QueueBytes"),
@@ -301,6 +316,11 @@ func (s *Stats) collect() {
 	s.writeValueLogMs.Set(snap.WriteAvgValueLogMs)
 	s.writeApplyMs.Set(snap.WriteAvgApplyMs)
 	s.writeBatchesTotal.Set(snap.WriteBatchesTotal)
+	s.raftGroupCount.Set(int64(snap.RaftGroupCount))
+	s.raftLaggingGroups.Set(int64(snap.RaftLaggingGroups))
+	s.raftMaxLagSegments.Set(snap.RaftMaxLagSegments)
+	s.raftMinSegment.Set(int64(snap.RaftMinLogSegment))
+	s.raftMaxSegment.Set(int64(snap.RaftMaxLogSegment))
 	if snap.WriteThrottleActive {
 		s.writeThrottle.Set(1)
 	} else {
@@ -391,6 +411,44 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			snap.WALSegmentCount = int64(wstats.SegmentCount)
 			snap.WALSegmentsRemoved = wstats.RemovedSegments
 		}
+	}
+
+	if man := s.db.Manifest(); man != nil {
+		ptrs := man.RaftPointerSnapshot()
+		snap.RaftGroupCount = len(ptrs)
+		var minSeg uint32
+		var maxSeg uint32
+		var maxLag int64
+		lagging := 0
+		activeSeg := snap.WALActiveSegment
+		for _, ptr := range ptrs {
+			if ptr.Segment == 0 {
+				lagging++
+				continue
+			}
+			if minSeg == 0 || ptr.Segment < minSeg {
+				minSeg = ptr.Segment
+			}
+			if ptr.Segment > maxSeg {
+				maxSeg = ptr.Segment
+			}
+			if activeSeg > 0 {
+				lag := activeSeg - int64(ptr.Segment)
+				if lag < 0 {
+					lag = 0
+				}
+				if lag > 0 {
+					lagging++
+				}
+				if lag > maxLag {
+					maxLag = lag
+				}
+			}
+		}
+		snap.RaftMinLogSegment = minSeg
+		snap.RaftMaxLogSegment = maxSeg
+		snap.RaftMaxLagSegments = maxLag
+		snap.RaftLaggingGroups = lagging
 	}
 
 	// Value log backlog.

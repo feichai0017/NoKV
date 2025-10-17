@@ -247,10 +247,10 @@ This roadmap follows the TinyKV phases and expands each into concrete, testable 
 - Add unit tests mirroring TinyKV labs (single-node commit, leader election, log replication corner cases).
 
 ### Phase 2 — Raft KV Integration (TinyKV Project2B)
-- **In progress**: `raftstore` peers wrap `RawNode` with disk-backed storage, integration tests cover three-node apply and restart recovery.
-- Bridge raft apply pipeline with NoKV write path (batching, conflict handling), add throttling/backpressure via `utils.WaterMark`.
-- Introduce persistent manifest edits for raft log checkpoints; ensure Ready pipeline coordinates with WAL rotation.
-- Implement message transport interfaces (local mock + hook for future RPC); add integration tests for failover, slow follower, and replay.
+- **Done**: `raftstore` peers默认通过 `walStorage` 复用 DB 的 WAL + manifest，Ready entries/HardState/Snapshot 与普通写入共享持久化路径；重启恢复和三节点复制已在测试中覆盖。
+- **In progress**: 桥接 raft apply（批量、冲突处理）与 `utils.WaterMark` 回压策略，完善慢 follower / failover 的集成测试。
+- **In progress**: `wal.Manager` 支持 typed record，manifest 记录 `EditRaftPointer`，但仍需补充崩溃注入、慢 follower backlog 与 snapshot resend 的自动化用例。
+- 实现消息传输接口（现阶段在内存 mock），为后续 RPC 化做准备。
 
 ### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
 - Surface truncated index/term in manifest; provide APIs to discard obsolete raft log segments and rewrite snapshots.

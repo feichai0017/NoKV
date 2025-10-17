@@ -3,11 +3,11 @@ package raftstore_test
 import (
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/utils"
@@ -18,12 +18,14 @@ import (
 )
 
 type memoryNetwork struct {
-	peers map[uint64]*raftstore.Peer
+	peers   map[uint64]*raftstore.Peer
+	blocked map[uint64]bool
 }
 
 func newMemoryNetwork() *memoryNetwork {
 	return &memoryNetwork{
-		peers: make(map[uint64]*raftstore.Peer),
+		peers:   make(map[uint64]*raftstore.Peer),
+		blocked: make(map[uint64]bool),
 	}
 }
 
@@ -33,6 +35,9 @@ func (n *memoryNetwork) Register(peer *raftstore.Peer) {
 
 func (n *memoryNetwork) Send(msg myraft.Message) {
 	if msg.To == 0 {
+		return
+	}
+	if n.blocked[msg.To] {
 		return
 	}
 	if peer, ok := n.peers[msg.To]; ok {
@@ -75,18 +80,12 @@ func (n *memoryNetwork) Flush() {
 	}
 }
 
-func openDBAt(t *testing.T, dir string) *NoKV.DB {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		require.NoError(t, err)
-	}
-	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = dir
-	opt.MemTableSize = 1 << 12
-	opt.SSTableMaxSz = 1 << 20
-	opt.ValueLogFileSize = 1 << 20
-	opt.ValueThreshold = utils.DefaultValueThreshold
-	return NoKV.Open(opt)
+func (n *memoryNetwork) Block(id uint64) {
+	n.blocked[id] = true
+}
+
+func (n *memoryNetwork) Unblock(id uint64) {
+	delete(n.blocked, id)
 }
 
 func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
@@ -288,7 +287,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		found   bool
 	)
 	_ = net2.Campaign(1)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		net2.Tick()
 		net2.Flush()
 		leader2, found = net2.Leader()
@@ -310,7 +309,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, net2.Propose(leader2, payload2))
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		net2.Tick()
 	}
 	net2.Flush()
@@ -322,4 +321,97 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		entry.DecrRef()
 		require.NoError(t, n.db.Close())
 	}
+}
+
+func TestRaftStoreSlowFollowerRetention(t *testing.T) {
+	net := newMemoryNetwork()
+	const (
+		raftGroupID = uint64(1)
+		followerID  = uint64(2)
+	)
+
+	dbs := make(map[uint64]*NoKV.DB)
+	var peers []*raftstore.Peer
+	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
+
+	for id := uint64(1); id <= 3; id++ {
+		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("slow-follower-db-%d", id))
+		db := openDBAt(t, dbDir)
+		dbs[id] = db
+		rc := myraft.Config{
+			ID:              id,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   math.MaxUint64,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		}
+		peer, err := raftstore.NewPeer(&raftstore.Config{
+			RaftConfig: rc,
+			Transport:  net,
+			Apply:      applyToDB(db),
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    raftGroupID,
+		})
+		require.NoError(t, err)
+		net.Register(peer)
+		peers = append(peers, peer)
+	}
+
+	for _, peer := range peers {
+		require.NoError(t, peer.Bootstrap(peerList))
+	}
+
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	leader, ok := net.Leader()
+	require.True(t, ok)
+	require.Equal(t, uint64(1), leader)
+
+	payload, err := proto.Marshal(&pb.KV{
+		Key:   []byte("slow-follower-key"),
+		Value: []byte("slow-follower-value"),
+	})
+	require.NoError(t, err)
+
+	followerDB := dbs[followerID]
+	ptrBaseline, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	if !ok {
+		ptrBaseline = manifest.RaftLogPointer{}
+	}
+
+	net.Block(followerID)
+
+	require.NoError(t, net.Propose(leader, payload))
+
+	for i := 0; i < 8; i++ {
+		net.Tick()
+		net.Flush()
+	}
+
+	_, err = followerDB.GetCF(utils.CFDefault, []byte("slow-follower-key"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	ptrDuring, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	if ok {
+		require.Equal(t, ptrBaseline.AppliedIndex, ptrDuring.AppliedIndex, "follower pointer should remain unchanged while blocked")
+	}
+
+	net.Unblock(followerID)
+
+	for i := 0; i < 12; i++ {
+		net.Tick()
+		net.Flush()
+	}
+
+	entry, err := followerDB.GetCF(utils.CFDefault, []byte("slow-follower-key"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("slow-follower-value"), entry.Value)
+	entry.DecrRef()
+
+	ptrAfter, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	require.True(t, ok)
+	require.Greater(t, ptrAfter.AppliedIndex, ptrBaseline.AppliedIndex)
 }
