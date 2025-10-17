@@ -199,6 +199,14 @@ func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lsm.levels.LogValueLogUpdate(meta)
 }
 
+// ManifestManager exposes the underlying manifest manager for advanced coordination layers.
+func (lsm *LSM) ManifestManager() *manifest.Manager {
+	if lsm == nil || lsm.levels == nil {
+		return nil
+	}
+	return lsm.levels.manifestMgr
+}
+
 // ValueLogHead returns the persisted head pointer, if any.
 func (lsm *LSM) ValueLogHead() (utils.ValuePtr, bool) {
 	meta := lsm.levels.ValueLogHead()

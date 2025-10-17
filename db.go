@@ -780,6 +780,22 @@ func (db *DB) valueThreshold() int64 {
 	return atomic.LoadInt64(&db.opt.ValueThreshold)
 }
 
+// WAL exposes the underlying WAL manager.
+func (db *DB) WAL() *wal.Manager {
+	if db == nil {
+		return nil
+	}
+	return db.wal
+}
+
+// Manifest exposes the manifest manager for coordination components.
+func (db *DB) Manifest() *manifest.Manager {
+	if db == nil || db.lsm == nil {
+		return nil
+	}
+	return db.lsm.ManifestManager()
+}
+
 func (db *DB) IsClosed() bool {
 	return atomic.LoadUint32(&db.isClosed) == 1
 }

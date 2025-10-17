@@ -35,6 +35,18 @@ type ValueLogMeta struct {
 	Valid  bool
 }
 
+// RaftLogPointer tracks WAL progress for a raft group.
+type RaftLogPointer struct {
+	GroupID       uint64
+	Segment       uint32
+	Offset        uint64
+	AppliedIndex  uint64
+	AppliedTerm   uint64
+	Committed     uint64
+	SnapshotIndex uint64
+	SnapshotTerm  uint64
+}
+
 // Version represents current manifest state.
 type Version struct {
 	Levels       map[int][]FileMeta
@@ -42,6 +54,7 @@ type Version struct {
 	LogOffset    uint64
 	ValueLogs    map[uint32]ValueLogMeta
 	ValueLogHead ValueLogMeta
+	RaftPointers map[uint64]RaftLogPointer
 }
 
 // Edit operation types.
@@ -54,6 +67,7 @@ const (
 	EditValueLogHead
 	EditDeleteValueLog
 	EditUpdateValueLog
+	EditRaftPointer
 )
 
 // Edit describes a single metadata operation.
@@ -63,6 +77,7 @@ type Edit struct {
 	LogSeg    uint32
 	LogOffset uint64
 	ValueLog  *ValueLogMeta
+	Raft      *RaftLogPointer
 }
 
 // Manager controls manifest file operations.
@@ -121,8 +136,9 @@ func (m *Manager) createNew() error {
 		return err
 	}
 	m.version = Version{
-		Levels:    make(map[int][]FileMeta),
-		ValueLogs: make(map[uint32]ValueLogMeta),
+		Levels:       make(map[int][]FileMeta),
+		ValueLogs:    make(map[uint32]ValueLogMeta),
+		RaftPointers: make(map[uint64]RaftLogPointer),
 	}
 	return nil
 }
@@ -141,8 +157,9 @@ func (m *Manager) writeCurrent() error {
 
 func (m *Manager) replay() error {
 	m.version = Version{
-		Levels:    make(map[int][]FileMeta),
-		ValueLogs: make(map[uint32]ValueLogMeta),
+		Levels:       make(map[int][]FileMeta),
+		ValueLogs:    make(map[uint32]ValueLogMeta),
+		RaftPointers: make(map[uint64]RaftLogPointer),
 	}
 	reader := bufio.NewReader(m.manifest)
 	for {
@@ -205,6 +222,11 @@ func (m *Manager) apply(edit Edit) {
 				}
 			}
 		}
+	case EditRaftPointer:
+		if edit.Raft != nil {
+			ptr := *edit.Raft
+			m.version.RaftPointers[ptr.GroupID] = ptr
+		}
 	}
 }
 
@@ -232,11 +254,13 @@ func (m *Manager) Current() Version {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[uint32]ValueLogMeta),
 		ValueLogHead: m.version.ValueLogHead,
+		RaftPointers: make(map[uint64]RaftLogPointer, len(m.version.RaftPointers)),
 	}
 	for level, files := range m.version.Levels {
 		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
 	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
+	maps.Copy(cp.RaftPointers, m.version.RaftPointers)
 	return cp
 }
 
@@ -291,6 +315,29 @@ func (m *Manager) ValueLogStatus() map[uint32]ValueLogMeta {
 	return out
 }
 
+// LogRaftPointer persists the WAL checkpoint for a raft group.
+func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
+	cp := ptr
+	return m.LogEdit(Edit{Type: EditRaftPointer, Raft: &cp})
+}
+
+// RaftPointer returns the last persisted raft WAL pointer for the given group.
+func (m *Manager) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ptr, ok := m.version.RaftPointers[groupID]
+	return ptr, ok
+}
+
+// RaftPointerSnapshot returns a copy of all raft WAL checkpoints.
+func (m *Manager) RaftPointerSnapshot() map[uint64]RaftLogPointer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[uint64]RaftLogPointer, len(m.version.RaftPointers))
+	maps.Copy(out, m.version.RaftPointers)
+	return out
+}
+
 // Internal encoding helpers
 func writeEdit(w io.Writer, edit Edit) error {
 	buf := make([]byte, 0, 64)
@@ -327,6 +374,17 @@ func writeEdit(w io.Writer, edit Edit) error {
 			} else {
 				buf = append(buf, 0)
 			}
+		}
+	case EditRaftPointer:
+		if edit.Raft != nil {
+			buf = binary.AppendUvarint(buf, edit.Raft.GroupID)
+			buf = binary.AppendUvarint(buf, uint64(edit.Raft.Segment))
+			buf = binary.AppendUvarint(buf, edit.Raft.Offset)
+			buf = binary.AppendUvarint(buf, edit.Raft.AppliedIndex)
+			buf = binary.AppendUvarint(buf, edit.Raft.AppliedTerm)
+			buf = binary.AppendUvarint(buf, edit.Raft.Committed)
+			buf = binary.AppendUvarint(buf, edit.Raft.SnapshotIndex)
+			buf = binary.AppendUvarint(buf, edit.Raft.SnapshotTerm)
 		}
 	}
 	// length prefix
@@ -438,6 +496,38 @@ func decodeEdit(data []byte) (Edit, error) {
 				FileID: uint32(fid64),
 				Offset: offset,
 				Valid:  valid,
+			}
+		}
+	case EditRaftPointer:
+		if pos <= len(data) {
+			groupID, n := binary.Uvarint(data[pos:])
+			pos += n
+			seg, n := binary.Uvarint(data[pos:])
+			pos += n
+			off, n := binary.Uvarint(data[pos:])
+			pos += n
+			appliedIdx, n := binary.Uvarint(data[pos:])
+			pos += n
+			appliedTerm, n := binary.Uvarint(data[pos:])
+			pos += n
+			committed, n := binary.Uvarint(data[pos:])
+			pos += n
+			snapIdx, n := binary.Uvarint(data[pos:])
+			pos += n
+			snapTerm, n := binary.Uvarint(data[pos:])
+			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest raft pointer truncated")
+			}
+			edit.Raft = &RaftLogPointer{
+				GroupID:       groupID,
+				Segment:       uint32(seg),
+				Offset:        off,
+				AppliedIndex:  appliedIdx,
+				AppliedTerm:   appliedTerm,
+				Committed:     committed,
+				SnapshotIndex: snapIdx,
+				SnapshotTerm:  snapTerm,
 			}
 		}
 	}
