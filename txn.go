@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/feichai0017/NoKV/utils"
 	"sort"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
@@ -340,7 +339,7 @@ func (txn *Txn) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
 	entries := make([]*utils.Entry, 0, len(txn.pendingWrites))
 	for _, e := range txn.pendingWrites {
 		dup := *e
-		dup.Key = utils.KeyWithTs(utils.SafeCopy(nil, e.Key), txn.readTs)
+		dup.Key = utils.InternalKey(dup.CF, e.Key, txn.readTs)
 		entries = append(entries, &dup)
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -412,12 +411,13 @@ func (txn *Txn) modify(e *utils.Entry) error {
 
 	// The txn.conflictKeys is used for conflict detection. If conflict detection
 	// is disabled, we don't need to store key hashes in this map.
+	cfKey := utils.EncodeKeyWithCF(e.CF, e.Key)
 	if txn.db.opt.DetectConflicts {
-		fp := utils.MemHash(e.Key) // Avoid dealing with byte arrays.
+		fp := utils.MemHash(cfKey) // Avoid dealing with byte arrays.
 		txn.conflictKeys[fp] = struct{}{}
 	}
 
-	txn.pendingWrites[unsafe.String(unsafe.SliceData(e.Key), len(e.Key))] = e
+	txn.pendingWrites[string(cfKey)] = e
 	return nil
 }
 
@@ -469,7 +469,8 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item = new(Item)
 	item.e = new(utils.Entry)
 	if txn.update {
-		if e, has := txn.pendingWrites[unsafe.String(unsafe.SliceData(key), len(key))]; has && bytes.Equal(key, e.Key) {
+		cfKey := utils.EncodeKeyWithCF(utils.CFDefault, key)
+		if e, has := txn.pendingWrites[string(cfKey)]; has && bytes.Equal(key, e.Key) {
 			if isDeletedOrExpired(e.Meta, e.ExpiresAt) {
 				return nil, utils.ErrKeyNotFound
 			}
@@ -477,6 +478,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 			item.e.Meta = e.Meta
 			item.e.Value = e.Value
 			item.e.Key = key
+			item.e.CF = e.CF
 			item.e.Version = txn.readTs
 			item.e.ExpiresAt = e.ExpiresAt
 			// We probably don't need to set db on item here.
@@ -485,11 +487,11 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		}
 		// Only track reads if this is update txn. No need to track read if txn serviced it
 		// internally.
-		txn.addReadKey(key)
+		txn.addReadKey(cfKey)
 	}
 
 	// 使用事务的readTs作为时间戳查询
-	seek := utils.KeyWithTs(key, txn.readTs)
+	seek := utils.InternalKey(utils.CFDefault, key, txn.readTs)
 	vs, err := txn.db.lsm.Get(seek)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
@@ -517,6 +519,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	item.e.Key = key
+	item.e.CF = utils.CFDefault
 	item.e.Version = vs.Version
 	item.e.Meta = vs.Meta
 	item.e.Value = vs.Value
@@ -597,7 +600,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	processEntry := func(e *utils.Entry) {
 		// Suffix the keys with commit ts, so the key versions are sorted in
 		// descending order of commit timestamp.
-		e.Key = utils.KeyWithTs(e.Key, e.Version)
+		e.Key = utils.InternalKey(e.CF, e.Key, e.Version)
 		entries = append(entries, e)
 	}
 

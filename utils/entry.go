@@ -36,8 +36,8 @@ func (vs *ValueStruct) DecodeValue(buf []byte) {
 	vs.Value = buf[1+sz:]
 }
 
-//对value进行编码，并将编码后的字节写入byte
-//这里将过期时间和value的值一起编码
+// 对value进行编码，并将编码后的字节写入byte
+// 这里将过期时间和value的值一起编码
 func (vs *ValueStruct) EncodeValue(b []byte) uint32 {
 	b[0] = vs.Meta
 	sz := binary.PutUvarint(b[1:], vs.ExpiresAt)
@@ -56,11 +56,13 @@ func sizeVarint(x uint64) (n int) {
 	return n
 }
 
-//Entry _ 最外层写入的结构体
+// Entry _ 最外层写入的结构体
 type Entry struct {
 	Key       []byte
 	Value     []byte
 	ExpiresAt uint64
+
+	CF ColumnFamily
 
 	Meta         byte
 	Version      uint64
@@ -88,6 +90,7 @@ func (e *Entry) reset() {
 	e.Key = nil
 	e.Value = nil
 	e.ExpiresAt = 0
+	e.CF = CFDefault
 	e.Meta = 0
 	e.Version = 0
 	e.Offset = 0
@@ -97,9 +100,18 @@ func (e *Entry) reset() {
 
 // NewEntry_
 func NewEntry(key, value []byte) *Entry {
+	return NewEntryWithCF(CFDefault, key, value)
+}
+
+// NewEntryWithCF creates an Entry for the specified column family.
+func NewEntryWithCF(cf ColumnFamily, key, value []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key = key
 	e.Value = value
+	e.CF = cf
+	if !cf.Valid() {
+		e.CF = CFDefault
+	}
 	e.IncrRef()
 	return e
 }
@@ -124,6 +136,18 @@ func (e *Entry) IsDeletedOrExpired() bool {
 // WithTTL _
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
+	return e
+}
+
+// WithColumnFamily sets the column family for the entry.
+func (e *Entry) WithColumnFamily(cf ColumnFamily) *Entry {
+	if e == nil {
+		return e
+	}
+	if !cf.Valid() {
+		cf = CFDefault
+	}
+	e.CF = cf
 	return e
 }
 

@@ -137,6 +137,12 @@ func (iter *DBIterator) materialize(src *utils.Entry) bool {
 		return false
 	}
 	iter.entry = *src
+	cf, userKey, ts := utils.SplitInternalKey(iter.entry.Key)
+	iter.entry.Key = userKey
+	iter.entry.CF = cf
+	if ts != 0 {
+		iter.entry.Version = ts
+	}
 	if utils.IsValuePtr(src) {
 		var vp utils.ValuePtr
 		vp.Decode(src.Value)

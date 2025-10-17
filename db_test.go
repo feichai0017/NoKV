@@ -71,6 +71,51 @@ func TestAPI(t *testing.T) {
 	}
 }
 
+func TestColumnFamilies(t *testing.T) {
+	clearDir()
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("user-key")
+	require.NoError(t, db.SetCF(utils.CFDefault, key, []byte("default")))
+	require.NoError(t, db.SetCF(utils.CFLock, key, []byte("lock")))
+	require.NoError(t, db.SetCF(utils.CFWrite, key, []byte("write")))
+
+	e, err := db.GetCF(utils.CFDefault, key)
+	require.NoError(t, err)
+	require.Equal(t, utils.CFDefault, e.CF)
+	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
+
+	e, err = db.GetCF(utils.CFLock, key)
+	require.NoError(t, err)
+	require.Equal(t, utils.CFLock, e.CF)
+	require.Equal(t, []byte("lock"), e.Value)
+	e.DecrRef()
+
+	e, err = db.GetCF(utils.CFWrite, key)
+	require.NoError(t, err)
+	require.Equal(t, utils.CFWrite, e.CF)
+	require.Equal(t, []byte("write"), e.Value)
+	e.DecrRef()
+
+	// Default Get should read default CF.
+	e, err = db.Get(key)
+	require.NoError(t, err)
+	require.Equal(t, utils.CFDefault, e.CF)
+	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
+
+	require.NoError(t, db.DelCF(utils.CFLock, key))
+	_, err = db.GetCF(utils.CFLock, key)
+	require.Error(t, err)
+	// Default CF should remain untouched.
+	e, err = db.GetCF(utils.CFDefault, key)
+	require.NoError(t, err)
+	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
+}
+
 func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 	req := requestPool.Get().(*request)
 	req.reset()

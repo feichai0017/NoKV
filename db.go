@@ -25,6 +25,9 @@ type (
 		Set(data *utils.Entry) error
 		Get(key []byte) (*utils.Entry, error)
 		Del(key []byte) error
+		SetCF(cf utils.ColumnFamily, key, value []byte) error
+		GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error)
+		DelCF(cf utils.ColumnFamily, key []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
 		Info() *Stats
 		Close() error
@@ -216,7 +219,7 @@ func (db *DB) Close() error {
 		db.prefetchWG.Wait()
 		db.prefetchCh = nil
 	}
-	
+
 	db.vlog.lfDiscardStats.closer.Close()
 	if err := db.lsm.Close(); err != nil {
 		return err
@@ -230,7 +233,7 @@ func (db *DB) Close() error {
 	if err := db.stats.close(); err != nil {
 		return err
 	}
-	
+
 	if db.dirLock != nil {
 		if err := db.dirLock.Release(); err != nil {
 			return err
@@ -242,12 +245,27 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) Del(key []byte) error {
+	return db.DelCF(utils.CFDefault, key)
+}
+
+// DelCF deletes a key from the specified column family.
+func (db *DB) DelCF(cf utils.ColumnFamily, key []byte) error {
 	// 写入一个值为nil的entry 作为墓碑消息实现删除
-	e := utils.NewEntry(key, nil)
+	e := utils.NewEntryWithCF(cf, key, nil)
+	e.Meta = utils.BitDelete
 	err := db.Set(e)
 	e.DecrRef()
 	return err
 }
+
+// SetCF writes a key/value pair into the specified column family.
+func (db *DB) SetCF(cf utils.ColumnFamily, key, value []byte) error {
+	e := utils.NewEntryWithCF(cf, key, value)
+	err := db.Set(e)
+	e.DecrRef()
+	return err
+}
+
 func (db *DB) Set(data *utils.Entry) error {
 	if data == nil || len(data.Key) == 0 {
 		return utils.ErrEmptyKey
@@ -258,7 +276,10 @@ func (db *DB) Set(data *utils.Entry) error {
 		vp  *utils.ValuePtr
 		err error
 	)
-	data.Key = utils.KeyWithTs(data.Key, math.MaxUint32)
+	if data.CF.Valid() == false {
+		data.CF = utils.CFDefault
+	}
+	data.Key = utils.InternalKey(data.CF, data.Key, math.MaxUint32)
 	// 如果value不应该直接写入LSM 则先写入 vlog文件，这时必须保证vlog具有重放功能
 	// 以便于崩溃后恢复数据
 	if !db.shouldWriteValueToLSM(data) {
@@ -279,20 +300,25 @@ func (db *DB) Set(data *utils.Entry) error {
 	return nil
 }
 func (db *DB) Get(key []byte) (*utils.Entry, error) {
+	return db.GetCF(utils.CFDefault, key)
+}
+
+// GetCF reads a key from the specified column family.
+func (db *DB) GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
 
 	originKey := key
 	// 添加时间戳用于查询
-	key = utils.KeyWithTs(key, math.MaxUint32)
+	internalKey := utils.InternalKey(cf, key, math.MaxUint32)
 
 	var (
 		entry *utils.Entry
 		err   error
 	)
 	// 从LSM中查询entry，这时不确定entry是不是值指针
-	if entry, err = db.lsm.Get(key); err != nil {
+	if entry, err = db.lsm.Get(internalKey); err != nil {
 		return entry, err
 	}
 	// 检查从lsm拿到的value是否是value ptr,是则从vlog中拿值
@@ -309,6 +335,15 @@ func (db *DB) Get(key []byte) (*utils.Entry, error) {
 
 	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
+	}
+	storedCF, _, ts := utils.SplitInternalKey(entry.Key)
+	if storedCF.Valid() {
+		entry.CF = storedCF
+	} else {
+		entry.CF = cf
+	}
+	if ts != 0 {
+		entry.Version = ts
 	}
 	entry.Key = originKey
 	db.recordRead(originKey)
@@ -348,7 +383,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 		return utils.ErrInvalidRequest
 	}
 	// Find head on disk
-	headKey := utils.KeyWithTs(head, math.MaxUint64)
+	headKey := utils.InternalKey(utils.CFDefault, head, math.MaxUint64)
 	val, err := db.lsm.Get(headKey)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
@@ -447,7 +482,7 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 		return
 	}
 	if db.lsm != nil {
-		internal := utils.KeyWithTs([]byte(key), math.MaxUint32)
+		internal := utils.InternalKey(utils.CFDefault, []byte(key), math.MaxUint32)
 		db.lsm.Prefetch(internal, req.hot)
 	}
 	db.prefetchMu.Lock()
@@ -702,7 +737,6 @@ func (db *DB) writeToLSM(b *request) error {
 	return nil
 }
 
-
 // 结构体
 type flushTask struct {
 	mt           *utils.Skiplist
@@ -721,7 +755,7 @@ func (db *DB) pushHead(ft flushTask) error {
 
 	// Pick the max commit ts, so in case of crash, our read ts would be higher than all the
 	// commits.
-	headTs := utils.KeyWithTs(head, uint64(time.Now().Unix()/1e9))
+	headTs := utils.InternalKey(utils.CFDefault, head, uint64(time.Now().Unix()/1e9))
 	e := utils.NewEntry(headTs, val)
 	ft.mt.Add(e)
 	e.DecrRef()
