@@ -242,15 +242,15 @@ This roadmap follows the TinyKV phases and expands each into concrete, testable 
 - Document CF key layout in `docs/cli.md` / `docs/testing.md`; add CLI flag for CF stats if useful.
 
 ### Phase 1 — Raft Core (TinyKV Project2A)
-- **In progress**: Introduced `raft/` package wrapping etcd/raft's `RawNode`, `MemoryStorage`, and basic single-node election/proposal tests.
-- Introduce `raft/` package: persistent log abstraction, `RaftLog`, state machine (`Follower`, `Candidate`, `Leader`), `Step` handlers for `Msg{Hup,Beat,Propose,Append,Heartbeat,Vote}`.
+- **Done**: Introduced `raft/` package wrapping etcd/raft's `RawNode`, `MemoryStorage`, and single-node election/proposal tests.
 - Implement ticking (`tickElection`, `tickHeartbeat`) and configurable timeouts; integrate with existing `utils.WaterMark` for proposal tracking.
 - Add unit tests mirroring TinyKV labs (single-node commit, leader election, log replication corner cases).
 
 ### Phase 2 — Raft KV Integration (TinyKV Project2B)
-- Build `raftstore` layer that wires `RawNode` to storage: persist ready state (entries, hard state, snapshots) using NoKV's WAL/manifest directories.
-- Bridge raft apply pipeline with `DB.doWrites`, ensuring proposals translate into batched engine writes; introduce proposal queue keyed by region/peer.
-- Implement message transport interfaces (local mock + hook for future RPC); add integration tests for failover & replay.
+- **In progress**: `raftstore` peers wrap `RawNode` with disk-backed storage, integration tests cover three-node apply and restart recovery.
+- Bridge raft apply pipeline with NoKV write path (batching, conflict handling), add throttling/backpressure via `utils.WaterMark`.
+- Introduce persistent manifest edits for raft log checkpoints; ensure Ready pipeline coordinates with WAL rotation.
+- Implement message transport interfaces (local mock + hook for future RPC); add integration tests for failover, slow follower, and replay.
 
 ### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
 - Surface truncated index/term in manifest; provide APIs to discard obsolete raft log segments and rewrite snapshots.
