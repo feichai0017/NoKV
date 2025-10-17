@@ -85,11 +85,20 @@ func runStatsCmd(w io.Writer, args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(snap)
 	}
-	
+
 	fmt.Fprintf(w, "Entries               %d\n", snap.Entries)
 	fmt.Fprintf(w, "Flush.Pending          %d\n", snap.FlushPending)
 	fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.CompactionBacklog)
 	fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.CompactionMaxScore)
+	fmt.Fprintf(w, "Flush.Wait.LastMs      %.2f\n", snap.FlushLastWaitMs)
+	fmt.Fprintf(w, "Flush.Wait.MaxMs       %.2f\n", snap.FlushMaxWaitMs)
+	fmt.Fprintf(w, "Flush.Build.LastMs     %.2f\n", snap.FlushLastBuildMs)
+	fmt.Fprintf(w, "Flush.Build.MaxMs      %.2f\n", snap.FlushMaxBuildMs)
+	fmt.Fprintf(w, "Flush.Release.LastMs   %.2f\n", snap.FlushLastReleaseMs)
+	fmt.Fprintf(w, "Flush.Release.MaxMs    %.2f\n", snap.FlushMaxReleaseMs)
+	fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.CompactionLastDurationMs)
+	fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.CompactionMaxDurationMs)
+	fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.CompactionRuns)
 	fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLogSegments)
 	fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLogPendingDel)
 	fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLogDiscardQueue)
@@ -101,6 +110,18 @@ func runStatsCmd(w io.Writer, args []string) error {
 	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
 	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
 	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
+	if len(snap.ColumnFamilies) > 0 {
+		fmt.Fprintln(w, "ColumnFamilies:")
+		var names []string
+		for name := range snap.ColumnFamilies {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			cf := snap.ColumnFamilies[name]
+			fmt.Fprintf(w, "  - %s: reads=%d writes=%d\n", name, cf.Reads, cf.Writes)
+		}
+	}
 	if len(snap.HotKeys) > 0 {
 		fmt.Fprintln(w, "HotKeys:")
 		for _, hk := range snap.HotKeys {
@@ -317,7 +338,7 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 			}
 		}
 	}
-	
+
 	setInt("NoKV.Stats.Entries", &snap.Entries)
 	setInt("NoKV.Stats.Flush.Pending", &snap.FlushPending)
 	setInt("NoKV.Stats.Compaction.Backlog", &snap.CompactionBacklog)

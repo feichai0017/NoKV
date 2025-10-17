@@ -64,6 +64,7 @@ type (
 		prefetchWarm     int32
 		prefetchHot      int32
 		prefetchCooldown time.Duration
+		cfMetrics        []*cfCounters
 	}
 
 	commitQueue struct {
@@ -80,6 +81,11 @@ type (
 		size       int64
 	}
 )
+
+type cfCounters struct {
+	writes uint64
+	reads  uint64
+}
 
 var (
 	head = []byte("!NoKV!head") // For storing value offset for replay.
@@ -153,6 +159,11 @@ func Open(opt *Options) *DB {
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// 初始化统计信息
 	db.iterPool = newIteratorPool()
+	cfCount := int(utils.CFWrite) + 1
+	db.cfMetrics = make([]*cfCounters, cfCount)
+	for i := range db.cfMetrics {
+		db.cfMetrics[i] = &cfCounters{}
+	}
 	db.stats = newStats(db)
 
 	if opt.HotRingEnabled {
@@ -292,6 +303,7 @@ func (db *DB) Set(data *utils.Entry) error {
 	if err := db.lsm.Set(data); err != nil {
 		return err
 	}
+	db.recordCFWrite(data.CF, 1)
 	if db.opt.SyncWrites {
 		if err := db.wal.Sync(); err != nil {
 			return err
@@ -346,6 +358,7 @@ func (db *DB) GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error) {
 		entry.Version = ts
 	}
 	entry.Key = originKey
+	db.recordCFRead(entry.CF, 1)
 	db.recordRead(originKey)
 	return entry, nil
 }
@@ -733,6 +746,7 @@ func (db *DB) writeToLSM(b *request) error {
 			entry.Value = b.Ptrs[i].Encode()
 		}
 		db.lsm.Set(entry)
+		db.recordCFWrite(entry.CF, 1)
 	}
 	return nil
 }
@@ -768,4 +782,55 @@ func (db *DB) valueThreshold() int64 {
 
 func (db *DB) IsClosed() bool {
 	return atomic.LoadUint32(&db.isClosed) == 1
+}
+
+func (db *DB) cfCounter(cf utils.ColumnFamily) *cfCounters {
+	if db == nil {
+		return nil
+	}
+	if !cf.Valid() {
+		cf = utils.CFDefault
+	}
+	idx := int(cf)
+	if idx < 0 || idx >= len(db.cfMetrics) {
+		idx = int(utils.CFDefault)
+	}
+	if db.cfMetrics[idx] == nil {
+		db.cfMetrics[idx] = &cfCounters{}
+	}
+	return db.cfMetrics[idx]
+}
+
+func (db *DB) recordCFWrite(cf utils.ColumnFamily, delta uint64) {
+	if cnt := db.cfCounter(cf); cnt != nil {
+		atomic.AddUint64(&cnt.writes, delta)
+	}
+}
+
+func (db *DB) recordCFRead(cf utils.ColumnFamily, delta uint64) {
+	if cnt := db.cfCounter(cf); cnt != nil {
+		atomic.AddUint64(&cnt.reads, delta)
+	}
+}
+
+func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
+	stats := make(map[string]ColumnFamilySnapshot)
+	if db == nil {
+		return stats
+	}
+	limit := int(utils.CFWrite) + 1
+	for idx := 0; idx < limit && idx < len(db.cfMetrics); idx++ {
+		cnt := db.cfMetrics[idx]
+		if cnt == nil {
+			continue
+		}
+		writes := atomic.LoadUint64(&cnt.writes)
+		reads := atomic.LoadUint64(&cnt.reads)
+		if writes == 0 && reads == 0 {
+			continue
+		}
+		cfName := utils.ColumnFamily(idx).String()
+		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
+	}
+	return stats
 }

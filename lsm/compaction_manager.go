@@ -19,6 +19,7 @@ type compactionManager struct {
 var (
 	compactionRunsTotal      = expvar.NewInt("NoKV.Compaction.RunsTotal")
 	compactionLastDurationMs = expvar.NewInt("NoKV.Compaction.LastDurationMs")
+	compactionMaxDurationMs  = expvar.NewInt("NoKV.Compaction.MaxDurationMs")
 )
 
 func newCompactionManager(lm *levelManager) *compactionManager {

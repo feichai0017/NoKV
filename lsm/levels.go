@@ -32,17 +32,20 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 }
 
 type levelManager struct {
-	maxFID       uint64
-	opt          *Options
-	cache        *cache
-	manifestMgr  *manifest.Manager
-	levels       []*levelHandler
-	lsm          *LSM
-	compactState *compactStatus
-	compaction   *compactionManager
-	logPtrMu     sync.RWMutex
-	logPtrSeg    uint32
-	logPtrOffset uint64
+	maxFID           uint64
+	opt              *Options
+	cache            *cache
+	manifestMgr      *manifest.Manager
+	levels           []*levelHandler
+	lsm              *LSM
+	compactState     *compactStatus
+	compaction       *compactionManager
+	logPtrMu         sync.RWMutex
+	logPtrSeg        uint32
+	logPtrOffset     uint64
+	compactionLastNs int64
+	compactionMaxNs  int64
+	compactionRuns   uint64
 }
 
 func (lm *levelManager) close() error {
@@ -255,9 +258,35 @@ func (lm *levelManager) compactionStats() (int64, float64) {
 	return int64(len(prios)), max
 }
 
+func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
+	if lm == nil {
+		return 0, 0, 0
+	}
+	lastNs := atomic.LoadInt64(&lm.compactionLastNs)
+	maxNs := atomic.LoadInt64(&lm.compactionMaxNs)
+	runs := atomic.LoadUint64(&lm.compactionRuns)
+	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
+}
+
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
 	compactionRunsTotal.Add(1)
-	compactionLastDurationMs.Set(duration.Milliseconds())
+	lastMs := duration.Milliseconds()
+	compactionLastDurationMs.Set(lastMs)
+	if lastMs > compactionMaxDurationMs.Value() {
+		compactionMaxDurationMs.Set(lastMs)
+	}
+	atomic.AddUint64(&lm.compactionRuns, 1)
+	last := duration.Nanoseconds()
+	atomic.StoreInt64(&lm.compactionLastNs, last)
+	for {
+		prev := atomic.LoadInt64(&lm.compactionMaxNs)
+		if last <= prev {
+			break
+		}
+		if atomic.CompareAndSwapInt64(&lm.compactionMaxNs, prev, last) {
+			break
+		}
+	}
 }
 
 func (lm *levelManager) cacheMetrics() CacheMetrics {
@@ -443,20 +472,20 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 		return hit
 	}
 	lh.RLock()
-		ingest := append([]*table(nil), lh.ingest...)
-		lh.RUnlock()
-		for _, table := range ingest {
-			if table == nil {
-				continue
-			}
-			if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
-				utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
-				continue
-			}
-			if table.prefetchBlockForKey(key, hot) {
-				return true
-			}
+	ingest := append([]*table(nil), lh.ingest...)
+	lh.RUnlock()
+	for _, table := range ingest {
+		if table == nil {
+			continue
 		}
+		if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
+			utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+			continue
+		}
+		if table.prefetchBlockForKey(key, hot) {
+			return true
+		}
+	}
 	table := lh.getTable(key)
 	if table == nil {
 		return false
@@ -624,7 +653,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
-	
+
 	if len(lh.ingest) > 0 {
 		var newIngest []*table
 		for _, t := range lh.ingest {

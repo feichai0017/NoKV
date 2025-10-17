@@ -45,13 +45,16 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if snap.IteratorReused != db.iterPool.reused() {
 		t.Fatalf("expected iterator reuse snapshot to match pool, snap=%d pool=%d", snap.IteratorReused, db.iterPool.reused())
 	}
+	if cfStats, ok := snap.ColumnFamilies[utils.CFDefault.String()]; !ok || cfStats.Writes == 0 || cfStats.Reads == 0 {
+		t.Fatalf("expected default column family stats to be populated, snapshot=%+v", snap.ColumnFamilies)
+	}
 
 	if snap.FlushPending != db.lsm.FlushPending() {
 		t.Fatalf("snapshot flush pending mismatch: %d vs %d", snap.FlushPending, db.lsm.FlushPending())
 	}
 
 	db.stats.collect()
-	
+
 	if got := expvar.Get("NoKV.Stats.Entries").(*expvar.Int).Value(); got != snap.Entries {
 		t.Fatalf("entry count mismatch expvar=%d snapshot=%d", got, snap.Entries)
 	}
@@ -87,6 +90,30 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if got := expvar.Get("NoKV.Stats.Flush.WaitMs").(*expvar.Float).Value(); got != snap.FlushWaitMs {
 		t.Fatalf("flush wait mismatch expvar=%f snapshot=%f", got, snap.FlushWaitMs)
 	}
+	if got := expvar.Get("NoKV.Stats.Flush.WaitLastMs").(*expvar.Float).Value(); got != snap.FlushLastWaitMs {
+		t.Fatalf("flush wait last mismatch expvar=%f snapshot=%f", got, snap.FlushLastWaitMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.WaitMaxMs").(*expvar.Float).Value(); got != snap.FlushMaxWaitMs {
+		t.Fatalf("flush wait max mismatch expvar=%f snapshot=%f", got, snap.FlushMaxWaitMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.BuildMs").(*expvar.Float).Value(); got != snap.FlushBuildMs {
+		t.Fatalf("flush build mismatch expvar=%f snapshot=%f", got, snap.FlushBuildMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.BuildLastMs").(*expvar.Float).Value(); got != snap.FlushLastBuildMs {
+		t.Fatalf("flush build last mismatch expvar=%f snapshot=%f", got, snap.FlushLastBuildMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.BuildMaxMs").(*expvar.Float).Value(); got != snap.FlushMaxBuildMs {
+		t.Fatalf("flush build max mismatch expvar=%f snapshot=%f", got, snap.FlushMaxBuildMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.ReleaseMs").(*expvar.Float).Value(); got != snap.FlushReleaseMs {
+		t.Fatalf("flush release mismatch expvar=%f snapshot=%f", got, snap.FlushReleaseMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.ReleaseLastMs").(*expvar.Float).Value(); got != snap.FlushLastReleaseMs {
+		t.Fatalf("flush release last mismatch expvar=%f snapshot=%f", got, snap.FlushLastReleaseMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Flush.ReleaseMaxMs").(*expvar.Float).Value(); got != snap.FlushMaxReleaseMs {
+		t.Fatalf("flush release max mismatch expvar=%f snapshot=%f", got, snap.FlushMaxReleaseMs)
+	}
 	if got := expvar.Get("NoKV.Stats.Write.QueueDepth").(*expvar.Int).Value(); got != snap.WriteQueueDepth {
 		t.Fatalf("write queue depth mismatch expvar=%d snapshot=%d", got, snap.WriteQueueDepth)
 	}
@@ -117,6 +144,15 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)
 	}
+	if got := expvar.Get("NoKV.Stats.Compaction.LastDurationMs").(*expvar.Float).Value(); got != snap.CompactionLastDurationMs {
+		t.Fatalf("compaction last duration mismatch expvar=%f snapshot=%f", got, snap.CompactionLastDurationMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Compaction.MaxDurationMs").(*expvar.Float).Value(); got != snap.CompactionMaxDurationMs {
+		t.Fatalf("compaction max duration mismatch expvar=%f snapshot=%f", got, snap.CompactionMaxDurationMs)
+	}
+	if got := expvar.Get("NoKV.Stats.Compaction.RunsTotal").(*expvar.Int).Value(); got != int64(snap.CompactionRuns) {
+		t.Fatalf("compaction runs mismatch expvar=%d snapshot=%d", got, snap.CompactionRuns)
+	}
 	if v := expvar.Get("NoKV.Stats.Cache.L0HitRate"); v == nil {
 		t.Fatalf("expected L0 hit rate metric to be exported")
 	}
@@ -143,6 +179,10 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Txns.Committed").(*expvar.Int).Value(); got != int64(snap.TxnsCommitted) {
 		t.Fatalf("txn committed mismatch expvar=%d snapshot=%d", got, snap.TxnsCommitted)
+	}
+	cfVar := expvar.Get("NoKV.Stats.ColumnFamilies")
+	if cfVar == nil {
+		t.Fatalf("expected column family expvar map to be published")
 	}
 }
 

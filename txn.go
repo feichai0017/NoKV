@@ -483,6 +483,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 			item.e.ExpiresAt = e.ExpiresAt
 			// We probably don't need to set db on item here.
 			txn.db.recordRead(key)
+			txn.db.recordCFRead(e.CF, 1)
 			return item, nil
 		}
 		// Only track reads if this is update txn. No need to track read if txn serviced it
@@ -519,12 +520,17 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	item.e.Key = key
-	item.e.CF = utils.CFDefault
+	cf, _, _ := utils.SplitInternalKey(vs.Key)
+	if !cf.Valid() {
+		cf = utils.CFDefault
+	}
+	item.e.CF = cf
 	item.e.Version = vs.Version
 	item.e.Meta = vs.Meta
 	item.e.Value = vs.Value
 	item.e.ExpiresAt = vs.ExpiresAt
 	txn.db.recordRead(key)
+	txn.db.recordCFRead(item.e.CF, 1)
 	return item, nil
 }
 
