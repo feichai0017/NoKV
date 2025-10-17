@@ -2,10 +2,19 @@ package raftstore
 
 import (
 	"errors"
+	"path/filepath"
 	"sync"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
+
+type readyStorage interface {
+	myraft.Storage
+	Append([]myraft.Entry) error
+	ApplySnapshot(myraft.Snapshot) error
+	SetHardState(myraft.HardState) error
+}
 
 // Transport is used by peers to send raft messages to other peers.
 type Transport interface {
@@ -21,6 +30,7 @@ type Config struct {
 	Peers      []myraft.Peer
 	Transport  Transport
 	Apply      ApplyFunc
+	StorageDir string
 }
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
@@ -28,7 +38,7 @@ type Peer struct {
 	mu        sync.Mutex
 	id        uint64
 	node      *myraft.RawNode
-	storage   *myraft.MemoryStorage
+	storage   readyStorage
 	transport Transport
 	apply     ApplyFunc
 }
@@ -45,7 +55,17 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	if cfg.Apply == nil {
 		return nil, errors.New("raftstore: apply function must be provided")
 	}
-	storage := myraft.NewMemoryStorage()
+	var storage readyStorage
+	if cfg.StorageDir != "" {
+		dir := filepath.Clean(cfg.StorageDir)
+		var err error
+		storage, err = OpenDiskStorage(dir)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		storage = myraft.NewMemoryStorage()
+	}
 	raftCfg := cfg.RaftConfig
 	if raftCfg.ID == 0 {
 		return nil, errors.New("raftstore: raft config must specify ID")
@@ -76,8 +96,17 @@ func (p *Peer) Bootstrap(peers []myraft.Peer) error {
 	if len(peers) == 0 {
 		return nil
 	}
+	last, err := p.storage.LastIndex()
+	if err == nil && last > 0 {
+		return nil
+	}
+	if hs, cs, err := p.storage.InitialState(); err == nil {
+		if !myraft.IsEmptyHardState(hs) || len(cs.Voters) > 0 || len(cs.Learners) > 0 {
+			return nil
+		}
+	}
 	p.mu.Lock()
-	err := p.node.Bootstrap(peers)
+	err = p.node.Bootstrap(peers)
 	p.mu.Unlock()
 	if err != nil {
 		return err
@@ -183,9 +212,30 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			p.transport.Send(msg)
 		}
 	}
-	if len(rd.CommittedEntries) > 0 && p.apply != nil {
-		if err := p.apply(rd.CommittedEntries); err != nil {
-			return err
+	if len(rd.CommittedEntries) > 0 {
+		var toApply []myraft.Entry
+		for _, entry := range rd.CommittedEntries {
+			switch entry.Type {
+			case myraft.EntryConfChange:
+				var cc raftpb.ConfChange
+				if err := cc.Unmarshal(entry.Data); err != nil {
+					return err
+				}
+				p.node.ApplyConfChange(cc.AsV2())
+			case myraft.EntryConfChangeV2:
+				var cc raftpb.ConfChangeV2
+				if err := cc.Unmarshal(entry.Data); err != nil {
+					return err
+				}
+				p.node.ApplyConfChange(cc)
+			default:
+				toApply = append(toApply, entry)
+			}
+		}
+		if len(toApply) > 0 && p.apply != nil {
+			if err := p.apply(toApply); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
