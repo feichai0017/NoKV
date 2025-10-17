@@ -296,3 +296,44 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 		t.Fatalf("expected %d entries after verify, got %d", len(payloads), count)
 	}
 }
+
+func TestManagerAppendRecordsTyped(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer m.Close()
+
+	rec := wal.Record{
+		Type:    wal.RecordTypeRaftEntry,
+		Payload: []byte("raft-data"),
+	}
+	infos, err := m.AppendRecords(rec)
+	if err != nil {
+		t.Fatalf("append records: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 record info, got %d", len(infos))
+	}
+	if infos[0].Type != wal.RecordTypeRaftEntry {
+		t.Fatalf("expected record type raft entry, got %v", infos[0].Type)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	var seenType wal.RecordType
+	if err := m.Replay(func(info wal.EntryInfo, payload []byte) error {
+		seenType = info.Type
+		if string(payload) != "raft-data" {
+			t.Fatalf("unexpected payload: %q", payload)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if seenType != wal.RecordTypeRaftEntry {
+		t.Fatalf("expected replay type raft entry, got %v", seenType)
+	}
+}

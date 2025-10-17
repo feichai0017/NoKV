@@ -110,11 +110,15 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		fids = append(fids, fid)
 	}
 	slices.Sort(fids)
-	
+
 	if seg, _ := lsm.levels.logPointer(); seg > 0 {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
+				if !lsm.levels.canRemoveWalSegment(uint32(fid)) {
+					cleaned = append(cleaned, fid)
+					continue
+				}
 				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
 					utils.Err(errors.Wrapf(err, "remove wal segment %d", fid))
 				}
@@ -158,7 +162,10 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
 		buf:       &bytes.Buffer{},
 	}
-	err := lsm.wal.ReplaySegment(uint32(fid), func(_ wal.EntryInfo, payload []byte) error {
+	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntry {
+			return nil
+		}
 		entry, err := wal.DecodeEntry(payload)
 		if err != nil {
 			return err
@@ -168,7 +175,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		}
 		mt.sl.Add(entry)
 		entry.DecrRef()
-		mt.walSize += int64(len(payload)) + 8
+		mt.walSize += int64(info.Length) + 8
 		return nil
 	})
 	if err != nil {

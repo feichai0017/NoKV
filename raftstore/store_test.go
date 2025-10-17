@@ -119,6 +119,8 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 	var dbs []*NoKV.DB
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
 
+	const raftGroupID = uint64(1)
+
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", id))
 		db := openDBAt(t, dbDir)
@@ -137,6 +139,9 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
 		net.Register(peer)
@@ -180,18 +185,16 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net := newMemoryNetwork()
 	var peers []*raftstore.Peer
 	type node struct {
-		id       uint64
-		dbDir    string
-		raftDir  string
-		db       *NoKV.DB
-		applyDir string
+		id    uint64
+		dbDir string
+		db    *NoKV.DB
 	}
 	var nodes []node
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
+	const raftGroupID = uint64(1)
 
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(baseDir, fmt.Sprintf("db-%d", id))
-		raftDir := filepath.Join(baseDir, fmt.Sprintf("raft-%d", id))
 		db := openDBAt(t, dbDir)
 		rc := myraft.Config{
 			ID:              id,
@@ -205,12 +208,14 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			StorageDir: raftDir,
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
 		net.Register(peer)
 		peers = append(peers, peer)
-		nodes = append(nodes, node{id: id, dbDir: dbDir, raftDir: raftDir, db: db})
+		nodes = append(nodes, node{id: id, dbDir: dbDir, db: db})
 	}
 
 	for _, peer := range peers {
@@ -259,7 +264,9 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net2,
 			Apply:      applyToDB(db),
-			StorageDir: n.raftDir,
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
 		net2.Register(peer)

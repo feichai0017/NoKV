@@ -36,6 +36,7 @@ type EntryInfo struct {
 	SegmentID uint32
 	Offset    int64
 	Length    uint32
+	Type      RecordType
 }
 
 // Metrics captures runtime information about WAL manager state.
@@ -59,6 +60,26 @@ type Manager struct {
 	removedSegments uint64
 	bufferSize      int
 	writer          *bufio.Writer
+}
+
+// RecordType identifies the kind of payload stored in the WAL.
+type RecordType uint8
+
+const (
+	// RecordTypeEntry represents an LSM mutation (default behaviour).
+	RecordTypeEntry RecordType = iota
+	// RecordTypeRaftEntry encodes a batch of raft log entries.
+	RecordTypeRaftEntry
+	// RecordTypeRaftState encodes a raft HardState update.
+	RecordTypeRaftState
+	// RecordTypeRaftSnapshot encodes a raft snapshot payload.
+	RecordTypeRaftSnapshot
+)
+
+// Record describes a typed WAL payload.
+type Record struct {
+	Type    RecordType
+	Payload []byte
 }
 
 // Open creates or resumes a WAL manager.
@@ -182,29 +203,52 @@ func (m *Manager) switchSegment(id uint32, truncate bool) error {
 
 // Append appends one or more payloads to WAL and returns their locations.
 func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	records := make([]Record, len(payloads))
+	for i, p := range payloads {
+		records[i] = Record{
+			Type:    RecordTypeEntry,
+			Payload: p,
+		}
+	}
+	return m.AppendRecords(records...)
+}
+
+// AppendRecords appends typed records to WAL and returns their locations.
+func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, fmt.Errorf("wal: manager closed")
 	}
-	results := make([]EntryInfo, len(payloads))
-	for i, p := range payloads {
-		if err := m.ensureCapacity(int64(len(p)) + 8); err != nil {
+	results := make([]EntryInfo, len(records))
+	for i, rec := range records {
+		payload := rec.Payload
+		encoded := make([]byte, len(payload)+1)
+		encoded[0] = byte(rec.Type)
+		copy(encoded[1:], payload)
+		total := len(encoded)
+		if err := m.ensureCapacity(int64(total) + 8); err != nil {
 			return nil, err
 		}
 		offset := m.activeSize
-		length := uint32(len(p))
+		length := uint32(total)
 		var hdr [4]byte
 		binary.BigEndian.PutUint32(hdr[:], length)
 		if _, err := m.writer.Write(hdr[:]); err != nil {
 			return nil, err
 		}
-		if _, err := m.writer.Write(p); err != nil {
+		if _, err := m.writer.Write(encoded); err != nil {
 			return nil, err
 		}
 		var crcBuf [4]byte
-		sum := crc32.Checksum(p, m.crcTable)
-		binary.BigEndian.PutUint32(crcBuf[:], sum)
+		hasher := crc32.New(m.crcTable)
+		if _, err := hasher.Write(encoded); err != nil {
+			return nil, err
+		}
+		binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
 		if _, err := m.writer.Write(crcBuf[:]); err != nil {
 			return nil, err
 		}
@@ -213,6 +257,7 @@ func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
 			SegmentID: m.activeID,
 			Offset:    offset,
 			Length:    length,
+			Type:      rec.Type,
 		}
 	}
 	if m.cfg.SyncOnWrite {
@@ -335,16 +380,28 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 			return err
 		}
 		expected := binary.BigEndian.Uint32(crcBuf[:])
-		actual := crc32.Checksum(payload, m.crcTable)
-		if expected != actual {
+		if length == 0 {
+			return fmt.Errorf("wal: empty record segment=%d offset=%d", id, offset)
+		}
+		hasher := crc32.New(m.crcTable)
+		if _, err := hasher.Write([]byte{payload[0]}); err != nil {
+			return err
+		}
+		if _, err := hasher.Write(payload[1:]); err != nil {
+			return err
+		}
+		if expected != hasher.Sum32() {
 			return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
 		}
+		recType := RecordType(payload[0])
+		data := payload[1:]
 		info := EntryInfo{
 			SegmentID: id,
 			Offset:    offset,
 			Length:    length,
+			Type:      recType,
 		}
-		if err := fn(info, payload); err != nil {
+		if err := fn(info, data); err != nil {
 			return err
 		}
 		offset += int64(length) + 8
@@ -449,8 +506,17 @@ func verifySegment(path string) error {
 			return fmt.Errorf("wal verify checksum %s: %w", filepath.Base(path), err)
 		}
 		expected := binary.BigEndian.Uint32(crcBuf[:])
-		actual := crc32.Checksum(payload, utils.CastagnoliCrcTable)
-		if expected != actual {
+		if length == 0 {
+			return fmt.Errorf("wal: empty record verifying %s at offset %d", filepath.Base(path), start)
+		}
+		hasher := crc32.New(utils.CastagnoliCrcTable)
+		if _, err := hasher.Write([]byte{payload[0]}); err != nil {
+			return fmt.Errorf("wal: checksum write type %s: %w", filepath.Base(path), err)
+		}
+		if _, err := hasher.Write(payload[1:]); err != nil {
+			return fmt.Errorf("wal: checksum write payload %s: %w", filepath.Base(path), err)
+		}
+		if expected != hasher.Sum32() {
 			return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), start)
 		}
 		offset = start + int64(length) + 8

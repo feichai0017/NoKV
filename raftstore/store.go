@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
@@ -31,6 +33,9 @@ type Config struct {
 	Transport  Transport
 	Apply      ApplyFunc
 	StorageDir string
+	WAL        *wal.Manager
+	Manifest   *manifest.Manager
+	GroupID    uint64
 }
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
@@ -56,14 +61,33 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		return nil, errors.New("raftstore: apply function must be provided")
 	}
 	var storage readyStorage
-	if cfg.StorageDir != "" {
+
+	groupID := cfg.GroupID
+	if groupID == 0 {
+		groupID = 1
+	}
+
+	switch {
+	case cfg.WAL != nil && cfg.Manifest != nil:
+		var err error
+		storage, err = openWalStorage(WalStorageConfig{
+			GroupID:  groupID,
+			WAL:      cfg.WAL,
+			Manifest: cfg.Manifest,
+		})
+		if err != nil {
+			return nil, err
+		}
+	case cfg.WAL != nil || cfg.Manifest != nil:
+		return nil, errors.New("raftstore: WAL and manifest must both be provided")
+	case cfg.StorageDir != "":
 		dir := filepath.Clean(cfg.StorageDir)
 		var err error
 		storage, err = OpenDiskStorage(dir)
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		storage = myraft.NewMemoryStorage()
 	}
 	raftCfg := cfg.RaftConfig

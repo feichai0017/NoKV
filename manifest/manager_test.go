@@ -70,6 +70,51 @@ func TestManagerLogPointer(t *testing.T) {
 	}
 }
 
+func TestManagerRaftPointer(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptr := manifest.RaftLogPointer{
+		GroupID:      7,
+		Segment:      3,
+		Offset:       2048,
+		AppliedIndex: 42,
+		AppliedTerm:  5,
+		Committed:    41,
+	}
+	if err := mgr.LogRaftPointer(ptr); err != nil {
+		t.Fatalf("log raft pointer: %v", err)
+	}
+	version := mgr.Current()
+	stored, ok := version.RaftPointers[ptr.GroupID]
+	if !ok {
+		t.Fatalf("expected raft pointer stored in current version")
+	}
+	if stored.Segment != ptr.Segment || stored.Offset != ptr.Offset {
+		t.Fatalf("unexpected raft pointer %+v", stored)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+
+	recovered, ok := mgr.RaftPointer(ptr.GroupID)
+	if !ok {
+		t.Fatalf("expected raft pointer after reopen")
+	}
+	if recovered.Segment != ptr.Segment || recovered.Offset != ptr.Offset || recovered.AppliedIndex != ptr.AppliedIndex {
+		t.Fatalf("unexpected pointer after reopen: %+v", recovered)
+	}
+}
+
 func TestManagerValueLog(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir)

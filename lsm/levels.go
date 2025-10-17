@@ -196,8 +196,10 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize))
 	lm.levels[0].add(table)
 	lm.levels[0].addSize(table)
-	if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if lm.canRemoveWalSegment(uint32(fid)) {
+		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	if lm.compaction != nil {
 		lm.compaction.trigger("flush")
@@ -320,6 +322,22 @@ func (lm *levelManager) maxVersion() uint64 {
 		lh.RUnlock()
 	}
 	return max
+}
+
+func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
+	if lm == nil || lm.manifestMgr == nil {
+		return true
+	}
+	ptrs := lm.manifestMgr.RaftPointerSnapshot()
+	for _, ptr := range ptrs {
+		if ptr.Segment == 0 {
+			continue
+		}
+		if id >= ptr.Segment {
+			return false
+		}
+	}
+	return true
 }
 
 func (lm *levelManager) prefetch(key []byte, hot bool) {
