@@ -40,12 +40,14 @@ type Config struct {
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
-	mu        sync.Mutex
-	id        uint64
-	node      *myraft.RawNode
-	storage   readyStorage
-	transport Transport
-	apply     ApplyFunc
+	mu            sync.Mutex
+	id            uint64
+	node          *myraft.RawNode
+	storage       readyStorage
+	transport     Transport
+	apply         ApplyFunc
+	raftLog       *raftLogTracker
+	snapshotQueue *snapshotResendQueue
 }
 
 // NewPeer constructs a peer using the provided configuration. The caller must
@@ -100,11 +102,13 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		return nil, err
 	}
 	peer := &Peer{
-		id:        raftCfg.ID,
-		node:      node,
-		storage:   storage,
-		transport: cfg.Transport,
-		apply:     cfg.Apply,
+		id:            raftCfg.ID,
+		node:          node,
+		storage:       storage,
+		transport:     cfg.Transport,
+		apply:         cfg.Apply,
+		raftLog:       newRaftLogTracker(cfg.Manifest, cfg.WAL, groupID),
+		snapshotQueue: newSnapshotResendQueue(),
 	}
 	return peer, nil
 }
@@ -216,19 +220,58 @@ func (p *Peer) processReady() error {
 }
 
 func (p *Peer) handleReady(rd myraft.Ready) error {
+	if info := p.raftLog; info != nil {
+		info.setInjected(ShouldInjectFailure())
+	}
+
 	if !myraft.IsEmptyHardState(rd.HardState) {
+		if err := p.raftLog.injectFailure("before_hard_state"); err != nil {
+			return err
+		}
 		if err := p.storage.SetHardState(rd.HardState); err != nil {
 			return err
 		}
+		if info := p.raftLog; info != nil {
+			info.capturePointer(manifest.RaftLogPointer{
+				GroupID:      info.groupID,
+				AppliedIndex: rd.HardState.Commit,
+				AppliedTerm:  rd.HardState.Term,
+			})
+		}
 	}
 	if !myraft.IsEmptySnap(rd.Snapshot) {
+		if err := p.raftLog.injectFailure("before_snapshot"); err != nil {
+			return err
+		}
 		if err := p.storage.ApplySnapshot(rd.Snapshot); err != nil {
 			return err
 		}
+		if info := p.raftLog; info != nil {
+			meta := rd.Snapshot.Metadata
+			info.capturePointer(manifest.RaftLogPointer{
+				GroupID:       info.groupID,
+				SnapshotIndex: meta.Index,
+				SnapshotTerm:  meta.Term,
+			})
+		}
+		if q := p.snapshotQueue; q != nil {
+			q.record(rd.Snapshot)
+		}
 	}
 	if len(rd.Entries) > 0 {
+		if err := p.raftLog.injectFailure("before_entries"); err != nil {
+			return err
+		}
 		if err := p.storage.Append(rd.Entries); err != nil {
 			return err
+		}
+		if info := p.raftLog; info != nil {
+			last := rd.Entries[len(rd.Entries)-1]
+			info.capturePointer(manifest.RaftLogPointer{
+				GroupID:      info.groupID,
+				AppliedIndex: last.Index,
+				AppliedTerm:  last.Term,
+			})
 		}
 	}
 	for _, msg := range rd.Messages {
@@ -263,4 +306,22 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	return nil
+}
+
+// PopPendingSnapshot returns the most recent snapshot recorded during Ready
+// handling, clearing the queue. It returns false when no snapshot is pending.
+func (p *Peer) PopPendingSnapshot() (myraft.Snapshot, bool) {
+	if p == nil || p.snapshotQueue == nil {
+		return myraft.Snapshot{}, false
+	}
+	return p.snapshotQueue.take()
+}
+
+// PendingSnapshot returns the snapshot retained for resend without removing it
+// from the queue.
+func (p *Peer) PendingSnapshot() (myraft.Snapshot, bool) {
+	if p == nil || p.snapshotQueue == nil {
+		return myraft.Snapshot{}, false
+	}
+	return p.snapshotQueue.peek()
 }

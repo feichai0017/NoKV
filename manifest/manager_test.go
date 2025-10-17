@@ -78,12 +78,16 @@ func TestManagerRaftPointer(t *testing.T) {
 	}
 
 	ptr := manifest.RaftLogPointer{
-		GroupID:      7,
-		Segment:      3,
-		Offset:       2048,
-		AppliedIndex: 42,
-		AppliedTerm:  5,
-		Committed:    41,
+		GroupID:        7,
+		Segment:        3,
+		Offset:         2048,
+		AppliedIndex:   42,
+		AppliedTerm:    5,
+		Committed:      41,
+		SnapshotIndex:  64,
+		SnapshotTerm:   7,
+		TruncatedIndex: 11,
+		TruncatedTerm:  2,
 	}
 	if err := mgr.LogRaftPointer(ptr); err != nil {
 		t.Fatalf("log raft pointer: %v", err)
@@ -95,6 +99,9 @@ func TestManagerRaftPointer(t *testing.T) {
 	}
 	if stored.Segment != ptr.Segment || stored.Offset != ptr.Offset {
 		t.Fatalf("unexpected raft pointer %+v", stored)
+	}
+	if stored.TruncatedIndex != ptr.TruncatedIndex || stored.TruncatedTerm != ptr.TruncatedTerm {
+		t.Fatalf("truncated pointer not persisted: %+v", stored)
 	}
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -112,6 +119,9 @@ func TestManagerRaftPointer(t *testing.T) {
 	}
 	if recovered.Segment != ptr.Segment || recovered.Offset != ptr.Offset || recovered.AppliedIndex != ptr.AppliedIndex {
 		t.Fatalf("unexpected pointer after reopen: %+v", recovered)
+	}
+	if recovered.TruncatedIndex != ptr.TruncatedIndex || recovered.TruncatedTerm != ptr.TruncatedTerm {
+		t.Fatalf("truncated fields not recovered: %+v", recovered)
 	}
 }
 
@@ -195,6 +205,54 @@ func TestManagerValueLogUpdate(t *testing.T) {
 	}
 	if !restored.Valid || restored.Offset != 2048 {
 		t.Fatalf("unexpected metadata after reopen: %+v", restored)
+	}
+}
+
+func TestManagerLogRaftTruncate(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	const groupID = uint64(9)
+	initial := manifest.RaftLogPointer{
+		GroupID:      groupID,
+		Segment:      4,
+		Offset:       8192,
+		AppliedIndex: 100,
+		AppliedTerm:  9,
+	}
+	if err := mgr.LogRaftPointer(initial); err != nil {
+		t.Fatalf("log raft pointer: %v", err)
+	}
+	if err := mgr.LogRaftTruncate(groupID, 80, 8); err != nil {
+		t.Fatalf("log raft truncate: %v", err)
+	}
+	ptr, ok := mgr.RaftPointer(groupID)
+	if !ok {
+		t.Fatalf("expected raft pointer stored")
+	}
+	if ptr.TruncatedIndex != 80 || ptr.TruncatedTerm != 8 {
+		t.Fatalf("unexpected truncation fields: %+v", ptr)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+
+	ptr, ok = mgr.RaftPointer(groupID)
+	if !ok {
+		t.Fatalf("expected raft pointer after reopen")
+	}
+	if ptr.TruncatedIndex != 80 || ptr.TruncatedTerm != 8 {
+		t.Fatalf("truncation fields not persisted: %+v", ptr)
 	}
 }
 

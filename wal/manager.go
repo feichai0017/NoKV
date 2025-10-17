@@ -43,6 +43,7 @@ type EntryInfo struct {
 type Metrics struct {
 	ActiveSegment   uint32
 	SegmentCount    int
+	ActiveSize      int64
 	RemovedSegments uint64
 }
 
@@ -533,6 +534,16 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	return nil
 }
 
+// ActiveSize returns the size in bytes of the current active WAL segment.
+func (m *Manager) ActiveSize() int64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeSize
+}
+
 // Metrics returns a snapshot of WAL manager statistics.
 func (m *Manager) Metrics() *Metrics {
 	if m == nil {
@@ -545,6 +556,7 @@ func (m *Manager) Metrics() *Metrics {
 	}
 	return &Metrics{
 		ActiveSegment:   m.ActiveSegment(),
+		ActiveSize:      m.ActiveSize(),
 		SegmentCount:    count,
 		RemovedSegments: atomic.LoadUint64(&m.removedSegments),
 	}

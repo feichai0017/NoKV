@@ -41,12 +41,14 @@ type Stats struct {
 	valueLogDiscardQueue *expvar.Int
 	walActiveSegment     *expvar.Int
 	walSegmentCount      *expvar.Int
+	walActiveSize        *expvar.Int
 	walSegmentsRemoved   *expvar.Int
 	raftGroupCount       *expvar.Int
 	raftLaggingGroups    *expvar.Int
 	raftMaxLagSegments   *expvar.Int
 	raftMinSegment       *expvar.Int
 	raftMaxSegment       *expvar.Int
+	raftLagWarning       *expvar.Int
 	writeQueueDepth      *expvar.Int
 	writeQueueEntries    *expvar.Int
 	writeQueueBytes      *expvar.Int
@@ -105,12 +107,15 @@ type StatsSnapshot struct {
 	ValueLogHead             utils.ValuePtr                  `json:"vlog_head"`
 	WALActiveSegment         int64                           `json:"wal_active_segment"`
 	WALSegmentCount          int64                           `json:"wal_segment_count"`
+	WALActiveSize            int64                           `json:"wal_active_size"`
 	WALSegmentsRemoved       uint64                          `json:"wal_segments_removed"`
 	RaftGroupCount           int                             `json:"raft_group_count"`
 	RaftLaggingGroups        int                             `json:"raft_lagging_groups"`
 	RaftMinLogSegment        uint32                          `json:"raft_min_log_segment"`
 	RaftMaxLogSegment        uint32                          `json:"raft_max_log_segment"`
 	RaftMaxLagSegments       int64                           `json:"raft_max_lag_segments"`
+	RaftLagWarnThreshold     int64                           `json:"raft_lag_warn_threshold"`
+	RaftLagWarning           bool                            `json:"raft_lag_warning"`
 	WriteQueueDepth          int64                           `json:"write_queue_depth"`
 	WriteQueueEntries        int64                           `json:"write_queue_entries"`
 	WriteQueueBytes          int64                           `json:"write_queue_bytes"`
@@ -162,6 +167,7 @@ func newStats(db *DB) *Stats {
 		valueLogPendingDel:   reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
 		valueLogDiscardQueue: reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
 		walActiveSegment:     reuseInt("NoKV.Stats.WAL.ActiveSegment"),
+		walActiveSize:        reuseInt("NoKV.Stats.WAL.ActiveSize"),
 		walSegmentCount:      reuseInt("NoKV.Stats.WAL.Segments"),
 		walSegmentsRemoved:   reuseInt("NoKV.Stats.WAL.Removed"),
 		raftGroupCount:       reuseInt("NoKV.Stats.Raft.Groups"),
@@ -169,6 +175,7 @@ func newStats(db *DB) *Stats {
 		raftMaxLagSegments:   reuseInt("NoKV.Stats.Raft.MaxLagSegments"),
 		raftMinSegment:       reuseInt("NoKV.Stats.Raft.MinSegment"),
 		raftMaxSegment:       reuseInt("NoKV.Stats.Raft.MaxSegment"),
+		raftLagWarning:       reuseInt("NoKV.Stats.Raft.LagWarning"),
 		writeQueueDepth:      reuseInt("NoKV.Stats.Write.QueueDepth"),
 		writeQueueEntries:    reuseInt("NoKV.Stats.Write.QueueEntries"),
 		writeQueueBytes:      reuseInt("NoKV.Stats.Write.QueueBytes"),
@@ -306,6 +313,7 @@ func (s *Stats) collect() {
 	s.valueLogDiscardQueue.Set(int64(snap.ValueLogDiscardQueue))
 	s.walActiveSegment.Set(snap.WALActiveSegment)
 	s.walSegmentCount.Set(snap.WALSegmentCount)
+	s.walActiveSize.Set(snap.WALActiveSize)
 	s.walSegmentsRemoved.Set(int64(snap.WALSegmentsRemoved))
 	s.writeQueueDepth.Set(snap.WriteQueueDepth)
 	s.writeQueueEntries.Set(snap.WriteQueueEntries)
@@ -321,6 +329,11 @@ func (s *Stats) collect() {
 	s.raftMaxLagSegments.Set(snap.RaftMaxLagSegments)
 	s.raftMinSegment.Set(int64(snap.RaftMinLogSegment))
 	s.raftMaxSegment.Set(int64(snap.RaftMaxLogSegment))
+	if snap.RaftLagWarning {
+		s.raftLagWarning.Set(1)
+	} else {
+		s.raftLagWarning.Set(0)
+	}
 	if snap.WriteThrottleActive {
 		s.writeThrottle.Set(1)
 	} else {
@@ -352,6 +365,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	var snap StatsSnapshot
 	if s == nil || s.db == nil {
 		return snap
+	}
+
+	if s.db.opt != nil {
+		if thresh := s.db.opt.RaftLagWarnSegments; thresh > 0 {
+			snap.RaftLagWarnThreshold = thresh
+		}
 	}
 
 	// Flush backlog (pending flush tasks).
@@ -408,6 +427,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	if s.db.wal != nil {
 		if wstats := s.db.wal.Metrics(); wstats != nil {
 			snap.WALActiveSegment = int64(wstats.ActiveSegment)
+			snap.WALActiveSize = wstats.ActiveSize
 			snap.WALSegmentCount = int64(wstats.SegmentCount)
 			snap.WALSegmentsRemoved = wstats.RemovedSegments
 		}
@@ -421,9 +441,16 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		var maxLag int64
 		lagging := 0
 		activeSeg := snap.WALActiveSegment
+		effectiveActive := activeSeg
+		if snap.WALActiveSize == 0 && effectiveActive > 0 {
+			effectiveActive--
+		}
 		for _, ptr := range ptrs {
 			if ptr.Segment == 0 {
 				lagging++
+				if effectiveActive > maxLag {
+					maxLag = effectiveActive
+				}
 				continue
 			}
 			if minSeg == 0 || ptr.Segment < minSeg {
@@ -432,8 +459,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			if ptr.Segment > maxSeg {
 				maxSeg = ptr.Segment
 			}
-			if activeSeg > 0 {
-				lag := activeSeg - int64(ptr.Segment)
+			if effectiveActive > 0 {
+				lag := effectiveActive - int64(ptr.Segment)
 				if lag < 0 {
 					lag = 0
 				}
@@ -449,6 +476,14 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.RaftMaxLogSegment = maxSeg
 		snap.RaftMaxLagSegments = maxLag
 		snap.RaftLaggingGroups = lagging
+		threshold := s.db.opt.RaftLagWarnSegments
+		if threshold < 0 {
+			threshold = 0
+		}
+		snap.RaftLagWarnThreshold = threshold
+		if threshold > 0 && maxLag >= threshold && lagging > 0 {
+			snap.RaftLagWarning = true
+		}
 	}
 
 	// Value log backlog.
