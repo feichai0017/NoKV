@@ -242,6 +242,7 @@ This roadmap follows the TinyKV phases and expands each into concrete, testable 
 - Document CF key layout in `docs/cli.md` / `docs/testing.md`; add CLI flag for CF stats if useful.
 
 ### Phase 1 — Raft Core (TinyKV Project2A)
+- **In progress**: Introduced `raft/` package wrapping etcd/raft's `RawNode`, `MemoryStorage`, and basic single-node election/proposal tests.
 - Introduce `raft/` package: persistent log abstraction, `RaftLog`, state machine (`Follower`, `Candidate`, `Leader`), `Step` handlers for `Msg{Hup,Beat,Propose,Append,Heartbeat,Vote}`.
 - Implement ticking (`tickElection`, `tickHeartbeat`) and configurable timeouts; integrate with existing `utils.WaterMark` for proposal tracking.
 - Add unit tests mirroring TinyKV labs (single-node commit, leader election, log replication corner cases).
