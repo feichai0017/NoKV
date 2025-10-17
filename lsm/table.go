@@ -109,7 +109,6 @@ func (t *table) indexKey() uint64 {
 	return t.fid
 }
 
-
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
 	return t.loadBlock(idx, true)
@@ -129,8 +128,8 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 		return cached, nil
 	}
 
-	var ko pb.BlockOffset
-	utils.CondPanic(!t.offsets(&ko, idx), fmt.Errorf("block t.offset id=%d", idx))
+	ko, ok := t.blockOffset(idx)
+	utils.CondPanic(!ok || ko == nil, fmt.Errorf("block t.offset id=%d", idx))
 	b = &block{
 		offset: int(ko.GetOffset()),
 	}
@@ -184,12 +183,12 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	if len(offsets) == 0 {
 		return false
 	}
-	var (
-		idx int
-		ko  pb.BlockOffset
-	)
+	var idx int
+	var ko *pb.BlockOffset
 	idx = sort.Search(len(offsets), func(i int) bool {
-		utils.CondPanic(!t.offsets(&ko, i), fmt.Errorf("table.prefetch idx=%d", i))
+		var ok bool
+		ko, ok = t.blockOffset(i)
+		utils.CondPanic(!ok, fmt.Errorf("table.prefetch idx=%d", i))
 		if i == len(offsets) {
 			return true
 		}
@@ -209,7 +208,6 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	_, err := t.loadBlock(idx, hot)
 	return err == nil
 }
-
 
 func (t *table) read(off, sz int) ([]byte, error) {
 	return t.ss.Bytes(off, sz)
@@ -336,9 +334,9 @@ func (it *tableIterator) seekToLast() {
 // 如果在 idx-1 的block中未找到key 那才可能在 idx 中
 // 如果都没有，则当前key不再此table
 func (it *tableIterator) Seek(key []byte) {
-	var ko pb.BlockOffset
 	idx := sort.Search(len(it.t.ss.Indexs().GetOffsets()), func(idx int) bool {
-		utils.CondPanic(!it.t.offsets(&ko, idx), fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()"))
+		ko, ok := it.t.blockOffset(idx)
+		utils.CondPanic(!ok, fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()"))
 		if idx == len(it.t.ss.Indexs().GetOffsets()) {
 			return true
 		}
@@ -366,16 +364,15 @@ func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 	it.it = it.bi.Item()
 }
 
-func (t *table) offsets(ko *pb.BlockOffset, i int) bool {
+func (t *table) blockOffset(i int) (*pb.BlockOffset, bool) {
 	index := t.ss.Indexs()
 	if i < 0 || i > len(index.GetOffsets()) {
-		return false
+		return nil, false
 	}
 	if i == len(index.GetOffsets()) {
-		return true
+		return nil, true
 	}
-	*ko = *index.GetOffsets()[i]
-	return true
+	return index.GetOffsets()[i], true
 }
 
 // Size is its file size in bytes
