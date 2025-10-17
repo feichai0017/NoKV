@@ -396,12 +396,10 @@ func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
 		return nil, 0, 0, io.ErrUnexpectedEOF
 	}
 
-	key := make([]byte, keyLen)
-	copy(key, data[idx:idx+keyLen])
+	keyStart := idx
 	idx += keyLen
 
-	val := make([]byte, valLen)
-	copy(val, data[idx:idx+valLen])
+	valStart := idx
 	idx += valLen
 
 	hash := crc32.New(utils.CastagnoliCrcTable)
@@ -413,12 +411,16 @@ func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
 		return nil, 0, 0, utils.ErrTruncate
 	}
 
-	entry := &utils.Entry{
-		Key:       key,
-		Value:     val,
-		Meta:      byte(metaU),
-		ExpiresAt: expiresAt,
-	}
+	entry := utils.EntryPool.Get().(*utils.Entry)
+	entry.IncrRef()
+	entry.Key = append(entry.Key[:0], data[keyStart:keyStart+keyLen]...)
+	entry.Value = append(entry.Value[:0], data[valStart:valStart+valLen]...)
+	entry.Meta = byte(metaU)
+	entry.ExpiresAt = expiresAt
+	entry.Version = 0
+	entry.Offset = 0
+	entry.Hlen = 0
+	entry.ValThreshold = 0
 	return entry, headerLen, total, nil
 }
 
@@ -489,8 +491,10 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 		}
 		entry.Offset = offset
 		entry.Hlen = headerLen
-		if err := fe(entry); err != nil {
-			return err
+		feErr := fe(entry)
+		entry.DecrRef()
+		if feErr != nil {
+			return feErr
 		}
 		offset += uint32(recordLen)
 	}
@@ -775,11 +779,13 @@ func (vlog *valueLog) iterate(lf *file.LogFile, offset uint32, fn utils.LogEntry
 		vp.Offset = e.Offset
 		vp.Fid = lf.FID
 		validEndOffset = read.recordOffset
-		if err := fn(e, &vp); err != nil {
-			if err == utils.ErrStop {
+		callErr := fn(e, &vp)
+		e.DecrRef()
+		if callErr != nil {
+			if callErr == utils.ErrStop {
 				return validEndOffset, nil
 			}
-			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", lf.FileName()), err)
+			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", lf.FileName()), callErr)
 		}
 	}
 }
@@ -833,15 +839,36 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 		return nil, utils.ErrTruncate
 	}
 
-	key := make([]byte, int(klen))
-	if _, err := io.ReadFull(tee, key); err != nil {
+	keyLen := int(klen)
+	entry := utils.EntryPool.Get().(*utils.Entry)
+	entry.IncrRef()
+	entry.Version = 0
+	entry.Hlen = headerBytes
+	entry.Offset = r.recordOffset
+	entry.ValThreshold = 0
+	entry.Meta = byte(meta)
+	entry.ExpiresAt = expiresAt
+
+	if cap(entry.Key) < keyLen {
+		entry.Key = make([]byte, keyLen)
+	} else {
+		entry.Key = entry.Key[:keyLen]
+	}
+	if _, err := io.ReadFull(tee, entry.Key); err != nil {
+		entry.DecrRef()
 		if err == io.EOF {
 			err = utils.ErrTruncate
 		}
 		return nil, err
 	}
-	val := make([]byte, int(vlen))
-	if _, err := io.ReadFull(tee, val); err != nil {
+	valLen := int(vlen)
+	if cap(entry.Value) < valLen {
+		entry.Value = make([]byte, valLen)
+	} else {
+		entry.Value = entry.Value[:valLen]
+	}
+	if _, err := io.ReadFull(tee, entry.Value); err != nil {
+		entry.DecrRef()
 		if err == io.EOF {
 			err = utils.ErrTruncate
 		}
@@ -857,21 +884,13 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 	}
 	crc := utils.BytesToU32(crcBuf[:])
 	if crc != tee.Sum32() {
+		entry.DecrRef()
 		return nil, utils.ErrTruncate
 	}
 
-	e := &utils.Entry{
-		Offset:    r.recordOffset,
-		Hlen:      headerBytes,
-		Key:       key,
-		Value:     val,
-		Meta:      byte(meta),
-		ExpiresAt: expiresAt,
-	}
-
-	recordLen := uint32(headerBytes) + uint32(len(key)) + uint32(len(val)) + crc32.Size
+	recordLen := uint32(headerBytes) + uint32(len(entry.Key)) + uint32(len(entry.Value)) + crc32.Size
 	r.recordOffset += recordLen
-	return e, nil
+	return entry, nil
 }
 
 func (vlog *valueLog) populateDiscardStats() error {
