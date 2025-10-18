@@ -1,48 +1,62 @@
-package raftstore
+package engine
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 const walRecordOverhead = 8 // length (4 bytes) + checksum (4 bytes)
 
-// WalStorageConfig configures WAL-backed raft storage.
-type WalStorageConfig struct {
+// WALStorageConfig configures WAL-backed raft storage.
+type WALStorageConfig struct {
 	GroupID  uint64
 	WAL      *wal.Manager
 	Manifest *manifest.Manager
 }
 
-type walStorage struct {
-	mu       sync.Mutex
-	groupID  uint64
-	wal      *wal.Manager
-	manifest *manifest.Manager
-	mem      *myraft.MemoryStorage
-	pointer  manifest.RaftLogPointer
+type entrySpan struct {
+	firstIndex uint64
+	lastIndex  uint64
+	segmentID  uint32
 }
 
-func openWalStorage(cfg WalStorageConfig) (*walStorage, error) {
+// WALStorage implements the PeerStorage interface using the shared WAL manager
+// plus manifest metadata. It mirrors the storage layout used in TinyKV/TiKV,
+// tracking segments so WAL GC can coordinate across raft groups.
+type WALStorage struct {
+	mu         sync.Mutex
+	groupID    uint64
+	wal        *wal.Manager
+	manifest   *manifest.Manager
+	mem        *myraft.MemoryStorage
+	pointer    manifest.RaftLogPointer
+	entrySpans []entrySpan
+}
+
+// OpenWALStorage constructs a WAL-backed raft storage.
+func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	if cfg.GroupID == 0 {
 		return nil, fmt.Errorf("raftstore: wal storage requires group id")
 	}
 	if cfg.WAL == nil {
 		return nil, fmt.Errorf("raftstore: wal storage requires WAL manager")
 	}
-	ws := &walStorage{
-		groupID:  cfg.GroupID,
-		wal:      cfg.WAL,
-		manifest: cfg.Manifest,
-		mem:      myraft.NewMemoryStorage(),
+	ws := &WALStorage{
+		groupID:    cfg.GroupID,
+		wal:        cfg.WAL,
+		manifest:   cfg.Manifest,
+		mem:        myraft.NewMemoryStorage(),
+		entrySpans: make([]entrySpan, 0, 16),
 	}
 	if cfg.Manifest != nil {
 		if ptr, ok := cfg.Manifest.RaftPointer(cfg.GroupID); ok {
@@ -67,6 +81,7 @@ func openWalStorage(cfg WalStorageConfig) (*walStorage, error) {
 			if err := ws.mem.Append(entries); err != nil {
 				return err
 			}
+			ws.recordEntrySpan(info.SegmentID, entries)
 			last := entries[len(entries)-1]
 			replayPtr.GroupID = cfg.GroupID
 			replayPtr.Segment = info.SegmentID
@@ -114,6 +129,16 @@ func openWalStorage(cfg WalStorageConfig) (*walStorage, error) {
 				replayPtr.AppliedIndex = meta.Index
 				replayPtr.AppliedTerm = meta.Term
 			}
+			replayPtr.TruncatedIndex = meta.Index
+			replayPtr.TruncatedTerm = meta.Term
+			if meta.Index > 0 {
+				if seg, ok := ws.segmentForIndex(meta.Index); ok {
+					replayPtr.SegmentIndex = uint64(seg)
+				} else {
+					replayPtr.SegmentIndex = uint64(info.SegmentID)
+				}
+				ws.pruneEntrySpans(meta.Index)
+			}
 		default:
 			return nil
 		}
@@ -128,11 +153,15 @@ func openWalStorage(cfg WalStorageConfig) (*walStorage, error) {
 		}
 	}
 
+	if ws.pointer.TruncatedIndex > 0 {
+		ws.pruneEntrySpans(ws.pointer.TruncatedIndex)
+	}
+
 	return ws, nil
 }
 
 // Append persists raft entries via WAL.
-func (ws *walStorage) Append(entries []myraft.Entry) error {
+func (ws *WALStorage) Append(entries []myraft.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -157,6 +186,7 @@ func (ws *walStorage) Append(entries []myraft.Entry) error {
 	if err := ws.mem.Append(entries); err != nil {
 		return err
 	}
+	ws.recordEntrySpan(infos[0].SegmentID, entries)
 	last := entries[len(entries)-1]
 	ptr := ws.pointer
 	ptr.GroupID = ws.groupID
@@ -168,7 +198,7 @@ func (ws *walStorage) Append(entries []myraft.Entry) error {
 }
 
 // ApplySnapshot persists and applies a raft snapshot.
-func (ws *walStorage) ApplySnapshot(snap myraft.Snapshot) error {
+func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	if myraft.IsEmptySnap(snap) {
 		return nil
 	}
@@ -204,11 +234,31 @@ func (ws *walStorage) ApplySnapshot(snap myraft.Snapshot) error {
 		ptr.AppliedIndex = meta.Index
 		ptr.AppliedTerm = meta.Term
 	}
-	return ws.updatePointer(ptr)
+	ptr.TruncatedIndex = meta.Index
+	ptr.TruncatedTerm = meta.Term
+	var truncSegment uint32
+	if meta.Index > 0 {
+		if seg, ok := ws.segmentForIndex(meta.Index); ok {
+			truncSegment = seg
+		} else {
+			truncSegment = infos[0].SegmentID
+		}
+	}
+	ptr.SegmentIndex = uint64(truncSegment)
+	if err := ws.updatePointer(ptr); err != nil {
+		return err
+	}
+	ws.pruneEntrySpans(meta.Index)
+	if ws.manifest != nil && ws.pointer == ptr {
+		if err := ws.manifest.LogRaftTruncate(ws.groupID, meta.Index, meta.Term, truncSegment); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetHardState persists the raft hard state.
-func (ws *walStorage) SetHardState(st myraft.HardState) error {
+func (ws *WALStorage) SetHardState(st myraft.HardState) error {
 	if myraft.IsEmptyHardState(st) {
 		ws.mu.Lock()
 		defer ws.mu.Unlock()
@@ -249,7 +299,47 @@ func (ws *walStorage) SetHardState(st myraft.HardState) error {
 	return ws.updatePointer(ptr)
 }
 
-func (ws *walStorage) updatePointer(ptr manifest.RaftLogPointer) error {
+// MaybeCompact retains only the newest portion of the WAL, mirroring TinyKV's
+// behaviour of compacting applied raft log entries.
+func (ws *WALStorage) MaybeCompact(applied, retain uint64) error {
+	if retain == 0 || applied == 0 || applied <= retain {
+		return nil
+	}
+	target := applied - retain
+	if target <= ws.pointer.TruncatedIndex {
+		return nil
+	}
+	return ws.compactTo(target)
+}
+
+// Delegated Storage interface methods.
+func (ws *WALStorage) InitialState() (myraft.HardState, myraft.ConfState, error) {
+	return ws.mem.InitialState()
+}
+
+func (ws *WALStorage) Entries(lo, hi, maxSize uint64) ([]myraft.Entry, error) {
+	return ws.mem.Entries(lo, hi, maxSize)
+}
+
+func (ws *WALStorage) Term(i uint64) (uint64, error) {
+	return ws.mem.Term(i)
+}
+
+func (ws *WALStorage) LastIndex() (uint64, error) {
+	return ws.mem.LastIndex()
+}
+
+func (ws *WALStorage) FirstIndex() (uint64, error) {
+	return ws.mem.FirstIndex()
+}
+
+func (ws *WALStorage) Snapshot() (myraft.Snapshot, error) {
+	return ws.mem.Snapshot()
+}
+
+// Internal helpers ----------------------------------------------------------
+
+func (ws *WALStorage) updatePointer(ptr manifest.RaftLogPointer) error {
 	if ptr.Segment == 0 {
 		return nil
 	}
@@ -257,10 +347,7 @@ func (ws *walStorage) updatePointer(ptr manifest.RaftLogPointer) error {
 	if ws.pointer == ptr {
 		return nil
 	}
-	if shouldSkipManifestUpdate() {
-		// Simulate a crash after WAL append but before the manifest pointer
-		// advances. The in-memory pointer intentionally stays stale so that
-		// recovery logic must replay WAL records to catch up.
+	if failpoints.ShouldSkipManifestUpdate() {
 		return nil
 	}
 	if ws.manifest != nil {
@@ -272,32 +359,111 @@ func (ws *walStorage) updatePointer(ptr manifest.RaftLogPointer) error {
 	return nil
 }
 
-// Delegated Storage interface methods.
-func (ws *walStorage) InitialState() (myraft.HardState, myraft.ConfState, error) {
-	return ws.mem.InitialState()
+func (ws *WALStorage) compactTo(index uint64) error {
+	if index == 0 {
+		return nil
+	}
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if index <= ws.pointer.TruncatedIndex {
+		return nil
+	}
+	term, err := ws.mem.Term(index)
+	if err != nil && !errors.Is(err, myraft.ErrCompacted) {
+		return err
+	}
+	if err := ws.mem.Compact(index); err != nil && !errors.Is(err, myraft.ErrCompacted) {
+		return err
+	}
+	var segment uint32
+	if seg, ok := ws.segmentForIndex(index); ok {
+		segment = seg
+	} else if ws.pointer.SegmentIndex > 0 {
+		segment = uint32(ws.pointer.SegmentIndex)
+	} else {
+		segment = ws.pointer.Segment
+	}
+	ptr := ws.pointer
+	ptr.TruncatedIndex = index
+	if term != 0 {
+		ptr.TruncatedTerm = term
+	}
+	ptr.SegmentIndex = uint64(segment)
+	if err := ws.updatePointer(ptr); err != nil {
+		return err
+	}
+	ws.pruneEntrySpans(index)
+	if ws.manifest != nil && ws.pointer == ptr {
+		if err := ws.manifest.LogRaftTruncate(ws.groupID, index, ptr.TruncatedTerm, segment); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (ws *walStorage) Entries(lo, hi, maxSize uint64) ([]myraft.Entry, error) {
-	return ws.mem.Entries(lo, hi, maxSize)
+func (ws *WALStorage) recordEntrySpan(segment uint32, entries []myraft.Entry) {
+	if len(entries) == 0 {
+		return
+	}
+	first := entries[0].Index
+	last := entries[len(entries)-1].Index
+	if first == 0 || last == 0 {
+		return
+	}
+	trimmed := ws.entrySpans[:0]
+	for _, span := range ws.entrySpans {
+		if span.lastIndex < first {
+			trimmed = append(trimmed, span)
+			continue
+		}
+		if span.firstIndex < first {
+			span.lastIndex = first - 1
+			trimmed = append(trimmed, span)
+		}
+		break
+	}
+	ws.entrySpans = append(trimmed, entrySpan{
+		firstIndex: first,
+		lastIndex:  last,
+		segmentID:  segment,
+	})
 }
 
-func (ws *walStorage) Term(i uint64) (uint64, error) {
-	return ws.mem.Term(i)
+func (ws *WALStorage) segmentForIndex(index uint64) (uint32, bool) {
+	if index == 0 {
+		return 0, false
+	}
+	for _, span := range ws.entrySpans {
+		if index < span.firstIndex {
+			break
+		}
+		if index <= span.lastIndex {
+			return span.segmentID, true
+		}
+	}
+	return 0, false
 }
 
-func (ws *walStorage) LastIndex() (uint64, error) {
-	return ws.mem.LastIndex()
+func (ws *WALStorage) pruneEntrySpans(index uint64) {
+	if index == 0 {
+		return
+	}
+	n := 0
+	for _, span := range ws.entrySpans {
+		if span.lastIndex <= index {
+			continue
+		}
+		if span.firstIndex <= index {
+			span.firstIndex = index + 1
+			if span.firstIndex > span.lastIndex {
+				continue
+			}
+		}
+		ws.entrySpans[n] = span
+		n++
+	}
+	ws.entrySpans = ws.entrySpans[:n]
 }
-
-func (ws *walStorage) FirstIndex() (uint64, error) {
-	return ws.mem.FirstIndex()
-}
-
-func (ws *walStorage) Snapshot() (myraft.Snapshot, error) {
-	return ws.mem.Snapshot()
-}
-
-// Helpers
 
 func recordEnd(info wal.EntryInfo) uint64 {
 	return uint64(info.Offset) + uint64(info.Length) + walRecordOverhead

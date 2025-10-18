@@ -47,6 +47,7 @@ type RaftLogPointer struct {
 	SnapshotTerm   uint64
 	TruncatedIndex uint64
 	TruncatedTerm  uint64
+	SegmentIndex   uint64
 }
 
 // Version represents current manifest state.
@@ -324,9 +325,10 @@ func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
 }
 
 // LogRaftTruncate records the log truncation point (index/term) for a raft
-// group without altering other pointer metadata. If the truncation matches the
-// existing checkpoint, the call is a no-op.
-func (m *Manager) LogRaftTruncate(groupID, index, term uint64) error {
+// group without altering other pointer metadata. When segment is non-zero it
+// updates the segment containing the truncated index. If the persisted state
+// already matches the provided values the call is a no-op.
+func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32) error {
 	if groupID == 0 {
 		return fmt.Errorf("manifest: raft truncate requires group id")
 	}
@@ -345,11 +347,17 @@ func (m *Manager) LogRaftTruncate(groupID, index, term uint64) error {
 		ptr.GroupID = groupID
 	}
 	if ptr.TruncatedIndex == index && ptr.TruncatedTerm == term {
-		return nil
+		if segment == 0 || ptr.SegmentIndex == uint64(segment) {
+			return nil
+		}
 	}
 	ptr.GroupID = groupID
 	ptr.TruncatedIndex = index
 	ptr.TruncatedTerm = term
+	if segment == 0 && ptr.SegmentIndex != 0 {
+		segment = uint32(ptr.SegmentIndex)
+	}
+	ptr.SegmentIndex = uint64(segment)
 	return m.LogRaftPointer(ptr)
 }
 
@@ -419,6 +427,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 			buf = binary.AppendUvarint(buf, edit.Raft.SnapshotTerm)
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedIndex)
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedTerm)
+			buf = binary.AppendUvarint(buf, edit.Raft.SegmentIndex)
 		}
 	}
 	// length prefix
@@ -555,6 +564,7 @@ func decodeEdit(data []byte) (Edit, error) {
 			}
 			var truncatedIdx uint64
 			var truncatedTerm uint64
+			var segmentIndex uint64
 			if pos < len(data) {
 				truncatedIdx, n = binary.Uvarint(data[pos:])
 				pos += n
@@ -569,6 +579,13 @@ func decodeEdit(data []byte) (Edit, error) {
 					return Edit{}, fmt.Errorf("manifest raft pointer truncated term overflow")
 				}
 			}
+			if pos < len(data) {
+				segmentIndex, n = binary.Uvarint(data[pos:])
+				pos += n
+				if pos > len(data) {
+					return Edit{}, fmt.Errorf("manifest raft pointer segment index overflow")
+				}
+			}
 			edit.Raft = &RaftLogPointer{
 				GroupID:        groupID,
 				Segment:        uint32(seg),
@@ -580,6 +597,7 @@ func decodeEdit(data []byte) (Edit, error) {
 				SnapshotTerm:   snapTerm,
 				TruncatedIndex: truncatedIdx,
 				TruncatedTerm:  truncatedTerm,
+				SegmentIndex:   segmentIndex,
 			}
 		}
 	}

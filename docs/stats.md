@@ -37,7 +37,7 @@ flowchart TD
 | `FlushWait/Build/ReleaseMs` | Derived from `WaitNs/BuildNs/ReleaseNs` averages | End-to-end latency of flush pipeline stages. |
 | `CompactionBacklog/MaxScore` | `lsm.CompactionStats()` | How many level files await compaction and the hottest score. |
 | `ValueLogSegments/PendingDel/DiscardQueue/Head` | `valueLog.metrics()` | Tracks vlog utilisation and GC backlog. |
-| `WALActiveSegment/SegmentCount/Removed` | `wal.Manager.Metrics()` | Observes WAL rotation and cleanup cadence. |
+| `WALActiveSegment/SegmentCount/Removed/ActiveSize` | `wal.Manager.Metrics()` | Observes WAL rotation cadence and current segment byte usage (pairs with raft lag metrics). |
 | `WriteQueueDepth/Entries/Bytes` | `writeMetrics.snapshot()` | Size of the asynchronous write queue. |
 | `WriteAvg*` | `writeMetrics` averages | Request wait times, vlog latency, apply latency. |
 | `WriteBatchesTotal` | `writeMetrics` | Lifetime batches processed. |
@@ -46,6 +46,7 @@ flowchart TD
 | `HotKeys` | `hotring.TopN()` | Top-K hot key counts. |
 | `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
 | `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |
+| `RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning` | `manifest.RaftPointerSnapshot()` | Tracks follower backlogs; `LagWarnThreshold` comes from `Options.RaftLagWarnSegments`, and `RaftLagWarning` toggles when any group exceeds it. |
 
 All values are exported under the `NoKV.*` namespace via expvar (see `newStats`).
 
@@ -53,7 +54,7 @@ All values are exported under the `NoKV.*` namespace via expvar (see `newStats`)
 
 ## 3. CLI & JSON Output
 
-* `nokv stats --workdir <dir>` prints a human-readable table (queue lengths, rates, hot keys) sourced from `Stats.Snapshot`.
+* `nokv stats --workdir <dir>` prints a human-readable table (queue lengths, rates, hot keys) sourced from `Stats.Snapshot`. When `RaftLagWarning=true` the CLI emits an extra `Raft.Warning` line summarising lagging groups and the maximum segment gap so operators can react quickly.
 * `nokv stats --json` emits the raw snapshot for automation. Example snippet:
 
 ```json
@@ -98,5 +99,6 @@ NoKV emphasises zero-dependency observability. Everything is consumable via HTTP
 * Watch `FlushQueueLength` and `CompactionBacklog` together—if both grow, increase flush workers or adjust level sizes.
 * `ValueLogDiscardQueue > 0` for extended periods indicates GC is blocked; inspect `NoKV.ValueLog.GcRuns` and consider tuning thresholds.
 * `WriteThrottleActive` toggling frequently suggests L0 is overwhelmed; cross-check `BlockL0HitRate` and compaction metrics.
+* `RaftLagWarning` toggling to `true` means at least one follower lags the leader by more than `Options.RaftLagWarnSegments`; inspect `Raft.Warning` from the CLI and consider snapshot resend or throttling the offending node.
 
 Refer to [`docs/testing.md`](testing.md#4-observability-in-tests) for scripted checks that validate stats during CI runs.

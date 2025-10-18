@@ -79,8 +79,11 @@ func runStatsCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	return renderStats(w, snap, *asJSON)
+}
 
-	if *asJSON {
+func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
+	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(snap)
@@ -107,6 +110,7 @@ func runStatsCmd(w io.Writer, args []string) error {
 			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
 	}
 	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WALActiveSegment, snap.WALSegmentCount, snap.WALSegmentsRemoved)
+	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WALActiveSize)
 	if snap.RaftGroupCount > 0 {
 		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
 			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)

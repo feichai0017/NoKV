@@ -42,6 +42,7 @@ const (
 	MsgRequestVote         = pb.MsgVote
 	MsgRequestVoteResponse = pb.MsgVoteResp
 	MsgSnapshot            = pb.MsgSnap
+	MsgSnapshotStatus      = pb.MsgSnapStatus
 	MsgHeartbeat           = pb.MsgHeartbeat
 	MsgHeartbeatResponse   = pb.MsgHeartbeatResp
 	MsgTransferLeader      = pb.MsgTransferLeader

@@ -1,53 +1,28 @@
-package raftstore
+package peer
 
 import (
 	"errors"
-	"path/filepath"
 	"sync"
 
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/wal"
+	"github.com/feichai0017/NoKV/raftstore/engine"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
+	"github.com/feichai0017/NoKV/raftstore/transport"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
-type readyStorage interface {
-	myraft.Storage
-	Append([]myraft.Entry) error
-	ApplySnapshot(myraft.Snapshot) error
-	SetHardState(myraft.HardState) error
-}
-
-// Transport is used by peers to send raft messages to other peers.
-type Transport interface {
-	Send(msg myraft.Message)
-}
-
-// ApplyFunc is invoked with committed raft log entries.
-type ApplyFunc func(entries []myraft.Entry) error
-
-// Config contains the parameters to start a raft peer.
-type Config struct {
-	RaftConfig myraft.Config
-	Peers      []myraft.Peer
-	Transport  Transport
-	Apply      ApplyFunc
-	StorageDir string
-	WAL        *wal.Manager
-	Manifest   *manifest.Manager
-	GroupID    uint64
-}
-
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
-	mu            sync.Mutex
-	id            uint64
-	node          *myraft.RawNode
-	storage       readyStorage
-	transport     Transport
-	apply         ApplyFunc
-	raftLog       *raftLogTracker
-	snapshotQueue *snapshotResendQueue
+	mu               sync.Mutex
+	id               uint64
+	node             *myraft.RawNode
+	storage          engine.PeerStorage
+	transport        transport.Transport
+	apply            ApplyFunc
+	raftLog          *raftLogTracker
+	snapshotQueue    *snapshotResendQueue
+	logRetainEntries uint64
 }
 
 // NewPeer constructs a peer using the provided configuration. The caller must
@@ -62,35 +37,9 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	if cfg.Apply == nil {
 		return nil, errors.New("raftstore: apply function must be provided")
 	}
-	var storage readyStorage
-
-	groupID := cfg.GroupID
-	if groupID == 0 {
-		groupID = 1
-	}
-
-	switch {
-	case cfg.WAL != nil && cfg.Manifest != nil:
-		var err error
-		storage, err = openWalStorage(WalStorageConfig{
-			GroupID:  groupID,
-			WAL:      cfg.WAL,
-			Manifest: cfg.Manifest,
-		})
-		if err != nil {
-			return nil, err
-		}
-	case cfg.WAL != nil || cfg.Manifest != nil:
-		return nil, errors.New("raftstore: WAL and manifest must both be provided")
-	case cfg.StorageDir != "":
-		dir := filepath.Clean(cfg.StorageDir)
-		var err error
-		storage, err = OpenDiskStorage(dir)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		storage = myraft.NewMemoryStorage()
+	storage, err := ResolveStorage(cfg)
+	if err != nil {
+		return nil, err
 	}
 	raftCfg := cfg.RaftConfig
 	if raftCfg.ID == 0 {
@@ -102,13 +51,17 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		return nil, err
 	}
 	peer := &Peer{
-		id:            raftCfg.ID,
-		node:          node,
-		storage:       storage,
-		transport:     cfg.Transport,
-		apply:         cfg.Apply,
-		raftLog:       newRaftLogTracker(cfg.Manifest, cfg.WAL, groupID),
-		snapshotQueue: newSnapshotResendQueue(),
+		id:               raftCfg.ID,
+		node:             node,
+		storage:          storage,
+		transport:        cfg.Transport,
+		apply:            cfg.Apply,
+		raftLog:          newRaftLogTracker(cfg.Manifest, cfg.WAL, nonZeroGroupID(cfg.GroupID)),
+		snapshotQueue:    newSnapshotResendQueue(),
+		logRetainEntries: cfg.LogRetainEntries,
+	}
+	if peer.logRetainEntries == 0 {
+		peer.logRetainEntries = defaultLogRetainEntries
 	}
 	return peer, nil
 }
@@ -147,11 +100,17 @@ func (p *Peer) Tick() error {
 	p.mu.Lock()
 	p.node.Tick()
 	p.mu.Unlock()
+	p.resendPendingSnapshots()
 	return p.processReady()
 }
 
 // Step forwards a received raft message to the underlying node.
 func (p *Peer) Step(msg myraft.Message) error {
+	if msg.Type == myraft.MsgSnapshotStatus && !msg.Reject {
+		if q := p.snapshotQueue; q != nil {
+			q.drop(msg.From)
+		}
+	}
 	p.mu.Lock()
 	err := p.node.Step(msg)
 	p.mu.Unlock()
@@ -221,7 +180,7 @@ func (p *Peer) processReady() error {
 
 func (p *Peer) handleReady(rd myraft.Ready) error {
 	if info := p.raftLog; info != nil {
-		info.setInjected(ShouldInjectFailure())
+		info.setInjected(failpoints.ShouldFailBeforeStorage())
 	}
 
 	if !myraft.IsEmptyHardState(rd.HardState) {
@@ -254,9 +213,6 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				SnapshotTerm:  meta.Term,
 			})
 		}
-		if q := p.snapshotQueue; q != nil {
-			q.record(rd.Snapshot)
-		}
 	}
 	if len(rd.Entries) > 0 {
 		if err := p.raftLog.injectFailure("before_entries"); err != nil {
@@ -275,6 +231,11 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	for _, msg := range rd.Messages {
+		if msg.Type == myraft.MsgSnapshot {
+			if q := p.snapshotQueue; q != nil {
+				q.record(msg)
+			}
+		}
 		if p.transport != nil {
 			p.transport.Send(msg)
 		}
@@ -304,8 +265,23 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				return err
 			}
 		}
+		lastApplied := rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+		if err := p.maybeCompact(lastApplied); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (p *Peer) maybeCompact(applied uint64) error {
+	if applied == 0 {
+		return nil
+	}
+	ws, ok := p.storage.(*engine.WALStorage)
+	if !ok {
+		return nil
+	}
+	return ws.MaybeCompact(applied, p.logRetainEntries)
 }
 
 // PopPendingSnapshot returns the most recent snapshot recorded during Ready
@@ -314,7 +290,12 @@ func (p *Peer) PopPendingSnapshot() (myraft.Snapshot, bool) {
 	if p == nil || p.snapshotQueue == nil {
 		return myraft.Snapshot{}, false
 	}
-	return p.snapshotQueue.take()
+	msg, ok := p.snapshotQueue.first()
+	if !ok || myraft.IsEmptySnap(msg.Snapshot) {
+		return myraft.Snapshot{}, false
+	}
+	p.snapshotQueue.drop(msg.To)
+	return msg.Snapshot, true
 }
 
 // PendingSnapshot returns the snapshot retained for resend without removing it
@@ -323,5 +304,32 @@ func (p *Peer) PendingSnapshot() (myraft.Snapshot, bool) {
 	if p == nil || p.snapshotQueue == nil {
 		return myraft.Snapshot{}, false
 	}
-	return p.snapshotQueue.peek()
+	msg, ok := p.snapshotQueue.first()
+	if !ok {
+		return myraft.Snapshot{}, false
+	}
+	return msg.Snapshot, true
+}
+
+// ResendSnapshot attempts to resend the last snapshot destined for the provided
+// peer ID. It returns true when a snapshot message was re-enqueued.
+func (p *Peer) ResendSnapshot(to uint64) bool {
+	if p == nil || p.transport == nil || p.snapshotQueue == nil || to == 0 {
+		return false
+	}
+	msg, ok := p.snapshotQueue.pendingFor(to)
+	if !ok {
+		return false
+	}
+	p.transport.Send(msg)
+	return true
+}
+
+func (p *Peer) resendPendingSnapshots() {
+	if p == nil || p.transport == nil || p.snapshotQueue == nil {
+		return
+	}
+	p.snapshotQueue.forEach(func(msg myraft.Message) {
+		p.transport.Send(msg)
+	})
 }

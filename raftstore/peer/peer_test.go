@@ -1,4 +1,4 @@
-package raftstore_test
+package peer_test
 
 import (
 	"fmt"
@@ -86,6 +86,11 @@ func (n *memoryNetwork) Block(id uint64) {
 
 func (n *memoryNetwork) Unblock(id uint64) {
 	delete(n.blocked, id)
+	for _, peer := range n.peers {
+		if peer.Status().RaftState == myraft.StateLeader {
+			_ = peer.ResendSnapshot(id)
+		}
+	}
 }
 
 func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
@@ -177,6 +182,60 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 		require.Equal(t, []byte("raft-value"), entry.Value, "db %d", idx+1)
 		entry.DecrRef()
 	}
+}
+
+func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
+	net := newMemoryNetwork()
+	dbDir := filepath.Join(t.TempDir(), "auto-compact")
+	db := openDBAt(t, dbDir)
+	t.Cleanup(func() { _ = db.Close() })
+
+	rc := myraft.Config{
+		ID:              1,
+		ElectionTick:    3,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   math.MaxUint64,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	}
+	peer, err := raftstore.NewPeer(&raftstore.Config{
+		RaftConfig:       rc,
+		Transport:        net,
+		Apply:            applyToDB(db),
+		WAL:              db.WAL(),
+		Manifest:         db.Manifest(),
+		GroupID:          1,
+		LogRetainEntries: 1,
+	})
+	require.NoError(t, err)
+	net.Register(peer)
+	require.NoError(t, peer.Bootstrap([]myraft.Peer{{ID: 1}}))
+
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	for i := 0; i < 6; i++ {
+		payload, perr := proto.Marshal(&pb.KV{
+			Key:   []byte(fmt.Sprintf("compact-key-%d", i)),
+			Value: []byte(fmt.Sprintf("val-%d", i)),
+		})
+		require.NoError(t, perr)
+		require.NoError(t, net.Propose(1, payload))
+		for tick := 0; tick < 3; tick++ {
+			net.Tick()
+		}
+		net.Flush()
+	}
+
+	for i := 0; i < 4; i++ {
+		net.Tick()
+		net.Flush()
+	}
+
+	ptr, ok := db.Manifest().RaftPointer(1)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, ptr.TruncatedIndex, uint64(5))
+	require.Equal(t, uint64(ptr.Segment), ptr.SegmentIndex)
 }
 
 func TestRaftStoreRecoverFromDisk(t *testing.T) {

@@ -1,4 +1,4 @@
-package raftstore_test
+package peer_test
 
 import (
 	"os"
