@@ -35,6 +35,44 @@ type ValueLogMeta struct {
 	Valid  bool
 }
 
+// PeerMeta describes a peer replica for a region.
+type PeerMeta struct {
+	StoreID uint64
+	PeerID  uint64
+}
+
+// RegionState enumerates region lifecycle states.
+type RegionState uint8
+
+const (
+	RegionStateNew RegionState = iota
+	RegionStateRunning
+	RegionStateRemoving
+	RegionStateTombstone
+)
+
+// RegionEpoch tracks metadata versioning.
+type RegionEpoch struct {
+	Version     uint64
+	ConfVersion uint64
+}
+
+// RegionMeta captures region key range and peer membership.
+type RegionMeta struct {
+	ID       uint64
+	StartKey []byte
+	EndKey   []byte
+	Epoch    RegionEpoch
+	Peers    []PeerMeta
+	State    RegionState
+}
+
+// RegionEdit represents an update or deletion.
+type RegionEdit struct {
+	Meta   RegionMeta
+	Delete bool
+}
+
 // RaftLogPointer tracks WAL progress for a raft group.
 type RaftLogPointer struct {
 	GroupID         uint64
@@ -59,6 +97,7 @@ type Version struct {
 	ValueLogs    map[uint32]ValueLogMeta
 	ValueLogHead ValueLogMeta
 	RaftPointers map[uint64]RaftLogPointer
+	Regions      map[uint64]RegionMeta
 }
 
 // Edit operation types.
@@ -72,6 +111,7 @@ const (
 	EditDeleteValueLog
 	EditUpdateValueLog
 	EditRaftPointer
+	EditRegion
 )
 
 // Edit describes a single metadata operation.
@@ -82,6 +122,7 @@ type Edit struct {
 	LogOffset uint64
 	ValueLog  *ValueLogMeta
 	Raft      *RaftLogPointer
+	Region    *RegionEdit
 }
 
 // Manager controls manifest file operations.
@@ -143,6 +184,7 @@ func (m *Manager) createNew() error {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[uint32]ValueLogMeta),
 		RaftPointers: make(map[uint64]RaftLogPointer),
+		Regions:      make(map[uint64]RegionMeta),
 	}
 	return nil
 }
@@ -164,6 +206,7 @@ func (m *Manager) replay() error {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[uint32]ValueLogMeta),
 		RaftPointers: make(map[uint64]RaftLogPointer),
+		Regions:      make(map[uint64]RegionMeta),
 	}
 	reader := bufio.NewReader(m.manifest)
 	for {
@@ -231,6 +274,18 @@ func (m *Manager) apply(edit Edit) {
 			ptr := *edit.Raft
 			m.version.RaftPointers[ptr.GroupID] = ptr
 		}
+	case EditRegion:
+		if edit.Region != nil {
+			if edit.Region.Delete {
+				delete(m.version.Regions, edit.Region.Meta.ID)
+			} else {
+				meta := edit.Region.Meta
+				meta.StartKey = append([]byte(nil), meta.StartKey...)
+				meta.EndKey = append([]byte(nil), meta.EndKey...)
+				meta.Peers = append([]PeerMeta(nil), meta.Peers...)
+				m.version.Regions[meta.ID] = meta
+			}
+		}
 	}
 }
 
@@ -259,12 +314,20 @@ func (m *Manager) Current() Version {
 		ValueLogs:    make(map[uint32]ValueLogMeta),
 		ValueLogHead: m.version.ValueLogHead,
 		RaftPointers: make(map[uint64]RaftLogPointer, len(m.version.RaftPointers)),
+		Regions:      make(map[uint64]RegionMeta, len(m.version.Regions)),
 	}
 	for level, files := range m.version.Levels {
 		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
 	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
 	maps.Copy(cp.RaftPointers, m.version.RaftPointers)
+	for id, meta := range m.version.Regions {
+		metaCopy := meta
+		metaCopy.StartKey = append([]byte(nil), meta.StartKey...)
+		metaCopy.EndKey = append([]byte(nil), meta.EndKey...)
+		metaCopy.Peers = append([]PeerMeta(nil), meta.Peers...)
+		cp.Regions[id] = metaCopy
+	}
 	return cp
 }
 
@@ -323,6 +386,33 @@ func (m *Manager) ValueLogStatus() map[uint32]ValueLogMeta {
 func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
 	cp := ptr
 	return m.LogEdit(Edit{Type: EditRaftPointer, Raft: &cp})
+}
+
+// LogRegionUpdate records region metadata.
+func (m *Manager) LogRegionUpdate(meta RegionMeta) error {
+	edit := RegionEdit{Meta: meta}
+	return m.LogEdit(Edit{Type: EditRegion, Region: &edit})
+}
+
+// LogRegionDelete marks the region as removed.
+func (m *Manager) LogRegionDelete(regionID uint64) error {
+	edit := RegionEdit{Meta: RegionMeta{ID: regionID}, Delete: true}
+	return m.LogEdit(Edit{Type: EditRegion, Region: &edit})
+}
+
+// RegionSnapshot returns a copy of region metadata map.
+func (m *Manager) RegionSnapshot() map[uint64]RegionMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[uint64]RegionMeta, len(m.version.Regions))
+	for id, meta := range m.version.Regions {
+		metaCopy := meta
+		metaCopy.StartKey = append([]byte(nil), meta.StartKey...)
+		metaCopy.EndKey = append([]byte(nil), meta.EndKey...)
+		metaCopy.Peers = append([]PeerMeta(nil), meta.Peers...)
+		out[id] = metaCopy
+	}
+	return out
 }
 
 // LogRaftTruncate records the log truncation point (index/term) for a raft
@@ -440,6 +530,25 @@ func writeEdit(w io.Writer, edit Edit) error {
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedTerm)
 			buf = binary.AppendUvarint(buf, edit.Raft.SegmentIndex)
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedOffset)
+		}
+	case EditRegion:
+		if edit.Region != nil {
+			buf = binary.AppendUvarint(buf, edit.Region.Meta.ID)
+			if edit.Region.Delete {
+				buf = append(buf, 1)
+				break
+			}
+			buf = append(buf, 0)
+			buf = appendBytes(buf, edit.Region.Meta.StartKey)
+			buf = appendBytes(buf, edit.Region.Meta.EndKey)
+			buf = binary.AppendUvarint(buf, edit.Region.Meta.Epoch.Version)
+			buf = binary.AppendUvarint(buf, edit.Region.Meta.Epoch.ConfVersion)
+			buf = append(buf, byte(edit.Region.Meta.State))
+			buf = binary.AppendUvarint(buf, uint64(len(edit.Region.Meta.Peers)))
+			for _, peer := range edit.Region.Meta.Peers {
+				buf = binary.AppendUvarint(buf, peer.StoreID)
+				buf = binary.AppendUvarint(buf, peer.PeerID)
+			}
 		}
 	}
 	// length prefix
@@ -619,6 +728,74 @@ func decodeEdit(data []byte) (Edit, error) {
 				TruncatedTerm:   truncatedTerm,
 				SegmentIndex:    segmentIndex,
 				TruncatedOffset: truncatedOffset,
+			}
+		}
+	case EditRegion:
+		if pos <= len(data) {
+			regionID, n := binary.Uvarint(data[pos:])
+			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest region edit truncated after id")
+			}
+			var delete bool
+			if pos < len(data) {
+				delete = data[pos] == 1
+				pos++
+			}
+			if delete {
+				edit.Region = &RegionEdit{
+					Meta:   RegionMeta{ID: regionID},
+					Delete: true,
+				}
+				break
+			}
+			start, n := readBytes(data[pos:])
+			pos += n
+			end, n := readBytes(data[pos:])
+			pos += n
+			version, n := binary.Uvarint(data[pos:])
+			pos += n
+			confVer, n := binary.Uvarint(data[pos:])
+			pos += n
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest region edit truncated epoch")
+			}
+			var state RegionState
+			if pos < len(data) {
+				state = RegionState(data[pos])
+				pos++
+			}
+			peersCount := uint64(0)
+			if pos < len(data) {
+				peersCount, n = binary.Uvarint(data[pos:])
+				pos += n
+			}
+			if pos > len(data) {
+				return Edit{}, fmt.Errorf("manifest region edit truncated peer count")
+			}
+			peers := make([]PeerMeta, 0, peersCount)
+			for i := uint64(0); i < peersCount; i++ {
+				storeID, n := binary.Uvarint(data[pos:])
+				pos += n
+				peerID, n := binary.Uvarint(data[pos:])
+				pos += n
+				if pos > len(data) {
+					return Edit{}, fmt.Errorf("manifest region edit truncated peer meta")
+				}
+				peers = append(peers, PeerMeta{StoreID: storeID, PeerID: peerID})
+			}
+			edit.Region = &RegionEdit{
+				Meta: RegionMeta{
+					ID:       regionID,
+					StartKey: append([]byte(nil), start...),
+					EndKey:   append([]byte(nil), end...),
+					Epoch: RegionEpoch{
+						Version:     version,
+						ConfVersion: confVer,
+					},
+					Peers: append([]PeerMeta(nil), peers...),
+					State: state,
+				},
 			}
 		}
 	}
