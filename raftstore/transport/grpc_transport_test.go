@@ -1,11 +1,19 @@
 package transport_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,6 +23,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/utils"
 	proto "google.golang.org/protobuf/proto"
+
+	"google.golang.org/grpc/credentials"
 
 	"github.com/feichai0017/NoKV/pb"
 )
@@ -45,8 +55,49 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	}
 }
 
+func TestGRPCTransportSupportsTLS(t *testing.T) {
+	serverCreds, clientCreds := buildTestCredentials(t)
+	cluster := newGRPCTestCluster(
+		t,
+		[]uint64{1, 2},
+		raftstore.Config{},
+		raftstore.WithGRPCServerCredentials(serverCreds),
+		raftstore.WithGRPCClientCredentials(clientCreds),
+		raftstore.WithGRPCRetry(1, 25*time.Millisecond),
+		raftstore.WithGRPCSendTimeout(750*time.Millisecond),
+	)
+	require.NoError(t, cluster.campaign(1))
+	cluster.tickMany(2)
+	cluster.flush()
+
+	leader, ok := cluster.leader()
+	require.True(t, ok)
+
+	payload, err := proto.Marshal(&pb.KV{
+		Key:   []byte("tls-propose"),
+		Value: []byte("secure-value"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, cluster.propose(leader, payload))
+	cluster.tickMany(6)
+	cluster.flush()
+
+	for id := range cluster.nodes {
+		entry, err := cluster.db(id).GetCF(utils.CFDefault, []byte("tls-propose"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("secure-value"), entry.Value, "db %d", id)
+		entry.DecrRef()
+	}
+}
+
 func TestGRPCTransportHandlesPartition(t *testing.T) {
-	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+	cluster := newGRPCTestCluster(
+		t,
+		[]uint64{1, 2, 3},
+		raftstore.Config{},
+		raftstore.WithGRPCRetry(2, 25*time.Millisecond),
+		raftstore.WithGRPCSendTimeout(750*time.Millisecond),
+	)
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
 	cluster.flush()
@@ -83,6 +134,23 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	require.Equal(t, []byte("stale"), entry.Value)
 	entry.DecrRef()
 
+	leader, ok = cluster.leader()
+	require.True(t, ok)
+
+	payload, err = proto.Marshal(&pb.KV{
+		Key:   []byte("grpc-reconnect"),
+		Value: []byte("recovered"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, cluster.propose(leader, payload))
+	cluster.tickMany(6)
+	cluster.flush()
+
+	entry, err = cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-reconnect"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("recovered"), entry.Value)
+	entry.DecrRef()
+
 	ptr, ok := cluster.manifest(followerID).RaftPointer(cluster.groupID)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, ptr.AppliedIndex, uint64(2))
@@ -102,7 +170,7 @@ type grpcTestNode struct {
 	transport *raftstore.GRPCTransport
 }
 
-func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *grpcTestCluster {
+func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config, opts ...raftstore.GRPCOption) *grpcTestCluster {
 	t.Helper()
 	cluster := &grpcTestCluster{
 		t:          t,
@@ -117,7 +185,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *grpcT
 
 	addresses := make(map[uint64]string)
 	for _, id := range ids {
-		transport, err := raftstore.NewGRPCTransport(id, "127.0.0.1:0")
+		transport, err := raftstore.NewGRPCTransport(id, "127.0.0.1:0", opts...)
 		require.NoError(t, err)
 		cluster.transports[id] = transport
 		addresses[id] = transport.Addr()
@@ -235,6 +303,48 @@ func (c *grpcTestCluster) db(id uint64) *NoKV.DB {
 
 func (c *grpcTestCluster) manifest(id uint64) *manifest.Manager {
 	return c.nodes[id].db.Manifest()
+}
+
+func buildTestCredentials(t *testing.T) (credentials.TransportCredentials, credentials.TransportCredentials) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "NoKV-test"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+	require.NoError(t, err)
+
+	cert := tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  priv,
+	}
+
+	caCert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+	cert.Leaf = caCert
+
+	serverCreds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+	})
+	clientCreds := credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "127.0.0.1",
+	})
+	return serverCreds, clientCreds
 }
 
 func openDBAt(t *testing.T, dir string) *NoKV.DB {

@@ -36,6 +36,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if snap.WALSegmentCount == 0 {
 		t.Fatalf("expected wal segment count to be tracked")
 	}
+	if snap.WALRecordCounts.Entries == 0 {
+		t.Fatalf("expected wal record counts to include entry records")
+	}
 	if snap.WriteBatchesTotal == 0 {
 		t.Fatalf("expected write batch metrics to be recorded, snapshot=%+v", snap)
 	}
@@ -143,6 +146,25 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.ActiveSize").(*expvar.Int).Value(); got != snap.WALActiveSize {
 		t.Fatalf("wal active size mismatch expvar=%d snapshot=%d", got, snap.WALActiveSize)
+	}
+	if v := expvar.Get("NoKV.Stats.WAL.RecordCounts"); v == nil {
+		t.Fatalf("expected wal record count map to be exported")
+	} else {
+		m := v.(*expvar.Map)
+		entries := getExpvarInt(t, m, "entries")
+		if entries == 0 {
+			t.Fatalf("expected wal entry count to be non-zero")
+		}
+		total := getExpvarInt(t, m, "total")
+		if total == 0 || total < entries {
+			t.Fatalf("unexpected wal record totals entries=%d total=%d", entries, total)
+		}
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.RaftSegments").(*expvar.Int).Value(); got != int64(snap.WALSegmentsWithRaftRecords) {
+		t.Fatalf("wal raft segment count mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsWithRaftRecords)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.RaftSegmentsRemovable").(*expvar.Int).Value(); got != int64(snap.WALRemovableRaftSegments) {
+		t.Fatalf("wal removable raft segments mismatch expvar=%d snapshot=%d", got, snap.WALRemovableRaftSegments)
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)
@@ -281,4 +303,20 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	if got := expvar.Get("NoKV.Stats.Write.Throttle").(*expvar.Int).Value(); got != 0 {
 		t.Fatalf("expected write throttle expvar to reset after release, got %d", got)
 	}
+}
+
+func getExpvarInt(t *testing.T, m *expvar.Map, key string) int64 {
+	t.Helper()
+	if m == nil {
+		t.Fatalf("expvar map is nil")
+	}
+	v := m.Get(key)
+	if v == nil {
+		t.Fatalf("expvar map missing key %s", key)
+	}
+	iv, ok := v.(*expvar.Int)
+	if !ok {
+		t.Fatalf("expvar value for %s is not int", key)
+	}
+	return iv.Value()
 }

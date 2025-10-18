@@ -1,3 +1,4 @@
+//go:build darwin
 // +build darwin
 
 package file
@@ -9,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 )
 
 // SSTable 文件的内存封装

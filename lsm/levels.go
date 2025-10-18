@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"sync"
@@ -340,6 +341,12 @@ func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 		}
 		if id >= ptr.Segment {
 			return false
+		}
+	}
+	if lm.lsm != nil && lm.lsm.wal != nil {
+		metrics := lm.lsm.wal.SegmentRecordMetrics(id)
+		if metrics.RaftRecords() > 0 {
+			log.Printf("[wal] segment %d retains raft records during GC eligibility (raft_entries=%d raft_states=%d raft_snapshots=%d)", id, metrics.RaftEntries, metrics.RaftStates, metrics.RaftSnapshots)
 		}
 	}
 	return true

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -21,6 +24,67 @@ const (
 	raftStepMethod     = "Step"
 	raftStepFullMethod = "/" + raftServiceName + "/" + raftStepMethod
 )
+
+type GRPCOption func(*grpcTransportConfig)
+
+type grpcTransportConfig struct {
+	serverCreds  credentials.TransportCredentials
+	clientCreds  credentials.TransportCredentials
+	dialTimeout  time.Duration
+	sendTimeout  time.Duration
+	maxRetries   int
+	retryBackoff time.Duration
+}
+
+func defaultGRPCConfig() grpcTransportConfig {
+	return grpcTransportConfig{
+		clientCreds:  insecure.NewCredentials(),
+		dialTimeout:  time.Second,
+		sendTimeout:  time.Second,
+		maxRetries:   0,
+		retryBackoff: 0,
+	}
+}
+
+func WithServerCredentials(creds credentials.TransportCredentials) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		cfg.serverCreds = creds
+	}
+}
+
+func WithClientCredentials(creds credentials.TransportCredentials) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		cfg.clientCreds = creds
+	}
+}
+
+func WithDialTimeout(d time.Duration) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		if d > 0 {
+			cfg.dialTimeout = d
+		}
+	}
+}
+
+func WithSendTimeout(d time.Duration) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		if d >= 0 {
+			cfg.sendTimeout = d
+		}
+	}
+}
+
+func WithRetry(maxRetries int, backoff time.Duration) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
+		cfg.maxRetries = maxRetries
+		if backoff > 0 {
+			cfg.retryBackoff = backoff
+		}
+	}
+}
 
 type raftServiceServer interface {
 	Step(context.Context, *raftpb.Message) (*emptypb.Empty, error)
@@ -57,7 +121,12 @@ var raftServiceDesc = grpc.ServiceDesc{
 	Metadata: "",
 }
 
-func raftStepHandler(srv any, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+var (
+	errPeerBlocked = errors.New("raftstore: peer blocked")
+	errPeerUnknown = errors.New("raftstore: peer address unknown")
+)
+
+func raftStepHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(raftpb.Message)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -93,23 +162,27 @@ func (c *raftServiceClientImpl) Step(ctx context.Context, in *raftpb.Message, op
 
 // GRPCTransport implements Transport backed by gRPC connections.
 type GRPCTransport struct {
-	mu          sync.RWMutex
-	localID     uint64
-	addr        string
-	peers       map[uint64]string
-	blocked     map[uint64]struct{}
-	conns       map[uint64]*grpc.ClientConn
-	clients     map[uint64]raftServiceClient
-	handler     func(myraft.Message) error
-	server      *grpc.Server
-	ln          net.Listener
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
-	dialTimeout time.Duration
+	mu           sync.RWMutex
+	localID      uint64
+	addr         string
+	peers        map[uint64]string
+	blocked      map[uint64]struct{}
+	conns        map[uint64]*grpc.ClientConn
+	clients      map[uint64]raftServiceClient
+	handler      func(myraft.Message) error
+	server       *grpc.Server
+	ln           net.Listener
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
+	dialTimeout  time.Duration
+	sendTimeout  time.Duration
+	maxRetries   int
+	retryBackoff time.Duration
+	clientCreds  credentials.TransportCredentials
 }
 
 // NewGRPCTransport starts a gRPC server bound to listenAddr.
-func NewGRPCTransport(localID uint64, listenAddr string) (*GRPCTransport, error) {
+func NewGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*GRPCTransport, error) {
 	if localID == 0 {
 		return nil, errors.New("raftstore: gRPC transport requires non-zero local ID")
 	}
@@ -120,17 +193,35 @@ func NewGRPCTransport(localID uint64, listenAddr string) (*GRPCTransport, error)
 	if err != nil {
 		return nil, err
 	}
+	cfg := defaultGRPCConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	clientCreds := cfg.clientCreds
+	if clientCreds == nil {
+		clientCreds = insecure.NewCredentials()
+	}
+	serverOpts := make([]grpc.ServerOption, 0, 1)
+	if cfg.serverCreds != nil {
+		serverOpts = append(serverOpts, grpc.Creds(cfg.serverCreds))
+	}
 	t := &GRPCTransport{
-		localID:     localID,
-		addr:        ln.Addr().String(),
-		peers:       make(map[uint64]string),
-		blocked:     make(map[uint64]struct{}),
-		conns:       make(map[uint64]*grpc.ClientConn),
-		clients:     make(map[uint64]raftServiceClient),
-		server:      grpc.NewServer(),
-		ln:          ln,
-		stopCh:      make(chan struct{}),
-		dialTimeout: time.Second,
+		localID:      localID,
+		addr:         ln.Addr().String(),
+		peers:        make(map[uint64]string),
+		blocked:      make(map[uint64]struct{}),
+		conns:        make(map[uint64]*grpc.ClientConn),
+		clients:      make(map[uint64]raftServiceClient),
+		server:       grpc.NewServer(serverOpts...),
+		ln:           ln,
+		stopCh:       make(chan struct{}),
+		dialTimeout:  cfg.dialTimeout,
+		sendTimeout:  cfg.sendTimeout,
+		maxRetries:   cfg.maxRetries,
+		retryBackoff: cfg.retryBackoff,
+		clientCreds:  clientCreds,
 	}
 	raftSrv := &raftService{transport: t}
 	t.server.RegisterService(&raftServiceDesc, raftSrv)
@@ -224,15 +315,42 @@ func (t *GRPCTransport) Send(msg myraft.Message) {
 	if msg.To == 0 {
 		return
 	}
-	client, err := t.getClient(msg.To)
-	if err != nil {
-		return
+	attempts := t.maxRetries + 1
+	if attempts <= 0 {
+		attempts = 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), t.dialTimeout)
-	defer cancel()
-	pbMsg := raftpb.Message(msg)
-	if _, err := client.Step(ctx, &pbMsg); err != nil {
+	for attempt := 0; attempt < attempts; attempt++ {
+		client, err := t.getClient(msg.To)
+		if err != nil {
+			if errors.Is(err, errPeerBlocked) || errors.Is(err, errPeerUnknown) {
+				return
+			}
+			if attempt == attempts-1 {
+				return
+			}
+			t.backoff()
+			continue
+		}
+		var (
+			ctx    context.Context
+			cancel context.CancelFunc
+		)
+		if t.sendTimeout > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), t.sendTimeout)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
+		}
+		pbMsg := raftpb.Message(msg)
+		_, err = client.Step(ctx, &pbMsg)
+		cancel()
+		if err == nil {
+			return
+		}
 		t.handleSendError(msg.To, err)
+		if attempt == attempts-1 {
+			return
+		}
+		t.backoff()
 	}
 }
 
@@ -242,7 +360,7 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 	if ok {
 		if _, blocked := t.blocked[id]; blocked {
 			t.mu.RUnlock()
-			return nil, errors.New("raftstore: peer blocked")
+			return nil, errPeerBlocked
 		}
 		if client, exists := t.clients[id]; exists {
 			t.mu.RUnlock()
@@ -251,12 +369,20 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 	}
 	t.mu.RUnlock()
 	if !ok || addr == "" {
-		return nil, errors.New("raftstore: peer address unknown")
+		return nil, errPeerUnknown
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), t.dialTimeout)
+	ctx := context.Background()
+	cancel := func() {}
+	if t.dialTimeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), t.dialTimeout)
+	}
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(t.clientCreds))
 	if err != nil {
+		return nil, err
+	}
+	if err := t.waitForClientReady(ctx, conn); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	client := &raftServiceClientImpl{cc: conn}
@@ -275,6 +401,35 @@ func (t *GRPCTransport) handleSendError(id uint64, err error) {
 		delete(t.clients, id)
 	}
 	t.mu.Unlock()
+}
+
+func (t *GRPCTransport) backoff() {
+	if t.retryBackoff <= 0 {
+		return
+	}
+	time.Sleep(t.retryBackoff)
+}
+
+func (t *GRPCTransport) waitForClientReady(ctx context.Context, conn *grpc.ClientConn) error {
+	conn.Connect()
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+		if state == connectivity.Shutdown {
+			return fmt.Errorf("raftstore: connection shutdown while dialing")
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("raftstore: wait for state change failed")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
 }
 
 // Close shuts down the transport and releases resources.

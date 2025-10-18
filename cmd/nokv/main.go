@@ -111,6 +111,12 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	}
 	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WALActiveSegment, snap.WALSegmentCount, snap.WALSegmentsRemoved)
 	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WALActiveSize)
+	if snap.WALRecordCounts.Total() > 0 {
+		r := snap.WALRecordCounts
+		fmt.Fprintf(w, "WAL.Records            entries=%d raft_entries=%d raft_states=%d raft_snapshots=%d other=%d\n",
+			r.Entries, r.RaftEntries, r.RaftStates, r.RaftSnapshots, r.Other)
+	}
+	fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WALSegmentsWithRaftRecords, snap.WALRemovableRaftSegments)
 	if snap.RaftGroupCount > 0 {
 		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
 			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)
