@@ -7,8 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/manifest"
+	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
+	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 var recoveryTraceEnabled = os.Getenv("RECOVERY_TRACE_METRICS") != ""
@@ -248,6 +253,81 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	})
 }
 
+func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	manifestDir := filepath.Join(dir, "manifest")
+
+	walMgr, err := wal.Open(wal.Config{Dir: walDir})
+	require.NoError(t, err)
+	defer walMgr.Close()
+
+	manifestMgr, err := manifest.Open(manifestDir)
+	require.NoError(t, err)
+	defer manifestMgr.Close()
+
+	ws, err := engine.OpenWALStorage(engine.WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	snapshot := myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     7,
+			Term:      2,
+			ConfState: raftpb.ConfState{Voters: []uint64{1}},
+		},
+		Data: []byte("raft-recovery-snapshot"),
+	}
+	require.NoError(t, ws.ApplySnapshot(snapshot))
+
+	exportPath := filepath.Join(dir, "raft.snapshot")
+	require.NoError(t, engine.ExportSnapshot(ws, exportPath))
+	logRecoveryMetric(t, "raft_snapshot_export", map[string]any{
+		"group_id":        1,
+		"snapshot_index":  snapshot.Metadata.Index,
+		"snapshot_term":   snapshot.Metadata.Term,
+		"export_path":     exportPath,
+		"manifest_dir":    manifestDir,
+		"wal_dir":         walDir,
+		"snapshot_length": len(snapshot.Data),
+	})
+
+	restoreWalDir := filepath.Join(dir, "restore", "wal")
+	restoreManifestDir := filepath.Join(dir, "restore", "manifest")
+	walMgrRestore, err := wal.Open(wal.Config{Dir: restoreWalDir})
+	require.NoError(t, err)
+	defer walMgrRestore.Close()
+
+	manifestMgrRestore, err := manifest.Open(restoreManifestDir)
+	require.NoError(t, err)
+	defer manifestMgrRestore.Close()
+
+	wsRestore, err := engine.OpenWALStorage(engine.WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgrRestore,
+		Manifest: manifestMgrRestore,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath))
+
+	ptr, ok := manifestMgrRestore.RaftPointer(1)
+	require.True(t, ok)
+	require.Equal(t, snapshot.Metadata.Index, ptr.SnapshotIndex)
+	require.Equal(t, snapshot.Metadata.Term, ptr.SnapshotTerm)
+
+	logRecoveryMetric(t, "raft_snapshot_import", map[string]any{
+		"group_id":       1,
+		"snapshot_index": ptr.SnapshotIndex,
+		"snapshot_term":  ptr.SnapshotTerm,
+		"manifest_dir":   restoreManifestDir,
+		"wal_dir":        restoreWalDir,
+	})
+}
+
 func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
@@ -288,5 +368,58 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 		"value_base64":  item.Value,
 		"wal_dir":       filepath.Join(opt.WorkDir, "wal"),
 		"recovered_len": len(item.Value),
+	})
+}
+
+func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
+	root := t.TempDir()
+	opt := &Options{
+		WorkDir:          root,
+		ValueThreshold:   1 << 20,
+		MemTableSize:     1 << 12,
+		SSTableMaxSz:     1 << 20,
+		ValueLogFileSize: 1 << 20,
+		MaxBatchCount:    32,
+		MaxBatchSize:     1 << 20,
+	}
+
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	walMgr := db.WAL()
+	manifestMgr := db.Manifest()
+
+	appendRaft := func(data string) {
+		_, err := walMgr.AppendRecords(wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte(data)})
+		require.NoError(t, err)
+		require.NoError(t, walMgr.Sync())
+	}
+
+	appendRaft("group1-seg1")
+	require.NoError(t, manifestMgr.LogRaftPointer(manifest.RaftLogPointer{GroupID: 1, Segment: walMgr.ActiveSegment(), AppliedIndex: 10, AppliedTerm: 1}))
+	require.NoError(t, manifestMgr.LogRaftPointer(manifest.RaftLogPointer{GroupID: 2, Segment: walMgr.ActiveSegment(), AppliedIndex: 9, AppliedTerm: 1}))
+
+	snapBefore := db.Info().Snapshot()
+	logRecoveryMetric(t, "raft_wal_backlog_pre", map[string]any{
+		"wal_segments_with_raft": snapBefore.WALSegmentsWithRaftRecords,
+		"wal_removable_segments": snapBefore.WALRemovableRaftSegments,
+	})
+
+	require.NoError(t, walMgr.SwitchSegment(2, true))
+	appendRaft("group1-seg2")
+	require.NoError(t, walMgr.SwitchSegment(3, true))
+	appendRaft("group1-seg3")
+
+	require.NoError(t, manifestMgr.LogRaftPointer(manifest.RaftLogPointer{GroupID: 1, Segment: 3, AppliedIndex: 30, AppliedTerm: 4}))
+	require.NoError(t, manifestMgr.LogRaftPointer(manifest.RaftLogPointer{GroupID: 2, Segment: 3, AppliedIndex: 28, AppliedTerm: 4}))
+	require.NoError(t, manifestMgr.LogRaftTruncate(1, 30, 4, 3, 0))
+	require.NoError(t, manifestMgr.LogRaftTruncate(2, 28, 4, 3, 0))
+
+	snapAfter := db.Info().Snapshot()
+	require.Greater(t, snapAfter.WALSegmentsWithRaftRecords, 0, "expected raft segments to be tracked")
+	require.Greater(t, snapAfter.WALRemovableRaftSegments, 0, "expected removable raft backlog once followers catch up")
+	logRecoveryMetric(t, "raft_wal_backlog_post", map[string]any{
+		"wal_segments_with_raft": snapAfter.WALSegmentsWithRaftRecords,
+		"wal_removable_segments": snapAfter.WALRemovableRaftSegments,
 	})
 }

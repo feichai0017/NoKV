@@ -233,20 +233,6 @@ For detailed walkthroughs of individual modules, refer to:
 
 ## 11. Distributed KV TODO Roadmap
 
-This roadmap follows the TinyKV phases and expands each into concrete, testable work items for NoKV.
-
-### TinyKV Progress Snapshot (updated 2025-10-18)
-
-| TinyKV Milestone | Deliverable (per TinyKV docs) | NoKV Status | Notes |
-| --- | --- | --- | --- |
-| Project 1 — Standalone RawKV | Basic raw kv API backed by RocksDB/LSM, WAL replay, snapshot-able state | ✅ Complete | NoKV’s LSM+WAL stack, manifest, value log, and recovery pipeline map directly to this phase with native Go implementation and extensive tests (`db_test.go`, `db_recovery_test.go`). |
-| Project 2 — Transaction KV | MVCC, CF separation (`default`/`write`/`lock`), conflict detection, txn API | ✅ Complete | MVCC oracle, CF-aware pipeline, managed transactions, and CLI/metrics parity match TinyKV Project2 expectations (`txn.go`, `txn_test.go`). |
-| Project 3A/3B — Raft Core & Raft KV | Raft log replication, persistent storage, Ready handling, snapshot sending | ⚙️ In progress | Raft peers复用 WAL/manifest（`raftstore`），snapshot resend 队列与限流测试已就绪；新增 gRPC transport 支持跨进程消息流转，仍在完善 typed WAL record 及进一步的日志压缩钩子。 |
-| Project 3C — Multi-Raft & Scheduling | Region metadata, peer lifecycle, conf change, raftstore <-> scheduler bridge | ⏳ Not started | Manifest lacks region catalogues; only single-group scaffolding (`GroupID`) exists with no PD-equivalent scheduler yet. |
-| Project 4 — Distributed Txn / 2PC | Per-region MVCC, lock resolution, scheduler cooperation, external API | ⏳ Not started | MVCC is single-node; no raft-proposed transactional RPCs or lock tables yet. |
-
-Legend: ✅ complete ⚙️ actively being built ⏳ planned / not started.
-
 ### Phase 0 — Column Families & Raw KV Surface
 - **Done**: Extend `utils.Entry`, write pipeline, and WAL paths with a `columnFamily` tag while keeping default CF compatibility.
 - **Done**: Define CF identifiers (`default`, `lock`, `write`) and helper routines analogous to TinyKV's `KeyWithCF`.
@@ -262,15 +248,18 @@ Legend: ✅ complete ⚙️ actively being built ⏳ planned / not started.
 - **Done**: `raftstore` peers默认通过 `walStorage` 复用 DB 的 WAL + manifest，Ready entries/HardState/Snapshot 与普通写入共享持久化路径；重启恢复和三节点复制已在测试中覆盖。
 - **Done**: Snapshot resend 队列与 `LogRaftTruncate` 的段编号桥接（2025-10-18）确保截断信息写回 manifest，`lsm.canRemoveWalSegment` 结合该段位阻止误 GC。
 - **Done**: `raftstore` 重构为 `peer/` (FSM + lifecycle)、`engine/` (WAL/Disk storage)、`transport/` (内存/GRPC 传输) 等子包，结构对齐 TinyKV 的 `peer`/`peerstorage`/`transport` 角色，根包仅负责兼容性导出。
-- **Done**: 新增 `GRPCTransport` 实现，基于 gRPC 的跨进程 Raft 消息收发支持网络分区测试，并替换旧的 `net/rpc` 实现。
-- **Done**: 桥接 raft apply（批量、冲突处理）与 `utils.WaterMark` 回压策略，新增 `Peer.WaitApplied` 与限流逻辑，覆盖慢 follower / failover 集成测试。
-- **In progress**: `wal.Manager` 支持 typed record，manifest 记录 `EditRaftPointer`，仍需补充崩溃注入、慢 follower backlog 与 snapshot resend 的自动化用例。
-- 实现消息传输接口（现阶段在内存 mock），为后续 RPC 化做准备。
+- **Done**: 新增 `GRPCTransport` 实现（`raftstore/transport/grpc_transport.go`），配套 `transport/grpc_transport_test.go` 覆盖提议跨节点复制、分区恢复及背压路径，同时完全替换旧 `net/rpc` 实现。
+- **Done**: 桥接 raft apply（批量、冲突处理）与 `utils.WaterMark` 回压策略，新增 `Peer.WaitApplied` 与限流逻辑，覆盖慢 follower / failover 集成测试 (`peer_test.go`, `levels_slow_follower_test.go`)。
+- **Done**: 推进 `wal.Manager` typed record 支持与 manifest `EditRaftPointer` 校验，完善崩溃注入、慢 follower backlog 和 snapshot resend 自动化回归，确保多路径截断点一致 (`RecordMetrics`, backlog 指标、恢复脚本)。
+- **Next**: 梳理 gRPC transport 的 TLS/鉴权、超时与重试策略，扩充 chaos 脚本（网络分裂、慢节点重连、磁盘阻塞）以及 WatchDog 指标，巩固生产化可靠性。
 
 ### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
-- **Done**: `manifest.LogRaftTruncate` 现持久化 index/term+segment+offset，WAL GC 依赖 `SegmentIndex` / `TruncatedOffset` 判断；`raftstore/engine/wal_storage_test.go` 覆盖最新逻辑，并通过 `MaybeCompact` 同步更新。
-- **Next**: 实现手动 / 自动 snapshot 导出，落地 apply 中断恢复流程，并复用 manifest 指针重试。
-- **Next**: 扩充慢 follower / snapshot 恢复测试，验证截断段位与实际 WAL GC 成功联动。
+- **Done**: `manifest.LogRaftTruncate` 现持久化 index/term+segment+offset，WAL GC 依赖 `SegmentIndex`/`TruncatedOffset` 判断；`raftstore/engine/wal_storage_test.go` 与 `lsm/levels_slow_follower_test.go` 验证截断-清理联动，`MaybeCompact` 同步更新 manifest。
+- **Done**: `wal_storage.ApplySnapshot` / `compactTo` 写回截断段位与偏移，重启后由 manifest 恢复，并在集成测试中验证慢 follower 不会被 GC 提前清理。
+- **Done**: 新增 `engine.ExportSnapshot/ImportSnapshot` 与 `TestRecoverySnapshotExportRoundTrip`，`scripts/recovery_scenarios.sh` 集成该场景并输出 `RECOVERY_METRIC`，便于手动/自动恢复校验。
+- **Done**: WAL typed record 全链路计数，`StatsSnapshot`/CLI 输出 `WALRecordCounts`、`WALRemovableRaftSegments`，并在 GC 时记录落后段位。
+- **Done**: `TestRecoverySlowFollowerSnapshotBacklog` 覆盖慢 follower + snapshot + WAL GC，恢复脚本新增场景/指标。
+- **Next**: 利用 backlog 指标驱动自动段 GC 策略，并将 typed record 告警纳入运维面板。
 
 ### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
 - Model `RegionMeta`, peer lifecycle, and peer state machine; maintain region ranges inside manifest or dedicated metadata store.

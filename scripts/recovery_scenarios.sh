@@ -16,6 +16,8 @@ SCENARIOS=(
   "TestRecoveryRemovesStaleValueLogSegment"
   "TestRecoveryCleansMissingSSTFromManifest"
   "TestRecoveryManifestRewriteCrash"
+  "TestRecoverySlowFollowerSnapshotBacklog"
+  "TestRecoverySnapshotExportRoundTrip"
   "TestRecoveryWALReplayRestoresData"
 )
 

@@ -24,6 +24,8 @@ type WALStorageConfig struct {
 	Manifest *manifest.Manager
 }
 
+var errStopPointerValidation = errors.New("raftstore: stop pointer validation")
+
 type entrySpan struct {
 	firstIndex uint64
 	lastIndex  uint64
@@ -62,6 +64,9 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	}
 	if cfg.Manifest != nil {
 		if ptr, ok := cfg.Manifest.RaftPointer(cfg.GroupID); ok {
+			if err := validateManifestPointer(cfg.WAL, ptr); err != nil {
+				return nil, err
+			}
 			ws.pointer = ptr
 		}
 	}
@@ -553,6 +558,49 @@ func isPointerAhead(newPtr, oldPtr manifest.RaftLogPointer) bool {
 		return newPtr.Segment > oldPtr.Segment
 	}
 	return newPtr.Offset > oldPtr.Offset
+}
+
+func validateManifestPointer(walMgr *wal.Manager, ptr manifest.RaftLogPointer) error {
+	if walMgr == nil {
+		return nil
+	}
+	if ptr.Segment == 0 || ptr.Offset == 0 {
+		return nil
+	}
+	var (
+		found     bool
+		recType   wal.RecordType
+		ptrOffset = ptr.Offset
+	)
+	err := walMgr.ReplaySegment(ptr.Segment, func(info wal.EntryInfo, _ []byte) error {
+		end := recordEnd(info)
+		if end == ptrOffset {
+			found = true
+			recType = info.Type
+			return errStopPointerValidation
+		}
+		if end > ptrOffset {
+			return fmt.Errorf("raftstore: manifest pointer offset %d falls within record ending at %d (segment=%d)",
+				ptrOffset, end, ptr.Segment)
+		}
+		return nil
+	})
+	if errors.Is(err, errStopPointerValidation) {
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("raftstore: manifest pointer offset %d not found in segment %d", ptrOffset, ptr.Segment)
+	}
+	switch recType {
+	case wal.RecordTypeRaftEntry, wal.RecordTypeRaftState, wal.RecordTypeRaftSnapshot:
+		return nil
+	default:
+		return fmt.Errorf("raftstore: manifest pointer references non-raft record type %d in segment %d",
+			recType, ptr.Segment)
+	}
 }
 
 func encodeRaftEntries(groupID uint64, entries []myraft.Entry) ([]byte, error) {

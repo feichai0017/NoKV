@@ -41,10 +41,45 @@ type EntryInfo struct {
 
 // Metrics captures runtime information about WAL manager state.
 type Metrics struct {
-	ActiveSegment   uint32
-	SegmentCount    int
-	ActiveSize      int64
-	RemovedSegments uint64
+	ActiveSegment           uint32
+	SegmentCount            int
+	ActiveSize              int64
+	RemovedSegments         uint64
+	RecordCounts            RecordMetrics
+	SegmentsWithRaftRecords int
+}
+
+// RecordMetrics summarises counts per record type.
+type RecordMetrics struct {
+	Entries       uint64 `json:"entries"`
+	RaftEntries   uint64 `json:"raft_entries"`
+	RaftStates    uint64 `json:"raft_states"`
+	RaftSnapshots uint64 `json:"raft_snapshots"`
+	Other         uint64 `json:"other"`
+}
+
+// Total returns the sum across all record types.
+func (m RecordMetrics) Total() uint64 {
+	return m.Entries + m.RaftEntries + m.RaftStates + m.RaftSnapshots + m.Other
+}
+
+func (m *RecordMetrics) add(recType RecordType) {
+	switch recType {
+	case RecordTypeEntry:
+		m.Entries++
+	case RecordTypeRaftEntry:
+		m.RaftEntries++
+	case RecordTypeRaftState:
+		m.RaftStates++
+	case RecordTypeRaftSnapshot:
+		m.RaftSnapshots++
+	default:
+		m.Other++
+	}
+}
+
+func (m RecordMetrics) RaftRecords() uint64 {
+	return m.RaftEntries + m.RaftStates + m.RaftSnapshots
 }
 
 // Manager provides append-only WAL segments with replay support.
@@ -61,6 +96,8 @@ type Manager struct {
 	removedSegments uint64
 	bufferSize      int
 	writer          *bufio.Writer
+	recordTotals    RecordMetrics
+	segmentTotals   map[uint32]RecordMetrics
 }
 
 // RecordType identifies the kind of payload stored in the WAL.
@@ -108,12 +145,16 @@ func Open(cfg Config) (*Manager, error) {
 	}
 
 	m := &Manager{
-		cfg:         cfg,
-		crcTable:    utils.CastagnoliCrcTable,
-		segmentSize: segSize,
-		bufferSize:  bufSize,
+		cfg:           cfg,
+		crcTable:      utils.CastagnoliCrcTable,
+		segmentSize:   segSize,
+		bufferSize:    bufSize,
+		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
 	if err := m.openLatestSegment(); err != nil {
+		return nil, err
+	}
+	if err := m.rebuildRecordCounts(); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -138,6 +179,32 @@ func (m *Manager) openLatestSegment() error {
 	}
 	last := ids[len(ids)-1]
 	return m.switchSegmentLocked(uint32(last), false)
+}
+
+func (m *Manager) rebuildRecordCounts() error {
+	totals := RecordMetrics{}
+	segmentTotals := make(map[uint32]RecordMetrics, 16)
+	err := m.Replay(func(info EntryInfo, _ []byte) error {
+		metrics := segmentTotals[info.SegmentID]
+		metrics.add(info.Type)
+		segmentTotals[info.SegmentID] = metrics
+		totals.add(info.Type)
+		return nil
+	})
+	if err != nil {
+		m.mu.Lock()
+		if m.segmentTotals == nil {
+			m.segmentTotals = make(map[uint32]RecordMetrics, 16)
+		}
+		m.recordTotals = RecordMetrics{}
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Lock()
+	m.segmentTotals = segmentTotals
+	m.recordTotals = totals
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *Manager) segmentPath(id uint32) string {
@@ -260,6 +327,10 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 			Length:    length,
 			Type:      rec.Type,
 		}
+		segMetrics := m.segmentTotals[m.activeID]
+		segMetrics.add(rec.Type)
+		m.segmentTotals[m.activeID] = segMetrics
+		m.recordTotals.add(rec.Type)
 	}
 	if m.cfg.SyncOnWrite {
 		if err := m.writer.Flush(); err != nil {
@@ -531,6 +602,16 @@ func (m *Manager) RemoveSegment(id uint32) error {
 		return err
 	}
 	atomic.AddUint64(&m.removedSegments, 1)
+	m.mu.Lock()
+	if metrics, ok := m.segmentTotals[id]; ok {
+		m.recordTotals.Entries -= metrics.Entries
+		m.recordTotals.RaftEntries -= metrics.RaftEntries
+		m.recordTotals.RaftStates -= metrics.RaftStates
+		m.recordTotals.RaftSnapshots -= metrics.RaftSnapshots
+		m.recordTotals.Other -= metrics.Other
+		delete(m.segmentTotals, id)
+	}
+	m.mu.Unlock()
 	return nil
 }
 
@@ -554,10 +635,46 @@ func (m *Manager) Metrics() *Metrics {
 	if err == nil {
 		count = len(files)
 	}
-	return &Metrics{
-		ActiveSegment:   m.ActiveSegment(),
-		ActiveSize:      m.ActiveSize(),
-		SegmentCount:    count,
-		RemovedSegments: atomic.LoadUint64(&m.removedSegments),
+	segmentRaft := 0
+	m.mu.Lock()
+	for _, metrics := range m.segmentTotals {
+		if metrics.RaftRecords() > 0 {
+			segmentRaft++
+		}
 	}
+	recordTotals := m.recordTotals
+	m.mu.Unlock()
+	return &Metrics{
+		ActiveSegment:           m.ActiveSegment(),
+		ActiveSize:              m.ActiveSize(),
+		SegmentCount:            count,
+		RemovedSegments:         atomic.LoadUint64(&m.removedSegments),
+		RecordCounts:            recordTotals,
+		SegmentsWithRaftRecords: segmentRaft,
+	}
+}
+
+// RecordMetrics returns the current record-type counters.
+func (m *Manager) RecordMetrics() RecordMetrics {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.recordTotals
+}
+
+// SegmentRecordMetrics returns accumulated metrics for a specific segment.
+func (m *Manager) SegmentRecordMetrics(id uint32) RecordMetrics {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.segmentTotals[id]
+}
+
+// SegmentMetrics returns a copy of per-segment metrics map.
+func (m *Manager) SegmentMetrics() map[uint32]RecordMetrics {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copyMap := make(map[uint32]RecordMetrics, len(m.segmentTotals))
+	for id, metrics := range m.segmentTotals {
+		copyMap[id] = metrics
+	}
+	return copyMap
 }

@@ -96,6 +96,147 @@ func TestWALStorageCompactUpdatesManifest(t *testing.T) {
 	require.Equal(t, uint32(ptr.Segment), seg)
 }
 
+func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	defer walMgr.Close()
+	manifestMgr := openManifestManager(t, dir)
+	defer manifestMgr.Close()
+
+	infos, err := walMgr.Append([]byte("plain-entry"))
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.NoError(t, walMgr.Sync())
+
+	ptr := manifest.RaftLogPointer{
+		GroupID: 1,
+		Segment: infos[0].SegmentID,
+		Offset:  recordEnd(infos[0]),
+	}
+	require.NoError(t, manifestMgr.LogRaftPointer(ptr))
+
+	_, err = OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-raft record type")
+}
+
+func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	manifestMgr := openManifestManager(t, dir)
+
+	ws1, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+	ws2, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  2,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, ws1.Append([]myraft.Entry{
+		{Index: 1, Term: 1, Data: []byte("g1-1")},
+		{Index: 2, Term: 1, Data: []byte("g1-2")},
+		{Index: 3, Term: 2, Data: []byte("g1-3")},
+	}))
+	require.NoError(t, ws2.Append([]myraft.Entry{
+		{Index: 1, Term: 1, Data: []byte("g2-1")},
+	}))
+	require.NoError(t, ws1.Append([]myraft.Entry{
+		{Index: 4, Term: 2, Data: []byte("g1-4")},
+		{Index: 5, Term: 3, Data: []byte("g1-5")},
+	}))
+	require.NoError(t, ws2.Append([]myraft.Entry{
+		{Index: 2, Term: 2, Data: []byte("g2-2")},
+		{Index: 3, Term: 3, Data: []byte("g2-3")},
+	}))
+
+	require.NoError(t, walMgr.Sync())
+	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, walMgr.Close())
+
+	walMgr = openWalManager(t, dir)
+	defer walMgr.Close()
+	manifestMgr = openManifestManager(t, dir)
+	defer manifestMgr.Close()
+
+	ws1, err = OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	lastIdx, err := ws1.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), lastIdx)
+
+	ptr, ok := manifestMgr.RaftPointer(1)
+	require.True(t, ok)
+	require.NoError(t, validateManifestPointer(walMgr, ptr))
+}
+
+func TestWALSnapshotExportImport(t *testing.T) {
+	baseDir := t.TempDir()
+	walMgr := openWalManager(t, baseDir)
+	manifestMgr := openManifestManager(t, baseDir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	sourceSnap := myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     10,
+			Term:      3,
+			ConfState: raftpb.ConfState{Voters: []uint64{1}},
+		},
+		Data: []byte("snapshot-state"),
+	}
+	require.NoError(t, ws.ApplySnapshot(sourceSnap))
+
+	exportPath := filepath.Join(baseDir, "snapshot.bin")
+	require.NoError(t, ExportSnapshot(ws, exportPath))
+
+	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, walMgr.Close())
+
+	restoreDir := filepath.Join(baseDir, "restore")
+	walMgrRestore := openWalManager(t, restoreDir)
+	defer walMgrRestore.Close()
+	manifestMgrRestore := openManifestManager(t, restoreDir)
+	defer manifestMgrRestore.Close()
+
+	wsRestore, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgrRestore,
+		Manifest: manifestMgrRestore,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, ImportSnapshot(wsRestore, exportPath))
+
+	lastIdx, err := wsRestore.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), lastIdx)
+
+	ptr, ok := manifestMgrRestore.RaftPointer(1)
+	require.True(t, ok)
+	require.Equal(t, uint64(10), ptr.SnapshotIndex)
+	require.Equal(t, uint64(3), ptr.SnapshotTerm)
+}
+
 // Helpers duplicated from former package for test reuse.
 
 func openWalManager(t *testing.T, dir string) *wal.Manager {

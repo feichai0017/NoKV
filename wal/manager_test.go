@@ -17,7 +17,6 @@ func TestManagerAppendAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
 
 	entries := [][]byte{
 		[]byte("hello"),
@@ -335,5 +334,44 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	}
 	if seenType != wal.RecordTypeRaftEntry {
 		t.Fatalf("expected replay type raft entry, got %v", seenType)
+	}
+
+	metrics := m.Metrics()
+	if metrics == nil {
+		t.Fatalf("expected wal metrics to be available")
+	}
+	if metrics.RecordCounts.RaftEntries != 1 {
+		t.Fatalf("expected raft entry count to be 1, got %+v", metrics.RecordCounts)
+	}
+	if metrics.RecordCounts.Entries != 0 || metrics.RecordCounts.RaftStates != 0 || metrics.RecordCounts.RaftSnapshots != 0 {
+		t.Fatalf("unexpected record counts %+v", metrics.RecordCounts)
+	}
+	if metrics.RecordCounts.Total() != 1 {
+		t.Fatalf("expected total record count to equal 1, got %d", metrics.RecordCounts.Total())
+	}
+	if metrics.SegmentsWithRaftRecords != 1 {
+		t.Fatalf("expected raft segment count to be 1, got %d", metrics.SegmentsWithRaftRecords)
+	}
+	segMetrics := m.SegmentRecordMetrics(infos[0].SegmentID)
+	if segMetrics.RaftEntries != 1 {
+		t.Fatalf("expected segment raft entry count to be 1, got %+v", segMetrics)
+	}
+
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err = wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen wal: %v", err)
+	}
+	defer m.Close()
+
+	metrics = m.Metrics()
+	if metrics.RecordCounts.RaftEntries != 1 {
+		t.Fatalf("expected raft entry count to persist after reopen, got %+v", metrics.RecordCounts)
+	}
+	if metrics.SegmentsWithRaftRecords != 1 {
+		t.Fatalf("expected segment count with raft records to persist after reopen, got %d", metrics.SegmentsWithRaftRecords)
 	}
 }

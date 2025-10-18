@@ -2,11 +2,13 @@ package NoKV
 
 import (
 	"expvar"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/wal"
 )
 
 type Stats struct {
@@ -68,6 +70,9 @@ type Stats struct {
 	bloomHitRate         *expvar.Float
 	iteratorReuses       *expvar.Int
 	cfMap                *expvar.Map
+	walRecordCounts      *expvar.Map
+	walSegmentsWithRaft  *expvar.Int
+	walSegmentsRemovable *expvar.Int
 }
 
 type HotKeyStat struct {
@@ -82,60 +87,63 @@ type ColumnFamilySnapshot struct {
 
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
-	Entries                  int64                           `json:"entries"`
-	FlushPending             int64                           `json:"flush_pending"`
-	FlushQueueLength         int64                           `json:"flush_queue_length"`
-	FlushActive              int64                           `json:"flush_active"`
-	FlushWaitMs              float64                         `json:"flush_wait_ms"`
-	FlushLastWaitMs          float64                         `json:"flush_last_wait_ms"`
-	FlushMaxWaitMs           float64                         `json:"flush_max_wait_ms"`
-	FlushBuildMs             float64                         `json:"flush_build_ms"`
-	FlushLastBuildMs         float64                         `json:"flush_last_build_ms"`
-	FlushMaxBuildMs          float64                         `json:"flush_max_build_ms"`
-	FlushReleaseMs           float64                         `json:"flush_release_ms"`
-	FlushLastReleaseMs       float64                         `json:"flush_last_release_ms"`
-	FlushMaxReleaseMs        float64                         `json:"flush_max_release_ms"`
-	FlushCompleted           int64                           `json:"flush_completed"`
-	CompactionBacklog        int64                           `json:"compaction_backlog"`
-	CompactionMaxScore       float64                         `json:"compaction_max_score"`
-	CompactionLastDurationMs float64                         `json:"compaction_last_duration_ms"`
-	CompactionMaxDurationMs  float64                         `json:"compaction_max_duration_ms"`
-	CompactionRuns           uint64                          `json:"compaction_runs"`
-	ValueLogSegments         int                             `json:"vlog_segments"`
-	ValueLogPendingDel       int                             `json:"vlog_pending_deletes"`
-	ValueLogDiscardQueue     int                             `json:"vlog_discard_queue"`
-	ValueLogHead             utils.ValuePtr                  `json:"vlog_head"`
-	WALActiveSegment         int64                           `json:"wal_active_segment"`
-	WALSegmentCount          int64                           `json:"wal_segment_count"`
-	WALActiveSize            int64                           `json:"wal_active_size"`
-	WALSegmentsRemoved       uint64                          `json:"wal_segments_removed"`
-	RaftGroupCount           int                             `json:"raft_group_count"`
-	RaftLaggingGroups        int                             `json:"raft_lagging_groups"`
-	RaftMinLogSegment        uint32                          `json:"raft_min_log_segment"`
-	RaftMaxLogSegment        uint32                          `json:"raft_max_log_segment"`
-	RaftMaxLagSegments       int64                           `json:"raft_max_lag_segments"`
-	RaftLagWarnThreshold     int64                           `json:"raft_lag_warn_threshold"`
-	RaftLagWarning           bool                            `json:"raft_lag_warning"`
-	WriteQueueDepth          int64                           `json:"write_queue_depth"`
-	WriteQueueEntries        int64                           `json:"write_queue_entries"`
-	WriteQueueBytes          int64                           `json:"write_queue_bytes"`
-	WriteAvgBatchEntries     float64                         `json:"write_avg_batch_entries"`
-	WriteAvgBatchBytes       float64                         `json:"write_avg_batch_bytes"`
-	WriteAvgRequestWaitMs    float64                         `json:"write_avg_request_wait_ms"`
-	WriteAvgValueLogMs       float64                         `json:"write_avg_vlog_ms"`
-	WriteAvgApplyMs          float64                         `json:"write_avg_apply_ms"`
-	WriteBatchesTotal        int64                           `json:"write_batches_total"`
-	WriteThrottleActive      bool                            `json:"write_throttle_active"`
-	TxnsActive               int64                           `json:"txns_active"`
-	TxnsStarted              uint64                          `json:"txns_started"`
-	TxnsCommitted            uint64                          `json:"txns_committed"`
-	TxnsConflicts            uint64                          `json:"txns_conflicts"`
-	HotKeys                  []HotKeyStat                    `json:"hot_keys,omitempty"`
-	BlockL0HitRate           float64                         `json:"block_l0_hit_rate"`
-	BlockL1HitRate           float64                         `json:"block_l1_hit_rate"`
-	BloomHitRate             float64                         `json:"bloom_hit_rate"`
-	IteratorReused           uint64                          `json:"iterator_reused"`
-	ColumnFamilies           map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
+	Entries                    int64                           `json:"entries"`
+	FlushPending               int64                           `json:"flush_pending"`
+	FlushQueueLength           int64                           `json:"flush_queue_length"`
+	FlushActive                int64                           `json:"flush_active"`
+	FlushWaitMs                float64                         `json:"flush_wait_ms"`
+	FlushLastWaitMs            float64                         `json:"flush_last_wait_ms"`
+	FlushMaxWaitMs             float64                         `json:"flush_max_wait_ms"`
+	FlushBuildMs               float64                         `json:"flush_build_ms"`
+	FlushLastBuildMs           float64                         `json:"flush_last_build_ms"`
+	FlushMaxBuildMs            float64                         `json:"flush_max_build_ms"`
+	FlushReleaseMs             float64                         `json:"flush_release_ms"`
+	FlushLastReleaseMs         float64                         `json:"flush_last_release_ms"`
+	FlushMaxReleaseMs          float64                         `json:"flush_max_release_ms"`
+	FlushCompleted             int64                           `json:"flush_completed"`
+	CompactionBacklog          int64                           `json:"compaction_backlog"`
+	CompactionMaxScore         float64                         `json:"compaction_max_score"`
+	CompactionLastDurationMs   float64                         `json:"compaction_last_duration_ms"`
+	CompactionMaxDurationMs    float64                         `json:"compaction_max_duration_ms"`
+	CompactionRuns             uint64                          `json:"compaction_runs"`
+	ValueLogSegments           int                             `json:"vlog_segments"`
+	ValueLogPendingDel         int                             `json:"vlog_pending_deletes"`
+	ValueLogDiscardQueue       int                             `json:"vlog_discard_queue"`
+	ValueLogHead               utils.ValuePtr                  `json:"vlog_head"`
+	WALActiveSegment           int64                           `json:"wal_active_segment"`
+	WALSegmentCount            int64                           `json:"wal_segment_count"`
+	WALActiveSize              int64                           `json:"wal_active_size"`
+	WALSegmentsRemoved         uint64                          `json:"wal_segments_removed"`
+	WALRecordCounts            wal.RecordMetrics               `json:"wal_record_counts"`
+	WALSegmentsWithRaftRecords int                             `json:"wal_segments_with_raft_records"`
+	WALRemovableRaftSegments   int                             `json:"wal_removable_raft_segments"`
+	RaftGroupCount             int                             `json:"raft_group_count"`
+	RaftLaggingGroups          int                             `json:"raft_lagging_groups"`
+	RaftMinLogSegment          uint32                          `json:"raft_min_log_segment"`
+	RaftMaxLogSegment          uint32                          `json:"raft_max_log_segment"`
+	RaftMaxLagSegments         int64                           `json:"raft_max_lag_segments"`
+	RaftLagWarnThreshold       int64                           `json:"raft_lag_warn_threshold"`
+	RaftLagWarning             bool                            `json:"raft_lag_warning"`
+	WriteQueueDepth            int64                           `json:"write_queue_depth"`
+	WriteQueueEntries          int64                           `json:"write_queue_entries"`
+	WriteQueueBytes            int64                           `json:"write_queue_bytes"`
+	WriteAvgBatchEntries       float64                         `json:"write_avg_batch_entries"`
+	WriteAvgBatchBytes         float64                         `json:"write_avg_batch_bytes"`
+	WriteAvgRequestWaitMs      float64                         `json:"write_avg_request_wait_ms"`
+	WriteAvgValueLogMs         float64                         `json:"write_avg_vlog_ms"`
+	WriteAvgApplyMs            float64                         `json:"write_avg_apply_ms"`
+	WriteBatchesTotal          int64                           `json:"write_batches_total"`
+	WriteThrottleActive        bool                            `json:"write_throttle_active"`
+	TxnsActive                 int64                           `json:"txns_active"`
+	TxnsStarted                uint64                          `json:"txns_started"`
+	TxnsCommitted              uint64                          `json:"txns_committed"`
+	TxnsConflicts              uint64                          `json:"txns_conflicts"`
+	HotKeys                    []HotKeyStat                    `json:"hot_keys,omitempty"`
+	BlockL0HitRate             float64                         `json:"block_l0_hit_rate"`
+	BlockL1HitRate             float64                         `json:"block_l1_hit_rate"`
+	BloomHitRate               float64                         `json:"bloom_hit_rate"`
+	IteratorReused             uint64                          `json:"iterator_reused"`
+	ColumnFamilies             map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
 }
 
 func newStats(db *DB) *Stats {
@@ -194,6 +202,8 @@ func newStats(db *DB) *Stats {
 		blockL1HitRate:       reuseFloat("NoKV.Stats.Cache.L1HitRate"),
 		bloomHitRate:         reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
 		iteratorReuses:       reuseInt("NoKV.Stats.Iterator.Reused"),
+		walSegmentsWithRaft:  reuseInt("NoKV.Stats.WAL.RaftSegments"),
+		walSegmentsRemovable: reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
 	}
 	if v := expvar.Get("NoKV.Stats.ColumnFamilies"); v != nil {
 		if m, ok := v.(*expvar.Map); ok {
@@ -203,6 +213,7 @@ func newStats(db *DB) *Stats {
 	if s.cfMap == nil {
 		s.cfMap = expvar.NewMap("NoKV.Stats.ColumnFamilies")
 	}
+	s.walRecordCounts = reuseMap("NoKV.Stats.WAL.RecordCounts")
 	if expvar.Get("NoKV.Stats.HotKeys") == nil {
 		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
 			if db == nil || db.hot == nil {
@@ -242,6 +253,15 @@ func reuseFloat(name string) *expvar.Float {
 		}
 	}
 	return expvar.NewFloat(name)
+}
+
+func reuseMap(name string) *expvar.Map {
+	if v := expvar.Get(name); v != nil {
+		if mv, ok := v.(*expvar.Map); ok {
+			return mv
+		}
+	}
+	return expvar.NewMap(name)
 }
 
 func newIntVar(val int64) *expvar.Int {
@@ -315,6 +335,8 @@ func (s *Stats) collect() {
 	s.walSegmentCount.Set(snap.WALSegmentCount)
 	s.walActiveSize.Set(snap.WALActiveSize)
 	s.walSegmentsRemoved.Set(int64(snap.WALSegmentsRemoved))
+	s.walSegmentsWithRaft.Set(int64(snap.WALSegmentsWithRaftRecords))
+	s.walSegmentsRemovable.Set(int64(snap.WALRemovableRaftSegments))
 	s.writeQueueDepth.Set(snap.WriteQueueDepth)
 	s.writeQueueEntries.Set(snap.WriteQueueEntries)
 	s.writeQueueBytes.Set(snap.WriteQueueBytes)
@@ -356,6 +378,14 @@ func (s *Stats) collect() {
 			sub.Set("reads", newIntVar(int64(cf.Reads)))
 			s.cfMap.Set(cfName, sub)
 		}
+	}
+	if s.walRecordCounts != nil {
+		s.walRecordCounts.Init()
+		s.walRecordCounts.Set("entries", newIntVar(int64(snap.WALRecordCounts.Entries)))
+		s.walRecordCounts.Set("raft_entries", newIntVar(int64(snap.WALRecordCounts.RaftEntries)))
+		s.walRecordCounts.Set("raft_states", newIntVar(int64(snap.WALRecordCounts.RaftStates)))
+		s.walRecordCounts.Set("raft_snapshots", newIntVar(int64(snap.WALRecordCounts.RaftSnapshots)))
+		s.walRecordCounts.Set("total", newIntVar(int64(snap.WALRecordCounts.Total())))
 	}
 	atomic.StoreInt64(&s.EntryNum, snap.Entries)
 }
@@ -424,13 +454,17 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 	snap.WriteThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
 
+	var segmentMetrics map[uint32]wal.RecordMetrics
 	if s.db.wal != nil {
 		if wstats := s.db.wal.Metrics(); wstats != nil {
 			snap.WALActiveSegment = int64(wstats.ActiveSegment)
 			snap.WALActiveSize = wstats.ActiveSize
 			snap.WALSegmentCount = int64(wstats.SegmentCount)
 			snap.WALSegmentsRemoved = wstats.RemovedSegments
+			snap.WALRecordCounts = wstats.RecordCounts
+			snap.WALSegmentsWithRaftRecords = wstats.SegmentsWithRaftRecords
 		}
+		segmentMetrics = s.db.wal.SegmentMetrics()
 	}
 
 	if man := s.db.Manifest(); man != nil {
@@ -445,6 +479,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		if snap.WALActiveSize == 0 && effectiveActive > 0 {
 			effectiveActive--
 		}
+		retainSegment := uint32(math.MaxUint32)
 		for _, ptr := range ptrs {
 			if ptr.Segment == 0 {
 				lagging++
@@ -459,6 +494,13 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			if ptr.Segment > maxSeg {
 				maxSeg = ptr.Segment
 			}
+			segIdx := uint32(ptr.SegmentIndex)
+			if segIdx == 0 {
+				segIdx = ptr.Segment
+			}
+			if segIdx > 0 && segIdx < retainSegment {
+				retainSegment = segIdx
+			}
 			if effectiveActive > 0 {
 				lag := effectiveActive - int64(ptr.Segment)
 				if lag < 0 {
@@ -472,6 +514,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				}
 			}
 		}
+		if retainSegment == math.MaxUint32 {
+			retainSegment = 0
+		}
 		snap.RaftMinLogSegment = minSeg
 		snap.RaftMaxLogSegment = maxSeg
 		snap.RaftMaxLagSegments = maxLag
@@ -483,6 +528,16 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.RaftLagWarnThreshold = threshold
 		if threshold > 0 && maxLag >= threshold && lagging > 0 {
 			snap.RaftLagWarning = true
+		}
+		if len(segmentMetrics) > 0 && retainSegment > 0 {
+			for id, metrics := range segmentMetrics {
+				if metrics.RaftRecords() == 0 {
+					continue
+				}
+				if id < retainSegment {
+					snap.WALRemovableRaftSegments++
+				}
+			}
 		}
 	}
 
