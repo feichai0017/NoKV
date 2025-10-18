@@ -38,7 +38,18 @@ Each edit serialises one logical action:
 - `EditLogPointer` – persists the latest WAL segment + offset checkpoint, analogous to RocksDB's `log_number` and `prev_log_number` fields.
 - `EditValueLogHead` – records the head pointer for vlog append, ensuring recovery resumes from the correct file/offset.
 - `EditDeleteValueLog` – marks a vlog segment logically deleted (GC has reclaimed it).
-- `EditUpdateValueLog` – updates metadata for a specific vlog file (used during GC rewrites).
+- `EditUpdateValueLog` –更新特定 vlog 文件的元数据（用于 GC 重写）。
+- `EditRaftPointer` – 持久化 Raft group 的 WAL 指针（segment、offset、applied/truncated index & term 等）。
+
+### 即将扩展：Region 元数据
+
+接下来会在 manifest 中维护 Region catalog：
+
+- `RegionMeta`：RegionID、Key Range、Peers（StoreID/PeerID）、Epoch。
+- Region 状态（`New`、`Running`、`Removing`、`Tombstone`）。
+- 复用 `EditRaftPointer` 记录每个 Region 的 WAL 截断点。
+
+具体编码方式（新增 `EditRegion*` 还是独立 catalog 文件）会在 Phase 4 设计后补充。
 
 `manifest.Manager.apply` interprets each edit and updates the in-memory `Version` structure, which is consumed by LSM initialisation and value log recovery.
 

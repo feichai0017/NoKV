@@ -208,6 +208,66 @@ func TestManagerValueLogUpdate(t *testing.T) {
 	}
 }
 
+func TestManagerRegionMetadata(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	meta := manifest.RegionMeta{
+		ID:       1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch: manifest.RegionEpoch{
+			Version:     3,
+			ConfVersion: 5,
+		},
+		Peers: []manifest.PeerMeta{
+			{StoreID: 1, PeerID: 11},
+			{StoreID: 2, PeerID: 21},
+		},
+		State: manifest.RegionStateRunning,
+	}
+	if err := mgr.LogRegionUpdate(meta); err != nil {
+		t.Fatalf("log region update: %v", err)
+	}
+	snap := mgr.RegionSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 region, got %d", len(snap))
+	}
+	got := snap[meta.ID]
+	if got.State != manifest.RegionStateRunning || got.Epoch.Version != meta.Epoch.Version {
+		t.Fatalf("unexpected region snapshot: %+v", got)
+	}
+	if len(got.Peers) != len(meta.Peers) || got.Peers[0].StoreID != meta.Peers[0].StoreID {
+		t.Fatalf("unexpected peers: %+v", got.Peers)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+
+	snap = mgr.RegionSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected region after reopen, got %d", len(snap))
+	}
+
+	if err := mgr.LogRegionDelete(meta.ID); err != nil {
+		t.Fatalf("log region delete: %v", err)
+	}
+	snap = mgr.RegionSnapshot()
+	if len(snap) != 0 {
+		t.Fatalf("expected region to be deleted, snapshot=%+v", snap)
+	}
+}
+
 func TestManagerLogRaftTruncate(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir)

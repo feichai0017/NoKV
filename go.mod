@@ -5,7 +5,6 @@ go 1.24.0
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/dgraph-io/badger/v4 v4.8.0
-	github.com/golang/protobuf v1.5.4
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	go.etcd.io/etcd/raft/v3 v3.5.13
@@ -21,6 +20,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

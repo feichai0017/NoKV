@@ -31,6 +31,7 @@ type Peer struct {
 	applyLimit       uint64
 	stopCtx          context.Context
 	stopCancel       context.CancelFunc
+	region           *manifest.RegionMeta
 }
 
 const defaultMaxInFlightApply = 8192
@@ -75,6 +76,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		applyCloser:      utils.NewCloserInitial(1),
 		stopCtx:          stopCtx,
 		stopCancel:       stopCancel,
+		region:           cloneRegionMeta(cfg.Region),
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries

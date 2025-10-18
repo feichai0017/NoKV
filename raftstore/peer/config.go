@@ -15,8 +15,7 @@ import (
 // un-compacted even after they are applied.
 const defaultLogRetainEntries = 4096
 
-// Config captures everything required to bootstrap a peer. It intentionally
-// mirrors TinyKV's raftstore Config.
+// Config captures everything required to bootstrap a peer. 
 type Config struct {
 	RaftConfig       myraft.Config
 	Peers            []myraft.Peer
@@ -26,6 +25,7 @@ type Config struct {
 	WAL              *wal.Manager
 	Manifest         *manifest.Manager
 	GroupID          uint64
+	Region           *manifest.RegionMeta
 	LogRetainEntries uint64
 	MaxInFlightApply uint64
 }
