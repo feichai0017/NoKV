@@ -27,6 +27,7 @@ type Config struct {
 	Manifest         *manifest.Manager
 	GroupID          uint64
 	LogRetainEntries uint64
+	MaxInFlightApply uint64
 }
 
 // ErrMissingManifestOrWAL indicates the caller provided only one durability
