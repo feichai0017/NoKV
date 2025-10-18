@@ -436,7 +436,7 @@ func (s *Skiplist) Draw(align bool) {
 					break
 				}
 				if ele != reverseTree[level][pos] {
-					newStr := fmt.Sprintf(strings.Repeat("-", len(ele)))
+					newStr := strings.Repeat("-", len(ele))
 					reverseTree[level] = append(reverseTree[level][:pos+1], reverseTree[level][pos:]...)
 					reverseTree[level][pos] = newStr
 				}
@@ -549,6 +549,7 @@ type UniIterator struct {
 }
 
 // FastRand is a fast thread local random function.
+//
 //go:linkname FastRand runtime.fastrand
 func FastRand() uint32
 

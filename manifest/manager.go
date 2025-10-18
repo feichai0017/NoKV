@@ -37,17 +37,18 @@ type ValueLogMeta struct {
 
 // RaftLogPointer tracks WAL progress for a raft group.
 type RaftLogPointer struct {
-	GroupID        uint64
-	Segment        uint32
-	Offset         uint64
-	AppliedIndex   uint64
-	AppliedTerm    uint64
-	Committed      uint64
-	SnapshotIndex  uint64
-	SnapshotTerm   uint64
-	TruncatedIndex uint64
-	TruncatedTerm  uint64
-	SegmentIndex   uint64
+	GroupID         uint64
+	Segment         uint32
+	Offset          uint64
+	AppliedIndex    uint64
+	AppliedTerm     uint64
+	Committed       uint64
+	SnapshotIndex   uint64
+	SnapshotTerm    uint64
+	TruncatedIndex  uint64
+	TruncatedTerm   uint64
+	SegmentIndex    uint64
+	TruncatedOffset uint64
 }
 
 // Version represents current manifest state.
@@ -326,9 +327,10 @@ func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
 
 // LogRaftTruncate records the log truncation point (index/term) for a raft
 // group without altering other pointer metadata. When segment is non-zero it
-// updates the segment containing the truncated index. If the persisted state
-// already matches the provided values the call is a no-op.
-func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32) error {
+// updates the segment containing the truncated index; offset, when provided,
+// marks the byte position within that segment that must be retained. If the
+// persisted state already matches the provided values the call is a no-op.
+func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32, offset uint64) error {
 	if groupID == 0 {
 		return fmt.Errorf("manifest: raft truncate requires group id")
 	}
@@ -348,6 +350,11 @@ func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32) e
 	}
 	if ptr.TruncatedIndex == index && ptr.TruncatedTerm == term {
 		if segment == 0 || ptr.SegmentIndex == uint64(segment) {
+			if offset == 0 || ptr.TruncatedOffset == offset {
+				return nil
+			}
+		}
+		if offset == 0 {
 			return nil
 		}
 	}
@@ -358,6 +365,10 @@ func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32) e
 		segment = uint32(ptr.SegmentIndex)
 	}
 	ptr.SegmentIndex = uint64(segment)
+	if offset == 0 && ptr.TruncatedOffset != 0 {
+		offset = ptr.TruncatedOffset
+	}
+	ptr.TruncatedOffset = offset
 	return m.LogRaftPointer(ptr)
 }
 
@@ -428,6 +439,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedIndex)
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedTerm)
 			buf = binary.AppendUvarint(buf, edit.Raft.SegmentIndex)
+			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedOffset)
 		}
 	}
 	// length prefix
@@ -565,6 +577,7 @@ func decodeEdit(data []byte) (Edit, error) {
 			var truncatedIdx uint64
 			var truncatedTerm uint64
 			var segmentIndex uint64
+			var truncatedOffset uint64
 			if pos < len(data) {
 				truncatedIdx, n = binary.Uvarint(data[pos:])
 				pos += n
@@ -586,18 +599,26 @@ func decodeEdit(data []byte) (Edit, error) {
 					return Edit{}, fmt.Errorf("manifest raft pointer segment index overflow")
 				}
 			}
+			if pos < len(data) {
+				truncatedOffset, n = binary.Uvarint(data[pos:])
+				pos += n
+				if pos > len(data) {
+					return Edit{}, fmt.Errorf("manifest raft pointer truncated offset overflow")
+				}
+			}
 			edit.Raft = &RaftLogPointer{
-				GroupID:        groupID,
-				Segment:        uint32(seg),
-				Offset:         off,
-				AppliedIndex:   appliedIdx,
-				AppliedTerm:    appliedTerm,
-				Committed:      committed,
-				SnapshotIndex:  snapIdx,
-				SnapshotTerm:   snapTerm,
-				TruncatedIndex: truncatedIdx,
-				TruncatedTerm:  truncatedTerm,
-				SegmentIndex:   segmentIndex,
+				GroupID:         groupID,
+				Segment:         uint32(seg),
+				Offset:          off,
+				AppliedIndex:    appliedIdx,
+				AppliedTerm:     appliedTerm,
+				Committed:       committed,
+				SnapshotIndex:   snapIdx,
+				SnapshotTerm:    snapTerm,
+				TruncatedIndex:  truncatedIdx,
+				TruncatedTerm:   truncatedTerm,
+				SegmentIndex:    segmentIndex,
+				TruncatedOffset: truncatedOffset,
 			}
 		}
 	}

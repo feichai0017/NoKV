@@ -227,7 +227,8 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 		t.Fatalf("log raft pointer: %v", err)
 	}
 	const segmentID = uint32(6)
-	if err := mgr.LogRaftTruncate(groupID, 80, 8, segmentID); err != nil {
+	const offset = uint64(512)
+	if err := mgr.LogRaftTruncate(groupID, 80, 8, segmentID, offset); err != nil {
 		t.Fatalf("log raft truncate: %v", err)
 	}
 	ptr, ok := mgr.RaftPointer(groupID)
@@ -239,6 +240,9 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 	}
 	if ptr.SegmentIndex != uint64(segmentID) {
 		t.Fatalf("unexpected segment index: %+v", ptr)
+	}
+	if ptr.TruncatedOffset != offset {
+		t.Fatalf("unexpected truncated offset: %+v", ptr)
 	}
 
 	if err := mgr.Close(); err != nil {
@@ -260,6 +264,9 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 	}
 	if ptr.SegmentIndex != uint64(segmentID) {
 		t.Fatalf("segment index not persisted: %+v", ptr)
+	}
+	if ptr.TruncatedOffset != offset {
+		t.Fatalf("truncated offset not persisted: %+v", ptr)
 	}
 }
 

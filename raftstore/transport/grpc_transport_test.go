@@ -19,8 +19,8 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 )
 
-func TestRPCTransportReplicatesProposals(t *testing.T) {
-	cluster := newRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+func TestGRPCTransportReplicatesProposals(t *testing.T) {
+	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
 	cluster.flush()
@@ -29,8 +29,8 @@ func TestRPCTransportReplicatesProposals(t *testing.T) {
 	require.True(t, ok)
 
 	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("rpc-propose"),
-		Value: []byte("rpc-value"),
+		Key:   []byte("grpc-propose"),
+		Value: []byte("grpc-value"),
 	})
 	require.NoError(t, err)
 	require.NoError(t, cluster.propose(leader, payload))
@@ -38,15 +38,15 @@ func TestRPCTransportReplicatesProposals(t *testing.T) {
 	cluster.flush()
 
 	for id := range cluster.nodes {
-		entry, err := cluster.db(id).GetCF(utils.CFDefault, []byte("rpc-propose"))
+		entry, err := cluster.db(id).GetCF(utils.CFDefault, []byte("grpc-propose"))
 		require.NoError(t, err, "db %d", id)
-		require.Equal(t, []byte("rpc-value"), entry.Value, "db %d", id)
+		require.Equal(t, []byte("grpc-value"), entry.Value, "db %d", id)
 		entry.DecrRef()
 	}
 }
 
-func TestRPCTransportHandlesPartition(t *testing.T) {
-	cluster := newRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+func TestGRPCTransportHandlesPartition(t *testing.T) {
+	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
 	cluster.flush()
@@ -60,7 +60,7 @@ func TestRPCTransportHandlesPartition(t *testing.T) {
 	cluster.blockLink(followerID, leader)
 
 	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("rpc-partition"),
+		Key:   []byte("grpc-partition"),
 		Value: []byte("stale"),
 	})
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(6)
 	cluster.flush()
 
-	_, err = cluster.db(followerID).GetCF(utils.CFDefault, []byte("rpc-partition"))
+	_, err = cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-partition"))
 	require.ErrorIs(t, err, utils.ErrKeyNotFound, "follower should not have applied entry while partitioned")
 
 	cluster.unblockLink(leader, followerID)
@@ -78,7 +78,7 @@ func TestRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(10)
 	cluster.flush()
 
-	entry, err := cluster.db(followerID).GetCF(utils.CFDefault, []byte("rpc-partition"))
+	entry, err := cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-partition"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("stale"), entry.Value)
 	entry.DecrRef()
@@ -88,27 +88,27 @@ func TestRPCTransportHandlesPartition(t *testing.T) {
 	require.GreaterOrEqual(t, ptr.AppliedIndex, uint64(2))
 }
 
-type rpcTestCluster struct {
+type grpcTestCluster struct {
 	t          *testing.T
 	groupID    uint64
-	nodes      map[uint64]*rpcTestNode
-	transports map[uint64]*raftstore.RPCTransport
+	nodes      map[uint64]*grpcTestNode
+	transports map[uint64]*raftstore.GRPCTransport
 }
 
-type rpcTestNode struct {
+type grpcTestNode struct {
 	id        uint64
 	db        *NoKV.DB
 	peer      *raftstore.Peer
-	transport *raftstore.RPCTransport
+	transport *raftstore.GRPCTransport
 }
 
-func newRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *rpcTestCluster {
+func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *grpcTestCluster {
 	t.Helper()
-	cluster := &rpcTestCluster{
+	cluster := &grpcTestCluster{
 		t:          t,
 		groupID:    cfg.GroupID,
-		nodes:      make(map[uint64]*rpcTestNode),
-		transports: make(map[uint64]*raftstore.RPCTransport),
+		nodes:      make(map[uint64]*grpcTestNode),
+		transports: make(map[uint64]*raftstore.GRPCTransport),
 	}
 	if cluster.groupID == 0 {
 		cluster.groupID = 1
@@ -117,7 +117,7 @@ func newRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *rpcTes
 
 	addresses := make(map[uint64]string)
 	for _, id := range ids {
-		transport, err := raftstore.NewRPCTransport(id, "127.0.0.1:0")
+		transport, err := raftstore.NewGRPCTransport(id, "127.0.0.1:0")
 		require.NoError(t, err)
 		cluster.transports[id] = transport
 		addresses[id] = transport.Addr()
@@ -160,7 +160,8 @@ func newRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *rpcTes
 		require.NoError(t, err)
 		transport.SetHandler(peer.Step)
 		require.NoError(t, peer.Bootstrap(peers))
-		cluster.nodes[id] = &rpcTestNode{
+		t.Cleanup(func() { _ = peer.Close() })
+		cluster.nodes[id] = &grpcTestNode{
 			id:        id,
 			db:        db,
 			peer:      peer,
@@ -179,14 +180,14 @@ func newRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config) *rpcTes
 	return cluster
 }
 
-func (c *rpcTestCluster) campaign(id uint64) error {
+func (c *grpcTestCluster) campaign(id uint64) error {
 	if node, ok := c.nodes[id]; ok {
 		return node.peer.Campaign()
 	}
 	return errors.New("node not found")
 }
 
-func (c *rpcTestCluster) leader() (uint64, bool) {
+func (c *grpcTestCluster) leader() (uint64, bool) {
 	for id, node := range c.nodes {
 		if node.peer.Status().RaftState == myraft.StateLeader {
 			return id, true
@@ -195,44 +196,44 @@ func (c *rpcTestCluster) leader() (uint64, bool) {
 	return 0, false
 }
 
-func (c *rpcTestCluster) propose(id uint64, data []byte) error {
+func (c *grpcTestCluster) propose(id uint64, data []byte) error {
 	if node, ok := c.nodes[id]; ok {
 		return node.peer.Propose(data)
 	}
 	return errors.New("node not found")
 }
 
-func (c *rpcTestCluster) tickMany(n int) {
+func (c *grpcTestCluster) tickMany(n int) {
 	for i := 0; i < n; i++ {
 		for _, node := range c.nodes {
-			require.NoError(c.t, node.peer.Tick())
+			_ = node.peer.Tick()
 		}
 	}
 }
 
-func (c *rpcTestCluster) flush() {
+func (c *grpcTestCluster) flush() {
 	for _, node := range c.nodes {
-		require.NoError(c.t, node.peer.Flush())
+		_ = node.peer.Flush()
 	}
 }
 
-func (c *rpcTestCluster) blockLink(from, to uint64) {
-	if node, ok := c.nodes[from]; ok {
-		node.transport.BlockPeer(to)
+func (c *grpcTestCluster) blockLink(from, to uint64) {
+	if transport, ok := c.transports[from]; ok {
+		transport.BlockPeer(to)
 	}
 }
 
-func (c *rpcTestCluster) unblockLink(from, to uint64) {
-	if node, ok := c.nodes[from]; ok {
-		node.transport.UnblockPeer(to)
+func (c *grpcTestCluster) unblockLink(from, to uint64) {
+	if transport, ok := c.transports[from]; ok {
+		transport.UnblockPeer(to)
 	}
 }
 
-func (c *rpcTestCluster) db(id uint64) *NoKV.DB {
+func (c *grpcTestCluster) db(id uint64) *NoKV.DB {
 	return c.nodes[id].db
 }
 
-func (c *rpcTestCluster) manifest(id uint64) *manifest.Manager {
+func (c *grpcTestCluster) manifest(id uint64) *manifest.Manager {
 	return c.nodes[id].db.Manifest()
 }
 

@@ -28,6 +28,8 @@ type entrySpan struct {
 	firstIndex uint64
 	lastIndex  uint64
 	segmentID  uint32
+	offsets    []uint64
+	recordEnd  uint64
 }
 
 // WALStorage implements the PeerStorage interface using the shared WAL manager
@@ -81,7 +83,7 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 			if err := ws.mem.Append(entries); err != nil {
 				return err
 			}
-			ws.recordEntrySpan(info.SegmentID, entries)
+			ws.recordEntrySpan(info, payload, entries)
 			last := entries[len(entries)-1]
 			replayPtr.GroupID = cfg.GroupID
 			replayPtr.Segment = info.SegmentID
@@ -186,7 +188,7 @@ func (ws *WALStorage) Append(entries []myraft.Entry) error {
 	if err := ws.mem.Append(entries); err != nil {
 		return err
 	}
-	ws.recordEntrySpan(infos[0].SegmentID, entries)
+	ws.recordEntrySpan(infos[0], payload, entries)
 	last := entries[len(entries)-1]
 	ptr := ws.pointer
 	ptr.GroupID = ws.groupID
@@ -236,21 +238,29 @@ func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	}
 	ptr.TruncatedIndex = meta.Index
 	ptr.TruncatedTerm = meta.Term
-	var truncSegment uint32
+	var (
+		truncSegment uint32
+		truncOffset  uint64
+	)
 	if meta.Index > 0 {
-		if seg, ok := ws.segmentForIndex(meta.Index); ok {
+		if seg, off, ok := ws.offsetAfterIndex(meta.Index); ok {
+			truncSegment = seg
+			truncOffset = off
+		} else if seg, ok := ws.segmentForIndex(meta.Index); ok {
 			truncSegment = seg
 		} else {
 			truncSegment = infos[0].SegmentID
+			truncOffset = recordEnd(infos[0])
 		}
 	}
 	ptr.SegmentIndex = uint64(truncSegment)
+	ptr.TruncatedOffset = truncOffset
 	if err := ws.updatePointer(ptr); err != nil {
 		return err
 	}
 	ws.pruneEntrySpans(meta.Index)
 	if ws.manifest != nil && ws.pointer == ptr {
-		if err := ws.manifest.LogRaftTruncate(ws.groupID, meta.Index, meta.Term, truncSegment); err != nil {
+		if err := ws.manifest.LogRaftTruncate(ws.groupID, meta.Index, meta.Term, truncSegment, truncOffset); err != nil {
 			return err
 		}
 	}
@@ -375,13 +385,14 @@ func (ws *WALStorage) compactTo(index uint64) error {
 	if err := ws.mem.Compact(index); err != nil && !errors.Is(err, myraft.ErrCompacted) {
 		return err
 	}
-	var segment uint32
-	if seg, ok := ws.segmentForIndex(index); ok {
-		segment = seg
-	} else if ws.pointer.SegmentIndex > 0 {
-		segment = uint32(ws.pointer.SegmentIndex)
-	} else {
-		segment = ws.pointer.Segment
+	segment, truncOffset, ok := ws.offsetAfterIndex(index)
+	if !ok {
+		if ws.pointer.SegmentIndex > 0 {
+			segment = uint32(ws.pointer.SegmentIndex)
+		} else {
+			segment = ws.pointer.Segment
+		}
+		truncOffset = ws.pointer.TruncatedOffset
 	}
 	ptr := ws.pointer
 	ptr.TruncatedIndex = index
@@ -389,19 +400,20 @@ func (ws *WALStorage) compactTo(index uint64) error {
 		ptr.TruncatedTerm = term
 	}
 	ptr.SegmentIndex = uint64(segment)
+	ptr.TruncatedOffset = truncOffset
 	if err := ws.updatePointer(ptr); err != nil {
 		return err
 	}
 	ws.pruneEntrySpans(index)
 	if ws.manifest != nil && ws.pointer == ptr {
-		if err := ws.manifest.LogRaftTruncate(ws.groupID, index, ptr.TruncatedTerm, segment); err != nil {
+		if err := ws.manifest.LogRaftTruncate(ws.groupID, index, ptr.TruncatedTerm, segment, truncOffset); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ws *WALStorage) recordEntrySpan(segment uint32, entries []myraft.Entry) {
+func (ws *WALStorage) recordEntrySpan(info wal.EntryInfo, payload []byte, entries []myraft.Entry) {
 	if len(entries) == 0 {
 		return
 	}
@@ -410,6 +422,7 @@ func (ws *WALStorage) recordEntrySpan(segment uint32, entries []myraft.Entry) {
 	if first == 0 || last == 0 {
 		return
 	}
+	offsets := computeEntryOffsets(info, payload, entries)
 	trimmed := ws.entrySpans[:0]
 	for _, span := range ws.entrySpans {
 		if span.lastIndex < first {
@@ -417,15 +430,24 @@ func (ws *WALStorage) recordEntrySpan(segment uint32, entries []myraft.Entry) {
 			continue
 		}
 		if span.firstIndex < first {
+			cut := int(first - span.firstIndex)
+			if cut > 0 && cut < len(span.offsets) {
+				span.recordEnd = span.offsets[cut]
+				span.offsets = span.offsets[:cut]
+			}
 			span.lastIndex = first - 1
-			trimmed = append(trimmed, span)
+			if span.lastIndex >= span.firstIndex {
+				trimmed = append(trimmed, span)
+			}
 		}
 		break
 	}
 	ws.entrySpans = append(trimmed, entrySpan{
 		firstIndex: first,
 		lastIndex:  last,
-		segmentID:  segment,
+		segmentID:  info.SegmentID,
+		offsets:    offsets,
+		recordEnd:  recordEnd(info),
 	})
 }
 
@@ -454,15 +476,66 @@ func (ws *WALStorage) pruneEntrySpans(index uint64) {
 			continue
 		}
 		if span.firstIndex <= index {
-			span.firstIndex = index + 1
-			if span.firstIndex > span.lastIndex {
+			trim := int(index - span.firstIndex + 1)
+			if trim >= len(span.offsets) {
 				continue
 			}
+			span.firstIndex = index + 1
+			span.offsets = span.offsets[trim:]
 		}
 		ws.entrySpans[n] = span
 		n++
 	}
 	ws.entrySpans = ws.entrySpans[:n]
+}
+
+func (ws *WALStorage) offsetAfterIndex(index uint64) (uint32, uint64, bool) {
+	if index == 0 {
+		return 0, 0, false
+	}
+	for _, span := range ws.entrySpans {
+		if index < span.firstIndex {
+			break
+		}
+		if index <= span.lastIndex {
+			if len(span.offsets) == 0 {
+				return span.segmentID, span.recordEnd, true
+			}
+			pos := int(index - span.firstIndex)
+			if pos+1 < len(span.offsets) {
+				return span.segmentID, span.offsets[pos+1], true
+			}
+			return span.segmentID, span.recordEnd, true
+		}
+	}
+	return 0, 0, false
+}
+
+func computeEntryOffsets(info wal.EntryInfo, payload []byte, entries []myraft.Entry) []uint64 {
+	if len(entries) == 0 || len(payload) == 0 {
+		return nil
+	}
+	base := uint64(info.Offset) + 4 + 1 // length prefix + record type
+	idx := 0
+	if _, err := readUvarint(payload, &idx); err != nil {
+		return nil
+	}
+	if _, err := readUvarint(payload, &idx); err != nil {
+		return nil
+	}
+	offsets := make([]uint64, 0, len(entries))
+	for range entries {
+		offsets = append(offsets, base+uint64(idx))
+		size, err := readUvarint(payload, &idx)
+		if err != nil {
+			return offsets
+		}
+		if idx+int(size) > len(payload) {
+			return offsets
+		}
+		idx += int(size)
+	}
+	return offsets
 }
 
 func recordEnd(info wal.EntryInfo) uint64 {

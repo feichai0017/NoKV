@@ -56,6 +56,7 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	require.Equal(t, snap.Metadata.Term, ptr.TruncatedTerm)
 	require.Equal(t, uint32(2), ptr.Segment)
 	require.Equal(t, uint64(1), ptr.SegmentIndex)
+	require.Greater(t, ptr.TruncatedOffset, uint64(0))
 }
 
 func TestWALStorageCompactUpdatesManifest(t *testing.T) {
@@ -86,6 +87,7 @@ func TestWALStorageCompactUpdatesManifest(t *testing.T) {
 	require.Equal(t, uint64(3), ptr.TruncatedIndex)
 	require.Equal(t, uint64(2), ptr.TruncatedTerm)
 	require.Equal(t, uint64(ptr.Segment), ptr.SegmentIndex)
+	require.Greater(t, ptr.TruncatedOffset, uint64(0))
 
 	_, ok = ws.segmentForIndex(2)
 	require.False(t, ok)

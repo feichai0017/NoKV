@@ -1,7 +1,9 @@
 package peer
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/feichai0017/NoKV/manifest"
@@ -9,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/transport"
+	"github.com/feichai0017/NoKV/utils"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
@@ -23,7 +26,16 @@ type Peer struct {
 	raftLog          *raftLogTracker
 	snapshotQueue    *snapshotResendQueue
 	logRetainEntries uint64
+	applyMark        *utils.WaterMark
+	applyCloser      *utils.Closer
+	applyLimit       uint64
+	stopCtx          context.Context
+	stopCancel       context.CancelFunc
 }
+
+const defaultMaxInFlightApply = 8192
+
+var errPeerStopped = errors.New("raftstore: peer stopped")
 
 // NewPeer constructs a peer using the provided configuration. The caller must
 // register the peer with the transport before invoking Bootstrap.
@@ -50,6 +62,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	if err != nil {
 		return nil, err
 	}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	peer := &Peer{
 		id:               raftCfg.ID,
 		node:             node,
@@ -59,9 +72,19 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		raftLog:          newRaftLogTracker(cfg.Manifest, cfg.WAL, nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
 		logRetainEntries: cfg.LogRetainEntries,
+		applyCloser:      utils.NewCloserInitial(1),
+		stopCtx:          stopCtx,
+		stopCancel:       stopCancel,
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries
+	}
+	peer.applyMark = &utils.WaterMark{Name: fmt.Sprintf("raft.%d.apply", peer.id)}
+	peer.applyMark.Init(peer.applyCloser)
+	if cfg.MaxInFlightApply > 0 {
+		peer.applyLimit = cfg.MaxInFlightApply
+	} else {
+		peer.applyLimit = defaultMaxInFlightApply
 	}
 	return peer, nil
 }
@@ -122,6 +145,9 @@ func (p *Peer) Step(msg myraft.Message) error {
 
 // Propose submits application data to the raft log.
 func (p *Peer) Propose(data []byte) error {
+	if err := p.waitForApplyBacklog(); err != nil {
+		return err
+	}
 	p.mu.Lock()
 	err := p.node.Propose(data)
 	p.mu.Unlock()
@@ -133,6 +159,9 @@ func (p *Peer) Propose(data []byte) error {
 
 // Campaign transitions this peer into candidate state.
 func (p *Peer) Campaign() error {
+	if err := p.waitForApplyBacklog(); err != nil {
+		return err
+	}
 	p.mu.Lock()
 	err := p.node.Campaign()
 	p.mu.Unlock()
@@ -213,6 +242,9 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				SnapshotTerm:  meta.Term,
 			})
 		}
+		if meta := rd.Snapshot.Metadata; meta.Index > 0 {
+			p.markSnapshotApplied(meta.Index)
+		}
 	}
 	if len(rd.Entries) > 0 {
 		if err := p.raftLog.injectFailure("before_entries"); err != nil {
@@ -241,6 +273,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	if len(rd.CommittedEntries) > 0 {
+		p.beginApply(rd.CommittedEntries)
 		var toApply []myraft.Entry
 		for _, entry := range rd.CommittedEntries {
 			switch entry.Type {
@@ -262,9 +295,11 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if len(toApply) > 0 && p.apply != nil {
 			if err := p.apply(toApply); err != nil {
+				p.finishApply(rd.CommittedEntries)
 				return err
 			}
 		}
+		p.finishApply(rd.CommittedEntries)
 		lastApplied := rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 		if err := p.maybeCompact(lastApplied); err != nil {
 			return err
@@ -282,6 +317,101 @@ func (p *Peer) maybeCompact(applied uint64) error {
 		return nil
 	}
 	return ws.MaybeCompact(applied, p.logRetainEntries)
+}
+
+// WaitApplied blocks until the provided raft log index has been fully applied.
+func (p *Peer) WaitApplied(ctx context.Context, index uint64) error {
+	if p == nil || p.applyMark == nil || index == 0 {
+		return nil
+	}
+	return p.applyMark.WaitForMark(ctx, index)
+}
+
+// Close releases resources associated with the peer, including background
+// watermark processors.
+func (p *Peer) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.stopCancel()
+	if p.applyCloser != nil {
+		p.applyCloser.SignalAndWait()
+	}
+	return nil
+}
+
+func (p *Peer) waitForApplyBacklog() error {
+	if p == nil || p.applyMark == nil {
+		return nil
+	}
+	limit := p.applyLimit
+	if limit == 0 {
+		return nil
+	}
+	for {
+		done := p.applyMark.DoneUntil()
+		last := p.applyMark.LastIndex()
+		if last <= done || last-done < limit {
+			return nil
+		}
+		target := done + 1
+		if err := p.applyMark.WaitForMark(p.stopCtx, target); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return errPeerStopped
+			}
+			return err
+		}
+	}
+}
+
+func (p *Peer) beginApply(entries []myraft.Entry) {
+	if p == nil || p.applyMark == nil || len(entries) == 0 {
+		return
+	}
+	indices := make([]uint64, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Index == 0 {
+			continue
+		}
+		indices = append(indices, entry.Index)
+	}
+	if len(indices) == 0 {
+		return
+	}
+	if len(indices) == 1 {
+		p.applyMark.Begin(indices[0])
+		return
+	}
+	p.applyMark.BeginMany(indices)
+}
+
+func (p *Peer) finishApply(entries []myraft.Entry) {
+	if p == nil || p.applyMark == nil || len(entries) == 0 {
+		return
+	}
+	indices := make([]uint64, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Index == 0 {
+			continue
+		}
+		indices = append(indices, entry.Index)
+	}
+	if len(indices) == 0 {
+		return
+	}
+	if len(indices) == 1 {
+		p.applyMark.Done(indices[0])
+		return
+	}
+	p.applyMark.DoneMany(indices)
+}
+
+func (p *Peer) markSnapshotApplied(index uint64) {
+	if p == nil || p.applyMark == nil || index == 0 {
+		return
+	}
+	// Snapshot application makes all indices <= snapshot index finished.
+	p.applyMark.SetDoneUntil(index)
 }
 
 // PopPendingSnapshot returns the most recent snapshot recorded during Ready

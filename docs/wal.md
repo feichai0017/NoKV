@@ -95,7 +95,7 @@ The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, mak
 ## 8. Truncation Metadata
 
 - `raftstore/engine/wal_storage` keeps a per-group index of `[firstIndex,lastIndex]` spans for each WAL record so it can map raft log indices back to the segment that stored them.
-- When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via `LogRaftTruncate` with both the index/term and the segment ID (`RaftLogPointer.SegmentIndex`) containing that truncation point.
+- When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via `LogRaftTruncate` with the index/term, segment ID (`RaftLogPointer.SegmentIndex`), and byte offset (`RaftLogPointer.TruncatedOffset`) that delimit the remaining WAL data.
 - `lsm/levelManager.canRemoveWalSegment` now blocks garbage collection whenever any raft group still references a segment through its truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.
 
 For broader context, read the [architecture overview](architecture.md) and [flush pipeline](flush.md) documents.

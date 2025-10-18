@@ -1,10 +1,12 @@
 package peer_test
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
@@ -149,6 +151,10 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net.Register(peer)
+		t.Cleanup(func() { _ = peer.Close() })
+		t.Cleanup(func(peer *raftstore.Peer) func() {
+			return func() { _ = peer.Close() }
+		}(peer))
 		peers = append(peers, peer)
 		dbs = append(dbs, db)
 	}
@@ -209,6 +215,7 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 	})
 	require.NoError(t, err)
 	net.Register(peer)
+	t.Cleanup(func() { _ = peer.Close() })
 	require.NoError(t, peer.Bootstrap([]myraft.Peer{{ID: 1}}))
 
 	require.NoError(t, net.Campaign(1))
@@ -272,6 +279,9 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net.Register(peer)
+		t.Cleanup(func(peer *raftstore.Peer) func() {
+			return func() { _ = peer.Close() }
+		}(peer))
 		peers = append(peers, peer)
 		nodes = append(nodes, node{id: id, dbDir: dbDir, db: db})
 	}
@@ -328,6 +338,9 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net2.Register(peer)
+		t.Cleanup(func(peer *raftstore.Peer) func() {
+			return func() { _ = peer.Close() }
+		}(peer))
 		peers2 = append(peers2, peer)
 		nodes[i].db = db
 	}
@@ -415,6 +428,9 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net.Register(peer)
+		t.Cleanup(func(peer *raftstore.Peer) func() {
+			return func() { _ = peer.Close() }
+		}(peer))
 		peers = append(peers, peer)
 	}
 
@@ -578,6 +594,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	})
 	require.NoError(t, err)
 	netRestart.Register(peerRestart)
+	t.Cleanup(func() { _ = peerRestart.Close() })
 	require.NoError(t, peerRestart.Bootstrap([]myraft.Peer{{ID: 1}}))
 
 	ptrRecovered, recovered := dbRestart.Manifest().RaftPointer(raftGroupID)
@@ -598,4 +615,69 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	recoveredSnap := dbRestart.Info().Snapshot()
 	t.Logf("recovered snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d ptr=%+v", recoveredSnap.RaftLagWarning, recoveredSnap.RaftMaxLagSegments, recoveredSnap.RaftLaggingGroups, recoveredSnap.WALActiveSegment, recoveredSnap.WALActiveSize, ptrRecovered)
 	require.False(t, recoveredSnap.RaftLagWarning, "lag warning should clear after manifest catches up")
+}
+
+func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
+	net := newMemoryNetwork()
+	dbDir := filepath.Join(t.TempDir(), "wait-applied-db")
+	db := openDBAt(t, dbDir)
+	t.Cleanup(func() { _ = db.Close() })
+
+	appliedCh := make(chan uint64, 4)
+	applyFn := func(entries []myraft.Entry) error {
+		if err := applyToDB(db)(entries); err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			appliedCh <- entries[len(entries)-1].Index
+		}
+		return nil
+	}
+
+	rc := myraft.Config{
+		ID:              1,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   math.MaxUint64,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	}
+	peer, err := raftstore.NewPeer(&raftstore.Config{
+		RaftConfig: rc,
+		Transport:  net,
+		Apply:      applyFn,
+		WAL:        db.WAL(),
+		Manifest:   db.Manifest(),
+		GroupID:    1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = peer.Close() })
+	net.Register(peer)
+	require.NoError(t, peer.Bootstrap([]myraft.Peer{{ID: 1}}))
+
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	leader, ok := net.Leader()
+	require.True(t, ok)
+	require.Equal(t, uint64(1), leader)
+
+	payload, err := proto.Marshal(&pb.KV{Key: []byte("wait-applied"), Value: []byte("value")})
+	require.NoError(t, err)
+	require.NoError(t, net.Propose(leader, payload))
+
+	for i := 0; i < 5; i++ {
+		net.Tick()
+	}
+	net.Flush()
+
+	var appliedIdx uint64
+	select {
+	case appliedIdx = <-appliedCh:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for apply index")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, peer.WaitApplied(ctx, appliedIdx))
 }

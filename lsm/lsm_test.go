@@ -165,9 +165,17 @@ func TestCompact(t *testing.T) {
 		return false
 	}
 	l0TOLMax := func() {
-		// 正常触发即可
-		baseTest(t, lsm, 128)
-		// 直接触发压缩执行
+		// Ensure L0 accumulates enough tables to trigger the ingest path. Newer Go versions
+		// batch allocations slightly differently, so loop until we hit the configured limit.
+		required := lsm.levels.opt.NumLevelZeroTables
+		for tries := 0; tries < 8 && lsm.levels.levels[0].numTables() < required; tries++ {
+			baseTest(t, lsm, 256)
+		}
+		if lsm.levels.levels[0].numTables() < required {
+			t.Fatalf("expected at least %d L0 tables before compaction, got %d",
+				required, lsm.levels.levels[0].numTables())
+		}
+
 		before := make(map[uint64]struct{})
 		for _, tbl := range lsm.levels.levels[0].tables {
 			before[tbl.fid] = struct{}{}
