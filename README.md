@@ -44,17 +44,62 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
 ## 🚀 Quick Start
 
-```bash
-go get github.com/feichai0017/NoKV
+1. **Install & smoke-test**
 
-go test ./...                   # unit + integration tests
-RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+   ```bash
+   go get github.com/feichai0017/NoKV
 
-# Optional: compare performance
-go test ./benchmark -run TestBenchmarkResults -count=1
-```
+   ```
 
-> Scripts emit structured `RECOVERY_METRIC` logs under `artifacts/recovery/`, ready for CI upload.
+2. **Embedded usage example**
+
+   ```go
+   package main
+
+   import (
+   	"fmt"
+   	"log"
+
+   	NoKV "github.com/feichai0017/NoKV"
+   	"github.com/feichai0017/NoKV/utils"
+   )
+
+   func main() {
+   	opt := NoKV.NewDefaultOptions()
+   	opt.WorkDir = "./workdir-demo"
+
+   	db := NoKV.Open(opt)
+   	defer func() { _ = db.Close() }()
+
+   	if err := db.Update(func(txn *NoKV.Txn) error {
+   		return txn.SetEntry(utils.NewEntry([]byte("hello"), []byte("world")))
+   	}); err != nil {
+   		log.Fatalf("set failed: %v", err)
+   	}
+
+   	entry, err := db.Get([]byte("hello"))
+   	if err != nil {
+   		log.Fatalf("get failed: %v", err)
+   	}
+   	fmt.Printf("value=%s\n", entry.Value)
+   	entry.DecrRef()
+   }
+   ```
+
+   Save the snippet as `main.go` (or any Go module entry point) and run:
+
+   ```bash
+   go run main.go
+   ```
+
+3. **Inspect with the CLI**
+
+   ```bash
+   go run ./cmd/nokv stats --workdir ./workdir-demo
+   go run ./cmd/nokv manifest --workdir ./workdir-demo
+   ```
+
+   `nokv stats` renders flush/WAL/backlog metrics so you can confirm compaction, watchdog, and GC health at a glance.
 
 ---
 
