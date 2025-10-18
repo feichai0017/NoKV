@@ -1,4 +1,4 @@
-# 🚀 NoKV – High-Performance LSM KV Engine
+# 🚀 NoKV – High-Performance Distributed KV Engine
 
 <div align="center">
   <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
@@ -12,7 +12,7 @@
   <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
 </div>
 
-NoKV is a Go-native **distributed** storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, multi-Raft region management, structured observability, and ready-to-use CLI tooling.
+NoKV is a Go-native distributed storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, multi-Raft region management, structured observability, and ready-to-use CLI tooling.
 
 ---
 
