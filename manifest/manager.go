@@ -73,6 +73,43 @@ type RegionEdit struct {
 	Delete bool
 }
 
+// CloneRegionMeta returns a deep copy of the provided RegionMeta.
+func CloneRegionMeta(meta RegionMeta) RegionMeta {
+	cp := meta
+	if meta.StartKey != nil {
+		cp.StartKey = append([]byte(nil), meta.StartKey...)
+	}
+	if meta.EndKey != nil {
+		cp.EndKey = append([]byte(nil), meta.EndKey...)
+	}
+	if len(meta.Peers) > 0 {
+		cp.Peers = append([]PeerMeta(nil), meta.Peers...)
+	}
+	return cp
+}
+
+// CloneRegionMetas deep copies a map of RegionMeta keyed by region ID.
+func CloneRegionMetas(metaMap map[uint64]RegionMeta) map[uint64]RegionMeta {
+	if len(metaMap) == 0 {
+		return nil
+	}
+	out := make(map[uint64]RegionMeta, len(metaMap))
+	for id, meta := range metaMap {
+		out[id] = CloneRegionMeta(meta)
+	}
+	return out
+}
+
+// CloneRegionMetaPtr returns a deep copy of the provided RegionMeta pointer,
+// or nil when meta is nil.
+func CloneRegionMetaPtr(meta *RegionMeta) *RegionMeta {
+	if meta == nil {
+		return nil
+	}
+	clone := CloneRegionMeta(*meta)
+	return &clone
+}
+
 // RaftLogPointer tracks WAL progress for a raft group.
 type RaftLogPointer struct {
 	GroupID         uint64

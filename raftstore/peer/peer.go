@@ -80,7 +80,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		applyCloser:      utils.NewCloserInitial(1),
 		stopCtx:          stopCtx,
 		stopCancel:       stopCancel,
-		region:           cloneRegionMeta(cfg.Region),
+		region:           manifest.CloneRegionMetaPtr(cfg.Region),
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries
@@ -107,7 +107,20 @@ func (p *Peer) RegionMeta() *manifest.RegionMeta {
 	if p == nil || p.region == nil {
 		return nil
 	}
-	return cloneRegionMeta(p.region)
+	return manifest.CloneRegionMetaPtr(p.region)
+}
+
+// SetRegionMeta replaces the in-memory region metadata with the provided
+// snapshot. It mirrors TinyKV's behaviour where raftstore updates peer state
+// based on scheduler decisions (splits, epoch bumps, membership changes).
+func (p *Peer) SetRegionMeta(meta manifest.RegionMeta) {
+	if p == nil {
+		return
+	}
+	cp := manifest.CloneRegionMetaPtr(&meta)
+	p.mu.Lock()
+	p.region = cp
+	p.mu.Unlock()
 }
 
 // Bootstrap injects the initial configuration into the node. It must be called

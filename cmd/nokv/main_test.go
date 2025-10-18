@@ -122,3 +122,32 @@ func TestRenderStatsWarnLine(t *testing.T) {
 		t.Fatalf("expected WAL.ActiveSize line in output, got: %q", out)
 	}
 }
+func TestRunRegionsCmd(t *testing.T) {
+	dir := t.TempDir()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.ValueThreshold = 0
+	db := NoKV.Open(opt)
+	e := utils.NewEntry([]byte("cli-region"), []byte("value"))
+	if err := db.Set(e); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	e.DecrRef()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := runRegionsCmd(&buf, []string{"-workdir", dir, "-json"}); err != nil {
+		t.Fatalf("runRegionsCmd: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
+		t.Fatalf("decode regions output: %v", err)
+	}
+	regions, ok := payload["regions"].([]any)
+	if !ok {
+		t.Fatalf("expected regions array in output: %v", payload)
+	}
+	_ = len(regions)
+}
