@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
@@ -93,5 +94,31 @@ func TestRunVlogCmd(t *testing.T) {
 	}
 	if _, ok := payload["segments"]; !ok {
 		t.Fatalf("expected segments array in vlog output")
+	}
+}
+
+func TestRenderStatsWarnLine(t *testing.T) {
+	var buf bytes.Buffer
+	snap := NoKV.StatsSnapshot{
+		Entries:              1,
+		WALActiveSegment:     7,
+		WALSegmentCount:      3,
+		WALSegmentsRemoved:   1,
+		WALActiveSize:        4096,
+		RaftGroupCount:       2,
+		RaftLaggingGroups:    1,
+		RaftMaxLagSegments:   5,
+		RaftLagWarnThreshold: 3,
+		RaftLagWarning:       true,
+	}
+	if err := renderStats(&buf, snap, false); err != nil {
+		t.Fatalf("renderStats: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Raft.Warning") {
+		t.Fatalf("expected Raft.Warning line in output, got: %q", out)
+	}
+	if !strings.Contains(out, "WAL.ActiveSize") {
+		t.Fatalf("expected WAL.ActiveSize line in output, got: %q", out)
 	}
 }

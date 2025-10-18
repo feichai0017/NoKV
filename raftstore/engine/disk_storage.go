@@ -1,4 +1,4 @@
-package raftstore
+package engine
 
 import (
 	"encoding/binary"
@@ -131,54 +131,93 @@ func (ds *DiskStorage) loadHardState() error {
 		}
 		return err
 	}
-	var hs myraft.HardState
-	if err := hs.Unmarshal(data); err != nil {
+	var st myraft.HardState
+	if err := st.Unmarshal(data); err != nil {
 		return fmt.Errorf("raftstore: decode hard state: %w", err)
 	}
-	if err := ds.mem.SetHardState(hs); err != nil {
+	if err := ds.mem.SetHardState(st); err != nil {
 		return err
 	}
-	ds.hardState = hs
+	ds.hardState = st
 	return nil
 }
 
-// Append persists new entries and forwards them to the underlying MemoryStorage.
+func (ds *DiskStorage) saveEntriesLocked(entries []myraft.Entry) error {
+	if err := ds.mem.Append(entries); err != nil {
+		return err
+	}
+	ds.entries = append(ds.entries, entries...)
+	return ds.persistEntriesLocked()
+}
+
+func (ds *DiskStorage) loadHardStateLocked() (myraft.HardState, error) {
+	return ds.hardState, nil
+}
+
+func (ds *DiskStorage) loadSnapshotLocked() (myraft.Snapshot, error) {
+	return ds.snapshot, nil
+}
+
+func (ds *DiskStorage) SaveReadyState(rd myraft.Ready) error {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	if !myraft.IsEmptyHardState(rd.HardState) {
+		if err := ds.mem.SetHardState(rd.HardState); err != nil {
+			return err
+		}
+		ds.hardState = rd.HardState
+		if err := ds.persistHardStateLocked(); err != nil {
+			return err
+		}
+	}
+	if !myraft.IsEmptySnap(rd.Snapshot) {
+		if err := ds.mem.ApplySnapshot(rd.Snapshot); err != nil {
+			return err
+		}
+		ds.snapshot = rd.Snapshot
+		if err := ds.persistSnapshotLocked(); err != nil {
+			return err
+		}
+		if err := ds.refreshEntriesLocked(); err != nil {
+			return err
+		}
+	}
+	if len(rd.Entries) > 0 {
+		if err := ds.saveEntriesLocked(rd.Entries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ds *DiskStorage) Append(entries []myraft.Entry) error {
-	if len(entries) == 0 {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	return ds.saveEntriesLocked(entries)
+}
+
+func (ds *DiskStorage) ApplySnapshot(snap myraft.Snapshot) error {
+	if myraft.IsEmptySnap(snap) {
 		return nil
 	}
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
-
-	if err := ds.mem.Append(entries); err != nil {
-		return err
-	}
-	if err := ds.refreshEntriesLocked(); err != nil {
-		return err
-	}
-	return ds.persistEntriesLocked()
-}
-
-// ApplySnapshot persists the snapshot.
-func (ds *DiskStorage) ApplySnapshot(snap myraft.Snapshot) error {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
 	if err := ds.mem.ApplySnapshot(snap); err != nil {
 		return err
 	}
 	ds.snapshot = snap
+	if err := ds.persistSnapshotLocked(); err != nil {
+		return err
+	}
 	if err := ds.refreshEntriesLocked(); err != nil {
 		return err
 	}
-	return ds.persistSnapshotLocked()
+	return nil
 }
 
-// SetHardState persists the raft hard state.
 func (ds *DiskStorage) SetHardState(st myraft.HardState) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
-
 	if err := ds.mem.SetHardState(st); err != nil {
 		return err
 	}
@@ -206,7 +245,7 @@ func (ds *DiskStorage) LastIndex() (uint64, error) {
 	return ds.mem.LastIndex()
 }
 
-// FirstIndex returns the index of the first log entry that is possible to return in Entries (older entries have been incorporated into the latest snapshot; if storage only contains the snapshot, it returns snapshot.Metadata.Index + 1).
+// FirstIndex returns the index of the first log entry.
 func (ds *DiskStorage) FirstIndex() (uint64, error) {
 	return ds.mem.FirstIndex()
 }

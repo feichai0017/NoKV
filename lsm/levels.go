@@ -330,6 +330,11 @@ func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 	}
 	ptrs := lm.manifestMgr.RaftPointerSnapshot()
 	for _, ptr := range ptrs {
+		if ptr.SegmentIndex > 0 {
+			if id >= uint32(ptr.SegmentIndex) {
+				return false
+			}
+		}
 		if ptr.Segment == 0 {
 			continue
 		}
