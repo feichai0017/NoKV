@@ -5,6 +5,7 @@ import (
 
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"google.golang.org/grpc/credentials"
 )
@@ -15,9 +16,19 @@ type ApplyFunc = peer.ApplyFunc
 type Transport = transport.Transport
 type GRPCTransport = transport.GRPCTransport
 type GRPCOption = transport.GRPCOption
+type Store = store.Store
+type Router = store.Router
 
 func NewPeer(cfg *Config) (*Peer, error) {
 	return peer.NewPeer(cfg)
+}
+
+func NewRouter() *Router {
+	return store.NewRouter()
+}
+
+func NewStore(router *Router) *Store {
+	return store.NewStore(router)
 }
 
 func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {

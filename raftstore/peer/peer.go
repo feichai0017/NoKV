@@ -15,6 +15,10 @@ import (
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
+// ApplyFunc consumes committed raft log entries and applies them to the user
+// state machine (LSM, MVCC, etc).
+type ApplyFunc func(entries []myraft.Entry) error
+
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
 	mu               sync.Mutex
@@ -94,6 +98,16 @@ func NewPeer(cfg *Config) (*Peer, error) {
 // ID returns the peer ID.
 func (p *Peer) ID() uint64 {
 	return p.id
+}
+
+// RegionMeta returns a clone of the region metadata associated with this
+// peer. It mirrors TinyKV's approach of surfacing region layout through the
+// store for schedulers and debugging endpoints.
+func (p *Peer) RegionMeta() *manifest.RegionMeta {
+	if p == nil || p.region == nil {
+		return nil
+	}
+	return cloneRegionMeta(p.region)
 }
 
 // Bootstrap injects the initial configuration into the node. It must be called
