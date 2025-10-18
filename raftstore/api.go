@@ -18,6 +18,11 @@ type GRPCTransport = transport.GRPCTransport
 type GRPCOption = transport.GRPCOption
 type Store = store.Store
 type Router = store.Router
+type StoreConfig = store.Config
+type StorePeerFactory = store.PeerFactory
+type StoreLifecycleHooks = store.LifecycleHooks
+type StorePeerHandle = store.PeerHandle
+type StoreRegionHooks = store.RegionHooks
 
 func NewPeer(cfg *Config) (*Peer, error) {
 	return peer.NewPeer(cfg)
@@ -29,6 +34,10 @@ func NewRouter() *Router {
 
 func NewStore(router *Router) *Store {
 	return store.NewStore(router)
+}
+
+func NewStoreWithConfig(cfg StoreConfig) *Store {
+	return store.NewStoreWithConfig(cfg)
 }
 
 func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {

@@ -33,6 +33,8 @@ func main() {
 		err = runManifestCmd(os.Stdout, args)
 	case "vlog":
 		err = runVlogCmd(os.Stdout, args)
+	case "regions":
+		err = runRegionsCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -52,6 +54,7 @@ Commands:
   stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
   manifest  Inspect manifest state, levels, and value log metadata
   vlog      List value log segments and active head
+  regions   Show region metadata catalog from manifest/store
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
@@ -291,6 +294,54 @@ func runVlogCmd(w io.Writer, args []string) error {
 	return nil
 }
 
+func runRegionsCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("regions", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "database work directory")
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *workDir == "" {
+		return fmt.Errorf("--workdir is required")
+	}
+
+	mgr, err := manifest.Open(*workDir)
+	if err != nil {
+		return err
+	}
+	defer mgr.Close()
+
+	snapshot := mgr.RegionSnapshot()
+	regions := make([]manifest.RegionMeta, 0, len(snapshot))
+	for _, meta := range snapshot {
+		regions = append(regions, meta)
+	}
+	sort.Slice(regions, func(i, j int) bool { return regions[i].ID < regions[j].ID })
+
+	if *asJSON {
+		out := map[string]any{
+			"regions": regions,
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+
+	if len(regions) == 0 {
+		fmt.Fprintln(w, "Regions: (none)")
+		return nil
+	}
+
+	fmt.Fprintln(w, "Regions:")
+	for _, meta := range regions {
+		fmt.Fprintf(w, "  - id=%d state=%s epoch={ver:%d conf:%d} range=[%q,%q) peers=%s\n",
+			meta.ID, formatRegionState(meta.State), meta.Epoch.Version, meta.Epoch.ConfVersion,
+			meta.StartKey, meta.EndKey, formatPeers(meta.Peers))
+	}
+	return nil
+}
+
 func localStatsSnapshot(workDir string) (NoKV.StatsSnapshot, error) {
 	if workDir == "" {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("workdir is required")
@@ -460,4 +511,30 @@ func totalSize(files []manifest.FileMeta) uint64 {
 		total += meta.Size
 	}
 	return total
+}
+
+func formatRegionState(state manifest.RegionState) string {
+	switch state {
+	case manifest.RegionStateNew:
+		return "new"
+	case manifest.RegionStateRunning:
+		return "running"
+	case manifest.RegionStateRemoving:
+		return "removing"
+	case manifest.RegionStateTombstone:
+		return "tombstone"
+	default:
+		return fmt.Sprintf("unknown(%d)", state)
+	}
+}
+
+func formatPeers(peers []manifest.PeerMeta) string {
+	if len(peers) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(peers))
+	for _, p := range peers {
+		parts = append(parts, fmt.Sprintf("{store:%d peer:%d}", p.StoreID, p.PeerID))
+	}
+	return fmt.Sprintf("[%s]", strings.Join(parts, " "))
 }
