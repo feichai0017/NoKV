@@ -270,14 +270,22 @@ func (t *GRPCTransport) SetPeer(id uint64, addr string) {
 	if id == 0 || id == t.localID {
 		return
 	}
+	var blockedDelta int64
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if addr == "" {
 		delete(t.peers, id)
 		if conn, ok := t.conns[id]; ok {
 			conn.Close()
 			delete(t.conns, id)
 			delete(t.clients, id)
+		}
+		if _, ok := t.blocked[id]; ok {
+			delete(t.blocked, id)
+			blockedDelta--
+		}
+		t.mu.Unlock()
+		if blockedDelta != 0 {
+			grpcMetrics().recordBlocked(blockedDelta)
 		}
 		return
 	}
@@ -286,8 +294,15 @@ func (t *GRPCTransport) SetPeer(id uint64, addr string) {
 		delete(t.conns, id)
 		delete(t.clients, id)
 	}
-	delete(t.blocked, id)
+	if _, ok := t.blocked[id]; ok {
+		delete(t.blocked, id)
+		blockedDelta--
+	}
 	t.peers[id] = addr
+	t.mu.Unlock()
+	if blockedDelta != 0 {
+		grpcMetrics().recordBlocked(blockedDelta)
+	}
 }
 
 // BlockPeer drops outbound messages destined for the provided peer ID.
@@ -296,8 +311,14 @@ func (t *GRPCTransport) BlockPeer(id uint64) {
 		return
 	}
 	t.mu.Lock()
-	t.blocked[id] = struct{}{}
+	_, existed := t.blocked[id]
+	if !existed {
+		t.blocked[id] = struct{}{}
+	}
 	t.mu.Unlock()
+	if !existed {
+		grpcMetrics().recordBlocked(1)
+	}
 }
 
 // UnblockPeer resumes delivery for the provided peer ID.
@@ -306,8 +327,14 @@ func (t *GRPCTransport) UnblockPeer(id uint64) {
 		return
 	}
 	t.mu.Lock()
-	delete(t.blocked, id)
+	_, existed := t.blocked[id]
+	if existed {
+		delete(t.blocked, id)
+	}
 	t.mu.Unlock()
+	if existed {
+		grpcMetrics().recordBlocked(-1)
+	}
 }
 
 // Send forwards the message to the remote peer using gRPC.
@@ -325,12 +352,13 @@ func (t *GRPCTransport) Send(msg myraft.Message) {
 			if errors.Is(err, errPeerBlocked) || errors.Is(err, errPeerUnknown) {
 				return
 			}
-			if attempt == attempts-1 {
-				return
+			if attempt < attempts-1 {
+				t.backoff()
 			}
-			t.backoff()
 			continue
 		}
+		metrics := grpcMetrics()
+		metrics.recordSendAttempt(attempt > 0)
 		var (
 			ctx    context.Context
 			cancel context.CancelFunc
@@ -344,8 +372,10 @@ func (t *GRPCTransport) Send(msg myraft.Message) {
 		_, err = client.Step(ctx, &pbMsg)
 		cancel()
 		if err == nil {
+			metrics.recordSendSuccess()
 			return
 		}
+		metrics.recordSendFailure(err, attempt == attempts-1)
 		t.handleSendError(msg.To, err)
 		if attempt == attempts-1 {
 			return
@@ -377,14 +407,19 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 		ctx, cancel = context.WithTimeout(context.Background(), t.dialTimeout)
 	}
 	defer cancel()
+	metrics := grpcMetrics()
+	metrics.recordDialAttempt()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(t.clientCreds))
 	if err != nil {
+		metrics.recordDialFailure(err)
 		return nil, err
 	}
 	if err := t.waitForClientReady(ctx, conn); err != nil {
+		metrics.recordDialFailure(err)
 		conn.Close()
 		return nil, err
 	}
+	metrics.recordDialSuccess()
 	client := &raftServiceClientImpl{cc: conn}
 	t.mu.Lock()
 	t.conns[id] = conn
@@ -438,16 +473,24 @@ func (t *GRPCTransport) Close() error {
 	t.server.GracefulStop()
 	_ = t.ln.Close()
 	var conns []*grpc.ClientConn
+	var blockedCount int64
 	t.mu.Lock()
 	for id, conn := range t.conns {
 		conns = append(conns, conn)
 		delete(t.conns, id)
 		delete(t.clients, id)
 	}
+	if len(t.blocked) > 0 {
+		blockedCount = int64(len(t.blocked))
+		t.blocked = make(map[uint64]struct{})
+	}
 	t.mu.Unlock()
 	for _, conn := range conns {
 		conn.Close()
 	}
 	t.wg.Wait()
+	if blockedCount > 0 {
+		grpcMetrics().recordBlocked(-blockedCount)
+	}
 	return nil
 }

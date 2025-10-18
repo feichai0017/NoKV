@@ -47,6 +47,15 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if snap.WALRecordCounts.Entries == 0 {
 		t.Fatalf("expected wal record counts to include entry records")
 	}
+	if snap.WALTypedRecordRatio < 0 {
+		t.Fatalf("expected typed record ratio to be non-negative")
+	}
+	if snap.WALTypedRecordWarning {
+		t.Fatalf("expected typed record warning to be false in baseline snapshot")
+	}
+	if snap.WALAutoGCRuns != 0 || snap.WALAutoGCRemoved != 0 {
+		t.Fatalf("expected wal auto gc counters to be zero, snapshot=%+v", snap)
+	}
 	if snap.WriteBatchesTotal == 0 {
 		t.Fatalf("expected write batch metrics to be recorded, snapshot=%+v", snap)
 	}
@@ -176,6 +185,24 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.RaftSegmentsRemovable").(*expvar.Int).Value(); got != int64(snap.WALRemovableRaftSegments) {
 		t.Fatalf("wal removable raft segments mismatch expvar=%d snapshot=%d", got, snap.WALRemovableRaftSegments)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.TypedRatio").(*expvar.Float).Value(); got != snap.WALTypedRecordRatio {
+		t.Fatalf("wal typed ratio mismatch expvar=%f snapshot=%f", got, snap.WALTypedRecordRatio)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.TypedWarning").(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected typed warning expvar to be zero, got %d", got)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.TypedReason").(*expvar.String).String(); got != `""` {
+		t.Fatalf("expected typed warning reason to be empty, got %s", got)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.AutoRuns").(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected wal auto gc runs to be zero, got %d", got)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.AutoRemoved").(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected wal auto gc removed to be zero, got %d", got)
+	}
+	if got := expvar.Get("NoKV.Stats.WAL.AutoLastUnix").(*expvar.Int).Value(); got != 0 {
+		t.Fatalf("expected wal auto gc last unix to be zero, got %d", got)
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)

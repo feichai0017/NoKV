@@ -16,6 +16,9 @@ go test ./... -run '^TestTxn|TestConflict|TestTxnIterator'
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
 
+# gRPC transport chaos tests + watchdog metrics
+CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
+
 # Performance baseline (NoKV vs Badger, optional RocksDB)
 go test ./benchmark -run TestBenchmarkResults -count=1
 # With RocksDB comparison (requires CGO and gorocksdb)
@@ -57,6 +60,7 @@ go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
 ## 4. Observability in Tests
 
 - **RECOVERY_METRIC logs** – produced when `RECOVERY_TRACE_METRICS=1`; consumed by recovery script and helpful when triaging CI failures.
+- **TRANSPORT_METRIC logs** – emitted by `scripts/transport_chaos.sh` when `CHAOS_TRACE_METRICS=1`, capturing gRPC watchdog counters during network partitions and retries.
 - **Stats snapshots** – `stats_test.go` verifies JSON structure so CLI output remains backwards compatible.
 - **Benchmark artefacts** – stored under `benchmark/benchmark_results/*.txt` for historical comparison. Aligns with README instructions.
 

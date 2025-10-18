@@ -275,7 +275,7 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 - **Done**: Added `GRPCTransport` (`raftstore/transport/grpc_transport.go`) with comprehensive tests for cross-node replication, partition recovery, and backpressure, replacing the old `net/rpc` implementation.
 - **Done**: Integrated raft apply with `utils.WaterMark` backpressure, introduced `Peer.WaitApplied`, and expanded slow follower/failover tests (`peer_test.go`, `levels_slow_follower_test.go`).
 - **Done**: Added typed WAL records plus manifest validation (`EditRaftPointer`), alongside automated fault-injection suites to keep truncation metadata consistent (`RecordMetrics`, backlog instrumentation, recovery scripts).
-- **Next**: Harden gRPC transport (TLS/auth, timeouts, retries) and extend chaos scripts (network splits, slow rejoin, disk stalls) together with watchdog metrics for production readiness.
+- **Done**: Hardened gRPC transport with retry/timeouts + TLS hooks and added watchdog instrumentation + chaos script coverage (see `scripts/transport_chaos.sh`).
 
 ### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
 - **Done**: `manifest.LogRaftTruncate` persists index/term + segment/offset; WAL GC consults `SegmentIndex`/`TruncatedOffset`. Tests (`raftstore/engine/wal_storage_test.go`, `lsm/levels_slow_follower_test.go`) verify truncation/cleanup coupling and `MaybeCompact` keeps manifest in sync.
@@ -283,7 +283,7 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 - **Done**: Added `engine.ExportSnapshot/ImportSnapshot` and `TestRecoverySnapshotExportRoundTrip`; `scripts/recovery_scenarios.sh` now emits `RECOVERY_METRIC` for snapshot flows.
 - **Done**: WAL typed-record counters surface via `StatsSnapshot`/CLI (`WALRecordCounts`, `WALRemovableRaftSegments`), recording lag during GC.
 - **Done**: `TestRecoverySlowFollowerSnapshotBacklog` covers slow follower + snapshot + WAL GC; recovery scripts gained matching scenarios/metrics.
-- **Next**: Use backlog indicators to drive automated WAL segment GC and surface typed-record alerts on dashboards.
+- **Done**: WAL watchdog now consumes backlog metrics to trigger automated segment GC and emits typed-record alerts surfaced via stats/CLI.
 
 ### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
 - **Done**: Manifest persists `RegionMeta`; `store.regionManager`/`RegionMetrics` expose the catalog and live counts; `nokv regions` and `StatsSnapshot` now report Region state distribution.

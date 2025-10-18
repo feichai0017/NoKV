@@ -1,0 +1,10 @@
+=== RUN   TestGRPCTransportMetricsBlockedPeers
+    grpc_transport_test.go:224: TRANSPORT_METRIC blocked_after_block {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:1 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+    grpc_transport_test.go:229: TRANSPORT_METRIC blocked_after_unblock {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:0 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+    grpc_transport_test.go:234: TRANSPORT_METRIC blocked_after_block_again {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:1 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+    grpc_transport_test.go:239: TRANSPORT_METRIC blocked_after_set_peer {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:0 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+    grpc_transport_test.go:244: TRANSPORT_METRIC blocked_before_close {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:1 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+    grpc_transport_test.go:250: TRANSPORT_METRIC blocked_after_close {DialsTotal:0 DialFailures:0 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:0 LastFailureUnix:0 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+--- PASS: TestGRPCTransportMetricsBlockedPeers (0.00s)
+PASS
+ok  	github.com/feichai0017/NoKV/raftstore/transport	0.005s

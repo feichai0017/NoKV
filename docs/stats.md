@@ -38,6 +38,8 @@ flowchart TD
 | `CompactionBacklog/MaxScore` | `lsm.CompactionStats()` | How many level files await compaction and the hottest score. |
 | `ValueLogSegments/PendingDel/DiscardQueue/Head` | `valueLog.metrics()` | Tracks vlog utilisation and GC backlog. |
 | `WALActiveSegment/SegmentCount/Removed/ActiveSize` | `wal.Manager.Metrics()` | Observes WAL rotation cadence and current segment byte usage (pairs with raft lag metrics). |
+| `WALTypedRecordRatio/Warning/Reason` | WAL backlog watchdog (`Stats.Snapshot`) | Tracks ratio of raft typed records in the WAL and surfaces warnings with reasons when exceeding thresholds. |
+| `WALAutoGCRuns/Removed/LastUnix` | WAL backlog watchdog | Automated WAL GC passes, total segments removed, and the Unix timestamp of the last run. |
 | `WriteQueueDepth/Entries/Bytes` | `writeMetrics.snapshot()` | Size of the asynchronous write queue. |
 | `WriteAvg*` | `writeMetrics` averages | Request wait times, vlog latency, apply latency. |
 | `WriteBatchesTotal` | `writeMetrics` | Lifetime batches processed. |
