@@ -2,11 +2,11 @@ package NoKV
 
 import (
 	"expvar"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -74,6 +74,12 @@ type Stats struct {
 	walRecordCounts      *expvar.Map
 	walSegmentsWithRaft  *expvar.Int
 	walSegmentsRemovable *expvar.Int
+	walTypedRatio        *expvar.Float
+	walTypedWarning      *expvar.Int
+	walTypedReason       *expvar.String
+	walAutoRuns          *expvar.Int
+	walAutoRemoved       *expvar.Int
+	walAutoLastUnix      *expvar.Int
 	regionMetrics        *storepkg.RegionMetrics
 	regionTotal          *expvar.Int
 	regionNew            *expvar.Int
@@ -125,6 +131,12 @@ type StatsSnapshot struct {
 	WALRecordCounts            wal.RecordMetrics               `json:"wal_record_counts"`
 	WALSegmentsWithRaftRecords int                             `json:"wal_segments_with_raft_records"`
 	WALRemovableRaftSegments   int                             `json:"wal_removable_raft_segments"`
+	WALTypedRecordRatio        float64                         `json:"wal_typed_record_ratio"`
+	WALTypedRecordWarning      bool                            `json:"wal_typed_record_warning"`
+	WALTypedRecordReason       string                          `json:"wal_typed_record_reason,omitempty"`
+	WALAutoGCRuns              uint64                          `json:"wal_auto_gc_runs"`
+	WALAutoGCRemoved           uint64                          `json:"wal_auto_gc_removed"`
+	WALAutoGCLastUnix          int64                           `json:"wal_auto_gc_last_unix"`
 	RaftGroupCount             int                             `json:"raft_group_count"`
 	RaftLaggingGroups          int                             `json:"raft_lagging_groups"`
 	RaftMinLogSegment          uint32                          `json:"raft_min_log_segment"`
@@ -218,6 +230,12 @@ func newStats(db *DB) *Stats {
 		iteratorReuses:       reuseInt("NoKV.Stats.Iterator.Reused"),
 		walSegmentsWithRaft:  reuseInt("NoKV.Stats.WAL.RaftSegments"),
 		walSegmentsRemovable: reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
+		walTypedRatio:        reuseFloat("NoKV.Stats.WAL.TypedRatio"),
+		walTypedWarning:      reuseInt("NoKV.Stats.WAL.TypedWarning"),
+		walTypedReason:       reuseString("NoKV.Stats.WAL.TypedReason"),
+		walAutoRuns:          reuseInt("NoKV.Stats.WAL.AutoRuns"),
+		walAutoRemoved:       reuseInt("NoKV.Stats.WAL.AutoRemoved"),
+		walAutoLastUnix:      reuseInt("NoKV.Stats.WAL.AutoLastUnix"),
 		regionTotal:          reuseInt("NoKV.Stats.Region.Total"),
 		regionNew:            reuseInt("NoKV.Stats.Region.New"),
 		regionRunning:        reuseInt("NoKV.Stats.Region.Running"),
@@ -273,6 +291,15 @@ func reuseFloat(name string) *expvar.Float {
 		}
 	}
 	return expvar.NewFloat(name)
+}
+
+func reuseString(name string) *expvar.String {
+	if v := expvar.Get(name); v != nil {
+		if sv, ok := v.(*expvar.String); ok {
+			return sv
+		}
+	}
+	return expvar.NewString(name)
 }
 
 func reuseMap(name string) *expvar.Map {
@@ -365,6 +392,16 @@ func (s *Stats) collect() {
 	s.walSegmentsRemoved.Set(int64(snap.WALSegmentsRemoved))
 	s.walSegmentsWithRaft.Set(int64(snap.WALSegmentsWithRaftRecords))
 	s.walSegmentsRemovable.Set(int64(snap.WALRemovableRaftSegments))
+	s.walTypedRatio.Set(snap.WALTypedRecordRatio)
+	if snap.WALTypedRecordWarning {
+		s.walTypedWarning.Set(1)
+	} else {
+		s.walTypedWarning.Set(0)
+	}
+	s.walTypedReason.Set(snap.WALTypedRecordReason)
+	s.walAutoRuns.Set(int64(snap.WALAutoGCRuns))
+	s.walAutoRemoved.Set(int64(snap.WALAutoGCRemoved))
+	s.walAutoLastUnix.Set(snap.WALAutoGCLastUnix)
 	s.writeQueueDepth.Set(snap.WriteQueueDepth)
 	s.writeQueueEntries.Set(snap.WriteQueueEntries)
 	s.writeQueueBytes.Set(snap.WriteQueueBytes)
@@ -500,32 +537,41 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.RegionOther = int64(rms.Other)
 	}
 
-	var segmentMetrics map[uint32]wal.RecordMetrics
+	var (
+		wstats         *wal.Metrics
+		segmentMetrics map[uint32]wal.RecordMetrics
+		ptrs           map[uint64]manifest.RaftLogPointer
+	)
 	if s.db.wal != nil {
-		if wstats := s.db.wal.Metrics(); wstats != nil {
+		wstats = s.db.wal.Metrics()
+		if wstats != nil {
 			snap.WALActiveSegment = int64(wstats.ActiveSegment)
 			snap.WALActiveSize = wstats.ActiveSize
 			snap.WALSegmentCount = int64(wstats.SegmentCount)
 			snap.WALSegmentsRemoved = wstats.RemovedSegments
-			snap.WALRecordCounts = wstats.RecordCounts
-			snap.WALSegmentsWithRaftRecords = wstats.SegmentsWithRaftRecords
 		}
 		segmentMetrics = s.db.wal.SegmentMetrics()
 	}
-
 	if man := s.db.Manifest(); man != nil {
-		ptrs := man.RaftPointerSnapshot()
+		ptrs = man.RaftPointerSnapshot()
 		snap.RaftGroupCount = len(ptrs)
+	}
+
+	analysis := analyzeWALBacklog(wstats, segmentMetrics, ptrs)
+	snap.WALRecordCounts = analysis.RecordCounts
+	snap.WALSegmentsWithRaftRecords = analysis.SegmentsWithRaft
+	snap.WALRemovableRaftSegments = len(analysis.RemovableSegments)
+	snap.WALTypedRecordRatio = analysis.TypedRecordRatio
+
+	if len(ptrs) > 0 {
 		var minSeg uint32
 		var maxSeg uint32
 		var maxLag int64
 		lagging := 0
-		activeSeg := snap.WALActiveSegment
-		effectiveActive := activeSeg
+		effectiveActive := snap.WALActiveSegment
 		if snap.WALActiveSize == 0 && effectiveActive > 0 {
 			effectiveActive--
 		}
-		retainSegment := uint32(math.MaxUint32)
 		for _, ptr := range ptrs {
 			if ptr.Segment == 0 {
 				lagging++
@@ -540,13 +586,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			if ptr.Segment > maxSeg {
 				maxSeg = ptr.Segment
 			}
-			segIdx := uint32(ptr.SegmentIndex)
-			if segIdx == 0 {
-				segIdx = ptr.Segment
-			}
-			if segIdx > 0 && segIdx < retainSegment {
-				retainSegment = segIdx
-			}
 			if effectiveActive > 0 {
 				lag := effectiveActive - int64(ptr.Segment)
 				if lag < 0 {
@@ -560,31 +599,36 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				}
 			}
 		}
-		if retainSegment == math.MaxUint32 {
-			retainSegment = 0
-		}
 		snap.RaftMinLogSegment = minSeg
 		snap.RaftMaxLogSegment = maxSeg
 		snap.RaftMaxLagSegments = maxLag
 		snap.RaftLaggingGroups = lagging
-		threshold := s.db.opt.RaftLagWarnSegments
-		if threshold < 0 {
-			threshold = 0
+	}
+	threshold := s.db.opt.RaftLagWarnSegments
+	if threshold < 0 {
+		threshold = 0
+	}
+	snap.RaftLagWarnThreshold = threshold
+	if threshold > 0 && snap.RaftMaxLagSegments >= threshold && snap.RaftLaggingGroups > 0 {
+		snap.RaftLagWarning = true
+	}
+
+	warning, reason := walTypedWarning(snap.WALTypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
+	if watchdog := s.db.walWatchdog; watchdog != nil {
+		wsnap := watchdog.snapshot()
+		snap.WALAutoGCRuns = wsnap.AutoRuns
+		snap.WALAutoGCRemoved = wsnap.SegmentsRemoved
+		snap.WALAutoGCLastUnix = wsnap.LastAutoUnix
+		if wsnap.Warning {
+			snap.WALTypedRecordWarning = true
+			snap.WALTypedRecordReason = wsnap.WarningReason
+		} else if warning {
+			snap.WALTypedRecordWarning = true
+			snap.WALTypedRecordReason = reason
 		}
-		snap.RaftLagWarnThreshold = threshold
-		if threshold > 0 && maxLag >= threshold && lagging > 0 {
-			snap.RaftLagWarning = true
-		}
-		if len(segmentMetrics) > 0 && retainSegment > 0 {
-			for id, metrics := range segmentMetrics {
-				if metrics.RaftRecords() == 0 {
-					continue
-				}
-				if id < retainSegment {
-					snap.WALRemovableRaftSegments++
-				}
-			}
-		}
+	} else if warning {
+		snap.WALTypedRecordWarning = true
+		snap.WALTypedRecordReason = reason
 	}
 
 	// Value log backlog.

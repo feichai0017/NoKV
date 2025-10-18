@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
@@ -122,6 +123,19 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 			r.Entries, r.RaftEntries, r.RaftStates, r.RaftSnapshots, r.Other)
 	}
 	fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WALSegmentsWithRaftRecords, snap.WALRemovableRaftSegments)
+	if snap.WALTypedRecordRatio > 0 || snap.WALTypedRecordWarning {
+		fmt.Fprintf(w, "WAL.TypedRatio         %.2f\n", snap.WALTypedRecordRatio)
+	}
+	if snap.WALTypedRecordWarning && snap.WALTypedRecordReason != "" {
+		fmt.Fprintf(w, "WAL.Warning            %s\n", snap.WALTypedRecordReason)
+	}
+	if snap.WALAutoGCRuns > 0 || snap.WALAutoGCRemoved > 0 || snap.WALAutoGCLastUnix > 0 {
+		last := "never"
+		if snap.WALAutoGCLastUnix > 0 {
+			last = time.Unix(snap.WALAutoGCLastUnix, 0).Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "WAL.AutoGC             runs=%d removed=%d last=%s\n", snap.WALAutoGCRuns, snap.WALAutoGCRemoved, last)
+	}
 	if snap.RaftGroupCount > 0 {
 		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
 			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)

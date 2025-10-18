@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
+	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	proto "google.golang.org/protobuf/proto"
 
@@ -30,6 +32,7 @@ import (
 )
 
 func TestGRPCTransportReplicatesProposals(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
 	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
@@ -56,6 +59,7 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 }
 
 func TestGRPCTransportSupportsTLS(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
 	serverCreds, clientCreds := buildTestCredentials(t)
 	cluster := newGRPCTestCluster(
 		t,
@@ -91,6 +95,7 @@ func TestGRPCTransportSupportsTLS(t *testing.T) {
 }
 
 func TestGRPCTransportHandlesPartition(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
 	cluster := newGRPCTestCluster(
 		t,
 		[]uint64{1, 2, 3},
@@ -154,6 +159,104 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	ptr, ok := cluster.manifest(followerID).RaftPointer(cluster.groupID)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, ptr.AppliedIndex, uint64(2))
+}
+
+func TestGRPCTransportMetricsWatchdog(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
+
+	transport, err := raftstore.NewGRPCTransport(
+		1,
+		"127.0.0.1:0",
+		raftstore.WithGRPCDialTimeout(50*time.Millisecond),
+		raftstore.WithGRPCSendTimeout(50*time.Millisecond),
+		raftstore.WithGRPCRetry(0, 0),
+	)
+	require.NoError(t, err)
+	defer func() { _ = transport.Close() }()
+
+	transport.SetPeer(2, "127.0.0.1:65535")
+	msg := myraft.Message{To: 2}
+	for i := 0; i < 3; i++ {
+		transport.Send(msg)
+	}
+
+	snap := transportpkg.GRPCMetricsSnapshot()
+	require.GreaterOrEqual(t, snap.DialFailures, int64(3))
+	require.True(t, snap.WatchdogActive)
+	require.GreaterOrEqual(t, snap.WatchdogConsecutiveFails, snap.WatchdogThreshold)
+	require.True(t, strings.Contains(snap.WatchdogReason, "dial failure"))
+	logTransportMetric(t, "watchdog_after_failures", snap)
+
+	peer, err := raftstore.NewGRPCTransport(
+		2,
+		"127.0.0.1:0",
+		raftstore.WithGRPCDialTimeout(50*time.Millisecond),
+		raftstore.WithGRPCSendTimeout(50*time.Millisecond),
+	)
+	require.NoError(t, err)
+	defer func() { _ = peer.Close() }()
+
+	transport.SetPeer(2, peer.Addr())
+	transport.Send(msg)
+
+	snap = transportpkg.GRPCMetricsSnapshot()
+	require.False(t, snap.WatchdogActive)
+	require.Equal(t, int64(0), snap.WatchdogConsecutiveFails)
+	require.Equal(t, "", snap.WatchdogReason)
+	logTransportMetric(t, "watchdog_after_recovery", snap)
+}
+
+func TestGRPCTransportMetricsBlockedPeers(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
+
+	tr, err := raftstore.NewGRPCTransport(1, "127.0.0.1:0")
+	require.NoError(t, err)
+	trRef := tr
+	t.Cleanup(func() {
+		if trRef != nil {
+			_ = trRef.Close()
+		}
+	})
+
+	tr.BlockPeer(2)
+	tr.BlockPeer(2)
+	snap := transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_after_block", snap)
+	require.Equal(t, int64(1), snap.BlockedPeers)
+
+	tr.UnblockPeer(2)
+	snap = transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_after_unblock", snap)
+	require.Equal(t, int64(0), snap.BlockedPeers)
+
+	tr.BlockPeer(3)
+	snap = transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_after_block_again", snap)
+	require.Equal(t, int64(1), snap.BlockedPeers)
+
+	tr.SetPeer(3, "127.0.0.1:9000")
+	snap = transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_after_set_peer", snap)
+	require.Equal(t, int64(0), snap.BlockedPeers)
+
+	tr.BlockPeer(4)
+	snap = transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_before_close", snap)
+	require.Equal(t, int64(1), snap.BlockedPeers)
+
+	require.NoError(t, tr.Close())
+	trRef = nil
+	snap = transportpkg.GRPCMetricsSnapshot()
+	logTransportMetric(t, "blocked_after_close", snap)
+	require.Equal(t, int64(0), snap.BlockedPeers)
+}
+
+func logTransportMetric(t *testing.T, label string, snap transportpkg.GRPCTransportMetrics) {
+	if os.Getenv("CHAOS_TRACE_METRICS") == "" {
+		return
+	}
+	t.Helper()
+	t.Logf("TRANSPORT_METRIC %s %+v", label, snap)
 }
 
 type grpcTestCluster struct {

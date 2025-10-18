@@ -41,6 +41,7 @@ type (
 		dirLock          *utils.DirLock
 		lsm              *lsm.LSM
 		wal              *wal.Manager
+		walWatchdog      *walWatchdog
 		vlog             *valueLog
 		stats            *Stats
 		flushChan        chan flushTask // For flushing memtables.
@@ -195,6 +196,10 @@ func Open(opt *Options) *DB {
 	db.flushChan = make(chan flushTask, 16)
 	// 启动 info 统计过程
 	db.stats.StartStats()
+	db.walWatchdog = newWalWatchdog(db)
+	if db.walWatchdog != nil {
+		db.walWatchdog.start()
+	}
 	return db
 }
 
@@ -225,6 +230,11 @@ func (db *DB) runRecoveryChecks() error {
 }
 
 func (db *DB) Close() error {
+
+	if db.walWatchdog != nil {
+		db.walWatchdog.stop()
+		db.walWatchdog = nil
+	}
 
 	if db.prefetchCh != nil {
 		close(db.prefetchCh)

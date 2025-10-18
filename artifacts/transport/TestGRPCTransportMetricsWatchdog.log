@@ -1,0 +1,6 @@
+=== RUN   TestGRPCTransportMetricsWatchdog
+    grpc_transport_test.go:188: TRANSPORT_METRIC watchdog_after_failures {DialsTotal:3 DialFailures:3 SendAttempts:0 SendSuccesses:0 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:0 LastFailureUnix:1760804737 WatchdogActive:true WatchdogConsecutiveFails:3 WatchdogThreshold:3 WatchdogReason:dial failure #3: context deadline exceeded}
+    grpc_transport_test.go:206: TRANSPORT_METRIC watchdog_after_recovery {DialsTotal:4 DialFailures:3 SendAttempts:1 SendSuccesses:1 SendFailures:0 Retries:0 RetryExhausted:0 BlockedPeers:0 LastFailureUnix:1760804737 WatchdogActive:false WatchdogConsecutiveFails:0 WatchdogThreshold:3 WatchdogReason:}
+--- PASS: TestGRPCTransportMetricsWatchdog (0.15s)
+PASS
+ok  	github.com/feichai0017/NoKV/raftstore/transport	0.160s
