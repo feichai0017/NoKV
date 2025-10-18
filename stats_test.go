@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/manifest"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -15,6 +17,12 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	opt.DetectConflicts = true
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
+
+	rm := storepkg.NewRegionMetrics()
+	db.SetRegionMetrics(rm)
+	hooks := rm.Hooks()
+	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
+	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
 
 	if err := db.Update(func(txn *Txn) error {
 		return txn.SetEntry(utils.NewEntry([]byte("stats-key"), []byte("stats-value")))
@@ -54,6 +62,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 
 	if snap.FlushPending != db.lsm.FlushPending() {
 		t.Fatalf("snapshot flush pending mismatch: %d vs %d", snap.FlushPending, db.lsm.FlushPending())
+	}
+	if snap.RegionTotal != 2 || snap.RegionRunning != 1 || snap.RegionRemoving != 1 {
+		t.Fatalf("expected region metrics populated, snapshot=%+v", snap)
 	}
 
 	db.stats.collect()
@@ -168,6 +179,15 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}
 	if got := expvar.Get("NoKV.Stats.WAL.Removed").(*expvar.Int).Value(); got != int64(snap.WALSegmentsRemoved) {
 		t.Fatalf("wal removed mismatch expvar=%d snapshot=%d", got, snap.WALSegmentsRemoved)
+	}
+	if got := expvar.Get("NoKV.Stats.Region.Total").(*expvar.Int).Value(); got != snap.RegionTotal {
+		t.Fatalf("region total mismatch expvar=%d snapshot=%d", got, snap.RegionTotal)
+	}
+	if got := expvar.Get("NoKV.Stats.Region.Running").(*expvar.Int).Value(); got != snap.RegionRunning {
+		t.Fatalf("region running mismatch expvar=%d snapshot=%d", got, snap.RegionRunning)
+	}
+	if got := expvar.Get("NoKV.Stats.Region.Removing").(*expvar.Int).Value(); got != snap.RegionRemoving {
+		t.Fatalf("region removing mismatch expvar=%d snapshot=%d", got, snap.RegionRemoving)
 	}
 	if v := expvar.Get("NoKV.Stats.Raft.Groups"); v == nil {
 		t.Fatalf("expected raft group metric to be exported")

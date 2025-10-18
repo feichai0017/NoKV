@@ -268,4 +268,24 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 		manifest.RegionStateTombstone,
 	}
 	require.Equal(t, expectedStates, states)
+
+	child := manifest.RegionMeta{
+		ID:       600,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		State:    manifest.RegionStateRunning,
+	}
+	parent := manifest.RegionMeta{
+		ID:       500,
+		StartKey: []byte("k"),
+		EndKey:   []byte("m"),
+		State:    manifest.RegionStateRunning,
+	}
+	require.NoError(t, rs.UpdateRegion(parent))
+	require.NoError(t, rs.UpdateRegion(child))
+
+	metas = rs.RegionMetas()
+	require.Len(t, metas, 2)
+
+	_ = len(states)
 }

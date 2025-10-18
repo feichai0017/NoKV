@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -73,6 +74,13 @@ type Stats struct {
 	walRecordCounts      *expvar.Map
 	walSegmentsWithRaft  *expvar.Int
 	walSegmentsRemovable *expvar.Int
+	regionMetrics        *storepkg.RegionMetrics
+	regionTotal          *expvar.Int
+	regionNew            *expvar.Int
+	regionRunning        *expvar.Int
+	regionRemoving       *expvar.Int
+	regionTombstone      *expvar.Int
+	regionOther          *expvar.Int
 }
 
 type HotKeyStat struct {
@@ -138,6 +146,12 @@ type StatsSnapshot struct {
 	TxnsStarted                uint64                          `json:"txns_started"`
 	TxnsCommitted              uint64                          `json:"txns_committed"`
 	TxnsConflicts              uint64                          `json:"txns_conflicts"`
+	RegionTotal                int64                           `json:"region_total"`
+	RegionNew                  int64                           `json:"region_new"`
+	RegionRunning              int64                           `json:"region_running"`
+	RegionRemoving             int64                           `json:"region_removing"`
+	RegionTombstone            int64                           `json:"region_tombstone"`
+	RegionOther                int64                           `json:"region_other"`
 	HotKeys                    []HotKeyStat                    `json:"hot_keys,omitempty"`
 	BlockL0HitRate             float64                         `json:"block_l0_hit_rate"`
 	BlockL1HitRate             float64                         `json:"block_l1_hit_rate"`
@@ -204,6 +218,12 @@ func newStats(db *DB) *Stats {
 		iteratorReuses:       reuseInt("NoKV.Stats.Iterator.Reused"),
 		walSegmentsWithRaft:  reuseInt("NoKV.Stats.WAL.RaftSegments"),
 		walSegmentsRemovable: reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
+		regionTotal:          reuseInt("NoKV.Stats.Region.Total"),
+		regionNew:            reuseInt("NoKV.Stats.Region.New"),
+		regionRunning:        reuseInt("NoKV.Stats.Region.Running"),
+		regionRemoving:       reuseInt("NoKV.Stats.Region.Removing"),
+		regionTombstone:      reuseInt("NoKV.Stats.Region.Tombstone"),
+		regionOther:          reuseInt("NoKV.Stats.Region.Other"),
 	}
 	if v := expvar.Get("NoKV.Stats.ColumnFamilies"); v != nil {
 		if m, ok := v.(*expvar.Map); ok {
@@ -285,6 +305,14 @@ func (s *Stats) StartStats() {
 		s.closer.Add(1)
 		go s.run()
 	})
+}
+
+// SetRegionMetrics attaches region metrics recorder used in snapshots.
+func (s *Stats) SetRegionMetrics(rm *storepkg.RegionMetrics) {
+	if s == nil {
+		return
+	}
+	s.regionMetrics = rm
 }
 
 func (s *Stats) run() {
@@ -387,6 +415,14 @@ func (s *Stats) collect() {
 		s.walRecordCounts.Set("raft_snapshots", newIntVar(int64(snap.WALRecordCounts.RaftSnapshots)))
 		s.walRecordCounts.Set("total", newIntVar(int64(snap.WALRecordCounts.Total())))
 	}
+	if s.regionTotal != nil {
+		s.regionTotal.Set(snap.RegionTotal)
+		s.regionNew.Set(snap.RegionNew)
+		s.regionRunning.Set(snap.RegionRunning)
+		s.regionRemoving.Set(snap.RegionRemoving)
+		s.regionTombstone.Set(snap.RegionTombstone)
+		s.regionOther.Set(snap.RegionOther)
+	}
 	atomic.StoreInt64(&s.EntryNum, snap.Entries)
 }
 
@@ -453,6 +489,16 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.WriteBatchesTotal = wsnap.Batches
 	}
 	snap.WriteThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
+
+	if rm := s.regionMetrics; rm != nil {
+		rms := rm.Snapshot()
+		snap.RegionTotal = int64(rms.Total)
+		snap.RegionNew = int64(rms.New)
+		snap.RegionRunning = int64(rms.Running)
+		snap.RegionRemoving = int64(rms.Removing)
+		snap.RegionTombstone = int64(rms.Tombstone)
+		snap.RegionOther = int64(rms.Other)
+	}
 
 	var segmentMetrics map[uint32]wal.RecordMetrics
 	if s.db.wal != nil {

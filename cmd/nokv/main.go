@@ -13,6 +13,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
@@ -64,6 +65,7 @@ func runStatsCmd(w io.Writer, args []string) error {
 	workDir := fs.String("workdir", "", "database work directory (offline snapshot)")
 	expvarURL := fs.String("expvar", "", "HTTP endpoint exposing /debug/vars (overrides workdir)")
 	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	noMetrics := fs.Bool("no-region-metrics", false, "do not attach region metrics recorder (requires --workdir)")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -75,7 +77,7 @@ func runStatsCmd(w io.Writer, args []string) error {
 	case *expvarURL != "":
 		snap, err = fetchExpvarSnapshot(*expvarURL)
 	case *workDir != "":
-		snap, err = localStatsSnapshot(*workDir)
+		snap, err = localStatsSnapshot(*workDir, !*noMetrics)
 	default:
 		return fmt.Errorf("either --workdir or --expvar must be specified")
 	}
@@ -136,6 +138,8 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
 	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
 	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
+	fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
+		snap.RegionTotal, snap.RegionNew, snap.RegionRunning, snap.RegionRemoving, snap.RegionTombstone, snap.RegionOther)
 	if len(snap.ColumnFamilies) > 0 {
 		fmt.Fprintln(w, "ColumnFamilies:")
 		var names []string
@@ -342,7 +346,7 @@ func runRegionsCmd(w io.Writer, args []string) error {
 	return nil
 }
 
-func localStatsSnapshot(workDir string) (NoKV.StatsSnapshot, error) {
+func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot, error) {
 	if workDir == "" {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("workdir is required")
 	}
@@ -352,6 +356,11 @@ func localStatsSnapshot(workDir string) (NoKV.StatsSnapshot, error) {
 	defer func() {
 		_ = db.Close()
 	}()
+	if attachMetrics {
+		if metrics := firstRegionMetrics(); metrics != nil {
+			db.SetRegionMetrics(metrics)
+		}
+	}
 	return db.Info().Snapshot(), nil
 }
 
@@ -439,6 +448,12 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	intVal = 0
 	setInt("NoKV.Stats.Raft.MaxSegment", &intVal)
 	snap.RaftMaxLogSegment = uint32(intVal)
+	setInt("NoKV.Stats.Region.Total", &snap.RegionTotal)
+	setInt("NoKV.Stats.Region.New", &snap.RegionNew)
+	setInt("NoKV.Stats.Region.Running", &snap.RegionRunning)
+	setInt("NoKV.Stats.Region.Removing", &snap.RegionRemoving)
+	setInt("NoKV.Stats.Region.Tombstone", &snap.RegionTombstone)
+	setInt("NoKV.Stats.Region.Other", &snap.RegionOther)
 	setInt("NoKV.Txns.Active", &snap.TxnsActive)
 	intVal = 0
 	setInt("NoKV.Txns.Started", &intVal)
@@ -511,6 +526,18 @@ func totalSize(files []manifest.FileMeta) uint64 {
 		total += meta.Size
 	}
 	return total
+}
+
+func firstRegionMetrics() *storepkg.RegionMetrics {
+	for _, st := range storepkg.Stores() {
+		if st == nil {
+			continue
+		}
+		if metrics := st.RegionMetrics(); metrics != nil {
+			return metrics
+		}
+	}
+	return nil
 }
 
 func formatRegionState(state manifest.RegionState) string {
