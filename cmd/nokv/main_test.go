@@ -121,6 +121,9 @@ func TestRenderStatsWarnLine(t *testing.T) {
 	if !strings.Contains(out, "WAL.ActiveSize") {
 		t.Fatalf("expected WAL.ActiveSize line in output, got: %q", out)
 	}
+	if !strings.Contains(out, "Regions.Total") {
+		t.Fatalf("expected Regions.Total line in output, got: %q", out)
+	}
 }
 func TestRunRegionsCmd(t *testing.T) {
 	dir := t.TempDir()

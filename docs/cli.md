@@ -19,6 +19,7 @@ Use `GOBIN` if you prefer a custom binary directory.
 - `--workdir <path>` – location of the NoKV database (must contain `CURRENT`).
 - `--json` – emit structured JSON (default is human-readable tables).
 - `--expvar <url>` – for `stats` command, pull metrics from a running process exposing `expvar`.
+- `--no-region-metrics` – for `stats` offline mode; skip attaching `RegionMetrics` and report manifest-only figures.
 
 ---
 
@@ -32,6 +33,7 @@ Use `GOBIN` if you prefer a custom binary directory.
   - `compaction.backlog`, `wal.active_segment`, `wal.removed_segments`
   - `value_log.head_fid`, `value_log.gc_runs`
   - `txns.active`, `txns.committed`, `txns.conflicts`
+  - `regions.total (new/running/removing/tombstone/other)`
   - `hot_keys` (Top-N hits captured by `hotring`)
 - Example:
 
@@ -62,3 +64,4 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue'
 ---
 
 For architecture context, see [architecture.md](architecture.md) and the module deep dives.
+- **`nokv regions`** – Dumps the manifest-backed Region catalog (ID/state/key range/peers). Supports `--json` for automation and complements the Region metrics shown in `nokv stats`.

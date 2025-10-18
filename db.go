@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
@@ -778,6 +779,17 @@ func (db *DB) pushHead(ft flushTask) error {
 
 func (db *DB) valueThreshold() int64 {
 	return atomic.LoadInt64(&db.opt.ValueThreshold)
+}
+
+// SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
+// include region state counts.
+func (db *DB) SetRegionMetrics(rm *storepkg.RegionMetrics) {
+	if db == nil {
+		return
+	}
+	if db.stats != nil {
+		db.stats.SetRegionMetrics(rm)
+	}
 }
 
 // WAL exposes the underlying WAL manager.

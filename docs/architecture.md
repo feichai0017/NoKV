@@ -223,6 +223,30 @@ For detailed walkthroughs of individual modules, refer to:
 
 ---
 
+## 10. RaftStore Architecture
+
+NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular design:
+
+| Sub-package | Responsibility | Key types |
+| --- | --- | --- |
+| `store/` | Orchestrates multi-Raft Regions, routing, lifecycle hooks, and metrics. Maintains an in-memory region catalog plus `RegionMetrics`, persisting updates through the manifest. | `Store`, `RegionHooks`, `RegionMetrics` |
+| `peer/` | Wraps etcd/raft `RawNode`, handling Ready processing, log persistence, snapshot application, and Region metadata updates. | `Peer`, `ApplyFunc`, `SetRegionMeta` |
+| `engine/` | Provides shared-WAL `PeerStorage` (reusing the DB WAL/manifest pipeline) alongside disk and memory alternatives, plus snapshot import/export helpers. | `WALStorage`, `DiskStorage` |
+| `transport/` | gRPC transport implementation with retry, TLS, and failure injection capabilities used by integration tests. | `GRPCTransport`, `Transport` |
+
+### 10.1 Region lifecycle & metrics
+
+* `Store` builds a `RegionMetrics` recorder by default and wires it via `RegionHooks`, tracking transitions such as `Running → Removing → Tombstone`. User-defined hooks can be chained without losing the built-in recorder.
+* Region metadata is always deep-copied via `manifest.CloneRegionMeta*`, preventing aliasing between packages.
+* `Store.RegionSnapshot()` / `RegionMetas()` expose the current catalog; helpers like `SplitRegion` make upcoming split/merge flows easier to implement.
+* Metrics reported through `StatsSnapshot`/expvar/`nokv stats` include `region_total/new/running/removing/tombstone/other`, while `nokv regions --workdir <dir> [--json]` renders the manifest-backed catalog (ID, state, key range, peers).
+
+### 10.2 Store registry & CLI integration
+
+`store.RegisterStore` records each running store instance (automatically invoked from `raftstore/api.NewStoreWithConfig`). The CLI can inspect `store.Stores()` to reuse the first available store—for example to fetch `RegionMetrics` before printing `nokv stats`.
+
+---
+
 ## 10. Extensibility Outlook
 
 - **Raft / replication** – WAL manager already exposes segment metadata; integrating raft logs would primarily require shipping WAL entries and manifest edits across nodes, akin to RocksDB's raft-enabled forks.
@@ -245,27 +269,27 @@ For detailed walkthroughs of individual modules, refer to:
 - Add unit tests mirroring TinyKV labs (single-node commit, leader election, log replication corner cases).
 
 ### Phase 2 — Raft KV Integration (TinyKV Project2B)
-- **Done**: `raftstore` peers默认通过 `walStorage` 复用 DB 的 WAL + manifest，Ready entries/HardState/Snapshot 与普通写入共享持久化路径；重启恢复和三节点复制已在测试中覆盖。
-- **Done**: Snapshot resend 队列与 `LogRaftTruncate` 的段编号桥接（2025-10-18）确保截断信息写回 manifest，`lsm.canRemoveWalSegment` 结合该段位阻止误 GC。
-- **Done**: `raftstore` 重构为 `peer/` (FSM + lifecycle)、`engine/` (WAL/Disk storage)、`transport/` (内存/GRPC 传输) 等子包，结构对齐 TinyKV 的 `peer`/`peerstorage`/`transport` 角色，根包仅负责兼容性导出。
-- **Done**: 新增 `GRPCTransport` 实现（`raftstore/transport/grpc_transport.go`），配套 `transport/grpc_transport_test.go` 覆盖提议跨节点复制、分区恢复及背压路径，同时完全替换旧 `net/rpc` 实现。
-- **Done**: 桥接 raft apply（批量、冲突处理）与 `utils.WaterMark` 回压策略，新增 `Peer.WaitApplied` 与限流逻辑，覆盖慢 follower / failover 集成测试 (`peer_test.go`, `levels_slow_follower_test.go`)。
-- **Done**: 推进 `wal.Manager` typed record 支持与 manifest `EditRaftPointer` 校验，完善崩溃注入、慢 follower backlog 和 snapshot resend 自动化回归，确保多路径截断点一致 (`RecordMetrics`, backlog 指标、恢复脚本)。
-- **Next**: 梳理 gRPC transport 的 TLS/鉴权、超时与重试策略，扩充 chaos 脚本（网络分裂、慢节点重连、磁盘阻塞）以及 WatchDog 指标，巩固生产化可靠性。
+- **Done**: `raftstore` peers reuse the DB WAL + manifest through `engine.WALStorage`, sharing the persistence path for Ready entries, HardState, and snapshots. Restart recovery and three-node replication are covered in tests.
+- **Done**: Snapshot resend queues feed `LogRaftTruncate` (2025‑10‑18) so manifest reflects the latest truncation point; `lsm.canRemoveWalSegment` honors this metadata to avoid premature GC.
+- **Done**: `raftstore` is split into `peer/` (FSM + lifecycle), `engine/` (WAL/Disk storage), and `transport/` (in-memory/gRPC) subpackages, mirroring TinyKV's layering.
+- **Done**: Added `GRPCTransport` (`raftstore/transport/grpc_transport.go`) with comprehensive tests for cross-node replication, partition recovery, and backpressure, replacing the old `net/rpc` implementation.
+- **Done**: Integrated raft apply with `utils.WaterMark` backpressure, introduced `Peer.WaitApplied`, and expanded slow follower/failover tests (`peer_test.go`, `levels_slow_follower_test.go`).
+- **Done**: Added typed WAL records plus manifest validation (`EditRaftPointer`), alongside automated fault-injection suites to keep truncation metadata consistent (`RecordMetrics`, backlog instrumentation, recovery scripts).
+- **Next**: Harden gRPC transport (TLS/auth, timeouts, retries) and extend chaos scripts (network splits, slow rejoin, disk stalls) together with watchdog metrics for production readiness.
 
 ### Phase 3 — Log GC & Snapshots (TinyKV Project2C)
-- **Done**: `manifest.LogRaftTruncate` 现持久化 index/term+segment+offset，WAL GC 依赖 `SegmentIndex`/`TruncatedOffset` 判断；`raftstore/engine/wal_storage_test.go` 与 `lsm/levels_slow_follower_test.go` 验证截断-清理联动，`MaybeCompact` 同步更新 manifest。
-- **Done**: `wal_storage.ApplySnapshot` / `compactTo` 写回截断段位与偏移，重启后由 manifest 恢复，并在集成测试中验证慢 follower 不会被 GC 提前清理。
-- **Done**: 新增 `engine.ExportSnapshot/ImportSnapshot` 与 `TestRecoverySnapshotExportRoundTrip`，`scripts/recovery_scenarios.sh` 集成该场景并输出 `RECOVERY_METRIC`，便于手动/自动恢复校验。
-- **Done**: WAL typed record 全链路计数，`StatsSnapshot`/CLI 输出 `WALRecordCounts`、`WALRemovableRaftSegments`，并在 GC 时记录落后段位。
-- **Done**: `TestRecoverySlowFollowerSnapshotBacklog` 覆盖慢 follower + snapshot + WAL GC，恢复脚本新增场景/指标。
-- **Next**: 利用 backlog 指标驱动自动段 GC 策略，并将 typed record 告警纳入运维面板。
+- **Done**: `manifest.LogRaftTruncate` persists index/term + segment/offset; WAL GC consults `SegmentIndex`/`TruncatedOffset`. Tests (`raftstore/engine/wal_storage_test.go`, `lsm/levels_slow_follower_test.go`) verify truncation/cleanup coupling and `MaybeCompact` keeps manifest in sync.
+- **Done**: `wal_storage.ApplySnapshot` / `compactTo` write back truncation metadata so restart recovers correctly; integration tests ensure slow followers are not GC'd prematurely.
+- **Done**: Added `engine.ExportSnapshot/ImportSnapshot` and `TestRecoverySnapshotExportRoundTrip`; `scripts/recovery_scenarios.sh` now emits `RECOVERY_METRIC` for snapshot flows.
+- **Done**: WAL typed-record counters surface via `StatsSnapshot`/CLI (`WALRecordCounts`, `WALRemovableRaftSegments`), recording lag during GC.
+- **Done**: `TestRecoverySlowFollowerSnapshotBacklog` covers slow follower + snapshot + WAL GC; recovery scripts gained matching scenarios/metrics.
+- **Next**: Use backlog indicators to drive automated WAL segment GC and surface typed-record alerts on dashboards.
 
 ### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
-- Model `RegionMeta`, peer lifecycle, and peer state machine; maintain region ranges inside manifest or dedicated metadata store.
-- Implement conf change handling (add/remove peers) and leadership transfer atop raft core; guard with epoch/version checks.
-- Support split flow: detect split triggers, stage new region metadata, create raft peers, and atomically update manifests/SST ownership.
-- Provide test harness for region splits, membership churn, and log application ordering.
+- **Done**: Manifest persists `RegionMeta`; `store.regionManager`/`RegionMetrics` expose the catalog and live counts; `nokv regions` and `StatsSnapshot` now report Region state distribution.
+- **Next**: Implement conf change handling (add/remove peers) and leadership transfer atop raft core, guarded by epoch/version checks.
+- **Next**: Implement the split flow: detect triggers, stage parent/child metadata, spin up child peers, and atomically update manifest/SST ownership.
+- **Next**: Provide a dedicated test harness for region splits, membership churn, and log application ordering.
 
 ### Phase 5 — Cluster Scheduler (TinyKV Project3C)
 - Introduce scheduler service tracking store stats, region heartbeats, and pending tasks.
@@ -295,3 +319,4 @@ For deeper implementation details, continue with module-specific documents:
 - [Crash recovery plan](recovery.md)
 - [Testing matrix](testing.md)
 - [CLI reference](cli.md)
+- [RaftStore overview](raftstore.md)

@@ -6,13 +6,13 @@
     <a href="https://github.com/feichai0017/NoKV/actions">
       <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status"/>
     </a>
-    <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
+    <img src="https://img.shields.io/badge/go-1.24+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
-  <p><strong>LSM Tree • ValueLog • MVCC • Hot-Key Tracking</strong></p>
+  <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
 </div>
 
-NoKV is a Go-native storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, structured observability, and ready-to-use CLI tooling.
+NoKV is a Go-native **distributed** storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, multi-Raft region management, structured observability, and ready-to-use CLI tooling.
 
 ---
 
@@ -35,6 +35,7 @@ NoKV is a Go-native storage engine that blends the manifest discipline of RocksD
 
 - 🔁 **Hybrid LSM + ValueLog** – WAL + MemTable durability like RocksDB, large values separated into vlog segments like Badger.
 - ⚡ **MVCC transactions** – snapshot isolation with conflict detection via `oracle`, iterator snapshots, and managed/unmanaged modes.
+- 🧠 **Multi-Raft regions** – `raftstore` manages Region lifecycle, shared WAL storage, hooks, and metrics; CLI/Stats make Region state observable by default.
 - 🔥 **Hot-key analytics** – `hotring` surfaces frequently accessed keys, powering prefetchers and CLI visibility.
 - ♻️ **Robust recovery** – manifest + WAL checkpoints + vlog GC metadata guarantee restart determinism.
 - 🛠️ **First-class tooling** – `nokv` CLI and `expvar` snapshots expose internals without extra dependencies.
@@ -91,9 +92,10 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 | --- | --- | --- | --- |
 | WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) | [WAL internals](docs/wal.md) |
 | LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md) |
-| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
+| Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints, Region metadata. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
 | ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
 | Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) | [Transactions & MVCC](docs/txn.md) |
+| RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
 | HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
 | Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
 | Filesystem | mmap-backed file helpers shared by WAL/SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
@@ -125,9 +127,10 @@ More scenarios (including transaction recovery) are covered in [docs/architectur
 
 - `Stats.StartStats` publishes metrics via `expvar` (flush backlog, WAL segments, vlog GC stats, txn counters).
 - `cmd/nokv` offers:
-  - `nokv stats --workdir <dir> [--json]`
-  - `nokv manifest --workdir <dir>`
-  - `nokv vlog --workdir <dir>`
+- `nokv stats --workdir <dir> [--json] [--no-region-metrics]`
+- `nokv manifest --workdir <dir>`
+- `nokv vlog --workdir <dir>`
+- `nokv regions --workdir <dir> [--json]`
 - Hot keys tracked by `hotring` appear in both expvar and CLI output, enabling cache warmup strategies.
 
 Details in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
@@ -144,6 +147,7 @@ Details in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-ob
 | Transactions | WriteBatch / optional txn library | Managed optimistic transactions | Built-in MVCC with oracle & iterators |
 | Value separation | Optional blob DB | Core design | Core design with manifest-backed head |
 | Observability | PerfContext, `ldb` | Prometheus metrics | expvar + `nokv` CLI + recovery traces |
+| Region management | External tooling | Single-node only | Built-in multi-Raft catalog + metrics + `nokv regions` |
 | Hot key analytics | External | Limited | Built-in hotring with prefetch hook |
 
 NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and adds MVCC/observability tailored for Go services.
@@ -168,10 +172,10 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 | Crash recovery playbook | [docs/recovery.md](docs/recovery.md) |
 | Testing matrix | [docs/testing.md](docs/testing.md) |
 | CLI reference | [docs/cli.md](docs/cli.md) |
+| RaftStore overview | [docs/raftstore.md](docs/raftstore.md) |
 
 ---
 
 ## 📄 License
 
 Apache-2.0. See [LICENSE](LICENSE).
-

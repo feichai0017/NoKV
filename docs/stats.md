@@ -47,6 +47,7 @@ flowchart TD
 | `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
 | `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |
 | `RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning` | `manifest.RaftPointerSnapshot()` | Tracks follower backlogs; `LagWarnThreshold` comes from `Options.RaftLagWarnSegments`, and `RaftLagWarning` toggles when any group exceeds it. |
+| `RegionTotal/New/Running/Removing/Tombstone/Other` | `store.RegionMetrics` | Multi-Raft region state distribution. CLI attaches the first available `RegionMetrics` by default; pass `--no-region-metrics` to disable. |
 
 All values are exported under the `NoKV.*` namespace via expvar (see `newStats`).
 
@@ -54,7 +55,8 @@ All values are exported under the `NoKV.*` namespace via expvar (see `newStats`)
 
 ## 3. CLI & JSON Output
 
-* `nokv stats --workdir <dir>` prints a human-readable table (queue lengths, rates, hot keys) sourced from `Stats.Snapshot`. When `RaftLagWarning=true` the CLI emits an extra `Raft.Warning` line summarising lagging groups and the maximum segment gap so operators can react quickly.
+* `nokv stats --workdir <dir>` prints a human-readable table (queue lengths, throughput, hot keys, region totals). It automatically attaches `RegionMetrics` when available; add `--no-region-metrics` to produce a manifest-only snapshot.
+* When `RaftLagWarning=true` the CLI emits an extra `Raft.Warning` line; it also surfaces `Regions.Total (...)` so operators can quickly gauge Region lifecycle health.
 * `nokv stats --json` emits the raw snapshot for automation. Example snippet:
 
 ```json
@@ -100,5 +102,6 @@ NoKV emphasises zero-dependency observability. Everything is consumable via HTTP
 * `ValueLogDiscardQueue > 0` for extended periods indicates GC is blocked; inspect `NoKV.ValueLog.GcRuns` and consider tuning thresholds.
 * `WriteThrottleActive` toggling frequently suggests L0 is overwhelmed; cross-check `BlockL0HitRate` and compaction metrics.
 * `RaftLagWarning` toggling to `true` means at least one follower lags the leader by more than `Options.RaftLagWarnSegments`; inspect `Raft.Warning` from the CLI and consider snapshot resend or throttling the offending node.
+* `Regions.Total` should match the expected cluster topology; sustained `Removing/Tombstone` counts indicate stalled cleanup—investigate split/merge logic or stuck replicas.
 
 Refer to [`docs/testing.md`](testing.md#4-observability-in-tests) for scripted checks that validate stats during CI runs.

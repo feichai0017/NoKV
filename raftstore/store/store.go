@@ -14,14 +14,15 @@ import (
 // lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
 // ticks or proposals without needing to keep global peer maps themselves.
 type Store struct {
-	mu          sync.RWMutex
-	router      *Router
-	peers       map[uint64]*peer.Peer
-	peerFactory PeerFactory
-	hooks       LifecycleHooks
-	regionHooks RegionHooks
-	manifest    *manifest.Manager
-	regions     *regionManager
+	mu            sync.RWMutex
+	router        *Router
+	peers         map[uint64]*peer.Peer
+	peerFactory   PeerFactory
+	hooks         LifecycleHooks
+	regionHooks   RegionHooks
+	regionMetrics *RegionMetrics
+	manifest      *manifest.Manager
+	regions       *regionManager
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -58,19 +59,45 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if factory == nil {
 		factory = peer.NewPeer
 	}
+	metrics := NewRegionMetrics()
+	combinedHooks := mergeRegionHooks(metrics.Hooks(), cfg.RegionHooks)
 	s := &Store{
-		router:      router,
-		peers:       make(map[uint64]*peer.Peer),
-		peerFactory: factory,
-		hooks:       cfg.Hooks,
-		regionHooks: cfg.RegionHooks,
-		manifest:    cfg.Manifest,
-		regions:     newRegionManager(),
+		router:        router,
+		peers:         make(map[uint64]*peer.Peer),
+		peerFactory:   factory,
+		hooks:         cfg.Hooks,
+		regionHooks:   combinedHooks,
+		regionMetrics: metrics,
+		manifest:      cfg.Manifest,
+		regions:       newRegionManager(),
 	}
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
+	RegisterStore(s)
 	return s
+}
+
+// SplitRegion updates metadata for an existing region and inserts the new
+// split region. Metadata is persisted via manifest when available.
+func (s *Store) SplitRegion(parentID uint64, child manifest.RegionMeta) error {
+    if s == nil {
+        return fmt.Errorf("raftstore: store is nil")
+    }
+    if parentID == 0 || child.ID == 0 {
+        return fmt.Errorf("raftstore: region ids must be non-zero")
+    }
+    parent, ok := s.RegionMetaByID(parentID)
+    if !ok {
+        return fmt.Errorf("raftstore: parent region %d not found", parentID)
+    }
+    if child.State == 0 {
+        child.State = manifest.RegionStateRunning
+    }
+    if err := s.UpdateRegion(parent); err != nil {
+        return err
+    }
+    return s.UpdateRegion(child)
 }
 
 // Router exposes the underlying router reference so transports can reuse the
@@ -354,6 +381,14 @@ func (s *Store) RegionSnapshot() RegionSnapshot {
 	return RegionSnapshot{Regions: s.RegionMetas()}
 }
 
+// RegionMetrics returns the metrics recorder tracking region state counts.
+func (s *Store) RegionMetrics() *RegionMetrics {
+	if s == nil {
+		return nil
+	}
+	return s.regionMetrics
+}
+
 // Peer returns the peer registered with the provided ID.
 func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	if s == nil || id == 0 {
@@ -381,4 +416,27 @@ func (s *Store) Peers() []PeerHandle {
 	}
 	s.mu.RUnlock()
 	return handles
+}
+
+func mergeRegionHooks(primary, secondary RegionHooks) RegionHooks {
+	update := func(meta manifest.RegionMeta) {
+		if primary.OnRegionUpdate != nil {
+			primary.OnRegionUpdate(meta)
+		}
+		if secondary.OnRegionUpdate != nil {
+			secondary.OnRegionUpdate(meta)
+		}
+	}
+	remove := func(id uint64) {
+		if primary.OnRegionRemove != nil {
+			primary.OnRegionRemove(id)
+		}
+		if secondary.OnRegionRemove != nil {
+			secondary.OnRegionRemove(id)
+		}
+	}
+	return RegionHooks{
+		OnRegionUpdate: update,
+		OnRegionRemove: remove,
+	}
 }
