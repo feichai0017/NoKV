@@ -17,3 +17,5 @@ mem.pprof
 benchmark.test
 
 AGENTS.md
+
+artifacts/

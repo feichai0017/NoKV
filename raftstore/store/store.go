@@ -1,12 +1,17 @@
 package store
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 // Store hosts a collection of peers and provides helpers inspired by
@@ -14,15 +19,21 @@ import (
 // lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
 // ticks or proposals without needing to keep global peer maps themselves.
 type Store struct {
-	mu            sync.RWMutex
-	router        *Router
-	peers         map[uint64]*peer.Peer
-	peerFactory   PeerFactory
-	hooks         LifecycleHooks
-	regionHooks   RegionHooks
-	regionMetrics *RegionMetrics
-	manifest      *manifest.Manager
-	regions       *regionManager
+	mu                sync.RWMutex
+	router            *Router
+	peers             map[uint64]*peer.Peer
+	peerFactory       PeerFactory
+	hooks             LifecycleHooks
+	regionHooks       RegionHooks
+	regionMetrics     *RegionMetrics
+	manifest          *manifest.Manager
+	regions           *regionManager
+	scheduler         scheduler.RegionSink
+	heartbeatInterval time.Duration
+	heartbeatStop     chan struct{}
+	heartbeatWG       sync.WaitGroup
+	storeID           uint64
+	planner           scheduler.Planner
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -60,44 +71,98 @@ func NewStoreWithConfig(cfg Config) *Store {
 		factory = peer.NewPeer
 	}
 	metrics := NewRegionMetrics()
-	combinedHooks := mergeRegionHooks(metrics.Hooks(), cfg.RegionHooks)
+	hookChain := []RegionHooks{metrics.Hooks()}
+	if cfg.Scheduler != nil {
+		hookChain = append(hookChain, RegionHooks{
+			OnRegionUpdate: cfg.Scheduler.SubmitRegionHeartbeat,
+			OnRegionRemove: cfg.Scheduler.RemoveRegion,
+		})
+	}
+	hookChain = append(hookChain, cfg.RegionHooks)
+	combinedHooks := mergeRegionHooks(hookChain...)
+	planner := cfg.Planner
+	if planner == nil {
+		planner = scheduler.NoopPlanner{}
+	}
 	s := &Store{
-		router:        router,
-		peers:         make(map[uint64]*peer.Peer),
-		peerFactory:   factory,
-		hooks:         cfg.Hooks,
-		regionHooks:   combinedHooks,
-		regionMetrics: metrics,
-		manifest:      cfg.Manifest,
-		regions:       newRegionManager(),
+		router:            router,
+		peers:             make(map[uint64]*peer.Peer),
+		peerFactory:       factory,
+		hooks:             cfg.Hooks,
+		regionHooks:       combinedHooks,
+		regionMetrics:     metrics,
+		manifest:          cfg.Manifest,
+		regions:           newRegionManager(),
+		scheduler:         cfg.Scheduler,
+		heartbeatInterval: cfg.HeartbeatInterval,
+		storeID:           cfg.StoreID,
+		planner:           planner,
 	}
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
+	if s.scheduler != nil {
+		if s.heartbeatInterval <= 0 {
+			s.heartbeatInterval = 3 * time.Second
+		}
+	}
+	s.heartbeatStop = make(chan struct{})
 	RegisterStore(s)
+	if s.scheduler != nil {
+		s.startHeartbeatLoop()
+	}
 	return s
 }
 
 // SplitRegion updates metadata for an existing region and inserts the new
 // split region. Metadata is persisted via manifest when available.
-func (s *Store) SplitRegion(parentID uint64, child manifest.RegionMeta) error {
-    if s == nil {
-        return fmt.Errorf("raftstore: store is nil")
-    }
-    if parentID == 0 || child.ID == 0 {
-        return fmt.Errorf("raftstore: region ids must be non-zero")
-    }
-    parent, ok := s.RegionMetaByID(parentID)
-    if !ok {
-        return fmt.Errorf("raftstore: parent region %d not found", parentID)
-    }
-    if child.State == 0 {
-        child.State = manifest.RegionStateRunning
-    }
-    if err := s.UpdateRegion(parent); err != nil {
-        return err
-    }
-    return s.UpdateRegion(child)
+// SplitRegion updates the parent region metadata and bootsraps a new peer for
+// the child region. childCfg must include the child region meta and raft
+// configuration. bootstrapPeers is forwarded to StartPeer for the child.
+func (s *Store) SplitRegion(parentID uint64, childCfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer.Peer, error) {
+	if s == nil {
+		return nil, fmt.Errorf("raftstore: store is nil")
+	}
+	if parentID == 0 {
+		return nil, fmt.Errorf("raftstore: parent region id is zero")
+	}
+	if childCfg == nil || childCfg.Region == nil {
+		return nil, fmt.Errorf("raftstore: child region config missing")
+	}
+	childMeta := manifest.CloneRegionMeta(*childCfg.Region)
+	if childMeta.ID == 0 {
+		return nil, fmt.Errorf("raftstore: child region id is zero")
+	}
+	if len(childMeta.StartKey) == 0 {
+		return nil, fmt.Errorf("raftstore: child region start key required")
+	}
+	parentMeta, ok := s.RegionMetaByID(parentID)
+	if !ok {
+		return nil, fmt.Errorf("raftstore: parent region %d not found", parentID)
+	}
+	originalParent := manifest.CloneRegionMeta(parentMeta)
+	if len(parentMeta.EndKey) > 0 && bytes.Compare(childMeta.StartKey, parentMeta.EndKey) >= 0 {
+		return nil, fmt.Errorf("raftstore: split key >= parent end key")
+	}
+	if bytes.Compare(childMeta.StartKey, parentMeta.StartKey) <= 0 {
+		return nil, fmt.Errorf("raftstore: split key must be greater than parent start key")
+	}
+	newParent := parentMeta
+	newParent.EndKey = append([]byte(nil), childMeta.StartKey...)
+	newParent.Epoch.Version++
+	if err := s.UpdateRegion(newParent); err != nil {
+		return nil, err
+	}
+	if childMeta.State == 0 {
+		childMeta.State = manifest.RegionStateRunning
+	}
+	childCfg.Region = &childMeta
+	childPeer, err := s.StartPeer(childCfg, bootstrapPeers)
+	if err != nil {
+		_ = s.UpdateRegion(originalParent)
+		return nil, err
+	}
+	return childPeer, nil
 }
 
 // Router exposes the underlying router reference so transports can reuse the
@@ -143,7 +208,9 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	if factory == nil {
 		factory = peer.NewPeer
 	}
-	p, err := factory(cfg)
+	cfgCopy := *cfg
+	cfgCopy.ConfChange = s.handlePeerConfChange
+	p, err := factory(&cfgCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +283,142 @@ func (s *Store) StopPeer(id uint64) {
 	if p != nil {
 		p.Close()
 	}
+}
+
+// Close stops background workers associated with the store.
+func (s *Store) Close() {
+	if s == nil {
+		return
+	}
+	if s.heartbeatStop != nil {
+		close(s.heartbeatStop)
+	}
+	s.heartbeatWG.Wait()
+}
+
+func (s *Store) startHeartbeatLoop() {
+	if s == nil || s.scheduler == nil || s.heartbeatInterval <= 0 {
+		return
+	}
+	for _, meta := range s.RegionMetas() {
+		s.scheduler.SubmitRegionHeartbeat(meta)
+	}
+	if s.storeID != 0 {
+		s.scheduler.SubmitStoreHeartbeat(s.storeStatsSnapshot())
+	}
+	s.processPlanner()
+	s.heartbeatWG.Add(1)
+	go func() {
+		defer s.heartbeatWG.Done()
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				metas := s.RegionMetas()
+				for _, meta := range metas {
+					s.scheduler.SubmitRegionHeartbeat(meta)
+				}
+				if s.storeID != 0 {
+					s.scheduler.SubmitStoreHeartbeat(s.storeStatsSnapshot())
+				}
+				s.processPlanner()
+			case <-s.heartbeatStop:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Store) processPlanner() {
+	if s == nil || s.planner == nil {
+		return
+	}
+	snapshot := s.SchedulerSnapshot()
+	ops := s.planner.Plan(snapshot)
+	for _, op := range ops {
+		s.applyOperation(op)
+	}
+}
+
+func (s *Store) applyOperation(op scheduler.Operation) {
+	if s == nil {
+		return
+	}
+	switch op.Type {
+	case scheduler.OperationLeaderTransfer:
+		if op.Source == 0 || op.Target == 0 {
+			return
+		}
+		s.VisitPeers(func(p *peer.Peer) {
+			if p.ID() == op.Source {
+				_ = p.TransferLeader(op.Target)
+			}
+		})
+	}
+}
+
+func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
+	return scheduler.StoreStats{
+		StoreID:   s.storeID,
+		RegionNum: uint64(len(s.RegionMetas())),
+		LeaderNum: s.countLeaders(),
+	}
+}
+
+func (s *Store) countLeaders() uint64 {
+	if s == nil {
+		return 0
+	}
+	var leaders uint64
+	s.VisitPeers(func(p *peer.Peer) {
+		if p.Status().RaftState == myraft.StateLeader {
+			leaders++
+		}
+	})
+	return leaders
+}
+
+// SchedulerSnapshot returns the scheduler snapshot if the store is connected to
+// a coordinator that implements SnapshotProvider. When unavailable, an empty
+// snapshot is returned.
+func (s *Store) SchedulerSnapshot() scheduler.Snapshot {
+	if s == nil {
+		return scheduler.Snapshot{}
+	}
+	snap := scheduler.Snapshot{}
+	if provider, ok := s.scheduler.(scheduler.SnapshotProvider); ok {
+		regions := provider.RegionSnapshot()
+		stores := provider.StoreSnapshot()
+		snap.Stores = append(snap.Stores, stores...)
+		for _, meta := range regions {
+			snap.Regions = append(snap.Regions, s.buildRegionDescriptor(meta))
+		}
+	}
+	return snap
+}
+
+func (s *Store) buildRegionDescriptor(meta manifest.RegionMeta) scheduler.RegionDescriptor {
+	desc := scheduler.RegionDescriptor{
+		ID:       meta.ID,
+		StartKey: append([]byte(nil), meta.StartKey...),
+		EndKey:   append([]byte(nil), meta.EndKey...),
+		Epoch:    meta.Epoch,
+	}
+	var leaderPeerID uint64
+	if local := s.regions.peer(meta.ID); local != nil {
+		if local.Status().RaftState == myraft.StateLeader {
+			leaderPeerID = local.ID()
+		}
+	}
+	for _, peerMeta := range meta.Peers {
+		desc.Peers = append(desc.Peers, scheduler.PeerDescriptor{
+			StoreID: peerMeta.StoreID,
+			PeerID:  peerMeta.PeerID,
+			Leader:  peerMeta.PeerID == leaderPeerID,
+		})
+	}
+	return desc
 }
 
 // UpdateRegion persists the region metadata (when a manifest manager is
@@ -332,6 +535,31 @@ func validRegionStateTransition(current, next manifest.RegionState) bool {
 	}
 }
 
+func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
+	if s == nil {
+		return nil
+	}
+	region := ev.RegionMeta
+	if region == nil && ev.Peer != nil {
+		region = ev.Peer.RegionMeta()
+	}
+	if region == nil || region.ID == 0 {
+		return nil
+	}
+	meta := manifest.CloneRegionMeta(*region)
+	changed, err := applyConfChangeToMeta(&meta, ev.ConfChange)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	if len(ev.ConfChange.Changes) > 0 {
+		meta.Epoch.ConfVersion += uint64(len(ev.ConfChange.Changes))
+	}
+	return s.UpdateRegion(meta)
+}
+
 // VisitPeers executes the provided callback for every peer registered with the
 // store. The callback receives a snapshot of the peer pointer so callers can
 // perform operations without holding the store lock for extended periods.
@@ -400,6 +628,163 @@ func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	return p, ok
 }
 
+// ProposeAddPeer issues a configuration change to add the provided peer to the
+// region's raft group. The manifest and in-memory region metadata are updated
+// once the configuration change is committed and applied.
+func (s *Store) ProposeAddPeer(regionID uint64, meta manifest.PeerMeta) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if regionID == 0 {
+		return fmt.Errorf("raftstore: region id is zero")
+	}
+	if meta.PeerID == 0 {
+		return fmt.Errorf("raftstore: peer id is zero")
+	}
+	peerRef := s.regions.peer(regionID)
+	if peerRef == nil {
+		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	cc := raftpb.ConfChangeV2{
+		Changes: []raftpb.ConfChangeSingle{
+			{
+				Type:   raftpb.ConfChangeAddNode,
+				NodeID: meta.PeerID,
+			},
+		},
+		Context: encodeConfChangeContext([]manifest.PeerMeta{meta}),
+	}
+	return peerRef.ProposeConfChange(cc)
+}
+
+// ProposeRemovePeer issues a configuration change removing the peer with the
+// provided peer ID from the region's raft group.
+func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if regionID == 0 || peerID == 0 {
+		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, peerID)
+	}
+	peerRef := s.regions.peer(regionID)
+	if peerRef == nil {
+		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	ctxMeta := manifest.PeerMeta{StoreID: peerID, PeerID: peerID}
+	if meta, ok := s.RegionMetaByID(regionID); ok {
+		if idx := peerIndexByID(meta.Peers, peerID); idx >= 0 {
+			ctxMeta = meta.Peers[idx]
+		}
+	}
+	cc := raftpb.ConfChangeV2{
+		Changes: []raftpb.ConfChangeSingle{
+			{
+				Type:   raftpb.ConfChangeRemoveNode,
+				NodeID: peerID,
+			},
+		},
+		Context: encodeConfChangeContext([]manifest.PeerMeta{ctxMeta}),
+	}
+	return peerRef.ProposeConfChange(cc)
+}
+
+// TransferLeader initiates leadership transfer for the specified region to the
+// provided peer ID.
+func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if regionID == 0 || targetPeerID == 0 {
+		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, targetPeerID)
+	}
+	peerRef := s.regions.peer(regionID)
+	if peerRef == nil {
+		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	return peerRef.TransferLeader(targetPeerID)
+}
+
+func applyConfChangeToMeta(meta *manifest.RegionMeta, cc raftpb.ConfChangeV2) (bool, error) {
+	if meta == nil {
+		return false, fmt.Errorf("raftstore: region meta is nil")
+	}
+	changed := false
+	ctxPeers, err := decodeConfChangeContext(cc.Context)
+	if err != nil {
+		return false, err
+	}
+	ctxIndex := 0
+	for _, change := range cc.Changes {
+		peerMeta := manifest.PeerMeta{StoreID: change.NodeID, PeerID: change.NodeID}
+		if ctxIndex < len(ctxPeers) {
+			peerMeta = ctxPeers[ctxIndex]
+		}
+		ctxIndex++
+		switch change.Type {
+		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
+			if idx := peerIndexByID(meta.Peers, peerMeta.PeerID); idx == -1 {
+				meta.Peers = append(meta.Peers, peerMeta)
+				changed = true
+			}
+		case raftpb.ConfChangeRemoveNode:
+			if idx := peerIndexByID(meta.Peers, change.NodeID); idx >= 0 {
+				meta.Peers = append(meta.Peers[:idx], meta.Peers[idx+1:]...)
+				changed = true
+			}
+		case raftpb.ConfChangeUpdateNode:
+			if idx := peerIndexByID(meta.Peers, change.NodeID); idx >= 0 {
+				meta.Peers[idx] = peerMeta
+				changed = true
+			}
+		default:
+			return false, fmt.Errorf("raftstore: unsupported conf change type %v", change.Type)
+		}
+	}
+	return changed, nil
+}
+
+func encodeConfChangeContext(peers []manifest.PeerMeta) []byte {
+	if len(peers) == 0 {
+		return nil
+	}
+	buf := make([]byte, 0, len(peers)*16)
+	for _, meta := range peers {
+		buf = binary.AppendUvarint(buf, meta.StoreID)
+		buf = binary.AppendUvarint(buf, meta.PeerID)
+	}
+	return buf
+}
+
+func decodeConfChangeContext(ctx []byte) ([]manifest.PeerMeta, error) {
+	if len(ctx) == 0 {
+		return nil, nil
+	}
+	peers := make([]manifest.PeerMeta, 0, 2)
+	for len(ctx) > 0 {
+		storeID, n := binary.Uvarint(ctx)
+		if n <= 0 {
+			return nil, fmt.Errorf("raftstore: invalid conf change context")
+		}
+		ctx = ctx[n:]
+		peerID, m := binary.Uvarint(ctx)
+		if m <= 0 {
+			return nil, fmt.Errorf("raftstore: invalid conf change context")
+		}
+		ctx = ctx[m:]
+		peers = append(peers, manifest.PeerMeta{StoreID: storeID, PeerID: peerID})
+	}
+	return peers, nil
+}
+
+func peerIndexByID(peers []manifest.PeerMeta, peerID uint64) int {
+	for i, meta := range peers {
+		if meta.PeerID == peerID {
+			return i
+		}
+	}
+	return -1
+}
+
 // Peers returns a snapshot describing every peer managed by the store.
 func (s *Store) Peers() []PeerHandle {
 	if s == nil {
@@ -418,25 +803,33 @@ func (s *Store) Peers() []PeerHandle {
 	return handles
 }
 
-func mergeRegionHooks(primary, secondary RegionHooks) RegionHooks {
+func mergeRegionHooks(hooks ...RegionHooks) RegionHooks {
 	update := func(meta manifest.RegionMeta) {
-		if primary.OnRegionUpdate != nil {
-			primary.OnRegionUpdate(meta)
-		}
-		if secondary.OnRegionUpdate != nil {
-			secondary.OnRegionUpdate(meta)
+		for _, h := range hooks {
+			if h.OnRegionUpdate != nil {
+				h.OnRegionUpdate(meta)
+			}
 		}
 	}
 	remove := func(id uint64) {
-		if primary.OnRegionRemove != nil {
-			primary.OnRegionRemove(id)
-		}
-		if secondary.OnRegionRemove != nil {
-			secondary.OnRegionRemove(id)
+		for _, h := range hooks {
+			if h.OnRegionRemove != nil {
+				h.OnRegionRemove(id)
+			}
 		}
 	}
 	return RegionHooks{
-		OnRegionUpdate: update,
-		OnRegionRemove: remove,
+		OnRegionUpdate: func(meta manifest.RegionMeta) {
+			if len(hooks) == 0 {
+				return
+			}
+			update(meta)
+		},
+		OnRegionRemove: func(id uint64) {
+			if len(hooks) == 0 {
+				return
+			}
+			remove(id)
+		},
 	}
 }
