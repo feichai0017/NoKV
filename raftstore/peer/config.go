@@ -21,6 +21,7 @@ type Config struct {
 	Peers            []myraft.Peer
 	Transport        transport.Transport
 	Apply            ApplyFunc
+	AdminApply       AdminApplyFunc
 	ConfChange       ConfChangeHandler
 	StorageDir       string
 	WAL              *wal.Manager

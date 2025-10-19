@@ -7,17 +7,22 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	proto "google.golang.org/protobuf/proto"
 )
 
 // ApplyFunc consumes committed raft log entries and applies them to the user
 // state machine (LSM, MVCC, etc).
 type ApplyFunc func(entries []myraft.Entry) error
+
+// AdminApplyFunc consumes admin commands (split, merge, etc.).
+type AdminApplyFunc func(cmd *pb.AdminCommand) error
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
@@ -27,6 +32,7 @@ type Peer struct {
 	storage          engine.PeerStorage
 	transport        transport.Transport
 	apply            ApplyFunc
+	adminApply       AdminApplyFunc
 	raftLog          *raftLogTracker
 	snapshotQueue    *snapshotResendQueue
 	logRetainEntries uint64
@@ -42,6 +48,23 @@ type Peer struct {
 const defaultMaxInFlightApply = 8192
 
 var errPeerStopped = errors.New("raftstore: peer stopped")
+
+const adminCommandPrefix byte = 0xAD
+
+func isAdminEntry(data []byte) bool {
+	return len(data) > 0 && data[0] == adminCommandPrefix
+}
+
+func decodeAdminCommand(data []byte) (*pb.AdminCommand, error) {
+	if len(data) <= 1 {
+		return nil, fmt.Errorf("raftstore: admin command payload too short")
+	}
+	var cmd pb.AdminCommand
+	if err := proto.Unmarshal(data[1:], &cmd); err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
 
 // NewPeer constructs a peer using the provided configuration. The caller must
 // register the peer with the transport before invoking Bootstrap.
@@ -75,6 +98,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		storage:          storage,
 		transport:        cfg.Transport,
 		apply:            cfg.Apply,
+		adminApply:       cfg.AdminApply,
 		confChangeHook:   cfg.ConfChange,
 		raftLog:          newRaftLogTracker(cfg.Manifest, cfg.WAL, nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
@@ -181,6 +205,24 @@ func (p *Peer) Propose(data []byte) error {
 	}
 	p.mu.Lock()
 	err := p.node.Propose(data)
+	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return p.processReady()
+}
+
+// ProposeAdmin submits an admin command encoded as pb.AdminCommand payload.
+func (p *Peer) ProposeAdmin(cmdData []byte) error {
+	if len(cmdData) == 0 {
+		return fmt.Errorf("raftstore: empty admin command")
+	}
+	if err := p.waitForApplyBacklog(); err != nil {
+		return err
+	}
+	payload := append([]byte{adminCommandPrefix}, cmdData...)
+	p.mu.Lock()
+	err := p.node.Propose(payload)
 	p.mu.Unlock()
 	if err != nil {
 		return err
@@ -356,6 +398,19 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 					return err
 				}
 			default:
+				if len(entry.Data) == 0 {
+					continue
+				}
+				if isAdminEntry(entry.Data) {
+					cmd, err := decodeAdminCommand(entry.Data)
+					if err != nil {
+						return err
+					}
+					if err := p.applyAdminCommand(cmd); err != nil {
+						return err
+					}
+					continue
+				}
 				toApply = append(toApply, entry)
 			}
 		}
@@ -397,6 +452,16 @@ func (p *Peer) maybeCompact(applied uint64) error {
 		return nil
 	}
 	return ws.MaybeCompact(applied, p.logRetainEntries)
+}
+
+func (p *Peer) applyAdminCommand(cmd *pb.AdminCommand) error {
+	if p == nil || cmd == nil {
+		return nil
+	}
+	if p.adminApply == nil {
+		return nil
+	}
+	return p.adminApply(cmd)
 }
 
 // WaitApplied blocks until the provided raft log index has been fully applied.
