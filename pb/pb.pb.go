@@ -69,6 +69,55 @@ func (ManifestChange_Operation) EnumDescriptor() ([]byte, []int) {
 	return file_pb_proto_rawDescGZIP(), []int{3, 0}
 }
 
+type AdminCommand_Type int32
+
+const (
+	AdminCommand_UNKNOWN AdminCommand_Type = 0
+	AdminCommand_SPLIT   AdminCommand_Type = 1
+	AdminCommand_MERGE   AdminCommand_Type = 2
+)
+
+// Enum value maps for AdminCommand_Type.
+var (
+	AdminCommand_Type_name = map[int32]string{
+		0: "UNKNOWN",
+		1: "SPLIT",
+		2: "MERGE",
+	}
+	AdminCommand_Type_value = map[string]int32{
+		"UNKNOWN": 0,
+		"SPLIT":   1,
+		"MERGE":   2,
+	}
+)
+
+func (x AdminCommand_Type) Enum() *AdminCommand_Type {
+	p := new(AdminCommand_Type)
+	*p = x
+	return p
+}
+
+func (x AdminCommand_Type) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AdminCommand_Type) Descriptor() protoreflect.EnumDescriptor {
+	return file_pb_proto_enumTypes[1].Descriptor()
+}
+
+func (AdminCommand_Type) Type() protoreflect.EnumType {
+	return &file_pb_proto_enumTypes[1]
+}
+
+func (x AdminCommand_Type) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AdminCommand_Type.Descriptor instead.
+func (AdminCommand_Type) EnumDescriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{10, 0}
+}
+
 type KV struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Key       []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -455,6 +504,314 @@ func (x *BlockOffset) GetLen() uint32 {
 	return 0
 }
 
+type RegionPeer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	PeerId        uint64                 `protobuf:"varint,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegionPeer) Reset() {
+	*x = RegionPeer{}
+	mi := &file_pb_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegionPeer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegionPeer) ProtoMessage() {}
+
+func (x *RegionPeer) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegionPeer.ProtoReflect.Descriptor instead.
+func (*RegionPeer) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RegionPeer) GetStoreId() uint64 {
+	if x != nil {
+		return x.StoreId
+	}
+	return 0
+}
+
+func (x *RegionPeer) GetPeerId() uint64 {
+	if x != nil {
+		return x.PeerId
+	}
+	return 0
+}
+
+type RegionMeta struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	StartKey         []byte                 `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	EndKey           []byte                 `protobuf:"bytes,3,opt,name=end_key,json=endKey,proto3" json:"end_key,omitempty"`
+	EpochVersion     uint64                 `protobuf:"varint,4,opt,name=epoch_version,json=epochVersion,proto3" json:"epoch_version,omitempty"`
+	EpochConfVersion uint64                 `protobuf:"varint,5,opt,name=epoch_conf_version,json=epochConfVersion,proto3" json:"epoch_conf_version,omitempty"`
+	Peers            []*RegionPeer          `protobuf:"bytes,6,rep,name=peers,proto3" json:"peers,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RegionMeta) Reset() {
+	*x = RegionMeta{}
+	mi := &file_pb_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegionMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegionMeta) ProtoMessage() {}
+
+func (x *RegionMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegionMeta.ProtoReflect.Descriptor instead.
+func (*RegionMeta) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RegionMeta) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *RegionMeta) GetStartKey() []byte {
+	if x != nil {
+		return x.StartKey
+	}
+	return nil
+}
+
+func (x *RegionMeta) GetEndKey() []byte {
+	if x != nil {
+		return x.EndKey
+	}
+	return nil
+}
+
+func (x *RegionMeta) GetEpochVersion() uint64 {
+	if x != nil {
+		return x.EpochVersion
+	}
+	return 0
+}
+
+func (x *RegionMeta) GetEpochConfVersion() uint64 {
+	if x != nil {
+		return x.EpochConfVersion
+	}
+	return 0
+}
+
+func (x *RegionMeta) GetPeers() []*RegionPeer {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
+type SplitCommand struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ParentRegionId uint64                 `protobuf:"varint,1,opt,name=parent_region_id,json=parentRegionId,proto3" json:"parent_region_id,omitempty"`
+	SplitKey       []byte                 `protobuf:"bytes,2,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
+	Child          *RegionMeta            `protobuf:"bytes,3,opt,name=child,proto3" json:"child,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SplitCommand) Reset() {
+	*x = SplitCommand{}
+	mi := &file_pb_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SplitCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SplitCommand) ProtoMessage() {}
+
+func (x *SplitCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SplitCommand.ProtoReflect.Descriptor instead.
+func (*SplitCommand) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SplitCommand) GetParentRegionId() uint64 {
+	if x != nil {
+		return x.ParentRegionId
+	}
+	return 0
+}
+
+func (x *SplitCommand) GetSplitKey() []byte {
+	if x != nil {
+		return x.SplitKey
+	}
+	return nil
+}
+
+func (x *SplitCommand) GetChild() *RegionMeta {
+	if x != nil {
+		return x.Child
+	}
+	return nil
+}
+
+type MergeCommand struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TargetRegionId uint64                 `protobuf:"varint,1,opt,name=target_region_id,json=targetRegionId,proto3" json:"target_region_id,omitempty"`
+	SourceRegionId uint64                 `protobuf:"varint,2,opt,name=source_region_id,json=sourceRegionId,proto3" json:"source_region_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MergeCommand) Reset() {
+	*x = MergeCommand{}
+	mi := &file_pb_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MergeCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MergeCommand) ProtoMessage() {}
+
+func (x *MergeCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MergeCommand.ProtoReflect.Descriptor instead.
+func (*MergeCommand) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *MergeCommand) GetTargetRegionId() uint64 {
+	if x != nil {
+		return x.TargetRegionId
+	}
+	return 0
+}
+
+func (x *MergeCommand) GetSourceRegionId() uint64 {
+	if x != nil {
+		return x.SourceRegionId
+	}
+	return 0
+}
+
+type AdminCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          AdminCommand_Type      `protobuf:"varint,1,opt,name=type,proto3,enum=pb.AdminCommand_Type" json:"type,omitempty"`
+	Split         *SplitCommand          `protobuf:"bytes,2,opt,name=split,proto3" json:"split,omitempty"`
+	Merge         *MergeCommand          `protobuf:"bytes,3,opt,name=merge,proto3" json:"merge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminCommand) Reset() {
+	*x = AdminCommand{}
+	mi := &file_pb_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminCommand) ProtoMessage() {}
+
+func (x *AdminCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminCommand.ProtoReflect.Descriptor instead.
+func (*AdminCommand) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AdminCommand) GetType() AdminCommand_Type {
+	if x != nil {
+		return x.Type
+	}
+	return AdminCommand_UNKNOWN
+}
+
+func (x *AdminCommand) GetSplit() *SplitCommand {
+	if x != nil {
+		return x.Split
+	}
+	return nil
+}
+
+func (x *AdminCommand) GetMerge() *MergeCommand {
+	if x != nil {
+		return x.Merge
+	}
+	return nil
+}
+
 var File_pb_proto protoreflect.FileDescriptor
 
 const file_pb_proto_rawDesc = "" +
@@ -496,7 +853,34 @@ const file_pb_proto_rawDesc = "" +
 	"\vBlockOffset\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x10\n" +
-	"\x03len\x18\x03 \x01(\rR\x03lenB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x03len\x18\x03 \x01(\rR\x03len\"@\n" +
+	"\n" +
+	"RegionPeer\x12\x19\n" +
+	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x17\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"\xcb\x01\n" +
+	"\n" +
+	"RegionMeta\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1b\n" +
+	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x17\n" +
+	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12#\n" +
+	"\repoch_version\x18\x04 \x01(\x04R\fepochVersion\x12,\n" +
+	"\x12epoch_conf_version\x18\x05 \x01(\x04R\x10epochConfVersion\x12$\n" +
+	"\x05peers\x18\x06 \x03(\v2\x0e.pb.RegionPeerR\x05peers\"{\n" +
+	"\fSplitCommand\x12(\n" +
+	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
+	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x12$\n" +
+	"\x05child\x18\x03 \x01(\v2\x0e.pb.RegionMetaR\x05child\"b\n" +
+	"\fMergeCommand\x12(\n" +
+	"\x10target_region_id\x18\x01 \x01(\x04R\x0etargetRegionId\x12(\n" +
+	"\x10source_region_id\x18\x02 \x01(\x04R\x0esourceRegionId\"\xb4\x01\n" +
+	"\fAdminCommand\x12)\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x15.pb.AdminCommand.TypeR\x04type\x12&\n" +
+	"\x05split\x18\x02 \x01(\v2\x10.pb.SplitCommandR\x05split\x12&\n" +
+	"\x05merge\x18\x03 \x01(\v2\x10.pb.MergeCommandR\x05merge\")\n" +
+	"\x04Type\x12\v\n" +
+	"\aUNKNOWN\x10\x00\x12\t\n" +
+	"\x05SPLIT\x10\x01\x12\t\n" +
+	"\x05MERGE\x10\x02B Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
 
 var (
 	file_pb_proto_rawDescOnce sync.Once
@@ -510,27 +894,38 @@ func file_pb_proto_rawDescGZIP() []byte {
 	return file_pb_proto_rawDescData
 }
 
-var file_pb_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_pb_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_pb_proto_goTypes = []any{
 	(ManifestChange_Operation)(0), // 0: pb.ManifestChange.Operation
-	(*KV)(nil),                    // 1: pb.KV
-	(*KVList)(nil),                // 2: pb.KVList
-	(*ManifestChangeSet)(nil),     // 3: pb.ManifestChangeSet
-	(*ManifestChange)(nil),        // 4: pb.ManifestChange
-	(*TableIndex)(nil),            // 5: pb.TableIndex
-	(*BlockOffset)(nil),           // 6: pb.BlockOffset
+	(AdminCommand_Type)(0),        // 1: pb.AdminCommand.Type
+	(*KV)(nil),                    // 2: pb.KV
+	(*KVList)(nil),                // 3: pb.KVList
+	(*ManifestChangeSet)(nil),     // 4: pb.ManifestChangeSet
+	(*ManifestChange)(nil),        // 5: pb.ManifestChange
+	(*TableIndex)(nil),            // 6: pb.TableIndex
+	(*BlockOffset)(nil),           // 7: pb.BlockOffset
+	(*RegionPeer)(nil),            // 8: pb.RegionPeer
+	(*RegionMeta)(nil),            // 9: pb.RegionMeta
+	(*SplitCommand)(nil),          // 10: pb.SplitCommand
+	(*MergeCommand)(nil),          // 11: pb.MergeCommand
+	(*AdminCommand)(nil),          // 12: pb.AdminCommand
 }
 var file_pb_proto_depIdxs = []int32{
-	1, // 0: pb.KVList.kv:type_name -> pb.KV
-	4, // 1: pb.ManifestChangeSet.changes:type_name -> pb.ManifestChange
-	0, // 2: pb.ManifestChange.Op:type_name -> pb.ManifestChange.Operation
-	6, // 3: pb.TableIndex.offsets:type_name -> pb.BlockOffset
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	2,  // 0: pb.KVList.kv:type_name -> pb.KV
+	5,  // 1: pb.ManifestChangeSet.changes:type_name -> pb.ManifestChange
+	0,  // 2: pb.ManifestChange.Op:type_name -> pb.ManifestChange.Operation
+	7,  // 3: pb.TableIndex.offsets:type_name -> pb.BlockOffset
+	8,  // 4: pb.RegionMeta.peers:type_name -> pb.RegionPeer
+	9,  // 5: pb.SplitCommand.child:type_name -> pb.RegionMeta
+	1,  // 6: pb.AdminCommand.type:type_name -> pb.AdminCommand.Type
+	10, // 7: pb.AdminCommand.split:type_name -> pb.SplitCommand
+	11, // 8: pb.AdminCommand.merge:type_name -> pb.MergeCommand
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_pb_proto_init() }
@@ -543,8 +938,8 @@ func file_pb_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pb_proto_rawDesc), len(file_pb_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   6,
+			NumEnums:      2,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

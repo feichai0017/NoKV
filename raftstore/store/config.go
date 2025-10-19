@@ -13,6 +13,11 @@ import (
 // keeping the store orchestration generic.
 type PeerFactory func(*peer.Config) (*peer.Peer, error)
 
+// PeerBuilder constructs peer configuration for the provided region metadata.
+// It allows the store to spawn new peers for splits without external callers
+// wiring the configuration manually.
+type PeerBuilder func(meta manifest.RegionMeta) (*peer.Config, error)
+
 // LifecycleHooks exposes callbacks triggered when peers are started or
 // stopped. The hooks allow tests and higher-level components to mirror
 // TinyKV's raftstore design, where the store notifies schedulers about region
@@ -34,6 +39,7 @@ type RegionHooks struct {
 type Config struct {
 	Router            *Router
 	PeerFactory       PeerFactory
+	PeerBuilder       PeerBuilder
 	Hooks             LifecycleHooks
 	RegionHooks       RegionHooks
 	Manifest          *manifest.Manager

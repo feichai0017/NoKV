@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +19,36 @@ import (
 type noopTransport struct{}
 
 func (noopTransport) Send(myraft.Message) {}
+
+func testPeerBuilder(storeID uint64) store.PeerBuilder {
+	return func(meta manifest.RegionMeta) (*raftstore.Config, error) {
+		var peerID uint64
+		for _, peerMeta := range meta.Peers {
+			if peerMeta.StoreID == storeID {
+				peerID = peerMeta.PeerID
+				break
+			}
+		}
+		if peerID == 0 {
+			return nil, fmt.Errorf("store %d missing peer in region %d", storeID, meta.ID)
+		}
+		cfg := &raftstore.Config{
+			RaftConfig: myraft.Config{
+				ID:              peerID,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport: noopTransport{},
+			Apply:     func([]myraft.Entry) error { return nil },
+			GroupID:   meta.ID,
+			Region:    manifest.CloneRegionMetaPtr(&meta),
+		}
+		return cfg, nil
+	}
+}
 
 func TestStorePeerLifecycle(t *testing.T) {
 	router := store.NewRouter()
@@ -293,65 +325,45 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 }
 
 func TestStoreSplitRegionStartsChildPeer(t *testing.T) {
-	rs := store.NewStore(nil)
+	storeID := uint64(1)
+	peerBuilder := testPeerBuilder(storeID)
+	rs := store.NewStoreWithConfig(store.Config{PeerBuilder: peerBuilder, StoreID: storeID})
 	defer rs.Close()
 
-	parentCfg := &raftstore.Config{
-		RaftConfig: myraft.Config{
-			ID:              1,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-		},
-		Transport: noopTransport{},
-		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &manifest.RegionMeta{
-			ID:       1000,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 1}},
-		},
+	parentMeta := manifest.RegionMeta{
+		ID:       1000,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 1}},
 	}
-
+	parentCfg, err := peerBuilder(parentMeta)
+	require.NoError(t, err)
 	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 1}})
 	require.NoError(t, err)
 	defer rs.StopPeer(parentPeer.ID())
 
-	childCfg := &raftstore.Config{
-		RaftConfig: myraft.Config{
-			ID:              2,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-		},
-		Transport: noopTransport{},
-		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &manifest.RegionMeta{
-			ID:       2000,
-			StartKey: []byte("m"),
-			EndKey:   []byte("z"),
-			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 2}},
-		},
+	childMeta := manifest.RegionMeta{
+		ID:       2000,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 2}},
 	}
-
-	childPeer, err := rs.SplitRegion(1000, childCfg, []myraft.Peer{{ID: 2}})
+	childPeer, err := rs.SplitRegion(parentMeta.ID, childMeta)
 	require.NoError(t, err)
 	require.NotNil(t, childPeer)
 	defer rs.StopPeer(childPeer.ID())
 
-	parentMeta, ok := rs.RegionMetaByID(1000)
+	parentUpdated, ok := rs.RegionMetaByID(1000)
 	require.True(t, ok)
-	require.Equal(t, []byte("m"), parentMeta.EndKey)
-	require.Equal(t, uint64(1), parentMeta.Epoch.Version)
+	require.Equal(t, []byte("m"), parentUpdated.EndKey)
+	require.Equal(t, uint64(1), parentUpdated.Epoch.Version)
 
-	childMeta, ok := rs.RegionMetaByID(2000)
+	childUpdated, ok := rs.RegionMetaByID(2000)
 	require.True(t, ok)
-	require.Equal(t, []byte("m"), childMeta.StartKey)
-	require.Equal(t, []byte("z"), childMeta.EndKey)
-	require.Len(t, childMeta.Peers, 1)
-	require.Equal(t, uint64(2), childMeta.Peers[0].PeerID)
+	require.Equal(t, []byte("m"), childUpdated.StartKey)
+	require.Equal(t, []byte("z"), childUpdated.EndKey)
+	require.Len(t, childUpdated.Peers, 1)
+	require.Equal(t, uint64(2), childUpdated.Peers[0].PeerID)
 
 }
 
@@ -403,6 +415,7 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	rs := store.NewStoreWithConfig(store.Config{
 		Scheduler:         coord,
 		StoreID:           9,
+		PeerBuilder:       testPeerBuilder(9),
 		HeartbeatInterval: 25 * time.Millisecond,
 	})
 	defer rs.Close()
@@ -426,6 +439,7 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 7}})
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
+	require.NoError(t, peer.Campaign())
 
 	require.Eventually(t, func() bool {
 		_, ok := coord.LastUpdate(77)
@@ -440,6 +454,152 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 
 	snap := rs.SchedulerSnapshot()
 	require.Len(t, snap.Stores, 1)
+	require.Equal(t, uint64(1), snap.Stores[0].LeaderNum)
 	require.NotEmpty(t, snap.Regions)
 	require.Equal(t, uint64(77), snap.Regions[0].ID)
+}
+
+func TestStoreProposeSplitApplies(t *testing.T) {
+	storeID := uint64(11)
+	rs := store.NewStoreWithConfig(store.Config{
+		PeerBuilder:       testPeerBuilder(storeID),
+		StoreID:           storeID,
+		HeartbeatInterval: 10 * time.Millisecond,
+	})
+	defer rs.Close()
+
+	parentMeta := manifest.RegionMeta{
+		ID:       3000,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 31}},
+	}
+	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
+	require.NoError(t, err)
+	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 31}})
+	require.NoError(t, err)
+	defer rs.StopPeer(parentPeer.ID())
+	require.NoError(t, parentPeer.Campaign())
+
+	childMeta := manifest.RegionMeta{
+		ID:       3001,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 32}},
+	}
+	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
+
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(childMeta.ID)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	parentUpdated, ok := rs.RegionMetaByID(parentMeta.ID)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), parentUpdated.EndKey)
+
+	childUpdated, ok := rs.RegionMetaByID(childMeta.ID)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), childUpdated.StartKey)
+}
+
+func TestStoreProposeMergeApplies(t *testing.T) {
+	storeID := uint64(12)
+	rs := store.NewStoreWithConfig(store.Config{
+		PeerBuilder:       testPeerBuilder(storeID),
+		StoreID:           storeID,
+		HeartbeatInterval: 10 * time.Millisecond,
+	})
+	defer rs.Close()
+
+	parentMeta := manifest.RegionMeta{
+		ID:       4000,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 41}},
+	}
+	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
+	require.NoError(t, err)
+	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 41}})
+	require.NoError(t, err)
+	defer rs.StopPeer(parentPeer.ID())
+	require.NoError(t, parentPeer.Campaign())
+
+	sourceMeta := manifest.RegionMeta{
+		ID:       4001,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 42}},
+	}
+	sourceCfg, err := testPeerBuilder(storeID)(sourceMeta)
+	require.NoError(t, err)
+	sourcePeer, err := rs.StartPeer(sourceCfg, []myraft.Peer{{ID: 42}})
+	require.NoError(t, err)
+	defer rs.StopPeer(sourcePeer.ID())
+	require.NoError(t, sourcePeer.Campaign())
+
+	require.NoError(t, rs.ProposeMerge(parentMeta.ID, sourceMeta.ID))
+
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(sourceMeta.ID)
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+
+	parentUpdated, ok := rs.RegionMetaByID(parentMeta.ID)
+	require.True(t, ok)
+	require.True(t, bytes.Equal(parentUpdated.EndKey, []byte("z")))
+
+	_, ok = rs.RegionMetaByID(sourceMeta.ID)
+	require.False(t, ok)
+	if peer, exists := rs.Peer(sourceMeta.Peers[0].PeerID); exists {
+		rs.StopPeer(peer.ID())
+	}
+}
+
+func TestStoreSplitMergeLifecycle(t *testing.T) {
+	storeID := uint64(13)
+	rs := store.NewStoreWithConfig(store.Config{
+		PeerBuilder:       testPeerBuilder(storeID),
+		StoreID:           storeID,
+		HeartbeatInterval: 15 * time.Millisecond,
+	})
+	defer rs.Close()
+
+	parentMeta := manifest.RegionMeta{
+		ID:       5000,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 51}},
+	}
+	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
+	require.NoError(t, err)
+	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 51}})
+	require.NoError(t, err)
+	defer rs.StopPeer(parentPeer.ID())
+	require.NoError(t, parentPeer.Campaign())
+
+	childMeta := manifest.RegionMeta{
+		ID:       5001,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 52}},
+	}
+	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(childMeta.ID)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, rs.ProposeMerge(parentMeta.ID, childMeta.ID))
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(childMeta.ID)
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+
+	parentUpdated, ok := rs.RegionMetaByID(parentMeta.ID)
+	require.True(t, ok)
+	require.True(t, bytes.Equal(parentUpdated.EndKey, []byte("z")))
+	if peer, exists := rs.Peer(childMeta.Peers[0].PeerID); exists {
+		rs.StopPeer(peer.ID())
+	}
 }

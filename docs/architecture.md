@@ -286,15 +286,15 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 - **Done**: WAL watchdog now consumes backlog metrics to trigger automated segment GC and emits typed-record alerts surfaced via stats/CLI.
 
 ### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
-- **Done**: Manifest persists `RegionMeta`; `store.regionManager`/`RegionMetrics` expose the catalog and live counts; `nokv regions` and `StatsSnapshot` now report Region state distribution.
-- **Done**: Added config change plumbing (add/remove peers) and leadership transfer APIs/tests so membership changes keep manifest/RegionMeta in sync.
-- **Done**: `Store.SplitRegion` scaffolding updates parent metadata, boots child peers, and rolls back on failure (future work will add raft-level split admin commands and chaos coverage).
-- **Next**: Provide a dedicated test harness for region splits, membership churn, and log application ordering.
+- **Done**: Manifest persists `RegionMeta`; `store.regionManager`/`RegionMetrics` expose the catalog and live counts; `nokv regions` and `StatsSnapshot` report region state distribution.
+- **Done**: Config change handling (add/remove peers) and leader transfer keep logical membership in sync with manifest updates.
+- **Done**: Split & merge flow through raft admin commands (`Peer.ProposeAdmin` + store handlers). Child peers are bootstrapped, manifest is updated with rollback on failure, and merge removes source peers/regions. Unit tests exercise split → merge lifecycles.
+- **Done**: Split/merge lifecycle tests (including raft-driven `ProposeSplit`/`ProposeMerge`) validate peer bootstrap, metadata updates, and peer teardown.
 
 ### Phase 5 — Cluster Scheduler (TinyKV Project3C)
-- **Done**: Introduced a lightweight scheduler coordinator receiving region/store heartbeats; stores emit periodic heartbeats (configurable interval/StoreID) and the CLI (`nokv scheduler`) exposes the aggregated snapshot.
-- **Done**: Added planner scaffolding with a sample leader-balance heuristic wired through the store to exercise leader transfer operations.
-- **Next**: Harden the scheduling pipeline with operation queues, richer store metrics (capacity/usage), failure detection, and scenario-driven tests for load/peer rebalance.
+- **Done**: Introduced a lightweight scheduler coordinator consuming region/store heartbeats; stores emit periodic heartbeats (configurable interval/StoreID) and the `nokv scheduler` CLI exposes aggregated snapshots.
+- **Done**: Added planner scaffolding with a sample leader-balance heuristic executed via the store heartbeat loop.
+- **Next**: Harden operation queues/cooldowns, enrich store metrics (capacity/usage), add failure detection, and supply scenario-driven tests for load/peer rebalance.
 
 ### Phase 6 — Distributed MVCC & 2PC (TinyKV Project4)
 - Extend MVCC layer to operate across regions: lock table persistence (`lock` CF), write records (`write` CF), and data (`default` CF).
