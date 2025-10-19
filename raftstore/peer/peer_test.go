@@ -245,6 +245,64 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 	require.Equal(t, uint64(ptr.Segment), ptr.SegmentIndex)
 }
 
+func TestPeerTransferLeader(t *testing.T) {
+	net := newMemoryNetwork()
+	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
+
+	for id := uint64(1); id <= 3; id++ {
+		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("transfer-%d", id))
+		db := openDBAt(t, dbDir)
+		t.Cleanup(func(db *NoKV.DB) func() { return func() { _ = db.Close() } }(db))
+		rc := myraft.Config{
+			ID:              id,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   math.MaxUint64,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		}
+		peer, err := raftstore.NewPeer(&raftstore.Config{
+			RaftConfig: rc,
+			Transport:  net,
+			Apply:      applyToDB(db),
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    1,
+		})
+		require.NoError(t, err)
+		net.Register(peer)
+		t.Cleanup(func() { _ = peer.Close() })
+		require.NoError(t, peer.Bootstrap(peerList))
+	}
+
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	leader, ok := net.Leader()
+	require.True(t, ok)
+	require.NotZero(t, leader)
+
+	var target uint64
+	for _, id := range []uint64{1, 2, 3} {
+		if id != leader {
+			target = id
+			break
+		}
+	}
+	require.NotZero(t, target)
+
+	require.NoError(t, net.peers[leader].TransferLeader(target))
+
+	require.Eventually(t, func() bool {
+		for i := 0; i < 3; i++ {
+			net.Tick()
+		}
+		net.Flush()
+		newLeader, ok := net.Leader()
+		return ok && newLeader == target
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	baseDir := t.TempDir()
 	net := newMemoryNetwork()

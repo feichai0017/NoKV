@@ -30,6 +30,7 @@ type Peer struct {
 	raftLog          *raftLogTracker
 	snapshotQueue    *snapshotResendQueue
 	logRetainEntries uint64
+	confChangeHook   ConfChangeHandler
 	applyMark        *utils.WaterMark
 	applyCloser      *utils.Closer
 	applyLimit       uint64
@@ -74,6 +75,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		storage:          storage,
 		transport:        cfg.Transport,
 		apply:            cfg.Apply,
+		confChangeHook:   cfg.ConfChange,
 		raftLog:          newRaftLogTracker(cfg.Manifest, cfg.WAL, nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
 		logRetainEntries: cfg.LogRetainEntries,
@@ -183,6 +185,34 @@ func (p *Peer) Propose(data []byte) error {
 	if err != nil {
 		return err
 	}
+	return p.processReady()
+}
+
+// ProposeConfChange submits a configuration change entry to the raft log.
+func (p *Peer) ProposeConfChange(cc raftpb.ConfChangeV2) error {
+	if err := p.waitForApplyBacklog(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	err := p.node.ProposeConfChange(cc)
+	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return p.processReady()
+}
+
+// TransferLeader requests leadership transfer to the provided peer ID.
+func (p *Peer) TransferLeader(target uint64) error {
+	if target == 0 {
+		return fmt.Errorf("raftstore: transfer target must be non-zero")
+	}
+	if err := p.waitForApplyBacklog(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.node.TransferLeader(target)
+	p.mu.Unlock()
 	return p.processReady()
 }
 
@@ -311,13 +341,20 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				if err := cc.Unmarshal(entry.Data); err != nil {
 					return err
 				}
-				p.node.ApplyConfChange(cc.AsV2())
+				ccV2 := cc.AsV2()
+				p.node.ApplyConfChange(ccV2)
+				if err := p.handleConfChange(ccV2, entry); err != nil {
+					return err
+				}
 			case myraft.EntryConfChangeV2:
 				var cc raftpb.ConfChangeV2
 				if err := cc.Unmarshal(entry.Data); err != nil {
 					return err
 				}
 				p.node.ApplyConfChange(cc)
+				if err := p.handleConfChange(cc, entry); err != nil {
+					return err
+				}
 			default:
 				toApply = append(toApply, entry)
 			}
@@ -335,6 +372,20 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	return nil
+}
+
+func (p *Peer) handleConfChange(cc raftpb.ConfChangeV2, entry raftpb.Entry) error {
+	if p == nil || p.confChangeHook == nil {
+		return nil
+	}
+	event := ConfChangeEvent{
+		Peer:       p,
+		RegionMeta: p.RegionMeta(),
+		ConfChange: cc,
+		Index:      entry.Index,
+		Term:       entry.Term,
+	}
+	return p.confChangeHook(event)
 }
 
 func (p *Peer) maybeCompact(applied uint64) error {

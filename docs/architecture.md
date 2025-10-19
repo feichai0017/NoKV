@@ -287,14 +287,14 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 
 ### Phase 4 — Multi-Raft & Region Management (TinyKV Project3A/3B)
 - **Done**: Manifest persists `RegionMeta`; `store.regionManager`/`RegionMetrics` expose the catalog and live counts; `nokv regions` and `StatsSnapshot` now report Region state distribution.
-- **Next**: Implement conf change handling (add/remove peers) and leadership transfer atop raft core, guarded by epoch/version checks.
-- **Next**: Implement the split flow: detect triggers, stage parent/child metadata, spin up child peers, and atomically update manifest/SST ownership.
+- **Done**: Added config change plumbing (add/remove peers) and leadership transfer APIs/tests so membership changes keep manifest/RegionMeta in sync.
+- **Done**: `Store.SplitRegion` scaffolding updates parent metadata, boots child peers, and rolls back on failure (future work will add raft-level split admin commands and chaos coverage).
 - **Next**: Provide a dedicated test harness for region splits, membership churn, and log application ordering.
 
 ### Phase 5 — Cluster Scheduler (TinyKV Project3C)
-- Introduce scheduler service tracking store stats, region heartbeats, and pending tasks.
-- Implement balance/peer-move operators, heartbeat processing, and failure detection; reuse existing metrics/CLI for visibility.
-- Add simulation tests to validate scheduling decisions under skewed load, down stores, and region hot spots.
+- **Done**: Introduced a lightweight scheduler coordinator receiving region/store heartbeats; stores emit periodic heartbeats (configurable interval/StoreID) and the CLI (`nokv scheduler`) exposes the aggregated snapshot.
+- **Done**: Added planner scaffolding with a sample leader-balance heuristic wired through the store to exercise leader transfer operations.
+- **Next**: Harden the scheduling pipeline with operation queues, richer store metrics (capacity/usage), failure detection, and scenario-driven tests for load/peer rebalance.
 
 ### Phase 6 — Distributed MVCC & 2PC (TinyKV Project4)
 - Extend MVCC layer to operate across regions: lock table persistence (`lock` CF), write records (`write` CF), and data (`default` CF).

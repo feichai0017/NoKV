@@ -37,6 +37,8 @@ func main() {
 		err = runVlogCmd(os.Stdout, args)
 	case "regions":
 		err = runRegionsCmd(os.Stdout, args)
+	case "scheduler":
+		err = runSchedulerCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -57,6 +59,7 @@ Commands:
   manifest  Inspect manifest state, levels, and value log metadata
   vlog      List value log segments and active head
   regions   Show region metadata catalog from manifest/store
+  scheduler Display scheduler heartbeat snapshot (in-process only)
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
@@ -356,6 +359,49 @@ func runRegionsCmd(w io.Writer, args []string) error {
 		fmt.Fprintf(w, "  - id=%d state=%s epoch={ver:%d conf:%d} range=[%q,%q) peers=%s\n",
 			meta.ID, formatRegionState(meta.State), meta.Epoch.Version, meta.Epoch.ConfVersion,
 			meta.StartKey, meta.EndKey, formatPeers(meta.Peers))
+	}
+	return nil
+}
+
+func runSchedulerCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("scheduler", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	stores := storepkg.Stores()
+	if len(stores) == 0 {
+		return fmt.Errorf("no registered store; run inside a process hosting raftstore")
+	}
+	snap := stores[0].SchedulerSnapshot()
+	if *asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(snap)
+	}
+	fmt.Fprintf(w, "Stores (%d)\n", len(snap.Stores))
+	for _, st := range snap.Stores {
+		updated := ""
+		if !st.UpdatedAt.IsZero() {
+			updated = st.UpdatedAt.Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "  - store=%d region_num=%d leader_num=%d capacity=%d available=%d updated=%s\n",
+			st.StoreID, st.RegionNum, st.LeaderNum, st.Capacity, st.Available, updated)
+	}
+	if len(snap.Stores) > 0 {
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintf(w, "Regions (%d)\n", len(snap.Regions))
+	for _, region := range snap.Regions {
+		fmt.Fprintf(w, "  - region=%d peers=", region.ID)
+		for i, peer := range region.Peers {
+			if i > 0 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, "%d/%d", peer.StoreID, peer.PeerID)
+		}
+		fmt.Fprintln(w)
 	}
 	return nil
 }

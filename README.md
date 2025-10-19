@@ -51,7 +51,7 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
    ```
 
-2. **Embedded usage example**
+2. **Embedded usage example (simple Set/Get)**
 
    ```go
    package main
@@ -71,13 +71,14 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
    	db := NoKV.Open(opt)
    	defer func() { _ = db.Close() }()
 
-   	if err := db.Update(func(txn *NoKV.Txn) error {
-   		return txn.SetEntry(utils.NewEntry([]byte("hello"), []byte("world")))
-   	}); err != nil {
+   	key := []byte("hello")
+   	val := []byte("world")
+
+   	if err := db.SetCF(utils.CFDefault, key, val); err != nil {
    		log.Fatalf("set failed: %v", err)
    	}
 
-   	entry, err := db.Get([]byte("hello"))
+   	entry, err := db.Get(key)
    	if err != nil {
    		log.Fatalf("get failed: %v", err)
    	}

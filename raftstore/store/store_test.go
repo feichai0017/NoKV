@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -9,6 +10,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -288,4 +290,156 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Len(t, metas, 2)
 
 	_ = len(states)
+}
+
+func TestStoreSplitRegionStartsChildPeer(t *testing.T) {
+	rs := store.NewStore(nil)
+	defer rs.Close()
+
+	parentCfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       1000,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 1}},
+		},
+	}
+
+	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	defer rs.StopPeer(parentPeer.ID())
+
+	childCfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              2,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       2000,
+			StartKey: []byte("m"),
+			EndKey:   []byte("z"),
+			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 2}},
+		},
+	}
+
+	childPeer, err := rs.SplitRegion(1000, childCfg, []myraft.Peer{{ID: 2}})
+	require.NoError(t, err)
+	require.NotNil(t, childPeer)
+	defer rs.StopPeer(childPeer.ID())
+
+	parentMeta, ok := rs.RegionMetaByID(1000)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), parentMeta.EndKey)
+	require.Equal(t, uint64(1), parentMeta.Epoch.Version)
+
+	childMeta, ok := rs.RegionMetaByID(2000)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), childMeta.StartKey)
+	require.Equal(t, []byte("z"), childMeta.EndKey)
+	require.Len(t, childMeta.Peers, 1)
+	require.Equal(t, uint64(2), childMeta.Peers[0].PeerID)
+
+}
+
+func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
+	coord := scheduler.NewCoordinator()
+	rs := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1})
+	defer rs.Close()
+
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       42,
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
+		},
+	}
+
+	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	defer rs.StopPeer(peer.ID())
+
+	snapshot := coord.RegionSnapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, uint64(42), snapshot[0].ID)
+
+	require.NoError(t, rs.UpdateRegionState(42, manifest.RegionStateRemoving))
+	snapshot = coord.RegionSnapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, manifest.RegionStateRemoving, snapshot[0].State)
+
+	require.NoError(t, rs.RemoveRegion(42))
+	snapshot = coord.RegionSnapshot()
+	require.Empty(t, snapshot)
+
+	storeSnap := rs.SchedulerSnapshot()
+	require.Empty(t, storeSnap.Regions)
+}
+
+func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
+	coord := scheduler.NewCoordinator()
+	rs := store.NewStoreWithConfig(store.Config{
+		Scheduler:         coord,
+		StoreID:           9,
+		HeartbeatInterval: 25 * time.Millisecond,
+	})
+	defer rs.Close()
+
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              7,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       77,
+			StartKey: []byte("alpha"),
+			EndKey:   []byte("beta"),
+		},
+	}
+	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 7}})
+	require.NoError(t, err)
+	defer rs.StopPeer(peer.ID())
+
+	require.Eventually(t, func() bool {
+		_, ok := coord.LastUpdate(77)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	first, _ := coord.LastUpdate(77)
+	time.Sleep(80 * time.Millisecond)
+	second, ok := coord.LastUpdate(77)
+	require.True(t, ok)
+	require.True(t, second.After(first))
+
+	snap := rs.SchedulerSnapshot()
+	require.Len(t, snap.Stores, 1)
+	require.NotEmpty(t, snap.Regions)
+	require.Equal(t, uint64(77), snap.Regions[0].ID)
 }

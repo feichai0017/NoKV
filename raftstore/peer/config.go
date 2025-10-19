@@ -15,12 +15,13 @@ import (
 // un-compacted even after they are applied.
 const defaultLogRetainEntries = 4096
 
-// Config captures everything required to bootstrap a peer. 
+// Config captures everything required to bootstrap a peer.
 type Config struct {
 	RaftConfig       myraft.Config
 	Peers            []myraft.Peer
 	Transport        transport.Transport
 	Apply            ApplyFunc
+	ConfChange       ConfChangeHandler
 	StorageDir       string
 	WAL              *wal.Manager
 	Manifest         *manifest.Manager

@@ -1,8 +1,11 @@
 package store
 
 import (
+	"time"
+
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
 // PeerFactory constructs raft peers for the store. It mirrors TinyKV's ability
@@ -29,9 +32,13 @@ type RegionHooks struct {
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.
 type Config struct {
-	Router      *Router
-	PeerFactory PeerFactory
-	Hooks       LifecycleHooks
-	RegionHooks RegionHooks
-	Manifest    *manifest.Manager
+	Router            *Router
+	PeerFactory       PeerFactory
+	Hooks             LifecycleHooks
+	RegionHooks       RegionHooks
+	Manifest          *manifest.Manager
+	Scheduler         scheduler.RegionSink
+	HeartbeatInterval time.Duration
+	StoreID           uint64
+	Planner           scheduler.Planner
 }
