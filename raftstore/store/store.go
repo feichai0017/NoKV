@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
@@ -37,6 +38,21 @@ type Store struct {
 	heartbeatWG       sync.WaitGroup
 	storeID           uint64
 	planner           scheduler.Planner
+	operationHook     func(scheduler.Operation)
+	operationInput    chan scheduler.Operation
+	operationStop     chan struct{}
+	operationWG       sync.WaitGroup
+	operationCooldown time.Duration
+	operationInterval time.Duration
+	operationBurst    int
+	operationMu       sync.Mutex
+	lastApplied       map[operationKey]time.Time
+	pendingOps        map[operationKey]struct{}
+}
+
+type operationKey struct {
+	region uint64
+	typeID scheduler.OperationType
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -87,6 +103,31 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if planner == nil {
 		planner = scheduler.NoopPlanner{}
 	}
+	queueSize := cfg.OperationQueueSize
+	if queueSize < 0 {
+		queueSize = 0
+	}
+	operationCooldown := cfg.OperationCooldown
+	if operationCooldown < 0 {
+		operationCooldown = 0
+	}
+	operationInterval := cfg.OperationInterval
+	if operationInterval <= 0 {
+		operationInterval = cfg.HeartbeatInterval
+	}
+	if operationInterval <= 0 {
+		operationInterval = 200 * time.Millisecond
+	}
+	operationBurst := cfg.OperationBurst
+	if operationBurst < 0 {
+		operationBurst = 0
+	}
+	if operationBurst == 0 {
+		operationBurst = 4
+	}
+	if operationCooldown == 0 {
+		operationCooldown = 5 * time.Second
+	}
 	s := &Store{
 		router:            router,
 		peers:             make(map[uint64]*peer.Peer),
@@ -101,6 +142,10 @@ func NewStoreWithConfig(cfg Config) *Store {
 		heartbeatInterval: cfg.HeartbeatInterval,
 		storeID:           cfg.StoreID,
 		planner:           planner,
+		operationHook:     cfg.OperationObserver,
+		operationCooldown: operationCooldown,
+		operationInterval: operationInterval,
+		operationBurst:    operationBurst,
 	}
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
@@ -111,6 +156,14 @@ func NewStoreWithConfig(cfg Config) *Store {
 		}
 	}
 	s.heartbeatStop = make(chan struct{})
+	if planner != nil && queueSize > 0 {
+		s.operationInput = make(chan scheduler.Operation, queueSize)
+		s.operationStop = make(chan struct{})
+		s.lastApplied = make(map[operationKey]time.Time)
+		s.pendingOps = make(map[operationKey]struct{})
+		s.operationWG.Add(1)
+		go s.operationWorker()
+	}
 	RegisterStore(s)
 	if s.scheduler != nil {
 		s.startHeartbeatLoop()
@@ -474,6 +527,10 @@ func (s *Store) Close() {
 		close(s.heartbeatStop)
 	}
 	s.heartbeatWG.Wait()
+	if s.operationStop != nil {
+		close(s.operationStop)
+	}
+	s.operationWG.Wait()
 }
 
 func (s *Store) startHeartbeatLoop() {
@@ -517,7 +574,7 @@ func (s *Store) processPlanner() {
 	snapshot := s.SchedulerSnapshot()
 	ops := s.planner.Plan(snapshot)
 	for _, op := range ops {
-		s.applyOperation(op)
+		s.enqueueOperation(op)
 	}
 }
 
@@ -525,25 +582,139 @@ func (s *Store) applyOperation(op scheduler.Operation) {
 	if s == nil {
 		return
 	}
+	var applied bool
 	switch op.Type {
 	case scheduler.OperationLeaderTransfer:
 		if op.Source == 0 || op.Target == 0 {
-			return
+			break
 		}
 		s.VisitPeers(func(p *peer.Peer) {
 			if p.ID() == op.Source {
 				_ = p.TransferLeader(op.Target)
 			}
 		})
+		applied = true
+	}
+	if hook := s.operationHook; hook != nil && applied {
+		hook(op)
 	}
 }
 
+type scheduledOperation struct {
+	op    scheduler.Operation
+	ready time.Time
+}
+
+func (s *Store) enqueueOperation(op scheduler.Operation) {
+	if s == nil {
+		return
+	}
+	if op.Type == scheduler.OperationNone || op.Region == 0 {
+		return
+	}
+	if s.operationInput == nil {
+		s.applyOperation(op)
+		return
+	}
+	key := operationKey{region: op.Region, typeID: op.Type}
+	s.operationMu.Lock()
+	if _, exists := s.pendingOps[key]; exists {
+		s.operationMu.Unlock()
+		return
+	}
+	s.pendingOps[key] = struct{}{}
+	s.operationMu.Unlock()
+	select {
+	case s.operationInput <- op:
+	default:
+		s.operationMu.Lock()
+		delete(s.pendingOps, key)
+		s.operationMu.Unlock()
+	}
+}
+
+func (s *Store) operationWorker() {
+	defer s.operationWG.Done()
+	interval := s.operationInterval
+	if interval <= 0 {
+		interval = 200 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	pending := make([]scheduledOperation, 0)
+	for {
+		select {
+		case <-s.operationStop:
+			return
+		case op := <-s.operationInput:
+			pending = append(pending, scheduledOperation{op: op, ready: s.nextReadyTime(op)})
+		case <-ticker.C:
+			now := time.Now()
+			limit := s.operationBurst
+			if limit <= 0 {
+				limit = len(pending)
+			}
+			executed := 0
+			var remaining []scheduledOperation
+			for _, item := range pending {
+				if limit > 0 && executed >= limit {
+					remaining = append(remaining, item)
+					continue
+				}
+				if !item.ready.IsZero() && item.ready.After(now) {
+					remaining = append(remaining, item)
+					continue
+				}
+				s.applyOperation(item.op)
+				s.markOperationApplied(item.op, now)
+				executed++
+			}
+			pending = remaining
+		}
+	}
+}
+
+func (s *Store) nextReadyTime(op scheduler.Operation) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	cooldown := s.operationCooldown
+	if cooldown <= 0 {
+		return time.Time{}
+	}
+	key := operationKey{region: op.Region, typeID: op.Type}
+	s.operationMu.Lock()
+	last := s.lastApplied[key]
+	s.operationMu.Unlock()
+	if last.IsZero() {
+		return time.Time{}
+	}
+	ready := last.Add(cooldown)
+	return ready
+}
+
+func (s *Store) markOperationApplied(op scheduler.Operation, appliedAt time.Time) {
+	key := operationKey{region: op.Region, typeID: op.Type}
+	if appliedAt.IsZero() {
+		appliedAt = time.Now()
+	}
+	s.operationMu.Lock()
+	s.lastApplied[key] = appliedAt
+	delete(s.pendingOps, key)
+	s.operationMu.Unlock()
+}
+
 func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
-	return scheduler.StoreStats{
+	stats := scheduler.StoreStats{
 		StoreID:   s.storeID,
 		RegionNum: uint64(len(s.RegionMetas())),
 		LeaderNum: s.countLeaders(),
 	}
+	if capacity, available, ok := s.diskStats(); ok {
+		stats.Capacity = capacity
+		stats.Available = available
+	}
+	return stats
 }
 
 func (s *Store) countLeaders() uint64 {
@@ -571,25 +742,34 @@ func (s *Store) SchedulerSnapshot() scheduler.Snapshot {
 		regions := provider.RegionSnapshot()
 		stores := provider.StoreSnapshot()
 		snap.Stores = append(snap.Stores, stores...)
-		for _, meta := range regions {
-			snap.Regions = append(snap.Regions, s.buildRegionDescriptor(meta))
+		for _, info := range regions {
+			snap.Regions = append(snap.Regions, s.buildRegionDescriptor(info))
 		}
 	}
 	return snap
 }
 
-func (s *Store) buildRegionDescriptor(meta manifest.RegionMeta) scheduler.RegionDescriptor {
+func (s *Store) buildRegionDescriptor(info scheduler.RegionInfo) scheduler.RegionDescriptor {
+	meta := info.Meta
 	desc := scheduler.RegionDescriptor{
-		ID:       meta.ID,
-		StartKey: append([]byte(nil), meta.StartKey...),
-		EndKey:   append([]byte(nil), meta.EndKey...),
-		Epoch:    meta.Epoch,
+		ID:            meta.ID,
+		StartKey:      append([]byte(nil), meta.StartKey...),
+		EndKey:        append([]byte(nil), meta.EndKey...),
+		Epoch:         meta.Epoch,
+		LastHeartbeat: info.LastHeartbeat,
 	}
 	var leaderPeerID uint64
 	if local := s.regions.peer(meta.ID); local != nil {
 		if local.Status().RaftState == myraft.StateLeader {
 			leaderPeerID = local.ID()
 		}
+	}
+	if !info.LastHeartbeat.IsZero() {
+		lag := time.Since(info.LastHeartbeat)
+		if lag < 0 {
+			lag = 0
+		}
+		desc.Lag = lag
 	}
 	for _, peerMeta := range meta.Peers {
 		desc.Peers = append(desc.Peers, scheduler.PeerDescriptor{
@@ -599,6 +779,23 @@ func (s *Store) buildRegionDescriptor(meta manifest.RegionMeta) scheduler.Region
 		})
 	}
 	return desc
+}
+
+func (s *Store) diskStats() (uint64, uint64, bool) {
+	if s == nil || s.manifest == nil {
+		return 0, 0, false
+	}
+	dir := s.manifest.Dir()
+	if dir == "" {
+		return 0, 0, false
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, 0, false
+	}
+	capacity := uint64(st.Blocks) * uint64(st.Bsize)
+	available := uint64(st.Bavail) * uint64(st.Bsize)
+	return capacity, available, true
 }
 
 // UpdateRegion persists the region metadata (when a manifest manager is
