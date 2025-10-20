@@ -16,6 +16,9 @@ cpu.pprof
 mem.pprof
 benchmark.test
 
+manifestctl
+tso
+
 AGENTS.md
 
 artifacts/

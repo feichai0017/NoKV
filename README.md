@@ -115,6 +115,22 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
    The script builds `nokv`, writes a lightweight Region manifest for each node, and automatically starts `nokv serve`; the console shows the Region/Peer information for every node. Press `Ctrl+C` to shut down all nodes together.
 
+   > ℹ️  Distributed API calls (e.g. `Mutate`) expect the client to supply monotonic `startVersion`/`commitVersion`. For multi-client experiments, launch the sample TSO allocator (`go run ./scripts/tso --addr 127.0.0.1:9494`) and use the issued timestamps. See [docs/txn.md](docs/txn.md#timestamp-sources) for details.
+
+5. **Run a three-node cluster with Docker Compose**
+
+   ```bash
+   docker compose up --build
+   ```
+
+   Services:
+
+   - `bootstrap` — seeds each store’s manifest with Region metadata.
+   - `tso` — optional HTTP timestamp allocator (`http://127.0.0.1:9494/tso`).
+   - `node1`, `node2`, `node3` — TinyKV nodes exposing gRPC on `20160-20162`.
+
+   View logs with `docker compose logs -f node1`, exec CLI commands (`docker compose exec node1 nokv stats --workdir /var/lib/nokv`), and tear down via `docker compose down -v`.
+
 ---
 
 ## 🧱 Architecture Overview
