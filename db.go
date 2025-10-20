@@ -322,6 +322,87 @@ func (db *DB) Set(data *utils.Entry) error {
 	}
 	return nil
 }
+
+// SetVersionedEntry writes a value to the specified column family using the
+// provided version. It mirrors SetCF but allows callers to control the MVCC
+// timestamp embedded in the internal key.
+func (db *DB) SetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	entry := utils.NewEntryWithCF(cf, utils.SafeCopy(nil, key), utils.SafeCopy(nil, value))
+	entry.Key = utils.InternalKey(cf, entry.Key, version)
+	entry.Meta = meta
+	defer entry.DecrRef()
+
+	if meta&utils.BitDelete == 0 && len(entry.Value) > 0 && !db.shouldWriteValueToLSM(entry) {
+		vp, err := db.vlog.newValuePtr(entry)
+		if err != nil {
+			return err
+		}
+		entry.Meta |= utils.BitValuePointer
+		entry.Value = vp.Encode()
+	}
+	if err := db.lsm.Set(entry); err != nil {
+		return err
+	}
+	db.recordCFWrite(cf, 1)
+	if db.opt.SyncWrites {
+		if err := db.wal.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteVersionedEntry marks the specified version as deleted by writing a
+// tombstone record.
+func (db *DB) DeleteVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64) error {
+	return db.SetVersionedEntry(cf, key, version, nil, utils.BitDelete)
+}
+
+// GetVersionedEntry retrieves the value stored at the provided MVCC version.
+// The caller is responsible for releasing the returned entry via DecrRef.
+func (db *DB) GetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64) (*utils.Entry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db is nil")
+	}
+	if len(key) == 0 {
+		return nil, utils.ErrEmptyKey
+	}
+	internalKey := utils.InternalKey(cf, key, version)
+	entry, err := db.lsm.Get(internalKey)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, utils.ErrKeyNotFound
+	}
+	if utils.IsValuePtr(entry) {
+		var vp utils.ValuePtr
+		vp.Decode(entry.Value)
+		result, cb, err := db.vlog.read(&vp)
+		if err != nil {
+			if cb != nil {
+				utils.RunCallback(cb)
+			}
+			entry.DecrRef()
+			return nil, err
+		}
+		entry.Value = utils.SafeCopy(nil, result)
+		if cb != nil {
+			utils.RunCallback(cb)
+		}
+	}
+	cfStored, userKey, ts := utils.SplitInternalKey(entry.Key)
+	entry.CF = cfStored
+	entry.Key = utils.SafeCopy(nil, userKey)
+	entry.Version = ts
+	return entry, nil
+}
 func (db *DB) Get(key []byte) (*utils.Entry, error) {
 	return db.GetCF(utils.CFDefault, key)
 }

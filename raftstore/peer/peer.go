@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/transport"
@@ -210,6 +211,16 @@ func (p *Peer) Propose(data []byte) error {
 		return err
 	}
 	return p.processReady()
+}
+
+// ProposeCommand encodes the provided raft command request and submits it to
+// the raft log.
+func (p *Peer) ProposeCommand(req *pb.RaftCmdRequest) error {
+	payload, err := command.Encode(req)
+	if err != nil {
+		return err
+	}
+	return p.Propose(payload)
 }
 
 // ProposeAdmin submits an admin command encoded as pb.AdminCommand payload.

@@ -10,13 +10,15 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/mvcc"
+	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
+	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 type memoryNetwork struct {
@@ -101,17 +103,25 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
 				continue
 			}
-			var kv pb.KV
-			if err := proto.Unmarshal(entry.Data, &kv); err != nil {
+			if req, ok, err := command.Decode(entry.Data); err != nil {
 				return err
-			}
-			if len(kv.GetValue()) == 0 {
-				if err := db.DelCF(utils.CFDefault, kv.GetKey()); err != nil {
+			} else if ok {
+				if _, err := kv.Apply(db, req); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := db.SetCF(utils.CFDefault, kv.GetKey(), kv.GetValue()); err != nil {
+			var legacy pb.KV
+			if err := proto.Unmarshal(entry.Data, &legacy); err != nil {
+				return err
+			}
+			if len(legacy.GetValue()) == 0 {
+				if err := db.DelCF(utils.CFDefault, legacy.GetKey()); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := db.SetCF(utils.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
 				return err
 			}
 		}
@@ -188,6 +198,94 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 		require.Equal(t, []byte("raft-value"), entry.Value, "db %d", idx+1)
 		entry.DecrRef()
 	}
+}
+
+func TestPeerPrewriteCommit(t *testing.T) {
+	net := newMemoryNetwork()
+	var peers []*raftstore.Peer
+	var dbs []*NoKV.DB
+	peerList := []myraft.Peer{{ID: 1}, {ID: 2}}
+
+	for id := uint64(1); id <= 2; id++ {
+		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", id))
+		db := openDBAt(t, dbDir)
+		dbs = append(dbs, db)
+		rc := myraft.Config{
+			ID:              id,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   math.MaxUint64,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		}
+		peer, err := raftstore.NewPeer(&raftstore.Config{
+			RaftConfig: rc,
+			Transport:  net,
+			Apply:      applyToDB(db),
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    11,
+			Region:     &manifest.RegionMeta{ID: 11},
+		})
+		require.NoError(t, err)
+		net.Register(peer)
+		t.Cleanup(func() { _ = peer.Close() })
+		t.Cleanup(func(db *NoKV.DB) func() { return func() { _ = db.Close() } }(db))
+		peers = append(peers, peer)
+	}
+
+	for _, peer := range peers {
+		require.NoError(t, peer.Bootstrap(peerList))
+	}
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	prewrite := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: 11},
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_PREWRITE,
+			Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
+				Mutations: []*pb.Mutation{{
+					Op:    pb.Mutation_Put,
+					Key:   []byte("txn-key"),
+					Value: []byte("txn-value"),
+				}},
+				PrimaryLock:  []byte("txn-key"),
+				StartVersion: 5,
+				LockTtl:      3000,
+			}},
+		}},
+	}
+	require.NoError(t, peers[0].ProposeCommand(prewrite))
+	for i := 0; i < 5; i++ {
+		net.Tick()
+	}
+	net.Flush()
+
+	commit := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: 11},
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_COMMIT,
+			Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+				Keys:          [][]byte{[]byte("txn-key")},
+				StartVersion:  5,
+				CommitVersion: 10,
+			}},
+		}},
+	}
+	require.NoError(t, peers[0].ProposeCommand(commit))
+	for i := 0; i < 5; i++ {
+		net.Tick()
+	}
+	net.Flush()
+
+	reader := mvcc.NewReader(dbs[0])
+	val, err := reader.GetValue([]byte("txn-key"), 10)
+	require.NoError(t, err)
+	require.Equal(t, []byte("txn-value"), val)
+	lock, err := reader.GetLock([]byte("txn-key"))
+	require.NoError(t, err)
+	require.Nil(t, lock)
 }
 
 func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {

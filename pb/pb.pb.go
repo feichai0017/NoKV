@@ -23,6 +23,122 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CmdType int32
+
+const (
+	CmdType_CMD_INVALID          CmdType = 0
+	CmdType_CMD_GET              CmdType = 1
+	CmdType_CMD_SCAN             CmdType = 2
+	CmdType_CMD_PREWRITE         CmdType = 3
+	CmdType_CMD_COMMIT           CmdType = 4
+	CmdType_CMD_BATCH_ROLLBACK   CmdType = 5
+	CmdType_CMD_RESOLVE_LOCK     CmdType = 6
+	CmdType_CMD_CHECK_TXN_STATUS CmdType = 7
+)
+
+// Enum value maps for CmdType.
+var (
+	CmdType_name = map[int32]string{
+		0: "CMD_INVALID",
+		1: "CMD_GET",
+		2: "CMD_SCAN",
+		3: "CMD_PREWRITE",
+		4: "CMD_COMMIT",
+		5: "CMD_BATCH_ROLLBACK",
+		6: "CMD_RESOLVE_LOCK",
+		7: "CMD_CHECK_TXN_STATUS",
+	}
+	CmdType_value = map[string]int32{
+		"CMD_INVALID":          0,
+		"CMD_GET":              1,
+		"CMD_SCAN":             2,
+		"CMD_PREWRITE":         3,
+		"CMD_COMMIT":           4,
+		"CMD_BATCH_ROLLBACK":   5,
+		"CMD_RESOLVE_LOCK":     6,
+		"CMD_CHECK_TXN_STATUS": 7,
+	}
+)
+
+func (x CmdType) Enum() *CmdType {
+	p := new(CmdType)
+	*p = x
+	return p
+}
+
+func (x CmdType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CmdType) Descriptor() protoreflect.EnumDescriptor {
+	return file_pb_proto_enumTypes[0].Descriptor()
+}
+
+func (CmdType) Type() protoreflect.EnumType {
+	return &file_pb_proto_enumTypes[0]
+}
+
+func (x CmdType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CmdType.Descriptor instead.
+func (CmdType) EnumDescriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{0}
+}
+
+type CheckTxnStatusAction int32
+
+const (
+	CheckTxnStatusAction_CheckTxnStatusNoAction             CheckTxnStatusAction = 0
+	CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback    CheckTxnStatusAction = 1
+	CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback CheckTxnStatusAction = 2
+	CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed    CheckTxnStatusAction = 3
+)
+
+// Enum value maps for CheckTxnStatusAction.
+var (
+	CheckTxnStatusAction_name = map[int32]string{
+		0: "CheckTxnStatusNoAction",
+		1: "CheckTxnStatusTTLExpireRollback",
+		2: "CheckTxnStatusLockNotExistRollback",
+		3: "CheckTxnStatusMinCommitTsPushed",
+	}
+	CheckTxnStatusAction_value = map[string]int32{
+		"CheckTxnStatusNoAction":             0,
+		"CheckTxnStatusTTLExpireRollback":    1,
+		"CheckTxnStatusLockNotExistRollback": 2,
+		"CheckTxnStatusMinCommitTsPushed":    3,
+	}
+)
+
+func (x CheckTxnStatusAction) Enum() *CheckTxnStatusAction {
+	p := new(CheckTxnStatusAction)
+	*p = x
+	return p
+}
+
+func (x CheckTxnStatusAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CheckTxnStatusAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_pb_proto_enumTypes[1].Descriptor()
+}
+
+func (CheckTxnStatusAction) Type() protoreflect.EnumType {
+	return &file_pb_proto_enumTypes[1]
+}
+
+func (x CheckTxnStatusAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CheckTxnStatusAction.Descriptor instead.
+func (CheckTxnStatusAction) EnumDescriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{1}
+}
+
 type ManifestChange_Operation int32
 
 const (
@@ -53,11 +169,11 @@ func (x ManifestChange_Operation) String() string {
 }
 
 func (ManifestChange_Operation) Descriptor() protoreflect.EnumDescriptor {
-	return file_pb_proto_enumTypes[0].Descriptor()
+	return file_pb_proto_enumTypes[2].Descriptor()
 }
 
 func (ManifestChange_Operation) Type() protoreflect.EnumType {
-	return &file_pb_proto_enumTypes[0]
+	return &file_pb_proto_enumTypes[2]
 }
 
 func (x ManifestChange_Operation) Number() protoreflect.EnumNumber {
@@ -102,11 +218,11 @@ func (x AdminCommand_Type) String() string {
 }
 
 func (AdminCommand_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_pb_proto_enumTypes[1].Descriptor()
+	return file_pb_proto_enumTypes[3].Descriptor()
 }
 
 func (AdminCommand_Type) Type() protoreflect.EnumType {
-	return &file_pb_proto_enumTypes[1]
+	return &file_pb_proto_enumTypes[3]
 }
 
 func (x AdminCommand_Type) Number() protoreflect.EnumNumber {
@@ -116,6 +232,58 @@ func (x AdminCommand_Type) Number() protoreflect.EnumNumber {
 // Deprecated: Use AdminCommand_Type.Descriptor instead.
 func (AdminCommand_Type) EnumDescriptor() ([]byte, []int) {
 	return file_pb_proto_rawDescGZIP(), []int{10, 0}
+}
+
+type Mutation_Op int32
+
+const (
+	Mutation_Put      Mutation_Op = 0
+	Mutation_Delete   Mutation_Op = 1
+	Mutation_Lock     Mutation_Op = 2
+	Mutation_Rollback Mutation_Op = 3
+)
+
+// Enum value maps for Mutation_Op.
+var (
+	Mutation_Op_name = map[int32]string{
+		0: "Put",
+		1: "Delete",
+		2: "Lock",
+		3: "Rollback",
+	}
+	Mutation_Op_value = map[string]int32{
+		"Put":      0,
+		"Delete":   1,
+		"Lock":     2,
+		"Rollback": 3,
+	}
+)
+
+func (x Mutation_Op) Enum() *Mutation_Op {
+	p := new(Mutation_Op)
+	*p = x
+	return p
+}
+
+func (x Mutation_Op) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Mutation_Op) Descriptor() protoreflect.EnumDescriptor {
+	return file_pb_proto_enumTypes[4].Descriptor()
+}
+
+func (Mutation_Op) Type() protoreflect.EnumType {
+	return &file_pb_proto_enumTypes[4]
+}
+
+func (x Mutation_Op) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Mutation_Op.Descriptor instead.
+func (Mutation_Op) EnumDescriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{21, 0}
 }
 
 type KV struct {
@@ -812,6 +980,2010 @@ func (x *AdminCommand) GetMerge() *MergeCommand {
 	return nil
 }
 
+type RegionEpoch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConfVer       uint64                 `protobuf:"varint,1,opt,name=conf_ver,json=confVer,proto3" json:"conf_ver,omitempty"`
+	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegionEpoch) Reset() {
+	*x = RegionEpoch{}
+	mi := &file_pb_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegionEpoch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegionEpoch) ProtoMessage() {}
+
+func (x *RegionEpoch) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegionEpoch.ProtoReflect.Descriptor instead.
+func (*RegionEpoch) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RegionEpoch) GetConfVer() uint64 {
+	if x != nil {
+		return x.ConfVer
+	}
+	return 0
+}
+
+func (x *RegionEpoch) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+type CmdHeader struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	RegionEpoch   *RegionEpoch           `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
+	PeerId        uint64                 `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	ReadQuorum    bool                   `protobuf:"varint,4,opt,name=read_quorum,json=readQuorum,proto3" json:"read_quorum,omitempty"`
+	RequestId     uint64                 `protobuf:"varint,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CmdHeader) Reset() {
+	*x = CmdHeader{}
+	mi := &file_pb_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CmdHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CmdHeader) ProtoMessage() {}
+
+func (x *CmdHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CmdHeader.ProtoReflect.Descriptor instead.
+func (*CmdHeader) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CmdHeader) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *CmdHeader) GetRegionEpoch() *RegionEpoch {
+	if x != nil {
+		return x.RegionEpoch
+	}
+	return nil
+}
+
+func (x *CmdHeader) GetPeerId() uint64 {
+	if x != nil {
+		return x.PeerId
+	}
+	return 0
+}
+
+func (x *CmdHeader) GetReadQuorum() bool {
+	if x != nil {
+		return x.ReadQuorum
+	}
+	return false
+}
+
+func (x *CmdHeader) GetRequestId() uint64 {
+	if x != nil {
+		return x.RequestId
+	}
+	return 0
+}
+
+type Request struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	CmdType CmdType                `protobuf:"varint,1,opt,name=cmd_type,json=cmdType,proto3,enum=pb.CmdType" json:"cmd_type,omitempty"`
+	// Types that are valid to be assigned to Cmd:
+	//
+	//	*Request_Get
+	//	*Request_Scan
+	//	*Request_Prewrite
+	//	*Request_Commit
+	//	*Request_BatchRollback
+	//	*Request_ResolveLock
+	//	*Request_CheckTxnStatus
+	Cmd           isRequest_Cmd `protobuf_oneof:"cmd"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Request) Reset() {
+	*x = Request{}
+	mi := &file_pb_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Request) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Request) ProtoMessage() {}
+
+func (x *Request) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Request.ProtoReflect.Descriptor instead.
+func (*Request) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *Request) GetCmdType() CmdType {
+	if x != nil {
+		return x.CmdType
+	}
+	return CmdType_CMD_INVALID
+}
+
+func (x *Request) GetCmd() isRequest_Cmd {
+	if x != nil {
+		return x.Cmd
+	}
+	return nil
+}
+
+func (x *Request) GetGet() *GetRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_Get); ok {
+			return x.Get
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetScan() *ScanRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_Scan); ok {
+			return x.Scan
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetPrewrite() *PrewriteRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_Prewrite); ok {
+			return x.Prewrite
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetCommit() *CommitRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_Commit); ok {
+			return x.Commit
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetBatchRollback() *BatchRollbackRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_BatchRollback); ok {
+			return x.BatchRollback
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetResolveLock() *ResolveLockRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_ResolveLock); ok {
+			return x.ResolveLock
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetCheckTxnStatus() *CheckTxnStatusRequest {
+	if x != nil {
+		if x, ok := x.Cmd.(*Request_CheckTxnStatus); ok {
+			return x.CheckTxnStatus
+		}
+	}
+	return nil
+}
+
+type isRequest_Cmd interface {
+	isRequest_Cmd()
+}
+
+type Request_Get struct {
+	Get *GetRequest `protobuf:"bytes,2,opt,name=get,proto3,oneof"`
+}
+
+type Request_Scan struct {
+	Scan *ScanRequest `protobuf:"bytes,3,opt,name=scan,proto3,oneof"`
+}
+
+type Request_Prewrite struct {
+	Prewrite *PrewriteRequest `protobuf:"bytes,4,opt,name=prewrite,proto3,oneof"`
+}
+
+type Request_Commit struct {
+	Commit *CommitRequest `protobuf:"bytes,5,opt,name=commit,proto3,oneof"`
+}
+
+type Request_BatchRollback struct {
+	BatchRollback *BatchRollbackRequest `protobuf:"bytes,6,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
+}
+
+type Request_ResolveLock struct {
+	ResolveLock *ResolveLockRequest `protobuf:"bytes,7,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
+}
+
+type Request_CheckTxnStatus struct {
+	CheckTxnStatus *CheckTxnStatusRequest `protobuf:"bytes,8,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
+}
+
+func (*Request_Get) isRequest_Cmd() {}
+
+func (*Request_Scan) isRequest_Cmd() {}
+
+func (*Request_Prewrite) isRequest_Cmd() {}
+
+func (*Request_Commit) isRequest_Cmd() {}
+
+func (*Request_BatchRollback) isRequest_Cmd() {}
+
+func (*Request_ResolveLock) isRequest_Cmd() {}
+
+func (*Request_CheckTxnStatus) isRequest_Cmd() {}
+
+type Response struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Cmd:
+	//
+	//	*Response_Get
+	//	*Response_Scan
+	//	*Response_Prewrite
+	//	*Response_Commit
+	//	*Response_BatchRollback
+	//	*Response_ResolveLock
+	//	*Response_CheckTxnStatus
+	Cmd           isResponse_Cmd `protobuf_oneof:"cmd"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Response) Reset() {
+	*x = Response{}
+	mi := &file_pb_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Response) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Response) ProtoMessage() {}
+
+func (x *Response) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Response.ProtoReflect.Descriptor instead.
+func (*Response) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *Response) GetCmd() isResponse_Cmd {
+	if x != nil {
+		return x.Cmd
+	}
+	return nil
+}
+
+func (x *Response) GetGet() *GetResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_Get); ok {
+			return x.Get
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetScan() *ScanResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_Scan); ok {
+			return x.Scan
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetPrewrite() *PrewriteResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_Prewrite); ok {
+			return x.Prewrite
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetCommit() *CommitResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_Commit); ok {
+			return x.Commit
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetBatchRollback() *BatchRollbackResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_BatchRollback); ok {
+			return x.BatchRollback
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetResolveLock() *ResolveLockResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_ResolveLock); ok {
+			return x.ResolveLock
+		}
+	}
+	return nil
+}
+
+func (x *Response) GetCheckTxnStatus() *CheckTxnStatusResponse {
+	if x != nil {
+		if x, ok := x.Cmd.(*Response_CheckTxnStatus); ok {
+			return x.CheckTxnStatus
+		}
+	}
+	return nil
+}
+
+type isResponse_Cmd interface {
+	isResponse_Cmd()
+}
+
+type Response_Get struct {
+	Get *GetResponse `protobuf:"bytes,1,opt,name=get,proto3,oneof"`
+}
+
+type Response_Scan struct {
+	Scan *ScanResponse `protobuf:"bytes,2,opt,name=scan,proto3,oneof"`
+}
+
+type Response_Prewrite struct {
+	Prewrite *PrewriteResponse `protobuf:"bytes,3,opt,name=prewrite,proto3,oneof"`
+}
+
+type Response_Commit struct {
+	Commit *CommitResponse `protobuf:"bytes,4,opt,name=commit,proto3,oneof"`
+}
+
+type Response_BatchRollback struct {
+	BatchRollback *BatchRollbackResponse `protobuf:"bytes,5,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
+}
+
+type Response_ResolveLock struct {
+	ResolveLock *ResolveLockResponse `protobuf:"bytes,6,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
+}
+
+type Response_CheckTxnStatus struct {
+	CheckTxnStatus *CheckTxnStatusResponse `protobuf:"bytes,7,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
+}
+
+func (*Response_Get) isResponse_Cmd() {}
+
+func (*Response_Scan) isResponse_Cmd() {}
+
+func (*Response_Prewrite) isResponse_Cmd() {}
+
+func (*Response_Commit) isResponse_Cmd() {}
+
+func (*Response_BatchRollback) isResponse_Cmd() {}
+
+func (*Response_ResolveLock) isResponse_Cmd() {}
+
+func (*Response_CheckTxnStatus) isResponse_Cmd() {}
+
+type RaftCmdRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Header        *CmdHeader             `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	Requests      []*Request             `protobuf:"bytes,2,rep,name=requests,proto3" json:"requests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RaftCmdRequest) Reset() {
+	*x = RaftCmdRequest{}
+	mi := &file_pb_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RaftCmdRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RaftCmdRequest) ProtoMessage() {}
+
+func (x *RaftCmdRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RaftCmdRequest.ProtoReflect.Descriptor instead.
+func (*RaftCmdRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *RaftCmdRequest) GetHeader() *CmdHeader {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *RaftCmdRequest) GetRequests() []*Request {
+	if x != nil {
+		return x.Requests
+	}
+	return nil
+}
+
+type RaftCmdResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Header        *CmdHeader             `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	Responses     []*Response            `protobuf:"bytes,2,rep,name=responses,proto3" json:"responses,omitempty"`
+	RegionError   *RegionError           `protobuf:"bytes,3,opt,name=region_error,json=regionError,proto3" json:"region_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RaftCmdResponse) Reset() {
+	*x = RaftCmdResponse{}
+	mi := &file_pb_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RaftCmdResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RaftCmdResponse) ProtoMessage() {}
+
+func (x *RaftCmdResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RaftCmdResponse.ProtoReflect.Descriptor instead.
+func (*RaftCmdResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RaftCmdResponse) GetHeader() *CmdHeader {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *RaftCmdResponse) GetResponses() []*Response {
+	if x != nil {
+		return x.Responses
+	}
+	return nil
+}
+
+func (x *RaftCmdResponse) GetRegionError() *RegionError {
+	if x != nil {
+		return x.RegionError
+	}
+	return nil
+}
+
+type GetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRequest) Reset() {
+	*x = GetRequest{}
+	mi := &file_pb_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRequest) ProtoMessage() {}
+
+func (x *GetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
+func (*GetRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetRequest) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *GetRequest) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+type GetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Value         []byte                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
+	NotFound      bool                   `protobuf:"varint,2,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
+	Error         *KeyError              `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetResponse) Reset() {
+	*x = GetResponse{}
+	mi := &file_pb_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetResponse) ProtoMessage() {}
+
+func (x *GetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
+func (*GetResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GetResponse) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *GetResponse) GetNotFound() bool {
+	if x != nil {
+		return x.NotFound
+	}
+	return false
+}
+
+func (x *GetResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type ScanRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StartKey      []byte                 `protobuf:"bytes,1,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	Limit         uint32                 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	Version       uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	IncludeStart  bool                   `protobuf:"varint,4,opt,name=include_start,json=includeStart,proto3" json:"include_start,omitempty"`
+	Reverse       bool                   `protobuf:"varint,5,opt,name=reverse,proto3" json:"reverse,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScanRequest) Reset() {
+	*x = ScanRequest{}
+	mi := &file_pb_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScanRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScanRequest) ProtoMessage() {}
+
+func (x *ScanRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScanRequest.ProtoReflect.Descriptor instead.
+func (*ScanRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ScanRequest) GetStartKey() []byte {
+	if x != nil {
+		return x.StartKey
+	}
+	return nil
+}
+
+func (x *ScanRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ScanRequest) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *ScanRequest) GetIncludeStart() bool {
+	if x != nil {
+		return x.IncludeStart
+	}
+	return false
+}
+
+func (x *ScanRequest) GetReverse() bool {
+	if x != nil {
+		return x.Reverse
+	}
+	return false
+}
+
+type ScanResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kvs           []*KV                  `protobuf:"bytes,1,rep,name=kvs,proto3" json:"kvs,omitempty"`
+	Error         *KeyError              `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScanResponse) Reset() {
+	*x = ScanResponse{}
+	mi := &file_pb_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScanResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScanResponse) ProtoMessage() {}
+
+func (x *ScanResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScanResponse.ProtoReflect.Descriptor instead.
+func (*ScanResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ScanResponse) GetKvs() []*KV {
+	if x != nil {
+		return x.Kvs
+	}
+	return nil
+}
+
+func (x *ScanResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type Mutation struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Op                Mutation_Op            `protobuf:"varint,1,opt,name=op,proto3,enum=pb.Mutation_Op" json:"op,omitempty"`
+	Key               []byte                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value             []byte                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	AssertionNotExist bool                   `protobuf:"varint,4,opt,name=assertion_not_exist,json=assertionNotExist,proto3" json:"assertion_not_exist,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *Mutation) Reset() {
+	*x = Mutation{}
+	mi := &file_pb_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Mutation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Mutation) ProtoMessage() {}
+
+func (x *Mutation) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Mutation.ProtoReflect.Descriptor instead.
+func (*Mutation) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *Mutation) GetOp() Mutation_Op {
+	if x != nil {
+		return x.Op
+	}
+	return Mutation_Put
+}
+
+func (x *Mutation) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *Mutation) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *Mutation) GetAssertionNotExist() bool {
+	if x != nil {
+		return x.AssertionNotExist
+	}
+	return false
+}
+
+type PrewriteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mutations     []*Mutation            `protobuf:"bytes,1,rep,name=mutations,proto3" json:"mutations,omitempty"`
+	PrimaryLock   []byte                 `protobuf:"bytes,2,opt,name=primary_lock,json=primaryLock,proto3" json:"primary_lock,omitempty"`
+	StartVersion  uint64                 `protobuf:"varint,3,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+	LockTtl       uint64                 `protobuf:"varint,4,opt,name=lock_ttl,json=lockTtl,proto3" json:"lock_ttl,omitempty"`
+	TxnSize       uint64                 `protobuf:"varint,5,opt,name=txn_size,json=txnSize,proto3" json:"txn_size,omitempty"`
+	MinCommitTs   uint64                 `protobuf:"varint,6,opt,name=min_commit_ts,json=minCommitTs,proto3" json:"min_commit_ts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrewriteRequest) Reset() {
+	*x = PrewriteRequest{}
+	mi := &file_pb_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrewriteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrewriteRequest) ProtoMessage() {}
+
+func (x *PrewriteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrewriteRequest.ProtoReflect.Descriptor instead.
+func (*PrewriteRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PrewriteRequest) GetMutations() []*Mutation {
+	if x != nil {
+		return x.Mutations
+	}
+	return nil
+}
+
+func (x *PrewriteRequest) GetPrimaryLock() []byte {
+	if x != nil {
+		return x.PrimaryLock
+	}
+	return nil
+}
+
+func (x *PrewriteRequest) GetStartVersion() uint64 {
+	if x != nil {
+		return x.StartVersion
+	}
+	return 0
+}
+
+func (x *PrewriteRequest) GetLockTtl() uint64 {
+	if x != nil {
+		return x.LockTtl
+	}
+	return 0
+}
+
+func (x *PrewriteRequest) GetTxnSize() uint64 {
+	if x != nil {
+		return x.TxnSize
+	}
+	return 0
+}
+
+func (x *PrewriteRequest) GetMinCommitTs() uint64 {
+	if x != nil {
+		return x.MinCommitTs
+	}
+	return 0
+}
+
+type PrewriteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Errors        []*KeyError            `protobuf:"bytes,1,rep,name=errors,proto3" json:"errors,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrewriteResponse) Reset() {
+	*x = PrewriteResponse{}
+	mi := &file_pb_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrewriteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrewriteResponse) ProtoMessage() {}
+
+func (x *PrewriteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrewriteResponse.ProtoReflect.Descriptor instead.
+func (*PrewriteResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *PrewriteResponse) GetErrors() []*KeyError {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
+type CommitRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          [][]byte               `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	StartVersion  uint64                 `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+	CommitVersion uint64                 `protobuf:"varint,3,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitRequest) Reset() {
+	*x = CommitRequest{}
+	mi := &file_pb_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitRequest) ProtoMessage() {}
+
+func (x *CommitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
+func (*CommitRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *CommitRequest) GetKeys() [][]byte {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *CommitRequest) GetStartVersion() uint64 {
+	if x != nil {
+		return x.StartVersion
+	}
+	return 0
+}
+
+func (x *CommitRequest) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
+	}
+	return 0
+}
+
+type CommitResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         *KeyError              `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitResponse) Reset() {
+	*x = CommitResponse{}
+	mi := &file_pb_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitResponse) ProtoMessage() {}
+
+func (x *CommitResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
+func (*CommitResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *CommitResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type BatchRollbackRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          [][]byte               `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	StartVersion  uint64                 `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchRollbackRequest) Reset() {
+	*x = BatchRollbackRequest{}
+	mi := &file_pb_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchRollbackRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchRollbackRequest) ProtoMessage() {}
+
+func (x *BatchRollbackRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchRollbackRequest.ProtoReflect.Descriptor instead.
+func (*BatchRollbackRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *BatchRollbackRequest) GetKeys() [][]byte {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *BatchRollbackRequest) GetStartVersion() uint64 {
+	if x != nil {
+		return x.StartVersion
+	}
+	return 0
+}
+
+type BatchRollbackResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         *KeyError              `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchRollbackResponse) Reset() {
+	*x = BatchRollbackResponse{}
+	mi := &file_pb_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchRollbackResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchRollbackResponse) ProtoMessage() {}
+
+func (x *BatchRollbackResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchRollbackResponse.ProtoReflect.Descriptor instead.
+func (*BatchRollbackResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *BatchRollbackResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type ResolveLockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StartVersion  uint64                 `protobuf:"varint,1,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+	CommitVersion uint64                 `protobuf:"varint,2,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+	Keys          [][]byte               `protobuf:"bytes,3,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveLockRequest) Reset() {
+	*x = ResolveLockRequest{}
+	mi := &file_pb_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveLockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveLockRequest) ProtoMessage() {}
+
+func (x *ResolveLockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveLockRequest.ProtoReflect.Descriptor instead.
+func (*ResolveLockRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ResolveLockRequest) GetStartVersion() uint64 {
+	if x != nil {
+		return x.StartVersion
+	}
+	return 0
+}
+
+func (x *ResolveLockRequest) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
+	}
+	return 0
+}
+
+func (x *ResolveLockRequest) GetKeys() [][]byte {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+type ResolveLockResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         *KeyError              `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	ResolvedLocks uint64                 `protobuf:"varint,2,opt,name=resolved_locks,json=resolvedLocks,proto3" json:"resolved_locks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveLockResponse) Reset() {
+	*x = ResolveLockResponse{}
+	mi := &file_pb_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveLockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveLockResponse) ProtoMessage() {}
+
+func (x *ResolveLockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveLockResponse.ProtoReflect.Descriptor instead.
+func (*ResolveLockResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ResolveLockResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+func (x *ResolveLockResponse) GetResolvedLocks() uint64 {
+	if x != nil {
+		return x.ResolvedLocks
+	}
+	return 0
+}
+
+type CheckTxnStatusRequest struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	PrimaryKey         []byte                 `protobuf:"bytes,1,opt,name=primary_key,json=primaryKey,proto3" json:"primary_key,omitempty"`
+	LockTs             uint64                 `protobuf:"varint,2,opt,name=lock_ts,json=lockTs,proto3" json:"lock_ts,omitempty"`
+	CurrentTs          uint64                 `protobuf:"varint,3,opt,name=current_ts,json=currentTs,proto3" json:"current_ts,omitempty"`
+	RollbackIfNotExist bool                   `protobuf:"varint,4,opt,name=rollback_if_not_exist,json=rollbackIfNotExist,proto3" json:"rollback_if_not_exist,omitempty"`
+	CallerStartTs      uint64                 `protobuf:"varint,5,opt,name=caller_start_ts,json=callerStartTs,proto3" json:"caller_start_ts,omitempty"`
+	CurrentTime        uint64                 `protobuf:"varint,6,opt,name=current_time,json=currentTime,proto3" json:"current_time,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *CheckTxnStatusRequest) Reset() {
+	*x = CheckTxnStatusRequest{}
+	mi := &file_pb_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckTxnStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckTxnStatusRequest) ProtoMessage() {}
+
+func (x *CheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckTxnStatusRequest.ProtoReflect.Descriptor instead.
+func (*CheckTxnStatusRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *CheckTxnStatusRequest) GetPrimaryKey() []byte {
+	if x != nil {
+		return x.PrimaryKey
+	}
+	return nil
+}
+
+func (x *CheckTxnStatusRequest) GetLockTs() uint64 {
+	if x != nil {
+		return x.LockTs
+	}
+	return 0
+}
+
+func (x *CheckTxnStatusRequest) GetCurrentTs() uint64 {
+	if x != nil {
+		return x.CurrentTs
+	}
+	return 0
+}
+
+func (x *CheckTxnStatusRequest) GetRollbackIfNotExist() bool {
+	if x != nil {
+		return x.RollbackIfNotExist
+	}
+	return false
+}
+
+func (x *CheckTxnStatusRequest) GetCallerStartTs() uint64 {
+	if x != nil {
+		return x.CallerStartTs
+	}
+	return 0
+}
+
+func (x *CheckTxnStatusRequest) GetCurrentTime() uint64 {
+	if x != nil {
+		return x.CurrentTime
+	}
+	return 0
+}
+
+type CheckTxnStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         *KeyError              `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	LockTtl       uint64                 `protobuf:"varint,2,opt,name=lock_ttl,json=lockTtl,proto3" json:"lock_ttl,omitempty"`
+	CommitVersion uint64                 `protobuf:"varint,3,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+	Action        CheckTxnStatusAction   `protobuf:"varint,4,opt,name=action,proto3,enum=pb.CheckTxnStatusAction" json:"action,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckTxnStatusResponse) Reset() {
+	*x = CheckTxnStatusResponse{}
+	mi := &file_pb_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckTxnStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckTxnStatusResponse) ProtoMessage() {}
+
+func (x *CheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckTxnStatusResponse.ProtoReflect.Descriptor instead.
+func (*CheckTxnStatusResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *CheckTxnStatusResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+func (x *CheckTxnStatusResponse) GetLockTtl() uint64 {
+	if x != nil {
+		return x.LockTtl
+	}
+	return 0
+}
+
+func (x *CheckTxnStatusResponse) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
+	}
+	return 0
+}
+
+func (x *CheckTxnStatusResponse) GetAction() CheckTxnStatusAction {
+	if x != nil {
+		return x.Action
+	}
+	return CheckTxnStatusAction_CheckTxnStatusNoAction
+}
+
+type KeyError struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Locked        *Locked                `protobuf:"bytes,1,opt,name=locked,proto3" json:"locked,omitempty"`
+	WriteConflict *WriteConflict         `protobuf:"bytes,2,opt,name=write_conflict,json=writeConflict,proto3" json:"write_conflict,omitempty"`
+	AlreadyExists *KeyAlreadyExists      `protobuf:"bytes,3,opt,name=already_exists,json=alreadyExists,proto3" json:"already_exists,omitempty"`
+	Retryable     string                 `protobuf:"bytes,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	Abort         string                 `protobuf:"bytes,5,opt,name=abort,proto3" json:"abort,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KeyError) Reset() {
+	*x = KeyError{}
+	mi := &file_pb_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KeyError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KeyError) ProtoMessage() {}
+
+func (x *KeyError) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KeyError.ProtoReflect.Descriptor instead.
+func (*KeyError) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *KeyError) GetLocked() *Locked {
+	if x != nil {
+		return x.Locked
+	}
+	return nil
+}
+
+func (x *KeyError) GetWriteConflict() *WriteConflict {
+	if x != nil {
+		return x.WriteConflict
+	}
+	return nil
+}
+
+func (x *KeyError) GetAlreadyExists() *KeyAlreadyExists {
+	if x != nil {
+		return x.AlreadyExists
+	}
+	return nil
+}
+
+func (x *KeyError) GetRetryable() string {
+	if x != nil {
+		return x.Retryable
+	}
+	return ""
+}
+
+func (x *KeyError) GetAbort() string {
+	if x != nil {
+		return x.Abort
+	}
+	return ""
+}
+
+type Locked struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PrimaryLock   []byte                 `protobuf:"bytes,1,opt,name=primary_lock,json=primaryLock,proto3" json:"primary_lock,omitempty"`
+	Key           []byte                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	LockVersion   uint64                 `protobuf:"varint,3,opt,name=lock_version,json=lockVersion,proto3" json:"lock_version,omitempty"`
+	LockTtl       uint64                 `protobuf:"varint,4,opt,name=lock_ttl,json=lockTtl,proto3" json:"lock_ttl,omitempty"`
+	LockType      Mutation_Op            `protobuf:"varint,5,opt,name=lock_type,json=lockType,proto3,enum=pb.Mutation_Op" json:"lock_type,omitempty"`
+	MinCommitTs   uint64                 `protobuf:"varint,6,opt,name=min_commit_ts,json=minCommitTs,proto3" json:"min_commit_ts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Locked) Reset() {
+	*x = Locked{}
+	mi := &file_pb_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Locked) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Locked) ProtoMessage() {}
+
+func (x *Locked) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Locked.ProtoReflect.Descriptor instead.
+func (*Locked) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *Locked) GetPrimaryLock() []byte {
+	if x != nil {
+		return x.PrimaryLock
+	}
+	return nil
+}
+
+func (x *Locked) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *Locked) GetLockVersion() uint64 {
+	if x != nil {
+		return x.LockVersion
+	}
+	return 0
+}
+
+func (x *Locked) GetLockTtl() uint64 {
+	if x != nil {
+		return x.LockTtl
+	}
+	return 0
+}
+
+func (x *Locked) GetLockType() Mutation_Op {
+	if x != nil {
+		return x.LockType
+	}
+	return Mutation_Put
+}
+
+func (x *Locked) GetMinCommitTs() uint64 {
+	if x != nil {
+		return x.MinCommitTs
+	}
+	return 0
+}
+
+type WriteConflict struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Primary       []byte                 `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	ConflictTs    uint64                 `protobuf:"varint,3,opt,name=conflict_ts,json=conflictTs,proto3" json:"conflict_ts,omitempty"`
+	CommitTs      uint64                 `protobuf:"varint,4,opt,name=commit_ts,json=commitTs,proto3" json:"commit_ts,omitempty"`
+	StartTs       uint64                 `protobuf:"varint,5,opt,name=start_ts,json=startTs,proto3" json:"start_ts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WriteConflict) Reset() {
+	*x = WriteConflict{}
+	mi := &file_pb_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WriteConflict) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WriteConflict) ProtoMessage() {}
+
+func (x *WriteConflict) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WriteConflict.ProtoReflect.Descriptor instead.
+func (*WriteConflict) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *WriteConflict) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *WriteConflict) GetPrimary() []byte {
+	if x != nil {
+		return x.Primary
+	}
+	return nil
+}
+
+func (x *WriteConflict) GetConflictTs() uint64 {
+	if x != nil {
+		return x.ConflictTs
+	}
+	return 0
+}
+
+func (x *WriteConflict) GetCommitTs() uint64 {
+	if x != nil {
+		return x.CommitTs
+	}
+	return 0
+}
+
+func (x *WriteConflict) GetStartTs() uint64 {
+	if x != nil {
+		return x.StartTs
+	}
+	return 0
+}
+
+type KeyAlreadyExists struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KeyAlreadyExists) Reset() {
+	*x = KeyAlreadyExists{}
+	mi := &file_pb_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KeyAlreadyExists) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KeyAlreadyExists) ProtoMessage() {}
+
+func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KeyAlreadyExists.ProtoReflect.Descriptor instead.
+func (*KeyAlreadyExists) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *KeyAlreadyExists) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+type RegionError struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NotLeader     *NotLeader             `protobuf:"bytes,1,opt,name=not_leader,json=notLeader,proto3" json:"not_leader,omitempty"`
+	EpochNotMatch *EpochNotMatch         `protobuf:"bytes,2,opt,name=epoch_not_match,json=epochNotMatch,proto3" json:"epoch_not_match,omitempty"`
+	StaleCommand  *StaleCommand          `protobuf:"bytes,3,opt,name=stale_command,json=staleCommand,proto3" json:"stale_command,omitempty"`
+	EntryTooLarge *RaftEntryTooLarge     `protobuf:"bytes,4,opt,name=entry_too_large,json=entryTooLarge,proto3" json:"entry_too_large,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegionError) Reset() {
+	*x = RegionError{}
+	mi := &file_pb_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegionError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegionError) ProtoMessage() {}
+
+func (x *RegionError) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegionError.ProtoReflect.Descriptor instead.
+func (*RegionError) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *RegionError) GetNotLeader() *NotLeader {
+	if x != nil {
+		return x.NotLeader
+	}
+	return nil
+}
+
+func (x *RegionError) GetEpochNotMatch() *EpochNotMatch {
+	if x != nil {
+		return x.EpochNotMatch
+	}
+	return nil
+}
+
+func (x *RegionError) GetStaleCommand() *StaleCommand {
+	if x != nil {
+		return x.StaleCommand
+	}
+	return nil
+}
+
+func (x *RegionError) GetEntryTooLarge() *RaftEntryTooLarge {
+	if x != nil {
+		return x.EntryTooLarge
+	}
+	return nil
+}
+
+type NotLeader struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	Leader        *RegionPeer            `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NotLeader) Reset() {
+	*x = NotLeader{}
+	mi := &file_pb_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NotLeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotLeader) ProtoMessage() {}
+
+func (x *NotLeader) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotLeader.ProtoReflect.Descriptor instead.
+func (*NotLeader) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *NotLeader) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *NotLeader) GetLeader() *RegionPeer {
+	if x != nil {
+		return x.Leader
+	}
+	return nil
+}
+
+type EpochNotMatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CurrentEpoch  *RegionEpoch           `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
+	Regions       []*RegionMeta          `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EpochNotMatch) Reset() {
+	*x = EpochNotMatch{}
+	mi := &file_pb_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EpochNotMatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EpochNotMatch) ProtoMessage() {}
+
+func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EpochNotMatch.ProtoReflect.Descriptor instead.
+func (*EpochNotMatch) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *EpochNotMatch) GetCurrentEpoch() *RegionEpoch {
+	if x != nil {
+		return x.CurrentEpoch
+	}
+	return nil
+}
+
+func (x *EpochNotMatch) GetRegions() []*RegionMeta {
+	if x != nil {
+		return x.Regions
+	}
+	return nil
+}
+
+type StaleCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StaleCommand) Reset() {
+	*x = StaleCommand{}
+	mi := &file_pb_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StaleCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StaleCommand) ProtoMessage() {}
+
+func (x *StaleCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StaleCommand.ProtoReflect.Descriptor instead.
+func (*StaleCommand) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{39}
+}
+
+type RaftEntryTooLarge struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RaftEntryTooLarge) Reset() {
+	*x = RaftEntryTooLarge{}
+	mi := &file_pb_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RaftEntryTooLarge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RaftEntryTooLarge) ProtoMessage() {}
+
+func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RaftEntryTooLarge.ProtoReflect.Descriptor instead.
+func (*RaftEntryTooLarge) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *RaftEntryTooLarge) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
 var File_pb_proto protoreflect.FileDescriptor
 
 const file_pb_proto_rawDesc = "" +
@@ -880,7 +3052,166 @@ const file_pb_proto_rawDesc = "" +
 	"\x04Type\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\t\n" +
 	"\x05SPLIT\x10\x01\x12\t\n" +
-	"\x05MERGE\x10\x02B Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x05MERGE\x10\x02\"B\n" +
+	"\vRegionEpoch\x12\x19\n" +
+	"\bconf_ver\x18\x01 \x01(\x04R\aconfVer\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\"\xb5\x01\n" +
+	"\tCmdHeader\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x122\n" +
+	"\fregion_epoch\x18\x02 \x01(\v2\x0f.pb.RegionEpochR\vregionEpoch\x12\x17\n" +
+	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12\x1f\n" +
+	"\vread_quorum\x18\x04 \x01(\bR\n" +
+	"readQuorum\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\x04R\trequestId\"\xaa\x03\n" +
+	"\aRequest\x12&\n" +
+	"\bcmd_type\x18\x01 \x01(\x0e2\v.pb.CmdTypeR\acmdType\x12\"\n" +
+	"\x03get\x18\x02 \x01(\v2\x0e.pb.GetRequestH\x00R\x03get\x12%\n" +
+	"\x04scan\x18\x03 \x01(\v2\x0f.pb.ScanRequestH\x00R\x04scan\x121\n" +
+	"\bprewrite\x18\x04 \x01(\v2\x13.pb.PrewriteRequestH\x00R\bprewrite\x12+\n" +
+	"\x06commit\x18\x05 \x01(\v2\x11.pb.CommitRequestH\x00R\x06commit\x12A\n" +
+	"\x0ebatch_rollback\x18\x06 \x01(\v2\x18.pb.BatchRollbackRequestH\x00R\rbatchRollback\x12;\n" +
+	"\fresolve_lock\x18\a \x01(\v2\x16.pb.ResolveLockRequestH\x00R\vresolveLock\x12E\n" +
+	"\x10check_txn_status\x18\b \x01(\v2\x19.pb.CheckTxnStatusRequestH\x00R\x0echeckTxnStatusB\x05\n" +
+	"\x03cmd\"\x8a\x03\n" +
+	"\bResponse\x12#\n" +
+	"\x03get\x18\x01 \x01(\v2\x0f.pb.GetResponseH\x00R\x03get\x12&\n" +
+	"\x04scan\x18\x02 \x01(\v2\x10.pb.ScanResponseH\x00R\x04scan\x122\n" +
+	"\bprewrite\x18\x03 \x01(\v2\x14.pb.PrewriteResponseH\x00R\bprewrite\x12,\n" +
+	"\x06commit\x18\x04 \x01(\v2\x12.pb.CommitResponseH\x00R\x06commit\x12B\n" +
+	"\x0ebatch_rollback\x18\x05 \x01(\v2\x19.pb.BatchRollbackResponseH\x00R\rbatchRollback\x12<\n" +
+	"\fresolve_lock\x18\x06 \x01(\v2\x17.pb.ResolveLockResponseH\x00R\vresolveLock\x12F\n" +
+	"\x10check_txn_status\x18\a \x01(\v2\x1a.pb.CheckTxnStatusResponseH\x00R\x0echeckTxnStatusB\x05\n" +
+	"\x03cmd\"`\n" +
+	"\x0eRaftCmdRequest\x12%\n" +
+	"\x06header\x18\x01 \x01(\v2\r.pb.CmdHeaderR\x06header\x12'\n" +
+	"\brequests\x18\x02 \x03(\v2\v.pb.RequestR\brequests\"\x98\x01\n" +
+	"\x0fRaftCmdResponse\x12%\n" +
+	"\x06header\x18\x01 \x01(\v2\r.pb.CmdHeaderR\x06header\x12*\n" +
+	"\tresponses\x18\x02 \x03(\v2\f.pb.ResponseR\tresponses\x122\n" +
+	"\fregion_error\x18\x03 \x01(\v2\x0f.pb.RegionErrorR\vregionError\"8\n" +
+	"\n" +
+	"GetRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\"d\n" +
+	"\vGetResponse\x12\x14\n" +
+	"\x05value\x18\x01 \x01(\fR\x05value\x12\x1b\n" +
+	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12\"\n" +
+	"\x05error\x18\x03 \x01(\v2\f.pb.KeyErrorR\x05error\"\x99\x01\n" +
+	"\vScanRequest\x12\x1b\n" +
+	"\tstart_key\x18\x01 \x01(\fR\bstartKey\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\rR\x05limit\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x04R\aversion\x12#\n" +
+	"\rinclude_start\x18\x04 \x01(\bR\fincludeStart\x12\x18\n" +
+	"\areverse\x18\x05 \x01(\bR\areverse\"L\n" +
+	"\fScanResponse\x12\x18\n" +
+	"\x03kvs\x18\x01 \x03(\v2\x06.pb.KVR\x03kvs\x12\"\n" +
+	"\x05error\x18\x02 \x01(\v2\f.pb.KeyErrorR\x05error\"\xb6\x01\n" +
+	"\bMutation\x12\x1f\n" +
+	"\x02op\x18\x01 \x01(\x0e2\x0f.pb.Mutation.OpR\x02op\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\x12.\n" +
+	"\x13assertion_not_exist\x18\x04 \x01(\bR\x11assertionNotExist\"1\n" +
+	"\x02Op\x12\a\n" +
+	"\x03Put\x10\x00\x12\n" +
+	"\n" +
+	"\x06Delete\x10\x01\x12\b\n" +
+	"\x04Lock\x10\x02\x12\f\n" +
+	"\bRollback\x10\x03\"\xdf\x01\n" +
+	"\x0fPrewriteRequest\x12*\n" +
+	"\tmutations\x18\x01 \x03(\v2\f.pb.MutationR\tmutations\x12!\n" +
+	"\fprimary_lock\x18\x02 \x01(\fR\vprimaryLock\x12#\n" +
+	"\rstart_version\x18\x03 \x01(\x04R\fstartVersion\x12\x19\n" +
+	"\block_ttl\x18\x04 \x01(\x04R\alockTtl\x12\x19\n" +
+	"\btxn_size\x18\x05 \x01(\x04R\atxnSize\x12\"\n" +
+	"\rmin_commit_ts\x18\x06 \x01(\x04R\vminCommitTs\"8\n" +
+	"\x10PrewriteResponse\x12$\n" +
+	"\x06errors\x18\x01 \x03(\v2\f.pb.KeyErrorR\x06errors\"o\n" +
+	"\rCommitRequest\x12\x12\n" +
+	"\x04keys\x18\x01 \x03(\fR\x04keys\x12#\n" +
+	"\rstart_version\x18\x02 \x01(\x04R\fstartVersion\x12%\n" +
+	"\x0ecommit_version\x18\x03 \x01(\x04R\rcommitVersion\"4\n" +
+	"\x0eCommitResponse\x12\"\n" +
+	"\x05error\x18\x01 \x01(\v2\f.pb.KeyErrorR\x05error\"O\n" +
+	"\x14BatchRollbackRequest\x12\x12\n" +
+	"\x04keys\x18\x01 \x03(\fR\x04keys\x12#\n" +
+	"\rstart_version\x18\x02 \x01(\x04R\fstartVersion\";\n" +
+	"\x15BatchRollbackResponse\x12\"\n" +
+	"\x05error\x18\x01 \x01(\v2\f.pb.KeyErrorR\x05error\"t\n" +
+	"\x12ResolveLockRequest\x12#\n" +
+	"\rstart_version\x18\x01 \x01(\x04R\fstartVersion\x12%\n" +
+	"\x0ecommit_version\x18\x02 \x01(\x04R\rcommitVersion\x12\x12\n" +
+	"\x04keys\x18\x03 \x03(\fR\x04keys\"`\n" +
+	"\x13ResolveLockResponse\x12\"\n" +
+	"\x05error\x18\x01 \x01(\v2\f.pb.KeyErrorR\x05error\x12%\n" +
+	"\x0eresolved_locks\x18\x02 \x01(\x04R\rresolvedLocks\"\xee\x01\n" +
+	"\x15CheckTxnStatusRequest\x12\x1f\n" +
+	"\vprimary_key\x18\x01 \x01(\fR\n" +
+	"primaryKey\x12\x17\n" +
+	"\alock_ts\x18\x02 \x01(\x04R\x06lockTs\x12\x1d\n" +
+	"\n" +
+	"current_ts\x18\x03 \x01(\x04R\tcurrentTs\x121\n" +
+	"\x15rollback_if_not_exist\x18\x04 \x01(\bR\x12rollbackIfNotExist\x12&\n" +
+	"\x0fcaller_start_ts\x18\x05 \x01(\x04R\rcallerStartTs\x12!\n" +
+	"\fcurrent_time\x18\x06 \x01(\x04R\vcurrentTime\"\xb0\x01\n" +
+	"\x16CheckTxnStatusResponse\x12\"\n" +
+	"\x05error\x18\x01 \x01(\v2\f.pb.KeyErrorR\x05error\x12\x19\n" +
+	"\block_ttl\x18\x02 \x01(\x04R\alockTtl\x12%\n" +
+	"\x0ecommit_version\x18\x03 \x01(\x04R\rcommitVersion\x120\n" +
+	"\x06action\x18\x04 \x01(\x0e2\x18.pb.CheckTxnStatusActionR\x06action\"\xd9\x01\n" +
+	"\bKeyError\x12\"\n" +
+	"\x06locked\x18\x01 \x01(\v2\n" +
+	".pb.LockedR\x06locked\x128\n" +
+	"\x0ewrite_conflict\x18\x02 \x01(\v2\x11.pb.WriteConflictR\rwriteConflict\x12;\n" +
+	"\x0ealready_exists\x18\x03 \x01(\v2\x14.pb.KeyAlreadyExistsR\ralreadyExists\x12\x1c\n" +
+	"\tretryable\x18\x04 \x01(\tR\tretryable\x12\x14\n" +
+	"\x05abort\x18\x05 \x01(\tR\x05abort\"\xcd\x01\n" +
+	"\x06Locked\x12!\n" +
+	"\fprimary_lock\x18\x01 \x01(\fR\vprimaryLock\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\x12!\n" +
+	"\flock_version\x18\x03 \x01(\x04R\vlockVersion\x12\x19\n" +
+	"\block_ttl\x18\x04 \x01(\x04R\alockTtl\x12,\n" +
+	"\tlock_type\x18\x05 \x01(\x0e2\x0f.pb.Mutation.OpR\blockType\x12\"\n" +
+	"\rmin_commit_ts\x18\x06 \x01(\x04R\vminCommitTs\"\x94\x01\n" +
+	"\rWriteConflict\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x12\x18\n" +
+	"\aprimary\x18\x02 \x01(\fR\aprimary\x12\x1f\n" +
+	"\vconflict_ts\x18\x03 \x01(\x04R\n" +
+	"conflictTs\x12\x1b\n" +
+	"\tcommit_ts\x18\x04 \x01(\x04R\bcommitTs\x12\x19\n" +
+	"\bstart_ts\x18\x05 \x01(\x04R\astartTs\"$\n" +
+	"\x10KeyAlreadyExists\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\"\xec\x01\n" +
+	"\vRegionError\x12,\n" +
+	"\n" +
+	"not_leader\x18\x01 \x01(\v2\r.pb.NotLeaderR\tnotLeader\x129\n" +
+	"\x0fepoch_not_match\x18\x02 \x01(\v2\x11.pb.EpochNotMatchR\repochNotMatch\x125\n" +
+	"\rstale_command\x18\x03 \x01(\v2\x10.pb.StaleCommandR\fstaleCommand\x12=\n" +
+	"\x0fentry_too_large\x18\x04 \x01(\v2\x15.pb.RaftEntryTooLargeR\rentryTooLarge\"P\n" +
+	"\tNotLeader\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12&\n" +
+	"\x06leader\x18\x02 \x01(\v2\x0e.pb.RegionPeerR\x06leader\"o\n" +
+	"\rEpochNotMatch\x124\n" +
+	"\rcurrent_epoch\x18\x01 \x01(\v2\x0f.pb.RegionEpochR\fcurrentEpoch\x12(\n" +
+	"\aregions\x18\x02 \x03(\v2\x0e.pb.RegionMetaR\aregions\"\x0e\n" +
+	"\fStaleCommand\"0\n" +
+	"\x11RaftEntryTooLarge\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId*\x9f\x01\n" +
+	"\aCmdType\x12\x0f\n" +
+	"\vCMD_INVALID\x10\x00\x12\v\n" +
+	"\aCMD_GET\x10\x01\x12\f\n" +
+	"\bCMD_SCAN\x10\x02\x12\x10\n" +
+	"\fCMD_PREWRITE\x10\x03\x12\x0e\n" +
+	"\n" +
+	"CMD_COMMIT\x10\x04\x12\x16\n" +
+	"\x12CMD_BATCH_ROLLBACK\x10\x05\x12\x14\n" +
+	"\x10CMD_RESOLVE_LOCK\x10\x06\x12\x18\n" +
+	"\x14CMD_CHECK_TXN_STATUS\x10\a*\xa4\x01\n" +
+	"\x14CheckTxnStatusAction\x12\x1a\n" +
+	"\x16CheckTxnStatusNoAction\x10\x00\x12#\n" +
+	"\x1fCheckTxnStatusTTLExpireRollback\x10\x01\x12&\n" +
+	"\"CheckTxnStatusLockNotExistRollback\x10\x02\x12#\n" +
+	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x03B Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
 
 var (
 	file_pb_proto_rawDescOnce sync.Once
@@ -894,38 +3225,114 @@ func file_pb_proto_rawDescGZIP() []byte {
 	return file_pb_proto_rawDescData
 }
 
-var file_pb_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_pb_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_pb_proto_goTypes = []any{
-	(ManifestChange_Operation)(0), // 0: pb.ManifestChange.Operation
-	(AdminCommand_Type)(0),        // 1: pb.AdminCommand.Type
-	(*KV)(nil),                    // 2: pb.KV
-	(*KVList)(nil),                // 3: pb.KVList
-	(*ManifestChangeSet)(nil),     // 4: pb.ManifestChangeSet
-	(*ManifestChange)(nil),        // 5: pb.ManifestChange
-	(*TableIndex)(nil),            // 6: pb.TableIndex
-	(*BlockOffset)(nil),           // 7: pb.BlockOffset
-	(*RegionPeer)(nil),            // 8: pb.RegionPeer
-	(*RegionMeta)(nil),            // 9: pb.RegionMeta
-	(*SplitCommand)(nil),          // 10: pb.SplitCommand
-	(*MergeCommand)(nil),          // 11: pb.MergeCommand
-	(*AdminCommand)(nil),          // 12: pb.AdminCommand
+	(CmdType)(0),                   // 0: pb.CmdType
+	(CheckTxnStatusAction)(0),      // 1: pb.CheckTxnStatusAction
+	(ManifestChange_Operation)(0),  // 2: pb.ManifestChange.Operation
+	(AdminCommand_Type)(0),         // 3: pb.AdminCommand.Type
+	(Mutation_Op)(0),               // 4: pb.Mutation.Op
+	(*KV)(nil),                     // 5: pb.KV
+	(*KVList)(nil),                 // 6: pb.KVList
+	(*ManifestChangeSet)(nil),      // 7: pb.ManifestChangeSet
+	(*ManifestChange)(nil),         // 8: pb.ManifestChange
+	(*TableIndex)(nil),             // 9: pb.TableIndex
+	(*BlockOffset)(nil),            // 10: pb.BlockOffset
+	(*RegionPeer)(nil),             // 11: pb.RegionPeer
+	(*RegionMeta)(nil),             // 12: pb.RegionMeta
+	(*SplitCommand)(nil),           // 13: pb.SplitCommand
+	(*MergeCommand)(nil),           // 14: pb.MergeCommand
+	(*AdminCommand)(nil),           // 15: pb.AdminCommand
+	(*RegionEpoch)(nil),            // 16: pb.RegionEpoch
+	(*CmdHeader)(nil),              // 17: pb.CmdHeader
+	(*Request)(nil),                // 18: pb.Request
+	(*Response)(nil),               // 19: pb.Response
+	(*RaftCmdRequest)(nil),         // 20: pb.RaftCmdRequest
+	(*RaftCmdResponse)(nil),        // 21: pb.RaftCmdResponse
+	(*GetRequest)(nil),             // 22: pb.GetRequest
+	(*GetResponse)(nil),            // 23: pb.GetResponse
+	(*ScanRequest)(nil),            // 24: pb.ScanRequest
+	(*ScanResponse)(nil),           // 25: pb.ScanResponse
+	(*Mutation)(nil),               // 26: pb.Mutation
+	(*PrewriteRequest)(nil),        // 27: pb.PrewriteRequest
+	(*PrewriteResponse)(nil),       // 28: pb.PrewriteResponse
+	(*CommitRequest)(nil),          // 29: pb.CommitRequest
+	(*CommitResponse)(nil),         // 30: pb.CommitResponse
+	(*BatchRollbackRequest)(nil),   // 31: pb.BatchRollbackRequest
+	(*BatchRollbackResponse)(nil),  // 32: pb.BatchRollbackResponse
+	(*ResolveLockRequest)(nil),     // 33: pb.ResolveLockRequest
+	(*ResolveLockResponse)(nil),    // 34: pb.ResolveLockResponse
+	(*CheckTxnStatusRequest)(nil),  // 35: pb.CheckTxnStatusRequest
+	(*CheckTxnStatusResponse)(nil), // 36: pb.CheckTxnStatusResponse
+	(*KeyError)(nil),               // 37: pb.KeyError
+	(*Locked)(nil),                 // 38: pb.Locked
+	(*WriteConflict)(nil),          // 39: pb.WriteConflict
+	(*KeyAlreadyExists)(nil),       // 40: pb.KeyAlreadyExists
+	(*RegionError)(nil),            // 41: pb.RegionError
+	(*NotLeader)(nil),              // 42: pb.NotLeader
+	(*EpochNotMatch)(nil),          // 43: pb.EpochNotMatch
+	(*StaleCommand)(nil),           // 44: pb.StaleCommand
+	(*RaftEntryTooLarge)(nil),      // 45: pb.RaftEntryTooLarge
 }
 var file_pb_proto_depIdxs = []int32{
-	2,  // 0: pb.KVList.kv:type_name -> pb.KV
-	5,  // 1: pb.ManifestChangeSet.changes:type_name -> pb.ManifestChange
-	0,  // 2: pb.ManifestChange.Op:type_name -> pb.ManifestChange.Operation
-	7,  // 3: pb.TableIndex.offsets:type_name -> pb.BlockOffset
-	8,  // 4: pb.RegionMeta.peers:type_name -> pb.RegionPeer
-	9,  // 5: pb.SplitCommand.child:type_name -> pb.RegionMeta
-	1,  // 6: pb.AdminCommand.type:type_name -> pb.AdminCommand.Type
-	10, // 7: pb.AdminCommand.split:type_name -> pb.SplitCommand
-	11, // 8: pb.AdminCommand.merge:type_name -> pb.MergeCommand
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	5,  // 0: pb.KVList.kv:type_name -> pb.KV
+	8,  // 1: pb.ManifestChangeSet.changes:type_name -> pb.ManifestChange
+	2,  // 2: pb.ManifestChange.Op:type_name -> pb.ManifestChange.Operation
+	10, // 3: pb.TableIndex.offsets:type_name -> pb.BlockOffset
+	11, // 4: pb.RegionMeta.peers:type_name -> pb.RegionPeer
+	12, // 5: pb.SplitCommand.child:type_name -> pb.RegionMeta
+	3,  // 6: pb.AdminCommand.type:type_name -> pb.AdminCommand.Type
+	13, // 7: pb.AdminCommand.split:type_name -> pb.SplitCommand
+	14, // 8: pb.AdminCommand.merge:type_name -> pb.MergeCommand
+	16, // 9: pb.CmdHeader.region_epoch:type_name -> pb.RegionEpoch
+	0,  // 10: pb.Request.cmd_type:type_name -> pb.CmdType
+	22, // 11: pb.Request.get:type_name -> pb.GetRequest
+	24, // 12: pb.Request.scan:type_name -> pb.ScanRequest
+	27, // 13: pb.Request.prewrite:type_name -> pb.PrewriteRequest
+	29, // 14: pb.Request.commit:type_name -> pb.CommitRequest
+	31, // 15: pb.Request.batch_rollback:type_name -> pb.BatchRollbackRequest
+	33, // 16: pb.Request.resolve_lock:type_name -> pb.ResolveLockRequest
+	35, // 17: pb.Request.check_txn_status:type_name -> pb.CheckTxnStatusRequest
+	23, // 18: pb.Response.get:type_name -> pb.GetResponse
+	25, // 19: pb.Response.scan:type_name -> pb.ScanResponse
+	28, // 20: pb.Response.prewrite:type_name -> pb.PrewriteResponse
+	30, // 21: pb.Response.commit:type_name -> pb.CommitResponse
+	32, // 22: pb.Response.batch_rollback:type_name -> pb.BatchRollbackResponse
+	34, // 23: pb.Response.resolve_lock:type_name -> pb.ResolveLockResponse
+	36, // 24: pb.Response.check_txn_status:type_name -> pb.CheckTxnStatusResponse
+	17, // 25: pb.RaftCmdRequest.header:type_name -> pb.CmdHeader
+	18, // 26: pb.RaftCmdRequest.requests:type_name -> pb.Request
+	17, // 27: pb.RaftCmdResponse.header:type_name -> pb.CmdHeader
+	19, // 28: pb.RaftCmdResponse.responses:type_name -> pb.Response
+	41, // 29: pb.RaftCmdResponse.region_error:type_name -> pb.RegionError
+	37, // 30: pb.GetResponse.error:type_name -> pb.KeyError
+	5,  // 31: pb.ScanResponse.kvs:type_name -> pb.KV
+	37, // 32: pb.ScanResponse.error:type_name -> pb.KeyError
+	4,  // 33: pb.Mutation.op:type_name -> pb.Mutation.Op
+	26, // 34: pb.PrewriteRequest.mutations:type_name -> pb.Mutation
+	37, // 35: pb.PrewriteResponse.errors:type_name -> pb.KeyError
+	37, // 36: pb.CommitResponse.error:type_name -> pb.KeyError
+	37, // 37: pb.BatchRollbackResponse.error:type_name -> pb.KeyError
+	37, // 38: pb.ResolveLockResponse.error:type_name -> pb.KeyError
+	37, // 39: pb.CheckTxnStatusResponse.error:type_name -> pb.KeyError
+	1,  // 40: pb.CheckTxnStatusResponse.action:type_name -> pb.CheckTxnStatusAction
+	38, // 41: pb.KeyError.locked:type_name -> pb.Locked
+	39, // 42: pb.KeyError.write_conflict:type_name -> pb.WriteConflict
+	40, // 43: pb.KeyError.already_exists:type_name -> pb.KeyAlreadyExists
+	4,  // 44: pb.Locked.lock_type:type_name -> pb.Mutation.Op
+	42, // 45: pb.RegionError.not_leader:type_name -> pb.NotLeader
+	43, // 46: pb.RegionError.epoch_not_match:type_name -> pb.EpochNotMatch
+	44, // 47: pb.RegionError.stale_command:type_name -> pb.StaleCommand
+	45, // 48: pb.RegionError.entry_too_large:type_name -> pb.RaftEntryTooLarge
+	11, // 49: pb.NotLeader.leader:type_name -> pb.RegionPeer
+	16, // 50: pb.EpochNotMatch.current_epoch:type_name -> pb.RegionEpoch
+	12, // 51: pb.EpochNotMatch.regions:type_name -> pb.RegionMeta
+	52, // [52:52] is the sub-list for method output_type
+	52, // [52:52] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_pb_proto_init() }
@@ -933,13 +3340,31 @@ func file_pb_proto_init() {
 	if File_pb_proto != nil {
 		return
 	}
+	file_pb_proto_msgTypes[13].OneofWrappers = []any{
+		(*Request_Get)(nil),
+		(*Request_Scan)(nil),
+		(*Request_Prewrite)(nil),
+		(*Request_Commit)(nil),
+		(*Request_BatchRollback)(nil),
+		(*Request_ResolveLock)(nil),
+		(*Request_CheckTxnStatus)(nil),
+	}
+	file_pb_proto_msgTypes[14].OneofWrappers = []any{
+		(*Response_Get)(nil),
+		(*Response_Scan)(nil),
+		(*Response_Prewrite)(nil),
+		(*Response_Commit)(nil),
+		(*Response_BatchRollback)(nil),
+		(*Response_ResolveLock)(nil),
+		(*Response_CheckTxnStatus)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pb_proto_rawDesc), len(file_pb_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   11,
+			NumEnums:      5,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

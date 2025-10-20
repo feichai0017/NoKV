@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -77,6 +78,18 @@ func (r *Router) SendPropose(id uint64, data []byte) error {
 		return fmt.Errorf("raftstore: peer %d not found", id)
 	}
 	return p.Propose(data)
+}
+
+// SendCommand encodes the provided raft command and submits it to the peer.
+func (r *Router) SendCommand(id uint64, req *pb.RaftCmdRequest) error {
+	if req == nil {
+		return fmt.Errorf("raftstore: nil raft command request")
+	}
+	p, ok := r.Peer(id)
+	if !ok {
+		return fmt.Errorf("raftstore: peer %d not found", id)
+	}
+	return p.ProposeCommand(req)
 }
 
 // SendTick drives a single logical clock tick for the target peer.

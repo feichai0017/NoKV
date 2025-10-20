@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
@@ -52,4 +53,5 @@ type Config struct {
 	OperationInterval  time.Duration
 	OperationBurst     int
 	OperationObserver  func(scheduler.Operation)
+	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 }
