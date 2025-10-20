@@ -116,6 +116,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - **Initialization**: provide `[]StoreEndpoint` + `[]RegionConfig` describing region boundaries and known leaders.
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
+- **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, reuse the TSO sample under `scripts/tso` to obtain globally increasing values before calling `TwoPhaseCommit`.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.

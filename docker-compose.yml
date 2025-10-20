@@ -1,0 +1,117 @@
+version: "3.9"
+
+x-nokv-image: &nokv-image
+  build: .
+  image: nokv:latest
+
+services:
+  bootstrap:
+    <<: *nokv-image
+    container_name: nokv-bootstrap
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      set -euo pipefail;
+      mkdir -p /data/store1 /data/store2 /data/store3;
+      nokv-manifest --workdir /data/store1 --region-id 1 --peer 1:101 --peer 2:201 --peer 3:301;
+      nokv-manifest --workdir /data/store2 --region-id 1 --peer 1:101 --peer 2:201 --peer 3:301;
+      nokv-manifest --workdir /data/store3 --region-id 1 --peer 1:101 --peer 2:201 --peer 3:301;
+      echo "manifest bootstrap complete";
+    volumes:
+      - node1-data:/data/store1
+      - node2-data:/data/store2
+      - node3-data:/data/store3
+    restart: "no"
+
+  tso:
+    image: nokv:latest
+    container_name: nokv-tso
+    entrypoint: ["/usr/local/bin/nokv-tso"]
+    command: ["--addr", "0.0.0.0:9494", "--start", "100"]
+    expose:
+      - "9494"
+    ports:
+      - "9494:9494"
+    restart: unless-stopped
+
+  node1:
+    image: nokv:latest
+    container_name: nokv-node1
+    command:
+      [
+        "serve",
+        "--workdir",
+        "/var/lib/nokv",
+        "--store-id",
+        "1",
+        "--addr",
+        "0.0.0.0:20160",
+        "--peer",
+        "2=node2:20160",
+        "--peer",
+        "3=node3:20160"
+      ]
+    volumes:
+      - node1-data:/var/lib/nokv
+    ports:
+      - "20160:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  node2:
+    image: nokv:latest
+    container_name: nokv-node2
+    command:
+      [
+        "serve",
+        "--workdir",
+        "/var/lib/nokv",
+        "--store-id",
+        "2",
+        "--addr",
+        "0.0.0.0:20160",
+        "--peer",
+        "1=node1:20160",
+        "--peer",
+        "3=node3:20160"
+      ]
+    volumes:
+      - node2-data:/var/lib/nokv
+    ports:
+      - "20161:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  node3:
+    image: nokv:latest
+    container_name: nokv-node3
+    command:
+      [
+        "serve",
+        "--workdir",
+        "/var/lib/nokv",
+        "--store-id",
+        "3",
+        "--addr",
+        "0.0.0.0:20160",
+        "--peer",
+        "1=node1:20160",
+        "--peer",
+        "2=node2:20160"
+      ]
+    volumes:
+      - node3-data:/var/lib/nokv
+    ports:
+      - "20162:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

@@ -19,6 +19,13 @@ RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
 # gRPC transport chaos tests + watchdog metrics
 CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
 
+# Sample timestamp allocator (TSO) for multi-client transaction tests
+go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
+
+# Docker-compose sandbox (3 nodes + TSO)
+docker compose up --build
+docker compose down -v
+
 # Performance baseline (NoKV vs Badger, optional RocksDB)
 go test ./benchmark -run TestBenchmarkResults -count=1
 # With RocksDB comparison (requires CGO and gorocksdb)
