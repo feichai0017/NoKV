@@ -6,6 +6,9 @@
     <a href="https://github.com/feichai0017/NoKV/actions">
       <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status"/>
     </a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
+      <img src="https://pkg.go.dev/badge/github.com/feichai0017/NoKV.svg" alt="Go Reference"/>
+    </a>
     <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
