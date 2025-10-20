@@ -6,7 +6,7 @@
     <a href="https://github.com/feichai0017/NoKV/actions">
       <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status"/>
     </a>
-    <img src="https://img.shields.io/badge/go-1.24+-blue.svg" alt="Go Version"/>
+    <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
   <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
