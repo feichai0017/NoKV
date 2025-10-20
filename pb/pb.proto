@@ -84,3 +84,218 @@ message AdminCommand {
   SplitCommand split = 2;
   MergeCommand merge = 3;
 }
+
+message RegionEpoch {
+  uint64 conf_ver = 1;
+  uint64 version = 2;
+}
+
+message CmdHeader {
+  uint64 region_id = 1;
+  RegionEpoch region_epoch = 2;
+  uint64 peer_id = 3;
+  bool read_quorum = 4;
+  uint64 request_id = 5;
+}
+
+enum CmdType {
+  CMD_INVALID = 0;
+  CMD_GET = 1;
+  CMD_SCAN = 2;
+  CMD_PREWRITE = 3;
+  CMD_COMMIT = 4;
+  CMD_BATCH_ROLLBACK = 5;
+  CMD_RESOLVE_LOCK = 6;
+  CMD_CHECK_TXN_STATUS = 7;
+}
+
+message Request {
+  CmdType cmd_type = 1;
+  oneof cmd {
+    GetRequest get = 2;
+    ScanRequest scan = 3;
+    PrewriteRequest prewrite = 4;
+    CommitRequest commit = 5;
+    BatchRollbackRequest batch_rollback = 6;
+    ResolveLockRequest resolve_lock = 7;
+    CheckTxnStatusRequest check_txn_status = 8;
+  }
+}
+
+message Response {
+  oneof cmd {
+    GetResponse get = 1;
+    ScanResponse scan = 2;
+    PrewriteResponse prewrite = 3;
+    CommitResponse commit = 4;
+    BatchRollbackResponse batch_rollback = 5;
+    ResolveLockResponse resolve_lock = 6;
+    CheckTxnStatusResponse check_txn_status = 7;
+  }
+}
+
+message RaftCmdRequest {
+  CmdHeader header = 1;
+  repeated Request requests = 2;
+}
+
+message RaftCmdResponse {
+  CmdHeader header = 1;
+  repeated Response responses = 2;
+  RegionError region_error = 3;
+}
+
+message GetRequest {
+  bytes key = 1;
+  uint64 version = 2;
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool not_found = 2;
+  KeyError error = 3;
+}
+
+message ScanRequest {
+  bytes start_key = 1;
+  uint32 limit = 2;
+  uint64 version = 3;
+  bool include_start = 4;
+  bool reverse = 5;
+}
+
+message ScanResponse {
+  repeated KV kvs = 1;
+  KeyError error = 2;
+}
+
+message Mutation {
+  enum Op {
+    Put = 0;
+    Delete = 1;
+    Lock = 2;
+    Rollback = 3;
+  }
+  Op op = 1;
+  bytes key = 2;
+  bytes value = 3;
+  bool assertion_not_exist = 4;
+}
+
+message PrewriteRequest {
+  repeated Mutation mutations = 1;
+  bytes primary_lock = 2;
+  uint64 start_version = 3;
+  uint64 lock_ttl = 4;
+  uint64 txn_size = 5;
+  uint64 min_commit_ts = 6;
+}
+
+message PrewriteResponse {
+  repeated KeyError errors = 1;
+}
+
+message CommitRequest {
+  repeated bytes keys = 1;
+  uint64 start_version = 2;
+  uint64 commit_version = 3;
+}
+
+message CommitResponse {
+  KeyError error = 1;
+}
+
+message BatchRollbackRequest {
+  repeated bytes keys = 1;
+  uint64 start_version = 2;
+}
+
+message BatchRollbackResponse {
+  KeyError error = 1;
+}
+
+message ResolveLockRequest {
+  uint64 start_version = 1;
+  uint64 commit_version = 2;
+  repeated bytes keys = 3;
+}
+
+message ResolveLockResponse {
+  KeyError error = 1;
+  uint64 resolved_locks = 2;
+}
+
+enum CheckTxnStatusAction {
+  CheckTxnStatusNoAction = 0;
+  CheckTxnStatusTTLExpireRollback = 1;
+  CheckTxnStatusLockNotExistRollback = 2;
+  CheckTxnStatusMinCommitTsPushed = 3;
+}
+
+message CheckTxnStatusRequest {
+  bytes primary_key = 1;
+  uint64 lock_ts = 2;
+  uint64 current_ts = 3;
+  bool rollback_if_not_exist = 4;
+  uint64 caller_start_ts = 5;
+  uint64 current_time = 6;
+}
+
+message CheckTxnStatusResponse {
+  KeyError error = 1;
+  uint64 lock_ttl = 2;
+  uint64 commit_version = 3;
+  CheckTxnStatusAction action = 4;
+}
+
+message KeyError {
+  Locked locked = 1;
+  WriteConflict write_conflict = 2;
+  KeyAlreadyExists already_exists = 3;
+  string retryable = 4;
+  string abort = 5;
+}
+
+message Locked {
+  bytes primary_lock = 1;
+  bytes key = 2;
+  uint64 lock_version = 3;
+  uint64 lock_ttl = 4;
+  Mutation.Op lock_type = 5;
+  uint64 min_commit_ts = 6;
+}
+
+message WriteConflict {
+  bytes key = 1;
+  bytes primary = 2;
+  uint64 conflict_ts = 3;
+  uint64 commit_ts = 4;
+  uint64 start_ts = 5;
+}
+
+message KeyAlreadyExists {
+  bytes key = 1;
+}
+
+message RegionError {
+  NotLeader not_leader = 1;
+  EpochNotMatch epoch_not_match = 2;
+  StaleCommand stale_command = 3;
+  RaftEntryTooLarge entry_too_large = 4;
+}
+
+message NotLeader {
+  uint64 region_id = 1;
+  RegionPeer leader = 2;
+}
+
+message EpochNotMatch {
+  RegionEpoch current_epoch = 1;
+  repeated RegionMeta regions = 2;
+}
+
+message StaleCommand {}
+
+message RaftEntryTooLarge {
+  uint64 region_id = 1;
+}

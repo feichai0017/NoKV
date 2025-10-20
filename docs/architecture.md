@@ -297,9 +297,8 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 - **Done**: Hardened planner execution with queued operations + cooldowns, enriched store stats with capacity/availability and heartbeat lag, surfaced stale-region detection in CLI, and added regression tests covering throttled leader transfers.
 
 ### Phase 6 — Distributed MVCC & 2PC (TinyKV Project4)
-- Extend MVCC layer to operate across regions: lock table persistence (`lock` CF), write records (`write` CF), and data (`default` CF).
-- Implement handlers for `KvGet`, `KvPrewrite`, `KvCommit`, `KvScan`, `KvCheckTxnStatus`, `KvBatchRollback`, `KvResolveLock` through raft proposals.
-- Wire primary/secondary lock resolution, TTL management, and latch manager; add integration tests mirroring TinyKV txn suites.
+- **Done**: Foundation for MVCC storage is in place — lock/write CF encoding, latch manager, and a raft-backed Apply path now execute `Prewrite`, `Commit`, `BatchRollback`, `ResolveLock`, and `CheckTxnStatus` with proper RegionError handling.
+- **Next**: Expose client RPCs (`KvGet`, `KvScan`, `KvPrewrite`, `KvCommit`, `KvCheckTxnStatus`, `KvBatchRollback`, `KvResolveLock`), add multi-region routing/NotLeader retries, and integrate end-to-end txn suites across Region splits/merges.
 
 ### Phase 7 — Observability, Tooling & Docs
 - Expose raft/region/txn metrics via `Stats` and CLI (`nokv raft`, `nokv regions`); integrate with recovery traces.

@@ -9,9 +9,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/mvcc"
+	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
+	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/store"
@@ -57,6 +61,14 @@ func testPeerBuilder(storeID uint64) store.PeerBuilder {
 		}
 		return cfg, nil
 	}
+}
+
+func openStoreDB(t *testing.T) *NoKV.DB {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db := NoKV.Open(opt)
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 func TestStorePeerLifecycle(t *testing.T) {
@@ -535,6 +547,174 @@ func TestStorePlannerQueuesOperations(t *testing.T) {
 	require.GreaterOrEqual(t, len(recorded), 2)
 	delta := recorded[1].Sub(recorded[0])
 	require.GreaterOrEqual(t, delta, 60*time.Millisecond)
+}
+
+func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
+	db := openStoreDB(t)
+	coord := scheduler.NewCoordinator()
+	applier := kv.NewApplier(db)
+	st := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+
+	region := &manifest.RegionMeta{
+		ID:       101,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch: manifest.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+		Peers: []manifest.PeerMeta{{StoreID: 1, PeerID: 1}},
+	}
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		WAL:       db.WAL(),
+		Manifest:  db.Manifest(),
+		GroupID:   101,
+		Region:    region,
+	}
+	peer, err := st.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(peer.ID()) })
+	require.NoError(t, peer.Campaign())
+
+	epoch := &pb.RegionEpoch{Version: 1, ConfVer: 1}
+	prewrite := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_PREWRITE,
+			Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
+				Mutations: []*pb.Mutation{{
+					Op:    pb.Mutation_Put,
+					Key:   []byte("cmd-key"),
+					Value: []byte("cmd-value"),
+				}},
+				PrimaryLock:  []byte("cmd-key"),
+				StartVersion: 20,
+				LockTtl:      3000,
+			}},
+		}},
+	}
+	resp, err := st.ProposeCommand(prewrite)
+	require.NoError(t, err)
+	require.Nil(t, resp.GetRegionError())
+	require.Len(t, resp.GetResponses(), 1)
+	require.Empty(t, resp.GetResponses()[0].GetPrewrite().GetErrors())
+	require.NotZero(t, resp.GetHeader().GetRequestId())
+
+	commit := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_COMMIT,
+			Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+				Keys:          [][]byte{[]byte("cmd-key")},
+				StartVersion:  20,
+				CommitVersion: 40,
+			}},
+		}},
+	}
+	resp, err = st.ProposeCommand(commit)
+	require.NoError(t, err)
+	require.Nil(t, resp.GetRegionError())
+	require.Len(t, resp.GetResponses(), 1)
+	require.Nil(t, resp.GetResponses()[0].GetCommit().GetError())
+
+	reader := mvcc.NewReader(db)
+	val, err := reader.GetValue([]byte("cmd-key"), 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("cmd-value"), val)
+}
+
+func TestStoreProposeCommandNotLeader(t *testing.T) {
+	db := openStoreDB(t)
+	applier := kv.NewApplier(db)
+	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+	region := &manifest.RegionMeta{
+		ID:       202,
+		StartKey: []byte("k"),
+		EndKey:   []byte("z"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 5}},
+	}
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              5,
+			ElectionTick:    10,
+			HeartbeatTick:   2,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		WAL:       db.WAL(),
+		Manifest:  db.Manifest(),
+		GroupID:   202,
+		Region:    region,
+	}
+	peer, err := st.StartPeer(cfg, []myraft.Peer{{ID: 5}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(peer.ID()) })
+
+	req := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}},
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_PREWRITE,
+			Cmd:     &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{StartVersion: 1}},
+		}},
+	}
+	resp, err := st.ProposeCommand(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetNotLeader())
+}
+
+func TestStoreProposeCommandEpochMismatch(t *testing.T) {
+	db := openStoreDB(t)
+	applier := kv.NewApplier(db)
+	st := store.NewStoreWithConfig(store.Config{StoreID: 3, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+	region := &manifest.RegionMeta{
+		ID:       303,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 3, PeerID: 7}},
+	}
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              7,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		WAL:       db.WAL(),
+		Manifest:  db.Manifest(),
+		GroupID:   303,
+		Region:    region,
+	}
+	peer, err := st.StartPeer(cfg, []myraft.Peer{{ID: 7}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(peer.ID()) })
+	require.NoError(t, peer.Campaign())
+
+	badReq := &pb.RaftCmdRequest{
+		Header:   &pb.CmdHeader{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}},
+		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_PREWRITE}},
+	}
+	resp, err := st.ProposeCommand(badReq)
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetEpochNotMatch())
 }
 
 func TestStoreProposeSplitApplies(t *testing.T) {

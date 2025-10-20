@@ -1,16 +1,19 @@
 package store
 
+
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
@@ -48,6 +51,10 @@ type Store struct {
 	operationMu       sync.Mutex
 	lastApplied       map[operationKey]time.Time
 	pendingOps        map[operationKey]struct{}
+	commandApplier    func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	proposalSeq       uint64
+	proposalMu        sync.Mutex
+	proposals         map[uint64]*commandProposal
 }
 
 type operationKey struct {
@@ -146,6 +153,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 		operationCooldown: operationCooldown,
 		operationInterval: operationInterval,
 		operationBurst:    operationBurst,
+		commandApplier:    cfg.CommandApplier,
+		proposals:         make(map[uint64]*commandProposal),
 	}
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
@@ -169,6 +178,15 @@ func NewStoreWithConfig(cfg Config) *Store {
 		s.startHeartbeatLoop()
 	}
 	return s
+}
+
+type commandProposal struct {
+	ch chan proposalResult
+}
+
+type proposalResult struct {
+	resp *pb.RaftCmdResponse
+	err  error
 }
 
 // SplitRegion updates the parent region metadata and bootstraps a new peer for
@@ -443,6 +461,10 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	if cfgCopy.AdminApply == nil {
 		cfgCopy.AdminApply = s.handleAdminCommand
 	}
+	legacyApply := cfgCopy.Apply
+	cfgCopy.Apply = func(entries []myraft.Entry) error {
+		return s.applyEntries(entries, legacyApply)
+	}
 	p, err := factory(&cfgCopy)
 	if err != nil {
 		return nil, err
@@ -598,6 +620,50 @@ func (s *Store) applyOperation(op scheduler.Operation) {
 	if hook := s.operationHook; hook != nil && applied {
 		hook(op)
 	}
+}
+
+func (s *Store) applyEntries(entries []myraft.Entry, fallback peer.ApplyFunc) error {
+	for _, entry := range entries {
+		if entry.Type != myraft.EntryNormal {
+			if fallback != nil {
+				if err := fallback([]myraft.Entry{entry}); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if len(entry.Data) == 0 {
+			continue
+		}
+		req, isCmd, err := command.Decode(entry.Data)
+		if err != nil {
+			return err
+		}
+		if !isCmd {
+			if fallback != nil {
+				if err := fallback([]myraft.Entry{entry}); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if s.commandApplier == nil {
+			if fallback != nil {
+				if err := fallback([]myraft.Entry{entry}); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("raftstore: command apply without handler")
+		}
+		resp, err := s.commandApplier(req)
+		if err != nil {
+			s.completeProposal(req.GetHeader().GetRequestId(), nil, err)
+			continue
+		}
+		s.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
+	}
+	return nil
 }
 
 type scheduledOperation struct {
@@ -796,6 +862,144 @@ func (s *Store) diskStats() (uint64, uint64, bool) {
 	capacity := uint64(st.Blocks) * uint64(st.Bsize)
 	available := uint64(st.Bavail) * uint64(st.Bsize)
 	return capacity, available, true
+}
+
+func (s *Store) nextProposalID() uint64 {
+	return atomic.AddUint64(&s.proposalSeq, 1)
+}
+
+func (s *Store) registerProposal(id uint64) *commandProposal {
+	prop := &commandProposal{ch: make(chan proposalResult, 1)}
+	s.proposalMu.Lock()
+	s.proposals[id] = prop
+	s.proposalMu.Unlock()
+	return prop
+}
+
+func (s *Store) removeProposal(id uint64) {
+	if id == 0 {
+		return
+	}
+	s.proposalMu.Lock()
+	delete(s.proposals, id)
+	s.proposalMu.Unlock()
+}
+
+func (s *Store) completeProposal(id uint64, resp *pb.RaftCmdResponse, err error) {
+	if id == 0 {
+		return
+	}
+	s.proposalMu.Lock()
+	prop, ok := s.proposals[id]
+	if ok {
+		delete(s.proposals, id)
+	}
+	s.proposalMu.Unlock()
+	if ok && prop != nil {
+		prop.ch <- proposalResult{resp: resp, err: err}
+	}
+}
+
+// ProposeCommand submits a raft command to the leader hosting the target
+// region. When the store is not leader or the request header is invalid the
+// returned response includes an appropriate RegionError.
+func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("raftstore: store is nil")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("raftstore: command is nil")
+	}
+	if req.Header == nil {
+		req.Header = &pb.CmdHeader{}
+	}
+	regionID := req.Header.GetRegionId()
+	if regionID == 0 {
+		return nil, fmt.Errorf("raftstore: region id missing")
+	}
+	meta, ok := s.RegionMetaByID(regionID)
+	if !ok {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(nil)}
+		return resp, nil
+	}
+	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		return resp, nil
+	}
+	peer := s.regions.peer(regionID)
+	if peer == nil {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(&meta)}
+		return resp, nil
+	}
+	status := peer.Status()
+	if status.RaftState != myraft.StateLeader {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
+		return resp, nil
+	}
+	req.Header.PeerId = peer.ID()
+	if req.Header.RequestId == 0 {
+		req.Header.RequestId = s.nextProposalID()
+	}
+	id := req.Header.RequestId
+	prop := s.registerProposal(id)
+	if err := s.router.SendCommand(peer.ID(), req); err != nil {
+		s.removeProposal(id)
+		return nil, err
+	}
+	result := <-prop.ch
+	if result.err != nil {
+		return nil, result.err
+	}
+	if result.resp == nil {
+		return &pb.RaftCmdResponse{Header: req.Header}, nil
+	}
+	return result.resp, nil
+}
+
+func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta manifest.RegionMeta) *pb.RegionError {
+	if reqEpoch == nil {
+		return epochNotMatchError(&meta)
+	}
+	if reqEpoch.GetConfVer() != meta.Epoch.ConfVersion || reqEpoch.GetVersion() != meta.Epoch.Version {
+		return epochNotMatchError(&meta)
+	}
+	return nil
+}
+
+func epochNotMatchError(meta *manifest.RegionMeta) *pb.RegionError {
+	var current *pb.RegionEpoch
+	var regions []*pb.RegionMeta
+	if meta != nil {
+		current = &pb.RegionEpoch{
+			ConfVer: meta.Epoch.ConfVersion,
+			Version: meta.Epoch.Version,
+		}
+		regions = append(regions, regionMetaToPB(*meta))
+	}
+	return &pb.RegionError{
+		EpochNotMatch: &pb.EpochNotMatch{
+			CurrentEpoch: current,
+			Regions:      regions,
+		},
+	}
+}
+
+func notLeaderError(meta manifest.RegionMeta, leaderPeerID uint64) *pb.RegionError {
+	var leader *pb.RegionPeer
+	if leaderPeerID != 0 {
+		for _, p := range meta.Peers {
+			if p.PeerID == leaderPeerID {
+				leader = &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID}
+				break
+			}
+		}
+	}
+	return &pb.RegionError{
+		NotLeader: &pb.NotLeader{
+			RegionId: meta.ID,
+			Leader:   leader,
+		},
+	}
 }
 
 // UpdateRegion persists the region metadata (when a manifest manager is
