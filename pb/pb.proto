@@ -248,6 +248,92 @@ message CheckTxnStatusResponse {
   CheckTxnStatusAction action = 4;
 }
 
+message Context {
+  uint64 region_id = 1;
+  RegionEpoch region_epoch = 2;
+  RegionPeer peer = 3;
+}
+
+message KvGetRequest {
+  Context context = 1;
+  GetRequest request = 2;
+}
+
+message KvGetResponse {
+  GetResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvScanRequest {
+  Context context = 1;
+  ScanRequest request = 2;
+}
+
+message KvScanResponse {
+  ScanResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvPrewriteRequest {
+  Context context = 1;
+  PrewriteRequest request = 2;
+}
+
+message KvPrewriteResponse {
+  PrewriteResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvCommitRequest {
+  Context context = 1;
+  CommitRequest request = 2;
+}
+
+message KvCommitResponse {
+  CommitResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvBatchRollbackRequest {
+  Context context = 1;
+  BatchRollbackRequest request = 2;
+}
+
+message KvBatchRollbackResponse {
+  BatchRollbackResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvResolveLockRequest {
+  Context context = 1;
+  ResolveLockRequest request = 2;
+}
+
+message KvResolveLockResponse {
+  ResolveLockResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvCheckTxnStatusRequest {
+  Context context = 1;
+  CheckTxnStatusRequest request = 2;
+}
+
+message KvCheckTxnStatusResponse {
+  CheckTxnStatusResponse response = 1;
+  RegionError region_error = 2;
+}
+
+service TinyKv {
+  rpc KvGet(KvGetRequest) returns (KvGetResponse);
+  rpc KvScan(KvScanRequest) returns (KvScanResponse);
+  rpc KvPrewrite(KvPrewriteRequest) returns (KvPrewriteResponse);
+  rpc KvCommit(KvCommitRequest) returns (KvCommitResponse);
+  rpc KvBatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
+  rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
+  rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
+}
+
 message KeyError {
   Locked locked = 1;
   WriteConflict write_conflict = 2;

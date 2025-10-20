@@ -1,6 +1,5 @@
 package store
 
-
 import (
 	"bytes"
 	"encoding/binary"
@@ -900,43 +899,54 @@ func (s *Store) completeProposal(id uint64, resp *pb.RaftCmdResponse, err error)
 	}
 }
 
-// ProposeCommand submits a raft command to the leader hosting the target
-// region. When the store is not leader or the request header is invalid the
-// returned response includes an appropriate RegionError.
-func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.RegionMeta, *pb.RaftCmdResponse, error) {
 	if s == nil {
-		return nil, fmt.Errorf("raftstore: store is nil")
+		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
 	}
 	if req == nil {
-		return nil, fmt.Errorf("raftstore: command is nil")
+		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
 	}
 	if req.Header == nil {
 		req.Header = &pb.CmdHeader{}
 	}
 	regionID := req.Header.GetRegionId()
 	if regionID == 0 {
-		return nil, fmt.Errorf("raftstore: region id missing")
+		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(nil)}
-		return resp, nil
+		return nil, manifest.RegionMeta{}, resp, nil
 	}
 	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
-		return resp, nil
+		return nil, meta, resp, nil
 	}
 	peer := s.regions.peer(regionID)
 	if peer == nil {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(&meta)}
-		return resp, nil
+		return nil, meta, resp, nil
 	}
 	status := peer.Status()
 	if status.RaftState != myraft.StateLeader {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
-		return resp, nil
+		return nil, meta, resp, nil
 	}
 	req.Header.PeerId = peer.ID()
+	return peer, meta, nil, nil
+}
+
+// ProposeCommand submits a raft command to the leader hosting the target
+// region. When the store is not leader or the request header is invalid the
+// returned response includes an appropriate RegionError.
+func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	peer, _, resp, err := s.validateCommand(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp != nil {
+		return resp, nil
+	}
 	if req.Header.RequestId == 0 {
 		req.Header.RequestId = s.nextProposalID()
 	}
@@ -954,6 +964,54 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		return &pb.RaftCmdResponse{Header: req.Header}, nil
 	}
 	return result.resp, nil
+}
+
+// ReadCommand executes the provided read-only raft command locally on the
+// leader. The command must only include read operations (Get/Scan). The method
+// returns a RegionError when the store is not leader for the target region.
+func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	peer, _, regionResp, err := s.validateCommand(req)
+	if err != nil {
+		return nil, err
+	}
+	if regionResp != nil {
+		return regionResp, nil
+	}
+	if len(req.GetRequests()) == 0 {
+		return nil, fmt.Errorf("raftstore: read command missing requests")
+	}
+	if !isReadOnlyRequest(req) {
+		return nil, fmt.Errorf("raftstore: read command must be read-only")
+	}
+	if s.commandApplier == nil {
+		return nil, fmt.Errorf("raftstore: command apply without handler")
+	}
+	if err := peer.Flush(); err != nil {
+		return nil, err
+	}
+	out, err := s.commandApplier(req)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func isReadOnlyRequest(req *pb.RaftCmdRequest) bool {
+	if req == nil {
+		return false
+	}
+	for _, r := range req.GetRequests() {
+		if r == nil {
+			continue
+		}
+		switch r.GetCmdType() {
+		case pb.CmdType_CMD_GET, pb.CmdType_CMD_SCAN:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta manifest.RegionMeta) *pb.RegionError {
@@ -1207,6 +1265,21 @@ func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	p, ok := s.peers[id]
 	s.mu.RUnlock()
 	return p, ok
+}
+
+// Step forwards the provided raft message to the target peer hosted on this
+// store.
+func (s *Store) Step(msg myraft.Message) error {
+	if s == nil {
+		return fmt.Errorf("raftstore: store is nil")
+	}
+	if msg.To == 0 {
+		return fmt.Errorf("raftstore: raft message missing recipient")
+	}
+	if s.router == nil {
+		return fmt.Errorf("raftstore: router is nil")
+	}
+	return s.router.SendRaft(msg.To, msg)
 }
 
 // ProposeAddPeer issues a configuration change to add the provided peer to the
