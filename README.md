@@ -103,17 +103,17 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
    `nokv stats` renders flush/WAL/backlog metrics so you can confirm compaction, watchdog, and GC health at a glance.
 
-4. **(Optional) 启动分布式 TinyKv 服务**
+4. **(Optional) Launch the distributed TinyKV service**
 
    ```bash
-   # 启动两节点集群，监听 21300 / 21301
+   # Launch a two-node cluster listening on 21300 / 21301
    ./scripts/run_local_cluster.sh --nodes 2 --base-port 21300
 
-   # 另开终端，可直接调用 gRPC 或使用 raftstore/client 访问 21300
+   # In another terminal, call gRPC directly or use raftstore/client to reach 21300
    go test ./raftstore/server -run TestServerWithClientTwoPhaseCommit -count=1
    ```
 
-   脚本会构建 `nokv`、为每个节点写入简易 Region manifest，并自动拉起 `nokv serve`；控制台会显示每个节点关联的 Region/Peer 信息。按 `Ctrl+C` 可以将所有节点一并关闭。
+   The script builds `nokv`, writes a lightweight Region manifest for each node, and automatically starts `nokv serve`; the console shows the Region/Peer information for every node. Press `Ctrl+C` to shut down all nodes together.
 
 ---
 
@@ -179,12 +179,12 @@ Each module has a dedicated document under `docs/` describing APIs, diagrams, an
 - ValueLog recovery trims partial records and resumes at the recorded head pointer.
 
 ### 2PC Across Regions (Distributed)
-1. 客户端使用 `raftstore/client` 初始化 Region 缓存（例：Region① `[a,m)`，Region② `[m,+∞)`）。
-2. 调用 `Client.Mutate(ctx, primary="alfa", mutations, startTS, commitTS, lockTTL)`：
-   - 先对 primary Region 执行 `KvPrewrite` → `KvCommit`；
-   - 其他 Region 并行 Prewrite，随后按顺序 Commit；发生 NotLeader 会自动刷新 leader 并重试。
-3. 读操作使用 `Client.Get/Scan`，若 Region 已迁移 leader，则 TinyKv 返回 `RegionError.NotLeader`，客户端更新缓存并重试。
-4. 完整示例可参考 `raftstore/server/server_client_integration_test.go`，其中真实节点 + gRPC Transport 完成 Put → Get/Scan → Delete 的环路。
+1. The client initializes the Region cache with `raftstore/client` (example: Region① `[a,m)`, Region② `[m,+∞)`).
+2. Call `Client.Mutate(ctx, primary="alfa", mutations, startTS, commitTS, lockTTL)`:
+   - Run `KvPrewrite` → `KvCommit` on the primary Region first.
+   - Other Regions prewrite in parallel, then commit sequentially; on a NotLeader error the client refreshes the leader and retries automatically.
+3. Reads use `Client.Get/Scan`; if a Region has moved leaders, TinyKV returns `RegionError.NotLeader`, prompting the client to update the cache and retry.
+4. A complete example lives in `raftstore/server/server_client_integration_test.go`, where real nodes plus the gRPC transport perform the Put → Get/Scan → Delete loop.
 
 More scenarios (including transaction recovery) are covered in [docs/architecture.md](docs/architecture.md#9-example-scenarios) and [docs/recovery.md](docs/recovery.md).
 
