@@ -33,7 +33,7 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
 ## ✨ Highlights
 
-- 🔁 **Hybrid LSM + ValueLog** – WAL + MemTable durability like RocksDB, while large values live in vlog segments à la Badger.
+- 🔁 **Hybrid LSM + ValueLog** – WAL + MemTable durability like RocksDB, while large values live in vlog segments like Badger.
 - ⚡ **MVCC transactions** – snapshot isolation with conflict detection via `oracle`, iterator snapshots, and managed/unmanaged modes.
 - 🔗 **Dual-mode runtime** – embed NoKV directly (`NoKV.Open`) *or* expose a distributed TinyKv service via `raftstore.Server` / `nokv serve`.
 - 🧠 **Multi-Raft regions** – `raftstore` manages Region lifecycle, shared WAL storage, hooks, and metrics; CLI/Stats make Region state observable by default.
@@ -214,7 +214,7 @@ cli, err := client.New(client.Config{
         {StoreID: 3, Addr: "127.0.0.1:20172"},
     },
     Regions: []client.RegionConfig{
-        {Meta: metaForRegion1, LeaderStoreID: 1}, // metaForRegion1来自 `nokv regions` 输出
+        {Meta: metaForRegion1, LeaderStoreID: 1}, // metaForRegion1 come from `nokv regions` output
     },
 })
 if err != nil {
