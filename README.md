@@ -106,16 +106,16 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 4. **(Optional) Launch the distributed TinyKV service**
 
    ```bash
-   # Launch a two-node cluster listening on 21300 / 21301
-   ./scripts/run_local_cluster.sh --nodes 2 --base-port 21300
+   # Launch a three-node cluster (default ports 20170-20172) plus a TSO on 9494
+   ./scripts/run_local_cluster.sh --tso-port 9494
 
-   # In another terminal, call gRPC directly or use raftstore/client to reach 21300
+   # In another terminal, call gRPC directly or use raftstore/client to reach 20170
    go test ./raftstore/server -run TestServerWithClientTwoPhaseCommit -count=1
    ```
 
-   The script builds `nokv`, writes a lightweight Region manifest for each node, and automatically starts `nokv serve`; the console shows the Region/Peer information for every node. Press `Ctrl+C` to shut down all nodes together.
+   The script builds `nokv`, seeds each store’s manifest via `nokv-manifest`, and starts three `nokv serve` processes (one per store). With `--tso-port` it also launches the sample timestamp allocator (`http://127.0.0.1:9494/tso`). Press `Ctrl+C` to shut everything down.
 
-   > ℹ️  Distributed API calls (e.g. `Mutate`) expect the client to supply monotonic `startVersion`/`commitVersion`. For multi-client experiments, launch the sample TSO allocator (`go run ./scripts/tso --addr 127.0.0.1:9494`) and use the issued timestamps. See [docs/txn.md](docs/txn.md#timestamp-sources) for details.
+   > ℹ️  Distributed API calls (e.g. `Mutate`) expect the client to supply monotonic `startVersion`/`commitVersion`. Either rely on the script’s TSO (`curl -s http://127.0.0.1:9494/tso`) or run your own allocator. See [docs/txn.md](docs/txn.md#timestamp-sources) for details.
 
 5. **Run a three-node cluster with Docker Compose**
 
@@ -201,6 +201,43 @@ Each module has a dedicated document under `docs/` describing APIs, diagrams, an
    - Other Regions prewrite in parallel, then commit sequentially; on a NotLeader error the client refreshes the leader and retries automatically.
 3. Reads use `Client.Get/Scan`; if a Region has moved leaders, TinyKV returns `RegionError.NotLeader`, prompting the client to update the cache and retry.
 4. A complete example lives in `raftstore/server/server_client_integration_test.go`, where real nodes plus the gRPC transport perform the Put → Get/Scan → Delete loop.
+
+### Client Snippet
+
+Use the distributed client against the local cluster (default ports `20170-20172`). Fetch timestamps from the TSO (`http://127.0.0.1:9494/tso`) or increment them yourself when experimenting:
+
+```go
+cli, err := client.New(client.Config{
+    Stores: []client.StoreEndpoint{
+        {StoreID: 1, Addr: "127.0.0.1:20170"},
+        {StoreID: 2, Addr: "127.0.0.1:20171"},
+        {StoreID: 3, Addr: "127.0.0.1:20172"},
+    },
+    Regions: []client.RegionConfig{
+        {Meta: metaForRegion1, LeaderStoreID: 1}, // metaForRegion1来自 `nokv regions` 输出
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer cli.Close()
+
+startTS := fetchTSO("http://127.0.0.1:9494/tso")  // helper: HTTP GET /tso and return resp.Timestamp
+commitTS := fetchTSO("http://127.0.0.1:9494/tso")
+
+mutations := []*pb.Mutation{{
+    Op:   pb.Mutation_Put,
+    Key:  []byte("alpha"),
+    Value: []byte("value"),
+}}
+if err := cli.Mutate(ctx, []byte("alpha"), mutations, startTS, commitTS, 3000); err != nil {
+    log.Fatal(err)
+}
+
+resp, err := cli.Get(ctx, []byte("alpha"), commitTS)
+```
+
+See `raftstore/client/client_test.go` for a full setup that wires Region metadata and handles `NotLeader` responses.
 
 More scenarios (including transaction recovery) are covered in [docs/architecture.md](docs/architecture.md#9-example-scenarios) and [docs/recovery.md](docs/recovery.md).
 

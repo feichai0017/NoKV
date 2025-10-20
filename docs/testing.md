@@ -22,6 +22,10 @@ CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
 # Sample timestamp allocator (TSO) for multi-client transaction tests
 go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
 
+# Local three-node cluster (includes manifest bootstrap)
+./scripts/run_local_cluster.sh --tso-port 9494
+# Tear down with Ctrl+C
+
 # Docker-compose sandbox (3 nodes + TSO)
 docker compose up --build
 docker compose down -v
