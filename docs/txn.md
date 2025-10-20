@@ -45,7 +45,7 @@ sequenceDiagram
     end
 ```
 
-1. **Start** – `DB.newTransaction` calls [`oracle.readTs`](../txn.go#L80-L100), which waits for all prior commits to finish (`txnMark.WaitForMark`) so new readers see a consistent snapshot.
+1. **Start** – `DB.newTransaction` calls [`oracle.readTs`](../txn.go#L80-L100), which waits for all prior commits to finish (`txnMark.WaitForMark`) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the `startVersion` themselves (see [Timestamp sources](#timestamp-sources)).
 2. **Reads** – `Txn.Get` first checks `pendingWrites`; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in `Txn.reads` via [`addReadKey`](../txn.go#L511-L526).
 3. **Conflict detection** – When `Options.DetectConflicts` is enabled, `oracle.newCommitTs` iterates `oracle.committedTxns` and compares read fingerprints against keys written by newer commits. This mirrors Badger's optimistic strategy.
 4. **Commit timestamp** – `newCommitTs` increments `nextTxnTs`, registers the commit in `txnMark`, and stores the conflict key set for future comparisons.
@@ -131,3 +131,23 @@ NoKV inherits Badger's optimistic concurrency but strengthens durability orderin
 * **Throttling**: combine `HotRing.TouchAndClamp` with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.
 
 See [`docs/testing.md`](testing.md#transactions) for the regression matrix covering conflict detection, iterator semantics, and managed timestamps.
+
+---
+
+## 7. Timestamp Sources
+
+Replica nodes do **not** generate timestamps during TinyKV RPC handling; the values sent in `KvPrewrite`/`KvCommit` are applied verbatim. For teaching and prototyping you can pick from two approaches:
+
+- **Single-client experiments** – choose monotonically increasing integers in your client code (as shown in `raftstore/client/client_test.go`).
+- **Shared allocator** – run the sample TSO service under `scripts/tso` to hand out globally increasing timestamps:
+
+  ```bash
+  go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
+
+  # request one timestamp
+  curl -s http://127.0.0.1:9494/tso
+  # request a batch of 16
+  curl -s "http://127.0.0.1:9494/tso?batch=16"
+  ```
+
+  Each call returns JSON (`{"timestamp":123,"count":1}`), where `timestamp` is the first value in the allocated range. Clients can use the first value for `startVersion`, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.
