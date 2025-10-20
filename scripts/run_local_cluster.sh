@@ -9,7 +9,7 @@ Options:
   --nodes N         Number of stores to launch (default: 2)
   --base-port PORT  First gRPC port to use (default: 20170)
   --workdir DIR     Base directory for cluster data (default: ./artifacts/cluster)
-  --bin PATH        Path to nokv binary (default: build into ./bin/nokv)
+  --bin PATH        Path to nokv binary (default: build into ./build/nokv)
 USAGE
 }
 
@@ -65,70 +65,16 @@ if [ -z "$WORKDIR" ]; then
 fi
 mkdir -p "$WORKDIR"
 
+BUILD_DIR="$ROOT_DIR/build"
+mkdir -p "$BUILD_DIR"
+
 if [ -z "$BIN" ]; then
-  BIN="$ROOT_DIR/bin/nokv"
-  mkdir -p "$(dirname "$BIN")"
+  BIN="$BUILD_DIR/nokv"
   go build -o "$BIN" "$ROOT_DIR/cmd/nokv"
 fi
 
-TMP_BOOTSTRAP=$(mktemp -d)
-cat >"$TMP_BOOTSTRAP/bootstrap.go" <<'EOF'
-package main
-
-import (
-    "log"
-    "os"
-    "strconv"
-    "strings"
-
-    "github.com/feichai0017/NoKV/manifest"
-)
-
-func main() {
-    if len(os.Args) != 4 {
-        log.Fatalf("usage: bootstrap <workdir> <regionID> <storeID:peerID,...>")
-    }
-    workdir := os.Args[1]
-    regionID, err := strconv.ParseUint(os.Args[2], 10, 64)
-    if err != nil {
-        log.Fatalf("invalid region id: %v", err)
-    }
-    peersArg := os.Args[3]
-    peers := strings.Split(peersArg, ",")
-    meta := manifest.RegionMeta{
-        ID:    regionID,
-        State: manifest.RegionStateRunning,
-        Epoch: manifest.RegionEpoch{Version: 1, ConfVersion: uint64(len(peers))},
-    }
-    for _, entry := range peers {
-        entry = strings.TrimSpace(entry)
-        if entry == "" {
-            continue
-        }
-        parts := strings.Split(entry, ":")
-        if len(parts) != 2 {
-            log.Fatalf("invalid peer entry %q", entry)
-        }
-        storeID, err := strconv.ParseUint(parts[0], 10, 64)
-        if err != nil {
-            log.Fatalf("invalid store id in %q: %v", entry, err)
-        }
-        peerID, err := strconv.ParseUint(parts[1], 10, 64)
-        if err != nil {
-            log.Fatalf("invalid peer id in %q: %v", entry, err)
-        }
-        meta.Peers = append(meta.Peers, manifest.PeerMeta{StoreID: storeID, PeerID: peerID})
-    }
-    mgr, err := manifest.Open(workdir)
-    if err != nil {
-        log.Fatalf("open manifest: %v", err)
-    }
-    defer mgr.Close()
-    if err := mgr.LogRegionUpdate(meta); err != nil {
-        log.Fatalf("log region: %v", err)
-    }
-}
-EOF
+MANIFEST_BIN="$BUILD_DIR/nokv-manifest"
+go build -o "$MANIFEST_BIN" "$ROOT_DIR/scripts/manifestctl"
 
 declare -a STORE_IDS PEER_IDS ADDRS WORKDIRS
 for i in $(seq 1 "$NODES"); do
@@ -142,11 +88,17 @@ PEER_LIST=()
 for i in "${!STORE_IDS[@]}"; do
   PEER_LIST+=("${STORE_IDS[$i]}:${PEER_IDS[$i]}")
 done
-PEER_CSV=$(IFS=,; echo "${PEER_LIST[*]}")
 
 for i in "${!STORE_IDS[@]}"; do
   mkdir -p "${WORKDIRS[$i]}"
-  go run "$TMP_BOOTSTRAP/bootstrap.go" "${WORKDIRS[$i]}" "1" "$PEER_CSV"
+  args=(
+    --workdir "${WORKDIRS[$i]}"
+    --region-id 1
+  )
+  for peerEntry in "${PEER_LIST[@]}"; do
+    args+=(--peer "$peerEntry")
+  done
+  "$MANIFEST_BIN" "${args[@]}"
 done
 
 PIDS=()
@@ -157,7 +109,6 @@ cleanup() {
       kill "$pid" 2>/dev/null || true
     fi
   done
-  rm -rf "$TMP_BOOTSTRAP"
 }
 trap cleanup EXIT
 

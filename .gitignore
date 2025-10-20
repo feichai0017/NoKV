@@ -12,6 +12,8 @@ benchmark/benchmark_results/
 .gocache
 .gomodcache
 
+build/
+
 cpu.pprof
 mem.pprof
 benchmark.test
