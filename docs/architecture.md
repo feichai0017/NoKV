@@ -117,6 +117,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, reuse the TSO sample under `scripts/tso` to obtain globally increasing values before calling `TwoPhaseCommit`.
+- **Bootstrap helpers**: `scripts/run_local_cluster.sh --tso-port 9494` builds the binaries, seeds manifests via `nokv-manifest`, launches three stores, and (optionally) starts the HTTP TSO allocator on `9494`.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.

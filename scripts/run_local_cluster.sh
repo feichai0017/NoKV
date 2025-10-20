@@ -6,17 +6,19 @@ usage() {
 Usage: scripts/run_local_cluster.sh [options]
 
 Options:
-  --nodes N         Number of stores to launch (default: 2)
+  --nodes N         Number of stores to launch (default: 3)
   --base-port PORT  First gRPC port to use (default: 20170)
   --workdir DIR     Base directory for cluster data (default: ./artifacts/cluster)
   --bin PATH        Path to nokv binary (default: build into ./build/nokv)
+  --tso-port PORT   Optional TSO HTTP port (example: 9494) to launch alongside stores
 USAGE
 }
 
-NODES=2
+NODES=3
 BASE_PORT=20170
 WORKDIR=""
 BIN=""
+TSO_PORT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bin)
       BIN=$2
+      shift 2
+      ;;
+    --tso-port)
+      TSO_PORT=$2
       shift 2
       ;;
     -h|--help)
@@ -56,6 +62,13 @@ fi
 if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]] || [ "$BASE_PORT" -lt 1 ]; then
   echo "--base-port must be a positive integer" >&2
   exit 1
+fi
+
+if [ -n "$TSO_PORT" ]; then
+  if ! [[ "$TSO_PORT" =~ ^[0-9]+$ ]] || [ "$TSO_PORT" -lt 1 ]; then
+    echo "--tso-port must be a positive integer" >&2
+    exit 1
+  fi
 fi
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -103,6 +116,14 @@ done
 
 PIDS=()
 
+if [ -n "$TSO_PORT" ]; then
+  TSO_BIN="$BUILD_DIR/nokv-tso"
+  go build -o "$TSO_BIN" "$ROOT_DIR/scripts/tso"
+  echo "Starting TSO allocator on 127.0.0.1:${TSO_PORT}"
+  "$TSO_BIN" --addr "127.0.0.1:${TSO_PORT}" --start 100 &
+  PIDS+=($!)
+fi
+
 cleanup() {
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -128,5 +149,9 @@ for i in "${!STORE_IDS[@]}"; do
   PIDS+=($!)
 done
 
-echo "Cluster running. Press Ctrl+C to stop."
+if [ -n "$TSO_PORT" ]; then
+  echo "Cluster running. TSO available at http://127.0.0.1:${TSO_PORT}/tso"
+else
+  echo "Cluster running. Press Ctrl+C to stop."
+fi
 wait
