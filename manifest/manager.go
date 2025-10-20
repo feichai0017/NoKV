@@ -368,6 +368,16 @@ func (m *Manager) Current() Version {
 	return cp
 }
 
+// Dir returns the manifest directory path. The result is empty when the
+// manager is nil, allowing callers to short-circuit optional metrics
+// collection.
+func (m *Manager) Dir() string {
+	if m == nil {
+		return ""
+	}
+	return m.dir
+}
+
 // Close closes manifest file.
 func (m *Manager) Close() error {
 	m.mu.Lock()

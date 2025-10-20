@@ -394,7 +394,11 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 	}
 	fmt.Fprintf(w, "Regions (%d)\n", len(snap.Regions))
 	for _, region := range snap.Regions {
-		fmt.Fprintf(w, "  - region=%d peers=", region.ID)
+		fmt.Fprintf(w, "  - region=%d", region.ID)
+		if !region.LastHeartbeat.IsZero() {
+			fmt.Fprintf(w, " last_heartbeat=%s lag=%s", region.LastHeartbeat.Format(time.RFC3339), region.Lag)
+		}
+		fmt.Fprint(w, " peers=")
 		for i, peer := range region.Peers {
 			if i > 0 {
 				fmt.Fprint(w, ",")

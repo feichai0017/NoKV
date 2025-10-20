@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +47,23 @@ func TestLeaderBalancePlannerNoOpsWhenBalanced(t *testing.T) {
 	snap := Snapshot{
 		Regions: []RegionDescriptor{
 			{ID: 1, Peers: []PeerDescriptor{{StoreID: 1, PeerID: 101, Leader: true}}},
+		},
+	}
+	require.Empty(t, planner.Plan(snap))
+}
+
+func TestLeaderBalancePlannerSkipsStaleRegions(t *testing.T) {
+	planner := LeaderBalancePlanner{MaxLeaders: 1, StaleThreshold: 500 * time.Millisecond}
+	snap := Snapshot{
+		Regions: []RegionDescriptor{
+			{
+				ID:  1,
+				Lag: time.Second,
+				Peers: []PeerDescriptor{
+					{StoreID: 1, PeerID: 101, Leader: true},
+					{StoreID: 2, PeerID: 202},
+				},
+			},
 		},
 	}
 	require.Empty(t, planner.Plan(snap))

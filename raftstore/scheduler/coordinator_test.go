@@ -17,7 +17,8 @@ func TestCoordinatorTracksRegionHeartbeats(t *testing.T) {
 
 	snapshot := c.RegionSnapshot()
 	require.Len(t, snapshot, 1)
-	require.Equal(t, uint64(1), snapshot[0].ID)
+	require.Equal(t, uint64(1), snapshot[0].Meta.ID)
+	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
 	prev, ok := c.LastUpdate(1)
 	require.True(t, ok)
@@ -28,7 +29,7 @@ func TestCoordinatorTracksRegionHeartbeats(t *testing.T) {
 
 	snapshot = c.RegionSnapshot()
 	require.Len(t, snapshot, 1)
-	require.Len(t, snapshot[0].Peers, 2)
+	require.Len(t, snapshot[0].Meta.Peers, 2)
 
 	c.RemoveRegion(1)
 	snapshot = c.RegionSnapshot()
@@ -79,4 +80,28 @@ func TestCoordinatorTracksStoreStats(t *testing.T) {
 	c.RemoveStore(5)
 	stats = c.StoreSnapshot()
 	require.Empty(t, stats)
+}
+
+func TestCoordinatorStaleDetection(t *testing.T) {
+	c := NewCoordinator()
+	region := manifest.RegionMeta{ID: 7}
+	c.SubmitRegionHeartbeat(region)
+	stats := StoreStats{StoreID: 10}
+	c.SubmitStoreHeartbeat(stats)
+
+	// Force staleness by manipulating timestamps.
+	c.mu.Lock()
+	old := time.Now().Add(-5 * time.Minute)
+	c.lastUpdated[region.ID] = old
+	s := c.stores[stats.StoreID]
+	s.UpdatedAt = old
+	c.stores[stats.StoreID] = s
+	c.mu.Unlock()
+
+	staleRegions := c.StaleRegions(2 * time.Minute)
+	require.Len(t, staleRegions, 1)
+	require.Equal(t, region.ID, staleRegions[0].Meta.ID)
+	staleStores := c.StaleStores(2 * time.Minute)
+	require.Len(t, staleStores, 1)
+	require.Equal(t, stats.StoreID, staleStores[0].StoreID)
 }

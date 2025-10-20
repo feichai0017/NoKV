@@ -37,14 +37,19 @@ type RegionHooks struct {
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.
 type Config struct {
-	Router            *Router
-	PeerFactory       PeerFactory
-	PeerBuilder       PeerBuilder
-	Hooks             LifecycleHooks
-	RegionHooks       RegionHooks
-	Manifest          *manifest.Manager
-	Scheduler         scheduler.RegionSink
-	HeartbeatInterval time.Duration
-	StoreID           uint64
-	Planner           scheduler.Planner
+	Router             *Router
+	PeerFactory        PeerFactory
+	PeerBuilder        PeerBuilder
+	Hooks              LifecycleHooks
+	RegionHooks        RegionHooks
+	Manifest           *manifest.Manager
+	Scheduler          scheduler.RegionSink
+	HeartbeatInterval  time.Duration
+	StoreID            uint64
+	Planner            scheduler.Planner
+	OperationQueueSize int
+	OperationCooldown  time.Duration
+	OperationInterval  time.Duration
+	OperationBurst     int
+	OperationObserver  func(scheduler.Operation)
 }

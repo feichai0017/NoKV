@@ -294,7 +294,7 @@ NoKV's replication layer lives in `raftstore/` and mirrors TinyKV's modular desi
 ### Phase 5 — Cluster Scheduler (TinyKV Project3C)
 - **Done**: Introduced a lightweight scheduler coordinator consuming region/store heartbeats; stores emit periodic heartbeats (configurable interval/StoreID) and the `nokv scheduler` CLI exposes aggregated snapshots.
 - **Done**: Added planner scaffolding with a sample leader-balance heuristic executed via the store heartbeat loop.
-- **Next**: Harden operation queues/cooldowns, enrich store metrics (capacity/usage), add failure detection, and supply scenario-driven tests for load/peer rebalance.
+- **Done**: Hardened planner execution with queued operations + cooldowns, enriched store stats with capacity/availability and heartbeat lag, surfaced stale-region detection in CLI, and added regression tests covering throttled leader transfers.
 
 ### Phase 6 — Distributed MVCC & 2PC (TinyKV Project4)
 - Extend MVCC layer to operate across regions: lock table persistence (`lock` CF), write records (`write` CF), and data (`default` CF).

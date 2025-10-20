@@ -17,7 +17,7 @@ type RegionSink interface {
 
 // SnapshotProvider exposes aggregated cluster state to schedulers or tooling.
 type SnapshotProvider interface {
-	RegionSnapshot() []manifest.RegionMeta
+	RegionSnapshot() []RegionInfo
 	StoreSnapshot() []StoreStats
 }
 
@@ -63,14 +63,17 @@ func (c *Coordinator) RemoveRegion(id uint64) {
 
 // RegionSnapshot returns a slice copy of the known regions. Callers receive
 // cloned metadata and may mutate the result freely.
-func (c *Coordinator) RegionSnapshot() []manifest.RegionMeta {
+func (c *Coordinator) RegionSnapshot() []RegionInfo {
 	if c == nil {
 		return nil
 	}
 	c.mu.RLock()
-	out := make([]manifest.RegionMeta, 0, len(c.regions))
-	for _, meta := range c.regions {
-		out = append(out, manifest.CloneRegionMeta(meta))
+	out := make([]RegionInfo, 0, len(c.regions))
+	for id, meta := range c.regions {
+		out = append(out, RegionInfo{
+			Meta:          manifest.CloneRegionMeta(meta),
+			LastHeartbeat: c.lastUpdated[id],
+		})
 	}
 	c.mu.RUnlock()
 	return out
@@ -96,6 +99,13 @@ type StoreStats struct {
 	Capacity  uint64    `json:"capacity"`
 	Available uint64    `json:"available"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// RegionInfo captures region metadata alongside the last recorded heartbeat
+// timestamp.
+type RegionInfo struct {
+	Meta          manifest.RegionMeta `json:"meta"`
+	LastHeartbeat time.Time           `json:"last_heartbeat"`
 }
 
 // SubmitStoreHeartbeat records store statistics.
@@ -131,4 +141,41 @@ func (c *Coordinator) RemoveStore(storeID uint64) {
 	c.mu.Lock()
 	delete(c.stores, storeID)
 	c.mu.Unlock()
+}
+
+// StaleRegions returns metadata for regions whose last heartbeat predates the
+// provided threshold. A non-positive threshold disables filtering.
+func (c *Coordinator) StaleRegions(threshold time.Duration) []RegionInfo {
+	if c == nil || threshold <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-threshold)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]RegionInfo, 0)
+	for id, meta := range c.regions {
+		last := c.lastUpdated[id]
+		if last.IsZero() || last.Before(cutoff) {
+			out = append(out, RegionInfo{Meta: manifest.CloneRegionMeta(meta), LastHeartbeat: last})
+		}
+	}
+	return out
+}
+
+// StaleStores returns store stats entries whose last update predates the
+// provided threshold. A non-positive threshold returns nil.
+func (c *Coordinator) StaleStores(threshold time.Duration) []StoreStats {
+	if c == nil || threshold <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-threshold)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]StoreStats, 0)
+	for _, stats := range c.stores {
+		if stats.UpdatedAt.IsZero() || stats.UpdatedAt.Before(cutoff) {
+			out = append(out, stats)
+		}
+	}
+	return out
 }

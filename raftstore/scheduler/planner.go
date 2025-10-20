@@ -1,6 +1,10 @@
 package scheduler
 
-import "github.com/feichai0017/NoKV/manifest"
+import (
+	"time"
+
+	"github.com/feichai0017/NoKV/manifest"
+)
 
 // Planner defines the interface for schedulers that consume cluster snapshots
 // and produce scheduling operations (e.g. leader transfer, rebalance).
@@ -18,11 +22,13 @@ type Snapshot struct {
 // RegionDescriptor is a lightweight view of region metadata required for
 // scheduling decisions.
 type RegionDescriptor struct {
-	ID       uint64
-	StartKey []byte
-	EndKey   []byte
-	Peers    []PeerDescriptor
-	Epoch    manifest.RegionEpoch
+	ID            uint64
+	StartKey      []byte
+	EndKey        []byte
+	Peers         []PeerDescriptor
+	Epoch         manifest.RegionEpoch
+	LastHeartbeat time.Time
+	Lag           time.Duration
 }
 
 // PeerDescriptor describes a raft peer in a region.
@@ -55,7 +61,8 @@ func (NoopPlanner) Plan(Snapshot) []Operation { return nil }
 // LeaderBalancePlanner suggests leader transfers away from stores whose leader
 // count exceeds MaxLeaders. This is a naive heuristic for demonstration.
 type LeaderBalancePlanner struct {
-	MaxLeaders uint64
+	MaxLeaders     uint64
+	StaleThreshold time.Duration
 }
 
 func (p LeaderBalancePlanner) Plan(snapshot Snapshot) []Operation {
@@ -65,6 +72,9 @@ func (p LeaderBalancePlanner) Plan(snapshot Snapshot) []Operation {
 	leaderCount := make(map[uint64]uint64)
 	regionLeader := make(map[uint64]PeerDescriptor)
 	for _, region := range snapshot.Regions {
+		if p.StaleThreshold > 0 && (region.LastHeartbeat.IsZero() || region.Lag > p.StaleThreshold) {
+			continue
+		}
 		for _, peer := range region.Peers {
 			if peer.Leader {
 				leaderCount[peer.StoreID]++

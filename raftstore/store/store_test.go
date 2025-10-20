@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,14 @@ import (
 type noopTransport struct{}
 
 func (noopTransport) Send(myraft.Message) {}
+
+type repeatingPlanner struct {
+	op scheduler.Operation
+}
+
+func (p *repeatingPlanner) Plan(s scheduler.Snapshot) []scheduler.Operation {
+	return []scheduler.Operation{p.op}
+}
 
 func testPeerBuilder(storeID uint64) store.PeerBuilder {
 	return func(meta manifest.RegionMeta) (*raftstore.Config, error) {
@@ -395,12 +404,13 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 
 	snapshot := coord.RegionSnapshot()
 	require.Len(t, snapshot, 1)
-	require.Equal(t, uint64(42), snapshot[0].ID)
+	require.Equal(t, uint64(42), snapshot[0].Meta.ID)
+	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
 	require.NoError(t, rs.UpdateRegionState(42, manifest.RegionStateRemoving))
 	snapshot = coord.RegionSnapshot()
 	require.Len(t, snapshot, 1)
-	require.Equal(t, manifest.RegionStateRemoving, snapshot[0].State)
+	require.Equal(t, manifest.RegionStateRemoving, snapshot[0].Meta.State)
 
 	require.NoError(t, rs.RemoveRegion(42))
 	snapshot = coord.RegionSnapshot()
@@ -457,6 +467,74 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	require.Equal(t, uint64(1), snap.Stores[0].LeaderNum)
 	require.NotEmpty(t, snap.Regions)
 	require.Equal(t, uint64(77), snap.Regions[0].ID)
+	require.False(t, snap.Regions[0].LastHeartbeat.IsZero())
+}
+
+func TestStorePlannerQueuesOperations(t *testing.T) {
+	coord := scheduler.NewCoordinator()
+	var mu sync.Mutex
+	var applied []time.Time
+	planner := &repeatingPlanner{op: scheduler.Operation{
+		Type:   scheduler.OperationLeaderTransfer,
+		Region: 200,
+		Source: 701,
+		Target: 702,
+	}}
+	rs := store.NewStoreWithConfig(store.Config{
+		Scheduler:          coord,
+		StoreID:            12,
+		PeerBuilder:        testPeerBuilder(12),
+		HeartbeatInterval:  25 * time.Millisecond,
+		OperationQueueSize: 8,
+		OperationCooldown:  80 * time.Millisecond,
+		OperationInterval:  20 * time.Millisecond,
+		OperationBurst:     1,
+		Planner:            planner,
+		OperationObserver: func(op scheduler.Operation) {
+			mu.Lock()
+			applied = append(applied, time.Now())
+			mu.Unlock()
+		},
+	})
+	defer rs.Close()
+
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              701,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       200,
+			StartKey: []byte("k0"),
+			EndKey:   []byte("k9"),
+			Peers: []manifest.PeerMeta{
+				{StoreID: 12, PeerID: 701},
+				{StoreID: 99, PeerID: 702},
+			},
+		},
+	}
+	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 701}})
+	require.NoError(t, err)
+	defer rs.StopPeer(peer.ID())
+	require.NoError(t, peer.Campaign())
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(applied) >= 2
+	}, time.Second, 20*time.Millisecond)
+
+	mu.Lock()
+	recorded := append([]time.Time(nil), applied...)
+	mu.Unlock()
+	require.GreaterOrEqual(t, len(recorded), 2)
+	delta := recorded[1].Sub(recorded[0])
+	require.GreaterOrEqual(t, delta, 60*time.Millisecond)
 }
 
 func TestStoreProposeSplitApplies(t *testing.T) {
