@@ -34,6 +34,7 @@ type grpcTransportConfig struct {
 	sendTimeout  time.Duration
 	maxRetries   int
 	retryBackoff time.Duration
+	registrars   []func(grpc.ServiceRegistrar)
 }
 
 func defaultGRPCConfig() grpcTransportConfig {
@@ -83,6 +84,15 @@ func WithRetry(maxRetries int, backoff time.Duration) GRPCOption {
 		if backoff > 0 {
 			cfg.retryBackoff = backoff
 		}
+	}
+}
+
+// WithServerRegistrar registers additional gRPC services on the transport
+// before it starts serving. Callers can pass multiple functions to register
+// several services.
+func WithServerRegistrar(regs ...func(grpc.ServiceRegistrar)) GRPCOption {
+	return func(cfg *grpcTransportConfig) {
+		cfg.registrars = append(cfg.registrars, regs...)
 	}
 }
 
@@ -225,6 +235,11 @@ func NewGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*G
 	}
 	raftSrv := &raftService{transport: t}
 	t.server.RegisterService(&raftServiceDesc, raftSrv)
+	for _, register := range cfg.registrars {
+		if register != nil {
+			register(t.server)
+		}
+	}
 	t.wg.Add(1)
 	go t.serve()
 	return t, nil

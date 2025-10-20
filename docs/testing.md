@@ -53,6 +53,7 @@ go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
 | Value separation + GC | `vlog/gc_test.go`, `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
 | Iterator consistency | `txn_iterator_test.go`, `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |
 | Throttling / backpressure | `lsm/compact_test.go`, `db_test.go::TestWriteThrottle` | L0 backlog triggers, flush queue growth, metrics observation. |
+| Distributed TinyKv client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet` | Region-aware routing, NotLeader retries, cross-region 2PC sequencing. |
 | Performance regression | `benchmark` package | Compare NoKV vs Badger/RocksDB, produce human-readable reports under `benchmark/benchmark_results`. |
 
 ---
