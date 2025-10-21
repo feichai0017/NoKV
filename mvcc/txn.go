@@ -39,7 +39,7 @@ func Prewrite(db *NoKV.DB, latches *latch.Manager, req *pb.PrewriteRequest) []*p
 func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut *pb.Mutation) *pb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
-		return keyErrorAbort(fmt.Sprintf("empty key in mutation"))
+		return keyErrorAbort("empty key in mutation")
 	}
 	lock, err := reader.GetLock(key)
 	if err != nil {

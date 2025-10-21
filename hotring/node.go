@@ -6,19 +6,15 @@ import (
 )
 
 type Node struct {
-	key     string
-	val     string
-	tag     uint32
-	incBase uint32
-	next    unsafe.Pointer
-	hp      unsafe.Pointer
-	count   int32
+	key   string
+	tag   uint32
+	next  unsafe.Pointer
+	count int32
 }
 
-func NewNode(key, val string, tag uint32) *Node {
+func NewNode(key string, tag uint32) *Node {
 	return &Node{
 		key: key,
-		val: val,
 		tag: tag,
 	}
 }
@@ -63,25 +59,12 @@ func (n *Node) Equal(c *Node) bool {
 	return false
 }
 
-func (n *Node) GetHead() *HeadPointer {
-	return (*HeadPointer)(atomic.LoadPointer(&n.hp))
-}
-
 func (n *Node) GetCounter() int32 {
 	return atomic.LoadInt32(&n.count)
 }
 
 func (n *Node) ResetCounter() {
 	atomic.StoreInt32(&n.count, 0)
-}
-
-func (n *Node) SetHead(hp *HeadPointer) {
-	for {
-		cur := atomic.LoadPointer(&n.hp)
-		if atomic.CompareAndSwapPointer(&n.hp, cur, unsafe.Pointer(hp)) {
-			return
-		}
-	}
 }
 
 func (n *Node) SetNext(next *Node) {

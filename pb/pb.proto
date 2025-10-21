@@ -21,32 +21,32 @@ message KVList {
 }
 
 message ManifestChangeSet {
-        // A set of changes that are applied atomically.
-        repeated ManifestChange changes = 1;
+    // A set of changes that are applied atomically.
+    repeated ManifestChange changes = 1;
 }
 
 message ManifestChange {
-        uint64 Id = 1;
-        enum Operation {
-                CREATE = 0;
-                DELETE = 1;
-        }
-        Operation Op   = 2;
-        uint32 Level   = 3; // Only used for CREATE
-        bytes Checksum = 4; // Only used for CREATE
+    uint64 Id = 1;
+    enum Operation {
+        CREATE = 0;
+        DELETE = 1;
+    }
+    Operation Op   = 2;
+    uint32 Level   = 3; // Only used for CREATE
+    bytes Checksum = 4; // Only used for CREATE
 }
 message TableIndex{
-        repeated BlockOffset offsets = 1;
-        bytes  bloomFilter = 2;
-        uint64 maxVersion = 3;
-        uint32 keyCount = 4;
-        uint32 staleDataSize = 5;
+    repeated BlockOffset offsets = 1;
+    bytes  bloomFilter = 2;
+    uint64 maxVersion = 3;
+    uint32 keyCount = 4;
+    uint32 staleDataSize = 5;
 }
 
 message BlockOffset{
-        bytes key = 1;
-        uint32 offset = 2;
-        uint32 len = 3;
+    bytes key = 1;
+    uint32 offset = 2;
+    uint32 len = 3;
 }
 
 message RegionPeer {
