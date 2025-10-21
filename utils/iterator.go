@@ -16,8 +16,11 @@ type Item interface {
 }
 
 // Options _
-// TODO maybe add more options in future
 type Options struct {
 	Prefix []byte
 	IsAsc  bool
+	// OnlyUseKey instructs iterators to avoid materialising value log entries
+	// eagerly. Callers should rely on Item.ValueCopy when value access is
+	// required. This keeps the default behaviour (false) for existing users.
+	OnlyUseKey bool
 }

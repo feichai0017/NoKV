@@ -468,6 +468,9 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 
 	item = new(Item)
 	item.e = new(utils.Entry)
+	if txn.db != nil {
+		item.vlog = txn.db.vlog
+	}
 	if txn.update {
 		cfKey := utils.EncodeKeyWithCF(utils.CFDefault, key)
 		if e, has := txn.pendingWrites[string(cfKey)]; has && bytes.Equal(key, e.Key) {
@@ -510,6 +513,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 			return nil, err
 		}
 		vs.Value = utils.SafeCopy(nil, result)
+		vs.Meta &^= utils.BitValuePointer
 	}
 
 	if vs.Value == nil && vs.Meta == 0 {

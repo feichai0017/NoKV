@@ -34,6 +34,7 @@ type IteratorOptions struct {
 	Reverse        bool // Direction of iteration. False is forward, true is backward.
 	AllVersions    bool // Fetch all valid versions of the same key.
 	InternalAccess bool // Used to allow internal access to keys.
+	KeyOnly        bool // Avoid eager value materialisation.
 
 	// The following option is used to narrow down the SSTables that iterator
 	// picks up. If Prefix is specified, only tables which could have this
@@ -130,6 +131,7 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 	if len(opt.Prefix) > 0 {
 		lsmOpt.Prefix = opt.Prefix
 	}
+	lsmOpt.OnlyUseKey = opt.KeyOnly
 
 	for _, iter := range txn.db.lsm.NewIterators(lsmOpt) {
 		iters = append(iters, newReadTsIterator(iter, txn.readTs))
@@ -147,6 +149,9 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 		ctx:    ctx,
 	}
 	ti.item.e = &ti.entry
+	if txn.db != nil {
+		ti.item.vlog = txn.db.vlog
+	}
 	ti.advance()
 	return ti
 }
@@ -172,6 +177,7 @@ func (it *TxnIterator) advance() {
 			it.iitr.Next()
 			continue
 		}
+		it.item.valueBuf = it.item.valueBuf[:0]
 		entry := item.Entry()
 		baseKey := utils.ParseKey(entry.Key)
 		cf, userKey, _ := utils.DecodeKeyCF(baseKey)
@@ -230,21 +236,29 @@ func (it *TxnIterator) materializeEntry(entry *utils.Entry, cf utils.ColumnFamil
 	it.entry.ExpiresAt = entry.ExpiresAt
 	it.entry.Version = version
 	if utils.IsValuePtr(entry) {
-		var vp utils.ValuePtr
-		vp.Decode(entry.Value)
-		val, cb, err := it.txn.db.vlog.read(&vp)
-		if err != nil {
+		if it.opt.KeyOnly {
+			it.entry.Value = entry.Value
+			it.item.valueBuf = it.item.valueBuf[:0]
+		} else {
+			var vp utils.ValuePtr
+			vp.Decode(entry.Value)
+			val, cb, err := it.txn.db.vlog.read(&vp)
+			if err != nil {
+				utils.RunCallback(cb)
+				return false
+			}
+			it.valueBuf = append(it.valueBuf[:0], val...)
 			utils.RunCallback(cb)
-			return false
+			if len(it.valueBuf) == 0 {
+				return false
+			}
+			it.entry.Value = it.valueBuf
+			it.entry.Meta &^= utils.BitValuePointer
+			it.item.valueBuf = it.entry.Value
 		}
-		it.valueBuf = append(it.valueBuf[:0], val...)
-		utils.RunCallback(cb)
-		if len(it.valueBuf) == 0 {
-			return false
-		}
-		it.entry.Value = it.valueBuf
 	} else {
 		it.entry.Value = append(it.entry.Value[:0], entry.Value...)
+		it.item.valueBuf = it.entry.Value
 	}
 	if isDeletedOrExpired(it.entry.Meta, it.entry.ExpiresAt) {
 		return false
@@ -284,6 +298,7 @@ func (it *TxnIterator) Close() {
 	}
 	it.valid = false
 	it.valueBuf = it.valueBuf[:0]
+	it.item.valueBuf = it.item.valueBuf[:0]
 	if it.pool != nil && it.ctx != nil {
 		it.pool.put(it.ctx)
 	}

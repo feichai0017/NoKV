@@ -9,15 +9,20 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// EncodeEntry encodes an entry using utils.WalCodec and returns a copy of the bytes.
+// EncodeEntry encodes an entry using utils.WalCodec and returns the encoded bytes.
+// Callers should append the returned slice before reusing the provided buffer.
 func EncodeEntry(buf *bytes.Buffer, e *utils.Entry) []byte {
 	if buf == nil {
 		buf = &bytes.Buffer{}
 	}
-	buf.Reset()
 	sz := utils.WalCodec(buf, e)
+	data := buf.Bytes()
+	if len(data) >= sz {
+		return data[:sz]
+	}
+	// Should not happen, but fall back to a copy to avoid panics.
 	out := make([]byte, sz)
-	copy(out, buf.Bytes()[:sz])
+	copy(out, data)
 	return out
 }
 

@@ -55,7 +55,7 @@ type (
 		hot              *hotring.HotRing
 		writeMetrics     *writeMetrics
 		commitQueue      commitQueue
-		commitLock       chan struct{}
+		commitWG         sync.WaitGroup
 		iterPool         *iteratorPool
 		prefetchCh       chan prefetchRequest
 		prefetchWG       sync.WaitGroup
@@ -74,6 +74,8 @@ type (
 		requests     []*commitRequest
 		totalEntries int
 		totalBytes   int64
+		cond         *sync.Cond
+		closed       bool
 	}
 
 	commitRequest struct {
@@ -192,7 +194,9 @@ func Open(opt *Options) *DB {
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
-	db.commitLock = make(chan struct{}, 1)
+	db.commitQueue.cond = sync.NewCond(&db.commitQueue.Mutex)
+	db.commitWG.Add(1)
+	go db.commitWorker()
 	db.flushChan = make(chan flushTask, 16)
 	// 启动 info 统计过程
 	db.stats.StartStats()
@@ -230,6 +234,7 @@ func (db *DB) runRecoveryChecks() error {
 }
 
 func (db *DB) Close() error {
+	db.stopCommitWorkers()
 
 	if db.walWatchdog != nil {
 		db.walWatchdog.stop()
@@ -634,9 +639,6 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 
 	db.enqueueCommitRequest(cr)
 
-	if db.tryBecomeCommitLeader() {
-		db.processCommitQueue()
-	}
 	return req, nil
 }
 
@@ -677,48 +679,50 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) {
 	qLen := len(db.commitQueue.requests)
 	qEntries := db.commitQueue.totalEntries
 	qBytes := db.commitQueue.totalBytes
+	if db.commitQueue.cond != nil {
+		db.commitQueue.cond.Signal()
+	}
 	db.commitQueue.Unlock()
 	db.writeMetrics.updateQueue(qLen, qEntries, qBytes)
 }
 
-func (db *DB) tryBecomeCommitLeader() bool {
-	if db.commitLock == nil {
-		return false
+func (db *DB) nextCommitBatch() []*commitRequest {
+	db.commitQueue.Lock()
+	for len(db.commitQueue.requests) == 0 && !db.commitQueue.closed {
+		db.commitQueue.cond.Wait()
 	}
-	select {
-	case db.commitLock <- struct{}{}:
-		return true
-	default:
-		return false
+	if len(db.commitQueue.requests) == 0 && db.commitQueue.closed {
+		db.commitQueue.Unlock()
+		return nil
 	}
+	reqs := db.commitQueue.requests
+	db.commitQueue.requests = nil
+	db.commitQueue.totalEntries = 0
+	db.commitQueue.totalBytes = 0
+	db.commitQueue.Unlock()
+	db.writeMetrics.updateQueue(0, 0, 0)
+	return reqs
 }
 
-func (db *DB) releaseCommitLeader() {
-	if db.commitLock == nil {
-		return
-	}
-	select {
-	case <-db.commitLock:
-	default:
-	}
-}
-
-func (db *DB) processCommitQueue() {
+func (db *DB) commitWorker() {
+	defer db.commitWG.Done()
 	for {
-		db.commitQueue.Lock()
-		if len(db.commitQueue.requests) == 0 {
-			db.releaseCommitLeader()
-			db.commitQueue.Unlock()
+		reqs := db.nextCommitBatch()
+		if reqs == nil {
 			return
 		}
-		reqs := db.commitQueue.requests
-		db.commitQueue.requests = nil
-		db.commitQueue.totalEntries = 0
-		db.commitQueue.totalBytes = 0
-		db.commitQueue.Unlock()
-		db.writeMetrics.updateQueue(0, 0, 0)
 		db.handleCommitRequests(reqs)
 	}
+}
+
+func (db *DB) stopCommitWorkers() {
+	db.commitQueue.Lock()
+	db.commitQueue.closed = true
+	if db.commitQueue.cond != nil {
+		db.commitQueue.cond.Broadcast()
+	}
+	db.commitQueue.Unlock()
+	db.commitWG.Wait()
 }
 
 func (db *DB) handleCommitRequests(reqs []*commitRequest) {
