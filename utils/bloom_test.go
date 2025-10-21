@@ -1,4 +1,3 @@
-
 package utils
 
 import (
@@ -76,7 +75,7 @@ func TestBloomFilter(t *testing.T) {
 loop:
 	for length := 1; length <= 10000; length = nextLength(length) {
 		keys := make([][]byte, 0, length)
-		for i := 0; i < length; i++ {
+		for i := range length {
 			keys = append(keys, le32(i))
 		}
 		var hashes []uint32
@@ -100,7 +99,7 @@ loop:
 
 		// Check false positive rate.
 		nFalsePositive := 0
-		for i := 0; i < 10000; i++ {
+		for i := range 10000 {
 			if f.MayContainKey(le32(1e9 + i)) {
 				nFalsePositive++
 			}

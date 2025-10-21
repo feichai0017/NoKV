@@ -24,7 +24,7 @@ func (f Filter) MayContain(h uint32) bool {
 	}
 	nBits := uint32(8 * (len(f) - 1))
 	delta := h>>17 | h<<15
-	for j := uint8(0); j < k; j++ {
+	for range k {
 		bitPos := h % nBits
 		if f[bitPos/8]&(1<<(bitPos%8)) == 0 {
 			return false
@@ -56,20 +56,11 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 		bitsPerKey = 0
 	}
 	// 0.69 is approximately ln(2).
-	k := uint32(float64(bitsPerKey) * 0.69)
-	if k < 1 {
-		k = 1
-	}
-	if k > 30 {
-		k = 30
-	}
+	k := min(max(uint32(float64(bitsPerKey)*0.69), 1), 30)
 
-	nBits := len(keys) * int(bitsPerKey)
+	nBits := max(len(keys) * int(bitsPerKey), 64)
 	// For small len(keys), we can see a very high false positive rate. Fix it
 	// by enforcing a minimum bloom filter length.
-	if nBits < 64 {
-		nBits = 64
-	}
 	nBytes := (nBits + 7) / 8
 	nBits = nBytes * 8
 	filter := make([]byte, nBytes+1)

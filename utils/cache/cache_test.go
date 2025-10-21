@@ -9,14 +9,14 @@ import (
 
 func TestCacheBasicCRUD(t *testing.T) {
 	cache := NewCache(5)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
 		cache.Set(key, val)
 		fmt.Printf("set %s: %s\n", key, cache)
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
 		res, ok := cache.Get(key)

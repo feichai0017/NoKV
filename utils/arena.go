@@ -51,13 +51,7 @@
 	 // checkptr tries to verify that the node of size MaxNodeSize resides on a single heap
 	 // allocation which causes this error: checkptr:converted pointer straddles multiple allocations
 	 if int(offset) > len(s.buf)-MaxNodeSize {
-		 growBy := uint32(len(s.buf))
-		 if growBy > 1<<30 {
-			 growBy = 1 << 30
-		 }
-		 if growBy < sz {
-			 growBy = sz
-		 }
+		 growBy := max(min(uint32(len(s.buf)), 1<<30), sz)
 		 newBuf := make([]byte, len(s.buf)+int(growBy))
 		 AssertTrue(len(s.buf) == copy(newBuf, s.buf))
 		 s.buf = newBuf

@@ -35,21 +35,20 @@ func Float64() float64 {
 
 // 生成随机字符串作为key和value
 func randStr(length int) string {
-	// 包括特殊字符,进行测试
-	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~=+%^*/()[]{}/!@#$?|©®😁😭🉑️🐂㎡硬核课堂"
-	bytes := []byte(str)
-	result := []byte{}
-	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))
-	for i := 0; i < length; i++ {
-		result = append(result, bytes[rand.Intn(len(bytes))])
+	if length <= 0 {
+		return ""
+	}
+	const charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~=+%^*/()[]{}/!@#$?|©®😁😭🉑️🐂㎡NoKV"
+	result := make([]byte, length)
+	for i := range length {
+		result[i] = charset[RandN(len(charset))]
 	}
 	return string(result)
 }
 
 // 构建entry对象
 func BuildEntry() *Entry {
-	rand.Seed(time.Now().Unix())
-	key := []byte(fmt.Sprintf("%s%s", randStr(16), "12345678"))
+	key := fmt.Appendf(nil, "%s%s", randStr(16), "12345678")
 	value := []byte(randStr(128))
 	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
 	e := NewEntry(key, value)

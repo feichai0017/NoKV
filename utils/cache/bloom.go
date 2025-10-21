@@ -29,7 +29,7 @@ func (f *BloomFilter) MayContain(h uint32) bool {
 	}
 	nBits := uint32(8 * (f.Len() - 1))
 	delta := h>>17 | h<<15
-	for j := uint8(0); j < k; j++ {
+	for range k {
 		bitPos := h % nBits
 		if f.bitmap[bitPos/8]&(1<<(bitPos%8)) == 0 {
 			return false
@@ -56,7 +56,7 @@ func (f *BloomFilter) Insert(h uint32) bool {
 	}
 	nBits := uint32(8 * (f.Len() - 1))
 	delta := h>>17 | h<<15
-	for j := uint8(0); j < k; j++ {
+	for range k {
 		bitPos := h % uint32(nBits)
 		f.bitmap[bitPos/8] |= 1 << (bitPos % 8)
 		h += delta
@@ -119,21 +119,12 @@ func initFilter(numEntries int, bitsPerKey int) *BloomFilter {
 		bitsPerKey = 0
 	}
 	// 0.69 is approximately ln(2).
-	k := uint32(float64(bitsPerKey) * 0.69)
-	if k < 1 {
-		k = 1
-	}
-	if k > 30 {
-		k = 30
-	}
+	k := min(max(uint32(float64(bitsPerKey)*0.69), 1), 30)
 	bf.k = uint8(k)
 
-	nBits := numEntries * int(bitsPerKey)
+	nBits := max(numEntries*int(bitsPerKey), 64)
 	// For small len(keys), we can see a very high false positive rate. Fix it
 	// by enforcing a minimum bloom filter length.
-	if nBits < 64 {
-		nBits = 64
-	}
 	nBytes := (nBits + 7) / 8
 	nBits = nBytes * 8
 	filter := make([]byte, nBytes+1)
