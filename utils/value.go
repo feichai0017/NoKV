@@ -106,11 +106,6 @@ func BytesToU32Slice(b []byte) []uint32 {
 	return u32s
 }
 
-// ValuePtrCodec _
-func ValuePtrCodec(vp *ValuePtr) []byte {
-	return []byte{}
-}
-
 // RunCallback _
 func RunCallback(cb func()) {
 	if cb != nil {

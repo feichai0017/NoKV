@@ -120,9 +120,7 @@ func location(deep int, fullPath bool) string {
 	}
 
 	if fullPath {
-		if strings.HasPrefix(file, gopath) {
-			file = file[len(gopath):]
-		}
+		file = strings.TrimPrefix(file, gopath)
 	} else {
 		file = filepath.Base(file)
 	}

@@ -11,8 +11,8 @@ type uint64Heap []uint64
 func (u uint64Heap) Len() int            { return len(u) }
 func (u uint64Heap) Less(i, j int) bool  { return u[i] < u[j] }
 func (u uint64Heap) Swap(i, j int)       { u[i], u[j] = u[j], u[i] }
-func (u *uint64Heap) Push(x interface{}) { *u = append(*u, x.(uint64)) }
-func (u *uint64Heap) Pop() interface{} {
+func (u *uint64Heap) Push(x any) { *u = append(*u, x.(uint64)) }
+func (u *uint64Heap) Pop() any {
 	old := *u
 	n := len(old)
 	x := old[n-1]

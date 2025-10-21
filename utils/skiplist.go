@@ -319,7 +319,7 @@ func (s *Skiplist) Add(e *Entry) {
 
 	// We always insert from the base level and up. After you add a node in base level, we cannot
 	// create a node in the level above because it would have discovered the node in the base level.
-	for i := 0; i < height; i++ {
+	for i := range height {
 		for {
 			if s.arena.getNode(prev[i]) == nil {
 				AssertTrue(i > 1) // This cannot happen in base level.

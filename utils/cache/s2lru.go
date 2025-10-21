@@ -106,7 +106,7 @@ func (slru *segmentedLRU) String() string {
 	for e := slru.stageTwo.Front(); e != nil; e = e.Next() {
 		s += fmt.Sprintf("%v,", e.Value.(*storeItem).value)
 	}
-	s += fmt.Sprintf(" | ")
+	s += " | "
 	for e := slru.stageOne.Front(); e != nil; e = e.Next() {
 		s += fmt.Sprintf("%v,", e.Value.(*storeItem).value)
 	}

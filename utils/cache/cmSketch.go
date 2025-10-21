@@ -33,7 +33,7 @@ func newCmSketch(numCounters int64) *cmSketch {
 	// 0000,0000|0000,0000|0000,0000
 	// 0000,0000|0000,0000|0000,0000
 
-	for i := 0; i < cmDepth; i++ {
+	for i := range cmDepth {
 		sketch.seed[i] = source.Uint64()
 		sketch.rows[i] = newCmRow(numCounters)
 	}
@@ -120,8 +120,9 @@ func (r cmRow) clear() {
 
 func (r cmRow) string() string {
 	s := ""
-	for i := uint64(0); i < uint64(len(r)*2); i++ {
-		s += fmt.Sprintf("%02d ", (r[(i/2)]>>((i&1)*4))&0x0f)
+	for i := range len(r) * 2 {
+		idx := uint64(i)
+		s += fmt.Sprintf("%02d ", (r[idx/2]>>((idx&1)*4))&0x0f)
 	}
 	s = s[:len(s)-1]
 	return s

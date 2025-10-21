@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -163,7 +164,6 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 	log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
 	return nil
 }
-
 
 // pickCompactLevel 选择合适的level执行合并，返回判断的优先级
 func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
@@ -395,7 +395,6 @@ func (lm *levelManager) fillTablesIngest(cd *compactDef) bool {
 	}
 	return lm.compactState.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
 }
-
 
 // compact older tables first.
 func (lm *levelManager) sortByHeuristic(tables []*table, cd *compactDef) {
@@ -639,7 +638,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 	skr.extend(cd.nextRange)
 
 	addRange := func(right []byte) {
-		skr.right = utils.Copy(right)
+		skr.right = slices.Clone(right)
 		cd.splits = append(cd.splits, skr)
 		skr.left = skr.right
 	}

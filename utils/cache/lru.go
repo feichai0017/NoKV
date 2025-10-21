@@ -15,7 +15,7 @@ type storeItem struct {
 	stage    int
 	key      uint64
 	conflict uint64
-	value    interface{}
+	value    any
 }
 
 func newWindowLRU(size int, data map[uint64]*list.Element) *windowLRU {

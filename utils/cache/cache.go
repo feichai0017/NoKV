@@ -27,25 +27,13 @@ func NewCache(size int) *Cache {
 	//define the percentage of window cache, here is 1%
 	const lruPct = 1
 	//calculate the capacity of window cache
-	lruSz := (lruPct * size) / 100
-
-	if lruSz < 1 {
-		lruSz = 1
-	}
+	lruSz := max((lruPct * size) / 100, 1)
 
 	//calculate the capacity of LFU cache
-	slruSz := int(float64(size) * ((100 - lruPct) / 100.0))
-
-	if slruSz < 1 {
-		slruSz = 1
-	}
+	slruSz := max(int(float64(size) * ((100 - lruPct) / 100.0)), 1)
 
 	//LFU is divided into two parts, stageOne accounts for 20%
-	slruO := int(0.2 * float64(slruSz))
-
-	if slruO < 1 {
-		slruO = 1
-	}
+	slruO := max(int(0.2 * float64(slruSz)), 1)
 
 	data := make(map[uint64]*list.Element, size)
 
@@ -59,13 +47,13 @@ func NewCache(size int) *Cache {
 
 }
 
-func (c *Cache) Set(key interface{}, value interface{}) bool {
+func (c *Cache) Set(key any, value any) bool {
 	c.m.Lock()
 	defer c.m.Unlock()
 	return c.set(key, value)
 }
 
-func (c *Cache) set(key, value interface{}) bool {
+func (c *Cache) set(key, value any) bool {
 	// keyHash is used to quickly locate, conflict is used to determine conflicts
 	keyHash, conflictHash := c.keyToHash(key)
 
@@ -115,13 +103,13 @@ func (c *Cache) set(key, value interface{}) bool {
 	return true
 }
 
-func (c *Cache) Get(key interface{}) (interface{}, bool) {
+func (c *Cache) Get(key any) (any, bool) {
 	c.m.RLock()
 	defer c.m.RUnlock()
 	return c.get(key)
 }
 
-func (c *Cache) get(key interface{}) (interface{}, bool) {
+func (c *Cache) get(key any) (any, bool) {
 	c.t++
 	if c.t == c.threshold {
 		c.c.Reset()
@@ -160,13 +148,13 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 
 }
 
-func (c *Cache) Del(key interface{}) (interface{}, bool) {
+func (c *Cache) Del(key any) (any, bool) {
 	c.m.Lock()
 	defer c.m.Unlock()
 	return c.del(key)
 }
 
-func (c *Cache) del(key interface{}) (interface{}, bool) {
+func (c *Cache) del(key any) (any, bool) {
 	keyHash, conflictHash := c.keyToHash(key)
 
 	val, ok := c.data[keyHash]
@@ -184,7 +172,7 @@ func (c *Cache) del(key interface{}) (interface{}, bool) {
 	return item.conflict, true
 }
 
-func (c *Cache) keyToHash(key interface{}) (uint64, uint64) {
+func (c *Cache) keyToHash(key any) (uint64, uint64) {
 	if key == nil {
 		return 0, 0
 	}
