@@ -23,9 +23,9 @@ HotRing
   hashMask -> selects bucket (power of two size)
 ```
 
-* Each bucket stores a circular linked list of [`Node`](../hotring/node.go#L9-L66) sorted by `(tag, key)`, where `tag` is derived from the upper bits of the hash. This keeps insertion/search O(bucket_length).
+* Each bucket stores a circular linked list of [`Node`](../hotring/node.go) sorted by `(tag, key)`, where `tag` is derived from the upper bits of the hash. This keeps insertion/search O(bucket_length).
 * `defaultTableBits = 12` → 4096 buckets by default (`NewHotRing`). The mask ensures cheap modulo operations.
-* Nodes keep a `count` (int32) updated atomically, plus `next`/`head` pointers using `unsafe.Pointer` to avoid additional allocations.
+* Nodes keep a `count` (int32) updated atomically and a `next` pointer stored via `unsafe.Pointer` to avoid extra allocations.
 
 ```mermaid
 flowchart LR
@@ -42,11 +42,11 @@ flowchart LR
 
 | Method | Behaviour | Notes |
 | --- | --- | --- |
-| [`Touch`](../hotring/hotring.go#L39-L66) | Insert or increment key's counter. | Creates node on miss, resets counter to 0 then increments. |
-| [`Frequency`](../hotring/hotring.go#L68-L84) | Read-only counter lookup. | No side effects; uses `RLock`. |
-| [`TouchAndClamp`](../hotring/hotring.go#L86-L125) | Increment unless `count >= limit`, returning `(count, limited)`. | Useful for throttling heavy keys. |
-| [`TopN`](../hotring/hotring.go#L149-L181) | Snapshot hottest keys sorted by count desc. | Clones slice to avoid exposing internal pointers. |
-| [`KeysAbove`](../hotring/hotring.go#L182-L212) | Return all keys with counters ≥ threshold. | Supports targeted throttling.
+| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | Creates node on miss, resets counter to 0 then increments. |
+| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | No side effects; uses `RLock`. |
+| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Useful for throttling heavy keys. |
+| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Clones slice to avoid exposing internal pointers. |
+| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Supports targeted throttling.
 
 The internal helpers [`searchLocked`](../hotring/hotring.go#L214-L259) and [`insertLocked`](../hotring/hotring.go#L261-L306) enforce bucket ordering and deduplicate keys.
 

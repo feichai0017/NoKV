@@ -18,16 +18,9 @@ type Item struct {
 // HotRing keeps track of frequently accessed keys using a per-bucket ring.
 type HotRing struct {
 	mu       sync.RWMutex
-	addrMask uint32
-	R        uint8
 	hashFn   HashFn
 	hashMask uint32
-
-	findCnt    uint32
-	maxFindCnt uint32
-	minFindCnt uint32
-
-	tables []*Node
+	tables   []*Node
 }
 
 const defaultTableBits = 12 // 4096 buckets by default
@@ -43,10 +36,8 @@ func NewHotRing(bits uint8, fn HashFn) *HotRing {
 	size := 1 << bits
 	mask := uint32(size - 1)
 	return &HotRing{
-		R:        bits,
 		hashFn:   fn,
 		hashMask: mask,
-		addrMask: ^mask,
 		tables:   make([]*Node, size),
 	}
 }
@@ -66,7 +57,7 @@ func (h *HotRing) Touch(key string) int32 {
 	if node := h.searchLocked(key, true); node != nil {
 		return node.GetCounter()
 	}
-	node, inserted := h.insertLocked(key, key)
+	node, inserted := h.insertLocked(key)
 	if !inserted {
 		// Shouldn't happen because search returned nil, but guard anyway.
 		if node != nil {
@@ -106,7 +97,7 @@ func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited b
 	defer h.mu.Unlock()
 	node := h.searchLocked(key, false)
 	if node == nil {
-		node, inserted := h.insertLocked(key, key)
+		node, inserted := h.insertLocked(key)
 		if !inserted || node == nil {
 			return 0, false
 		}
@@ -120,22 +111,6 @@ func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited b
 	}
 	count = node.Increment()
 	return count, count >= limit
-}
-
-
-// Search returns the node for key, incrementing its counter.
-func (h *HotRing) Search(key string) *Node {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.searchLocked(key, true)
-}
-
-// Insert adds a keyed node when absent.
-func (h *HotRing) Insert(key, val string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	_, inserted := h.insertLocked(key, val)
-	return inserted
 }
 
 func (h *HotRing) Remove(key string) {
@@ -169,22 +144,6 @@ func (h *HotRing) Remove(key string) {
 			h.tables[index] = toDel.Next()
 		}
 	}
-}
-
-func (h *HotRing) Update(key, val string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	res := h.searchLocked(key, false)
-	if res == nil {
-		return false
-	}
-
-	res.val = val
-	hashVal := h.hashFn(key)
-	index := hashVal & h.hashMask
-	h.tables[index] = res
-	return true
 }
 
 // TopN returns at most n hot keys ordered by access count (descending).
@@ -229,6 +188,7 @@ func (h *HotRing) TopN(n int) []Item {
 	}
 	return items
 }
+
 // KeysAbove returns all keys whose counters are at least threshold.
 func (h *HotRing) KeysAbove(threshold int32) []Item {
 	if h == nil || threshold <= 0 {
@@ -308,11 +268,11 @@ func (h *HotRing) searchLocked(key string, increment bool) *Node {
 	return res
 }
 
-func (h *HotRing) insertLocked(key, val string) (*Node, bool) {
+func (h *HotRing) insertLocked(key string) (*Node, bool) {
 	hashVal := h.hashFn(key)
 	index, tag := hashVal&h.hashMask, hashVal&(^h.hashMask)
 
-	newItem := NewNode(key, val, tag)
+	newItem := NewNode(key, tag)
 
 	switch head := h.tables[index]; {
 	case head == nil:
