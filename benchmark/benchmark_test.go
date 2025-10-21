@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
 	NoKV "github.com/feichai0017/NoKV"
+	unix "golang.org/x/sys/unix"
 )
 
 // ------------------------------ Flags & Config ------------------------------
@@ -30,20 +32,24 @@ var (
 	fConc       = flag.Int("conc", 0, "concurrency (0 => use GOMAXPROCS)")
 	fRounds     = flag.Int("rounds", 1, "repeat the whole suite N rounds")
 
-	fValueSize      = flag.Int("valsz", 100, "value size (bytes)")
-	fPreloadEntries = flag.Int("preload", 100000, "preload entries for read/range")
-	fWriteOps       = flag.Int("write_ops", 500000, "number of single-write ops")
-	fReadOps        = flag.Int("read_ops", 2000000, "number of read ops")
-	fBatchEntries   = flag.Int("batch_entries", 2000000, "total entries for batch write")
-	fBatchSize      = flag.Int("batch_size", 1000, "batch size per transaction")
-	fRangeQueries   = flag.Int("range_q", 2000, "number of range queries")
-	fRangeWindow    = flag.Int("range_win", 100, "range window per query (items)")
+	fValueSize      = flag.Int("valsz", 1000, "value size (bytes)")
+	fPreloadEntries = flag.Int("preload", 1000000, "preload entries for read/range")
+	fWriteOps       = flag.Int("write_ops", 5000000, "number of single-write ops")
+	fReadOps        = flag.Int("read_ops", 20000000, "number of read ops")
+	fBatchEntries   = flag.Int("batch_entries", 20000000, "total entries for batch write")
+	fBatchSize      = flag.Int("batch_size", 10000, "batch size per transaction")
+	fRangeQueries   = flag.Int("range_q", 20000, "number of range queries")
+	fRangeWindow    = flag.Int("range_win", 1000, "range window per query (items)")
 
 	fMode = flag.String("mode", "both", "read/range mode: warm|cold|both")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")
 	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression: none|snappy|zstd")
+
+	fValueThreshold = flag.Int("value_threshold", 32, "value size threshold (bytes) before spilling to value log (applied to both engines)")
+	fDropCacheMode  = flag.String("drop_cache", "sudo", "drop-cache mode for cold workloads: none|direct|sudo")
+	fDropCacheWait  = flag.Duration("drop_cache_wait", 2*time.Second, "sleep duration after dropping caches before continuing cold workloads")
 )
 
 type workloadConfig struct {
@@ -63,6 +69,9 @@ type workloadConfig struct {
 	BadgerBlockMB  int
 	BadgerIndexMB  int
 	BadgerComp     string
+	ValueThreshold int
+	DropCacheMode  string
+	DropCacheWait  time.Duration
 }
 
 var wl workloadConfig
@@ -162,8 +171,8 @@ func openBadgerAt(dir string, clean bool) (*badger.DB, error) {
 		WithSyncWrites(wl.SyncWrites).
 		WithCompression(comp).
 		WithBlockCacheSize(int64(wl.BadgerBlockMB) << 20).
-		WithIndexCacheSize(int64(wl.BadgerIndexMB) << 20)
-		//opts = opts.WithValueThreshold(1 << 20) // force values <=1MB into LSM
+		WithIndexCacheSize(int64(wl.BadgerIndexMB) << 20).
+		WithValueThreshold(int64(wl.ValueThreshold))
 	return badger.Open(opts)
 }
 
@@ -177,20 +186,82 @@ func openNoKVAt(dir string, clean bool) (*NoKV.DB, error) {
 			return nil, fmt.Errorf("nokv open dir: %w", err)
 		}
 	}
+	maxBatchCount := 2 * wl.BatchSize
+	if maxBatchCount < 10000 {
+		maxBatchCount = 10000
+	}
+	estimatedBatchBytes := int64(wl.BatchSize) * int64(wl.ValueSize)
+	if estimatedBatchBytes < 0 {
+		estimatedBatchBytes = 0
+	}
+	maxBatchSize := int64(128 << 20) // 128 MiB default upper bound
+	if est := estimatedBatchBytes * 2; est > maxBatchSize {
+		maxBatchSize = est
+	}
 	opt := &NoKV.Options{
 		WorkDir:             dir,
 		MemTableSize:        64 << 20,
 		SSTableMaxSz:        1 << 30,
 		ValueLogFileSize:    1 << 30,
 		ValueLogMaxEntries:  100000,
-		ValueThreshold:      32,
-		MaxBatchCount:       10000,
-		MaxBatchSize:        16 << 20,
+		ValueThreshold:      int64(wl.ValueThreshold),
+		MaxBatchCount:       int64(maxBatchCount),
+		MaxBatchSize:        maxBatchSize,
 		VerifyValueChecksum: true,
 		DetectConflicts:     false,
 		SyncWrites:          wl.SyncWrites,
 	}
 	return NoKV.Open(opt), nil
+}
+
+func dropCachesDirect() error {
+	unix.Sync()
+	f, err := os.OpenFile("/proc/sys/vm/drop_caches", os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open drop_caches: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("3\n"); err != nil {
+		return fmt.Errorf("write drop_caches: %w", err)
+	}
+	return nil
+}
+
+func dropCachesSudo() error {
+	cmd := exec.Command("sudo", "sh", "-c", "sync && echo 3 > /proc/sys/vm/drop_caches")
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		fmt.Printf("%s\n", strings.TrimSpace(string(out)))
+	}
+	if err != nil {
+		return fmt.Errorf("sudo drop caches: %w", err)
+	}
+	return nil
+}
+
+// maybeDropCaches executes the configured strategy to flush the OS cache before cold runs.
+func maybeDropCaches(t *testing.T, label string) {
+	mode := strings.ToLower(strings.TrimSpace(wl.DropCacheMode))
+	if mode == "" || mode == "none" {
+		return
+	}
+	fmt.Printf(">>> drop cache (%s): mode=%s\n", label, mode)
+	var err error
+	switch mode {
+	case "direct":
+		err = dropCachesDirect()
+	case "sudo":
+		err = dropCachesSudo()
+	default:
+		t.Fatalf("unknown drop_cache mode: %s", mode)
+	}
+	if err != nil {
+		t.Logf("drop cache (%s) failed: %v", label, err)
+		return
+	}
+	if wl.DropCacheWait > 0 {
+		time.Sleep(wl.DropCacheWait)
+	}
 }
 
 // ------------------------------ Streaming Preload ------------------------------
@@ -458,6 +529,7 @@ func benchNoKVRead(t *testing.T, mode string) {
 
 	if mode == "cold" {
 		_ = db.Close()
+		maybeDropCaches(t, "nokv-read")
 		db, err = openNoKVAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen nokv: %v", err)
@@ -517,6 +589,7 @@ func benchBadgerRead(t *testing.T, mode string) {
 
 	if mode == "cold" {
 		_ = db.Close()
+		maybeDropCaches(t, "badger-read")
 		db, err = openBadgerAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen badger: %v", err)
@@ -574,6 +647,7 @@ func benchNoKVRange(t *testing.T, mode string) {
 
 	if mode == "cold" {
 		_ = db.Close()
+		maybeDropCaches(t, "nokv-range")
 		db, err = openNoKVAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen nokv: %v", err)
@@ -598,11 +672,9 @@ func benchNoKVRange(t *testing.T, mode string) {
 				defer it.Close()
 				cnt := 0
 				for it.Rewind(); it.Valid() && cnt < wl.RangeWindow; it.Next() {
-					item := it.Item()
-					if item == nil || item.Entry() == nil {
+					if it.Item() == nil {
 						break
 					}
-					_ = item.Entry().Value
 					cnt++
 				}
 				localCount += int64(cnt)
@@ -646,6 +718,7 @@ func benchBadgerRange(t *testing.T, mode string) {
 
 	if mode == "cold" {
 		_ = db.Close()
+		maybeDropCaches(t, "badger-range")
 		db, err = openBadgerAt(dir, false)
 		if err != nil {
 			t.Fatalf("reopen badger: %v", err)
@@ -776,6 +849,9 @@ func TestMain(m *testing.M) {
 		BadgerBlockMB:  *fBadgerBlockMB,
 		BadgerIndexMB:  *fBadgerIndexMB,
 		BadgerComp:     strings.ToLower(*fBadgerCompression),
+		ValueThreshold: *fValueThreshold,
+		DropCacheMode:  strings.ToLower(*fDropCacheMode),
+		DropCacheWait:  *fDropCacheWait,
 	}
 
 	os.Exit(m.Run())

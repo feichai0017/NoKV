@@ -34,6 +34,9 @@ docker compose down -v
 go test ./benchmark -run TestBenchmarkResults -count=1
 # With RocksDB comparison (requires CGO and gorocksdb)
 go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
+# True cold-start run (drops OS caches; requires sudo privileges)
+go test ./benchmark -run TestBenchmarkResults -count=1 -- \
+  -mode cold -drop_cache sudo
 ```
 
 > Tip: Pin `GOCACHE`/`GOMODCACHE` in CI to keep build artefacts local and avoid permission issues.
