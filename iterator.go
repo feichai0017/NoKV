@@ -10,6 +10,8 @@ type DBIterator struct {
 	vlog *valueLog
 	pool *iteratorPool
 	ctx  *iteratorContext
+	// keyOnly avoids eager value log materialisation when true.
+	keyOnly bool
 
 	entry    utils.Entry
 	item     Item
@@ -18,7 +20,9 @@ type DBIterator struct {
 }
 
 type Item struct {
-	e *utils.Entry
+	e        *utils.Entry
+	vlog     *valueLog
+	valueBuf []byte
 }
 
 func (it *Item) Entry() *utils.Entry {
@@ -32,6 +36,25 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	val := it.e.Value
+	if utils.IsValuePtr(it.e) {
+		if it.vlog == nil {
+			return nil, utils.ErrKeyNotFound
+		}
+		var vp utils.ValuePtr
+		vp.Decode(val)
+		fetched, cb, err := it.vlog.read(&vp)
+		if cb != nil {
+			defer utils.RunCallback(cb)
+		}
+		if err != nil {
+			return nil, err
+		}
+		it.valueBuf = append(it.valueBuf[:0], fetched...)
+		dst = append(dst[:0], it.valueBuf...)
+		it.e.Value = it.valueBuf
+		it.e.Meta &^= utils.BitValuePointer
+		return dst, nil
+	}
 	if len(val) == 0 {
 		return dst[:0], nil
 	}
@@ -42,13 +65,16 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
 	}
+	keyOnly := opt.OnlyUseKey
 	ctx := db.iterPool.get()
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
-		vlog: db.vlog,
-		pool: db.iterPool,
-		ctx:  ctx,
+		vlog:    db.vlog,
+		pool:    db.iterPool,
+		ctx:     ctx,
+		keyOnly: keyOnly,
 	}
+	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
 	itr.iitr = lsm.NewMergeIterator(ctx.iters, opt.IsAsc)
 	return itr
@@ -115,6 +141,7 @@ func (iter *DBIterator) populate() {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.item.valueBuf = iter.item.valueBuf[:0]
 	for iter.iitr.Valid() {
 		item := iter.iitr.Item()
 		if item == nil {
@@ -144,22 +171,31 @@ func (iter *DBIterator) materialize(src *utils.Entry) bool {
 		iter.entry.Version = ts
 	}
 	if utils.IsValuePtr(src) {
-		var vp utils.ValuePtr
-		vp.Decode(src.Value)
-		val, cb, err := iter.vlog.read(&vp)
-		if cb != nil {
-			defer utils.RunCallback(cb)
+		if iter.keyOnly {
+			// Leave pointer encoded; defer value fetch to Item.ValueCopy.
+			iter.entry.Value = src.Value
+			iter.item.valueBuf = iter.item.valueBuf[:0]
+		} else {
+			var vp utils.ValuePtr
+			vp.Decode(src.Value)
+			val, cb, err := iter.vlog.read(&vp)
+			if cb != nil {
+				defer utils.RunCallback(cb)
+			}
+			if err != nil || len(val) == 0 {
+				return false
+			}
+			iter.valueBuf = append(iter.valueBuf[:0], val...)
+			iter.entry.Value = iter.valueBuf
+			iter.entry.Meta &^= utils.BitValuePointer
+			iter.item.valueBuf = iter.entry.Value
 		}
-		if err != nil || len(val) == 0 {
-			return false
-		}
-		iter.valueBuf = append(iter.valueBuf[:0], val...)
-		iter.entry.Value = iter.valueBuf
 	} else {
 		if src.Value == nil || src.IsDeletedOrExpired() {
 			return false
 		}
 		iter.entry.Value = src.Value
+		iter.item.valueBuf = iter.entry.Value
 	}
 	iter.item.e = &iter.entry
 	return true

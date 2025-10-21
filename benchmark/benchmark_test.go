@@ -48,7 +48,7 @@ var (
 	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression: none|snappy|zstd")
 
 	fValueThreshold = flag.Int("value_threshold", 32, "value size threshold (bytes) before spilling to value log (applied to both engines)")
-	fDropCacheMode  = flag.String("drop_cache", "sudo", "drop-cache mode for cold workloads: none|direct|sudo")
+	fDropCacheMode  = flag.String("drop_cache", "none", "drop-cache mode for cold workloads: none|direct|sudo")
 	fDropCacheWait  = flag.Duration("drop_cache_wait", 2*time.Second, "sleep duration after dropping caches before continuing cold workloads")
 )
 
@@ -667,7 +667,8 @@ func benchNoKVRange(t *testing.T, mode string) {
 		for i := s; i < e; i++ {
 			if err := db.View(func(txn *NoKV.Txn) error {
 				it := txn.NewIterator(NoKV.IteratorOptions{
-					Prefix: []byte("key-g-"),
+					Prefix:  []byte("key-g-"),
+					KeyOnly: true,
 				})
 				defer it.Close()
 				cnt := 0
