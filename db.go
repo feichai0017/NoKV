@@ -158,16 +158,16 @@ func Open(opt *Options) *DB {
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	recoveredVersion := db.lsm.MaxVersion()
-	// 初始化vlog结构
-	db.initVLog()
-	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
-	// 初始化统计信息
 	db.iterPool = newIteratorPool()
 	cfCount := int(utils.CFWrite) + 1
 	db.cfMetrics = make([]*cfCounters, cfCount)
 	for i := range db.cfMetrics {
 		db.cfMetrics[i] = &cfCounters{}
 	}
+	// 初始化vlog结构
+	db.initVLog()
+	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
+	// 初始化统计信息
 	db.stats = newStats(db)
 
 	if opt.HotRingEnabled {
@@ -234,6 +234,18 @@ func (db *DB) runRecoveryChecks() error {
 }
 
 func (db *DB) Close() error {
+	if db == nil {
+		return nil
+	}
+
+	if db.IsClosed() {
+		return nil
+	}
+
+	if vlog := db.vlog; vlog != nil && vlog.lfDiscardStats != nil && vlog.lfDiscardStats.closer != nil {
+		vlog.lfDiscardStats.closer.Close()
+	}
+
 	db.stopCommitWorkers()
 
 	if db.walWatchdog != nil {
@@ -247,7 +259,9 @@ func (db *DB) Close() error {
 		db.prefetchCh = nil
 	}
 
-	db.vlog.lfDiscardStats.closer.Close()
+	if err := db.stats.close(); err != nil {
+		return err
+	}
 	if err := db.lsm.Close(); err != nil {
 		return err
 	}
@@ -255,9 +269,6 @@ func (db *DB) Close() error {
 		return err
 	}
 	if err := db.wal.Close(); err != nil {
-		return err
-	}
-	if err := db.stats.close(); err != nil {
 		return err
 	}
 
@@ -637,7 +648,10 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 		size:       size,
 	}
 
-	db.enqueueCommitRequest(cr)
+	if err := db.enqueueCommitRequest(cr); err != nil {
+		req.DecrRef()
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -668,11 +682,15 @@ func (db *DB) batchSet(entries []*utils.Entry) error {
 	return req.Wait()
 }
 
-func (db *DB) enqueueCommitRequest(cr *commitRequest) {
+func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	if cr == nil {
-		return
+		return nil
 	}
 	db.commitQueue.Lock()
+	if db.commitQueue.closed {
+		db.commitQueue.Unlock()
+		return utils.ErrBlockedWrites
+	}
 	db.commitQueue.requests = append(db.commitQueue.requests, cr)
 	db.commitQueue.totalEntries += cr.entryCount
 	db.commitQueue.totalBytes += cr.size
@@ -684,6 +702,7 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) {
 	}
 	db.commitQueue.Unlock()
 	db.writeMetrics.updateQueue(qLen, qEntries, qBytes)
+	return nil
 }
 
 func (db *DB) nextCommitBatch() []*commitRequest {

@@ -64,14 +64,24 @@ func (lsm *LSM) Close() error {
 	lsm.closer.Close()
 	lsm.flushMgr.Close()
 	lsm.flushWG.Wait()
-	// TODO need to lock to ensure concurrency safety
-	if lsm.memTable != nil {
-		if err := lsm.memTable.close(); err != nil {
+
+	lsm.lock.Lock()
+	mem := lsm.memTable
+	immutables := append([]*memTable(nil), lsm.immutables...)
+	lsm.memTable = nil
+	lsm.immutables = nil
+	lsm.lock.Unlock()
+
+	if mem != nil {
+		if err := mem.close(); err != nil {
 			return err
 		}
 	}
-	for i := range lsm.immutables {
-		if err := lsm.immutables[i].close(); err != nil {
+	for _, mt := range immutables {
+		if mt == nil {
+			continue
+		}
+		if err := mt.close(); err != nil {
 			return err
 		}
 	}

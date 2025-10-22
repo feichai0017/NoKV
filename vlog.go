@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	discardStatsFlushThreshold = 100
-	valueLogHeadLogInterval    = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
+	defaultDiscardStatsFlushThreshold = 100
+	valueLogHeadLogInterval           = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
 )
 
 var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
@@ -937,14 +937,20 @@ func (db *DB) initVLog() {
 
 	status := db.lsm.ValueLogStatus()
 
+	threshold := db.opt.DiscardStatsFlushThreshold
+	if threshold <= 0 {
+		threshold = defaultDiscardStatsFlushThreshold
+	}
+
 	vlog := &valueLog{
 		dirPath:          vlogDir,
 		manager:          manager,
 		filesToBeDeleted: make([]uint32, 0),
 		lfDiscardStats: &lfDiscardStats{
-			m:         make(map[uint32]int64),
-			closer:    utils.NewCloser(),
-			flushChan: make(chan map[uint32]int64, 16),
+			m:              make(map[uint32]int64),
+			closer:         utils.NewCloser(),
+			flushChan:      make(chan map[uint32]int64, 16),
+			flushThreshold: threshold,
 		},
 		db:        db,
 		opt:       *db.opt,
@@ -1076,6 +1082,7 @@ type lfDiscardStats struct {
 	flushChan         chan map[uint32]int64
 	closer            *utils.Closer
 	updatesSinceFlush int
+	flushThreshold    int
 }
 
 func (vlog *valueLog) flushDiscardStats() {
@@ -1089,7 +1096,11 @@ func (vlog *valueLog) flushDiscardStats() {
 			vlog.lfDiscardStats.updatesSinceFlush++
 		}
 
-		if vlog.lfDiscardStats.updatesSinceFlush > discardStatsFlushThreshold {
+		threshold := vlog.lfDiscardStats.flushThreshold
+		if threshold <= 0 {
+			threshold = defaultDiscardStatsFlushThreshold
+		}
+		if vlog.lfDiscardStats.updatesSinceFlush >= threshold {
 			encodedDS, err := json.Marshal(vlog.lfDiscardStats.m)
 			if err != nil {
 				return nil, err
