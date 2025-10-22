@@ -62,6 +62,11 @@ type Options struct {
 	// of WAL segments containing raft records exceeds this threshold. Zero
 	// disables segment-count warnings.
 	WALTypedRecordWarnSegments int64
+
+	// DiscardStatsFlushThreshold controls how many discard-stat updates must be
+	// accumulated before they are flushed back into the LSM. Zero keeps the
+	// default threshold.
+	DiscardStatsFlushThreshold int
 }
 
 // NewDefaultOptions 返回默认的options
