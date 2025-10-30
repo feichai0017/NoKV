@@ -249,6 +249,43 @@ func (s *mockService) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGe
 	return s.cluster.get(s.storeID, req)
 }
 
+func (s *mockService) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
+	if req == nil || req.GetContext() == nil {
+		return nil, statusInvalidArgument("context required")
+	}
+	batch := req.GetRequest()
+	if batch == nil || len(batch.GetRequests()) == 0 {
+		return &pb.KvBatchGetResponse{
+			Response: &pb.BatchGetResponse{},
+		}, nil
+	}
+	responses := make([]*pb.GetResponse, 0, len(batch.GetRequests()))
+	for _, getReq := range batch.GetRequests() {
+		if getReq == nil {
+			responses = append(responses, &pb.GetResponse{NotFound: true})
+			continue
+		}
+		resp, err := s.cluster.get(s.storeID, &pb.KvGetRequest{
+			Context: req.GetContext(),
+			Request: getReq,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp.GetRegionError() != nil {
+			return &pb.KvBatchGetResponse{RegionError: resp.GetRegionError()}, nil
+		}
+		if resp.GetResponse() != nil {
+			responses = append(responses, resp.GetResponse())
+		} else {
+			responses = append(responses, &pb.GetResponse{NotFound: true})
+		}
+	}
+	return &pb.KvBatchGetResponse{
+		Response: &pb.BatchGetResponse{Responses: responses},
+	}, nil
+}
+
 func (s *mockService) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScanResponse, error) {
 	return s.cluster.scan(s.storeID, req)
 }

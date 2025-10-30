@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	TinyKv_KvGet_FullMethodName            = "/pb.TinyKv/KvGet"
+	TinyKv_KvBatchGet_FullMethodName       = "/pb.TinyKv/KvBatchGet"
 	TinyKv_KvScan_FullMethodName           = "/pb.TinyKv/KvScan"
 	TinyKv_KvPrewrite_FullMethodName       = "/pb.TinyKv/KvPrewrite"
 	TinyKv_KvCommit_FullMethodName         = "/pb.TinyKv/KvCommit"
@@ -35,6 +36,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type TinyKvClient interface {
 	KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error)
+	KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error)
 	KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error)
 	KvPrewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error)
 	KvCommit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error)
@@ -55,6 +57,16 @@ func (c *tinyKvClient) KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvGetResponse)
 	err := c.cc.Invoke(ctx, TinyKv_KvGet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tinyKvClient) KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KvBatchGetResponse)
+	err := c.cc.Invoke(ctx, TinyKv_KvBatchGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +138,7 @@ func (c *tinyKvClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatu
 // for forward compatibility.
 type TinyKvServer interface {
 	KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error)
+	KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error)
 	KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error)
 	KvPrewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error)
 	KvCommit(context.Context, *KvCommitRequest) (*KvCommitResponse, error)
@@ -143,6 +156,9 @@ type UnimplementedTinyKvServer struct{}
 
 func (UnimplementedTinyKvServer) KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method KvGet not implemented")
+}
+func (UnimplementedTinyKvServer) KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KvBatchGet not implemented")
 }
 func (UnimplementedTinyKvServer) KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method KvScan not implemented")
@@ -196,6 +212,24 @@ func _TinyKv_KvGet_Handler(srv interface{}, ctx context.Context, dec func(interf
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TinyKvServer).KvGet(ctx, req.(*KvGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TinyKv_KvBatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KvBatchGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TinyKvServer).KvBatchGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TinyKv_KvBatchGet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TinyKvServer).KvBatchGet(ctx, req.(*KvBatchGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -318,6 +352,10 @@ var TinyKv_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "KvGet",
 			Handler:    _TinyKv_KvGet_Handler,
+		},
+		{
+			MethodName: "KvBatchGet",
+			Handler:    _TinyKv_KvBatchGet_Handler,
 		},
 		{
 			MethodName: "KvScan",

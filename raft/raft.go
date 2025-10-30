@@ -14,6 +14,7 @@ type (
 	SoftState        = etcdraft.SoftState
 	Status           = etcdraft.Status
 	Peer             = etcdraft.Peer
+	ReadState        = etcdraft.ReadState
 	MemoryStorage    = etcdraft.MemoryStorage
 	Storage          = etcdraft.Storage
 	HardState        = pb.HardState

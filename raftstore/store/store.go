@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"sync"
@@ -986,7 +987,19 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if s.commandApplier == nil {
 		return nil, fmt.Errorf("raftstore: command apply without handler")
 	}
-	if err := peer.Flush(); err != nil {
+	if req.Header == nil {
+		req.Header = &pb.CmdHeader{}
+	}
+	if req.Header.GetRequestId() == 0 {
+		req.Header.RequestId = s.nextProposalID()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	index, err := peer.LinearizableRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := peer.WaitApplied(ctx, index); err != nil {
 		return nil, err
 	}
 	out, err := s.commandApplier(req)
