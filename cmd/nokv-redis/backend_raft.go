@@ -177,32 +177,11 @@ func (b *raftBackend) Close() error {
 }
 
 func (b *raftBackend) Get(key []byte) (*redisValue, error) {
-	ctx, cancel := b.context()
-	defer cancel()
-	resp, err := b.client.Get(ctx, key, mathMaxUint64)
+	version, err := b.reserveTimestamp(1)
 	if err != nil {
 		return nil, err
 	}
-	if resp == nil || resp.GetNotFound() {
-		return &redisValue{Found: false}, nil
-	}
-	// TTL metadata is stored separately. Fetch it so callers get the same behaviour
-	// as the embedded backend (including auto-cleanup when the entry expired).
-	expiresAt, err := b.loadTTL(key)
-	if err != nil {
-		return nil, err
-	}
-	if expiresAt > 0 && expiresAt <= uint64(time.Now().Unix()) {
-		if err := b.deleteKeys(key); err != nil {
-			return nil, err
-		}
-		return &redisValue{Found: false}, nil
-	}
-	return &redisValue{
-		Value:     append([]byte(nil), resp.GetValue()...),
-		ExpiresAt: expiresAt,
-		Found:     true,
-	}, nil
+	return b.getAtVersion(key, version)
 }
 
 func (b *raftBackend) Set(args setArgs) (bool, error) {
@@ -259,24 +238,29 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
-	var removed int64
+	version, err := b.reserveTimestamp(1)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := b.context()
+	defer cancel()
+	resps, err := b.client.BatchGet(ctx, keys, version)
+	if err != nil {
+		return 0, err
+	}
 	mutations := make([]*pb.Mutation, 0, len(keys)*2)
+	var removed int64
 	for _, key := range keys {
-		val, err := b.Get(key)
-		if err != nil {
-			return 0, err
+		resp := resps[string(key)]
+		if resp != nil && !resp.GetNotFound() {
+			removed++
 		}
-		// Remove both value and TTL entries in a single 2PC mutation batch so the
-		// behaviour matches embedded mode.
 		valueKey := append([]byte(nil), key...)
 		metaKey := ttlMetaKey(key)
 		mutations = append(mutations,
 			&pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey},
 			&pb.Mutation{Op: pb.Mutation_Delete, Key: metaKey},
 		)
-		if val.Found {
-			removed++
-		}
 	}
 	if len(mutations) == 0 {
 		return removed, nil
@@ -288,9 +272,34 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 }
 
 func (b *raftBackend) MGet(keys [][]byte) ([]*redisValue, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	version, err := b.reserveTimestamp(1)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := b.context()
+	defer cancel()
+	request := make([][]byte, 0, len(keys)*2)
+	valueKeys := make([][]byte, len(keys))
+	metaKeys := make([][]byte, len(keys))
+	for i, key := range keys {
+		valueKey := append([]byte(nil), key...)
+		valueKeys[i] = valueKey
+		metaKey := ttlMetaKey(key)
+		metaKeys[i] = metaKey
+		request = append(request, valueKey, metaKey)
+	}
+	resps, err := b.client.BatchGet(ctx, request, version)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]*redisValue, len(keys))
 	for i, key := range keys {
-		val, err := b.Get(key)
+		valueResp := resps[string(valueKeys[i])]
+		ttlResp := resps[string(metaKeys[i])]
+		val, err := b.buildValueAtVersion(key, valueResp, ttlResp)
 		if err != nil {
 			return nil, err
 		}
@@ -327,12 +336,12 @@ func (b *raftBackend) MSet(pairs [][2][]byte) error {
 }
 
 func (b *raftBackend) Exists(keys [][]byte) (int64, error) {
+	vals, err := b.MGet(keys)
+	if err != nil {
+		return 0, err
+	}
 	var count int64
-	for _, key := range keys {
-		val, err := b.Get(key)
-		if err != nil {
-			return count, err
-		}
+	for _, val := range vals {
 		if val != nil && val.Found {
 			count++
 		}
@@ -341,7 +350,11 @@ func (b *raftBackend) Exists(keys [][]byte) (int64, error) {
 }
 
 func (b *raftBackend) IncrBy(key []byte, delta int64) (int64, error) {
-	val, err := b.Get(key)
+	version, err := b.reserveTimestamp(1)
+	if err != nil {
+		return 0, err
+	}
+	val, err := b.getAtVersion(key, version)
 	if err != nil {
 		return 0, err
 	}
@@ -371,33 +384,59 @@ func (b *raftBackend) IncrBy(key []byte, delta int64) (int64, error) {
 
 const (
 	defaultLockTTL = uint64(3000)
-	mathMaxUint64  = ^uint64(0)
 )
 
 var ttlMetaPrefix = []byte("!redis:ttl!")
+
+func (b *raftBackend) reserveTimestamp(n uint64) (uint64, error) {
+	return b.ts.Reserve(n)
+}
+
+func (b *raftBackend) getAtVersion(key []byte, version uint64) (*redisValue, error) {
+	ctx, cancel := b.context()
+	defer cancel()
+	request := [][]byte{
+		append([]byte(nil), key...),
+		ttlMetaKey(key),
+	}
+	resps, err := b.client.BatchGet(ctx, request, version)
+	if err != nil {
+		return nil, err
+	}
+	valueResp := resps[string(request[0])]
+	ttlResp := resps[string(request[1])]
+	return b.buildValueAtVersion(key, valueResp, ttlResp)
+}
+
+func (b *raftBackend) buildValueAtVersion(key []byte, valueResp, ttlResp *pb.GetResponse) (*redisValue, error) {
+	if valueResp == nil || valueResp.GetNotFound() {
+		if ttlResp != nil && !ttlResp.GetNotFound() {
+			// Stale TTL metadata without a value should be cleaned up.
+			if err := b.deleteKeys(key); err != nil {
+				return nil, err
+			}
+		}
+		return &redisValue{Found: false}, nil
+	}
+	expiresAt := decodeTTLFromResponse(ttlResp)
+	if expiresAt > 0 && expiresAt <= uint64(time.Now().Unix()) {
+		if err := b.deleteKeys(key); err != nil {
+			return nil, err
+		}
+		return &redisValue{Found: false}, nil
+	}
+	return &redisValue{
+		Value:     append([]byte(nil), valueResp.GetValue()...),
+		ExpiresAt: expiresAt,
+		Found:     true,
+	}, nil
+}
 
 func ttlMetaKey(key []byte) []byte {
 	out := make([]byte, len(ttlMetaPrefix)+len(key))
 	copy(out, ttlMetaPrefix)
 	copy(out[len(ttlMetaPrefix):], key)
 	return out
-}
-
-func (b *raftBackend) loadTTL(key []byte) (uint64, error) {
-	ctx, cancel := b.context()
-	defer cancel()
-	resp, err := b.client.Get(ctx, ttlMetaKey(key), mathMaxUint64)
-	if err != nil {
-		return 0, err
-	}
-	if resp == nil || resp.GetNotFound() {
-		return 0, nil
-	}
-	data := resp.GetValue()
-	if len(data) != 8 {
-		return 0, nil
-	}
-	return binary.BigEndian.Uint64(data), nil
 }
 
 func (b *raftBackend) deleteKeys(key []byte) error {
@@ -409,11 +448,22 @@ func (b *raftBackend) deleteKeys(key []byte) error {
 	)
 }
 
+func decodeTTLFromResponse(resp *pb.GetResponse) uint64 {
+	if resp == nil || resp.GetNotFound() {
+		return 0
+	}
+	data := resp.GetValue()
+	if len(data) != 8 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(data)
+}
+
 func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	if len(mutations) == 0 {
 		return nil
 	}
-	start, err := b.ts.Reserve(2)
+	start, err := b.reserveTimestamp(2)
 	if err != nil {
 		return err
 	}

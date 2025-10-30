@@ -2,9 +2,11 @@ package peer
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
@@ -44,6 +46,9 @@ type Peer struct {
 	stopCtx          context.Context
 	stopCancel       context.CancelFunc
 	region           *manifest.RegionMeta
+	readSeq          atomic.Uint64
+	readMu           sync.Mutex
+	pendingReads     map[string]chan uint64
 }
 
 const defaultMaxInFlightApply = 8192
@@ -108,6 +113,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		stopCtx:          stopCtx,
 		stopCancel:       stopCancel,
 		region:           manifest.CloneRegionMetaPtr(cfg.Region),
+		pendingReads:     make(map[string]chan uint64),
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries
@@ -384,6 +390,9 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			p.transport.Send(msg)
 		}
 	}
+	if len(rd.ReadStates) > 0 {
+		p.handleReadStates(rd.ReadStates)
+	}
 	if len(rd.CommittedEntries) > 0 {
 		p.beginApply(rd.CommittedEntries)
 		var toApply []myraft.Entry
@@ -493,6 +502,14 @@ func (p *Peer) Close() error {
 	if p.applyCloser != nil {
 		p.applyCloser.SignalAndWait()
 	}
+	p.readMu.Lock()
+	for key, ch := range p.pendingReads {
+		if ch != nil {
+			close(ch)
+		}
+		delete(p.pendingReads, key)
+	}
+	p.readMu.Unlock()
 	return nil
 }
 
@@ -560,6 +577,93 @@ func (p *Peer) finishApply(entries []myraft.Entry) {
 		return
 	}
 	p.applyMark.DoneMany(indices)
+}
+
+// LinearizableRead performs a raft ReadIndex round-trip to ensure the peer
+// still holds leadership and returns the corresponding log index. Callers
+// should subsequently wait for that index to be applied before reading state.
+func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
+	if p == nil {
+		return 0, fmt.Errorf("raftstore: peer is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-p.stopCtx.Done():
+		return 0, errPeerStopped
+	default:
+	}
+	key, ch := p.startReadIndex()
+	if err := p.Flush(); err != nil {
+		p.cancelReadIndex(key)
+		return 0, err
+	}
+	select {
+	case idx, ok := <-ch:
+		if !ok {
+			return 0, errPeerStopped
+		}
+		return idx, nil
+	case <-ctx.Done():
+		p.cancelReadIndex(key)
+		return 0, ctx.Err()
+	case <-p.stopCtx.Done():
+		p.cancelReadIndex(key)
+		return 0, errPeerStopped
+	}
+}
+
+func (p *Peer) startReadIndex() (string, chan uint64) {
+	reqCtx := make([]byte, 16)
+	binary.BigEndian.PutUint64(reqCtx[:8], p.id)
+	seq := p.readSeq.Add(1)
+	binary.BigEndian.PutUint64(reqCtx[8:], seq)
+	key := string(reqCtx)
+	ch := make(chan uint64, 1)
+
+	p.readMu.Lock()
+	p.pendingReads[key] = ch
+	p.readMu.Unlock()
+
+	p.mu.Lock()
+	p.node.ReadIndex(reqCtx)
+	p.mu.Unlock()
+	return key, ch
+}
+
+func (p *Peer) cancelReadIndex(key string) {
+	p.readMu.Lock()
+	ch, ok := p.pendingReads[key]
+	if ok {
+		delete(p.pendingReads, key)
+	}
+	p.readMu.Unlock()
+	if ok && ch != nil {
+		close(ch)
+	}
+}
+
+func (p *Peer) handleReadStates(states []myraft.ReadState) {
+	if len(states) == 0 {
+		return
+	}
+	for _, state := range states {
+		if len(state.RequestCtx) == 0 {
+			continue
+		}
+		key := string(state.RequestCtx)
+		p.readMu.Lock()
+		ch, ok := p.pendingReads[key]
+		if ok {
+			delete(p.pendingReads, key)
+		}
+		p.readMu.Unlock()
+		if ok && ch != nil {
+			ch <- state.Index
+			close(ch)
+		}
+	}
 }
 
 func (p *Peer) markSnapshotApplied(index uint64) {

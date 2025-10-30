@@ -164,6 +164,79 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 	return nil, fmt.Errorf("client: kv get retries exhausted for key %q", key)
 }
 
+// BatchGet fetches multiple keys using the same snapshot version. Keys are
+// grouped by region so that each group shares a single KvBatchGet round-trip
+// and read index.
+func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
+	results := make(map[string]*pb.GetResponse, len(keys))
+	if len(keys) == 0 {
+		return results, nil
+	}
+	pending := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		keyCopy := append([]byte(nil), key...)
+		pending[string(keyCopy)] = keyCopy
+	}
+	type regionBatch struct {
+		region regionSnapshot
+		keys   [][]byte
+		ids    []string
+	}
+	var lastErr error
+	for attempt := 0; attempt < c.maxRetries && len(pending) > 0; attempt++ {
+		groups := make(map[uint64]*regionBatch)
+		for keyID, key := range pending {
+			region, err := c.regionForKey(key)
+			if err != nil {
+				return nil, err
+			}
+			regionID := region.meta.GetId()
+			group := groups[regionID]
+			if group == nil {
+				group = &regionBatch{region: region}
+				groups[regionID] = group
+			}
+			group.keys = append(group.keys, key)
+			group.ids = append(group.ids, keyID)
+		}
+		var completed []string
+		for regionID, group := range groups {
+			resp, regionErr, err := c.callBatchGet(ctx, group.region, group.keys, version)
+			if err != nil {
+				return nil, err
+			}
+			if regionErr != nil {
+				lastErr = c.handleRegionError(regionID, regionErr)
+				if lastErr != nil {
+					return nil, lastErr
+				}
+				continue
+			}
+			responses := resp.GetResponses()
+			for i, keyID := range group.ids {
+				var getResp *pb.GetResponse
+				if i < len(responses) && responses[i] != nil {
+					getResp = responses[i]
+				} else {
+					getResp = &pb.GetResponse{NotFound: true}
+				}
+				results[keyID] = getResp
+				completed = append(completed, keyID)
+			}
+		}
+		for _, keyID := range completed {
+			delete(pending, keyID)
+		}
+	}
+	if len(pending) > 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("client: kv batch get retries exhausted")
+	}
+	return results, nil
+}
+
 func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte, version uint64) (*pb.GetResponse, *pb.RegionError, error) {
 	st, err := c.store(region.leader)
 	if err != nil {
@@ -184,6 +257,41 @@ func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte,
 		return nil, nil, normalizeRPCError(err)
 	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
+}
+
+func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64) (*pb.BatchGetResponse, *pb.RegionError, error) {
+	if len(keys) == 0 {
+		return &pb.BatchGetResponse{}, nil, nil
+	}
+	st, err := c.store(region.leader)
+	if err != nil {
+		return nil, nil, err
+	}
+	header, err := buildContext(region)
+	if err != nil {
+		return nil, nil, err
+	}
+	request := &pb.BatchGetRequest{
+		Requests: make([]*pb.GetRequest, 0, len(keys)),
+	}
+	for _, key := range keys {
+		request.Requests = append(request.Requests, &pb.GetRequest{
+			Key:     append([]byte(nil), key...),
+			Version: version,
+		})
+	}
+	resp, err := st.client.KvBatchGet(ctx, &pb.KvBatchGetRequest{
+		Context: header,
+		Request: request,
+	})
+	if err != nil {
+		return nil, nil, normalizeRPCError(err)
+	}
+	out := resp.GetResponse()
+	if out == nil {
+		out = &pb.BatchGetResponse{}
+	}
+	return out, resp.GetRegionError(), nil
 }
 
 // Scan issues a forward KvScan starting at startKey, reading up to limit keys.

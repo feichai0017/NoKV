@@ -283,7 +283,7 @@ func (x Mutation_Op) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Mutation_Op.Descriptor instead.
 func (Mutation_Op) EnumDescriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{21, 0}
+	return file_pb_proto_rawDescGZIP(), []int{23, 0}
 }
 
 type KV struct {
@@ -1664,6 +1664,94 @@ func (x *GetResponse) GetError() *KeyError {
 	return nil
 }
 
+type BatchGetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Requests      []*GetRequest          `protobuf:"bytes,1,rep,name=requests,proto3" json:"requests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetRequest) Reset() {
+	*x = BatchGetRequest{}
+	mi := &file_pb_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetRequest) ProtoMessage() {}
+
+func (x *BatchGetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetRequest.ProtoReflect.Descriptor instead.
+func (*BatchGetRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *BatchGetRequest) GetRequests() []*GetRequest {
+	if x != nil {
+		return x.Requests
+	}
+	return nil
+}
+
+type BatchGetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Responses     []*GetResponse         `protobuf:"bytes,1,rep,name=responses,proto3" json:"responses,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetResponse) Reset() {
+	*x = BatchGetResponse{}
+	mi := &file_pb_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetResponse) ProtoMessage() {}
+
+func (x *BatchGetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetResponse.ProtoReflect.Descriptor instead.
+func (*BatchGetResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *BatchGetResponse) GetResponses() []*GetResponse {
+	if x != nil {
+		return x.Responses
+	}
+	return nil
+}
+
 type ScanRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StartKey      []byte                 `protobuf:"bytes,1,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
@@ -1677,7 +1765,7 @@ type ScanRequest struct {
 
 func (x *ScanRequest) Reset() {
 	*x = ScanRequest{}
-	mi := &file_pb_proto_msgTypes[19]
+	mi := &file_pb_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1689,7 +1777,7 @@ func (x *ScanRequest) String() string {
 func (*ScanRequest) ProtoMessage() {}
 
 func (x *ScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[19]
+	mi := &file_pb_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1702,7 +1790,7 @@ func (x *ScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRequest.ProtoReflect.Descriptor instead.
 func (*ScanRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{19}
+	return file_pb_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ScanRequest) GetStartKey() []byte {
@@ -1750,7 +1838,7 @@ type ScanResponse struct {
 
 func (x *ScanResponse) Reset() {
 	*x = ScanResponse{}
-	mi := &file_pb_proto_msgTypes[20]
+	mi := &file_pb_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1762,7 +1850,7 @@ func (x *ScanResponse) String() string {
 func (*ScanResponse) ProtoMessage() {}
 
 func (x *ScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[20]
+	mi := &file_pb_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1775,7 +1863,7 @@ func (x *ScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanResponse.ProtoReflect.Descriptor instead.
 func (*ScanResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{20}
+	return file_pb_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ScanResponse) GetKvs() []*KV {
@@ -1804,7 +1892,7 @@ type Mutation struct {
 
 func (x *Mutation) Reset() {
 	*x = Mutation{}
-	mi := &file_pb_proto_msgTypes[21]
+	mi := &file_pb_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1816,7 +1904,7 @@ func (x *Mutation) String() string {
 func (*Mutation) ProtoMessage() {}
 
 func (x *Mutation) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[21]
+	mi := &file_pb_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1829,7 +1917,7 @@ func (x *Mutation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Mutation.ProtoReflect.Descriptor instead.
 func (*Mutation) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{21}
+	return file_pb_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Mutation) GetOp() Mutation_Op {
@@ -1874,7 +1962,7 @@ type PrewriteRequest struct {
 
 func (x *PrewriteRequest) Reset() {
 	*x = PrewriteRequest{}
-	mi := &file_pb_proto_msgTypes[22]
+	mi := &file_pb_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1886,7 +1974,7 @@ func (x *PrewriteRequest) String() string {
 func (*PrewriteRequest) ProtoMessage() {}
 
 func (x *PrewriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[22]
+	mi := &file_pb_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1899,7 +1987,7 @@ func (x *PrewriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrewriteRequest.ProtoReflect.Descriptor instead.
 func (*PrewriteRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{22}
+	return file_pb_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PrewriteRequest) GetMutations() []*Mutation {
@@ -1953,7 +2041,7 @@ type PrewriteResponse struct {
 
 func (x *PrewriteResponse) Reset() {
 	*x = PrewriteResponse{}
-	mi := &file_pb_proto_msgTypes[23]
+	mi := &file_pb_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1965,7 +2053,7 @@ func (x *PrewriteResponse) String() string {
 func (*PrewriteResponse) ProtoMessage() {}
 
 func (x *PrewriteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[23]
+	mi := &file_pb_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1978,7 +2066,7 @@ func (x *PrewriteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrewriteResponse.ProtoReflect.Descriptor instead.
 func (*PrewriteResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{23}
+	return file_pb_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *PrewriteResponse) GetErrors() []*KeyError {
@@ -1999,7 +2087,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_pb_proto_msgTypes[24]
+	mi := &file_pb_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2011,7 +2099,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[24]
+	mi := &file_pb_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2024,7 +2112,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{24}
+	return file_pb_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CommitRequest) GetKeys() [][]byte {
@@ -2057,7 +2145,7 @@ type CommitResponse struct {
 
 func (x *CommitResponse) Reset() {
 	*x = CommitResponse{}
-	mi := &file_pb_proto_msgTypes[25]
+	mi := &file_pb_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2069,7 +2157,7 @@ func (x *CommitResponse) String() string {
 func (*CommitResponse) ProtoMessage() {}
 
 func (x *CommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[25]
+	mi := &file_pb_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2082,7 +2170,7 @@ func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
 func (*CommitResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{25}
+	return file_pb_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CommitResponse) GetError() *KeyError {
@@ -2102,7 +2190,7 @@ type BatchRollbackRequest struct {
 
 func (x *BatchRollbackRequest) Reset() {
 	*x = BatchRollbackRequest{}
-	mi := &file_pb_proto_msgTypes[26]
+	mi := &file_pb_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2114,7 +2202,7 @@ func (x *BatchRollbackRequest) String() string {
 func (*BatchRollbackRequest) ProtoMessage() {}
 
 func (x *BatchRollbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[26]
+	mi := &file_pb_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2127,7 +2215,7 @@ func (x *BatchRollbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchRollbackRequest.ProtoReflect.Descriptor instead.
 func (*BatchRollbackRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{26}
+	return file_pb_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *BatchRollbackRequest) GetKeys() [][]byte {
@@ -2153,7 +2241,7 @@ type BatchRollbackResponse struct {
 
 func (x *BatchRollbackResponse) Reset() {
 	*x = BatchRollbackResponse{}
-	mi := &file_pb_proto_msgTypes[27]
+	mi := &file_pb_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2165,7 +2253,7 @@ func (x *BatchRollbackResponse) String() string {
 func (*BatchRollbackResponse) ProtoMessage() {}
 
 func (x *BatchRollbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[27]
+	mi := &file_pb_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2178,7 +2266,7 @@ func (x *BatchRollbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchRollbackResponse.ProtoReflect.Descriptor instead.
 func (*BatchRollbackResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{27}
+	return file_pb_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *BatchRollbackResponse) GetError() *KeyError {
@@ -2199,7 +2287,7 @@ type ResolveLockRequest struct {
 
 func (x *ResolveLockRequest) Reset() {
 	*x = ResolveLockRequest{}
-	mi := &file_pb_proto_msgTypes[28]
+	mi := &file_pb_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2211,7 +2299,7 @@ func (x *ResolveLockRequest) String() string {
 func (*ResolveLockRequest) ProtoMessage() {}
 
 func (x *ResolveLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[28]
+	mi := &file_pb_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2224,7 +2312,7 @@ func (x *ResolveLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLockRequest.ProtoReflect.Descriptor instead.
 func (*ResolveLockRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{28}
+	return file_pb_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ResolveLockRequest) GetStartVersion() uint64 {
@@ -2258,7 +2346,7 @@ type ResolveLockResponse struct {
 
 func (x *ResolveLockResponse) Reset() {
 	*x = ResolveLockResponse{}
-	mi := &file_pb_proto_msgTypes[29]
+	mi := &file_pb_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2270,7 +2358,7 @@ func (x *ResolveLockResponse) String() string {
 func (*ResolveLockResponse) ProtoMessage() {}
 
 func (x *ResolveLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[29]
+	mi := &file_pb_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2283,7 +2371,7 @@ func (x *ResolveLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLockResponse.ProtoReflect.Descriptor instead.
 func (*ResolveLockResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{29}
+	return file_pb_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ResolveLockResponse) GetError() *KeyError {
@@ -2314,7 +2402,7 @@ type CheckTxnStatusRequest struct {
 
 func (x *CheckTxnStatusRequest) Reset() {
 	*x = CheckTxnStatusRequest{}
-	mi := &file_pb_proto_msgTypes[30]
+	mi := &file_pb_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2326,7 +2414,7 @@ func (x *CheckTxnStatusRequest) String() string {
 func (*CheckTxnStatusRequest) ProtoMessage() {}
 
 func (x *CheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[30]
+	mi := &file_pb_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2339,7 +2427,7 @@ func (x *CheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckTxnStatusRequest.ProtoReflect.Descriptor instead.
 func (*CheckTxnStatusRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{30}
+	return file_pb_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CheckTxnStatusRequest) GetPrimaryKey() []byte {
@@ -2396,7 +2484,7 @@ type CheckTxnStatusResponse struct {
 
 func (x *CheckTxnStatusResponse) Reset() {
 	*x = CheckTxnStatusResponse{}
-	mi := &file_pb_proto_msgTypes[31]
+	mi := &file_pb_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2408,7 +2496,7 @@ func (x *CheckTxnStatusResponse) String() string {
 func (*CheckTxnStatusResponse) ProtoMessage() {}
 
 func (x *CheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[31]
+	mi := &file_pb_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2421,7 +2509,7 @@ func (x *CheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckTxnStatusResponse.ProtoReflect.Descriptor instead.
 func (*CheckTxnStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{31}
+	return file_pb_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CheckTxnStatusResponse) GetError() *KeyError {
@@ -2463,7 +2551,7 @@ type Context struct {
 
 func (x *Context) Reset() {
 	*x = Context{}
-	mi := &file_pb_proto_msgTypes[32]
+	mi := &file_pb_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2475,7 +2563,7 @@ func (x *Context) String() string {
 func (*Context) ProtoMessage() {}
 
 func (x *Context) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[32]
+	mi := &file_pb_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2488,7 +2576,7 @@ func (x *Context) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Context.ProtoReflect.Descriptor instead.
 func (*Context) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{32}
+	return file_pb_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Context) GetRegionId() uint64 {
@@ -2522,7 +2610,7 @@ type KvGetRequest struct {
 
 func (x *KvGetRequest) Reset() {
 	*x = KvGetRequest{}
-	mi := &file_pb_proto_msgTypes[33]
+	mi := &file_pb_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2534,7 +2622,7 @@ func (x *KvGetRequest) String() string {
 func (*KvGetRequest) ProtoMessage() {}
 
 func (x *KvGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[33]
+	mi := &file_pb_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2547,7 +2635,7 @@ func (x *KvGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvGetRequest.ProtoReflect.Descriptor instead.
 func (*KvGetRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{33}
+	return file_pb_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *KvGetRequest) GetContext() *Context {
@@ -2574,7 +2662,7 @@ type KvGetResponse struct {
 
 func (x *KvGetResponse) Reset() {
 	*x = KvGetResponse{}
-	mi := &file_pb_proto_msgTypes[34]
+	mi := &file_pb_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2586,7 +2674,7 @@ func (x *KvGetResponse) String() string {
 func (*KvGetResponse) ProtoMessage() {}
 
 func (x *KvGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[34]
+	mi := &file_pb_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2599,7 +2687,7 @@ func (x *KvGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvGetResponse.ProtoReflect.Descriptor instead.
 func (*KvGetResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{34}
+	return file_pb_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *KvGetResponse) GetResponse() *GetResponse {
@@ -2616,6 +2704,110 @@ func (x *KvGetResponse) GetRegionError() *RegionError {
 	return nil
 }
 
+type KvBatchGetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *Context               `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	Request       *BatchGetRequest       `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KvBatchGetRequest) Reset() {
+	*x = KvBatchGetRequest{}
+	mi := &file_pb_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KvBatchGetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KvBatchGetRequest) ProtoMessage() {}
+
+func (x *KvBatchGetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KvBatchGetRequest.ProtoReflect.Descriptor instead.
+func (*KvBatchGetRequest) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *KvBatchGetRequest) GetContext() *Context {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *KvBatchGetRequest) GetRequest() *BatchGetRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type KvBatchGetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Response      *BatchGetResponse      `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
+	RegionError   *RegionError           `protobuf:"bytes,2,opt,name=region_error,json=regionError,proto3" json:"region_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KvBatchGetResponse) Reset() {
+	*x = KvBatchGetResponse{}
+	mi := &file_pb_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KvBatchGetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KvBatchGetResponse) ProtoMessage() {}
+
+func (x *KvBatchGetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KvBatchGetResponse.ProtoReflect.Descriptor instead.
+func (*KvBatchGetResponse) Descriptor() ([]byte, []int) {
+	return file_pb_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *KvBatchGetResponse) GetResponse() *BatchGetResponse {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+func (x *KvBatchGetResponse) GetRegionError() *RegionError {
+	if x != nil {
+		return x.RegionError
+	}
+	return nil
+}
+
 type KvScanRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Context       *Context               `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
@@ -2626,7 +2818,7 @@ type KvScanRequest struct {
 
 func (x *KvScanRequest) Reset() {
 	*x = KvScanRequest{}
-	mi := &file_pb_proto_msgTypes[35]
+	mi := &file_pb_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2638,7 +2830,7 @@ func (x *KvScanRequest) String() string {
 func (*KvScanRequest) ProtoMessage() {}
 
 func (x *KvScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[35]
+	mi := &file_pb_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2651,7 +2843,7 @@ func (x *KvScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvScanRequest.ProtoReflect.Descriptor instead.
 func (*KvScanRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{35}
+	return file_pb_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *KvScanRequest) GetContext() *Context {
@@ -2678,7 +2870,7 @@ type KvScanResponse struct {
 
 func (x *KvScanResponse) Reset() {
 	*x = KvScanResponse{}
-	mi := &file_pb_proto_msgTypes[36]
+	mi := &file_pb_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2690,7 +2882,7 @@ func (x *KvScanResponse) String() string {
 func (*KvScanResponse) ProtoMessage() {}
 
 func (x *KvScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[36]
+	mi := &file_pb_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2703,7 +2895,7 @@ func (x *KvScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvScanResponse.ProtoReflect.Descriptor instead.
 func (*KvScanResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{36}
+	return file_pb_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *KvScanResponse) GetResponse() *ScanResponse {
@@ -2730,7 +2922,7 @@ type KvPrewriteRequest struct {
 
 func (x *KvPrewriteRequest) Reset() {
 	*x = KvPrewriteRequest{}
-	mi := &file_pb_proto_msgTypes[37]
+	mi := &file_pb_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2742,7 +2934,7 @@ func (x *KvPrewriteRequest) String() string {
 func (*KvPrewriteRequest) ProtoMessage() {}
 
 func (x *KvPrewriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[37]
+	mi := &file_pb_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2755,7 +2947,7 @@ func (x *KvPrewriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvPrewriteRequest.ProtoReflect.Descriptor instead.
 func (*KvPrewriteRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{37}
+	return file_pb_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *KvPrewriteRequest) GetContext() *Context {
@@ -2782,7 +2974,7 @@ type KvPrewriteResponse struct {
 
 func (x *KvPrewriteResponse) Reset() {
 	*x = KvPrewriteResponse{}
-	mi := &file_pb_proto_msgTypes[38]
+	mi := &file_pb_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2794,7 +2986,7 @@ func (x *KvPrewriteResponse) String() string {
 func (*KvPrewriteResponse) ProtoMessage() {}
 
 func (x *KvPrewriteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[38]
+	mi := &file_pb_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2807,7 +2999,7 @@ func (x *KvPrewriteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvPrewriteResponse.ProtoReflect.Descriptor instead.
 func (*KvPrewriteResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{38}
+	return file_pb_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *KvPrewriteResponse) GetResponse() *PrewriteResponse {
@@ -2834,7 +3026,7 @@ type KvCommitRequest struct {
 
 func (x *KvCommitRequest) Reset() {
 	*x = KvCommitRequest{}
-	mi := &file_pb_proto_msgTypes[39]
+	mi := &file_pb_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2846,7 +3038,7 @@ func (x *KvCommitRequest) String() string {
 func (*KvCommitRequest) ProtoMessage() {}
 
 func (x *KvCommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[39]
+	mi := &file_pb_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2859,7 +3051,7 @@ func (x *KvCommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCommitRequest.ProtoReflect.Descriptor instead.
 func (*KvCommitRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{39}
+	return file_pb_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *KvCommitRequest) GetContext() *Context {
@@ -2886,7 +3078,7 @@ type KvCommitResponse struct {
 
 func (x *KvCommitResponse) Reset() {
 	*x = KvCommitResponse{}
-	mi := &file_pb_proto_msgTypes[40]
+	mi := &file_pb_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2898,7 +3090,7 @@ func (x *KvCommitResponse) String() string {
 func (*KvCommitResponse) ProtoMessage() {}
 
 func (x *KvCommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[40]
+	mi := &file_pb_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2911,7 +3103,7 @@ func (x *KvCommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCommitResponse.ProtoReflect.Descriptor instead.
 func (*KvCommitResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{40}
+	return file_pb_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *KvCommitResponse) GetResponse() *CommitResponse {
@@ -2938,7 +3130,7 @@ type KvBatchRollbackRequest struct {
 
 func (x *KvBatchRollbackRequest) Reset() {
 	*x = KvBatchRollbackRequest{}
-	mi := &file_pb_proto_msgTypes[41]
+	mi := &file_pb_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2950,7 +3142,7 @@ func (x *KvBatchRollbackRequest) String() string {
 func (*KvBatchRollbackRequest) ProtoMessage() {}
 
 func (x *KvBatchRollbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[41]
+	mi := &file_pb_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2963,7 +3155,7 @@ func (x *KvBatchRollbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchRollbackRequest.ProtoReflect.Descriptor instead.
 func (*KvBatchRollbackRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{41}
+	return file_pb_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *KvBatchRollbackRequest) GetContext() *Context {
@@ -2990,7 +3182,7 @@ type KvBatchRollbackResponse struct {
 
 func (x *KvBatchRollbackResponse) Reset() {
 	*x = KvBatchRollbackResponse{}
-	mi := &file_pb_proto_msgTypes[42]
+	mi := &file_pb_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3002,7 +3194,7 @@ func (x *KvBatchRollbackResponse) String() string {
 func (*KvBatchRollbackResponse) ProtoMessage() {}
 
 func (x *KvBatchRollbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[42]
+	mi := &file_pb_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3015,7 +3207,7 @@ func (x *KvBatchRollbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchRollbackResponse.ProtoReflect.Descriptor instead.
 func (*KvBatchRollbackResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{42}
+	return file_pb_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *KvBatchRollbackResponse) GetResponse() *BatchRollbackResponse {
@@ -3042,7 +3234,7 @@ type KvResolveLockRequest struct {
 
 func (x *KvResolveLockRequest) Reset() {
 	*x = KvResolveLockRequest{}
-	mi := &file_pb_proto_msgTypes[43]
+	mi := &file_pb_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3054,7 +3246,7 @@ func (x *KvResolveLockRequest) String() string {
 func (*KvResolveLockRequest) ProtoMessage() {}
 
 func (x *KvResolveLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[43]
+	mi := &file_pb_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3067,7 +3259,7 @@ func (x *KvResolveLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvResolveLockRequest.ProtoReflect.Descriptor instead.
 func (*KvResolveLockRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{43}
+	return file_pb_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *KvResolveLockRequest) GetContext() *Context {
@@ -3094,7 +3286,7 @@ type KvResolveLockResponse struct {
 
 func (x *KvResolveLockResponse) Reset() {
 	*x = KvResolveLockResponse{}
-	mi := &file_pb_proto_msgTypes[44]
+	mi := &file_pb_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3106,7 +3298,7 @@ func (x *KvResolveLockResponse) String() string {
 func (*KvResolveLockResponse) ProtoMessage() {}
 
 func (x *KvResolveLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[44]
+	mi := &file_pb_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3119,7 +3311,7 @@ func (x *KvResolveLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvResolveLockResponse.ProtoReflect.Descriptor instead.
 func (*KvResolveLockResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{44}
+	return file_pb_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *KvResolveLockResponse) GetResponse() *ResolveLockResponse {
@@ -3146,7 +3338,7 @@ type KvCheckTxnStatusRequest struct {
 
 func (x *KvCheckTxnStatusRequest) Reset() {
 	*x = KvCheckTxnStatusRequest{}
-	mi := &file_pb_proto_msgTypes[45]
+	mi := &file_pb_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3158,7 +3350,7 @@ func (x *KvCheckTxnStatusRequest) String() string {
 func (*KvCheckTxnStatusRequest) ProtoMessage() {}
 
 func (x *KvCheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[45]
+	mi := &file_pb_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3171,7 +3363,7 @@ func (x *KvCheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCheckTxnStatusRequest.ProtoReflect.Descriptor instead.
 func (*KvCheckTxnStatusRequest) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{45}
+	return file_pb_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *KvCheckTxnStatusRequest) GetContext() *Context {
@@ -3198,7 +3390,7 @@ type KvCheckTxnStatusResponse struct {
 
 func (x *KvCheckTxnStatusResponse) Reset() {
 	*x = KvCheckTxnStatusResponse{}
-	mi := &file_pb_proto_msgTypes[46]
+	mi := &file_pb_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3210,7 +3402,7 @@ func (x *KvCheckTxnStatusResponse) String() string {
 func (*KvCheckTxnStatusResponse) ProtoMessage() {}
 
 func (x *KvCheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[46]
+	mi := &file_pb_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3223,7 +3415,7 @@ func (x *KvCheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCheckTxnStatusResponse.ProtoReflect.Descriptor instead.
 func (*KvCheckTxnStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{46}
+	return file_pb_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *KvCheckTxnStatusResponse) GetResponse() *CheckTxnStatusResponse {
@@ -3253,7 +3445,7 @@ type KeyError struct {
 
 func (x *KeyError) Reset() {
 	*x = KeyError{}
-	mi := &file_pb_proto_msgTypes[47]
+	mi := &file_pb_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3265,7 +3457,7 @@ func (x *KeyError) String() string {
 func (*KeyError) ProtoMessage() {}
 
 func (x *KeyError) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[47]
+	mi := &file_pb_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3278,7 +3470,7 @@ func (x *KeyError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyError.ProtoReflect.Descriptor instead.
 func (*KeyError) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{47}
+	return file_pb_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *KeyError) GetLocked() *Locked {
@@ -3330,7 +3522,7 @@ type Locked struct {
 
 func (x *Locked) Reset() {
 	*x = Locked{}
-	mi := &file_pb_proto_msgTypes[48]
+	mi := &file_pb_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3342,7 +3534,7 @@ func (x *Locked) String() string {
 func (*Locked) ProtoMessage() {}
 
 func (x *Locked) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[48]
+	mi := &file_pb_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3355,7 +3547,7 @@ func (x *Locked) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Locked.ProtoReflect.Descriptor instead.
 func (*Locked) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{48}
+	return file_pb_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *Locked) GetPrimaryLock() []byte {
@@ -3413,7 +3605,7 @@ type WriteConflict struct {
 
 func (x *WriteConflict) Reset() {
 	*x = WriteConflict{}
-	mi := &file_pb_proto_msgTypes[49]
+	mi := &file_pb_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3425,7 +3617,7 @@ func (x *WriteConflict) String() string {
 func (*WriteConflict) ProtoMessage() {}
 
 func (x *WriteConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[49]
+	mi := &file_pb_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3438,7 +3630,7 @@ func (x *WriteConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteConflict.ProtoReflect.Descriptor instead.
 func (*WriteConflict) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{49}
+	return file_pb_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *WriteConflict) GetKey() []byte {
@@ -3485,7 +3677,7 @@ type KeyAlreadyExists struct {
 
 func (x *KeyAlreadyExists) Reset() {
 	*x = KeyAlreadyExists{}
-	mi := &file_pb_proto_msgTypes[50]
+	mi := &file_pb_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3497,7 +3689,7 @@ func (x *KeyAlreadyExists) String() string {
 func (*KeyAlreadyExists) ProtoMessage() {}
 
 func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[50]
+	mi := &file_pb_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3510,7 +3702,7 @@ func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyAlreadyExists.ProtoReflect.Descriptor instead.
 func (*KeyAlreadyExists) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{50}
+	return file_pb_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *KeyAlreadyExists) GetKey() []byte {
@@ -3532,7 +3724,7 @@ type RegionError struct {
 
 func (x *RegionError) Reset() {
 	*x = RegionError{}
-	mi := &file_pb_proto_msgTypes[51]
+	mi := &file_pb_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3544,7 +3736,7 @@ func (x *RegionError) String() string {
 func (*RegionError) ProtoMessage() {}
 
 func (x *RegionError) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[51]
+	mi := &file_pb_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3557,7 +3749,7 @@ func (x *RegionError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionError.ProtoReflect.Descriptor instead.
 func (*RegionError) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{51}
+	return file_pb_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *RegionError) GetNotLeader() *NotLeader {
@@ -3598,7 +3790,7 @@ type NotLeader struct {
 
 func (x *NotLeader) Reset() {
 	*x = NotLeader{}
-	mi := &file_pb_proto_msgTypes[52]
+	mi := &file_pb_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3610,7 +3802,7 @@ func (x *NotLeader) String() string {
 func (*NotLeader) ProtoMessage() {}
 
 func (x *NotLeader) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[52]
+	mi := &file_pb_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3623,7 +3815,7 @@ func (x *NotLeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotLeader.ProtoReflect.Descriptor instead.
 func (*NotLeader) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{52}
+	return file_pb_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *NotLeader) GetRegionId() uint64 {
@@ -3650,7 +3842,7 @@ type EpochNotMatch struct {
 
 func (x *EpochNotMatch) Reset() {
 	*x = EpochNotMatch{}
-	mi := &file_pb_proto_msgTypes[53]
+	mi := &file_pb_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3662,7 +3854,7 @@ func (x *EpochNotMatch) String() string {
 func (*EpochNotMatch) ProtoMessage() {}
 
 func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[53]
+	mi := &file_pb_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3675,7 +3867,7 @@ func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EpochNotMatch.ProtoReflect.Descriptor instead.
 func (*EpochNotMatch) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{53}
+	return file_pb_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *EpochNotMatch) GetCurrentEpoch() *RegionEpoch {
@@ -3700,7 +3892,7 @@ type StaleCommand struct {
 
 func (x *StaleCommand) Reset() {
 	*x = StaleCommand{}
-	mi := &file_pb_proto_msgTypes[54]
+	mi := &file_pb_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3712,7 +3904,7 @@ func (x *StaleCommand) String() string {
 func (*StaleCommand) ProtoMessage() {}
 
 func (x *StaleCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[54]
+	mi := &file_pb_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3725,7 +3917,7 @@ func (x *StaleCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StaleCommand.ProtoReflect.Descriptor instead.
 func (*StaleCommand) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{54}
+	return file_pb_proto_rawDescGZIP(), []int{58}
 }
 
 type RaftEntryTooLarge struct {
@@ -3737,7 +3929,7 @@ type RaftEntryTooLarge struct {
 
 func (x *RaftEntryTooLarge) Reset() {
 	*x = RaftEntryTooLarge{}
-	mi := &file_pb_proto_msgTypes[55]
+	mi := &file_pb_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3749,7 +3941,7 @@ func (x *RaftEntryTooLarge) String() string {
 func (*RaftEntryTooLarge) ProtoMessage() {}
 
 func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
-	mi := &file_pb_proto_msgTypes[55]
+	mi := &file_pb_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3762,7 +3954,7 @@ func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftEntryTooLarge.ProtoReflect.Descriptor instead.
 func (*RaftEntryTooLarge) Descriptor() ([]byte, []int) {
-	return file_pb_proto_rawDescGZIP(), []int{55}
+	return file_pb_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RaftEntryTooLarge) GetRegionId() uint64 {
@@ -3885,7 +4077,11 @@ const file_pb_proto_rawDesc = "" +
 	"\vGetResponse\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\fR\x05value\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12\"\n" +
-	"\x05error\x18\x03 \x01(\v2\f.pb.KeyErrorR\x05error\"\x99\x01\n" +
+	"\x05error\x18\x03 \x01(\v2\f.pb.KeyErrorR\x05error\"=\n" +
+	"\x0fBatchGetRequest\x12*\n" +
+	"\brequests\x18\x01 \x03(\v2\x0e.pb.GetRequestR\brequests\"A\n" +
+	"\x10BatchGetResponse\x12-\n" +
+	"\tresponses\x18\x01 \x03(\v2\x0f.pb.GetResponseR\tresponses\"\x99\x01\n" +
 	"\vScanRequest\x12\x1b\n" +
 	"\tstart_key\x18\x01 \x01(\fR\bstartKey\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\rR\x05limit\x12\x18\n" +
@@ -3956,6 +4152,12 @@ const file_pb_proto_rawDesc = "" +
 	"\arequest\x18\x02 \x01(\v2\x0e.pb.GetRequestR\arequest\"p\n" +
 	"\rKvGetResponse\x12+\n" +
 	"\bresponse\x18\x01 \x01(\v2\x0f.pb.GetResponseR\bresponse\x122\n" +
+	"\fregion_error\x18\x02 \x01(\v2\x0f.pb.RegionErrorR\vregionError\"i\n" +
+	"\x11KvBatchGetRequest\x12%\n" +
+	"\acontext\x18\x01 \x01(\v2\v.pb.ContextR\acontext\x12-\n" +
+	"\arequest\x18\x02 \x01(\v2\x13.pb.BatchGetRequestR\arequest\"z\n" +
+	"\x12KvBatchGetResponse\x120\n" +
+	"\bresponse\x18\x01 \x01(\v2\x14.pb.BatchGetResponseR\bresponse\x122\n" +
 	"\fregion_error\x18\x02 \x01(\v2\x0f.pb.RegionErrorR\vregionError\"a\n" +
 	"\rKvScanRequest\x12%\n" +
 	"\acontext\x18\x01 \x01(\v2\v.pb.ContextR\acontext\x12)\n" +
@@ -4045,9 +4247,11 @@ const file_pb_proto_rawDesc = "" +
 	"\x16CheckTxnStatusNoAction\x10\x00\x12#\n" +
 	"\x1fCheckTxnStatusTTLExpireRollback\x10\x01\x12&\n" +
 	"\"CheckTxnStatusLockNotExistRollback\x10\x02\x12#\n" +
-	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x032\xbc\x03\n" +
+	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x032\xf9\x03\n" +
 	"\x06TinyKv\x12,\n" +
-	"\x05KvGet\x12\x10.pb.KvGetRequest\x1a\x11.pb.KvGetResponse\x12/\n" +
+	"\x05KvGet\x12\x10.pb.KvGetRequest\x1a\x11.pb.KvGetResponse\x12;\n" +
+	"\n" +
+	"KvBatchGet\x12\x15.pb.KvBatchGetRequest\x1a\x16.pb.KvBatchGetResponse\x12/\n" +
 	"\x06KvScan\x12\x11.pb.KvScanRequest\x1a\x12.pb.KvScanResponse\x12;\n" +
 	"\n" +
 	"KvPrewrite\x12\x15.pb.KvPrewriteRequest\x1a\x16.pb.KvPrewriteResponse\x125\n" +
@@ -4069,7 +4273,7 @@ func file_pb_proto_rawDescGZIP() []byte {
 }
 
 var file_pb_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_pb_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_pb_proto_goTypes = []any{
 	(CmdType)(0),                     // 0: pb.CmdType
 	(CheckTxnStatusAction)(0),        // 1: pb.CheckTxnStatusAction
@@ -4095,43 +4299,47 @@ var file_pb_proto_goTypes = []any{
 	(*RaftCmdResponse)(nil),          // 21: pb.RaftCmdResponse
 	(*GetRequest)(nil),               // 22: pb.GetRequest
 	(*GetResponse)(nil),              // 23: pb.GetResponse
-	(*ScanRequest)(nil),              // 24: pb.ScanRequest
-	(*ScanResponse)(nil),             // 25: pb.ScanResponse
-	(*Mutation)(nil),                 // 26: pb.Mutation
-	(*PrewriteRequest)(nil),          // 27: pb.PrewriteRequest
-	(*PrewriteResponse)(nil),         // 28: pb.PrewriteResponse
-	(*CommitRequest)(nil),            // 29: pb.CommitRequest
-	(*CommitResponse)(nil),           // 30: pb.CommitResponse
-	(*BatchRollbackRequest)(nil),     // 31: pb.BatchRollbackRequest
-	(*BatchRollbackResponse)(nil),    // 32: pb.BatchRollbackResponse
-	(*ResolveLockRequest)(nil),       // 33: pb.ResolveLockRequest
-	(*ResolveLockResponse)(nil),      // 34: pb.ResolveLockResponse
-	(*CheckTxnStatusRequest)(nil),    // 35: pb.CheckTxnStatusRequest
-	(*CheckTxnStatusResponse)(nil),   // 36: pb.CheckTxnStatusResponse
-	(*Context)(nil),                  // 37: pb.Context
-	(*KvGetRequest)(nil),             // 38: pb.KvGetRequest
-	(*KvGetResponse)(nil),            // 39: pb.KvGetResponse
-	(*KvScanRequest)(nil),            // 40: pb.KvScanRequest
-	(*KvScanResponse)(nil),           // 41: pb.KvScanResponse
-	(*KvPrewriteRequest)(nil),        // 42: pb.KvPrewriteRequest
-	(*KvPrewriteResponse)(nil),       // 43: pb.KvPrewriteResponse
-	(*KvCommitRequest)(nil),          // 44: pb.KvCommitRequest
-	(*KvCommitResponse)(nil),         // 45: pb.KvCommitResponse
-	(*KvBatchRollbackRequest)(nil),   // 46: pb.KvBatchRollbackRequest
-	(*KvBatchRollbackResponse)(nil),  // 47: pb.KvBatchRollbackResponse
-	(*KvResolveLockRequest)(nil),     // 48: pb.KvResolveLockRequest
-	(*KvResolveLockResponse)(nil),    // 49: pb.KvResolveLockResponse
-	(*KvCheckTxnStatusRequest)(nil),  // 50: pb.KvCheckTxnStatusRequest
-	(*KvCheckTxnStatusResponse)(nil), // 51: pb.KvCheckTxnStatusResponse
-	(*KeyError)(nil),                 // 52: pb.KeyError
-	(*Locked)(nil),                   // 53: pb.Locked
-	(*WriteConflict)(nil),            // 54: pb.WriteConflict
-	(*KeyAlreadyExists)(nil),         // 55: pb.KeyAlreadyExists
-	(*RegionError)(nil),              // 56: pb.RegionError
-	(*NotLeader)(nil),                // 57: pb.NotLeader
-	(*EpochNotMatch)(nil),            // 58: pb.EpochNotMatch
-	(*StaleCommand)(nil),             // 59: pb.StaleCommand
-	(*RaftEntryTooLarge)(nil),        // 60: pb.RaftEntryTooLarge
+	(*BatchGetRequest)(nil),          // 24: pb.BatchGetRequest
+	(*BatchGetResponse)(nil),         // 25: pb.BatchGetResponse
+	(*ScanRequest)(nil),              // 26: pb.ScanRequest
+	(*ScanResponse)(nil),             // 27: pb.ScanResponse
+	(*Mutation)(nil),                 // 28: pb.Mutation
+	(*PrewriteRequest)(nil),          // 29: pb.PrewriteRequest
+	(*PrewriteResponse)(nil),         // 30: pb.PrewriteResponse
+	(*CommitRequest)(nil),            // 31: pb.CommitRequest
+	(*CommitResponse)(nil),           // 32: pb.CommitResponse
+	(*BatchRollbackRequest)(nil),     // 33: pb.BatchRollbackRequest
+	(*BatchRollbackResponse)(nil),    // 34: pb.BatchRollbackResponse
+	(*ResolveLockRequest)(nil),       // 35: pb.ResolveLockRequest
+	(*ResolveLockResponse)(nil),      // 36: pb.ResolveLockResponse
+	(*CheckTxnStatusRequest)(nil),    // 37: pb.CheckTxnStatusRequest
+	(*CheckTxnStatusResponse)(nil),   // 38: pb.CheckTxnStatusResponse
+	(*Context)(nil),                  // 39: pb.Context
+	(*KvGetRequest)(nil),             // 40: pb.KvGetRequest
+	(*KvGetResponse)(nil),            // 41: pb.KvGetResponse
+	(*KvBatchGetRequest)(nil),        // 42: pb.KvBatchGetRequest
+	(*KvBatchGetResponse)(nil),       // 43: pb.KvBatchGetResponse
+	(*KvScanRequest)(nil),            // 44: pb.KvScanRequest
+	(*KvScanResponse)(nil),           // 45: pb.KvScanResponse
+	(*KvPrewriteRequest)(nil),        // 46: pb.KvPrewriteRequest
+	(*KvPrewriteResponse)(nil),       // 47: pb.KvPrewriteResponse
+	(*KvCommitRequest)(nil),          // 48: pb.KvCommitRequest
+	(*KvCommitResponse)(nil),         // 49: pb.KvCommitResponse
+	(*KvBatchRollbackRequest)(nil),   // 50: pb.KvBatchRollbackRequest
+	(*KvBatchRollbackResponse)(nil),  // 51: pb.KvBatchRollbackResponse
+	(*KvResolveLockRequest)(nil),     // 52: pb.KvResolveLockRequest
+	(*KvResolveLockResponse)(nil),    // 53: pb.KvResolveLockResponse
+	(*KvCheckTxnStatusRequest)(nil),  // 54: pb.KvCheckTxnStatusRequest
+	(*KvCheckTxnStatusResponse)(nil), // 55: pb.KvCheckTxnStatusResponse
+	(*KeyError)(nil),                 // 56: pb.KeyError
+	(*Locked)(nil),                   // 57: pb.Locked
+	(*WriteConflict)(nil),            // 58: pb.WriteConflict
+	(*KeyAlreadyExists)(nil),         // 59: pb.KeyAlreadyExists
+	(*RegionError)(nil),              // 60: pb.RegionError
+	(*NotLeader)(nil),                // 61: pb.NotLeader
+	(*EpochNotMatch)(nil),            // 62: pb.EpochNotMatch
+	(*StaleCommand)(nil),             // 63: pb.StaleCommand
+	(*RaftEntryTooLarge)(nil),        // 64: pb.RaftEntryTooLarge
 }
 var file_pb_proto_depIdxs = []int32{
 	5,  // 0: pb.KVList.kv:type_name -> pb.KV
@@ -4146,95 +4354,103 @@ var file_pb_proto_depIdxs = []int32{
 	16, // 9: pb.CmdHeader.region_epoch:type_name -> pb.RegionEpoch
 	0,  // 10: pb.Request.cmd_type:type_name -> pb.CmdType
 	22, // 11: pb.Request.get:type_name -> pb.GetRequest
-	24, // 12: pb.Request.scan:type_name -> pb.ScanRequest
-	27, // 13: pb.Request.prewrite:type_name -> pb.PrewriteRequest
-	29, // 14: pb.Request.commit:type_name -> pb.CommitRequest
-	31, // 15: pb.Request.batch_rollback:type_name -> pb.BatchRollbackRequest
-	33, // 16: pb.Request.resolve_lock:type_name -> pb.ResolveLockRequest
-	35, // 17: pb.Request.check_txn_status:type_name -> pb.CheckTxnStatusRequest
+	26, // 12: pb.Request.scan:type_name -> pb.ScanRequest
+	29, // 13: pb.Request.prewrite:type_name -> pb.PrewriteRequest
+	31, // 14: pb.Request.commit:type_name -> pb.CommitRequest
+	33, // 15: pb.Request.batch_rollback:type_name -> pb.BatchRollbackRequest
+	35, // 16: pb.Request.resolve_lock:type_name -> pb.ResolveLockRequest
+	37, // 17: pb.Request.check_txn_status:type_name -> pb.CheckTxnStatusRequest
 	23, // 18: pb.Response.get:type_name -> pb.GetResponse
-	25, // 19: pb.Response.scan:type_name -> pb.ScanResponse
-	28, // 20: pb.Response.prewrite:type_name -> pb.PrewriteResponse
-	30, // 21: pb.Response.commit:type_name -> pb.CommitResponse
-	32, // 22: pb.Response.batch_rollback:type_name -> pb.BatchRollbackResponse
-	34, // 23: pb.Response.resolve_lock:type_name -> pb.ResolveLockResponse
-	36, // 24: pb.Response.check_txn_status:type_name -> pb.CheckTxnStatusResponse
+	27, // 19: pb.Response.scan:type_name -> pb.ScanResponse
+	30, // 20: pb.Response.prewrite:type_name -> pb.PrewriteResponse
+	32, // 21: pb.Response.commit:type_name -> pb.CommitResponse
+	34, // 22: pb.Response.batch_rollback:type_name -> pb.BatchRollbackResponse
+	36, // 23: pb.Response.resolve_lock:type_name -> pb.ResolveLockResponse
+	38, // 24: pb.Response.check_txn_status:type_name -> pb.CheckTxnStatusResponse
 	17, // 25: pb.RaftCmdRequest.header:type_name -> pb.CmdHeader
 	18, // 26: pb.RaftCmdRequest.requests:type_name -> pb.Request
 	17, // 27: pb.RaftCmdResponse.header:type_name -> pb.CmdHeader
 	19, // 28: pb.RaftCmdResponse.responses:type_name -> pb.Response
-	56, // 29: pb.RaftCmdResponse.region_error:type_name -> pb.RegionError
-	52, // 30: pb.GetResponse.error:type_name -> pb.KeyError
-	5,  // 31: pb.ScanResponse.kvs:type_name -> pb.KV
-	52, // 32: pb.ScanResponse.error:type_name -> pb.KeyError
-	4,  // 33: pb.Mutation.op:type_name -> pb.Mutation.Op
-	26, // 34: pb.PrewriteRequest.mutations:type_name -> pb.Mutation
-	52, // 35: pb.PrewriteResponse.errors:type_name -> pb.KeyError
-	52, // 36: pb.CommitResponse.error:type_name -> pb.KeyError
-	52, // 37: pb.BatchRollbackResponse.error:type_name -> pb.KeyError
-	52, // 38: pb.ResolveLockResponse.error:type_name -> pb.KeyError
-	52, // 39: pb.CheckTxnStatusResponse.error:type_name -> pb.KeyError
-	1,  // 40: pb.CheckTxnStatusResponse.action:type_name -> pb.CheckTxnStatusAction
-	16, // 41: pb.Context.region_epoch:type_name -> pb.RegionEpoch
-	11, // 42: pb.Context.peer:type_name -> pb.RegionPeer
-	37, // 43: pb.KvGetRequest.context:type_name -> pb.Context
-	22, // 44: pb.KvGetRequest.request:type_name -> pb.GetRequest
-	23, // 45: pb.KvGetResponse.response:type_name -> pb.GetResponse
-	56, // 46: pb.KvGetResponse.region_error:type_name -> pb.RegionError
-	37, // 47: pb.KvScanRequest.context:type_name -> pb.Context
-	24, // 48: pb.KvScanRequest.request:type_name -> pb.ScanRequest
-	25, // 49: pb.KvScanResponse.response:type_name -> pb.ScanResponse
-	56, // 50: pb.KvScanResponse.region_error:type_name -> pb.RegionError
-	37, // 51: pb.KvPrewriteRequest.context:type_name -> pb.Context
-	27, // 52: pb.KvPrewriteRequest.request:type_name -> pb.PrewriteRequest
-	28, // 53: pb.KvPrewriteResponse.response:type_name -> pb.PrewriteResponse
-	56, // 54: pb.KvPrewriteResponse.region_error:type_name -> pb.RegionError
-	37, // 55: pb.KvCommitRequest.context:type_name -> pb.Context
-	29, // 56: pb.KvCommitRequest.request:type_name -> pb.CommitRequest
-	30, // 57: pb.KvCommitResponse.response:type_name -> pb.CommitResponse
-	56, // 58: pb.KvCommitResponse.region_error:type_name -> pb.RegionError
-	37, // 59: pb.KvBatchRollbackRequest.context:type_name -> pb.Context
-	31, // 60: pb.KvBatchRollbackRequest.request:type_name -> pb.BatchRollbackRequest
-	32, // 61: pb.KvBatchRollbackResponse.response:type_name -> pb.BatchRollbackResponse
-	56, // 62: pb.KvBatchRollbackResponse.region_error:type_name -> pb.RegionError
-	37, // 63: pb.KvResolveLockRequest.context:type_name -> pb.Context
-	33, // 64: pb.KvResolveLockRequest.request:type_name -> pb.ResolveLockRequest
-	34, // 65: pb.KvResolveLockResponse.response:type_name -> pb.ResolveLockResponse
-	56, // 66: pb.KvResolveLockResponse.region_error:type_name -> pb.RegionError
-	37, // 67: pb.KvCheckTxnStatusRequest.context:type_name -> pb.Context
-	35, // 68: pb.KvCheckTxnStatusRequest.request:type_name -> pb.CheckTxnStatusRequest
-	36, // 69: pb.KvCheckTxnStatusResponse.response:type_name -> pb.CheckTxnStatusResponse
-	56, // 70: pb.KvCheckTxnStatusResponse.region_error:type_name -> pb.RegionError
-	53, // 71: pb.KeyError.locked:type_name -> pb.Locked
-	54, // 72: pb.KeyError.write_conflict:type_name -> pb.WriteConflict
-	55, // 73: pb.KeyError.already_exists:type_name -> pb.KeyAlreadyExists
-	4,  // 74: pb.Locked.lock_type:type_name -> pb.Mutation.Op
-	57, // 75: pb.RegionError.not_leader:type_name -> pb.NotLeader
-	58, // 76: pb.RegionError.epoch_not_match:type_name -> pb.EpochNotMatch
-	59, // 77: pb.RegionError.stale_command:type_name -> pb.StaleCommand
-	60, // 78: pb.RegionError.entry_too_large:type_name -> pb.RaftEntryTooLarge
-	11, // 79: pb.NotLeader.leader:type_name -> pb.RegionPeer
-	16, // 80: pb.EpochNotMatch.current_epoch:type_name -> pb.RegionEpoch
-	12, // 81: pb.EpochNotMatch.regions:type_name -> pb.RegionMeta
-	38, // 82: pb.TinyKv.KvGet:input_type -> pb.KvGetRequest
-	40, // 83: pb.TinyKv.KvScan:input_type -> pb.KvScanRequest
-	42, // 84: pb.TinyKv.KvPrewrite:input_type -> pb.KvPrewriteRequest
-	44, // 85: pb.TinyKv.KvCommit:input_type -> pb.KvCommitRequest
-	46, // 86: pb.TinyKv.KvBatchRollback:input_type -> pb.KvBatchRollbackRequest
-	48, // 87: pb.TinyKv.KvResolveLock:input_type -> pb.KvResolveLockRequest
-	50, // 88: pb.TinyKv.KvCheckTxnStatus:input_type -> pb.KvCheckTxnStatusRequest
-	39, // 89: pb.TinyKv.KvGet:output_type -> pb.KvGetResponse
-	41, // 90: pb.TinyKv.KvScan:output_type -> pb.KvScanResponse
-	43, // 91: pb.TinyKv.KvPrewrite:output_type -> pb.KvPrewriteResponse
-	45, // 92: pb.TinyKv.KvCommit:output_type -> pb.KvCommitResponse
-	47, // 93: pb.TinyKv.KvBatchRollback:output_type -> pb.KvBatchRollbackResponse
-	49, // 94: pb.TinyKv.KvResolveLock:output_type -> pb.KvResolveLockResponse
-	51, // 95: pb.TinyKv.KvCheckTxnStatus:output_type -> pb.KvCheckTxnStatusResponse
-	89, // [89:96] is the sub-list for method output_type
-	82, // [82:89] is the sub-list for method input_type
-	82, // [82:82] is the sub-list for extension type_name
-	82, // [82:82] is the sub-list for extension extendee
-	0,  // [0:82] is the sub-list for field type_name
+	60, // 29: pb.RaftCmdResponse.region_error:type_name -> pb.RegionError
+	56, // 30: pb.GetResponse.error:type_name -> pb.KeyError
+	22, // 31: pb.BatchGetRequest.requests:type_name -> pb.GetRequest
+	23, // 32: pb.BatchGetResponse.responses:type_name -> pb.GetResponse
+	5,  // 33: pb.ScanResponse.kvs:type_name -> pb.KV
+	56, // 34: pb.ScanResponse.error:type_name -> pb.KeyError
+	4,  // 35: pb.Mutation.op:type_name -> pb.Mutation.Op
+	28, // 36: pb.PrewriteRequest.mutations:type_name -> pb.Mutation
+	56, // 37: pb.PrewriteResponse.errors:type_name -> pb.KeyError
+	56, // 38: pb.CommitResponse.error:type_name -> pb.KeyError
+	56, // 39: pb.BatchRollbackResponse.error:type_name -> pb.KeyError
+	56, // 40: pb.ResolveLockResponse.error:type_name -> pb.KeyError
+	56, // 41: pb.CheckTxnStatusResponse.error:type_name -> pb.KeyError
+	1,  // 42: pb.CheckTxnStatusResponse.action:type_name -> pb.CheckTxnStatusAction
+	16, // 43: pb.Context.region_epoch:type_name -> pb.RegionEpoch
+	11, // 44: pb.Context.peer:type_name -> pb.RegionPeer
+	39, // 45: pb.KvGetRequest.context:type_name -> pb.Context
+	22, // 46: pb.KvGetRequest.request:type_name -> pb.GetRequest
+	23, // 47: pb.KvGetResponse.response:type_name -> pb.GetResponse
+	60, // 48: pb.KvGetResponse.region_error:type_name -> pb.RegionError
+	39, // 49: pb.KvBatchGetRequest.context:type_name -> pb.Context
+	24, // 50: pb.KvBatchGetRequest.request:type_name -> pb.BatchGetRequest
+	25, // 51: pb.KvBatchGetResponse.response:type_name -> pb.BatchGetResponse
+	60, // 52: pb.KvBatchGetResponse.region_error:type_name -> pb.RegionError
+	39, // 53: pb.KvScanRequest.context:type_name -> pb.Context
+	26, // 54: pb.KvScanRequest.request:type_name -> pb.ScanRequest
+	27, // 55: pb.KvScanResponse.response:type_name -> pb.ScanResponse
+	60, // 56: pb.KvScanResponse.region_error:type_name -> pb.RegionError
+	39, // 57: pb.KvPrewriteRequest.context:type_name -> pb.Context
+	29, // 58: pb.KvPrewriteRequest.request:type_name -> pb.PrewriteRequest
+	30, // 59: pb.KvPrewriteResponse.response:type_name -> pb.PrewriteResponse
+	60, // 60: pb.KvPrewriteResponse.region_error:type_name -> pb.RegionError
+	39, // 61: pb.KvCommitRequest.context:type_name -> pb.Context
+	31, // 62: pb.KvCommitRequest.request:type_name -> pb.CommitRequest
+	32, // 63: pb.KvCommitResponse.response:type_name -> pb.CommitResponse
+	60, // 64: pb.KvCommitResponse.region_error:type_name -> pb.RegionError
+	39, // 65: pb.KvBatchRollbackRequest.context:type_name -> pb.Context
+	33, // 66: pb.KvBatchRollbackRequest.request:type_name -> pb.BatchRollbackRequest
+	34, // 67: pb.KvBatchRollbackResponse.response:type_name -> pb.BatchRollbackResponse
+	60, // 68: pb.KvBatchRollbackResponse.region_error:type_name -> pb.RegionError
+	39, // 69: pb.KvResolveLockRequest.context:type_name -> pb.Context
+	35, // 70: pb.KvResolveLockRequest.request:type_name -> pb.ResolveLockRequest
+	36, // 71: pb.KvResolveLockResponse.response:type_name -> pb.ResolveLockResponse
+	60, // 72: pb.KvResolveLockResponse.region_error:type_name -> pb.RegionError
+	39, // 73: pb.KvCheckTxnStatusRequest.context:type_name -> pb.Context
+	37, // 74: pb.KvCheckTxnStatusRequest.request:type_name -> pb.CheckTxnStatusRequest
+	38, // 75: pb.KvCheckTxnStatusResponse.response:type_name -> pb.CheckTxnStatusResponse
+	60, // 76: pb.KvCheckTxnStatusResponse.region_error:type_name -> pb.RegionError
+	57, // 77: pb.KeyError.locked:type_name -> pb.Locked
+	58, // 78: pb.KeyError.write_conflict:type_name -> pb.WriteConflict
+	59, // 79: pb.KeyError.already_exists:type_name -> pb.KeyAlreadyExists
+	4,  // 80: pb.Locked.lock_type:type_name -> pb.Mutation.Op
+	61, // 81: pb.RegionError.not_leader:type_name -> pb.NotLeader
+	62, // 82: pb.RegionError.epoch_not_match:type_name -> pb.EpochNotMatch
+	63, // 83: pb.RegionError.stale_command:type_name -> pb.StaleCommand
+	64, // 84: pb.RegionError.entry_too_large:type_name -> pb.RaftEntryTooLarge
+	11, // 85: pb.NotLeader.leader:type_name -> pb.RegionPeer
+	16, // 86: pb.EpochNotMatch.current_epoch:type_name -> pb.RegionEpoch
+	12, // 87: pb.EpochNotMatch.regions:type_name -> pb.RegionMeta
+	40, // 88: pb.TinyKv.KvGet:input_type -> pb.KvGetRequest
+	42, // 89: pb.TinyKv.KvBatchGet:input_type -> pb.KvBatchGetRequest
+	44, // 90: pb.TinyKv.KvScan:input_type -> pb.KvScanRequest
+	46, // 91: pb.TinyKv.KvPrewrite:input_type -> pb.KvPrewriteRequest
+	48, // 92: pb.TinyKv.KvCommit:input_type -> pb.KvCommitRequest
+	50, // 93: pb.TinyKv.KvBatchRollback:input_type -> pb.KvBatchRollbackRequest
+	52, // 94: pb.TinyKv.KvResolveLock:input_type -> pb.KvResolveLockRequest
+	54, // 95: pb.TinyKv.KvCheckTxnStatus:input_type -> pb.KvCheckTxnStatusRequest
+	41, // 96: pb.TinyKv.KvGet:output_type -> pb.KvGetResponse
+	43, // 97: pb.TinyKv.KvBatchGet:output_type -> pb.KvBatchGetResponse
+	45, // 98: pb.TinyKv.KvScan:output_type -> pb.KvScanResponse
+	47, // 99: pb.TinyKv.KvPrewrite:output_type -> pb.KvPrewriteResponse
+	49, // 100: pb.TinyKv.KvCommit:output_type -> pb.KvCommitResponse
+	51, // 101: pb.TinyKv.KvBatchRollback:output_type -> pb.KvBatchRollbackResponse
+	53, // 102: pb.TinyKv.KvResolveLock:output_type -> pb.KvResolveLockResponse
+	55, // 103: pb.TinyKv.KvCheckTxnStatus:output_type -> pb.KvCheckTxnStatusResponse
+	96, // [96:104] is the sub-list for method output_type
+	88, // [88:96] is the sub-list for method input_type
+	88, // [88:88] is the sub-list for extension type_name
+	88, // [88:88] is the sub-list for extension extendee
+	0,  // [0:88] is the sub-list for field type_name
 }
 
 func init() { file_pb_proto_init() }
@@ -4266,7 +4482,7 @@ func file_pb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pb_proto_rawDesc), len(file_pb_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   56,
+			NumMessages:   60,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

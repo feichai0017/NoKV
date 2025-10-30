@@ -48,6 +48,61 @@ func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetRes
 	return resp, nil
 }
 
+func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
+	header, err := buildHeader(req.GetContext())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	batch := req.GetRequest()
+	if batch == nil {
+		return nil, status.Error(codes.InvalidArgument, "batch get request missing payload")
+	}
+	if len(batch.GetRequests()) == 0 {
+		return &pb.KvBatchGetResponse{
+			Response: &pb.BatchGetResponse{},
+		}, nil
+	}
+	requests := make([]*pb.Request, 0, len(batch.GetRequests()))
+	for _, getReq := range batch.GetRequests() {
+		if getReq == nil {
+			continue
+		}
+		requests = append(requests, &pb.Request{
+			CmdType: pb.CmdType_CMD_GET,
+			Cmd:     &pb.Request_Get{Get: getReq},
+		})
+	}
+	cmd := &pb.RaftCmdRequest{
+		Header:   header,
+		Requests: requests,
+	}
+	result, err := s.read(cmd)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+	resp := &pb.KvBatchGetResponse{RegionError: result.GetRegionError()}
+	if result.GetRegionError() == nil {
+		responses := make([]*pb.GetResponse, 0, len(requests))
+		for _, r := range result.GetResponses() {
+			if r == nil {
+				responses = append(responses, &pb.GetResponse{NotFound: true})
+				continue
+			}
+			if get := r.GetGet(); get != nil {
+				responses = append(responses, get)
+				continue
+			}
+			responses = append(responses, &pb.GetResponse{NotFound: true})
+		}
+		// Ensure the response count matches the request count.
+		for len(responses) < len(requests) {
+			responses = append(responses, &pb.GetResponse{NotFound: true})
+		}
+		resp.Response = &pb.BatchGetResponse{Responses: responses}
+	}
+	return resp, nil
+}
+
 func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScanResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {

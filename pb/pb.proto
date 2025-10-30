@@ -156,6 +156,14 @@ message GetResponse {
   KeyError error = 3;
 }
 
+message BatchGetRequest {
+  repeated GetRequest requests = 1;
+}
+
+message BatchGetResponse {
+  repeated GetResponse responses = 1;
+}
+
 message ScanRequest {
   bytes start_key = 1;
   uint32 limit = 2;
@@ -264,6 +272,16 @@ message KvGetResponse {
   RegionError region_error = 2;
 }
 
+message KvBatchGetRequest {
+  Context context = 1;
+  BatchGetRequest request = 2;
+}
+
+message KvBatchGetResponse {
+  BatchGetResponse response = 1;
+  RegionError region_error = 2;
+}
+
 message KvScanRequest {
   Context context = 1;
   ScanRequest request = 2;
@@ -326,6 +344,7 @@ message KvCheckTxnStatusResponse {
 
 service TinyKv {
   rpc KvGet(KvGetRequest) returns (KvGetResponse);
+  rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
   rpc KvScan(KvScanRequest) returns (KvScanResponse);
   rpc KvPrewrite(KvPrewriteRequest) returns (KvPrewriteResponse);
   rpc KvCommit(KvCommitRequest) returns (KvCommitResponse);
