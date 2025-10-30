@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -139,7 +140,7 @@ func (s *redisServer) Serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			if isRetryableAcceptError(err) {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
@@ -173,6 +174,22 @@ func (s *redisServer) Wait() {
 }
 
 var errQuit = errors.New("client quit")
+
+func isRetryableAcceptError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return true
+		}
+		if opErr.Op == "accept" && (errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.ECONNRESET)) {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *redisServer) handleConn(conn net.Conn) {
 	defer conn.Close()
