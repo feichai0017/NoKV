@@ -27,6 +27,7 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 - [Module Breakdown](#-module-breakdown)
 - [Example Flow](#-example-flow)
 - [Observability & CLI](#-observability--cli)
+- [Redis Gateway](#-redis-gateway)
 - [Comparison: RocksDB vs Badger vs NoKV](#-comparison-rocksdb-vs-badger-vs-nokv)
 - [Testing & Benchmarks](#-testing--benchmarks)
 - [Documentation](#-documentation)
@@ -133,6 +134,21 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
    - `node1`, `node2`, `node3` — TinyKV nodes exposing gRPC on `20160-20162`.
 
    View logs with `docker compose logs -f node1`, exec CLI commands (`docker compose exec node1 nokv stats --workdir /var/lib/nokv`), and tear down via `docker compose down -v`.
+
+6. **Redis protocol gateway**
+
+   ```bash
+   # Embedded gateway (stores data in ./work_redis)
+   go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --workdir ./work_redis
+
+   # Distributed gateway (matches scripts/run_local_cluster.sh defaults)
+   go run ./cmd/nokv-redis \
+     --addr 127.0.0.1:6380 \
+     --raft-config cmd/nokv-redis/raft_config.example.json \
+     --tso-url http://127.0.0.1:9494
+   ```
+
+   Validate with `redis-cli -p 6380 ping`. For a full command matrix, configuration details, and metrics reference see [docs/redis.md](docs/redis.md).
 
 ---
 
@@ -260,6 +276,17 @@ Details in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-ob
 
 ---
 
+## 🔌 Redis Gateway
+
+- `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) every command runs inside local MVCC transactions; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit so NX/XX, TTL, arithmetic and multi-key writes match the single-node semantics.
+- TTL metadata is stored under `!redis:ttl!<key>` and is automatically cleaned up when reads detect expiration.
+- `--metrics-addr` publishes `NoKV.Redis` statistics via expvar and `--tso-url` can point to an external TSO service (otherwise a local oracle is used).
+- A ready-to-use cluster configuration is available at `cmd/nokv-redis/raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
+
+> For the complete command matrix, configuration and deployment guides, see [docs/redis.md](docs/redis.md).
+
+---
+
 ## ⚖️ Comparison: RocksDB vs Badger vs NoKV
 
 | Aspect | RocksDB | BadgerDB | NoKV |
@@ -296,6 +323,7 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 | Testing matrix | [docs/testing.md](docs/testing.md) |
 | CLI reference | [docs/cli.md](docs/cli.md) |
 | RaftStore overview | [docs/raftstore.md](docs/raftstore.md) |
+| Redis gateway | [docs/redis.md](docs/redis.md) |
 
 ---
 

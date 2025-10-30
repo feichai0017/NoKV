@@ -1,0 +1,22 @@
+{
+  "max_retries": 5,
+  "stores": [
+    { "store_id": 1, "addr": "127.0.0.1:20170" },
+    { "store_id": 2, "addr": "127.0.0.1:20171" },
+    { "store_id": 3, "addr": "127.0.0.1:20172" }
+  ],
+  "regions": [
+    {
+      "id": 1,
+      "start_key": "",
+      "end_key": "",
+      "epoch": { "version": 1, "conf_version": 1 },
+      "peers": [
+        { "store_id": 1, "peer_id": 101 },
+        { "store_id": 2, "peer_id": 201 },
+        { "store_id": 3, "peer_id": 301 }
+      ],
+      "leader_store_id": 1
+    }
+  ]
+}
