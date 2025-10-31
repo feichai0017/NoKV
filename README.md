@@ -23,6 +23,7 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
 - [Highlights](#-highlights)
 - [Quick Start](#-quick-start)
+- [Topology & Configuration](#-topology--configuration)
 - [Architecture Overview](#-architecture-overview)
 - [Module Breakdown](#-module-breakdown)
 - [Example Flow](#-example-flow)
@@ -35,120 +36,96 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
 
 ---
 
-## ✨ Highlights
+## ✨ Highlights at a Glance
 
-- 🔁 **Hybrid LSM + ValueLog** – WAL + MemTable durability like RocksDB, while large values live in vlog segments like Badger.
-- ⚡ **MVCC transactions** – snapshot isolation with conflict detection via `oracle`, iterator snapshots, and managed/unmanaged modes.
-- 🔗 **Dual-mode runtime** – embed NoKV directly (`NoKV.Open`) *or* expose a distributed TinyKv service via `raftstore.Server` / `nokv serve`.
-- 🧠 **Multi-Raft regions** – `raftstore` manages Region lifecycle, shared WAL storage, hooks, and metrics; CLI/Stats make Region state observable by default.
-- 🔥 **Hot-key analytics** – `hotring` surfaces frequently accessed keys, powering prefetchers and CLI visibility.
-- ♻️ **Robust recovery** – manifest + WAL checkpoints + vlog GC metadata guarantee restart determinism.
-- 🛠️ **First-class tooling** – `nokv` CLI and `expvar` snapshots expose internals without extra dependencies.
+| Theme | What it unlocks |
+| --- | --- |
+| 🔁 **Hybrid LSM + ValueLog** | WAL → MemTable → SST pipeline keeps latency low while ValueLog stores hefty payloads; think RocksDB discipline with Badger’s separation trick. |
+| ⚡ **MVCC-native transactions** | Snapshot isolation, conflict detection, iterator snapshots, TTL semantics—no bolt-on layer, it’s all baked in. |
+| 🧠 **Multi-Raft Regions** | `raftstore` spins a Raft group per Region, reuses shared WAL/vlog, and exposes hooks/metrics for schedulers and tooling. |
+| 🛰️ **Dual-mode runtime** | Embed NoKV via `NoKV.Open` or toggle to the distributed service (`nokv serve` / gRPC) without changing data structures. |
+| 🔍 **Observability-first** | `nokv stats`, expvar/pprof, manifest tooling, and hotring heatmaps keep the internals transparent. |
+| 🧰 **Single source of truth** | `raft_config.json` feeds local scripts, Docker Compose, Redis gateway, and CI—no config drift, ever. |
 
 ---
 
 ## 🚀 Quick Start
 
-1. **Install & smoke-test**
+| Scenario | Command | Notes |
+| --- | --- | --- |
+| Embedded Set/Get | <pre>go run main.go</pre> | See minimal example below—great for embedding or unit tests. |
+| Inspect internals | <pre>go run ./cmd/nokv stats --workdir ./workdir-demo</pre> | Surfaces compaction queues, WAL checkpoints, hot keys. |
+| Run 3-store/2-region cluster | <pre>./scripts/run_local_cluster.sh --config ./raft_config.example.json</pre> | Starts three `nokv serve` processes (plus TSO). Existing store directories are detected and reused (skip manifest reseeding). Always stop with `Ctrl+C`; if the process crashes, wipe `./artifacts/cluster` and restart. |
+| Docker Compose | <pre>docker compose up --build</pre> | Builds the image, bootstraps manifests, launches stores + TSO + Redis gateway. |
+| Redis API | <pre>go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json</pre> | Auto-discovers TSO/regions from the JSON; add `--addr-scope docker` when running inside containers. |
 
-   ```bash
-   go get github.com/feichai0017/NoKV
+Minimal embedded snippet:
 
-   ```
+```go
+package main
 
-2. **Embedded usage example (simple Set/Get)**
+import (
+	"fmt"
+	"log"
 
-   ```go
-   package main
+	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/utils"
+)
 
-   import (
-   	"fmt"
-   	"log"
+func main() {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = "./workdir-demo"
 
-   	NoKV "github.com/feichai0017/NoKV"
-   	"github.com/feichai0017/NoKV/utils"
-   )
+	db := NoKV.Open(opt)
+	defer db.Close()
 
-   func main() {
-   	opt := NoKV.NewDefaultOptions()
-   	opt.WorkDir = "./workdir-demo"
+	key := []byte("hello")
+	if err := db.SetCF(utils.CFDefault, key, []byte("world")); err != nil {
+		log.Fatalf("set failed: %v", err)
+	}
 
-   	db := NoKV.Open(opt)
-   	defer func() { _ = db.Close() }()
+	entry, err := db.Get(key)
+	if err != nil {
+		log.Fatalf("get failed: %v", err)
+	}
+	fmt.Printf("value=%s\n", entry.Value)
+	entry.DecrRef()
+}
+```
 
-   	key := []byte("hello")
-   	val := []byte("world")
+> ℹ️ `run_local_cluster.sh` rebuilds `nokv`, `nokv-config`, `nokv-tso`, seeds manifests via `nokv-config manifest`, and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 
-   	if err := db.SetCF(utils.CFDefault, key, val); err != nil {
-   		log.Fatalf("set failed: %v", err)
-   	}
+---
 
-   	entry, err := db.Get(key)
-   	if err != nil {
-   		log.Fatalf("get failed: %v", err)
-   	}
-   	fmt.Printf("value=%s\n", entry.Value)
-   	entry.DecrRef()
-   }
-   ```
+## 🧭 Topology & Configuration
 
-   Save the snippet as `main.go` (or any Go module entry point) and run:
+Everything hangs off a single file: [`raft_config.example.json`](./raft_config.example.json).
 
-   ```bash
-   go run main.go
-   ```
+```jsonc
+"stores": [
+  { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
+  { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
+  { "store_id": 3, "listen_addr": "127.0.0.1:20172", ... }
+],
+"regions": [
+  { "id": 1, "range": [-inf,"m"), peers: 101/201/301, leader: store 1 },
+  { "id": 2, "range": ["m",+inf), peers: 102/202/302, leader: store 2 }
+]
+```
 
-3. **Inspect with the CLI**
+- **Local scripts** (`run_local_cluster.sh`, `serve_from_config.sh`, `bootstrap_from_config.sh`) ingest the same JSON, so local runs match production layouts.
+- **Docker Compose** mounts the file into each container; manifests, transports, and Redis gateway all stay in sync.
+- Need more stores or regions? Update the JSON and re-run the script/Compose—no code changes required.
 
-   ```bash
-   go run ./cmd/nokv stats --workdir ./workdir-demo
-   go run ./cmd/nokv manifest --workdir ./workdir-demo
-   ```
+### 🧬 Tech Stack Snapshot
 
-   `nokv stats` renders flush/WAL/backlog metrics so you can confirm compaction, watchdog, and GC health at a glance.
-
-4. **(Optional) Launch the distributed TinyKV service**
-
-   ```bash
-   # Launch a three-node cluster (default ports 20170-20172) plus a TSO on 9494
-   ./scripts/run_local_cluster.sh --tso-port 9494
-
-   # In another terminal, call gRPC directly or use raftstore/client to reach 20170
-   go test ./raftstore/server -run TestServerWithClientTwoPhaseCommit -count=1
-   ```
-
-   The script builds `nokv`, seeds each store’s manifest via `nokv-manifest`, and starts three `nokv serve` processes (one per store). With `--tso-port` it also launches the sample timestamp allocator (`http://127.0.0.1:9494/tso`). Press `Ctrl+C` to shut everything down.
-
-   > ℹ️  Distributed API calls (e.g. `Mutate`) expect the client to supply monotonic `startVersion`/`commitVersion`. Either rely on the script’s TSO (`curl -s http://127.0.0.1:9494/tso`) or run your own allocator. See [docs/txn.md](docs/txn.md#timestamp-sources) for details.
-
-5. **Run a three-node cluster with Docker Compose**
-
-   ```bash
-   docker compose up --build
-   ```
-
-   Services:
-
-   - `bootstrap` — seeds each store’s manifest with Region metadata.
-   - `tso` — optional HTTP timestamp allocator (`http://127.0.0.1:9494/tso`).
-   - `node1`, `node2`, `node3` — TinyKV nodes exposing gRPC on `20160-20162`.
-
-   View logs with `docker compose logs -f node1`, exec CLI commands (`docker compose exec node1 nokv stats --workdir /var/lib/nokv`), and tear down via `docker compose down -v`.
-
-6. **Redis protocol gateway**
-
-   ```bash
-   # Embedded gateway (stores data in ./work_redis)
-   go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --workdir ./work_redis
-
-   # Distributed gateway (matches scripts/run_local_cluster.sh defaults)
-   go run ./cmd/nokv-redis \
-     --addr 127.0.0.1:6380 \
-     --raft-config raft_config.example.json \
-     --tso-url http://127.0.0.1:9494
-   ```
-
-   Validate with `redis-cli -p 6380 ping`. For a full command matrix, configuration details, and metrics reference see [docs/redis.md](docs/redis.md).
+| Layer | Tech/Package | Why it matters |
+| --- | --- | --- |
+| Storage Core | `lsm/`, `wal/`, `vlog/` | Hybrid log-structured design with manifest-backed durability and value separation. |
+| Concurrency | `mvcc/`, `txn.go`, `oracle` | Timestamp oracle + lock manager for MVCC transactions and TTL-aware reads. |
+| Replication | `raftstore/*` | Multi-Raft orchestration (regions, peers, router, schedulers, gRPC transport). |
+| Tooling | `cmd/nokv`, `cmd/nokv-config`, `cmd/nokv-redis` | CLI, config helper, Redis-compatible gateway share the same topology file. |
+| Observability | `stats`, `hotring`, expvar | Built-in metrics, hot-key analytics, and crash recovery traces. |
 
 ---
 
@@ -264,15 +241,15 @@ More scenarios (including transaction recovery) are covered in [docs/architectur
 
 ## 📡 Observability & CLI
 
-- `Stats.StartStats` publishes metrics via `expvar` (flush backlog, WAL segments, vlog GC stats, txn counters).
-- `cmd/nokv` offers:
-- `nokv stats --workdir <dir> [--json] [--no-region-metrics]`
-- `nokv manifest --workdir <dir>`
-- `nokv vlog --workdir <dir>`
-- `nokv regions --workdir <dir> [--json]`
-- Hot keys tracked by `hotring` appear in both expvar and CLI output, enabling cache warmup strategies.
+- `Stats.StartStats` publishes metrics via `expvar` (flush backlog, WAL segments, value log GC stats, txn counters).
+- `cmd/nokv` gives you:
+  - `nokv stats --workdir <dir> [--json] [--no-region-metrics]`
+  - `nokv manifest --workdir <dir>`
+  - `nokv regions --workdir <dir> [--json]`
+  - `nokv vlog --workdir <dir>`
+- `hotring` continuously surfaces hot keys in stats + CLI so you can pre-warm caches or debug skewed workloads.
 
-Details in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
+More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
 
 ---
 
@@ -304,6 +281,17 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 
 ---
 
+## 🧪 Testing & Benchmarks
+
+- Unit/integration sweep: `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
+- Crash recovery matrix: `RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh`
+- Microbenchmarks: `go test ./benchmark -run TestBenchmarkResults -count=1`
+- Compose smoke test: `docker compose up --build` (Redis gateway automatically targets the same config).
+
+Results and guidance live in [docs/testing.md](docs/testing.md).
+
+---
+
 ## 📚 Documentation
 
 | Topic | Document |
@@ -323,7 +311,7 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 | Testing matrix | [docs/testing.md](docs/testing.md) |
 | CLI reference | [docs/cli.md](docs/cli.md) |
 | RaftStore overview | [docs/raftstore.md](docs/raftstore.md) |
-| Redis gateway | [docs/redis.md](docs/redis.md) |
+| Redis gateway | [docs/nokv-redis.md](docs/nokv-redis.md) |
 
 ---
 

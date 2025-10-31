@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -93,7 +94,7 @@ func (t *httpTSO) Reserve(n uint64) (uint64, error) {
 	return payload.Timestamp, nil
 }
 
-func newRaftBackend(cfgPath, tsoURL string) (*raftBackend, error) {
+func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
@@ -108,15 +109,19 @@ func newRaftBackend(cfgPath, tsoURL string) (*raftBackend, error) {
 	if len(rawCfg.Regions) == 0 {
 		return nil, fmt.Errorf("raft backend: at least one region required")
 	}
-	cfg := client.Config{
-		MaxRetries: rawCfg.MaxRetries,
-	}
-	for _, st := range rawCfg.Stores {
-		cfg.Stores = append(cfg.Stores, client.StoreEndpoint{
-			StoreID: st.StoreID,
-			Addr:    st.Addr,
-		})
-	}
+    cfg := client.Config{
+        MaxRetries: rawCfg.MaxRetries,
+    }
+    for _, st := range rawCfg.Stores {
+        addr := strings.TrimSpace(st.Addr)
+        if strings.EqualFold(addrScope, "docker") && st.DockerAddr != "" {
+            addr = strings.TrimSpace(st.DockerAddr)
+        }
+        cfg.Stores = append(cfg.Stores, client.StoreEndpoint{
+            StoreID: st.StoreID,
+            Addr:    addr,
+        })
+    }
 	for _, region := range rawCfg.Regions {
 		meta := &pb.RegionMeta{
 			Id:               region.ID,
@@ -141,6 +146,17 @@ func newRaftBackend(cfgPath, tsoURL string) (*raftBackend, error) {
 		return nil, fmt.Errorf("raft backend: init client: %w", err)
 	}
 
+	tsoURL = strings.TrimSpace(tsoURL)
+	if tsoURL == "" && rawCfg.TSO != nil {
+		tsoURL = strings.TrimSpace(rawCfg.TSO.AdvertiseURL)
+		if tsoURL == "" {
+			tsoURL = strings.TrimSpace(rawCfg.TSO.ListenAddr)
+			if tsoURL != "" && !strings.Contains(tsoURL, "://") {
+				tsoURL = "http://" + tsoURL
+			}
+		}
+	}
+
 	var allocator timestampAllocator
 	if tsoURL != "" {
 		allocator = newHTTPTSO(tsoURL)
@@ -155,14 +171,20 @@ func newRaftBackend(cfgPath, tsoURL string) (*raftBackend, error) {
 }
 
 func decodeKey(val string) []byte {
-	if val == "" {
+	val = strings.TrimSpace(val)
+	if val == "" || val == "-" {
 		return nil
 	}
-	out, err := base64.StdEncoding.DecodeString(val)
-	if err != nil {
-		return []byte(val)
+	if strings.HasPrefix(val, "hex:") {
+		raw, err := hex.DecodeString(val[4:])
+		if err == nil {
+			return raw
+		}
 	}
-	return out
+	if out, err := base64.StdEncoding.DecodeString(val); err == nil {
+		return out
+	}
+	return []byte(val)
 }
 
 func (b *raftBackend) context() (context.Context, context.CancelFunc) {
@@ -482,14 +504,16 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 }
 
 type raftConfigFile struct {
-	Stores     []raftStoreConfig  `json:"stores"`
-	Regions    []raftRegionConfig `json:"regions"`
-	MaxRetries int                `json:"max_retries"`
+    Stores     []raftStoreConfig  `json:"stores"`
+    Regions    []raftRegionConfig `json:"regions"`
+    MaxRetries int                `json:"max_retries"`
+    TSO        *tsoConfig         `json:"tso"`
 }
 
 type raftStoreConfig struct {
-	StoreID uint64 `json:"store_id"`
-	Addr    string `json:"addr"`
+    StoreID uint64 `json:"store_id"`
+    Addr    string `json:"addr"`
+    DockerAddr string `json:"docker_addr"`
 }
 
 type raftRegionConfig struct {
@@ -509,4 +533,9 @@ type raftRegionEpoch struct {
 type raftRegionPeer struct {
 	StoreID uint64 `json:"store_id"`
 	PeerID  uint64 `json:"peer_id"`
+}
+
+type tsoConfig struct {
+	ListenAddr   string `json:"listen_addr"`
+	AdvertiseURL string `json:"advertise_url"`
 }

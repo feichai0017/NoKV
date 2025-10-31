@@ -2,6 +2,10 @@ package server
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"sync"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
@@ -31,6 +35,11 @@ type Config struct {
 	// TransportOptions allows callers to override transport settings (TLS,
 	// retry behaviour, etc.).
 	TransportOptions []transport.GRPCOption
+	// RaftTickInterval controls how often the server calls BroadcastTick on the
+	// store router. When zero or negative a default of 100ms is used.
+	RaftTickInterval time.Duration
+	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
+	EnableRaftDebugLog bool
 }
 
 // Server bundles the components required to serve TinyKv RPCs backed by a
@@ -40,7 +49,14 @@ type Server struct {
 	store     *store.Store
 	service   *kv.Service
 	transport *transport.GRPCTransport
+	tickStop  chan struct{}
+	tickWG    sync.WaitGroup
+	tickEvery time.Duration
 }
+
+const defaultRaftTickInterval = 100 * time.Millisecond
+
+var raftDebugLoggerOnce sync.Once
 
 // New constructs a Server using the provided configuration.
 func New(cfg Config) (*Server, error) {
@@ -98,6 +114,10 @@ func New(cfg Config) (*Server, error) {
 	}
 	storeCfg.PeerBuilder = builder
 
+	if cfg.EnableRaftDebugLog {
+		enableRaftDebugLogging()
+	}
+
 	st := store.NewStoreWithConfig(storeCfg)
 	service := kv.NewService(st)
 
@@ -115,12 +135,18 @@ func New(cfg Config) (*Server, error) {
 		return st.Step(msg)
 	})
 
-	return &Server{
+	srv := &Server{
 		db:        cfg.DB,
 		store:     st,
 		service:   service,
 		transport: tr,
-	}, nil
+	}
+	interval := cfg.RaftTickInterval
+	if interval <= 0 {
+		interval = defaultRaftTickInterval
+	}
+	srv.startRaftTickLoop(interval)
+	return srv, nil
 }
 
 // Addr returns the address TinyKv clients (and raft peers) should dial.
@@ -166,10 +192,56 @@ func (s *Server) Close() error {
 			return err
 		}
 	}
+	if s.tickStop != nil {
+		close(s.tickStop)
+		s.tickWG.Wait()
+		s.tickStop = nil
+	}
 	if s.store != nil {
 		s.store.Close()
 	}
 	return nil
+}
+
+func enableRaftDebugLogging() {
+	raftDebugLoggerOnce.Do(func() {
+		logger := &myraft.DefaultLogger{Logger: log.New(os.Stderr, "raft ", log.LstdFlags)}
+		logger.EnableTimestamps()
+		logger.EnableDebug()
+		myraft.SetLogger(logger)
+	})
+}
+
+func (s *Server) startRaftTickLoop(interval time.Duration) {
+	if s == nil || interval <= 0 {
+		return
+	}
+	if s.store == nil {
+		return
+	}
+	router := s.store.Router()
+	if router == nil {
+		return
+	}
+	if s.tickStop != nil {
+		return
+	}
+	s.tickEvery = interval
+	s.tickStop = make(chan struct{})
+	s.tickWG.Add(1)
+	go func() {
+		defer s.tickWG.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = router.BroadcastTick()
+			case <-s.tickStop:
+				return
+			}
+		}
+	}()
 }
 
 func peerIDForStore(meta manifest.RegionMeta, storeID uint64) uint64 {

@@ -25,6 +25,8 @@ type (
 	Entry            = pb.Entry
 	EntryType        = pb.EntryType
 	ConfState        = pb.ConfState
+	Logger           = etcdraft.Logger
+	DefaultLogger    = etcdraft.DefaultLogger
 )
 
 const (
@@ -77,3 +79,14 @@ func NewRawNode(cfg *Config) (*RawNode, error) {
 }
 
 // RestartRawNode restarts the RawNode from a new state.
+
+// SetLogger installs a custom logger for raft. The logger is shared by all nodes
+// in the process, mirroring etcd/raft's global logging behaviour.
+func SetLogger(l Logger) {
+	etcdraft.SetLogger(l)
+}
+
+// ResetDefaultLogger restores the default etcd/raft logger.
+func ResetDefaultLogger() {
+	etcdraft.ResetDefaultLogger()
+}
