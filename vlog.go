@@ -363,6 +363,14 @@ func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
 		return val, n, nil
 	}
 
+	// Binary Format (same as WAL entry format):
+	// +----------------+----------------+------+-------+----------+
+	// | Key Length (v) | Val Length (v) | Meta | ExpAt | Key      |
+	// +----------------+----------------+------+-------+----------+
+	// | Value          | Checksum (4B)  |
+	// +----------------+----------------+
+	// (v) denotes Uvarint encoding.
+
 	idx := 0
 	keyLenU, n, err := readVarint(data[idx:])
 	if err != nil {

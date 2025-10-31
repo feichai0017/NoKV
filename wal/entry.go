@@ -11,6 +11,14 @@ import (
 
 // EncodeEntry encodes an entry using utils.WalCodec and returns the encoded bytes.
 // Callers should append the returned slice before reusing the provided buffer.
+//
+// Binary Format:
+// +----------------+----------------+------+-------+----------+
+// | Key Length (v) | Val Length (v) | Meta | ExpAt | Key      |
+// +----------------+----------------+------+-------+----------+
+// | Value          | Checksum (4B)  |
+// +----------------+----------------+
+// (v) denotes Uvarint encoding.
 func EncodeEntry(buf *bytes.Buffer, e *utils.Entry) []byte {
 	if buf == nil {
 		buf = &bytes.Buffer{}
@@ -27,6 +35,14 @@ func EncodeEntry(buf *bytes.Buffer, e *utils.Entry) []byte {
 }
 
 // DecodeEntry parses a WAL payload into an Entry.
+//
+// Binary Format:
+// +----------------+----------------+------+-------+----------+
+// | Key Length (v) | Val Length (v) | Meta | ExpAt | Key      |
+// +----------------+----------------+------+-------+----------+
+// | Value          | Checksum (4B)  |
+// +----------------+----------------+
+// (v) denotes Uvarint encoding.
 func DecodeEntry(data []byte) (*utils.Entry, error) {
 	reader := bytes.NewReader(data)
 	hashReader := utils.NewHashReader(reader)
@@ -62,6 +78,14 @@ func DecodeEntry(data []byte) (*utils.Entry, error) {
 // DecodeValueSlice parses a value log payload and returns a slice referencing the encoded value.
 // The returned slice aliases the provided data. Callers must not use it after invoking the callback
 // returned by vlog.Manager.Read.
+//
+// Binary Format:
+// +----------------+----------------+------+-------+----------+
+// | Key Length (v) | Val Length (v) | Meta | ExpAt | Key      |
+// // +----------------+----------------+------+-------+----------+
+// | Value          | Checksum (4B)  |
+// +----------------+----------------+
+// (v) denotes Uvarint encoding.
 func DecodeValueSlice(data []byte) ([]byte, utils.WalHeader, error) {
 	var h utils.WalHeader
 	var idx int

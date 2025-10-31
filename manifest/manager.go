@@ -528,12 +528,31 @@ func (m *Manager) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 
 // Internal encoding helpers
 func writeEdit(w io.Writer, edit Edit) error {
+	// Overall Manifest Entry Binary Format:
+	// +----------------------+--------------------------------+
+	// | Length (4B, LittleE) | Payload (Edit Record)          |
+	// +----------------------+--------------------------------+
+	//
+	// Payload (Edit Record) Binary Format:
+	// +----------------+------------+--------------------------+
+	// | Magic (4B)     | EditType (1B) | Type-Specific Data       |
+	// +----------------+------------+--------------------------+
+
 	buf := make([]byte, 0, 64)
-	// magic + type
+	// Magic + Type
 	buf = append(buf, []byte(editMagic)...)
 	buf = append(buf, byte(edit.Type))
+
+	// Type-Specific Data
 	switch edit.Type {
 	case EditAddFile, EditDeleteFile:
+		// EditAddFile / EditDeleteFile Data Format:
+		// +----------------+----------------+----------------+----------------+----------------+
+		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
+		// +----------------+----------------+----------------+----------------+----------------+
+		// | CreatedAt (v)  |
+		// +----------------+
+		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		meta := edit.File
 		buf = binary.AppendUvarint(buf, uint64(meta.Level))
 		buf = binary.AppendUvarint(buf, meta.FileID)
@@ -542,18 +561,38 @@ func writeEdit(w io.Writer, edit Edit) error {
 		buf = appendBytes(buf, meta.Largest)
 		buf = binary.AppendUvarint(buf, meta.CreatedAt)
 	case EditLogPointer:
+		// EditLogPointer Data Format:
+		// +----------------+----------------+
+		// | LogSegment (v) | LogOffset (v)  |
+		// +----------------+----------------+
+		// (v) denotes Uvarint
 		buf = binary.AppendUvarint(buf, uint64(edit.LogSeg))
 		buf = binary.AppendUvarint(buf, edit.LogOffset)
 	case EditValueLogHead:
+		// EditValueLogHead Data Format:
+		// +----------------+----------------+
+		// | FileID (v)     | Offset (v)     |
+		// +----------------+----------------+
+		// (v) denotes Uvarint
 		if edit.ValueLog != nil {
 			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
 			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
 		}
 	case EditDeleteValueLog:
+		// EditDeleteValueLog Data Format:
+		// +----------------+
+		// | FileID (v)     |
+		// +----------------+
+		// (v) denotes Uvarint
 		if edit.ValueLog != nil {
 			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
 		}
 	case EditUpdateValueLog:
+		// EditUpdateValueLog Data Format:
+		// +----------------+----------------+----------+
+		// | FileID (v)     | Offset (v)     | Valid (1B)|
+		// +----------------+----------------+----------+
+		// (v) denotes Uvarint
 		if edit.ValueLog != nil {
 			buf = binary.AppendUvarint(buf, uint64(edit.ValueLog.FileID))
 			buf = binary.AppendUvarint(buf, edit.ValueLog.Offset)
@@ -564,6 +603,15 @@ func writeEdit(w io.Writer, edit Edit) error {
 			}
 		}
 	case EditRaftPointer:
+		// EditRaftPointer Data Format:
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | GroupID (v)     | Segment (v)     | Offset (v)      | AppliedIndex (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | AppliedTerm (v) | Committed (v)   | SnapshotIndex (v)| SnapshotTerm (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | TruncatedIndex (v)| TruncatedTerm (v)| SegmentIndex (v)| TruncatedOffset (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// (v) denotes Uvarint
 		if edit.Raft != nil {
 			buf = binary.AppendUvarint(buf, edit.Raft.GroupID)
 			buf = binary.AppendUvarint(buf, uint64(edit.Raft.Segment))
@@ -579,6 +627,13 @@ func writeEdit(w io.Writer, edit Edit) error {
 			buf = binary.AppendUvarint(buf, edit.Raft.TruncatedOffset)
 		}
 	case EditRegion:
+		// EditRegion Data Format:
+		// +----------------+------------+----------------------------------------------------+
+		// | RegionID (v)   | Delete (1B)| If Delete=0: StartKey (lv) | EndKey (lv) | Epoch.Version (v) |
+		// +----------------+------------+----------------------------------------------------+
+		// | Epoch.ConfVersion (v) | State (1B) | PeersCount (v) | Peer1.StoreID (v) | Peer1.PeerID (v) | ... |
+		// +-----------------------+------------+----------------+-------------------+------------------+
+		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		if edit.Region != nil {
 			buf = binary.AppendUvarint(buf, edit.Region.Meta.ID)
 			if edit.Region.Delete {
@@ -608,6 +663,10 @@ func writeEdit(w io.Writer, edit Edit) error {
 }
 
 func readEdit(r *bufio.Reader) (Edit, error) {
+	// Overall Manifest Entry Binary Format:
+	// +----------------------+--------------------------------+
+	// | Length (4B, LittleE) | Payload (Edit Record)          |
+	// +----------------------+--------------------------------+
 	var length uint32
 	if err := binary.Read(r, binary.LittleEndian, &length); err != nil {
 		return Edit{}, err
@@ -620,6 +679,13 @@ func readEdit(r *bufio.Reader) (Edit, error) {
 }
 
 func decodeEdit(data []byte) (Edit, error) {
+	// Payload (Edit Record) Binary Format:
+	// +----------------+------------+--------------------------+
+	// | Magic (4B)     | EditType (1B) | Type-Specific Data       |
+	// +----------------+------------+--------------------------+
+	//
+	// Type-Specific Data formats are described in writeEdit function.
+
 	if len(data) < len(editMagic)+1 {
 		return Edit{}, fmt.Errorf("manifest entry too short")
 	}
@@ -630,6 +696,13 @@ func decodeEdit(data []byte) (Edit, error) {
 	pos := len(editMagic) + 1
 	switch edit.Type {
 	case EditAddFile, EditDeleteFile:
+		// EditAddFile / EditDeleteFile Data Format:
+		// +----------------+----------------+----------------+----------------+----------------+
+		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
+		// +----------------+----------------+----------------+----------------+----------------+
+		// | CreatedAt (v)  |
+		// +----------------+
+		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		level, n := binary.Uvarint(data[pos:])
 		pos += n
 		fileID, n := binary.Uvarint(data[pos:])
@@ -654,6 +727,11 @@ func decodeEdit(data []byte) (Edit, error) {
 			CreatedAt: created,
 		}
 	case EditLogPointer:
+		// EditLogPointer Data Format:
+		// +----------------+----------------+
+		// | LogSegment (v) | LogOffset (v)  |
+		// +----------------+----------------+
+		// (v) denotes Uvarint
 		seg, n := binary.Uvarint(data[pos:])
 		pos += n
 		off, n := binary.Uvarint(data[pos:])
@@ -664,6 +742,11 @@ func decodeEdit(data []byte) (Edit, error) {
 		edit.LogSeg = uint32(seg)
 		edit.LogOffset = off
 	case EditValueLogHead:
+		// EditValueLogHead Data Format:
+		// +----------------+----------------+
+		// | FileID (v)     | Offset (v)     |
+		// +----------------+----------------+
+		// (v) denotes Uvarint
 		if pos < len(data) {
 			fid64, n := binary.Uvarint(data[pos:])
 			pos += n
@@ -679,6 +762,11 @@ func decodeEdit(data []byte) (Edit, error) {
 			}
 		}
 	case EditDeleteValueLog:
+		// EditDeleteValueLog Data Format:
+		// +----------------+
+		// | FileID (v)     |
+		// +----------------+
+		// (v) denotes Uvarint
 		if pos < len(data) {
 			fid64, n := binary.Uvarint(data[pos:])
 			pos += n
@@ -690,6 +778,11 @@ func decodeEdit(data []byte) (Edit, error) {
 			}
 		}
 	case EditUpdateValueLog:
+		// EditUpdateValueLog Data Format:
+		// +----------------+----------------+----------+
+		// | FileID (v)     | Offset (v)     | Valid (1B)|
+		// +----------------+----------------+----------+
+		// (v) denotes Uvarint
 		if pos < len(data) {
 			fid64, n := binary.Uvarint(data[pos:])
 			pos += n
@@ -710,6 +803,15 @@ func decodeEdit(data []byte) (Edit, error) {
 			}
 		}
 	case EditRaftPointer:
+		// EditRaftPointer Data Format:
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | GroupID (v)     | Segment (v)     | Offset (v)      | AppliedIndex (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | AppliedTerm (v) | Committed (v)   | SnapshotIndex (v)| SnapshotTerm (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// | TruncatedIndex (v)| TruncatedTerm (v)| SegmentIndex (v)| TruncatedOffset (v)|
+		// +-----------------+-----------------+-----------------+-----------------+
+		// (v) denotes Uvarint
 		if pos <= len(data) {
 			groupID, n := binary.Uvarint(data[pos:])
 			pos += n
@@ -778,6 +880,13 @@ func decodeEdit(data []byte) (Edit, error) {
 			}
 		}
 	case EditRegion:
+		// EditRegion Data Format:
+		// +----------------+------------+----------------------------------------------------+
+		// | RegionID (v)   | Delete (1B)| If Delete=0: StartKey (lv) | EndKey (lv) | Epoch.Version (v) |
+		// +----------------+------------+----------------------------------------------------+
+		// | Epoch.ConfVersion (v) | State (1B) | PeersCount (v) | Peer1.StoreID (v) | Peer1.PeerID (v) | ... |
+		// +-----------------------+------------+----------------+-------------------+------------------+
+		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		if pos <= len(data) {
 			regionID, n := binary.Uvarint(data[pos:])
 			pos += n
