@@ -51,6 +51,13 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// first reference, otherwise the reference state will be incorrect
 	t.IncrRef()
 	// initialize the sst file, load the index
+	// The Index Block is stored as a Protobuf message (pb.TableIndex).
+	// The overall SSTable structure is:
+	// +--------------------+ ... +--------------------+--------------------+
+	// | Data Block 1       |     | Data Block N       | Index Block (Proto)|
+	// +--------------------+ ... +--------------------+--------------------+
+	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
+	// +-------------------------+-----------------------+------------------------------+
 	if err := t.ss.Init(); err != nil {
 		utils.Err(err)
 		return nil
@@ -140,6 +147,15 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.ss.FID(), b.offset, ko.GetLen())
 	}
+
+	// Binary Format for a Data Block (read from disk):
+	// +--------------------------------+--------------------------------+
+	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
+	// +--------------------------------+--------------------------------+
+	// | Entry Offsets List Length (4B) | Block Checksum (8B)            |
+	// +--------------------------------+--------------------------------+
+	// | Block Checksum Length (4B)     |
+	// +--------------------------------+
 
 	readPos := len(b.data) - 4 // First read checksum length.
 	b.chkLen = int(utils.BytesToU32(b.data[readPos : readPos+4]))

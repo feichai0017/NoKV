@@ -102,6 +102,12 @@ func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 	utils.CondPanic(!(len(key)-len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16"))
 	utils.CondPanic(!(len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(diffKey) <= math.MaxUint16"))
 
+	// Binary Format for a single entry within a Data Block:
+	// +-----------------+-----------------+-----------------+
+	// | Overlap (2B)    | Diff Length (2B)| Diff Key Bytes  |
+	// +-----------------+-----------------+-----------------+
+	// | Value Meta (1B) | Value ExpAt (8B)| Value Bytes     |
+	// +-----------------+-----------------+-----------------+
 	h := header{
 		overlap: uint16(len(key) - len(diffKey)),
 		diff:    uint16(len(diffKey)),
@@ -180,6 +186,15 @@ func (tb *tableBuilder) finishBlock() {
 	if tb.curBlock == nil || len(tb.curBlock.entryOffsets) == 0 {
 		return
 	}
+	// Binary Format for a Data Block (after all entries):
+	// +--------------------------------+--------------------------------+
+	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
+	// +--------------------------------+--------------------------------+
+	// | Entry Offsets List Length (4B) | Block Checksum (8B)            |
+	// +--------------------------------+--------------------------------+
+	// | Block Checksum Length (4B)     |
+	// +--------------------------------+
+
 	// Append the entryOffsets and its length.
 	tb.append(utils.U32SliceToBytes(tb.curBlock.entryOffsets))
 	tb.append(utils.U32ToBytes(uint32(len(tb.curBlock.entryOffsets))))
@@ -280,6 +295,13 @@ func (tb *tableBuilder) done() buildData {
 		f = utils.NewFilter(tb.keyHashes, bits)
 	}
 	// TODO 构建 sst的索引
+	// Overall SSTable Binary Format:
+	// +--------------------+--------------------+ ... +--------------------+--------------------+
+	// | Data Block 1       | Data Block 2       |     | Data Block N       | Index Block (Proto)|
+	// +--------------------+--------------------+ ... +--------------------+--------------------+
+	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
+	// +-------------------------+-----------------------+------------------------------+
+
 	index, dataSize := tb.buildIndex(f)
 	checksum := tb.calculateChecksum(index)
 	bd.index = index
