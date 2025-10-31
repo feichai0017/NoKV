@@ -1,0 +1,16 @@
+# Git
+.git
+.gitmodules
+
+# Build artefacts
+/build
+artifacts
+**/*.pprof
+
+# Module caches
+.gocache
+.gomodcache
+
+# Docker
+Dockerfile
+.gitignore

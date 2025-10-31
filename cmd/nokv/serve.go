@@ -28,6 +28,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	heartbeatTick := fs.Int("heartbeat-tick", 2, "raft heartbeat tick")
 	maxMsgBytes := fs.Int("raft-max-msg-bytes", 1<<20, "raft max message bytes")
 	maxInflight := fs.Int("raft-max-inflight", 256, "raft max inflight messages")
+	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
+	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
 	var peerFlags []string
 	fs.Func("peer", "remote store mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -64,6 +66,8 @@ func runServeCmd(w io.Writer, args []string) error {
 		Store: raftstore.StoreConfig{
 			StoreID: *storeID,
 		},
+		EnableRaftDebugLog: *raftDebugLog,
+		RaftTickInterval:   *raftTickInterval,
 		Raft: myraft.Config{
 			ElectionTick:    *electionTick,
 			HeartbeatTick:   *heartbeatTick,

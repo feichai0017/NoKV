@@ -6,43 +6,37 @@ usage() {
 Usage: scripts/run_local_cluster.sh [options]
 
 Options:
-  --nodes N         Number of stores to launch (default: 3)
-  --base-port PORT  First gRPC port to use (default: 20170)
-  --workdir DIR     Base directory for cluster data (default: ./artifacts/cluster)
-  --bin PATH        Path to nokv binary (default: build into ./build/nokv)
-  --tso-port PORT   Optional TSO HTTP port (example: 9494) to launch alongside stores
+  --config PATH         Raft configuration file (default: ./raft_config.example.json)
+  --workdir DIR         Base directory for cluster data (default: ./artifacts/cluster)
+  --raft-debug-log      Enable verbose raft debug logging (default: enabled)
+  --no-raft-debug-log   Disable raft debug logging
 USAGE
 }
 
-NODES=3
-BASE_PORT=20170
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
-BIN=""
-TSO_PORT=""
+RAFT_DEBUG=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --nodes)
-      NODES=$2
-      shift 2
-      ;;
-    --base-port)
-      BASE_PORT=$2
+    --config)
+      CONFIG_PATH=$2
       shift 2
       ;;
     --workdir)
       WORKDIR=$2
       shift 2
       ;;
-    --bin)
-      BIN=$2
-      shift 2
+    --raft-debug-log)
+      RAFT_DEBUG=1
+      shift
       ;;
-    --tso-port)
-      TSO_PORT=$2
-      shift 2
+    --no-raft-debug-log)
+      RAFT_DEBUG=0
+      shift
       ;;
-    -h|--help)
+    --help|-h)
       usage
       exit 0
       ;;
@@ -54,24 +48,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$NODES" =~ ^[0-9]+$ ]] || [ "$NODES" -lt 1 ]; then
-  echo "--nodes must be a positive integer" >&2
+if ! [[ -f "$CONFIG_PATH" ]]; then
+  echo "configuration file not found: $CONFIG_PATH" >&2
   exit 1
 fi
-
-if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]] || [ "$BASE_PORT" -lt 1 ]; then
-  echo "--base-port must be a positive integer" >&2
-  exit 1
-fi
-
-if [ -n "$TSO_PORT" ]; then
-  if ! [[ "$TSO_PORT" =~ ^[0-9]+$ ]] || [ "$TSO_PORT" -lt 1 ]; then
-    echo "--tso-port must be a positive integer" >&2
-    exit 1
-  fi
-fi
-
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 if [ -z "$WORKDIR" ]; then
   WORKDIR="$ROOT_DIR/artifacts/cluster"
@@ -81,46 +61,64 @@ mkdir -p "$WORKDIR"
 BUILD_DIR="$ROOT_DIR/build"
 mkdir -p "$BUILD_DIR"
 
-if [ -z "$BIN" ]; then
-  BIN="$BUILD_DIR/nokv"
-  go build -o "$BIN" "$ROOT_DIR/cmd/nokv"
+go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
+go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
+go build -o "$BUILD_DIR/nokv-tso" "$ROOT_DIR/scripts/tso"
+
+PATH="$BUILD_DIR:$PATH"
+
+mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
+if [ "${#STORE_LINES[@]}" -eq 0 ]; then
+  echo "no stores defined in $CONFIG_PATH" >&2
+  exit 1
 fi
 
-MANIFEST_BIN="$BUILD_DIR/nokv-manifest"
-go build -o "$MANIFEST_BIN" "$ROOT_DIR/scripts/manifestctl"
-
-declare -a STORE_IDS PEER_IDS ADDRS WORKDIRS
-for i in $(seq 1 "$NODES"); do
-  STORE_IDS+=("$i")
-  PEER_IDS+=($((100 + i)))
-  WORKDIRS+=("$WORKDIR/store-$i")
-  ADDRS+=("127.0.0.1:$((BASE_PORT + i - 1))")
+declare -a STORE_IDS STORE_WORKDIRS
+for line in "${STORE_LINES[@]}"; do
+  read -r store_id listen_addr advertise_addr docker_listen docker_addr <<<"$line"
+  STORE_IDS+=("$store_id")
+  STORE_WORKDIRS+=("$WORKDIR/store-$store_id")
+  mkdir -p "$WORKDIR/store-$store_id"
 done
 
-PEER_LIST=()
-for i in "${!STORE_IDS[@]}"; do
-  PEER_LIST+=("${STORE_IDS[$i]}:${PEER_IDS[$i]}")
-done
+mapfile -t REGION_LINES < <(nokv-config regions --config "$CONFIG_PATH" --format simple)
+if [ "${#REGION_LINES[@]}" -eq 0 ]; then
+  echo "no regions defined in $CONFIG_PATH" >&2
+  exit 1
+fi
 
-for i in "${!STORE_IDS[@]}"; do
-  mkdir -p "${WORKDIRS[$i]}"
-  args=(
-    --workdir "${WORKDIRS[$i]}"
-    --region-id 1
-  )
-  for peerEntry in "${PEER_LIST[@]}"; do
-    args+=(--peer "$peerEntry")
+for idx in "${!STORE_IDS[@]}"; do
+  store_dir="${STORE_WORKDIRS[$idx]}"
+  if [[ -f "$store_dir/CURRENT" ]]; then
+    echo "Store ${STORE_IDS[$idx]} already bootstrapped; skipping manifest seeding"
+    continue
+  fi
+  for region_line in "${REGION_LINES[@]}"; do
+    read -r region_id start_key end_key epoch_ver epoch_conf peer_str leader_store <<<"$region_line"
+    args=(--workdir "$store_dir" --region-id "$region_id" --epoch-version "$epoch_ver" --epoch-conf-version "$epoch_conf")
+    if [[ "$start_key" != "-" ]]; then
+      args+=(--start-key "$start_key")
+    fi
+    if [[ "$end_key" != "-" ]]; then
+      args+=(--end-key "$end_key")
+    fi
+    IFS=',' read -ra peers <<<"$peer_str"
+    for peer in "${peers[@]}"; do
+      if [[ -n "$peer" ]]; then
+        args+=(--peer "$peer")
+      fi
+    done
+    nokv-config manifest "${args[@]}"
   done
-  "$MANIFEST_BIN" "${args[@]}"
 done
+
+read -r TSO_LISTEN TSO_URL < <(nokv-config tso --config "$CONFIG_PATH" --format simple 2>/dev/null || echo "- -")
 
 PIDS=()
 
-if [ -n "$TSO_PORT" ]; then
-  TSO_BIN="$BUILD_DIR/nokv-tso"
-  go build -o "$TSO_BIN" "$ROOT_DIR/scripts/tso"
-  echo "Starting TSO allocator on 127.0.0.1:${TSO_PORT}"
-  "$TSO_BIN" --addr "127.0.0.1:${TSO_PORT}" --start 100 &
+if [[ -n "${TSO_LISTEN:-}" && "$TSO_LISTEN" != "-" ]]; then
+  echo "Starting TSO allocator on ${TSO_LISTEN}"
+  nokv-tso --addr "$TSO_LISTEN" --start 100 >"$WORKDIR/tso.log" 2>&1 &
   PIDS+=($!)
 fi
 
@@ -133,25 +131,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for i in "${!STORE_IDS[@]}"; do
-  storeID=${STORE_IDS[$i]}
-  addr=${ADDRS[$i]}
-  dir=${WORKDIRS[$i]}
-  cmd=("$BIN" serve --workdir "$dir" --store-id "$storeID" --addr "$addr")
-  for j in "${!STORE_IDS[@]}"; do
-    if [ "$i" -eq "$j" ]; then
-      continue
-    fi
-    cmd+=(--peer "${STORE_IDS[$j]}=${ADDRS[$j]}")
-  done
-  echo "Starting store ${storeID} at ${addr} (workdir=${dir})"
-  "${cmd[@]}" &
+serve_debug_args=()
+if [[ $RAFT_DEBUG -eq 1 ]]; then
+  serve_debug_args=(--raft-debug-log)
+fi
+
+for idx in "${!STORE_IDS[@]}"; do
+  store_id="${STORE_IDS[$idx]}"
+  store_dir="${STORE_WORKDIRS[$idx]}"
+  echo "Starting store ${store_id} (workdir=${store_dir})"
+  scripts/serve_from_config.sh \
+    --config "$CONFIG_PATH" \
+    --store-id "$store_id" \
+    --workdir "$store_dir" \
+    "${serve_debug_args[@]}" >"$store_dir/server.log" 2>&1 &
   PIDS+=($!)
 done
 
-if [ -n "$TSO_PORT" ]; then
-  echo "Cluster running. TSO available at http://127.0.0.1:${TSO_PORT}/tso"
+if [[ -n "${TSO_URL:-}" && "$TSO_URL" != "-" ]]; then
+  echo "Cluster running. TSO available at ${TSO_URL}/tso"
 else
-  echo "Cluster running. Press Ctrl+C to stop."
+  echo "Cluster running (TSO disabled). Press Ctrl+C to stop."
 fi
 wait
