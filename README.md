@@ -144,7 +144,7 @@ NoKV is a Go-native distributed storage engine that blends the manifest discipli
    # Distributed gateway (matches scripts/run_local_cluster.sh defaults)
    go run ./cmd/nokv-redis \
      --addr 127.0.0.1:6380 \
-     --raft-config cmd/nokv-redis/raft_config.example.json \
+     --raft-config raft_config.example.json \
      --tso-url http://127.0.0.1:9494
    ```
 
