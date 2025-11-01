@@ -151,4 +151,20 @@ fi
 cmd+=("${peer_args[@]}")
 cmd+=("${EXTRA_ARGS[@]}")
 
-exec "${cmd[@]}"
+child=""
+cleanup() {
+  if [[ -n "${child:-}" ]] && kill -0 "$child" 2>/dev/null; then
+    kill -INT "$child" 2>/dev/null || true
+    wait "$child" || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+"${cmd[@]}" &
+child=$!
+wait "$child"
+status=$?
+child=""
+trap - EXIT INT TERM
+exit $status

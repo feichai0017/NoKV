@@ -65,6 +65,40 @@ go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
 go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
 go build -o "$BUILD_DIR/nokv-tso" "$ROOT_DIR/scripts/tso"
 
+cleaned=0
+STORE_PIDS=()
+TSO_PID=""
+
+cleanup() {
+  if [[ $cleaned -eq 1 ]]; then
+    return
+  fi
+  cleaned=1
+
+  for pid in "${STORE_PIDS[@]:-}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -INT "$pid" 2>/dev/null || true
+    fi
+  done
+
+  if [[ -n "${TSO_PID:-}" ]] && kill -0 "$TSO_PID" 2>/dev/null; then
+    kill -INT "$TSO_PID" 2>/dev/null || true
+  fi
+
+  for pid in "${STORE_PIDS[@]:-}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" || true
+    fi
+  done
+
+  if [[ -n "${TSO_PID:-}" ]]; then
+    wait "$TSO_PID" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT
+trap 'cleanup; exit 0' INT TERM
+
 PATH="$BUILD_DIR:$PATH"
 
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
@@ -78,7 +112,13 @@ for line in "${STORE_LINES[@]}"; do
   read -r store_id listen_addr advertise_addr docker_listen docker_addr <<<"$line"
   STORE_IDS+=("$store_id")
   STORE_WORKDIRS+=("$WORKDIR/store-$store_id")
-  mkdir -p "$WORKDIR/store-$store_id"
+  store_dir="$WORKDIR/store-$store_id"
+  mkdir -p "$store_dir"
+  lock_path="$store_dir/LOCK"
+  if [[ -f "$lock_path" ]]; then
+    echo "Removing stale lock file $lock_path (previous run exited uncleanly)"
+    rm -f "$lock_path"
+  fi
 done
 
 mapfile -t REGION_LINES < <(nokv-config regions --config "$CONFIG_PATH" --format simple)
@@ -114,22 +154,11 @@ done
 
 read -r TSO_LISTEN TSO_URL < <(nokv-config tso --config "$CONFIG_PATH" --format simple 2>/dev/null || echo "- -")
 
-PIDS=()
-
 if [[ -n "${TSO_LISTEN:-}" && "$TSO_LISTEN" != "-" ]]; then
   echo "Starting TSO allocator on ${TSO_LISTEN}"
   nokv-tso --addr "$TSO_LISTEN" --start 100 >"$WORKDIR/tso.log" 2>&1 &
-  PIDS+=($!)
+  TSO_PID=$!
 fi
-
-cleanup() {
-  for pid in "${PIDS[@]:-}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-    fi
-  done
-}
-trap cleanup EXIT
 
 serve_debug_args=()
 if [[ $RAFT_DEBUG -eq 1 ]]; then
@@ -145,7 +174,7 @@ for idx in "${!STORE_IDS[@]}"; do
     --store-id "$store_id" \
     --workdir "$store_dir" \
     "${serve_debug_args[@]}" >"$store_dir/server.log" 2>&1 &
-  PIDS+=($!)
+  STORE_PIDS+=($!)
 done
 
 if [[ -n "${TSO_URL:-}" && "$TSO_URL" != "-" ]]; then

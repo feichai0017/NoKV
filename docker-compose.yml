@@ -38,7 +38,9 @@ services:
       - "9494:9494"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
-    restart: unless-stopped
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
   node1:
     image: nokv:latest
@@ -63,7 +65,9 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
   node2:
     image: nokv:latest
@@ -88,7 +92,9 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
   node3:
     image: nokv:latest
@@ -113,7 +119,9 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
   redis:
     image: nokv:latest
@@ -143,7 +151,9 @@ services:
         condition: service_started
       tso:
         condition: service_started
-    restart: unless-stopped
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
 volumes:
   node1-data:
