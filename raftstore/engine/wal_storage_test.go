@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -122,6 +124,53 @@ func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-raft record type")
+}
+
+func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	manifestMgr := openManifestManager(t, dir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 1, Term: 1, Data: []byte("entry-1")},
+		{Index: 2, Term: 1, Data: []byte("entry-2")},
+	}))
+	require.NoError(t, walMgr.Sync())
+
+	ptr, ok := manifestMgr.RaftPointer(1)
+	require.True(t, ok)
+	require.Greater(t, ptr.Offset, uint64(0))
+
+	segmentPath := filepath.Join(dir, "wal", fmt.Sprintf("%05d.wal", ptr.Segment))
+
+	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, walMgr.Close())
+
+	file, err := os.OpenFile(segmentPath, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	truncateTo := max(int64(ptr.Offset) - int64(walRecordOverhead), 0)
+	require.NoError(t, file.Truncate(truncateTo))
+	require.NoError(t, file.Close())
+
+	walMgr = openWalManager(t, dir)
+	defer walMgr.Close()
+	manifestMgr = openManifestManager(t, dir)
+	defer manifestMgr.Close()
+
+	_, err = OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "manifest pointer")
 }
 
 func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {

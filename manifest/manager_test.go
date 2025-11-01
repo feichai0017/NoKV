@@ -48,6 +48,69 @@ func TestManagerCreateAndRecover(t *testing.T) {
 	}
 }
 
+func TestManagerRegionEditRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	meta := manifest.RegionMeta{
+		ID:       42,
+		StartKey: []byte("alpha"),
+		EndKey:   []byte("omega"),
+		Epoch: manifest.RegionEpoch{
+			Version:     3,
+			ConfVersion: 7,
+		},
+		Peers: []manifest.PeerMeta{
+			{StoreID: 1, PeerID: 101},
+			{StoreID: 2, PeerID: 201},
+		},
+		State: manifest.RegionStateRunning,
+	}
+	if err := mgr.LogRegionUpdate(meta); err != nil {
+		t.Fatalf("log region: %v", err)
+	}
+	version := mgr.Current()
+	if len(version.Regions) != 1 {
+		t.Fatalf("expected one region, got %d", len(version.Regions))
+	}
+	stored, ok := version.Regions[meta.ID]
+	if !ok {
+		t.Fatalf("region not found in current version")
+	}
+	if string(stored.StartKey) != "alpha" || string(stored.EndKey) != "omega" {
+		t.Fatalf("unexpected key range: %+v", stored)
+	}
+	if stored.Epoch.Version != meta.Epoch.Version || stored.Epoch.ConfVersion != meta.Epoch.ConfVersion {
+		t.Fatalf("epoch mismatch: %+v", stored.Epoch)
+	}
+	if len(stored.Peers) != len(meta.Peers) {
+		t.Fatalf("peer count mismatch: %+v", stored.Peers)
+	}
+	if err := mgr.LogRegionDelete(meta.ID); err != nil {
+		t.Fatalf("log region delete: %v", err)
+	}
+	version = mgr.Current()
+	if len(version.Regions) != 0 {
+		t.Fatalf("expected region deletion to remove entry: %+v", version.Regions)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+	_, ok = mgr.RegionSnapshot()[meta.ID]
+	if ok {
+		t.Fatalf("expected region to remain deleted after reopen")
+	}
+}
+
 func TestManagerLogPointer(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir)

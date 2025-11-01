@@ -12,52 +12,44 @@
     <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
-  <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions</strong></p>
+  <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
 </div>
 
-NoKV is a Go-native distributed storage engine that blends the manifest discipline of RocksDB with the value-log design popularised by Badger. The result is an embeddable KV store featuring MVCC transactions, multi-Raft region management, structured observability, and ready-to-use CLI tooling.
+NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline with Badger-inspired value separation. You can embed it locally, drive it via multi-Raft regions, or front it with a Redis protocol gateway—all from a single topology file.
 
 ---
 
-## 🌐 Table of Contents
+## ✨ Feature Highlights
 
-- [Highlights](#-highlights)
-- [Quick Start](#-quick-start)
-- [Topology & Configuration](#-topology--configuration)
-- [Architecture Overview](#-architecture-overview)
-- [Module Breakdown](#-module-breakdown)
-- [Example Flow](#-example-flow)
-- [Observability & CLI](#-observability--cli)
-- [Redis Gateway](#-redis-gateway)
-- [Comparison: RocksDB vs Badger vs NoKV](#-comparison-rocksdb-vs-badger-vs-nokv)
-- [Testing & Benchmarks](#-testing--benchmarks)
-- [Documentation](#-documentation)
-- [License](#-license)
+- 🚀 **Dual runtime modes** – call `NoKV.Open` inside your process or launch `nokv serve` for a distributed deployment, no code changes required.
+- 🔁 **Hybrid LSM + ValueLog** – WAL → MemTable → SST pipeline for latency, with a ValueLog to keep large payloads off the hot path.
+- ⚡ **MVCC-native transactions** – snapshot isolation, conflict detection, TTL, and iterators built into the core (no external locks).
+- 🧠 **Multi-Raft regions** – `raftstore` manages per-region raft groups, WAL/manifest pointers, and tick-driven leader elections.
+- 🛰️ **Redis gateway** – `cmd/nokv-redis` exposes RESP commands (SET/GET/MGET/NX/XX/TTL/INCR...) on top of raft-backed storage.
+- 🔍 **Observability first** – `nokv stats`, expvar endpoints, hot key tracking, RECOVERY/TRANSPORT metrics, and ready-to-use recovery scripts.
+- 🧰 **Single-source config** – `raft_config.json` feeds local scripts, Docker Compose, Redis gateway, and CI so there’s zero drift.
 
 ---
 
-## ✨ Highlights at a Glance
+## 🚦 Quick Start
 
-| Theme | What it unlocks |
-| --- | --- |
-| 🔁 **Hybrid LSM + ValueLog** | WAL → MemTable → SST pipeline keeps latency low while ValueLog stores hefty payloads; think RocksDB discipline with Badger’s separation trick. |
-| ⚡ **MVCC-native transactions** | Snapshot isolation, conflict detection, iterator snapshots, TTL semantics—no bolt-on layer, it’s all baked in. |
-| 🧠 **Multi-Raft Regions** | `raftstore` spins a Raft group per Region, reuses shared WAL/vlog, and exposes hooks/metrics for schedulers and tooling. |
-| 🛰️ **Dual-mode runtime** | Embed NoKV via `NoKV.Open` or toggle to the distributed service (`nokv serve` / gRPC) without changing data structures. |
-| 🔍 **Observability-first** | `nokv stats`, expvar/pprof, manifest tooling, and hotring heatmaps keep the internals transparent. |
-| 🧰 **Single source of truth** | `raft_config.json` feeds local scripts, Docker Compose, Redis gateway, and CI—no config drift, ever. |
+```bash
+# 1. Embedded snippet
+go run main.go
 
----
+# 2. One-shot stats
+go run ./cmd/nokv stats --workdir ./workdir-demo
 
-## 🚀 Quick Start
+# 3. Three-node dev cluster (plus optional TSO)
+./scripts/run_local_cluster.sh --config ./raft_config.example.json
+# Stop with Ctrl+C; wipe ./artifacts/cluster if the run crashed.
 
-| Scenario | Command | Notes |
-| --- | --- | --- |
-| Embedded Set/Get | <pre>go run main.go</pre> | See minimal example below—great for embedding or unit tests. |
-| Inspect internals | <pre>go run ./cmd/nokv stats --workdir ./workdir-demo</pre> | Surfaces compaction queues, WAL checkpoints, hot keys. |
-| Run 3-store/2-region cluster | <pre>./scripts/run_local_cluster.sh --config ./raft_config.example.json</pre> | Starts three `nokv serve` processes (plus TSO). Existing store directories are detected and reused (skip manifest reseeding). Always stop with `Ctrl+C`; if the process crashes, wipe `./artifacts/cluster` and restart. |
-| Docker Compose | <pre>docker compose up --build</pre> | Builds the image, bootstraps manifests, launches stores + TSO + Redis gateway. |
-| Redis API | <pre>go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json</pre> | Auto-discovers TSO/regions from the JSON; add `--addr-scope docker` when running inside containers. |
+# 4. Redis gateway backed by raft
+go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+
+# 5. Docker Compose sandbox
+docker compose up --build
+```
 
 Minimal embedded snippet:
 
@@ -260,7 +252,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 - `--metrics-addr` publishes `NoKV.Redis` statistics via expvar and `--tso-url` can point to an external TSO service (otherwise a local oracle is used).
 - A ready-to-use cluster configuration is available at `cmd/nokv-redis/raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
 
-> For the complete command matrix, configuration and deployment guides, see [docs/redis.md](docs/redis.md).
+> For the complete command matrix, configuration and deployment guides, see [docs/redis.md](docs/nokv-redis.md).
 
 ---
 
