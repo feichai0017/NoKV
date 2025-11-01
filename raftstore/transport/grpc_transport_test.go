@@ -58,6 +58,29 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	}
 }
 
+func TestGRPCTransportManualTicksDriveElection(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
+	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+	cluster.flush()
+
+	if _, ok := cluster.leader(); ok {
+		t.Fatalf("expected no leader before ticking")
+	}
+
+	cluster.tickMany(4)
+	cluster.flush()
+	if _, ok := cluster.leader(); ok {
+		t.Fatalf("unexpected leader before election timeout")
+	}
+
+	cluster.tickMany(6)
+	cluster.flush()
+	leader, ok := cluster.leader()
+	if !ok || leader == 0 {
+		t.Fatalf("expected leader after manual ticks")
+	}
+}
+
 func TestGRPCTransportSupportsTLS(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
 	serverCreds, clientCreds := buildTestCredentials(t)

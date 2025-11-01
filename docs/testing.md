@@ -54,6 +54,8 @@ go test ./benchmark -run TestBenchmarkResults -count=1 -- \
 | Transactions / Oracle | `txn_test.go`, `txn_iterator_test.go`, `txn_metrics_test.go` | MVCC timestamps, conflict detection, iterator snapshots, metrics accounting. | Mixed workload fuzzing, managed transactions with TTL. |
 | DB Integration | `db_test.go`, `db_recovery_test.go`, `db_recovery_managed_test.go` | End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour. | Combine ValueLog GC + compaction stress, multi-DB interference. |
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
+| Redis Gateway | `cmd/nokv-redis/backend_embedded_test.go`, `cmd/nokv-redis/server_test.go`, `cmd/nokv-redis/backend_raft_test.go` | Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring & TSO discovery. | End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures. |
+| Scripts & Tooling | `scripts/scripts_test.go`, `cmd/nokv-config/main_test.go` | `serve_from_config.sh` address scoping (host/docker) and manifest skipping, `nokv-config` JSON/simple formats, manifest logging CLI. | Golden coverage for `run_local_cluster.sh`, failure-path diagnostics. |
 | Benchmark | `benchmark/benchmark_test.go`, `benchmark/rocksdb_benchmark_test.go` | Comparative throughput/latency vs Badger/RocksDB across workloads. | Add long-tail latency reporting, multi-threaded contention. |
 
 ---
@@ -63,11 +65,12 @@ go test ./benchmark -run TestBenchmarkResults -count=1 -- \
 | Scenario | Coverage | Focus |
 | --- | --- | --- |
 | Crash recovery | `db_recovery_test.go`, `scripts/recovery_scenarios.sh` | WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety. |
+| WAL pointer desync | `raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment` | Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption. |
 | Transaction contention | `TestConflict`, `TestTxnReadAfterWrite`, `TestTxnDiscard` | Oracle watermark handling, conflict errors, managed commit path. |
 | Value separation + GC | `vlog/gc_test.go`, `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
 | Iterator consistency | `txn_iterator_test.go`, `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |
 | Throttling / backpressure | `lsm/compact_test.go`, `db_test.go::TestWriteThrottle` | L0 backlog triggers, flush queue growth, metrics observation. |
-| Distributed TinyKv client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet` | Region-aware routing, NotLeader retries, cross-region 2PC sequencing. |
+| Distributed TinyKv client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection` | Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing. |
 | Performance regression | `benchmark` package | Compare NoKV vs Badger/RocksDB, produce human-readable reports under `benchmark/benchmark_results`. |
 
 ---
