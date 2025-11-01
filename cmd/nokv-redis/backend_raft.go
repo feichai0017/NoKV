@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -109,19 +111,19 @@ func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 	if len(rawCfg.Regions) == 0 {
 		return nil, fmt.Errorf("raft backend: at least one region required")
 	}
-    cfg := client.Config{
-        MaxRetries: rawCfg.MaxRetries,
-    }
-    for _, st := range rawCfg.Stores {
-        addr := strings.TrimSpace(st.Addr)
-        if strings.EqualFold(addrScope, "docker") && st.DockerAddr != "" {
-            addr = strings.TrimSpace(st.DockerAddr)
-        }
-        cfg.Stores = append(cfg.Stores, client.StoreEndpoint{
-            StoreID: st.StoreID,
-            Addr:    addr,
-        })
-    }
+	cfg := client.Config{
+		MaxRetries: rawCfg.MaxRetries,
+	}
+	for _, st := range rawCfg.Stores {
+		addr := strings.TrimSpace(st.Addr)
+		if strings.EqualFold(addrScope, "docker") && st.DockerAddr != "" {
+			addr = strings.TrimSpace(st.DockerAddr)
+		}
+		cfg.Stores = append(cfg.Stores, client.StoreEndpoint{
+			StoreID: st.StoreID,
+			Addr:    addr,
+		})
+	}
 	for _, region := range rawCfg.Regions {
 		meta := &pb.RegionMeta{
 			Id:               region.ID,
@@ -485,35 +487,133 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	if len(mutations) == 0 {
 		return nil
 	}
-	start, err := b.reserveTimestamp(2)
-	if err != nil {
-		return err
+	const maxRetries = 5
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		start, err := b.reserveTimestamp(2)
+		if err != nil {
+			return err
+		}
+		commit := start + 1
+		ctx, cancel := b.context()
+		err = b.client.Mutate(ctx,
+			append([]byte(nil), primary...),
+			mutations,
+			start,
+			commit,
+			defaultLockTTL,
+		)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		var conflicts *client.KeyConflictError
+		if errors.As(err, &conflicts) {
+			if b.resolveKeyConflicts(conflicts) {
+				continue
+			}
+		}
+		lastErr = err
+		break
 	}
-	commit := start + 1
-	// We rely on raftstore/client's TwoPhaseCommit to guarantee atomicity across
-	// all keys in the mutation batch.
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("raft backend: mutate retries exhausted")
+}
+
+func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) bool {
+	if conflicts == nil || len(conflicts.Errors) == 0 {
+		return false
+	}
+	for _, keyErr := range conflicts.Errors {
+		if keyErr == nil {
+			continue
+		}
+		lock := keyErr.GetLocked()
+		if lock == nil {
+			continue
+		}
+		if !b.resolveSingleLock(lock) {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
+	if lock == nil {
+		return true
+	}
+	currentTs, err := b.reserveTimestamp(1)
+	if err != nil {
+		currentTs = uint64(time.Now().UnixNano())
+	}
 	ctx, cancel := b.context()
-	defer cancel()
-	return b.client.Mutate(ctx,
-		append([]byte(nil), primary...),
-		mutations,
-		start,
-		commit,
-		defaultLockTTL,
-	)
+	resp, err := b.client.CheckTxnStatus(ctx, lock.GetPrimaryLock(), lock.GetLockVersion(), currentTs)
+	cancel()
+	if err != nil || resp == nil {
+		return false
+	}
+	if resp.GetCommitVersion() > 0 {
+		return false
+	}
+	switch resp.GetAction() {
+	case pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+		pb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
+		keys := [][]byte{append([]byte(nil), lock.GetKey()...)}
+		if isTTLMetaKey(lock.GetKey()) {
+			base := append([]byte(nil), lock.GetKey()[len(ttlMetaPrefix):]...)
+			if len(base) > 0 {
+				keys = append(keys, base)
+			}
+		} else {
+			keys = append(keys, ttlMetaKey(lock.GetKey()))
+		}
+		ctx2, cancel2 := b.context()
+		_, err := b.client.ResolveLocks(ctx2, lock.GetLockVersion(), 0, uniqueKeys(keys))
+		cancel2()
+		return err == nil
+	case pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
+		pb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed:
+		return false
+	default:
+		return false
+	}
+}
+
+func isTTLMetaKey(key []byte) bool {
+	return bytes.HasPrefix(key, ttlMetaPrefix)
+}
+
+func uniqueKeys(keys [][]byte) [][]byte {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		if len(key) == 0 {
+			continue
+		}
+		str := string(key)
+		if _, ok := seen[str]; ok {
+			continue
+		}
+		seen[str] = struct{}{}
+		out = append(out, key)
+	}
+	return out
 }
 
 type raftConfigFile struct {
-    Stores     []raftStoreConfig  `json:"stores"`
-    Regions    []raftRegionConfig `json:"regions"`
-    MaxRetries int                `json:"max_retries"`
-    TSO        *tsoConfig         `json:"tso"`
+	Stores     []raftStoreConfig  `json:"stores"`
+	Regions    []raftRegionConfig `json:"regions"`
+	MaxRetries int                `json:"max_retries"`
+	TSO        *tsoConfig         `json:"tso"`
 }
 
 type raftStoreConfig struct {
-    StoreID uint64 `json:"store_id"`
-    Addr    string `json:"addr"`
-    DockerAddr string `json:"docker_addr"`
+	StoreID    uint64 `json:"store_id"`
+	Addr       string `json:"addr"`
+	DockerAddr string `json:"docker_addr"`
 }
 
 type raftRegionConfig struct {

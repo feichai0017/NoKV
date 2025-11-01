@@ -15,6 +15,16 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 )
 
+// KeyConflictError represents prewrite-time key conflicts surfaced by the raft
+// service. Callers can inspect the KeyErrors to resolve locks before retrying.
+type KeyConflictError struct {
+	Errors []*pb.KeyError
+}
+
+func (e *KeyConflictError) Error() string {
+	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
+}
+
 // StoreEndpoint describes a reachable store in the cluster.
 type StoreEndpoint struct {
 	StoreID uint64
@@ -494,7 +504,7 @@ func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []
 			continue
 		}
 		if pr := resp.GetResponse(); pr != nil && len(pr.GetErrors()) > 0 {
-			return fmt.Errorf("client: prewrite key errors: %+v", pr.GetErrors())
+			return &KeyConflictError{Errors: pr.GetErrors()}
 		}
 		return nil
 	}
@@ -547,6 +557,127 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 		return lastErr
 	}
 	return fmt.Errorf("client: commit retries exhausted for region %d", regionID)
+}
+
+// CheckTxnStatus inspects the primary lock for a transaction and returns the
+// scheduler's decision (rollback, still alive, or already committed).
+func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*pb.CheckTxnStatusResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		region, err := c.regionForKey(primary)
+		if err != nil {
+			return nil, err
+		}
+		st, err := c.store(region.leader)
+		if err != nil {
+			return nil, err
+		}
+		header, err := buildContext(region)
+		if err != nil {
+			return nil, err
+		}
+		req := &pb.KvCheckTxnStatusRequest{
+			Context: header,
+			Request: &pb.CheckTxnStatusRequest{
+				PrimaryKey:         append([]byte(nil), primary...),
+				LockTs:             lockTs,
+				CurrentTs:          currentTs,
+				CallerStartTs:      currentTs,
+				RollbackIfNotExist: true,
+				CurrentTime:        uint64(time.Now().Unix()),
+			},
+		}
+		resp, err := st.client.KvCheckTxnStatus(ctx, req)
+		if err != nil {
+			return nil, normalizeRPCError(err)
+		}
+		if regionErr := resp.GetRegionError(); regionErr != nil {
+			lastErr = c.handleRegionError(region.meta.GetId(), regionErr)
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			continue
+		}
+		return resp.GetResponse(), nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("client: check txn status retries exhausted")
+}
+
+// ResolveLocks attempts to resolve (commit or rollback) the provided keys for
+// the given transaction versions. Keys are grouped by region automatically.
+func (c *Client) ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	grouped := make(map[uint64][][]byte)
+	for _, key := range keys {
+		region, err := c.regionForKey(key)
+		if err != nil {
+			return 0, err
+		}
+		id := region.meta.GetId()
+		grouped[id] = append(grouped[id], append([]byte(nil), key...))
+	}
+	var resolved uint64
+	for regionID, regionKeys := range grouped {
+		count, err := c.resolveRegionLocks(ctx, regionID, startVersion, commitVersion, regionKeys)
+		if err != nil {
+			return resolved, err
+		}
+		resolved += count
+	}
+	return resolved, nil
+}
+
+func (c *Client) resolveRegionLocks(ctx context.Context, regionID uint64, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+	var lastErr error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		region, ok := c.regionSnapshot(regionID)
+		if !ok {
+			return 0, fmt.Errorf("client: region %d missing for resolve", regionID)
+		}
+		st, err := c.store(region.leader)
+		if err != nil {
+			return 0, err
+		}
+		header, err := buildContext(region)
+		if err != nil {
+			return 0, err
+		}
+		req := &pb.KvResolveLockRequest{
+			Context: header,
+			Request: &pb.ResolveLockRequest{
+				StartVersion:  startVersion,
+				CommitVersion: commitVersion,
+				Keys:          cloneKeys(keys),
+			},
+		}
+		resp, err := st.client.KvResolveLock(ctx, req)
+		if err != nil {
+			return 0, normalizeRPCError(err)
+		}
+		if regionErr := resp.GetRegionError(); regionErr != nil {
+			lastErr = c.handleRegionError(regionID, regionErr)
+			if lastErr != nil {
+				return 0, lastErr
+			}
+			continue
+		}
+		if out := resp.GetResponse(); out != nil {
+			if keyErr := out.GetError(); keyErr != nil {
+				return 0, fmt.Errorf("client: resolve lock key error: %v", keyErr)
+			}
+			return out.GetResolvedLocks(), nil
+		}
+		return 0, nil
+	}
+	if lastErr != nil {
+		return 0, lastErr
+	}
+	return 0, fmt.Errorf("client: resolve lock retries exhausted for region %d", regionID)
 }
 
 func (c *Client) store(storeID uint64) (*storeConn, error) {
