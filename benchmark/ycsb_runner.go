@@ -38,6 +38,7 @@ type ycsbConfig struct {
 	Seed        int64
 	RecordCount int
 	Operations  int
+	WarmUpOps   int
 	ValueSize   int
 	Concurrency int
 	ScanLength  int
@@ -166,6 +167,15 @@ func runYCSBBenchmarks(cfg ycsbConfig, opts ycsbEngineOptions) ([]BenchmarkResul
 			return nil, fmt.Errorf("%s load: %w", engine.Name(), err)
 		}
 		for _, workload := range cfg.Workloads {
+			if cfg.WarmUpOps > 0 {
+				warmCfg := cfg
+				warmCfg.Operations = cfg.WarmUpOps
+				warmCfg.WarmUpOps = 0
+				if _, err := ycsbRunWorkload(engine, warmCfg, state, workload); err != nil {
+					_ = engine.Close()
+					return nil, fmt.Errorf("%s warmup %s: %w", engine.Name(), workload.Name, err)
+				}
+			}
 			res, err := ycsbRunWorkload(engine, cfg, state, workload)
 			if err != nil {
 				_ = engine.Close()
