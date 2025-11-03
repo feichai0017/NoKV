@@ -28,6 +28,7 @@ func TestBenchmarkYCSB(t *testing.T) {
 		Seed:        *fSeed,
 		RecordCount: *ycsbRecords,
 		Operations:  *ycsbOperations,
+		WarmUpOps:   *ycsbWarmOperations,
 		ValueSize:   *ycsbValueSize,
 		Concurrency: *ycsbConcurrency,
 		ScanLength:  *ycsbScanLength,

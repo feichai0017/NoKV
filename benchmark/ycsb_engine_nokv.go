@@ -43,7 +43,8 @@ func (e *nokvEngine) Open(clean bool) error {
 		SyncWrites:          e.opts.SyncWrites,
 	}
 	if e.opts.BlockCacheMB >= 0 {
-		opt.BlockCacheSize = e.opts.BlockCacheMB
+		// BlockCacheSize counts blocks; approximate 4KB blocks per MB.
+		opt.BlockCacheSize = e.opts.BlockCacheMB * 256
 	}
 	e.db = NoKV.Open(opt)
 	return nil
