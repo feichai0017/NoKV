@@ -277,7 +277,26 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 
 - Unit/integration sweep: `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
 - Crash recovery matrix: `RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh`
-- Microbenchmarks: `go test ./benchmark -run TestBenchmarkResults -count=1`
+- Build RocksDB locally (optional for RocksDB comparisons): `./scripts/build_rocksdb.sh`
+- YCSB baseline (NoKV vs Badger):
+  ```bash
+  NOKV_RUN_BENCHMARKS=1 \
+  GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
+  go test ./benchmark -run TestBenchmarkYCSB -count=1 -args \
+    -ycsb_workloads=A,B,C \
+    -ycsb_engines=nokv,badger
+  ```
+- YCSB with RocksDB (requires CGO, the `benchmark_rocksdb` tag, and the RocksDB build above):
+  ```bash
+  LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
+  CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
+  CGO_LDFLAGS="-L$(pwd)/third_party/rocksdb/dist/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4" \
+  NOKV_RUN_BENCHMARKS=1 \
+  GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
+  go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkYCSB -count=1 -args \
+    -ycsb_workloads=A,B,C \
+    -ycsb_engines=nokv,rocksdb,badger
+  ```
 - Compose smoke test: `docker compose up --build` (Redis gateway automatically targets the same config).
 
 Results and guidance live in [docs/testing.md](docs/testing.md).

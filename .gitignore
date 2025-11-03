@@ -24,3 +24,5 @@ AGENTS.md
 artifacts/
 
 work_redis
+
+third_party/

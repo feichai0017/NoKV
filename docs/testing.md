@@ -30,13 +30,30 @@ go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
 docker compose up --build
 docker compose down -v
 
-# Performance baseline (NoKV vs Badger, optional RocksDB)
-go test ./benchmark -run TestBenchmarkResults -count=1
-# With RocksDB comparison (requires CGO and gorocksdb)
-go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkResults -count=1
-# True cold-start run (drops OS caches; requires sudo privileges)
-go test ./benchmark -run TestBenchmarkResults -count=1 -- \
-  -mode cold -drop_cache sudo
+# Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)
+./scripts/build_rocksdb.sh
+# YCSB baseline (NoKV vs Badger)
+NOKV_RUN_BENCHMARKS=1 \
+GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
+go test ./benchmark -run TestBenchmarkYCSB -count=1 -args \
+  -ycsb_workloads=A,B,C \
+  -ycsb_engines=nokv,badger
+# YCSB with RocksDB (requires CGO, benchmark_rocksdb build tag, and the RocksDB build above)
+LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
+CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
+CGO_LDFLAGS="-L$(pwd)/third_party/rocksdb/dist/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4" \
+NOKV_RUN_BENCHMARKS=1 \
+GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
+go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkYCSB -count=1 -args \
+  -ycsb_workloads=A,B,C \
+  -ycsb_engines=nokv,rocksdb,badger
+# Smaller smoke run (helpful for CI)
+NOKV_RUN_BENCHMARKS=1 \
+go test ./benchmark -run TestBenchmarkYCSB -count=1 -args \
+  -ycsb_workloads=A \
+  -ycsb_engines=nokv \
+  -ycsb_records=10000 \
+  -ycsb_ops=50000
 ```
 
 > Tip: Pin `GOCACHE`/`GOMODCACHE` in CI to keep build artefacts local and avoid permission issues.
@@ -56,7 +73,7 @@ go test ./benchmark -run TestBenchmarkResults -count=1 -- \
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
 | Redis Gateway | `cmd/nokv-redis/backend_embedded_test.go`, `cmd/nokv-redis/server_test.go`, `cmd/nokv-redis/backend_raft_test.go` | Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring & TSO discovery. | End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures. |
 | Scripts & Tooling | `scripts/scripts_test.go`, `cmd/nokv-config/main_test.go` | `serve_from_config.sh` address scoping (host/docker) and manifest skipping, `nokv-config` JSON/simple formats, manifest logging CLI. | Golden coverage for `run_local_cluster.sh`, failure-path diagnostics. |
-| Benchmark | `benchmark/benchmark_test.go`, `benchmark/rocksdb_benchmark_test.go` | Comparative throughput/latency vs Badger/RocksDB across workloads. | Add long-tail latency reporting, multi-threaded contention. |
+| Benchmark | `benchmark/ycsb_test.go`, `benchmark/ycsb_runner.go` | YCSB throughput/latency comparisons across engines with detailed percentile + operation mix reporting. | Automate multi-node deployments, add more workloads (D/E/F) and multi-GB datasets. |
 
 ---
 
