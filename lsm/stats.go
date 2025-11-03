@@ -52,10 +52,10 @@ func (lm *levelManager) entryCount() int64 {
 			continue
 		}
 		for _, tbl := range level.tablesSnapshot() {
-			if tbl == nil || tbl.ss == nil {
+			if tbl == nil {
 				continue
 			}
-			total += int64(tbl.ss.Indexs().GetKeyCount())
+			total += int64(tbl.KeyCount())
 		}
 	}
 	return total

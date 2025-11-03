@@ -178,8 +178,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		Level:     0,
 		FileID:    fid,
 		Size:      uint64(table.Size()),
-		Smallest:  utils.SafeCopy(nil, table.ss.MinKey()),
-		Largest:   utils.SafeCopy(nil, table.ss.MaxKey()),
+		Smallest:  utils.SafeCopy(nil, table.MinKey()),
+		Largest:   utils.SafeCopy(nil, table.MaxKey()),
 		CreatedAt: uint64(time.Now().Unix()),
 	}
 	edit := manifest.Edit{
@@ -311,13 +311,11 @@ func (lm *levelManager) maxVersion() uint64 {
 		}
 		lh.RLock()
 		for _, tbl := range lh.tables {
-			if tbl == nil || tbl.ss == nil {
+			if tbl == nil {
 				continue
 			}
-			if idx := tbl.ss.Indexs(); idx != nil {
-				if v := idx.GetMaxVersion(); v > max {
-					max = v
-				}
+			if v := tbl.MaxVersionVal(); v > max {
+				max = v
 			}
 		}
 		lh.RUnlock()
@@ -382,7 +380,10 @@ type levelHandler struct {
 
 func (lh *levelHandler) close() error {
 	for i := range lh.tables {
-		if err := lh.tables[i].ss.Close(); err != nil {
+		if lh.tables[i] == nil {
+			continue
+		}
+		if err := lh.tables[i].closeHandle(); err != nil {
 			return err
 		}
 	}
@@ -391,7 +392,7 @@ func (lh *levelHandler) close() error {
 func (lh *levelHandler) add(t *table) {
 	lh.Lock()
 	defer lh.Unlock()
-	t.lvl = lh.levelNum
+	t.setLevel(lh.levelNum)
 	lh.tables = append(lh.tables, t)
 }
 
@@ -401,7 +402,7 @@ func (lh *levelHandler) addIngest(t *table) {
 	}
 	lh.Lock()
 	defer lh.Unlock()
-	t.lvl = lh.levelNum
+	t.setLevel(lh.levelNum)
 	lh.ingest = append(lh.ingest, t)
 	lh.ingestSize += t.Size()
 }
@@ -413,7 +414,7 @@ func (lh *levelHandler) addIngestBatch(ts []*table) {
 		if t == nil {
 			continue
 		}
-		t.lvl = lh.levelNum
+		t.setLevel(lh.levelNum)
 		lh.ingest = append(lh.ingest, t)
 		lh.ingestSize += t.Size()
 	}
@@ -424,7 +425,7 @@ func (lh *levelHandler) addBatch(ts []*table) {
 	defer lh.Unlock()
 	for _, t := range ts {
 		if t != nil {
-			t.lvl = lh.levelNum
+			t.setLevel(lh.levelNum)
 		}
 	}
 	lh.tables = append(lh.tables, ts...)
@@ -491,8 +492,8 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 			if table == nil {
 				continue
 			}
-			if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
-				utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+			if utils.CompareKeys(key, table.MinKey()) < 0 ||
+				utils.CompareKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
 			if table.prefetchBlockForKey(key, hot) {
@@ -508,8 +509,8 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 		if table == nil {
 			continue
 		}
-		if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
-			utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+		if utils.CompareKeys(key, table.MinKey()) < 0 ||
+			utils.CompareKeys(key, table.MaxKey()) > 0 {
 			continue
 		}
 		if table.prefetchBlockForKey(key, hot) {
@@ -535,12 +536,12 @@ func (lh *levelHandler) Sort() {
 	} else {
 		// Sort tables by keys.
 		sort.Slice(lh.tables, func(i, j int) bool {
-			return utils.CompareKeys(lh.tables[i].ss.MinKey(), lh.tables[j].ss.MinKey()) < 0
+			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 		})
 	}
 	if len(lh.ingest) > 1 {
 		sort.Slice(lh.ingest, func(i, j int) bool {
-			return utils.CompareKeys(lh.ingest[i].ss.MinKey(), lh.ingest[j].ss.MinKey()) < 0
+			return utils.CompareKeys(lh.ingest[i].MinKey(), lh.ingest[j].MinKey()) < 0
 		})
 	}
 }
@@ -567,8 +568,8 @@ func (lh *levelHandler) searchIngestSST(key []byte) (*utils.Entry, error) {
 		if table == nil {
 			continue
 		}
-		if utils.CompareKeys(key, table.ss.MinKey()) < 0 ||
-			utils.CompareKeys(key, table.ss.MaxKey()) > 0 {
+		if utils.CompareKeys(key, table.MinKey()) < 0 ||
+			utils.CompareKeys(key, table.MaxKey()) > 0 {
 			continue
 		}
 		if entry, err := table.Search(key, &version); err == nil {
@@ -590,12 +591,12 @@ func (lh *levelHandler) searchLNSST(key []byte) (*utils.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 func (lh *levelHandler) getTable(key []byte) *table {
-	if len(lh.tables) > 0 && (bytes.Compare(key, lh.tables[0].ss.MinKey()) < 0 || bytes.Compare(key, lh.tables[len(lh.tables)-1].ss.MaxKey()) > 0) {
+	if len(lh.tables) > 0 && (bytes.Compare(key, lh.tables[0].MinKey()) < 0 || bytes.Compare(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0) {
 		return nil
 	} else {
 		for i := len(lh.tables) - 1; i >= 0; i-- {
-			if bytes.Compare(key, lh.tables[i].ss.MinKey()) > -1 &&
-				bytes.Compare(key, lh.tables[i].ss.MaxKey()) < 1 {
+			if bytes.Compare(key, lh.tables[i].MinKey()) > -1 &&
+				bytes.Compare(key, lh.tables[i].MaxKey()) < 1 {
 				return lh.tables[i]
 			}
 		}
@@ -616,10 +617,10 @@ func (lh *levelHandler) overlappingTables(_ levelHandlerRLocked, kr keyRange) (i
 		return 0, 0
 	}
 	left := sort.Search(len(lh.tables), func(i int) bool {
-		return utils.CompareKeys(kr.left, lh.tables[i].ss.MaxKey()) <= 0
+		return utils.CompareKeys(kr.left, lh.tables[i].MaxKey()) <= 0
 	})
 	right := sort.Search(len(lh.tables), func(i int) bool {
-		return utils.CompareKeys(kr.right, lh.tables[i].ss.MaxKey()) < 0
+		return utils.CompareKeys(kr.right, lh.tables[i].MaxKey()) < 0
 	})
 	return left, right
 }
@@ -650,14 +651,14 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	for _, t := range toAdd {
 		lh.addSize(t)
 		t.IncrRef()
-		t.lvl = lh.levelNum
+		t.setLevel(lh.levelNum)
 		newTables = append(newTables, t)
 	}
 
 	// Assign tables.
 	lh.tables = newTables
 	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareKeys(lh.tables[i].ss.MinKey(), lh.tables[i].ss.MinKey()) < 0
+		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 	})
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(toDel)

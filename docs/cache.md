@@ -8,12 +8,19 @@ NoKV's LSM tier layers a multi-level block cache with bloom filter caching to ac
 
 | Component | Purpose | Source |
 | --- | --- | --- |
-| `cache.indexs` | Short-lived table metadata cache (`fid` → `*table`). | [`coreCache.Cache`](../utils/cache) wrapper |
+| `cache.indexs` | Table index cache (`fid` → `*pb.TableIndex`) reused across reopen. | [`coreCache.Cache`](../utils/cache) wrapper |
 | `blockCache` | Two-tier block cache (hot LRU + cold CLOCK). | [`lsm/cache.go#L168-L266`](../lsm/cache.go#L168-L266) |
 | `bloomCache` | LRU cache of bloom filter bitsets per SST. | [`lsm/cache.go#L296-L356`](../lsm/cache.go#L296-L356) |
 | `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and blooms. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
 
 Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes block cache(s) via the `BlockBasedTableOptions`. NoKV keeps it Go-native and GC-friendly.
+
+---
+
+### 1.1 Index Cache & Handles
+
+* SSTable metadata stays with the `table` struct, while decoded protobuf indexes are stored in `cache.indexs`. Lookups first hit the cache before falling back to disk.
+* SST handles are reopened on demand for lower levels. L0/L1 tables keep their file descriptors pinned, while deeper levels close them once no iterator is using the table.
 
 ---
 

@@ -404,7 +404,7 @@ func (lm *levelManager) sortByHeuristic(tables []*table, cd *compactDef) {
 
 	// Sort tables by max version. This is what RocksDB does.
 	sort.Slice(tables, func(i, j int) bool {
-		return tables[i].ss.Indexs().MaxVersion < tables[j].ss.Indexs().MaxVersion
+		return tables[i].MaxVersionVal() < tables[j].MaxVersionVal()
 	})
 }
 func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
@@ -453,8 +453,8 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Level:     int(ch.Level),
 					FileID:    tbl.fid,
 					Size:      uint64(tbl.Size()),
-					Smallest:  utils.SafeCopy(nil, tbl.ss.MinKey()),
-					Largest:   utils.SafeCopy(nil, tbl.ss.MaxKey()),
+					Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
+					Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 				},
 			}
@@ -615,7 +615,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	}
 
 	sort.Slice(newTables, func(i, j int) bool {
-		return utils.CompareKeys(newTables[i].ss.MaxKey(), newTables[j].ss.MaxKey()) < 0
+		return utils.CompareKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
 	})
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
@@ -651,7 +651,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 		}
 		if i%width == width-1 {
 			// 设置最大值为右区间
-			right := utils.KeyWithTs(utils.ParseKey(t.ss.MaxKey()), math.MaxUint64)
+			right := utils.KeyWithTs(utils.ParseKey(t.MaxKey()), math.MaxUint64)
 			addRange(right)
 		}
 	}
@@ -683,7 +683,7 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 		totalSize := t.Size()
 
 		j := sort.Search(len(tables), func(i int) bool {
-			return utils.CompareKeys(tables[i].ss.MinKey(), t.ss.MinKey()) >= 0
+			return utils.CompareKeys(tables[i].MinKey(), t.MinKey()) >= 0
 		})
 		utils.CondPanic(tables[j].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
 		j++
@@ -780,8 +780,8 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				Level:     cd.nextLevel.levelNum,
 				FileID:    tbl.fid,
 				Size:      uint64(tbl.Size()),
-				Smallest:  utils.SafeCopy(nil, tbl.ss.MinKey()),
-				Largest:   utils.SafeCopy(nil, tbl.ss.MaxKey()),
+				Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
+				Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
 			},
 		}
@@ -928,14 +928,14 @@ func getKeyRange(tables ...*table) keyRange {
 	if len(tables) == 0 {
 		return keyRange{}
 	}
-	minKey := tables[0].ss.MinKey()
-	maxKey := tables[0].ss.MaxKey()
+	minKey := tables[0].MinKey()
+	maxKey := tables[0].MaxKey()
 	for i := 1; i < len(tables); i++ {
-		if utils.CompareKeys(tables[i].ss.MinKey(), minKey) < 0 {
-			minKey = tables[i].ss.MinKey()
+		if utils.CompareKeys(tables[i].MinKey(), minKey) < 0 {
+			minKey = tables[i].MinKey()
 		}
-		if utils.CompareKeys(tables[i].ss.MaxKey(), maxKey) > 0 {
-			maxKey = tables[i].ss.MaxKey()
+		if utils.CompareKeys(tables[i].MaxKey(), maxKey) > 0 {
+			maxKey = tables[i].MaxKey()
 		}
 	}
 
