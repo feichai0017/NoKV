@@ -130,20 +130,23 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 		total += n
 		return nil
 	}
+	writeSection := func(b []byte) error {
+		if err := write(b); err != nil {
+			return err
+		}
+		if _, err := crc.Write(b); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	if err := write(headerEnc[:sz]); err != nil {
 		return 0, err
 	}
-	if err := write(e.Key); err != nil {
+	if err := writeSection(e.Key); err != nil {
 		return 0, err
 	}
-	if _, err := crc.Write(e.Key); err != nil {
-		return 0, err
-	}
-	if err := write(e.Value); err != nil {
-		return 0, err
-	}
-	if _, err := crc.Write(e.Value); err != nil {
+	if err := writeSection(e.Value); err != nil {
 		return 0, err
 	}
 
