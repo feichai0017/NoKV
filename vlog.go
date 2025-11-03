@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"expvar"
@@ -246,7 +245,6 @@ func (vlog *valueLog) read(vp *utils.ValuePtr) ([]byte, func(), error) {
 }
 
 func (vlog *valueLog) write(reqs []*request) error {
-	var buf bytes.Buffer
 	head := vlog.manager.Head()
 	fail := func(err error, context string) error {
 		for _, req := range reqs {
@@ -265,8 +263,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 				req.Ptrs = append(req.Ptrs, utils.ValuePtr{})
 				continue
 			}
-			payload := wal.EncodeEntry(&buf, e)
-			ptr, err := vlog.manager.Append(payload)
+			ptr, err := vlog.manager.AppendEntry(e)
 			if err != nil {
 				return fail(err, "rewind value log after append failure")
 			}

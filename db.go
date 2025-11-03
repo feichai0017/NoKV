@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,6 +138,38 @@ func Open(opt *Options) *DB {
 	})
 	utils.Panic(err)
 	db.wal = wlog
+
+	numCompactors := opt.NumCompactors
+	if numCompactors <= 0 {
+		cpu := runtime.NumCPU()
+		if cpu <= 1 {
+			numCompactors = 1
+		} else {
+			numCompactors = min(max(cpu/2, 2), 8)
+		}
+	}
+	numL0Tables := opt.NumLevelZeroTables
+	if numL0Tables <= 0 {
+		numL0Tables = 15
+	}
+	ingestBatchSize := opt.IngestCompactBatchSize
+	if ingestBatchSize <= 0 {
+		ingestBatchSize = 8
+	}
+	baseTableSize := opt.MemTableSize
+	if baseTableSize <= 0 {
+		baseTableSize = 8 << 20
+	}
+	if baseTableSize < 8<<20 {
+		baseTableSize = 8 << 20
+	}
+	if opt.SSTableMaxSz > 0 && baseTableSize > opt.SSTableMaxSz {
+		baseTableSize = opt.SSTableMaxSz
+	}
+	baseLevelSize := baseTableSize * 4
+	if baseLevelSize < 32<<20 {
+		baseLevelSize = 32 << 20
+	}
 	// 初始化LSM结构
 	db.lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:                opt.WorkDir,
@@ -144,14 +177,14 @@ func Open(opt *Options) *DB {
 		SSTableMaxSz:           opt.SSTableMaxSz,
 		BlockSize:              8 * 1024,
 		BloomFalsePositive:     0, //0.01,
-		BaseLevelSize:          10 << 20,
-		LevelSizeMultiplier:    10,
-		BaseTableSize:          5 << 20,
+		BaseLevelSize:          baseLevelSize,
+		LevelSizeMultiplier:    8,
+		BaseTableSize:          baseTableSize,
 		TableSizeMultiplier:    2,
-		NumLevelZeroTables:     15,
+		NumLevelZeroTables:     numL0Tables,
 		MaxLevelNum:            7,
-		NumCompactors:          1,
-		IngestCompactBatchSize: 4,
+		NumCompactors:          numCompactors,
+		IngestCompactBatchSize: ingestBatchSize,
 		BlockCacheSize:         db.opt.BlockCacheSize,
 		BlockCacheHotFraction:  db.opt.BlockCacheHotFraction,
 		BloomCacheSize:         db.opt.BloomCacheSize,
@@ -636,7 +669,9 @@ func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
 	req := requestPool.Get().(*request)
 	req.reset()
 	req.Entries = entries
-	req.enqueueAt = time.Now()
+	if db.writeMetrics != nil {
+		req.enqueueAt = time.Now()
+	}
 	done := make(chan error, 1)
 	req.doneCh = done
 	req.IncrRef() // for db write
@@ -755,7 +790,8 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 		totalSize    int64
 		waitSum      int64
 	)
-	now := time.Now()
+	batchStart := time.Now()
+	now := batchStart
 	for _, cr := range reqs {
 		if cr == nil || cr.req == nil {
 			continue
@@ -775,21 +811,33 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 		return
 	}
 
-	db.writeMetrics.recordBatch(len(requests), totalEntries, totalSize, waitSum)
+	if db.writeMetrics != nil {
+		db.writeMetrics.recordBatch(len(requests), totalEntries, totalSize, waitSum)
+	}
 
-	start := time.Now()
 	if err := db.vlog.write(requests); err != nil {
 		db.finishCommitRequests(reqs, err)
 		return
 	}
-	db.writeMetrics.recordValueLog(time.Since(start))
+	var valueLogDur time.Duration
+	if db.writeMetrics != nil {
+		valueLogDur = max(time.Since(batchStart), 0)
+		if valueLogDur > 0 {
+			db.writeMetrics.recordValueLog(valueLogDur)
+		}
+	}
 
-	start = time.Now()
 	if err := db.applyRequests(requests); err != nil {
 		db.finishCommitRequests(reqs, err)
 		return
 	}
-	db.writeMetrics.recordApply(time.Since(start))
+	if db.writeMetrics != nil {
+		totalDur := max(time.Since(batchStart), 0)
+		applyDur := max(totalDur-valueLogDur, 0)
+		if applyDur > 0 {
+			db.writeMetrics.recordApply(applyDur)
+		}
+	}
 
 	if db.opt.SyncWrites {
 		if err := db.wal.Sync(); err != nil {

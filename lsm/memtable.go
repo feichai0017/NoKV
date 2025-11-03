@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/utils"
@@ -22,9 +23,37 @@ type memTable struct {
 	lsm        *LSM
 	segmentID  uint32
 	sl         *utils.Skiplist
-	buf        *bytes.Buffer
+	walBuf     *bytes.Buffer
 	maxVersion uint64
 	walSize    int64
+}
+
+var walBufferPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+const walBufferMaxReuse = 1 << 22 // 4 MiB guard to avoid retaining huge buffers unnecessarily.
+
+func getWalBuffer() *bytes.Buffer {
+	if bufAny := walBufferPool.Get(); bufAny != nil {
+		buf := bufAny.(*bytes.Buffer)
+		buf.Reset()
+		return buf
+	}
+	return &bytes.Buffer{}
+}
+
+func putWalBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	if buf.Cap() > walBufferMaxReuse {
+		return
+	}
+	buf.Reset()
+	walBufferPool.Put(buf)
 }
 
 const defaultArenaBase = int64(64 << 20)
@@ -51,15 +80,27 @@ func (lsm *LSM) NewMemtable() *memTable {
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
-		buf:       &bytes.Buffer{},
+		walBuf:    getWalBuffer(),
 		walSize:   0,
 	}
 }
 
-func (m *memTable) close() error { return nil }
+func (m *memTable) close() error {
+	if m == nil {
+		return nil
+	}
+	putWalBuffer(m.walBuf)
+	m.walBuf = nil
+	return nil
+}
 
 func (m *memTable) set(entry *utils.Entry) error {
-	payload := wal.EncodeEntry(m.buf, entry)
+	buf := m.walBuf
+	if buf == nil {
+		buf = getWalBuffer()
+		m.walBuf = buf
+	}
+	payload := wal.EncodeEntry(buf, entry)
 	infos, err := m.lsm.wal.Append(payload)
 	if err != nil {
 		return err
@@ -160,7 +201,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		lsm:       lsm,
 		segmentID: uint32(fid),
 		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
-		buf:       &bytes.Buffer{},
+		walBuf:    getWalBuffer(),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntry {
