@@ -277,8 +277,8 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
 
 - Unit/integration sweep: `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
 - Crash recovery matrix: `RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh`
-- Build RocksDB locally（可选，用于对比 RocksDB）：`./scripts/build_rocksdb.sh`
-- YCSB baseline（默认 workloads=A,B,C,D,F，records=1e6，ops=1e6，warmup=1e5，conc=16）
+- Build RocksDB locally (optional for RocksDB comparisons): `./scripts/build_rocksdb.sh`
+- YCSB baseline (default workloads=A,B,C,D,F, records=1e6, ops=1e6, warmup=1e5, conc=16)
   ```bash
   NOKV_RUN_BENCHMARKS=1 \
   GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
@@ -286,7 +286,7 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
     -ycsb_workloads=A,B,C,D,F \
     -ycsb_engines=nokv,badger
   ```
-- YCSB with RocksDB（需要 CGO、`benchmark_rocksdb`、以及上一步构建的 RocksDB）
+- YCSB with RocksDB (requires CGO, the `benchmark_rocksdb` tag, and the RocksDB build above)
   ```bash
   LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
   CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
@@ -297,7 +297,7 @@ NoKV takes the structure of RocksDB, the value-log efficiency of Badger, and add
     -ycsb_workloads=A,B,C,D,F \
     -ycsb_engines=nokv,rocksdb,badger
   ```
-- 一键脚本：`./scripts/run_benchmarks.sh`（支持 `YCSB_*` 环境变量覆写记录数、操作数、warmup、并发等）
+- One-click script: `./scripts/run_benchmarks.sh` (supports `YCSB_*` env vars to override dataset size, operations, warmup, concurrency, etc.)
 - Compose smoke test: `docker compose up --build` (Redis gateway automatically targets the same config).
 
 Results and guidance live in [docs/testing.md](docs/testing.md).
