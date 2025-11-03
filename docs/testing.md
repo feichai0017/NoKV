@@ -32,29 +32,18 @@ docker compose down -v
 
 # Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)
 ./scripts/build_rocksdb.sh
-# YCSB baseline (default workloads=A,B,C,D,F, records=1e6, ops=1e6, warmup=1e5, conc=16)
-NOKV_RUN_BENCHMARKS=1 \
-GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
-go test ./benchmark -run TestBenchmarkYCSB -count=1 -args \
-  -ycsb_workloads=A,B,C,D,F \
-  -ycsb_engines=nokv,badger
+# YCSB baseline (records=1e6, ops=1e6, warmup=1e5, conc=16)
+./scripts/run_benchmarks.sh
 # YCSB with RocksDB (requires CGO, `benchmark_rocksdb`, and the RocksDB build above)
 LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
 CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
 CGO_LDFLAGS="-L$(pwd)/third_party/rocksdb/dist/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4" \
-NOKV_RUN_BENCHMARKS=1 \
-GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache \
-go test -tags benchmark_rocksdb ./benchmark -run TestBenchmarkYCSB -count=1 -args \
-  -ycsb_workloads=A,B,C,D,F \
-  -ycsb_engines=nokv,rocksdb,badger
+YCSB_ENGINES="nokv,rocksdb,badger" ./scripts/run_benchmarks.sh
 # One-click script (auto-detect RocksDB, supports `YCSB_*` env vars to override defaults)
 ./scripts/run_benchmarks.sh
 # Quick smoke run (smaller dataset)
-NOKV_RUN_BENCHMARKS=1 \
-YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
-go test ./benchmark -run TestBenchmarkYCSB -count=1 -args \
-  -ycsb_workloads=A \
-  -ycsb_engines=nokv
+NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
+./scripts/run_benchmarks.sh -ycsb_workloads=A -ycsb_engines=nokv
 ```
 
 > Tip: Pin `GOCACHE`/`GOMODCACHE` in CI to keep build artefacts local and avoid permission issues.
