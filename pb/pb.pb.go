@@ -543,6 +543,7 @@ type TableIndex struct {
 	MaxVersion    uint64                 `protobuf:"varint,3,opt,name=maxVersion,proto3" json:"maxVersion,omitempty"`
 	KeyCount      uint32                 `protobuf:"varint,4,opt,name=keyCount,proto3" json:"keyCount,omitempty"`
 	StaleDataSize uint32                 `protobuf:"varint,5,opt,name=staleDataSize,proto3" json:"staleDataSize,omitempty"`
+	ValueSize     uint64                 `protobuf:"varint,6,opt,name=valueSize,proto3" json:"valueSize,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -608,6 +609,13 @@ func (x *TableIndex) GetKeyCount() uint32 {
 func (x *TableIndex) GetStaleDataSize() uint32 {
 	if x != nil {
 		return x.StaleDataSize
+	}
+	return 0
+}
+
+func (x *TableIndex) GetValueSize() uint64 {
+	if x != nil {
+		return x.ValueSize
 	}
 	return 0
 }
@@ -3992,7 +4000,7 @@ const file_pb_proto_rawDesc = "" +
 	"\n" +
 	"\x06CREATE\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"\xbb\x01\n" +
+	"\x06DELETE\x10\x01\"\xd9\x01\n" +
 	"\n" +
 	"TableIndex\x12)\n" +
 	"\aoffsets\x18\x01 \x03(\v2\x0f.pb.BlockOffsetR\aoffsets\x12 \n" +
@@ -4001,7 +4009,8 @@ const file_pb_proto_rawDesc = "" +
 	"maxVersion\x18\x03 \x01(\x04R\n" +
 	"maxVersion\x12\x1a\n" +
 	"\bkeyCount\x18\x04 \x01(\rR\bkeyCount\x12$\n" +
-	"\rstaleDataSize\x18\x05 \x01(\rR\rstaleDataSize\"I\n" +
+	"\rstaleDataSize\x18\x05 \x01(\rR\rstaleDataSize\x12\x1c\n" +
+	"\tvalueSize\x18\x06 \x01(\x04R\tvalueSize\"I\n" +
 	"\vBlockOffset\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x10\n" +

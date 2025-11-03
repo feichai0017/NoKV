@@ -28,6 +28,15 @@ type compactionPriority struct {
 	ingestOnly   bool
 }
 
+func (cp *compactionPriority) applyValueWeight(weight, valueScore float64) {
+	if weight <= 0 || valueScore <= 0 {
+		return
+	}
+	capped := math.Min(valueScore, 16)
+	cp.score += weight * capped
+	cp.adjusted = cp.score
+}
+
 // 归并目标
 type targets struct {
 	baseLevel int
@@ -168,6 +177,7 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 // pickCompactLevel 选择合适的level执行合并，返回判断的优先级
 func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 	t := lm.levelTargets()
+	valueWeight := lm.opt.CompactionValueWeight
 	addPriority := func(level int, score float64, ingest bool) {
 		pri := compactionPriority{
 			level:      level,
@@ -175,6 +185,43 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 			adjusted:   score,
 			t:          t,
 			ingestOnly: ingest,
+		}
+		if valueWeight > 0 && level < len(lm.levels) {
+			lvl := lm.levels[level]
+			if lvl != nil {
+				var valueBytes int64
+				var target float64
+				if level == 0 {
+					valueBytes = lvl.getTotalValueSize()
+					target = float64(lm.opt.BaseLevelSize)
+					if target <= 0 {
+						target = float64(lm.opt.BaseTableSize)
+					}
+				} else if ingest {
+					valueBytes = lvl.ingestValueBytes()
+					target = float64(t.fileSz[level])
+					if target <= 0 {
+						target = float64(lm.opt.BaseTableSize)
+					}
+					if target <= 0 {
+						target = 1
+					}
+				} else {
+					valueBytes = lvl.mainValueBytes()
+					target = float64(t.targetSz[level])
+				}
+				if target <= 0 {
+					target = float64(lm.opt.BaseTableSize)
+					if target <= 0 {
+						target = 1
+					}
+				}
+				valueScore := float64(valueBytes) / target
+				if ingest && valueScore == 0 {
+					valueScore = lvl.ingestValueDensity()
+				}
+				pri.applyValueWeight(valueWeight, valueScore)
+			}
 		}
 		prios = append(prios, pri)
 	}
@@ -456,6 +503,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
 					Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
+					ValueSize: tbl.ValueSize(),
 				},
 			}
 			if err := lm.manifestMgr.LogEdit(add); err != nil {
@@ -783,6 +831,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
 				Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
+				ValueSize: tbl.ValueSize(),
 			},
 		}
 		if err := lm.manifestMgr.LogEdit(add); err != nil {
@@ -876,7 +925,10 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	cd.nextRange = keyRange{}
 	cd.bot = nil
 
-	//  TODO 这里是否会导致死锁？
+	// We intentionally avoid calling compactDef.lockLevels here. Both thisLevel and nextLevel
+	// point at L0, so grabbing the RLock twice would violate RWMutex semantics and can deadlock
+	// once another goroutine attempts a write lock. Taking the shared lock exactly once matches
+	// Badger's approach and keeps lock acquisition order (level -> compactState) consistent.
 	utils.CondPanic(cd.thisLevel.levelNum != 0, errors.New("cd.thisLevel.levelNum != 0"))
 	utils.CondPanic(cd.nextLevel.levelNum != 0, errors.New("cd.nextLevel.levelNum != 0"))
 	lm.levels[0].RLock()
@@ -968,6 +1020,10 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 	var lastKey []byte
 	// 更新 discardStats
 	discardStats := make(map[uint32]int64)
+	valueBias := 1.0
+	if cd.thisLevel != nil {
+		valueBias = cd.thisLevel.valueBias(lm.opt.CompactionValueWeight)
+	}
 	defer func() {
 		lm.updateDiscardStats(discardStats)
 	}()
@@ -975,7 +1031,11 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 		if e.Meta&utils.BitValuePointer > 0 {
 			var vp utils.ValuePtr
 			vp.Decode(e.Value)
-			discardStats[vp.Fid] += int64(vp.Len)
+			weighted := float64(vp.Len) * valueBias
+			if weighted < 1 {
+				weighted = float64(vp.Len)
+			}
+			discardStats[vp.Fid] += int64(math.Round(weighted))
 		}
 	}
 	addKeys := func(builder *tableBuilder) {
@@ -1003,17 +1063,17 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 				// 更新右边界
 				tableKr.right = lastKey
 			}
-			// TODO 这里要区分值的指针
 			// 判断是否是过期内容，是的话就删除
+			valueLen := entryValueLen(it.Item().Entry())
 			switch {
 			case isExpired:
 				updateStats(it.Item().Entry())
-				builder.AddStaleKey(it.Item().Entry())
+				builder.AddStaleEntryWithLen(it.Item().Entry(), valueLen)
 			default:
-				builder.AddKey(it.Item().Entry())
+				builder.AddKeyWithLen(it.Item().Entry(), valueLen)
 			}
 		}
-	} // End of function: addKeys
+	}
 
 	//如果 key range left还存在 则seek到这里 说明遍历中途停止了
 	if len(kr.left) > 0 {
@@ -1027,9 +1087,9 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 		if len(kr.right) > 0 && utils.CompareKeys(key, kr.right) >= 0 {
 			break
 		}
-		// 拼装table创建的参数
-		// TODO 这里可能要大改，对open table的参数复制一份opt
-		builder := newTableBuilerWithSSTSize(lm.opt, cd.t.fileSz[cd.nextLevel.levelNum])
+		// 为构建任务拷贝一份 Options，避免后台调整与运行中 compaction 互相影响。
+		builderOpt := lm.opt.Clone()
+		builder := newTableBuilerWithSSTSize(builderOpt, cd.t.fileSz[cd.nextLevel.levelNum])
 
 		// This would do the iteration and add keys to builder.
 		addKeys(builder)

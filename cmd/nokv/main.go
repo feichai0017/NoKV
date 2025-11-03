@@ -121,6 +121,17 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		fmt.Fprintf(w, "ValueLog.Head          fid=%d offset=%d len=%d\n",
 			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
 	}
+	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.CompactionValueWeight)
+	if snap.CompactionValueWeightSuggested > snap.CompactionValueWeight {
+		fmt.Fprintf(w, " (suggested %.2f)", snap.CompactionValueWeightSuggested)
+	}
+	fmt.Fprintln(w)
+	if snap.LSMValueDensityMax > 0 {
+		fmt.Fprintf(w, "LSM.ValueDensityMax    %.2f\n", snap.LSMValueDensityMax)
+	}
+	if snap.LSMValueDensityAlert {
+		fmt.Fprintln(w, "LSM.ValueDensityAlert  true")
+	}
 	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WALActiveSegment, snap.WALSegmentCount, snap.WALSegmentsRemoved)
 	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WALActiveSize)
 	if snap.WALRecordCounts.Total() > 0 {
@@ -160,6 +171,21 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
 	fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
 		snap.RegionTotal, snap.RegionNew, snap.RegionRunning, snap.RegionRemoving, snap.RegionTombstone, snap.RegionOther)
+	if snap.LSMValueBytesTotal > 0 {
+		fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSMValueBytesTotal)
+	}
+	if len(snap.LSMLevels) > 0 {
+		fmt.Fprintln(w, "LSM.Levels:")
+		for _, lvl := range snap.LSMLevels {
+			fmt.Fprintf(w, "  - L%d tables=%d size=%dB value=%dB stale=%dB",
+				lvl.Level, lvl.TableCount, lvl.SizeBytes, lvl.ValueBytes, lvl.StaleBytes)
+			if lvl.IngestTables > 0 {
+				fmt.Fprintf(w, " ingestTables=%d ingestSize=%dB ingestValue=%dB",
+					lvl.IngestTables, lvl.IngestSizeBytes, lvl.IngestValueBytes)
+			}
+			fmt.Fprintln(w)
+		}
+	}
 	if len(snap.ColumnFamilies) > 0 {
 		fmt.Fprintln(w, "ColumnFamilies:")
 		var names []string
@@ -225,11 +251,13 @@ func runManifestCmd(w io.Writer, args []string) error {
 	sort.Ints(levels)
 	for _, level := range levels {
 		files := version.Levels[level]
+		totalVal := totalValue(files)
 		levelInfo = append(levelInfo, map[string]any{
 			"level":       level,
 			"file_count":  len(files),
 			"file_ids":    fileIDs(files),
 			"total_bytes": totalSize(files),
+			"value_bytes": totalVal,
 		})
 	}
 	out["levels"] = levelInfo
@@ -260,8 +288,8 @@ func runManifestCmd(w io.Writer, args []string) error {
 	fmt.Fprintf(w, "ValueLog Head        : fid=%d offset=%d valid=%v\n", head.FileID, head.Offset, head.Valid)
 	fmt.Fprintln(w, "Levels:")
 	for _, lvl := range levelInfo {
-		fmt.Fprintf(w, "  - L%d files=%d total=%d bytes ids=%v\n",
-			lvl["level"], lvl["file_count"], lvl["total_bytes"], lvl["file_ids"])
+		fmt.Fprintf(w, "  - L%d files=%d total=%d bytes value=%d bytes ids=%v\n",
+			lvl["level"], lvl["file_count"], lvl["total_bytes"], lvl["value_bytes"], lvl["file_ids"])
 	}
 	fmt.Fprintln(w, "ValueLog segments:")
 	for _, vl := range valueLogs {
@@ -515,6 +543,14 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	intVal = 0
 	setInt("NoKV.Stats.Raft.MaxSegment", &intVal)
 	snap.RaftMaxLogSegment = uint32(intVal)
+	setInt("NoKV.Stats.LSM.ValueBytes", &snap.LSMValueBytesTotal)
+	setFloat("NoKV.Stats.Compaction.ValueWeight", &snap.CompactionValueWeight)
+	setFloat("NoKV.Stats.LSM.ValueDensityMax", &snap.LSMValueDensityMax)
+	intVal = 0
+	setInt("NoKV.Stats.LSM.ValueDensityAlert", &intVal)
+	if intVal != 0 {
+		snap.LSMValueDensityAlert = true
+	}
 	setInt("NoKV.Stats.Region.Total", &snap.RegionTotal)
 	setInt("NoKV.Stats.Region.New", &snap.RegionNew)
 	setInt("NoKV.Stats.Region.Running", &snap.RegionRunning)
@@ -566,6 +602,41 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 			}
 		}
 	}
+	if raw, ok := data["NoKV.Stats.LSM.Levels"]; ok {
+		switch levels := raw.(type) {
+		case []any:
+			for _, elem := range levels {
+				if m, ok := elem.(map[string]any); ok {
+					var lvl NoKV.LSMLevelStats
+					if v, ok := m["level"].(float64); ok {
+						lvl.Level = int(v)
+					}
+					if v, ok := m["tables"].(float64); ok {
+						lvl.TableCount = int(v)
+					}
+					if v, ok := m["size_bytes"].(float64); ok {
+						lvl.SizeBytes = int64(v)
+					}
+					if v, ok := m["value_bytes"].(float64); ok {
+						lvl.ValueBytes = int64(v)
+					}
+					if v, ok := m["stale_bytes"].(float64); ok {
+						lvl.StaleBytes = int64(v)
+					}
+					if v, ok := m["ingest_tables"].(float64); ok {
+						lvl.IngestTables = int(v)
+					}
+					if v, ok := m["ingest_size_bytes"].(float64); ok {
+						lvl.IngestSizeBytes = int64(v)
+					}
+					if v, ok := m["ingest_value_bytes"].(float64); ok {
+						lvl.IngestValueBytes = int64(v)
+					}
+					snap.LSMLevels = append(snap.LSMLevels, lvl)
+				}
+			}
+		}
+	}
 	return snap
 }
 
@@ -591,6 +662,14 @@ func totalSize(files []manifest.FileMeta) uint64 {
 	var total uint64
 	for _, meta := range files {
 		total += meta.Size
+	}
+	return total
+}
+
+func totalValue(files []manifest.FileMeta) uint64 {
+	var total uint64
+	for _, meta := range files {
+		total += meta.ValueSize
 	}
 	return total
 }

@@ -77,31 +77,42 @@ type Options struct {
 	// IngestCompactBatchSize decides how many L0 tables to promote into the
 	// ingest buffer per compaction cycle. Zero falls back to the legacy default.
 	IngestCompactBatchSize int
+
+	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
+	// levels whose entries reference large value log payloads. Higher values
+	// make the compaction picker favour levels with high ValuePtr density.
+	CompactionValueWeight float64
+
+	// CompactionValueAlertThreshold triggers stats alerts when a level's
+	// value-density (value bytes / total bytes) exceeds this ratio.
+	CompactionValueAlertThreshold float64
 }
 
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:                    "./work_test",
-		MemTableSize:               64 << 20,
-		SSTableMaxSz:               256 << 20,
-		HotRingEnabled:             true,
-		HotRingBits:                12,
-		HotRingTopK:                16,
-		WriteBatchMaxCount:         64,
-		WriteBatchMaxSize:          1 << 20,
-		WriteBatchDelay:            2 * time.Millisecond,
-		BlockCacheSize:             4096,
-		BlockCacheHotFraction:      0.25,
-		BloomCacheSize:             1024,
-		SyncWrites:                 false,
-		RaftLagWarnSegments:        8,
-		EnableWALWatchdog:          true,
-		WALAutoGCInterval:          15 * time.Second,
-		WALAutoGCMinRemovable:      1,
-		WALAutoGCMaxBatch:          4,
-		WALTypedRecordWarnRatio:    0.35,
-		WALTypedRecordWarnSegments: 6,
+		WorkDir:                       "./work_test",
+		MemTableSize:                  64 << 20,
+		SSTableMaxSz:                  256 << 20,
+		HotRingEnabled:                true,
+		HotRingBits:                   12,
+		HotRingTopK:                   16,
+		WriteBatchMaxCount:            64,
+		WriteBatchMaxSize:             1 << 20,
+		WriteBatchDelay:               2 * time.Millisecond,
+		BlockCacheSize:                4096,
+		BlockCacheHotFraction:         0.25,
+		BloomCacheSize:                1024,
+		SyncWrites:                    false,
+		RaftLagWarnSegments:           8,
+		EnableWALWatchdog:             true,
+		WALAutoGCInterval:             15 * time.Second,
+		WALAutoGCMinRemovable:         1,
+		WALAutoGCMaxBatch:             4,
+		WALTypedRecordWarnRatio:       0.35,
+		WALTypedRecordWarnSegments:    6,
+		CompactionValueWeight:         0.35,
+		CompactionValueAlertThreshold: 0.6,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt

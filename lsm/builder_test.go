@@ -27,4 +27,5 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	var tableIndex pb.TableIndex
 	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
 	require.Equal(t, uint32(builder.staleDataSize), tableIndex.GetStaleDataSize())
+	require.Equal(t, uint64(builder.valueSize), tableIndex.GetValueSize())
 }

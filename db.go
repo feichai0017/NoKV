@@ -185,6 +185,7 @@ func Open(opt *Options) *DB {
 		MaxLevelNum:            7,
 		NumCompactors:          numCompactors,
 		IngestCompactBatchSize: ingestBatchSize,
+		CompactionValueWeight:  db.opt.CompactionValueWeight,
 		BlockCacheSize:         db.opt.BlockCacheSize,
 		BlockCacheHotFraction:  db.opt.BlockCacheHotFraction,
 		BloomCacheSize:         db.opt.BloomCacheSize,

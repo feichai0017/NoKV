@@ -26,6 +26,7 @@ type FileMeta struct {
 	Smallest  []byte
 	Largest   []byte
 	CreatedAt uint64
+	ValueSize uint64
 }
 
 // ValueLogMeta describes a value log segment.
@@ -550,8 +551,8 @@ func writeEdit(w io.Writer, edit Edit) error {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  |
-		// +----------------+
+		// | CreatedAt (v)  | ValueSize (v)  |
+		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		meta := edit.File
 		buf = binary.AppendUvarint(buf, uint64(meta.Level))
@@ -560,6 +561,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 		buf = appendBytes(buf, meta.Smallest)
 		buf = appendBytes(buf, meta.Largest)
 		buf = binary.AppendUvarint(buf, meta.CreatedAt)
+		buf = binary.AppendUvarint(buf, meta.ValueSize)
 	case EditLogPointer:
 		// EditLogPointer Data Format:
 		// +----------------+----------------+
@@ -700,8 +702,8 @@ func decodeEdit(data []byte) (Edit, error) {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  |
-		// +----------------+
+		// | CreatedAt (v)  | ValueSize (v)  |
+		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		level, n := binary.Uvarint(data[pos:])
 		pos += n
@@ -715,6 +717,16 @@ func decodeEdit(data []byte) (Edit, error) {
 		pos += n
 		created, n := binary.Uvarint(data[pos:])
 		pos += n
+		var valueSize uint64
+		if pos <= len(data) {
+			if pos == len(data) {
+				valueSize = 0
+			} else {
+				vs, consumed := binary.Uvarint(data[pos:])
+				pos += consumed
+				valueSize = vs
+			}
+		}
 		if pos > len(data) {
 			return Edit{}, fmt.Errorf("manifest add/delete truncated")
 		}
@@ -725,6 +737,7 @@ func decodeEdit(data []byte) (Edit, error) {
 			Smallest:  smallest,
 			Largest:   largest,
 			CreatedAt: created,
+			ValueSize: valueSize,
 		}
 	case EditLogPointer:
 		// EditLogPointer Data Format:

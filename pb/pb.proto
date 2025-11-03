@@ -41,6 +41,7 @@ message TableIndex{
     uint64 maxVersion = 3;
     uint32 keyCount = 4;
     uint32 staleDataSize = 5;
+    uint64 valueSize = 6;
 }
 
 message BlockOffset{
