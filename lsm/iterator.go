@@ -163,12 +163,12 @@ func (s *ConcatIterator) Seek(key []byte) {
 	var idx int
 	if s.options.IsAsc {
 		idx = sort.Search(len(s.tables), func(i int) bool {
-			return utils.CompareKeys(s.tables[i].ss.MaxKey(), key) >= 0
+			return utils.CompareKeys(s.tables[i].MaxKey(), key) >= 0
 		})
 	} else {
 		n := len(s.tables)
 		idx = n - 1 - sort.Search(n, func(i int) bool {
-			return utils.CompareKeys(s.tables[n-1-i].ss.MinKey(), key) <= 0
+			return utils.CompareKeys(s.tables[n-1-i].MinKey(), key) <= 0
 		})
 	}
 	if idx >= len(s.tables) || idx < 0 {

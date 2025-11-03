@@ -22,7 +22,14 @@ func TestWALWatchdogAutoGC(t *testing.T) {
 	opt.WALTypedRecordWarnSegments = 0
 
 	db := Open(opt)
-	t.Cleanup(func() { _ = db.Close() })
+	wd := db.walWatchdog
+	if wd != nil {
+		wd.stop()
+	}
+	t.Cleanup(func() {
+		db.walWatchdog = nil
+		_ = db.Close()
+	})
 
 	record := wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte("raft-entry")}
 	for i := 0; i < 4; i++ {
@@ -37,10 +44,10 @@ func TestWALWatchdogAutoGC(t *testing.T) {
 	ptr := manifest.RaftLogPointer{GroupID: 42, Segment: 4, SegmentIndex: 4}
 	require.NoError(t, db.Manifest().LogRaftPointer(ptr))
 
-	db.walWatchdog.runOnce()
+	wd.runOnce()
 
-	wSnap := db.walWatchdog.snapshot()
-    require.GreaterOrEqual(t, wSnap.AutoRuns, uint64(1))
+	wSnap := wd.snapshot()
+	require.GreaterOrEqual(t, wSnap.AutoRuns, uint64(1))
 	require.GreaterOrEqual(t, wSnap.SegmentsRemoved, uint64(1))
 	require.False(t, wSnap.Warning)
 
@@ -56,7 +63,7 @@ func TestWALWatchdogAutoGC(t *testing.T) {
 	require.NotContains(t, joined, "00002.wal")
 
 	snap := db.Info().Snapshot()
-    require.GreaterOrEqual(t, snap.WALAutoGCRuns, uint64(1))
+	require.GreaterOrEqual(t, snap.WALAutoGCRuns, uint64(1))
 	require.GreaterOrEqual(t, snap.WALAutoGCRemoved, uint64(1))
 	require.True(t, snap.WALRemovableRaftSegments >= 1)
 	require.False(t, snap.WALTypedRecordWarning)
@@ -73,16 +80,23 @@ func TestWALWatchdogTypedWarning(t *testing.T) {
 	opt.WALTypedRecordWarnSegments = 0
 
 	db := Open(opt)
-	t.Cleanup(func() { _ = db.Close() })
+	wd := db.walWatchdog
+	if wd != nil {
+		wd.stop()
+	}
+	t.Cleanup(func() {
+		db.walWatchdog = nil
+		_ = db.Close()
+	})
 
 	record := wal.Record{Type: wal.RecordTypeRaftEntry, Payload: []byte("raft-entry")}
 	_, err := db.wal.AppendRecords(record)
 	require.NoError(t, err)
 	require.NoError(t, db.wal.Sync())
 
-	db.walWatchdog.runOnce()
+	wd.runOnce()
 
-	wSnap := db.walWatchdog.snapshot()
+	wSnap := wd.snapshot()
 	require.True(t, wSnap.Warning)
 	require.NotEmpty(t, wSnap.WarningReason)
 	require.Contains(t, wSnap.WarningReason, "typed record ratio")

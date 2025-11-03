@@ -391,9 +391,9 @@ func buildCompactionPriority(lsm *LSM, thisLevel int, t targets) compactionPrior
 func tricky(tables []*table) {
 	// 非常tricky的处理方法，为了能通过检查，检查所有逻辑分支
 	for _, table := range tables {
-		table.ss.Indexs().StaleDataSize = 10 << 20
+		table.staleDataSize = 10 << 20
 		t, _ := time.Parse("2006-01-02 15:04:05", "1995-08-10 00:00:00")
-		table.ss.SetCreatedAt(&t)
+		table.createdAt = t
 	}
 }
 

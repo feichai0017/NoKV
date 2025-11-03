@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
 )
@@ -12,7 +13,7 @@ import (
 const defaultCacheSize = 1024
 
 type cache struct {
-	indexs  *coreCache.Cache // key fid， value table
+	indexs  *coreCache.Cache // key fid， value *pb.TableIndex
 	blocks  *blockCache
 	blooms  *bloomCache
 	metrics *cacheMetrics
@@ -104,11 +105,36 @@ func newCache(opt *Options) *cache {
 	}
 }
 
-func (c *cache) addIndex(fid uint64, t *table) {
+func (c *cache) addIndex(fid uint64, idx *pb.TableIndex) {
 	if c == nil || c.indexs == nil {
 		return
 	}
-	c.indexs.Set(fid, t)
+	if idx == nil {
+		return
+	}
+	c.indexs.Set(fid, idx)
+}
+
+func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
+	if c == nil || c.indexs == nil {
+		return nil, false
+	}
+	val, ok := c.indexs.Get(fid)
+	if !ok {
+		return nil, false
+	}
+	index, ok := val.(*pb.TableIndex)
+	if !ok || index == nil {
+		return nil, false
+	}
+	return index, true
+}
+
+func (c *cache) delIndex(fid uint64) {
+	if c == nil || c.indexs == nil {
+		return
+	}
+	c.indexs.Del(fid)
 }
 
 func (c *cache) getBlock(level int, key uint64) (*block, bool) {
@@ -129,10 +155,10 @@ func (c *cache) addBlock(level int, key uint64, blk *block) {
 }
 
 func (c *cache) addBlockWithTier(level int, key uint64, blk *block, hot bool) {
-		if c == nil || c.blocks == nil {
-			return
-		}
-		c.blocks.addWithTier(level, key, blk, hot)
+	if c == nil || c.blocks == nil {
+		return
+	}
+	c.blocks.addWithTier(level, key, blk, hot)
 }
 
 func (c *cache) dropBlock(key uint64) {
