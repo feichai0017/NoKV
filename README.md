@@ -33,22 +33,27 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 
 ## 🚦 Quick Start
 
+Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster (plus the optional TSO) and expose the Redis-compatible gateway.
+
 ```bash
-# 1. Embedded snippet
-go run main.go
-
-# 2. One-shot stats
-go run ./cmd/nokv stats --workdir ./workdir-demo
-
-# 3. Three-node dev cluster (plus optional TSO)
+# Option A: local processes
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
-# Stop with Ctrl+C; wipe ./artifacts/cluster if the run crashed.
-
-# 4. Redis gateway backed by raft
+# In another shell: launch the Redis gateway on top of the running cluster
 go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 
-# 5. Docker Compose sandbox
+# Option B: Docker Compose (cluster + gateway + TSO)
 docker compose up --build
+# Tear down
+docker compose down -v
+```
+
+Once the cluster is running you can point any Redis client at `127.0.0.1:6380` (or the address exposed by Compose).
+
+For quick CLI checks:
+
+```bash
+# Inspect stats from an existing workdir
+go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
 Minimal embedded snippet:
