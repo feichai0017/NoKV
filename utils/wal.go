@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
@@ -17,6 +18,22 @@ var (
 	}
 )
 
+// CRC32 returns a Castagnoli hash from the shared pool.
+func CRC32() hash.Hash32 {
+	h := crc32Pool.Get().(hash.Hash32)
+	h.Reset()
+	return h
+}
+
+// PutCRC32 returns a hash to the pool.
+func PutCRC32(h hash.Hash32) {
+	if h == nil {
+		return
+	}
+	h.Reset()
+	crc32Pool.Put(h)
+}
+
 // LogEntry
 type LogEntry func(e *Entry, vp *ValuePtr) error
 
@@ -27,7 +44,7 @@ type WalHeader struct {
 	ExpiresAt uint64
 }
 
-const maxHeaderSize int = 21
+const maxHeaderSize int = 4 * binary.MaxVarintLen64
 
 func (h WalHeader) Encode(out []byte) int {
 	index := 0
@@ -69,38 +86,74 @@ func (h *WalHeader) Decode(reader *HashReader) (int, error) {
 // | header | key | value | crc32 |
 func WalCodec(buf *bytes.Buffer, e *Entry) int {
 	buf.Reset()
+	n, err := EncodeEntryTo(buf, e)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+// EncodeEntryTo streams the WAL entry encoding directly into the provided writer.
+// | header | key | value | crc32 |
+func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	h := WalHeader{
 		KeyLen:    uint32(len(e.Key)),
 		ValueLen:  uint32(len(e.Value)),
-		ExpiresAt: e.ExpiresAt,
 		Meta:      e.Meta,
+		ExpiresAt: e.ExpiresAt,
 	}
 
-	// Get hasher from pool and schedule it to be returned.
-	hash := crc32Pool.Get().(hash.Hash32)
-	hash.Reset()
-	defer crc32Pool.Put(hash)
-
-	// encode header.
 	var headerEnc [maxHeaderSize]byte
 	sz := h.Encode(headerEnc[:])
+	if sz > len(headerEnc) {
+		return 0, fmt.Errorf("wal header overflow: sz=%d cap=%d key=%d val=%d meta=%d expires=%d", sz, len(headerEnc), len(e.Key), len(e.Value), h.Meta, h.ExpiresAt)
+	}
 
-	// Write directly to buffer and hasher, avoiding io.MultiWriter allocation.
-	Panic2(buf.Write(headerEnc[:sz]))
-	Panic2(hash.Write(headerEnc[:sz]))
+	crc := CRC32()
+	defer PutCRC32(crc)
+	if _, err := crc.Write(headerEnc[:sz]); err != nil {
+		return 0, err
+	}
 
-	Panic2(buf.Write(e.Key))
-	Panic2(hash.Write(e.Key))
+	total := 0
+	write := func(b []byte) error {
+		if len(b) == 0 {
+			return nil
+		}
+		n, err := w.Write(b)
+		if err != nil {
+			return err
+		}
+		if n != len(b) {
+			return io.ErrShortWrite
+		}
+		total += n
+		return nil
+	}
 
-	Panic2(buf.Write(e.Value))
-	Panic2(hash.Write(e.Value))
+	if err := write(headerEnc[:sz]); err != nil {
+		return 0, err
+	}
+	if err := write(e.Key); err != nil {
+		return 0, err
+	}
+	if _, err := crc.Write(e.Key); err != nil {
+		return 0, err
+	}
+	if err := write(e.Value); err != nil {
+		return 0, err
+	}
+	if _, err := crc.Write(e.Value); err != nil {
+		return 0, err
+	}
 
-	// write crc32 hash.
 	var crcBuf [crc32.Size]byte
-	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
-	Panic2(buf.Write(crcBuf[:]))
-	// return encoded length.
-	return len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf)
+	binary.BigEndian.PutUint32(crcBuf[:], crc.Sum32())
+	if err := write(crcBuf[:]); err != nil {
+		return 0, err
+	}
+
+	return total, nil
 }
 
 // EstimateWalCodecSize 预估当前kv 写入wal文件占用的空间大小

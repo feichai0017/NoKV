@@ -67,14 +67,24 @@ type Options struct {
 	// accumulated before they are flushed back into the LSM. Zero keeps the
 	// default threshold.
 	DiscardStatsFlushThreshold int
+
+	// NumCompactors controls how many background compaction workers are spawned.
+	// Zero uses an auto value derived from the host CPU count.
+	NumCompactors int
+	// NumLevelZeroTables controls when write throttling kicks in and feeds into
+	// the compaction priority calculation. Zero falls back to the legacy default.
+	NumLevelZeroTables int
+	// IngestCompactBatchSize decides how many L0 tables to promote into the
+	// ingest buffer per compaction cycle. Zero falls back to the legacy default.
+	IngestCompactBatchSize int
 }
 
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
 		WorkDir:                    "./work_test",
-		MemTableSize:               1024,
-		SSTableMaxSz:               1 << 30,
+		MemTableSize:               64 << 20,
+		SSTableMaxSz:               256 << 20,
 		HotRingEnabled:             true,
 		HotRingBits:                12,
 		HotRingTopK:                16,

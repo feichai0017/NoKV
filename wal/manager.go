@@ -100,6 +100,7 @@ type Manager struct {
 	segmentTotals   map[uint32]RecordMetrics
 }
 
+
 // RecordType identifies the kind of payload stored in the WAL.
 type RecordType uint8
 
@@ -294,10 +295,7 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 	results := make([]EntryInfo, len(records))
 	for i, rec := range records {
 		payload := rec.Payload
-		encoded := make([]byte, len(payload)+1)
-		encoded[0] = byte(rec.Type)
-		copy(encoded[1:], payload)
-		total := len(encoded)
+		total := len(payload) + 1
 		if err := m.ensureCapacity(int64(total) + 8); err != nil {
 			return nil, err
 		}
@@ -308,15 +306,26 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 		if _, err := m.writer.Write(hdr[:]); err != nil {
 			return nil, err
 		}
-		if _, err := m.writer.Write(encoded); err != nil {
+		typeByte := byte(rec.Type)
+		if err := m.writer.WriteByte(typeByte); err != nil {
+			return nil, err
+		}
+		if _, err := m.writer.Write(payload); err != nil {
+			return nil, err
+		}
+		hasher := utils.CRC32()
+		typeBuf := [1]byte{typeByte}
+		if _, err := hasher.Write(typeBuf[:]); err != nil {
+			utils.PutCRC32(hasher)
+			return nil, err
+		}
+		if _, err := hasher.Write(payload); err != nil {
+			utils.PutCRC32(hasher)
 			return nil, err
 		}
 		var crcBuf [4]byte
-		hasher := crc32.New(m.crcTable)
-		if _, err := hasher.Write(encoded); err != nil {
-			return nil, err
-		}
 		binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
+		utils.PutCRC32(hasher)
 		if _, err := m.writer.Write(crcBuf[:]); err != nil {
 			return nil, err
 		}

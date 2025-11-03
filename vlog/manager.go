@@ -2,6 +2,7 @@ package vlog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	stderrors "errors"
 	"fmt"
@@ -34,6 +35,23 @@ type Manager struct {
 	activeID  uint32
 	offset    uint32
 	hooks     ManagerTestingHooks
+}
+
+type logFileAppender struct {
+	lf  *file.LogFile
+	off uint32
+}
+
+func (a *logFileAppender) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if err := a.lf.Write(a.off, p); err != nil {
+		return 0, err
+	}
+	lenp := len(p)
+	a.off += uint32(lenp)
+	return lenp, nil
 }
 
 // ManagerTestingHooks provides callbacks that are used only in tests to inject
@@ -174,6 +192,50 @@ func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
 	m.offset += uint32(len(data))
 
 	return &utils.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
+}
+
+// AppendEntry encodes and appends the provided entry directly into the active value log.
+func (m *Manager) AppendEntry(e *utils.Entry) (*utils.ValuePtr, error) {
+	if e == nil {
+		return nil, fmt.Errorf("vlog manager: nil entry")
+	}
+	m.filesLock.Lock()
+	defer m.filesLock.Unlock()
+
+	if m.active == nil {
+		if _, err := m.create(m.maxFid + 1); err != nil {
+			return nil, err
+		}
+		m.active = m.files[m.maxFid]
+		m.activeID = m.maxFid
+		m.offset = 0
+	}
+
+	if hook := m.hooks.BeforeAppend; hook != nil {
+		var tmp bytes.Buffer
+		sz, err := utils.EncodeEntryTo(&tmp, e)
+		if err != nil {
+			return nil, err
+		}
+		if err := hook(m, tmp.Bytes()); err != nil {
+			return nil, err
+		}
+		start := m.offset
+		if err := m.active.Write(start, tmp.Bytes()); err != nil {
+			return nil, err
+		}
+		m.offset = start + uint32(sz)
+		return &utils.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
+	}
+
+	start := m.offset
+	writer := &logFileAppender{lf: m.active, off: start}
+	sz, err := utils.EncodeEntryTo(writer, e)
+	if err != nil {
+		return nil, err
+	}
+	m.offset = writer.off
+	return &utils.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
 }
 
 func (m *Manager) Rotate() error {

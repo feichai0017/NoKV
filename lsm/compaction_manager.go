@@ -66,14 +66,29 @@ func (cm *compactionManager) start(id int) {
 
 func (cm *compactionManager) runCycle(id int, reason string) {
 	_ = reason
-	if id == 0 {
-		cm.adjustThrottle()
+	maxRuns := cm.lm.opt.NumCompactors
+	if maxRuns <= 0 {
+		maxRuns = 1
+	} else if maxRuns > 4 {
+		maxRuns = 4
 	}
-	running := cm.runOnce(id)
-	if id == 0 {
-		cm.adjustThrottle()
+	ranAny := false
+	for i := 0; i < maxRuns; i++ {
+		if id == 0 {
+			cm.adjustThrottle()
+		}
+		if !cm.runOnce(id) {
+			break
+		}
+		ranAny = true
+		if id == 0 {
+			cm.adjustThrottle()
+		}
+		if !cm.needsCompaction() {
+			break
+		}
 	}
-	if running && cm.needsCompaction() {
+	if ranAny && cm.needsCompaction() {
 		cm.trigger("backlog")
 	}
 }
