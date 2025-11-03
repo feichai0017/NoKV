@@ -49,6 +49,20 @@ type levelManager struct {
 	compactionRuns   uint64
 }
 
+// LevelMetrics captures aggregated statistics for a single LSM level.
+type LevelMetrics struct {
+	Level              int
+	TableCount         int
+	SizeBytes          int64
+	ValueBytes         int64
+	StaleBytes         int64
+	IngestTableCount   int
+	IngestSizeBytes    int64
+	IngestValueBytes   int64
+	ValueDensity       float64
+	IngestValueDensity float64
+}
+
 func (lm *levelManager) close() error {
 	if err := lm.cache.close(); err != nil {
 		return err
@@ -168,7 +182,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	builder := newTableBuiler(lm.opt)
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
-		builder.add(entry, false)
+		builder.AddKey(entry)
 	}
 	table := openTable(lm, sstName, builder)
 	if table == nil {
@@ -181,6 +195,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		Smallest:  utils.SafeCopy(nil, table.MinKey()),
 		Largest:   utils.SafeCopy(nil, table.MaxKey()),
 		CreatedAt: uint64(time.Now().Unix()),
+		ValueSize: table.ValueSize(),
 	}
 	edit := manifest.Edit{
 		Type:   manifest.EditAddFile,
@@ -259,6 +274,20 @@ func (lm *levelManager) compactionStats() (int64, float64) {
 		}
 	}
 	return int64(len(prios)), max
+}
+
+func (lm *levelManager) levelMetricsSnapshot() []LevelMetrics {
+	if lm == nil {
+		return nil
+	}
+	metrics := make([]LevelMetrics, 0, len(lm.levels))
+	for _, lh := range lm.levels {
+		if lh == nil {
+			continue
+		}
+		metrics = append(metrics, lh.metricsSnapshot())
+	}
+	return metrics
 }
 
 func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
@@ -369,13 +398,15 @@ func (lm *levelManager) prefetch(key []byte, hot bool) {
 // --------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
-	levelNum       int
-	tables         []*table
-	ingest         []*table
-	totalSize      int64
-	totalStaleSize int64
-	ingestSize     int64
-	lm             *levelManager
+	levelNum        int
+	tables          []*table
+	ingest          []*table
+	totalSize       int64
+	totalStaleSize  int64
+	totalValueSize  int64
+	ingestSize      int64
+	ingestValueSize int64
+	lm              *levelManager
 }
 
 func (lh *levelHandler) close() error {
@@ -405,6 +436,7 @@ func (lh *levelHandler) addIngest(t *table) {
 	t.setLevel(lh.levelNum)
 	lh.ingest = append(lh.ingest, t)
 	lh.ingestSize += t.Size()
+	lh.ingestValueSize += int64(t.ValueSize())
 }
 
 func (lh *levelHandler) addIngestBatch(ts []*table) {
@@ -417,6 +449,7 @@ func (lh *levelHandler) addIngestBatch(ts []*table) {
 		t.setLevel(lh.levelNum)
 		lh.ingest = append(lh.ingest, t)
 		lh.ingestSize += t.Size()
+		lh.ingestValueSize += int64(t.ValueSize())
 	}
 }
 
@@ -437,18 +470,127 @@ func (lh *levelHandler) getTotalSize() int64 {
 	return lh.totalSize + lh.ingestSize
 }
 
+func (lh *levelHandler) getTotalValueSize() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.totalValueSize + lh.ingestValueSize
+}
+
 func (lh *levelHandler) addSize(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
+	lh.totalValueSize += int64(t.ValueSize())
 }
 
 func (lh *levelHandler) subtractSize(t *table) {
 	lh.totalSize -= t.Size()
 	lh.totalStaleSize -= int64(t.StaleDataSize())
+	lh.totalValueSize -= int64(t.ValueSize())
+	if lh.totalValueSize < 0 {
+		lh.totalValueSize = 0
+	}
 }
 
 func (lh *levelHandler) subtractIngestSize(t *table) {
 	lh.ingestSize -= t.Size()
+	lh.ingestValueSize -= int64(t.ValueSize())
+	if lh.ingestValueSize < 0 {
+		lh.ingestValueSize = 0
+	}
+}
+
+func (lh *levelHandler) mainValueBytes() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.totalValueSize
+}
+
+func (lh *levelHandler) ingestValueBytes() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.ingestValueSize
+}
+
+func (lh *levelHandler) valueDensity() float64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	if lh.totalSize <= 0 {
+		return 0
+	}
+	return float64(lh.totalValueSize) / float64(lh.totalSize)
+}
+
+func (lh *levelHandler) ingestValueDensity() float64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	if lh.ingestSize <= 0 {
+		return 0
+	}
+	return float64(lh.ingestValueSize) / float64(lh.ingestSize)
+}
+
+func (lh *levelHandler) valueBias(weight float64) float64 {
+	if weight <= 0 {
+		return 1.0
+	}
+	density := lh.valueDensity()
+	bias := 1.0 + weight*density
+	if bias > 4.0 {
+		return 4.0
+	}
+	if bias < 1.0 {
+		return 1.0
+	}
+	return bias
+}
+
+func (lh *levelHandler) ingestValueBias(weight float64) float64 {
+	if weight <= 0 {
+		return 1.0
+	}
+	density := lh.ingestValueDensity()
+	bias := 1.0 + weight*density
+	if bias > 4.0 {
+		return 4.0
+	}
+	if bias < 1.0 {
+		return 1.0
+	}
+	return bias
+}
+
+func (lh *levelHandler) metricsSnapshot() LevelMetrics {
+	if lh == nil {
+		return LevelMetrics{}
+	}
+	lh.RLock()
+	defer lh.RUnlock()
+	return LevelMetrics{
+		Level:              lh.levelNum,
+		TableCount:         len(lh.tables),
+		SizeBytes:          lh.totalSize,
+		ValueBytes:         lh.totalValueSize,
+		StaleBytes:         lh.totalStaleSize,
+		IngestTableCount:   len(lh.ingest),
+		IngestSizeBytes:    lh.ingestSize,
+		IngestValueBytes:   lh.ingestValueSize,
+		ValueDensity:       lh.densityLocked(),
+		IngestValueDensity: lh.ingestDensityLocked(),
+	}
+}
+
+func (lh *levelHandler) densityLocked() float64 {
+	if lh.totalSize <= 0 {
+		return 0
+	}
+	return float64(lh.totalValueSize) / float64(lh.totalSize)
+}
+
+func (lh *levelHandler) ingestDensityLocked() float64 {
+	if lh.ingestSize <= 0 {
+		return 0
+	}
+	return float64(lh.ingestValueSize) / float64(lh.ingestSize)
 }
 
 func (lh *levelHandler) numTables() int {

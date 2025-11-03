@@ -28,6 +28,7 @@ type table struct {
 
 	createdAt     time.Time
 	staleDataSize uint32
+	valueSize     uint64
 	keyCount      uint32
 	maxVersion    uint64
 	hasBloom      bool
@@ -85,6 +86,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 		t.keyCount = idx.GetKeyCount()
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
+		t.valueSize = idx.GetValueSize()
 		t.lm.cache.addIndex(t.fid, idx)
 	}
 	t.hasBloom = t.ss.HasBloomFilter()
@@ -132,6 +134,10 @@ func (t *table) index() *pb.TableIndex {
 	if idx != nil {
 		t.idx.Store(idx)
 		t.lm.cache.addIndex(t.fid, idx)
+		t.keyCount = idx.GetKeyCount()
+		t.maxVersion = idx.GetMaxVersion()
+		t.staleDataSize = idx.GetStaleDataSize()
+		t.valueSize = idx.GetValueSize()
 	}
 	return idx
 }
@@ -181,6 +187,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.keyCount = idx.GetKeyCount()
 			t.maxVersion = idx.GetMaxVersion()
 			t.staleDataSize = idx.GetStaleDataSize()
+			t.valueSize = idx.GetValueSize()
 			t.lm.cache.addIndex(t.fid, idx)
 		}
 		t.hasBloom = ss.HasBloomFilter()
@@ -676,6 +683,9 @@ func (t *table) Delete() error {
 
 // StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
 func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
+
+// ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
+func (t *table) ValueSize() uint64 { return t.valueSize }
 
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {

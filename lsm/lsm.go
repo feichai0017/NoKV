@@ -54,6 +54,14 @@ type Options struct {
 
 	IngestCompactBatchSize int
 
+	// CompactionValueWeight increases the priority of levels containing a high
+	// proportion of ValueLog-backed payloads. Must be non-negative.
+	CompactionValueWeight float64
+
+	// CompactionValueAlertThreshold triggers stats alerts when value density
+	// exceeds this ratio.
+	CompactionValueAlertThreshold float64
+
 	DiscardStatsCh *chan map[uint32]int64
 }
 
@@ -152,6 +160,30 @@ func (lsm *LSM) CompactionDurations() (float64, float64, uint64) {
 	return lsm.levels.compactionDurations()
 }
 
+// LevelMetrics returns aggregated statistics per LSM level.
+func (lsm *LSM) LevelMetrics() []LevelMetrics {
+	if lsm == nil || lsm.levels == nil {
+		return nil
+	}
+	return lsm.levels.levelMetricsSnapshot()
+}
+
+// CompactionValueWeight returns the current compaction value weighting factor.
+func (lsm *LSM) CompactionValueWeight() float64 {
+	if lsm == nil || lsm.option == nil {
+		return 0
+	}
+	return lsm.option.CompactionValueWeight
+}
+
+// CompactionValueAlertThreshold returns the alert threshold for value density.
+func (lsm *LSM) CompactionValueAlertThreshold() float64 {
+	if lsm == nil || lsm.option == nil {
+		return 0.6
+	}
+	return lsm.option.CompactionValueAlertThreshold
+}
+
 // CacheMetrics returns read-path cache hit statistics.
 func (lsm *LSM) CacheMetrics() CacheMetrics {
 	if lsm == nil || lsm.levels == nil {
@@ -244,6 +276,15 @@ func (lsm *LSM) CurrentVersion() manifest.Version {
 
 // NewLSM _
 func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
+	if opt.CompactionValueWeight < 0 {
+		opt.CompactionValueWeight = 0
+	}
+	if opt.CompactionValueWeight == 0 {
+		opt.CompactionValueWeight = 0.35
+	}
+	if opt.CompactionValueAlertThreshold <= 0 {
+		opt.CompactionValueAlertThreshold = 0.6
+	}
 	lsm := &LSM{option: opt, wal: walMgr}
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager

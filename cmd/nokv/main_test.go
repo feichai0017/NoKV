@@ -36,6 +36,14 @@ func TestRunManifestCmd(t *testing.T) {
 	if _, ok := payload["levels"]; !ok {
 		t.Fatalf("expected levels in manifest output")
 	}
+	levels, _ := payload["levels"].([]any)
+	if len(levels) > 0 {
+		if lvl, ok := levels[0].(map[string]any); ok {
+			if _, ok := lvl["value_bytes"]; !ok {
+				t.Fatalf("expected value_bytes in manifest level entry")
+			}
+		}
+	}
 }
 
 func TestRunStatsCmd(t *testing.T) {
@@ -66,6 +74,18 @@ func TestRunStatsCmd(t *testing.T) {
 	}
 	if snap.ValueLogSegments == 0 {
 		t.Fatalf("expected value log segments > 0")
+	}
+	if len(snap.LSMLevels) == 0 {
+		t.Fatalf("expected LSM level metrics")
+	}
+	if snap.LSMValueBytesTotal < 0 {
+		t.Fatalf("expected aggregated LSM value bytes to be non-negative")
+	}
+	if snap.CompactionValueWeight <= 0 {
+		t.Fatalf("expected compaction value weight > 0")
+	}
+	if snap.LSMValueDensityMax < 0 {
+		t.Fatalf("expected non-negative value density max")
 	}
 }
 
@@ -123,6 +143,9 @@ func TestRenderStatsWarnLine(t *testing.T) {
 	}
 	if !strings.Contains(out, "Regions.Total") {
 		t.Fatalf("expected Regions.Total line in output, got: %q", out)
+	}
+	if !strings.Contains(out, "Compaction.ValueWeight") {
+		t.Fatalf("expected Compaction.ValueWeight line in output, got: %q", out)
 	}
 }
 func TestRunRegionsCmd(t *testing.T) {

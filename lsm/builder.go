@@ -27,6 +27,7 @@ type tableBuilder struct {
 	baseKey       []byte
 	staleDataSize int
 	estimateSz    int64
+	valueSize     int64
 }
 type buildData struct {
 	blockList []*block
@@ -64,7 +65,7 @@ func (h header) encode() []byte {
 	return b[:]
 }
 
-func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
+func (tb *tableBuilder) add(e *utils.Entry, valueLen uint32, isStale bool) {
 	key := e.Key
 	val := utils.ValueStruct{
 		Meta:      e.Meta,
@@ -120,6 +121,7 @@ func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 
 	dst := tb.allocate(int(val.EncodedSize()))
 	val.EncodeValue(dst)
+	tb.valueSize += int64(valueLen)
 }
 func newTableBuilerWithSSTSize(opt *Options, size int64) *tableBuilder {
 	return &tableBuilder{
@@ -168,19 +170,44 @@ func (tb *tableBuilder) tryFinishBlock(e *utils.Entry) bool {
 
 // AddStaleKey 记录陈旧key所占用的空间大小，用于日志压缩时的决策
 func (tb *tableBuilder) AddStaleKey(e *utils.Entry) {
+	tb.AddStaleEntryWithLen(e, entryValueLen(e))
+}
+
+// AddStaleEntryWithLen explicit len variant for compaction pipeline.
+func (tb *tableBuilder) AddStaleEntryWithLen(e *utils.Entry, valueLen uint32) {
 	// Rough estimate based on how much space it will occupy in the SST.
-	tb.staleDataSize += len(e.Key) + len(e.Value) + 4 /* entry offset */ + 4 /* header size */
-	tb.add(e, true)
+	tb.staleDataSize += len(e.Key) + int(valueLen) + 4 /* entry offset */ + 4 /* header size */
+	tb.add(e, valueLen, true)
 }
 
 // AddKey _
 func (tb *tableBuilder) AddKey(e *utils.Entry) {
-	tb.add(e, false)
+	tb.AddKeyWithLen(e, entryValueLen(e))
+}
+
+// AddKeyWithLen 添加 key，并显式指定 value 长度（用于区分内联值和 ValuePtr）。
+func (tb *tableBuilder) AddKeyWithLen(e *utils.Entry, valueLen uint32) {
+	tb.add(e, valueLen, false)
 }
 
 // Close closes the TableBuilder.
 func (tb *tableBuilder) Close() {
 	// combine the memory allocator
+}
+
+func entryValueLen(e *utils.Entry) uint32 {
+	if e == nil {
+		return 0
+	}
+	if e.Meta&utils.BitValuePointer > 0 {
+		var vptr utils.ValuePtr
+		req := int(unsafe.Sizeof(vptr))
+		if len(e.Value) >= req {
+			vptr.Decode(e.Value)
+			return vptr.Len
+		}
+	}
+	return uint32(len(e.Value))
 }
 func (tb *tableBuilder) finishBlock() {
 	if tb.curBlock == nil || len(tb.curBlock.entryOffsets) == 0 {
@@ -245,7 +272,6 @@ func (tb *tableBuilder) keyDiff(newKey []byte) []byte {
 	return newKey[i:]
 }
 
-// TODO: there are multiple user space copy processes, need to optimize
 func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
 	bd := tb.done()
 	t = &table{lm: lm, fid: utils.FID(tableName)}
@@ -255,15 +281,14 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(bd.size)})
-	// write the data of builder to the sst file
-	buf := make([]byte, bd.size)
-	written := bd.Copy(buf)
-	utils.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))
 	dst, err := t.ss.Bytes(0, bd.size)
 	if err != nil {
 		return nil, err
 	}
-	copy(dst, buf)
+	written := bd.Copy(dst)
+	utils.CondPanic(written != len(dst), fmt.Errorf("tableBuilder.flush written != len(dst)"))
+	// Allow GC to reclaim the intermediate blocks once the data is persisted.
+	tb.blockList = nil
 	return t, nil
 }
 
@@ -306,7 +331,9 @@ func (tb *tableBuilder) done() buildData {
 	checksum := tb.calculateChecksum(index)
 	bd.index = index
 	bd.checksum = checksum
-	bd.size = int(dataSize) + len(index) + len(checksum) + 4 + 4
+	total := int(dataSize) + len(index) + len(checksum) + 4 + 4
+	bd.size = total
+	tb.estimateSz = int64(total)
 	return bd
 }
 
@@ -324,6 +351,7 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 			tableIndex.StaleDataSize = uint32(tb.staleDataSize)
 		}
 	}
+	tableIndex.ValueSize = uint64(tb.valueSize)
 	tableIndex.Offsets = tb.writeBlockOffsets(tableIndex)
 	var dataSize uint32
 	for i := range tb.blockList {
@@ -482,7 +510,7 @@ func (itr *blockIterator) Next() {
 }
 
 func (itr *blockIterator) Valid() bool {
-	return itr.err != io.EOF // TODO 这里用err比较好
+	return itr.err == nil
 }
 func (itr *blockIterator) Rewind() bool {
 	itr.setIdx(0)

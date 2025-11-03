@@ -2,10 +2,12 @@ package NoKV
 
 import (
 	"expvar"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
@@ -20,73 +22,77 @@ type Stats struct {
 
 	EntryNum int64 // Mirrors Entries for backwards compatibility.
 
-	entries              *expvar.Int
-	flushPending         *expvar.Int
-	flushQueueLen        *expvar.Int
-	flushActive          *expvar.Int
-	flushWaitMs          *expvar.Float
-	flushWaitLastMs      *expvar.Float
-	flushWaitMaxMs       *expvar.Float
-	flushBuildMs         *expvar.Float
-	flushBuildLastMs     *expvar.Float
-	flushBuildMaxMs      *expvar.Float
-	flushReleaseMs       *expvar.Float
-	flushReleaseLastMs   *expvar.Float
-	flushReleaseMaxMs    *expvar.Float
-	flushCompleted       *expvar.Int
-	compactionBacklog    *expvar.Int
-	compactionMaxScore   *expvar.Float
-	compactionLastMs     *expvar.Float
-	compactionMaxMs      *expvar.Float
-	compactionRuns       *expvar.Int
-	valueLogSegments     *expvar.Int
-	valueLogPendingDel   *expvar.Int
-	valueLogDiscardQueue *expvar.Int
-	walActiveSegment     *expvar.Int
-	walSegmentCount      *expvar.Int
-	walActiveSize        *expvar.Int
-	walSegmentsRemoved   *expvar.Int
-	raftGroupCount       *expvar.Int
-	raftLaggingGroups    *expvar.Int
-	raftMaxLagSegments   *expvar.Int
-	raftMinSegment       *expvar.Int
-	raftMaxSegment       *expvar.Int
-	raftLagWarning       *expvar.Int
-	writeQueueDepth      *expvar.Int
-	writeQueueEntries    *expvar.Int
-	writeQueueBytes      *expvar.Int
-	writeBatchAvgEntries *expvar.Float
-	writeBatchAvgBytes   *expvar.Float
-	writeRequestWaitMs   *expvar.Float
-	writeValueLogMs      *expvar.Float
-	writeApplyMs         *expvar.Float
-	writeBatchesTotal    *expvar.Int
-	writeThrottle        *expvar.Int
-	txnActive            *expvar.Int
-	txnStarted           *expvar.Int
-	txnCommitted         *expvar.Int
-	txnConflicts         *expvar.Int
-	blockL0HitRate       *expvar.Float
-	blockL1HitRate       *expvar.Float
-	bloomHitRate         *expvar.Float
-	iteratorReuses       *expvar.Int
-	cfMap                *expvar.Map
-	walRecordCounts      *expvar.Map
-	walSegmentsWithRaft  *expvar.Int
-	walSegmentsRemovable *expvar.Int
-	walTypedRatio        *expvar.Float
-	walTypedWarning      *expvar.Int
-	walTypedReason       *expvar.String
-	walAutoRuns          *expvar.Int
-	walAutoRemoved       *expvar.Int
-	walAutoLastUnix      *expvar.Int
-	regionMetrics        *storepkg.RegionMetrics
-	regionTotal          *expvar.Int
-	regionNew            *expvar.Int
-	regionRunning        *expvar.Int
-	regionRemoving       *expvar.Int
-	regionTombstone      *expvar.Int
-	regionOther          *expvar.Int
+	entries               *expvar.Int
+	flushPending          *expvar.Int
+	flushQueueLen         *expvar.Int
+	flushActive           *expvar.Int
+	flushWaitMs           *expvar.Float
+	flushWaitLastMs       *expvar.Float
+	flushWaitMaxMs        *expvar.Float
+	flushBuildMs          *expvar.Float
+	flushBuildLastMs      *expvar.Float
+	flushBuildMaxMs       *expvar.Float
+	flushReleaseMs        *expvar.Float
+	flushReleaseLastMs    *expvar.Float
+	flushReleaseMaxMs     *expvar.Float
+	flushCompleted        *expvar.Int
+	compactionBacklog     *expvar.Int
+	compactionMaxScore    *expvar.Float
+	compactionLastMs      *expvar.Float
+	compactionMaxMs       *expvar.Float
+	compactionRuns        *expvar.Int
+	valueLogSegments      *expvar.Int
+	valueLogPendingDel    *expvar.Int
+	valueLogDiscardQueue  *expvar.Int
+	walActiveSegment      *expvar.Int
+	walSegmentCount       *expvar.Int
+	walActiveSize         *expvar.Int
+	walSegmentsRemoved    *expvar.Int
+	raftGroupCount        *expvar.Int
+	raftLaggingGroups     *expvar.Int
+	raftMaxLagSegments    *expvar.Int
+	raftMinSegment        *expvar.Int
+	raftMaxSegment        *expvar.Int
+	raftLagWarning        *expvar.Int
+	writeQueueDepth       *expvar.Int
+	writeQueueEntries     *expvar.Int
+	writeQueueBytes       *expvar.Int
+	writeBatchAvgEntries  *expvar.Float
+	writeBatchAvgBytes    *expvar.Float
+	writeRequestWaitMs    *expvar.Float
+	writeValueLogMs       *expvar.Float
+	writeApplyMs          *expvar.Float
+	writeBatchesTotal     *expvar.Int
+	writeThrottle         *expvar.Int
+	txnActive             *expvar.Int
+	txnStarted            *expvar.Int
+	txnCommitted          *expvar.Int
+	txnConflicts          *expvar.Int
+	blockL0HitRate        *expvar.Float
+	blockL1HitRate        *expvar.Float
+	bloomHitRate          *expvar.Float
+	iteratorReuses        *expvar.Int
+	cfMap                 *expvar.Map
+	walRecordCounts       *expvar.Map
+	walSegmentsWithRaft   *expvar.Int
+	walSegmentsRemovable  *expvar.Int
+	walTypedRatio         *expvar.Float
+	walTypedWarning       *expvar.Int
+	walTypedReason        *expvar.String
+	walAutoRuns           *expvar.Int
+	walAutoRemoved        *expvar.Int
+	walAutoLastUnix       *expvar.Int
+	lsmValueBytes         *expvar.Int
+	compactionValueWeight *expvar.Float
+	lsmValueDensityMax    *expvar.Float
+	lsmValueDensityAlert  *expvar.Int
+	regionMetrics         *storepkg.RegionMetrics
+	regionTotal           *expvar.Int
+	regionNew             *expvar.Int
+	regionRunning         *expvar.Int
+	regionRemoving        *expvar.Int
+	regionTombstone       *expvar.Int
+	regionOther           *expvar.Int
 }
 
 type HotKeyStat struct {
@@ -99,149 +105,188 @@ type ColumnFamilySnapshot struct {
 	Reads  uint64 `json:"reads"`
 }
 
+// LSMLevelStats captures aggregated metrics per LSM level.
+type LSMLevelStats struct {
+	Level              int     `json:"level"`
+	TableCount         int     `json:"tables"`
+	SizeBytes          int64   `json:"size_bytes"`
+	ValueBytes         int64   `json:"value_bytes"`
+	StaleBytes         int64   `json:"stale_bytes"`
+	IngestTables       int     `json:"ingest_tables"`
+	IngestSizeBytes    int64   `json:"ingest_size_bytes"`
+	IngestValueBytes   int64   `json:"ingest_value_bytes"`
+	ValueDensity       float64 `json:"value_density"`
+	IngestValueDensity float64 `json:"ingest_value_density"`
+}
+
+func levelMetricsToStats(lvl lsm.LevelMetrics) LSMLevelStats {
+	return LSMLevelStats{
+		Level:              lvl.Level,
+		TableCount:         lvl.TableCount,
+		SizeBytes:          lvl.SizeBytes,
+		ValueBytes:         lvl.ValueBytes,
+		StaleBytes:         lvl.StaleBytes,
+		IngestTables:       lvl.IngestTableCount,
+		IngestSizeBytes:    lvl.IngestSizeBytes,
+		IngestValueBytes:   lvl.IngestValueBytes,
+		ValueDensity:       lvl.ValueDensity,
+		IngestValueDensity: lvl.IngestValueDensity,
+	}
+}
+
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
-	Entries                    int64                           `json:"entries"`
-	FlushPending               int64                           `json:"flush_pending"`
-	FlushQueueLength           int64                           `json:"flush_queue_length"`
-	FlushActive                int64                           `json:"flush_active"`
-	FlushWaitMs                float64                         `json:"flush_wait_ms"`
-	FlushLastWaitMs            float64                         `json:"flush_last_wait_ms"`
-	FlushMaxWaitMs             float64                         `json:"flush_max_wait_ms"`
-	FlushBuildMs               float64                         `json:"flush_build_ms"`
-	FlushLastBuildMs           float64                         `json:"flush_last_build_ms"`
-	FlushMaxBuildMs            float64                         `json:"flush_max_build_ms"`
-	FlushReleaseMs             float64                         `json:"flush_release_ms"`
-	FlushLastReleaseMs         float64                         `json:"flush_last_release_ms"`
-	FlushMaxReleaseMs          float64                         `json:"flush_max_release_ms"`
-	FlushCompleted             int64                           `json:"flush_completed"`
-	CompactionBacklog          int64                           `json:"compaction_backlog"`
-	CompactionMaxScore         float64                         `json:"compaction_max_score"`
-	CompactionLastDurationMs   float64                         `json:"compaction_last_duration_ms"`
-	CompactionMaxDurationMs    float64                         `json:"compaction_max_duration_ms"`
-	CompactionRuns             uint64                          `json:"compaction_runs"`
-	ValueLogSegments           int                             `json:"vlog_segments"`
-	ValueLogPendingDel         int                             `json:"vlog_pending_deletes"`
-	ValueLogDiscardQueue       int                             `json:"vlog_discard_queue"`
-	ValueLogHead               utils.ValuePtr                  `json:"vlog_head"`
-	WALActiveSegment           int64                           `json:"wal_active_segment"`
-	WALSegmentCount            int64                           `json:"wal_segment_count"`
-	WALActiveSize              int64                           `json:"wal_active_size"`
-	WALSegmentsRemoved         uint64                          `json:"wal_segments_removed"`
-	WALRecordCounts            wal.RecordMetrics               `json:"wal_record_counts"`
-	WALSegmentsWithRaftRecords int                             `json:"wal_segments_with_raft_records"`
-	WALRemovableRaftSegments   int                             `json:"wal_removable_raft_segments"`
-	WALTypedRecordRatio        float64                         `json:"wal_typed_record_ratio"`
-	WALTypedRecordWarning      bool                            `json:"wal_typed_record_warning"`
-	WALTypedRecordReason       string                          `json:"wal_typed_record_reason,omitempty"`
-	WALAutoGCRuns              uint64                          `json:"wal_auto_gc_runs"`
-	WALAutoGCRemoved           uint64                          `json:"wal_auto_gc_removed"`
-	WALAutoGCLastUnix          int64                           `json:"wal_auto_gc_last_unix"`
-	RaftGroupCount             int                             `json:"raft_group_count"`
-	RaftLaggingGroups          int                             `json:"raft_lagging_groups"`
-	RaftMinLogSegment          uint32                          `json:"raft_min_log_segment"`
-	RaftMaxLogSegment          uint32                          `json:"raft_max_log_segment"`
-	RaftMaxLagSegments         int64                           `json:"raft_max_lag_segments"`
-	RaftLagWarnThreshold       int64                           `json:"raft_lag_warn_threshold"`
-	RaftLagWarning             bool                            `json:"raft_lag_warning"`
-	WriteQueueDepth            int64                           `json:"write_queue_depth"`
-	WriteQueueEntries          int64                           `json:"write_queue_entries"`
-	WriteQueueBytes            int64                           `json:"write_queue_bytes"`
-	WriteAvgBatchEntries       float64                         `json:"write_avg_batch_entries"`
-	WriteAvgBatchBytes         float64                         `json:"write_avg_batch_bytes"`
-	WriteAvgRequestWaitMs      float64                         `json:"write_avg_request_wait_ms"`
-	WriteAvgValueLogMs         float64                         `json:"write_avg_vlog_ms"`
-	WriteAvgApplyMs            float64                         `json:"write_avg_apply_ms"`
-	WriteBatchesTotal          int64                           `json:"write_batches_total"`
-	WriteThrottleActive        bool                            `json:"write_throttle_active"`
-	TxnsActive                 int64                           `json:"txns_active"`
-	TxnsStarted                uint64                          `json:"txns_started"`
-	TxnsCommitted              uint64                          `json:"txns_committed"`
-	TxnsConflicts              uint64                          `json:"txns_conflicts"`
-	RegionTotal                int64                           `json:"region_total"`
-	RegionNew                  int64                           `json:"region_new"`
-	RegionRunning              int64                           `json:"region_running"`
-	RegionRemoving             int64                           `json:"region_removing"`
-	RegionTombstone            int64                           `json:"region_tombstone"`
-	RegionOther                int64                           `json:"region_other"`
-	HotKeys                    []HotKeyStat                    `json:"hot_keys,omitempty"`
-	BlockL0HitRate             float64                         `json:"block_l0_hit_rate"`
-	BlockL1HitRate             float64                         `json:"block_l1_hit_rate"`
-	BloomHitRate               float64                         `json:"bloom_hit_rate"`
-	IteratorReused             uint64                          `json:"iterator_reused"`
-	ColumnFamilies             map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
+	Entries                        int64                           `json:"entries"`
+	FlushPending                   int64                           `json:"flush_pending"`
+	FlushQueueLength               int64                           `json:"flush_queue_length"`
+	FlushActive                    int64                           `json:"flush_active"`
+	FlushWaitMs                    float64                         `json:"flush_wait_ms"`
+	FlushLastWaitMs                float64                         `json:"flush_last_wait_ms"`
+	FlushMaxWaitMs                 float64                         `json:"flush_max_wait_ms"`
+	FlushBuildMs                   float64                         `json:"flush_build_ms"`
+	FlushLastBuildMs               float64                         `json:"flush_last_build_ms"`
+	FlushMaxBuildMs                float64                         `json:"flush_max_build_ms"`
+	FlushReleaseMs                 float64                         `json:"flush_release_ms"`
+	FlushLastReleaseMs             float64                         `json:"flush_last_release_ms"`
+	FlushMaxReleaseMs              float64                         `json:"flush_max_release_ms"`
+	FlushCompleted                 int64                           `json:"flush_completed"`
+	CompactionBacklog              int64                           `json:"compaction_backlog"`
+	CompactionMaxScore             float64                         `json:"compaction_max_score"`
+	CompactionLastDurationMs       float64                         `json:"compaction_last_duration_ms"`
+	CompactionMaxDurationMs        float64                         `json:"compaction_max_duration_ms"`
+	CompactionRuns                 uint64                          `json:"compaction_runs"`
+	CompactionValueWeight          float64                         `json:"compaction_value_weight"`
+	CompactionValueWeightSuggested float64                         `json:"compaction_value_weight_suggested,omitempty"`
+	ValueLogSegments               int                             `json:"vlog_segments"`
+	ValueLogPendingDel             int                             `json:"vlog_pending_deletes"`
+	ValueLogDiscardQueue           int                             `json:"vlog_discard_queue"`
+	ValueLogHead                   utils.ValuePtr                  `json:"vlog_head"`
+	WALActiveSegment               int64                           `json:"wal_active_segment"`
+	WALSegmentCount                int64                           `json:"wal_segment_count"`
+	WALActiveSize                  int64                           `json:"wal_active_size"`
+	WALSegmentsRemoved             uint64                          `json:"wal_segments_removed"`
+	WALRecordCounts                wal.RecordMetrics               `json:"wal_record_counts"`
+	WALSegmentsWithRaftRecords     int                             `json:"wal_segments_with_raft_records"`
+	WALRemovableRaftSegments       int                             `json:"wal_removable_raft_segments"`
+	WALTypedRecordRatio            float64                         `json:"wal_typed_record_ratio"`
+	WALTypedRecordWarning          bool                            `json:"wal_typed_record_warning"`
+	WALTypedRecordReason           string                          `json:"wal_typed_record_reason,omitempty"`
+	WALAutoGCRuns                  uint64                          `json:"wal_auto_gc_runs"`
+	WALAutoGCRemoved               uint64                          `json:"wal_auto_gc_removed"`
+	WALAutoGCLastUnix              int64                           `json:"wal_auto_gc_last_unix"`
+	RaftGroupCount                 int                             `json:"raft_group_count"`
+	RaftLaggingGroups              int                             `json:"raft_lagging_groups"`
+	RaftMinLogSegment              uint32                          `json:"raft_min_log_segment"`
+	RaftMaxLogSegment              uint32                          `json:"raft_max_log_segment"`
+	RaftMaxLagSegments             int64                           `json:"raft_max_lag_segments"`
+	RaftLagWarnThreshold           int64                           `json:"raft_lag_warn_threshold"`
+	RaftLagWarning                 bool                            `json:"raft_lag_warning"`
+	WriteQueueDepth                int64                           `json:"write_queue_depth"`
+	WriteQueueEntries              int64                           `json:"write_queue_entries"`
+	WriteQueueBytes                int64                           `json:"write_queue_bytes"`
+	WriteAvgBatchEntries           float64                         `json:"write_avg_batch_entries"`
+	WriteAvgBatchBytes             float64                         `json:"write_avg_batch_bytes"`
+	WriteAvgRequestWaitMs          float64                         `json:"write_avg_request_wait_ms"`
+	WriteAvgValueLogMs             float64                         `json:"write_avg_vlog_ms"`
+	WriteAvgApplyMs                float64                         `json:"write_avg_apply_ms"`
+	WriteBatchesTotal              int64                           `json:"write_batches_total"`
+	WriteThrottleActive            bool                            `json:"write_throttle_active"`
+	TxnsActive                     int64                           `json:"txns_active"`
+	TxnsStarted                    uint64                          `json:"txns_started"`
+	TxnsCommitted                  uint64                          `json:"txns_committed"`
+	TxnsConflicts                  uint64                          `json:"txns_conflicts"`
+	RegionTotal                    int64                           `json:"region_total"`
+	RegionNew                      int64                           `json:"region_new"`
+	RegionRunning                  int64                           `json:"region_running"`
+	RegionRemoving                 int64                           `json:"region_removing"`
+	RegionTombstone                int64                           `json:"region_tombstone"`
+	RegionOther                    int64                           `json:"region_other"`
+	HotKeys                        []HotKeyStat                    `json:"hot_keys,omitempty"`
+	BlockL0HitRate                 float64                         `json:"block_l0_hit_rate"`
+	BlockL1HitRate                 float64                         `json:"block_l1_hit_rate"`
+	BloomHitRate                   float64                         `json:"bloom_hit_rate"`
+	IteratorReused                 uint64                          `json:"iterator_reused"`
+	ColumnFamilies                 map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
+	LSMLevels                      []LSMLevelStats                 `json:"lsm_levels,omitempty"`
+	LSMValueBytesTotal             int64                           `json:"lsm_value_bytes_total"`
+	LSMValueDensityMax             float64                         `json:"lsm_value_density_max"`
+	LSMValueDensityAlert           bool                            `json:"lsm_value_density_alert"`
 }
 
 func newStats(db *DB) *Stats {
 	s := &Stats{
-		db:                   db,
-		closer:               utils.NewCloser(),
-		interval:             5 * time.Second,
-		EntryNum:             0,
-		entries:              reuseInt("NoKV.Stats.Entries"),
-		flushPending:         reuseInt("NoKV.Stats.Flush.Pending"),
-		flushQueueLen:        reuseInt("NoKV.Stats.Flush.QueueLength"),
-		flushActive:          reuseInt("NoKV.Stats.Flush.Active"),
-		flushWaitMs:          reuseFloat("NoKV.Stats.Flush.WaitMs"),
-		flushWaitLastMs:      reuseFloat("NoKV.Stats.Flush.WaitLastMs"),
-		flushWaitMaxMs:       reuseFloat("NoKV.Stats.Flush.WaitMaxMs"),
-		flushBuildMs:         reuseFloat("NoKV.Stats.Flush.BuildMs"),
-		flushBuildLastMs:     reuseFloat("NoKV.Stats.Flush.BuildLastMs"),
-		flushBuildMaxMs:      reuseFloat("NoKV.Stats.Flush.BuildMaxMs"),
-		flushReleaseMs:       reuseFloat("NoKV.Stats.Flush.ReleaseMs"),
-		flushReleaseLastMs:   reuseFloat("NoKV.Stats.Flush.ReleaseLastMs"),
-		flushReleaseMaxMs:    reuseFloat("NoKV.Stats.Flush.ReleaseMaxMs"),
-		flushCompleted:       reuseInt("NoKV.Stats.Flush.Completed"),
-		compactionBacklog:    reuseInt("NoKV.Stats.Compaction.Backlog"),
-		compactionMaxScore:   reuseFloat("NoKV.Stats.Compaction.MaxScore"),
-		compactionLastMs:     reuseFloat("NoKV.Stats.Compaction.LastDurationMs"),
-		compactionMaxMs:      reuseFloat("NoKV.Stats.Compaction.MaxDurationMs"),
-		compactionRuns:       reuseInt("NoKV.Stats.Compaction.RunsTotal"),
-		valueLogSegments:     reuseInt("NoKV.Stats.ValueLog.Segments"),
-		valueLogPendingDel:   reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
-		valueLogDiscardQueue: reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
-		walActiveSegment:     reuseInt("NoKV.Stats.WAL.ActiveSegment"),
-		walActiveSize:        reuseInt("NoKV.Stats.WAL.ActiveSize"),
-		walSegmentCount:      reuseInt("NoKV.Stats.WAL.Segments"),
-		walSegmentsRemoved:   reuseInt("NoKV.Stats.WAL.Removed"),
-		raftGroupCount:       reuseInt("NoKV.Stats.Raft.Groups"),
-		raftLaggingGroups:    reuseInt("NoKV.Stats.Raft.LaggingGroups"),
-		raftMaxLagSegments:   reuseInt("NoKV.Stats.Raft.MaxLagSegments"),
-		raftMinSegment:       reuseInt("NoKV.Stats.Raft.MinSegment"),
-		raftMaxSegment:       reuseInt("NoKV.Stats.Raft.MaxSegment"),
-		raftLagWarning:       reuseInt("NoKV.Stats.Raft.LagWarning"),
-		writeQueueDepth:      reuseInt("NoKV.Stats.Write.QueueDepth"),
-		writeQueueEntries:    reuseInt("NoKV.Stats.Write.QueueEntries"),
-		writeQueueBytes:      reuseInt("NoKV.Stats.Write.QueueBytes"),
-		writeBatchAvgEntries: reuseFloat("NoKV.Stats.Write.BatchAvgEntries"),
-		writeBatchAvgBytes:   reuseFloat("NoKV.Stats.Write.BatchAvgBytes"),
-		writeRequestWaitMs:   reuseFloat("NoKV.Stats.Write.RequestWaitMs"),
-		writeValueLogMs:      reuseFloat("NoKV.Stats.Write.ValueLogMs"),
-		writeApplyMs:         reuseFloat("NoKV.Stats.Write.ApplyMs"),
-		writeBatchesTotal:    reuseInt("NoKV.Stats.Write.Batches"),
-		writeThrottle:        reuseInt("NoKV.Stats.Write.Throttle"),
-		txnActive:            reuseInt("NoKV.Txns.Active"),
-		txnStarted:           reuseInt("NoKV.Txns.Started"),
-		txnCommitted:         reuseInt("NoKV.Txns.Committed"),
-		txnConflicts:         reuseInt("NoKV.Txns.Conflicts"),
-		blockL0HitRate:       reuseFloat("NoKV.Stats.Cache.L0HitRate"),
-		blockL1HitRate:       reuseFloat("NoKV.Stats.Cache.L1HitRate"),
-		bloomHitRate:         reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
-		iteratorReuses:       reuseInt("NoKV.Stats.Iterator.Reused"),
-		walSegmentsWithRaft:  reuseInt("NoKV.Stats.WAL.RaftSegments"),
-		walSegmentsRemovable: reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
-		walTypedRatio:        reuseFloat("NoKV.Stats.WAL.TypedRatio"),
-		walTypedWarning:      reuseInt("NoKV.Stats.WAL.TypedWarning"),
-		walTypedReason:       reuseString("NoKV.Stats.WAL.TypedReason"),
-		walAutoRuns:          reuseInt("NoKV.Stats.WAL.AutoRuns"),
-		walAutoRemoved:       reuseInt("NoKV.Stats.WAL.AutoRemoved"),
-		walAutoLastUnix:      reuseInt("NoKV.Stats.WAL.AutoLastUnix"),
-		regionTotal:          reuseInt("NoKV.Stats.Region.Total"),
-		regionNew:            reuseInt("NoKV.Stats.Region.New"),
-		regionRunning:        reuseInt("NoKV.Stats.Region.Running"),
-		regionRemoving:       reuseInt("NoKV.Stats.Region.Removing"),
-		regionTombstone:      reuseInt("NoKV.Stats.Region.Tombstone"),
-		regionOther:          reuseInt("NoKV.Stats.Region.Other"),
+		db:                    db,
+		closer:                utils.NewCloser(),
+		interval:              5 * time.Second,
+		EntryNum:              0,
+		entries:               reuseInt("NoKV.Stats.Entries"),
+		flushPending:          reuseInt("NoKV.Stats.Flush.Pending"),
+		flushQueueLen:         reuseInt("NoKV.Stats.Flush.QueueLength"),
+		flushActive:           reuseInt("NoKV.Stats.Flush.Active"),
+		flushWaitMs:           reuseFloat("NoKV.Stats.Flush.WaitMs"),
+		flushWaitLastMs:       reuseFloat("NoKV.Stats.Flush.WaitLastMs"),
+		flushWaitMaxMs:        reuseFloat("NoKV.Stats.Flush.WaitMaxMs"),
+		flushBuildMs:          reuseFloat("NoKV.Stats.Flush.BuildMs"),
+		flushBuildLastMs:      reuseFloat("NoKV.Stats.Flush.BuildLastMs"),
+		flushBuildMaxMs:       reuseFloat("NoKV.Stats.Flush.BuildMaxMs"),
+		flushReleaseMs:        reuseFloat("NoKV.Stats.Flush.ReleaseMs"),
+		flushReleaseLastMs:    reuseFloat("NoKV.Stats.Flush.ReleaseLastMs"),
+		flushReleaseMaxMs:     reuseFloat("NoKV.Stats.Flush.ReleaseMaxMs"),
+		flushCompleted:        reuseInt("NoKV.Stats.Flush.Completed"),
+		compactionBacklog:     reuseInt("NoKV.Stats.Compaction.Backlog"),
+		compactionMaxScore:    reuseFloat("NoKV.Stats.Compaction.MaxScore"),
+		compactionLastMs:      reuseFloat("NoKV.Stats.Compaction.LastDurationMs"),
+		compactionMaxMs:       reuseFloat("NoKV.Stats.Compaction.MaxDurationMs"),
+		compactionRuns:        reuseInt("NoKV.Stats.Compaction.RunsTotal"),
+		valueLogSegments:      reuseInt("NoKV.Stats.ValueLog.Segments"),
+		valueLogPendingDel:    reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
+		valueLogDiscardQueue:  reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
+		walActiveSegment:      reuseInt("NoKV.Stats.WAL.ActiveSegment"),
+		walActiveSize:         reuseInt("NoKV.Stats.WAL.ActiveSize"),
+		walSegmentCount:       reuseInt("NoKV.Stats.WAL.Segments"),
+		walSegmentsRemoved:    reuseInt("NoKV.Stats.WAL.Removed"),
+		raftGroupCount:        reuseInt("NoKV.Stats.Raft.Groups"),
+		raftLaggingGroups:     reuseInt("NoKV.Stats.Raft.LaggingGroups"),
+		raftMaxLagSegments:    reuseInt("NoKV.Stats.Raft.MaxLagSegments"),
+		raftMinSegment:        reuseInt("NoKV.Stats.Raft.MinSegment"),
+		raftMaxSegment:        reuseInt("NoKV.Stats.Raft.MaxSegment"),
+		raftLagWarning:        reuseInt("NoKV.Stats.Raft.LagWarning"),
+		writeQueueDepth:       reuseInt("NoKV.Stats.Write.QueueDepth"),
+		writeQueueEntries:     reuseInt("NoKV.Stats.Write.QueueEntries"),
+		writeQueueBytes:       reuseInt("NoKV.Stats.Write.QueueBytes"),
+		writeBatchAvgEntries:  reuseFloat("NoKV.Stats.Write.BatchAvgEntries"),
+		writeBatchAvgBytes:    reuseFloat("NoKV.Stats.Write.BatchAvgBytes"),
+		writeRequestWaitMs:    reuseFloat("NoKV.Stats.Write.RequestWaitMs"),
+		writeValueLogMs:       reuseFloat("NoKV.Stats.Write.ValueLogMs"),
+		writeApplyMs:          reuseFloat("NoKV.Stats.Write.ApplyMs"),
+		writeBatchesTotal:     reuseInt("NoKV.Stats.Write.Batches"),
+		writeThrottle:         reuseInt("NoKV.Stats.Write.Throttle"),
+		txnActive:             reuseInt("NoKV.Txns.Active"),
+		txnStarted:            reuseInt("NoKV.Txns.Started"),
+		txnCommitted:          reuseInt("NoKV.Txns.Committed"),
+		txnConflicts:          reuseInt("NoKV.Txns.Conflicts"),
+		blockL0HitRate:        reuseFloat("NoKV.Stats.Cache.L0HitRate"),
+		blockL1HitRate:        reuseFloat("NoKV.Stats.Cache.L1HitRate"),
+		bloomHitRate:          reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
+		iteratorReuses:        reuseInt("NoKV.Stats.Iterator.Reused"),
+		walSegmentsWithRaft:   reuseInt("NoKV.Stats.WAL.RaftSegments"),
+		walSegmentsRemovable:  reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
+		walTypedRatio:         reuseFloat("NoKV.Stats.WAL.TypedRatio"),
+		walTypedWarning:       reuseInt("NoKV.Stats.WAL.TypedWarning"),
+		walTypedReason:        reuseString("NoKV.Stats.WAL.TypedReason"),
+		walAutoRuns:           reuseInt("NoKV.Stats.WAL.AutoRuns"),
+		walAutoRemoved:        reuseInt("NoKV.Stats.WAL.AutoRemoved"),
+		walAutoLastUnix:       reuseInt("NoKV.Stats.WAL.AutoLastUnix"),
+		lsmValueBytes:         reuseInt("NoKV.Stats.LSM.ValueBytes"),
+		compactionValueWeight: reuseFloat("NoKV.Stats.Compaction.ValueWeight"),
+		lsmValueDensityMax:    reuseFloat("NoKV.Stats.LSM.ValueDensityMax"),
+		lsmValueDensityAlert:  reuseInt("NoKV.Stats.LSM.ValueDensityAlert"),
+		regionTotal:           reuseInt("NoKV.Stats.Region.Total"),
+		regionNew:             reuseInt("NoKV.Stats.Region.New"),
+		regionRunning:         reuseInt("NoKV.Stats.Region.Running"),
+		regionRemoving:        reuseInt("NoKV.Stats.Region.Removing"),
+		regionTombstone:       reuseInt("NoKV.Stats.Region.Tombstone"),
+		regionOther:           reuseInt("NoKV.Stats.Region.Other"),
 	}
 	if v := expvar.Get("NoKV.Stats.ColumnFamilies"); v != nil {
 		if m, ok := v.(*expvar.Map); ok {
@@ -252,6 +297,28 @@ func newStats(db *DB) *Stats {
 		s.cfMap = expvar.NewMap("NoKV.Stats.ColumnFamilies")
 	}
 	s.walRecordCounts = reuseMap("NoKV.Stats.WAL.RecordCounts")
+	if expvar.Get("NoKV.Stats.LSM.Levels") == nil {
+		expvar.Publish("NoKV.Stats.LSM.Levels", expvar.Func(func() any {
+			if s == nil || s.db == nil || s.db.lsm == nil {
+				return []map[string]any{}
+			}
+			levels := s.db.lsm.LevelMetrics()
+			out := make([]map[string]any, 0, len(levels))
+			for _, lvl := range levels {
+				out = append(out, map[string]any{
+					"level":              lvl.Level,
+					"tables":             lvl.TableCount,
+					"size_bytes":         lvl.SizeBytes,
+					"value_bytes":        lvl.ValueBytes,
+					"stale_bytes":        lvl.StaleBytes,
+					"ingest_tables":      lvl.IngestTableCount,
+					"ingest_size_bytes":  lvl.IngestSizeBytes,
+					"ingest_value_bytes": lvl.IngestValueBytes,
+				})
+			}
+			return out
+		}))
+	}
 	if expvar.Get("NoKV.Stats.HotKeys") == nil {
 		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
 			if db == nil || db.hot == nil {
@@ -478,6 +545,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 
 	// Flush backlog (pending flush tasks).
 	if s.db.lsm != nil {
+		snap.CompactionValueWeight = s.db.lsm.CompactionValueWeight()
+		alertThreshold := s.db.lsm.CompactionValueAlertThreshold()
 		fstats := s.db.lsm.FlushMetrics()
 		snap.FlushPending = fstats.Pending
 		snap.FlushQueueLength = fstats.Queue
@@ -511,7 +580,53 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		}
 		snap.FlushCompleted = fstats.Completed
 		snap.CompactionBacklog, snap.CompactionMaxScore = s.db.lsm.CompactionStats()
+		if levels := s.db.lsm.LevelMetrics(); len(levels) > 0 {
+			snap.LSMLevels = make([]LSMLevelStats, 0, len(levels))
+			var maxDensity float64
+			for _, lvl := range levels {
+				statsLvl := levelMetricsToStats(lvl)
+				snap.LSMLevels = append(snap.LSMLevels, statsLvl)
+				if statsLvl.ValueDensity > maxDensity {
+					maxDensity = statsLvl.ValueDensity
+				}
+				if statsLvl.IngestValueDensity > maxDensity {
+					maxDensity = statsLvl.IngestValueDensity
+				}
+			}
+			snap.LSMValueDensityMax = maxDensity
+			if alertThreshold > 0 && maxDensity >= alertThreshold {
+				snap.LSMValueDensityAlert = true
+				delta := maxDensity - alertThreshold
+				recommend := snap.CompactionValueWeight + delta
+				if recommend < snap.CompactionValueWeight {
+					recommend = snap.CompactionValueWeight
+				}
+				if recommend > 4.0 {
+					recommend = 4.0
+				}
+				snap.CompactionValueWeightSuggested = math.Round(recommend*100) / 100
+			}
+		}
 	}
+	if len(snap.LSMLevels) > 0 {
+		var totalValue int64
+		for _, lvl := range snap.LSMLevels {
+			totalValue += lvl.ValueBytes + lvl.IngestValueBytes
+		}
+		snap.LSMValueBytesTotal = totalValue
+		s.lsmValueBytes.Set(totalValue)
+		s.lsmValueDensityMax.Set(snap.LSMValueDensityMax)
+		if snap.LSMValueDensityAlert {
+			s.lsmValueDensityAlert.Set(1)
+		} else {
+			s.lsmValueDensityAlert.Set(0)
+		}
+	} else {
+		s.lsmValueBytes.Set(0)
+		s.lsmValueDensityMax.Set(0)
+		s.lsmValueDensityAlert.Set(0)
+	}
+	s.compactionValueWeight.Set(snap.CompactionValueWeight)
 
 	if s.db.writeMetrics != nil {
 		wsnap := s.db.writeMetrics.snapshot()
