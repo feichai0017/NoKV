@@ -12,7 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -71,10 +70,10 @@ func TestVlogBase(t *testing.T) {
 	// 关闭会调的锁
 	defer kvpkg.RunCallback(unlock1)
 	defer kvpkg.RunCallback(unlock2)
-	entry1, err := wal.DecodeEntry(payload1)
+	entry1, err := kvpkg.DecodeEntry(payload1)
 	require.NoError(t, err)
 	defer entry1.DecrRef()
-	entry2, err := wal.DecodeEntry(payload2)
+	entry2, err := kvpkg.DecodeEntry(payload2)
 	require.NoError(t, err)
 	defer entry2.DecrRef()
 
@@ -171,7 +170,8 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 func TestDecodeWalEntryReleasesEntries(t *testing.T) {
 	orig := kvpkg.NewEntry([]byte("decode-key"), []byte("decode-val"))
 	buf := &bytes.Buffer{}
-	payload := wal.EncodeEntry(buf, orig)
+	payload, err := kvpkg.EncodeEntry(buf, orig)
+	require.NoError(t, err)
 	orig.DecrRef()
 
 	entry, _, _, err := decodeWalEntry(payload)

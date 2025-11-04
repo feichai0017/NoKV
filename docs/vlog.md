@@ -30,13 +30,13 @@ The design echoes BadgerDB's value log while remaining manifest-driven like Rock
 The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries written to the value log and the WAL are byte-identical.
 
 ```
-+--------+---------+------------+-------------+-----------+-------+
-| Meta   | KeyLen  | ValueLen   | ExpiresAt   | Key bytes | Value |
-+--------+---------+------------+-------------+-----------+-------+
++--------+----------+------+-------------+-----------+-------+
+| KeyLen | ValueLen | Meta | ExpiresAt   | Key bytes | Value |
++--------+----------+------+-------------+-----------+-------+
                                              + CRC32 (4 B)
 ```
 
-* Header fields are varint-encoded (`kv.Header.Encode`).
+* Header fields are varint-encoded (`kv.EntryHeader`).
 * `file.LogFile.EncodeEntry`/`DecodeEntry` perform the layout work, and each append finishes with a CRC32 to detect torn writes.
 * `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L348-L418) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
 

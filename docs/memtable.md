@@ -18,7 +18,7 @@ type memTable struct {
 ```
 
 * **Skiplist arena** – `utils.NewSkiplist` allocates a pointer-friendly arena sized via [`arenaSizeFor`](../lsm/memtable.go#L23-L36). The arena doubles in size until it hits the configured `Options.MemTableSize`, similar to Badger's design.
-* **WAL coupling** – every `Set` uses [`wal.EncodeEntry`](../lsm/memtable.go#L42-L54), appending the payload to the active WAL segment before inserting into the skiplist. `walSize` tracks how much of the segment is consumed so flush can release it later.
+* **WAL coupling** – every `Set` uses [`kv.EncodeEntry`](../lsm/memtable.go#L42-L59) to materialise the payload to the active WAL segment before inserting into the skiplist. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – [`LSM.NewMemtable`](../lsm/memtable.go#L38-L51) atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.
 
 ---

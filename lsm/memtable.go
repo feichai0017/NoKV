@@ -101,7 +101,10 @@ func (m *memTable) set(entry *kv.Entry) error {
 		buf = getWalBuffer()
 		m.walBuf = buf
 	}
-	payload := wal.EncodeEntry(buf, entry)
+	payload, err := kv.EncodeEntry(buf, entry)
+	if err != nil {
+		return err
+	}
 	infos, err := m.lsm.wal.Append(payload)
 	if err != nil {
 		return err
@@ -208,7 +211,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		if info.Type != wal.RecordTypeEntry {
 			return nil
 		}
-		entry, err := wal.DecodeEntry(payload)
+		entry, err := kv.DecodeEntry(payload)
 		if err != nil {
 			return err
 		}
