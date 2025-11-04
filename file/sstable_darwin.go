@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -67,7 +68,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	// Read checksum len from the last 4 bytes.
 	readPos -= 4
 	buf := ss.readCheckError(readPos, 4)
-	checksumLen := int(utils.BytesToU32(buf))
+	checksumLen := int(kv.BytesToU32(buf))
 	if checksumLen < 0 {
 		return nil, errors.New("checksum length less than zero. Data corrupted")
 	}
@@ -79,7 +80,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	// Read index size from the footer.
 	readPos -= 4
 	buf = ss.readCheckError(readPos, 4)
-	ss.idxLen = int(utils.BytesToU32(buf))
+	ss.idxLen = int(kv.BytesToU32(buf))
 
 	// Read index.
 	readPos -= ss.idxLen

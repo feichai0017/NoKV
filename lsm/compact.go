@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
@@ -500,8 +501,8 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Level:     int(ch.Level),
 					FileID:    tbl.fid,
 					Size:      uint64(tbl.Size()),
-					Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
-					Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
+					Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
+					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 					ValueSize: tbl.ValueSize(),
 				},
@@ -699,7 +700,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 		}
 		if i%width == width-1 {
 			// 设置最大值为右区间
-			right := utils.KeyWithTs(utils.ParseKey(t.MaxKey()), math.MaxUint64)
+			right := kv.KeyWithTs(kv.ParseKey(t.MaxKey()), math.MaxUint64)
 			addRange(right)
 		}
 	}
@@ -828,8 +829,8 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				Level:     cd.nextLevel.levelNum,
 				FileID:    tbl.fid,
 				Size:      uint64(tbl.Size()),
-				Smallest:  utils.SafeCopy(nil, tbl.MinKey()),
-				Largest:   utils.SafeCopy(nil, tbl.MaxKey()),
+				Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
+				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
 				ValueSize: tbl.ValueSize(),
 			},
@@ -994,8 +995,8 @@ func getKeyRange(tables ...*table) keyRange {
 	// We pick all the versions of the smallest and the biggest key. Note that version zero would
 	// be the rightmost key, considering versions are default sorted in descending order.
 	return keyRange{
-		left:  utils.KeyWithTs(utils.ParseKey(minKey), math.MaxUint64),
-		right: utils.KeyWithTs(utils.ParseKey(maxKey), 0),
+		left:  kv.KeyWithTs(kv.ParseKey(minKey), math.MaxUint64),
+		right: kv.KeyWithTs(kv.ParseKey(maxKey), 0),
 	}
 }
 
@@ -1027,9 +1028,9 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 	defer func() {
 		lm.updateDiscardStats(discardStats)
 	}()
-	updateStats := func(e *utils.Entry) {
-		if e.Meta&utils.BitValuePointer > 0 {
-			var vp utils.ValuePtr
+	updateStats := func(e *kv.Entry) {
+		if e.Meta&kv.BitValuePointer > 0 {
+			var vp kv.ValuePtr
 			vp.Decode(e.Value)
 			weighted := float64(vp.Len) * valueBias
 			if weighted < 1 {
@@ -1042,9 +1043,9 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 		var tableKr keyRange
 		for ; it.Valid(); it.Next() {
 			key := it.Item().Entry().Key
-			//version := utils.ParseTs(key)
+			//version := kv.ParseTs(key)
 			isExpired := IsDeletedOrExpired(it.Item().Entry())
-			if !utils.SameKey(key, lastKey) {
+			if !kv.SameKey(key, lastKey) {
 				// 如果迭代器返回的key大于当前key的范围就不用执行了
 				if len(kr.right) > 0 && utils.CompareKeys(key, kr.right) >= 0 {
 					break
@@ -1054,11 +1055,11 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 					break
 				}
 				// 把当前的key变为 lastKey
-				lastKey = utils.SafeCopy(lastKey, key)
+				lastKey = kv.SafeCopy(lastKey, key)
 				//umVersions = 0
 				// 如果左边界没有，则当前key给到左边界
 				if len(tableKr.left) == 0 {
-					tableKr.left = utils.SafeCopy(tableKr.left, key)
+					tableKr.left = kv.SafeCopy(tableKr.left, key)
 				}
 				// 更新右边界
 				tableKr.right = lastKey
@@ -1141,7 +1142,7 @@ func (lm *levelManager) checkOverlap(tables []*table, lev int) bool {
 }
 
 // 判断是否过期 是可删除
-func IsDeletedOrExpired(e *utils.Entry) bool {
+func IsDeletedOrExpired(e *kv.Entry) bool {
 	if e.Value == nil {
 		return true
 	}

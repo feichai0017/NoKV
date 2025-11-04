@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -293,12 +294,12 @@ func TestCompact(t *testing.T) {
 // 正确性测试
 func baseTest(t *testing.T, lsm *LSM, n int) {
 	// 用来跟踪调试的
-	e := &utils.Entry{
+	e := &kv.Entry{
 		Key:       []byte("CRTS😁NoKVMrGSBtL12345678"),
 		Value:     []byte("我草了"),
 		ExpiresAt: 123,
 	}
-	//caseList := make([]*utils.Entry, 0)
+	//caseList := make([]*kv.Entry, 0)
 	//caseList = append(caseList, e)
 
 	// 随机构建数据进行测试
@@ -313,7 +314,7 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	utils.Panic(err)
 	utils.CondPanic(!bytes.Equal(e.Value, v.Value), fmt.Errorf("lsm.Get(e.Key) value not equal !!!"))
 	// TODO range功能待完善
-	//retList := make([]*utils.Entry, 0)
+	//retList := make([]*kv.Entry, 0)
 	// testRange := func(isAsc bool) {
 	// 	// Range 确保写入进去的每个lsm都可以被读取到
 	// 	iter := lsm.NewIterator(&utils.Options{IsAsc: true})

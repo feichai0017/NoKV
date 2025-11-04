@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -13,19 +14,19 @@ type DBIterator struct {
 	// keyOnly avoids eager value log materialisation when true.
 	keyOnly bool
 
-	entry    utils.Entry
+	entry    kv.Entry
 	item     Item
 	valueBuf []byte
 	valid    bool
 }
 
 type Item struct {
-	e        *utils.Entry
+	e        *kv.Entry
 	vlog     *valueLog
 	valueBuf []byte
 }
 
-func (it *Item) Entry() *utils.Entry {
+func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
 
@@ -36,15 +37,15 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	val := it.e.Value
-	if utils.IsValuePtr(it.e) {
+	if kv.IsValuePtr(it.e) {
 		if it.vlog == nil {
 			return nil, utils.ErrKeyNotFound
 		}
-		var vp utils.ValuePtr
+		var vp kv.ValuePtr
 		vp.Decode(val)
 		fetched, cb, err := it.vlog.read(&vp)
 		if cb != nil {
-			defer utils.RunCallback(cb)
+			defer kv.RunCallback(cb)
 		}
 		if err != nil {
 			return nil, err
@@ -52,7 +53,7 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		it.valueBuf = append(it.valueBuf[:0], fetched...)
 		dst = append(dst[:0], it.valueBuf...)
 		it.e.Value = it.valueBuf
-		it.e.Meta &^= utils.BitValuePointer
+		it.e.Meta &^= kv.BitValuePointer
 		return dst, nil
 	}
 	if len(val) == 0 {
@@ -156,7 +157,7 @@ func (iter *DBIterator) populate() {
 	}
 }
 
-func (iter *DBIterator) materialize(src *utils.Entry) bool {
+func (iter *DBIterator) materialize(src *kv.Entry) bool {
 	if iter == nil || src == nil {
 		return false
 	}
@@ -164,30 +165,30 @@ func (iter *DBIterator) materialize(src *utils.Entry) bool {
 		return false
 	}
 	iter.entry = *src
-	cf, userKey, ts := utils.SplitInternalKey(iter.entry.Key)
+	cf, userKey, ts := kv.SplitInternalKey(iter.entry.Key)
 	iter.entry.Key = userKey
 	iter.entry.CF = cf
 	if ts != 0 {
 		iter.entry.Version = ts
 	}
-	if utils.IsValuePtr(src) {
+	if kv.IsValuePtr(src) {
 		if iter.keyOnly {
 			// Leave pointer encoded; defer value fetch to Item.ValueCopy.
 			iter.entry.Value = src.Value
 			iter.item.valueBuf = iter.item.valueBuf[:0]
 		} else {
-			var vp utils.ValuePtr
+			var vp kv.ValuePtr
 			vp.Decode(src.Value)
 			val, cb, err := iter.vlog.read(&vp)
 			if cb != nil {
-				defer utils.RunCallback(cb)
+				defer kv.RunCallback(cb)
 			}
 			if err != nil || len(val) == 0 {
 				return false
 			}
 			iter.valueBuf = append(iter.valueBuf[:0], val...)
 			iter.entry.Value = iter.valueBuf
-			iter.entry.Meta &^= utils.BitValuePointer
+			iter.entry.Meta &^= kv.BitValuePointer
 			iter.item.valueBuf = iter.entry.Value
 		}
 	} else {

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
 
 	if err := db.Update(func(txn *Txn) error {
-		return txn.SetEntry(utils.NewEntry([]byte("stats-key"), []byte("stats-value")))
+		return txn.SetEntry(kv.NewEntry([]byte("stats-key"), []byte("stats-value")))
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	if snap.IteratorReused != db.iterPool.reused() {
 		t.Fatalf("expected iterator reuse snapshot to match pool, snap=%d pool=%d", snap.IteratorReused, db.iterPool.reused())
 	}
-	if cfStats, ok := snap.ColumnFamilies[utils.CFDefault.String()]; !ok || cfStats.Writes == 0 || cfStats.Reads == 0 {
+	if cfStats, ok := snap.ColumnFamilies[kv.CFDefault.String()]; !ok || cfStats.Writes == 0 || cfStats.Reads == 0 {
 		t.Fatalf("expected default column family stats to be populated, snapshot=%+v", snap.ColumnFamilies)
 	}
 
@@ -302,7 +302,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 
 	// Create a WAL record so that rotation and removal have work to do.
 	require.NoError(t, db.Update(func(txn *Txn) error {
-		return txn.SetEntry(utils.NewEntry([]byte("wal-metrics"), []byte("value")))
+		return txn.SetEntry(kv.NewEntry([]byte("wal-metrics"), []byte("value")))
 	}))
 
 	require.NoError(t, db.wal.Rotate())

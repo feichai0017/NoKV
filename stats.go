@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -160,7 +161,7 @@ type StatsSnapshot struct {
 	ValueLogSegments               int                             `json:"vlog_segments"`
 	ValueLogPendingDel             int                             `json:"vlog_pending_deletes"`
 	ValueLogDiscardQueue           int                             `json:"vlog_discard_queue"`
-	ValueLogHead                   utils.ValuePtr                  `json:"vlog_head"`
+	ValueLogHead                   kv.ValuePtr                     `json:"vlog_head"`
 	WALActiveSegment               int64                           `json:"wal_active_segment"`
 	WALSegmentCount                int64                           `json:"wal_segment_count"`
 	WALActiveSize                  int64                           `json:"wal_active_size"`

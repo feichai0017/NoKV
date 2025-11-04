@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"encoding/binary"
@@ -21,14 +21,14 @@ type ValueStruct struct {
 	Version uint64 // This field is not serialized. Only for internal usage.
 }
 
-// value只持久化具体的value值和过期时间
+// EncodedSize returns the size of the encoded value structure.
 func (vs *ValueStruct) EncodedSize() uint32 {
 	sz := len(vs.Value) + 1 // meta
 	enc := sizeVarint(vs.ExpiresAt)
 	return uint32(sz + enc)
 }
 
-// DecodeValue
+// DecodeValue decodes the provided buffer into the value structure.
 func (vs *ValueStruct) DecodeValue(buf []byte) {
 	vs.Meta = buf[0]
 	var sz int
@@ -36,8 +36,7 @@ func (vs *ValueStruct) DecodeValue(buf []byte) {
 	vs.Value = buf[1+sz:]
 }
 
-// 对value进行编码，并将编码后的字节写入byte
-// 这里将过期时间和value的值一起编码
+// EncodeValue encodes the value structure into the provided buffer and returns the bytes written.
 func (vs *ValueStruct) EncodeValue(b []byte) uint32 {
 	b[0] = vs.Meta
 	sz := binary.PutUvarint(b[1:], vs.ExpiresAt)
@@ -56,7 +55,7 @@ func sizeVarint(x uint64) (n int) {
 	return n
 }
 
-// Entry _ 最外层写入的结构体
+// Entry represents the top-level mutation record stored in WAL/vlog segments.
 type Entry struct {
 	Key       []byte
 	Value     []byte
@@ -73,10 +72,12 @@ type Entry struct {
 	ref int32
 }
 
+// IncrRef increments the entry reference count.
 func (e *Entry) IncrRef() {
 	atomic.AddInt32(&e.ref, 1)
 }
 
+// DecrRef decrements the entry reference count and releases it to the pool when it reaches zero.
 func (e *Entry) DecrRef() {
 	nRef := atomic.AddInt32(&e.ref, -1)
 	if nRef > 0 {
@@ -98,7 +99,7 @@ func (e *Entry) reset() {
 	e.ValThreshold = 0
 }
 
-// NewEntry_
+// NewEntry creates a new entry in the default column family.
 func NewEntry(key, value []byte) *Entry {
 	return NewEntryWithCF(CFDefault, key, value)
 }
@@ -108,32 +109,31 @@ func NewEntryWithCF(cf ColumnFamily, key, value []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key = key
 	e.Value = value
-	e.CF = cf
 	if !cf.Valid() {
-		e.CF = CFDefault
+		cf = CFDefault
 	}
+	e.CF = cf
 	e.IncrRef()
 	return e
 }
 
-// Entry_
+// Entry returns itself. It is kept for compatibility with iterator interfaces.
 func (e *Entry) Entry() *Entry {
 	return e
 }
 
+// IsDeletedOrExpired reports whether the entry is a tombstone or has passed its expiry.
 func (e *Entry) IsDeletedOrExpired() bool {
 	if e.Value == nil {
 		return true
 	}
-
 	if e.ExpiresAt == 0 {
 		return false
 	}
-
 	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
-// WithTTL _
+// WithTTL sets the TTL for the entry.
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
 	return e
@@ -151,7 +151,7 @@ func (e *Entry) WithColumnFamily(cf ColumnFamily) *Entry {
 	return e
 }
 
-// EncodedSize is the size of the ValueStruct when encoded
+// EncodedSize is the size of the Entry value when encoded.
 func (e *Entry) EncodedSize() uint32 {
 	sz := len(e.Value)
 	enc := sizeVarint(uint64(e.Meta))
@@ -159,17 +159,15 @@ func (e *Entry) EncodedSize() uint32 {
 	return uint32(sz + enc)
 }
 
-// EstimateSize
+// EstimateSize estimates the size of the entry when stored inline versus via value log pointer.
 func (e *Entry) EstimateSize(threshold int) int {
-	// TODO: 是否考虑 user meta?
 	if len(e.Value) < threshold {
 		return len(e.Key) + len(e.Value) + 1 // Meta
 	}
-	return len(e.Key) + 12 + 1 // 12 for ValuePointer, 2 for meta.
+	return len(e.Key) + 12 + 1 // 12 for ValuePointer, 1 for meta.
 }
 
-// header 对象
-// header is used in value log as a header before Entry.
+// Header is the value-log header preceding each entry payload.
 type Header struct {
 	KLen      uint32
 	VLen      uint32
@@ -177,9 +175,7 @@ type Header struct {
 	Meta      byte
 }
 
-// +------+----------+------------+--------------+-----------+
-// | Meta | UserMeta | Key Length | Value Length | ExpiresAt |
-// +------+----------+------------+--------------+-----------+
+// Encode serializes the header into the provided buffer.
 func (h Header) Encode(out []byte) int {
 	out[0] = h.Meta
 	index := 1

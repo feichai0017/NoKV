@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
@@ -94,7 +95,7 @@ func (m *memTable) close() error {
 	return nil
 }
 
-func (m *memTable) set(entry *utils.Entry) error {
+func (m *memTable) set(entry *kv.Entry) error {
 	buf := m.walBuf
 	if buf == nil {
 		buf = getWalBuffer()
@@ -112,9 +113,9 @@ func (m *memTable) set(entry *utils.Entry) error {
 	return nil
 }
 
-func (m *memTable) Get(key []byte) (*utils.Entry, error) {
+func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	vs := m.sl.Search(key)
-	e := utils.EntryPool.Get().(*utils.Entry)
+	e := kv.EntryPool.Get().(*kv.Entry)
 	e.Key = key
 	e.Value = vs.Value
 	e.ExpiresAt = vs.ExpiresAt
@@ -211,7 +212,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		if err != nil {
 			return err
 		}
-		if ts := utils.ParseTs(entry.Key); ts > mt.maxVersion {
+		if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
 			mt.maxVersion = ts
 		}
 		mt.sl.Add(entry)

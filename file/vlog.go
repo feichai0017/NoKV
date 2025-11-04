@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
@@ -39,7 +40,7 @@ func (lf *LogFile) Open(opt *Options) error {
 }
 
 // Acquire lock on mmap/file if you are calling this
-func (lf *LogFile) Read(p *utils.ValuePtr) (buf []byte, err error) {
+func (lf *LogFile) Read(p *kv.ValuePtr) (buf []byte, err error) {
 	offset := p.Offset
 	// Do not convert size to uint32, because the lf.fmap can be of size
 	// 4GB, which overflows the uint32 during conversion to make the size 0,
@@ -119,8 +120,8 @@ func (lf *LogFile) Bootstrap() error {
 		return fmt.Errorf("logfile bootstrap: nil receiver")
 	}
 	// Reserve header region and ensure it is zeroed even when the file is preallocated.
-	if utils.ValueLogHeaderSize > 0 {
-		header := make([]byte, utils.ValueLogHeaderSize)
+	if kv.ValueLogHeaderSize > 0 {
+		header := make([]byte, kv.ValueLogHeaderSize)
 		if err := lf.Write(0, header); err != nil {
 			return err
 		}

@@ -7,6 +7,7 @@ import (
 	"math"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/mvcc"
 	"github.com/feichai0017/NoKV/mvcc/latch"
 	"github.com/feichai0017/NoKV/pb"
@@ -85,7 +86,7 @@ func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, 
 	if lock != nil && req.GetVersion() >= lock.Ts {
 		keyErr := &pb.KeyError{Locked: &pb.Locked{
 			PrimaryLock: lock.Primary,
-			Key:         utils.SafeCopy(nil, req.GetKey()),
+			Key:         kv.SafeCopy(nil, req.GetKey()),
 			LockVersion: lock.Ts,
 			LockTtl:     lock.TTL,
 			LockType:    lock.Kind,
@@ -139,11 +140,11 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 			iter.Next()
 			continue
 		}
-		if entry.CF != utils.CFWrite {
+		if entry.CF != kv.CFWrite {
 			iter.Next()
 			continue
 		}
-		key := utils.SafeCopy(nil, entry.Key)
+		key := kv.SafeCopy(nil, entry.Key)
 		if !started {
 			cmp := bytes.Compare(key, startKey)
 			if cmp < 0 || (cmp == 0 && !includeStart) {
@@ -225,9 +226,9 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 		default:
 			var value []byte
 			if len(write.ShortValue) > 0 {
-				value = utils.SafeCopy(nil, write.ShortValue)
+				value = kv.SafeCopy(nil, write.ShortValue)
 			} else {
-				entryVal, err := db.GetVersionedEntry(utils.CFDefault, key, write.StartTs)
+				entryVal, err := db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
 				if err != nil {
 					if errors.Is(err, utils.ErrKeyNotFound) {
 						iter.Next()
@@ -235,7 +236,7 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 					}
 					return nil, false, err
 				}
-				value = utils.SafeCopy(nil, entryVal.Value)
+				value = kv.SafeCopy(nil, entryVal.Value)
 				entryVal.DecrRef()
 			}
 			advanceToNextUserKey(iter, key)
@@ -252,7 +253,7 @@ func lockedError(key []byte, lock *mvcc.Lock) *pb.KeyError {
 	return &pb.KeyError{
 		Locked: &pb.Locked{
 			PrimaryLock: lock.Primary,
-			Key:         utils.SafeCopy(nil, key),
+			Key:         kv.SafeCopy(nil, key),
 			LockVersion: lock.Ts,
 			LockTtl:     lock.TTL,
 			LockType:    lock.Kind,

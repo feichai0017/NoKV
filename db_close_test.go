@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/kv"
 )
 
 func TestDBCloseFlushesDiscardStats(t *testing.T) {
@@ -33,7 +33,7 @@ func TestDBCloseFlushesDiscardStats(t *testing.T) {
 		}
 	}()
 
-	entry, err := reopened.GetCF(utils.CFDefault, lfDiscardStatsKey)
+	entry, err := reopened.GetCF(kv.CFDefault, lfDiscardStatsKey)
 	if err != nil {
 		t.Fatalf("GetCF returned error: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -105,7 +106,7 @@ func Open(cfg Config) (*Manager, error) {
 	}
 	if mgr.active != nil {
 		if fresh {
-			mgr.offset = uint32(utils.ValueLogHeaderSize)
+			mgr.offset = uint32(kv.ValueLogHeaderSize)
 		} else {
 			off, err := mgr.active.Seek(0, io.SeekEnd)
 			if err != nil {
@@ -166,7 +167,7 @@ func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 	return lf, nil
 }
 
-func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
+func (m *Manager) Append(data []byte) (*kv.ValuePtr, error) {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
 
@@ -191,11 +192,11 @@ func (m *Manager) Append(data []byte) (*utils.ValuePtr, error) {
 	}
 	m.offset += uint32(len(data))
 
-	return &utils.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
+	return &kv.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
 }
 
 // AppendEntry encodes and appends the provided entry directly into the active value log.
-func (m *Manager) AppendEntry(e *utils.Entry) (*utils.ValuePtr, error) {
+func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 	if e == nil {
 		return nil, fmt.Errorf("vlog manager: nil entry")
 	}
@@ -213,7 +214,7 @@ func (m *Manager) AppendEntry(e *utils.Entry) (*utils.ValuePtr, error) {
 
 	if hook := m.hooks.BeforeAppend; hook != nil {
 		var tmp bytes.Buffer
-		sz, err := utils.EncodeEntryTo(&tmp, e)
+		sz, err := kv.EncodeEntryTo(&tmp, e)
 		if err != nil {
 			return nil, err
 		}
@@ -225,17 +226,17 @@ func (m *Manager) AppendEntry(e *utils.Entry) (*utils.ValuePtr, error) {
 			return nil, err
 		}
 		m.offset = start + uint32(sz)
-		return &utils.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
+		return &kv.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
 	}
 
 	start := m.offset
 	writer := &logFileAppender{lf: m.active, off: start}
-	sz, err := utils.EncodeEntryTo(writer, e)
+	sz, err := kv.EncodeEntryTo(writer, e)
 	if err != nil {
 		return nil, err
 	}
 	m.offset = writer.off
-	return &utils.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
+	return &kv.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
 }
 
 func (m *Manager) Rotate() error {
@@ -262,7 +263,7 @@ func (m *Manager) Rotate() error {
 	return nil
 }
 
-func (m *Manager) Read(ptr *utils.ValuePtr) ([]byte, func(), error) {
+func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
 	lf, unlock, err := m.getFileRLocked(ptr.Fid)
 	if err != nil {
 		if unlock != nil {
@@ -340,10 +341,10 @@ func (m *Manager) ActiveFID() uint32 {
 	return atomic.LoadUint32(&m.activeID)
 }
 
-func (m *Manager) Head() utils.ValuePtr {
+func (m *Manager) Head() kv.ValuePtr {
 	m.filesLock.RLock()
 	defer m.filesLock.RUnlock()
-	return utils.ValuePtr{
+	return kv.ValuePtr{
 		Fid:    m.activeID,
 		Offset: m.offset,
 	}
@@ -424,7 +425,7 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	validEnd := offset
 	for {
 		entryOffset := offset
-		tee := utils.NewHashReader(reader)
+		tee := kv.NewHashReader(reader)
 		headerBytes := 0
 		readVarint := func() (uint64, error) {
 			val, err := binary.ReadUvarint(tee)
@@ -484,7 +485,7 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 			}
 			return 0, err
 		}
-		expected := utils.BytesToU32(crcBuf[:])
+		expected := kv.BytesToU32(crcBuf[:])
 		if expected != tee.Sum32() {
 			return validEnd, utils.ErrTruncate
 		}
@@ -530,7 +531,7 @@ func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
 // beyond it and removing files created after the pointer's file. It is primarily
 // used to recover from value log write failures so that partially written
 // batches don't leave garbage in the log.
-func (m *Manager) Rewind(ptr utils.ValuePtr) error {
+func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	var (
 		extra []struct {
 			lf   *file.LogFile

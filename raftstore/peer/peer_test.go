@@ -9,6 +9,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/mvcc"
 	"github.com/feichai0017/NoKV/pb"
@@ -116,12 +117,12 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 				return err
 			}
 			if len(legacy.GetValue()) == 0 {
-				if err := db.DelCF(utils.CFDefault, legacy.GetKey()); err != nil {
+				if err := db.DelCF(entrykv.CFDefault, legacy.GetKey()); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := db.SetCF(utils.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
+			if err := db.SetCF(entrykv.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
 				return err
 			}
 		}
@@ -193,7 +194,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 	net.Flush()
 
 	for idx, db := range dbs {
-		entry, err := db.GetCF(utils.CFDefault, []byte("raft-key"))
+		entry, err := db.GetCF(entrykv.CFDefault, []byte("raft-key"))
 		require.NoError(t, err, "db %d", idx+1)
 		require.Equal(t, []byte("raft-value"), entry.Value, "db %d", idx+1)
 		entry.DecrRef()
@@ -464,7 +465,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(utils.CFDefault, []byte("raft-persist-key"))
+		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("persist-before"), entry.Value)
 		entry.DecrRef()
@@ -504,7 +505,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net2.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(utils.CFDefault, []byte("raft-persist-key"))
+		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("persist-before"), entry.Value)
 		entry.DecrRef()
@@ -543,7 +544,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net2.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(utils.CFDefault, []byte("raft-persist-key2"))
+		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key2"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("persist-after"), entry.Value)
 		entry.DecrRef()
@@ -622,7 +623,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		net.Flush()
 	}
 
-	_, err = followerDB.GetCF(utils.CFDefault, []byte("slow-follower-key"))
+	_, err = followerDB.GetCF(entrykv.CFDefault, []byte("slow-follower-key"))
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 
 	ptrDuring, ok := followerDB.Manifest().RaftPointer(raftGroupID)
@@ -637,7 +638,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		net.Flush()
 	}
 
-	entry, err := followerDB.GetCF(utils.CFDefault, []byte("slow-follower-key"))
+	entry, err := followerDB.GetCF(entrykv.CFDefault, []byte("slow-follower-key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("slow-follower-value"), entry.Value)
 	entry.DecrRef()
@@ -728,7 +729,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
 
-	entry, err := db.GetCF(utils.CFDefault, []byte("ready-fail-key"))
+	entry, err := db.GetCF(entrykv.CFDefault, []byte("ready-fail-key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("ready-fail-value"), entry.Value)
 	entry.DecrRef()
@@ -763,7 +764,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	}
 	require.Greater(t, ptrRecovered.Segment, uint32(0))
 
-	entry2, err := dbRestart.GetCF(utils.CFDefault, []byte("ready-fail-key"))
+	entry2, err := dbRestart.GetCF(entrykv.CFDefault, []byte("ready-fail-key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("ready-fail-value"), entry2.Value)
 	entry2.DecrRef()
