@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ func TestAPI(t *testing.T) {
 	// 写入
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := utils.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
+		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +57,7 @@ func TestAPI(t *testing.T) {
 
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := utils.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
+		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
@@ -77,40 +78,40 @@ func TestColumnFamilies(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
-	require.NoError(t, db.SetCF(utils.CFDefault, key, []byte("default")))
-	require.NoError(t, db.SetCF(utils.CFLock, key, []byte("lock")))
-	require.NoError(t, db.SetCF(utils.CFWrite, key, []byte("write")))
+	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("default")))
+	require.NoError(t, db.SetCF(kv.CFLock, key, []byte("lock")))
+	require.NoError(t, db.SetCF(kv.CFWrite, key, []byte("write")))
 
-	e, err := db.GetCF(utils.CFDefault, key)
+	e, err := db.GetCF(kv.CFDefault, key)
 	require.NoError(t, err)
-	require.Equal(t, utils.CFDefault, e.CF)
+	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
 	e.DecrRef()
 
-	e, err = db.GetCF(utils.CFLock, key)
+	e, err = db.GetCF(kv.CFLock, key)
 	require.NoError(t, err)
-	require.Equal(t, utils.CFLock, e.CF)
+	require.Equal(t, kv.CFLock, e.CF)
 	require.Equal(t, []byte("lock"), e.Value)
 	e.DecrRef()
 
-	e, err = db.GetCF(utils.CFWrite, key)
+	e, err = db.GetCF(kv.CFWrite, key)
 	require.NoError(t, err)
-	require.Equal(t, utils.CFWrite, e.CF)
+	require.Equal(t, kv.CFWrite, e.CF)
 	require.Equal(t, []byte("write"), e.Value)
 	e.DecrRef()
 
 	// Default Get should read default CF.
 	e, err = db.Get(key)
 	require.NoError(t, err)
-	require.Equal(t, utils.CFDefault, e.CF)
+	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
 	e.DecrRef()
 
-	require.NoError(t, db.DelCF(utils.CFLock, key))
-	_, err = db.GetCF(utils.CFLock, key)
+	require.NoError(t, db.DelCF(kv.CFLock, key))
+	_, err = db.GetCF(kv.CFLock, key)
 	require.Error(t, err)
 	// Default CF should remain untouched.
-	e, err = db.GetCF(utils.CFDefault, key)
+	e, err = db.GetCF(kv.CFDefault, key)
 	require.NoError(t, err)
 	require.Equal(t, []byte("default"), e.Value)
 	e.DecrRef()
@@ -125,9 +126,9 @@ func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 		requestPool.Put(req)
 	}()
 
-	e1 := &utils.Entry{Key: []byte("a")}
-	e2 := &utils.Entry{Key: []byte("b")}
-	src := []*utils.Entry{e1, e2}
+	e1 := &kv.Entry{Key: []byte("a")}
+	e2 := &kv.Entry{Key: []byte("b")}
+	src := []*kv.Entry{e1, e2}
 	req.loadEntries(src)
 
 	if len(req.Entries) != len(src) {
@@ -136,7 +137,7 @@ func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
 	if &req.Entries[0] == &src[0] {
 		t.Fatalf("request reused caller backing array")
 	}
-	src[0] = &utils.Entry{Key: []byte("z")}
+	src[0] = &kv.Entry{Key: []byte("z")}
 	if string(req.Entries[0].Key) != "a" {
 		t.Fatalf("entry data mutated with caller slice")
 	}

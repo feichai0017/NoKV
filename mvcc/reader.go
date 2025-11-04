@@ -5,6 +5,7 @@ import (
 	"math"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -23,7 +24,7 @@ func NewReader(db *NoKV.DB) *Reader {
 
 // GetLock returns the lock stored for the provided key, if any.
 func (r *Reader) GetLock(key []byte) (*Lock, error) {
-	entry, err := r.db.GetVersionedEntry(utils.CFLock, key, lockColumnTs)
+	entry, err := r.db.GetVersionedEntry(kv.CFLock, key, lockColumnTs)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
 			return nil, nil
@@ -31,7 +32,7 @@ func (r *Reader) GetLock(key []byte) (*Lock, error) {
 		return nil, err
 	}
 	defer entry.DecrRef()
-	if entry.Meta&utils.BitDelete > 0 || entry.Value == nil {
+	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, nil
 	}
 	lock, err := DecodeLock(entry.Value)
@@ -97,15 +98,15 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, error) {
 	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
 		return nil, utils.ErrKeyNotFound
 	}
-	entry, err := r.db.GetVersionedEntry(utils.CFDefault, key, write.StartTs)
+	entry, err := r.db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
 	if err != nil {
 		return nil, err
 	}
 	defer entry.DecrRef()
-	if entry.Meta&utils.BitDelete > 0 || entry.Value == nil {
+	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-	return utils.SafeCopy(nil, entry.Value), nil
+	return kv.SafeCopy(nil, entry.Value), nil
 }
 
 func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, error) {
@@ -138,7 +139,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			continue
 		}
 		entry := item.Entry()
-		if entry.CF != utils.CFWrite {
+		if entry.CF != kv.CFWrite {
 			if bytes.Compare(entry.Key, key) > 0 {
 				break
 			}
@@ -153,7 +154,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			iter.Next()
 			continue
 		}
-		if entry.Meta&utils.BitDelete > 0 {
+		if entry.Meta&kv.BitDelete > 0 {
 			iter.Next()
 			continue
 		}

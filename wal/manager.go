@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -100,7 +101,6 @@ type Manager struct {
 	segmentTotals   map[uint32]RecordMetrics
 }
 
-
 // RecordType identifies the kind of payload stored in the WAL.
 type RecordType uint8
 
@@ -147,7 +147,7 @@ func Open(cfg Config) (*Manager, error) {
 
 	m := &Manager{
 		cfg:           cfg,
-		crcTable:      utils.CastagnoliCrcTable,
+		crcTable:      kv.CastagnoliCrcTable,
 		segmentSize:   segSize,
 		bufferSize:    bufSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
@@ -313,19 +313,19 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 		if _, err := m.writer.Write(payload); err != nil {
 			return nil, err
 		}
-		hasher := utils.CRC32()
+		hasher := kv.CRC32()
 		typeBuf := [1]byte{typeByte}
 		if _, err := hasher.Write(typeBuf[:]); err != nil {
-			utils.PutCRC32(hasher)
+			kv.PutCRC32(hasher)
 			return nil, err
 		}
 		if _, err := hasher.Write(payload); err != nil {
-			utils.PutCRC32(hasher)
+			kv.PutCRC32(hasher)
 			return nil, err
 		}
 		var crcBuf [4]byte
 		binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
-		utils.PutCRC32(hasher)
+		kv.PutCRC32(hasher)
 		if _, err := m.writer.Write(crcBuf[:]); err != nil {
 			return nil, err
 		}
@@ -590,7 +590,7 @@ func verifySegment(path string) error {
 		if length == 0 {
 			return fmt.Errorf("wal: empty record verifying %s at offset %d", filepath.Base(path), start)
 		}
-		hasher := crc32.New(utils.CastagnoliCrcTable)
+		hasher := crc32.New(kv.CastagnoliCrcTable)
 		if _, err := hasher.Write([]byte{payload[0]}); err != nil {
 			return fmt.Errorf("wal: checksum write type %s: %w", filepath.Base(path), err)
 		}

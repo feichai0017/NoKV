@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
@@ -71,7 +72,7 @@ func TestTxnSimple(t *testing.T) {
 		for i := range 10 {
 			k := fmt.Appendf(nil, "key=%d", i)
 			v := fmt.Appendf(nil, "val=%d", i)
-			require.NoError(t, txn.SetEntry(utils.NewEntry(k, v)))
+			require.NoError(t, txn.SetEntry(kv.NewEntry(k, v)))
 		}
 
 		item, err := txn.Get([]byte("key=8"))
@@ -92,7 +93,7 @@ func TestTxnReadAfterWrite(t *testing.T) {
 				defer wg.Done()
 				key := fmt.Appendf(nil, "key%d", i)
 				err := db.Update(func(tx *Txn) error {
-					return tx.SetEntry(utils.NewEntry(key, key))
+					return tx.SetEntry(kv.NewEntry(key, key))
 				})
 				require.NoError(t, err)
 				err = db.View(func(tx *Txn) error {
@@ -120,7 +121,7 @@ func TestTxnVersions(t *testing.T) {
 		for i := 1; i < 10; i++ {
 			txn := db.NewTransaction(true)
 
-			require.NoError(t, txn.SetEntry(utils.NewEntry(k, []byte(fmt.Sprintf("valversion=%d", i)))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry(k, []byte(fmt.Sprintf("valversion=%d", i)))))
 			require.NoError(t, txn.Commit())
 			require.Equal(t, uint64(i), db.orc.readTs())
 		}
@@ -216,8 +217,8 @@ func TestTxnWriteSkew(t *testing.T) {
 		txn := db.NewTransaction(true)
 		defer txn.Discard()
 		val := []byte(strconv.Itoa(100))
-		require.NoError(t, txn.SetEntry(utils.NewEntry(ax, val)))
-		require.NoError(t, txn.SetEntry(utils.NewEntry(ay, val)))
+		require.NoError(t, txn.SetEntry(kv.NewEntry(ax, val)))
+		require.NoError(t, txn.SetEntry(kv.NewEntry(ay, val)))
 		require.NoError(t, txn.Commit())
 		require.Equal(t, uint64(1), db.orc.readTs())
 
@@ -237,7 +238,7 @@ func TestTxnWriteSkew(t *testing.T) {
 		sum := getBal(txn1, ax)
 		sum += getBal(txn1, ay)
 		require.Equal(t, 200, sum)
-		require.NoError(t, txn1.SetEntry(utils.NewEntry(ax, []byte("0")))) // Deduct 100 from ax.
+		require.NoError(t, txn1.SetEntry(kv.NewEntry(ax, []byte("0")))) // Deduct 100 from ax.
 
 		// Let's read this back.
 		sum = getBal(txn1, ax)
@@ -251,7 +252,7 @@ func TestTxnWriteSkew(t *testing.T) {
 		sum = getBal(txn2, ax)
 		sum += getBal(txn2, ay)
 		require.Equal(t, 200, sum)
-		require.NoError(t, txn2.SetEntry(utils.NewEntry(ay, []byte("0")))) // Deduct 100 from ay.
+		require.NoError(t, txn2.SetEntry(kv.NewEntry(ay, []byte("0")))) // Deduct 100 from ay.
 
 		// Let's read this back.
 		sum = getBal(txn2, ax)

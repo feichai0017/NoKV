@@ -49,7 +49,7 @@ sequenceDiagram
 2. **Reads** – `Txn.Get` first checks `pendingWrites`; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in `Txn.reads` via [`addReadKey`](../txn.go#L511-L526).
 3. **Conflict detection** – When `Options.DetectConflicts` is enabled, `oracle.newCommitTs` iterates `oracle.committedTxns` and compares read fingerprints against keys written by newer commits. This mirrors Badger's optimistic strategy.
 4. **Commit timestamp** – `newCommitTs` increments `nextTxnTs`, registers the commit in `txnMark`, and stores the conflict key set for future comparisons.
-5. **Apply** – `Txn.commitAndSend` assigns the commit timestamp to each pending entry (`utils.KeyWithTs`), enqueues them through `sendToWriteCh`, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle's `doneCommit` release the commit watermark.
+5. **Apply** – `Txn.commitAndSend` assigns the commit timestamp to each pending entry (`kv.KeyWithTs`), enqueues them through `sendToWriteCh`, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle's `doneCommit` release the commit watermark.
 6. **Value log ordering** – As with non-transactional writes, `processValueLogBatches` executes before the WAL append. On failure `vlog.manager.Rewind` ensures partial writes do not leak.
 
 RocksDB's default WriteBatch lacks conflict detection, relying on application-level locking; NoKV ships with snapshot isolation and optional detection, similar to Badger's `Txn` but with integrated metrics and iterator pooling.
@@ -78,7 +78,7 @@ oracle{
 type Txn struct {
     readTs   uint64
     commitTs uint64
-    pendingWrites map[string]*utils.Entry
+    pendingWrites map[string]*kv.Entry
     conflictKeys  map[uint64]struct{}
     reads         []uint64
     numIterators  int32
@@ -88,7 +88,7 @@ type Txn struct {
 ```
 
 * Pending writes retain the caller's entry pointers until commit; NoKV copies values only when moving them into the write batch.
-* Read fingerprints use `utils.MemHash`, so conflict detection is order-independent and compact.
+* Read fingerprints use `kv.MemHash`, so conflict detection is order-independent and compact.
 * MVCC versions are encoded in the key suffix (`KeyWithTs`), matching the LSM's descending version order.
 
 ### Iterator Integration

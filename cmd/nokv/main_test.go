@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/kv"
 )
 
 func TestRunManifestCmd(t *testing.T) {
@@ -16,7 +16,7 @@ func TestRunManifestCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	e := utils.NewEntry([]byte("cli-manifest"), []byte("value"))
+	e := kv.NewEntry([]byte("cli-manifest"), []byte("value"))
 	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestRunStatsCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	e := utils.NewEntry([]byte("cli-stats"), []byte("value"))
+	e := kv.NewEntry([]byte("cli-stats"), []byte("value"))
 	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRunVlogCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	e := utils.NewEntry([]byte("cli-vlog"), []byte("value"))
+	e := kv.NewEntry([]byte("cli-vlog"), []byte("value"))
 	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRunRegionsCmd(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
 	db := NoKV.Open(opt)
-	e := utils.NewEntry([]byte("cli-region"), []byte("value"))
+	e := kv.NewEntry([]byte("cli-region"), []byte("value"))
 	if err := db.Set(e); err != nil {
 		t.Fatalf("set: %v", err)
 	}

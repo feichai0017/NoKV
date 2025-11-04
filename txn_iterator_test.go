@@ -4,21 +4,21 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTxnIteratorSnapshotIsolation(t *testing.T) {
 	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 		require.NoError(t, db.Update(func(tx *Txn) error {
-			return tx.SetEntry(utils.NewEntry([]byte("key1"), []byte("v1")))
+			return tx.SetEntry(kv.NewEntry([]byte("key1"), []byte("v1")))
 		}))
 
 		roTxn := db.NewTransaction(false)
 		defer roTxn.Discard()
 
 		require.NoError(t, db.Update(func(tx *Txn) error {
-			return tx.SetEntry(utils.NewEntry([]byte("key1"), []byte("v2")))
+			return tx.SetEntry(kv.NewEntry([]byte("key1"), []byte("v2")))
 		}))
 
 		it := roTxn.NewIterator(IteratorOptions{})
@@ -33,13 +33,13 @@ func TestTxnIteratorSnapshotIsolation(t *testing.T) {
 func TestTxnIteratorSeesPendingWrites(t *testing.T) {
 	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
 		require.NoError(t, db.Update(func(tx *Txn) error {
-			return tx.SetEntry(utils.NewEntry([]byte("key2"), []byte("base")))
+			return tx.SetEntry(kv.NewEntry([]byte("key2"), []byte("base")))
 		}))
 
 		txn := db.NewTransaction(true)
 		defer txn.Discard()
 
-		require.NoError(t, txn.SetEntry(utils.NewEntry([]byte("key2"), []byte("override"))))
+		require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("key2"), []byte("override"))))
 
 		it := txn.NewIterator(IteratorOptions{})
 		defer it.Close()
@@ -59,7 +59,7 @@ func TestTxnIteratorAllVersionsAndSinceTs(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			val := []byte(fmt.Sprintf("v%d", i+1))
 			require.NoError(t, db.Update(func(tx *Txn) error {
-				return tx.SetEntry(utils.NewEntry(key, val))
+				return tx.SetEntry(kv.NewEntry(key, val))
 			}))
 		}
 

@@ -2,9 +2,10 @@ package cache
 
 import (
 	"container/list"
-	xxhash "github.com/cespare/xxhash/v2"
 	"sync"
 	"unsafe"
+
+	xxhash "github.com/cespare/xxhash/v2"
 )
 
 type Cache struct {
@@ -27,13 +28,13 @@ func NewCache(size int) *Cache {
 	//define the percentage of window cache, here is 1%
 	const lruPct = 1
 	//calculate the capacity of window cache
-	lruSz := max((lruPct * size) / 100, 1)
+	lruSz := max((lruPct*size)/100, 1)
 
 	//calculate the capacity of LFU cache
-	slruSz := max(int(float64(size) * ((100 - lruPct) / 100.0)), 1)
+	slruSz := max(int(float64(size)*((100-lruPct)/100.0)), 1)
 
 	//LFU is divided into two parts, stageOne accounts for 20%
-	slruO := max(int(0.2 * float64(slruSz)), 1)
+	slruO := max(int(0.2*float64(slruSz)), 1)
 
 	data := make(map[uint64]*list.Element, size)
 

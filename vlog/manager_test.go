@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -69,7 +69,7 @@ func TestManagerRemove(t *testing.T) {
 	if err := mgr.Remove(vp.Fid); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	_, _, err = mgr.Read(&utils.ValuePtr{Fid: vp.Fid, Offset: vp.Offset, Len: vp.Len})
+	_, _, err = mgr.Read(&kv.ValuePtr{Fid: vp.Fid, Offset: vp.Offset, Len: vp.Len})
 	if err == nil {
 		t.Fatalf("expected error reading removed fid")
 	}
@@ -172,14 +172,14 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 		t.Fatalf("open manager: %v", err)
 	}
 	var buf bytes.Buffer
-	entry1 := utils.NewEntry([]byte("k1"), []byte("value-data"))
+	entry1 := kv.NewEntry([]byte("k1"), []byte("value-data"))
 	firstEncoded := wal.EncodeEntry(&buf, entry1)
 	ptr1, err := mgr.Append(firstEncoded)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	buf.Reset()
-	entry2 := utils.NewEntry([]byte("k2"), []byte("partial"))
+	entry2 := kv.NewEntry([]byte("k2"), []byte("partial"))
 	secondEncoded := wal.EncodeEntry(&buf, entry2)
 	secondLen := len(secondEncoded)
 	if _, err := mgr.Append(secondEncoded); err != nil {

@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"encoding/binary"
@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	// size of vlog header.
+	// ValueLogHeaderSize is the size of the fixed vlog header.
 	// +----------------+------------------+
 	// | keyID(8 bytes) |  baseIV(12 bytes)|
 	// +----------------+------------------+
@@ -42,16 +42,15 @@ func (p ValuePtr) IsZero() bool {
 // Encode encodes Pointer into byte buffer.
 func (p ValuePtr) Encode() []byte {
 	b := make([]byte, vptrSize)
-	// Copy over the content from p to b.
 	*(*ValuePtr)(unsafe.Pointer(&b[0])) = p
 	return b
 }
 
 // Decode decodes the value pointer into the provided byte buffer.
 func (p *ValuePtr) Decode(b []byte) {
-	// Copy over data from b into p. Using *p=unsafe.pointer(...) leads to
 	copy(((*[vptrSize]byte)(unsafe.Pointer(p))[:]), b[:vptrSize])
 }
+
 func IsValuePtr(e *Entry) bool {
 	return e.Meta&BitValuePointer > 0
 }
@@ -61,7 +60,7 @@ func BytesToU32(b []byte) uint32 {
 	return binary.BigEndian.Uint32(b)
 }
 
-// BytesToU64 _
+// BytesToU64 converts the given byte slice to uint64
 func BytesToU64(b []byte) uint64 {
 	return binary.BigEndian.Uint64(b)
 }
@@ -106,7 +105,7 @@ func BytesToU32Slice(b []byte) []uint32 {
 	return u32s
 }
 
-// RunCallback _
+// RunCallback runs callback if not nil.
 func RunCallback(cb func()) {
 	if cb != nil {
 		cb()
@@ -124,16 +123,10 @@ func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
 }
 
 func DiscardEntry(e, vs *Entry) bool {
-	// TODO 版本这个信息应该被弱化掉 在后面上MVCC或者多版本查询的时候再考虑
-	// if vs.Version != ParseTs(e.Key) {
-	// 	// Version not found. Discard.
-	// 	return true
-	// }
 	if IsDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
 		return true
 	}
 	if (vs.Meta & BitValuePointer) == 0 {
-		// Key also stores the value in LSM. Discard.
 		return true
 	}
 	return false

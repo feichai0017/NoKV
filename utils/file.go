@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/pkg/errors"
 )
 
@@ -100,8 +101,8 @@ func CompareKeys(key1, key2 []byte) int {
 
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
-	actual := uint64(crc32.Checksum(data, CastagnoliCrcTable))
-	expectedU64 := BytesToU64(expected)
+	actual := uint64(crc32.Checksum(data, kv.CastagnoliCrcTable))
+	expectedU64 := kv.BytesToU64(expected)
 	if actual != expectedU64 {
 		return errors.Wrapf(ErrChecksumMismatch, "actual: %d, expected: %d", actual, expectedU64)
 	}
@@ -111,7 +112,7 @@ func VerifyChecksum(data []byte, expected []byte) error {
 
 // CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
-	return uint64(crc32.Checksum(data, CastagnoliCrcTable))
+	return uint64(crc32.Checksum(data, kv.CastagnoliCrcTable))
 }
 
 // RemoveDir _

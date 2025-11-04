@@ -27,7 +27,7 @@ The design echoes BadgerDB's value log while remaining manifest-driven like Rock
 
 ## 2. Record Format
 
-The vlog uses the shared encoding helper (`utils.EncodeEntryTo`), so entries written to the value log and the WAL are byte-identical.
+The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries written to the value log and the WAL are byte-identical.
 
 ```
 +--------+---------+------------+-------------+-----------+-------+
@@ -36,7 +36,7 @@ The vlog uses the shared encoding helper (`utils.EncodeEntryTo`), so entries wri
                                              + CRC32 (4 B)
 ```
 
-* Header fields are varint-encoded (`utils.Header.Encode`).
+* Header fields are varint-encoded (`kv.Header.Encode`).
 * `file.LogFile.EncodeEntry`/`DecodeEntry` perform the layout work, and each append finishes with a CRC32 to detect torn writes.
 * `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L348-L418) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
 
@@ -83,7 +83,7 @@ sequenceDiagram
     Batch->>Mem: apply to skiplist
 ```
 
-1. [`valueLog.write`](../vlog.go#L240-L272) iterates through batched entries. For entries staying in LSM (`shouldWriteValueToLSM`), it records a zero `ValuePtr`. Others stream their bytes via `utils.EncodeEntryTo` straight into the vlog.
+1. [`valueLog.write`](../vlog.go#L240-L272) iterates through batched entries. For entries staying in LSM (`shouldWriteValueToLSM`), it records a zero `ValuePtr`. Others stream their bytes via `kv.EncodeEntryTo` straight into the vlog.
 2. If the append would exceed `Options.ValueLogFileSize`, the manager rotates before continuing. The WAL append happens **after** the value log append so that crash replay observes consistent pointers.
 3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L139-L209) exercises both append- and rotate-failure paths.
 4. `Txn.Commit` piggybacks on the same pipeline: pending writes are turned into entries and routed through `processValueLogBatches` before the WAL write, ensuring MVCC correctness.

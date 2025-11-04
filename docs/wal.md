@@ -23,7 +23,7 @@ uint32 length (big-endian)
 uint32 checksum (CRC32 Castagnoli)
 ```
 
-- Checksums use `utils.CastagnoliCrcTable`, same polynomial as RocksDB's default (Castagnoli).
+- Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli).
 - Appends are buffered by `bufio.Writer` so batches become single system calls.
 - Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestReplayTruncatedTail`).
 
@@ -57,7 +57,7 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 
 | Call Site | Purpose |
 | --- | --- |
-| `DB.doWrites` | Batches encode via `utils.WalCodec` and call `wal.Manager.Append`. Returned offsets are embedded into memtable mutations and transaction commit paths. |
+| `DB.doWrites` | Batches encode via `kv.WalCodec` and call `wal.Manager.Append`. Returned offsets are embedded into memtable mutations and transaction commit paths. |
 | `manifest.Manager.LogEdit` | Uses `EntryInfo.SegmentID` to persist the WAL checkpoint (`EditLogPointer`). This acts as the `log number` seen in RocksDB manifest entries. |
 | `lsm/flush.Manager.Update` | Once an SST is installed, WAL segments older than the checkpoint are released (`wal.Manager.Remove`). |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |

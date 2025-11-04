@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	proto "google.golang.org/protobuf/proto"
@@ -65,9 +66,9 @@ func (h header) encode() []byte {
 	return b[:]
 }
 
-func (tb *tableBuilder) add(e *utils.Entry, valueLen uint32, isStale bool) {
+func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 	key := e.Key
-	val := utils.ValueStruct{
+	val := kv.ValueStruct{
 		Meta:      e.Meta,
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
@@ -85,10 +86,10 @@ func (tb *tableBuilder) add(e *utils.Entry, valueLen uint32, isStale bool) {
 		}
 	}
 	// record the hash value of the key
-	tb.keyHashes = append(tb.keyHashes, utils.Hash(utils.ParseKey(key)))
+	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.ParseKey(key)))
 
 	// update the maxVersion
-	if version := utils.ParseTs(key); version > tb.maxVersion {
+	if version := kv.ParseTs(key); version > tb.maxVersion {
 		tb.maxVersion = version
 	}
 
@@ -146,7 +147,7 @@ func (tb *tableBuilder) finish() []byte {
 	utils.CondPanic(written == len(buf), nil)
 	return buf
 }
-func (tb *tableBuilder) tryFinishBlock(e *utils.Entry) bool {
+func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	if tb.curBlock == nil {
 		return true
 	}
@@ -169,24 +170,24 @@ func (tb *tableBuilder) tryFinishBlock(e *utils.Entry) bool {
 }
 
 // AddStaleKey 记录陈旧key所占用的空间大小，用于日志压缩时的决策
-func (tb *tableBuilder) AddStaleKey(e *utils.Entry) {
+func (tb *tableBuilder) AddStaleKey(e *kv.Entry) {
 	tb.AddStaleEntryWithLen(e, entryValueLen(e))
 }
 
 // AddStaleEntryWithLen explicit len variant for compaction pipeline.
-func (tb *tableBuilder) AddStaleEntryWithLen(e *utils.Entry, valueLen uint32) {
+func (tb *tableBuilder) AddStaleEntryWithLen(e *kv.Entry, valueLen uint32) {
 	// Rough estimate based on how much space it will occupy in the SST.
 	tb.staleDataSize += len(e.Key) + int(valueLen) + 4 /* entry offset */ + 4 /* header size */
 	tb.add(e, valueLen, true)
 }
 
 // AddKey _
-func (tb *tableBuilder) AddKey(e *utils.Entry) {
+func (tb *tableBuilder) AddKey(e *kv.Entry) {
 	tb.AddKeyWithLen(e, entryValueLen(e))
 }
 
 // AddKeyWithLen 添加 key，并显式指定 value 长度（用于区分内联值和 ValuePtr）。
-func (tb *tableBuilder) AddKeyWithLen(e *utils.Entry, valueLen uint32) {
+func (tb *tableBuilder) AddKeyWithLen(e *kv.Entry, valueLen uint32) {
 	tb.add(e, valueLen, false)
 }
 
@@ -195,12 +196,12 @@ func (tb *tableBuilder) Close() {
 	// combine the memory allocator
 }
 
-func entryValueLen(e *utils.Entry) uint32 {
+func entryValueLen(e *kv.Entry) uint32 {
 	if e == nil {
 		return 0
 	}
-	if e.Meta&utils.BitValuePointer > 0 {
-		var vptr utils.ValuePtr
+	if e.Meta&kv.BitValuePointer > 0 {
+		var vptr kv.ValuePtr
 		req := int(unsafe.Sizeof(vptr))
 		if len(e.Value) >= req {
 			vptr.Decode(e.Value)
@@ -223,14 +224,14 @@ func (tb *tableBuilder) finishBlock() {
 	// +--------------------------------+
 
 	// Append the entryOffsets and its length.
-	tb.append(utils.U32SliceToBytes(tb.curBlock.entryOffsets))
-	tb.append(utils.U32ToBytes(uint32(len(tb.curBlock.entryOffsets))))
+	tb.append(kv.U32SliceToBytes(tb.curBlock.entryOffsets))
+	tb.append(kv.U32ToBytes(uint32(len(tb.curBlock.entryOffsets))))
 
 	checksum := tb.calculateChecksum(tb.curBlock.data[:tb.curBlock.end])
 
 	// Append the block checksum and its length.
 	tb.append(checksum)
-	tb.append(utils.U32ToBytes(uint32(len(checksum))))
+	tb.append(kv.U32ToBytes(uint32(len(checksum))))
 	tb.estimateSz += tb.curBlock.estimateSz
 	tb.blockList = append(tb.blockList, tb.curBlock)
 	// TODO: estimate the size of the sst file after the builder is serialized to disk
@@ -259,7 +260,7 @@ func (tb *tableBuilder) allocate(need int) []byte {
 
 func (tb *tableBuilder) calculateChecksum(data []byte) []byte {
 	checkSum := utils.CalculateChecksum(data)
-	return utils.U64ToBytes(checkSum)
+	return kv.U64ToBytes(checkSum)
 }
 
 func (tb *tableBuilder) keyDiff(newKey []byte) []byte {
@@ -298,10 +299,10 @@ func (bd *buildData) Copy(dst []byte) int {
 		written += copy(dst[written:], bl.data[:bl.end])
 	}
 	written += copy(dst[written:], bd.index)
-	written += copy(dst[written:], utils.U32ToBytes(uint32(len(bd.index))))
+	written += copy(dst[written:], kv.U32ToBytes(uint32(len(bd.index))))
 
 	written += copy(dst[written:], bd.checksum)
-	written += copy(dst[written:], utils.U32ToBytes(uint32(len(bd.checksum))))
+	written += copy(dst[written:], kv.U32ToBytes(uint32(len(bd.checksum))))
 	return written
 }
 
@@ -491,8 +492,8 @@ func (itr *blockIterator) setIdx(i int) {
 	valueOff := headerSize + h.diff
 	diffKey := entryData[headerSize:valueOff]
 	itr.key = append(itr.key[:h.overlap], diffKey...)
-	e := &utils.Entry{Key: itr.key}
-	val := &utils.ValueStruct{}
+	e := &kv.Entry{Key: itr.key}
+	val := &kv.ValueStruct{}
 	val.DecodeValue(entryData[valueOff:])
 	itr.val = val.Value
 	e.Value = val.Value
