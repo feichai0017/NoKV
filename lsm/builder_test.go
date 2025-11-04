@@ -3,8 +3,8 @@ package lsm
 import (
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
 )
@@ -17,7 +17,7 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	}
 
 	builder := newTableBuiler(opt)
-	entry := utils.NewEntry([]byte("stale-key"), []byte("stale-value"))
+	entry := kv.NewEntry([]byte("stale-key"), []byte("stale-value"))
 	builder.AddStaleKey(entry)
 
 	bd := builder.done()

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -52,7 +53,7 @@ type valueLogMetrics struct {
 	Segments       int
 	PendingDeletes int
 	DiscardQueue   int
-	Head           utils.ValuePtr
+	Head           kv.ValuePtr
 }
 
 func (vlog *valueLog) metrics() valueLogMetrics {
@@ -157,10 +158,10 @@ func (vlog *valueLog) removeValueLogFile(fid uint32) error {
 	return nil
 }
 
-func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
+func (vlog *valueLog) newValuePtr(e *kv.Entry) (*kv.ValuePtr, error) {
 	req := requestPool.Get().(*request)
 	req.reset()
-	req.Entries = []*utils.Entry{e}
+	req.Entries = []*kv.Entry{e}
 	req.IncrRef()
 	defer func() {
 		req.Entries = nil // Break the link to avoid resetting the entry.
@@ -177,7 +178,7 @@ func (vlog *valueLog) newValuePtr(e *utils.Entry) (*utils.ValuePtr, error) {
 	return &vp, nil
 }
 
-func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
+func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 	vlog.lfDiscardStats.closer.Add(1)
 	go vlog.flushDiscardStats()
 
@@ -231,7 +232,7 @@ func (vlog *valueLog) open(ptr *utils.ValuePtr, replayFn utils.LogEntry) error {
 	return nil
 }
 
-func (vlog *valueLog) read(vp *utils.ValuePtr) ([]byte, func(), error) {
+func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
 	data, unlock, err := vlog.manager.Read(vp)
 	if err != nil {
 		return nil, unlock, err
@@ -260,7 +261,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 		req.Ptrs = req.Ptrs[:0]
 		for _, e := range req.Entries {
 			if vlog.db.shouldWriteValueToLSM(e) {
-				req.Ptrs = append(req.Ptrs, utils.ValuePtr{})
+				req.Ptrs = append(req.Ptrs, kv.ValuePtr{})
 				continue
 			}
 			ptr, err := vlog.manager.AppendEntry(e)
@@ -288,7 +289,7 @@ func (vlog *valueLog) close() error {
 	return vlog.manager.Close()
 }
 
-func (vlog *valueLog) runGC(discardRatio float64, head *utils.ValuePtr) error {
+func (vlog *valueLog) runGC(discardRatio float64, head *kv.ValuePtr) error {
 	select {
 	case vlog.garbageCh <- struct{}{}:
 		defer func() {
@@ -344,7 +345,7 @@ func (vlog *valueLog) doRunGC(lf *file.LogFile, discardRatio float64) (err error
 	return nil
 }
 
-func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
+func decodeWalEntry(data []byte) (*kv.Entry, int, int, error) {
 	if len(data) == 0 {
 		return nil, 0, 0, io.EOF
 	}
@@ -407,7 +408,7 @@ func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
 	valStart := idx
 	idx += valLen
 
-	hash := crc32.New(utils.CastagnoliCrcTable)
+	hash := crc32.New(kv.CastagnoliCrcTable)
 	if _, err := hash.Write(data[:idx]); err != nil {
 		return nil, 0, 0, err
 	}
@@ -416,7 +417,7 @@ func decodeWalEntry(data []byte) (*utils.Entry, int, int, error) {
 		return nil, 0, 0, utils.ErrTruncate
 	}
 
-	entry := utils.EntryPool.Get().(*utils.Entry)
+	entry := kv.EntryPool.Get().(*kv.Entry)
 	entry.IncrRef()
 	entry.Key = append(entry.Key[:0], data[keyStart:keyStart+keyLen]...)
 	entry.Value = append(entry.Value[:0], data[valStart:valStart+valLen]...)
@@ -433,15 +434,15 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 	activeFID := vlog.manager.ActiveFID()
 	utils.CondPanic(f.FID >= activeFID, fmt.Errorf("fid to move: %d. Current active fid: %d", f.FID, activeFID))
 
-	wb := make([]*utils.Entry, 0, 1000)
+	wb := make([]*kv.Entry, 0, 1000)
 	var size int64
 
-	fe := func(e *utils.Entry) error {
+	fe := func(e *kv.Entry) error {
 		entry, err := vlog.db.lsm.Get(e.Key)
 		if err != nil {
 			return err
 		}
-		if utils.DiscardEntry(e, entry) {
+		if kv.DiscardEntry(e, entry) {
 			return nil
 		}
 
@@ -449,14 +450,14 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 			return errors.Errorf("empty value: %+v", entry)
 		}
 
-		var vp utils.ValuePtr
+		var vp kv.ValuePtr
 		vp.Decode(entry.Value)
 
 		if vp.Fid > f.FID || (vp.Fid == f.FID && vp.Offset > e.Offset) {
 			return nil
 		}
 
-		ne := utils.EntryPool.Get().(*utils.Entry)
+		ne := kv.EntryPool.Get().(*kv.Entry)
 		ne.IncrRef()
 		ne.Meta = 0
 		ne.ExpiresAt = e.ExpiresAt
@@ -522,7 +523,7 @@ func (vlog *valueLog) rewrite(f *file.LogFile) error {
 	if len(wb) > 0 {
 		testKey := wb[len(wb)-1].Key
 		if vs, err := vlog.db.lsm.Get(testKey); err == nil {
-			var vp utils.ValuePtr
+			var vp kv.ValuePtr
 			vp.Decode(vs.Value)
 		} else {
 			return err
@@ -593,7 +594,7 @@ func (vlog *valueLog) filterPendingDeletes(fids []uint32) []uint32 {
 	return out
 }
 
-func (vlog *valueLog) pickLog(head *utils.ValuePtr) (files []*file.LogFile) {
+func (vlog *valueLog) pickLog(head *kv.ValuePtr) (files []*file.LogFile) {
 	fids := vlog.manager.ListFIDs()
 	if len(fids) <= 1 {
 		return nil
@@ -676,7 +677,7 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 
 	var r reason
 	start := time.Now()
-	_, err := vlog.iterate(samp.lf, 0, func(e *utils.Entry, vp *utils.ValuePtr) error {
+	_, err := vlog.iterate(samp.lf, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		esz := float64(vp.Len) / (1 << 20)
 		if skipped < skipFirstM {
 			skipped += esz
@@ -688,12 +689,12 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 		r.total += esz
 		r.count++
 
-		cf, userKey, _ := utils.SplitInternalKey(e.Key)
+		cf, userKey, _ := kv.SplitInternalKey(e.Key)
 		entry, err := vlog.db.GetCF(cf, userKey)
 		if err != nil {
 			return err
 		}
-		if utils.DiscardEntry(e, entry) {
+		if kv.DiscardEntry(e, entry) {
 			r.discard += esz
 			return nil
 		}
@@ -701,7 +702,7 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 		if len(entry.Value) == 0 {
 			return nil
 		}
-		var newVP utils.ValuePtr
+		var newVP kv.ValuePtr
 		newVP.Decode(entry.Value)
 
 		if newVP.Fid > samp.lf.FID || (newVP.Fid == samp.lf.FID && newVP.Offset > e.Offset) {
@@ -721,7 +722,7 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 	return &r, nil
 }
 
-func (vlog *valueLog) replayLog(lf *file.LogFile, offset uint32, replayFn utils.LogEntry, isActive bool) error {
+func (vlog *valueLog) replayLog(lf *file.LogFile, offset uint32, replayFn kv.LogEntry, isActive bool) error {
 	endOffset, err := vlog.iterate(lf, offset, replayFn)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to replay logfile:[%s]", lf.FileName())
@@ -745,7 +746,7 @@ func (vlog *valueLog) replayLog(lf *file.LogFile, offset uint32, replayFn utils.
 	return nil
 }
 
-func (vlog *valueLog) iterate(lf *file.LogFile, offset uint32, fn utils.LogEntry) (uint32, error) {
+func (vlog *valueLog) iterate(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = utils.VlogHeaderSize
 	}
@@ -780,7 +781,7 @@ func (vlog *valueLog) iterate(lf *file.LogFile, offset uint32, fn utils.LogEntry
 			continue
 		}
 
-		var vp utils.ValuePtr
+		var vp kv.ValuePtr
 		vp.Len = uint32(int(e.Hlen) + len(e.Key) + len(e.Value) + crc32.Size)
 		vp.Offset = e.Offset
 		vp.Fid = lf.FID
@@ -803,8 +804,8 @@ type safeRead struct {
 	lf           *file.LogFile
 }
 
-func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
-	tee := utils.NewHashReader(reader)
+func (r *safeRead) Entry(reader io.Reader) (*kv.Entry, error) {
+	tee := kv.NewHashReader(reader)
 	var headerBytes int
 	readVarint := func() (uint64, error) {
 		val, err := binary.ReadUvarint(tee)
@@ -846,7 +847,7 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 	}
 
 	keyLen := int(klen)
-	entry := utils.EntryPool.Get().(*utils.Entry)
+	entry := kv.EntryPool.Get().(*kv.Entry)
 	entry.IncrRef()
 	entry.Version = 0
 	entry.Hlen = headerBytes
@@ -888,7 +889,7 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 		}
 		return nil, err
 	}
-	crc := utils.BytesToU32(crcBuf[:])
+	crc := kv.BytesToU32(crcBuf[:])
 	if crc != tee.Sum32() {
 		entry.DecrRef()
 		return nil, utils.ErrTruncate
@@ -901,7 +902,7 @@ func (r *safeRead) Entry(reader io.Reader) (*utils.Entry, error) {
 
 func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[uint32]int64
-	vs, err := vlog.db.GetCF(utils.CFDefault, lfDiscardStatsKey)
+	vs, err := vlog.db.GetCF(kv.CFDefault, lfDiscardStatsKey)
 	if err != nil {
 		return err
 	}
@@ -909,12 +910,12 @@ func (vlog *valueLog) populateDiscardStats() error {
 		return nil
 	}
 	val := vs.Value
-	if utils.IsValuePtr(vs) {
-		var vp utils.ValuePtr
+	if kv.IsValuePtr(vs) {
+		var vp kv.ValuePtr
 		vp.Decode(val)
 		result, cb, err := vlog.read(&vp)
-		val = utils.SafeCopy(nil, result)
-		utils.RunCallback(cb)
+		val = kv.SafeCopy(nil, result)
+		kv.RunCallback(cb)
 		if err != nil {
 			return err
 		}
@@ -966,7 +967,7 @@ func (db *DB) initVLog() {
 	if vp != nil {
 		db.lastLoggedHead = *vp
 	} else {
-		db.lastLoggedHead = utils.ValuePtr{}
+		db.lastLoggedHead = kv.ValuePtr{}
 	}
 	if err := vlog.open(vp, db.replayFunction()); err != nil {
 		utils.Panic(err)
@@ -974,26 +975,26 @@ func (db *DB) initVLog() {
 	db.vlog = vlog
 }
 
-func (db *DB) getHead() (*utils.ValuePtr, uint64) {
+func (db *DB) getHead() (*kv.ValuePtr, uint64) {
 	vp, ok := db.lsm.ValueLogHead()
 	if !ok {
-		var zero utils.ValuePtr
+		var zero kv.ValuePtr
 		return &zero, 0
 	}
 	ptr := vp
 	return &ptr, uint64(ptr.Offset)
 }
 
-func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
-	toLSM := func(k []byte, vs utils.ValueStruct) {
-		e := utils.NewEntry(k, vs.Value)
+func (db *DB) replayFunction() func(*kv.Entry, *kv.ValuePtr) error {
+	toLSM := func(k []byte, vs kv.ValueStruct) {
+		e := kv.NewEntry(k, vs.Value)
 		e.ExpiresAt = vs.ExpiresAt
 		e.Meta = vs.Meta
 		db.lsm.Set(e)
 		e.DecrRef()
 	}
 
-	return func(e *utils.Entry, vp *utils.ValuePtr) error {
+	return func(e *kv.Entry, vp *kv.ValuePtr) error {
 		nk := make([]byte, len(e.Key))
 		copy(nk, e.Key)
 		var nv []byte
@@ -1003,11 +1004,11 @@ func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
 			copy(nv, e.Value)
 		} else {
 			nv = vp.Encode()
-			meta = meta | utils.BitValuePointer
+			meta = meta | kv.BitValuePointer
 		}
-		db.updateHead([]utils.ValuePtr{*vp})
+		db.updateHead([]kv.ValuePtr{*vp})
 
-		v := utils.ValueStruct{
+		v := kv.ValueStruct{
 			Value:     nv,
 			Meta:      meta,
 			ExpiresAt: e.ExpiresAt,
@@ -1017,9 +1018,9 @@ func (db *DB) replayFunction() func(*utils.Entry, *utils.ValuePtr) error {
 	}
 }
 
-func (db *DB) updateHead(ptrs []utils.ValuePtr) {
+func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 	var (
-		ptr   utils.ValuePtr
+		ptr   kv.ValuePtr
 		found bool
 	)
 	for i := len(ptrs) - 1; i >= 0; i-- {
@@ -1042,7 +1043,7 @@ func (db *DB) updateHead(ptrs []utils.ValuePtr) {
 		return
 	}
 
-	next := &utils.ValuePtr{Fid: head.Fid, Offset: head.Offset}
+	next := &kv.ValuePtr{Fid: head.Fid, Offset: head.Offset}
 	if db.vhead != nil && next.Less(db.vhead) {
 		utils.CondPanic(true, fmt.Errorf("value log head regression: prev=%+v next=%+v", db.vhead, next))
 	}
@@ -1058,7 +1059,7 @@ func (db *DB) updateHead(ptrs []utils.ValuePtr) {
 	db.lastLoggedHead = *next
 }
 
-func (db *DB) shouldPersistHead(next *utils.ValuePtr) bool {
+func (db *DB) shouldPersistHead(next *kv.ValuePtr) bool {
 	if db == nil || next == nil || next.IsZero() {
 		return false
 	}
@@ -1122,8 +1123,8 @@ func (vlog *valueLog) flushDiscardStats() {
 			return err
 		}
 
-		entries := []*utils.Entry{{
-			Key:   utils.InternalKey(utils.CFDefault, lfDiscardStatsKey, 1),
+		entries := []*kv.Entry{{
+			Key:   kv.InternalKey(kv.CFDefault, lfDiscardStatsKey, 1),
 			Value: encodedDS,
 		}}
 		req, err := vlog.db.sendToWriteCh(entries)
@@ -1153,8 +1154,8 @@ var requestPool = sync.Pool{
 }
 
 type request struct {
-	Entries   []*utils.Entry
-	Ptrs      []utils.ValuePtr
+	Entries   []*kv.Entry
+	Ptrs      []kv.ValuePtr
 	Err       error
 	ref       int32
 	enqueueAt time.Time
@@ -1170,9 +1171,9 @@ func (req *request) reset() {
 	req.doneCh = nil
 }
 
-func (req *request) loadEntries(entries []*utils.Entry) {
+func (req *request) loadEntries(entries []*kv.Entry) {
 	if cap(req.Entries) < len(entries) {
-		req.Entries = make([]*utils.Entry, len(entries))
+		req.Entries = make([]*kv.Entry, len(entries))
 	} else {
 		req.Entries = req.Entries[:len(entries)]
 	}

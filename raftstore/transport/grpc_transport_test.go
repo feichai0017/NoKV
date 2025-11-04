@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
@@ -51,7 +52,7 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	cluster.flush()
 
 	for id := range cluster.nodes {
-		entry, err := cluster.db(id).GetCF(utils.CFDefault, []byte("grpc-propose"))
+		entry, err := cluster.db(id).GetCF(entrykv.CFDefault, []byte("grpc-propose"))
 		require.NoError(t, err, "db %d", id)
 		require.Equal(t, []byte("grpc-value"), entry.Value, "db %d", id)
 		entry.DecrRef()
@@ -110,7 +111,7 @@ func TestGRPCTransportSupportsTLS(t *testing.T) {
 	cluster.flush()
 
 	for id := range cluster.nodes {
-		entry, err := cluster.db(id).GetCF(utils.CFDefault, []byte("tls-propose"))
+		entry, err := cluster.db(id).GetCF(entrykv.CFDefault, []byte("tls-propose"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("secure-value"), entry.Value, "db %d", id)
 		entry.DecrRef()
@@ -148,7 +149,7 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(6)
 	cluster.flush()
 
-	_, err = cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-partition"))
+	_, err = cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-partition"))
 	require.ErrorIs(t, err, utils.ErrKeyNotFound, "follower should not have applied entry while partitioned")
 
 	cluster.unblockLink(leader, followerID)
@@ -157,7 +158,7 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(10)
 	cluster.flush()
 
-	entry, err := cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-partition"))
+	entry, err := cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-partition"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("stale"), entry.Value)
 	entry.DecrRef()
@@ -174,7 +175,7 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(6)
 	cluster.flush()
 
-	entry, err = cluster.db(followerID).GetCF(utils.CFDefault, []byte("grpc-reconnect"))
+	entry, err = cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-reconnect"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("recovered"), entry.Value)
 	entry.DecrRef()
@@ -499,12 +500,12 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 				return err
 			}
 			if len(kv.GetValue()) == 0 {
-				if err := db.DelCF(utils.CFDefault, kv.GetKey()); err != nil {
+				if err := db.DelCF(entrykv.CFDefault, kv.GetKey()); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := db.SetCF(utils.CFDefault, kv.GetKey(), kv.GetValue()); err != nil {
+			if err := db.SetCF(entrykv.CFDefault, kv.GetKey(), kv.GetValue()); err != nil {
 				return err
 			}
 		}

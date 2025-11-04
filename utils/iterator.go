@@ -1,5 +1,7 @@
 package utils
 
+import "github.com/feichai0017/NoKV/kv"
+
 // Iterator 迭代器
 type Iterator interface {
 	Next()
@@ -12,7 +14,7 @@ type Iterator interface {
 
 // Item _
 type Item interface {
-	Entry() *Entry
+	Entry() *kv.Entry
 }
 
 // Options _

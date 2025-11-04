@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
@@ -48,7 +49,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	for i := range 48 {
 		val := make([]byte, 512)
 		key := fmt.Appendf(nil, "key-%03d", i)
-		e := utils.NewEntry(key, val)
+		e := kv.NewEntry(key, val)
 		require.NoError(t, db.Set(e))
 		e.DecrRef()
 	}
@@ -103,7 +104,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	db := Open(opt)
 	key := []byte("orphan-key")
 	val := make([]byte, 512)
-	e := utils.NewEntry(key, val)
+	e := kv.NewEntry(key, val)
 	require.NoError(t, db.Set(e))
 	e.DecrRef()
 
@@ -168,7 +169,7 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	for i := range 256 {
 		key := fmt.Appendf(nil, "sst-crash-%03d", i)
 		val := make([]byte, 128)
-		e := utils.NewEntry(key, val)
+		e := kv.NewEntry(key, val)
 		require.NoError(t, db.Set(e))
 		e.DecrRef()
 	}
@@ -214,7 +215,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	}
 
 	db := Open(opt)
-	e := utils.NewEntry([]byte("rewrite-key"), []byte("rewrite-val"))
+	e := kv.NewEntry([]byte("rewrite-key"), []byte("rewrite-val"))
 	require.NoError(t, db.Set(e))
 	e.DecrRef()
 	require.NoError(t, db.Close())
@@ -343,7 +344,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	db := Open(opt)
 	key := []byte("wal-crash-key")
 	val := []byte("wal-crash-value")
-	e := utils.NewEntry(key, val)
+	e := kv.NewEntry(key, val)
 	require.NoError(t, db.Set(e))
 	e.DecrRef()
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	kvpkg "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -45,15 +46,15 @@ func TestVlogBase(t *testing.T) {
 	const val2 = "samplevalb012345678901234567890123"
 	require.True(t, int64(len(val1)) >= db.opt.ValueThreshold)
 
-	e1 := utils.NewEntry([]byte("samplekey"), []byte(val1))
-	e1.Meta = utils.BitValuePointer
+	e1 := kvpkg.NewEntry([]byte("samplekey"), []byte(val1))
+	e1.Meta = kvpkg.BitValuePointer
 
-	e2 := utils.NewEntry([]byte("samplekeyb"), []byte(val2))
-	e2.Meta = utils.BitValuePointer
+	e2 := kvpkg.NewEntry([]byte("samplekeyb"), []byte(val2))
+	e2.Meta = kvpkg.BitValuePointer
 
 	// 构建一个批量请求的request
 	b := new(request)
-	b.Entries = []*utils.Entry{e1, e2}
+	b.Entries = []*kvpkg.Entry{e1, e2}
 
 	// 直接写入vlog中
 	log.write([]*request{b})
@@ -68,8 +69,8 @@ func TestVlogBase(t *testing.T) {
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	// 关闭会调的锁
-	defer utils.RunCallback(unlock1)
-	defer utils.RunCallback(unlock2)
+	defer kvpkg.RunCallback(unlock1)
+	defer kvpkg.RunCallback(unlock2)
 	entry1, err := wal.DecodeEntry(payload1)
 	require.NoError(t, err)
 	defer entry1.DecrRef()
@@ -80,11 +81,11 @@ func TestVlogBase(t *testing.T) {
 	// Compare the fields we care about.
 	require.Equal(t, []byte("samplekey"), entry1.Key)
 	require.Equal(t, []byte(val1), entry1.Value)
-	require.Equal(t, utils.BitValuePointer, entry1.Meta)
+	require.Equal(t, kvpkg.BitValuePointer, entry1.Meta)
 
 	require.Equal(t, []byte("samplekeyb"), entry2.Key)
 	require.Equal(t, []byte(val2), entry2.Value)
-	require.Equal(t, utils.BitValuePointer, entry2.Meta)
+	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
 }
 
 func clearDir() {
@@ -104,10 +105,10 @@ func clearDir() {
 func TestValueGC(t *testing.T) {
 	clearDir()
 	opt.ValueLogFileSize = 1 << 20
-	kv := Open(opt)
-	defer kv.Close()
+	db := Open(opt)
+	defer db.Close()
 	sz := 32 << 10
-	kvList := make([]*utils.Entry, 0, 100)
+	kvList := make([]*kvpkg.Entry, 0, 100)
 	defer func() {
 		for _, e := range kvList {
 			e.DecrRef()
@@ -116,17 +117,17 @@ func TestValueGC(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		e := newRandEntry(sz)
-		eCopy := utils.NewEntry(e.Key, e.Value)
+		eCopy := kvpkg.NewEntry(e.Key, e.Value)
 		eCopy.Meta = e.Meta
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, kv.Set(e))
+		require.NoError(t, db.Set(e))
 		e.DecrRef()
 	}
-	kv.RunValueLogGC(0.9)
+	db.RunValueLogGC(0.9)
 	for _, e := range kvList {
-		item, err := kv.Get(e.Key)
+		item, err := db.Get(e.Key)
 		require.NoError(t, err)
 		val := getItemValue(t, item)
 		require.NotNil(t, val)
@@ -144,7 +145,7 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 	txn := db.NewTransaction(true)
 	defer txn.Discard()
 	val := bytes.Repeat([]byte("x"), 128)
-	require.NoError(t, txn.SetEntry(utils.NewEntry([]byte("iter-key"), val)))
+	require.NoError(t, txn.SetEntry(kvpkg.NewEntry([]byte("iter-key"), val)))
 	require.NoError(t, txn.Commit())
 
 	vlog := db.vlog
@@ -152,8 +153,8 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 	lf, ok := vlog.manager.LogFile(active)
 	require.True(t, ok, "active log file missing")
 
-	var captured []*utils.Entry
-	_, err := vlog.iterate(lf, utils.ValueLogHeaderSize, func(e *utils.Entry, vp *utils.ValuePtr) error {
+	var captured []*kvpkg.Entry
+	_, err := vlog.iterate(lf, kvpkg.ValueLogHeaderSize, func(e *kvpkg.Entry, vp *kvpkg.ValuePtr) error {
 		captured = append(captured, e)
 		return nil
 	})
@@ -168,7 +169,7 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 }
 
 func TestDecodeWalEntryReleasesEntries(t *testing.T) {
-	orig := utils.NewEntry([]byte("decode-key"), []byte("decode-val"))
+	orig := kvpkg.NewEntry([]byte("decode-key"), []byte("decode-val"))
 	buf := &bytes.Buffer{}
 	payload := wal.EncodeEntry(buf, orig)
 	orig.DecrRef()
@@ -203,9 +204,9 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 
 	req := requestPool.Get().(*request)
 	req.reset()
-	entries := []*utils.Entry{
-		utils.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 64)),
-		utils.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 64)),
+	entries := []*kvpkg.Entry{
+		kvpkg.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 64)),
+		kvpkg.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 64)),
 	}
 	req.loadEntries(entries)
 	req.IncrRef()
@@ -239,9 +240,9 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 
 	req := requestPool.Get().(*request)
 	req.reset()
-	entries := []*utils.Entry{
-		utils.NewEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
-		utils.NewEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
+	entries := []*kvpkg.Entry{
+		kvpkg.NewEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
+		kvpkg.NewEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
 	}
 	req.loadEntries(entries)
 	req.IncrRef()
@@ -254,14 +255,14 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	require.Equal(t, 1, rotates)
 }
 
-func newRandEntry(sz int) *utils.Entry {
+func newRandEntry(sz int) *kvpkg.Entry {
 	v := make([]byte, sz)
 	rand.Read(v[:rand.Intn(sz)])
 	e := utils.BuildEntry()
 	e.Value = v
 	return e
 }
-func getItemValue(t *testing.T, item *utils.Entry) (val []byte) {
+func getItemValue(t *testing.T, item *kvpkg.Entry) (val []byte) {
 	t.Helper()
 	if item == nil {
 		return nil
@@ -280,9 +281,9 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := utils.NewEntry([]byte("manifest-head"), []byte("value"))
-	entry.Key = utils.KeyWithTs(entry.Key, math.MaxUint32)
-	if err := db.batchSet([]*utils.Entry{entry}); err != nil {
+	entry := kvpkg.NewEntry([]byte("manifest-head"), []byte("value"))
+	entry.Key = kvpkg.KeyWithTs(entry.Key, math.MaxUint32)
+	if err := db.batchSet([]*kvpkg.Entry{entry}); err != nil {
 		t.Fatalf("batchSet: %v", err)
 	}
 

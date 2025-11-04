@@ -8,10 +8,10 @@ import (
 
 type uint64Heap []uint64
 
-func (u uint64Heap) Len() int            { return len(u) }
-func (u uint64Heap) Less(i, j int) bool  { return u[i] < u[j] }
-func (u uint64Heap) Swap(i, j int)       { u[i], u[j] = u[j], u[i] }
-func (u *uint64Heap) Push(x any) { *u = append(*u, x.(uint64)) }
+func (u uint64Heap) Len() int           { return len(u) }
+func (u uint64Heap) Less(i, j int) bool { return u[i] < u[j] }
+func (u uint64Heap) Swap(i, j int)      { u[i], u[j] = u[j], u[i] }
+func (u *uint64Heap) Push(x any)        { *u = append(*u, x.(uint64)) }
 func (u *uint64Heap) Pop() any {
 	old := *u
 	n := len(old)
@@ -33,8 +33,8 @@ type mark struct {
 
 // WaterMark is used to keep track of the minimum un-finished index.  Typically, an index k becomes
 // finished or "done" according to a WaterMark once Done(k) has been called
-//   1. as many times as Begin(k) has, AND
-//   2. a positive number of times.
+//  1. as many times as Begin(k) has, AND
+//  2. a positive number of times.
 //
 // An index may also become "done" by calling SetDoneUntil at a time such that it is not
 // inter-mingled with Begin/Done calls.

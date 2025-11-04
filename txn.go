@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
@@ -270,7 +271,7 @@ type Txn struct {
 	conflictKeys map[uint64]struct{}
 	readsLock    sync.Mutex // guards the reads slice. See addReadKey.
 
-	pendingWrites map[string]*utils.Entry // cache stores any writes done by txn.
+	pendingWrites map[string]*kv.Entry // cache stores any writes done by txn.
 
 	numIterators int32
 	discarded    bool
@@ -279,7 +280,7 @@ type Txn struct {
 }
 
 type pendingWritesIterator struct {
-	entries  []*utils.Entry
+	entries  []*kv.Entry
 	nextIdx  int
 	readTs   uint64
 	reversed bool
@@ -313,14 +314,14 @@ func (pi *pendingWritesIterator) Key() []byte {
 	return entry.Key
 }
 
-func (pi *pendingWritesIterator) Value() utils.ValueStruct {
+func (pi *pendingWritesIterator) Value() kv.ValueStruct {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
-	return utils.ValueStruct{
+	return kv.ValueStruct{
 		Value:     entry.Value,
 		Meta:      entry.Meta,
 		ExpiresAt: entry.ExpiresAt,
-		Version:   utils.ParseTs(entry.Key),
+		Version:   kv.ParseTs(entry.Key),
 	}
 }
 
@@ -336,10 +337,10 @@ func (txn *Txn) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
 	if !txn.update || len(txn.pendingWrites) == 0 {
 		return nil
 	}
-	entries := make([]*utils.Entry, 0, len(txn.pendingWrites))
+	entries := make([]*kv.Entry, 0, len(txn.pendingWrites))
 	for _, e := range txn.pendingWrites {
 		dup := *e
-		dup.Key = utils.InternalKey(dup.CF, e.Key, txn.readTs)
+		dup.Key = kv.InternalKey(dup.CF, e.Key, txn.readTs)
 		entries = append(entries, &dup)
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -356,7 +357,7 @@ func (txn *Txn) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
 	}
 }
 
-func (txn *Txn) checkSize(e *utils.Entry) error {
+func (txn *Txn) checkSize(e *kv.Entry) error {
 	count := txn.count + 1
 	// Extra bytes for the version in key.
 	size := txn.size + int64(e.EstimateSize(int(txn.db.valueThreshold())+10))
@@ -390,7 +391,7 @@ func ValidEntry(db *DB, key, val []byte) error {
 	return nil
 }
 
-func (txn *Txn) modify(e *utils.Entry) error {
+func (txn *Txn) modify(e *kv.Entry) error {
 	switch {
 	case !txn.update:
 		return utils.ErrReadOnlyTxn
@@ -411,9 +412,9 @@ func (txn *Txn) modify(e *utils.Entry) error {
 
 	// The txn.conflictKeys is used for conflict detection. If conflict detection
 	// is disabled, we don't need to store key hashes in this map.
-	cfKey := utils.EncodeKeyWithCF(e.CF, e.Key)
+	cfKey := kv.EncodeKeyWithCF(e.CF, e.Key)
 	if txn.db.opt.DetectConflicts {
-		fp := utils.MemHash(cfKey) // Avoid dealing with byte arrays.
+		fp := kv.MemHash(cfKey) // Avoid dealing with byte arrays.
 		txn.conflictKeys[fp] = struct{}{}
 	}
 
@@ -427,15 +428,15 @@ func (txn *Txn) modify(e *utils.Entry) error {
 // The current transaction keeps a reference to the key and val byte slice
 // arguments. Users must not modify key and val until the end of the transaction.
 func (txn *Txn) Set(key, val []byte) error {
-	return txn.SetEntry(utils.NewEntry(key, val))
+	return txn.SetEntry(kv.NewEntry(key, val))
 }
 
-// SetEntry takes an utils.Entry struct and adds the key-value pair in the struct,
+// SetEntry takes an kv.Entry struct and adds the key-value pair in the struct,
 // along with other metadata to the database.
 //
 // The current transaction keeps a reference to the entry passed in argument.
 // Users must not modify the entry until the end of the transaction.
-func (txn *Txn) SetEntry(e *utils.Entry) error {
+func (txn *Txn) SetEntry(e *kv.Entry) error {
 	return txn.modify(e)
 }
 
@@ -448,8 +449,8 @@ func (txn *Txn) SetEntry(e *utils.Entry) error {
 // The current transaction keeps a reference to the key byte slice argument.
 // Users must not modify the key until the end of the transaction.
 func (txn *Txn) Delete(key []byte) error {
-	e := utils.NewEntry(key, nil)
-	e.Meta = utils.BitDelete
+	e := kv.NewEntry(key, nil)
+	e.Meta = kv.BitDelete
 	if err := txn.modify(e); err != nil {
 		e.DecrRef()
 		return err
@@ -467,12 +468,12 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	item = new(Item)
-	item.e = new(utils.Entry)
+	item.e = new(kv.Entry)
 	if txn.db != nil {
 		item.vlog = txn.db.vlog
 	}
 	if txn.update {
-		cfKey := utils.EncodeKeyWithCF(utils.CFDefault, key)
+		cfKey := kv.EncodeKeyWithCF(kv.CFDefault, key)
 		if e, has := txn.pendingWrites[string(cfKey)]; has && bytes.Equal(key, e.Key) {
 			if isDeletedOrExpired(e.Meta, e.ExpiresAt) {
 				return nil, utils.ErrKeyNotFound
@@ -495,7 +496,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	// 使用事务的readTs作为时间戳查询
-	seek := utils.InternalKey(utils.CFDefault, key, txn.readTs)
+	seek := kv.InternalKey(kv.CFDefault, key, txn.readTs)
 	vs, err := txn.db.lsm.Get(seek)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
@@ -504,16 +505,16 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
 	// 处理值指针
-	if vs != nil && utils.IsValuePtr(vs) {
-		var vp utils.ValuePtr
+	if vs != nil && kv.IsValuePtr(vs) {
+		var vp kv.ValuePtr
 		vp.Decode(vs.Value)
 		result, cb, err := txn.db.vlog.read(&vp)
-		defer utils.RunCallback(cb)
+		defer kv.RunCallback(cb)
 		if err != nil {
 			return nil, err
 		}
-		vs.Value = utils.SafeCopy(nil, result)
-		vs.Meta &^= utils.BitValuePointer
+		vs.Value = kv.SafeCopy(nil, result)
+		vs.Meta &^= kv.BitValuePointer
 	}
 
 	if vs.Value == nil && vs.Meta == 0 {
@@ -524,9 +525,9 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	item.e.Key = key
-	cf, _, _ := utils.SplitInternalKey(vs.Key)
+	cf, _, _ := kv.SplitInternalKey(vs.Key)
 	if !cf.Valid() {
-		cf = utils.CFDefault
+		cf = kv.CFDefault
 	}
 	item.e.CF = cf
 	item.e.Version = vs.Version
@@ -540,7 +541,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 
 func (txn *Txn) addReadKey(key []byte) {
 	if txn.update {
-		fp := utils.MemHash(key)
+		fp := kv.MemHash(key)
 
 		// Because of the possibility of multiple iterators it is now possible
 		// for multiple threads within a read-write transaction to read keys at
@@ -581,7 +582,7 @@ func (txn *Txn) Discard() {
 
 func (txn *Txn) commitAndSend() (func() error, error) {
 	orc := txn.db.orc
-	var entries []*utils.Entry
+	var entries []*kv.Entry
 	var commitTs uint64
 
 	// The following logic has to be guarded by a lock, because we are using
@@ -597,7 +598,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 		return nil, utils.ErrConflict
 	}
 
-	setVersion := func(e *utils.Entry) {
+	setVersion := func(e *kv.Entry) {
 		if e.Version == 0 {
 			e.Version = commitTs
 		}
@@ -606,11 +607,11 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 		setVersion(e)
 	}
 
-	entries = make([]*utils.Entry, 0, len(txn.pendingWrites))
-	processEntry := func(e *utils.Entry) {
+	entries = make([]*kv.Entry, 0, len(txn.pendingWrites))
+	processEntry := func(e *kv.Entry) {
 		// Suffix the keys with commit ts, so the key versions are sorted in
 		// descending order of commit timestamp.
-		e.Key = utils.InternalKey(e.CF, e.Key, e.Version)
+		e.Key = kv.InternalKey(e.CF, e.Key, e.Version)
 		entries = append(entries, e)
 	}
 
@@ -763,7 +764,7 @@ func (db *DB) newTransaction(update bool) *Txn {
 		if db.opt.DetectConflicts {
 			txn.conflictKeys = make(map[uint64]struct{})
 		}
-		txn.pendingWrites = make(map[string]*utils.Entry)
+		txn.pendingWrites = make(map[string]*kv.Entry)
 	}
 	db.orc.trackTxnStart()
 	txn.readTs = db.orc.readTs()

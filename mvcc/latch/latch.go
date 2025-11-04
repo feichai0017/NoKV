@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/kv"
 )
 
 // Manager provides hashed latches on keys to serialize conflicting
@@ -40,7 +40,7 @@ body:
 		if len(key) == 0 {
 			continue
 		}
-		h := utils.MemHash(key)
+		h := kv.MemHash(key)
 		idx := int(h % uint64(len(m.stripes)))
 		// deduplicate identical indices for identical keys
 		for _, existing := range indices {

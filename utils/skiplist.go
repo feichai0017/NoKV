@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	_ "unsafe"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/pkg/errors"
 )
 
@@ -84,7 +85,7 @@ func (s *Skiplist) DecrRef() {
 	s.arena = nil
 }
 
-func newNode(arena *Arena, key []byte, v ValueStruct, height int) *node {
+func newNode(arena *Arena, key []byte, v kv.ValueStruct, height int) *node {
 	// The base level is already allocated in the node struct.
 	nodeOffset := arena.putNode(height)
 	keyOffset := arena.putKey(key)
@@ -111,7 +112,7 @@ func decodeValue(value uint64) (valOffset uint32, valSize uint32) {
 // NewSkiplist makes a new empty skiplist, with a given arena size
 func NewSkiplist(arenaSize int64) *Skiplist {
 	arena := newArena(arenaSize)
-	head := newNode(arena, nil, ValueStruct{}, maxHeight)
+	head := newNode(arena, nil, kv.ValueStruct{}, maxHeight)
 	ho := arena.getNodeOffset(head)
 	return &Skiplist{
 		height:     1,
@@ -142,8 +143,8 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 	return atomic.CompareAndSwapUint32(&n.tower[h], old, val)
 }
 
-// getVs return ValueStruct stored in node
-func (n *node) getVs(arena *Arena) ValueStruct {
+// getVs return kv.ValueStruct stored in node
+func (n *node) getVs(arena *Arena) kv.ValueStruct {
 	valOffset, valSize := n.getValueOffset()
 	return arena.getVal(valOffset, valSize)
 }
@@ -277,10 +278,10 @@ func (s *Skiplist) getHeight() int32 {
 }
 
 // Put inserts the key-value pair.
-func (s *Skiplist) Add(e *Entry) {
+func (s *Skiplist) Add(e *kv.Entry) {
 	// Since we allow overwrite, we may not need to create a new node. We might not even need to
 	// increase the height. Let's defer these actions.
-	key, v := e.Key, ValueStruct{
+	key, v := e.Key, kv.ValueStruct{
 		Meta:      e.Meta,
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
@@ -380,15 +381,15 @@ func (s *Skiplist) findLast() *node {
 
 // Get gets the value associated with the key. It returns a valid value if it finds equal or earlier
 // version of the same key.
-func (s *Skiplist) Search(key []byte) ValueStruct {
+func (s *Skiplist) Search(key []byte) kv.ValueStruct {
 	n, _ := s.findNear(key, false, true) // findGreaterOrEqual.
 	if n == nil {
-		return ValueStruct{}
+		return kv.ValueStruct{}
 	}
 
 	nextKey := s.arena.getKey(n.keyOffset, n.keySize)
-	if !SameKey(key, nextKey) {
-		return ValueStruct{}
+	if !kv.SameKey(key, nextKey) {
+		return kv.ValueStruct{}
 	}
 
 	valOffset, valSize := n.getValueOffset()
@@ -464,7 +465,7 @@ func (s *Skiplist) Draw(align bool) {
 type SkipListIterator struct {
 	list *Skiplist
 	n    *node
-	e    Entry
+	e    kv.Entry
 }
 
 func (s *SkipListIterator) Rewind() {
@@ -496,7 +497,7 @@ func (s *SkipListIterator) Key() []byte {
 }
 
 // Value returns value.
-func (s *SkipListIterator) Value() ValueStruct {
+func (s *SkipListIterator) Value() kv.ValueStruct {
 	valOffset, valSize := s.n.getValueOffset()
 	return s.list.arena.getVal(valOffset, valSize)
 }

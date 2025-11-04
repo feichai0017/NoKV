@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -87,9 +88,9 @@ func (lm *levelManager) iterators() []utils.Iterator {
 	return itrs
 }
 
-func (lm *levelManager) Get(key []byte) (*utils.Entry, error) {
+func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 	var (
-		entry *utils.Entry
+		entry *kv.Entry
 		err   error
 	)
 	// L0 layer query
@@ -192,8 +193,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		Level:     0,
 		FileID:    fid,
 		Size:      uint64(table.Size()),
-		Smallest:  utils.SafeCopy(nil, table.MinKey()),
-		Largest:   utils.SafeCopy(nil, table.MaxKey()),
+		Smallest:  kv.SafeCopy(nil, table.MinKey()),
+		Largest:   kv.SafeCopy(nil, table.MaxKey()),
 		CreatedAt: uint64(time.Now().Unix()),
 		ValueSize: table.ValueSize(),
 	}
@@ -223,7 +224,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	return nil
 }
 
-func (lm *levelManager) LogValueLogHead(ptr *utils.ValuePtr) error {
+func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	if ptr == nil {
 		return nil
 	}
@@ -611,7 +612,7 @@ func (lh *levelHandler) ingestDataSize() int64 {
 	return lh.ingestSize
 }
 
-func (lh *levelHandler) Get(key []byte) (*utils.Entry, error) {
+func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	// if it is the 0th layer file, handle it specially
 	if lh.levelNum == 0 {
 		// get the sst that may contain the key
@@ -688,7 +689,7 @@ func (lh *levelHandler) Sort() {
 	}
 }
 
-func (lh *levelHandler) searchL0SST(key []byte) (*utils.Entry, error) {
+func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 	var version uint64
 	for _, table := range lh.tables {
 		if entry, err := table.Search(key, &version); err == nil {
@@ -698,7 +699,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*utils.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) searchIngestSST(key []byte) (*utils.Entry, error) {
+func (lh *levelHandler) searchIngestSST(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
 	if len(lh.ingest) == 0 {
@@ -721,7 +722,7 @@ func (lh *levelHandler) searchIngestSST(key []byte) (*utils.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) searchLNSST(key []byte) (*utils.Entry, error) {
+func (lh *levelHandler) searchLNSST(key []byte) (*kv.Entry, error) {
 	table := lh.getTable(key)
 	var version uint64
 	if table == nil {

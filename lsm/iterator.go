@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -13,10 +14,10 @@ type Iterator struct {
 	iters []utils.Iterator
 }
 type Item struct {
-	e *utils.Entry
+	e *kv.Entry
 }
 
-func (it *Item) Entry() *utils.Entry {
+func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
 
@@ -231,7 +232,7 @@ type MergeIterator struct {
 
 type node struct {
 	valid bool
-	entry *utils.Entry
+	entry *kv.Entry
 	iter  utils.Iterator
 
 	// The two iterators are type asserted from `y.Iterator`, used to inline more function calls.
