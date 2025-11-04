@@ -20,7 +20,7 @@ die() {
 }
 
 default_workloads="A,B,C,D,F"
-default_engines="nokv,badger,rocksdb,etcd"
+default_engines="nokv,badger,rocksdb"
 default_records=1000000
 default_ops=1000000
 default_conc=16
@@ -79,6 +79,8 @@ args=(
   -ycsb_block_cache_mb "${ycsb_block_cache_mb}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
 )
+
+
 
 if (( $# > 0 )); then
   args+=("$@")

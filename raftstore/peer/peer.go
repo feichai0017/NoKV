@@ -30,6 +30,7 @@ type AdminApplyFunc func(cmd *pb.AdminCommand) error
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
 	mu               sync.Mutex
+	readyMu          sync.Mutex
 	id               uint64
 	node             *myraft.RawNode
 	storage          engine.PeerStorage
@@ -302,6 +303,7 @@ func (p *Peer) Status() myraft.Status {
 }
 
 func (p *Peer) processReady() error {
+	p.readyMu.Lock()
 	for {
 		p.mu.Lock()
 		hasReady := p.node.HasReady()
@@ -312,11 +314,13 @@ func (p *Peer) processReady() error {
 		p.mu.Unlock()
 
 		if !hasReady {
+			p.readyMu.Unlock()
 			return nil
 		}
 
 		msgs := rd.Messages
 		if err := p.handleReady(rd); err != nil {
+			p.readyMu.Unlock()
 			return err
 		}
 
@@ -324,7 +328,9 @@ func (p *Peer) processReady() error {
 		p.node.Advance(rd)
 		p.mu.Unlock()
 
+		p.readyMu.Unlock()
 		p.sendMessages(msgs)
+		p.readyMu.Lock()
 	}
 }
 
