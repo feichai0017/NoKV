@@ -9,7 +9,7 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"

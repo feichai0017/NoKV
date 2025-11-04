@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 var recoveryTraceEnabled = os.Getenv("RECOVERY_TRACE_METRICS") != ""

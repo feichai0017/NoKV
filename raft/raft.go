@@ -1,8 +1,8 @@
 package raft
 
 import (
-	etcdraft "go.etcd.io/etcd/raft/v3"
-	pb "go.etcd.io/etcd/raft/v3/raftpb"
+	etcdraft "go.etcd.io/raft/v3"
+	pb "go.etcd.io/raft/v3/raftpb"
 )
 
 type (

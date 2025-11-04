@@ -2,7 +2,7 @@ package peer
 
 import (
 	"github.com/feichai0017/NoKV/manifest"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 // ConfChangeEvent captures context for a configuration change entry that has
