@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 func TestSnapshotResendQueueRecordAndDrop(t *testing.T) {
@@ -15,7 +15,7 @@ func TestSnapshotResendQueueRecordAndDrop(t *testing.T) {
 		Type: myraft.MsgSnapshot,
 		To:   2,
 		From: 1,
-		Snapshot: raftpb.Snapshot{
+		Snapshot: &raftpb.Snapshot{
 			Metadata: raftpb.SnapshotMetadata{Index: 12, Term: 3},
 			Data:     []byte("snap-1"),
 		},
@@ -24,7 +24,7 @@ func TestSnapshotResendQueueRecordAndDrop(t *testing.T) {
 		Type: myraft.MsgSnapshot,
 		To:   3,
 		From: 1,
-		Snapshot: raftpb.Snapshot{
+		Snapshot: &raftpb.Snapshot{
 			Metadata: raftpb.SnapshotMetadata{Index: 42, Term: 4},
 			Data:     []byte("snap-2"),
 		},
@@ -78,7 +78,7 @@ func TestPeerResendSnapshot(t *testing.T) {
 		Type: myraft.MsgSnapshot,
 		To:   2,
 		From: 1,
-		Snapshot: raftpb.Snapshot{
+		Snapshot: &raftpb.Snapshot{
 			Metadata: raftpb.SnapshotMetadata{Index: 100, Term: 7},
 			Data:     []byte("snap-data"),
 		},

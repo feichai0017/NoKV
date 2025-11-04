@@ -38,7 +38,7 @@ docker compose down -v
 LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
 CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
 CGO_LDFLAGS="-L$(pwd)/third_party/rocksdb/dist/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4" \
-YCSB_ENGINES="nokv,rocksdb,badger" ./scripts/run_benchmarks.sh
+YCSB_ENGINES="nokv,badger,rocksdb,etcd" ./scripts/run_benchmarks.sh
 # One-click script (auto-detect RocksDB, supports `YCSB_*` env vars to override defaults)
 ./scripts/run_benchmarks.sh
 # Quick smoke run (smaller dataset)

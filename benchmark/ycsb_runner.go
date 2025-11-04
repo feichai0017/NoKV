@@ -155,6 +155,8 @@ func runYCSBBenchmarks(cfg ycsbConfig, opts ycsbEngineOptions) ([]BenchmarkResul
 			engine = newBadgerEngine(opts)
 		case "rocksdb":
 			engine = newRocksDBEngine(opts)
+		case "etcd":
+			engine = newEtcdEngine(opts)
 		default:
 			return nil, fmt.Errorf("unknown engine %q", engineName)
 		}

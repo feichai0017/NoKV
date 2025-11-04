@@ -18,7 +18,7 @@ func newSnapshotResendQueue() *snapshotResendQueue {
 }
 
 func (q *snapshotResendQueue) record(msg myraft.Message) {
-	if q == nil || msg.Type != myraft.MsgSnapshot || msg.To == 0 || myraft.IsEmptySnap(msg.Snapshot) {
+	if q == nil || msg.Type != myraft.MsgSnapshot || msg.To == 0 || msg.Snapshot == nil || myraft.IsEmptySnap(*msg.Snapshot) {
 		return
 	}
 	q.mu.Lock()

@@ -16,7 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -315,6 +315,7 @@ func (p *Peer) processReady() error {
 			return nil
 		}
 
+		msgs := rd.Messages
 		if err := p.handleReady(rd); err != nil {
 			return err
 		}
@@ -322,6 +323,8 @@ func (p *Peer) processReady() error {
 		p.mu.Lock()
 		p.node.Advance(rd)
 		p.mu.Unlock()
+
+		p.sendMessages(msgs)
 	}
 }
 
@@ -378,16 +381,6 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				AppliedIndex: last.Index,
 				AppliedTerm:  last.Term,
 			})
-		}
-	}
-	for _, msg := range rd.Messages {
-		if msg.Type == myraft.MsgSnapshot {
-			if q := p.snapshotQueue; q != nil {
-				q.record(msg)
-			}
-		}
-		if p.transport != nil {
-			p.transport.Send(msg)
 		}
 	}
 	if len(rd.ReadStates) > 0 {
@@ -447,6 +440,20 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	return nil
+}
+
+func (p *Peer) sendMessages(msgs []myraft.Message) {
+	if p == nil || len(msgs) == 0 || p.transport == nil {
+		return
+	}
+	for _, msg := range msgs {
+		if msg.Type == myraft.MsgSnapshot {
+			if q := p.snapshotQueue; q != nil {
+				q.record(msg)
+			}
+		}
+		p.transport.Send(msg)
+	}
 }
 
 func (p *Peer) handleConfChange(cc raftpb.ConfChangeV2, entry raftpb.Entry) error {
@@ -681,11 +688,11 @@ func (p *Peer) PopPendingSnapshot() (myraft.Snapshot, bool) {
 		return myraft.Snapshot{}, false
 	}
 	msg, ok := p.snapshotQueue.first()
-	if !ok || myraft.IsEmptySnap(msg.Snapshot) {
+	if !ok || msg.Snapshot == nil || myraft.IsEmptySnap(*msg.Snapshot) {
 		return myraft.Snapshot{}, false
 	}
 	p.snapshotQueue.drop(msg.To)
-	return msg.Snapshot, true
+	return *msg.Snapshot, true
 }
 
 // PendingSnapshot returns the snapshot retained for resend without removing it
@@ -695,10 +702,10 @@ func (p *Peer) PendingSnapshot() (myraft.Snapshot, bool) {
 		return myraft.Snapshot{}, false
 	}
 	msg, ok := p.snapshotQueue.first()
-	if !ok {
+	if !ok || msg.Snapshot == nil {
 		return myraft.Snapshot{}, false
 	}
-	return msg.Snapshot, true
+	return *msg.Snapshot, true
 }
 
 // ResendSnapshot attempts to resend the last snapshot destined for the provided

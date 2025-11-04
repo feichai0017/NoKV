@@ -6,7 +6,7 @@ import (
 	"os"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 // ExportSnapshot persists the current raft snapshot from storage to the supplied file path.

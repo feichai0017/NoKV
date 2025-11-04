@@ -8,7 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	raftpb "go.etcd.io/etcd/raft/v3/raftpb"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 type noopTransport struct{}
