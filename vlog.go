@@ -20,7 +20,6 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
 )
 
@@ -237,7 +236,7 @@ func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
 	if err != nil {
 		return nil, unlock, err
 	}
-	val, _, err := wal.DecodeValueSlice(data)
+	val, _, err := kv.DecodeValueSlice(data)
 	if err != nil {
 		unlock()
 		return nil, nil, err
@@ -1094,31 +1093,38 @@ type lfDiscardStats struct {
 func (vlog *valueLog) flushDiscardStats() {
 	defer vlog.lfDiscardStats.closer.Done()
 
-	mergeStats := func(stats map[uint32]int64) ([]byte, error) {
+	mergeStats := func(stats map[uint32]int64, force bool) ([]byte, error) {
 		vlog.lfDiscardStats.Lock()
 		defer vlog.lfDiscardStats.Unlock()
-		for fid, count := range stats {
-			vlog.lfDiscardStats.m[fid] += count
-			vlog.lfDiscardStats.updatesSinceFlush++
+		if stats != nil {
+			for fid, count := range stats {
+				vlog.lfDiscardStats.m[fid] += count
+				vlog.lfDiscardStats.updatesSinceFlush++
+			}
 		}
 
 		threshold := vlog.lfDiscardStats.flushThreshold
 		if threshold <= 0 {
 			threshold = defaultDiscardStatsFlushThreshold
 		}
-		if vlog.lfDiscardStats.updatesSinceFlush >= threshold {
-			encodedDS, err := json.Marshal(vlog.lfDiscardStats.m)
-			if err != nil {
-				return nil, err
-			}
-			vlog.lfDiscardStats.updatesSinceFlush = 0
-			return encodedDS, nil
+
+		if !force && vlog.lfDiscardStats.updatesSinceFlush < threshold {
+			return nil, nil
 		}
-		return nil, nil
+		if vlog.lfDiscardStats.updatesSinceFlush == 0 {
+			return nil, nil
+		}
+
+		encodedDS, err := json.Marshal(vlog.lfDiscardStats.m)
+		if err != nil {
+			return nil, err
+		}
+		vlog.lfDiscardStats.updatesSinceFlush = 0
+		return encodedDS, nil
 	}
 
-	process := func(stats map[uint32]int64) error {
-		encodedDS, err := mergeStats(stats)
+	process := func(stats map[uint32]int64, force bool) error {
+		encodedDS, err := mergeStats(stats, force)
 		if err != nil || encodedDS == nil {
 			return err
 		}
@@ -1138,9 +1144,23 @@ func (vlog *valueLog) flushDiscardStats() {
 	for {
 		select {
 		case <-closer.CloseSignal:
+			for {
+				select {
+				case stats := <-vlog.lfDiscardStats.flushChan:
+					if err := process(stats, false); err != nil {
+						utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+					}
+				default:
+					goto drainComplete
+				}
+			}
+		drainComplete:
+			if err := process(nil, true); err != nil {
+				utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+			}
 			return
 		case stats := <-vlog.lfDiscardStats.flushChan:
-			if err := process(stats); err != nil {
+			if err := process(stats, false); err != nil {
 				utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
 			}
 		}

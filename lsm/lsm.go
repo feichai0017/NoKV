@@ -324,7 +324,7 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	// check if the current memtable is full, if so, create a new memtable, and write the current memtable to immutables
 	// otherwise, write to the current memtable
 	if lsm.memTable.walSize+
-		int64(kv.EstimateWalCodecSize(entry)) > lsm.option.MemTableSize {
+		int64(kv.EstimateEncodeSize(entry)) > lsm.option.MemTableSize {
 		lsm.Rotate()
 	}
 

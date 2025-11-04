@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 func TestManagerAppendRead(t *testing.T) {
@@ -173,14 +172,20 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	entry1 := kv.NewEntry([]byte("k1"), []byte("value-data"))
-	firstEncoded := wal.EncodeEntry(&buf, entry1)
+	firstEncoded, err := kv.EncodeEntry(&buf, entry1)
+	if err != nil {
+		t.Fatalf("encode first: %v", err)
+	}
 	ptr1, err := mgr.Append(firstEncoded)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	buf.Reset()
 	entry2 := kv.NewEntry([]byte("k2"), []byte("partial"))
-	secondEncoded := wal.EncodeEntry(&buf, entry2)
+	secondEncoded, err := kv.EncodeEntry(&buf, entry2)
+	if err != nil {
+		t.Fatalf("encode second: %v", err)
+	}
 	secondLen := len(secondEncoded)
 	if _, err := mgr.Append(secondEncoded); err != nil {
 		t.Fatalf("append second: %v", err)

@@ -41,7 +41,7 @@ _ = lf.DoneWriting(nextOffset)
 
 * `Open` mmaps the file and records current size (guarded to `< 4 GiB`).
 * `Read` validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.
-* `EncodeEntry` uses `kv.Header` and CRC32 to produce the exact on-disk layout consumed by `vlog.Manager` and `wal.Manager`.
+* `EncodeEntry` uses the shared `kv.EntryHeader` and CRC32 helpers to produce the exact on-disk layout consumed by `vlog.Manager` and `wal.Manager`.
 * `DoneWriting` syncs, truncates to the provided offset, reinitialises the mmap, and keeps the file open in read-write mode—supporting subsequent appends.
 * `Rewind` (via `vlog.Manager.Rewind`) leverages `LogFile.Truncate` and `Init` to roll back partial batches after errors.
 
