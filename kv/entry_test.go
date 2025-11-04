@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ func TestValueStruct(t *testing.T) {
 	}
 	data := make([]byte, v.EncodedSize())
 	v.EncodeValue(data)
-	var vv ValueStruct
-	vv.DecodeValue(data)
-	assert.Equal(t, vv, v)
+	var decoded ValueStruct
+	decoded.DecodeValue(data)
+	assert.Equal(t, decoded, v)
 }

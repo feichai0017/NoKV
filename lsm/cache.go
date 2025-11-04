@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
@@ -454,7 +455,7 @@ func (bc *bloomCache) add(fid uint64, filter utils.Filter) {
 	if bc == nil || len(filter) == 0 {
 		return
 	}
-	dup := utils.SafeCopy(nil, filter)
+	dup := kv.SafeCopy(nil, filter)
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 	if elem, ok := bc.items[fid]; ok {

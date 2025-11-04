@@ -155,7 +155,7 @@ func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
 
 	file, err := os.OpenFile(segmentPath, os.O_WRONLY, 0)
 	require.NoError(t, err)
-	truncateTo := max(int64(ptr.Offset) - int64(walRecordOverhead), 0)
+	truncateTo := max(int64(ptr.Offset)-int64(walRecordOverhead), 0)
 	require.NoError(t, file.Truncate(truncateTo))
 	require.NoError(t, file.Close())
 

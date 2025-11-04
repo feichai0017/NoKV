@@ -58,7 +58,7 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 	// 0.69 is approximately ln(2).
 	k := min(max(uint32(float64(bitsPerKey)*0.69), 1), 30)
 
-	nBits := max(len(keys) * int(bitsPerKey), 64)
+	nBits := max(len(keys)*int(bitsPerKey), 64)
 	// For small len(keys), we can see a very high false positive rate. Fix it
 	// by enforcing a minimum bloom filter length.
 	nBytes := (nBits + 7) / 8

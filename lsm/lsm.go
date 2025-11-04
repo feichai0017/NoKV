@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/flush"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
@@ -224,7 +225,7 @@ func (lsm *LSM) MaxVersion() uint64 {
 }
 
 // LogValueLogHead persists value log head pointer via manifest.
-func (lsm *LSM) LogValueLogHead(ptr *utils.ValuePtr) error {
+func (lsm *LSM) LogValueLogHead(ptr *kv.ValuePtr) error {
 	return lsm.levels.LogValueLogHead(ptr)
 }
 
@@ -250,12 +251,12 @@ func (lsm *LSM) ManifestManager() *manifest.Manager {
 }
 
 // ValueLogHead returns the persisted head pointer, if any.
-func (lsm *LSM) ValueLogHead() (utils.ValuePtr, bool) {
+func (lsm *LSM) ValueLogHead() (kv.ValuePtr, bool) {
 	meta := lsm.levels.ValueLogHead()
 	if !meta.Valid {
-		return utils.ValuePtr{}, false
+		return kv.ValuePtr{}, false
 	}
-	return utils.ValuePtr{Fid: meta.FileID, Offset: uint32(meta.Offset)}, true
+	return kv.ValuePtr{Fid: meta.FileID, Offset: uint32(meta.Offset)}, true
 }
 
 // ValueLogStatus returns manifest tracked value log metadata.
@@ -313,7 +314,7 @@ func (lsm *LSM) StartCompacter() {
 }
 
 // Set _
-func (lsm *LSM) Set(entry *utils.Entry) (err error) {
+func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
@@ -323,7 +324,7 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 	// check if the current memtable is full, if so, create a new memtable, and write the current memtable to immutables
 	// otherwise, write to the current memtable
 	if lsm.memTable.walSize+
-		int64(utils.EstimateWalCodecSize(entry)) > lsm.option.MemTableSize {
+		int64(kv.EstimateWalCodecSize(entry)) > lsm.option.MemTableSize {
 		lsm.Rotate()
 	}
 
@@ -334,14 +335,14 @@ func (lsm *LSM) Set(entry *utils.Entry) (err error) {
 }
 
 // Get _
-func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
+func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
 	var (
-		entry *utils.Entry
+		entry *kv.Entry
 		err   error
 	)
 	lsm.lock.RLock()

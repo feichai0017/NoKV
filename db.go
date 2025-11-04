@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -24,12 +25,12 @@ import (
 type (
 	// NoKV对外提供的功能集合
 	CoreAPI interface {
-		Set(data *utils.Entry) error
-		Get(key []byte) (*utils.Entry, error)
+		Set(data *kv.Entry) error
+		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
-		SetCF(cf utils.ColumnFamily, key, value []byte) error
-		GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error)
-		DelCF(cf utils.ColumnFamily, key []byte) error
+		SetCF(cf kv.ColumnFamily, key, value []byte) error
+		GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error)
+		DelCF(cf kv.ColumnFamily, key []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
 		Info() *Stats
 		Close() error
@@ -47,8 +48,8 @@ type (
 		stats            *Stats
 		flushChan        chan flushTask // For flushing memtables.
 		blockWrites      int32
-		vhead            *utils.ValuePtr
-		lastLoggedHead   utils.ValuePtr
+		vhead            *kv.ValuePtr
+		lastLoggedHead   kv.ValuePtr
 		headLogDelta     uint32
 		logRotates       int32
 		isClosed         uint32
@@ -193,7 +194,7 @@ func Open(opt *Options) *DB {
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	recoveredVersion := db.lsm.MaxVersion()
 	db.iterPool = newIteratorPool()
-	cfCount := int(utils.CFWrite) + 1
+	cfCount := int(kv.CFWrite) + 1
 	db.cfMetrics = make([]*cfCounters, cfCount)
 	for i := range db.cfMetrics {
 		db.cfMetrics[i] = &cfCounters{}
@@ -317,48 +318,48 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) Del(key []byte) error {
-	return db.DelCF(utils.CFDefault, key)
+	return db.DelCF(kv.CFDefault, key)
 }
 
 // DelCF deletes a key from the specified column family.
-func (db *DB) DelCF(cf utils.ColumnFamily, key []byte) error {
+func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
 	// 写入一个值为nil的entry 作为墓碑消息实现删除
-	e := utils.NewEntryWithCF(cf, key, nil)
-	e.Meta = utils.BitDelete
+	e := kv.NewEntryWithCF(cf, key, nil)
+	e.Meta = kv.BitDelete
 	err := db.Set(e)
 	e.DecrRef()
 	return err
 }
 
 // SetCF writes a key/value pair into the specified column family.
-func (db *DB) SetCF(cf utils.ColumnFamily, key, value []byte) error {
-	e := utils.NewEntryWithCF(cf, key, value)
+func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
+	e := kv.NewEntryWithCF(cf, key, value)
 	err := db.Set(e)
 	e.DecrRef()
 	return err
 }
 
-func (db *DB) Set(data *utils.Entry) error {
+func (db *DB) Set(data *kv.Entry) error {
 	if data == nil || len(data.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
 	// 做一些必要性的检查
 	// 如果value 大于一个阈值 则创建值指针，并将其写入vlog中
 	var (
-		vp  *utils.ValuePtr
+		vp  *kv.ValuePtr
 		err error
 	)
 	if data.CF.Valid() == false {
-		data.CF = utils.CFDefault
+		data.CF = kv.CFDefault
 	}
-	data.Key = utils.InternalKey(data.CF, data.Key, math.MaxUint32)
+	data.Key = kv.InternalKey(data.CF, data.Key, math.MaxUint32)
 	// 如果value不应该直接写入LSM 则先写入 vlog文件，这时必须保证vlog具有重放功能
 	// 以便于崩溃后恢复数据
 	if !db.shouldWriteValueToLSM(data) {
 		if vp, err = db.vlog.newValuePtr(data); err != nil {
 			return err
 		}
-		data.Meta |= utils.BitValuePointer
+		data.Meta |= kv.BitValuePointer
 		data.Value = vp.Encode()
 	}
 	if err := db.lsm.Set(data); err != nil {
@@ -376,24 +377,24 @@ func (db *DB) Set(data *utils.Entry) error {
 // SetVersionedEntry writes a value to the specified column family using the
 // provided version. It mirrors SetCF but allows callers to control the MVCC
 // timestamp embedded in the internal key.
-func (db *DB) SetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
+func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	entry := utils.NewEntryWithCF(cf, utils.SafeCopy(nil, key), utils.SafeCopy(nil, value))
-	entry.Key = utils.InternalKey(cf, entry.Key, version)
+	entry := kv.NewEntryWithCF(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value))
+	entry.Key = kv.InternalKey(cf, entry.Key, version)
 	entry.Meta = meta
 	defer entry.DecrRef()
 
-	if meta&utils.BitDelete == 0 && len(entry.Value) > 0 && !db.shouldWriteValueToLSM(entry) {
+	if meta&kv.BitDelete == 0 && len(entry.Value) > 0 && !db.shouldWriteValueToLSM(entry) {
 		vp, err := db.vlog.newValuePtr(entry)
 		if err != nil {
 			return err
 		}
-		entry.Meta |= utils.BitValuePointer
+		entry.Meta |= kv.BitValuePointer
 		entry.Value = vp.Encode()
 	}
 	if err := db.lsm.Set(entry); err != nil {
@@ -410,20 +411,20 @@ func (db *DB) SetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint6
 
 // DeleteVersionedEntry marks the specified version as deleted by writing a
 // tombstone record.
-func (db *DB) DeleteVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64) error {
-	return db.SetVersionedEntry(cf, key, version, nil, utils.BitDelete)
+func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) error {
+	return db.SetVersionedEntry(cf, key, version, nil, kv.BitDelete)
 }
 
 // GetVersionedEntry retrieves the value stored at the provided MVCC version.
 // The caller is responsible for releasing the returned entry via DecrRef.
-func (db *DB) GetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint64) (*utils.Entry, error) {
+func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
-	internalKey := utils.InternalKey(cf, key, version)
+	internalKey := kv.InternalKey(cf, key, version)
 	entry, err := db.lsm.Get(internalKey)
 	if err != nil {
 		return nil, err
@@ -431,44 +432,44 @@ func (db *DB) GetVersionedEntry(cf utils.ColumnFamily, key []byte, version uint6
 	if entry == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-	if utils.IsValuePtr(entry) {
-		var vp utils.ValuePtr
+	if kv.IsValuePtr(entry) {
+		var vp kv.ValuePtr
 		vp.Decode(entry.Value)
 		result, cb, err := db.vlog.read(&vp)
 		if err != nil {
 			if cb != nil {
-				utils.RunCallback(cb)
+				kv.RunCallback(cb)
 			}
 			entry.DecrRef()
 			return nil, err
 		}
-		entry.Value = utils.SafeCopy(nil, result)
+		entry.Value = kv.SafeCopy(nil, result)
 		if cb != nil {
-			utils.RunCallback(cb)
+			kv.RunCallback(cb)
 		}
 	}
-	cfStored, userKey, ts := utils.SplitInternalKey(entry.Key)
+	cfStored, userKey, ts := kv.SplitInternalKey(entry.Key)
 	entry.CF = cfStored
-	entry.Key = utils.SafeCopy(nil, userKey)
+	entry.Key = kv.SafeCopy(nil, userKey)
 	entry.Version = ts
 	return entry, nil
 }
-func (db *DB) Get(key []byte) (*utils.Entry, error) {
-	return db.GetCF(utils.CFDefault, key)
+func (db *DB) Get(key []byte) (*kv.Entry, error) {
+	return db.GetCF(kv.CFDefault, key)
 }
 
 // GetCF reads a key from the specified column family.
-func (db *DB) GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error) {
+func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
 
 	originKey := key
 	// 添加时间戳用于查询
-	internalKey := utils.InternalKey(cf, key, math.MaxUint32)
+	internalKey := kv.InternalKey(cf, key, math.MaxUint32)
 
 	var (
-		entry *utils.Entry
+		entry *kv.Entry
 		err   error
 	)
 	// 从LSM中查询entry，这时不确定entry是不是值指针
@@ -476,21 +477,21 @@ func (db *DB) GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error) {
 		return entry, err
 	}
 	// 检查从lsm拿到的value是否是value ptr,是则从vlog中拿值
-	if entry != nil && utils.IsValuePtr(entry) {
-		var vp utils.ValuePtr
+	if entry != nil && kv.IsValuePtr(entry) {
+		var vp kv.ValuePtr
 		vp.Decode(entry.Value)
 		result, cb, err := db.vlog.read(&vp)
-		defer utils.RunCallback(cb)
+		defer kv.RunCallback(cb)
 		if err != nil {
 			return nil, err
 		}
-		entry.Value = utils.SafeCopy(nil, result)
+		entry.Value = kv.SafeCopy(nil, result)
 	}
 
 	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
 	}
-	storedCF, _, ts := utils.SplitInternalKey(entry.Key)
+	storedCF, _, ts := kv.SplitInternalKey(entry.Key)
 	if storedCF.Valid() {
 		entry.CF = storedCF
 	} else {
@@ -506,7 +507,7 @@ func (db *DB) GetCF(cf utils.ColumnFamily, key []byte) (*utils.Entry, error) {
 }
 
 // 判断是否过期 是可删除
-func isDeletedOrExpiredByEntry(e *utils.Entry) bool {
+func isDeletedOrExpiredByEntry(e *kv.Entry) bool {
 	if e.Value == nil {
 		return true
 	}
@@ -518,7 +519,7 @@ func isDeletedOrExpiredByEntry(e *utils.Entry) bool {
 }
 
 func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
-	if meta&utils.BitDelete > 0 {
+	if meta&kv.BitDelete > 0 {
 		return true
 	}
 	if expiresAt == 0 {
@@ -538,11 +539,11 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 		return utils.ErrInvalidRequest
 	}
 	// Find head on disk
-	headKey := utils.InternalKey(utils.CFDefault, head, math.MaxUint64)
+	headKey := kv.InternalKey(kv.CFDefault, head, math.MaxUint64)
 	val, err := db.lsm.Get(headKey)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
-			val = utils.NewEntry(headKey, []byte{})
+			val = kv.NewEntry(headKey, []byte{})
 		} else {
 			return pkgerrors.Wrap(err, "Retrieving head from on-disk LSM")
 		}
@@ -550,7 +551,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	defer val.DecrRef()
 
 	// 内部key head 一定是value ptr 不需要检查内容
-	var head utils.ValuePtr
+	var head kv.ValuePtr
 	if len(val.Value) > 0 {
 		head.Decode(val.Value)
 	}
@@ -637,7 +638,7 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 		return
 	}
 	if db.lsm != nil {
-		internal := utils.InternalKey(utils.CFDefault, []byte(key), math.MaxUint32)
+		internal := kv.InternalKey(kv.CFDefault, []byte(key), math.MaxUint32)
 		db.lsm.Prefetch(internal, req.hot)
 	}
 	db.prefetchMu.Lock()
@@ -650,11 +651,11 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 	db.prefetchMu.Unlock()
 }
 
-func (db *DB) shouldWriteValueToLSM(e *utils.Entry) bool {
+func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
 	return int64(len(e.Value)) < db.opt.ValueThreshold
 }
 
-func (db *DB) sendToWriteCh(entries []*utils.Entry) (*request, error) {
+func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
 	if atomic.LoadInt32(&db.blockWrites) == 1 {
 		return nil, utils.ErrBlockedWrites
 	}
@@ -709,7 +710,7 @@ func (db *DB) applyThrottle(enable bool) {
 }
 
 // Check(kv.BatchSet(entries))
-func (db *DB) batchSet(entries []*utils.Entry) error {
+func (db *DB) batchSet(entries []*kv.Entry) error {
 	req, err := db.sendToWriteCh(entries)
 	if err != nil {
 		return err
@@ -904,9 +905,9 @@ func (db *DB) writeToLSM(b *request) error {
 
 	for i, entry := range b.Entries {
 		if db.shouldWriteValueToLSM(entry) { // Will include deletion / tombstone case.
-			entry.Meta = entry.Meta &^ utils.BitValuePointer
+			entry.Meta = entry.Meta &^ kv.BitValuePointer
 		} else {
-			entry.Meta = entry.Meta | utils.BitValuePointer
+			entry.Meta = entry.Meta | kv.BitValuePointer
 			entry.Value = b.Ptrs[i].Encode()
 		}
 		db.lsm.Set(entry)
@@ -918,7 +919,7 @@ func (db *DB) writeToLSM(b *request) error {
 // 结构体
 type flushTask struct {
 	mt           *utils.Skiplist
-	vptr         *utils.ValuePtr
+	vptr         *kv.ValuePtr
 	dropPrefixes [][]byte
 }
 
@@ -933,8 +934,8 @@ func (db *DB) pushHead(ft flushTask) error {
 
 	// Pick the max commit ts, so in case of crash, our read ts would be higher than all the
 	// commits.
-	headTs := utils.InternalKey(utils.CFDefault, head, uint64(time.Now().Unix()/1e9))
-	e := utils.NewEntry(headTs, val)
+	headTs := kv.InternalKey(kv.CFDefault, head, uint64(time.Now().Unix()/1e9))
+	e := kv.NewEntry(headTs, val)
 	ft.mt.Add(e)
 	e.DecrRef()
 	return nil
@@ -975,16 +976,16 @@ func (db *DB) IsClosed() bool {
 	return atomic.LoadUint32(&db.isClosed) == 1
 }
 
-func (db *DB) cfCounter(cf utils.ColumnFamily) *cfCounters {
+func (db *DB) cfCounter(cf kv.ColumnFamily) *cfCounters {
 	if db == nil {
 		return nil
 	}
 	if !cf.Valid() {
-		cf = utils.CFDefault
+		cf = kv.CFDefault
 	}
 	idx := int(cf)
 	if idx < 0 || idx >= len(db.cfMetrics) {
-		idx = int(utils.CFDefault)
+		idx = int(kv.CFDefault)
 	}
 	if db.cfMetrics[idx] == nil {
 		db.cfMetrics[idx] = &cfCounters{}
@@ -992,13 +993,13 @@ func (db *DB) cfCounter(cf utils.ColumnFamily) *cfCounters {
 	return db.cfMetrics[idx]
 }
 
-func (db *DB) recordCFWrite(cf utils.ColumnFamily, delta uint64) {
+func (db *DB) recordCFWrite(cf kv.ColumnFamily, delta uint64) {
 	if cnt := db.cfCounter(cf); cnt != nil {
 		atomic.AddUint64(&cnt.writes, delta)
 	}
 }
 
-func (db *DB) recordCFRead(cf utils.ColumnFamily, delta uint64) {
+func (db *DB) recordCFRead(cf kv.ColumnFamily, delta uint64) {
 	if cnt := db.cfCounter(cf); cnt != nil {
 		atomic.AddUint64(&cnt.reads, delta)
 	}
@@ -1009,7 +1010,7 @@ func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
 	if db == nil {
 		return stats
 	}
-	limit := int(utils.CFWrite) + 1
+	limit := int(kv.CFWrite) + 1
 	for idx := 0; idx < limit && idx < len(db.cfMetrics); idx++ {
 		cnt := db.cfMetrics[idx]
 		if cnt == nil {
@@ -1020,7 +1021,7 @@ func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
 		if writes == 0 && reads == 0 {
 			continue
 		}
-		cfName := utils.ColumnFamily(idx).String()
+		cfName := kv.ColumnFamily(idx).String()
 		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
 	}
 	return stats

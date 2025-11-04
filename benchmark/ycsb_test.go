@@ -36,17 +36,17 @@ func TestBenchmarkYCSB(t *testing.T) {
 		Engines:     engines,
 	}
 
-opts := ycsbEngineOptions{
-    BaseDir:            baseDir,
-    ValueSize:          cfg.ValueSize,
-    ValueThreshold:     *fValueThreshold,
-    SyncWrites:         *fSyncWrites,
-    BlockCacheMB:       *ycsbBlockCacheMB,
-    BadgerBlockCacheMB: *fBadgerBlockMB,
-    BadgerIndexCacheMB: *fBadgerIndexMB,
-    BadgerCompression:  strings.ToLower(*fBadgerCompression),
-    RocksDBCompression: strings.ToLower(*ycsbRocksCompression),
-}
+	opts := ycsbEngineOptions{
+		BaseDir:            baseDir,
+		ValueSize:          cfg.ValueSize,
+		ValueThreshold:     *fValueThreshold,
+		SyncWrites:         *fSyncWrites,
+		BlockCacheMB:       *ycsbBlockCacheMB,
+		BadgerBlockCacheMB: *fBadgerBlockMB,
+		BadgerIndexCacheMB: *fBadgerIndexMB,
+		BadgerCompression:  strings.ToLower(*fBadgerCompression),
+		RocksDBCompression: strings.ToLower(*ycsbRocksCompression),
+	}
 
 	results, err := runYCSBBenchmarks(cfg, opts)
 	if err != nil {

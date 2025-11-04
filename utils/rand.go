@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/feichai0017/NoKV/kv"
 )
 
 var (
@@ -47,11 +49,11 @@ func randStr(length int) string {
 }
 
 // 构建entry对象
-func BuildEntry() *Entry {
+func BuildEntry() *kv.Entry {
 	key := fmt.Appendf(nil, "%s%s", randStr(16), "12345678")
 	value := []byte(randStr(128))
 	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
-	e := NewEntry(key, value)
+	e := kv.NewEntry(key, value)
 	e.ExpiresAt = expiresAt
 	return e
 }

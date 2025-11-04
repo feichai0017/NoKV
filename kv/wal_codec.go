@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"bytes"
@@ -10,13 +10,11 @@ import (
 	"sync"
 )
 
-var (
-	crc32Pool = sync.Pool{
-		New: func() any {
-			return crc32.New(CastagnoliCrcTable)
-		},
-	}
-)
+var crc32Pool = sync.Pool{
+	New: func() any {
+		return crc32.New(CastagnoliCrcTable)
+	},
+}
 
 // CRC32 returns a Castagnoli hash from the shared pool.
 func CRC32() hash.Hash32 {
@@ -34,7 +32,7 @@ func PutCRC32(h hash.Hash32) {
 	crc32Pool.Put(h)
 }
 
-// LogEntry
+// LogEntry represents the callback signature used during WAL/vlog replay.
 type LogEntry func(e *Entry, vp *ValuePtr) error
 
 type WalHeader struct {
@@ -82,8 +80,8 @@ func (h *WalHeader) Decode(reader *HashReader) (int, error) {
 	return reader.BytesRead, nil
 }
 
-// WalCodec 写入wal文件的编码
-// | header | key | value | crc32 |
+// WalCodec writes the WAL entry encoding into the provided buffer.
+// Layout: | header | key | value | crc32 |
 func WalCodec(buf *bytes.Buffer, e *Entry) int {
 	buf.Reset()
 	n, err := EncodeEntryTo(buf, e)
@@ -94,7 +92,7 @@ func WalCodec(buf *bytes.Buffer, e *Entry) int {
 }
 
 // EncodeEntryTo streams the WAL entry encoding directly into the provided writer.
-// | header | key | value | crc32 |
+// Layout: | header | key | value | crc32 |
 func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	h := WalHeader{
 		KeyLen:    uint32(len(e.Key)),
@@ -159,59 +157,8 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	return total, nil
 }
 
-// EstimateWalCodecSize 预估当前kv 写入wal文件占用的空间大小
+// EstimateWalCodecSize estimates the encoded size of an entry in the WAL.
 func EstimateWalCodecSize(e *Entry) int {
 	return len(e.Key) + len(e.Value) + 8 /* ExpiresAt uint64 */ +
 		crc32.Size + maxHeaderSize
-}
-
-type HashReader struct {
-	R         io.Reader
-	H         hash.Hash32
-	BytesRead int // Number of bytes read.
-}
-
-func NewHashReader(r io.Reader) *HashReader {
-	hash := crc32.New(CastagnoliCrcTable)
-	return &HashReader{
-		R: r,
-		H: hash,
-	}
-}
-
-// Read reads len(p) bytes from the reader. Returns the number of bytes read, error on failure.
-func (t *HashReader) Read(p []byte) (int, error) {
-	n, err := t.R.Read(p)
-	if err != nil {
-		return n, err
-	}
-	t.BytesRead += n
-	return t.H.Write(p[:n])
-}
-
-// ReadByte reads exactly one byte from the reader. Returns error on failure.
-func (t *HashReader) ReadByte() (byte, error) {
-	b := make([]byte, 1)
-	_, err := t.Read(b)
-	return b[0], err
-}
-
-// Sum32 returns the sum32 of the underlying hash.
-func (t *HashReader) Sum32() uint32 {
-	return t.H.Sum32()
-}
-
-// IsZero _
-func (e *Entry) IsZero() bool {
-	return len(e.Key) == 0
-}
-
-// LogHeaderLen _
-func (e *Entry) LogHeaderLen() int {
-	return e.Hlen
-}
-
-// LogOffset _
-func (e *Entry) LogOffset() uint32 {
-	return e.Offset
 }

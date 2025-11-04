@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -12,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
 )
@@ -50,12 +50,12 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 				return err
 			}
 			if len(legacy.GetValue()) == 0 {
-				if err := db.DelCF(utils.CFDefault, legacy.GetKey()); err != nil {
+				if err := db.DelCF(entrykv.CFDefault, legacy.GetKey()); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := db.SetCF(utils.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
+			if err := db.SetCF(entrykv.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
 				return err
 			}
 		}
@@ -183,7 +183,7 @@ func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, s
 	req := &pb.KvCommitRequest{
 		Context: ctx,
 		Request: &pb.CommitRequest{
-			Keys:          [][]byte{utils.SafeCopy(nil, key)},
+			Keys:          [][]byte{entrykv.SafeCopy(nil, key)},
 			StartVersion:  startVersion,
 			CommitVersion: commitVersion,
 		},

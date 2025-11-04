@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"fmt"
@@ -85,17 +85,4 @@ func DecodeKeyCF(key []byte) (ColumnFamily, []byte, bool) {
 		}
 	}
 	return CFDefault, key, false
-}
-
-// InternalKey generates an LSM key carrying both CF prefix and timestamp.
-func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
-	return KeyWithTs(EncodeKeyWithCF(cf, key), ts)
-}
-
-// SplitInternalKey decodes column family, user key, and timestamp from an internal key.
-func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64) {
-	ts := ParseTs(internal)
-	base := ParseKey(internal)
-	cf, userKey, _ := DecodeKeyCF(base)
-	return cf, userKey, ts
 }

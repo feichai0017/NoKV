@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -16,7 +17,7 @@ type TxnIterator struct {
 
 	opt      IteratorOptions
 	item     Item
-	entry    utils.Entry
+	entry    kv.Entry
 	valueBuf []byte
 
 	lastKey []byte // Used to skip over multiple versions of the same key.
@@ -65,7 +66,7 @@ func (ri *readTsIterator) ensureVisible() {
 			ri.iter.Next()
 			continue
 		}
-		if utils.ParseTs(item.Entry().Key) > ri.readTs {
+		if kv.ParseTs(item.Entry().Key) > ri.readTs {
 			ri.iter.Next()
 			continue
 		}
@@ -179,9 +180,9 @@ func (it *TxnIterator) advance() {
 		}
 		it.item.valueBuf = it.item.valueBuf[:0]
 		entry := item.Entry()
-		baseKey := utils.ParseKey(entry.Key)
-		cf, userKey, _ := utils.DecodeKeyCF(baseKey)
-		version := utils.ParseTs(entry.Key)
+		baseKey := kv.ParseKey(entry.Key)
+		cf, userKey, _ := kv.DecodeKeyCF(baseKey)
+		version := kv.ParseTs(entry.Key)
 		if version > it.readTs {
 			it.iitr.Next()
 			continue
@@ -214,7 +215,7 @@ func (it *TxnIterator) advance() {
 		it.lastKey = append(it.lastKey[:0], userKey...)
 		it.valid = true
 		if it.txn != nil {
-			encoded := utils.EncodeKeyWithCF(it.entry.CF, it.entry.Key)
+			encoded := kv.EncodeKeyWithCF(it.entry.CF, it.entry.Key)
 			it.txn.addReadKey(encoded)
 			if it.txn.db != nil {
 				it.txn.db.recordRead(it.entry.Key)
@@ -226,7 +227,7 @@ func (it *TxnIterator) advance() {
 	it.latestTs = 0
 }
 
-func (it *TxnIterator) materializeEntry(entry *utils.Entry, cf utils.ColumnFamily, userKey []byte, version uint64) bool {
+func (it *TxnIterator) materializeEntry(entry *kv.Entry, cf kv.ColumnFamily, userKey []byte, version uint64) bool {
 	if entry == nil {
 		return false
 	}
@@ -235,25 +236,25 @@ func (it *TxnIterator) materializeEntry(entry *utils.Entry, cf utils.ColumnFamil
 	it.entry.Meta = entry.Meta
 	it.entry.ExpiresAt = entry.ExpiresAt
 	it.entry.Version = version
-	if utils.IsValuePtr(entry) {
+	if kv.IsValuePtr(entry) {
 		if it.opt.KeyOnly {
 			it.entry.Value = entry.Value
 			it.item.valueBuf = it.item.valueBuf[:0]
 		} else {
-			var vp utils.ValuePtr
+			var vp kv.ValuePtr
 			vp.Decode(entry.Value)
 			val, cb, err := it.txn.db.vlog.read(&vp)
 			if err != nil {
-				utils.RunCallback(cb)
+				kv.RunCallback(cb)
 				return false
 			}
 			it.valueBuf = append(it.valueBuf[:0], val...)
-			utils.RunCallback(cb)
+			kv.RunCallback(cb)
 			if len(it.valueBuf) == 0 {
 				return false
 			}
 			it.entry.Value = it.valueBuf
-			it.entry.Meta &^= utils.BitValuePointer
+			it.entry.Meta &^= kv.BitValuePointer
 			it.item.valueBuf = it.entry.Value
 		}
 	} else {
@@ -284,7 +285,7 @@ func (it *TxnIterator) Valid() bool {
 // ValidForPrefix returns false when iteration is done
 // or when the current key is not prefixed by the specified prefix.
 func (it *TxnIterator) ValidForPrefix(prefix []byte) bool {
-	return it.Valid() && bytes.HasPrefix(utils.ParseKey(it.item.Entry().Key), prefix)
+	return it.Valid() && bytes.HasPrefix(kv.ParseKey(it.item.Entry().Key), prefix)
 }
 
 // Close would close the iterator. It is important to call this when you're done with iteration.
@@ -323,7 +324,7 @@ func (it *TxnIterator) Next() {
 // Behavior would be reversed if iterating backwards.
 func (it *TxnIterator) Seek(key []byte) uint64 {
 	if len(key) > 0 && it.txn != nil {
-		encoded := utils.EncodeKeyWithCF(utils.CFDefault, key)
+		encoded := kv.EncodeKeyWithCF(kv.CFDefault, key)
 		it.txn.addReadKey(encoded)
 	}
 	it.lastKey = it.lastKey[:0]

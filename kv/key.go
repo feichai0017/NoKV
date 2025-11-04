@@ -1,4 +1,4 @@
-package utils
+package kv
 
 import (
 	"bytes"
@@ -21,7 +21,6 @@ func ParseKey(key []byte) []byte {
 	if len(key) < 8 {
 		return key
 	}
-
 	return key[:len(key)-8]
 }
 
@@ -49,16 +48,27 @@ func KeyWithTs(key []byte, ts uint64) []byte {
 	return out
 }
 
-// MemHash is the hash function used by go map, it utilizes available hardware instructions(behaves
-// as aeshash if aes instruction is available).
+// InternalKey generates an LSM key carrying both CF prefix and timestamp.
+func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
+	return KeyWithTs(EncodeKeyWithCF(cf, key), ts)
+}
+
+// SplitInternalKey decodes column family, user key, and timestamp from an internal key.
+func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64) {
+	ts := ParseTs(internal)
+	base := ParseKey(internal)
+	cf, userKey, _ := DecodeKeyCF(base)
+	return cf, userKey, ts
+}
+
+// MemHash is the hash function used by go map, it utilizes available hardware instructions.
 // NOTE: The hash seed changes for every process. So, this cannot be used as a persistent hash.
 func MemHash(data []byte) uint64 {
 	ss := (*stringStruct)(unsafe.Pointer(&data))
 	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
 }
 
-// MemHashString is the hash function used by go map, it utilizes available hardware instructions
-// (behaves as aeshash if aes instruction is available).
+// MemHashString is the hash function used by go map, it utilizes available hardware instructions.
 // NOTE: The hash seed changes for every process. So, this cannot be used as a persistent hash.
 func MemHashString(str string) uint64 {
 	ss := (*stringStruct)(unsafe.Pointer(&str))

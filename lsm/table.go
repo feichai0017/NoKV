@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/file"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -94,7 +95,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	if created := t.ss.GetCreatedAt(); created != nil {
 		t.createdAt = *created
 	}
-	t.minKey = utils.SafeCopy(nil, t.ss.MinKey())
+	t.minKey = kv.SafeCopy(nil, t.ss.MinKey())
 
 	// get the max key of sst, need to use iterator
 	itr := t.NewIterator(&utils.Options{}) // default is descending
@@ -103,7 +104,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	itr.Rewind()
 	utils.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
 	maxKey := append([]byte(nil), itr.Item().Entry().Key...)
-	t.maxKey = utils.SafeCopy(nil, maxKey)
+	t.maxKey = kv.SafeCopy(nil, maxKey)
 	t.ss.SetMaxKey(maxKey)
 
 	return t
@@ -196,10 +197,10 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.createdAt = *created
 		}
 		if len(t.minKey) == 0 {
-			t.minKey = utils.SafeCopy(nil, ss.MinKey())
+			t.minKey = kv.SafeCopy(nil, ss.MinKey())
 		}
 		if len(t.maxKey) == 0 {
-			t.maxKey = utils.SafeCopy(nil, ss.MaxKey())
+			t.maxKey = kv.SafeCopy(nil, ss.MaxKey())
 		}
 	}
 	t.ss = ss
@@ -257,7 +258,7 @@ func (t *table) pinSSTable() (*file.SSTable, func(), error) {
 }
 
 // Search search for a key in the table
-func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error) {
+func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
 	// get the index
@@ -287,8 +288,8 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *utils.Entry, err error
 		return nil, utils.ErrKeyNotFound
 	}
 
-	if utils.SameKey(key, iter.Item().Entry().Key) {
-		if version := utils.ParseTs(iter.Item().Entry().Key); *maxVs < version {
+	if kv.SameKey(key, iter.Item().Entry().Key) {
+		if version := kv.ParseTs(iter.Item().Entry().Key); *maxVs < version {
 			*maxVs = version
 			return iter.Item().Entry(), nil
 		}
@@ -347,7 +348,7 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	// +--------------------------------+
 
 	readPos := len(b.data) - 4 // First read checksum length.
-	b.chkLen = int(utils.BytesToU32(b.data[readPos : readPos+4]))
+	b.chkLen = int(kv.BytesToU32(b.data[readPos : readPos+4]))
 
 	if b.chkLen > len(b.data) {
 		return nil, errors.New("invalid checksum length. Either the data is " +
@@ -364,11 +365,11 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	}
 
 	readPos -= 4
-	numEntries := int(utils.BytesToU32(b.data[readPos : readPos+4]))
+	numEntries := int(kv.BytesToU32(b.data[readPos : readPos+4]))
 	entriesIndexStart := readPos - (numEntries * 4)
 	entriesIndexEnd := entriesIndexStart + numEntries*4
 
-	b.entryOffsets = utils.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
+	b.entryOffsets = kv.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
 
 	b.entriesIndexStart = entriesIndexStart
 

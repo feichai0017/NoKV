@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -32,7 +33,7 @@ func (b *embeddedBackend) Get(key []byte) (*redisValue, error) {
 		return nil, err
 	}
 	defer entry.DecrRef()
-	if utils.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+	if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return &redisValue{Found: false}, nil
 	}
 	val := append([]byte(nil), entry.Value...)
@@ -57,7 +58,7 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 			case err == nil:
 				exists = true
 				defer item.Entry().DecrRef()
-				if utils.IsDeletedOrExpired(item.Entry().Meta, item.Entry().ExpiresAt) {
+				if kv.IsDeletedOrExpired(item.Entry().Meta, item.Entry().ExpiresAt) {
 					exists = false
 				}
 			case errors.Is(err, utils.ErrKeyNotFound):
@@ -71,7 +72,7 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 			if args.XX && !exists {
 				return errConditionNotMet
 			}
-			e := utils.NewEntry(args.Key, append([]byte(nil), args.Value...))
+			e := kv.NewEntry(args.Key, append([]byte(nil), args.Value...))
 			if args.ExpireAt > 0 {
 				e.ExpiresAt = args.ExpireAt
 			}
@@ -87,7 +88,7 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 		}
 	}
 
-	entry := utils.NewEntry(args.Key, append([]byte(nil), args.Value...))
+	entry := kv.NewEntry(args.Key, append([]byte(nil), args.Value...))
 	if args.ExpireAt > 0 {
 		entry.ExpiresAt = args.ExpireAt
 	}
@@ -110,7 +111,7 @@ func (b *embeddedBackend) Del(keys [][]byte) (int64, error) {
 			case err == nil:
 				entry := item.Entry()
 				defer entry.DecrRef()
-				if utils.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					if err := txn.Delete(key); err != nil {
 						return err
 					}
@@ -146,7 +147,7 @@ func (b *embeddedBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 			case err == nil:
 				entry := item.Entry()
 				defer entry.DecrRef()
-				if utils.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					out[i] = &redisValue{Found: false}
 					continue
 				}
@@ -181,7 +182,7 @@ func (b *embeddedBackend) MSet(pairs [][2][]byte) error {
 			if len(pair[0]) == 0 {
 				return utils.ErrEmptyKey
 			}
-			entry := utils.NewEntry(pair[0], append([]byte(nil), pair[1]...))
+			entry := kv.NewEntry(pair[0], append([]byte(nil), pair[1]...))
 			if err := txn.SetEntry(entry); err != nil {
 				return err
 			}
@@ -201,7 +202,7 @@ func (b *embeddedBackend) Exists(keys [][]byte) (int64, error) {
 			case err == nil:
 				entry := item.Entry()
 				defer entry.DecrRef()
-				if utils.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					continue
 				}
 				count++
@@ -234,7 +235,7 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 			existing = true
 			defer item.Entry().DecrRef()
 			entry := item.Entry()
-			if utils.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+			if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 				existing = false
 			} else if len(entry.Value) > 0 {
 				parsed, perr := strconvParseIntSafe(entry.Value)
@@ -258,7 +259,7 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 		}
 
 		result = current + delta
-		entry := utils.NewEntry(key, []byte(strconv.FormatInt(result, 10)))
+		entry := kv.NewEntry(key, []byte(strconv.FormatInt(result, 10)))
 		if existing {
 			entry.ExpiresAt = expires
 		}
