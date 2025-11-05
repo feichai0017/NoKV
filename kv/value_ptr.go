@@ -2,7 +2,6 @@ package kv
 
 import (
 	"encoding/binary"
-	"reflect"
 	"time"
 	"unsafe"
 )
@@ -16,6 +15,13 @@ const (
 	vptrSize           = unsafe.Sizeof(ValuePtr{})
 )
 
+// ValuePtr is a pointer to a value in the value log.
+// The encoded format of a ValuePtr is:
+// +-----+--------+-----+
+// | Len | Offset | Fid |
+// +-----+--------+-----+
+// | 4B  | 4B     | 4B  |
+// +-----+--------+-----+
 type ValuePtr struct {
 	Len    uint32
 	Offset uint32
@@ -70,12 +76,7 @@ func U32SliceToBytes(u32s []uint32) []byte {
 	if len(u32s) == 0 {
 		return nil
 	}
-	var b []byte
-	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-	hdr.Len = len(u32s) * 4
-	hdr.Cap = hdr.Len
-	hdr.Data = uintptr(unsafe.Pointer(&u32s[0]))
-	return b
+	return unsafe.Slice((*byte)(unsafe.Pointer(&u32s[0])), len(u32s)*4)
 }
 
 // U32ToBytes converts the given Uint32 to bytes
@@ -97,12 +98,7 @@ func BytesToU32Slice(b []byte) []uint32 {
 	if len(b) == 0 {
 		return nil
 	}
-	var u32s []uint32
-	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&u32s))
-	hdr.Len = len(b) / 4
-	hdr.Cap = hdr.Len
-	hdr.Data = uintptr(unsafe.Pointer(&b[0]))
-	return u32s
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
 // RunCallback runs callback if not nil.

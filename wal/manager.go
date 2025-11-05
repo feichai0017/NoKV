@@ -114,6 +114,18 @@ const (
 )
 
 // Record describes a typed WAL payload.
+//
+// The WAL record is stored on disk in the following format:
+//
+//  +--------+-----------+-----------+---------+
+//  | Length | Type      | Payload   | CRC32   |
+//  | [4]byte| [1]byte   | [N]byte   | [4]byte |
+//  +--------+-----------+-----------+---------+
+//
+// - Length: The length of the Type and Payload fields.
+// - Type: The type of the record, as defined by RecordType.
+// - Payload: The record's data.
+// - CRC32: A CRC32 checksum of the Type and Payload.
 type Record struct {
 	Type    RecordType
 	Payload []byte
