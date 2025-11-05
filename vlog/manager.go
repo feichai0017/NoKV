@@ -2,7 +2,6 @@ package vlog
 
 import (
 	"bytes"
-	"encoding/binary"
 	stderrors "errors"
 	"fmt"
 	"io"
@@ -164,34 +163,6 @@ func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 		m.maxFid = fid
 	}
 	return lf, nil
-}
-
-func (m *Manager) Append(data []byte) (*kv.ValuePtr, error) {
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-
-	if hook := m.hooks.BeforeAppend; hook != nil {
-		if err := hook(m, data); err != nil {
-			return nil, err
-		}
-	}
-
-	if m.active == nil {
-		if _, err := m.create(m.maxFid + 1); err != nil {
-			return nil, err
-		}
-		m.active = m.files[m.maxFid]
-		m.activeID = m.maxFid
-		m.offset = 0
-	}
-
-	off := m.offset
-	if err := m.active.Write(off, data); err != nil {
-		return nil, err
-	}
-	m.offset += uint32(len(data))
-
-	return &kv.ValuePtr{Fid: m.activeID, Offset: off, Len: uint32(len(data))}, nil
 }
 
 // AppendEntry encodes and appends the provided entry directly into the active value log.
@@ -724,22 +695,6 @@ func (m *Manager) ListFIDs() []uint32 {
 	}
 	slices.Sort(fids)
 	return fids
-}
-
-func EncodeHead(fid, offset uint32) []byte {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint32(buf[:4], fid)
-	binary.BigEndian.PutUint32(buf[4:], offset)
-	return buf
-}
-
-func DecodeHead(data []byte) (uint32, uint32) {
-	if len(data) < 8 {
-		return 0, 0
-	}
-	fid := binary.BigEndian.Uint32(data[:4])
-	offset := binary.BigEndian.Uint32(data[4:])
-	return fid, offset
 }
 
 func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, error) {
