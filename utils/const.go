@@ -3,8 +3,6 @@ package utils
 import (
 	"math"
 	"os"
-
-	"github.com/feichai0017/NoKV/kv"
 )
 
 const (
@@ -33,16 +31,9 @@ const (
 	KVWriteChCapacity        = 1000
 )
 
-// meta
-const (
-	BitDelete       = kv.BitDelete
-	BitValuePointer = kv.BitValuePointer
-)
 
 // codec
 var (
 	MagicText    = [4]byte{'H', 'A', 'R', 'D'}
 	MagicVersion = uint32(1)
-	// CastagnoliCrcTable is a CRC32 polynomial table
-	CastagnoliCrcTable = kv.CastagnoliCrcTable
 )

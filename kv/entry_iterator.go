@@ -2,10 +2,7 @@ package kv
 
 import (
 	"bufio"
-	"encoding/binary"
-	"errors"
 	"io"
-	"math"
 )
 
 // EntryIterator sequentially decodes entries stored using the unified
@@ -42,116 +39,15 @@ func (it *EntryIterator) Next() bool {
 	}
 	it.releaseCurrent()
 
-	hashReader := NewHashReader(it.reader)
-
-	readVarint := func(allowEOF bool) (uint64, error) {
-		val, err := binary.ReadUvarint(hashReader)
-		if err == nil {
-			return val, nil
-		}
-		switch {
-		case errors.Is(err, io.EOF):
-			if allowEOF {
-				return 0, io.EOF
-			}
-			return 0, ErrPartialEntry
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			return 0, ErrPartialEntry
-		default:
-			return 0, err
-		}
-	}
-
-	klen, err := readVarint(true)
+	// Delegate the complex decoding logic to DecodeEntryFrom
+	entry, recordLen, err := DecodeEntryFrom(it.reader)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			it.err = io.EOF
-			return false
-		}
-		it.err = err
-		return false
-	}
-	vlen, err := readVarint(false)
-	if err != nil {
-		it.err = err
-		return false
-	}
-	meta, err := readVarint(false)
-	if err != nil {
-		it.err = err
-		return false
-	}
-	expiresAt, err := readVarint(false)
-	if err != nil {
-		it.err = err
-		return false
-	}
-
-	if klen > math.MaxUint32 || vlen > math.MaxUint32 || meta > math.MaxUint8 {
-		it.err = ErrPartialEntry
-		return false
-	}
-
-	keyLen := int(klen)
-	valLen := int(vlen)
-
-	entry := EntryPool.Get().(*Entry)
-	entry.IncrRef()
-	entry.Version = 0
-	entry.ValThreshold = 0
-	entry.Hlen = hashReader.BytesRead
-	entry.Offset = 0
-	entry.Meta = byte(meta)
-	entry.ExpiresAt = expiresAt
-
-	if cap(entry.Key) < keyLen {
-		entry.Key = make([]byte, keyLen)
-	} else {
-		entry.Key = entry.Key[:keyLen]
-	}
-	if _, err := io.ReadFull(hashReader, entry.Key); err != nil {
-		entry.DecrRef()
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			it.err = ErrPartialEntry
-		} else {
-			it.err = err
-		}
-		return false
-	}
-
-	if cap(entry.Value) < valLen {
-		entry.Value = make([]byte, valLen)
-	} else {
-		entry.Value = entry.Value[:valLen]
-	}
-	if _, err := io.ReadFull(hashReader, entry.Value); err != nil {
-		entry.DecrRef()
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			it.err = ErrPartialEntry
-		} else {
-			it.err = err
-		}
-		return false
-	}
-
-	var crcBuf [4]byte
-	if _, err := io.ReadFull(it.reader, crcBuf[:]); err != nil {
-		entry.DecrRef()
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			it.err = ErrPartialEntry
-		} else {
-			it.err = err
-		}
-		return false
-	}
-	if BytesToU32(crcBuf[:]) != hashReader.Sum32() {
-		entry.DecrRef()
-		it.err = ErrBadChecksum
+		it.err = err // Store the terminal error (e.g., io.EOF)
 		return false
 	}
 
 	it.current = entry
-	it.recordLen = uint32(entry.Hlen) + uint32(len(entry.Key)) + uint32(len(entry.Value)) + 4
+	it.recordLen = recordLen
 	return true
 }
 

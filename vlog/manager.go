@@ -509,8 +509,8 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 
 	stats.SkippedMiB = skipped
 
-	switch {
-	case err == nil, err == utils.ErrStop:
+	switch  err{
+	case nil, utils.ErrStop:
 		return stats, nil
 	default:
 		return nil, err
@@ -587,18 +587,18 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	if _, err := lf.Seek(int64(start), io.SeekStart); err != nil {
 		return 0, err
 	}
-	stream := kv.NewEntryIterator(lf.FD())
-	defer stream.Close()
+	eIter := kv.NewEntryIterator(lf.FD())
+	defer eIter.Close()
 
 	offset := start
 	validEnd := offset
-	for stream.Next() {
-		recordLen := stream.RecordLen()
+	for eIter.Next() {
+		recordLen := eIter.RecordLen()
 		validEnd = offset + recordLen
 		offset = validEnd
 	}
 
-	switch err := stream.Err(); err {
+	switch err := eIter.Err(); err {
 	case nil, io.EOF:
 		return validEnd, nil
 	case kv.ErrPartialEntry, kv.ErrBadChecksum:
@@ -623,7 +623,7 @@ func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
 		}
 		n, err := fd.ReadAt(buf[:toRead], offset)
 		if n > 0 {
-			for i := 0; i < n; i++ {
+			for i := range n {
 				if buf[i] != 0 {
 					return uint32(offset) + uint32(i), nil
 				}
