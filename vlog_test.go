@@ -149,11 +149,9 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 
 	vlog := db.vlog
 	active := vlog.manager.ActiveFID()
-	lf, ok := vlog.manager.LogFile(active)
-	require.True(t, ok, "active log file missing")
 
 	var captured []*kvpkg.Entry
-	_, err := vlog.iterate(lf, kvpkg.ValueLogHeaderSize, func(e *kvpkg.Entry, vp *kvpkg.ValuePtr) error {
+	_, err := vlog.manager.Iterate(active, kvpkg.ValueLogHeaderSize, func(e *kvpkg.Entry, vp *kvpkg.ValuePtr) error {
 		captured = append(captured, e)
 		return nil
 	})
@@ -174,7 +172,7 @@ func TestDecodeWalEntryReleasesEntries(t *testing.T) {
 	require.NoError(t, err)
 	orig.DecrRef()
 
-	entry, _, _, err := decodeWalEntry(payload)
+	entry, err := kvpkg.DecodeEntry(payload)
 	require.NoError(t, err)
 	entry.DecrRef()
 
