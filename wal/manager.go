@@ -435,57 +435,36 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 		return err
 	}
 	defer f.Close()
-	reader := bufio.NewReader(f)
+
+	stream := NewRecordStream(f, m.bufferSize)
+	defer stream.Close()
+
 	var offset int64
-	for {
-		var lenBuf [4]byte
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return nil
-			}
-			return err
-		}
-		length := binary.BigEndian.Uint32(lenBuf[:])
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return nil
-			}
-			return err
-		}
-		var crcBuf [4]byte
-		if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return nil
-			}
-			return err
-		}
-		expected := binary.BigEndian.Uint32(crcBuf[:])
-		if length == 0 {
-			return fmt.Errorf("wal: empty record segment=%d offset=%d", id, offset)
-		}
-		hasher := crc32.New(m.crcTable)
-		if _, err := hasher.Write([]byte{payload[0]}); err != nil {
-			return err
-		}
-		if _, err := hasher.Write(payload[1:]); err != nil {
-			return err
-		}
-		if expected != hasher.Sum32() {
-			return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
-		}
-		recType := RecordType(payload[0])
-		data := payload[1:]
+	for stream.Next() {
+		length := stream.Length()
+		recType := stream.Type()
+		payload := append([]byte{}, stream.Payload()...)
 		info := EntryInfo{
 			SegmentID: id,
 			Offset:    offset,
 			Length:    length,
 			Type:      recType,
 		}
-		if err := fn(info, data); err != nil {
+		if err := fn(info, payload); err != nil {
 			return err
 		}
 		offset += int64(length) + 8
+	}
+
+	switch err := stream.Err(); err {
+	case nil, io.EOF:
+		return nil
+	case ErrPartialRecord:
+		return nil
+	case kv.ErrBadChecksum:
+		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
+	default:
+		return err
 	}
 }
 
@@ -557,50 +536,24 @@ func verifySegment(path string) error {
 		return err
 	}
 	defer f.Close()
-	reader := bufio.NewReader(f)
+
+	stream := NewRecordStream(f, defaultBufferSize)
+	defer stream.Close()
+
 	var offset int64
-	for {
-		start := offset
-		var lenBuf [4]byte
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			if err == io.ErrUnexpectedEOF {
-				return f.Truncate(start)
-			}
-			return fmt.Errorf("wal verify length %s: %w", filepath.Base(path), err)
-		}
-		length := binary.BigEndian.Uint32(lenBuf[:])
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return f.Truncate(start)
-			}
-			return fmt.Errorf("wal verify payload %s: %w", filepath.Base(path), err)
-		}
-		var crcBuf [4]byte
-		if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return f.Truncate(start)
-			}
-			return fmt.Errorf("wal verify checksum %s: %w", filepath.Base(path), err)
-		}
-		expected := binary.BigEndian.Uint32(crcBuf[:])
-		if length == 0 {
-			return fmt.Errorf("wal: empty record verifying %s at offset %d", filepath.Base(path), start)
-		}
-		hasher := crc32.New(kv.CastagnoliCrcTable)
-		if _, err := hasher.Write([]byte{payload[0]}); err != nil {
-			return fmt.Errorf("wal: checksum write type %s: %w", filepath.Base(path), err)
-		}
-		if _, err := hasher.Write(payload[1:]); err != nil {
-			return fmt.Errorf("wal: checksum write payload %s: %w", filepath.Base(path), err)
-		}
-		if expected != hasher.Sum32() {
-			return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), start)
-		}
-		offset = start + int64(length) + 8
+	for stream.Next() {
+		offset += int64(stream.Length()) + 8
+	}
+
+	switch err := stream.Err(); err {
+	case nil, io.EOF:
+		return nil
+	case ErrPartialRecord:
+		return f.Truncate(offset)
+	case kv.ErrBadChecksum:
+		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
+	default:
+		return err
 	}
 }
 

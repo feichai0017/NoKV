@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
@@ -413,6 +414,107 @@ func (m *Manager) Iterate(fid uint32, offset uint32, fn kv.LogEntry) (uint32, er
 		return 0, err
 	}
 	return iterateLogFile(lf, offset, fn)
+}
+
+// SampleOptions controls value-log sampling behaviour.
+type SampleOptions struct {
+	SizeRatio     float64
+	CountRatio    float64
+	FromBeginning bool
+	MaxEntries    uint32
+}
+
+// SampleStats captures sampling totals.
+type SampleStats struct {
+	TotalMiB    float64
+	DiscardMiB  float64
+	Count       int
+	SkippedMiB  float64
+	SizeWindow  float64
+	CountWindow int
+}
+
+// SampleCallback determines whether an entry contributes to the discard total.
+type SampleCallback func(e *kv.Entry, vp *kv.ValuePtr) (bool, error)
+
+// Sample iterates over a subset of entries in the given segment using the
+// provided options, returning aggregate statistics and invoking the callback for
+// each sampled entry. The callback's boolean return value indicates whether the
+// entry should count towards the discard total.
+func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*SampleStats, error) {
+	if cb == nil {
+		return nil, fmt.Errorf("vlog manager sample: nil callback")
+	}
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return nil, err
+	}
+
+	size := lf.Size()
+
+	stats := &SampleStats{}
+
+	var sizeLimit float64
+	if opt.SizeRatio > 0 {
+		sizeLimit = (float64(size) / float64(utils.Mi)) * opt.SizeRatio
+		stats.SizeWindow = sizeLimit
+	}
+
+	var countLimit int
+	if opt.CountRatio > 0 && opt.MaxEntries > 0 {
+		countLimit = int(float64(opt.MaxEntries) * opt.CountRatio)
+		if countLimit > 0 {
+			stats.CountWindow = countLimit
+		}
+	}
+
+	var skipMiB float64
+	if !opt.FromBeginning && size > 0 {
+		skipBytes := float64(rand.Int63n(size))
+		skipBytes -= float64(size) * opt.SizeRatio
+		if skipBytes < 0 {
+			skipBytes = 0
+		}
+		skipMiB = skipBytes / float64(utils.Mi)
+	}
+
+	var skipped float64
+	_, err = iterateLogFile(lf, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
+		esz := float64(vp.Len) / float64(utils.Mi)
+
+		if skipped < skipMiB {
+			skipped += esz
+			return nil
+		}
+
+		if countLimit > 0 && stats.Count >= countLimit {
+			return utils.ErrStop
+		}
+		if sizeLimit > 0 && stats.TotalMiB >= sizeLimit {
+			return utils.ErrStop
+		}
+
+		stats.TotalMiB += esz
+		stats.Count++
+
+		discard, err := cb(e, vp)
+		if err != nil {
+			return err
+		}
+		if discard {
+			stats.DiscardMiB += esz
+		}
+		return nil
+	})
+
+	stats.SkippedMiB = skipped
+
+	switch {
+	case err == nil, err == utils.ErrStop:
+		return stats, nil
+	default:
+		return nil, err
+	}
 }
 
 // VerifyDir scans all value log segments and truncates any partially written
