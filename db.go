@@ -239,6 +239,12 @@ func Open(opt *Options) *DB {
 	if db.walWatchdog != nil {
 		db.walWatchdog.start()
 	}
+	if db.opt.ValueLogGCInterval > 0 {
+		if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
+			db.vlog.lfDiscardStats.closer.Add(1)
+			go db.runValueLogGCPeriodically()
+		}
+	}
 	return db
 }
 
@@ -558,6 +564,32 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 
 	// Pick a log file and run GC
 	return db.vlog.runGC(discardRatio, &head)
+}
+
+func (db *DB) runValueLogGCPeriodically() {
+	if db.vlog == nil || db.vlog.lfDiscardStats == nil || db.vlog.lfDiscardStats.closer == nil {
+		return
+	}
+	defer db.vlog.lfDiscardStats.closer.Done()
+
+	ticker := time.NewTicker(db.opt.ValueLogGCInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			err := db.RunValueLogGC(db.opt.ValueLogGCDiscardRatio)
+			if err != nil {
+				if err == utils.ErrNoRewrite {
+					db.vlog.logf("No rewrite on GC.")
+				} else {
+					utils.Err(err)
+				}
+			}
+		case <-db.vlog.lfDiscardStats.closer.CloseSignal:
+			return
+		}
+	}
 }
 
 func (db *DB) recordRead(key []byte) {
