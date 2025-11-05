@@ -587,7 +587,7 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	if _, err := lf.Seek(int64(start), io.SeekStart); err != nil {
 		return 0, err
 	}
-	stream := kv.NewEntryStream(lf.FD())
+	stream := kv.NewEntryIterator(lf.FD())
 	defer stream.Close()
 
 	offset := start
@@ -757,7 +757,7 @@ func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, er
 		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", lf.FileName())
 	}
 
-	stream := kv.NewEntryStream(lf.FD())
+	stream := kv.NewEntryIterator(lf.FD())
 	defer stream.Close()
 
 	validEndOffset := offset

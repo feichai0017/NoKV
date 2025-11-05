@@ -17,9 +17,9 @@ var (
 	ErrEmptyRecord = errors.New("wal: empty record")
 )
 
-// RecordStream provides iterator-style access over WAL records stored in the
+// RecordIterator provides iterator-style access over WAL records stored in the
 // | length (4B) | type (1B) | payload | crc32 (4B) | layout.
-type RecordStream struct {
+type RecordIterator struct {
 	reader  *bufio.Reader
 	buffer  []byte
 	recType RecordType
@@ -27,10 +27,10 @@ type RecordStream struct {
 	err     error
 }
 
-// NewRecordStream constructs a RecordStream using the provided reader.
-func NewRecordStream(r io.Reader, bufSize int) *RecordStream {
+// NewRecordIterator constructs an iterator over WAL records using the provided reader.
+func NewRecordIterator(r io.Reader, bufSize int) *RecordIterator {
 	if r == nil {
-		return &RecordStream{err: io.EOF}
+		return &RecordIterator{err: io.EOF}
 	}
 	br, ok := r.(*bufio.Reader)
 	if !ok {
@@ -39,11 +39,11 @@ func NewRecordStream(r io.Reader, bufSize int) *RecordStream {
 		}
 		br = bufio.NewReaderSize(r, bufSize)
 	}
-	return &RecordStream{reader: br}
+	return &RecordIterator{reader: br}
 }
 
 // Next advances the stream to the next record.
-func (rs *RecordStream) Next() bool {
+func (rs *RecordIterator) Next() bool {
 	if rs == nil || rs.err != nil {
 		return false
 	}
@@ -113,8 +113,8 @@ func (rs *RecordStream) Next() bool {
 	return true
 }
 
-// Payload returns the record payload excluding the record type byte.
-func (rs *RecordStream) Payload() []byte {
+// Record returns a copy of the record payload excluding the type byte.
+func (rs *RecordIterator) Record() []byte {
 	if rs == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func (rs *RecordStream) Payload() []byte {
 }
 
 // Type returns the record type of the current record.
-func (rs *RecordStream) Type() RecordType {
+func (rs *RecordIterator) Type() RecordType {
 	if rs == nil {
 		return RecordTypeEntry
 	}
@@ -133,7 +133,7 @@ func (rs *RecordStream) Type() RecordType {
 }
 
 // Length returns the encoded payload length (type byte + payload bytes).
-func (rs *RecordStream) Length() uint32 {
+func (rs *RecordIterator) Length() uint32 {
 	if rs == nil {
 		return 0
 	}
@@ -141,7 +141,7 @@ func (rs *RecordStream) Length() uint32 {
 }
 
 // Err returns the terminal error for the stream.
-func (rs *RecordStream) Err() error {
+func (rs *RecordIterator) Err() error {
 	if rs == nil {
 		return nil
 	}
@@ -149,7 +149,7 @@ func (rs *RecordStream) Err() error {
 }
 
 // Close releases resources held by the stream.
-func (rs *RecordStream) Close() error {
+func (rs *RecordIterator) Close() error {
 	if rs == nil {
 		return nil
 	}

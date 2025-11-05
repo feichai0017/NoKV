@@ -445,14 +445,14 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	}
 	defer f.Close()
 
-	stream := NewRecordStream(f, m.bufferSize)
+    stream := NewRecordIterator(f, m.bufferSize)
 	defer stream.Close()
 
 	var offset int64
 	for stream.Next() {
-		length := stream.Length()
-		recType := stream.Type()
-		payload := append([]byte{}, stream.Payload()...)
+        length := stream.Length()
+        recType := stream.Type()
+        payload := append([]byte{}, stream.Record()...)
 		info := EntryInfo{
 			SegmentID: id,
 			Offset:    offset,
@@ -546,7 +546,7 @@ func verifySegment(path string) error {
 	}
 	defer f.Close()
 
-	stream := NewRecordStream(f, defaultBufferSize)
+    stream := NewRecordIterator(f, defaultBufferSize)
 	defer stream.Close()
 
 	var offset int64
