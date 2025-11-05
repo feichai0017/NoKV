@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	stderrors "errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -291,6 +290,16 @@ func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {
 	return lf, lf.Lock.RUnlock, nil
 }
 
+func (m *Manager) getFile(fid uint32) (*file.LogFile, error) {
+	m.filesLock.RLock()
+	lf, ok := m.files[fid]
+	m.filesLock.RUnlock()
+	if !ok {
+		return nil, pkgerrors.Errorf("value log file %d not found", fid)
+	}
+	return lf, nil
+}
+
 func (m *Manager) Remove(fid uint32) error {
 	m.filesLock.Lock()
 	lf, ok := m.files[fid]
@@ -348,6 +357,63 @@ func (m *Manager) Head() kv.ValuePtr {
 		Fid:    m.activeID,
 		Offset: m.offset,
 	}
+}
+
+// SegmentSize reports the current size of the segment identified by fid.
+func (m *Manager) SegmentSize(fid uint32) (int64, error) {
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return 0, err
+	}
+	return lf.Size(), nil
+}
+
+// SegmentInit refreshes the mmap metadata for the specified segment.
+func (m *Manager) SegmentInit(fid uint32) error {
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return err
+	}
+	return lf.Init()
+}
+
+// SegmentBootstrap rewrites the header of the provided segment, resetting its
+// logical contents. It is typically used when truncation shrinks a file below
+// the header size and the segment needs to be treated as empty.
+func (m *Manager) SegmentBootstrap(fid uint32) error {
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return err
+	}
+	lf.Lock.Lock()
+	defer lf.Lock.Unlock()
+	return lf.Bootstrap()
+}
+
+// SegmentTruncate shrinks the segment to the provided offset.
+func (m *Manager) SegmentTruncate(fid uint32, offset uint32) error {
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return err
+	}
+	lf.Lock.Lock()
+	defer lf.Lock.Unlock()
+	return lf.Truncate(int64(offset))
+}
+
+// Iterate streams value-log records from the given file identifier starting at
+// the provided offset, invoking fn for each decoded entry. It returns the last
+// known-good offset (suitable for truncation) when the iteration completes or
+// stops early.
+func (m *Manager) Iterate(fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
+	if fn == nil {
+		return offset, fmt.Errorf("vlog manager iterate: nil callback")
+	}
+	lf, err := m.getFile(fid)
+	if err != nil {
+		return 0, err
+	}
+	return iterateLogFile(lf, offset, fn)
 }
 
 // VerifyDir scans all value log segments and truncates any partially written
@@ -424,80 +490,26 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	offset := start
 	validEnd := offset
 	for {
-		entryOffset := offset
-		tee := kv.NewHashReader(reader)
-		headerBytes := 0
-		readVarint := func() (uint64, error) {
-			val, err := binary.ReadUvarint(tee)
-			headerBytes = tee.BytesRead
-			return val, err
-		}
-		klen, err := readVarint()
+		entry, recordLen, err := kv.DecodeEntryFrom(reader)
 		if err != nil {
-			if err == io.EOF {
+			switch err {
+			case io.EOF:
 				return validEnd, nil
-			}
-			if err == io.ErrUnexpectedEOF {
-				return validEnd, nil
-			}
-			return 0, err
-		}
-		vlen, err := readVarint()
-		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return validEnd, nil
-			}
-			return 0, err
-		}
-		if klen > uint64(1<<32) || vlen > uint64(1<<32) {
-			return validEnd, utils.ErrTruncate
-		}
-		if _, err := readVarint(); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return validEnd, nil
-			}
-			return 0, err
-		}
-		if _, err := readVarint(); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return validEnd, nil
-			}
-			return 0, err
-		}
-		key := make([]byte, int(klen))
-		if _, err := io.ReadFull(tee, key); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			case kv.ErrPartialEntry, kv.ErrBadChecksum:
 				return validEnd, utils.ErrTruncate
+			default:
+				return validEnd, err
 			}
-			return 0, err
 		}
-		val := make([]byte, int(vlen))
-		if _, err := io.ReadFull(tee, val); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return validEnd, utils.ErrTruncate
-			}
-			return 0, err
-		}
-		var crcBuf [crc32.Size]byte
-		if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return validEnd, utils.ErrTruncate
-			}
-			return 0, err
-		}
-		expected := kv.BytesToU32(crcBuf[:])
-		if expected != tee.Sum32() {
-			return validEnd, utils.ErrTruncate
-		}
-		recordLen := uint32(headerBytes) + uint32(len(key)) + uint32(len(val)) + crc32.Size
-		validEnd = entryOffset + recordLen
+		entry.DecrRef()
+		validEnd = offset + recordLen
 		offset = validEnd
 	}
 }
 
 func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
 	size := lf.Size()
-	start := int64(utils.VlogHeaderSize)
+	start := int64(kv.ValueLogHeaderSize)
 	if size <= start {
 		return uint32(start), nil
 	}
@@ -613,13 +625,6 @@ func (m *Manager) ListFIDs() []uint32 {
 	return fids
 }
 
-func (m *Manager) LogFile(fid uint32) (*file.LogFile, bool) {
-	m.filesLock.RLock()
-	defer m.filesLock.RUnlock()
-	lf, ok := m.files[fid]
-	return lf, ok
-}
-
 func EncodeHead(fid, offset uint32) []byte {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint32(buf[:4], fid)
@@ -634,4 +639,55 @@ func DecodeHead(data []byte) (uint32, uint32) {
 	fid := binary.BigEndian.Uint32(data[:4])
 	offset := binary.BigEndian.Uint32(data[4:])
 	return fid, offset
+}
+
+func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, error) {
+	if lf == nil {
+		return 0, fmt.Errorf("value log iterate: nil logfile")
+	}
+	if offset == 0 {
+		offset = uint32(kv.ValueLogHeaderSize)
+	}
+	if int64(offset) == lf.Size() {
+		return offset, nil
+	}
+
+	if _, err := lf.Seek(int64(offset), io.SeekStart); err != nil {
+		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", lf.FileName())
+	}
+
+	reader := bufio.NewReader(lf.FD())
+	validEndOffset := offset
+	currentOffset := offset
+
+	for {
+		entry, recordLen, err := kv.DecodeEntryFrom(reader)
+		switch {
+		case err == nil:
+			entry.Offset = currentOffset
+		case err == io.EOF:
+			return validEndOffset, nil
+		case err == kv.ErrPartialEntry, err == kv.ErrBadChecksum:
+			return validEndOffset, nil
+		default:
+			return 0, err
+		}
+
+		vp := kv.ValuePtr{
+			Len:    recordLen,
+			Offset: entry.Offset,
+			Fid:    lf.FID,
+		}
+		validEndOffset = currentOffset + recordLen
+		currentOffset = validEndOffset
+
+		callErr := fn(entry, &vp)
+		entry.DecrRef()
+		if callErr != nil {
+			if callErr == utils.ErrStop {
+				return validEndOffset, nil
+			}
+			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", lf.FileName()), callErr)
+		}
+	}
 }

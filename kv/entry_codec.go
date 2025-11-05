@@ -15,6 +15,10 @@ import (
 var (
 	// ErrBadChecksum indicates a mismatch between the stored CRC32 and the computed checksum.
 	ErrBadChecksum = errors.New("bad check sum")
+	// ErrPartialEntry indicates that an entry could not be fully read because the
+	// underlying stream ended unexpectedly. Callers can treat this as a signal that
+	// the value log should be truncated at the last known-good offset.
+	ErrPartialEntry = errors.New("kv: partial entry")
 )
 
 var crc32Pool = sync.Pool{
@@ -228,6 +232,126 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	}
 
 	return total, nil
+}
+
+// DecodeEntryFrom reads the next entry from r, verifying its checksum and
+// returning the fully populated Entry alongside its total encoded length.
+// Layout consumed from the stream: | header | key | value | crc32 |.
+// The returned Entry has a reference count of 1 and must be released with
+// DecrRef when the caller is finished with it.
+func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
+	if r == nil {
+		return nil, 0, errors.New("kv: decode entry from nil reader")
+	}
+
+	hashReader := NewHashReader(r)
+
+	readVarint := func(allowEOF bool) (uint64, error) {
+		val, err := binary.ReadUvarint(hashReader)
+		if err == nil {
+			return val, nil
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			if allowEOF {
+				return 0, io.EOF
+			}
+			return 0, ErrPartialEntry
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			return 0, ErrPartialEntry
+		default:
+			return 0, err
+		}
+	}
+
+	klen, err := readVarint(true)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, 0, io.EOF
+		}
+		return nil, 0, err
+	}
+	vlen, err := readVarint(false)
+	if err != nil {
+		return nil, 0, err
+	}
+	meta, err := readVarint(false)
+	if err != nil {
+		return nil, 0, err
+	}
+	expiresAt, err := readVarint(false)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if klen > math.MaxUint32 || vlen > math.MaxUint32 {
+		return nil, 0, ErrPartialEntry
+	}
+	if meta > math.MaxUint8 {
+		return nil, 0, ErrPartialEntry
+	}
+
+	keyLen := int(klen)
+	if keyLen < 0 || uint64(keyLen) != klen {
+		return nil, 0, ErrPartialEntry
+	}
+	valueLen := int(vlen)
+	if valueLen < 0 || uint64(valueLen) != vlen {
+		return nil, 0, ErrPartialEntry
+	}
+
+	headerBytes := hashReader.BytesRead
+
+	entry := EntryPool.Get().(*Entry)
+	entry.IncrRef()
+	entry.Version = 0
+	entry.ValThreshold = 0
+	entry.Hlen = headerBytes
+	entry.Offset = 0
+	entry.Meta = byte(meta)
+	entry.ExpiresAt = expiresAt
+
+	if cap(entry.Key) < keyLen {
+		entry.Key = make([]byte, keyLen)
+	} else {
+		entry.Key = entry.Key[:keyLen]
+	}
+	if _, err := io.ReadFull(hashReader, entry.Key); err != nil {
+		entry.DecrRef()
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, 0, ErrPartialEntry
+		}
+		return nil, 0, err
+	}
+
+	if cap(entry.Value) < valueLen {
+		entry.Value = make([]byte, valueLen)
+	} else {
+		entry.Value = entry.Value[:valueLen]
+	}
+	if _, err := io.ReadFull(hashReader, entry.Value); err != nil {
+		entry.DecrRef()
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, 0, ErrPartialEntry
+		}
+		return nil, 0, err
+	}
+
+	var crcBuf [crc32.Size]byte
+	if _, err := io.ReadFull(r, crcBuf[:]); err != nil {
+		entry.DecrRef()
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, 0, ErrPartialEntry
+		}
+		return nil, 0, err
+	}
+	if BytesToU32(crcBuf[:]) != hashReader.Sum32() {
+		entry.DecrRef()
+		return nil, 0, ErrBadChecksum
+	}
+
+	recordLen := uint32(headerBytes) + uint32(keyLen) + uint32(valueLen) + crc32.Size
+	return entry, recordLen, nil
 }
 
 // EstimateEncodeSize estimates the encoded size of an entry in the WAL/value log.
