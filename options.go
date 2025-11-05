@@ -20,6 +20,13 @@ type Options struct {
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
 
+	// ValueLogGCInterval specifies how frequently to trigger a check for value
+	// log garbage collection. Zero or negative values disable automatic GC.
+	ValueLogGCInterval time.Duration
+	// ValueLogGCDiscardRatio is the discard ratio for a value log file to be
+	// considered for garbage collection. It must be in the range (0.0, 1.0).
+	ValueLogGCDiscardRatio float64
+
 	// Value log GC sampling parameters. Ratios <= 0 fall back to defaults.
 	ValueLogGCSampleSizeRatio  float64
 	ValueLogGCSampleCountRatio float64
@@ -121,6 +128,8 @@ func NewDefaultOptions() *Options {
 		WALTypedRecordWarnSegments:    6,
 		CompactionValueWeight:         0.35,
 		CompactionValueAlertThreshold: 0.6,
+		ValueLogGCInterval:            10 * time.Minute,
+		ValueLogGCDiscardRatio:        0.5,
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
 	}
