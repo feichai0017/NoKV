@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -92,7 +91,6 @@ type Manager struct {
 	activeID        uint32
 	activeSize      int64
 	closed          bool
-	crcTable        *crc32.Table
 	segmentSize     int64
 	removedSegments uint64
 	bufferSize      int
@@ -147,7 +145,6 @@ func Open(cfg Config) (*Manager, error) {
 
 	m := &Manager{
 		cfg:           cfg,
-		crcTable:      kv.CastagnoliCrcTable,
 		segmentSize:   segSize,
 		bufferSize:    bufSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
