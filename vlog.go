@@ -43,6 +43,13 @@ type valueLog struct {
 	lfDiscardStats     *lfDiscardStats
 }
 
+func (vlog *valueLog) logf(format string, args ...interface{}) {
+	if vlog == nil || !vlog.opt.ValueLogVerbose {
+		return
+	}
+	fmt.Printf(format+"\n", args...)
+}
+
 type valueLogMetrics struct {
 	Segments       int
 	PendingDeletes int
@@ -190,7 +197,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 		if fid == ptr.Fid {
 			offset = ptr.Offset + ptr.Len
 		}
-		fmt.Printf("Replaying file id: %d at offset: %d\n", fid, offset)
+		vlog.logf("Replaying file id: %d at offset: %d", fid, offset)
 		start := time.Now()
 		if err := vlog.replayLog(fid, offset, replayFn, fid == activeFID); err != nil {
 			if err == utils.ErrDeleteVlogFile {
@@ -201,7 +208,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 			}
 			return err
 		}
-		fmt.Printf("Replay took: %s\n", time.Since(start))
+		vlog.logf("Replay took: %s", time.Since(start))
 
 		if fid != activeFID {
 			if err := vlog.manager.SegmentInit(fid); err != nil {
@@ -216,7 +223,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 	}
 	if err := vlog.populateDiscardStats(); err != nil {
 		if err != utils.ErrKeyNotFound {
-			fmt.Printf("Failed to populate discard stats: %s\n", err)
+			utils.Err(fmt.Errorf("failed to populate discard stats: %w", err))
 		}
 	}
 	return nil
@@ -319,9 +326,9 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 
 	s := &sampler{
 		fid:           fid,
-		countRatio:    0.01,
-		sizeRatio:     0.1,
-		fromBeginning: false,
+		countRatio:    vlog.gcSampleCountRatio(),
+		sizeRatio:     vlog.gcSampleSizeRatio(),
+		fromBeginning: vlog.opt.ValueLogGCSampleFromHead,
 	}
 
 	if _, err = vlog.sample(s, discardRatio); err != nil {
@@ -600,7 +607,7 @@ func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, erro
 		return nil, err
 	}
 
-	fmt.Printf("Fid: %d. Skipped: %5.2fMB Data status=%+v\n", samp.fid, skipped, r)
+	vlog.logf("Fid: %d. Skipped: %5.2fMB Data status=%+v", samp.fid, skipped, r)
 	if (r.count < countWindow && r.total < sizeWindowM*0.75) || r.discard < discardRatio*r.total {
 		return nil, utils.ErrNoRewrite
 	}
@@ -627,7 +634,7 @@ func (vlog *valueLog) replayLog(fid uint32, offset uint32, replayFn kv.LogEntry,
 		return vlog.manager.SegmentBootstrap(fid)
 	}
 
-	fmt.Printf("Truncating vlog file %05d to offset: %d\n", fid, endOffset)
+	vlog.logf("Truncating vlog file %05d to offset: %d", fid, endOffset)
 	if err := vlog.manager.SegmentTruncate(fid, endOffset); err != nil {
 		return utils.WarpErr(
 			fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
@@ -661,9 +668,25 @@ func (vlog *valueLog) populateDiscardStats() error {
 	if err := json.Unmarshal(val, &statsMap); err != nil {
 		return errors.Wrapf(err, "failed to unmarshal discard stats")
 	}
-	fmt.Printf("Value Log Discard stats: %v\n", statsMap)
+	vlog.logf("Value Log Discard stats: %v", statsMap)
 	vlog.lfDiscardStats.flushChan <- statsMap
 	return nil
+}
+
+func (vlog *valueLog) gcSampleSizeRatio() float64 {
+	r := vlog.opt.ValueLogGCSampleSizeRatio
+	if r <= 0 {
+		return 0.10
+	}
+	return r
+}
+
+func (vlog *valueLog) gcSampleCountRatio() float64 {
+	r := vlog.opt.ValueLogGCSampleCountRatio
+	if r <= 0 {
+		return 0.01
+	}
+	return r
 }
 
 func (db *DB) initVLog() {
