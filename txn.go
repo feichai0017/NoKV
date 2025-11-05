@@ -376,21 +376,6 @@ func exceedsSize(prefix string, max int64, key []byte) error {
 const maxKeySize = 65000
 const maxValSize = 1 << 20
 
-func ValidEntry(db *DB, key, val []byte) error {
-	switch {
-	case len(key) == 0:
-		return utils.ErrEmptyKey
-	case len(key) > maxKeySize:
-		// Key length can't be more than uint16, as determined by table::header.  To
-		// keep things safe and allow move prefix and a timestamp suffix, let's
-		// cut it down to 65000, instead of using 65536.
-		return exceedsSize("Key", maxKeySize, key)
-	case int64(len(val)) > maxValSize:
-		return exceedsSize("Value", maxValSize, val)
-	}
-	return nil
-}
-
 func (txn *Txn) modify(e *kv.Entry) error {
 	switch {
 	case !txn.update:

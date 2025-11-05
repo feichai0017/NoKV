@@ -817,11 +817,9 @@ func (vlog *valueLog) flushDiscardStats() {
 	mergeStats := func(stats map[uint32]int64, force bool) ([]byte, error) {
 		vlog.lfDiscardStats.Lock()
 		defer vlog.lfDiscardStats.Unlock()
-		if stats != nil {
-			for fid, count := range stats {
-				vlog.lfDiscardStats.m[fid] += count
-				vlog.lfDiscardStats.updatesSinceFlush++
-			}
+		for fid, count := range stats {
+			vlog.lfDiscardStats.m[fid] += count
+			vlog.lfDiscardStats.updatesSinceFlush++
 		}
 
 		threshold := vlog.lfDiscardStats.flushThreshold
@@ -919,12 +917,6 @@ func (req *request) loadEntries(entries []*kv.Entry) {
 		req.Entries = req.Entries[:len(entries)]
 	}
 	copy(req.Entries, entries)
-}
-
-func (vlog *valueLog) waitOnGC(lc *utils.Closer) {
-	defer lc.Done()
-	<-lc.CloseSignal
-	vlog.garbageCh <- struct{}{}
 }
 
 func (req *request) IncrRef() {

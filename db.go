@@ -512,18 +512,6 @@ func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	return entry, nil
 }
 
-// 判断是否过期 是可删除
-func isDeletedOrExpiredByEntry(e *kv.Entry) bool {
-	if e.Value == nil {
-		return true
-	}
-	if e.ExpiresAt == 0 {
-		return false
-	}
-
-	return e.ExpiresAt <= uint64(time.Now().Unix())
-}
-
 func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	if meta&kv.BitDelete > 0 {
 		return true

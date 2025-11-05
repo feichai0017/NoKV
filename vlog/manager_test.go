@@ -1,7 +1,6 @@
 package vlog
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,15 +17,21 @@ func TestManagerAppendRead(t *testing.T) {
 	defer mgr.Close()
 
 	payload := []byte("record-data")
-	vp, err := mgr.Append(payload)
+	entry := kv.NewEntry([]byte("key"), payload)
+	vp, err := mgr.AppendEntry(entry)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	got, release, err := mgr.Read(vp)
+	raw, release, err := mgr.Read(vp)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	defer release()
+
+	got, _, err := kv.DecodeValueSlice(raw)
+	if err != nil {
+		t.Fatalf("decode value slice: %v", err)
+	}
 	if string(got) != string(payload) {
 		t.Fatalf("payload mismatch: got %q want %q", got, payload)
 	}
@@ -58,7 +63,8 @@ func TestManagerRemove(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	vp, err := mgr.Append([]byte("abc"))
+	entry := kv.NewEntry([]byte("key"), []byte("abc"))
+	vp, err := mgr.AppendEntry(entry)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -74,27 +80,15 @@ func TestManagerRemove(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeHead(t *testing.T) {
-	fid := uint32(10)
-	off := uint32(1234)
-	buf := EncodeHead(fid, off)
-	rf, ro := DecodeHead(buf)
-	if rf != fid || ro != off {
-		t.Fatalf("decode mismatch fid=%d off=%d", rf, ro)
-	}
-	rf, ro = DecodeHead(nil)
-	if rf != 0 || ro != 0 {
-		t.Fatalf("decode nil mismatch")
-	}
-}
-
 func TestManagerPopulateExisting(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := Open(Config{Dir: dir})
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	vp, err := mgr.Append([]byte("hello"))
+	payload := []byte("hello")
+	entry := kv.NewEntry([]byte("key"), payload)
+	vp, err := mgr.AppendEntry(entry)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -108,11 +102,16 @@ func TestManagerPopulateExisting(t *testing.T) {
 	if mgr.ActiveFID() != mgr.MaxFID() {
 		t.Fatalf("active fid not equal max fid")
 	}
-	data, release, err := mgr.Read(vp)
+	raw, release, err := mgr.Read(vp)
 	if err != nil {
 		t.Fatalf("read after reopen: %v", err)
 	}
 	defer release()
+
+	data, _, err := kv.DecodeValueSlice(raw)
+	if err != nil {
+		t.Fatalf("decode value slice: %v", err)
+	}
 	if string(data) != "hello" {
 		t.Fatalf("data mismatch after reopen")
 	}
@@ -126,7 +125,7 @@ func TestManagerRewind(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	if _, err := mgr.Append([]byte("alpha")); err != nil {
+	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("key"), []byte("alpha"))); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	head := mgr.Head()
@@ -155,7 +154,7 @@ func TestManagerRewind(t *testing.T) {
 		t.Fatalf("unexpected fid list after rewind: %v", fids)
 	}
 
-	vp, err := mgr.Append([]byte("beta"))
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("key"), []byte("beta")))
 	if err != nil {
 		t.Fatalf("append after rewind: %v", err)
 	}
@@ -170,26 +169,19 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	var buf bytes.Buffer
+
 	entry1 := kv.NewEntry([]byte("k1"), []byte("value-data"))
-	firstEncoded, err := kv.EncodeEntry(&buf, entry1)
-	if err != nil {
-		t.Fatalf("encode first: %v", err)
-	}
-	ptr1, err := mgr.Append(firstEncoded)
+	ptr1, err := mgr.AppendEntry(entry1)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	buf.Reset()
+
 	entry2 := kv.NewEntry([]byte("k2"), []byte("partial"))
-	secondEncoded, err := kv.EncodeEntry(&buf, entry2)
+	ptr2, err := mgr.AppendEntry(entry2)
 	if err != nil {
-		t.Fatalf("encode second: %v", err)
-	}
-	secondLen := len(secondEncoded)
-	if _, err := mgr.Append(secondEncoded); err != nil {
 		t.Fatalf("append second: %v", err)
 	}
+
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -198,7 +190,7 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("list files err=%v files=%v", err, files)
 	}
-	partialSize := int64(ptr1.Offset) + int64(ptr1.Len) + int64(secondLen) - 5
+	partialSize := int64(ptr1.Offset) + int64(ptr1.Len) + int64(ptr2.Len) - 5
 	if err := os.Truncate(files[0], partialSize); err != nil {
 		t.Fatalf("truncate vlog: %v", err)
 	}
