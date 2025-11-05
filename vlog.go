@@ -324,15 +324,52 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		}
 	}()
 
-	s := &sampler{
-		fid:           fid,
-		countRatio:    vlog.gcSampleCountRatio(),
-		sizeRatio:     vlog.gcSampleSizeRatio(),
-		fromBeginning: vlog.opt.ValueLogGCSampleFromHead,
+	opts := vlogpkg.SampleOptions{
+		SizeRatio:     vlog.gcSampleSizeRatio(),
+		CountRatio:    vlog.gcSampleCountRatio(),
+		FromBeginning: vlog.opt.ValueLogGCSampleFromHead,
+		MaxEntries:    vlog.opt.ValueLogMaxEntries,
+	}
+	start := time.Now()
+	stats, err := vlog.manager.Sample(fid, opts, func(e *kv.Entry, vp *kv.ValuePtr) (bool, error) {
+		if time.Since(start) > 10*time.Second {
+			return false, utils.ErrStop
+		}
+		cf, userKey, _ := kv.SplitInternalKey(e.Key)
+		entry, err := vlog.db.GetCF(cf, userKey)
+		if err != nil {
+			return false, err
+		}
+		if kv.DiscardEntry(e, entry) {
+			return true, nil
+		}
+
+		if len(entry.Value) == 0 {
+			return false, nil
+		}
+		var newVP kv.ValuePtr
+		newVP.Decode(entry.Value)
+
+		if newVP.Fid > fid || (newVP.Fid == fid && newVP.Offset > e.Offset) {
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil && err != utils.ErrStop {
+		return err
+	}
+	if stats == nil {
+		return utils.ErrNoRewrite
 	}
 
-	if _, err = vlog.sample(s, discardRatio); err != nil {
-		return err
+	vlog.logf("Fid: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
+
+	sizeWindow := stats.SizeWindow
+	if sizeWindow == 0 {
+		sizeWindow = float64(vlog.opt.ValueLogFileSize) / float64(utils.Mi)
+	}
+	if (stats.Count < stats.CountWindow && stats.TotalMiB < sizeWindow*0.75) || stats.DiscardMiB < discardRatio*stats.TotalMiB {
+		return utils.ErrNoRewrite
 	}
 
 	if err = vlog.rewrite(fid); err != nil {
@@ -537,81 +574,6 @@ func (vlog *valueLog) pickLog(head *kv.ValuePtr) (files []uint32) {
 	}
 	files = append(files, fids[idx])
 	return files
-}
-
-type sampler struct {
-	fid           uint32
-	sizeRatio     float64
-	countRatio    float64
-	fromBeginning bool
-}
-
-func (vlog *valueLog) sample(samp *sampler, discardRatio float64) (*reason, error) {
-	fileSize, err := vlog.manager.SegmentSize(samp.fid)
-	if err != nil {
-		return nil, err
-	}
-	sizePercent := samp.sizeRatio
-	countPercent := samp.countRatio
-	sizeWindow := float64(fileSize) * sizePercent
-	sizeWindowM := sizeWindow / (1 << 20)
-	countWindow := int(float64(vlog.opt.ValueLogMaxEntries) * countPercent)
-
-	var skipFirstM float64
-	if !samp.fromBeginning {
-		if fileSize > 0 {
-			skipFirstM = float64(rand.Int63n(fileSize))
-		}
-		skipFirstM -= sizeWindow
-		skipFirstM /= float64(utils.Mi)
-	}
-	var skipped float64
-
-	var r reason
-	start := time.Now()
-	_, err = vlog.manager.Iterate(samp.fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
-		esz := float64(vp.Len) / (1 << 20)
-		if skipped < skipFirstM {
-			skipped += esz
-			return nil
-		}
-		if r.count > countWindow || r.total > sizeWindowM || time.Since(start) > 10*time.Second {
-			return utils.ErrStop
-		}
-		r.total += esz
-		r.count++
-
-		cf, userKey, _ := kv.SplitInternalKey(e.Key)
-		entry, err := vlog.db.GetCF(cf, userKey)
-		if err != nil {
-			return err
-		}
-		if kv.DiscardEntry(e, entry) {
-			r.discard += esz
-			return nil
-		}
-
-		if len(entry.Value) == 0 {
-			return nil
-		}
-		var newVP kv.ValuePtr
-		newVP.Decode(entry.Value)
-
-		if newVP.Fid > samp.fid || (newVP.Fid == samp.fid && newVP.Offset > e.Offset) {
-			r.discard += esz
-			return nil
-		}
-		return nil
-	})
-	if err != nil && err != utils.ErrStop {
-		return nil, err
-	}
-
-	vlog.logf("Fid: %d. Skipped: %5.2fMB Data status=%+v", samp.fid, skipped, r)
-	if (r.count < countWindow && r.total < sizeWindowM*0.75) || r.discard < discardRatio*r.total {
-		return nil, utils.ErrNoRewrite
-	}
-	return &r, nil
 }
 
 func (vlog *valueLog) replayLog(fid uint32, offset uint32, replayFn kv.LogEntry, isActive bool) error {
@@ -963,12 +925,6 @@ func (vlog *valueLog) waitOnGC(lc *utils.Closer) {
 	defer lc.Done()
 	<-lc.CloseSignal
 	vlog.garbageCh <- struct{}{}
-}
-
-type reason struct {
-	total   float64
-	discard float64
-	count   int
 }
 
 func (req *request) IncrRef() {
