@@ -2,11 +2,8 @@ package wal
 
 import (
 	"bufio"
-	"encoding/binary"
 	"errors"
 	"io"
-
-	"github.com/feichai0017/NoKV/kv"
 )
 
 var (
@@ -47,68 +44,15 @@ func (rs *RecordIterator) Next() bool {
 	if rs == nil || rs.err != nil {
 		return false
 	}
-	rs.length = 0
 
-	var header [4]byte
-	if _, err := io.ReadFull(rs.reader, header[:]); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			rs.err = io.EOF
-		} else {
-			rs.err = err
-		}
-		return false
-	}
-
-	length := binary.BigEndian.Uint32(header[:])
-	if length == 0 {
-		rs.err = ErrEmptyRecord
-		return false
-	}
-
-	if cap(rs.buffer) < int(length) {
-		rs.buffer = make([]byte, length)
-	}
-	buf := rs.buffer[:length]
-
-	if _, err := io.ReadFull(rs.reader, buf); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			rs.err = ErrPartialRecord
-		} else {
-			rs.err = err
-		}
-		return false
-	}
-
-	var crcBuf [4]byte
-	if _, err := io.ReadFull(rs.reader, crcBuf[:]); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			rs.err = ErrPartialRecord
-		} else {
-			rs.err = err
-		}
-		return false
-	}
-
-	expected := binary.BigEndian.Uint32(crcBuf[:])
-	hasher := kv.CRC32()
-	if _, err := hasher.Write(buf[:1]); err != nil {
-		kv.PutCRC32(hasher)
+	recType, payload, length, err := DecodeRecord(rs.reader)
+	if err != nil {
 		rs.err = err
 		return false
 	}
-	if _, err := hasher.Write(buf[1:]); err != nil {
-		kv.PutCRC32(hasher)
-		rs.err = err
-		return false
-	}
-	sum := hasher.Sum32()
-	kv.PutCRC32(hasher)
-	if expected != sum {
-		rs.err = kv.ErrBadChecksum
-		return false
-	}
 
-	rs.recType = RecordType(buf[0])
+	rs.recType = recType
+	rs.buffer = payload // Store the payload directly
 	rs.length = length
 	return true
 }
@@ -121,7 +65,8 @@ func (rs *RecordIterator) Record() []byte {
 	if rs.length <= 1 {
 		return nil
 	}
-	return append([]byte(nil), rs.buffer[1:rs.length]...)
+	// rs.buffer now contains just the payload, so we return a copy of it directly.
+	return append([]byte(nil), rs.buffer...)
 }
 
 // Type returns the record type of the current record.

@@ -131,6 +131,95 @@ type Record struct {
 	Payload []byte
 }
 
+func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
+	var header [4]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, nil, 0, io.EOF
+		}
+		return 0, nil, 0, err
+	}
+
+	length := binary.BigEndian.Uint32(header[:])
+	if length == 0 {
+		return 0, nil, 0, ErrEmptyRecord
+	}
+
+	// Allocate buffer for type byte + payload
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, nil, 0, ErrPartialRecord
+		}
+		return 0, nil, 0, err
+	}
+
+	var crcBuf [4]byte
+	if _, err := io.ReadFull(r, crcBuf[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, nil, 0, ErrPartialRecord
+		}
+		return 0, nil, 0, err
+	}
+
+	expected := binary.BigEndian.Uint32(crcBuf[:])
+	hasher := kv.CRC32()
+	// Calculate CRC over type byte + payload
+	if _, err := hasher.Write(buf); err != nil {
+		kv.PutCRC32(hasher)
+		return 0, nil, 0, err
+	}
+	sum := hasher.Sum32()
+	kv.PutCRC32(hasher)
+	if expected != sum {
+		return 0, nil, 0, kv.ErrBadChecksum
+	}
+
+	recType := RecordType(buf[0])
+	payload := buf[1:] // Payload is the rest after the type byte
+	
+	return recType, payload, length, nil
+}
+
+func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) {
+	total := len(payload) + 1 // Type byte + payload length
+	length := uint32(total)
+
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], length)
+	if _, err := w.Write(hdr[:]); err != nil {
+		return 0, err
+	}
+
+	typeByte := byte(recType)
+	if _, err := w.Write([]byte{typeByte}); err != nil {
+		return 0, err
+	}
+
+	if _, err := w.Write(payload); err != nil {
+		return 0, err
+	}
+
+	hasher := kv.CRC32()
+	typeBuf := [1]byte{typeByte}
+	if _, err := hasher.Write(typeBuf[:]); err != nil {
+		kv.PutCRC32(hasher)
+		return 0, err
+	}
+	if _, err := hasher.Write(payload); err != nil {
+		kv.PutCRC32(hasher)
+		return 0, err
+	}
+	var crcBuf [4]byte
+	binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
+	kv.PutCRC32(hasher)
+	if _, err := w.Write(crcBuf[:]); err != nil {
+		return 0, err
+	}
+
+	return int(length) + 8, nil // length + 4 bytes for header + 4 bytes for CRC
+}
+
 // Open creates or resumes a WAL manager.
 func Open(cfg Config) (*Manager, error) {
 	if cfg.Dir == "" {
@@ -304,45 +393,22 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 	results := make([]EntryInfo, len(records))
 	for i, rec := range records {
 		payload := rec.Payload
-		total := len(payload) + 1
-		if err := m.ensureCapacity(int64(total) + 8); err != nil {
+		totalRecordSize := len(payload) + 1 + 4 + 4 // Type + Payload + Length field + CRC field
+		if err := m.ensureCapacity(int64(totalRecordSize)); err != nil {
 			return nil, err
 		}
 		offset := m.activeSize
-		length := uint32(total)
-		var hdr [4]byte
-		binary.BigEndian.PutUint32(hdr[:], length)
-		if _, err := m.writer.Write(hdr[:]); err != nil {
+		
+		n, err := EncodeRecord(m.writer, rec.Type, payload)
+		if err != nil {
 			return nil, err
 		}
-		typeByte := byte(rec.Type)
-		if err := m.writer.WriteByte(typeByte); err != nil {
-			return nil, err
-		}
-		if _, err := m.writer.Write(payload); err != nil {
-			return nil, err
-		}
-		hasher := kv.CRC32()
-		typeBuf := [1]byte{typeByte}
-		if _, err := hasher.Write(typeBuf[:]); err != nil {
-			kv.PutCRC32(hasher)
-			return nil, err
-		}
-		if _, err := hasher.Write(payload); err != nil {
-			kv.PutCRC32(hasher)
-			return nil, err
-		}
-		var crcBuf [4]byte
-		binary.BigEndian.PutUint32(crcBuf[:], hasher.Sum32())
-		kv.PutCRC32(hasher)
-		if _, err := m.writer.Write(crcBuf[:]); err != nil {
-			return nil, err
-		}
-		m.activeSize += int64(length) + 8
+		
+		m.activeSize += int64(n)
 		results[i] = EntryInfo{
 			SegmentID: m.activeID,
 			Offset:    offset,
-			Length:    length,
+			Length:    uint32(len(payload) + 1),
 			Type:      rec.Type,
 		}
 		segMetrics := m.segmentTotals[m.activeID]
@@ -445,14 +511,14 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	}
 	defer f.Close()
 
-    stream := NewRecordIterator(f, m.bufferSize)
-	defer stream.Close()
+    reIter := NewRecordIterator(f, m.bufferSize)
+	defer reIter.Close()
 
 	var offset int64
-	for stream.Next() {
-        length := stream.Length()
-        recType := stream.Type()
-        payload := append([]byte{}, stream.Record()...)
+	for reIter.Next() {
+        length := reIter.Length()
+        recType := reIter.Type()
+        payload := append([]byte{}, reIter.Record()...)
 		info := EntryInfo{
 			SegmentID: id,
 			Offset:    offset,
@@ -465,7 +531,7 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 		offset += int64(length) + 8
 	}
 
-	switch err := stream.Err(); err {
+	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
 	case ErrPartialRecord:
@@ -546,15 +612,15 @@ func verifySegment(path string) error {
 	}
 	defer f.Close()
 
-    stream := NewRecordIterator(f, defaultBufferSize)
-	defer stream.Close()
+    reIter := NewRecordIterator(f, defaultBufferSize)
+	defer reIter.Close()
 
 	var offset int64
-	for stream.Next() {
-		offset += int64(stream.Length()) + 8
+	for reIter.Next() {
+		offset += int64(reIter.Length()) + 8
 	}
 
-	switch err := stream.Err(); err {
+	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
 	case ErrPartialRecord:
