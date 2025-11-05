@@ -1,7 +1,6 @@
 package vlog
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	stderrors "errors"
@@ -486,24 +485,24 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	if _, err := lf.Seek(int64(start), io.SeekStart); err != nil {
 		return 0, err
 	}
-	reader := bufio.NewReader(lf.FD())
+	stream := kv.NewEntryStream(lf.FD())
+	defer stream.Close()
+
 	offset := start
 	validEnd := offset
-	for {
-		entry, recordLen, err := kv.DecodeEntryFrom(reader)
-		if err != nil {
-			switch err {
-			case io.EOF:
-				return validEnd, nil
-			case kv.ErrPartialEntry, kv.ErrBadChecksum:
-				return validEnd, utils.ErrTruncate
-			default:
-				return validEnd, err
-			}
-		}
-		entry.DecrRef()
+	for stream.Next() {
+		recordLen := stream.RecordLen()
 		validEnd = offset + recordLen
 		offset = validEnd
+	}
+
+	switch err := stream.Err(); err {
+	case nil, io.EOF:
+		return validEnd, nil
+	case kv.ErrPartialEntry, kv.ErrBadChecksum:
+		return validEnd, utils.ErrTruncate
+	default:
+		return validEnd, err
 	}
 }
 
@@ -656,22 +655,16 @@ func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, er
 		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", lf.FileName())
 	}
 
-	reader := bufio.NewReader(lf.FD())
+	stream := kv.NewEntryStream(lf.FD())
+	defer stream.Close()
+
 	validEndOffset := offset
 	currentOffset := offset
 
-	for {
-		entry, recordLen, err := kv.DecodeEntryFrom(reader)
-		switch {
-		case err == nil:
-			entry.Offset = currentOffset
-		case err == io.EOF:
-			return validEndOffset, nil
-		case err == kv.ErrPartialEntry, err == kv.ErrBadChecksum:
-			return validEndOffset, nil
-		default:
-			return 0, err
-		}
+	for stream.Next() {
+		entry := stream.Entry()
+		recordLen := stream.RecordLen()
+		entry.Offset = currentOffset
 
 		vp := kv.ValuePtr{
 			Len:    recordLen,
@@ -682,12 +675,20 @@ func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, er
 		currentOffset = validEndOffset
 
 		callErr := fn(entry, &vp)
-		entry.DecrRef()
 		if callErr != nil {
 			if callErr == utils.ErrStop {
 				return validEndOffset, nil
 			}
 			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", lf.FileName()), callErr)
 		}
+	}
+
+	switch err := stream.Err(); err {
+	case nil, io.EOF:
+		return validEndOffset, nil
+	case kv.ErrPartialEntry, kv.ErrBadChecksum:
+		return validEndOffset, nil
+	default:
+		return 0, err
 	}
 }
