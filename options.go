@@ -20,6 +20,14 @@ type Options struct {
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
 
+	// Value log GC sampling parameters. Ratios <= 0 fall back to defaults.
+	ValueLogGCSampleSizeRatio  float64
+	ValueLogGCSampleCountRatio float64
+	ValueLogGCSampleFromHead   bool
+
+	// ValueLogVerbose enables verbose logging across value-log operations.
+	ValueLogVerbose bool
+
 	WriteBatchMaxCount int
 	WriteBatchMaxSize  int64
 	WriteBatchDelay    time.Duration
@@ -113,6 +121,8 @@ func NewDefaultOptions() *Options {
 		WALTypedRecordWarnSegments:    6,
 		CompactionValueWeight:         0.35,
 		CompactionValueAlertThreshold: 0.6,
+		ValueLogGCSampleSizeRatio:     0.10,
+		ValueLogGCSampleCountRatio:    0.01,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	return opt

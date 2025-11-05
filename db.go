@@ -929,7 +929,9 @@ func (db *DB) pushHead(ft flushTask) error {
 		return stderrors.New("Head should not be zero")
 	}
 
-	fmt.Printf("Storing value log head: %+v\n", ft.vptr)
+	if db != nil && db.vlog != nil {
+		db.vlog.logf("Storing value log head: %+v", ft.vptr)
+	}
 	val := ft.vptr.Encode()
 
 	// Pick the max commit ts, so in case of crash, our read ts would be higher than all the

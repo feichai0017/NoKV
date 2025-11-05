@@ -37,6 +37,7 @@ The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries writte
 ```
 
 * Header fields are varint-encoded (`kv.EntryHeader`).
+* The first 20 bytes of every segment are reserved (`kv.ValueLogHeaderSize`) for future metadata; iteration always skips this fixed header.
 * `file.LogFile.EncodeEntry`/`DecodeEntry` perform the layout work, and each append finishes with a CRC32 to detect torn writes.
 * `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L348-L418) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
 
@@ -107,6 +108,7 @@ flowchart LR
 * `lfDiscardStats` aggregates per-file discard counts from `lsm.FlushTable` completion (`valueLog.lfDiscardStats.push` inside `lsm/flush`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
 * `valueLog.flushDiscardStats` consumes those stats, ensuring they are persisted even across crashes. During recovery `valueLog.populateDiscardStats` replays the JSON payload to repopulate the in-memory map.
 * GC uses `discardRatio = discardedBytes/totalBytes` from [`valueLog.sample`](../vlog.go#L644-L704). If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog.go#L316-L417) rewrites live entries into the current head (using `Manager.Append`) and then [`valueLog.rewrite`](../vlog.go#L418-L531) schedules deletion edits in the manifest.
+  * Sampling behaviour is controlled by `Options.ValueLogGCSampleSizeRatio` (default 0.10 of the file) and `Options.ValueLogGCSampleCountRatio` (default 1% of the configured entry limit). Setting either to `<=0` keeps the default heuristics. `Options.ValueLogGCSampleFromHead` starts sampling from the beginning instead of a random window.
 * Completed deletions are logged via `lsm.LogValueLogDelete` so the manifest can skip them during replay. When GC rotates to a new head, `valueLog.updateHead` records the pointer and bumps the `NoKV.ValueLog.HeadUpdates` counter.
 
 RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.
@@ -129,7 +131,7 @@ The flow matches Badger's recovery (scan vlog → replay WAL) but adds manifest-
 
 * Metrics in [`stats.go`](../stats.go#L12-L126) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
 * `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/manager.go#L308-L411) before describing segments.
-* Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases.
+* Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable `Options.ValueLogVerbose` to emit replay/GC messages to stdout.
 
 ---
 
