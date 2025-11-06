@@ -146,10 +146,10 @@ func (h *EntryHeader) Decode(buf []byte) (int, error) {
 	return idx, nil
 }
 
-// EncodeEntry writes the WAL/value log entry encoding into the provided buffer and
-// returns the encoded payload. The returned slice aliases the supplied buffer
-// when possible.
-// Layout: | header | key | value | crc32 |
+// EncodeEntry is a convenience function that encodes to a buffer.
+// It uses EncodeEntryTo internally to encode an Entry into a bytes.Buffer and returns the resulting byte slice.
+// This is suitable for cases where the encoded []byte is needed directly.
+// The encoded layout is the same as EncodeEntryTo.
 func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 	if buf == nil {
 		buf = &bytes.Buffer{}
@@ -168,8 +168,13 @@ func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 	return dup, nil
 }
 
-// EncodeEntryTo streams the entry encoding directly into the provided writer.
-// Layout: | header | key | value | crc32 |
+// EncodeEntryTo is the core streaming encoder.
+// It serializes an Entry object and writes it directly to an io.Writer,
+// making it suitable for scenarios where allocating a large buffer is undesirable.
+//
+// The encoded layout is: | header | key | value | crc32 |
+// - header: Varint-encoded, contains Key/Value lengths, Meta, and ExpiresAt.
+// - crc32: 4 bytes, BigEndian, checksums the header, key, and value.
 func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	header := EntryHeader{
 		KeyLen:    uint32(len(e.Key)),
@@ -234,11 +239,17 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	return total, nil
 }
 
-// DecodeEntryFrom reads the next entry from r, verifying its checksum and
-// returning the fully populated Entry alongside its total encoded length.
-// Layout consumed from the stream: | header | key | value | crc32 |.
-// The returned Entry has a reference count of 1 and must be released with
-// DecrRef when the caller is finished with it.
+// DecodeEntryFrom is the core streaming decoder.
+// It reads from an io.Reader and deserializes the data into an Entry object.
+// This function performs a full CRC32 checksum verification to ensure data integrity.
+//
+// It expects the data stream to have the layout: | header | key | value | crc32 |
+//
+// The returned Entry is sourced from an object pool and has a reference count of 1.
+// The caller MUST call DecrRef() on the entry when it is no longer needed to return it
+// to the pool and avoid memory leaks.
+//
+// In addition to the Entry, it also returns the total length of the record in the stream.
 func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 	if r == nil {
 		return nil, 0, errors.New("kv: decode entry from nil reader")
@@ -360,38 +371,16 @@ func EstimateEncodeSize(e *Entry) int {
 		crc32.Size + MaxEntryHeaderSize
 }
 
-// DecodeEntry parses a WAL/value log payload into an Entry instance.
+// DecodeEntry is a convenience function that decodes a byte slice.
+// It takes a byte slice containing a single record and decodes it into an Entry object.
+//
+// Internally, it wraps the []byte with a bytes.NewReader and calls the core
+// DecodeEntryFrom function to perform the actual decoding and validation.
+// This design follows the DRY principle by reusing the core decoding logic.
 func DecodeEntry(data []byte) (*Entry, error) {
 	reader := bytes.NewReader(data)
-	hashReader := NewHashReader(reader)
-
-	var header EntryHeader
-	if _, err := header.DecodeFrom(hashReader); err != nil {
-		return nil, err
-	}
-
-	if header.KeyLen > uint32(len(data)) || header.ValueLen > uint32(len(data)) {
-		return nil, io.ErrUnexpectedEOF
-	}
-
-	buf := make([]byte, header.KeyLen+header.ValueLen)
-	if _, err := io.ReadFull(hashReader, buf); err != nil {
-		return nil, err
-	}
-
-	e := NewEntry(buf[:header.KeyLen], buf[header.KeyLen:])
-	e.ExpiresAt = header.ExpiresAt
-	e.Meta = header.Meta
-
-	var crcBuf [crc32.Size]byte
-	if _, err := io.ReadFull(reader, crcBuf[:]); err != nil {
-		return nil, err
-	}
-	expected := binary.BigEndian.Uint32(crcBuf[:])
-	if expected != hashReader.Sum32() {
-		return nil, ErrBadChecksum
-	}
-	return e, nil
+	entry, _, err := DecodeEntryFrom(reader) // Directly call, reuse core logic
+	return entry, err
 }
 
 // DecodeValueSlice parses a value log payload and returns a slice referencing the encoded value.
