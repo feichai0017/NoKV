@@ -8,7 +8,7 @@
 
 | Package | Responsibility |
 | --- | --- |
-| [`store`](../raftstore/store) | Region catalog, router, RegionMetrics, lifecycle hooks, manifest integration, helpers such as `StartPeer` and `SplitRegion`. |
+| [`store`](../raftstore/store) | Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as `StartPeer`, `ProposeCommand`, `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync. |
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv). |
@@ -34,7 +34,7 @@
 2. **Start local peers**
    - CLI (`nokv serve`) iterates the manifest snapshot and calls `Store.StartPeer` for every region that includes the local store.
    - Each `peer.Config` carries raft parameters, the transport reference, `kv.NewEntryApplier`, WAL/manifest handles, and Region metadata.
-   - After `StartPeer`, the peer is registered in the router and may bootstrap or campaign for leadership.
+   - `StartPeer` registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.
 
 3. **Peer connectivity**
    - `transport.SetPeer(storeID, addr)` defines outbound raft connections; the CLI exposes it via `--peer storeID=addr`.
@@ -52,7 +52,7 @@
 
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
-2. The leader appends the encoded request to raft, replicates, and once committed calls `kv.Apply` which maps Prewrite/Commit/ResolveLock to the `mvcc` package.
+2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `mvcc` package.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.
 
 ---
@@ -78,7 +78,7 @@
 | RPC | Execution Path | Notes |
 | --- | --- | --- |
 | `KvGet` / `KvScan` | `ReadCommand` → `kv.Apply` (read mode) | No raft round-trip; leader-only.
-| `KvPrewrite` / `KvCommit` / `KvBatchRollback` / `KvResolveLock` / `KvCheckTxnStatus` | `ProposeCommand` → raft log → `kv.Apply` | The MVCC latch manager prevents write conflicts.
+| `KvPrewrite` / `KvCommit` / `KvBatchRollback` / `KvResolveLock` / `KvCheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
 
 The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a manifest summary (key ranges, peers) so operators can verify the node’s view at startup.
 
@@ -98,6 +98,17 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 - `store.RegionMetrics()` feeds into `StatsSnapshot`, making region counts and backlog visible via expvar and `nokv stats`.
 - `nokv regions` shows manifest-backed regions: ID, range, peers, state.
 - `scripts/transport_chaos.sh` exercises transport metrics under faults; `scripts/run_local_cluster.sh` spins up multi-node clusters for manual inspection.
+
+### Store internals at a glance
+
+| Component | File | Responsibility |
+| --- | --- | --- |
+| Peer set | [`peer_set.go`](../raftstore/store/peer_set.go) | Tracks active peers, synchronises router registration, exposes thread-safe lookups/iteration. |
+| Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |
+| Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
+| Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
+| Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions. |
+| Global registry | [`global.go`](../raftstore/store/global.go) | Records live stores for CLI/scripting (`Store.Close()` automatically unregisters instances). |
 
 ---
 

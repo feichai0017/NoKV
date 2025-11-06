@@ -6,14 +6,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -25,36 +23,23 @@ import (
 // lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
 // ticks or proposals without needing to keep global peer maps themselves.
 type Store struct {
-	mu                sync.RWMutex
-	router            *Router
-	peers             map[uint64]*peer.Peer
-	peerFactory       PeerFactory
-	peerBuilder       PeerBuilder
-	hooks             LifecycleHooks
-	regionHooks       RegionHooks
-	regionMetrics     *RegionMetrics
-	manifest          *manifest.Manager
-	regions           *regionManager
-	scheduler         scheduler.RegionSink
-	heartbeatInterval time.Duration
-	heartbeatStop     chan struct{}
-	heartbeatWG       sync.WaitGroup
-	storeID           uint64
-	planner           scheduler.Planner
-	operationHook     func(scheduler.Operation)
-	operationInput    chan scheduler.Operation
-	operationStop     chan struct{}
-	operationWG       sync.WaitGroup
-	operationCooldown time.Duration
-	operationInterval time.Duration
-	operationBurst    int
-	operationMu       sync.Mutex
-	lastApplied       map[operationKey]time.Time
-	pendingOps        map[operationKey]struct{}
-	commandApplier    func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	proposalSeq       uint64
-	proposalMu        sync.Mutex
-	proposals         map[uint64]*commandProposal
+	mu             sync.RWMutex
+	router         *Router
+	peers          *peerSet
+	peerFactory    PeerFactory
+	peerBuilder    PeerBuilder
+	hooks          LifecycleHooks
+	regionMetrics  *RegionMetrics
+	manifest       *manifest.Manager
+	regions        *regionManager
+	scheduler      scheduler.RegionSink
+	storeID        uint64
+	planner        scheduler.Planner
+	operationHook  func(scheduler.Operation)
+	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	command        *commandPipeline
+	operations     *operationScheduler
+	heartbeat      *heartbeatLoop
 }
 
 type operationKey struct {
@@ -118,6 +103,9 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if operationCooldown < 0 {
 		operationCooldown = 0
 	}
+	if operationCooldown == 0 {
+		operationCooldown = 5 * time.Second
+	}
 	operationInterval := cfg.OperationInterval
 	if operationInterval <= 0 {
 		operationInterval = cfg.HeartbeatInterval
@@ -132,61 +120,47 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if operationBurst == 0 {
 		operationBurst = 4
 	}
-	if operationCooldown == 0 {
-		operationCooldown = 5 * time.Second
-	}
 	s := &Store{
-		router:            router,
-		peers:             make(map[uint64]*peer.Peer),
-		peerFactory:       factory,
-		peerBuilder:       cfg.PeerBuilder,
-		hooks:             cfg.Hooks,
-		regionHooks:       combinedHooks,
-		regionMetrics:     metrics,
-		manifest:          cfg.Manifest,
-		regions:           newRegionManager(),
-		scheduler:         cfg.Scheduler,
-		heartbeatInterval: cfg.HeartbeatInterval,
-		storeID:           cfg.StoreID,
-		planner:           planner,
-		operationHook:     cfg.OperationObserver,
-		operationCooldown: operationCooldown,
-		operationInterval: operationInterval,
-		operationBurst:    operationBurst,
-		commandApplier:    cfg.CommandApplier,
-		proposals:         make(map[uint64]*commandProposal),
+		router:         router,
+		peers:          newPeerSet(router),
+		peerFactory:    factory,
+		peerBuilder:    cfg.PeerBuilder,
+		hooks:          cfg.Hooks,
+		regionMetrics:  metrics,
+		manifest:       cfg.Manifest,
+		scheduler:      cfg.Scheduler,
+		storeID:        cfg.StoreID,
+		planner:        planner,
+		operationHook:  cfg.OperationObserver,
+		commandApplier: cfg.CommandApplier,
 	}
+	s.regions = newRegionManager(cfg.Manifest, combinedHooks)
+	s.command = newCommandPipeline(cfg.CommandApplier)
+	s.operations = newOperationScheduler(queueSize, operationInterval, operationCooldown, operationBurst, s.applyOperation, s.operationHook)
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
-	if s.scheduler != nil {
-		if s.heartbeatInterval <= 0 {
-			s.heartbeatInterval = 3 * time.Second
-		}
-	}
-	s.heartbeatStop = make(chan struct{})
-	if planner != nil && queueSize > 0 {
-		s.operationInput = make(chan scheduler.Operation, queueSize)
-		s.operationStop = make(chan struct{})
-		s.lastApplied = make(map[operationKey]time.Time)
-		s.pendingOps = make(map[operationKey]struct{})
-		s.operationWG.Add(1)
-		go s.operationWorker()
-	}
 	RegisterStore(s)
 	if s.scheduler != nil {
-		s.startHeartbeatLoop()
+		heartbeatInterval := cfg.HeartbeatInterval
+		if heartbeatInterval <= 0 {
+			heartbeatInterval = 3 * time.Second
+		}
+		s.heartbeat = newHeartbeatLoop(
+			heartbeatInterval,
+			s.scheduler,
+			planner,
+			s.storeID,
+			s.RegionMetas,
+			s.storeStatsSnapshot,
+			s.SchedulerSnapshot,
+			s.enqueueOperation,
+		)
+		if s.heartbeat != nil {
+			s.heartbeat.start()
+		}
 	}
 	return s
-}
-
-type commandProposal struct {
-	ch chan proposalResult
-}
-
-type proposalResult struct {
-	resp *pb.RaftCmdResponse
-	err  error
 }
 
 // SplitRegion updates the parent region metadata and bootstraps a new peer for
@@ -452,7 +426,9 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		}
 		regionMeta = manifest.CloneRegionMetaPtr(cfg.Region)
 	}
+	s.mu.RLock()
 	factory := s.peerFactory
+	s.mu.RUnlock()
 	if factory == nil {
 		factory = peer.NewPeer
 	}
@@ -470,31 +446,26 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		return nil, err
 	}
 	id := p.ID()
-	s.mu.Lock()
-	if _, exists := s.peers[id]; exists {
-		s.mu.Unlock()
+	if err := s.peers.add(p); err != nil {
 		p.Close()
-		return nil, fmt.Errorf("raftstore: peer %d already exists", id)
+		return nil, err
 	}
-	s.peers[id] = p
 	if regionMeta != nil && regionMeta.ID != 0 {
 		s.regions.setPeer(regionMeta.ID, p)
 	}
-	s.mu.Unlock()
 
 	if err := s.router.Register(p); err != nil {
-		s.mu.Lock()
-		delete(s.peers, id)
-		s.mu.Unlock()
+		s.peers.remove(id)
+		if regionMeta != nil {
+			s.regions.setPeer(regionMeta.ID, nil)
+		}
 		p.Close()
 		return nil, err
 	}
 	if regionMeta != nil {
 		if err := s.UpdateRegion(*regionMeta); err != nil {
 			s.router.Deregister(id)
-			s.mu.Lock()
-			delete(s.peers, id)
-			s.mu.Unlock()
+			s.peers.remove(id)
 			s.regions.setPeer(regionMeta.ID, nil)
 			p.Close()
 			return nil, err
@@ -518,16 +489,13 @@ func (s *Store) StopPeer(id uint64) {
 		return
 	}
 	s.router.Deregister(id)
+	p := s.peers.remove(id)
 	var regionID uint64
-	s.mu.Lock()
-	p := s.peers[id]
-	delete(s.peers, id)
 	if p != nil {
 		if meta := p.RegionMeta(); meta != nil {
 			regionID = meta.ID
 		}
 	}
-	s.mu.Unlock()
 	if regionID != 0 {
 		s.regions.setPeer(regionID, nil)
 		_ = s.UpdateRegionState(regionID, manifest.RegionStateRemoving)
@@ -545,229 +513,55 @@ func (s *Store) Close() {
 	if s == nil {
 		return
 	}
-	if s.heartbeatStop != nil {
-		close(s.heartbeatStop)
+	if s.heartbeat != nil {
+		s.heartbeat.stopLoop()
 	}
-	s.heartbeatWG.Wait()
-	if s.operationStop != nil {
-		close(s.operationStop)
+	if s.operations != nil {
+		s.operations.stopLoop()
 	}
-	s.operationWG.Wait()
+	UnregisterStore(s)
 }
 
-func (s *Store) startHeartbeatLoop() {
-	if s == nil || s.scheduler == nil || s.heartbeatInterval <= 0 {
-		return
-	}
-	for _, meta := range s.RegionMetas() {
-		s.scheduler.SubmitRegionHeartbeat(meta)
-	}
-	if s.storeID != 0 {
-		s.scheduler.SubmitStoreHeartbeat(s.storeStatsSnapshot())
-	}
-	s.processPlanner()
-	s.heartbeatWG.Add(1)
-	go func() {
-		defer s.heartbeatWG.Done()
-		ticker := time.NewTicker(s.heartbeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				metas := s.RegionMetas()
-				for _, meta := range metas {
-					s.scheduler.SubmitRegionHeartbeat(meta)
-				}
-				if s.storeID != 0 {
-					s.scheduler.SubmitStoreHeartbeat(s.storeStatsSnapshot())
-				}
-				s.processPlanner()
-			case <-s.heartbeatStop:
-				return
-			}
-		}
-	}()
-}
-
-func (s *Store) processPlanner() {
-	if s == nil || s.planner == nil {
-		return
-	}
-	snapshot := s.SchedulerSnapshot()
-	ops := s.planner.Plan(snapshot)
-	for _, op := range ops {
-		s.enqueueOperation(op)
-	}
-}
-
-func (s *Store) applyOperation(op scheduler.Operation) {
+func (s *Store) applyOperation(op scheduler.Operation) bool {
 	if s == nil {
-		return
+		return false
 	}
-	var applied bool
 	switch op.Type {
 	case scheduler.OperationLeaderTransfer:
 		if op.Source == 0 || op.Target == 0 {
-			break
+			return false
 		}
 		s.VisitPeers(func(p *peer.Peer) {
 			if p.ID() == op.Source {
 				_ = p.TransferLeader(op.Target)
 			}
 		})
-		applied = true
+		return true
 	}
-	if hook := s.operationHook; hook != nil && applied {
-		hook(op)
-	}
+	return false
 }
 
 func (s *Store) applyEntries(entries []myraft.Entry, fallback peer.ApplyFunc) error {
-	for _, entry := range entries {
-		if entry.Type != myraft.EntryNormal {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
-			continue
+	if s == nil {
+		if fallback != nil {
+			return fallback(entries)
 		}
-		if len(entry.Data) == 0 {
-			continue
-		}
-		req, isCmd, err := command.Decode(entry.Data)
-		if err != nil {
-			return err
-		}
-		if !isCmd {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		if s.commandApplier == nil {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-				continue
-			}
-			return fmt.Errorf("raftstore: command apply without handler")
-		}
-		resp, err := s.commandApplier(req)
-		if err != nil {
-			s.completeProposal(req.GetHeader().GetRequestId(), nil, err)
-			continue
-		}
-		s.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
+		return nil
 	}
-	return nil
-}
-
-type scheduledOperation struct {
-	op    scheduler.Operation
-	ready time.Time
+	if s.command == nil {
+		if fallback != nil {
+			return fallback(entries)
+		}
+		return fmt.Errorf("raftstore: command apply without handler")
+	}
+	return s.command.applyEntries(entries, fallback)
 }
 
 func (s *Store) enqueueOperation(op scheduler.Operation) {
-	if s == nil {
+	if s == nil || s.operations == nil {
 		return
 	}
-	if op.Type == scheduler.OperationNone || op.Region == 0 {
-		return
-	}
-	if s.operationInput == nil {
-		s.applyOperation(op)
-		return
-	}
-	key := operationKey{region: op.Region, typeID: op.Type}
-	s.operationMu.Lock()
-	if _, exists := s.pendingOps[key]; exists {
-		s.operationMu.Unlock()
-		return
-	}
-	s.pendingOps[key] = struct{}{}
-	s.operationMu.Unlock()
-	select {
-	case s.operationInput <- op:
-	default:
-		s.operationMu.Lock()
-		delete(s.pendingOps, key)
-		s.operationMu.Unlock()
-	}
-}
-
-func (s *Store) operationWorker() {
-	defer s.operationWG.Done()
-	interval := s.operationInterval
-	if interval <= 0 {
-		interval = 200 * time.Millisecond
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	pending := make([]scheduledOperation, 0)
-	for {
-		select {
-		case <-s.operationStop:
-			return
-		case op := <-s.operationInput:
-			pending = append(pending, scheduledOperation{op: op, ready: s.nextReadyTime(op)})
-		case <-ticker.C:
-			now := time.Now()
-			limit := s.operationBurst
-			if limit <= 0 {
-				limit = len(pending)
-			}
-			executed := 0
-			var remaining []scheduledOperation
-			for _, item := range pending {
-				if limit > 0 && executed >= limit {
-					remaining = append(remaining, item)
-					continue
-				}
-				if !item.ready.IsZero() && item.ready.After(now) {
-					remaining = append(remaining, item)
-					continue
-				}
-				s.applyOperation(item.op)
-				s.markOperationApplied(item.op, now)
-				executed++
-			}
-			pending = remaining
-		}
-	}
-}
-
-func (s *Store) nextReadyTime(op scheduler.Operation) time.Time {
-	if s == nil {
-		return time.Time{}
-	}
-	cooldown := s.operationCooldown
-	if cooldown <= 0 {
-		return time.Time{}
-	}
-	key := operationKey{region: op.Region, typeID: op.Type}
-	s.operationMu.Lock()
-	last := s.lastApplied[key]
-	s.operationMu.Unlock()
-	if last.IsZero() {
-		return time.Time{}
-	}
-	ready := last.Add(cooldown)
-	return ready
-}
-
-func (s *Store) markOperationApplied(op scheduler.Operation, appliedAt time.Time) {
-	key := operationKey{region: op.Region, typeID: op.Type}
-	if appliedAt.IsZero() {
-		appliedAt = time.Now()
-	}
-	s.operationMu.Lock()
-	s.lastApplied[key] = appliedAt
-	delete(s.pendingOps, key)
-	s.operationMu.Unlock()
+	s.operations.enqueue(op)
 }
 
 func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
@@ -864,42 +658,6 @@ func (s *Store) diskStats() (uint64, uint64, bool) {
 	return capacity, available, true
 }
 
-func (s *Store) nextProposalID() uint64 {
-	return atomic.AddUint64(&s.proposalSeq, 1)
-}
-
-func (s *Store) registerProposal(id uint64) *commandProposal {
-	prop := &commandProposal{ch: make(chan proposalResult, 1)}
-	s.proposalMu.Lock()
-	s.proposals[id] = prop
-	s.proposalMu.Unlock()
-	return prop
-}
-
-func (s *Store) removeProposal(id uint64) {
-	if id == 0 {
-		return
-	}
-	s.proposalMu.Lock()
-	delete(s.proposals, id)
-	s.proposalMu.Unlock()
-}
-
-func (s *Store) completeProposal(id uint64, resp *pb.RaftCmdResponse, err error) {
-	if id == 0 {
-		return
-	}
-	s.proposalMu.Lock()
-	prop, ok := s.proposals[id]
-	if ok {
-		delete(s.proposals, id)
-	}
-	s.proposalMu.Unlock()
-	if ok && prop != nil {
-		prop.ch <- proposalResult{resp: resp, err: err}
-	}
-}
-
 func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.RegionMeta, *pb.RaftCmdResponse, error) {
 	if s == nil {
 		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
@@ -949,12 +707,15 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		return resp, nil
 	}
 	if req.Header.RequestId == 0 {
-		req.Header.RequestId = s.nextProposalID()
+		req.Header.RequestId = s.command.nextProposalID()
 	}
 	id := req.Header.RequestId
-	prop := s.registerProposal(id)
+	prop := s.command.registerProposal(id)
+	if prop == nil {
+		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
+	}
 	if err := s.router.SendCommand(peer.ID(), req); err != nil {
-		s.removeProposal(id)
+		s.command.removeProposal(id)
 		return nil, err
 	}
 	result := <-prop.ch
@@ -990,8 +751,8 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if req.Header == nil {
 		req.Header = &pb.CmdHeader{}
 	}
-	if req.Header.GetRequestId() == 0 {
-		req.Header.RequestId = s.nextProposalID()
+	if s.command != nil && req.Header.GetRequestId() == 0 {
+		req.Header.RequestId = s.command.nextProposalID()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1081,42 +842,7 @@ func (s *Store) UpdateRegion(meta manifest.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if meta.ID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
-	}
-	if meta.State == 0 {
-		meta.State = manifest.RegionStateRunning
-	}
-
-	metaCopy := manifest.CloneRegionMeta(meta)
-
-	current, exists := s.regions.meta(metaCopy.ID)
-	var currentState manifest.RegionState
-	if exists {
-		currentState = current.State
-	} else {
-		currentState = manifest.RegionStateNew
-	}
-
-	if !validRegionStateTransition(currentState, metaCopy.State) {
-		return fmt.Errorf("raftstore: invalid region %d state transition %v -> %v", metaCopy.ID, currentState, metaCopy.State)
-	}
-
-	if s.manifest != nil {
-		if err := s.manifest.LogRegionUpdate(metaCopy); err != nil {
-			return err
-		}
-	}
-
-	peerRef := s.regions.updateMeta(metaCopy)
-
-	if peerRef != nil {
-		peerRef.SetRegionMeta(metaCopy)
-	}
-	if hook := s.regionHooks.OnRegionUpdate; hook != nil {
-		hook(metaCopy)
-	}
-	return nil
+	return s.regions.updateRegion(meta)
 }
 
 // RemoveRegion tombstones the region metadata from the manifest (when present)
@@ -1126,29 +852,7 @@ func (s *Store) RemoveRegion(regionID uint64) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if regionID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
-	}
-	existing, ok := s.regions.meta(regionID)
-	if !ok {
-		return fmt.Errorf("raftstore: region %d not found", regionID)
-	}
-	if existing.State != manifest.RegionStateTombstone {
-		existing.State = manifest.RegionStateTombstone
-		if err := s.UpdateRegion(existing); err != nil {
-			return err
-		}
-	}
-	if s.manifest != nil {
-		if err := s.manifest.LogRegionDelete(regionID); err != nil {
-			return err
-		}
-	}
-	s.regions.remove(regionID)
-	if hook := s.regionHooks.OnRegionRemove; hook != nil {
-		hook(regionID)
-	}
-	return nil
+	return s.regions.removeRegion(regionID)
 }
 
 // UpdateRegionState loads the currently known metadata and advances the state
@@ -1158,33 +862,7 @@ func (s *Store) UpdateRegionState(regionID uint64, state manifest.RegionState) e
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if regionID == 0 {
-		return fmt.Errorf("raftstore: region id is zero")
-	}
-	meta, ok := s.regions.meta(regionID)
-	if !ok {
-		return fmt.Errorf("raftstore: region %d not found", regionID)
-	}
-	meta.State = state
-	return s.UpdateRegion(meta)
-}
-
-func validRegionStateTransition(current, next manifest.RegionState) bool {
-	if current == next {
-		return true
-	}
-	switch current {
-	case manifest.RegionStateNew:
-		return next == manifest.RegionStateRunning
-	case manifest.RegionStateRunning:
-		return next == manifest.RegionStateRemoving || next == manifest.RegionStateTombstone
-	case manifest.RegionStateRemoving:
-		return next == manifest.RegionStateTombstone
-	case manifest.RegionStateTombstone:
-		return next == manifest.RegionStateTombstone
-	default:
-		return false
-	}
+	return s.regions.updateRegionState(regionID, state)
 }
 
 func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
@@ -1219,15 +897,7 @@ func (s *Store) VisitPeers(fn func(*peer.Peer)) {
 	if s == nil || fn == nil {
 		return
 	}
-	s.mu.RLock()
-	peers := make([]*peer.Peer, 0, len(s.peers))
-	for _, p := range s.peers {
-		peers = append(peers, p)
-	}
-	s.mu.RUnlock()
-	for _, p := range peers {
-		fn(p)
-	}
+	s.peers.visit(fn)
 }
 
 // RegionMetas collects the known manifest.RegionMeta entries from registered
@@ -1274,10 +944,7 @@ func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	if s == nil || id == 0 {
 		return nil, false
 	}
-	s.mu.RLock()
-	p, ok := s.peers[id]
-	s.mu.RUnlock()
-	return p, ok
+	return s.peers.get(id)
 }
 
 // Step forwards the provided raft message to the target peer hosted on this
@@ -1457,16 +1124,15 @@ func (s *Store) Peers() []PeerHandle {
 	if s == nil {
 		return nil
 	}
-	s.mu.RLock()
-	handles := make([]PeerHandle, 0, len(s.peers))
-	for id, p := range s.peers {
+	raw := s.peers.list()
+	handles := make([]PeerHandle, 0, len(raw))
+	for _, p := range raw {
 		handles = append(handles, PeerHandle{
-			ID:     id,
+			ID:     p.ID(),
 			Peer:   p,
 			Region: manifest.CloneRegionMetaPtr(p.RegionMeta()),
 		})
 	}
-	s.mu.RUnlock()
 	return handles
 }
 
