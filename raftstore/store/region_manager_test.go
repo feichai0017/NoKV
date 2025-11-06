@@ -8,7 +8,7 @@ import (
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
-	rm := newRegionManager()
+	rm := newRegionManager(nil, RegionHooks{})
 	snapshot := map[uint64]manifest.RegionMeta{
 		1: {
 			ID:       1,
@@ -30,14 +30,11 @@ func TestRegionManagerLoadAndMeta(t *testing.T) {
 }
 
 func TestRegionManagerPeerTracking(t *testing.T) {
-	rm := newRegionManager()
+	rm := newRegionManager(nil, RegionHooks{})
 	fakePeer := &peer.Peer{}
 	rm.setPeer(2, fakePeer)
-
-	meta := manifest.RegionMeta{ID: 2}
-	ret := rm.updateMeta(meta)
-	if ret != fakePeer {
-		t.Fatalf("expected returned peer to match stored peer")
+	if got := rm.peer(2); got != fakePeer {
+		t.Fatalf("expected peer to be retrievable")
 	}
 
 	rm.setPeer(2, nil)
@@ -47,11 +44,11 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 }
 
 func TestRegionManagerRemove(t *testing.T) {
-	rm := newRegionManager()
-	rm.loadSnapshot(map[uint64]manifest.RegionMeta{3: {ID: 3}})
+	rm := newRegionManager(nil, RegionHooks{})
+	requireNoError(t, rm.updateRegion(manifest.RegionMeta{ID: 3}))
 	rm.setPeer(3, &peer.Peer{})
 
-	rm.remove(3)
+	requireNoError(t, rm.removeRegion(3))
 	if _, ok := rm.meta(3); ok {
 		t.Fatalf("meta should be removed")
 	}
@@ -61,7 +58,7 @@ func TestRegionManagerRemove(t *testing.T) {
 }
 
 func TestRegionManagerListMetas(t *testing.T) {
-	rm := newRegionManager()
+	rm := newRegionManager(nil, RegionHooks{})
 	rm.loadSnapshot(map[uint64]manifest.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
@@ -69,5 +66,12 @@ func TestRegionManagerListMetas(t *testing.T) {
 	metas := rm.listMetas()
 	if len(metas) != 2 {
 		t.Fatalf("expected two metas, got %d", len(metas))
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
