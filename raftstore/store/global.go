@@ -17,6 +17,21 @@ func RegisterStore(st *Store) {
 	storeRegistryMu.Unlock()
 }
 
+// UnregisterStore removes the store instance from the global registry.
+func UnregisterStore(st *Store) {
+	if st == nil {
+		return
+	}
+	storeRegistryMu.Lock()
+	for i, registered := range storeRegistry {
+		if registered == st {
+			storeRegistry = append(storeRegistry[:i], storeRegistry[i+1:]...)
+			break
+		}
+	}
+	storeRegistryMu.Unlock()
+}
+
 // Stores returns the list of registered stores.
 func Stores() []*Store {
 	storeRegistryMu.Lock()
