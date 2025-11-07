@@ -1,13 +1,13 @@
 package peer
 
 import (
-	"errors"
 	"path/filepath"
 
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/transport"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -32,10 +32,6 @@ type Config struct {
 	MaxInFlightApply uint64
 }
 
-// ErrMissingManifestOrWAL indicates the caller provided only one durability
-// component, which would break crash recovery.
-var ErrMissingManifestOrWAL = errors.New("raftstore: WAL and manifest must both be provided")
-
 // ResolveStorage chooses the backing log engine (in-memory, on-disk, or WAL).
 func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 	if cfg == nil {
@@ -49,7 +45,7 @@ func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 		})
 	}
 	if cfg.WAL != nil || cfg.Manifest != nil {
-		return nil, ErrMissingManifestOrWAL
+		return nil, utils.ErrMissingManifestOrWAL
 	}
 	if cfg.StorageDir != "" {
 		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir))

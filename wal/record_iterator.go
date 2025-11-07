@@ -2,16 +2,7 @@ package wal
 
 import (
 	"bufio"
-	"errors"
 	"io"
-)
-
-var (
-	// ErrPartialRecord indicates that a record could not be fully read due to an
-	// unexpected EOF. Callers typically truncate the tail when this occurs.
-	ErrPartialRecord = errors.New("wal: partial record")
-	// ErrEmptyRecord indicates that a record header advertised zero length.
-	ErrEmptyRecord = errors.New("wal: empty record")
 )
 
 // RecordIterator provides iterator-style access over WAL records stored in the

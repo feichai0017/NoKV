@@ -117,10 +117,10 @@ const (
 //
 // The WAL record is stored on disk in the following format:
 //
-//  +--------+-----------+-----------+---------+
-//  | Length | Type      | Payload   | CRC32   |
-//  | [4]byte| [1]byte   | [N]byte   | [4]byte |
-//  +--------+-----------+-----------+---------+
+//	+--------+-----------+-----------+---------+
+//	| Length | Type      | Payload   | CRC32   |
+//	| [4]byte| [1]byte   | [N]byte   | [4]byte |
+//	+--------+-----------+-----------+---------+
 //
 // - Length: The length of the Type and Payload fields.
 // - Type: The type of the record, as defined by RecordType.
@@ -142,14 +142,14 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 {
-		return 0, nil, 0, ErrEmptyRecord
+		return 0, nil, 0, utils.ErrEmptyRecord
 	}
 
 	// Allocate buffer for type byte + payload
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, nil, 0, ErrPartialRecord
+			return 0, nil, 0, utils.ErrPartialRecord
 		}
 		return 0, nil, 0, err
 	}
@@ -157,7 +157,7 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 	var crcBuf [4]byte
 	if _, err := io.ReadFull(r, crcBuf[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, nil, 0, ErrPartialRecord
+			return 0, nil, 0, utils.ErrPartialRecord
 		}
 		return 0, nil, 0, err
 	}
@@ -177,7 +177,7 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 
 	recType := RecordType(buf[0])
 	payload := buf[1:] // Payload is the rest after the type byte
-	
+
 	return recType, payload, length, nil
 }
 
@@ -398,12 +398,12 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 			return nil, err
 		}
 		offset := m.activeSize
-		
+
 		n, err := EncodeRecord(m.writer, rec.Type, payload)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		m.activeSize += int64(n)
 		results[i] = EntryInfo{
 			SegmentID: m.activeID,
@@ -511,14 +511,14 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	}
 	defer f.Close()
 
-    reIter := NewRecordIterator(f, m.bufferSize)
+	reIter := NewRecordIterator(f, m.bufferSize)
 	defer reIter.Close()
 
 	var offset int64
 	for reIter.Next() {
-        length := reIter.Length()
-        recType := reIter.Type()
-        payload := append([]byte{}, reIter.Record()...)
+		length := reIter.Length()
+		recType := reIter.Type()
+		payload := append([]byte{}, reIter.Record()...)
 		info := EntryInfo{
 			SegmentID: id,
 			Offset:    offset,
@@ -534,7 +534,7 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case ErrPartialRecord:
+	case utils.ErrPartialRecord:
 		return nil
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
@@ -612,7 +612,7 @@ func verifySegment(path string) error {
 	}
 	defer f.Close()
 
-    reIter := NewRecordIterator(f, defaultBufferSize)
+	reIter := NewRecordIterator(f, defaultBufferSize)
 	defer reIter.Close()
 
 	var offset int64
@@ -623,7 +623,7 @@ func verifySegment(path string) error {
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case ErrPartialRecord:
+	case utils.ErrPartialRecord:
 		return f.Truncate(offset)
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
