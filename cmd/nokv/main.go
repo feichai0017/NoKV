@@ -522,6 +522,7 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	setInt("NoKV.Stats.Flush.Pending", &snap.FlushPending)
 	setInt("NoKV.Stats.Compaction.Backlog", &snap.CompactionBacklog)
 	setFloat("NoKV.Stats.Compaction.MaxScore", &snap.CompactionMaxScore)
+	setFloat("NoKV.Stats.Cache.IndexHitRate", &snap.IndexHitRate)
 	var intVal int64
 	setInt("NoKV.Stats.Write.HotKeyLimited", &intVal)
 	if intVal < 0 {

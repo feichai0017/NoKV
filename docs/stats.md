@@ -48,6 +48,7 @@ flowchart TD
 | `TxnsActive/Started/Committed/Conflicts` | `oracle.txnMetricsSnapshot()` | MVCC activity counters. |
 | `HotKeys` | `hotring.TopN()` | Top-K hot key counts. |
 | `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
+| `IndexHitRate` | `lsm.CacheMetrics()` | SST 索引块缓存命中率。 |
 | `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |
 | `RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning` | `manifest.RaftPointerSnapshot()` | Tracks follower backlogs; `LagWarnThreshold` comes from `Options.RaftLagWarnSegments`, and `RaftLagWarning` toggles when any group exceeds it. |
 | `RegionTotal/New/Running/Removing/Tombstone/Other` | `store.RegionMetrics` | Multi-Raft region state distribution. CLI attaches the first available `RegionMetrics` by default; pass `--no-region-metrics` to disable. |
