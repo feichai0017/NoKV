@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -173,4 +174,44 @@ func TestDirectoryLockPreventsConcurrentOpen(t *testing.T) {
 
 	db2 := Open(opt)
 	require.NoError(t, db2.Close())
+}
+
+func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
+	clearDir()
+	prev := opt.WriteHotKeyLimit
+	opt.WriteHotKeyLimit = 3
+	defer func() {
+		opt.WriteHotKeyLimit = prev
+	}()
+
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("throttle-key")
+	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v1")))
+	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v2")))
+	err := db.SetCF(kv.CFDefault, key, []byte("v3"))
+	require.ErrorIs(t, err, ErrHotKeyWriteThrottle)
+	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+}
+
+func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
+	clearDir()
+	prev := opt.WriteHotKeyLimit
+	opt.WriteHotKeyLimit = 3
+	defer func() {
+		opt.WriteHotKeyLimit = prev
+	}()
+
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	txn := db.NewTransaction(true)
+	key := []byte("txn-hot-key")
+	require.NoError(t, txn.Set(key, []byte("a")))
+	require.NoError(t, txn.Set(key, []byte("b")))
+	err := txn.Set(key, []byte("c"))
+	require.ErrorIs(t, err, ErrHotKeyWriteThrottle)
+	txn.Discard()
+	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
 }

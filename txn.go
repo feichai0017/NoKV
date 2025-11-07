@@ -391,6 +391,12 @@ func (txn *Txn) modify(e *kv.Entry) error {
 		return exceedsSize("Key", maxKeySize, e.Key)
 	}
 
+	if txn.db != nil {
+		if err := txn.db.maybeThrottleWrite(e.CF, e.Key); err != nil {
+			return err
+		}
+	}
+
 	if err := txn.checkSize(e); err != nil {
 		return err
 	}

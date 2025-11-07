@@ -121,6 +121,7 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		fmt.Fprintf(w, "ValueLog.Head          fid=%d offset=%d len=%d\n",
 			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
 	}
+	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.HotWriteLimited)
 	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.CompactionValueWeight)
 	if snap.CompactionValueWeightSuggested > snap.CompactionValueWeight {
 		fmt.Fprintf(w, " (suggested %.2f)", snap.CompactionValueWeightSuggested)
@@ -522,6 +523,12 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	setInt("NoKV.Stats.Compaction.Backlog", &snap.CompactionBacklog)
 	setFloat("NoKV.Stats.Compaction.MaxScore", &snap.CompactionMaxScore)
 	var intVal int64
+	setInt("NoKV.Stats.Write.HotKeyLimited", &intVal)
+	if intVal < 0 {
+		intVal = 0
+	}
+	snap.HotWriteLimited = uint64(intVal)
+	intVal = 0
 	setInt("NoKV.Stats.ValueLog.Segments", &intVal)
 	snap.ValueLogSegments = int(intVal)
 	intVal = 0
