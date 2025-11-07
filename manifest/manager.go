@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -165,11 +166,12 @@ type Edit struct {
 
 // Manager controls manifest file operations.
 type Manager struct {
-	mu       sync.Mutex
-	dir      string
-	current  string
-	manifest *os.File
-	version  Version
+	mu         sync.Mutex
+	dir        string
+	current    string
+	manifest   *os.File
+	version    Version
+	syncWrites bool
 }
 
 // Open loads manifest from CURRENT file or creates a new one.
@@ -180,7 +182,7 @@ func Open(dir string) (*Manager, error) {
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return nil, err
 	}
-	mgr := &Manager{dir: dir}
+	mgr := &Manager{dir: dir, syncWrites: true}
 	if err := mgr.loadCurrent(); err != nil {
 		if err := mgr.createNew(); err != nil {
 			return nil, err
@@ -329,16 +331,58 @@ func (m *Manager) apply(edit Edit) {
 
 // LogEdit appends an edit to manifest and updates current version.
 func (m *Manager) LogEdit(edit Edit) error {
+	return m.LogEdits(edit)
+}
+
+// SetSync configures whether manifest edits are synchronously flushed to disk.
+func (m *Manager) SetSync(sync bool) {
+	m.mu.Lock()
+	m.syncWrites = sync
+	m.mu.Unlock()
+}
+
+// LogEdits appends a batch of edits to manifest and updates current version.
+func (m *Manager) LogEdits(edits ...Edit) error {
+	if len(edits) == 0 {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := writeEdit(m.manifest, edit); err != nil {
+	return m.logEditsLocked(edits)
+}
+
+func (m *Manager) logEditsLocked(edits []Edit) error {
+	var buf bytes.Buffer
+	syncNeeded := false
+	for _, edit := range edits {
+		if err := writeEdit(&buf, edit); err != nil {
+			return err
+		}
+		if requiresSync(edit) {
+			syncNeeded = true
+		}
+	}
+	if _, err := m.manifest.Write(buf.Bytes()); err != nil {
 		return err
 	}
-	if err := m.manifest.Sync(); err != nil {
-		return err
+	if syncNeeded && m.syncWrites {
+		if err := m.manifest.Sync(); err != nil {
+			return err
+		}
 	}
-	m.apply(edit)
+	for _, edit := range edits {
+		m.apply(edit)
+	}
 	return nil
+}
+
+func requiresSync(edit Edit) bool {
+	switch edit.Type {
+	case EditAddFile, EditDeleteFile, EditLogPointer, EditValueLogHead, EditDeleteValueLog, EditUpdateValueLog:
+		return true
+	default:
+		return false
+	}
 }
 
 // Current returns a snapshot of the current version.
@@ -1027,18 +1071,6 @@ func Verify(dir string) error {
 		}
 		offset = pos + int64(length) + 4
 	}
-}
-
-func appendUint64(dst []byte, v uint64) []byte {
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], v)
-	return append(dst, buf[:]...)
-}
-
-func appendUint32(dst []byte, v uint32) []byte {
-	var buf [4]byte
-	binary.BigEndian.PutUint32(buf[:], v)
-	return append(dst, buf[:]...)
 }
 
 func appendBytes(dst []byte, b []byte) []byte {
