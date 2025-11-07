@@ -191,7 +191,7 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v1")))
 	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v2")))
 	err := db.SetCF(kv.CFDefault, key, []byte("v3"))
-	require.ErrorIs(t, err, ErrHotKeyWriteThrottle)
+	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
 }
 
@@ -211,7 +211,7 @@ func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
 	require.NoError(t, txn.Set(key, []byte("a")))
 	require.NoError(t, txn.Set(key, []byte("b")))
 	err := txn.Set(key, []byte("c"))
-	require.ErrorIs(t, err, ErrHotKeyWriteThrottle)
+	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	txn.Discard()
 	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
 }

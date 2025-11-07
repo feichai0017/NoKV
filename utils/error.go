@@ -83,6 +83,17 @@ var (
 	ErrDBClosed = errors.New("DB Closed")
 
 	ErrFillTables = errors.New("fill tables")
+
+	// ErrHotKeyWriteThrottle indicates that a key exceeded the configured write hot-key limit.
+	ErrHotKeyWriteThrottle = errors.New("hot key write throttled")
+
+	// ErrMissingManifestOrWAL indicates WAL and manifest must be provided together for raftstore durability.
+	ErrMissingManifestOrWAL = errors.New("raftstore: WAL and manifest must both be provided")
+
+	// ErrPartialRecord indicates that a WAL record ended prematurely (typically due to EOF/corruption).
+	ErrPartialRecord = errors.New("wal: partial record")
+	// ErrEmptyRecord indicates that a WAL record header advertised zero payload length.
+	ErrEmptyRecord = errors.New("wal: empty record")
 )
 
 // Panic 如果err 不为nil 则panicc

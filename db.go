@@ -89,8 +89,6 @@ type (
 	}
 )
 
-var ErrHotKeyWriteThrottle = stderrors.New("hot key write throttled")
-
 type cfCounters struct {
 	writes uint64
 	reads  uint64
@@ -634,7 +632,7 @@ func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
 		return nil
 	}
 	atomic.AddUint64(&db.hotWriteLimited, 1)
-	return ErrHotKeyWriteThrottle
+	return utils.ErrHotKeyWriteThrottle
 }
 
 func cfHotKey(cf kv.ColumnFamily, key []byte) string {

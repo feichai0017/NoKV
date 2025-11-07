@@ -47,7 +47,7 @@ type Options struct {
 	SyncWrites   bool
 	ManifestSync bool
 	// WriteHotKeyLimit caps how many consecutive writes a single key can issue
-	// before the DB returns ErrHotKeyWriteThrottle. Zero disables write-path
+	// before the DB returns utils.ErrHotKeyWriteThrottle. Zero disables write-path
 	// throttling.
 	WriteHotKeyLimit int32
 
@@ -125,7 +125,7 @@ func NewDefaultOptions() *Options {
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
-		WriteHotKeyLimit:              0,
+		WriteHotKeyLimit:              128,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,
