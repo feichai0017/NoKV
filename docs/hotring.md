@@ -81,3 +81,16 @@ The HotRing emphasises simplicity: no approximate counting sketches, just per-bu
 * Resetting the ring is as simple as instantiating a new `HotRing`—useful for benchmarks that require clean counters between phases.
 
 For end-to-end examples see [`docs/stats.md`](stats.md#hot-key-export) and the CLI walkthrough in [`docs/cli.md`](cli.md#hot-key-output).
+
+---
+
+## 7. Write-Path Throttling
+
+`Options.WriteHotKeyLimit` wires HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `ErrHotKeyWriteThrottle`. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
+
+Operational hints:
+
+* `StatsSnapshot.HotWriteLimited` and the CLI line `Write.HotKeyThrottled` expose how many writes were rejected since the process started.
+* Applications should surface `ErrHotKeyWriteThrottle` to callers (e.g. HTTP 429) so clients can back off.
+* Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.
+* Set the limit conservatively (e.g. a few dozen) and pair it with richer `HotRing` analytics (top-K stats, expvar export) to identify outliers before tuning.

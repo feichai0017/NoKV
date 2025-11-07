@@ -65,6 +65,7 @@ type Stats struct {
 	writeApplyMs          *expvar.Float
 	writeBatchesTotal     *expvar.Int
 	writeThrottle         *expvar.Int
+	writeHotKeyLimited    *expvar.Int
 	txnActive             *expvar.Int
 	txnStarted            *expvar.Int
 	txnCommitted          *expvar.Int
@@ -203,6 +204,7 @@ type StatsSnapshot struct {
 	RegionTombstone                int64                           `json:"region_tombstone"`
 	RegionOther                    int64                           `json:"region_other"`
 	HotKeys                        []HotKeyStat                    `json:"hot_keys,omitempty"`
+	HotWriteLimited                uint64                          `json:"hot_write_limited"`
 	BlockL0HitRate                 float64                         `json:"block_l0_hit_rate"`
 	BlockL1HitRate                 float64                         `json:"block_l1_hit_rate"`
 	BloomHitRate                   float64                         `json:"bloom_hit_rate"`
@@ -262,6 +264,7 @@ func newStats(db *DB) *Stats {
 		writeApplyMs:          reuseFloat("NoKV.Stats.Write.ApplyMs"),
 		writeBatchesTotal:     reuseInt("NoKV.Stats.Write.Batches"),
 		writeThrottle:         reuseInt("NoKV.Stats.Write.Throttle"),
+		writeHotKeyLimited:    reuseInt("NoKV.Stats.Write.HotKeyLimited"),
 		txnActive:             reuseInt("NoKV.Txns.Active"),
 		txnStarted:            reuseInt("NoKV.Txns.Started"),
 		txnCommitted:          reuseInt("NoKV.Txns.Committed"),
@@ -479,6 +482,9 @@ func (s *Stats) collect() {
 	s.writeValueLogMs.Set(snap.WriteAvgValueLogMs)
 	s.writeApplyMs.Set(snap.WriteAvgApplyMs)
 	s.writeBatchesTotal.Set(snap.WriteBatchesTotal)
+	if s.writeHotKeyLimited != nil {
+		s.writeHotKeyLimited.Set(int64(snap.HotWriteLimited))
+	}
 	s.raftGroupCount.Set(int64(snap.RaftGroupCount))
 	s.raftLaggingGroups.Set(int64(snap.RaftLaggingGroups))
 	s.raftMaxLagSegments.Set(snap.RaftMaxLagSegments)
@@ -642,6 +648,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.WriteBatchesTotal = wsnap.Batches
 	}
 	snap.WriteThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
+	snap.HotWriteLimited = atomic.LoadUint64(&s.db.hotWriteLimited)
 
 	if rm := s.regionMetrics; rm != nil {
 		rms := rm.Snapshot()

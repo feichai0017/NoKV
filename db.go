@@ -69,6 +69,7 @@ type (
 		prefetchHot      int32
 		prefetchCooldown time.Duration
 		cfMetrics        []*cfCounters
+		hotWriteLimited  uint64
 	}
 
 	commitQueue struct {
@@ -87,6 +88,8 @@ type (
 		size       int64
 	}
 )
+
+var ErrHotKeyWriteThrottle = stderrors.New("hot key write throttled")
 
 type cfCounters struct {
 	writes uint64
@@ -359,6 +362,9 @@ func (db *DB) Set(data *kv.Entry) error {
 	if data.CF.Valid() == false {
 		data.CF = kv.CFDefault
 	}
+	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
+		return err
+	}
 	data.Key = kv.InternalKey(data.CF, data.Key, math.MaxUint32)
 	// 如果value不应该直接写入LSM 则先写入 vlog文件，这时必须保证vlog具有重放功能
 	// 以便于崩溃后恢复数据
@@ -392,10 +398,14 @@ func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, 
 		return utils.ErrEmptyKey
 	}
 	entry := kv.NewEntryWithCF(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value))
-	entry.Key = kv.InternalKey(cf, entry.Key, version)
 	entry.Meta = meta
 	defer entry.DecrRef()
 
+	if err := db.maybeThrottleWrite(entry.CF, entry.Key); err != nil {
+		return err
+	}
+
+	entry.Key = kv.InternalKey(entry.CF, entry.Key, version)
 	if meta&kv.BitDelete == 0 && len(entry.Value) > 0 && !db.shouldWriteValueToLSM(entry) {
 		vp, err := db.vlog.newValuePtr(entry)
 		if err != nil {
@@ -608,6 +618,33 @@ func (db *DB) recordRead(key []byte) {
 	if db.prefetchWarm > 0 && count >= db.prefetchWarm {
 		db.enqueuePrefetch(skey, false)
 	}
+}
+
+func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
+	if db == nil || db.hot == nil || len(key) == 0 {
+		return nil
+	}
+	limit := db.opt.WriteHotKeyLimit
+	if limit <= 0 {
+		return nil
+	}
+	skey := cfHotKey(cf, key)
+	_, limited := db.hot.TouchAndClamp(skey, limit)
+	if !limited {
+		return nil
+	}
+	atomic.AddUint64(&db.hotWriteLimited, 1)
+	return ErrHotKeyWriteThrottle
+}
+
+func cfHotKey(cf kv.ColumnFamily, key []byte) string {
+	if !cf.Valid() || cf == kv.CFDefault {
+		return string(key)
+	}
+	buf := make([]byte, len(key)+1)
+	buf[0] = byte(cf)
+	copy(buf[1:], key)
+	return string(buf)
 }
 
 func (db *DB) enqueuePrefetch(key string, hot bool) {
