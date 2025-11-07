@@ -104,7 +104,7 @@ NoKV emphasises zero-dependency observability. Everything is consumable via HTTP
 * Watch `FlushQueueLength` and `CompactionBacklog` together—if both grow, increase flush workers or adjust level sizes.
 * `ValueLogDiscardQueue > 0` for extended periods indicates GC is blocked; inspect `NoKV.ValueLog.GcRuns` and consider tuning thresholds.
 * `WriteThrottleActive` toggling frequently suggests L0 is overwhelmed; cross-check `BlockL0HitRate` and compaction metrics.
-* `HotWriteLimited` climbing steadily means HotRing write throttling is firing—surface `ErrHotKeyWriteThrottle` to clients and investigate abusive keys via the `HotKeys` list.
+* `HotWriteLimited` climbing steadily means HotRing write throttling is firing—surface `utils.ErrHotKeyWriteThrottle` to clients and investigate abusive keys via the `HotKeys` list.
 * `RaftLagWarning` toggling to `true` means at least one follower lags the leader by more than `Options.RaftLagWarnSegments`; inspect `Raft.Warning` from the CLI and consider snapshot resend or throttling the offending node.
 * `Regions.Total` should match the expected cluster topology; sustained `Removing/Tombstone` counts indicate stalled cleanup—investigate split/merge logic or stuck replicas.
 

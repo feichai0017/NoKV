@@ -3,6 +3,7 @@ package hotring
 import (
 	"sort"
 	"sync"
+	"time"
 
 	xxhash "github.com/cespare/xxhash/v2"
 )
@@ -21,6 +22,14 @@ type HotRing struct {
 	hashFn   HashFn
 	hashMask uint32
 	tables   []*Node
+
+	windowSlots   int
+	windowSlotDur time.Duration
+
+	decayInterval time.Duration
+	decayShift    uint32
+	decayStop     chan struct{}
+	decayWG       sync.WaitGroup
 }
 
 const defaultTableBits = 12 // 4096 buckets by default
@@ -42,8 +51,129 @@ func NewHotRing(bits uint8, fn HashFn) *HotRing {
 	}
 }
 
+// EnableSlidingWindow configures the ring to maintain a time-based sliding window.
+// slots specifies how many buckets to retain, while slotDuration controls how long
+// each bucket remains active. Passing non-positive values disables the window.
+func (h *HotRing) EnableSlidingWindow(slots int, slotDuration time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if slots <= 0 || slotDuration <= 0 {
+		h.windowSlots = 0
+		h.windowSlotDur = 0
+		return
+	}
+	h.windowSlots = slots
+	h.windowSlotDur = slotDuration
+}
+
+// EnableDecay applies periodic right-shift decay to the raw counters.
+// interval <= 0 or shift == 0 disables background decay.
+func (h *HotRing) EnableDecay(interval time.Duration, shift uint32) {
+	h.stopDecay()
+	if interval <= 0 || shift == 0 {
+		return
+	}
+	h.mu.Lock()
+	if h.decayStop != nil {
+		close(h.decayStop)
+		h.decayStop = nil
+	}
+	h.decayInterval = interval
+	h.decayShift = shift
+	stop := make(chan struct{})
+	h.decayStop = stop
+	h.decayWG.Add(1)
+	h.mu.Unlock()
+
+	go h.decayLoop(stop, interval, shift)
+}
+
+// Close releases background resources attached to the ring.
+func (h *HotRing) Close() {
+	h.stopDecay()
+}
+
 func defaultHash(key string) uint32 {
 	return uint32(xxhash.Sum64String(key))
+}
+
+func (h *HotRing) stopDecay() {
+	h.mu.Lock()
+	stop := h.decayStop
+	if stop != nil {
+		close(stop)
+		h.decayStop = nil
+	}
+	h.mu.Unlock()
+	if stop != nil {
+		h.decayWG.Wait()
+	}
+}
+
+func (h *HotRing) decayLoop(stop <-chan struct{}, interval time.Duration, shift uint32) {
+	ticker := time.NewTicker(interval)
+	defer func() {
+		ticker.Stop()
+		h.decayWG.Done()
+	}()
+	for {
+		select {
+		case <-ticker.C:
+			h.applyDecay(shift)
+		case <-stop:
+			return
+		}
+	}
+}
+
+func (h *HotRing) applyDecay(shift uint32) {
+	if shift == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, head := range h.tables {
+		if head == nil {
+			continue
+		}
+		node := head
+		for {
+			node.decay(shift)
+			next := node.Next()
+			if next == nil || next == head {
+				break
+			}
+			node = next
+		}
+	}
+}
+
+func (h *HotRing) currentSlot() int64 {
+	if h == nil || h.windowSlots <= 0 || h.windowSlotDur <= 0 {
+		return 0
+	}
+	return time.Now().UnixNano() / h.windowSlotDur.Nanoseconds()
+}
+
+func (h *HotRing) nodeCountLocked(node *Node, slot int64) int32 {
+	if node == nil {
+		return 0
+	}
+	if h.windowSlots > 0 {
+		return node.windowTotalAt(h.windowSlots, slot)
+	}
+	return node.GetCounter()
+}
+
+func (h *HotRing) incrementNodeLocked(node *Node, slot int64) int32 {
+	if node == nil {
+		return 0
+	}
+	node.Increment()
+	if h.windowSlots > 0 {
+		return node.incrementWindow(h.windowSlots, slot)
+	}
+	return node.GetCounter()
 }
 
 // Touch records a key access and returns the updated counter.
@@ -51,23 +181,26 @@ func (h *HotRing) Touch(key string) int32 {
 	if h == nil || key == "" {
 		return 0
 	}
+	slot := h.currentSlot()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if node := h.searchLocked(key, true); node != nil {
-		return node.GetCounter()
-	}
-	node, inserted := h.insertLocked(key)
-	if !inserted {
-		// Shouldn't happen because search returned nil, but guard anyway.
-		if node != nil {
-			return node.GetCounter()
+	node := h.searchLocked(key)
+	if node == nil {
+		var inserted bool
+		node, inserted = h.insertLocked(key)
+		if !inserted {
+			if node == nil {
+				return 0
+			}
+		} else {
+			node.ResetCounter()
+			if h.windowSlots > 0 {
+				node.ensureWindow(h.windowSlots, slot)
+			}
 		}
-		return 0
 	}
-	// First access for this key.
-	node.ResetCounter()
-	return node.Increment()
+	return h.incrementNodeLocked(node, slot)
 }
 
 // Frequency returns the current access counter for key without mutating state.
@@ -75,13 +208,16 @@ func (h *HotRing) Frequency(key string) int32 {
 	if h == nil || key == "" {
 		return 0
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	node := h.searchLocked(key, false)
-	if node == nil {
-		return 0
+	slot := h.currentSlot()
+	if h.windowSlots > 0 {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	} else {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
 	}
-	return node.GetCounter()
+	node := h.searchLocked(key)
+	return h.nodeCountLocked(node, slot)
 }
 
 // TouchAndClamp increments the counter if below the provided limit and reports
@@ -95,21 +231,25 @@ func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited b
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	node := h.searchLocked(key, false)
+	slot := h.currentSlot()
+	node := h.searchLocked(key)
 	if node == nil {
 		node, inserted := h.insertLocked(key)
 		if !inserted || node == nil {
 			return 0, false
 		}
 		node.ResetCounter()
-		count = node.Increment()
+		if h.windowSlots > 0 {
+			node.ensureWindow(h.windowSlots, slot)
+		}
+		count = h.incrementNodeLocked(node, slot)
 		return count, count >= limit
 	}
-	current := node.GetCounter()
+	current := h.nodeCountLocked(node, slot)
 	if current >= limit {
 		return current, true
 	}
-	count = node.Increment()
+	count = h.incrementNodeLocked(node, slot)
 	return count, count >= limit
 }
 
@@ -117,7 +257,7 @@ func (h *HotRing) Remove(key string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	toDel := h.searchLocked(key, false)
+	toDel := h.searchLocked(key)
 	if toDel == nil {
 		return
 	}
@@ -151,8 +291,14 @@ func (h *HotRing) TopN(n int) []Item {
 	if h == nil || n <= 0 {
 		return nil
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	slot := h.currentSlot()
+	if h.windowSlots > 0 {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	} else {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+	}
 
 	var items []Item
 	for _, head := range h.tables {
@@ -163,7 +309,7 @@ func (h *HotRing) TopN(n int) []Item {
 		for {
 			items = append(items, Item{
 				Key:   node.key,
-				Count: node.GetCounter(),
+				Count: h.nodeCountLocked(node, slot),
 			})
 			next := node.Next()
 			if next == nil || next == head {
@@ -194,8 +340,14 @@ func (h *HotRing) KeysAbove(threshold int32) []Item {
 	if h == nil || threshold <= 0 {
 		return nil
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	slot := h.currentSlot()
+	if h.windowSlots > 0 {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	} else {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+	}
 	var items []Item
 	for _, head := range h.tables {
 		if head == nil {
@@ -203,7 +355,7 @@ func (h *HotRing) KeysAbove(threshold int32) []Item {
 		}
 		node := head
 		for {
-			if cnt := node.GetCounter(); cnt >= threshold {
+			if cnt := h.nodeCountLocked(node, slot); cnt >= threshold {
 				items = append(items, Item{Key: node.key, Count: cnt})
 			}
 			next := node.Next()
@@ -222,8 +374,8 @@ func (h *HotRing) KeysAbove(threshold int32) []Item {
 	return items
 }
 
-// searchLocked finds the node for key; if increment is true the access counter is incremented.
-func (h *HotRing) searchLocked(key string, increment bool) *Node {
+// searchLocked finds the node for key. Caller must hold at least a read lock.
+func (h *HotRing) searchLocked(key string) *Node {
 	hashVal := h.hashFn(key)
 	index, tag := hashVal&h.hashMask, hashVal&(^h.hashMask)
 
@@ -260,10 +412,6 @@ func (h *HotRing) searchLocked(key string, increment bool) *Node {
 				break
 			}
 		}
-	}
-
-	if res != nil && increment {
-		res.Increment()
 	}
 	return res
 }
