@@ -48,12 +48,23 @@ func KeyWithTs(key []byte, ts uint64) []byte {
 	return out
 }
 
-// InternalKey generates an LSM key carrying both CF prefix and timestamp.
+// InternalKey encodes (column family, user key, timestamp) into the canonical
+// on-disk layout used by the LSM:
+//
+//	+------------+----------+----------------------+
+//	| CF marker  | User key | Timestamp (uint64 BE)|
+//	+------------+----------+----------------------+
+//	| 4 bytes    | raw      | 8 bytes (descending) |
+//	+------------+----------+----------------------+
+//
+// CF marker uses 3 fixed bytes (0xFF,'C','F') plus the CF byte. Timestamp is
+// bitwise inverted (^ts) so that newer versions sort before older ones.
 func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
 	return KeyWithTs(EncodeKeyWithCF(cf, key), ts)
 }
 
-// SplitInternalKey decodes column family, user key, and timestamp from an internal key.
+// SplitInternalKey decodes (column family, user key, timestamp) from an internal
+// key created by InternalKey.
 func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64) {
 	ts := ParseTs(internal)
 	base := ParseKey(internal)

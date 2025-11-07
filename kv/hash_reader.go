@@ -10,6 +10,7 @@ type HashReader struct {
 	R         io.Reader
 	H         hash32
 	BytesRead int // Number of bytes read.
+	tmp       [1]byte
 }
 
 type hash32 interface {
@@ -38,9 +39,8 @@ func (t *HashReader) Read(p []byte) (int, error) {
 
 // ReadByte reads exactly one byte from the reader. Returns error on failure.
 func (t *HashReader) ReadByte() (byte, error) {
-	b := make([]byte, 1)
-	_, err := t.Read(b)
-	return b[0], err
+	_, err := t.Read(t.tmp[:])
+	return t.tmp[0], err
 }
 
 // Sum32 returns the sum32 of the underlying hash.

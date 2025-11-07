@@ -1,7 +1,6 @@
 package kv
 
 import (
-	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,49 +12,20 @@ var EntryPool = sync.Pool{
 	},
 }
 
-type ValueStruct struct {
-	Meta      byte
-	Value     []byte
-	ExpiresAt uint64
-
-	Version uint64 // This field is not serialized. Only for internal usage.
-}
-
-// EncodedSize returns the size of the encoded value structure.
-func (vs *ValueStruct) EncodedSize() uint32 {
-	sz := len(vs.Value) + 1 // meta
-	enc := sizeVarint(vs.ExpiresAt)
-	return uint32(sz + enc)
-}
-
-// DecodeValue decodes the provided buffer into the value structure.
-func (vs *ValueStruct) DecodeValue(buf []byte) {
-	vs.Meta = buf[0]
-	var sz int
-	vs.ExpiresAt, sz = binary.Uvarint(buf[1:])
-	vs.Value = buf[1+sz:]
-}
-
-// EncodeValue encodes the value structure into the provided buffer and returns the bytes written.
-func (vs *ValueStruct) EncodeValue(b []byte) uint32 {
-	b[0] = vs.Meta
-	sz := binary.PutUvarint(b[1:], vs.ExpiresAt)
-	n := copy(b[1+sz:], vs.Value)
-	return uint32(1 + sz + n)
-}
-
-func sizeVarint(x uint64) (n int) {
-	for {
-		n++
-		x >>= 7
-		if x == 0 {
-			break
-		}
-	}
-	return n
-}
-
 // Entry represents the top-level mutation record stored in WAL/vlog segments.
+//
+// Binary layout when encoded (via EncodeEntryTo):
+//
+//	+---------+------+--------+--------+
+//	| Header  | Key  | Value  | CRC32  |
+//	+---------+------+--------+--------+
+//	| varints | raw  | raw    | 4 bytes|
+//	+---------+------+--------+--------+
+//
+// Header encodes KeyLen, ValueLen, Meta, ExpiresAt using Uvarint. Key and Value
+// are already in their internal encodings before hitting EncodeEntryTo:
+//   - Key must be an InternalKey (see key.go) with CF marker + user key + timestamp.
+//   - Value must be a ValueStruct encoding (meta + ExpiresAt + inline payload or ValuePtr).
 type Entry struct {
 	Key       []byte
 	Value     []byte
