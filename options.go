@@ -43,6 +43,16 @@ type Options struct {
 	HotRingEnabled  bool
 	HotRingBits     uint8
 	HotRingTopK     int
+	// HotRingDecayInterval controls how often HotRing halves its global counters.
+	// Zero disables periodic decay.
+	HotRingDecayInterval time.Duration
+	// HotRingDecayShift determines how aggressively counters decay (count >>= shift).
+	HotRingDecayShift uint32
+	// HotRingWindowSlots controls the number of sliding-window buckets tracked per key.
+	// Zero disables the sliding window.
+	HotRingWindowSlots int
+	// HotRingWindowSlotDuration sets the duration of each sliding-window bucket.
+	HotRingWindowSlotDuration time.Duration
 
 	SyncWrites   bool
 	ManifestSync bool
@@ -117,6 +127,10 @@ func NewDefaultOptions() *Options {
 		HotRingEnabled:                true,
 		HotRingBits:                   12,
 		HotRingTopK:                   16,
+		HotRingDecayInterval:          time.Second,
+		HotRingDecayShift:             1,
+		HotRingWindowSlots:            8,
+		HotRingWindowSlotDuration:     250 * time.Millisecond,
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,
 		WriteBatchDelay:               2 * time.Millisecond,

@@ -1,6 +1,9 @@
 package hotring
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestHotRingTouchAndTopN(t *testing.T) {
 	r := NewHotRing(4, nil)
@@ -71,5 +74,36 @@ func TestHotRingFrequencyAndClamp(t *testing.T) {
 	}
 	if !foundHot {
 		t.Fatalf("expected hot key to be reported above threshold")
+	}
+}
+
+func TestHotRingSlidingWindow(t *testing.T) {
+	r := NewHotRing(4, nil)
+	r.EnableSlidingWindow(4, 10*time.Millisecond)
+	defer r.Close()
+
+	for i := 0; i < 3; i++ {
+		r.Touch("pulse")
+	}
+	if freq := r.Frequency("pulse"); freq != 3 {
+		t.Fatalf("expected initial window count 3, got %d", freq)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if freq := r.Frequency("pulse"); freq != 0 {
+		t.Fatalf("expected sliding window to decay to 0, got %d", freq)
+	}
+}
+
+func TestHotRingDecayLoop(t *testing.T) {
+	r := NewHotRing(4, nil)
+	r.EnableDecay(10*time.Millisecond, 1)
+	defer r.Close()
+
+	for i := 0; i < 8; i++ {
+		r.Touch("decay-key")
+	}
+	time.Sleep(35 * time.Millisecond)
+	if freq := r.Frequency("decay-key"); freq >= 8 {
+		t.Fatalf("expected decay to reduce count, still %d", freq)
 	}
 }

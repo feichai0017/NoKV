@@ -10,6 +10,11 @@ type Node struct {
 	tag   uint32
 	next  unsafe.Pointer
 	count int32
+
+	window       []int32
+	windowTotal  int32
+	windowPos    int
+	windowSlotID int64
 }
 
 func NewNode(key string, tag uint32) *Node {
@@ -65,6 +70,14 @@ func (n *Node) GetCounter() int32 {
 
 func (n *Node) ResetCounter() {
 	atomic.StoreInt32(&n.count, 0)
+	n.windowTotal = 0
+	if n.window != nil {
+		for i := range n.window {
+			n.window[i] = 0
+		}
+		n.windowPos = 0
+		n.windowSlotID = 0
+	}
 }
 
 func (n *Node) SetNext(next *Node) {
@@ -78,4 +91,74 @@ func (n *Node) SetNext(next *Node) {
 
 func (n *Node) Increment() int32 {
 	return atomic.AddInt32(&n.count, 1)
+}
+
+func (n *Node) ensureWindow(slots int, slotID int64) {
+	if slots <= 0 {
+		return
+	}
+	if len(n.window) != slots {
+		n.window = make([]int32, slots)
+		n.windowPos = int(slotID % int64(slots))
+		n.windowSlotID = slotID
+		n.windowTotal = 0
+		return
+	}
+	if n.windowSlotID == 0 {
+		n.windowSlotID = slotID
+	}
+}
+
+func (n *Node) advanceWindow(slots int, slotID int64) {
+	if slots <= 0 {
+		return
+	}
+	n.ensureWindow(slots, slotID)
+	if slotID <= n.windowSlotID {
+		return
+	}
+	steps := slotID - n.windowSlotID
+	if steps >= int64(slots) {
+		for i := range n.window {
+			n.window[i] = 0
+		}
+		n.windowTotal = 0
+		n.windowPos = int(slotID % int64(slots))
+		n.windowSlotID = slotID
+		return
+	}
+	for i := int64(0); i < steps; i++ {
+		n.windowPos = (n.windowPos + 1) % slots
+		n.windowTotal -= n.window[n.windowPos]
+		n.window[n.windowPos] = 0
+	}
+	n.windowSlotID = slotID
+}
+
+func (n *Node) incrementWindow(slots int, slotID int64) int32 {
+	if slots <= 0 {
+		return n.GetCounter()
+	}
+	n.advanceWindow(slots, slotID)
+	n.window[n.windowPos]++
+	n.windowTotal++
+	return n.windowTotal
+}
+
+func (n *Node) windowTotalAt(slots int, slotID int64) int32 {
+	if slots <= 0 {
+		return n.GetCounter()
+	}
+	n.advanceWindow(slots, slotID)
+	return n.windowTotal
+}
+
+func (n *Node) decay(shift uint32) {
+	if shift == 0 {
+		return
+	}
+	if n.count == 0 {
+		return
+	}
+	n.count = int32(int64(n.count) >> shift)
 }

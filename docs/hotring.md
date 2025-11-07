@@ -86,11 +86,33 @@ For end-to-end examples see [`docs/stats.md`](stats.md#hot-key-export) and the C
 
 ## 7. Write-Path Throttling
 
-`Options.WriteHotKeyLimit` wires HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `ErrHotKeyWriteThrottle`. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
+`Options.WriteHotKeyLimit` wires HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
 
 Operational hints:
 
 * `StatsSnapshot.HotWriteLimited` and the CLI line `Write.HotKeyThrottled` expose how many writes were rejected since the process started.
-* Applications should surface `ErrHotKeyWriteThrottle` to callers (e.g. HTTP 429) so clients can back off.
+* Applications should surface `utils.ErrHotKeyWriteThrottle` to callers (e.g. HTTP 429) so clients can back off.
 * Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.
 * Set the limit conservatively (e.g. a few dozen) and pair it with richer `HotRing` analytics (top-K stats, expvar export) to identify outliers before tuning.
+
+---
+
+## 8. Time-Based Decay & Sliding Window
+
+HotRing now exposes two complementary controls so “old” hotspots fade away automatically:
+
+1. **Periodic decay (`Options.HotRingDecayInterval` + `HotRingDecayShift`)**  
+   Every `interval` the global counters are right-shifted (`count >>= shift`). This keeps `TopN` and stats output focused on recent traffic even if writes stop abruptly.
+2. **Sliding window (`Options.HotRingWindowSlots` + `HotRingWindowSlotDuration`)**  
+   Per-key windows split time into `slots`, each lasting `slotDuration`. `Touch` only accumulates inside the current slot; once the window slides past, the stale contribution is dropped. `TouchAndClamp` and `Frequency` use the sliding-window total, so write throttling reflects short-term pressure instead of lifetime counts.
+
+Disable either mechanism by setting the interval/durations to zero. Typical starting points:
+
+| Option | Default value | Effect |
+| --- | --- | --- |
+| `HotRingDecayInterval` | `1s` | Halve legacy counters once per second. |
+| `HotRingDecayShift` | `1` | Simple divide-by-two decay. |
+| `HotRingWindowSlots` | `8` | Keep ~8 buckets of recency data. |
+| `HotRingWindowSlotDuration` | `250ms` | Roughly 2s window for throttling. |
+
+With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.

@@ -209,6 +209,12 @@ func Open(opt *Options) *DB {
 
 	if opt.HotRingEnabled {
 		db.hot = hotring.NewHotRing(opt.HotRingBits, nil)
+		if opt.HotRingWindowSlots > 0 && opt.HotRingWindowSlotDuration > 0 {
+			db.hot.EnableSlidingWindow(opt.HotRingWindowSlots, opt.HotRingWindowSlotDuration)
+		}
+		if opt.HotRingDecayInterval > 0 && opt.HotRingDecayShift > 0 {
+			db.hot.EnableDecay(opt.HotRingDecayInterval, opt.HotRingDecayShift)
+		}
 		if opt.HotRingTopK <= 0 {
 			opt.HotRingTopK = 16
 		}
@@ -294,6 +300,10 @@ func (db *DB) Close() error {
 	if db.walWatchdog != nil {
 		db.walWatchdog.stop()
 		db.walWatchdog = nil
+	}
+
+	if db.hot != nil {
+		db.hot.Close()
 	}
 
 	if db.prefetchCh != nil {
