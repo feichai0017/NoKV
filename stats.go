@@ -73,6 +73,7 @@ type Stats struct {
 	blockL0HitRate        *expvar.Float
 	blockL1HitRate        *expvar.Float
 	bloomHitRate          *expvar.Float
+	indexHitRate          *expvar.Float
 	iteratorReuses        *expvar.Int
 	cfMap                 *expvar.Map
 	walRecordCounts       *expvar.Map
@@ -208,6 +209,7 @@ type StatsSnapshot struct {
 	BlockL0HitRate                 float64                         `json:"block_l0_hit_rate"`
 	BlockL1HitRate                 float64                         `json:"block_l1_hit_rate"`
 	BloomHitRate                   float64                         `json:"bloom_hit_rate"`
+	IndexHitRate                   float64                         `json:"index_hit_rate"`
 	IteratorReused                 uint64                          `json:"iterator_reused"`
 	ColumnFamilies                 map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
 	LSMLevels                      []LSMLevelStats                 `json:"lsm_levels,omitempty"`
@@ -272,6 +274,7 @@ func newStats(db *DB) *Stats {
 		blockL0HitRate:        reuseFloat("NoKV.Stats.Cache.L0HitRate"),
 		blockL1HitRate:        reuseFloat("NoKV.Stats.Cache.L1HitRate"),
 		bloomHitRate:          reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
+		indexHitRate:          reuseFloat("NoKV.Stats.Cache.IndexHitRate"),
 		iteratorReuses:        reuseInt("NoKV.Stats.Iterator.Reused"),
 		walSegmentsWithRaft:   reuseInt("NoKV.Stats.WAL.RaftSegments"),
 		walSegmentsRemovable:  reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
@@ -507,6 +510,7 @@ func (s *Stats) collect() {
 	s.blockL0HitRate.Set(snap.BlockL0HitRate)
 	s.blockL1HitRate.Set(snap.BlockL1HitRate)
 	s.bloomHitRate.Set(snap.BloomHitRate)
+	s.indexHitRate.Set(snap.IndexHitRate)
 	s.iteratorReuses.Set(int64(snap.IteratorReused))
 	if s.cfMap != nil {
 		s.cfMap.Init()
@@ -788,6 +792,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		}
 		if total := cm.BloomHits + cm.BloomMisses; total > 0 {
 			snap.BloomHitRate = float64(cm.BloomHits) / float64(total)
+		}
+		if total := cm.IndexHits + cm.IndexMisses; total > 0 {
+			snap.IndexHitRate = float64(cm.IndexHits) / float64(total)
 		}
 	}
 	if s.db != nil && s.db.iterPool != nil {

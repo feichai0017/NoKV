@@ -28,6 +28,8 @@ type CacheMetrics struct {
 	L1Misses    uint64
 	BloomHits   uint64
 	BloomMisses uint64
+	IndexHits   uint64
+	IndexMisses uint64
 }
 
 type cacheMetrics struct {
@@ -37,6 +39,8 @@ type cacheMetrics struct {
 	l1Misses    uint64
 	bloomHits   uint64
 	bloomMisses uint64
+	indexHits   uint64
+	indexMisses uint64
 }
 
 func (m *cacheMetrics) recordBlock(level int, hit bool) {
@@ -75,11 +79,36 @@ func (m *cacheMetrics) snapshot() CacheMetrics {
 		L1Misses:    atomic.LoadUint64(&m.l1Misses),
 		BloomHits:   atomic.LoadUint64(&m.bloomHits),
 		BloomMisses: atomic.LoadUint64(&m.bloomMisses),
+		IndexHits:   atomic.LoadUint64(&m.indexHits),
+		IndexMisses: atomic.LoadUint64(&m.indexMisses),
 	}
 }
 
+func (m *cacheMetrics) recordIndex(hit bool) {
+	if hit {
+		atomic.AddUint64(&m.indexHits, 1)
+		return
+	}
+	atomic.AddUint64(&m.indexMisses, 1)
+}
+
 // close releases cache state.
-func (c *cache) close() error { return nil }
+func (c *cache) close() error {
+	if c == nil {
+		return nil
+	}
+	c.indexs = nil
+	if c.blocks != nil {
+		c.blocks.close()
+		c.blocks = nil
+	}
+	if c.blooms != nil {
+		c.blooms.close()
+		c.blooms = nil
+	}
+	c.metrics = nil
+	return nil
+}
 
 func newCache(opt *Options) *cache {
 	metrics := &cacheMetrics{}
@@ -96,7 +125,7 @@ func newCache(opt *Options) *cache {
 		hotSize = hotCap
 	}
 	coldSize := hotCap - hotSize
-	blocks := newBlockCache(hotSize, coldSize, metrics)
+	blocks := newBlockCache(hotSize, coldSize)
 	blooms := newBloomCache(opt.BloomCacheSize)
 	return &cache{
 		indexs:  coreCache.NewCache(defaultCacheSize),
@@ -121,6 +150,9 @@ func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
 		return nil, false
 	}
 	val, ok := c.indexs.Get(fid)
+	if c.metrics != nil {
+		c.metrics.recordIndex(ok)
+	}
 	if !ok {
 		return nil, false
 	}
@@ -142,7 +174,7 @@ func (c *cache) getBlock(level int, key uint64) (*block, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(level, key)
+	blk, ok := c.blocks.get(key)
 	if ok {
 		c.metrics.recordBlock(level, true)
 		return blk, true
@@ -205,7 +237,7 @@ type blockEntry struct {
 	data *block
 }
 
-func newBlockCache(hotCap, coldCap int, metrics *cacheMetrics) *blockCache {
+func newBlockCache(hotCap, coldCap int) *blockCache {
 	bc := &blockCache{
 		hotCap:  hotCap,
 		hotList: list.New(),
@@ -217,7 +249,7 @@ func newBlockCache(hotCap, coldCap int, metrics *cacheMetrics) *blockCache {
 	return bc
 }
 
-func (c *blockCache) get(level int, key uint64) (*block, bool) {
+func (c *blockCache) get(key uint64) (*block, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -313,6 +345,20 @@ func (c *blockCache) removeLocked(key uint64) {
 	}
 	if c.cold != nil {
 		c.cold.del(key)
+	}
+}
+
+func (c *blockCache) close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hotData = nil
+	c.hotList = nil
+	if c.cold != nil {
+		c.cold.clear()
+		c.cold = nil
 	}
 }
 
@@ -414,6 +460,16 @@ func (c *clockCache) del(key uint64) {
 	}
 }
 
+func (c *clockCache) clear() {
+	if c == nil {
+		return
+	}
+	c.entries = nil
+	c.index = nil
+	c.capacity = 0
+	c.hand = 0
+}
+
 type bloomCache struct {
 	mu    sync.Mutex
 	cap   int
@@ -473,4 +529,15 @@ func (bc *bloomCache) add(fid uint64, filter utils.Filter) {
 	}
 	elem := bc.lru.PushFront(&bloomEntry{fid: fid, filter: dup})
 	bc.items[fid] = elem
+}
+
+func (bc *bloomCache) close() {
+	if bc == nil {
+		return
+	}
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	bc.items = nil
+	bc.lru = nil
+	bc.cap = 0
 }

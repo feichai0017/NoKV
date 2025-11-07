@@ -67,6 +67,7 @@ type CacheMetrics struct {
     L0Hits, L0Misses uint64
     L1Hits, L1Misses uint64
     BloomHits, BloomMisses uint64
+    IndexHits, IndexMisses uint64
 }
 ```
 
