@@ -28,6 +28,9 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if err := lm.loadManifest(); err != nil {
 		panic(err)
 	}
+	if lm.manifestMgr != nil {
+		lm.manifestMgr.SetSync(opt.ManifestSync)
+	}
 	lm.build()
 	lm.compaction = newCompactionManager(lm)
 	return lm
@@ -107,9 +110,6 @@ func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 	return entry, utils.ErrKeyNotFound
 }
 
-func (lm *levelManager) loadCache() {
-
-}
 func (lm *levelManager) loadManifest() (err error) {
 	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir)
 	return err
@@ -198,16 +198,17 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		CreatedAt: uint64(time.Now().Unix()),
 		ValueSize: table.ValueSize(),
 	}
-	edit := manifest.Edit{
+	fileEdit := manifest.Edit{
 		Type:   manifest.EditAddFile,
 		File:   meta,
 		LogSeg: immutable.segmentID,
 	}
-	if err := lm.manifestMgr.LogEdit(edit); err != nil {
-		return err
+	pointerEdit := manifest.Edit{
+		Type: manifest.EditLogPointer, 
+		LogSeg: immutable.segmentID, 
+		LogOffset: uint64(immutable.walSize),
 	}
-	pointerEdit := manifest.Edit{Type: manifest.EditLogPointer, LogSeg: immutable.segmentID, LogOffset: uint64(immutable.walSize)}
-	if err := lm.manifestMgr.LogEdit(pointerEdit); err != nil {
+	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
 		return err
 	}
 	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize))

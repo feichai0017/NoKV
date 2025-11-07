@@ -64,6 +64,9 @@ type Options struct {
 	CompactionValueAlertThreshold float64
 
 	DiscardStatsCh *chan map[uint32]int64
+
+	// ManifestSync controls whether manifest edits are fsynced immediately.
+	ManifestSync bool
 }
 
 // Close  _

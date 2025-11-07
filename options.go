@@ -44,7 +44,8 @@ type Options struct {
 	HotRingBits     uint8
 	HotRingTopK     int
 
-	SyncWrites bool
+	SyncWrites   bool
+	ManifestSync bool
 
 	// Block cache configuration for read path optimization. The cache keeps a
 	// two-tier layout (hot LRU + cold CLOCK) and currently targets L0/L1.
@@ -119,6 +120,7 @@ func NewDefaultOptions() *Options {
 		BlockCacheHotFraction:         0.25,
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
+		ManifestSync:                  false,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,

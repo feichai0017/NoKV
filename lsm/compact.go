@@ -488,6 +488,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	changeSet := buildChangeSet(&cd, newTables)
 
 	// 更新 manifest
+	var manifestEdits []manifest.Edit
 	for _, ch := range changeSet.Changes {
 		switch ch.Op {
 		case pb.ManifestChange_CREATE:
@@ -507,18 +508,17 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					ValueSize: tbl.ValueSize(),
 				},
 			}
-			if err := lm.manifestMgr.LogEdit(add); err != nil {
-				return err
-			}
+			manifestEdits = append(manifestEdits, add)
 		case pb.ManifestChange_DELETE:
 			del := manifest.Edit{
 				Type: manifest.EditDeleteFile,
 				File: &manifest.FileMeta{FileID: ch.Id},
 			}
-			if err := lm.manifestMgr.LogEdit(del); err != nil {
-				return err
-			}
+			manifestEdits = append(manifestEdits, del)
 		}
+	}
+	if err := lm.manifestMgr.LogEdits(manifestEdits...); err != nil {
+		return err
 	}
 
 	if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
@@ -812,6 +812,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 	if len(cd.top) == 0 {
 		return nil
 	}
+	var edits []manifest.Edit
 	for _, tbl := range cd.top {
 		if tbl == nil {
 			continue
@@ -820,9 +821,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 			Type: manifest.EditDeleteFile,
 			File: &manifest.FileMeta{FileID: tbl.fid},
 		}
-		if err := lm.manifestMgr.LogEdit(del); err != nil {
-			return err
-		}
+		edits = append(edits, del)
 		add := manifest.Edit{
 			Type: manifest.EditAddFile,
 			File: &manifest.FileMeta{
@@ -835,9 +834,10 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				ValueSize: tbl.ValueSize(),
 			},
 		}
-		if err := lm.manifestMgr.LogEdit(add); err != nil {
-			return err
-		}
+		edits = append(edits, add)
+	}
+	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
+		return err
 	}
 
 	toDel := make(map[uint64]struct{}, len(cd.top))
