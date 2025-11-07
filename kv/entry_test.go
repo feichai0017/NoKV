@@ -1,9 +1,12 @@
 package kv
 
 import (
+	"bytes"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValueStruct(t *testing.T) {
@@ -17,4 +20,108 @@ func TestValueStruct(t *testing.T) {
 	var decoded ValueStruct
 	decoded.DecodeValue(data)
 	assert.Equal(t, decoded, v)
+}
+
+func TestEntryEncodeDecodeRoundTrip(t *testing.T) {
+	val := ValueStruct{
+		Meta:      0x2,
+		Value:     []byte("inline-value"),
+		ExpiresAt: 42,
+	}
+	entry := &Entry{
+		Key:       InternalKey(CFWrite, []byte("foo"), 99),
+		Value:     encodeValueStruct(val),
+		Meta:      val.Meta,
+		ExpiresAt: val.ExpiresAt,
+	}
+	var buf bytes.Buffer
+	n, err := EncodeEntryTo(&buf, entry)
+	require.NoError(t, err)
+	require.Equal(t, buf.Len(), n)
+
+	decoded, recordLen, err := DecodeEntryFrom(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	t.Cleanup(func() { decoded.DecrRef() })
+	require.Equal(t, uint32(n), recordLen)
+
+	assert.Equal(t, entry.Meta, decoded.Meta)
+	assert.Equal(t, entry.ExpiresAt, decoded.ExpiresAt)
+	assert.Equal(t, entry.Key, decoded.Key)
+	assert.Equal(t, entry.Value, decoded.Value)
+
+	cf, userKey, ts := SplitInternalKey(decoded.Key)
+	assert.Equal(t, CFWrite, cf)
+	assert.Equal(t, []byte("foo"), userKey)
+	assert.Equal(t, uint64(99), ts)
+}
+
+func TestDecodeEntryFromEOFAndPartial(t *testing.T) {
+	e := &Entry{
+		Key:       InternalKey(CFDefault, []byte("bar"), 1),
+		Value:     encodeValueStruct(ValueStruct{Value: []byte("baz")}),
+		ExpiresAt: 5,
+	}
+	var buf bytes.Buffer
+	_, err := EncodeEntryTo(&buf, e)
+	require.NoError(t, err)
+
+	decoded, _, err := DecodeEntryFrom(bytes.NewReader(nil))
+	assert.Nil(t, decoded)
+	assert.ErrorIs(t, err, io.EOF)
+
+	truncated := buf.Bytes()[:buf.Len()-2]
+	decoded, _, err = DecodeEntryFrom(bytes.NewReader(truncated))
+	assert.Nil(t, decoded)
+	assert.ErrorIs(t, err, ErrPartialEntry)
+}
+
+func TestEntryIterator(t *testing.T) {
+	var buf bytes.Buffer
+	for ts := uint64(1); ts <= 2; ts++ {
+		e := &Entry{
+			Key:       InternalKey(CFDefault, []byte("iter"), ts),
+			Value:     encodeValueStruct(ValueStruct{Value: []byte{byte('a' + ts)}}),
+			ExpiresAt: ts,
+		}
+		_, err := EncodeEntryTo(&buf, e)
+		require.NoError(t, err)
+	}
+
+	it := NewEntryIterator(bytes.NewReader(buf.Bytes()))
+	defer func() { require.NoError(t, it.Close()) }()
+
+	count := 0
+	for it.Next() {
+		count++
+		assert.Greater(t, it.RecordLen(), uint32(0))
+		entry := it.Entry()
+		require.NotNil(t, entry)
+		cf, userKey, ts := SplitInternalKey(entry.Key)
+		assert.Equal(t, CFDefault, cf)
+		assert.Equal(t, []byte("iter"), userKey)
+		assert.Equal(t, uint64(count), ts)
+	}
+	assert.Equal(t, 2, count)
+	assert.ErrorIs(t, it.Err(), io.EOF)
+}
+
+func TestValuePtrEncodeDecode(t *testing.T) {
+	ptr := ValuePtr{Len: 1, Offset: 2, Fid: 3}
+	encoded := ptr.Encode()
+	assert.Equal(t, valuePtrEncodedSize, len(encoded))
+	assert.Equal(t, []byte{0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3}, encoded)
+
+	var decoded ValuePtr
+	decoded.Decode(encoded)
+	assert.Equal(t, ptr, decoded)
+
+	decoded.Len, decoded.Offset, decoded.Fid = 9, 9, 9
+	decoded.Decode([]byte{1, 2}) // short buffer clears ptr
+	assert.Equal(t, ValuePtr{}, decoded)
+}
+
+func encodeValueStruct(v ValueStruct) []byte {
+	buf := make([]byte, v.EncodedSize())
+	v.EncodeValue(buf)
+	return buf
 }

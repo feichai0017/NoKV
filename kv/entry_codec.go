@@ -47,15 +47,17 @@ func PutCRC32(h hash.Hash32) {
 type LogEntry func(e *Entry, vp *ValuePtr) error
 
 // EntryHeader is the unified entry header used by WAL and value log encodings.
+// Binary layout (Encode):
+//
+//	varint(KeyLen) | varint(ValueLen) | varint(Meta) | varint(ExpiresAt)
+//
+// Meta is constrained to 1 byte; lengths are stored as unsigned varints.
 type EntryHeader struct {
 	KeyLen    uint32
 	ValueLen  uint32
 	Meta      byte
 	ExpiresAt uint64
 }
-
-// MaxEntryHeaderSize defines the maximum number of bytes required to encode an EntryHeader.
-const MaxEntryHeaderSize int = 4 * binary.MaxVarintLen64
 
 // Encode serializes the header using uvarint encoding for each field.
 func (h EntryHeader) Encode(out []byte) int {
@@ -67,39 +69,40 @@ func (h EntryHeader) Encode(out []byte) int {
 	return idx
 }
 
-// DecodeFrom consumes the header from a HashReader.
+// DecodeFrom consumes the header from a HashReader and reports the number of bytes read.
 func (h *EntryHeader) DecodeFrom(reader *HashReader) (int, error) {
+	start := reader.BytesRead
 	readVarint := func() (uint64, error) {
 		return binary.ReadUvarint(reader)
 	}
 
 	klen, err := readVarint()
 	if err != nil {
-		return 0, err
+		return reader.BytesRead - start, err
 	}
 	h.KeyLen = uint32(klen)
 
 	vlen, err := readVarint()
 	if err != nil {
-		return 0, err
+		return reader.BytesRead - start, err
 	}
 	h.ValueLen = uint32(vlen)
 
 	meta, err := readVarint()
 	if err != nil {
-		return 0, err
+		return reader.BytesRead - start, err
 	}
 	if meta > math.MaxUint8 {
-		return 0, fmt.Errorf("entry header meta overflow: %d", meta)
+		return reader.BytesRead - start, fmt.Errorf("entry header meta overflow: %d", meta)
 	}
 	h.Meta = byte(meta)
 
 	expiresAt, err := readVarint()
 	if err != nil {
-		return 0, err
+		return reader.BytesRead - start, err
 	}
 	h.ExpiresAt = expiresAt
-	return reader.BytesRead, nil
+	return reader.BytesRead - start, nil
 }
 
 // Decode parses the header directly from the provided byte slice.
@@ -257,61 +260,27 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 
 	hashReader := NewHashReader(r)
 
-	readVarint := func(allowEOF bool) (uint64, error) {
-		val, err := binary.ReadUvarint(hashReader)
-		if err == nil {
-			return val, nil
-		}
+	var header EntryHeader
+	headerBytes, err := header.DecodeFrom(hashReader)
+	if err != nil {
 		switch {
-		case errors.Is(err, io.EOF):
-			if allowEOF {
-				return 0, io.EOF
-			}
-			return 0, ErrPartialEntry
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			return 0, ErrPartialEntry
-		default:
-			return 0, err
-		}
-	}
-
-	klen, err := readVarint(true)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
+		case errors.Is(err, io.EOF) && headerBytes == 0:
 			return nil, 0, io.EOF
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+			return nil, 0, ErrPartialEntry
+		default:
+			return nil, 0, err
 		}
-		return nil, 0, err
-	}
-	vlen, err := readVarint(false)
-	if err != nil {
-		return nil, 0, err
-	}
-	meta, err := readVarint(false)
-	if err != nil {
-		return nil, 0, err
-	}
-	expiresAt, err := readVarint(false)
-	if err != nil {
-		return nil, 0, err
 	}
 
-	if klen > math.MaxUint32 || vlen > math.MaxUint32 {
+	keyLen := int(header.KeyLen)
+	if keyLen < 0 || uint32(keyLen) != header.KeyLen {
 		return nil, 0, ErrPartialEntry
 	}
-	if meta > math.MaxUint8 {
+	valueLen := int(header.ValueLen)
+	if valueLen < 0 || uint32(valueLen) != header.ValueLen {
 		return nil, 0, ErrPartialEntry
 	}
-
-	keyLen := int(klen)
-	if keyLen < 0 || uint64(keyLen) != klen {
-		return nil, 0, ErrPartialEntry
-	}
-	valueLen := int(vlen)
-	if valueLen < 0 || uint64(valueLen) != vlen {
-		return nil, 0, ErrPartialEntry
-	}
-
-	headerBytes := hashReader.BytesRead
 
 	entry := EntryPool.Get().(*Entry)
 	entry.IncrRef()
@@ -319,8 +288,8 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 	entry.ValThreshold = 0
 	entry.Hlen = headerBytes
 	entry.Offset = 0
-	entry.Meta = byte(meta)
-	entry.ExpiresAt = expiresAt
+	entry.Meta = header.Meta
+	entry.ExpiresAt = header.ExpiresAt
 
 	if cap(entry.Key) < keyLen {
 		entry.Key = make([]byte, keyLen)
