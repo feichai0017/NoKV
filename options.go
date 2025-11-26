@@ -66,6 +66,17 @@ type Options struct {
 	BlockCacheSize        int
 	BlockCacheHotFraction float64
 	BloomCacheSize        int
+	// VMCachePageSize overrides the cold-tier page size. Zero defaults to
+	// BlockSize.
+	VMCachePageSize int
+	// VMCacheEvictBatch bounds the number of pages scanned per cold-tier
+	// eviction pass. Zero uses the cache capacity.
+	VMCacheEvictBatch int
+	// VMCacheUseMmap toggles whether the cold tier uses anonymous mmap
+	// (default) or a Go heap buffer.
+	VMCacheUseMmap bool
+	// VMCacheDisableMadvise skips MADV_DONTNEED on eviction for the cold tier.
+	VMCacheDisableMadvise bool
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -137,6 +148,7 @@ func NewDefaultOptions() *Options {
 		BlockCacheSize:                4096,
 		BlockCacheHotFraction:         0.25,
 		BloomCacheSize:                1024,
+		VMCacheUseMmap:                true,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		WriteHotKeyLimit:              128,

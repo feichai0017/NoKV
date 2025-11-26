@@ -2,6 +2,8 @@ package lsm
 
 import (
 	"container/list"
+	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -9,9 +11,26 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
+	"github.com/feichai0017/NoKV/vmcache"
 )
 
 const defaultCacheSize = 1024
+
+type blockLookup struct {
+	tbl    *table
+	offset int
+	length int
+}
+
+func (l *blockLookup) Release() {
+	if l == nil || l.tbl == nil {
+		return
+	}
+	_ = l.tbl.DecrRef()
+	l.tbl = nil
+}
+
+type blockLocator func(id uint64) (*blockLookup, error)
 
 type cache struct {
 	indexs  *coreCache.Cache // key fid， value *pb.TableIndex
@@ -110,7 +129,7 @@ func (c *cache) close() error {
 	return nil
 }
 
-func newCache(opt *Options) *cache {
+func newCache(opt *Options, locator blockLocator) *cache {
 	metrics := &cacheMetrics{}
 	hotCap := max(opt.BlockCacheSize, 0)
 	hotFraction := opt.BlockCacheHotFraction
@@ -125,7 +144,20 @@ func newCache(opt *Options) *cache {
 		hotSize = hotCap
 	}
 	coldSize := hotCap - hotSize
-	blocks := newBlockCache(hotSize, coldSize)
+	var cold coldBackend
+	if coldSize > 0 && locator != nil {
+		pageSize := opt.VMCachePageSize
+		if pageSize <= 0 {
+			pageSize = opt.BlockSize
+		}
+		evictBatch := opt.VMCacheEvictBatch
+		var err error
+		cold, err = newVMColdCache(opt, pageSize, coldSize, evictBatch, locator)
+		if err != nil {
+			utils.Err(err)
+		}
+	}
+	blocks := newBlockCache(hotSize, cold, locator)
 	blooms := newBloomCache(opt.BloomCacheSize)
 	return &cache{
 		indexs:  coreCache.NewCache(defaultCacheSize),
@@ -174,13 +206,13 @@ func (c *cache) getBlock(level int, key uint64) (*block, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(key)
-	if ok {
-		c.metrics.recordBlock(level, true)
-		return blk, true
+	blk, hit, err := c.blocks.get(key)
+	if err != nil || blk == nil {
+		c.metrics.recordBlock(level, false)
+		return nil, false
 	}
-	c.metrics.recordBlock(level, false)
-	return nil, false
+	c.metrics.recordBlock(level, hit)
+	return blk, true
 }
 
 func (c *cache) addBlock(level int, key uint64, blk *block) {
@@ -229,43 +261,110 @@ type blockCache struct {
 	hotCap  int
 	hotList *list.List
 	hotData map[uint64]*list.Element
-	cold    *clockCache
+	cold    coldBackend
+	locate  blockLocator
 }
 
 type blockEntry struct {
-	key  uint64
-	data *block
+	key    uint64
+	data   *block
+	handle *vmcache.Handle
 }
 
-func newBlockCache(hotCap, coldCap int) *blockCache {
+type coldBackend interface {
+	Fix(id uint64) (*vmcache.Handle, bool, error)
+	Release(id uint64, dirty bool)
+	Evict(ids []uint64)
+	Prefetch(ids []uint64)
+	Close() error
+}
+
+func newBlockCache(hotCap int, cold coldBackend, locate blockLocator) *blockCache {
 	bc := &blockCache{
 		hotCap:  hotCap,
 		hotList: list.New(),
 		hotData: make(map[uint64]*list.Element, hotCap),
-	}
-	if coldCap > 0 {
-		bc.cold = newClockCache(coldCap)
+		cold:    cold,
+		locate:  locate,
 	}
 	return bc
 }
 
-func (c *blockCache) get(key uint64) (*block, bool) {
+func newVMColdCache(opt *Options, pageSize, capacity, evictBatch int, locator blockLocator) (coldBackend, error) {
+	loader := func(id uint64, dst []byte) (int, error) {
+		loc, err := locator(id)
+		if err != nil {
+			return 0, err
+		}
+		if loc == nil || loc.tbl == nil {
+			return 0, fmt.Errorf("vmcache loader: table missing for id %d", id)
+		}
+		defer loc.Release()
+		if loc.length > len(dst) {
+			return 0, fmt.Errorf("vmcache loader: block length %d exceeds page size %d", loc.length, len(dst))
+		}
+		return loc.tbl.copyBlockData(int(id&maxUint32), dst)
+	}
+	cache, err := vmcache.New(vmcache.Options{
+		PageSize:       pageSize,
+		Capacity:       capacity,
+		EvictBatch:     evictBatch,
+		UseMmap:        opt.VMCacheUseMmap,
+		DisableMadvise: opt.VMCacheDisableMadvise,
+	}, loader)
+	if err != nil {
+		return nil, err
+	}
+	return cache, nil
+}
+
+func (c *blockCache) get(key uint64) (*block, bool, error) {
 	if c == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if elem, ok := c.hotData[key]; ok {
 		c.hotList.MoveToFront(elem)
-		return elem.Value.(*blockEntry).data, true
+		blk := elem.Value.(*blockEntry).data
+		c.mu.Unlock()
+		return blk, true, nil
 	}
-	if c.cold != nil {
-		if blk, ok := c.cold.get(key); ok {
-			c.promoteLocked(key, blk)
-			return blk, true
+	c.mu.Unlock()
+
+	if c.cold == nil {
+		return nil, false, nil
+	}
+	handle, hit, err := c.cold.Fix(key)
+	if err != nil || handle == nil {
+		return nil, false, err
+	}
+	blk, err := c.buildBlockFromHandle(key, handle)
+	if err != nil {
+		handle.Release(false)
+		return nil, false, err
+	}
+
+	c.mu.Lock()
+	c.promoteLocked(key, blk)
+	c.mu.Unlock()
+	return blk, hit, nil
+}
+
+func (c *blockCache) buildBlockFromHandle(key uint64, handle *vmcache.Handle) (*block, error) {
+	offset := 0
+	if c.locate != nil {
+		if loc, err := c.locate(key); err == nil && loc != nil {
+			offset = loc.offset
+			loc.Release()
 		}
 	}
-	return nil, false
+	blk, err := decodeBlock(handle.Bytes(), offset)
+	if err != nil {
+		return nil, err
+	}
+	blk.vmHandle = handle
+	runtime.SetFinalizer(blk, (*block).releaseHandle)
+	return blk, nil
 }
 
 func (c *blockCache) add(level int, key uint64, blk *block) {
@@ -283,22 +382,23 @@ func (c *blockCache) addWithTier(level int, key uint64, blk *block, hot bool) {
 		// Only track blocks for L0/L1 as requested.
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if hot || c.hotCap == 0 {
+		c.mu.Lock()
 		c.promoteLocked(key, blk)
+		c.mu.Unlock()
 		return
 	}
+	c.mu.Lock()
 	if elem, ok := c.hotData[key]; ok {
-		elem.Value.(*blockEntry).data = blk
+		entry := elem.Value.(*blockEntry)
+		entry.data = blk
+		entry.handle = blk.vmHandle
 		c.hotList.MoveToFront(elem)
-		return
-	}
-	if c.cold != nil {
-		c.cold.add(key, blk)
+		c.mu.Unlock()
 		return
 	}
 	c.promoteLocked(key, blk)
+	c.mu.Unlock()
 }
 
 func (c *blockCache) del(key uint64) {
@@ -306,19 +406,24 @@ func (c *blockCache) del(key uint64) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.removeLocked(key)
+	c.mu.Unlock()
+	if c.cold != nil {
+		c.cold.Evict([]uint64{key})
+	}
 }
 
 func (c *blockCache) promoteLocked(key uint64, blk *block) {
 	if c.hotCap == 0 {
-		if c.cold != nil {
-			c.cold.add(key, blk)
-		}
 		return
 	}
 	if elem, ok := c.hotData[key]; ok {
-		elem.Value.(*blockEntry).data = blk
+		entry := elem.Value.(*blockEntry)
+		if entry.data != blk {
+			entry.data.releaseHandle()
+			entry.data = blk
+			entry.handle = blk.vmHandle
+		}
 		c.hotList.MoveToFront(elem)
 		return
 	}
@@ -326,25 +431,24 @@ func (c *blockCache) promoteLocked(key uint64, blk *block) {
 		tail := c.hotList.Back()
 		if tail != nil {
 			old := tail.Value.(*blockEntry)
+			old.data.releaseHandle()
 			delete(c.hotData, old.key)
 			c.hotList.Remove(tail)
-			if c.cold != nil {
-				c.cold.add(old.key, old.data)
-			}
 		}
 	}
-	elem := c.hotList.PushFront(&blockEntry{key: key, data: blk})
+	elem := c.hotList.PushFront(&blockEntry{key: key, data: blk, handle: blk.vmHandle})
 	c.hotData[key] = elem
 }
 
 func (c *blockCache) removeLocked(key uint64) {
 	if elem, ok := c.hotData[key]; ok {
+		entry := elem.Value.(*blockEntry)
+		if entry != nil {
+			entry.data.releaseHandle()
+		}
 		delete(c.hotData, key)
 		c.hotList.Remove(elem)
 		return
-	}
-	if c.cold != nil {
-		c.cold.del(key)
 	}
 }
 
@@ -353,11 +457,19 @@ func (c *blockCache) close() {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	for _, elem := range c.hotData {
+		if elem == nil {
+			continue
+		}
+		if entry, ok := elem.Value.(*blockEntry); ok && entry != nil {
+			entry.data.releaseHandle()
+		}
+	}
 	c.hotData = nil
 	c.hotList = nil
+	c.mu.Unlock()
 	if c.cold != nil {
-		c.cold.clear()
+		_ = c.cold.Close()
 		c.cold = nil
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vmcache"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -46,6 +47,17 @@ type block struct {
 	entryOffsets      []uint32
 	end               int
 	estimateSz        int64
+	vmHandle          *vmcache.Handle
+}
+
+func (b *block) releaseHandle() {
+	if b == nil {
+		return
+	}
+	if b.vmHandle != nil {
+		b.vmHandle.Release(false)
+		b.vmHandle = nil
+	}
 }
 
 type header struct {

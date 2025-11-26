@@ -192,6 +192,10 @@ func Open(opt *Options) *DB {
 		BlockCacheHotFraction:  db.opt.BlockCacheHotFraction,
 		BloomCacheSize:         db.opt.BloomCacheSize,
 		ManifestSync:           db.opt.ManifestSync,
+		VMCachePageSize:        db.opt.VMCachePageSize,
+		VMCacheEvictBatch:      db.opt.VMCacheEvictBatch,
+		VMCacheUseMmap:         db.opt.VMCacheUseMmap,
+		VMCacheDisableMadvise:  db.opt.VMCacheDisableMadvise,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	recoveredVersion := db.lsm.MaxVersion()

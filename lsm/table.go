@@ -327,32 +327,39 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 
 	ko, ok := t.blockOffset(idx)
 	utils.CondPanic(!ok || ko == nil, fmt.Errorf("block t.offset id=%d", idx))
-	b = &block{
-		offset: int(ko.GetOffset()),
-	}
-
-	var err error
-	if b.data, err = t.read(b.offset, int(ko.GetLen())); err != nil {
+	offset := int(ko.GetOffset())
+	rawLen := int(ko.GetLen())
+	raw, err := t.read(offset, rawLen)
+	if err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
-			t.fid, b.offset, ko.GetLen())
+			t.fid, offset, ko.GetLen())
 	}
 
-	// Binary Format for a Data Block (read from disk):
-	// +--------------------------------+--------------------------------+
-	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
-	// +--------------------------------+--------------------------------+
-	// | Entry Offsets List Length (4B) | Block Checksum (8B)            |
-	// +--------------------------------+--------------------------------+
-	// | Block Checksum Length (4B)     |
-	// +--------------------------------+
+	b, err = decodeBlock(raw, offset)
+	if err != nil {
+		return nil, err
+	}
 
+	t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
+
+	return b, nil
+}
+
+// decodeBlock parses a raw block buffer into a block structure. The provided
+// offset is recorded for debugging purposes.
+func decodeBlock(raw []byte, offset int) (*block, error) {
+	b := &block{
+		offset: offset,
+		data:   raw,
+	}
+	if len(b.data) < 12 {
+		return nil, errors.New("block too small")
+	}
 	readPos := len(b.data) - 4 // First read checksum length.
 	b.chkLen = int(kv.BytesToU32(b.data[readPos : readPos+4]))
-
 	if b.chkLen > len(b.data) {
-		return nil, errors.New("invalid checksum length. Either the data is " +
-			"corrupted or the table options are incorrectly set")
+		return nil, errors.New("invalid checksum length. Either the data is corrupted or the table options are incorrectly set")
 	}
 
 	readPos -= b.chkLen
@@ -360,22 +367,46 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 
 	b.data = b.data[:readPos]
 
-	if err = b.verifyCheckSum(); err != nil {
+	if err := b.verifyCheckSum(); err != nil {
 		return nil, err
 	}
 
 	readPos -= 4
+	if readPos < 0 {
+		return nil, errors.New("block header truncated")
+	}
 	numEntries := int(kv.BytesToU32(b.data[readPos : readPos+4]))
 	entriesIndexStart := readPos - (numEntries * 4)
 	entriesIndexEnd := entriesIndexStart + numEntries*4
+	if entriesIndexStart < 0 || entriesIndexEnd > len(b.data) {
+		return nil, errors.New("invalid block index table")
+	}
 
 	b.entryOffsets = kv.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
-
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
-
 	return b, nil
+}
+
+func (t *table) copyBlockData(idx int, dst []byte) (int, error) {
+	ko, ok := t.blockOffset(idx)
+	if !ok || ko == nil {
+		return 0, fmt.Errorf("block offset missing for idx=%d", idx)
+	}
+	length := int(ko.GetLen())
+	if length > len(dst) {
+		return 0, fmt.Errorf("block length %d exceeds destination size %d", length, len(dst))
+	}
+	ss, release, err := t.pinSSTable()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	data, err := ss.Bytes(int(ko.GetOffset()), length)
+	if err != nil {
+		return 0, err
+	}
+	return copy(dst, data), nil
 }
 
 func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {

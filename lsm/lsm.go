@@ -43,6 +43,10 @@ type Options struct {
 	BlockCacheSize        int
 	BlockCacheHotFraction float64
 	BloomCacheSize        int
+	VMCachePageSize       int
+	VMCacheEvictBatch     int
+	VMCacheUseMmap        bool
+	VMCacheDisableMadvise bool
 
 	// compact
 	NumCompactors       int

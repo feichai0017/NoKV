@@ -126,7 +126,7 @@ func (lm *levelManager) build() error {
 
 	version := lm.manifestMgr.Current()
 	lm.setLogPointer(version.LogSegment, version.LogOffset)
-	lm.cache = newCache(lm.opt)
+	lm.cache = newCache(lm.opt, lm.blockLocator())
 	var maxFID uint64
 	var missing []manifest.FileMeta
 	for level, files := range version.Levels {
@@ -158,6 +158,49 @@ func (lm *levelManager) build() error {
 			Type: manifest.EditDeleteFile,
 			File: &metaCopy,
 		})
+	}
+	return nil
+}
+
+func (lm *levelManager) blockLocator() blockLocator {
+	return func(id uint64) (*blockLookup, error) {
+		fid := id >> 32
+		idx := int(id & maxUint32)
+		tbl := lm.tableForFID(fid)
+		if tbl == nil {
+			return nil, fmt.Errorf("table %d not found for block %d", fid, idx)
+		}
+		ko, ok := tbl.blockOffset(idx)
+		if !ok || ko == nil {
+			_ = tbl.DecrRef()
+			return nil, fmt.Errorf("block index %d out of range for table %d", idx, fid)
+		}
+		return &blockLookup{
+			tbl:    tbl,
+			offset: int(ko.GetOffset()),
+			length: int(ko.GetLen()),
+		}, nil
+	}
+}
+
+func (lm *levelManager) tableForFID(fid uint64) *table {
+	for _, lh := range lm.levels {
+		lh.RLock()
+		for _, t := range lh.tables {
+			if t != nil && t.fid == fid {
+				t.IncrRef()
+				lh.RUnlock()
+				return t
+			}
+		}
+		for _, t := range lh.ingest {
+			if t != nil && t.fid == fid {
+				t.IncrRef()
+				lh.RUnlock()
+				return t
+			}
+		}
+		lh.RUnlock()
 	}
 	return nil
 }
@@ -204,8 +247,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		LogSeg: immutable.segmentID,
 	}
 	pointerEdit := manifest.Edit{
-		Type: manifest.EditLogPointer, 
-		LogSeg: immutable.segmentID, 
+		Type:      manifest.EditLogPointer,
+		LogSeg:    immutable.segmentID,
 		LogOffset: uint64(immutable.walSize),
 	}
 	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {

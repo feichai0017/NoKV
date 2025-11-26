@@ -54,7 +54,7 @@ func TestCacheHotColdMetrics(t *testing.T) {
 		BlockCacheHotFraction: 0.5,
 		BloomCacheSize:        4,
 	}
-	cache := newCache(opt)
+	cache := newCache(opt, nil)
 	if cache == nil {
 		t.Fatalf("expected cache to initialize")
 	}
