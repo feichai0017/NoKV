@@ -17,22 +17,13 @@ type Loader func(id uint64, dst []byte) (int, error)
 
 // Options configure the VM-backed cache.
 type Options struct {
-	// PageSize controls the size of each slot in bytes. Typically matches the
-	// SSTable block size.
-	PageSize int
-	// Capacity is the total number of pages that can be resident.
-	Capacity int
-	// EvictBatch limits how many candidates a single eviction pass scans. Zero
-	// defaults to Capacity.
-	EvictBatch int
-	// UseMmap toggles whether the cache allocates via anonymous mmap. If false,
-	// a Go heap slice is used instead.
-	UseMmap bool
-	// DisableMadvise skips MADV_DONTNEED on eviction.
+	PageSize       int
+	Capacity       int
+	EvictBatch     int
+	UseMmap        bool
 	DisableMadvise bool
-	// Flusher, if provided, is invoked before evicting a dirty page. Returning
-	// an error keeps the page resident and marks it as recently used.
-	Flusher func(id uint64, data []byte) error
+	Shards         int
+	Flusher        func(id uint64, data []byte) error
 }
 
 // Stats exposes basic hit/miss and residency counters.
@@ -46,16 +37,6 @@ type Stats struct {
 	Waits     uint64
 	WaitNanos uint64
 	Madvises  uint64
-}
-
-type frameMeta struct {
-	recent  atomic.Bool
-	loading atomic.Bool
-	dirty   atomic.Bool
-	size    atomic.Int32
-	ready   chan struct{}
-	err     atomic.Pointer[error]
-	value   atomic.Value
 }
 
 // Handle pins a cached page for the caller.
@@ -75,8 +56,7 @@ func (h *Handle) Bytes() []byte {
 	return h.cache.page(h.slot)[:h.size]
 }
 
-// Release drops the reference to the underlying page, allowing eviction once
-// no other pins exist.
+// Release drops the reference to the underlying page.
 func (h *Handle) Release(dirty bool) {
 	if h == nil || h.cache == nil {
 		return
@@ -87,46 +67,14 @@ func (h *Handle) Release(dirty bool) {
 	h.cache.release(h.id, dirty)
 }
 
-// Value returns cached metadata associated with this page.
-func (h *Handle) Value() any {
-	if h == nil || h.cache == nil {
-		return nil
-	}
-	return h.cache.value(h.id)
-}
-
-// SetValue attaches metadata to this page.
-func (h *Handle) SetValue(v any) {
-	if h == nil || h.cache == nil {
-		return
-	}
-	h.cache.setValue(h.id, v)
-}
-
-const invalidID = ^uint64(0)
-
-var errClosed = errors.New("vmcache: cache closed")
-
-// Cache manages a region of anonymous memory and exposes page-level pins.
+// Cache is a sharded VM-backed cache with per-shard CLOCK eviction.
 type Cache struct {
-	mu     sync.RWMutex
 	loader Loader
 	opts   Options
 
 	region []byte
 
-	resident *residentSet
-	slotID   []uint64 // slot -> pageID
-	meta     []frameMeta
-	state    []pageState
-
-	freeSlots  []int
-	clock      []int // slots
-	clockIndex []int
-	hand       int
-
-	releaseCh chan struct{}
-	closed    bool
+	shards []*shard
 
 	stats struct {
 		hits      atomic.Uint64
@@ -140,6 +88,32 @@ type Cache struct {
 	}
 }
 
+type frameMeta struct {
+	recent  atomic.Bool
+	loading atomic.Bool
+	dirty   atomic.Bool
+	size    atomic.Int32
+	ready   chan struct{}
+	err     atomic.Pointer[error]
+	value   atomic.Value
+}
+
+type shard struct {
+	mu         sync.Mutex
+	baseSlot   int
+	capacity   int
+	slotID     []uint64
+	state      []pageState
+	meta       []frameMeta
+	idToSlot   map[uint64]int
+	freeSlots  []int
+	clock      []int
+	clockIndex []int
+	hand       int
+}
+
+const invalidID = ^uint64(0)
+
 // New allocates the backing region and returns a VMCache instance.
 func New(opts Options, loader Loader) (*Cache, error) {
 	if opts.PageSize <= 0 {
@@ -148,135 +122,132 @@ func New(opts Options, loader Loader) (*Cache, error) {
 	if opts.Capacity <= 0 {
 		return nil, errors.New("vmcache: Capacity must be positive")
 	}
-	regionSize := opts.PageSize * opts.Capacity
-	if regionSize <= 0 {
-		return nil, fmt.Errorf("vmcache: invalid region size %d", regionSize)
-	}
-	var region []byte
-	var err error
-	if opts.UseMmap {
-		region, err = unix.Mmap(-1, 0, regionSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE|unix.MAP_NORESERVE)
-		if err != nil {
-			return nil, fmt.Errorf("vmcache: mmap failed: %w", err)
+	if opts.Shards <= 0 {
+		opts.Shards = runtime.GOMAXPROCS(0)
+		if opts.Shards < 1 {
+			opts.Shards = 1
 		}
-	} else {
-		region = make([]byte, regionSize)
-	}
-	free := make([]int, opts.Capacity)
-	for i := range free {
-		free[i] = opts.Capacity - 1 - i
 	}
 	if opts.EvictBatch <= 0 {
 		opts.EvictBatch = opts.Capacity
 	}
-	slotID := make([]uint64, opts.Capacity)
+	regionSize := opts.PageSize * opts.Capacity
+	region, err := unix.Mmap(-1, 0, regionSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE|unix.MAP_NORESERVE)
+	if err != nil {
+		return nil, fmt.Errorf("vmcache: mmap failed: %w", err)
+	}
+
+	c := &Cache{
+		loader: loader,
+		opts:   opts,
+		region: region,
+	}
+	perShard := opts.Capacity / opts.Shards
+	rem := opts.Capacity % opts.Shards
+	slotBase := 0
+	for i := 0; i < opts.Shards; i++ {
+		sz := perShard
+		if i < rem {
+			sz++
+		}
+		s := newShard(slotBase, sz, opts)
+		c.shards = append(c.shards, s)
+		slotBase += sz
+	}
+	return c, nil
+}
+
+func newShard(base, cap int, opts Options) *shard {
+	slotID := make([]uint64, cap)
 	for i := range slotID {
 		slotID[i] = invalidID
 	}
-	state := make([]pageState, opts.Capacity)
+	state := make([]pageState, cap)
 	for i := range state {
 		state[i].init()
 	}
-	clockIndex := make([]int, opts.Capacity)
+	free := make([]int, cap)
+	for i := range free {
+		free[i] = base + cap - 1 - i
+	}
+	clockIndex := make([]int, cap)
 	for i := range clockIndex {
 		clockIndex[i] = -1
 	}
-
-	return &Cache{
-		loader:     loader,
-		opts:       opts,
-		region:     region,
-		resident:   newResident(opts.Capacity),
+	return &shard{
+		baseSlot:   base,
+		capacity:   cap,
 		slotID:     slotID,
-		meta:       make([]frameMeta, opts.Capacity),
 		state:      state,
+		meta:       make([]frameMeta, cap),
+		idToSlot:   make(map[uint64]int, cap),
 		freeSlots:  free,
-		clock:      make([]int, 0, opts.Capacity),
+		clock:      make([]int, 0, cap),
 		clockIndex: clockIndex,
-		releaseCh:  make(chan struct{}, opts.Capacity),
-	}, nil
+	}
 }
 
-// Close releases resources. It does not wait for in-flight loads.
-func (c *Cache) Close() error {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil
+func (c *Cache) shardFor(id uint64) *shard {
+	if len(c.shards) == 1 {
+		return c.shards[0]
 	}
-	c.closed = true
-	region := c.region
-	useMmap := c.opts.UseMmap
-	c.mu.Unlock()
-	if useMmap {
-		return unix.Munmap(region)
-	}
-	return nil
+	return c.shards[hash64(id)&uint64(len(c.shards)-1)]
 }
 
-// Fix pins the page for id, loading it on-demand via Loader. The returned bool
-// indicates whether the page was already resident.
+// Fix pins the page for id, loading it on-demand via Loader.
 func (c *Cache) Fix(id uint64) (*Handle, bool, error) {
+	s := c.shardFor(id)
+	h, hit, err := c.fixShard(s, id)
+	return h, hit, err
+}
+
+func (c *Cache) fixShard(s *shard, id uint64) (*Handle, bool, error) {
 	for {
-		slot, size, hit, meta, err := c.allocateSlot(id)
+		if slot, ok := s.lookup(id); ok {
+			if size, ok := c.fixExisting(s, slot); ok {
+				c.stats.hits.Add(1)
+				return &Handle{cache: c, id: id, slot: slot, size: size}, true, nil
+			}
+			continue
+		}
+
+		slot, err := c.allocateSlot(s, id)
 		if err != nil {
 			return nil, false, err
 		}
-		if hit {
-			return c.makeHandle(id, slot, size), true, nil
-		}
-		if c.loader == nil {
-			c.releaseSlot(slot, id, meta, fmt.Errorf("vmcache: no loader configured"))
-			return nil, false, errors.New("vmcache: no loader configured")
-		}
+		// load under exclusive lock
 		start := time.Now()
 		n, loadErr := c.loader(id, c.page(slot))
-		c.stats.loadNanos.Add(uint64(time.Since(start).Nanoseconds()))
 		c.stats.loads.Add(1)
+		c.stats.loadNanos.Add(uint64(time.Since(start).Nanoseconds()))
+		s.mu.Lock()
+		meta := &s.meta[slot-s.baseSlot]
 		if loadErr != nil || n <= 0 || n > c.opts.PageSize {
 			if loadErr == nil {
-				loadErr = fmt.Errorf("vmcache: loader wrote invalid size %d", n)
+				loadErr = fmt.Errorf("vmcache: invalid load size %d", n)
 			}
-			c.releaseSlot(slot, id, meta, loadErr)
+			meta.err.Store(&loadErr)
+			meta.loading.Store(false)
+			close(meta.ready)
+			s.removeSlot(slot)
+			s.mu.Unlock()
 			return nil, false, loadErr
 		}
-		c.completeSlot(slot, n, meta)
-		if !c.pinShared(slot) {
-			c.releaseSlot(slot, id, meta, errors.New("vmcache: failed to pin loaded page"))
+		meta.size.Store(int32(n))
+		meta.loading.Store(false)
+		var errNil error
+		meta.err.Store(&errNil)
+		close(meta.ready)
+		s.unlockX(slot, false)
+		if !s.tryShared(slot) {
+			s.removeSlot(slot)
+			s.mu.Unlock()
 			return nil, false, errors.New("vmcache: failed to pin loaded page")
 		}
-		return c.makeHandle(id, slot, n), false, nil
+		meta.recent.Store(true)
+		s.mu.Unlock()
+		return &Handle{cache: c, id: id, slot: slot, size: n}, false, nil
 	}
-}
-
-// Prefetch triggers asynchronous loads of the provided IDs.
-func (c *Cache) Prefetch(ids []uint64) {
-	if len(ids) == 0 {
-		return
-	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers > len(ids) {
-		workers = len(ids)
-	}
-	ch := make(chan uint64, len(ids))
-	for _, id := range ids {
-		ch <- id
-	}
-	close(ch)
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func() {
-			defer wg.Done()
-			for id := range ch {
-				h, _, err := c.Fix(id)
-				if err == nil && h != nil {
-					h.Release(false)
-				}
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 // Release decrements the refcount without needing a Handle.
@@ -285,54 +256,58 @@ func (c *Cache) Release(id uint64, dirty bool) {
 }
 
 func (c *Cache) release(id uint64, dirty bool) {
-	slot, ok := c.lookupSlot(id)
-	if !ok {
+	s := c.shardFor(id)
+	if s == nil {
 		return
 	}
-	meta := &c.meta[slot]
+	s.mu.Lock()
+	slot, ok := s.idToSlot[id]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	meta := &s.meta[slot-s.baseSlot]
 	if dirty {
 		meta.dirty.Store(true)
 	}
-	ps := &c.state[slot]
-	ps.unlockS()
+	s.unlockS(slot)
 	meta.recent.Store(false)
-	c.notifyWaiters()
+	s.mu.Unlock()
 }
 
-// Evict removes specific pages and returns their slots to the free list.
+// Evict removes specific pages.
 func (c *Cache) Evict(ids []uint64) {
-	c.mu.Lock()
+	shardBuckets := make(map[*shard][]uint64)
 	for _, id := range ids {
-		slot, ok := c.lookupSlot(id)
-		if !ok {
-			continue
-		}
-		meta := &c.meta[slot]
-		if meta.loading.Load() || c.state[slot].state(c.state[slot].load()) > stateUnlocked {
-			continue
-		}
-		if c.opts.Flusher != nil && meta.dirty.Load() {
-			if err := c.opts.Flusher(id, c.page(slot)[:int(meta.size.Load())]); err != nil {
-				meta.recent.Store(true)
-				continue
-			}
-			meta.dirty.Store(false)
-		}
-		c.dropSlotLocked(slot)
+		shardBuckets[c.shardFor(id)] = append(shardBuckets[c.shardFor(id)], id)
 	}
-	c.mu.Unlock()
-	c.notifyWaiters()
+	for sh, list := range shardBuckets {
+		sh.evictList(list, c)
+	}
+}
+
+// Prefetch triggers asynchronous loads.
+func (c *Cache) Prefetch(ids []uint64) {
+	if len(ids) == 0 {
+		return
+	}
+	go func() {
+		for _, id := range ids {
+			h, _, err := c.Fix(id)
+			if err == nil && h != nil {
+				h.Release(false)
+			}
+		}
+	}()
 }
 
 // Stats returns a snapshot of counters.
 func (c *Cache) Stats() Stats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return Stats{
 		Hits:      c.stats.hits.Load(),
 		Misses:    c.stats.misses.Load(),
 		Evictions: c.stats.evictions.Load(),
-		Resident:  uint64(c.residentLen()),
+		Resident:  c.residentLen(),
 		Loads:     c.stats.loads.Load(),
 		LoadNanos: c.stats.loadNanos.Load(),
 		Waits:     c.stats.waits.Load(),
@@ -341,116 +316,94 @@ func (c *Cache) Stats() Stats {
 	}
 }
 
-func (c *Cache) allocateSlot(id uint64) (slot int, size int, hit bool, meta *frameMeta, err error) {
+// Close unmaps the backing region.
+func (c *Cache) Close() error {
+	return unix.Munmap(c.region)
+}
+
+// --- shard operations ---
+
+func (s *shard) lookup(id uint64) (int, bool) {
+	s.mu.Lock()
+	slot, ok := s.idToSlot[id]
+	s.mu.Unlock()
+	return slot, ok
+}
+
+func (c *Cache) allocateSlot(s *shard, id uint64) (int, error) {
 	for {
-		if existing, ok := c.lookupSlot(id); ok {
-			if h, size, ok := c.fixExisting(existing); ok {
-				c.stats.hits.Add(1)
-				return existing, size, true, h, nil
+		s.mu.Lock()
+		if slot, ok := s.idToSlot[id]; ok {
+			s.mu.Unlock()
+			return slot, nil
+		}
+		if len(s.freeSlots) == 0 {
+			s.evictSome(c)
+			if len(s.freeSlots) == 0 {
+				s.mu.Unlock()
+				time.Sleep(time.Millisecond)
+				continue
 			}
-			continue
 		}
-
-		c.mu.Lock()
-		if c.closed {
-			c.mu.Unlock()
-			return 0, 0, false, nil, errClosed
-		}
-		if existing, ok := c.lookupSlot(id); ok {
-			if h, size, ok := c.fixExisting(existing); ok {
-				c.stats.hits.Add(1)
-				c.mu.Unlock()
-				return existing, size, true, h, nil
-			}
-			continue
-		}
-
-		slot, err := c.grabSlotLocked()
-		if err != nil {
-			c.mu.Unlock()
-			return 0, 0, false, nil, err
-		}
-		m := &c.meta[slot]
-		m.recent.Store(true)
+		last := len(s.freeSlots) - 1
+		slot := s.freeSlots[last]
+		s.freeSlots = s.freeSlots[:last]
+		s.idToSlot[id] = slot
+		local := slot - s.baseSlot
+		s.slotID[local] = id
+		m := &s.meta[local]
 		m.loading.Store(true)
 		m.ready = make(chan struct{})
 		var errNil error
 		m.err.Store(&errNil)
-		m.size.Store(0)
-		ps := &c.state[slot]
-		for {
-			old := ps.load()
-			if ps.state(old) == stateEvicted {
-				if ps.tryLockX(old) {
-					break
-				}
-			} else if ps.state(old) == stateUnlocked || ps.state(old) == stateMarked {
-				if ps.tryLockX(old) {
-					break
-				}
-			} else {
-				c.dropSlotLocked(slot)
-				c.mu.Unlock()
-				continue
-			}
-		}
-
-		c.setSlot(id, slot)
-		c.slotID[slot] = id
-		c.clockIndex[slot] = len(c.clock)
-		c.clock = append(c.clock, slot)
+		m.recent.Store(true)
+		s.clockIndex[local] = len(s.clock)
+		s.clock = append(s.clock, slot)
+		s.mu.Unlock()
 		c.stats.misses.Add(1)
-		c.mu.Unlock()
-		return slot, 0, false, m, nil
+		return slot, nil
 	}
 }
 
-func (c *Cache) fixExisting(slot int) (*frameMeta, int, bool) {
-	ps := &c.state[slot]
-	meta := &c.meta[slot]
+func (c *Cache) fixExisting(s *shard, slot int) (int, bool) {
+	local := slot - s.baseSlot
+	ps := &s.state[local]
+	meta := &s.meta[local]
 	for {
 		v := ps.load()
-		state := ps.state(v)
-		switch state {
+		switch ps.state(v) {
 		case stateEvicted:
 			if ps.tryLockX(v) {
-				if err := c.handleFault(slot); err != nil {
-					return nil, 0, false
+				if err := c.handleFaultLocked(s, slot); err != nil {
+					s.unlockX(slot, true)
+					return 0, false
 				}
-				ps.unlockX()
-				if !c.pinShared(slot) {
-					return nil, 0, false
+				s.unlockX(slot, false)
+				if !s.tryShared(slot) {
+					return 0, false
 				}
 				meta.recent.Store(true)
-				return meta, int(meta.size.Load()), true
+				return int(meta.size.Load()), true
 			}
 		case stateLocked:
 			runtime.Gosched()
-		case stateMarked, stateUnlocked:
+		default:
 			if ps.tryLockS(v) {
 				meta.recent.Store(true)
-				return meta, int(meta.size.Load()), true
+				return int(meta.size.Load()), true
 			}
-		default:
 			runtime.Gosched()
 		}
 	}
 }
 
-func (c *Cache) handleFault(slot int) error {
-	id := c.slotID[slot]
-	meta := &c.meta[slot]
-	if meta.ready == nil {
-		meta.ready = make(chan struct{})
-	}
-	meta.loading.Store(true)
-	var errNil error
-	meta.err.Store(&errNil)
-	meta.size.Store(0)
+func (c *Cache) handleFaultLocked(s *shard, slot int) error {
+	id := s.slotID[slot-s.baseSlot]
+	meta := &s.meta[slot-s.baseSlot]
 	start := time.Now()
 	n, err := c.loader(id, c.page(slot))
-	c.stats.loadNanos.Add(uint64(time.Since(start).Nanoseconds()))
 	c.stats.loads.Add(1)
+	c.stats.loadNanos.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
 		meta.err.Store(&err)
 		meta.loading.Store(false)
@@ -459,16 +412,33 @@ func (c *Cache) handleFault(slot int) error {
 	}
 	meta.size.Store(int32(n))
 	meta.loading.Store(false)
+	var errNil error
+	meta.err.Store(&errNil)
 	close(meta.ready)
 	return nil
 }
 
-func (c *Cache) pinShared(slot int) bool {
-	ps := &c.state[slot]
+func (s *shard) unlockX(slot int, evict bool) {
+	local := slot - s.baseSlot
+	ps := &s.state[local]
+	if evict {
+		ps.unlockXEvicted()
+	} else {
+		ps.unlockX()
+	}
+}
+
+func (s *shard) unlockS(slot int) {
+	local := slot - s.baseSlot
+	s.state[local].unlockS()
+}
+
+func (s *shard) tryShared(slot int) bool {
+	local := slot - s.baseSlot
+	ps := &s.state[local]
 	for {
 		v := ps.load()
-		s := ps.state(v)
-		switch s {
+		switch ps.state(v) {
 		case stateEvicted:
 			return false
 		case stateLocked:
@@ -482,76 +452,30 @@ func (c *Cache) pinShared(slot int) bool {
 	}
 }
 
-func (c *Cache) completeSlot(slot, size int, meta *frameMeta) {
-	c.mu.Lock()
-	meta.size.Store(int32(size))
-	meta.loading.Store(false)
-	var errNil error
-	meta.err.Store(&errNil)
-	close(meta.ready)
-	c.state[slot].unlockX()
-	c.mu.Unlock()
-	c.notifyWaiters()
-}
-
-func (c *Cache) releaseSlot(slot int, id uint64, meta *frameMeta, err error) {
-	c.mu.Lock()
-	if meta.ready == nil {
-		meta.ready = make(chan struct{})
-	}
-	if err != nil {
-		meta.err.Store(&err)
-	} else {
-		var errNil error
-		meta.err.Store(&errNil)
-	}
-	meta.loading.Store(false)
-	close(meta.ready)
-	c.state[slot].unlockXEvicted()
-	c.dropSlotLocked(slot)
-	c.mu.Unlock()
-	c.notifyWaiters()
-}
-
-func (c *Cache) grabSlotLocked() (int, error) {
-	for len(c.freeSlots) == 0 {
-		c.evictLocked()
-		if len(c.freeSlots) == 0 {
-			c.mu.Unlock()
-			wait := c.waitForRelease()
-			if wait > 0 {
-				c.stats.waits.Add(1)
-				c.stats.waitNanos.Add(uint64(wait))
-			}
-			c.mu.Lock()
-			if c.closed {
-				return 0, errClosed
-			}
-		}
-	}
-	last := len(c.freeSlots) - 1
-	slot := c.freeSlots[last]
-	c.freeSlots = c.freeSlots[:last]
-	return slot, nil
-}
-
-func (c *Cache) evictLocked() {
-	if len(c.clock) == 0 {
+func (s *shard) evictSome(c *Cache) {
+	if len(s.clock) == 0 {
 		return
 	}
 	budget := c.opts.EvictBatch
-	if budget <= 0 || budget > len(c.clock) {
-		budget = len(c.clock)
+	if budget > len(s.clock) {
+		budget = len(s.clock)
 	}
 	scanned := 0
-	for len(c.freeSlots) == 0 && scanned < budget && len(c.clock) > 0 {
-		if c.hand >= len(c.clock) {
-			c.hand = 0
+	for len(s.freeSlots) == 0 && scanned < budget && len(s.clock) > 0 {
+		if s.hand >= len(s.clock) {
+			s.hand = 0
 		}
-		slot := c.clock[c.hand]
-		c.hand++
-		meta := &c.meta[slot]
-		if meta.loading.Load() || c.state[slot].state(c.state[slot].load()) > stateUnlocked {
+		slot := s.clock[s.hand]
+		local := slot - s.baseSlot
+		s.hand++
+		ps := &s.state[local]
+		meta := &s.meta[local]
+		state := ps.state(ps.load())
+		if state == stateLocked || state == stateEvicted {
+			scanned++
+			continue
+		}
+		if meta.loading.Load() {
 			scanned++
 			continue
 		}
@@ -560,113 +484,96 @@ func (c *Cache) evictLocked() {
 			continue
 		}
 		if c.opts.Flusher != nil && meta.dirty.Load() {
-			if err := c.opts.Flusher(c.slotID[slot], c.page(slot)[:int(meta.size.Load())]); err != nil {
+			if err := c.opts.Flusher(s.slotID[local], c.pageFor(slot, int(meta.size.Load()))); err != nil {
 				meta.recent.Store(true)
 				scanned++
 				continue
 			}
 			meta.dirty.Store(false)
 		}
-		c.dropSlotLocked(slot)
+		s.removeSlot(slot)
 		c.stats.evictions.Add(1)
 		scanned++
 	}
 }
 
-func (c *Cache) dropSlotLocked(slot int) {
-	id := c.slotID[slot]
-	if id != invalidID {
-		c.delSlot(id)
-		c.slotID[slot] = invalidID
-	}
-	if idx := c.clockIndex[slot]; idx >= 0 {
-		last := len(c.clock) - 1
-		lastSlot := c.clock[last]
-		c.clock[idx] = lastSlot
-		c.clock = c.clock[:last]
-		c.clockIndex[slot] = -1
-		if idx < len(c.clock) {
-			c.clockIndex[lastSlot] = idx
+func (s *shard) evictList(ids []uint64, c *Cache) {
+	s.mu.Lock()
+	for _, id := range ids {
+		slot, ok := s.idToSlot[id]
+		if !ok {
+			continue
 		}
-		if c.hand > idx {
-			c.hand--
+		local := slot - s.baseSlot
+		meta := &s.meta[local]
+		if meta.loading.Load() {
+			continue
 		}
-		if c.hand >= len(c.clock) {
-			c.hand = 0
+		s.removeSlot(slot)
+		c.stats.evictions.Add(1)
+	}
+	s.mu.Unlock()
+}
+
+func (s *shard) removeSlot(slot int) {
+	local := slot - s.baseSlot
+	id := s.slotID[local]
+	delete(s.idToSlot, id)
+	s.slotID[local] = invalidID
+	s.state[local].unlockXEvicted()
+	if s.clockIndex[local] >= 0 {
+		idx := s.clockIndex[local]
+		last := len(s.clock) - 1
+		s.clock[idx] = s.clock[last]
+		s.clock = s.clock[:last]
+		if idx < len(s.clock) {
+			otherLocal := s.clock[idx] - s.baseSlot
+			s.clockIndex[otherLocal] = idx
 		}
+		s.clockIndex[local] = -1
 	}
-	if !c.opts.DisableMadvise && c.opts.UseMmap {
-		if err := unix.Madvise(c.page(slot), unix.MADV_DONTNEED); err == nil {
-			c.stats.madvises.Add(1)
-		}
-	}
-	c.meta[slot].recent.Store(false)
-	c.meta[slot].dirty.Store(false)
-	c.meta[slot].loading.Store(false)
-	c.meta[slot].size.Store(0)
-	c.freeSlots = append(c.freeSlots, slot)
+	s.meta[local].recent.Store(false)
+	s.meta[local].dirty.Store(false)
+	s.meta[local].loading.Store(false)
+	s.meta[local].size.Store(0)
+	s.freeSlots = append(s.freeSlots, slot)
 }
 
-func (c *Cache) waitForRelease() time.Duration {
-	start := time.Now()
-	select {
-	case <-c.releaseCh:
-	case <-time.After(time.Millisecond):
-		runtime.Gosched()
-	}
-	return time.Since(start)
-}
+func cBool(b bool) bool { return b }
 
-func (c *Cache) notifyWaiters() {
-	select {
-	case c.releaseCh <- struct{}{}:
-	default:
-	}
-}
-
-func (c *Cache) makeHandle(id uint64, slot, size int) *Handle {
-	if size <= 0 {
-		size = c.opts.PageSize
-	}
-	return &Handle{
-		cache: c,
-		id:    id,
-		slot:  slot,
-		size:  size,
-	}
-}
-
-func (c *Cache) value(id uint64) any {
-	if slot, ok := c.lookupSlot(id); ok {
-		return c.meta[slot].value.Load()
-	}
-	return nil
-}
-
-func (c *Cache) setValue(id uint64, v any) {
-	if slot, ok := c.lookupSlot(id); ok {
-		c.meta[slot].value.Store(v)
-	}
-}
-
+// helpers
 func (c *Cache) page(slot int) []byte {
 	start := slot * c.opts.PageSize
 	end := start + c.opts.PageSize
 	return c.region[start:end]
 }
 
-func (c *Cache) lookupSlot(id uint64) (int, bool) {
-	return c.resident.get(id)
+func (c *Cache) residentLen() uint64 {
+	var total uint64
+	for _, s := range c.shards {
+		total += uint64(len(s.idToSlot))
+	}
+	return total
 }
 
-func (c *Cache) setSlot(id uint64, slot int) {
-	c.resident.insert(id, slot)
+func (c *Cache) pageFor(slot int, size int) []byte {
+	if size <= 0 || size > c.opts.PageSize {
+		size = c.opts.PageSize
+	}
+	return c.page(slot)[:size]
 }
 
-func (c *Cache) delSlot(id uint64) {
-	c.resident.remove(id)
-}
-
-func (c *Cache) residentLen() int {
-	return c.resident.len()
+func hash64(k uint64) uint64 {
+	const m = uint64(0xc6a4a7935bd1e995)
+	const r = uint64(47)
+	h := uint64(0x8445d61a4e774912) ^ uint64(0x9e3779b97f4a7c15)
+	k *= m
+	k ^= k >> r
+	k *= m
+	h ^= k
+	h *= m
+	h ^= h >> r
+	h *= m
+	h ^= h >> r
+	return h
 }
