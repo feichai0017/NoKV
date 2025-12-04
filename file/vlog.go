@@ -82,6 +82,10 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 		return errors.Wrapf(err, "failed to initialize file %s", lf.FileName())
 	}
 
+	// Drop freshly written pages from page cache; cold segments rely on OS
+	// cache rather than user cache.
+	_ = lf.f.Advise(utils.AccessPatternDontNeed)
+
 	// Previously we used to close the file after it was written and reopen it in read-only mode.
 	// We no longer open files in read-only mode. We keep all vlog files open in read-write mode.
 	return nil

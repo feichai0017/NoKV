@@ -290,6 +290,9 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 	utils.CondPanic(written != len(dst), fmt.Errorf("tableBuilder.flush written != len(dst)"))
 	// Allow GC to reclaim the intermediate blocks once the data is persisted.
 	tb.blockList = nil
+	// Drop freshly written pages from the OS cache; block cache or subsequent
+	// reads will fault them back if needed.
+	_ = t.ss.Advise(utils.AccessPatternDontNeed)
 	return t, nil
 }
 

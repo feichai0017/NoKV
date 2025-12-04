@@ -5,7 +5,6 @@ package mmap
 
 import (
 	"os"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
