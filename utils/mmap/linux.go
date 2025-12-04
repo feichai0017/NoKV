@@ -26,24 +26,12 @@ func mremap(data []byte, size int) ([]byte, error) {
 }
 
 // munmap unmaps a previously mapped slice.
-//
-// unix.Munmap maintains an internal list of mmapped addresses, and only calls munmap
-// if the address is present in that list. If we use mremap, this list is not updated.
-// To bypass this, we call munmap ourselves.
 func munmap(data []byte) error {
-	if len(data) == 0 || len(data) != cap(data) {
-		return unix.EINVAL
+	// Keep checks minimal; unix.Munmap already validates length/cap internally.
+	if len(data) == 0 {
+		return nil
 	}
-	_, _, errno := unix.Syscall(
-		unix.SYS_MUNMAP,
-		uintptr(unsafe.Pointer(&data[0])),
-		uintptr(len(data)),
-		0,
-	)
-	if errno != 0 {
-		return errno
-	}
-	return nil
+	return unix.Munmap(data)
 }
 
 // adviseFromBool maps the legacy bool readahead flag to Advice.
