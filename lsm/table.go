@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"expvar"
 	"fmt"
 	"io"
 	"math"
@@ -15,6 +16,12 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
+)
+
+var (
+	prefetchLaunched  = expvar.NewInt("NoKV.Prefetch.Launched")
+	prefetchAborted   = expvar.NewInt("NoKV.Prefetch.Aborted")
+	prefetchCompleted = expvar.NewInt("NoKV.Prefetch.Completed")
 )
 
 type table struct {
@@ -347,10 +354,14 @@ func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
 	}
 
 	var err error
-	if b.data, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
+	var gen uint64
+	if b.data, gen, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
+	}
+	if !copyData && gen != t.ss.Generation() {
+		return nil, errors.New("stale mmap generation detected")
 	}
 
 	// Binary Format for a Data Block (read from disk):
@@ -436,22 +447,22 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	return err == nil
 }
 
-func (t *table) read(off, sz int, copyData bool) ([]byte, error) {
+func (t *table) read(off, sz int, copyData bool) ([]byte, uint64, error) {
 	ss, release, err := t.pinSSTable()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer release()
 	data, err := ss.Bytes(off, sz)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !copyData {
-		return data, nil
+		return data, ss.Generation(), nil
 	}
 	out := make([]byte, len(data))
 	copy(out, data)
-	return out, nil
+	return out, ss.Generation(), nil
 }
 
 const maxUint32 = uint64(math.MaxUint32)
@@ -501,15 +512,18 @@ func (t *table) HasBloomFilter() bool {
 }
 
 type tableIterator struct {
-	it       utils.Item
-	opt      *utils.Options
-	t        *table
-	blockPos int
-	bi       *blockIterator
-	err      error
-	index    *pb.TableIndex
-	copyData bool
-	release  func()
+	it        utils.Item
+	opt       *utils.Options
+	t         *table
+	blockPos  int
+	bi        *blockIterator
+	err       error
+	index     *pb.TableIndex
+	copyData  bool
+	release   func()
+	closeCh   chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
@@ -529,11 +543,27 @@ func (it *tableIterator) prefetchNext(idx int) {
 		if next >= limit {
 			return
 		}
+		select {
+		case <-it.closeCh:
+			return
+		default:
+		}
 		it.t.IncrRef()
+		it.wg.Add(1)
 		go func(blockIdx int) {
+			defer it.wg.Done()
 			defer it.t.DecrRef()
-			_, _ = it.t.loadBlock(blockIdx, false, true)
+			select {
+			case <-it.closeCh:
+				prefetchAborted.Add(1)
+				return
+			default:
+			}
+			if _, err := it.t.loadBlock(blockIdx, false, true); err == nil {
+				prefetchCompleted.Add(1)
+			}
 		}(next)
+		prefetchLaunched.Add(1)
 	}
 }
 
@@ -545,7 +575,13 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	copyData := !options.ZeroCopy
 	pattern := options.AccessPattern
 	if pattern == utils.AccessPatternAuto {
-		pattern = utils.AccessPatternNormal
+		// Default to random for point/range-with-seeks, sequential when caller
+		// is scanning forward/backward deliberately.
+		if options.IsAsc {
+			pattern = utils.AccessPatternSequential
+		} else {
+			pattern = utils.AccessPatternRandom
+		}
 	}
 	var hold func()
 	if ss, release, err := t.pinSSTable(); err == nil {
@@ -565,6 +601,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		index:    t.index(),
 		copyData: copyData,
 		release:  hold,
+		closeCh:  make(chan struct{}),
 	}
 }
 func (it *tableIterator) Next() {
@@ -613,6 +650,10 @@ func (it *tableIterator) Item() utils.Item {
 	return it.it
 }
 func (it *tableIterator) Close() error {
+	it.closeOnce.Do(func() {
+		close(it.closeCh)
+		it.wg.Wait()
+	})
 	if it.release != nil {
 		it.release()
 		it.release = nil
