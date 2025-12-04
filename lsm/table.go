@@ -102,8 +102,17 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	defer itr.Close()
 	// locate to the initial position is the max key
 	itr.Rewind()
-	utils.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
-	maxKey := append([]byte(nil), itr.Item().Entry().Key...)
+	if !itr.Valid() {
+		// Empty table should not happen, but keep minKey as maxKey fallback.
+		t.maxKey = kv.SafeCopy(nil, t.minKey)
+		return t
+	}
+	item := itr.Item()
+	if item == nil || item.Entry() == nil {
+		t.maxKey = kv.SafeCopy(nil, t.minKey)
+		return t
+	}
+	maxKey := append([]byte(nil), item.Entry().Key...)
 	t.maxKey = kv.SafeCopy(nil, maxKey)
 	t.ss.SetMaxKey(maxKey)
 
@@ -287,11 +296,15 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	if !iter.Valid() {
 		return nil, utils.ErrKeyNotFound
 	}
+	item := iter.Item()
+	if item == nil || item.Entry() == nil {
+		return nil, utils.ErrKeyNotFound
+	}
 
-	if kv.SameKey(key, iter.Item().Entry().Key) {
-		if version := kv.ParseTs(iter.Item().Entry().Key); *maxVs < version {
+	if kv.SameKey(key, item.Entry().Key) {
+		if version := kv.ParseTs(item.Entry().Key); *maxVs < version {
 			*maxVs = version
-			return iter.Item().Entry(), nil
+			return item.Entry(), nil
 		}
 	}
 	return nil, utils.ErrKeyNotFound
@@ -303,10 +316,10 @@ func (t *table) indexKey() uint64 {
 
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
-	return t.loadBlock(idx, true)
+	return t.loadBlock(idx, true, true)
 }
 
-func (t *table) loadBlock(idx int, hot bool) (*block, error) {
+func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
 	utils.CondPanic(idx < 0, fmt.Errorf("idx=%d", idx))
 	index := t.index()
 	if index == nil {
@@ -318,11 +331,13 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
-		if hot {
-			t.lm.cache.addBlockWithTier(t.lvl, key, cached, true)
+	if copyData {
+		if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
+			if hot {
+				t.lm.cache.addBlockWithTier(t.lvl, key, cached, true)
+			}
+			return cached, nil
 		}
-		return cached, nil
 	}
 
 	ko, ok := t.blockOffset(idx)
@@ -332,7 +347,7 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	}
 
 	var err error
-	if b.data, err = t.read(b.offset, int(ko.GetLen())); err != nil {
+	if b.data, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
@@ -373,7 +388,9 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
+	if copyData {
+		t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
+	}
 
 	return b, nil
 }
@@ -415,11 +432,11 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	if idx < 0 || idx >= len(offsets) {
 		return false
 	}
-	_, err := t.loadBlock(idx, hot)
+	_, err := t.loadBlock(idx, hot, true)
 	return err == nil
 }
 
-func (t *table) read(off, sz int) ([]byte, error) {
+func (t *table) read(off, sz int, copyData bool) ([]byte, error) {
 	ss, release, err := t.pinSSTable()
 	if err != nil {
 		return nil, err
@@ -428,6 +445,9 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	data, err := ss.Bytes(off, sz)
 	if err != nil {
 		return nil, err
+	}
+	if !copyData {
+		return data, nil
 	}
 	out := make([]byte, len(data))
 	copy(out, data)
@@ -488,15 +508,63 @@ type tableIterator struct {
 	bi       *blockIterator
 	err      error
 	index    *pb.TableIndex
+	copyData bool
+	release  func()
+}
+
+func (it *tableIterator) fetchBlock(idx int) (*block, error) {
+	return it.t.loadBlock(idx, true, it.copyData)
+}
+
+func (it *tableIterator) prefetchNext(idx int) {
+	if it.opt == nil || it.opt.PrefetchBlocks <= 0 {
+		return
+	}
+	if !it.copyData || it.index == nil {
+		return
+	}
+	limit := len(it.index.GetOffsets())
+	for n := 1; n <= it.opt.PrefetchBlocks; n++ {
+		next := idx + n
+		if next >= limit {
+			return
+		}
+		it.t.IncrRef()
+		go func(blockIdx int) {
+			defer it.t.DecrRef()
+			_, _ = it.t.loadBlock(blockIdx, false, true)
+		}(next)
+	}
 }
 
 func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	t.IncrRef()
+	if options == nil {
+		options = &utils.Options{}
+	}
+	copyData := !options.ZeroCopy
+	pattern := options.AccessPattern
+	if pattern == utils.AccessPatternAuto {
+		pattern = utils.AccessPatternNormal
+	}
+	var hold func()
+	if ss, release, err := t.pinSSTable(); err == nil {
+		_ = ss.Advise(pattern)
+		if copyData {
+			release()
+		} else {
+			hold = release
+		}
+	} else {
+		copyData = true
+	}
 	return &tableIterator{
-		opt:   options,
-		t:     t,
-		bi:    &blockIterator{},
-		index: t.index(),
+		opt:      options,
+		t:        t,
+		bi:       &blockIterator{},
+		index:    t.index(),
+		copyData: copyData,
+		release:  hold,
 	}
 }
 func (it *tableIterator) Next() {
@@ -508,11 +576,12 @@ func (it *tableIterator) Next() {
 	}
 
 	if len(it.bi.data) == 0 {
-		block, err := it.t.block(it.blockPos)
+		block, err := it.fetchBlock(it.blockPos)
 		if err != nil {
 			it.err = err
 			return
 		}
+		it.prefetchNext(it.blockPos)
 		it.bi.tableID = it.t.fid
 		it.bi.blockID = it.blockPos
 		it.bi.setBlock(block)
@@ -531,7 +600,7 @@ func (it *tableIterator) Next() {
 	it.it = it.bi.it
 }
 func (it *tableIterator) Valid() bool {
-	return it.err != io.EOF // 如果没有的时候 则是EOF
+	return it.err == nil
 }
 func (it *tableIterator) Rewind() {
 	if it.opt.IsAsc {
@@ -544,6 +613,10 @@ func (it *tableIterator) Item() utils.Item {
 	return it.it
 }
 func (it *tableIterator) Close() error {
+	if it.release != nil {
+		it.release()
+		it.release = nil
+	}
 	it.bi.Close()
 	return it.t.DecrRef()
 }
@@ -558,11 +631,12 @@ func (it *tableIterator) seekToFirst() {
 		return
 	}
 	it.blockPos = 0
-	block, err := it.t.block(it.blockPos)
+	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
 		return
 	}
+	it.prefetchNext(it.blockPos)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
 	it.bi.setBlock(block)
@@ -582,11 +656,12 @@ func (it *tableIterator) seekToLast() {
 		return
 	}
 	it.blockPos = numBlocks - 1
-	block, err := it.t.block(it.blockPos)
+	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
 		return
 	}
+	it.prefetchNext(it.blockPos)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
 	it.bi.setBlock(block)
@@ -624,11 +699,12 @@ func (it *tableIterator) Seek(key []byte) {
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 	it.blockPos = blockIdx
-	block, err := it.t.block(blockIdx)
+	block, err := it.fetchBlock(blockIdx)
 	if err != nil {
 		it.err = err
 		return
 	}
+	it.prefetchNext(blockIdx)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
 	it.bi.setBlock(block)

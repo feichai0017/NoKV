@@ -132,6 +132,14 @@ func (ss *SSTable) HasBloomFilter() bool {
 	return ss.hasBloomFilter
 }
 
+// Advise forwards the read pattern hint to the underlying mmap.
+func (ss *SSTable) Advise(pattern utils.AccessPattern) error {
+	if ss == nil || ss.f == nil {
+		return nil
+	}
+	return ss.f.Advise(pattern)
+}
+
 func (ss *SSTable) read(off, sz int) ([]byte, error) {
 	if len(ss.f.Data) > 0 {
 		if len(ss.f.Data[off:]) < sz {
