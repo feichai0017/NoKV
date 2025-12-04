@@ -47,14 +47,44 @@ if [[ ",${ycsb_engines}," == *,rocksdb,* ]]; then
   need_rocksdb=true
 fi
 
+# Provide a single helper to append unique flags to an env var.
+append_unique() {
+  # $1 var name, $2 value to append
+  local var="$1"
+  local val="$2"
+  # shellcheck disable=SC2086
+  local current="${!var:-}"
+  if [[ "${current}" == *"${val}"* ]]; then
+    return 0
+  fi
+  if [[ -z "${current}" ]]; then
+    export "${var}=${val}"
+  else
+    export "${var}=${current} ${val}"
+  fi
+}
+
 if $need_rocksdb; then
   prefix="${REPO_ROOT}/third_party/rocksdb/dist"
-  if [[ ! -f "${prefix}/lib/librocksdb.so" ]]; then
+  libdir="${prefix}/lib"
+  if [[ ! -f "${libdir}/librocksdb.so" && ! -f "${libdir}/librocksdb.dylib" ]]; then
     die "RocksDB artifacts not found at ${prefix}. Run ./scripts/build_rocksdb.sh first."
   fi
-  export LD_LIBRARY_PATH="${prefix}/lib:${LD_LIBRARY_PATH:-}"
+
   export CGO_CFLAGS="${CGO_CFLAGS:-} -I${prefix}/include"
-  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -L${prefix}/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4"
+  # Base rpath/ldflags for rocksdb and bundled codecs.
+  rocks_ldflags="-L${libdir} -Wl,-rpath,${libdir} -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4"
+  homebrew_lib="/opt/homebrew/lib"
+  if [[ -d "${homebrew_lib}" ]]; then
+    rocks_ldflags+=" -L${homebrew_lib} -Wl,-rpath,${homebrew_lib}"
+  fi
+  append_unique LD_LIBRARY_PATH "${libdir}"
+  append_unique DYLD_LIBRARY_PATH "${libdir}"
+  if [[ -d "${homebrew_lib}" ]]; then
+    append_unique LD_LIBRARY_PATH "${homebrew_lib}"
+    append_unique DYLD_LIBRARY_PATH "${homebrew_lib}"
+  fi
+  append_unique CGO_LDFLAGS "${rocks_ldflags}"
   build_tags="-tags benchmark_rocksdb"
 else
   build_tags=""

@@ -251,26 +251,47 @@ func (n *node) setIterator(iter utils.Iterator) {
 }
 
 func (n *node) setKey() {
+	if n.iter == nil {
+		n.valid = false
+		n.entry = nil
+		return
+	}
 	switch {
 	case n.merge != nil:
-		n.valid = n.merge.small.valid
+		n.valid = n.merge.small != nil && n.merge.small.valid && n.merge.small.entry != nil
+		n.entry = nil
 		if n.valid {
 			n.entry = n.merge.small.entry
 		}
 	case n.concat != nil:
 		n.valid = n.concat.Valid()
+		n.entry = nil
 		if n.valid {
-			n.entry = n.concat.Item().Entry()
+			item := n.concat.Item()
+			utils.CondPanic(item == nil, fmt.Errorf("concat iterator valid but item nil (type=%T)", n.concat))
+			entry := item.Entry()
+			utils.CondPanic(entry == nil, fmt.Errorf("concat iterator valid but entry nil (type=%T)", n.concat))
+			n.entry = entry
 		}
 	default:
 		n.valid = n.iter.Valid()
+		n.entry = nil
 		if n.valid {
-			n.entry = n.iter.Item().Entry()
+			item := n.iter.Item()
+			utils.CondPanic(item == nil, fmt.Errorf("iterator valid but item nil (type=%T)", n.iter))
+			entry := item.Entry()
+			utils.CondPanic(entry == nil, fmt.Errorf("iterator valid but entry nil (type=%T)", n.iter))
+			n.entry = entry
 		}
 	}
 }
 
 func (n *node) next() {
+	if n.iter == nil {
+		n.valid = false
+		n.entry = nil
+		return
+	}
 	switch {
 	case n.merge != nil:
 		n.merge.Next()
@@ -283,11 +304,21 @@ func (n *node) next() {
 }
 
 func (n *node) rewind() {
+	if n.iter == nil {
+		n.valid = false
+		n.entry = nil
+		return
+	}
 	n.iter.Rewind()
 	n.setKey()
 }
 
 func (n *node) seek(key []byte) {
+	if n.iter == nil {
+		n.valid = false
+		n.entry = nil
+		return
+	}
 	n.iter.Seek(key)
 	n.setKey()
 }
@@ -358,7 +389,11 @@ func (mi *MergeIterator) Next() {
 }
 
 func (mi *MergeIterator) setCurrent() {
-	utils.CondPanic(mi.small.entry == nil && mi.small.valid == true, fmt.Errorf("mi.small.entry is nil"))
+	if mi.small.valid && mi.small.entry == nil {
+		mi.small.valid = false
+		mi.small.entry = nil
+		return
+	}
 	if mi.small.valid {
 		mi.curKey = append(mi.curKey[:0], mi.small.entry.Key...)
 	}

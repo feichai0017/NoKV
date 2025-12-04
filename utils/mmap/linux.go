@@ -5,7 +5,6 @@ package mmap
 
 import (
 	"os"
-	"reflect"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -23,27 +22,7 @@ func mmap(fd *os.File, writable bool, size int64) ([]byte, error) {
 
 // mremap is a Linux-specific system call to remap pages in memory. This can be used in place of munmap + mmap.
 func mremap(data []byte, size int) ([]byte, error) {
-	// taken from <https://github.com/torvalds/linux/blob/f8394f232b1eab649ce2df5c5f15b0e528c92091/include/uapi/linux/mman.h#L8>
-	const MREMAP_MAYMOVE = 0x1
-
-	header := (*reflect.SliceHeader)(unsafe.Pointer(&data))
-	mmapAddr, _, errno := unix.Syscall6(
-		unix.SYS_MREMAP,
-		header.Data,
-		uintptr(header.Len),
-		uintptr(size),
-		uintptr(MREMAP_MAYMOVE),
-		0,
-		0,
-	)
-	if errno != 0 {
-		return nil, errno
-	}
-
-	header.Data = mmapAddr
-	header.Cap = size
-	header.Len = size
-	return data, nil
+	return unix.Mremap(data, size, unix.MREMAP_MAYMOVE)
 }
 
 // munmap unmaps a previously mapped slice.
@@ -67,13 +46,31 @@ func munmap(data []byte) error {
 	return nil
 }
 
-// madvise uses the madvise system call to give advise about the use of memory
-// when using a slice that is memory-mapped to a file. Set the readahead flag to
-// false if page references are expected in random order.
-func madvise(b []byte, readahead bool) error {
-	flags := unix.MADV_NORMAL
-	if !readahead {
+// adviseFromBool maps the legacy bool readahead flag to Advice.
+func adviseFromBool(readahead bool) Advice {
+	if readahead {
+		return AdviceNormal
+	}
+	return AdviceRandom
+}
+
+// madvisePattern uses the madvise system call to give advise about the use of
+// memory when using a slice that is memory-mapped to a file.
+func madvisePattern(b []byte, advice Advice) error {
+	var flags int
+	switch advice {
+	case AdviceNormal:
+		flags = unix.MADV_NORMAL
+	case AdviceSequential:
+		flags = unix.MADV_SEQUENTIAL
+	case AdviceRandom:
 		flags = unix.MADV_RANDOM
+	case AdviceWillNeed:
+		flags = unix.MADV_WILLNEED
+	case AdviceDontNeed:
+		flags = unix.MADV_DONTNEED
+	default:
+		flags = unix.MADV_NORMAL
 	}
 	return unix.Madvise(b, flags)
 }

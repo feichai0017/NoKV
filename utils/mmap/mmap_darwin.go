@@ -17,10 +17,15 @@ func Munmap(b []byte) error {
 }
 
 // Madvise uses the madvise system call to give advise about the use of memory
-// when using a slice that is memory-mapped to a file. Set the readahead flag to
-// false if page references are expected in random order.
+// when using a slice that is memory-mapped to a file. Prefer MadvisePattern
+// for explicit patterns.
 func Madvise(b []byte, readahead bool) error {
-	return madvise(b, readahead)
+	return MadvisePattern(b, adviseFromBool(readahead))
+}
+
+// MadvisePattern exposes richer access-pattern hints to the OS.
+func MadvisePattern(b []byte, advice Advice) error {
+	return madvisePattern(b, advice)
 }
 
 // Msync would call sync on the mmapped data.

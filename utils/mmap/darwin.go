@@ -26,15 +26,33 @@ func munmap(b []byte) error {
 	return unix.Munmap(b)
 }
 
+func adviseFromBool(readahead bool) Advice {
+	if readahead {
+		return AdviceNormal
+	}
+	return AdviceRandom
+}
+
 // This is required because the unix package does not support the madvise system call on OS X.
-func madvise(b []byte, readahead bool) error {
-	advice := unix.MADV_NORMAL
-	if !readahead {
-		advice = unix.MADV_RANDOM
+func madvisePattern(b []byte, advice Advice) error {
+	var flag int
+	switch advice {
+	case AdviceNormal:
+		flag = unix.MADV_NORMAL
+	case AdviceSequential:
+		flag = unix.MADV_SEQUENTIAL
+	case AdviceRandom:
+		flag = unix.MADV_RANDOM
+	case AdviceWillNeed:
+		flag = unix.MADV_WILLNEED
+	case AdviceDontNeed:
+		flag = unix.MADV_DONTNEED
+	default:
+		flag = unix.MADV_NORMAL
 	}
 
 	_, _, e1 := syscall.Syscall(syscall.SYS_MADVISE, uintptr(unsafe.Pointer(&b[0])),
-		uintptr(len(b)), uintptr(advice))
+		uintptr(len(b)), uintptr(flag))
 	if e1 != 0 {
 		return e1
 	}

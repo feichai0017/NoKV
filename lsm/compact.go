@@ -602,7 +602,10 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	topTables := cd.top
 	botTables := cd.bot
 	iterOpt := &utils.Options{
-		IsAsc: true,
+		IsAsc:          true,
+		AccessPattern:  utils.AccessPatternSequential,
+		ZeroCopy:       true,
+		PrefetchBlocks: 1,
 	}
 	//numTables := int64(len(topTables) + len(botTables))
 	newIterator := func() []utils.Iterator {

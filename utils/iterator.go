@@ -25,4 +25,13 @@ type Options struct {
 	// eagerly. Callers should rely on Item.ValueCopy when value access is
 	// required. This keeps the default behaviour (false) for existing users.
 	OnlyUseKey bool
+	// AccessPattern lets callers hint expected IO behaviour (sequential scans,
+	// random point lookups, etc.) so the file layer can tune madvise settings.
+	AccessPattern AccessPattern
+	// ZeroCopy keeps block data backed by mmap instead of copying. Callers must
+	// ensure the underlying table stays pinned for the iterator lifetime.
+	ZeroCopy bool
+	// PrefetchBlocks controls how many blocks ahead to prefetch eagerly. Zero
+	// disables prefetch.
+	PrefetchBlocks int
 }
