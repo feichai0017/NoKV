@@ -34,4 +34,12 @@ type Options struct {
 	// PrefetchBlocks controls how many blocks ahead to prefetch eagerly. Zero
 	// disables prefetch.
 	PrefetchBlocks int
+	// PrefetchWorkers optionally overrides worker count (defaults to
+	// min(PrefetchBlocks,4)). Zero uses the default.
+	PrefetchWorkers int
+	// PrefetchAdaptive enables dynamic tuning of prefetch based on hit/miss stats.
+	PrefetchAdaptive bool
+	// BypassBlockCache skips block-cache lookups/insertions, relying on OS page
+	// cache + zero-copy for large scans to avoid double cache.
+	BypassBlockCache bool
 }

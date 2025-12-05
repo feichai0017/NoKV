@@ -5,6 +5,8 @@ package mmap
 
 import (
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 func Mmap(fd *os.File, writable bool, size int64) ([]byte, error) {
@@ -31,4 +33,17 @@ func MadvisePattern(b []byte, advice Advice) error {
 // Msync would call sync on the mmapped data.
 func Msync(b []byte) error {
 	return msync(b)
+}
+
+// MsyncAsync flushes dirty pages asynchronously.
+func MsyncAsync(b []byte) error {
+	return msyncAsync(b)
+}
+
+// MsyncAsyncRange flushes a range [off, off+len) asynchronously.
+func MsyncAsyncRange(b []byte, off, n int64) error {
+	if off < 0 || n <= 0 || off+n > int64(len(b)) {
+		return unix.EINVAL
+	}
+	return msyncAsync(b[off : off+n])
 }

@@ -602,10 +602,11 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	topTables := cd.top
 	botTables := cd.bot
 	iterOpt := &utils.Options{
-		IsAsc:          true,
-		AccessPattern:  utils.AccessPatternSequential,
-		ZeroCopy:       true,
-		PrefetchBlocks: 1,
+		IsAsc:            true,
+		AccessPattern:    utils.AccessPatternSequential,
+		ZeroCopy:         true,
+		PrefetchBlocks:   1,
+		BypassBlockCache: true,
 	}
 	//numTables := int64(len(topTables) + len(botTables))
 	newIterator := func() []utils.Iterator {
@@ -624,17 +625,15 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	res := make(chan *table, 3)
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 	for _, kr := range cd.splits {
-		// Initiate Do here so we can register the goroutines for buildTables too.
-		if err := inflightBuilders.Do(); err != nil {
-			return nil, nil, fmt.Errorf("cannot start subcompaction: %+v", err)
-		}
-		// 开启一个协程去处理子压缩
-		go func(kr keyRange) {
-			defer inflightBuilders.Done(nil)
+		kr := kr
+		if err := inflightBuilders.Go(func() error {
 			it := NewMergeIterator(newIterator(), false)
 			defer it.Close()
 			lm.subcompact(it, kr, cd, inflightBuilders, res)
-		}(kr)
+			return nil
+		}); err != nil {
+			return nil, nil, fmt.Errorf("cannot start subcompaction: %+v", err)
+		}
 	}
 
 	// mapreduce的方式收集table的句柄

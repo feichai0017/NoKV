@@ -323,10 +323,10 @@ func (t *table) indexKey() uint64 {
 
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
-	return t.loadBlock(idx, true, true)
+	return t.loadBlock(idx, true, true, false)
 }
 
-func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
+func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, error) {
 	utils.CondPanic(idx < 0, fmt.Errorf("idx=%d", idx))
 	index := t.index()
 	if index == nil {
@@ -338,7 +338,7 @@ func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	if copyData {
+	if copyData && !bypassCache {
 		if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
 			if hot {
 				t.lm.cache.addBlockWithTier(t.lvl, key, cached, true)
@@ -361,7 +361,10 @@ func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
 			t.fid, b.offset, ko.GetLen())
 	}
 	if !copyData && gen != t.ss.Generation() {
-		return nil, errors.New("stale mmap generation detected")
+		if b.data, _, err = t.read(b.offset, int(ko.GetLen()), true); err != nil {
+			return nil, err
+		}
+		copyData = true
 	}
 
 	// Binary Format for a Data Block (read from disk):
@@ -399,7 +402,7 @@ func (t *table) loadBlock(idx int, hot, copyData bool) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	if copyData {
+	if copyData && !bypassCache {
 		t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
 	}
 
@@ -443,7 +446,7 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	if idx < 0 || idx >= len(offsets) {
 		return false
 	}
-	_, err := t.loadBlock(idx, hot, true)
+	_, err := t.loadBlock(idx, hot, true, false)
 	return err == nil
 }
 
@@ -512,26 +515,31 @@ func (t *table) HasBloomFilter() bool {
 }
 
 type tableIterator struct {
-	it        utils.Item
-	opt       *utils.Options
-	t         *table
-	blockPos  int
-	bi        *blockIterator
-	err       error
-	index     *pb.TableIndex
-	copyData  bool
-	release   func()
-	closeCh   chan struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	it           utils.Item
+	opt          *utils.Options
+	t            *table
+	blockPos     int
+	bi           *blockIterator
+	err          error
+	index        *pb.TableIndex
+	copyData     bool
+	release      func()
+	closeCh      chan struct{}
+	wg           sync.WaitGroup
+	closeOnce    sync.Once
+	bypassCache  bool
+	prefetchCh   chan int
+	prefetchPool *utils.Pool
+	hitCount     *expvar.Int
+	missCount    *expvar.Int
 }
 
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
-	return it.t.loadBlock(idx, true, it.copyData)
+	return it.t.loadBlock(idx, true, it.copyData, it.bypassCache)
 }
 
 func (it *tableIterator) prefetchNext(idx int) {
-	if it.opt == nil || it.opt.PrefetchBlocks <= 0 {
+	if it.opt == nil || it.opt.PrefetchBlocks <= 0 || it.prefetchCh == nil {
 		return
 	}
 	if !it.copyData || it.index == nil {
@@ -546,24 +554,12 @@ func (it *tableIterator) prefetchNext(idx int) {
 		select {
 		case <-it.closeCh:
 			return
+		case it.prefetchCh <- next:
+			prefetchLaunched.Add(1)
 		default:
+			prefetchAborted.Add(1)
+			return
 		}
-		it.t.IncrRef()
-		it.wg.Add(1)
-		go func(blockIdx int) {
-			defer it.wg.Done()
-			defer it.t.DecrRef()
-			select {
-			case <-it.closeCh:
-				prefetchAborted.Add(1)
-				return
-			default:
-			}
-			if _, err := it.t.loadBlock(blockIdx, false, true); err == nil {
-				prefetchCompleted.Add(1)
-			}
-		}(next)
-		prefetchLaunched.Add(1)
 	}
 }
 
@@ -576,8 +572,8 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	pattern := options.AccessPattern
 	if pattern == utils.AccessPatternAuto {
 		// Default to random for point/range-with-seeks, sequential when caller
-		// is scanning forward/backward deliberately.
-		if options.IsAsc {
+		// is scanning forward/backward deliberately or bypassing block cache.
+		if options.IsAsc || options.BypassBlockCache {
 			pattern = utils.AccessPatternSequential
 		} else {
 			pattern = utils.AccessPatternRandom
@@ -594,15 +590,51 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	} else {
 		copyData = true
 	}
-	return &tableIterator{
-		opt:      options,
-		t:        t,
-		bi:       &blockIterator{},
-		index:    t.index(),
-		copyData: copyData,
-		release:  hold,
-		closeCh:  make(chan struct{}),
+	it := &tableIterator{
+		opt:         options,
+		t:           t,
+		bi:          &blockIterator{},
+		index:       t.index(),
+		copyData:    copyData,
+		release:     hold,
+		closeCh:     make(chan struct{}),
+		bypassCache: options.BypassBlockCache,
 	}
+	if options.PrefetchBlocks > 0 {
+		it.prefetchCh = make(chan int, options.PrefetchBlocks)
+		workers := options.PrefetchWorkers
+		if workers <= 0 {
+			workers = min(options.PrefetchBlocks, 4)
+		}
+		it.prefetchPool = utils.NewPool(workers, "IteratorPrefetch")
+		it.wg.Add(1)
+		go func() {
+			defer it.wg.Done()
+			for {
+				select {
+				case <-it.closeCh:
+					return
+				case idx, ok := <-it.prefetchCh:
+					if !ok {
+						return
+					}
+					// submit to pool to bound parallel prefetch.
+					if err := it.prefetchPool.Submit(func() {
+						it.t.IncrRef()
+						if _, err := it.t.loadBlock(idx, false, true, it.bypassCache); err == nil {
+							prefetchCompleted.Add(1)
+						} else {
+							prefetchAborted.Add(1)
+						}
+						it.t.DecrRef()
+					}); err != nil {
+						prefetchAborted.Add(1)
+					}
+				}
+			}
+		}()
+	}
+	return it
 }
 func (it *tableIterator) Next() {
 	it.err = nil
@@ -651,8 +683,16 @@ func (it *tableIterator) Item() utils.Item {
 }
 func (it *tableIterator) Close() error {
 	it.closeOnce.Do(func() {
-		close(it.closeCh)
+		if it.closeCh != nil {
+			close(it.closeCh)
+		}
+		if it.prefetchCh != nil {
+			close(it.prefetchCh)
+		}
 		it.wg.Wait()
+		if it.prefetchPool != nil {
+			it.prefetchPool.Release()
+		}
 	})
 	if it.release != nil {
 		it.release()
