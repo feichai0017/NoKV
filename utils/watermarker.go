@@ -3,6 +3,7 @@ package utils
 import (
 	"container/heap"
 	"context"
+	"sync"
 	"sync/atomic"
 )
 
@@ -20,17 +21,6 @@ func (u *uint64Heap) Pop() any {
 	return x
 }
 
-// mark contains one of more indices, along with a done boolean to indicate the
-// status of the index: begin or done. It also contains waiters, who could be
-// waiting for the watermark to reach >= a certain index.
-type mark struct {
-	// Either this is an (index, waiter) pair or (index, done) or (indices, done).
-	index   uint64
-	waiter  chan struct{}
-	indices []uint64
-	done    bool // Set to true if the index is done.
-}
-
 // WaterMark is used to keep track of the minimum un-finished index.  Typically, an index k becomes
 // finished or "done" according to a WaterMark once Done(k) has been called
 //  1. as many times as Begin(k) has, AND
@@ -45,35 +35,50 @@ type WaterMark struct {
 	doneUntil uint64
 	lastIndex uint64
 	Name      string
-	markCh    chan mark
+
+	mu      sync.Mutex
+	pending map[uint64]int
+	waiters map[uint64][]chan struct{}
+	indices uint64Heap
 }
 
 // Init initializes a WaterMark struct. MUST be called before using it.
 func (w *WaterMark) Init(closer *Closer) {
-	w.markCh = make(chan mark, 100)
-	go w.process(closer)
+	w.pending = make(map[uint64]int)
+	w.waiters = make(map[uint64][]chan struct{})
+	heap.Init(&w.indices)
+	// Legacy closers expected each watermark processor to call Done once.
+	// We no longer run a background goroutine, so mark it done immediately
+	// to avoid leaking waiters on shutdown.
+	if closer != nil {
+		closer.Done()
+	}
 }
 
 // Begin sets the last index to the given value.
 func (w *WaterMark) Begin(index uint64) {
 	atomic.StoreUint64(&w.lastIndex, index)
-	w.markCh <- mark{index: index, done: false}
+	w.addIndex(index, 1)
 }
 
 // BeginMany works like Begin but accepts multiple indices.
 func (w *WaterMark) BeginMany(indices []uint64) {
 	atomic.StoreUint64(&w.lastIndex, indices[len(indices)-1])
-	w.markCh <- mark{index: 0, indices: indices, done: false}
+	for _, idx := range indices {
+		w.addIndex(idx, 1)
+	}
 }
 
 // Done sets a single index as done.
 func (w *WaterMark) Done(index uint64) {
-	w.markCh <- mark{index: index, done: true}
+	w.addIndex(index, -1)
 }
 
 // DoneMany works like Done but accepts multiple indices.
 func (w *WaterMark) DoneMany(indices []uint64) {
-	w.markCh <- mark{index: 0, indices: indices, done: true}
+	for _, idx := range indices {
+		w.addIndex(idx, -1)
+	}
 }
 
 // DoneUntil returns the maximum index that has the property that all indices
@@ -85,7 +90,10 @@ func (w *WaterMark) DoneUntil() uint64 {
 // SetDoneUntil sets the maximum index that has the property that all indices
 // less than or equal to it are done.
 func (w *WaterMark) SetDoneUntil(val uint64) {
-	atomic.StoreUint64(&w.doneUntil, val)
+	prev := atomic.SwapUint64(&w.doneUntil, val)
+	w.mu.Lock()
+	w.notifyWaitersLocked(prev, val)
+	w.mu.Unlock()
 }
 
 // LastIndex returns the last index for which Begin has been called.
@@ -99,7 +107,14 @@ func (w *WaterMark) WaitForMark(ctx context.Context, index uint64) error {
 		return nil
 	}
 	waitCh := make(chan struct{})
-	w.markCh <- mark{index: index, waiter: waitCh}
+
+	w.mu.Lock()
+	if w.DoneUntil() >= index {
+		w.mu.Unlock()
+		return nil
+	}
+	w.waiters[index] = append(w.waiters[index], waitCh)
+	w.mu.Unlock()
 
 	select {
 	case <-ctx.Done():
@@ -109,114 +124,60 @@ func (w *WaterMark) WaitForMark(ctx context.Context, index uint64) error {
 	}
 }
 
-// process is used to process the Mark channel. This is not thread-safe,
-// so only run one goroutine for process. One is sufficient, because
-// all goroutine ops use purely memory and cpu.
-// Each index has to emit atleast one begin watermark in serial order otherwise waiters
-// can get blocked idefinitely. Example: We had an watermark at 100 and a waiter at 101,
-// if no watermark is emitted at index 101 then waiter would get stuck indefinitely as it
-// can't decide whether the task at 101 has decided not to emit watermark or it didn't get
-// scheduled yet.
-func (w *WaterMark) process(closer *Closer) {
-	defer closer.Done()
+func (w *WaterMark) addIndex(index uint64, delta int) {
+	if index == 0 {
+		return
+	}
+	w.mu.Lock()
+	if _, present := w.pending[index]; !present {
+		heap.Push(&w.indices, index)
+	}
+	w.pending[index] += delta
+	w.advanceLocked()
+	w.mu.Unlock()
+}
 
-	var indices uint64Heap
-	// pending maps raft proposal index to the number of pending mutations for this proposal.
-	pending := make(map[uint64]int)
-	waiters := make(map[uint64][]chan struct{})
+func (w *WaterMark) advanceLocked() {
+	doneUntil := w.DoneUntil()
+	until := doneUntil
 
-	heap.Init(&indices)
-
-	processOne := func(index uint64, done bool) {
-		// If not already done, then set. Otherwise, don't undo a done entry.
-		prev, present := pending[index]
-		if !present {
-			heap.Push(&indices, index)
+	for len(w.indices) > 0 {
+		min := w.indices[0]
+		if pending := w.pending[min]; pending > 0 {
+			break
 		}
-
-		delta := 1
-		if done {
-			delta = -1
-		}
-		pending[index] = prev + delta
-
-		// Update mark by going through all indices in order; and checking if they have
-		// been done. Stop at the first index, which isn't done.
-		doneUntil := w.DoneUntil()
-		if doneUntil > index {
-			AssertTruef(false, "Name: %s doneUntil: %d. Index: %d", w.Name, doneUntil, index)
-		}
-
-		until := doneUntil
-		loops := 0
-
-		for len(indices) > 0 {
-			min := indices[0]
-			if done := pending[min]; done > 0 {
-				break // len(indices) will be > 0.
-			}
-			// Even if done is called multiple times causing it to become
-			// negative, we should still pop the index.
-			heap.Pop(&indices)
-			delete(pending, min)
-			until = min
-			loops++
-		}
-
-		if until != doneUntil {
-			AssertTrue(atomic.CompareAndSwapUint64(&w.doneUntil, doneUntil, until))
-		}
-
-		notifyAndRemove := func(idx uint64, toNotify []chan struct{}) {
-			for _, ch := range toNotify {
-				close(ch)
-			}
-			delete(waiters, idx) // Release the memory back.
-		}
-
-		if until-doneUntil <= uint64(len(waiters)) {
-			// Issue #908 showed that if doneUntil is close to 2^60, while until is zero, this loop
-			// can hog up CPU just iterating over integers creating a busy-wait loop. So, only do
-			// this path if until - doneUntil is less than the number of waiters.
-			for idx := doneUntil + 1; idx <= until; idx++ {
-				if toNotify, ok := waiters[idx]; ok {
-					notifyAndRemove(idx, toNotify)
-				}
-			}
-		} else {
-			for idx, toNotify := range waiters {
-				if idx <= until {
-					notifyAndRemove(idx, toNotify)
-				}
-			}
-		} // end of notifying waiters.
+		heap.Pop(&w.indices)
+		delete(w.pending, min)
+		until = min
 	}
 
-	for {
-		select {
-		case <-closer.HasBeenClosed():
-			return
-		case mark := <-w.markCh:
-			if mark.waiter != nil {
-				doneUntil := atomic.LoadUint64(&w.doneUntil)
-				if doneUntil >= mark.index {
-					close(mark.waiter)
-				} else {
-					ws, ok := waiters[mark.index]
-					if !ok {
-						waiters[mark.index] = []chan struct{}{mark.waiter}
-					} else {
-						waiters[mark.index] = append(ws, mark.waiter)
-					}
-				}
-			} else {
-				if mark.index > 0 {
-					processOne(mark.index, mark.done)
-				}
-				for _, index := range mark.indices {
-					processOne(index, mark.done)
-				}
+	if until != doneUntil {
+		atomic.StoreUint64(&w.doneUntil, until)
+		w.notifyWaitersLocked(doneUntil, until)
+	}
+}
+
+func (w *WaterMark) notifyWaitersLocked(prev, until uint64) {
+	notify := func(idx uint64, chans []chan struct{}) {
+		for _, ch := range chans {
+			close(ch)
+		}
+		delete(w.waiters, idx)
+	}
+
+	// When waiters are sparse, iterate by index distance; otherwise, range over map.
+	if until-prev <= uint64(len(w.waiters)) {
+		for idx := prev + 1; idx <= until; idx++ {
+			if chans, ok := w.waiters[idx]; ok {
+				notify(idx, chans)
 			}
+		}
+		return
+	}
+
+	for idx, chans := range w.waiters {
+		if idx <= until {
+			notify(idx, chans)
 		}
 	}
 }

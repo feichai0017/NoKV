@@ -34,7 +34,7 @@ Cold tier (CLOCK) -> larger backing store for demoted blocks
 * `Options.BlockCacheSize` sets the combined capacity (in blocks). `Options.BlockCacheHotFraction` decides the fraction devoted to the hot tier.
 * **Hot tier** – Doubly linked list managed with `container/list`. Promotion happens on every hit; eviction demotes blocks into the cold tier where possible.
 * **Cold tier** – CLOCK algorithm implemented via a ring buffer (`clockCache`). It tracks reference bits and approximates LRU without heavy locking.
-* All operations guard internal state with `blockCache.mu`, while metrics record the level (L0 or L1) and hit/miss outcome.
+* Locking strategy: read path takes `RLock` to probe hot tier, then briefly upgrades to `Lock` to maintain LRU on hit; cold tier uses its own internal lock so hot-tier probes stay fast. Writes/evictions still use `Lock`, and metrics continue to track L0/L1 hits/misses.
 
 ```mermaid
 flowchart LR
