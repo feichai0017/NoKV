@@ -66,3 +66,8 @@ func madvisePattern(b []byte, advice Advice) error {
 func msync(b []byte) error {
 	return unix.Msync(b, unix.MS_SYNC)
 }
+
+// msyncAsync flushes dirty pages asynchronously.
+func msyncAsync(b []byte) error {
+	return unix.Msync(b, unix.MS_ASYNC)
+}

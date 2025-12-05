@@ -27,6 +27,12 @@ var crc32Pool = sync.Pool{
 	},
 }
 
+var headerPool = sync.Pool{
+	New: func() any {
+		return make([]byte, MaxEntryHeaderSize)
+	},
+}
+
 // CRC32 returns a Castagnoli hash from the shared pool.
 func CRC32() hash.Hash32 {
 	h := crc32Pool.Get().(hash.Hash32)
@@ -186,15 +192,19 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 		ExpiresAt: e.ExpiresAt,
 	}
 
-	var headerBuf [MaxEntryHeaderSize]byte
-	sz := header.Encode(headerBuf[:])
+	baseHeaderBuf := headerPool.Get().([]byte)
+	headerBuf := baseHeaderBuf[:MaxEntryHeaderSize]
+	sz := header.Encode(headerBuf)
 	if sz > len(headerBuf) {
+		headerPool.Put(baseHeaderBuf[:MaxEntryHeaderSize])
 		return 0, fmt.Errorf("entry header overflow: sz=%d cap=%d key=%d val=%d meta=%d expires=%d", sz, len(headerBuf), len(e.Key), len(e.Value), header.Meta, header.ExpiresAt)
 	}
+	headerBuf = headerBuf[:sz]
 
 	crc := CRC32()
 	defer PutCRC32(crc)
-	if _, err := crc.Write(headerBuf[:sz]); err != nil {
+	if _, err := crc.Write(headerBuf); err != nil {
+		headerPool.Put(baseHeaderBuf[:MaxEntryHeaderSize])
 		return 0, err
 	}
 
@@ -223,9 +233,11 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 		return nil
 	}
 
-	if err := write(headerBuf[:sz]); err != nil {
+	if err := write(headerBuf); err != nil {
+		headerPool.Put(baseHeaderBuf[:MaxEntryHeaderSize])
 		return 0, err
 	}
+	headerPool.Put(baseHeaderBuf[:MaxEntryHeaderSize])
 	if err := writeSection(e.Key); err != nil {
 		return 0, err
 	}

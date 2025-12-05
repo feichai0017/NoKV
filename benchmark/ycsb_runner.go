@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"encoding/csv"
+	"expvar"
 	"fmt"
 	"math/rand"
 	"os"
@@ -401,11 +402,46 @@ func selectExistingKey(gen keyGenerator, state *ycsbKeyspace) []byte {
 }
 
 func formatYCSBKey(id int64) []byte {
-	return []byte(fmt.Sprintf("user%012d", id))
+	return fmt.Appendf(nil, "user%012d", id)
+}
+
+var (
+	valueBufPool = &valuePool{
+		pool:     sync.Pool{},
+		gets:     expvar.NewInt("NoKV.Benchmark.ValuePool.Gets"),
+		releases: expvar.NewInt("NoKV.Benchmark.ValuePool.Releases"),
+	}
+)
+
+type valuePool struct {
+	pool     sync.Pool
+	gets     *expvar.Int
+	releases *expvar.Int
+}
+
+func (vp *valuePool) Get(size int) []byte {
+	vp.gets.Add(1)
+	if size <= 0 {
+		return nil
+	}
+	if v := vp.pool.Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) >= size {
+			return buf[:size]
+		}
+	}
+	return make([]byte, size)
+}
+
+func (vp *valuePool) Put(buf []byte) {
+	if buf == nil {
+		return
+	}
+	vp.releases.Add(1)
+	vp.pool.Put(buf)
 }
 
 func randomValue(rng *rand.Rand, size int) []byte {
-	buf := make([]byte, size)
+	buf := valueBufPool.Get(size)
 	if size <= 0 {
 		return buf
 	}

@@ -2,71 +2,71 @@ package utils
 
 import "sync"
 
-// Throttle allows a limited number of workers to run at a time. It also
-// provides a mechanism to check for errors encountered by workers and wait for
-// them to finish.
+// Throttle is a small wrapper around ants pool that limits concurrent tasks
+// and collects their errors.
 type Throttle struct {
 	once      sync.Once
 	wg        sync.WaitGroup
-	ch        chan struct{}
 	errCh     chan error
 	finishErr error
+	pool      *Pool
 }
 
 // NewThrottle creates a new throttle with a max number of workers.
 func NewThrottle(max int) *Throttle {
+	if max <= 0 {
+		max = 1
+	}
 	return &Throttle{
-		ch:    make(chan struct{}, max),
 		errCh: make(chan error, max),
+		pool:  NewPool(max, "Throttle"),
 	}
 }
 
-// Do should be called by workers before they start working. It blocks if there
-// are already maximum number of workers working. If it detects an error from
-// previously Done workers, it would return it.
-func (t *Throttle) Do() error {
-	for {
-		select {
-		case t.ch <- struct{}{}:
-			t.wg.Add(1)
-			return nil
-		case err := <-t.errCh:
-			if err != nil {
-				return err
-			}
+// Go submits a task to the underlying goroutine pool.
+func (t *Throttle) Go(fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	t.wg.Add(1)
+	return t.pool.Submit(func() {
+		defer t.wg.Done()
+		if err := fn(); err != nil {
+			t.errCh <- err
 		}
-	}
+	})
 }
 
-// Done should be called by workers when they finish working. They can also
-// pass the error status of work done.
+// Do/Done remain for compatibility with existing call sites that manage their
+// own goroutines. They simply track waitgroup/err collection without limiting
+// via channel (pool should be used via Go).
+func (t *Throttle) Do() error {
+	t.wg.Add(1)
+	return nil
+}
+
 func (t *Throttle) Done(err error) {
 	if err != nil {
 		t.errCh <- err
 	}
-	select {
-	case <-t.ch:
-	default:
-		panic("Throttle Do Done mismatch")
-	}
 	t.wg.Done()
 }
 
-// Finish waits until all workers have finished working. It would return any error passed by Done.
-// If Finish is called multiple time, it will wait for workers to finish only once(first time).
-// From next calls, it will return same error as found on first call.
+// Finish waits until all workers have finished working. It returns the first
+// error encountered.
 func (t *Throttle) Finish() error {
 	t.once.Do(func() {
 		t.wg.Wait()
-		close(t.ch)
 		close(t.errCh)
 		for err := range t.errCh {
 			if err != nil {
 				t.finishErr = err
-				return
+				break
 			}
 		}
+		if t.pool != nil {
+			t.pool.Release()
+		}
 	})
-
 	return t.finishErr
 }

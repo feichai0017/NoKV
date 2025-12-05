@@ -122,6 +122,17 @@ func (m *Manager) populate() error {
 		return err
 	}
 	sort.Strings(files)
+	var max uint32
+	for _, path := range files {
+		var fid uint32
+		if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
+			continue
+		}
+		if fid > max {
+			max = fid
+		}
+	}
+	m.maxFid = max
 	for _, path := range files {
 		var fid uint32
 		if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
@@ -132,15 +143,17 @@ func (m *Manager) populate() error {
 			FID:      uint64(fid),
 			FileName: path,
 			Dir:      m.cfg.Dir,
-			Flag:     os.O_CREATE | os.O_RDWR,
-			MaxSz:    int(m.cfg.MaxSize),
+			Flag: func() int {
+				if fid == max {
+					return os.O_CREATE | os.O_RDWR
+				}
+				return os.O_RDONLY
+			}(),
+			MaxSz: int(m.cfg.MaxSize),
 		}); err != nil {
 			return err
 		}
 		m.files[fid] = lf
-		if fid > m.maxFid {
-			m.maxFid = fid
-		}
 	}
 	return nil
 }
@@ -222,6 +235,8 @@ func (m *Manager) Rotate() error {
 		if err := m.active.DoneWriting(m.offset); err != nil {
 			return err
 		}
+		// Previous active becomes read-only to reduce cache/RSS.
+		_ = m.active.SetReadOnly()
 	}
 	nextID := m.maxFid + 1
 	if _, err := m.create(nextID); err != nil {
@@ -480,7 +495,7 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 
 	stats.SkippedMiB = skipped
 
-	switch  err{
+	switch err {
 	case nil, utils.ErrStop:
 		return stats, nil
 	default:
@@ -649,6 +664,9 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	}
 
 	var firstErr error
+	if err := active.SetWritable(); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	for _, item := range extra {
 		item.lf.Lock.Lock()
 		if err := item.lf.Close(); err != nil && firstErr == nil {

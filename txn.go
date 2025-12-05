@@ -275,8 +275,13 @@ type Txn struct {
 
 	numIterators int32
 	discarded    bool
+	returned     bool
 	doneRead     bool
 	update       bool // update is used to conditionally keep track of reads.
+}
+
+var txnPool = sync.Pool{
+	New: func() any { return &Txn{} },
 }
 
 type pendingWritesIterator struct {
@@ -563,12 +568,45 @@ func (txn *Txn) Discard() {
 		for _, e := range txn.pendingWrites {
 			e.DecrRef()
 		}
-		txn.pendingWrites = nil
+		txn.clearPendingWrites()
 	}
 
 	txn.db.orc.doneRead(txn)
 	txn.db.orc.trackTxnFinish()
 
+	txn.recycle()
+}
+
+func (txn *Txn) clearPendingWrites() {
+	if txn.pendingWrites == nil {
+		return
+	}
+	for k := range txn.pendingWrites {
+		delete(txn.pendingWrites, k)
+	}
+}
+
+func (txn *Txn) recycle() {
+	if txn.returned {
+		return
+	}
+	txn.returned = true
+	txn.db = nil
+	txn.reads = txn.reads[:0]
+	txn.commitTs = 0
+	txn.readTs = 0
+	txn.size = 0
+	txn.count = 0
+	txn.doneRead = false
+	poolable := !txn.update
+	txn.update = false
+	atomic.StoreInt32(&txn.numIterators, 0)
+	txn.clearPendingWrites()
+	txn.pendingWrites = nil
+	txn.conflictKeys = nil
+	if poolable {
+		txnPool.Put(txn)
+	}
 }
 
 func (txn *Txn) commitAndSend() (func() error, error) {
@@ -609,7 +647,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	for _, e := range txn.pendingWrites {
 		processEntry(e)
 	}
-	txn.pendingWrites = nil // Clear the map to prevent double-free in Discard.
+	txn.clearPendingWrites() // Clear the map to prevent double-free in Discard.
 	orc.writeChLock.Unlock()
 
 	req, err := txn.db.sendToWriteCh(entries)
@@ -746,16 +784,33 @@ func (db *DB) NewTransaction(update bool) *Txn {
 }
 
 func (db *DB) newTransaction(update bool) *Txn {
-	txn := &Txn{
-		update: update,
-		db:     db,
-		count:  1, // One extra entry for BitFin.
+	var txn *Txn
+	if update {
+		txn = &Txn{}
+	} else {
+		txn = txnPool.Get().(*Txn)
 	}
+	txn.db = db
+	txn.update = update
+	txn.count = 1 // One extra entry for BitFin.
+	txn.size = 0
+	txn.commitTs = 0
+	txn.readTs = 0
+	txn.discarded = false
+	txn.returned = false
+	txn.doneRead = false
+	txn.reads = txn.reads[:0]
+	atomic.StoreInt32(&txn.numIterators, 0)
 	if update {
 		if db.opt.DetectConflicts {
 			txn.conflictKeys = make(map[uint64]struct{})
+		} else {
+			txn.conflictKeys = nil
 		}
 		txn.pendingWrites = make(map[string]*kv.Entry)
+	} else {
+		txn.conflictKeys = nil
+		txn.pendingWrites = nil
 	}
 	db.orc.trackTxnStart()
 	txn.readTs = db.orc.readTs()

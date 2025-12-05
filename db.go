@@ -89,6 +89,10 @@ type (
 	}
 )
 
+var commitReqPool = sync.Pool{
+	New: func() any { return &commitRequest{} },
+}
+
 type cfCounters struct {
 	writes uint64
 	reads  uint64
@@ -744,15 +748,15 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
 	req.doneCh = done
 	req.IncrRef() // for db write
 
-	cr := &commitRequest{
-		req:        req,
-		done:       done,
-		entryCount: int(count),
-		size:       size,
-	}
+	cr := commitReqPool.Get().(*commitRequest)
+	cr.req = req
+	cr.done = done
+	cr.entryCount = int(count)
+	cr.size = size
 
 	if err := db.enqueueCommitRequest(cr); err != nil {
 		req.DecrRef()
+		commitReqPool.Put(cr)
 		return nil, err
 	}
 
@@ -946,6 +950,11 @@ func (db *DB) finishCommitRequests(reqs []*commitRequest, err error) {
 			cr.req.doneCh <- err
 			close(cr.req.doneCh)
 		}
+		cr.req = nil
+		cr.done = nil
+		cr.entryCount = 0
+		cr.size = 0
+		commitReqPool.Put(cr)
 	}
 }
 

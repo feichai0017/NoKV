@@ -18,13 +18,18 @@ type LogFile struct {
 	FID  uint32
 	size uint32
 	f    *MmapFile
+	ro   bool
 }
 
 func (lf *LogFile) Open(opt *Options) error {
 	var err error
 	lf.FID = uint32(opt.FID)
 	lf.Lock = sync.RWMutex{}
-	lf.f, err = OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	flag := opt.Flag
+	if flag == 0 {
+		flag = os.O_CREATE | os.O_RDWR
+	}
+	lf.f, err = OpenMmapFile(opt.FileName, flag, opt.MaxSz)
 	utils.Panic2(nil, err)
 	fi, err := lf.f.Fd.Stat()
 	if err != nil {
@@ -35,6 +40,7 @@ func (lf *LogFile) Open(opt *Options) error {
 	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
 		uint32(sz), uint32(math.MaxUint32)))
 	lf.size = uint32(sz)
+	lf.ro = flag == os.O_RDONLY
 	// TODO 是否要在这里弄一个header放一些元数据呢?
 	return nil
 }
@@ -63,6 +69,8 @@ func (lf *LogFile) Read(p *kv.ValuePtr) (buf []byte, err error) {
 func (lf *LogFile) DoneWriting(offset uint32) error {
 	// Sync before acquiring lock. (We call this from write() and thus know we have shared access
 	// to the fd.)
+	// Prefer async flush to reduce stall; follow up with sync after truncation.
+	_ = lf.f.SyncAsyncRange(0, int64(offset))
 	if err := lf.f.Sync(); err != nil {
 		return errors.Wrapf(err, "Unable to sync value log: %q", lf.FileName())
 	}
@@ -91,6 +99,9 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	return nil
 }
 func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
+	if lf.ro {
+		return fmt.Errorf("logfile %s is read-only", lf.FileName())
+	}
 	err = lf.f.AppendBuffer(offset, buf)
 	if err == nil {
 		atomic.StoreUint32(&lf.size, offset+uint32(len(buf)))
@@ -122,6 +133,9 @@ func (lf *LogFile) Size() int64 {
 func (lf *LogFile) Bootstrap() error {
 	if lf == nil {
 		return fmt.Errorf("logfile bootstrap: nil receiver")
+	}
+	if lf.ro {
+		return fmt.Errorf("logfile bootstrap: read-only file %s", lf.FileName())
 	}
 	// Reserve header region and ensure it is zeroed even when the file is preallocated.
 	if kv.ValueLogHeaderSize > 0 {
@@ -162,4 +176,33 @@ func (lf *LogFile) FD() *os.File {
 // You must hold lf.lock to sync()
 func (lf *LogFile) Sync() error {
 	return lf.f.Sync()
+}
+
+// SetReadOnly remaps the file as read-only and advises the OS to drop pages.
+func (lf *LogFile) SetReadOnly() error {
+	lf.Lock.Lock()
+	defer lf.Lock.Unlock()
+	if lf.ro {
+		return nil
+	}
+	if err := lf.f.Remap(false); err != nil {
+		return err
+	}
+	_ = lf.f.Advise(utils.AccessPatternDontNeed)
+	lf.ro = true
+	return nil
+}
+
+// SetWritable remaps the file back to writable mode.
+func (lf *LogFile) SetWritable() error {
+	lf.Lock.Lock()
+	defer lf.Lock.Unlock()
+	if !lf.ro {
+		return nil
+	}
+	if err := lf.f.Remap(true); err != nil {
+		return err
+	}
+	lf.ro = false
+	return nil
 }

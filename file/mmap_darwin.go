@@ -175,6 +175,43 @@ func (m *MmapFile) Sync() error {
 	return mmap.Msync(m.Data)
 }
 
+// SyncAsync flushes dirty pages asynchronously.
+func (m *MmapFile) SyncAsync() error {
+	if m == nil {
+		return nil
+	}
+	return mmap.MsyncAsync(m.Data)
+}
+
+// SyncAsyncRange flushes a range asynchronously.
+func (m *MmapFile) SyncAsyncRange(off, n int64) error {
+	if m == nil {
+		return nil
+	}
+	return mmap.MsyncAsyncRange(m.Data, off, n)
+}
+
+// Remap remaps the file with the requested writability.
+func (m *MmapFile) Remap(writable bool) error {
+	if m == nil || m.Fd == nil {
+		return fmt.Errorf("mmap file remap: nil receiver")
+	}
+	if err := mmap.Munmap(m.Data); err != nil {
+		return err
+	}
+	fi, err := m.Fd.Stat()
+	if err != nil {
+		return err
+	}
+	buf, err := mmap.Mmap(m.Fd, writable, fi.Size())
+	if err != nil {
+		return err
+	}
+	m.Data = buf
+	atomic.AddUint64(&m.gen, 1)
+	return nil
+}
+
 func (m *MmapFile) Delete() error {
 	if m.Fd == nil {
 		return nil
