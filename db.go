@@ -3,6 +3,7 @@ package NoKV
 import (
 	stderrors "errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -122,12 +123,8 @@ func (s *prefetchState) clone() *prefetchState {
 		pend:       make(map[string]struct{}, len(s.pend)),
 		prefetched: make(map[string]time.Time, len(s.prefetched)),
 	}
-	for k, v := range s.pend {
-		ns.pend[k] = v
-	}
-	for k, v := range s.prefetched {
-		ns.prefetched[k] = v
-	}
+	maps.Copy(ns.pend, s.pend)
+	maps.Copy(ns.prefetched, s.prefetched)
 	return ns
 }
 
