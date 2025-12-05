@@ -44,8 +44,10 @@ type WaterMark struct {
 
 // Init initializes a WaterMark struct. MUST be called before using it.
 func (w *WaterMark) Init(closer *Closer) {
-	w.pending = make(map[uint64]int)
-	w.waiters = make(map[uint64][]chan struct{})
+	const defaultCap = 128
+	w.pending = make(map[uint64]int, defaultCap)
+	w.waiters = make(map[uint64][]chan struct{}, defaultCap)
+	w.indices = make(uint64Heap, 0, defaultCap)
 	heap.Init(&w.indices)
 	// Legacy closers expected each watermark processor to call Done once.
 	// We no longer run a background goroutine, so mark it done immediately
