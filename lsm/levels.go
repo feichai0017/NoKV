@@ -414,11 +414,18 @@ type levelHandler struct {
 type levelView struct {
 	tables          []*table
 	ingest          []*table
+	ingestRanges    []tableRange
 	totalSize       int64
 	totalStaleSize  int64
 	totalValueSize  int64
 	ingestSize      int64
 	ingestValueSize int64
+}
+
+type tableRange struct {
+	min []byte
+	max []byte
+	tbl *table
 }
 
 func (lh *levelHandler) loadView() *levelView {
@@ -443,7 +450,17 @@ func (lh *levelHandler) refreshViewLocked() {
 	for _, t := range v.ingest {
 		if t != nil {
 			t.IncrRef()
+			v.ingestRanges = append(v.ingestRanges, tableRange{
+				min: t.MinKey(),
+				max: t.MaxKey(),
+				tbl: t,
+			})
 		}
+	}
+	if len(v.ingestRanges) > 1 {
+		sort.Slice(v.ingestRanges, func(i, j int) bool {
+			return utils.CompareKeys(v.ingestRanges[i].min, v.ingestRanges[j].min) < 0
+		})
 	}
 	old := lh.view.Swap(v)
 	if old != nil {
@@ -693,6 +710,25 @@ func (lh *levelHandler) ingestDensityLocked() float64 {
 	return float64(lh.ingestValueSize) / float64(lh.ingestSize)
 }
 
+func (lh *levelHandler) maxIngestAgeSeconds() float64 {
+	v := lh.loadView()
+	if v == nil || len(v.ingest) == 0 {
+		return 0
+	}
+	now := time.Now()
+	var maxAge float64
+	for _, t := range v.ingest {
+		if t == nil {
+			continue
+		}
+		age := now.Sub(t.createdAt).Seconds()
+		if age > maxAge {
+			maxAge = age
+		}
+	}
+	return maxAge
+}
+
 func (lh *levelHandler) densityLockedView(v *levelView) float64 {
 	if v == nil || v.totalSize <= 0 {
 		return 0
@@ -825,20 +861,25 @@ func (lh *levelHandler) searchL0SSTView(key []byte, v *levelView) (*kv.Entry, er
 }
 
 func (lh *levelHandler) searchIngestSSTView(key []byte, v *levelView) (*kv.Entry, error) {
-	if v == nil || len(v.ingest) == 0 {
+	if v == nil || len(v.ingestRanges) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
+	idx := sort.Search(len(v.ingestRanges), func(i int) bool {
+		return utils.CompareKeys(key, v.ingestRanges[i].max) <= 0
+	})
 	var version uint64
-	for i := len(v.ingest) - 1; i >= 0; i-- {
-		table := v.ingest[i]
-		if table == nil {
+	for i := idx; i < len(v.ingestRanges); i++ {
+		rng := v.ingestRanges[i]
+		if rng.tbl == nil {
 			continue
 		}
-		if utils.CompareKeys(key, table.MinKey()) < 0 ||
-			utils.CompareKeys(key, table.MaxKey()) > 0 {
+		if utils.CompareKeys(key, rng.min) < 0 {
+			break
+		}
+		if utils.CompareKeys(key, rng.max) > 0 {
 			continue
 		}
-		if entry, err := table.Search(key, &version); err == nil {
+		if entry, err := rng.tbl.Search(key, &version); err == nil {
 			return entry, nil
 		}
 	}

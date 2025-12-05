@@ -245,6 +245,12 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 			if ingestScore < 1.0 {
 				ingestScore = 1.0
 			}
+			// Age bias: older ingest tables get compacted sooner.
+			ageSec := lvl.maxIngestAgeSeconds()
+			if ageSec > 0 {
+				ageFactor := math.Min(ageSec/60.0, 4.0) // cap bias
+				ingestScore += ageFactor
+			}
 			addPriority(i, ingestScore+1.0, true)
 			continue
 		}
