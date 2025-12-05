@@ -154,6 +154,9 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - Commit queue: switched from buffered channel to an MPSC ring buffer plus `sync.Cond` notifiers (not-empty/not-full) to lower channel contention.
 - Prefetch state: hot-key prefetch bookkeeping moved to atomic COW snapshots (no global mutex on reads).
 - Block cache: hot tier probed under `RLock`, brief upgrade to update LRU; cold CLOCK tier has its own lock so hot-path probes stay cheap.
+- Level views: LSM level/table metadata is snapshotted via `atomic.Pointer[levelView]`, letting iterators and reads walk a consistent view without taking locks on the live structures.
+- Prefetch/iterator queues: queues refactored to use the shared `utils.Ring` MPSC buffer; iterator/prefetch loops rely on atomic close flags instead of select-heavy channels to reduce scheduling overhead.
+- Concurrency utilities: `utils/ringbuffer` is a reusable lock-free MPSC ring (with cond for blocking variants) now used by commit, prefetch, and iterator paths.
 
 ---
 
