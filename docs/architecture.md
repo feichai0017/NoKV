@@ -61,6 +61,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ### 2.4 MVCC
 - `txn.go` exposes MVCC transactions with timestamps from `oracle`.
 - `mvcc` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
+- Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.
 
 ---
 
@@ -144,6 +145,15 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
   - `scripts/run_local_cluster.sh` – launch a multi-node TinyKv cluster locally.
   - `scripts/recovery_scenarios.sh` – crash-recovery test harness.
   - `scripts/transport_chaos.sh` – inject network faults and observe transport metrics.
+
+---
+
+## 9. Recent performance-oriented changes
+
+- Watermarks: removed channel/select-driven worker; Begin/Done/Wait are synchronous with a lightweight mutex+atomic path to cut `selectgo`/cond waits.
+- Commit queue: switched from buffered channel to an MPSC ring buffer plus `sync.Cond` notifiers (not-empty/not-full) to lower channel contention.
+- Prefetch state: hot-key prefetch bookkeeping moved to atomic COW snapshots (no global mutex on reads).
+- Block cache: hot tier probed under `RLock`, brief upgrade to update LRU; cold CLOCK tier has its own lock so hot-path probes stay cheap.
 
 ---
 

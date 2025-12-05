@@ -59,11 +59,9 @@ type (
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
 		iterPool         *iteratorPool
-		prefetchCh       chan prefetchRequest
+		prefetchRing     *utils.Ring[prefetchRequest]
 		prefetchWG       sync.WaitGroup
-		prefetchMu       sync.Mutex
-		prefetchPend     map[string]struct{}
-		prefetched       map[string]time.Time
+		prefetchState    atomic.Pointer[prefetchState]
 		prefetchClamp    int32
 		prefetchWarm     int32
 		prefetchHot      int32
@@ -73,12 +71,13 @@ type (
 	}
 
 	commitQueue struct {
-		sync.Mutex
-		requests     []*commitRequest
-		totalEntries int
-		totalBytes   int64
-		cond         *sync.Cond
-		closed       bool
+		ring           *utils.Ring[*commitRequest]
+		mu             sync.Mutex
+		notEmpty       *sync.Cond
+		notFull        *sync.Cond
+		pendingBytes   int64
+		pendingEntries int64
+		closed         uint32
 	}
 
 	commitRequest struct {
@@ -105,6 +104,31 @@ var (
 type prefetchRequest struct {
 	key string
 	hot bool
+}
+
+type prefetchState struct {
+	pend       map[string]struct{}
+	prefetched map[string]time.Time
+}
+
+func (s *prefetchState) clone() *prefetchState {
+	if s == nil {
+		return &prefetchState{
+			pend:       make(map[string]struct{}),
+			prefetched: make(map[string]time.Time),
+		}
+	}
+	ns := &prefetchState{
+		pend:       make(map[string]struct{}, len(s.pend)),
+		prefetched: make(map[string]time.Time, len(s.prefetched)),
+	}
+	for k, v := range s.pend {
+		ns.pend[k] = v
+	}
+	for k, v := range s.prefetched {
+		ns.prefetched[k] = v
+	}
+	return ns
 }
 
 const (
@@ -229,9 +253,11 @@ func Open(opt *Options) *DB {
 			db.prefetchHot = db.prefetchWarm + 4
 		}
 		db.prefetchCooldown = 15 * time.Second
-		db.prefetchPend = make(map[string]struct{})
-		db.prefetched = make(map[string]time.Time)
-		db.prefetchCh = make(chan prefetchRequest, 128)
+		db.prefetchRing = utils.NewRing[prefetchRequest](256)
+		db.prefetchState.Store(&prefetchState{
+			pend:       make(map[string]struct{}),
+			prefetched: make(map[string]time.Time),
+		})
 		db.prefetchWG.Add(1)
 		go db.prefetchLoop()
 	}
@@ -241,7 +267,10 @@ func Open(opt *Options) *DB {
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
-	db.commitQueue.cond = sync.NewCond(&db.commitQueue.Mutex)
+	queueCap := max(opt.WriteBatchMaxCount*4, 256)
+	db.commitQueue.ring = utils.NewRing[*commitRequest](queueCap)
+	db.commitQueue.notEmpty = sync.NewCond(&db.commitQueue.mu)
+	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
 	db.commitWG.Add(1)
 	go db.commitWorker()
 	db.flushChan = make(chan flushTask, 16)
@@ -310,10 +339,10 @@ func (db *DB) Close() error {
 		db.hot.Close()
 	}
 
-	if db.prefetchCh != nil {
-		close(db.prefetchCh)
+	if db.prefetchRing != nil {
+		db.prefetchRing.Close()
 		db.prefetchWG.Wait()
-		db.prefetchCh = nil
+		db.prefetchRing = nil
 	}
 
 	if err := db.stats.close(); err != nil {
@@ -608,7 +637,7 @@ func (db *DB) recordRead(key []byte) {
 		return
 	}
 	skey := string(key)
-	if db.prefetchCh == nil {
+	if db.prefetchRing == nil {
 		db.hot.Touch(skey)
 		return
 	}
@@ -660,38 +689,56 @@ func cfHotKey(cf kv.ColumnFamily, key []byte) string {
 }
 
 func (db *DB) enqueuePrefetch(key string, hot bool) {
-	if db == nil || db.prefetchCh == nil || key == "" {
+	if db == nil || db.prefetchRing == nil || key == "" {
 		return
 	}
 	now := time.Now()
-	db.prefetchMu.Lock()
-	if expiry, ok := db.prefetched[key]; ok {
-		if expiry.After(now) {
-			db.prefetchMu.Unlock()
+	for {
+		state := db.prefetchState.Load()
+		if state == nil {
 			return
 		}
-		delete(db.prefetched, key)
+		if expiry, ok := state.prefetched[key]; ok && expiry.After(now) {
+			return
+		}
+		if _, pending := state.pend[key]; pending {
+			return
+		}
+		next := state.clone()
+		delete(next.prefetched, key)
+		next.pend[key] = struct{}{}
+		if db.prefetchState.CompareAndSwap(state, next) {
+			break
+		}
 	}
-	if _, pending := db.prefetchPend[key]; pending {
-		db.prefetchMu.Unlock()
-		return
-	}
-	db.prefetchPend[key] = struct{}{}
-	db.prefetchMu.Unlock()
 
 	req := prefetchRequest{key: key, hot: hot}
-	select {
-	case db.prefetchCh <- req:
-	default:
-		db.prefetchMu.Lock()
-		delete(db.prefetchPend, key)
-		db.prefetchMu.Unlock()
+	if ok := db.prefetchRing.Push(req); !ok {
+		for {
+			state := db.prefetchState.Load()
+			if state == nil {
+				return
+			}
+			next := state.clone()
+			delete(next.pend, key)
+			if db.prefetchState.CompareAndSwap(state, next) {
+				return
+			}
+		}
 	}
 }
 
 func (db *DB) prefetchLoop() {
 	defer db.prefetchWG.Done()
-	for req := range db.prefetchCh {
+	for {
+		req, ok := db.prefetchRing.Pop()
+		if !ok {
+			if db.prefetchRing.Closed() {
+				return
+			}
+			runtime.Gosched()
+			continue
+		}
 		db.executePrefetch(req)
 	}
 }
@@ -701,24 +748,26 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 		return
 	}
 	key := req.key
-	if key == "" {
-		db.prefetchMu.Lock()
-		delete(db.prefetchPend, key)
-		db.prefetchMu.Unlock()
-		return
-	}
 	if db.lsm != nil {
 		internal := kv.InternalKey(kv.CFDefault, []byte(key), math.MaxUint32)
 		db.lsm.Prefetch(internal, req.hot)
 	}
-	db.prefetchMu.Lock()
-	delete(db.prefetchPend, key)
-	if db.prefetchCooldown > 0 {
-		db.prefetched[key] = time.Now().Add(db.prefetchCooldown)
-	} else {
-		delete(db.prefetched, key)
+	for {
+		state := db.prefetchState.Load()
+		if state == nil {
+			return
+		}
+		next := state.clone()
+		delete(next.pend, key)
+		if db.prefetchCooldown > 0 {
+			next.prefetched[key] = time.Now().Add(db.prefetchCooldown)
+		} else {
+			delete(next.prefetched, key)
+		}
+		if db.prefetchState.CompareAndSwap(state, next) {
+			return
+		}
 	}
-	db.prefetchMu.Unlock()
 }
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
@@ -793,41 +842,73 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	if cr == nil {
 		return nil
 	}
-	db.commitQueue.Lock()
-	if db.commitQueue.closed {
-		db.commitQueue.Unlock()
+	if atomic.LoadUint32(&db.commitQueue.closed) == 1 {
 		return utils.ErrBlockedWrites
 	}
-	db.commitQueue.requests = append(db.commitQueue.requests, cr)
-	db.commitQueue.totalEntries += cr.entryCount
-	db.commitQueue.totalBytes += cr.size
-	qLen := len(db.commitQueue.requests)
-	qEntries := db.commitQueue.totalEntries
-	qBytes := db.commitQueue.totalBytes
-	if db.commitQueue.cond != nil {
-		db.commitQueue.cond.Signal()
+	atomic.AddInt64(&db.commitQueue.pendingEntries, int64(cr.entryCount))
+	atomic.AddInt64(&db.commitQueue.pendingBytes, cr.size)
+	cq := &db.commitQueue
+
+	cq.mu.Lock()
+	for {
+		if atomic.LoadUint32(&cq.closed) == 1 {
+			cq.mu.Unlock()
+			return utils.ErrBlockedWrites
+		}
+		if cq.ring.Push(cr) {
+			qLen := cq.ring.Len()
+			qEntries := atomic.LoadInt64(&cq.pendingEntries)
+			qBytes := atomic.LoadInt64(&cq.pendingBytes)
+			cq.notEmpty.Signal()
+			cq.mu.Unlock()
+			db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
+			return nil
+		}
+		cq.notFull.Wait()
 	}
-	db.commitQueue.Unlock()
-	db.writeMetrics.updateQueue(qLen, qEntries, qBytes)
-	return nil
 }
 
 func (db *DB) nextCommitBatch() []*commitRequest {
-	db.commitQueue.Lock()
-	for len(db.commitQueue.requests) == 0 && !db.commitQueue.closed {
-		db.commitQueue.cond.Wait()
+	cq := &db.commitQueue
+	cq.mu.Lock()
+	for cq.ring.Len() == 0 && atomic.LoadUint32(&cq.closed) == 0 {
+		cq.notEmpty.Wait()
 	}
-	if len(db.commitQueue.requests) == 0 && db.commitQueue.closed {
-		db.commitQueue.Unlock()
+	if cq.ring.Len() == 0 && atomic.LoadUint32(&cq.closed) == 1 {
+		cq.mu.Unlock()
 		return nil
 	}
-	reqs := db.commitQueue.requests
-	db.commitQueue.requests = nil
-	db.commitQueue.totalEntries = 0
-	db.commitQueue.totalBytes = 0
-	db.commitQueue.Unlock()
-	db.writeMetrics.updateQueue(0, 0, 0)
-	return reqs
+
+	batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+	pendingEntries := int64(0)
+	pendingBytes := int64(0)
+
+	popOne := func() bool {
+		if cr, ok := cq.ring.Pop(); ok {
+			batch = append(batch, cr)
+			pendingEntries += int64(cr.entryCount)
+			pendingBytes += cr.size
+			return true
+		}
+		return false
+	}
+
+	popOne()
+	for len(batch) < db.opt.WriteBatchMaxCount && pendingBytes < db.opt.WriteBatchMaxSize {
+		if !popOne() {
+			break
+		}
+	}
+
+	atomic.AddInt64(&cq.pendingEntries, -pendingEntries)
+	atomic.AddInt64(&cq.pendingBytes, -pendingBytes)
+	qLen := cq.ring.Len()
+	qEntries := atomic.LoadInt64(&cq.pendingEntries)
+	qBytes := atomic.LoadInt64(&cq.pendingBytes)
+	cq.notFull.Broadcast()
+	cq.mu.Unlock()
+	db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
+	return batch
 }
 
 func (db *DB) commitWorker() {
@@ -842,12 +923,12 @@ func (db *DB) commitWorker() {
 }
 
 func (db *DB) stopCommitWorkers() {
-	db.commitQueue.Lock()
-	db.commitQueue.closed = true
-	if db.commitQueue.cond != nil {
-		db.commitQueue.cond.Broadcast()
+	if atomic.CompareAndSwapUint32(&db.commitQueue.closed, 0, 1) {
+		db.commitQueue.mu.Lock()
+		db.commitQueue.notEmpty.Broadcast()
+		db.commitQueue.notFull.Broadcast()
+		db.commitQueue.mu.Unlock()
 	}
-	db.commitQueue.Unlock()
 	db.commitWG.Wait()
 }
 

@@ -225,7 +225,7 @@ func (c *cache) metricsSnapshot() CacheMetrics {
 }
 
 type blockCache struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	hotCap  int
 	hotList *list.List
 	hotData map[uint64]*list.Element
@@ -253,15 +253,24 @@ func (c *blockCache) get(key uint64) (*block, bool) {
 	if c == nil {
 		return nil, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if elem, ok := c.hotData[key]; ok {
-		c.hotList.MoveToFront(elem)
-		return elem.Value.(*blockEntry).data, true
+	c.mu.RLock()
+	elem, ok := c.hotData[key]
+	c.mu.RUnlock()
+	if ok {
+		blk := elem.Value.(*blockEntry).data
+		c.mu.Lock()
+		if curr, ok2 := c.hotData[key]; ok2 && curr == elem {
+			c.hotList.MoveToFront(elem)
+		}
+		c.mu.Unlock()
+		return blk, true
 	}
+
 	if c.cold != nil {
 		if blk, ok := c.cold.get(key); ok {
+			c.mu.Lock()
 			c.promoteLocked(key, blk)
+			c.mu.Unlock()
 			return blk, true
 		}
 	}
@@ -363,6 +372,7 @@ func (c *blockCache) close() {
 }
 
 type clockCache struct {
+	mu       sync.Mutex
 	capacity int
 	entries  []clockEntry
 	index    map[uint64]int
@@ -391,6 +401,8 @@ func (c *clockCache) get(key uint64) (*block, bool) {
 	if c == nil {
 		return nil, false
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if idx, ok := c.index[key]; ok {
 		entry := &c.entries[idx]
 		if entry.valid {
@@ -406,6 +418,8 @@ func (c *clockCache) add(key uint64, value *block) {
 	if c == nil || c.capacity == 0 || value == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if idx, ok := c.index[key]; ok {
 		entry := &c.entries[idx]
 		entry.value = value
@@ -451,6 +465,8 @@ func (c *clockCache) del(key uint64) {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if idx, ok := c.index[key]; ok {
 		entry := &c.entries[idx]
 		entry.valid = false
@@ -464,6 +480,8 @@ func (c *clockCache) clear() {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.entries = nil
 	c.index = nil
 	c.capacity = 0

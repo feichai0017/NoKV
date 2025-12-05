@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -528,7 +529,7 @@ type tableIterator struct {
 	wg           sync.WaitGroup
 	closeOnce    sync.Once
 	bypassCache  bool
-	prefetchCh   chan int
+	prefetchRing *utils.Ring[int]
 	prefetchPool *utils.Pool
 	hitCount     *expvar.Int
 	missCount    *expvar.Int
@@ -539,7 +540,7 @@ func (it *tableIterator) fetchBlock(idx int) (*block, error) {
 }
 
 func (it *tableIterator) prefetchNext(idx int) {
-	if it.opt == nil || it.opt.PrefetchBlocks <= 0 || it.prefetchCh == nil {
+	if it.opt == nil || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
 		return
 	}
 	if !it.copyData || it.index == nil {
@@ -554,11 +555,13 @@ func (it *tableIterator) prefetchNext(idx int) {
 		select {
 		case <-it.closeCh:
 			return
-		case it.prefetchCh <- next:
-			prefetchLaunched.Add(1)
 		default:
-			prefetchAborted.Add(1)
-			return
+			if ok := it.prefetchRing.Push(next); ok {
+				prefetchLaunched.Add(1)
+			} else {
+				prefetchAborted.Add(1)
+				return
+			}
 		}
 	}
 }
@@ -601,7 +604,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		bypassCache: options.BypassBlockCache,
 	}
 	if options.PrefetchBlocks > 0 {
-		it.prefetchCh = make(chan int, options.PrefetchBlocks)
+		it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
 		workers := options.PrefetchWorkers
 		if workers <= 0 {
 			workers = min(options.PrefetchBlocks, 4)
@@ -614,11 +617,12 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 				select {
 				case <-it.closeCh:
 					return
-				case idx, ok := <-it.prefetchCh:
+				default:
+					idx, ok := it.prefetchRing.Pop()
 					if !ok {
-						return
+						runtime.Gosched()
+						continue
 					}
-					// submit to pool to bound parallel prefetch.
 					if err := it.prefetchPool.Submit(func() {
 						it.t.IncrRef()
 						if _, err := it.t.loadBlock(idx, false, true, it.bypassCache); err == nil {
@@ -686,8 +690,8 @@ func (it *tableIterator) Close() error {
 		if it.closeCh != nil {
 			close(it.closeCh)
 		}
-		if it.prefetchCh != nil {
-			close(it.prefetchCh)
+		if it.prefetchRing != nil {
+			it.prefetchRing.Close()
 		}
 		it.wg.Wait()
 		if it.prefetchPool != nil {
