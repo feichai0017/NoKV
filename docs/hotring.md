@@ -56,7 +56,7 @@ Concurrency is handled via a global `RWMutex`; buckets are small enough that the
 
 ## 4. Integration Points
 
-* **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which in turn invokes `HotRing.Touch` for every successful lookup. Writes can also touch the ring if configured (see `Options.TrackWrites` in `db.go`).
+* **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which in turn invokes `HotRing.Touch` for every successful lookup. Writes touch the ring only when `Options.WriteHotKeyLimit` is set, so throttling can clamp abusive keys.
 * **Stats** – [`StatsSnapshot`](../stats.go#L41-L87) copies `hot.TopN` into `HotKeys`. `expvar` publishes the same view under `NoKV.Stats.HotKeys` for automation.
 * **Caching** – `lsm/cache` can promote blocks referenced by frequently touched keys, keeping the hot tier warm.
 

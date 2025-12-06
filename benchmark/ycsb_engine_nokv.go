@@ -30,17 +30,16 @@ func (e *nokvEngine) Open(clean bool) error {
 		return fmt.Errorf("nokv: mkdir: %w", err)
 	}
 	opt := &NoKV.Options{
-		WorkDir:             dir,
-		MemTableSize:        64 << 20,
-		SSTableMaxSz:        512 << 20,
-		ValueLogFileSize:    512 << 20,
-		ValueLogMaxEntries:  1 << 20,
-		ValueThreshold:      int64(e.opts.ValueThreshold),
-		MaxBatchCount:       10000,
-		MaxBatchSize:        128 << 20,
-		VerifyValueChecksum: true,
-		DetectConflicts:     false,
-		SyncWrites:          e.opts.SyncWrites,
+		WorkDir:            dir,
+		MemTableSize:       64 << 20,
+		SSTableMaxSz:       512 << 20,
+		ValueLogFileSize:   512 << 20,
+		ValueLogMaxEntries: 1 << 20,
+		ValueThreshold:     int64(e.opts.ValueThreshold),
+		MaxBatchCount:      10000,
+		MaxBatchSize:       128 << 20,
+		DetectConflicts:    false,
+		SyncWrites:         e.opts.SyncWrites,
 	}
 	if e.opts.BlockCacheMB >= 0 {
 		// BlockCacheSize counts blocks; approximate 4KB blocks per MB.

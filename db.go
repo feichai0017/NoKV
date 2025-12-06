@@ -3,7 +3,6 @@ package NoKV
 import (
 	stderrors "errors"
 	"fmt"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -20,7 +19,6 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
-	pkgerrors "github.com/pkg/errors"
 )
 
 type (
@@ -46,13 +44,12 @@ type (
 		wal              *wal.Manager
 		walWatchdog      *walWatchdog
 		vlog             *valueLog
+		vwriter          valueLogWriter
 		stats            *Stats
-		flushChan        chan flushTask // For flushing memtables.
 		blockWrites      int32
 		vhead            *kv.ValuePtr
 		lastLoggedHead   kv.ValuePtr
 		headLogDelta     uint32
-		logRotates       int32
 		isClosed         uint32
 		orc              *oracle
 		hot              *hotring.HotRing
@@ -89,10 +86,6 @@ type (
 	}
 )
 
-var commitReqPool = sync.Pool{
-	New: func() any { return &commitRequest{} },
-}
-
 type cfCounters struct {
 	writes uint64
 	reads  uint64
@@ -100,38 +93,6 @@ type cfCounters struct {
 
 var (
 	head = []byte("!NoKV!head") // For storing value offset for replay.
-)
-
-type prefetchRequest struct {
-	key string
-	hot bool
-}
-
-type prefetchState struct {
-	pend       map[string]struct{}
-	prefetched map[string]time.Time
-}
-
-func (s *prefetchState) clone() *prefetchState {
-	if s == nil {
-		return &prefetchState{
-			pend:       make(map[string]struct{}),
-			prefetched: make(map[string]time.Time),
-		}
-	}
-	ns := &prefetchState{
-		pend:       make(map[string]struct{}, len(s.pend)),
-		prefetched: make(map[string]time.Time, len(s.prefetched)),
-	}
-	maps.Copy(ns.pend, s.pend)
-	maps.Copy(ns.prefetched, s.prefetched)
-	return ns
-}
-
-const (
-	defaultWriteBatchMaxCount = 64
-	defaultWriteBatchMaxSize  = 1 << 20
-	defaultWriteBatchDelay    = 2 * time.Millisecond
 )
 
 // Open DB
@@ -270,7 +231,6 @@ func Open(opt *Options) *DB {
 	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
 	db.commitWG.Add(1)
 	go db.commitWorker()
-	db.flushChan = make(chan flushTask, 16)
 	// 启动 info 统计过程
 	db.stats.StartStats()
 	db.walWatchdog = newWalWatchdog(db)
@@ -588,7 +548,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 		if err == utils.ErrKeyNotFound {
 			val = kv.NewEntry(headKey, []byte{})
 		} else {
-			return pkgerrors.Wrap(err, "Retrieving head from on-disk LSM")
+			return fmt.Errorf("retrieving head from on-disk LSM: %w", err)
 		}
 	}
 	defer val.DecrRef()
@@ -629,481 +589,8 @@ func (db *DB) runValueLogGCPeriodically() {
 	}
 }
 
-func (db *DB) recordRead(key []byte) {
-	if db == nil || db.hot == nil || len(key) == 0 {
-		return
-	}
-	skey := string(key)
-	if db.prefetchRing == nil {
-		db.hot.Touch(skey)
-		return
-	}
-	clamp := db.prefetchClamp
-	if clamp <= 0 {
-		clamp = db.prefetchHot
-		if clamp <= 0 {
-			clamp = db.prefetchWarm
-		}
-		if clamp <= 0 {
-			clamp = 1
-		}
-	}
-	count, _ := db.hot.TouchAndClamp(skey, clamp)
-	if db.prefetchHot > 0 && count >= db.prefetchHot {
-		db.enqueuePrefetch(skey, true)
-		return
-	}
-	if db.prefetchWarm > 0 && count >= db.prefetchWarm {
-		db.enqueuePrefetch(skey, false)
-	}
-}
-
-func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
-	if db == nil || db.hot == nil || len(key) == 0 {
-		return nil
-	}
-	limit := db.opt.WriteHotKeyLimit
-	if limit <= 0 {
-		return nil
-	}
-	skey := cfHotKey(cf, key)
-	_, limited := db.hot.TouchAndClamp(skey, limit)
-	if !limited {
-		return nil
-	}
-	atomic.AddUint64(&db.hotWriteLimited, 1)
-	return utils.ErrHotKeyWriteThrottle
-}
-
-func cfHotKey(cf kv.ColumnFamily, key []byte) string {
-	if !cf.Valid() || cf == kv.CFDefault {
-		return string(key)
-	}
-	buf := make([]byte, len(key)+1)
-	buf[0] = byte(cf)
-	copy(buf[1:], key)
-	return string(buf)
-}
-
-func (db *DB) enqueuePrefetch(key string, hot bool) {
-	if db == nil || db.prefetchRing == nil || key == "" {
-		return
-	}
-	now := time.Now()
-	for {
-		state := db.prefetchState.Load()
-		if state == nil {
-			return
-		}
-		if expiry, ok := state.prefetched[key]; ok && expiry.After(now) {
-			return
-		}
-		if _, pending := state.pend[key]; pending {
-			return
-		}
-		next := state.clone()
-		delete(next.prefetched, key)
-		next.pend[key] = struct{}{}
-		if db.prefetchState.CompareAndSwap(state, next) {
-			break
-		}
-	}
-
-	req := prefetchRequest{key: key, hot: hot}
-	if ok := db.prefetchRing.Push(req); !ok {
-		for {
-			state := db.prefetchState.Load()
-			if state == nil {
-				return
-			}
-			next := state.clone()
-			delete(next.pend, key)
-			if db.prefetchState.CompareAndSwap(state, next) {
-				return
-			}
-		}
-	}
-}
-
-func (db *DB) prefetchLoop() {
-	defer db.prefetchWG.Done()
-	for {
-		req, ok := db.prefetchRing.Pop()
-		if !ok {
-			if db.prefetchRing.Closed() {
-				return
-			}
-			runtime.Gosched()
-			continue
-		}
-		db.executePrefetch(req)
-	}
-}
-
-func (db *DB) executePrefetch(req prefetchRequest) {
-	if db == nil {
-		return
-	}
-	key := req.key
-	if db.lsm != nil {
-		internal := kv.InternalKey(kv.CFDefault, []byte(key), math.MaxUint32)
-		db.lsm.Prefetch(internal, req.hot)
-	}
-	for {
-		state := db.prefetchState.Load()
-		if state == nil {
-			return
-		}
-		next := state.clone()
-		delete(next.pend, key)
-		if db.prefetchCooldown > 0 {
-			next.prefetched[key] = time.Now().Add(db.prefetchCooldown)
-		} else {
-			delete(next.prefetched, key)
-		}
-		if db.prefetchState.CompareAndSwap(state, next) {
-			return
-		}
-	}
-}
-
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
 	return int64(len(e.Value)) < db.opt.ValueThreshold
-}
-
-func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
-	if atomic.LoadInt32(&db.blockWrites) == 1 {
-		return nil, utils.ErrBlockedWrites
-	}
-	var size int64
-	count := int64(len(entries))
-	for _, e := range entries {
-		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
-	}
-	if count >= db.opt.MaxBatchCount || size >= db.opt.MaxBatchSize {
-		return nil, utils.ErrTxnTooBig
-	}
-
-	req := requestPool.Get().(*request)
-	req.reset()
-	req.Entries = entries
-	if db.writeMetrics != nil {
-		req.enqueueAt = time.Now()
-	}
-	done := make(chan error, 1)
-	req.doneCh = done
-	req.IncrRef() // for db write
-
-	cr := commitReqPool.Get().(*commitRequest)
-	cr.req = req
-	cr.done = done
-	cr.entryCount = int(count)
-	cr.size = size
-
-	if err := db.enqueueCommitRequest(cr); err != nil {
-		req.DecrRef()
-		commitReqPool.Put(cr)
-		return nil, err
-	}
-
-	return req, nil
-}
-
-func (db *DB) applyThrottle(enable bool) {
-	var val int32
-	if enable {
-		val = 1
-	}
-	prev := atomic.SwapInt32(&db.blockWrites, val)
-	if prev == val {
-		return
-	}
-	if enable {
-		utils.Err(fmt.Errorf("write throttle enabled due to L0 backlog"))
-	} else {
-		utils.Err(fmt.Errorf("write throttle released"))
-	}
-}
-
-// Check(kv.BatchSet(entries))
-func (db *DB) batchSet(entries []*kv.Entry) error {
-	req, err := db.sendToWriteCh(entries)
-	if err != nil {
-		return err
-	}
-
-	return req.Wait()
-}
-
-func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
-	if cr == nil {
-		return nil
-	}
-	if atomic.LoadUint32(&db.commitQueue.closed) == 1 {
-		return utils.ErrBlockedWrites
-	}
-	atomic.AddInt64(&db.commitQueue.pendingEntries, int64(cr.entryCount))
-	atomic.AddInt64(&db.commitQueue.pendingBytes, cr.size)
-	cq := &db.commitQueue
-
-	// Lazy init conds in case tests construct DB without running Open path.
-	if cq.notEmpty == nil || cq.notFull == nil {
-		cq.notEmpty = sync.NewCond(&cq.mu)
-		cq.notFull = sync.NewCond(&cq.mu)
-	}
-
-	cq.mu.Lock()
-	if cq.ring == nil {
-		cq.mu.Unlock()
-		return utils.ErrBlockedWrites
-	}
-	for {
-		if atomic.LoadUint32(&cq.closed) == 1 {
-			cq.mu.Unlock()
-			return utils.ErrBlockedWrites
-		}
-		if cq.ring.Push(cr) {
-			qLen := cq.ring.Len()
-			qEntries := atomic.LoadInt64(&cq.pendingEntries)
-			qBytes := atomic.LoadInt64(&cq.pendingBytes)
-			cq.notEmpty.Signal()
-			cq.mu.Unlock()
-			db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
-			return nil
-		}
-		cq.notFull.Wait()
-	}
-}
-
-func (db *DB) nextCommitBatch() []*commitRequest {
-	cq := &db.commitQueue
-	cq.mu.Lock()
-	for cq.ring.Len() == 0 && atomic.LoadUint32(&cq.closed) == 0 {
-		cq.notEmpty.Wait()
-	}
-	if cq.ring.Len() == 0 && atomic.LoadUint32(&cq.closed) == 1 {
-		cq.mu.Unlock()
-		return nil
-	}
-
-	batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
-	pendingEntries := int64(0)
-	pendingBytes := int64(0)
-
-	popOne := func() bool {
-		if cr, ok := cq.ring.Pop(); ok {
-			batch = append(batch, cr)
-			pendingEntries += int64(cr.entryCount)
-			pendingBytes += cr.size
-			return true
-		}
-		return false
-	}
-
-	popOne()
-	for len(batch) < db.opt.WriteBatchMaxCount && pendingBytes < db.opt.WriteBatchMaxSize {
-		if !popOne() {
-			break
-		}
-	}
-
-	atomic.AddInt64(&cq.pendingEntries, -pendingEntries)
-	atomic.AddInt64(&cq.pendingBytes, -pendingBytes)
-	qLen := cq.ring.Len()
-	qEntries := atomic.LoadInt64(&cq.pendingEntries)
-	qBytes := atomic.LoadInt64(&cq.pendingBytes)
-	cq.notFull.Broadcast()
-	cq.mu.Unlock()
-	db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
-	return batch
-}
-
-func (db *DB) commitWorker() {
-	defer db.commitWG.Done()
-	for {
-		reqs := db.nextCommitBatch()
-		if reqs == nil {
-			return
-		}
-		db.handleCommitRequests(reqs)
-	}
-}
-
-func (db *DB) stopCommitWorkers() {
-	if atomic.CompareAndSwapUint32(&db.commitQueue.closed, 0, 1) {
-		db.commitQueue.mu.Lock()
-		db.commitQueue.notEmpty.Broadcast()
-		db.commitQueue.notFull.Broadcast()
-		db.commitQueue.mu.Unlock()
-	}
-	db.commitWG.Wait()
-}
-
-func (db *DB) handleCommitRequests(reqs []*commitRequest) {
-	if len(reqs) == 0 {
-		return
-	}
-
-	requests := make([]*request, 0, len(reqs))
-	var (
-		totalEntries int
-		totalSize    int64
-		waitSum      int64
-	)
-	batchStart := time.Now()
-	now := batchStart
-	for _, cr := range reqs {
-		if cr == nil || cr.req == nil {
-			continue
-		}
-		r := cr.req
-		requests = append(requests, r)
-		totalEntries += len(r.Entries)
-		totalSize += cr.size
-		if !r.enqueueAt.IsZero() {
-			waitSum += now.Sub(r.enqueueAt).Nanoseconds()
-			r.enqueueAt = time.Time{}
-		}
-	}
-
-	if len(requests) == 0 {
-		db.finishCommitRequests(reqs, nil)
-		return
-	}
-
-	if db.writeMetrics != nil {
-		db.writeMetrics.recordBatch(len(requests), totalEntries, totalSize, waitSum)
-	}
-
-	if err := db.vlog.write(requests); err != nil {
-		db.finishCommitRequests(reqs, err)
-		return
-	}
-	var valueLogDur time.Duration
-	if db.writeMetrics != nil {
-		valueLogDur = max(time.Since(batchStart), 0)
-		if valueLogDur > 0 {
-			db.writeMetrics.recordValueLog(valueLogDur)
-		}
-	}
-
-	if err := db.applyRequests(requests); err != nil {
-		db.finishCommitRequests(reqs, err)
-		return
-	}
-	if db.writeMetrics != nil {
-		totalDur := max(time.Since(batchStart), 0)
-		applyDur := max(totalDur-valueLogDur, 0)
-		if applyDur > 0 {
-			db.writeMetrics.recordApply(applyDur)
-		}
-	}
-
-	if db.opt.SyncWrites {
-		if err := db.wal.Sync(); err != nil {
-			db.finishCommitRequests(reqs, err)
-			return
-		}
-	}
-
-	db.finishCommitRequests(reqs, nil)
-}
-
-func (db *DB) applyRequests(reqs []*request) error {
-	for _, r := range reqs {
-		if r == nil || len(r.Entries) == 0 {
-			continue
-		}
-		if err := db.writeToLSM(r); err != nil {
-			return pkgerrors.Wrap(err, "writeRequests")
-		}
-		db.Lock()
-		db.updateHead(r.Ptrs)
-		db.Unlock()
-	}
-	return nil
-}
-
-func (db *DB) finishCommitRequests(reqs []*commitRequest, err error) {
-	for _, cr := range reqs {
-		if cr == nil || cr.req == nil {
-			continue
-		}
-		cr.req.Err = err
-		switch {
-		case cr.done != nil:
-			cr.done <- err
-			close(cr.done)
-		case cr.req.doneCh != nil:
-			cr.req.doneCh <- err
-			close(cr.req.doneCh)
-		}
-		cr.req = nil
-		cr.done = nil
-		cr.entryCount = 0
-		cr.size = 0
-		commitReqPool.Put(cr)
-	}
-}
-
-func (db *DB) initWriteBatchOptions() {
-	if db.opt.WriteBatchMaxCount <= 0 {
-		db.opt.WriteBatchMaxCount = defaultWriteBatchMaxCount
-	}
-	if db.opt.WriteBatchMaxSize <= 0 {
-		db.opt.WriteBatchMaxSize = defaultWriteBatchMaxSize
-	}
-	if db.opt.WriteBatchDelay < 0 {
-		db.opt.WriteBatchDelay = 0
-	}
-	if db.opt.WriteBatchDelay == 0 {
-		db.opt.WriteBatchDelay = defaultWriteBatchDelay
-	}
-}
-
-func (db *DB) writeToLSM(b *request) error {
-	if len(b.Ptrs) != len(b.Entries) {
-		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
-	}
-
-	for i, entry := range b.Entries {
-		if db.shouldWriteValueToLSM(entry) { // Will include deletion / tombstone case.
-			entry.Meta = entry.Meta &^ kv.BitValuePointer
-		} else {
-			entry.Meta = entry.Meta | kv.BitValuePointer
-			entry.Value = b.Ptrs[i].Encode()
-		}
-		db.lsm.Set(entry)
-		db.recordCFWrite(entry.CF, 1)
-	}
-	return nil
-}
-
-// 结构体
-type flushTask struct {
-	mt           *utils.Skiplist
-	vptr         *kv.ValuePtr
-	dropPrefixes [][]byte
-}
-
-func (db *DB) pushHead(ft flushTask) error {
-	// Ensure we never push a zero valued head pointer.
-	if ft.vptr.IsZero() {
-		return stderrors.New("Head should not be zero")
-	}
-
-	if db != nil && db.vlog != nil {
-		db.vlog.logf("Storing value log head: %+v", ft.vptr)
-	}
-	val := ft.vptr.Encode()
-
-	// Pick the max commit ts, so in case of crash, our read ts would be higher than all the
-	// commits.
-	headTs := kv.InternalKey(kv.CFDefault, head, uint64(time.Now().Unix()/1e9))
-	e := kv.NewEntry(headTs, val)
-	ft.mt.Add(e)
-	e.DecrRef()
-	return nil
 }
 
 func (db *DB) valueThreshold() int64 {
