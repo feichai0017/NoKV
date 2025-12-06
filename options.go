@@ -8,17 +8,14 @@ import (
 
 // Options NoKV 总的配置文件
 type Options struct {
-	ValueThreshold      int64
-	WorkDir             string
-	MemTableSize        int64
-	SSTableMaxSz        int64
-	MaxBatchCount       int64
-	MaxBatchSize        int64 // max batch size in bytes
-	ValueLogFileSize    int
-	VerifyValueChecksum bool
-	ValueLogMaxEntries  uint32
-	LogRotatesToFlush   int32
-	MaxTableSize        int64
+	ValueThreshold     int64
+	WorkDir            string
+	MemTableSize       int64
+	SSTableMaxSz       int64
+	MaxBatchCount      int64
+	MaxBatchSize       int64 // max batch size in bytes
+	ValueLogFileSize   int
+	ValueLogMaxEntries uint32
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
 	// log garbage collection. Zero or negative values disable automatic GC.
@@ -37,7 +34,6 @@ type Options struct {
 
 	WriteBatchMaxCount int
 	WriteBatchMaxSize  int64
-	WriteBatchDelay    time.Duration
 
 	DetectConflicts bool
 	HotRingEnabled  bool
@@ -133,7 +129,6 @@ func NewDefaultOptions() *Options {
 		HotRingWindowSlotDuration:     250 * time.Millisecond,
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,
-		WriteBatchDelay:               2 * time.Millisecond,
 		BlockCacheSize:                4096,
 		BlockCacheHotFraction:         0.25,
 		BloomCacheSize:                1024,
