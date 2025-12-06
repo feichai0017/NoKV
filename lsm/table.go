@@ -571,6 +571,10 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options == nil {
 		options = &utils.Options{}
 	}
+	// Auto-bypass cache for obvious forward scans with prefetch to reduce double caching.
+	if !options.BypassBlockCache && options.IsAsc && options.PrefetchBlocks > 0 {
+		options.BypassBlockCache = true
+	}
 	copyData := !options.ZeroCopy
 	pattern := options.AccessPattern
 	if pattern == utils.AccessPatternAuto {
