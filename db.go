@@ -846,7 +846,17 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	atomic.AddInt64(&db.commitQueue.pendingBytes, cr.size)
 	cq := &db.commitQueue
 
+	// Lazy init conds in case tests construct DB without running Open path.
+	if cq.notEmpty == nil || cq.notFull == nil {
+		cq.notEmpty = sync.NewCond(&cq.mu)
+		cq.notFull = sync.NewCond(&cq.mu)
+	}
+
 	cq.mu.Lock()
+	if cq.ring == nil {
+		cq.mu.Unlock()
+		return utils.ErrBlockedWrites
+	}
 	for {
 		if atomic.LoadUint32(&cq.closed) == 1 {
 			cq.mu.Unlock()

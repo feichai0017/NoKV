@@ -42,4 +42,6 @@ type Options struct {
 	// BypassBlockCache skips block-cache lookups/insertions, relying on OS page
 	// cache + zero-copy for large scans to avoid double cache.
 	BypassBlockCache bool
+	// Metrics tags for observability.
+	MetricTag string
 }

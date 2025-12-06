@@ -366,6 +366,8 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 			return nil, err
 		}
 		copyData = true
+	} else if !copyData {
+		cacheZeroCopyUses.Add(1)
 	}
 
 	// Binary Format for a Data Block (read from disk):
@@ -405,6 +407,8 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 
 	if copyData && !bypassCache {
 		t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
+	} else {
+		cacheBypassCount.Add(1)
 	}
 
 	return b, nil
@@ -529,6 +533,8 @@ type tableIterator struct {
 	wg           sync.WaitGroup
 	closeOnce    sync.Once
 	bypassCache  bool
+	autoBypass   bool
+	blocksRead   int
 	prefetchRing *utils.Ring[int]
 	prefetchPool *utils.Pool
 	hitCount     *expvar.Int
@@ -571,10 +577,17 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options == nil {
 		options = &utils.Options{}
 	}
-	// Auto-bypass cache for obvious forward scans with prefetch to reduce double caching.
+	// Heuristic: if caller scans forward and prefetches multiple blocks, bypass block cache to reduce double caching.
 	if !options.BypassBlockCache && options.IsAsc && options.PrefetchBlocks > 0 {
 		options.BypassBlockCache = true
 	}
+	// Adaptive: if no explicit prefetch but caller is ascending and request count is large, enable prefetch and bypass.
+	if !options.BypassBlockCache && options.IsAsc && options.PrefetchBlocks == 0 && t.lm != nil {
+		// Use a small default prefetch window for scans without explicit prefetch.
+		options.PrefetchBlocks = 4
+		options.BypassBlockCache = true
+	}
+
 	copyData := !options.ZeroCopy
 	pattern := options.AccessPattern
 	if pattern == utils.AccessPatternAuto {
@@ -653,6 +666,14 @@ func (it *tableIterator) Next() {
 	}
 
 	if len(it.bi.data) == 0 {
+		if !it.bypassCache && it.opt != nil && it.opt.IsAsc {
+			it.blocksRead++
+			if it.blocksRead >= 16 {
+				it.bypassCache = true
+				it.autoBypass = true
+				cacheAutoBypass.Add(1)
+			}
+		}
 		block, err := it.fetchBlock(it.blockPos)
 		if err != nil {
 			it.err = err
@@ -720,6 +741,8 @@ func (it *tableIterator) seekToFirst() {
 		return
 	}
 	it.blockPos = 0
+	it.blocksRead = 0
+	it.autoBypass = false
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
@@ -745,6 +768,8 @@ func (it *tableIterator) seekToLast() {
 		return
 	}
 	it.blockPos = numBlocks - 1
+	it.blocksRead = 0
+	it.autoBypass = false
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err

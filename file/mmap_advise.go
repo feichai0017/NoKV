@@ -8,6 +8,7 @@ import (
 )
 
 var madviseCount = expvar.NewInt("NoKV.Mmap.Madvise")
+var madviseFailed = expvar.NewInt("NoKV.Mmap.MadviseFailed")
 
 func toMmapAdvice(pattern utils.AccessPattern) mmap.Advice {
 	switch pattern {
@@ -34,6 +35,8 @@ func (m *MmapFile) Advise(pattern utils.AccessPattern) error {
 	err := mmap.MadvisePattern(m.Data, toMmapAdvice(pattern))
 	if err == nil {
 		madviseCount.Add(1)
+	} else {
+		madviseFailed.Add(1)
 	}
 	return err
 }
