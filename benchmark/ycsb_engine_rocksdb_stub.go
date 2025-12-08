@@ -15,8 +15,8 @@ func (e *rocksdbEngine) Open(bool) error {
 	return fmt.Errorf("rocksdb support requires cgo and the benchmark_rocksdb build tag")
 }
 func (e *rocksdbEngine) Close() error { return nil }
-func (e *rocksdbEngine) Read([]byte) error {
-	return fmt.Errorf("rocksdb support requires cgo and the benchmark_rocksdb build tag")
+func (e *rocksdbEngine) Read(_ []byte, dst []byte) ([]byte, error) {
+	return dst, fmt.Errorf("rocksdb support requires cgo and the benchmark_rocksdb build tag")
 }
 func (e *rocksdbEngine) Insert([]byte, []byte) error {
 	return fmt.Errorf("rocksdb support requires cgo and the benchmark_rocksdb build tag")

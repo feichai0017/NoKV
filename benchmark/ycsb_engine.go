@@ -14,7 +14,9 @@ type ycsbEngine interface {
 	Name() string
 	Open(clean bool) error
 	Close() error
-	Read(key []byte) error
+	// Read copies the value of key into dst (if possible) and returns the
+	// resulting slice (may alias dst). Callers reuse dst to avoid allocations.
+	Read(key []byte, dst []byte) ([]byte, error)
 	Insert(key, value []byte) error
 	Update(key, value []byte) error
 	Scan(startKey []byte, count int) (int, error)
@@ -29,6 +31,7 @@ type ycsbEngineOptions struct {
 	ValueThreshold int
 	SyncWrites     bool
 	BlockCacheMB   int
+	RedisAddr      string
 
 	// Badger specific cache sizes (in MB).
 	BadgerBlockCacheMB int

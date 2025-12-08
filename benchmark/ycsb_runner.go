@@ -156,6 +156,8 @@ func runYCSBBenchmarks(cfg ycsbConfig, opts ycsbEngineOptions) ([]BenchmarkResul
 			engine = newBadgerEngine(opts)
 		case "rocksdb":
 			engine = newRocksDBEngine(opts)
+		case "redis":
+			engine = newRedisEngine(opts)
 		default:
 			return nil, fmt.Errorf("unknown engine %q", engineName)
 		}
@@ -268,10 +270,12 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 				switch opType {
 				case "read":
 					key := selectExistingKey(readGen, state)
-					if err := engine.Read(key); err != nil {
+					valBuf := valueBufPool.Get(cfg.ValueSize)
+					if _, err := engine.Read(key, valBuf); err != nil {
 						errCh <- fmt.Errorf("%s read: %w", engine.Name(), err)
 						return
 					}
+					valueBufPool.Put(valBuf)
 					readOps.Add(1)
 					dataBytes.Add(int64(cfg.ValueSize))
 				case "update":
@@ -281,6 +285,7 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 						errCh <- fmt.Errorf("%s update: %w", engine.Name(), err)
 						return
 					}
+					valueBufPool.Put(val)
 					updateOps.Add(1)
 					dataBytes.Add(int64(cfg.ValueSize))
 				case "insert":
@@ -291,6 +296,7 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 						errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
 						return
 					}
+					valueBufPool.Put(val)
 					insertOps.Add(1)
 					dataBytes.Add(int64(cfg.ValueSize))
 				case "scan":
@@ -307,7 +313,8 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					}
 				case "readmodifywrite":
 					key := selectExistingKey(readGen, state)
-					if err := engine.Read(key); err != nil {
+					valBuf := valueBufPool.Get(cfg.ValueSize)
+					if _, err := engine.Read(key, valBuf); err != nil {
 						errCh <- fmt.Errorf("%s read: %w", engine.Name(), err)
 						return
 					}
@@ -316,6 +323,8 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 						errCh <- fmt.Errorf("%s update: %w", engine.Name(), err)
 						return
 					}
+					valueBufPool.Put(valBuf)
+					valueBufPool.Put(val)
 					rmwOps.Add(1)
 					dataBytes.Add(int64(cfg.ValueSize) * 2)
 				default:
@@ -402,7 +411,25 @@ func selectExistingKey(gen keyGenerator, state *ycsbKeyspace) []byte {
 }
 
 func formatYCSBKey(id int64) []byte {
-	return fmt.Appendf(nil, "user%012d", id)
+	buf := make([]byte, 0, 16)
+	buf = append(buf, 'u', 's', 'e', 'r')
+	// Zero-pad to 12 digits to retain fixed-width keys.
+	var tmp [12]byte
+	pos := len(tmp)
+	if id == 0 {
+		pos--
+		tmp[pos] = '0'
+	}
+	for v := id; v > 0 && pos > 0; v /= 10 {
+		pos--
+		tmp[pos] = byte('0' + v%10)
+	}
+	for pos > 0 {
+		pos--
+		tmp[pos] = '0'
+	}
+	buf = append(buf, tmp[:]...)
+	return buf
 }
 
 var (
