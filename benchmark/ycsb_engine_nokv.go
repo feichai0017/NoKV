@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/utils"
@@ -14,8 +15,11 @@ func newNoKVEngine(opts ycsbEngineOptions) ycsbEngine {
 }
 
 type nokvEngine struct {
-	opts ycsbEngineOptions
-	db   *NoKV.DB
+	opts       ycsbEngineOptions
+	db         *NoKV.DB
+	valuePool  sync.Pool
+	valueSize  int
+	valueCap   int
 }
 
 func (e *nokvEngine) Name() string { return "NoKV" }
@@ -46,6 +50,12 @@ func (e *nokvEngine) Open(clean bool) error {
 		opt.BlockCacheSize = e.opts.BlockCacheMB * 256
 	}
 	e.db = NoKV.Open(opt)
+	e.valueSize = e.opts.ValueSize
+	if e.valueSize <= 0 {
+		e.valueSize = 1
+	}
+	e.valueCap = e.valueSize
+	e.valuePool.New = func() any { return make([]byte, e.valueCap) }
 	return nil
 }
 
@@ -56,8 +66,9 @@ func (e *nokvEngine) Close() error {
 	return e.db.Close()
 }
 
-func (e *nokvEngine) Read(key []byte) error {
-	return e.db.View(func(txn *NoKV.Txn) error {
+func (e *nokvEngine) Read(key []byte, dst []byte) ([]byte, error) {
+	var out []byte
+	err := e.db.View(func(txn *NoKV.Txn) error {
 		item, err := txn.Get(key)
 		if err != nil {
 			if errors.Is(err, utils.ErrKeyNotFound) {
@@ -65,22 +76,21 @@ func (e *nokvEngine) Read(key []byte) error {
 			}
 			return err
 		}
-		_, err = item.ValueCopy(nil)
+		out, err = item.ValueCopy(dst)
 		return err
 	})
+	return out, err
 }
 
 func (e *nokvEngine) Insert(key, value []byte) error {
-	val := append([]byte(nil), value...)
 	return e.db.Update(func(txn *NoKV.Txn) error {
-		return txn.Set(key, val)
+		return txn.Set(key, value)
 	})
 }
 
 func (e *nokvEngine) Update(key, value []byte) error {
-	val := append([]byte(nil), value...)
 	return e.db.Update(func(txn *NoKV.Txn) error {
-		return txn.Set(key, val)
+		return txn.Set(key, value)
 	})
 }
 

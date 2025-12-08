@@ -105,9 +105,9 @@ func (e *rocksdbEngine) Close() error {
 	return nil
 }
 
-func (e *rocksdbEngine) Read(key []byte) error {
+func (e *rocksdbEngine) Read(key []byte, dst []byte) ([]byte, error) {
 	if e.db == nil {
-		return fmt.Errorf("rocksdb not open")
+		return nil, fmt.Errorf("rocksdb not open")
 	}
 	var valLen C.size_t
 	var errStr *C.char
@@ -121,12 +121,22 @@ func (e *rocksdbEngine) Read(key []byte) error {
 	)
 	if errStr != nil {
 		defer C.free(unsafe.Pointer(errStr))
-		return errors.New(C.GoString(errStr))
+		return nil, errors.New(C.GoString(errStr))
+	}
+	if val != nil && valLen > 0 {
+		goBytes := C.GoBytes(unsafe.Pointer(val), C.int(valLen))
+		if cap(dst) < len(goBytes) {
+			dst = make([]byte, len(goBytes))
+		}
+		dst = dst[:len(goBytes)]
+		copy(dst, goBytes)
+		C.rocksdb_free(unsafe.Pointer(val))
+		return dst, nil
 	}
 	if val != nil {
 		C.rocksdb_free(unsafe.Pointer(val))
 	}
-	return nil
+	return dst[:0], nil
 }
 
 func (e *rocksdbEngine) Insert(key, value []byte) error {

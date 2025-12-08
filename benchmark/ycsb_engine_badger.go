@@ -60,14 +60,20 @@ func (e *badgerEngine) Close() error {
 	return e.db.Close()
 }
 
-func (e *badgerEngine) Read(key []byte) error {
-	return e.db.View(func(txn *badger.Txn) error {
-		_, err := txn.Get(key)
+func (e *badgerEngine) Read(key []byte, dst []byte) ([]byte, error) {
+	var out []byte
+	err := e.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			return nil
 		}
+		if err != nil {
+			return err
+		}
+		out, err = item.ValueCopy(dst)
 		return err
 	})
+	return out, err
 }
 
 func (e *badgerEngine) Insert(key, value []byte) error {
