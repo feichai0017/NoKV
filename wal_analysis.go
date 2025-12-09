@@ -1,9 +1,9 @@
 package NoKV
 
 import (
+	"slices"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/wal"
@@ -79,7 +79,7 @@ func analyzeWALBacklog(metrics *wal.Metrics, segmentMetrics map[uint32]wal.Recor
 				candidates = append(candidates, id)
 			}
 		}
-		sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
+		slices.Sort(candidates)
 		analysis.RemovableSegments = candidates
 	}
 

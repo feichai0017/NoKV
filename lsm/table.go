@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"container/list"
 	"expvar"
 	"fmt"
 	"io"
@@ -44,9 +45,10 @@ type table struct {
 
 	idx atomic.Pointer[pb.TableIndex]
 
-	mu   sync.Mutex
-	ss   *file.SSTable
-	pins int32
+	mu         sync.Mutex
+	ss         *file.SSTable
+	pins       int32
+	cacheSlots []*list.Element
 }
 
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
@@ -340,9 +342,9 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	var b *block
 	key := t.blockCacheKey(idx)
 	if copyData && !bypassCache {
-		if cached, ok := t.lm.cache.getBlock(t.lvl, key); ok && cached != nil {
+		if cached, ok := t.lm.cache.getBlock(t.lvl, t, key); ok && cached != nil {
 			if hot {
-				t.lm.cache.addBlockWithTier(t.lvl, key, cached, true)
+				t.lm.cache.addBlockWithTier(t.lvl, t, key, cached, true)
 			}
 			return cached, nil
 		}
@@ -352,6 +354,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	utils.CondPanic(!ok || ko == nil, fmt.Errorf("block t.offset id=%d", idx))
 	b = &block{
 		offset: int(ko.GetOffset()),
+		tbl:    t,
 	}
 
 	var err error
@@ -406,7 +409,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	b.entriesIndexStart = entriesIndexStart
 
 	if copyData && !bypassCache {
-		t.lm.cache.addBlockWithTier(t.lvl, key, b, hot)
+		t.lm.cache.addBlockWithTier(t.lvl, t, key, b, hot)
 	} else {
 		cacheBypassCount.Add(1)
 	}
@@ -587,36 +590,18 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		options.PrefetchBlocks = 4
 		options.BypassBlockCache = true
 	}
+	if options.IsAsc && options.PrefetchBlocks > 0 {
+		// Best-effort advise for long forward scans; ignore errors.
+		t.adviseIterator(options)
+	}
 
 	copyData := !options.ZeroCopy
-	pattern := options.AccessPattern
-	if pattern == utils.AccessPatternAuto {
-		// Default to random for point/range-with-seeks, sequential when caller
-		// is scanning forward/backward deliberately or bypassing block cache.
-		if options.IsAsc || options.BypassBlockCache {
-			pattern = utils.AccessPatternSequential
-		} else {
-			pattern = utils.AccessPatternRandom
-		}
-	}
-	var hold func()
-	if ss, release, err := t.pinSSTable(); err == nil {
-		_ = ss.Advise(pattern)
-		if copyData {
-			release()
-		} else {
-			hold = release
-		}
-	} else {
-		copyData = true
-	}
 	it := &tableIterator{
 		opt:         options,
 		t:           t,
 		bi:          &blockIterator{},
 		index:       t.index(),
 		copyData:    copyData,
-		release:     hold,
 		closeCh:     make(chan struct{}),
 		bypassCache: options.BypassBlockCache,
 	}
@@ -656,6 +641,28 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		}()
 	}
 	return it
+}
+
+// adviseIterator is an optional helper to issue madvise hints for long scans.
+func (t *table) adviseIterator(options *utils.Options) {
+	if options == nil {
+		return
+	}
+	pattern := options.AccessPattern
+	if pattern == utils.AccessPatternAuto {
+		if options.IsAsc || options.BypassBlockCache {
+			pattern = utils.AccessPatternSequential
+		} else {
+			pattern = utils.AccessPatternRandom
+		}
+	}
+	if pattern == utils.AccessPatternAuto {
+		return
+	}
+	if ss, release, err := t.pinSSTable(); err == nil {
+		_ = ss.Advise(pattern)
+		release()
+	}
 }
 func (it *tableIterator) Next() {
 	it.err = nil

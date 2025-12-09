@@ -42,7 +42,6 @@ func TestBenchmarkYCSB(t *testing.T) {
 		ValueThreshold:     *fValueThreshold,
 		SyncWrites:         *fSyncWrites,
 		BlockCacheMB:       *ycsbBlockCacheMB,
-		RedisAddr:          *ycsbRedisAddr,
 		BadgerBlockCacheMB: *fBadgerBlockMB,
 		BadgerIndexCacheMB: *fBadgerIndexMB,
 		BadgerCompression:  strings.ToLower(*fBadgerCompression),

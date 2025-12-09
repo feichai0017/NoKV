@@ -23,7 +23,6 @@ var (
 	ycsbWarmOperations   = flag.Int("ycsb_warm_ops", 100000, "warm-up operations executed per workload before measuring")
 	ycsbRocksCompression = flag.String("ycsb_rocks_compression", "none", "RocksDB compression codec: none|snappy|zstd")
 	ycsbBlockCacheMB     = flag.Int("ycsb_block_cache_mb", 256, "Block cache size (MB) applied to RocksDB/NoKV tables")
-	ycsbRedisAddr        = flag.String("ycsb_redis_addr", "127.0.0.1:6379", "Redis endpoint for YCSB Redis engine")
 )
 
 const benchmarkEnvKey = "NOKV_RUN_BENCHMARKS"
