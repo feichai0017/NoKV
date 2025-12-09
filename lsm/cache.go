@@ -2,10 +2,10 @@ package lsm
 
 import (
 	"container/list"
-	"math/bits"
-	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/dgraph-io/ristretto/v2"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
@@ -174,14 +174,10 @@ func (c *cache) getBlock(level int, tbl *table, key uint64) (*block, bool) {
 }
 
 func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block) {
-	c.addBlockWithTier(level, tbl, key, blk, true)
-}
-
-func (c *cache) addBlockWithTier(level int, tbl *table, key uint64, blk *block, hot bool) {
 	if c == nil || c.blocks == nil {
 		return
 	}
-	c.blocks.addWithTier(level, tbl, key, blk, hot)
+	c.blocks.addWithTier(level, tbl, key, blk)
 }
 
 func (c *cache) dropBlock(key uint64) {
@@ -215,411 +211,142 @@ func (c *cache) metricsSnapshot() CacheMetrics {
 }
 
 type blockCache struct {
-	shards []*blockCacheShard
-	mask   uint64
-}
-
-type blockCacheShard struct {
-	mu      sync.RWMutex
-	cap     int
-	hotList *list.List
-	table   *cacheTable
+	rc *ristretto.Cache[uint64, *blockEntry]
 }
 
 type blockEntry struct {
-	key  uint64
-	idx  int
-	tbl  *table
-	data *block
+	key uint64
+	idx int
+	tbl *table
+	blk *block
 }
 
 func newBlockCache(capacity int) *blockCache {
-	shardCount := pickBlockCacheShards(capacity)
-	shards := make([]*blockCacheShard, shardCount)
-
-	capDist := spreadCapacity(capacity, shardCount)
-	for i := range shards {
-		shards[i] = newBlockCacheShard(capDist[i])
-	}
-
-	mask := uint64(0)
-	if isPowerOfTwo(shardCount) {
-		mask = uint64(shardCount - 1)
-	}
-	return &blockCache{shards: shards, mask: mask}
-}
-
-func pickBlockCacheShards(capacity int) int {
 	if capacity <= 0 {
-		return 1
+		return nil
 	}
-	shards := min(min(max(runtime.GOMAXPROCS(0), 4), 16), capacity)
-	if !isPowerOfTwo(shards) {
-		shards = 1 << bits.Len(uint(shards))
+	rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
+		NumCounters: int64(capacity) * 8,
+		MaxCost:     int64(capacity),
+		BufferItems: 64,
+		Cost: func(_ *blockEntry) int64 {
+			return 1
+		},
+		OnEvict: func(item *ristretto.Item[*blockEntry]) {
+			if item == nil || item.Value == nil {
+				return
+			}
+			clearTableSlot(item.Value)
+		},
+	})
+	if err != nil {
+		return nil
 	}
-	if shards == 0 {
-		shards = 1
-	}
-	return shards
-}
-
-func isPowerOfTwo(n int) bool {
-	return n > 0 && (n&(n-1)) == 0
-}
-
-func spreadCapacity(total, parts int) []int {
-	out := make([]int, parts)
-	if parts <= 0 || total <= 0 {
-		return out
-	}
-	base := total / parts
-	rem := total % parts
-	for i := range parts {
-		out[i] = base
-		if rem > 0 && i < rem {
-			out[i]++
-		}
-	}
-	return out
+	return &blockCache{rc: rc}
 }
 
 func blockIndexFromKey(key uint64) int {
 	return int(uint32(key))
 }
 
-func (c *blockCache) shard(key uint64) *blockCacheShard {
-	if c == nil || len(c.shards) == 0 {
-		return nil
-	}
-	fid := key >> 32
-	if c.mask > 0 {
-		return c.shards[int(fid&c.mask)]
-	}
-	return c.shards[int(fid%uint64(len(c.shards)))]
-}
-
-func newBlockCacheShard(capacity int) *blockCacheShard {
-	return &blockCacheShard{
-		cap:     capacity,
-		hotList: list.New(),
-		table:   newCacheTable(capacity),
-	}
-}
-
 func (c *blockCache) get(level int, tbl *table, key uint64) (*block, bool) {
-	shard := c.shard(key)
-	if shard == nil {
+	if tbl != nil {
+		idx := blockIndexFromKey(key)
+		if idx < len(tbl.cacheSlots) {
+			if be := tbl.cacheSlots[idx]; be != nil && be.blk != nil {
+				return be.blk, true
+			}
+		}
+	}
+	if c == nil || c.rc == nil {
 		return nil, false
 	}
-	return shard.get(level, tbl, key)
+	if be, ok := c.rc.Get(key); ok && be != nil && be.blk != nil {
+		if tbl != nil {
+			c.storeTableSlot(tbl, be)
+		}
+		return be.blk, true
+	}
+	return nil, false
 }
 
 func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
 	if c == nil {
 		return
 	}
-	c.addWithTier(level, tbl, key, blk, true)
+	c.addWithTier(level, tbl, key, blk)
 }
 
-func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, hot bool) {
-	shard := c.shard(key)
-	if shard == nil {
+func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block) {
+	if c == nil || c.rc == nil || blk == nil {
 		return
 	}
-	shard.addWithTier(level, tbl, key, blk, hot)
+	if level > 1 {
+		return
+	}
+	entry := &blockEntry{
+		key: key,
+		idx: blockIndexFromKey(key),
+		tbl: tbl,
+		blk: blk,
+	}
+	if tbl != nil {
+		c.storeTableSlot(tbl, entry)
+	}
+	_ = c.rc.Set(key, entry, 1)
 }
 
 func (c *blockCache) del(tbl *table, key uint64) {
-	shard := c.shard(key)
-	if shard == nil {
+	if c == nil {
 		return
 	}
-	shard.del(tbl, key)
+	if tbl != nil {
+		idx := blockIndexFromKey(key)
+		if idx < len(tbl.cacheSlots) && tbl.cacheSlots[idx] != nil {
+			tbl.cacheSlots[idx] = nil
+		}
+	}
+	if c.rc != nil {
+		c.rc.Del(key)
+	}
 }
 
 func (c *blockCache) close() {
 	if c == nil {
 		return
 	}
-	for _, shard := range c.shards {
-		shard.close()
+	if c.rc != nil {
+		c.rc.Close()
 	}
-	c.shards = nil
 }
 
-func (c *blockCacheShard) get(level int, tbl *table, key uint64) (*block, bool) {
-	if c == nil {
-		return nil, false
-	}
-	c.mu.RLock()
-	idx := blockIndexFromKey(key)
-	elem, ok := c.lookupEntry(tbl, key, idx)
-	c.mu.RUnlock()
-	if ok {
-		return c.sliceFromEntry(elem)
-	}
-	return nil, false
-}
-
-func (c *blockCacheShard) add(level int, tbl *table, key uint64, blk *block) {
-	if c == nil {
+func (c *blockCache) storeTableSlot(tbl *table, be *blockEntry) {
+	if tbl == nil || be == nil {
 		return
 	}
-	c.addWithTier(level, tbl, key, blk, true)
-}
-
-func (c *blockCacheShard) addWithTier(level int, tbl *table, key uint64, blk *block, _ bool) {
-	if c == nil || blk == nil {
+	idx := be.idx
+	if idx < 0 {
 		return
 	}
-	if level > 1 {
-		// Only track blocks for L0/L1 as requested.
+	if idx >= len(tbl.cacheSlots) {
+		grown := make([]*blockEntry, idx+1)
+		copy(grown, tbl.cacheSlots)
+		tbl.cacheSlots = grown
+	}
+	tbl.cacheSlots[idx] = be
+}
+
+func clearTableSlot(be *blockEntry) {
+	if be == nil || be.tbl == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.promoteLocked(tbl, key, blk)
-}
-
-func (c *blockCacheShard) del(tbl *table, key uint64) {
-	if c == nil {
+	idx := be.idx
+	if idx < 0 || idx >= len(be.tbl.cacheSlots) {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.removeLocked(tbl, key)
-}
-
-func (c *blockCacheShard) promoteLocked(tbl *table, key uint64, blk *block) {
-	if c.cap == 0 {
-		return
+	if be.tbl.cacheSlots[idx] == be {
+		be.tbl.cacheSlots[idx] = nil
 	}
-	idx := blockIndexFromKey(key)
-	// Replace existing entry in place.
-	if elem, ok := c.lookupEntry(tbl, key, idx); ok {
-		if v := elem.Value.(*blockEntry); v != nil {
-			v.idx = idx
-			v.tbl = blk.tbl
-			if blk.tbl == nil {
-				v.data = blk
-			} else {
-				v.data = nil
-			}
-		}
-		c.hotList.MoveToFront(elem)
-		return
-	}
-
-	if c.hotList.Len() >= c.cap {
-		tail := c.hotList.Back()
-		if tail != nil {
-			old := tail.Value.(*blockEntry)
-			c.deleteEntry(old.tbl, old.key, blockIndexFromKey(old.key))
-			c.hotList.Remove(tail)
-		}
-	}
-	entry := &blockEntry{key: key, idx: idx, tbl: blk.tbl}
-	if blk.tbl == nil {
-		entry.data = blk
-	}
-	elem := c.hotList.PushFront(entry)
-	c.storeEntry(tbl, key, idx, elem)
-}
-
-func (c *blockCacheShard) removeLocked(tbl *table, key uint64) {
-	idx := blockIndexFromKey(key)
-	if elem, ok := c.lookupEntry(tbl, key, idx); ok {
-		c.deleteEntry(tbl, key, idx)
-		c.hotList.Remove(elem)
-	}
-}
-
-func (c *blockCacheShard) close() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.table = nil
-	c.hotList = nil
-}
-
-func (c *blockCacheShard) sliceFromEntry(elem *list.Element) (*block, bool) {
-	if elem == nil {
-		return nil, false
-	}
-	be, ok := elem.Value.(*blockEntry)
-	if !ok || be == nil {
-		return nil, false
-	}
-	if be.data != nil {
-		return be.data, true
-	}
-	if be.tbl == nil {
-		return nil, false
-	}
-	// Reload block on demand using table/mmap to avoid storing full block data.
-	blk, err := be.tbl.loadBlock(be.idx, true, false, true)
-	if err != nil {
-		return nil, false
-	}
-	return blk, true
-}
-
-func (c *blockCacheShard) lookupEntry(tbl *table, key uint64, idx int) (*list.Element, bool) {
-	if tbl != nil {
-		if idx < len(tbl.cacheSlots) {
-			if elem := tbl.cacheSlots[idx]; elem != nil {
-				return elem, true
-			}
-		}
-		return nil, false
-	}
-	return c.table.get(key)
-}
-
-func (c *blockCacheShard) storeEntry(tbl *table, key uint64, idx int, elem *list.Element) {
-	if tbl != nil {
-		if idx >= len(tbl.cacheSlots) {
-			needed := idx + 1
-			grown := make([]*list.Element, needed)
-			copy(grown, tbl.cacheSlots)
-			tbl.cacheSlots = grown
-		}
-		tbl.cacheSlots[idx] = elem
-		return
-	}
-	c.table.set(key, elem)
-}
-
-func (c *blockCacheShard) deleteEntry(tbl *table, key uint64, idx int) {
-	if tbl != nil {
-		if idx < len(tbl.cacheSlots) {
-			tbl.cacheSlots[idx] = nil
-		}
-		return
-	}
-	c.table.del(key)
-}
-
-// cacheTable is a simple open-addressed hash table mapping key -> list element.
-type cacheTable struct {
-	slots []cacheSlot
-	mask  uint64
-}
-
-type cacheSlot struct {
-	key   uint64
-	val   *list.Element
-	state slotState
-}
-
-type slotState uint8
-
-const (
-	slotEmpty slotState = iota
-	slotFull
-	slotTombstone
-)
-
-func newCacheTable(capacity int) *cacheTable {
-	size := nextPow2(capacity * 2)
-	if size == 0 {
-		size = 1
-	}
-	return &cacheTable{
-		slots: make([]cacheSlot, size),
-		mask:  uint64(size - 1),
-	}
-}
-
-func nextPow2(n int) int {
-	if n <= 0 {
-		return 0
-	}
-	p := 1 << bits.Len(uint(n-1))
-	if p == 0 {
-		p = 1
-	}
-	return p
-}
-
-func (t *cacheTable) get(key uint64) (*list.Element, bool) {
-	if t == nil || len(t.slots) == 0 {
-		return nil, false
-	}
-	for idx, probes := t.index(key); probes < len(t.slots); idx, probes = t.next(idx, probes) {
-		slot := &t.slots[idx]
-		switch slot.state {
-		case slotEmpty:
-			return nil, false
-		case slotFull:
-			if slot.key == key {
-				return slot.val, true
-			}
-		}
-	}
-	return nil, false
-}
-
-func (t *cacheTable) set(key uint64, val *list.Element) {
-	if t == nil || len(t.slots) == 0 {
-		return
-	}
-	firstTomb := -1
-	for idx, probes := t.index(key); probes < len(t.slots); idx, probes = t.next(idx, probes) {
-		slot := &t.slots[idx]
-		switch slot.state {
-		case slotEmpty:
-			if firstTomb >= 0 {
-				slot = &t.slots[firstTomb]
-			}
-			slot.key = key
-			slot.val = val
-			slot.state = slotFull
-			return
-		case slotFull:
-			if slot.key == key {
-				slot.val = val
-				return
-			}
-		case slotTombstone:
-			if firstTomb < 0 {
-				firstTomb = idx
-			}
-		}
-	}
-}
-
-func (t *cacheTable) del(key uint64) {
-	if t == nil || len(t.slots) == 0 {
-		return
-	}
-	for idx, probes := t.index(key); probes < len(t.slots); idx, probes = t.next(idx, probes) {
-		slot := &t.slots[idx]
-		switch slot.state {
-		case slotEmpty:
-			return
-		case slotFull:
-			if slot.key == key {
-				slot.state = slotTombstone
-				slot.key = 0
-				slot.val = nil
-				return
-			}
-		}
-	}
-}
-
-func (t *cacheTable) index(key uint64) (idx int, probes int) {
-	if t.mask > 0 {
-		return int(key & t.mask), 0
-	}
-	return int(key % uint64(len(t.slots))), 0
-}
-
-func (t *cacheTable) next(idx, probes int) (int, int) {
-	return (idx + 1) % len(t.slots), probes + 1
 }
 
 type bloomCache struct {
