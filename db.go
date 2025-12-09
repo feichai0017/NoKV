@@ -56,6 +56,7 @@ type (
 		writeMetrics     *writeMetrics
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
+		commitBatchPool  sync.Pool
 		iterPool         *iteratorPool
 		prefetchRing     *utils.Ring[prefetchRequest]
 		prefetchWG       sync.WaitGroup
@@ -100,6 +101,9 @@ func Open(opt *Options) *DB {
 	db := &DB{opt: opt, writeMetrics: newWriteMetrics()}
 	db.headLogDelta = valueLogHeadLogInterval
 	db.initWriteBatchOptions()
+	db.commitBatchPool.New = func() any {
+		return make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+	}
 
 	if db.opt.BlockCacheSize < 0 {
 		db.opt.BlockCacheSize = 0

@@ -310,10 +310,10 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 		return nil, utils.ErrKeyNotFound
 	}
 
-	if kv.SameKey(key, item.Entry().Key) {
-		if version := kv.ParseTs(item.Entry().Key); *maxVs < version {
+	if e := item.Entry(); kv.SameKey(key, e.Key) {
+		if version := kv.ParseTs(e.Key); *maxVs < version {
 			*maxVs = version
-			return item.Entry(), nil
+			return e, nil
 		}
 	}
 	return nil, utils.ErrKeyNotFound
@@ -595,7 +595,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	it := &tableIterator{
 		opt:         options,
 		t:           t,
-		bi:          &blockIterator{},
+		bi:          getBlockIterator(),
 		index:       t.index(),
 		copyData:    copyData,
 		closeCh:     make(chan struct{}),

@@ -50,6 +50,17 @@ type committedTxn struct {
 	conflictKeys map[uint64]struct{}
 }
 
+func cloneConflictKeys(src map[uint64]struct{}) map[uint64]struct{} {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[uint64]struct{}, len(src))
+	for k := range src {
+		dst[k] = struct{}{}
+	}
+	return dst
+}
+
 func newOracle(opt Options) *oracle {
 	orc := &oracle{
 		detectConflicts: opt.DetectConflicts,
@@ -209,9 +220,10 @@ func (o *oracle) newCommitTs(txn *Txn) (uint64, bool) {
 	if o.detectConflicts {
 		// We should ensure that txns are not added to o.committedTxns slice when
 		// conflict detection is disabled otherwise this slice would keep growing.
+		// txn.conflictKeys is pooled; copy it so future reuse does not clear history.
 		o.committedTxns = append(o.committedTxns, committedTxn{
 			ts:           ts,
-			conflictKeys: txn.conflictKeys,
+			conflictKeys: cloneConflictKeys(txn.conflictKeys),
 		})
 	}
 
@@ -278,10 +290,6 @@ type Txn struct {
 	returned     bool
 	doneRead     bool
 	update       bool // update is used to conditionally keep track of reads.
-}
-
-var txnPool = sync.Pool{
-	New: func() any { return &Txn{} },
 }
 
 type pendingWritesIterator struct {
@@ -598,14 +606,13 @@ func (txn *Txn) recycle() {
 	txn.size = 0
 	txn.count = 0
 	txn.doneRead = false
-	poolable := !txn.update
 	txn.update = false
 	atomic.StoreInt32(&txn.numIterators, 0)
 	txn.clearPendingWrites()
-	txn.pendingWrites = nil
-	txn.conflictKeys = nil
-	if poolable {
-		txnPool.Put(txn)
+	if txn.conflictKeys != nil {
+		for k := range txn.conflictKeys {
+			delete(txn.conflictKeys, k)
+		}
 	}
 }
 
@@ -784,12 +791,7 @@ func (db *DB) NewTransaction(update bool) *Txn {
 }
 
 func (db *DB) newTransaction(update bool) *Txn {
-	var txn *Txn
-	if update {
-		txn = &Txn{}
-	} else {
-		txn = txnPool.Get().(*Txn)
-	}
+	txn := &Txn{}
 	txn.db = db
 	txn.update = update
 	txn.count = 1 // One extra entry for BitFin.
@@ -803,14 +805,30 @@ func (db *DB) newTransaction(update bool) *Txn {
 	atomic.StoreInt32(&txn.numIterators, 0)
 	if update {
 		if db.opt.DetectConflicts {
-			txn.conflictKeys = make(map[uint64]struct{})
+			if txn.conflictKeys == nil {
+				txn.conflictKeys = make(map[uint64]struct{})
+			} else {
+				for k := range txn.conflictKeys {
+					delete(txn.conflictKeys, k)
+				}
+			}
 		} else {
 			txn.conflictKeys = nil
 		}
-		txn.pendingWrites = make(map[string]*kv.Entry)
+		if txn.pendingWrites == nil {
+			txn.pendingWrites = make(map[string]*kv.Entry)
+		} else {
+			for k := range txn.pendingWrites {
+				delete(txn.pendingWrites, k)
+			}
+		}
 	} else {
 		txn.conflictKeys = nil
-		txn.pendingWrites = nil
+		if txn.pendingWrites != nil {
+			for k := range txn.pendingWrites {
+				delete(txn.pendingWrites, k)
+			}
+		}
 	}
 	db.orc.trackTxnStart()
 	txn.readTs = db.orc.readTs()
