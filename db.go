@@ -104,12 +104,6 @@ func Open(opt *Options) *DB {
 	if db.opt.BlockCacheSize < 0 {
 		db.opt.BlockCacheSize = 0
 	}
-	if db.opt.BlockCacheSize == 0 {
-		// Disable caches explicitly when set to zero, otherwise fall back to default.
-		db.opt.BlockCacheHotFraction = 0
-	} else if db.opt.BlockCacheHotFraction <= 0 || db.opt.BlockCacheHotFraction >= 1 {
-		db.opt.BlockCacheHotFraction = 0.25
-	}
 	if db.opt.BloomCacheSize < 0 {
 		db.opt.BloomCacheSize = 0
 	}
@@ -175,7 +169,6 @@ func Open(opt *Options) *DB {
 		IngestCompactBatchSize: ingestBatchSize,
 		CompactionValueWeight:  db.opt.CompactionValueWeight,
 		BlockCacheSize:         db.opt.BlockCacheSize,
-		BlockCacheHotFraction:  db.opt.BlockCacheHotFraction,
 		BloomCacheSize:         db.opt.BloomCacheSize,
 		ManifestSync:           db.opt.ManifestSync,
 	}, wlog)

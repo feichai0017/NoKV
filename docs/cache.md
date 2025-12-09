@@ -27,23 +27,21 @@ Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes
 ## 2. Block Cache Strategy
 
 ```text
-Hot tier (LRU)  -> small, latency-critical blocks (L0/L1)
-Cold tier (CLOCK) -> larger backing store for demoted blocks
+Hot tier (LRU)  -> user-space cache for latency-critical blocks (L0/L1)
+Cold tier       -> handled by OS page cache (no user-space cold CLOCK)
 ```
 
-* `Options.BlockCacheSize` sets the combined capacity (in blocks). `Options.BlockCacheHotFraction` decides the fraction devoted to the hot tier.
-* **Hot tier** – Doubly linked list managed with `container/list`. Promotion happens on every hit; eviction demotes blocks into the cold tier where possible.
-* **Cold tier** – CLOCK algorithm implemented via a ring buffer (`clockCache`). It tracks reference bits and approximates LRU without heavy locking.
-* Locking strategy: read path takes `RLock` to probe hot tier, then briefly upgrades to `Lock` to maintain LRU on hit; cold tier uses its own internal lock so hot-tier probes stay fast. Writes/evictions still use `Lock`, and metrics continue to track L0/L1 hits/misses.
+* `Options.BlockCacheSize` sets the user-space cache capacity (in blocks); all容量都是热层，冷数据直接依赖 OS page cache。
+* **Hot tier** – Doubly linked list managed with `container/list`. Promotion happens on every hit; eviction simply drops into the OS cache instead of a user-space冷层。
+* 锁策略：读路径 `RLock` 探测，命中短暂升级写锁更新 LRU；写入/淘汰仍用写锁。L0/L1 读都会记录命中/未命中指标。
 
 ```mermaid
 flowchart LR
     Read --> CheckHot
     CheckHot -->|hit| Return
-    CheckHot -->|miss| CheckCold
-    CheckCold -->|hit| Promote
-    CheckCold -->|miss| LoadFromTable
-    Promote --> UpdateHot
+    CheckHot -->|miss| LoadFromTable (OS cache handles cold)
+    LoadFromTable --> InsertHot
+    InsertHot --> Return
 ```
 
 By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflecting the higher re-use for top levels.
@@ -94,8 +92,7 @@ type CacheMetrics struct {
 
 ## 7. Operational Tips
 
-* Keep `BlockCacheHotFraction` between 0.1 and 0.3 for latency-sensitive workloads—too small and promotion churn increases.
-* If bloom hit rate is low (<60%), consider increasing filter bits per key (see `table` builder options) or raising bloom cache size.
-* Use `nokv stats --json` to track cache hit trends across releases; regressions often point to iterator misuse or working-set shifts.
+* 如果 bloom 命中率低于 60%，考虑提高每 key 的 bloom 位数或增大 Bloom cache。
+* 用 `nokv stats --json` 跟踪缓存命中率趋势；回归通常指向迭代器使用不当或工作集变化。
 
 More on SST layout lives in [`docs/manifest.md`](manifest.md) and [`docs/architecture.md`](architecture.md#4-read-path--iterators).

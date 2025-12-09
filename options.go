@@ -57,11 +57,10 @@ type Options struct {
 	// throttling.
 	WriteHotKeyLimit int32
 
-	// Block cache configuration for read path optimization. The cache keeps a
-	// two-tier layout (hot LRU + cold CLOCK) and currently targets L0/L1.
-	BlockCacheSize        int
-	BlockCacheHotFraction float64
-	BloomCacheSize        int
+	// Block cache configuration for read path optimization. Cached blocks
+	// target L0/L1; colder data relies on the OS page cache.
+	BlockCacheSize int
+	BloomCacheSize int
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -130,7 +129,6 @@ func NewDefaultOptions() *Options {
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,
 		BlockCacheSize:                4096,
-		BlockCacheHotFraction:         0.25,
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
 		ManifestSync:                  false,

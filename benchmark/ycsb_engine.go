@@ -31,7 +31,6 @@ type ycsbEngineOptions struct {
 	ValueThreshold int
 	SyncWrites     bool
 	BlockCacheMB   int
-	RedisAddr      string
 
 	// Badger specific cache sizes (in MB).
 	BadgerBlockCacheMB int

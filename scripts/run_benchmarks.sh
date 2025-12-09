@@ -20,7 +20,7 @@ die() {
 }
 
 default_workloads="A,B,C,D,F"
-default_engines="nokv,badger,rocksdb,redis"
+default_engines="nokv,badger,rocksdb"
 default_records=1000000
 default_ops=1000000
 default_conc=16
@@ -37,7 +37,6 @@ ycsb_seed="${YCSB_SEED:-42}"
 ycsb_sync="${YCSB_SYNC_WRITES:-false}"
 ycsb_badger_comp="${YCSB_BADGER_COMPRESSION:-none}"
 ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
-ycsb_redis_addr="${YCSB_REDIS_ADDR:-127.0.0.1:6379}"
 benchdir="${YCSB_BENCHDIR:-benchmark_data}"
 ycsb_warm_ops="${YCSB_WARM_OPS:-100000}"
 
@@ -109,7 +108,6 @@ args=(
   -ycsb_rocks_compression "${ycsb_rocks_comp}"
   -ycsb_block_cache_mb "${ycsb_block_cache_mb}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
-  -ycsb_redis_addr "${ycsb_redis_addr}"
 )
 
 

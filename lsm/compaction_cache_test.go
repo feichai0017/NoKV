@@ -50,9 +50,8 @@ Found:
 
 func TestCacheHotColdMetrics(t *testing.T) {
 	opt := &Options{
-		BlockCacheSize:        4,
-		BlockCacheHotFraction: 0.5,
-		BloomCacheSize:        4,
+		BlockCacheSize: 4,
+		BloomCacheSize: 4,
 	}
 	cache := newCache(opt)
 	if cache == nil {
@@ -60,15 +59,15 @@ func TestCacheHotColdMetrics(t *testing.T) {
 	}
 
 	blk := &block{}
-	cache.addBlockWithTier(0, 1, blk, true)
-	if v, ok := cache.getBlock(0, 1); !ok || v == nil {
+	cache.addBlockWithTier(0, nil, 1, blk, true)
+	if v, ok := cache.getBlock(0, nil, 1); !ok || v == nil {
 		t.Fatalf("expected hot block hit")
 	}
 	// Miss on different key.
-	cache.getBlock(0, 2)
+	cache.getBlock(0, nil, 2)
 
-	cache.addBlockWithTier(1, 42, &block{}, false)
-	if v, ok := cache.getBlock(1, 42); !ok || v == nil {
+	cache.addBlockWithTier(1, nil, 42, &block{}, false)
+	if v, ok := cache.getBlock(1, nil, 42); !ok || v == nil {
 		t.Fatalf("expected cold block hit")
 	}
 

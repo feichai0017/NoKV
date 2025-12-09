@@ -127,7 +127,7 @@ func (n *Node) advanceWindow(slots int, slotID int64) {
 		n.windowSlotID = slotID
 		return
 	}
-	for i := int64(0); i < steps; i++ {
+	for range steps {
 		n.windowPos = (n.windowPos + 1) % slots
 		n.windowTotal -= n.window[n.windowPos]
 		n.window[n.windowPos] = 0

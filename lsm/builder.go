@@ -46,6 +46,7 @@ type block struct {
 	entryOffsets      []uint32
 	end               int
 	estimateSz        int64
+	tbl               *table
 }
 
 type header struct {

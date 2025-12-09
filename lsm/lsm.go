@@ -40,9 +40,8 @@ type Options struct {
 	BloomFalsePositive float64
 
 	// Block cache controls.
-	BlockCacheSize        int
-	BlockCacheHotFraction float64
-	BloomCacheSize        int
+	BlockCacheSize int
+	BloomCacheSize int
 
 	// compact
 	NumCompactors       int
