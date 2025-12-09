@@ -48,6 +48,7 @@ type block struct {
 	end               int
 	estimateSz        int64
 	tbl               *table
+	release           func()
 }
 
 type header struct {
@@ -441,6 +442,9 @@ func putBlockIterator(bi *blockIterator) {
 }
 
 func (itr *blockIterator) setBlock(b *block) {
+	if itr.block != nil && itr.block.release != nil && itr.block != b {
+		itr.block.release()
+	}
 	itr.block = b
 	itr.err = nil
 	itr.idx = 0
@@ -552,10 +556,18 @@ func (itr *blockIterator) Item() utils.Item {
 	return itr.it
 }
 func (itr *blockIterator) Close() error {
+	if itr.block != nil && itr.block.release != nil {
+		itr.block.release()
+		itr.block.release = nil
+	}
 	return nil
 }
 
 func (itr *blockIterator) reset() {
+	if itr.block != nil && itr.block.release != nil {
+		itr.block.release()
+		itr.block.release = nil
+	}
 	itr.data = nil
 	itr.idx = 0
 	itr.err = nil

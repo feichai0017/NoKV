@@ -126,9 +126,9 @@ func NewDefaultOptions() *Options {
 		HotRingDecayShift:             1,
 		HotRingWindowSlots:            8,
 		HotRingWindowSlotDuration:     250 * time.Millisecond,
-		// Larger write batches to reduce queue churn/spin.
-		WriteBatchMaxCount: 		   128,
-		WriteBatchMaxSize:			   2 << 20,
+		// Conservative defaults to avoid long batch-induced pauses.
+		WriteBatchMaxCount: 64,
+		WriteBatchMaxSize:  1 << 20,
 		BlockCacheSize:                4096,
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
