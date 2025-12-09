@@ -126,8 +126,9 @@ func NewDefaultOptions() *Options {
 		HotRingDecayShift:             1,
 		HotRingWindowSlots:            8,
 		HotRingWindowSlotDuration:     250 * time.Millisecond,
-		WriteBatchMaxCount:            64,
-		WriteBatchMaxSize:             1 << 20,
+		// Larger write batches to reduce queue churn/spin.
+		WriteBatchMaxCount: 		   128,
+		WriteBatchMaxSize:			   2 << 20,
 		BlockCacheSize:                4096,
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
@@ -148,5 +149,11 @@ func NewDefaultOptions() *Options {
 		ValueLogGCSampleCountRatio:    0.01,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
+
+	// Relax L0 throttling defaults and increase compaction parallelism a bit to
+	// reduce write-path sleeps under load.
+	opt.NumLevelZeroTables = 16
+	opt.IngestCompactBatchSize = 4
+	opt.NumCompactors = 4
 	return opt
 }

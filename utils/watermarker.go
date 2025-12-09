@@ -38,7 +38,7 @@ type WaterMark struct {
 
 	mu      sync.Mutex
 	pending map[uint64]int
-	waiters map[uint64][]chan struct{}
+	waiters map[uint64]chan struct{}
 	indices uint64Heap
 }
 
@@ -46,7 +46,7 @@ type WaterMark struct {
 func (w *WaterMark) Init(closer *Closer) {
 	const defaultCap = 128
 	w.pending = make(map[uint64]int, defaultCap)
-	w.waiters = make(map[uint64][]chan struct{}, defaultCap)
+	w.waiters = make(map[uint64]chan struct{}, defaultCap)
 	w.indices = make(uint64Heap, 0, defaultCap)
 	heap.Init(&w.indices)
 	// Legacy closers expected each watermark processor to call Done once.
@@ -108,14 +108,16 @@ func (w *WaterMark) WaitForMark(ctx context.Context, index uint64) error {
 	if w.DoneUntil() >= index {
 		return nil
 	}
-	waitCh := make(chan struct{})
-
 	w.mu.Lock()
 	if w.DoneUntil() >= index {
 		w.mu.Unlock()
 		return nil
 	}
-	w.waiters[index] = append(w.waiters[index], waitCh)
+	waitCh, ok := w.waiters[index]
+	if !ok {
+		waitCh = make(chan struct{})
+		w.waiters[index] = waitCh
+	}
 	w.mu.Unlock()
 
 	select {
@@ -160,26 +162,10 @@ func (w *WaterMark) advanceLocked() {
 }
 
 func (w *WaterMark) notifyWaitersLocked(prev, until uint64) {
-	notify := func(idx uint64, chans []chan struct{}) {
-		for _, ch := range chans {
-			close(ch)
-		}
-		delete(w.waiters, idx)
-	}
-
-	// When waiters are sparse, iterate by index distance; otherwise, range over map.
-	if until-prev <= uint64(len(w.waiters)) {
-		for idx := prev + 1; idx <= until; idx++ {
-			if chans, ok := w.waiters[idx]; ok {
-				notify(idx, chans)
-			}
-		}
-		return
-	}
-
-	for idx, chans := range w.waiters {
+	for idx, ch := range w.waiters {
 		if idx <= until {
-			notify(idx, chans)
+			close(ch)
+			delete(w.waiters, idx)
 		}
 	}
 }

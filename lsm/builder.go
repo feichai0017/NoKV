@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync"
 	"sort"
 	"unsafe"
 
@@ -363,7 +364,7 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 		}
 	}
 	tableIndex.ValueSize = uint64(tb.valueSize)
-	tableIndex.Offsets = tb.writeBlockOffsets(tableIndex)
+	tableIndex.Offsets = tb.writeBlockOffsets()
 	var dataSize uint32
 	for i := range tb.blockList {
 		dataSize += uint32(tb.blockList[i].end)
@@ -373,7 +374,7 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 	return data, dataSize
 }
 
-func (tb *tableBuilder) writeBlockOffsets(tableIndex *pb.TableIndex) []*pb.BlockOffset {
+func (tb *tableBuilder) writeBlockOffsets() []*pb.BlockOffset {
 	var startOffset uint32
 	var offsets []*pb.BlockOffset
 	for _, bl := range tb.blockList {
@@ -421,6 +422,22 @@ type blockIterator struct {
 	item      Item
 
 	it utils.Item
+}
+
+var blockItrPool = sync.Pool{
+	New: func() any { return &blockIterator{} },
+}
+
+func getBlockIterator() *blockIterator {
+	return blockItrPool.Get().(*blockIterator)
+}
+
+func putBlockIterator(bi *blockIterator) {
+	if bi == nil {
+		return
+	}
+	bi.reset()
+	blockItrPool.Put(bi)
 }
 
 func (itr *blockIterator) setBlock(b *block) {
@@ -536,4 +553,22 @@ func (itr *blockIterator) Item() utils.Item {
 }
 func (itr *blockIterator) Close() error {
 	return nil
+}
+
+func (itr *blockIterator) reset() {
+	itr.data = nil
+	itr.idx = 0
+	itr.err = nil
+	itr.baseKey = itr.baseKey[:0]
+	itr.key = itr.key[:0]
+	itr.val = itr.val[:0]
+	itr.entryOffsets = nil
+	itr.block = nil
+	itr.tableID = 0
+	itr.blockID = 0
+	itr.prevOverlap = 0
+	itr.entry = kv.Entry{}
+	itr.valStruct = kv.ValueStruct{}
+	itr.item = Item{}
+	itr.it = nil
 }

@@ -1,7 +1,7 @@
 package NoKV
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +14,11 @@ import (
 const (
 	defaultWriteBatchMaxCount = 64
 	defaultWriteBatchMaxSize  = 1 << 20
+)
+
+var (
+	errWriteThrottleEnabled = errors.New("write throttle enabled due to L0 backlog")
+	errWriteThrottleRelease = errors.New("write throttle released")
 )
 
 var commitReqPool = sync.Pool{
@@ -39,9 +44,9 @@ func (db *DB) applyThrottle(enable bool) {
 		return
 	}
 	if enable {
-		utils.Err(fmt.Errorf("write throttle enabled due to L0 backlog"))
+		utils.Err(errWriteThrottleEnabled)
 	} else {
-		utils.Err(fmt.Errorf("write throttle released"))
+		utils.Err(errWriteThrottleRelease)
 	}
 }
 
@@ -144,7 +149,8 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 		return nil
 	}
 
-	batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+	batch := db.commitBatchPool.Get().([]*commitRequest)
+	batch = batch[:0]
 	pendingEntries := int64(0)
 	pendingBytes := int64(0)
 
@@ -184,6 +190,7 @@ func (db *DB) commitWorker() {
 			return
 		}
 		db.handleCommitRequests(reqs)
+		db.releaseCommitBatch(reqs)
 	}
 }
 
@@ -270,6 +277,16 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 	}
 
 	db.finishCommitRequests(reqs, nil)
+}
+
+func (db *DB) releaseCommitBatch(batch []*commitRequest) {
+	if batch == nil {
+		return
+	}
+	for i := range batch {
+		batch[i] = nil
+	}
+	db.commitBatchPool.Put(batch[:0])
 }
 
 func (db *DB) applyRequests(reqs []*request) error {
