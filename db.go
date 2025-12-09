@@ -222,7 +222,7 @@ func Open(opt *Options) *DB {
 	// 启动 sstable 的合并压缩过程
 	go db.lsm.StartCompacter()
 	// 准备vlog gc
-	queueCap := max(opt.WriteBatchMaxCount*4, 256)
+	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
 	db.commitQueue.ring = utils.NewRing[*commitRequest](queueCap)
 	db.commitQueue.notEmpty = sync.NewCond(&db.commitQueue.mu)
 	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)

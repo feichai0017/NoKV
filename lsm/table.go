@@ -353,15 +353,22 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 		tbl:    t,
 	}
 
-	var err error
-	var gen uint64
-	if b.data, gen, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
+	var (
+		err error
+		gen uint64
+		rel func()
+	)
+	if b.data, gen, rel, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
 	}
 	if !copyData && gen != t.ss.Generation() {
-		if b.data, _, err = t.read(b.offset, int(ko.GetLen()), true); err != nil {
+		if rel != nil {
+			rel()
+			rel = nil
+		}
+		if b.data, _, _, err = t.read(b.offset, int(ko.GetLen()), true); err != nil {
 			return nil, err
 		}
 		copyData = true
@@ -392,6 +399,9 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	b.data = b.data[:readPos]
 
 	if err = b.verifyCheckSum(); err != nil {
+		if rel != nil {
+			rel()
+		}
 		return nil, err
 	}
 
@@ -409,6 +419,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	} else {
 		cacheBypassCount.Add(1)
 	}
+	b.release = rel
 
 	return b, nil
 }
@@ -454,22 +465,23 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	return err == nil
 }
 
-func (t *table) read(off, sz int, copyData bool) ([]byte, uint64, error) {
+func (t *table) read(off, sz int, copyData bool) ([]byte, uint64, func(), error) {
 	ss, release, err := t.pinSSTable()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
-	defer release()
 	data, err := ss.Bytes(off, sz)
 	if err != nil {
-		return nil, 0, err
+		release()
+		return nil, 0, nil, err
 	}
 	if !copyData {
-		return data, ss.Generation(), nil
+		return data, ss.Generation(), release, nil
 	}
 	out := make([]byte, len(data))
 	copy(out, data)
-	return out, ss.Generation(), nil
+	release()
+	return out, ss.Generation(), nil, nil
 }
 
 const maxUint32 = uint64(math.MaxUint32)
@@ -589,6 +601,12 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options.IsAsc && options.PrefetchBlocks > 0 {
 		// Best-effort advise for long forward scans; ignore errors.
 		t.adviseIterator(options)
+	}
+
+	// Long forward scans prefer zero-copy to reduce allocations; callers can
+	// override via ZeroCopy.
+	if options.IsAsc && options.PrefetchBlocks > 0 {
+		options.ZeroCopy = true
 	}
 
 	copyData := !options.ZeroCopy
