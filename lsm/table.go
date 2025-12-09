@@ -329,7 +329,7 @@ func (t *table) block(idx int) (*block, error) {
 }
 
 func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, error) {
-	utils.CondPanic(idx < 0, fmt.Errorf("idx=%d", idx))
+	utils.CondPanicFunc(idx < 0, func() error { return fmt.Errorf("idx=%d", idx) })
 	index := t.index()
 	if index == nil {
 		return nil, errors.New("missing table index")
@@ -347,7 +347,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	}
 
 	ko, ok := t.blockOffset(idx)
-	utils.CondPanic(!ok || ko == nil, fmt.Errorf("block t.offset id=%d", idx))
+	utils.CondPanicFunc(!ok || ko == nil, func() error { return fmt.Errorf("block t.offset id=%d", idx) })
 	b = &block{
 		offset: int(ko.GetOffset()),
 		tbl:    t,
@@ -476,8 +476,8 @@ const maxUint32 = uint64(math.MaxUint32)
 
 // blockCacheKey is used to store blocks in the block cache.
 func (t *table) blockCacheKey(idx int) uint64 {
-	utils.CondPanic(t.fid > maxUint32, fmt.Errorf("table fid %d exceeds 32-bit limit", t.fid))
-	utils.CondPanic(idx < 0 || uint64(idx) > maxUint32, fmt.Errorf("invalid block index %d", idx))
+	utils.CondPanicFunc(t.fid > maxUint32, func() error { return fmt.Errorf("table fid %d exceeds 32-bit limit", t.fid) })
+	utils.CondPanicFunc(idx < 0 || uint64(idx) > maxUint32, func() error { return fmt.Errorf("invalid block index %d", idx) })
 	return (t.fid << 32) | uint64(uint32(idx))
 }
 
@@ -801,7 +801,7 @@ func (it *tableIterator) Seek(key []byte) {
 	offsets := it.index.GetOffsets()
 	idx := sort.Search(len(offsets), func(idx int) bool {
 		ko, ok := it.t.blockOffset(idx)
-		utils.CondPanic(!ok, fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()"))
+		utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
 		if idx == len(offsets) {
 			return true
 		}

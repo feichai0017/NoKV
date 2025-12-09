@@ -145,6 +145,14 @@ func CondPanic(condition bool, err error) {
 	}
 }
 
+// CondPanicFunc defers error construction until the condition is true, avoiding
+// allocations on the hot path.
+func CondPanicFunc(condition bool, errFn func() error) {
+	if condition {
+		Panic(errFn())
+	}
+}
+
 func Check(err error) {
 	if err != nil {
 		log.Fatalf("%+v", Wrap(err, ""))
