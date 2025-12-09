@@ -36,7 +36,7 @@ type valueLogWriter interface {
 	WriteRequests(reqs []*request) error
 }
 
-func (vlog *valueLog) logf(format string, args ...interface{}) {
+func (vlog *valueLog) logf(format string, args ...any) {
 	if vlog == nil || !vlog.opt.ValueLogVerbose {
 		return
 	}

@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"container/list"
 	"expvar"
 	"fmt"
 	"io"
@@ -48,7 +47,7 @@ type table struct {
 	mu         sync.Mutex
 	ss         *file.SSTable
 	pins       int32
-	cacheSlots []*list.Element
+	cacheSlots []*blockEntry
 }
 
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
@@ -343,9 +342,6 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	key := t.blockCacheKey(idx)
 	if copyData && !bypassCache {
 		if cached, ok := t.lm.cache.getBlock(t.lvl, t, key); ok && cached != nil {
-			if hot {
-				t.lm.cache.addBlockWithTier(t.lvl, t, key, cached, true)
-			}
 			return cached, nil
 		}
 	}
@@ -409,7 +405,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	b.entriesIndexStart = entriesIndexStart
 
 	if copyData && !bypassCache {
-		t.lm.cache.addBlockWithTier(t.lvl, t, key, b, hot)
+		t.lm.cache.addBlock(t.lvl, t, key, b)
 	} else {
 		cacheBypassCount.Add(1)
 	}

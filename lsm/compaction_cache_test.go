@@ -58,16 +58,17 @@ func TestCacheHotColdMetrics(t *testing.T) {
 		t.Fatalf("expected cache to initialize")
 	}
 
-	blk := &block{}
-	cache.addBlockWithTier(0, nil, 1, blk, true)
-	if v, ok := cache.getBlock(0, nil, 1); !ok || v == nil {
+	tbl := &table{}
+	blk := &block{tbl: tbl}
+	cache.addBlock(0, tbl, 1, blk)
+	if v, ok := cache.getBlock(0, tbl, 1); !ok || v == nil {
 		t.Fatalf("expected hot block hit")
 	}
 	// Miss on different key.
-	cache.getBlock(0, nil, 2)
+	cache.getBlock(0, tbl, 2)
 
-	cache.addBlockWithTier(1, nil, 42, &block{}, false)
-	if v, ok := cache.getBlock(1, nil, 42); !ok || v == nil {
+	cache.addBlock(1, tbl, 42, &block{tbl: tbl})
+	if v, ok := cache.getBlock(1, tbl, 42); !ok || v == nil {
 		t.Fatalf("expected cold block hit")
 	}
 

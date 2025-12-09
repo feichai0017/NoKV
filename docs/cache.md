@@ -9,7 +9,7 @@ NoKV's LSM tier layers a multi-level block cache with bloom filter caching to ac
 | Component | Purpose | Source |
 | --- | --- | --- |
 | `cache.indexs` | Table index cache (`fid` → `*pb.TableIndex`) reused across reopen. | [`coreCache.Cache`](../utils/cache) wrapper |
-| `blockCache` | Two-tier block cache (hot LRU + cold CLOCK). | [`lsm/cache.go#L168-L266`](../lsm/cache.go#L168-L266) |
+| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots. Stores parsed blocks. | [`lsm/cache.go`](../lsm/cache.go) |
 | `bloomCache` | LRU cache of bloom filter bitsets per SST. | [`lsm/cache.go#L296-L356`](../lsm/cache.go#L296-L356) |
 | `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and blooms. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
 
@@ -27,19 +27,20 @@ Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes
 ## 2. Block Cache Strategy
 
 ```text
-Hot tier (LRU)  -> user-space cache for latency-critical blocks (L0/L1)
-Cold tier       -> handled by OS page cache (no user-space cold CLOCK)
+User-space block cache (L0/L1, parsed blocks, Ristretto LFU-ish)
+Deeper levels rely on OS page cache + mmap readahead
 ```
 
-* `Options.BlockCacheSize` sets the user-space cache capacity (in blocks); all容量都是热层，冷数据直接依赖 OS page cache。
-* **Hot tier** – Doubly linked list managed with `container/list`. Promotion happens on every hit; eviction simply drops into the OS cache instead of a user-space冷层。
-* 锁策略：读路径 `RLock` 探测，命中短暂升级写锁更新 LRU；写入/淘汰仍用写锁。L0/L1 读都会记录命中/未命中指标。
+* `Options.BlockCacheSize` sets capacity in **blocks** (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.
+* Per-table direct slots (`table.cacheSlots[idx]`) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).
+* Evictions clear the table slot via `OnEvict`; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.
+* Access patterns: `getBlock` also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.
 
 ```mermaid
 flowchart LR
     Read --> CheckHot
     CheckHot -->|hit| Return
-    CheckHot -->|miss| LoadFromTable (OS cache handles cold)
+    CheckHot -->|miss| LoadFromTable (mmap + OS page cache)
     LoadFromTable --> InsertHot
     InsertHot --> Return
 ```
@@ -84,7 +85,7 @@ type CacheMetrics struct {
 
 | Feature | RocksDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
-| Hot/cold tiers | Configurable multiple caches | Single cache | Built-in hot LRU + cold CLOCK |
+| Hot/cold tiers | Configurable multiple caches | Single cache | Ristretto (hot) + OS page cache (cold) |
 | Bloom cache | Enabled per table, no explicit cache | Optional | Dedicated LRU storing filters |
 | Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Stats.Cache.*` hit rates |
 
@@ -92,7 +93,7 @@ type CacheMetrics struct {
 
 ## 7. Operational Tips
 
-* 如果 bloom 命中率低于 60%，考虑提高每 key 的 bloom 位数或增大 Bloom cache。
-* 用 `nokv stats --json` 跟踪缓存命中率趋势；回归通常指向迭代器使用不当或工作集变化。
+* If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.
+* Track `nokv stats --json` cache metrics over time; drops often indicate iterator misuse or working-set shifts.
 
 More on SST layout lives in [`docs/manifest.md`](manifest.md) and [`docs/architecture.md`](architecture.md#4-read-path--iterators).
