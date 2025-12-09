@@ -102,8 +102,12 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 	} else {
 		diffKey = tb.keyDiff(key)
 	}
-	utils.CondPanic(!(len(key)-len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16"))
-	utils.CondPanic(!(len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(diffKey) <= math.MaxUint16"))
+	utils.CondPanicFunc(!(len(key)-len(diffKey) <= math.MaxUint16), func() error {
+		return fmt.Errorf("tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16")
+	})
+	utils.CondPanicFunc(!(len(diffKey) <= math.MaxUint16), func() error {
+		return fmt.Errorf("tableBuilder.add: len(diffKey) <= math.MaxUint16")
+	})
 
 	// Binary Format for a single entry within a Data Block:
 	// +-----------------+-----------------+-----------------+
@@ -288,7 +292,9 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 		return nil, err
 	}
 	written := bd.Copy(dst)
-	utils.CondPanic(written != len(dst), fmt.Errorf("tableBuilder.flush written != len(dst)"))
+	utils.CondPanicFunc(written != len(dst), func() error {
+		return fmt.Errorf("tableBuilder.flush written != len(dst)")
+	})
 	// Allow GC to reclaim the intermediate blocks once the data is persisted.
 	tb.blockList = nil
 
@@ -410,6 +416,10 @@ type blockIterator struct {
 
 	prevOverlap uint16
 
+	entry     kv.Entry
+	valStruct kv.ValueStruct
+	item      Item
+
 	it utils.Item
 }
 
@@ -496,14 +506,14 @@ func (itr *blockIterator) setIdx(i int) {
 	valueOff := headerSize + h.diff
 	diffKey := entryData[headerSize:valueOff]
 	itr.key = append(itr.key[:h.overlap], diffKey...)
-	e := &kv.Entry{Key: itr.key}
-	val := &kv.ValueStruct{}
-	val.DecodeValue(entryData[valueOff:])
-	itr.val = val.Value
-	e.Value = val.Value
-	e.ExpiresAt = val.ExpiresAt
-	e.Meta = val.Meta
-	itr.it = &Item{e: e}
+	itr.entry.Key = itr.key
+	itr.valStruct.DecodeValue(entryData[valueOff:])
+	itr.val = itr.valStruct.Value
+	itr.entry.Value = itr.valStruct.Value
+	itr.entry.ExpiresAt = itr.valStruct.ExpiresAt
+	itr.entry.Meta = itr.valStruct.Meta
+	itr.item.e = &itr.entry
+	itr.it = &itr.item
 }
 
 func (itr *blockIterator) Error() error {
