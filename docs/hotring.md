@@ -18,22 +18,22 @@ Compared with RocksDB (which exposes block access stats via `perf_context`) and 
 
 ```text
 HotRing
-  tables[] -> per-bucket circular linked list (Node)
+  buckets[] -> per-bucket lock-free linked list (Node)
   hashFn   -> hash(key) -> uint32
   hashMask -> selects bucket (power of two size)
 ```
 
-* Each bucket stores a circular linked list of [`Node`](../hotring/node.go) sorted by `(tag, key)`, where `tag` is derived from the upper bits of the hash. This keeps insertion/search O(bucket_length).
+* Each bucket stores a sorted linked list of [`Node`](../hotring/node.go) ordered by `(tag, key)`, where `tag` is derived from the upper bits of the hash. Head pointers are `atomic.Pointer[Node]`, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.
 * `defaultTableBits = 12` → 4096 buckets by default (`NewHotRing`). The mask ensures cheap modulo operations.
-* Nodes keep a `count` (int32) updated atomically and a `next` pointer stored via `unsafe.Pointer` to avoid extra allocations.
+* Nodes keep a `count` (int32) updated atomically and a `next` pointer stored via `unsafe.Pointer`. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.
 
 ```mermaid
 flowchart LR
-  Key(key) -->|hash| Bucket["table[index]"]
+  Key(key) -->|hash| Bucket["buckets[index] (atomic head)"]
   Bucket --> Node1
   Node1 --> Node2
   Node2 --> Node3
-  Node3 --> Node1
+  Node3 --> Nil[(nil)]
 ```
 
 ---
@@ -42,15 +42,13 @@ flowchart LR
 
 | Method | Behaviour | Notes |
 | --- | --- | --- |
-| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | Creates node on miss, resets counter to 0 then increments. |
-| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | No side effects; uses `RLock`. |
-| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Useful for throttling heavy keys. |
-| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Clones slice to avoid exposing internal pointers. |
-| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Supports targeted throttling.
+| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
+| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
+| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
+| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
+| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
 
-The internal helpers [`searchLocked`](../hotring/hotring.go#L214-L259) and [`insertLocked`](../hotring/hotring.go#L261-L306) enforce bucket ordering and deduplicate keys.
-
-Concurrency is handled via a global `RWMutex`; buckets are small enough that the coarse lock keeps overhead modest. The per-node counters use `atomic.AddInt32` so concurrent touches within the same bucket remain safe.
+Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket head or the predecessor’s `next` pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.
 
 ---
 
@@ -70,7 +68,7 @@ Concurrency is handled via a global `RWMutex`; buckets are small enough that the
 | Badger | None built-in. |
 | NoKV | In-process ring with expvar/CLI export and throttling helpers. |
 
-The HotRing emphasises simplicity: no approximate counting sketches, just per-bucket rings adequate for hundreds of thousands of keys while keeping allocations minimal.
+The HotRing emphasises simplicity: lock-free bucket lists with atomic counters (plus optional per-node window tracking), avoiding sketches while staying light enough for hundreds of thousands of hot keys.
 
 ---
 

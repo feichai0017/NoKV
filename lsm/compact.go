@@ -447,7 +447,11 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	tables := make([]*table, cd.thisLevel.numTables())
 	copy(tables, cd.thisLevel.tables)
 	if len(tables) == 0 {
-		return false
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
+			tables = append(tables, cd.thisLevel.ingest.allTables()...)
+		} else {
+			return false
+		}
 	}
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {
@@ -602,6 +606,13 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 
 	// 更新 manifest
 	var manifestEdits []manifest.Edit
+	levelByID := make(map[uint64]int, len(cd.top)+len(cd.bot))
+	for _, t := range cd.top {
+		levelByID[t.fid] = cd.thisLevel.levelNum
+	}
+	for _, t := range cd.bot {
+		levelByID[t.fid] = cd.nextLevel.levelNum
+	}
 	for _, ch := range changeSet.Changes {
 		switch ch.Op {
 		case pb.ManifestChange_CREATE:
@@ -619,13 +630,15 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 					ValueSize: tbl.ValueSize(),
+					Ingest:    cd.ingestMerge,
 				},
 			}
 			manifestEdits = append(manifestEdits, add)
 		case pb.ManifestChange_DELETE:
+			level := levelByID[ch.Id]
 			del := manifest.Edit{
 				Type: manifest.EditDeleteFile,
-				File: &manifest.FileMeta{FileID: ch.Id},
+				File: &manifest.FileMeta{FileID: ch.Id, Level: level},
 			}
 			manifestEdits = append(manifestEdits, del)
 		}
@@ -952,7 +965,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 		}
 		del := manifest.Edit{
 			Type: manifest.EditDeleteFile,
-			File: &manifest.FileMeta{FileID: tbl.fid},
+			File: &manifest.FileMeta{FileID: tbl.fid, Level: cd.thisLevel.levelNum},
 		}
 		edits = append(edits, del)
 		add := manifest.Edit{
@@ -965,6 +978,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 				CreatedAt: uint64(time.Now().Unix()),
 				ValueSize: tbl.ValueSize(),
+				Ingest:    true,
 			},
 		}
 		edits = append(edits, add)

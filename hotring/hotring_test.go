@@ -1,6 +1,7 @@
 package hotring
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,6 +34,28 @@ func TestHotRingTouchAndTopN(t *testing.T) {
 		if item.Key == "alpha" {
 			t.Fatalf("expected alpha to be removed, found in top list")
 		}
+	}
+}
+
+func TestHotRingConcurrentTouch(t *testing.T) {
+	r := NewHotRing(4, nil)
+	const goroutines = 8
+	const perG = 500
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perG; j++ {
+				r.Touch("shared")
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := r.Frequency("shared"); got != int32(goroutines*perG) {
+		t.Fatalf("expected %d touches, got %d", goroutines*perG, got)
 	}
 }
 

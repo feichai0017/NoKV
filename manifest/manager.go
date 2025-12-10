@@ -28,6 +28,7 @@ type FileMeta struct {
 	Largest   []byte
 	CreatedAt uint64
 	ValueSize uint64
+	Ingest    bool
 }
 
 // ValueLogMeta describes a value log segment.
@@ -595,7 +596,7 @@ func writeEdit(w io.Writer, edit Edit) error {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  | ValueSize (v)  |
+		// | CreatedAt (v)  | ValueSize (v)  | Ingest (1B)    |
 		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		meta := edit.File
@@ -606,6 +607,11 @@ func writeEdit(w io.Writer, edit Edit) error {
 		buf = appendBytes(buf, meta.Largest)
 		buf = binary.AppendUvarint(buf, meta.CreatedAt)
 		buf = binary.AppendUvarint(buf, meta.ValueSize)
+		if meta.Ingest {
+			buf = append(buf, 1)
+		} else {
+			buf = append(buf, 0)
+		}
 	case EditLogPointer:
 		// EditLogPointer Data Format:
 		// +----------------+----------------+
@@ -746,7 +752,7 @@ func decodeEdit(data []byte) (Edit, error) {
 		// +----------------+----------------+----------------+----------------+----------------+
 		// | Level (v)      | FileID (v)     | Size (v)       | Smallest (lv)  | Largest (lv)   |
 		// +----------------+----------------+----------------+----------------+----------------+
-		// | CreatedAt (v)  | ValueSize (v)  |
+		// | CreatedAt (v)  | ValueSize (v)  | Ingest (1B)    |
 		// +----------------+----------------+
 		// (v) denotes Uvarint, (lv) denotes Length-prefixed Bytes (Uvarint length + bytes)
 		level, n := binary.Uvarint(data[pos:])
@@ -771,6 +777,11 @@ func decodeEdit(data []byte) (Edit, error) {
 				valueSize = vs
 			}
 		}
+		var ingest bool
+		if pos < len(data) {
+			ingest = data[pos] == 1
+			pos++
+		}
 		if pos > len(data) {
 			return Edit{}, fmt.Errorf("manifest add/delete truncated")
 		}
@@ -782,6 +793,7 @@ func decodeEdit(data []byte) (Edit, error) {
 			Largest:   largest,
 			CreatedAt: created,
 			ValueSize: valueSize,
+			Ingest:    ingest,
 		}
 	case EditLogPointer:
 		// EditLogPointer Data Format:

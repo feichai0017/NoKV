@@ -149,7 +149,11 @@ func (lm *levelManager) build() error {
 				maxFID = meta.FileID
 			}
 			t := openTable(lm, fileName, nil)
-			lm.levels[level].add(t)
+			if meta.Ingest {
+				lm.levels[level].addIngest(t)
+			} else {
+				lm.levels[level].add(t)
+			}
 		}
 	}
 	// sort each level
