@@ -69,17 +69,16 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
 	if db.writeMetrics != nil {
 		req.enqueueAt = time.Now()
 	}
-	done := make(chan error, 1)
-	req.doneCh = done
+	req.wg.Add(1)
 	req.IncrRef() // for db write
 
 	cr := commitReqPool.Get().(*commitRequest)
 	cr.req = req
-	cr.done = done
 	cr.entryCount = int(count)
 	cr.size = size
 
 	if err := db.enqueueCommitRequest(cr); err != nil {
+		req.wg.Done()
 		req.DecrRef()
 		commitReqPool.Put(cr)
 		return nil, err
@@ -105,9 +104,14 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	if atomic.LoadUint32(&db.commitQueue.closed) == 1 {
 		return utils.ErrBlockedWrites
 	}
-	atomic.AddInt64(&db.commitQueue.pendingEntries, int64(cr.entryCount))
-	atomic.AddInt64(&db.commitQueue.pendingBytes, cr.size)
 	cq := &db.commitQueue
+
+	if cq.ring == nil {
+		return utils.ErrBlockedWrites
+	}
+
+	atomic.AddInt64(&cq.pendingEntries, int64(cr.entryCount))
+	atomic.AddInt64(&cq.pendingBytes, cr.size)
 
 	// Lazy init conds in case tests construct DB without running Open path.
 	if cq.notEmpty == nil || cq.notFull == nil {
@@ -116,10 +120,6 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	}
 
 	cq.mu.Lock()
-	if cq.ring == nil {
-		cq.mu.Unlock()
-		return utils.ErrBlockedWrites
-	}
 	for {
 		if atomic.LoadUint32(&cq.closed) == 1 {
 			cq.mu.Unlock()
@@ -154,6 +154,22 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	pendingEntries := int64(0)
 	pendingBytes := int64(0)
 
+	// Adapt batch size to current backlog to drain the queue faster under load
+	// and reduce wake/sleep churn on the condition variable. Caps keep the batch
+	// from growing without bound to avoid long pauses.
+	limitCount := db.opt.WriteBatchMaxCount
+	limitSize := db.opt.WriteBatchMaxSize
+	backlog := cq.ring.Len()
+	if backlog > limitCount && limitCount > 0 {
+		factor := min(max(backlog/limitCount, 1), 4)
+		if scaled := limitCount * factor; scaled > 0 {
+			limitCount = min(scaled, backlog)
+		}
+		if scaled := limitSize * int64(factor); scaled > 0 {
+			limitSize = scaled
+		}
+	}
+
 	popOne := func() bool {
 		if cr, ok := cq.ring.Pop(); ok {
 			batch = append(batch, cr)
@@ -165,7 +181,7 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	}
 
 	popOne()
-	for len(batch) < db.opt.WriteBatchMaxCount && pendingBytes < db.opt.WriteBatchMaxSize {
+	for len(batch) < limitCount && pendingBytes < limitSize {
 		if !popOne() {
 			break
 		}
@@ -310,16 +326,8 @@ func (db *DB) finishCommitRequests(reqs []*commitRequest, err error) {
 			continue
 		}
 		cr.req.Err = err
-		switch {
-		case cr.done != nil:
-			cr.done <- err
-			close(cr.done)
-		case cr.req.doneCh != nil:
-			cr.req.doneCh <- err
-			close(cr.req.doneCh)
-		}
+		cr.req.wg.Done()
 		cr.req = nil
-		cr.done = nil
 		cr.entryCount = 0
 		cr.size = 0
 		commitReqPool.Put(cr)
