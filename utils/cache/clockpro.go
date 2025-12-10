@@ -76,3 +76,20 @@ func (c *ClockProCache[V]) Promote(key uint64, val V) {
 		return
 	}
 }
+
+// Delete removes a key from the cache if present. It leaves the slot in-place
+// to avoid reshuffling indexes; future promotions will overwrite it.
+func (c *ClockProCache[V]) Delete(key uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.index[key]
+	if !ok || idx >= len(c.entries) {
+		return
+	}
+	delete(c.index, key)
+	var zero V
+	c.entries[idx] = clockEntry[V]{key: 0, val: zero, ref: false}
+}
