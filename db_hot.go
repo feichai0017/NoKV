@@ -42,27 +42,16 @@ func (db *DB) recordRead(key []byte) {
 		return
 	}
 	skey := string(key)
+	count := db.hot.Touch(skey)
 	if db.prefetchRing == nil {
-		db.hot.Touch(skey)
 		return
 	}
-	clamp := db.prefetchClamp
+	clamp := db.prefetchHot
 	if clamp <= 0 {
-		clamp = db.prefetchHot
-		if clamp <= 0 {
-			clamp = db.prefetchWarm
-		}
-		if clamp <= 0 {
-			clamp = 1
-		}
+		clamp = max(db.prefetchWarm, 1)
 	}
-	count, _ := db.hot.TouchAndClamp(skey, clamp)
-	if db.prefetchHot > 0 && count >= db.prefetchHot {
+	if clamp > 0 && count >= clamp {
 		db.enqueuePrefetch(skey, true)
-		return
-	}
-	if db.prefetchWarm > 0 && count >= db.prefetchWarm {
-		db.enqueuePrefetch(skey, false)
 	}
 }
 
