@@ -83,6 +83,7 @@ type (
 		req        *request
 		entryCount int
 		size       int64
+		hot        bool
 	}
 )
 

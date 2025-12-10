@@ -56,6 +56,12 @@ type Options struct {
 	// before the DB returns utils.ErrHotKeyWriteThrottle. Zero disables write-path
 	// throttling.
 	WriteHotKeyLimit int32
+	// HotWriteBurstThreshold marks a key as “hot” for batching when its write
+	// frequency exceeds this count; zero disables hot write batching.
+	HotWriteBurstThreshold int32
+	// HotWriteBatchMultiplier scales write batch limits when a hot key is
+	// detected, allowing short-term coalescing of repeated writes.
+	HotWriteBatchMultiplier int
 
 	// Block cache configuration for read path optimization. Cached blocks
 	// target L0/L1; colder data relies on the OS page cache.
@@ -141,6 +147,8 @@ func NewDefaultOptions() *Options {
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		WriteHotKeyLimit:              128,
+		HotWriteBurstThreshold:        8,
+		HotWriteBatchMultiplier:       2,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,

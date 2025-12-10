@@ -76,6 +76,7 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
 	cr.req = req
 	cr.entryCount = int(count)
 	cr.size = size
+	cr.hot = db.isHotWrite(entries)
 
 	if err := db.enqueueCommitRequest(cr); err != nil {
 		req.wg.Done()
@@ -175,6 +176,19 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 			batch = append(batch, cr)
 			pendingEntries += int64(cr.entryCount)
 			pendingBytes += cr.size
+			if cr.hot {
+				mult := db.opt.HotWriteBatchMultiplier
+				if mult <= 0 {
+					mult = 2
+				}
+				if mult > 4 {
+					mult = 4
+				}
+				limitCount = min(limitCount*mult, db.opt.WriteBatchMaxCount*mult)
+				if scaled := limitSize * int64(mult); scaled > 0 {
+					limitSize = scaled
+				}
+			}
 			return true
 		}
 		return false
