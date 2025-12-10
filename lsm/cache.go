@@ -47,77 +47,32 @@ type cacheMetrics struct {
 }
 
 type hotIndexCache struct {
-	mu    sync.Mutex
-	cap   int
-	items map[uint64]*list.Element
-	lru   *list.List
-}
-
-type hotIndexEntry struct {
-	fid uint64
-	idx *pb.TableIndex
+	cp *clockProCache[*pb.TableIndex]
 }
 
 func newHotIndexCache(cap int) *hotIndexCache {
 	if cap <= 0 {
 		return nil
 	}
-	return &hotIndexCache{
-		cap:   cap,
-		items: make(map[uint64]*list.Element, cap),
-		lru:   list.New(),
-	}
+	return &hotIndexCache{cp: newClockProCache[*pb.TableIndex](cap)}
 }
 
 func (hc *hotIndexCache) get(fid uint64) (*pb.TableIndex, bool) {
-	if hc == nil {
+	if hc == nil || hc.cp == nil {
 		return nil, false
 	}
-	hc.mu.Lock()
-	defer hc.mu.Unlock()
-	elem, ok := hc.items[fid]
-	if !ok || elem == nil {
-		return nil, false
-	}
-	hc.lru.MoveToFront(elem)
-	entry := elem.Value.(*hotIndexEntry)
-	return entry.idx, entry.idx != nil
+	return hc.cp.get(fid)
 }
 
 func (hc *hotIndexCache) promote(fid uint64, idx *pb.TableIndex) {
-	if hc == nil || idx == nil {
+	if hc == nil || hc.cp == nil || idx == nil {
 		return
 	}
-	hc.mu.Lock()
-	defer hc.mu.Unlock()
-	if elem, ok := hc.items[fid]; ok {
-		elem.Value = &hotIndexEntry{fid: fid, idx: idx}
-		hc.lru.MoveToFront(elem)
-		return
-	}
-	elem := hc.lru.PushFront(&hotIndexEntry{fid: fid, idx: idx})
-	hc.items[fid] = elem
-	for hc.lru.Len() > hc.cap {
-		tail := hc.lru.Back()
-		if tail == nil {
-			break
-		}
-		entry := tail.Value.(*hotIndexEntry)
-		delete(hc.items, entry.fid)
-		hc.lru.Remove(tail)
-	}
+	hc.cp.promote(fid, idx)
 }
 
 type hotBloomCache struct {
-	mu    sync.Mutex
-	cap   int
-	items map[uint64]*list.Element
-	lru   *list.List
-}
-
-type hotBloomEntry struct {
-	fid    uint64
-	filter utils.Filter
+	cp *clockProCache[utils.Filter]
 }
 
 func newHotBloomCache(cap int) *hotBloomCache {
@@ -125,53 +80,23 @@ func newHotBloomCache(cap int) *hotBloomCache {
 		return nil
 	}
 	return &hotBloomCache{
-		cap:   cap,
-		items: make(map[uint64]*list.Element, cap),
-		lru:   list.New(),
+		cp: newClockProCache[utils.Filter](cap),
 	}
 }
 
 func (hc *hotBloomCache) get(fid uint64) (utils.Filter, bool) {
-	if hc == nil {
+	if hc == nil || hc.cp == nil {
 		return nil, false
 	}
-	hc.mu.Lock()
-	defer hc.mu.Unlock()
-	elem, ok := hc.items[fid]
-	if !ok || elem == nil {
-		return nil, false
-	}
-	hc.lru.MoveToFront(elem)
-	entry := elem.Value.(*hotBloomEntry)
-	if entry.filter == nil {
-		return nil, false
-	}
-	return entry.filter, true
+	return hc.cp.get(fid)
 }
 
 func (hc *hotBloomCache) promote(fid uint64, filter utils.Filter) {
-	if hc == nil || len(filter) == 0 {
+	if hc == nil || hc.cp == nil || len(filter) == 0 {
 		return
 	}
 	dup := kv.SafeCopy(nil, filter)
-	hc.mu.Lock()
-	defer hc.mu.Unlock()
-	if elem, ok := hc.items[fid]; ok {
-		elem.Value = &hotBloomEntry{fid: fid, filter: dup}
-		hc.lru.MoveToFront(elem)
-		return
-	}
-	elem := hc.lru.PushFront(&hotBloomEntry{fid: fid, filter: dup})
-	hc.items[fid] = elem
-	for hc.lru.Len() > hc.cap {
-		tail := hc.lru.Back()
-		if tail == nil {
-			break
-		}
-		entry := tail.Value.(*hotBloomEntry)
-		delete(hc.items, entry.fid)
-		hc.lru.Remove(tail)
-	}
+	hc.cp.promote(fid, dup)
 }
 
 func (m *cacheMetrics) recordBlock(level int, hit bool) {
