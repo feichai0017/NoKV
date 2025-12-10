@@ -655,7 +655,17 @@ func keyInRange(min, max, key []byte) bool {
 	if len(min) == 0 || len(max) == 0 || len(key) == 0 {
 		return false
 	}
-	return utils.CompareKeys(key, min) >= 0 && utils.CompareKeys(key, max) <= 0
+	// Accept both internal keys (with timestamp) and raw user keys from HotRing.
+	minUser := kv.ParseKey(min)
+	maxUser := kv.ParseKey(max)
+	keyUser := key
+	if len(key) > 8 {
+		keyUser = kv.ParseKey(key)
+	}
+	_, minUser, _ = kv.DecodeKeyCF(minUser)
+	_, maxUser, _ = kv.DecodeKeyCF(maxUser)
+	_, keyUser, _ = kv.DecodeKeyCF(keyUser)
+	return bytes.Compare(keyUser, minUser) >= 0 && bytes.Compare(keyUser, maxUser) <= 0
 }
 
 // hotOverlapScore returns the fraction of hotKeys overlapping this level.
