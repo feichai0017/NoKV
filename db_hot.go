@@ -93,6 +93,24 @@ func cfHotKey(cf kv.ColumnFamily, key []byte) string {
 	return string(buf)
 }
 
+// isHotWrite tags a small set as hot when repeated writes hit HotRing.
+func (db *DB) isHotWrite(entries []*kv.Entry) bool {
+	if db == nil || db.hot == nil {
+		return false
+	}
+	if len(entries) != 1 {
+		return false
+	}
+	thr := db.opt.HotWriteBurstThreshold
+	if thr <= 0 {
+		return false
+	}
+	k := entries[0]
+	key := cfHotKey(k.CF, k.Key)
+	_, limited := db.hot.TouchAndClamp(key, thr)
+	return limited
+}
+
 func (db *DB) enqueuePrefetch(key string, hot bool) {
 	if db == nil || db.prefetchRing == nil || key == "" {
 		return
