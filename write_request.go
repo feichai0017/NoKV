@@ -14,7 +14,7 @@ type request struct {
 	Err       error
 	ref       int32
 	enqueueAt time.Time
-	doneCh    chan error
+	wg        sync.WaitGroup
 }
 
 var requestPool = sync.Pool{
@@ -27,7 +27,7 @@ func (req *request) reset() {
 	req.Err = nil
 	req.ref = 0
 	req.enqueueAt = time.Time{}
-	req.doneCh = nil
+	req.wg = sync.WaitGroup{}
 }
 
 func (req *request) IncrRef() {
@@ -57,15 +57,7 @@ func (req *request) DecrRef() {
 }
 
 func (req *request) Wait() error {
-	if req.doneCh != nil {
-		err, ok := <-req.doneCh
-		if ok {
-			req.Err = err
-		} else if req.Err != nil {
-			err = req.Err
-		}
-		req.Err = err
-	}
+	req.wg.Wait()
 	err := req.Err
 	req.DecrRef() // DecrRef after writing to DB.
 	return err

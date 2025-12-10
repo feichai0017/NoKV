@@ -81,7 +81,6 @@ type (
 
 	commitRequest struct {
 		req        *request
-		done       chan error
 		entryCount int
 		size       int64
 	}
