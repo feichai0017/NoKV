@@ -29,19 +29,21 @@ func TestCompactionMoveToIngest(t *testing.T) {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
 
-	beforeIngest := len(cd.nextLevel.ingest)
+	beforeIngest := cd.nextLevel.numIngestTables()
 	if err := lsm.levels.moveToIngest(cd); err != nil {
 		t.Fatalf("moveToIngest: %v", err)
 	}
-	afterIngest := len(cd.nextLevel.ingest)
+	afterIngest := cd.nextLevel.numIngestTables()
 	if afterIngest <= beforeIngest {
 		t.Fatalf("expected ingest buffer to grow, before=%d after=%d", beforeIngest, afterIngest)
 	}
 
 	// Ensure the moved table has been removed from the source level.
-	for _, tbl := range cd.nextLevel.ingest {
-		if tbl.fid == cd.top[0].fid {
-			goto Found
+	for _, sh := range cd.nextLevel.ingest.shards {
+		for _, tbl := range sh.tables {
+			if tbl.fid == cd.top[0].fid {
+				goto Found
+			}
 		}
 	}
 	t.Fatalf("table %d not found in ingest buffer", cd.top[0].fid)

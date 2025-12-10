@@ -102,6 +102,9 @@ type Options struct {
 	// IngestCompactBatchSize decides how many L0 tables to promote into the
 	// ingest buffer per compaction cycle. Zero falls back to the legacy default.
 	IngestCompactBatchSize int
+	// IngestBacklogMergeScore triggers an ingest-merge task when the ingest
+	// backlog score exceeds this threshold. Zero keeps the default (2.0).
+	IngestBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
 	// levels whose entries reference large value log payloads. Higher values
@@ -111,24 +114,28 @@ type Options struct {
 	// CompactionValueAlertThreshold triggers stats alerts when a level's
 	// value-density (value bytes / total bytes) exceeds this ratio.
 	CompactionValueAlertThreshold float64
+
+	// IngestShardParallelism caps how many ingest shards can be compacted in a
+	// single ingest-only pass. A value <= 0 falls back to 1 (sequential).
+	IngestShardParallelism int
 }
 
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:                       "./work_test",
-		MemTableSize:                  64 << 20,
-		SSTableMaxSz:                  256 << 20,
-		HotRingEnabled:                true,
-		HotRingBits:                   12,
-		HotRingTopK:                   16,
-		HotRingDecayInterval:          time.Second,
-		HotRingDecayShift:             1,
-		HotRingWindowSlots:            8,
-		HotRingWindowSlotDuration:     250 * time.Millisecond,
+		WorkDir:                   "./work_test",
+		MemTableSize:              64 << 20,
+		SSTableMaxSz:              256 << 20,
+		HotRingEnabled:            true,
+		HotRingBits:               12,
+		HotRingTopK:               16,
+		HotRingDecayInterval:      time.Second,
+		HotRingDecayShift:         1,
+		HotRingWindowSlots:        8,
+		HotRingWindowSlotDuration: 250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
-		WriteBatchMaxCount: 64,
-		WriteBatchMaxSize:  1 << 20,
+		WriteBatchMaxCount:            64,
+		WriteBatchMaxSize:             1 << 20,
 		BlockCacheSize:                4096,
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
@@ -154,6 +161,8 @@ func NewDefaultOptions() *Options {
 	// reduce write-path sleeps under load.
 	opt.NumLevelZeroTables = 16
 	opt.IngestCompactBatchSize = 4
+	opt.IngestBacklogMergeScore = 2.0
 	opt.NumCompactors = 4
+	opt.IngestShardParallelism = 1
 	return opt
 }

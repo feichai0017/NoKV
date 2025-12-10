@@ -55,16 +55,22 @@ type levelManager struct {
 
 // LevelMetrics captures aggregated statistics for a single LSM level.
 type LevelMetrics struct {
-	Level              int
-	TableCount         int
-	SizeBytes          int64
-	ValueBytes         int64
-	StaleBytes         int64
-	IngestTableCount   int
-	IngestSizeBytes    int64
-	IngestValueBytes   int64
-	ValueDensity       float64
-	IngestValueDensity float64
+	Level                 int
+	TableCount            int
+	SizeBytes             int64
+	ValueBytes            int64
+	StaleBytes            int64
+	IngestTableCount      int
+	IngestSizeBytes       int64
+	IngestValueBytes      int64
+	ValueDensity          float64
+	IngestValueDensity    float64
+	IngestRuns            int64
+	IngestMs              float64
+	IngestTablesCompacted int64
+	IngestMergeRuns       int64
+	IngestMergeMs         float64
+	IngestMergeTables     int64
 }
 
 func (lm *levelManager) close() error {
@@ -117,11 +123,13 @@ func (lm *levelManager) loadManifest() (err error) {
 func (lm *levelManager) build() error {
 	lm.levels = make([]*levelHandler, 0, lm.opt.MaxLevelNum)
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
-		lm.levels = append(lm.levels, &levelHandler{
+		lh := &levelHandler{
 			levelNum: i,
 			tables:   make([]*table, 0),
 			lm:       lm,
-		})
+		}
+		lh.ingest.ensureInit()
+		lm.levels = append(lm.levels, lh)
 	}
 
 	version := lm.manifestMgr.Current()
@@ -399,27 +407,34 @@ func (lm *levelManager) prefetch(key []byte, hot bool) {
 // --------- levelHandler ---------
 type levelHandler struct {
 	sync.RWMutex
-	levelNum        int
-	tables          []*table
-	ingest          []*table
-	totalSize       int64
-	totalStaleSize  int64
-	totalValueSize  int64
-	ingestSize      int64
-	ingestValueSize int64
-	lm              *levelManager
-	view            atomic.Pointer[levelView]
+	levelNum              int
+	tables                []*table
+	ingest                ingestBuffer
+	totalSize             int64
+	totalStaleSize        int64
+	totalValueSize        int64
+	lm                    *levelManager
+	view                  atomic.Pointer[levelView]
+	ingestRuns            uint64
+	ingestMergeRuns       uint64
+	ingestDurationNs      int64
+	ingestMergeDurationNs int64
+	ingestTablesCompacted uint64
+	ingestMergeTables     uint64
 }
 
 type levelView struct {
-	tables          []*table
-	ingest          []*table
-	ingestRanges    []tableRange
-	totalSize       int64
-	totalStaleSize  int64
-	totalValueSize  int64
-	ingestSize      int64
-	ingestValueSize int64
+	tables                []*table
+	ingest                ingestBuffer
+	totalSize             int64
+	totalStaleSize        int64
+	totalValueSize        int64
+	ingestRuns            uint64
+	ingestMergeRuns       uint64
+	ingestDurationNs      int64
+	ingestMergeDurationNs int64
+	ingestTablesCompacted uint64
+	ingestMergeTables     uint64
 }
 
 type tableRange struct {
@@ -434,38 +449,27 @@ func (lh *levelHandler) loadView() *levelView {
 
 func (lh *levelHandler) refreshViewLocked() {
 	v := &levelView{
-		tables:          append([]*table(nil), lh.tables...),
-		ingest:          append([]*table(nil), lh.ingest...),
-		totalSize:       lh.totalSize,
-		totalStaleSize:  lh.totalStaleSize,
-		totalValueSize:  lh.totalValueSize,
-		ingestSize:      lh.ingestSize,
-		ingestValueSize: lh.ingestValueSize,
+		tables:                append([]*table(nil), lh.tables...),
+		ingest:                lh.ingest.cloneWithRefs(),
+		totalSize:             lh.totalSize,
+		totalStaleSize:        lh.totalStaleSize,
+		totalValueSize:        lh.totalValueSize,
+		ingestRuns:            atomic.LoadUint64(&lh.ingestRuns),
+		ingestMergeRuns:       atomic.LoadUint64(&lh.ingestMergeRuns),
+		ingestDurationNs:      atomic.LoadInt64(&lh.ingestDurationNs),
+		ingestMergeDurationNs: atomic.LoadInt64(&lh.ingestMergeDurationNs),
+		ingestTablesCompacted: atomic.LoadUint64(&lh.ingestTablesCompacted),
+		ingestMergeTables:     atomic.LoadUint64(&lh.ingestMergeTables),
 	}
 	for _, t := range v.tables {
 		if t != nil {
 			t.IncrRef()
 		}
 	}
-	for _, t := range v.ingest {
-		if t != nil {
-			t.IncrRef()
-			v.ingestRanges = append(v.ingestRanges, tableRange{
-				min: t.MinKey(),
-				max: t.MaxKey(),
-				tbl: t,
-			})
-		}
-	}
-	if len(v.ingestRanges) > 1 {
-		sort.Slice(v.ingestRanges, func(i, j int) bool {
-			return utils.CompareKeys(v.ingestRanges[i].min, v.ingestRanges[j].min) < 0
-		})
-	}
 	old := lh.view.Swap(v)
 	if old != nil {
 		decrRefs(old.tables)
-		decrRefs(old.ingest)
+		decrRefs(old.ingest.allTables())
 	}
 }
 
@@ -473,7 +477,7 @@ func (lh *levelHandler) clearView() {
 	old := lh.view.Swap(nil)
 	if old != nil {
 		decrRefs(old.tables)
-		decrRefs(old.ingest)
+		decrRefs(old.ingest.allTables())
 	}
 }
 
@@ -500,34 +504,6 @@ func (lh *levelHandler) add(t *table) {
 	lh.refreshViewLocked()
 }
 
-func (lh *levelHandler) addIngest(t *table) {
-	if t == nil {
-		return
-	}
-	lh.Lock()
-	defer lh.Unlock()
-	t.setLevel(lh.levelNum)
-	lh.ingest = append(lh.ingest, t)
-	lh.ingestSize += t.Size()
-	lh.ingestValueSize += int64(t.ValueSize())
-	lh.refreshViewLocked()
-}
-
-func (lh *levelHandler) addIngestBatch(ts []*table) {
-	lh.Lock()
-	defer lh.Unlock()
-	for _, t := range ts {
-		if t == nil {
-			continue
-		}
-		t.setLevel(lh.levelNum)
-		lh.ingest = append(lh.ingest, t)
-		lh.ingestSize += t.Size()
-		lh.ingestValueSize += int64(t.ValueSize())
-	}
-	lh.refreshViewLocked()
-}
-
 func (lh *levelHandler) addBatch(ts []*table) {
 	lh.Lock()
 	defer lh.Unlock()
@@ -545,20 +521,20 @@ func (lh *levelHandler) addBatch(ts []*table) {
 
 func (lh *levelHandler) getTotalSize() int64 {
 	if v := lh.loadView(); v != nil {
-		return v.totalSize + v.ingestSize
+		return v.totalSize + v.ingest.totalSize()
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalSize + lh.ingestSize
+	return lh.totalSize + lh.ingest.totalSize()
 }
 
 func (lh *levelHandler) getTotalValueSize() int64 {
 	if v := lh.loadView(); v != nil {
-		return v.totalValueSize + v.ingestValueSize
+		return v.totalValueSize + v.ingest.totalValueSize()
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalValueSize + lh.ingestValueSize
+	return lh.totalValueSize + lh.ingest.totalValueSize()
 }
 
 func (lh *levelHandler) addSize(t *table) {
@@ -576,14 +552,6 @@ func (lh *levelHandler) subtractSize(t *table) {
 	}
 }
 
-func (lh *levelHandler) subtractIngestSize(t *table) {
-	lh.ingestSize -= t.Size()
-	lh.ingestValueSize -= int64(t.ValueSize())
-	if lh.ingestValueSize < 0 {
-		lh.ingestValueSize = 0
-	}
-}
-
 func (lh *levelHandler) mainValueBytes() int64 {
 	if v := lh.loadView(); v != nil {
 		return v.totalValueSize
@@ -591,15 +559,6 @@ func (lh *levelHandler) mainValueBytes() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.totalValueSize
-}
-
-func (lh *levelHandler) ingestValueBytes() int64 {
-	if v := lh.loadView(); v != nil {
-		return v.ingestValueSize
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	return lh.ingestValueSize
 }
 
 func (lh *levelHandler) valueDensity() float64 {
@@ -617,21 +576,6 @@ func (lh *levelHandler) valueDensity() float64 {
 	return float64(lh.totalValueSize) / float64(lh.totalSize)
 }
 
-func (lh *levelHandler) ingestValueDensity() float64 {
-	if v := lh.loadView(); v != nil {
-		if v.ingestSize <= 0 {
-			return 0
-		}
-		return float64(v.ingestValueSize) / float64(v.ingestSize)
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	if lh.ingestSize <= 0 {
-		return 0
-	}
-	return float64(lh.ingestValueSize) / float64(lh.ingestSize)
-}
-
 func (lh *levelHandler) valueBias(weight float64) float64 {
 	if weight <= 0 {
 		return 1.0
@@ -647,52 +591,31 @@ func (lh *levelHandler) valueBias(weight float64) float64 {
 	return bias
 }
 
-func (lh *levelHandler) ingestValueBias(weight float64) float64 {
-	if weight <= 0 {
-		return 1.0
-	}
-	density := lh.ingestValueDensity()
-	bias := 1.0 + weight*density
-	if bias > 4.0 {
-		return 4.0
-	}
-	if bias < 1.0 {
-		return 1.0
-	}
-	return bias
-}
-
 func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 	if lh == nil {
 		return LevelMetrics{}
 	}
-	if v := lh.loadView(); v != nil {
-		return LevelMetrics{
-			Level:              lh.levelNum,
-			TableCount:         len(v.tables),
-			SizeBytes:          v.totalSize,
-			ValueBytes:         v.totalValueSize,
-			StaleBytes:         v.totalStaleSize,
-			IngestTableCount:   len(v.ingest),
-			IngestSizeBytes:    v.ingestSize,
-			IngestValueBytes:   v.ingestValueSize,
-			ValueDensity:       lh.densityLockedView(v),
-			IngestValueDensity: lh.ingestDensityLockedView(v),
-		}
+	v := lh.loadView()
+	if v == nil {
+		v = &levelView{}
 	}
-	lh.RLock()
-	defer lh.RUnlock()
 	return LevelMetrics{
-		Level:              lh.levelNum,
-		TableCount:         len(lh.tables),
-		SizeBytes:          lh.totalSize,
-		ValueBytes:         lh.totalValueSize,
-		StaleBytes:         lh.totalStaleSize,
-		IngestTableCount:   len(lh.ingest),
-		IngestSizeBytes:    lh.ingestSize,
-		IngestValueBytes:   lh.ingestValueSize,
-		ValueDensity:       lh.densityLocked(),
-		IngestValueDensity: lh.ingestDensityLocked(),
+		Level:                 lh.levelNum,
+		TableCount:            len(v.tables),
+		SizeBytes:             v.totalSize,
+		ValueBytes:            v.totalValueSize,
+		StaleBytes:            v.totalStaleSize,
+		IngestTableCount:      v.ingest.tableCount(),
+		IngestSizeBytes:       v.ingest.totalSize(),
+		IngestValueBytes:      v.ingest.totalValueSize(),
+		ValueDensity:          lh.densityLockedView(v),
+		IngestValueDensity:    lh.ingestDensityLockedView(v),
+		IngestRuns:            int64(atomic.LoadUint64(&lh.ingestRuns)),
+		IngestMs:              float64(atomic.LoadInt64(&lh.ingestDurationNs)) / 1e6,
+		IngestTablesCompacted: int64(atomic.LoadUint64(&lh.ingestTablesCompacted)),
+		IngestMergeRuns:       int64(atomic.LoadUint64(&lh.ingestMergeRuns)),
+		IngestMergeMs:         float64(atomic.LoadInt64(&lh.ingestMergeDurationNs)) / 1e6,
+		IngestMergeTables:     int64(atomic.LoadUint64(&lh.ingestMergeTables)),
 	}
 }
 
@@ -703,44 +626,11 @@ func (lh *levelHandler) densityLocked() float64 {
 	return float64(lh.totalValueSize) / float64(lh.totalSize)
 }
 
-func (lh *levelHandler) ingestDensityLocked() float64 {
-	if lh.ingestSize <= 0 {
-		return 0
-	}
-	return float64(lh.ingestValueSize) / float64(lh.ingestSize)
-}
-
-func (lh *levelHandler) maxIngestAgeSeconds() float64 {
-	v := lh.loadView()
-	if v == nil || len(v.ingest) == 0 {
-		return 0
-	}
-	now := time.Now()
-	var maxAge float64
-	for _, t := range v.ingest {
-		if t == nil {
-			continue
-		}
-		age := now.Sub(t.createdAt).Seconds()
-		if age > maxAge {
-			maxAge = age
-		}
-	}
-	return maxAge
-}
-
 func (lh *levelHandler) densityLockedView(v *levelView) float64 {
 	if v == nil || v.totalSize <= 0 {
 		return 0
 	}
 	return float64(v.totalValueSize) / float64(v.totalSize)
-}
-
-func (lh *levelHandler) ingestDensityLockedView(v *levelView) float64 {
-	if v == nil || v.ingestSize <= 0 {
-		return 0
-	}
-	return float64(v.ingestValueSize) / float64(v.ingestSize)
 }
 
 func (lh *levelHandler) numTables() int {
@@ -750,24 +640,6 @@ func (lh *levelHandler) numTables() int {
 	lh.RLock()
 	defer lh.RUnlock()
 	return len(lh.tables)
-}
-
-func (lh *levelHandler) numIngestTables() int {
-	if v := lh.loadView(); v != nil {
-		return len(v.ingest)
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	return len(lh.ingest)
-}
-
-func (lh *levelHandler) ingestDataSize() int64 {
-	if v := lh.loadView(); v != nil {
-		return v.ingestSize
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	return lh.ingestSize
 }
 
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
@@ -808,17 +680,8 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 		}
 		return hit
 	}
-	for _, table := range v.ingest {
-		if table == nil {
-			continue
-		}
-		if utils.CompareKeys(key, table.MinKey()) < 0 ||
-			utils.CompareKeys(key, table.MaxKey()) > 0 {
-			continue
-		}
-		if table.prefetchBlockForKey(key, hot) {
-			return true
-		}
+	if v.ingest.prefetch(key, hot) {
+		return true
 	}
 	table := lh.getTableView(key, v)
 	if table == nil {
@@ -842,11 +705,7 @@ func (lh *levelHandler) Sort() {
 			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 		})
 	}
-	if len(lh.ingest) > 1 {
-		sort.Slice(lh.ingest, func(i, j int) bool {
-			return utils.CompareKeys(lh.ingest[i].MinKey(), lh.ingest[j].MinKey()) < 0
-		})
-	}
+	lh.ingest.sortShards()
 	lh.refreshViewLocked()
 }
 
@@ -854,32 +713,6 @@ func (lh *levelHandler) searchL0SSTView(key []byte, v *levelView) (*kv.Entry, er
 	var version uint64
 	for _, table := range v.tables {
 		if entry, err := table.Search(key, &version); err == nil {
-			return entry, nil
-		}
-	}
-	return nil, utils.ErrKeyNotFound
-}
-
-func (lh *levelHandler) searchIngestSSTView(key []byte, v *levelView) (*kv.Entry, error) {
-	if v == nil || len(v.ingestRanges) == 0 {
-		return nil, utils.ErrKeyNotFound
-	}
-	idx := sort.Search(len(v.ingestRanges), func(i int) bool {
-		return utils.CompareKeys(key, v.ingestRanges[i].max) <= 0
-	})
-	var version uint64
-	for i := idx; i < len(v.ingestRanges); i++ {
-		rng := v.ingestRanges[i]
-		if rng.tbl == nil {
-			continue
-		}
-		if utils.CompareKeys(key, rng.min) < 0 {
-			break
-		}
-		if utils.CompareKeys(key, rng.max) > 0 {
-			continue
-		}
-		if entry, err := rng.tbl.Search(key, &version); err == nil {
 			return entry, nil
 		}
 	}
@@ -1000,24 +833,48 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 	}
 	lh.tables = newTables
 
-	if len(lh.ingest) > 0 {
-		var newIngest []*table
-		for _, t := range lh.ingest {
-			_, found := toDelMap[t.fid]
-			if !found {
-				newIngest = append(newIngest, t)
-				continue
-			}
-			lh.subtractIngestSize(t)
-		}
-		lh.ingest = newIngest
-	}
+	lh.ingest.remove(toDelMap)
 
 	lh.refreshViewLocked()
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
 	return decrRefs(toDel)
+}
+
+func (lh *levelHandler) deleteIngestTables(toDel []*table) error {
+	lh.Lock() // s.Unlock() below
+
+	toDelMap := make(map[uint64]struct{})
+	for _, t := range toDel {
+		toDelMap[t.fid] = struct{}{}
+	}
+
+	lh.ingest.remove(toDelMap)
+	lh.refreshViewLocked()
+
+	lh.Unlock()
+
+	return decrRefs(toDel)
+}
+
+func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, tables int) {
+	if tables < 0 {
+		tables = 0
+	}
+	if merge {
+		atomic.AddUint64(&lh.ingestMergeRuns, 1)
+		atomic.AddInt64(&lh.ingestMergeDurationNs, duration.Nanoseconds())
+		if tables > 0 {
+			atomic.AddUint64(&lh.ingestMergeTables, uint64(tables))
+		}
+		return
+	}
+	atomic.AddUint64(&lh.ingestRuns, 1)
+	atomic.AddInt64(&lh.ingestDurationNs, duration.Nanoseconds())
+	if tables > 0 {
+		atomic.AddUint64(&lh.ingestTablesCompacted, uint64(tables))
+	}
 }
 
 func (lh *levelHandler) iterators() []utils.Iterator {
@@ -1031,9 +888,7 @@ func (lh *levelHandler) iterators() []utils.Iterator {
 	}
 
 	var itrs []utils.Iterator
-	if len(v.ingest) > 0 {
-		itrs = append(itrs, iteratorsReversed(v.ingest, topt)...)
-	}
+	itrs = append(itrs, v.ingest.iterators(topt)...)
 	if len(v.tables) > 0 {
 		itrs = append(itrs, NewConcatIterator(v.tables, topt))
 	}

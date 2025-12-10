@@ -141,6 +141,14 @@ func Open(opt *Options) *DB {
 	if ingestBatchSize <= 0 {
 		ingestBatchSize = 8
 	}
+	mergeScore := opt.IngestBacklogMergeScore
+	if mergeScore <= 0 {
+		mergeScore = 2.0
+	}
+	shardParallel := opt.IngestShardParallelism
+	if shardParallel <= 0 {
+		shardParallel = max(numCompactors/2, 2)
+	}
 	baseTableSize := opt.MemTableSize
 	if baseTableSize <= 0 {
 		baseTableSize = 8 << 20
@@ -157,23 +165,25 @@ func Open(opt *Options) *DB {
 	}
 	// 初始化LSM结构
 	db.lsm = lsm.NewLSM(&lsm.Options{
-		WorkDir:                opt.WorkDir,
-		MemTableSize:           opt.MemTableSize,
-		SSTableMaxSz:           opt.SSTableMaxSz,
-		BlockSize:              8 * 1024,
-		BloomFalsePositive:     0, //0.01,
-		BaseLevelSize:          baseLevelSize,
-		LevelSizeMultiplier:    8,
-		BaseTableSize:          baseTableSize,
-		TableSizeMultiplier:    2,
-		NumLevelZeroTables:     numL0Tables,
-		MaxLevelNum:            7,
-		NumCompactors:          numCompactors,
-		IngestCompactBatchSize: ingestBatchSize,
-		CompactionValueWeight:  db.opt.CompactionValueWeight,
-		BlockCacheSize:         db.opt.BlockCacheSize,
-		BloomCacheSize:         db.opt.BloomCacheSize,
-		ManifestSync:           db.opt.ManifestSync,
+		WorkDir:                 opt.WorkDir,
+		MemTableSize:            opt.MemTableSize,
+		SSTableMaxSz:            opt.SSTableMaxSz,
+		BlockSize:               8 * 1024,
+		BloomFalsePositive:      0, //0.01,
+		BaseLevelSize:           baseLevelSize,
+		LevelSizeMultiplier:     8,
+		BaseTableSize:           baseTableSize,
+		TableSizeMultiplier:     2,
+		NumLevelZeroTables:      numL0Tables,
+		MaxLevelNum:             7,
+		NumCompactors:           numCompactors,
+		IngestCompactBatchSize:  ingestBatchSize,
+		IngestBacklogMergeScore: mergeScore,
+		IngestShardParallelism:  shardParallel,
+		CompactionValueWeight:   db.opt.CompactionValueWeight,
+		BlockCacheSize:          db.opt.BlockCacheSize,
+		BloomCacheSize:          db.opt.BloomCacheSize,
+		ManifestSync:            db.opt.ManifestSync,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	recoveredVersion := db.lsm.MaxVersion()
