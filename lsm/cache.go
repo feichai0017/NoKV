@@ -419,13 +419,6 @@ func (c *blockCache) get(level int, tbl *table, key uint64, hotHint bool) (*bloc
 	return nil, false
 }
 
-func (c *blockCache) add(level int, tbl *table, key uint64, blk *block, hot bool) {
-	if c == nil {
-		return
-	}
-	c.addWithTier(level, tbl, key, blk, hot)
-}
-
 func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, hot bool) {
 	if c == nil || c.rc == nil || blk == nil {
 		return
