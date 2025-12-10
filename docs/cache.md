@@ -9,7 +9,7 @@ NoKV's LSM tier layers a multi-level block cache with bloom filter caching to ac
 | Component | Purpose | Source |
 | --- | --- | --- |
 | `cache.indexs` + `indexHot` | Table index cache (`fid` → `*pb.TableIndex`) reused across reopen + small CLOCK hot tier fed by HotRing hits. | [`utils/cache`](../utils/cache) |
-| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots; hot block tier (small LRU) keeps hotspot blocks resident. | [`lsm/cache.go`](../lsm/cache.go) |
+| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots; hot block tier (small CLOCK) keeps hotspot blocks resident. | [`lsm/cache.go`](../lsm/cache.go) |
 | `bloomCache` + `hot` | LRU cache of bloom filter bitsets per SST plus small CLOCK hot tier to protect frequent filters. | [`lsm/cache.go`](../lsm/cache.go) |
 | `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and blooms. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
 
@@ -28,12 +28,12 @@ Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes
 
 ```text
 User-space block cache (L0/L1, parsed blocks, Ristretto LFU-ish)
-Small hot tier (LRU) for hotspot blocks
+Small hot tier (CLOCK) for hotspot blocks
 Deeper levels rely on OS page cache + mmap readahead
 ```
 
 * `Options.BlockCacheSize` sets capacity in **blocks** (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.
-* 热块 tier：热点 key/预取路径会带 `hot` 标志，块被提升到小 LRU 热区，不易被长尾流量挤出；容量自适应且上限很小。
+* Hot tier: requests marked `hot` (prefetch/hotspot reads) promote blocks into the small CLOCK hot set derived from the main capacity, making them harder to evict under long-tail traffic.
 * Per-table direct slots (`table.cacheSlots[idx]`) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).
 * Evictions clear the table slot via `OnEvict`; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.
 * Access patterns: `getBlock` also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.
@@ -54,8 +54,8 @@ By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflec
 ## 3. Bloom Cache
 
 * `bloomCache` stores the raw filter bitset (`utils.Filter`) per table ID. Entries are deep-copied (`SafeCopy`) to avoid sharing memory with mmaps.
-* 主体是 LRU，附带一个很小的 CLOCK 热区保护频繁命中的 filter，避免被扫描冲掉。
-* 容量通过 `Options.BloomCacheSize` 控制，热区容量自适应（默认几几十到几百）。
+* Main tier is LRU with a tiny CLOCK hot set to protect frequently hit filters from being washed out by scans.
+* Capacity is controlled by `Options.BloomCacheSize`; the hot CLOCK tier auto-scales from a few dozen up to a few hundred entries.
 * Bloom hits/misses are recorded via `cacheMetrics.recordBloom`, feeding into `StatsSnapshot.BloomHitRate`.
 
 ---
@@ -79,10 +79,10 @@ type CacheMetrics struct {
 
 ## 5. Hot Integration (HotRing)
 
-* 热点判定：读/写路径的 HotRing 计数达到阈值时，读会带上 `hot` 标志；只有热点会触发预取。
-* 缓存晋升：热点命中/预取会把 block 晋升到热块 tier，索引/Bloom 晋升到各自的 CLOCK 热区；冷数据不晋升，避免污染。
-* 压缩协同：HotRing top-k 传给压缩调度，包含热点范围的 level/ingest 得分提高，优先消化热点重叠。
-* 配置：热点阈值来自 HotRing 选项（窗口/衰减可调），热区容量小且派生自现有缓存大小。
+* Hot detection: HotRing counts on read/write paths raise a `hot` flag once thresholds are met; only hot keys trigger prefetch.
+* Cache promotion: hot hits/prefetch promote blocks into the CLOCK hot tier and promote indexes/Blooms into their CLOCK tiers; cold data stays in the main cache to avoid pollution.
+* Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.
+* Tuning: Hot thresholds come from HotRing options (window/decay configurable); hot tier capacities are small and derived from existing cache sizes.
 
 ---
 
