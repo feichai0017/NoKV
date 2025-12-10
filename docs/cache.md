@@ -8,9 +8,9 @@ NoKV's LSM tier layers a multi-level block cache with bloom filter caching to ac
 
 | Component | Purpose | Source |
 | --- | --- | --- |
-| `cache.indexs` | Table index cache (`fid` → `*pb.TableIndex`) reused across reopen. | [`coreCache.Cache`](../utils/cache) wrapper |
-| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots. Stores parsed blocks. | [`lsm/cache.go`](../lsm/cache.go) |
-| `bloomCache` | LRU cache of bloom filter bitsets per SST. | [`lsm/cache.go#L296-L356`](../lsm/cache.go#L296-L356) |
+| `cache.indexs` + `indexHot` | Table index cache (`fid` → `*pb.TableIndex`) reused across reopen + small CLOCK hot tier fed by HotRing hits. | [`utils/cache`](../utils/cache) |
+| `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots; hot block tier (small LRU) keeps hotspot blocks resident. | [`lsm/cache.go`](../lsm/cache.go) |
+| `bloomCache` + `hot` | LRU cache of bloom filter bitsets per SST plus small CLOCK hot tier to protect frequent filters. | [`lsm/cache.go`](../lsm/cache.go) |
 | `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and blooms. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
 
 Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes block cache(s) via the `BlockBasedTableOptions`. NoKV keeps it Go-native and GC-friendly.
@@ -28,10 +28,12 @@ Badger uses a similar block cache split (`Pinner`/`Cache`) while RocksDB exposes
 
 ```text
 User-space block cache (L0/L1, parsed blocks, Ristretto LFU-ish)
+Small hot tier (LRU) for hotspot blocks
 Deeper levels rely on OS page cache + mmap readahead
 ```
 
 * `Options.BlockCacheSize` sets capacity in **blocks** (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.
+* 热块 tier：热点 key/预取路径会带 `hot` 标志，块被提升到小 LRU 热区，不易被长尾流量挤出；容量自适应且上限很小。
 * Per-table direct slots (`table.cacheSlots[idx]`) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).
 * Evictions clear the table slot via `OnEvict`; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.
 * Access patterns: `getBlock` also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.
@@ -52,7 +54,8 @@ By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflec
 ## 3. Bloom Cache
 
 * `bloomCache` stores the raw filter bitset (`utils.Filter`) per table ID. Entries are deep-copied (`SafeCopy`) to avoid sharing memory with mmaps.
-* LRU eviction ensures the newest filters stay resident; older ones are dropped to keep memory bounded (`Options.BloomCacheSize`).
+* 主体是 LRU，附带一个很小的 CLOCK 热区保护频繁命中的 filter，避免被扫描冲掉。
+* 容量通过 `Options.BloomCacheSize` 控制，热区容量自适应（默认几几十到几百）。
 * Bloom hits/misses are recorded via `cacheMetrics.recordBloom`, feeding into `StatsSnapshot.BloomHitRate`.
 
 ---
@@ -74,14 +77,23 @@ type CacheMetrics struct {
 
 ---
 
-## 5. Interaction with Value Log
+## 5. Hot Integration (HotRing)
+
+* 热点判定：读/写路径的 HotRing 计数达到阈值时，读会带上 `hot` 标志；只有热点会触发预取。
+* 缓存晋升：热点命中/预取会把 block 晋升到热块 tier，索引/Bloom 晋升到各自的 CLOCK 热区；冷数据不晋升，避免污染。
+* 压缩协同：HotRing top-k 传给压缩调度，包含热点范围的 level/ingest 得分提高，优先消化热点重叠。
+* 配置：热点阈值来自 HotRing 选项（窗口/衰减可调），热区容量小且派生自现有缓存大小。
+
+---
+
+## 6. Interaction with Value Log
 
 * Keys stored as value pointers (large values) still populate block cache entries for the key/index block. The value payload is read directly from the vlog (`valueLog.read`), so block cache hit rates remain meaningful.
 * Discard stats from flushes can demote cached blocks via `cache.dropBlock`, ensuring obsolete SST data leaves the cache quickly.
 
 ---
 
-## 6. Comparison
+## 7. Comparison
 
 | Feature | RocksDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
@@ -91,7 +103,7 @@ type CacheMetrics struct {
 
 ---
 
-## 7. Operational Tips
+## 8. Operational Tips
 
 * If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.
 * Track `nokv stats --json` cache metrics over time; drops often indicate iterator misuse or working-set shifts.
