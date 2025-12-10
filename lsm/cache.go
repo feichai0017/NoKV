@@ -160,11 +160,11 @@ func (c *cache) delIndex(fid uint64) {
 	c.indexs.Del(fid)
 }
 
-func (c *cache) getBlock(level int, tbl *table, key uint64) (*block, bool) {
+func (c *cache) getBlock(level int, tbl *table, key uint64, hot bool) (*block, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(level, tbl, key)
+	blk, ok := c.blocks.get(level, tbl, key, hot)
 	if ok {
 		c.metrics.recordBlock(level, true)
 		return blk, true
@@ -173,11 +173,11 @@ func (c *cache) getBlock(level int, tbl *table, key uint64) (*block, bool) {
 	return nil, false
 }
 
-func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block) {
+func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block, hot bool) {
 	if c == nil || c.blocks == nil {
 		return
 	}
-	c.blocks.addWithTier(level, tbl, key, blk)
+	c.blocks.addWithTier(level, tbl, key, blk, hot)
 }
 
 func (c *cache) dropBlock(key uint64) {
@@ -211,7 +211,11 @@ func (c *cache) metricsSnapshot() CacheMetrics {
 }
 
 type blockCache struct {
-	rc *ristretto.Cache[uint64, *blockEntry]
+	rc       *ristretto.Cache[uint64, *blockEntry]
+	hotMu    sync.Mutex
+	hotCap   int
+	hotItems map[uint64]*list.Element
+	hotLRU   *list.List
 }
 
 type blockEntry struct {
@@ -225,6 +229,21 @@ func newBlockCache(capacity int) *blockCache {
 	if capacity <= 0 {
 		return nil
 	}
+	hotCap := capacity / 8
+	if hotCap < 16 {
+		hotCap = 16
+	}
+	if hotCap > capacity {
+		hotCap = capacity
+	}
+	if hotCap > 256 {
+		hotCap = 256
+	}
+	bc := &blockCache{
+		hotCap:   hotCap,
+		hotItems: make(map[uint64]*list.Element, hotCap),
+		hotLRU:   list.New(),
+	}
 	rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
 		NumCounters: int64(capacity) * 8,
 		MaxCost:     int64(capacity),
@@ -237,23 +256,89 @@ func newBlockCache(capacity int) *blockCache {
 				return
 			}
 			clearTableSlot(item.Value)
+			bc.removeHotEntry(item.Value)
 		},
 	})
 	if err != nil {
 		return nil
 	}
-	return &blockCache{rc: rc}
+	bc.rc = rc
+	return bc
 }
 
 func blockIndexFromKey(key uint64) int {
 	return int(uint32(key))
 }
 
-func (c *blockCache) get(level int, tbl *table, key uint64) (*block, bool) {
+func (c *blockCache) getHot(key uint64) (*blockEntry, bool) {
+	if c == nil || c.hotCap == 0 {
+		return nil, false
+	}
+	c.hotMu.Lock()
+	defer c.hotMu.Unlock()
+	elem, ok := c.hotItems[key]
+	if !ok || elem == nil {
+		return nil, false
+	}
+	c.hotLRU.MoveToFront(elem)
+	be := elem.Value.(*blockEntry)
+	return be, true
+}
+
+func (c *blockCache) promoteHot(be *blockEntry) {
+	if c == nil || c.hotCap == 0 || be == nil {
+		return
+	}
+	c.hotMu.Lock()
+	defer c.hotMu.Unlock()
+	if elem, ok := c.hotItems[be.key]; ok {
+		elem.Value = be
+		c.hotLRU.MoveToFront(elem)
+		return
+	}
+	elem := c.hotLRU.PushFront(be)
+	c.hotItems[be.key] = elem
+	for c.hotLRU.Len() > c.hotCap {
+		tail := c.hotLRU.Back()
+		if tail == nil {
+			break
+		}
+		tb := tail.Value.(*blockEntry)
+		delete(c.hotItems, tb.key)
+		c.hotLRU.Remove(tail)
+	}
+}
+
+func (c *blockCache) removeHotEntry(be *blockEntry) {
+	if c == nil || c.hotCap == 0 || be == nil {
+		return
+	}
+	c.hotMu.Lock()
+	defer c.hotMu.Unlock()
+	elem, ok := c.hotItems[be.key]
+	if !ok || elem == nil {
+		return
+	}
+	if elem.Value == be {
+		delete(c.hotItems, be.key)
+		c.hotLRU.Remove(elem)
+	}
+}
+
+func (c *blockCache) get(level int, tbl *table, key uint64, hotHint bool) (*block, bool) {
+	if be, ok := c.getHot(key); ok && be != nil && be.blk != nil {
+		if tbl != nil {
+			c.storeTableSlot(tbl, be)
+		}
+		return be.blk, true
+	}
 	if tbl != nil {
 		idx := blockIndexFromKey(key)
 		if idx < len(tbl.cacheSlots) {
 			if be := tbl.cacheSlots[idx]; be != nil && be.blk != nil {
+				if hotHint {
+					c.promoteHot(be)
+				}
 				return be.blk, true
 			}
 		}
@@ -265,19 +350,22 @@ func (c *blockCache) get(level int, tbl *table, key uint64) (*block, bool) {
 		if tbl != nil {
 			c.storeTableSlot(tbl, be)
 		}
+		if hotHint {
+			c.promoteHot(be)
+		}
 		return be.blk, true
 	}
 	return nil, false
 }
 
-func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
+func (c *blockCache) add(level int, tbl *table, key uint64, blk *block, hot bool) {
 	if c == nil {
 		return
 	}
-	c.addWithTier(level, tbl, key, blk)
+	c.addWithTier(level, tbl, key, blk, hot)
 }
 
-func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block) {
+func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, hot bool) {
 	if c == nil || c.rc == nil || blk == nil {
 		return
 	}
@@ -289,6 +377,9 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block) 
 		idx: blockIndexFromKey(key),
 		tbl: tbl,
 		blk: blk,
+	}
+	if hot && c.hotCap > 0 {
+		c.promoteHot(entry)
 	}
 	if tbl != nil {
 		c.storeTableSlot(tbl, entry)

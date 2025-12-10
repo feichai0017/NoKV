@@ -446,12 +446,25 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 
 	tables := make([]*table, cd.thisLevel.numTables())
 	copy(tables, cd.thisLevel.tables)
+	useIngestFallback := false
 	if len(tables) == 0 {
 		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
 			tables = append(tables, cd.thisLevel.ingest.allTables()...)
+			useIngestFallback = true
 		} else {
 			return false
 		}
+	}
+	if useIngestFallback {
+		cd.top = tables
+		cd.bot = nil
+		cd.ingestMerge = true
+		cd.thisRange = getKeyRange(cd.top...)
+		cd.nextRange = cd.thisRange
+		if lm.compactState.overlapsWith(cd.thisLevel.levelNum, cd.thisRange) {
+			return false
+		}
+		return lm.compactState.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
 	}
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {

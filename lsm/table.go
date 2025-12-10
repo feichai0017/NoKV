@@ -341,7 +341,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	var b *block
 	key := t.blockCacheKey(idx)
 	if copyData && !bypassCache {
-		if cached, ok := t.lm.cache.getBlock(t.lvl, t, key); ok && cached != nil {
+		if cached, ok := t.lm.cache.getBlock(t.lvl, t, key, hot); ok && cached != nil {
 			return cached, nil
 		}
 	}
@@ -415,7 +415,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	b.entriesIndexStart = entriesIndexStart
 
 	if copyData && !bypassCache {
-		t.lm.cache.addBlock(t.lvl, t, key, b)
+		t.lm.cache.addBlock(t.lvl, t, key, b, hot)
 	} else {
 		cacheBypassCount.Add(1)
 	}
