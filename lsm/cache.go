@@ -47,32 +47,32 @@ type cacheMetrics struct {
 }
 
 type hotIndexCache struct {
-	cp *clockProCache[*pb.TableIndex]
+	cp *coreCache.ClockProCache[*pb.TableIndex]
 }
 
 func newHotIndexCache(cap int) *hotIndexCache {
 	if cap <= 0 {
 		return nil
 	}
-	return &hotIndexCache{cp: newClockProCache[*pb.TableIndex](cap)}
+	return &hotIndexCache{cp: coreCache.NewClockProCache[*pb.TableIndex](cap)}
 }
 
 func (hc *hotIndexCache) get(fid uint64) (*pb.TableIndex, bool) {
 	if hc == nil || hc.cp == nil {
 		return nil, false
 	}
-	return hc.cp.get(fid)
+	return hc.cp.Get(fid)
 }
 
 func (hc *hotIndexCache) promote(fid uint64, idx *pb.TableIndex) {
 	if hc == nil || hc.cp == nil || idx == nil {
 		return
 	}
-	hc.cp.promote(fid, idx)
+	hc.cp.Promote(fid, idx)
 }
 
 type hotBloomCache struct {
-	cp *clockProCache[utils.Filter]
+	cp *coreCache.ClockProCache[utils.Filter]
 }
 
 func newHotBloomCache(cap int) *hotBloomCache {
@@ -80,7 +80,7 @@ func newHotBloomCache(cap int) *hotBloomCache {
 		return nil
 	}
 	return &hotBloomCache{
-		cp: newClockProCache[utils.Filter](cap),
+		cp: coreCache.NewClockProCache[utils.Filter](cap),
 	}
 }
 
@@ -88,7 +88,7 @@ func (hc *hotBloomCache) get(fid uint64) (utils.Filter, bool) {
 	if hc == nil || hc.cp == nil {
 		return nil, false
 	}
-	return hc.cp.get(fid)
+	return hc.cp.Get(fid)
 }
 
 func (hc *hotBloomCache) promote(fid uint64, filter utils.Filter) {
@@ -96,7 +96,7 @@ func (hc *hotBloomCache) promote(fid uint64, filter utils.Filter) {
 		return
 	}
 	dup := kv.SafeCopy(nil, filter)
-	hc.cp.promote(fid, dup)
+	hc.cp.Promote(fid, dup)
 }
 
 func (m *cacheMetrics) recordBlock(level int, hit bool) {
