@@ -1,6 +1,7 @@
 package hotring
 
 import (
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 )
@@ -15,6 +16,7 @@ type Node struct {
 	windowTotal  int32
 	windowPos    int
 	windowSlotID int64
+	windowLock   uint32
 }
 
 func NewNode(key string, tag uint32) *Node {
@@ -69,51 +71,69 @@ func (n *Node) GetCounter() int32 {
 }
 
 func (n *Node) ResetCounter() {
-	atomic.StoreInt32(&n.count, 0)
-	n.windowTotal = 0
-	if n.window != nil {
-		for i := range n.window {
-			n.window[i] = 0
-		}
-		n.windowPos = 0
-		n.windowSlotID = 0
-	}
+	n.ResetCounterWithWindow(0, 0)
 }
 
 func (n *Node) SetNext(next *Node) {
-	for {
-		cur := atomic.LoadPointer(&n.next)
-		if atomic.CompareAndSwapPointer(&n.next, cur, unsafe.Pointer(next)) {
-			return
-		}
-	}
+	atomic.StorePointer(&n.next, unsafe.Pointer(next))
+}
+
+func (n *Node) StoreNext(next *Node) {
+	atomic.StorePointer(&n.next, unsafe.Pointer(next))
+}
+
+func (n *Node) CompareAndSwapNext(old, next *Node) bool {
+	return atomic.CompareAndSwapPointer(&n.next, unsafe.Pointer(old), unsafe.Pointer(next))
 }
 
 func (n *Node) Increment() int32 {
 	return atomic.AddInt32(&n.count, 1)
 }
 
-func (n *Node) ensureWindow(slots int, slotID int64) {
+func (n *Node) lockWindow() {
+	for !atomic.CompareAndSwapUint32(&n.windowLock, 0, 1) {
+		runtime.Gosched()
+	}
+}
+
+func (n *Node) unlockWindow() {
+	atomic.StoreUint32(&n.windowLock, 0)
+}
+
+func (n *Node) resetWindowLocked(slots int, slotID int64) {
 	if slots <= 0 {
+		n.window = nil
+		n.windowTotal = 0
+		n.windowPos = 0
+		n.windowSlotID = 0
 		return
 	}
 	if len(n.window) != slots {
 		n.window = make([]int32, slots)
-		n.windowPos = int(slotID % int64(slots))
-		n.windowSlotID = slotID
-		n.windowTotal = 0
-		return
+	} else {
+		for i := range n.window {
+			n.window[i] = 0
+		}
 	}
-	if n.windowSlotID == 0 {
-		n.windowSlotID = slotID
-	}
+	n.windowTotal = 0
+	n.windowPos = int(slotID % int64(slots))
+	n.windowSlotID = slotID
 }
 
-func (n *Node) advanceWindow(slots int, slotID int64) {
+func (n *Node) ensureWindowLocked(slots int, slotID int64) {
 	if slots <= 0 {
 		return
 	}
-	n.ensureWindow(slots, slotID)
+	if len(n.window) != slots || n.windowSlotID == 0 {
+		n.resetWindowLocked(slots, slotID)
+	}
+}
+
+func (n *Node) advanceWindowLocked(slots int, slotID int64) {
+	if slots <= 0 {
+		return
+	}
+	n.ensureWindowLocked(slots, slotID)
 	if slotID <= n.windowSlotID {
 		return
 	}
@@ -127,10 +147,11 @@ func (n *Node) advanceWindow(slots int, slotID int64) {
 		n.windowSlotID = slotID
 		return
 	}
-	for range steps {
+	for steps > 0 {
 		n.windowPos = (n.windowPos + 1) % slots
 		n.windowTotal -= n.window[n.windowPos]
 		n.window[n.windowPos] = 0
+		steps--
 	}
 	n.windowSlotID = slotID
 }
@@ -139,26 +160,45 @@ func (n *Node) incrementWindow(slots int, slotID int64) int32 {
 	if slots <= 0 {
 		return n.GetCounter()
 	}
-	n.advanceWindow(slots, slotID)
+	n.lockWindow()
+	n.advanceWindowLocked(slots, slotID)
 	n.window[n.windowPos]++
 	n.windowTotal++
-	return n.windowTotal
+	total := n.windowTotal
+	n.unlockWindow()
+	return total
 }
 
 func (n *Node) windowTotalAt(slots int, slotID int64) int32 {
 	if slots <= 0 {
 		return n.GetCounter()
 	}
-	n.advanceWindow(slots, slotID)
-	return n.windowTotal
+	n.lockWindow()
+	n.advanceWindowLocked(slots, slotID)
+	total := n.windowTotal
+	n.unlockWindow()
+	return total
+}
+
+func (n *Node) ResetCounterWithWindow(slots int, slotID int64) {
+	atomic.StoreInt32(&n.count, 0)
+	n.lockWindow()
+	n.resetWindowLocked(slots, slotID)
+	n.unlockWindow()
 }
 
 func (n *Node) decay(shift uint32) {
 	if shift == 0 {
 		return
 	}
-	if n.count == 0 {
-		return
+	for {
+		cur := atomic.LoadInt32(&n.count)
+		if cur == 0 {
+			return
+		}
+		decayed := int32(int64(cur) >> shift)
+		if atomic.CompareAndSwapInt32(&n.count, cur, decayed) {
+			return
+		}
 	}
-	n.count = int32(int64(n.count) >> shift)
 }

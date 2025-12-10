@@ -27,6 +27,8 @@ type LSM struct {
 
 	throttleFn func(bool)
 	throttled  int32
+
+	closed atomic.Bool
 }
 
 // Options _
@@ -72,6 +74,12 @@ type Options struct {
 
 // Close  _
 func (lsm *LSM) Close() error {
+	if lsm == nil {
+		return nil
+	}
+	if !lsm.closed.CompareAndSwap(false, true) {
+		return nil
+	}
 	// wait for all api calls to finish
 	lsm.throttleWrites(false)
 	lsm.closer.Close()
