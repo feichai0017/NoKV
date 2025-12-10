@@ -229,16 +229,7 @@ func newBlockCache(capacity int) *blockCache {
 	if capacity <= 0 {
 		return nil
 	}
-	hotCap := capacity / 8
-	if hotCap < 16 {
-		hotCap = 16
-	}
-	if hotCap > capacity {
-		hotCap = capacity
-	}
-	if hotCap > 256 {
-		hotCap = 256
-	}
+	hotCap := min(min(max(capacity/8, 16), capacity), 256)
 	bc := &blockCache{
 		hotCap:   hotCap,
 		hotItems: make(map[uint64]*list.Element, hotCap),

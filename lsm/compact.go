@@ -231,6 +231,12 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 	t := lm.levelTargets()
 	valueWeight := lm.opt.CompactionValueWeight
+	var hotKeys [][]byte
+	if v := lm.hotProvider.Load(); v != nil {
+		if fn, ok := v.(func() [][]byte); ok && fn != nil {
+			hotKeys = fn()
+		}
+	}
 	prios = make([]compactionPriority, len(lm.levels))
 	var extras []compactionPriority
 	addPriority := func(level int, score float64, ingest bool, merge bool) {
@@ -278,6 +284,16 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 					valueScore = lvl.ingestValueDensity()
 				}
 				pri.applyValueWeight(valueWeight, valueScore)
+			}
+		}
+		if len(hotKeys) > 0 && level < len(lm.levels) {
+			hotScore := lm.levels[level].hotOverlapScore(hotKeys, ingest)
+			if hotScore > 0 {
+				pri.score += hotScore
+				pri.adjusted += hotScore * 2
+				if !strings.Contains(pri.statsTag, "hot") {
+					pri.statsTag = "hot-" + pri.statsTag
+				}
 			}
 		}
 		if merge {

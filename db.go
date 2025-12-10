@@ -225,6 +225,23 @@ func Open(opt *Options) *DB {
 		})
 		db.prefetchWG.Add(1)
 		go db.prefetchLoop()
+		db.lsm.SetHotKeyProvider(func() [][]byte {
+			if db.hot == nil {
+				return nil
+			}
+			top := db.hot.TopN(opt.HotRingTopK)
+			if len(top) == 0 {
+				return nil
+			}
+			keys := make([][]byte, 0, len(top))
+			for _, item := range top {
+				if item.Key == "" {
+					continue
+				}
+				keys = append(keys, []byte(item.Key))
+			}
+			return keys
+		})
 	}
 
 	db.orc = newOracle(*opt)
