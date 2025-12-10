@@ -68,6 +68,10 @@ type Options struct {
 
 	DiscardStatsCh *chan map[uint32]int64
 
+	// HotKeyProvider optionally surfaces the hottest keys so compaction can
+	// prioritise ranges with heavy access.
+	HotKeyProvider func() [][]byte
+
 	// ManifestSync controls whether manifest edits are fsynced immediately.
 	ManifestSync bool
 }
@@ -117,6 +121,18 @@ func (lsm *LSM) SetDiscardStatsCh(ch *chan map[uint32]int64) {
 	lsm.option.DiscardStatsCh = ch
 	if lsm.levels != nil {
 		lsm.levels.opt.DiscardStatsCh = ch
+	}
+}
+
+// SetHotKeyProvider wires a callback that returns currently hot keys so
+// compaction can prioritise hot ranges.
+func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
+	if fn == nil {
+		return
+	}
+	lsm.option.HotKeyProvider = fn
+	if lsm.levels != nil {
+		lsm.levels.setHotKeyProvider(fn)
 	}
 }
 

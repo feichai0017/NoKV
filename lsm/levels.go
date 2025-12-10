@@ -33,6 +33,9 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	}
 	lm.build()
 	lm.compaction = newCompactionManager(lm)
+	if opt != nil && opt.HotKeyProvider != nil {
+		lm.setHotKeyProvider(opt.HotKeyProvider)
+	}
 	return lm
 }
 
@@ -51,6 +54,7 @@ type levelManager struct {
 	compactionLastNs int64
 	compactionMaxNs  int64
 	compactionRuns   uint64
+	hotProvider      atomic.Value // func() [][]byte
 }
 
 // LevelMetrics captures aggregated statistics for a single LSM level.
@@ -86,6 +90,16 @@ func (lm *levelManager) close() error {
 		}
 	}
 	return nil
+}
+
+func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
+	if lm == nil {
+		return
+	}
+	if fn == nil {
+		return
+	}
+	lm.hotProvider.Store(fn)
 }
 
 func (lm *levelManager) iterators() []utils.Iterator {
@@ -635,6 +649,62 @@ func (lh *levelHandler) densityLockedView(v *levelView) float64 {
 		return 0
 	}
 	return float64(v.totalValueSize) / float64(v.totalSize)
+}
+
+func keyInRange(min, max, key []byte) bool {
+	if len(min) == 0 || len(max) == 0 || len(key) == 0 {
+		return false
+	}
+	return utils.CompareKeys(key, min) >= 0 && utils.CompareKeys(key, max) <= 0
+}
+
+// hotOverlapScore returns the fraction of hotKeys overlapping this level.
+// When ingestOnly is true, only ingest buffers are considered.
+func (lh *levelHandler) hotOverlapScore(hotKeys [][]byte, ingestOnly bool) float64 {
+	if lh == nil || len(hotKeys) == 0 {
+		return 0
+	}
+	v := lh.loadView()
+	if v == nil {
+		return 0
+	}
+	hit := 0
+	checkMain := func(key []byte) bool {
+		for _, t := range v.tables {
+			if t == nil {
+				continue
+			}
+			if keyInRange(t.MinKey(), t.MaxKey(), key) {
+				return true
+			}
+		}
+		return false
+	}
+	checkIngest := func(key []byte) bool {
+		for _, sh := range v.ingest.shards {
+			for _, rng := range sh.ranges {
+				if keyInRange(rng.min, rng.max, key) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, hk := range hotKeys {
+		if len(hk) == 0 {
+			continue
+		}
+		if ingestOnly {
+			if checkIngest(hk) {
+				hit++
+			}
+			continue
+		}
+		if checkMain(hk) || checkIngest(hk) {
+			hit++
+		}
+	}
+	return float64(hit) / float64(len(hotKeys))
 }
 
 func (lh *levelHandler) numTables() int {
