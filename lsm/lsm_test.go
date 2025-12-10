@@ -158,9 +158,11 @@ func TestCompact(t *testing.T) {
 				return true
 			}
 		}
-		for _, t := range lh.ingest {
-			if t.fid == fid {
-				return true
+		for _, sh := range lh.ingest.shards {
+			for _, t := range sh.tables {
+				if t.fid == fid {
+					return true
+				}
 			}
 		}
 		return false
@@ -258,10 +260,12 @@ func TestCompact(t *testing.T) {
 				}
 			}
 			if !ok {
-				for _, tbl := range lsm.levels.levels[6].ingest {
-					if tbl.fid > prevMax {
-						ok = true
-						break
+				for _, sh := range lsm.levels.levels[6].ingest.shards {
+					for _, tbl := range sh.tables {
+						if tbl.fid > prevMax {
+							ok = true
+							break
+						}
 					}
 				}
 			}
@@ -289,6 +293,107 @@ func TestCompact(t *testing.T) {
 	}
 	// 运行N次测试多个sst的影响
 	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
+}
+
+func TestIngestMergeStaysInIngest(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	// Generate enough data to create multiple L0 tables.
+	baseTest(t, lsm, 256)
+
+	// Move one L0 table to the max level ingest buffer.
+	l0 := lsm.levels.levels[0]
+	if len(l0.tables) == 0 {
+		t.Fatalf("expected L0 tables before ingest merge test")
+	}
+	cd := buildCompactDef(lsm, 0, 0, 6)
+	cd.top = []*table{l0.tables[0]}
+	cd.thisRange = getKeyRange(cd.top...)
+	cd.nextRange = cd.thisRange
+	if err := lsm.levels.moveToIngest(cd); err != nil {
+		t.Fatalf("moveToIngest: %v", err)
+	}
+
+	target := lsm.levels.levels[6]
+	beforeIngest := target.numIngestTables()
+	if beforeIngest == 0 {
+		t.Fatalf("expected ingest tables after moveToIngest")
+	}
+	beforeMain := len(target.tables)
+
+	pri := compactionPriority{
+		level:       6,
+		score:       5.0,
+		adjusted:    5.0,
+		t:           lsm.levels.levelTargets(),
+		ingestOnly:  true,
+		ingestMerge: true,
+	}
+	if err := lsm.levels.doCompact(0, pri); err != nil {
+		t.Fatalf("ingest merge compact failed: %v", err)
+	}
+
+	afterIngest := target.numIngestTables()
+	if afterIngest == 0 {
+		t.Fatalf("expected ingest tables to remain after merge")
+	}
+	if len(target.tables) != beforeMain {
+		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, len(target.tables))
+	}
+}
+
+// Concurrent shard compaction should not violate compactState and should keep ingest merge output in ingest.
+func TestIngestShardParallelSafety(t *testing.T) {
+	clearDir()
+	opt.NumCompactors = 4
+	opt.IngestShardParallelism = 4
+	lsm := buildLSM()
+	defer lsm.Close()
+	lsm.StartCompacter()
+
+	// Write enough data to spawn multiple L0 tables, then move to ingest.
+	for range 4 {
+		baseTest(t, lsm, 512)
+	}
+	l0 := lsm.levels.levels[0]
+	if len(l0.tables) == 0 {
+		t.Fatalf("expected L0 tables for parallel ingest test")
+	}
+	cd := buildCompactDef(lsm, 0, 0, 6)
+	cd.top = []*table{l0.tables[0]}
+	cd.thisRange = getKeyRange(cd.top...)
+	cd.nextRange = cd.thisRange
+	if err := lsm.levels.moveToIngest(cd); err != nil {
+		t.Fatalf("moveToIngest: %v", err)
+	}
+
+	// Trigger parallel ingest-only compactions across shards.
+	pri := compactionPriority{
+		level:      6,
+		score:      6.0,
+		adjusted:   6.0,
+		t:          lsm.levels.levelTargets(),
+		ingestOnly: true,
+	}
+	if err := lsm.levels.doCompact(0, pri); err != nil {
+		t.Fatalf("parallel ingest compaction failed: %v", err)
+	}
+
+	// Ensure manifest/lists are consistent.
+	target := lsm.levels.levels[6]
+	if target.numIngestTables() == 0 {
+		t.Fatalf("expected ingest tables after parallel compaction")
+	}
+
+	// Simulate restart and ensure ingest state survives manifest/WAL replay.
+	utils.Err(lsm.Close())
+	lsm = buildLSM()
+	defer lsm.Close()
+	if got := lsm.levels.levels[6].numIngestTables(); got == 0 {
+		t.Fatalf("expected ingest tables after restart")
+	}
 }
 
 // 正确性测试

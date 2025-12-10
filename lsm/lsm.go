@@ -52,7 +52,9 @@ type Options struct {
 	NumLevelZeroTables  int
 	MaxLevelNum         int
 
-	IngestCompactBatchSize int
+	IngestCompactBatchSize  int
+	IngestBacklogMergeScore float64
+	IngestShardParallelism  int
 
 	// CompactionValueWeight increases the priority of levels containing a high
 	// proportion of ValueLog-backed payloads. Must be non-negative.

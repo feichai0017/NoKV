@@ -27,6 +27,8 @@ type compactionPriority struct {
 	dropPrefixes [][]byte
 	t            targets
 	ingestOnly   bool
+	ingestMerge  bool
+	statsTag     string
 }
 
 func (cp *compactionPriority) applyValueWeight(weight, valueScore float64) {
@@ -62,6 +64,21 @@ type compactDef struct {
 
 	dropPrefixes [][]byte
 	ingestOnly   bool
+	ingestMerge  bool
+	statsTag     string
+}
+
+func (cd *compactDef) targetFileSize() int64 {
+	level := cd.thisLevel.levelNum
+	if level >= 0 && level < len(cd.t.fileSz) {
+		if cd.t.fileSz[level] > 0 {
+			return cd.t.fileSz[level]
+		}
+	}
+	if level >= 0 && level < len(cd.t.targetSz) && cd.t.targetSz[level] > 0 {
+		return cd.t.targetSz[level]
+	}
+	return 0
 }
 
 func (cd *compactDef) lockLevels() {
@@ -108,6 +125,8 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 		thisLevel:    lm.levels[l],
 		dropPrefixes: p.dropPrefixes,
 		ingestOnly:   p.ingestOnly,
+		ingestMerge:  p.ingestMerge,
+		statsTag:     p.statsTag,
 	}
 
 	var cleanup bool
@@ -119,15 +138,48 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 
 	if p.ingestOnly && l > 0 {
 		cd.nextLevel = cd.thisLevel
-		if !lm.fillTablesIngest(&cd) {
+		order := cd.thisLevel.ingest.shardOrderBySize()
+		if len(order) == 0 {
 			return utils.ErrFillTables
 		}
-		cleanup = true
-		if err := lm.runCompactDef(id, l, cd); err != nil {
-			log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, cd)
-			return err
+		baseLimit := lm.opt.IngestShardParallelism
+		if baseLimit <= 0 {
+			baseLimit = lm.opt.NumCompactors / 2
+			if baseLimit < 1 {
+				baseLimit = 1
+			}
 		}
-		log.Printf("[Compactor: %d] Ingest compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+		if baseLimit > len(order) {
+			baseLimit = len(order)
+		}
+		// Adaptive bump: more backlog ⇒ allow more shards, capped by shard count.
+		shardLimit := baseLimit
+		if p.score > 1.0 {
+			shardLimit += int(math.Ceil(p.score / 2))
+			if shardLimit > len(order) {
+				shardLimit = len(order)
+			}
+		}
+		var ran bool
+		for i := 0; i < shardLimit; i++ {
+			sub := cd
+			if !lm.fillTablesIngestShard(&sub, order[i]) {
+				continue
+			}
+			sub.ingestMerge = p.ingestMerge
+			sub.statsTag = p.statsTag
+			if err := lm.runCompactDef(id, l, sub); err != nil {
+				log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, sub)
+				lm.compactState.delete(sub)
+				return err
+			}
+			lm.compactState.delete(sub)
+			ran = true
+			log.Printf("[Compactor: %d] Ingest compaction for level: %d shard=%d DONE", id, sub.thisLevel.levelNum, order[i])
+		}
+		if !ran {
+			return utils.ErrFillTables
+		}
 		return nil
 	}
 
@@ -179,13 +231,17 @@ func (lm *levelManager) doCompact(id int, p compactionPriority) error {
 func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 	t := lm.levelTargets()
 	valueWeight := lm.opt.CompactionValueWeight
-	addPriority := func(level int, score float64, ingest bool) {
+	prios = make([]compactionPriority, len(lm.levels))
+	var extras []compactionPriority
+	addPriority := func(level int, score float64, ingest bool, merge bool) {
 		pri := compactionPriority{
-			level:      level,
-			score:      score,
-			adjusted:   score,
-			t:          t,
-			ingestOnly: ingest,
+			level:       level,
+			score:       score,
+			adjusted:    score,
+			t:           t,
+			ingestOnly:  ingest,
+			ingestMerge: merge,
+			statsTag:    "regular",
 		}
 		if valueWeight > 0 && level < len(lm.levels) {
 			lvl := lm.levels[level]
@@ -224,11 +280,15 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 				pri.applyValueWeight(valueWeight, valueScore)
 			}
 		}
-		prios = append(prios, pri)
+		if merge {
+			extras = append(extras, pri)
+			return
+		}
+		prios[level] = pri
 	}
 
 	// 根据l0表的table数量来对压缩提权
-	addPriority(0, float64(lm.levels[0].numTables())/float64(lm.opt.NumLevelZeroTables), false)
+	addPriority(0, float64(lm.levels[0].numTables())/float64(lm.opt.NumLevelZeroTables), false, false)
 
 	// 非l0 层都根据大小计算优先级
 	for i := 1; i < len(lm.levels); i++ {
@@ -251,17 +311,38 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 				ageFactor := math.Min(ageSec/60.0, 4.0) // cap bias
 				ingestScore += ageFactor
 			}
-			addPriority(i, ingestScore+1.0, true)
+			addPriority(i, ingestScore+1.0, true, false)
+			trigger := lm.opt.IngestBacklogMergeScore
+			if trigger <= 0 {
+				trigger = 2.0
+			}
+			// Dynamic merge trigger: lower threshold when backlog or age is very high.
+			dynTrigger := trigger
+			if ingestScore >= trigger*2 {
+				dynTrigger = trigger * 0.8
+			} else if ageSec > 120 {
+				dynTrigger = trigger * 0.9
+			}
+			if ingestScore >= dynTrigger {
+				pri := compactionPriority{
+					level:       i,
+					score:       ingestScore * 0.8,
+					adjusted:    ingestScore * 0.8,
+					t:           t,
+					ingestOnly:  true,
+					ingestMerge: true,
+					statsTag:    "ingest-merge",
+				}
+				prios = append(prios, pri)
+			}
 			continue
 		}
 		// 处于压缩状态的sst 不能计算在内
 		delSize := lm.compactState.delSize(i)
 		sz := lvl.getTotalSize() - delSize
 		// score的计算是 扣除正在合并的表后的尺寸与目标sz的比值
-		addPriority(i, float64(sz)/float64(t.targetSz[i]), false)
+		addPriority(i, float64(sz)/float64(t.targetSz[i]), false, false)
 	}
-	utils.CondPanic(len(prios) != len(lm.levels), errors.New("[pickCompactLevels] len(prios) != len(lm.levels)"))
-
 	// 调整得分
 	var prevLevel int
 	for level := t.baseLevel; level < len(lm.levels); level++ {
@@ -280,6 +361,11 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 	// 仅选择得分大于1的压缩内容，并且允许l0到l0的特殊压缩，为了提升查询性能允许l0层独自压缩
 	out := prios[:0]
 	for _, p := range prios[:len(prios)-1] {
+		if p.score >= 1.0 {
+			out = append(out, p)
+		}
+	}
+	for _, p := range extras {
 		if p.score >= 1.0 {
 			out = append(out, p)
 		}
@@ -406,6 +492,10 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 }
 
 func (lm *levelManager) fillTablesIngest(cd *compactDef) bool {
+	return lm.fillTablesIngestShard(cd, -1)
+}
+
+func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
@@ -417,8 +507,25 @@ func (lm *levelManager) fillTablesIngest(cd *compactDef) bool {
 	if batchSize <= 0 || batchSize > totalIngest {
 		batchSize = totalIngest
 	}
-	top := make([]*table, batchSize)
-	copy(top, cd.thisLevel.ingest[:batchSize])
+	if shardIdx < 0 {
+		shardIdx = cd.thisLevel.ingestShardByBacklog()
+	}
+	sh := cd.thisLevel.ingest.shardByIndex(shardIdx)
+	if sh == nil || len(sh.tables) == 0 {
+		return false
+	}
+	// Adaptive batch: scale up when shard backlog is large to drain faster.
+	if denom := cd.targetFileSize(); denom > 0 {
+		score := float64(sh.size) / float64(denom)
+		if score > 1.0 {
+			boost := int(math.Ceil(score))
+			batchSize = min(len(sh.tables), batchSize*boost)
+		}
+	}
+	top := sh.tables
+	if batchSize > 0 && batchSize < len(top) {
+		top = top[:batchSize]
+	}
 	cd.top = top
 	cd.thisSize = 0
 	for _, t := range cd.top {
@@ -527,12 +634,25 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		return err
 	}
 
-	if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
-		return err
-	}
 	defer decrRefs(cd.top)
-	if err := thisLevel.deleteTables(cd.top); err != nil {
-		return err
+	if cd.ingestMerge {
+		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
+			return err
+		}
+		thisLevel.ingest.addBatch(newTables)
+		if thisLevel.levelNum > 0 {
+			thisLevel.Sort()
+		}
+	} else {
+		if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
+			return err
+		}
+		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
+			return err
+		}
+		if err := thisLevel.deleteTables(cd.top); err != nil {
+			return err
+		}
 	}
 
 	from := append(tablesToString(cd.top), tablesToString(cd.bot)...)
@@ -547,6 +667,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			id, expensive, thisLevel.levelNum, nextLevel.levelNum, len(cd.top), len(cd.bot),
 			len(newTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
 			dur.Round(time.Millisecond))
+	}
+	// Record ingest metrics if applicable.
+	if cd.ingestOnly {
+		tablesCompacted := len(cd.top) + len(cd.bot)
+		cd.thisLevel.recordIngestMetrics(cd.ingestMerge, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
 	return nil
@@ -622,7 +747,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		case lev == 0:
 			iters = append(iters, iteratorsReversed(topTables, iterOpt)...)
 		case len(topTables) > 0:
-			iters = []utils.Iterator{topTables[0].NewIterator(iterOpt)}
+			iters = append(iters, iteratorsReversed(topTables, iterOpt)...)
 		}
 		return append(iters, NewConcatIterator(botTables, iterOpt))
 	}
@@ -1121,7 +1246,6 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 			defer builder.Close()
 			var tbl *table
 			newFID := atomic.AddUint64(&lm.maxFID, 1) // compact的时候是没有memtable的，这里自增maxFID即可。
-			// TODO 这里的sst文件需要根据level大小变化
 			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
 			tbl = openTable(lm, sstName, builder)
 			if tbl == nil {
