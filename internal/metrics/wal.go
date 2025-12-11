@@ -6,15 +6,43 @@ import (
 	"slices"
 
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/wal"
 )
+
+// WALRecordMetrics summarises counts per record type.
+type WALRecordMetrics struct {
+	Entries       uint64 `json:"entries"`
+	RaftEntries   uint64 `json:"raft_entries"`
+	RaftStates    uint64 `json:"raft_states"`
+	RaftSnapshots uint64 `json:"raft_snapshots"`
+	Other         uint64 `json:"other"`
+}
+
+// Total returns the sum across all record types.
+func (m WALRecordMetrics) Total() uint64 {
+	return m.Entries + m.RaftEntries + m.RaftStates + m.RaftSnapshots + m.Other
+}
+
+// RaftRecords returns the total count of raft-specific records.
+func (m WALRecordMetrics) RaftRecords() uint64 {
+	return m.RaftEntries + m.RaftStates + m.RaftSnapshots
+}
+
+// WALMetrics captures runtime information about WAL manager state.
+type WALMetrics struct {
+	ActiveSegment           uint32
+	SegmentCount            int
+	ActiveSize              int64
+	RemovedSegments         uint64
+	RecordCounts            WALRecordMetrics
+	SegmentsWithRaftRecords int
+}
 
 // WALBacklogAnalysis summarizes WAL backlog state and GC candidates.
 type WALBacklogAnalysis struct {
 	ActiveSegment       uint32
 	ActiveSize          int64
 	SegmentCount        int
-	RecordCounts        wal.RecordMetrics
+	RecordCounts        WALRecordMetrics
 	SegmentsWithRaft    int
 	RemovableSegments   []uint32
 	TypedRecordRatio    float64
@@ -24,7 +52,7 @@ type WALBacklogAnalysis struct {
 
 // AnalyzeWALBacklog inspects WAL metrics, per-segment metrics, and raft pointers to
 // derive GC candidates and typed record ratios.
-func AnalyzeWALBacklog(metrics *wal.Metrics, segmentMetrics map[uint32]wal.RecordMetrics, ptrs map[uint64]manifest.RaftLogPointer) WALBacklogAnalysis {
+func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordMetrics, ptrs map[uint64]manifest.RaftLogPointer) WALBacklogAnalysis {
 	var analysis WALBacklogAnalysis
 	if metrics != nil {
 		analysis.ActiveSegment = metrics.ActiveSegment

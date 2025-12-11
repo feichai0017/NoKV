@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -40,30 +41,15 @@ type EntryInfo struct {
 }
 
 // Metrics captures runtime information about WAL manager state.
-type Metrics struct {
-	ActiveSegment           uint32
-	SegmentCount            int
-	ActiveSize              int64
-	RemovedSegments         uint64
-	RecordCounts            RecordMetrics
-	SegmentsWithRaftRecords int
-}
+type Metrics = metrics.WALMetrics
 
 // RecordMetrics summarises counts per record type.
-type RecordMetrics struct {
-	Entries       uint64 `json:"entries"`
-	RaftEntries   uint64 `json:"raft_entries"`
-	RaftStates    uint64 `json:"raft_states"`
-	RaftSnapshots uint64 `json:"raft_snapshots"`
-	Other         uint64 `json:"other"`
-}
+type RecordMetrics = metrics.WALRecordMetrics
 
-// Total returns the sum across all record types.
-func (m RecordMetrics) Total() uint64 {
-	return m.Entries + m.RaftEntries + m.RaftStates + m.RaftSnapshots + m.Other
-}
-
-func (m *RecordMetrics) add(recType RecordType) {
+func addRecordMetric(m *RecordMetrics, recType RecordType) {
+	if m == nil {
+		return
+	}
 	switch recType {
 	case RecordTypeEntry:
 		m.Entries++
@@ -76,10 +62,6 @@ func (m *RecordMetrics) add(recType RecordType) {
 	default:
 		m.Other++
 	}
-}
-
-func (m RecordMetrics) RaftRecords() uint64 {
-	return m.RaftEntries + m.RaftStates + m.RaftSnapshots
 }
 
 // Manager provides append-only WAL segments with replay support.
@@ -285,9 +267,9 @@ func (m *Manager) rebuildRecordCounts() error {
 	segmentTotals := make(map[uint32]RecordMetrics, 16)
 	err := m.Replay(func(info EntryInfo, _ []byte) error {
 		metrics := segmentTotals[info.SegmentID]
-		metrics.add(info.Type)
+		addRecordMetric(&metrics, info.Type)
 		segmentTotals[info.SegmentID] = metrics
-		totals.add(info.Type)
+		addRecordMetric(&totals, info.Type)
 		return nil
 	})
 	if err != nil {
@@ -412,9 +394,9 @@ func (m *Manager) AppendRecords(records ...Record) ([]EntryInfo, error) {
 			Type:      rec.Type,
 		}
 		segMetrics := m.segmentTotals[m.activeID]
-		segMetrics.add(rec.Type)
+		addRecordMetric(&segMetrics, rec.Type)
 		m.segmentTotals[m.activeID] = segMetrics
-		m.recordTotals.add(rec.Type)
+		addRecordMetric(&m.recordTotals, rec.Type)
 	}
 	if m.cfg.SyncOnWrite {
 		if err := m.writer.Flush(); err != nil {
