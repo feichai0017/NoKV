@@ -1,6 +1,6 @@
 # HotRing – Hot Key Tracking
 
-`hotring` is NoKV's built-in hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation resides in [`internal/hotring/`](../internal/hotring).
+`hotring` is NoKV's built-in hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation resides in [`hotring/`](../hotring).
 
 ---
 
@@ -42,11 +42,11 @@ flowchart LR
 
 | Method | Behaviour | Notes |
 | --- | --- | --- |
-| [`Touch`](../internal/hotring/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
-| [`Frequency`](../internal/hotring/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
-| [`TouchAndClamp`](../internal/hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
-| [`TopN`](../internal/hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
-| [`KeysAbove`](../internal/hotring/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
+| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
+| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
+| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
+| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
+| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
 
 Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket head or the predecessor’s `next` pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.
 

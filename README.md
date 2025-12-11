@@ -129,7 +129,7 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 | Concurrency | `mvcc/`, `txn.go`, `oracle` | Timestamp oracle + lock manager for MVCC transactions and TTL-aware reads. |
 | Replication | `raftstore/*` | Multi-Raft orchestration (regions, peers, router, schedulers, gRPC transport). |
 | Tooling | `cmd/nokv`, `cmd/nokv-config`, `cmd/nokv-redis` | CLI, config helper, Redis-compatible gateway share the same topology file. |
-| Observability | `stats`, `internal/hotring`, expvar | Built-in metrics, hot-key analytics, and crash recovery traces. |
+| Observability | `stats`, `hotring`, expvar | Built-in metrics, hot-key analytics, and crash recovery traces. |
 
 ---
 
@@ -171,7 +171,7 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 | ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
 | Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) | [Transactions & MVCC](docs/txn.md) |
 | RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
-| HotRing | Hot key tracking, throttling helpers (internal). | [`internal/hotring/`](./internal/hotring) | [HotRing overview](docs/hotring.md) |
+| HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
 | Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
 | Filesystem | mmap-backed file helpers shared by SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
 
@@ -188,7 +188,7 @@ Each module has a dedicated document under `docs/` describing APIs, diagrams, an
   - `nokv manifest --workdir <dir>`
   - `nokv regions --workdir <dir> [--json]`
   - `nokv vlog --workdir <dir>`
-- `hotring` (internal) continuously surfaces hot keys in stats + CLI so you can pre-warm caches or debug skewed workloads.
+- `hotring` continuously surfaces hot keys in stats + CLI so you can pre-warm caches or debug skewed workloads.
 
 More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-observability-in-tests).
 
