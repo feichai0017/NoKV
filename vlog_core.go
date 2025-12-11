@@ -44,6 +44,27 @@ func (vlog *valueLog) logf(format string, args ...any) {
 	fmt.Printf(format+"\n", args...)
 }
 
+// metrics captures backlog counters for the value log.
+func (vlog *valueLog) metrics() metrics.ValueLogMetrics {
+	if vlog == nil || vlog.manager == nil {
+		return metrics.ValueLogMetrics{}
+	}
+	stats := metrics.ValueLogMetrics{
+		Segments: len(vlog.manager.ListFIDs()),
+		Head:     vlog.manager.Head(),
+	}
+
+	if vlog.lfDiscardStats != nil {
+		stats.DiscardQueue = len(vlog.lfDiscardStats.flushChan)
+	}
+
+	vlog.filesToDeleteLock.Lock()
+	stats.PendingDeletes = len(vlog.filesToBeDeleted)
+	vlog.filesToDeleteLock.Unlock()
+
+	return stats
+}
+
 func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta) {
 	if vlog == nil || vlog.manager == nil || len(status) == 0 {
 		return
