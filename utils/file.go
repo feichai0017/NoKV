@@ -101,6 +101,9 @@ func CompareKeys(key1, key2 []byte) int {
 
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
+	if len(expected) < 8 {
+		return errors.Wrapf(ErrChecksumMismatch, "expected checksum length %d < 8", len(expected))
+	}
 	actual := uint64(crc32.Checksum(data, kv.CastagnoliCrcTable))
 	expectedU64 := kv.BytesToU64(expected)
 	if actual != expectedU64 {
