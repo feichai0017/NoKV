@@ -202,11 +202,13 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 	process := func(e *kv.Entry, ptr *kv.ValuePtr) error {
 		entry, err := vlog.db.lsm.Get(e.Key)
 		if err != nil {
-			// Key has been deleted/compacted away; skip.
+			// If LSM can't find it (e.g., concurrent compaction/move), fall back to the
+			// value log copy so we don't drop a live key.
 			if errors.Is(err, utils.ErrKeyNotFound) {
-				return nil
+				entry = e
+			} else {
+				return err
 			}
-			return err
 		}
 		if kv.DiscardEntry(e, entry) {
 			return nil
