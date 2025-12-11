@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
@@ -53,7 +54,7 @@ type (
 		isClosed         uint32
 		orc              *oracle
 		hot              *hotring.HotRing
-		writeMetrics     *writeMetrics
+		writeMetrics     *metrics.WriteMetrics
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
 		commitBatchPool  sync.Pool
@@ -98,7 +99,7 @@ var (
 
 // Open DB
 func Open(opt *Options) *DB {
-	db := &DB{opt: opt, writeMetrics: newWriteMetrics()}
+	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
 	db.headLogDelta = valueLogHeadLogInterval
 	db.initWriteBatchOptions()
 	db.commitBatchPool.New = func() any {
