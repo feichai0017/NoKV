@@ -31,6 +31,10 @@ type BenchmarkResult struct {
 	ScanOps            int64         `json:"scan_ops,omitempty"`
 	ScanItems          int64         `json:"scan_items,omitempty"`
 	ReadModifyWriteOps int64         `json:"read_modify_write_ops,omitempty"`
+	ValueAvg           float64       `json:"value_avg,omitempty"`
+	ValueP50           float64       `json:"value_p50,omitempty"`
+	ValueP95           float64       `json:"value_p95,omitempty"`
+	ValueP99           float64       `json:"value_p99,omitempty"`
 }
 
 // Finalize computes derived metrics after the raw totals are filled in.
@@ -60,11 +64,11 @@ func (r BenchmarkResult) opsPerSecond() float64 {
 
 // writeSummaryTable renders a table of benchmark results to the provided writer.
 func writeSummaryTable(w *tabwriter.Writer, results []BenchmarkResult) {
-	fmt.Fprintln(w, "ENGINE\tOPERATION\tMODE\tOPS/S\tAVG LATENCY\tP50\tP95\tP99\tTOTAL OPS\tREADS\tUPDATES\tINSERTS\tSCANS\tSCAN ITEMS\tRMW\tDATA (MB)\tDURATION")
+	fmt.Fprintln(w, "ENGINE\tOPERATION\tMODE\tOPS/S\tAVG LATENCY\tP50\tP95\tP99\tTOTAL OPS\tREADS\tUPDATES\tINSERTS\tSCANS\tSCAN ITEMS\tRMW\tVAL AVG\tVAL P95\tDATA (MB)\tDURATION")
 	for _, result := range results {
 		fmt.Fprintf(
 			w,
-			"%s\t%s\t%s\t%.0f\t%v\t%v\t%v\t%v\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%v\n",
+			"%s\t%s\t%s\t%.0f\t%v\t%v\t%v\t%v\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.0f\t%.0f\t%.2f\t%v\n",
 			result.Engine,
 			result.Operation,
 			result.Mode,
@@ -80,6 +84,8 @@ func writeSummaryTable(w *tabwriter.Writer, results []BenchmarkResult) {
 			result.ScanOps,
 			result.ScanItems,
 			result.ReadModifyWriteOps,
+			result.ValueAvg,
+			result.ValueP95,
 			result.DataSize,
 			result.TotalDuration,
 		)
@@ -132,6 +138,10 @@ func WriteResults(results []BenchmarkResult) error {
 		}
 		if result.P99LatencyNS > 0 {
 			fmt.Fprintf(file, "P99 Latency: %v\n", latencyFromNS(result.P99LatencyNS))
+		}
+		if result.ValueAvg > 0 || result.ValueP95 > 0 {
+			fmt.Fprintf(file, "Value Size (bytes): avg=%.0f p50=%.0f p95=%.0f p99=%.0f\n",
+				result.ValueAvg, result.ValueP50, result.ValueP95, result.ValueP99)
 		}
 		fmt.Fprintf(file, "Total Operations: %d\n", result.TotalOperations)
 		fmt.Fprintf(file, "Data Processed: %d bytes (%.2f MB)\n", result.DataBytes, result.DataSize)

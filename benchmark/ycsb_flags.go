@@ -31,6 +31,11 @@ var (
 	ycsbMemtableMB       = flag.Int("ycsb_memtable_mb", 64, "Memtable size (MB) for LSM engines (NoKV/RocksDB where applicable)")
 	ycsbSSTableMB        = flag.Int("ycsb_sstable_mb", 512, "Target SST size (MB) for LSM engines (NoKV/RocksDB where applicable)")
 	ycsbVlogFileMB       = flag.Int("ycsb_vlog_mb", 512, "Value log file size (MB) for engines that separate values (NoKV)")
+	ycsbValueDist        = flag.String("ycsb_value_dist", "fixed", "Value size distribution: fixed|uniform|normal|percentile")
+	ycsbValueMin         = flag.Int("ycsb_value_min", 0, "Min value size for uniform/normal distributions (bytes); 0 defaults to value_size")
+	ycsbValueMax         = flag.Int("ycsb_value_max", 0, "Max value size for uniform/normal distributions (bytes); 0 defaults to value_size")
+	ycsbValueStd         = flag.Int("ycsb_value_std", 0, "Stddev for normal distribution (bytes); 0 defaults to value_size/4")
+	ycsbValuePercentiles = flag.String("ycsb_value_percentiles", "", "Percentile map for percentile dist, e.g. \"50:256,90:512,99:1024,100:2048\"")
 )
 
 const benchmarkEnvKey = "NOKV_RUN_BENCHMARKS"
