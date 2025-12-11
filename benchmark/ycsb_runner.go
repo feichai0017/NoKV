@@ -43,6 +43,8 @@ type ycsbConfig struct {
 	ValueSize   int
 	Concurrency int
 	ScanLength  int
+	TargetOps   int // overall ops/sec target; 0 = unlimited
+	StatusEvery time.Duration
 	Workloads   []ycsbWorkload
 	Engines     []string
 }
@@ -249,6 +251,39 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 	errCh := make(chan error, cfg.Concurrency)
 	var wg sync.WaitGroup
 
+	// Optional overall throughput throttle.
+	var targetInterval time.Duration
+	if cfg.TargetOps > 0 {
+		// Spread tokens evenly over a second; clamp to avoid zero duration.
+		perOp := time.Second / time.Duration(cfg.TargetOps)
+		if perOp < time.Microsecond {
+			perOp = time.Microsecond
+		}
+		targetInterval = perOp
+	}
+
+	// Optional status ticker.
+	var statusStop chan struct{}
+	if cfg.StatusEvery > 0 {
+		statusStop = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(cfg.StatusEvery)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					done := loadedOps.Load()
+					elapsed := time.Since(start).Seconds()
+					opsRate := float64(done) / elapsed
+					fmt.Printf("[YCSB %s %s] ops=%d rate=%.0f ops/s elapsed=%.1fs\n",
+						engine.Name(), wl.Name, done, opsRate, elapsed)
+				case <-statusStop:
+					return
+				}
+			}
+		}()
+	}
+
 	keySpan := uint64(cfg.RecordCount + cfg.Operations*2)
 
 	for worker := 0; worker < cfg.Concurrency; worker++ {
@@ -331,6 +366,9 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 				}
 				latRec.Record(time.Since(startOp).Nanoseconds())
 				loadedOps.Add(1)
+				if targetInterval > 0 {
+					time.Sleep(targetInterval)
+				}
 			}
 		}(worker, localStart, localEnd)
 	}
@@ -342,6 +380,9 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 		}
 	}
 	duration := time.Since(start)
+	if statusStop != nil {
+		close(statusStop)
+	}
 
 	result := BenchmarkResult{
 		Name:               fmt.Sprintf("%s-YCSB-%s", engine.Name(), wl.Name),

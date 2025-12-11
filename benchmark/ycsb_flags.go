@@ -1,6 +1,9 @@
 package benchmark
 
-import "flag"
+import (
+	"flag"
+	"time"
+)
 
 var (
 	fBenchDir   = flag.String("benchdir", "benchmark_data", "benchmark working directory")
@@ -21,6 +24,8 @@ var (
 	ycsbScanLength       = flag.Int("ycsb_scan_len", 100, "scan length (items) used by YCSB workload E")
 	ycsbValueSize        = flag.Int("ycsb_value_size", 256, "value size (bytes) for YCSB records")
 	ycsbWarmOperations   = flag.Int("ycsb_warm_ops", 100000, "warm-up operations executed per workload before measuring")
+	ycsbTargetOps        = flag.Int("ycsb_target_ops", 0, "optional target ops/sec (overall) during run; 0 disables throttling")
+	ycsbStatusInterval   = flag.Duration("ycsb_status_interval", 10*time.Second, "interval for progress/status reporting; 0 disables")
 	ycsbRocksCompression = flag.String("ycsb_rocks_compression", "none", "RocksDB compression codec: none|snappy|zstd")
 	ycsbBlockCacheMB     = flag.Int("ycsb_block_cache_mb", 256, "Block cache size (MB) applied to RocksDB/NoKV tables")
 )
