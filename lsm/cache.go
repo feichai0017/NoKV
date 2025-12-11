@@ -3,10 +3,10 @@ package lsm
 import (
 	"container/list"
 	"sync"
-	"sync/atomic"
 
 	"github.com/dgraph-io/ristretto/v2"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
@@ -15,35 +15,15 @@ import (
 
 const defaultCacheSize = 1024
 
+// CacheMetrics is an alias for the shared cache metrics snapshot type.
+type CacheMetrics = metrics.CacheSnapshot
+
 type cache struct {
 	indexs   *coreCache.Cache // key fid， value *pb.TableIndex
 	indexHot *hotIndexCache
 	blocks   *blockCache
 	blooms   *bloomCache
-	metrics  *cacheMetrics
-}
-
-// CacheMetrics captures cache hit/miss counters for read path observability.
-type CacheMetrics struct {
-	L0Hits      uint64
-	L0Misses    uint64
-	L1Hits      uint64
-	L1Misses    uint64
-	BloomHits   uint64
-	BloomMisses uint64
-	IndexHits   uint64
-	IndexMisses uint64
-}
-
-type cacheMetrics struct {
-	l0Hits      uint64
-	l0Misses    uint64
-	l1Hits      uint64
-	l1Misses    uint64
-	bloomHits   uint64
-	bloomMisses uint64
-	indexHits   uint64
-	indexMisses uint64
+	metrics  *metrics.CacheCounters
 }
 
 type hotIndexCache struct {
@@ -99,55 +79,6 @@ func (hc *hotBloomCache) promote(fid uint64, filter utils.Filter) {
 	hc.cp.Promote(fid, dup)
 }
 
-func (m *cacheMetrics) recordBlock(level int, hit bool) {
-	switch level {
-	case 0:
-		if hit {
-			atomic.AddUint64(&m.l0Hits, 1)
-		} else {
-			atomic.AddUint64(&m.l0Misses, 1)
-		}
-	case 1:
-		if hit {
-			atomic.AddUint64(&m.l1Hits, 1)
-		} else {
-			atomic.AddUint64(&m.l1Misses, 1)
-		}
-	}
-}
-
-func (m *cacheMetrics) recordBloom(hit bool) {
-	if hit {
-		atomic.AddUint64(&m.bloomHits, 1)
-		return
-	}
-	atomic.AddUint64(&m.bloomMisses, 1)
-}
-
-func (m *cacheMetrics) snapshot() CacheMetrics {
-	if m == nil {
-		return CacheMetrics{}
-	}
-	return CacheMetrics{
-		L0Hits:      atomic.LoadUint64(&m.l0Hits),
-		L0Misses:    atomic.LoadUint64(&m.l0Misses),
-		L1Hits:      atomic.LoadUint64(&m.l1Hits),
-		L1Misses:    atomic.LoadUint64(&m.l1Misses),
-		BloomHits:   atomic.LoadUint64(&m.bloomHits),
-		BloomMisses: atomic.LoadUint64(&m.bloomMisses),
-		IndexHits:   atomic.LoadUint64(&m.indexHits),
-		IndexMisses: atomic.LoadUint64(&m.indexMisses),
-	}
-}
-
-func (m *cacheMetrics) recordIndex(hit bool) {
-	if hit {
-		atomic.AddUint64(&m.indexHits, 1)
-		return
-	}
-	atomic.AddUint64(&m.indexMisses, 1)
-}
-
 // close releases cache state.
 func (c *cache) close() error {
 	if c == nil {
@@ -167,7 +98,7 @@ func (c *cache) close() error {
 }
 
 func newCache(opt *Options) *cache {
-	metrics := &cacheMetrics{}
+	counters := metrics.NewCacheCounters()
 	hotCap := max(opt.BlockCacheSize, 0)
 	blocks := newBlockCache(hotCap)
 	blooms := newBloomCache(opt.BloomCacheSize)
@@ -180,7 +111,7 @@ func newCache(opt *Options) *cache {
 		indexHot: newHotIndexCache(hotIdxCap),
 		blocks:   blocks,
 		blooms:   blooms,
-		metrics:  metrics,
+		metrics:  counters,
 	}
 }
 
@@ -201,7 +132,7 @@ func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
 	if c != nil && c.indexHot != nil {
 		if idx, ok := c.indexHot.get(fid); ok && idx != nil {
 			if c.metrics != nil {
-				c.metrics.recordIndex(true)
+				c.metrics.RecordIndex(true)
 			}
 			return idx, true
 		}
@@ -211,7 +142,7 @@ func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
 	}
 	val, ok := c.indexs.Get(fid)
 	if c.metrics != nil {
-		c.metrics.recordIndex(ok)
+		c.metrics.RecordIndex(ok)
 	}
 	if !ok {
 		return nil, false
@@ -236,10 +167,10 @@ func (c *cache) getBlock(level int, tbl *table, key uint64, hot bool) (*block, b
 	}
 	blk, ok := c.blocks.get(level, tbl, key, hot)
 	if ok {
-		c.metrics.recordBlock(level, true)
+		c.metrics.RecordBlock(level, true)
 		return blk, true
 	}
-	c.metrics.recordBlock(level, false)
+	c.metrics.RecordBlock(level, false)
 	return nil, false
 }
 
@@ -262,7 +193,7 @@ func (c *cache) getBloom(fid uint64) (utils.Filter, bool) {
 		return nil, false
 	}
 	filter, ok := c.blooms.get(fid)
-	c.metrics.recordBloom(ok)
+	c.metrics.RecordBloom(ok)
 	return filter, ok
 }
 
@@ -273,11 +204,11 @@ func (c *cache) addBloom(fid uint64, filter utils.Filter) {
 	c.blooms.add(fid, filter)
 }
 
-func (c *cache) metricsSnapshot() CacheMetrics {
+func (c *cache) metricsSnapshot() metrics.CacheSnapshot {
 	if c == nil {
-		return CacheMetrics{}
+		return metrics.CacheSnapshot{}
 	}
-	return c.metrics.snapshot()
+	return c.metrics.Snapshot()
 }
 
 type blockCache struct {
