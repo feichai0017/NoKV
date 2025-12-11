@@ -375,3 +375,83 @@ func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
 	_, err = db.Get([]byte("txn-key"))
 	require.Equal(t, utils.ErrKeyNotFound, err)
 }
+
+func TestTxnIteratorBasic(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		txn := db.NewTransaction(true)
+		keys := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		for i, k := range keys {
+			require.NoError(t, txn.Set(k, []byte{byte('v' + i)}))
+		}
+		require.NoError(t, txn.Commit())
+
+		readTxn := db.NewTransaction(false)
+		it := readTxn.NewIterator(DefaultIteratorOptions)
+		it.Rewind()
+		var got [][]byte
+		for it.Valid() {
+			got = append(got, append([]byte(nil), it.Item().Entry().Key...))
+			it.Next()
+		}
+		it.Close()
+		require.ElementsMatch(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, got)
+		readTxn.Discard()
+	})
+}
+
+func TestTxnIteratorSeekAndReverse(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		txn := db.NewTransaction(true)
+		keys := [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}
+		for _, k := range keys {
+			require.NoError(t, txn.Set(k, []byte("v")))
+		}
+		require.NoError(t, txn.Commit())
+
+		// Forward seek
+		readTxn := db.NewTransaction(false)
+		it := readTxn.NewIterator(DefaultIteratorOptions)
+		it.Seek([]byte("b"))
+		var forward []byte
+		for it.Valid() {
+			forward = append(forward, it.Item().Entry().Key...)
+			it.Next()
+		}
+		it.Close()
+		readTxn.Discard()
+
+		require.Equal(t, []byte("bcd"), forward)
+
+		// Reverse
+		readTxn2 := db.NewTransaction(false)
+		revOpt := DefaultIteratorOptions
+		revOpt.Reverse = true
+		it2 := readTxn2.NewIterator(revOpt)
+		it2.Rewind()
+		var reverse []byte
+		for it2.Valid() {
+			reverse = append(reverse, it2.Item().Entry().Key...)
+			it2.Next()
+		}
+		it2.Close()
+		readTxn2.Discard()
+
+		require.Equal(t, []byte("abcd"), reverse)
+	})
+}
+
+func TestTxnMetricsCounters(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		// Simple read and write to bump counters.
+		_ = db.View(func(tx *Txn) error {
+			_, _ = tx.Get([]byte("missing"))
+			return nil
+		})
+		_ = db.Update(func(tx *Txn) error {
+			return tx.Set([]byte("m"), []byte("v"))
+		})
+
+		snap := db.orc.txnMetricsSnapshot()
+		require.GreaterOrEqual(t, snap.Started, uint64(2))
+	})
+}

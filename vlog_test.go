@@ -321,3 +321,22 @@ func TestValueLogReconcileManifestRemovesInvalid(t *testing.T) {
 	_, err = os.Stat(filepath.Join(tmp, "00000.vlog"))
 	require.Error(t, err)
 }
+
+func TestValueLogGCSkipBlocked(t *testing.T) {
+	clearDir()
+	opt := NewDefaultOptions()
+	opt.ValueLogFileSize = 1 << 20
+	opt.NumCompactors = 0
+	db := Open(opt)
+	defer db.Close()
+
+	db.applyThrottle(true)
+	defer db.applyThrottle(false)
+
+	e := kvpkg.NewEntry([]byte("gc-skip"), []byte("v"))
+	require.NoError(t, db.Set(e))
+
+	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
+		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)
+	}
+}
