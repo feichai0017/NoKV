@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"

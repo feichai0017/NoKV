@@ -1,6 +1,6 @@
 package store
 
-import "github.com/feichai0017/NoKV/internal/metrics"
+import "github.com/feichai0017/NoKV/metrics"
 
 // RegionMetrics records region counts grouped by lifecycle state. It is safe
 // for concurrent use.
