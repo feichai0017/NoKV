@@ -38,13 +38,21 @@ func (e *badgerEngine) Open(clean bool) error {
 	default:
 		comp = options.None
 	}
+	blockCacheMB := e.opts.BadgerBlockCacheMB
+	if blockCacheMB <= 0 {
+		blockCacheMB = e.opts.BlockCacheMB
+	}
+	indexCacheMB := e.opts.BadgerIndexCacheMB
+	if indexCacheMB <= 0 {
+		indexCacheMB = blockCacheMB
+	}
 	opts := badger.DefaultOptions(dir).
 		WithLogger(nil).
 		WithSyncWrites(e.opts.SyncWrites).
 		WithCompression(comp).
 		WithValueThreshold(int64(e.opts.ValueThreshold)).
-		WithBlockCacheSize(int64(e.opts.BadgerBlockCacheMB) << 20).
-		WithIndexCacheSize(int64(e.opts.BadgerIndexCacheMB) << 20)
+		WithBlockCacheSize(int64(blockCacheMB) << 20).
+		WithIndexCacheSize(int64(indexCacheMB) << 20)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return err

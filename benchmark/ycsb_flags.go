@@ -9,8 +9,8 @@ var (
 
 	fValueThreshold = flag.Int("value_threshold", 32, "value size threshold (bytes) before spilling to the value log")
 
-	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", 256, "Badger block cache size (MB)")
-	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", 128, "Badger index cache size (MB)")
+	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", -1, "Badger block cache size (MB); <=0 falls back to ycsb_block_cache_mb")
+	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", -1, "Badger index cache size (MB); <=0 falls back to block cache size")
 	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression codec: none|snappy|zstd")
 
 	ycsbWorkloads        = flag.String("ycsb_workloads", "A,B,C,D,F", "comma-separated YCSB workloads (A-F)")
