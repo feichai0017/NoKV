@@ -9,6 +9,12 @@
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
       <img src="https://pkg.go.dev/badge/github.com/feichai0017/NoKV.svg" alt="Go Reference"/>
     </a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
+      <img src="https://goreportcard.com/badge/github.com/feichai0017/NoKV" alt="Go Report Card"/>
+    </a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV">
+      <img src="https://codecov.io/gh/feichai0017/NoKV/branch/main/graph/badge.svg" alt="Coverage"/>
+    </a>
     <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
