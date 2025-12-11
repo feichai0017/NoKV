@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -102,13 +103,6 @@ func (o *oracle) Stop() {
 	o.closer.SignalAndWait()
 }
 
-type txnMetrics struct {
-	Started   uint64
-	Committed uint64
-	Conflicts uint64
-	Active    int64
-}
-
 func (o *oracle) trackTxnStart() {
 	atomic.AddUint64(&o.txnStarted, 1)
 	atomic.AddInt64(&o.txnActive, 1)
@@ -126,8 +120,8 @@ func (o *oracle) trackTxnFinish() {
 	atomic.AddInt64(&o.txnActive, -1)
 }
 
-func (o *oracle) txnMetricsSnapshot() txnMetrics {
-	return txnMetrics{
+func (o *oracle) txnMetricsSnapshot() metrics.TxnMetrics {
+	return metrics.TxnMetrics{
 		Started:   atomic.LoadUint64(&o.txnStarted),
 		Committed: atomic.LoadUint64(&o.txnCommitted),
 		Conflicts: atomic.LoadUint64(&o.txnConflicts),
