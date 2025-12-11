@@ -62,6 +62,10 @@ type Options struct {
 	// HotWriteBatchMultiplier scales write batch limits when a hot key is
 	// detected, allowing short-term coalescing of repeated writes.
 	HotWriteBatchMultiplier int
+	// WriteBatchWait adds an optional coalescing delay when the commit queue is
+	// momentarily empty, letting small bursts share one WAL fsync/apply pass.
+	// Zero disables the delay.
+	WriteBatchWait time.Duration
 
 	// Block cache configuration for read path optimization. Cached blocks
 	// target L0/L1; colder data relies on the OS page cache.
@@ -149,6 +153,7 @@ func NewDefaultOptions() *Options {
 		WriteHotKeyLimit:              128,
 		HotWriteBurstThreshold:        8,
 		HotWriteBatchMultiplier:       2,
+		WriteBatchWait:                200 * time.Microsecond,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,

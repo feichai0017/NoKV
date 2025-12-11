@@ -32,6 +32,9 @@ func (db *DB) initWriteBatchOptions() {
 	if db.opt.WriteBatchMaxSize <= 0 {
 		db.opt.WriteBatchMaxSize = defaultWriteBatchMaxSize
 	}
+	if db.opt.WriteBatchWait < 0 {
+		db.opt.WriteBatchWait = 0
+	}
 }
 
 func (db *DB) applyThrottle(enable bool) {
@@ -154,6 +157,7 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	batch = batch[:0]
 	pendingEntries := int64(0)
 	pendingBytes := int64(0)
+	coalesceWait := db.opt.WriteBatchWait
 
 	// Adapt batch size to current backlog to drain the queue faster under load
 	// and reduce wake/sleep churn on the condition variable. Caps keep the batch
@@ -195,6 +199,12 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	}
 
 	popOne()
+	if coalesceWait > 0 && cq.ring.Len() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
+		// Allow a brief coalescing window when the queue is momentarily empty.
+		cq.mu.Unlock()
+		time.Sleep(coalesceWait)
+		cq.mu.Lock()
+	}
 	for len(batch) < limitCount && pendingBytes < limitSize {
 		if !popOne() {
 			break

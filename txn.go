@@ -34,6 +34,7 @@ type oracle struct {
 	// of keys written and their latest commit counter).
 	committedTxns []committedTxn
 	lastCleanupTs uint64
+	intentTable   map[uint64]uint64 // key hash -> latest commit ts
 
 	// closer is used to stop watermarks.
 	closer *utils.Closer
@@ -64,6 +65,7 @@ func cloneConflictKeys(src map[uint64]struct{}) map[uint64]struct{} {
 func newOracle(opt Options) *oracle {
 	orc := &oracle{
 		detectConflicts: opt.DetectConflicts,
+		intentTable:     make(map[uint64]uint64),
 		// We're not initializing nextTxnTs and readOnlyTs. It would be done after replay in Open.
 		//
 		// WaterMarks must be 64-bit aligned for atomic package, hence we must use pointers here.
@@ -178,6 +180,14 @@ func (o *oracle) hasConflict(txn *Txn) bool {
 	if len(txn.reads) == 0 {
 		return false
 	}
+	// Fast intent check: if any read key hash has a commit newer than readTs, short-circuit.
+	if o.intentTable != nil {
+		for _, ro := range txn.reads {
+			if ts, ok := o.intentTable[ro]; ok && ts > txn.readTs {
+				return true
+			}
+		}
+	}
 	for _, committedTxn := range o.committedTxns {
 		// If the committedTxn.ts is less than txn.readTs that implies that the
 		// committedTxn finished before the current transaction started.
@@ -221,10 +231,16 @@ func (o *oracle) newCommitTs(txn *Txn) (uint64, bool) {
 		// We should ensure that txns are not added to o.committedTxns slice when
 		// conflict detection is disabled otherwise this slice would keep growing.
 		// txn.conflictKeys is pooled; copy it so future reuse does not clear history.
+		copied := cloneConflictKeys(txn.conflictKeys)
 		o.committedTxns = append(o.committedTxns, committedTxn{
 			ts:           ts,
-			conflictKeys: cloneConflictKeys(txn.conflictKeys),
+			conflictKeys: copied,
 		})
+		if o.intentTable != nil {
+			for k := range copied {
+				o.intentTable[k] = ts
+			}
+		}
 	}
 
 	return ts, false
@@ -260,6 +276,13 @@ func (o *oracle) cleanupCommittedTransactions() { // Must be called under o.Lock
 	tmp := o.committedTxns[:0]
 	for _, txn := range o.committedTxns {
 		if txn.ts <= maxReadTs {
+			if o.intentTable != nil {
+				for k := range txn.conflictKeys {
+					if ts, ok := o.intentTable[k]; ok && ts == txn.ts {
+						delete(o.intentTable, k)
+					}
+				}
+			}
 			continue
 		}
 		tmp = append(tmp, txn)
