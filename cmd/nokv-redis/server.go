@@ -3,16 +3,16 @@ package main
 import (
 	"bufio"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/feichai0017/NoKV/internal/metrics"
 )
 
 const (
@@ -20,104 +20,18 @@ const (
 	flushBufferedBytes = 2048
 )
 
-type redisMetrics struct {
-	commandsTotal       atomic.Uint64
-	errorsTotal         atomic.Uint64
-	connectionsCurrent  atomic.Int64
-	connectionsAccepted atomic.Uint64
-	mu                  sync.RWMutex
-	commandCounts       map[string]*atomic.Uint64
-}
-
-func newRedisMetrics(commandNames []string) *redisMetrics {
-	rm := &redisMetrics{
-		commandCounts: make(map[string]*atomic.Uint64, len(commandNames)),
-	}
-	for _, name := range commandNames {
-		rm.commandCounts[strings.ToUpper(name)] = &atomic.Uint64{}
-	}
-
-	expvar.Publish("NoKV.Redis", expvar.Func(func() any {
-		return rm.snapshot()
-	}))
-	return rm
-}
-
-func (rm *redisMetrics) snapshot() map[string]any {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	commands := make(map[string]uint64, len(rm.commandCounts))
-	for name, counter := range rm.commandCounts {
-		commands[name] = counter.Load()
-	}
-
-	return map[string]any{
-		"commands_total":         rm.commandsTotal.Load(),
-		"errors_total":           rm.errorsTotal.Load(),
-		"connections_active":     rm.connectionsCurrent.Load(),
-		"connections_accepted":   rm.connectionsAccepted.Load(),
-		"commands_per_operation": commands,
-	}
-}
-
-func (rm *redisMetrics) incCommand(name string) {
-	if rm == nil {
-		return
-	}
-	rm.commandsTotal.Add(1)
-	name = strings.ToUpper(name)
-	rm.mu.RLock()
-	counter := rm.commandCounts[name]
-	rm.mu.RUnlock()
-	if counter != nil {
-		counter.Add(1)
-		return
-	}
-	rm.mu.Lock()
-	counter = rm.commandCounts[name]
-	if counter == nil {
-		counter = &atomic.Uint64{}
-		rm.commandCounts[name] = counter
-	}
-	rm.mu.Unlock()
-	counter.Add(1)
-}
-
-func (rm *redisMetrics) incError() {
-	if rm == nil {
-		return
-	}
-	rm.errorsTotal.Add(1)
-}
-
-func (rm *redisMetrics) connOpened() {
-	if rm == nil {
-		return
-	}
-	rm.connectionsAccepted.Add(1)
-	rm.connectionsCurrent.Add(1)
-}
-
-func (rm *redisMetrics) connClosed() {
-	if rm == nil {
-		return
-	}
-	rm.connectionsCurrent.Add(-1)
-}
-
 var (
 	metricsOnce     sync.Once
-	metricsInstance *redisMetrics
+	metricsInstance *metrics.RedisMetrics
 )
 
-func globalRedisMetrics() *redisMetrics {
+func globalRedisMetrics() *metrics.RedisMetrics {
 	metricsOnce.Do(func() {
 		commands := []string{
 			"PING", "ECHO", "GET", "SET", "DEL", "MGET", "MSET",
 			"INCR", "DECR", "INCRBY", "DECRBY", "EXISTS", "QUIT",
 		}
-		metricsInstance = newRedisMetrics(commands)
+		metricsInstance = metrics.NewRedisMetrics(commands)
 	})
 	return metricsInstance
 }
@@ -125,7 +39,7 @@ func globalRedisMetrics() *redisMetrics {
 type redisServer struct {
 	backend redisBackend
 	wg      sync.WaitGroup
-	metrics *redisMetrics
+	metrics *metrics.RedisMetrics
 }
 
 func newServer(backend redisBackend) *redisServer {
@@ -160,7 +74,7 @@ func (s *redisServer) Serve(ln net.Listener) error {
 			return err
 		}
 		tempDelay = 0
-		s.metrics.connOpened()
+		s.metrics.ConnOpened()
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -193,7 +107,7 @@ func isRetryableAcceptError(err error) bool {
 
 func (s *redisServer) handleConn(conn net.Conn) {
 	defer conn.Close()
-	defer s.metrics.connClosed()
+	defer s.metrics.ConnClosed()
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 	pending := 0
@@ -248,7 +162,7 @@ func (s *redisServer) handleConn(conn net.Conn) {
 
 func (s *redisServer) execute(w *bufio.Writer, args [][]byte) error {
 	cmd := strings.ToUpper(string(args[0]))
-	s.metrics.incCommand(cmd)
+	s.metrics.IncCommand(cmd)
 	switch cmd {
 	case "PING":
 		if len(args) > 1 && len(args[1]) > 0 {
@@ -660,7 +574,7 @@ func writeError(w *bufio.Writer, msg string) error {
 
 func (s *redisServer) respondError(w *bufio.Writer, msg string) error {
 	if s.metrics != nil {
-		s.metrics.incError()
+		s.metrics.IncError()
 	}
 	return writeError(w, msg)
 }
