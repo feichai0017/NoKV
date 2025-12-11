@@ -169,6 +169,10 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		return false, nil
 	})
 	if err != nil && err != utils.ErrStop {
+		// Skip this round if writes are blocked/DB is closing; GC can retry later.
+		if errors.Is(err, utils.ErrBlockedWrites) || errors.Is(err, utils.ErrDBClosed) {
+			return utils.ErrNoRewrite
+		}
 		return err
 	}
 	if stats == nil {
