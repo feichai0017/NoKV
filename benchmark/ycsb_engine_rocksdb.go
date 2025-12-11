@@ -44,6 +44,9 @@ func (e *rocksdbEngine) Open(clean bool) error {
 	opts := C.rocksdb_options_create()
 	e.options = opts
 	C.rocksdb_options_set_create_if_missing(opts, 1)
+	if mb := e.opts.MemtableMB; mb > 0 {
+		C.rocksdb_options_set_write_buffer_size(opts, C.size_t(mb)<<20)
+	}
 	if conc := e.opts.BlockCacheMB; conc > 0 {
 		e.cache = C.rocksdb_cache_create_lru(C.size_t(conc) << 20)
 		bopts := C.rocksdb_block_based_options_create()
@@ -59,6 +62,10 @@ func (e *rocksdbEngine) Open(clean bool) error {
 		C.rocksdb_options_set_compression(opts, C.rocksdb_zstd_compression)
 	default:
 		C.rocksdb_options_set_compression(opts, C.rocksdb_no_compression)
+	}
+	if mb := e.opts.SSTableMB; mb > 0 {
+		C.rocksdb_options_set_target_file_size_base(opts, C.uint64_t(mb)<<20)
+		C.rocksdb_options_set_target_file_size_multiplier(opts, 1)
 	}
 
 	cDir := C.CString(dir)

@@ -31,6 +31,9 @@ type ycsbEngineOptions struct {
 	ValueThreshold int
 	SyncWrites     bool
 	BlockCacheMB   int
+	MemtableMB     int
+	SSTableMB      int
+	VlogFileMB     int
 
 	// Badger specific cache sizes (in MB).
 	BadgerBlockCacheMB int

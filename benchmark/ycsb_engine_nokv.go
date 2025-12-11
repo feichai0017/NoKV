@@ -15,11 +15,11 @@ func newNoKVEngine(opts ycsbEngineOptions) ycsbEngine {
 }
 
 type nokvEngine struct {
-	opts       ycsbEngineOptions
-	db         *NoKV.DB
-	valuePool  sync.Pool
-	valueSize  int
-	valueCap   int
+	opts      ycsbEngineOptions
+	db        *NoKV.DB
+	valuePool sync.Pool
+	valueSize int
+	valueCap  int
 }
 
 func (e *nokvEngine) Name() string { return "NoKV" }
@@ -35,9 +35,9 @@ func (e *nokvEngine) Open(clean bool) error {
 	}
 	opt := &NoKV.Options{
 		WorkDir:            dir,
-		MemTableSize:       64 << 20,
-		SSTableMaxSz:       512 << 20,
-		ValueLogFileSize:   512 << 20,
+		MemTableSize:       int64(e.opts.MemtableMB) << 20,
+		SSTableMaxSz:       int64(e.opts.SSTableMB) << 20,
+		ValueLogFileSize:   e.opts.VlogFileMB << 20,
 		ValueLogMaxEntries: 1 << 20,
 		ValueThreshold:     int64(e.opts.ValueThreshold),
 		MaxBatchCount:      10000,
