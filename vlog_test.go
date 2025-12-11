@@ -104,8 +104,11 @@ func clearDir() {
 func TestValueGC(t *testing.T) {
 	clearDir()
 	opt.ValueLogFileSize = 1 << 20
+	origCompactors := opt.NumCompactors
+	opt.NumCompactors = 0
 	db := Open(opt)
 	defer db.Close()
+	defer func() { opt.NumCompactors = origCompactors }()
 	sz := 32 << 10
 	kvList := make([]*kvpkg.Entry, 0, 100)
 	defer func() {
