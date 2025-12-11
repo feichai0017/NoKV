@@ -28,6 +28,9 @@ var (
 	ycsbStatusInterval   = flag.Duration("ycsb_status_interval", 10*time.Second, "interval for progress/status reporting; 0 disables")
 	ycsbRocksCompression = flag.String("ycsb_rocks_compression", "none", "RocksDB compression codec: none|snappy|zstd")
 	ycsbBlockCacheMB     = flag.Int("ycsb_block_cache_mb", 256, "Block cache size (MB) applied to RocksDB/NoKV tables")
+	ycsbMemtableMB       = flag.Int("ycsb_memtable_mb", 64, "Memtable size (MB) for LSM engines (NoKV/RocksDB where applicable)")
+	ycsbSSTableMB        = flag.Int("ycsb_sstable_mb", 512, "Target SST size (MB) for LSM engines (NoKV/RocksDB where applicable)")
+	ycsbVlogFileMB       = flag.Int("ycsb_vlog_mb", 512, "Value log file size (MB) for engines that separate values (NoKV)")
 )
 
 const benchmarkEnvKey = "NOKV_RUN_BENCHMARKS"
