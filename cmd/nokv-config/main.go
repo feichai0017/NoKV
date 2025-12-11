@@ -3,54 +3,15 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/manifest"
 )
-
-type configFile struct {
-	MaxRetries int            `json:"max_retries"`
-	TSO        *tsoConfig     `json:"tso"`
-	Stores     []storeConfig  `json:"stores"`
-	Regions    []regionConfig `json:"regions"`
-}
-
-type tsoConfig struct {
-	ListenAddr   string `json:"listen_addr"`
-	AdvertiseURL string `json:"advertise_url"`
-}
-
-type storeConfig struct {
-	StoreID          uint64 `json:"store_id"`
-	Addr             string `json:"addr"`
-	ListenAddr       string `json:"listen_addr"`
-	DockerAddr       string `json:"docker_addr"`
-	DockerListenAddr string `json:"docker_listen_addr"`
-}
-
-type regionConfig struct {
-	ID            uint64       `json:"id"`
-	StartKey      string       `json:"start_key"`
-	EndKey        string       `json:"end_key"`
-	Epoch         regionEpoch  `json:"epoch"`
-	Peers         []regionPeer `json:"peers"`
-	LeaderStoreID uint64       `json:"leader_store_id"`
-}
-
-type regionEpoch struct {
-	Version     uint64 `json:"version"`
-	ConfVersion uint64 `json:"conf_version"`
-}
-
-type regionPeer struct {
-	StoreID uint64 `json:"store_id"`
-	PeerID  uint64 `json:"peer_id"`
-}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -166,7 +127,7 @@ func runTSO(args []string) error {
 		return err
 	}
 	if cfg.TSO == nil {
-		return errors.New("tso block missing from configuration")
+		return fmt.Errorf("tso block missing from configuration")
 	}
 
 	switch strings.ToLower(*format) {
@@ -180,16 +141,15 @@ func runTSO(args []string) error {
 	}
 }
 
-func loadConfig(path string) (*configFile, error) {
-	data, err := os.ReadFile(path)
+func loadConfig(path string) (*config.File, error) {
+	cfg, err := config.LoadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cfg configFile
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 func firstNonEmpty(values ...string) string {

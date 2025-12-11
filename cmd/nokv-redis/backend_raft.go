@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
 )
@@ -97,24 +97,17 @@ func (t *httpTSO) Reserve(n uint64) (uint64, error) {
 }
 
 func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
-	raw, err := os.ReadFile(cfgPath)
+	cfgFile, err := config.LoadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
 	}
-	var rawCfg raftConfigFile
-	if err := json.Unmarshal(raw, &rawCfg); err != nil {
-		return nil, fmt.Errorf("raft backend: parse config: %w", err)
-	}
-	if len(rawCfg.Stores) == 0 {
-		return nil, fmt.Errorf("raft backend: at least one store required")
-	}
-	if len(rawCfg.Regions) == 0 {
-		return nil, fmt.Errorf("raft backend: at least one region required")
+	if err := cfgFile.Validate(); err != nil {
+		return nil, fmt.Errorf("raft backend: config invalid: %w", err)
 	}
 	cfg := client.Config{
-		MaxRetries: rawCfg.MaxRetries,
+		MaxRetries: cfgFile.MaxRetries,
 	}
-	for _, st := range rawCfg.Stores {
+	for _, st := range cfgFile.Stores {
 		addr := strings.TrimSpace(st.Addr)
 		if strings.EqualFold(addrScope, "docker") && st.DockerAddr != "" {
 			addr = strings.TrimSpace(st.DockerAddr)
@@ -124,7 +117,7 @@ func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 			Addr:    addr,
 		})
 	}
-	for _, region := range rawCfg.Regions {
+	for _, region := range cfgFile.Regions {
 		meta := &pb.RegionMeta{
 			Id:               region.ID,
 			StartKey:         decodeKey(region.StartKey),
@@ -149,10 +142,10 @@ func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 	}
 
 	tsoURL = strings.TrimSpace(tsoURL)
-	if tsoURL == "" && rawCfg.TSO != nil {
-		tsoURL = strings.TrimSpace(rawCfg.TSO.AdvertiseURL)
+	if tsoURL == "" && cfgFile.TSO != nil {
+		tsoURL = strings.TrimSpace(cfgFile.TSO.AdvertiseURL)
 		if tsoURL == "" {
-			tsoURL = strings.TrimSpace(rawCfg.TSO.ListenAddr)
+			tsoURL = strings.TrimSpace(cfgFile.TSO.ListenAddr)
 			if tsoURL != "" && !strings.Contains(tsoURL, "://") {
 				tsoURL = "http://" + tsoURL
 			}
@@ -601,41 +594,4 @@ func uniqueKeys(keys [][]byte) [][]byte {
 		out = append(out, key)
 	}
 	return out
-}
-
-type raftConfigFile struct {
-	Stores     []raftStoreConfig  `json:"stores"`
-	Regions    []raftRegionConfig `json:"regions"`
-	MaxRetries int                `json:"max_retries"`
-	TSO        *tsoConfig         `json:"tso"`
-}
-
-type raftStoreConfig struct {
-	StoreID    uint64 `json:"store_id"`
-	Addr       string `json:"addr"`
-	DockerAddr string `json:"docker_addr"`
-}
-
-type raftRegionConfig struct {
-	ID            uint64           `json:"id"`
-	StartKey      string           `json:"start_key"`
-	EndKey        string           `json:"end_key"`
-	Epoch         raftRegionEpoch  `json:"epoch"`
-	Peers         []raftRegionPeer `json:"peers"`
-	LeaderStoreID uint64           `json:"leader_store_id"`
-}
-
-type raftRegionEpoch struct {
-	Version     uint64 `json:"version"`
-	ConfVersion uint64 `json:"conf_version"`
-}
-
-type raftRegionPeer struct {
-	StoreID uint64 `json:"store_id"`
-	PeerID  uint64 `json:"peer_id"`
-}
-
-type tsoConfig struct {
-	ListenAddr   string `json:"listen_addr"`
-	AdvertiseURL string `json:"advertise_url"`
 }
