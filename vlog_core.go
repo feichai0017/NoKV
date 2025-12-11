@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
@@ -67,7 +68,7 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 					continue
 				}
 				delete(existing, fid)
-				valueLogSegmentsRemoved.Add(1)
+				metrics.IncValueLogSegmentsRemoved()
 			}
 			continue
 		}
@@ -93,7 +94,7 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 			utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d: %v", fid, err))
 			continue
 		}
-		valueLogSegmentsRemoved.Add(1)
+		metrics.IncValueLogSegmentsRemoved()
 		utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d", fid))
 	}
 }
@@ -121,7 +122,7 @@ func (vlog *valueLog) removeValueLogFile(fid uint32) error {
 		}
 		return errors.Wrapf(err, "remove value log fid %d", fid)
 	}
-	valueLogSegmentsRemoved.Add(1)
+	metrics.IncValueLogSegmentsRemoved()
 	return nil
 }
 
@@ -375,7 +376,7 @@ func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 		utils.Err(fmt.Errorf("log value log head: %w", err))
 		return
 	}
-	valueLogHeadUpdates.Add(1)
+	metrics.IncValueLogHeadUpdates()
 	db.lastLoggedHead = *next
 }
 

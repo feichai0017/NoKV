@@ -1,29 +1,14 @@
 package NoKV
 
 import (
-	"expvar"
-
-	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/internal/metrics"
 )
 
-var (
-	valueLogGCRuns          = expvar.NewInt("NoKV.ValueLog.GcRuns")
-	valueLogSegmentsRemoved = expvar.NewInt("NoKV.ValueLog.SegmentsRemoved")
-	valueLogHeadUpdates     = expvar.NewInt("NoKV.ValueLog.HeadUpdates")
-)
-
-type valueLogMetrics struct {
-	Segments       int
-	PendingDeletes int
-	DiscardQueue   int
-	Head           kv.ValuePtr
-}
-
-func (vlog *valueLog) metrics() valueLogMetrics {
+func (vlog *valueLog) metrics() metrics.ValueLogMetrics {
 	if vlog == nil || vlog.manager == nil {
-		return valueLogMetrics{}
+		return metrics.ValueLogMetrics{}
 	}
-	stats := valueLogMetrics{
+	stats := metrics.ValueLogMetrics{
 		Segments: len(vlog.manager.ListFIDs()),
 		Head:     vlog.manager.Head(),
 	}

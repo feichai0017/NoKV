@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -192,7 +193,7 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 	if err = vlog.rewrite(fid); err != nil {
 		return err
 	}
-	valueLogGCRuns.Add(1)
+	metrics.IncValueLogGCRuns()
 	return nil
 }
 
