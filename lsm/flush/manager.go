@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/feichai0017/NoKV/internal/metrics"
 )
 
 // Stage represents the state of a flush task.
@@ -28,24 +30,7 @@ type Task struct {
 	installAt  time.Time
 }
 
-type Metrics struct {
-	Pending       int64
-	Queue         int64
-	Active        int64
-	WaitNs        int64
-	WaitCount     int64
-	WaitLastNs    int64
-	WaitMaxNs     int64
-	BuildNs       int64
-	BuildCount    int64
-	BuildLastNs   int64
-	BuildMaxNs    int64
-	ReleaseNs     int64
-	ReleaseCount  int64
-	ReleaseLastNs int64
-	ReleaseMaxNs  int64
-	Completed     int64
-}
+type Metrics = metrics.FlushMetrics
 
 // Manager coordinates flush tasks.
 type Manager struct {
