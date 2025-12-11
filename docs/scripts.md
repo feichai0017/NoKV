@@ -67,5 +67,6 @@ go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
 - `nokv-config stores` / `regions` / `tso` provide structured views over `raft_config.json`, making it easy for scripts and CI to query the topology.
 - `nokv-config manifest` writes Region metadata into manifests and replaces the historical `manifestctl` binary.
 - `cmd/nokv-redis` reads the same config; when `--tso-url` is omitted it falls back to the `tso` section.
+- Go tools or custom scripts can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` to consume the same `raft_config.json`, avoiding divergent schemas.
 
 Maintaining a single `raft_config.json` keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.

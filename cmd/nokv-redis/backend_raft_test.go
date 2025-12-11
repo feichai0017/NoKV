@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/pb"
 	"google.golang.org/grpc"
 )
@@ -179,31 +180,31 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cfg := raftConfigFile{
+	cfg := config.File{
 		MaxRetries: 3,
-		Stores: []raftStoreConfig{
+		Stores: []config.Store{
 			{
 				StoreID:    1,
 				Addr:       "127.0.0.1:1", // intentionally invalid so docker scope must be used
 				DockerAddr: storeAddr,
 			},
 		},
-		Regions: []raftRegionConfig{
+		Regions: []config.Region{
 			{
 				ID:       1,
 				StartKey: "a",
 				EndKey:   "-",
-				Epoch: raftRegionEpoch{
+				Epoch: config.RegionEpoch{
 					Version:     1,
 					ConfVersion: 1,
 				},
-				Peers: []raftRegionPeer{
+				Peers: []config.Peer{
 					{StoreID: 1, PeerID: 101},
 				},
 				LeaderStoreID: 1,
 			},
 		},
-		TSO: &tsoConfig{
+		TSO: &config.TSO{
 			AdvertiseURL: ts.URL,
 		},
 	}
@@ -252,21 +253,21 @@ func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
 	storeAddr, _, stopStore := startStubTinyKv(t)
 	defer stopStore()
 
-	cfg := raftConfigFile{
-		Stores: []raftStoreConfig{
+	cfg := config.File{
+		Stores: []config.Store{
 			{
 				StoreID: 1,
 				Addr:    storeAddr,
 			},
 		},
-		Regions: []raftRegionConfig{
+		Regions: []config.Region{
 			{
 				ID: 1,
-				Epoch: raftRegionEpoch{
+				Epoch: config.RegionEpoch{
 					Version:     1,
 					ConfVersion: 1,
 				},
-				Peers: []raftRegionPeer{
+				Peers: []config.Peer{
 					{StoreID: 1, PeerID: 101},
 				},
 				LeaderStoreID: 1,
@@ -311,22 +312,22 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 	storeAddr, stub, stopStore := startStubTinyKv(t)
 	defer stopStore()
 
-	cfg := raftConfigFile{
+	cfg := config.File{
 		MaxRetries: 3,
-		Stores: []raftStoreConfig{
+		Stores: []config.Store{
 			{
 				StoreID: 1,
 				Addr:    storeAddr,
 			},
 		},
-		Regions: []raftRegionConfig{
+		Regions: []config.Region{
 			{
 				ID: 1,
-				Epoch: raftRegionEpoch{
+				Epoch: config.RegionEpoch{
 					Version:     1,
 					ConfVersion: 1,
 				},
-				Peers: []raftRegionPeer{
+				Peers: []config.Peer{
 					{StoreID: 1, PeerID: 101},
 				},
 				LeaderStoreID: 1,

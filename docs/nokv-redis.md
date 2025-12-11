@@ -62,6 +62,8 @@ nokv-config stores --config raft_config.json
 nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id, peers:.peers}'
 ```
 
+For Go tooling, import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` to reuse the same schema and defaults across CLIs, scripts, and applications.
+
 ## Metrics
 
 With `--metrics-addr` enabled the gateway publishes `NoKV.Redis` on `/debug/vars`, for example:

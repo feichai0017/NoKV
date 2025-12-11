@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +46,7 @@ func TestRunTSOJsonFormat(t *testing.T) {
 		return runTSO([]string{"--config", cfgPath, "--format", "json"})
 	})
 	require.NoError(t, err)
-	var tso tsoConfig
+	var tso config.TSO
 	require.NoError(t, json.Unmarshal([]byte(output), &tso))
 	require.Equal(t, "0.0.0.0:9494", strings.TrimSpace(tso.ListenAddr))
 	require.Equal(t, "http://127.0.0.1:9494", strings.TrimSpace(tso.AdvertiseURL))
@@ -109,13 +110,13 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 func writeSampleConfig(t *testing.T) string {
 	t.Helper()
-	cfg := configFile{
+	cfg := config.File{
 		MaxRetries: 3,
-		TSO: &tsoConfig{
+		TSO: &config.TSO{
 			ListenAddr:   "0.0.0.0:9494",
 			AdvertiseURL: "http://127.0.0.1:9494",
 		},
-		Stores: []storeConfig{
+		Stores: []config.Store{
 			{
 				StoreID:          1,
 				ListenAddr:       "127.0.0.1:10170",
@@ -129,16 +130,16 @@ func writeSampleConfig(t *testing.T) string {
 				Addr:       "127.0.0.1:10171",
 			},
 		},
-		Regions: []regionConfig{
+		Regions: []config.Region{
 			{
 				ID:       1,
 				StartKey: "",
 				EndKey:   "m",
-				Epoch: regionEpoch{
+				Epoch: config.RegionEpoch{
 					Version:     1,
 					ConfVersion: 1,
 				},
-				Peers: []regionPeer{
+				Peers: []config.Peer{
 					{StoreID: 1, PeerID: 101},
 					{StoreID: 2, PeerID: 201},
 				},
@@ -148,11 +149,11 @@ func writeSampleConfig(t *testing.T) string {
 				ID:       2,
 				StartKey: "m",
 				EndKey:   string([]byte{0x00, 0x01}),
-				Epoch: regionEpoch{
+				Epoch: config.RegionEpoch{
 					Version:     2,
 					ConfVersion: 3,
 				},
-				Peers: []regionPeer{
+				Peers: []config.Peer{
 					{StoreID: 2, PeerID: 202},
 				},
 				LeaderStoreID: 2,
