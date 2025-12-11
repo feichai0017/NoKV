@@ -176,6 +176,6 @@ func NewDefaultOptions() *Options {
 	opt.IngestCompactBatchSize = 4
 	opt.IngestBacklogMergeScore = 2.0
 	opt.NumCompactors = 4
-	opt.IngestShardParallelism = 1
+	opt.IngestShardParallelism = 2
 	return opt
 }
