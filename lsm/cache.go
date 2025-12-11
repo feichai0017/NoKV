@@ -6,8 +6,8 @@ import (
 
 	"github.com/dgraph-io/ristretto/v2"
 
-	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"

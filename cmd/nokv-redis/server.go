@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/feichai0017/NoKV/internal/metrics"
+	"github.com/feichai0017/NoKV/metrics"
 )
 
 const (
