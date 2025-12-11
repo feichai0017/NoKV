@@ -4,10 +4,13 @@ import (
 	"encoding/csv"
 	"expvar"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +44,11 @@ type ycsbConfig struct {
 	Operations  int
 	WarmUpOps   int
 	ValueSize   int
+	ValueDist   string
+	ValueMin    int
+	ValueMax    int
+	ValueStd    int
+	ValuePct    string
 	Concurrency int
 	ScanLength  int
 	TargetOps   int // overall ops/sec target; 0 = unlimited
@@ -52,6 +60,144 @@ type ycsbConfig struct {
 type ycsbKeyspace struct {
 	baseRecords int64
 	inserted    atomic.Int64
+}
+
+type valueSizer struct {
+	dist        string
+	fixed       int
+	min         int
+	max         int
+	std         float64
+	percentiles []pctSize
+	maxSize     int
+}
+
+type pctSize struct {
+	pct  float64
+	size int
+}
+
+func newValueSizer(cfg ycsbConfig) valueSizer {
+	dist := strings.ToLower(strings.TrimSpace(cfg.ValueDist))
+	if dist == "" {
+		dist = "fixed"
+	}
+	min := cfg.ValueMin
+	max := cfg.ValueMax
+	if min <= 0 {
+		min = cfg.ValueSize
+	}
+	if max <= 0 {
+		max = cfg.ValueSize
+	}
+	if max < min {
+		max = min
+	}
+	std := cfg.ValueStd
+	if std <= 0 {
+		std = cfg.ValueSize / 4
+	}
+	percentiles, pctMax := parsePercentiles(cfg.ValuePct, cfg.ValueSize)
+	maxSize := max
+	if pctMax > maxSize {
+		maxSize = pctMax
+	}
+	if cfg.ValueSize > maxSize {
+		maxSize = cfg.ValueSize
+	}
+	return valueSizer{
+		dist:        dist,
+		fixed:       cfg.ValueSize,
+		min:         min,
+		max:         max,
+		std:         float64(std),
+		percentiles: percentiles,
+		maxSize:     maxSize,
+	}
+}
+
+func (vs valueSizer) Next(rng *rand.Rand) int {
+	if rng == nil {
+		return vs.fixed
+	}
+	switch vs.dist {
+	case "uniform":
+		if vs.max <= vs.min {
+			return vs.min
+		}
+		return rng.Intn(vs.max-vs.min+1) + vs.min
+	case "normal":
+		mean := float64(vs.min+vs.max) / 2
+		val := int(math.Round(rng.NormFloat64()*vs.std + mean))
+		if val < vs.min {
+			val = vs.min
+		}
+		if val > vs.max {
+			val = vs.max
+		}
+		return val
+	case "percentile":
+		p := rng.Float64() * 100
+		for _, ps := range vs.percentiles {
+			if p <= ps.pct {
+				if ps.size > 0 {
+					return ps.size
+				}
+				break
+			}
+		}
+		// fallback
+		if len(vs.percentiles) > 0 {
+			return vs.percentiles[len(vs.percentiles)-1].size
+		}
+		return vs.fixed
+	default:
+		return vs.fixed
+	}
+}
+
+func parsePercentiles(spec string, def int) ([]pctSize, int) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, def
+	}
+	parts := strings.Split(spec, ",")
+	out := make([]pctSize, 0, len(parts))
+	maxSize := def
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		kv := strings.Split(part, ":")
+		if len(kv) != 2 {
+			continue
+		}
+		p, err1 := strconv.ParseFloat(strings.TrimSpace(kv[0]), 64)
+		sz, err2 := strconv.Atoi(strings.TrimSpace(kv[1]))
+		if err1 != nil || err2 != nil || p < 0 {
+			continue
+		}
+		if p > 100 {
+			p = 100
+		}
+		if sz <= 0 {
+			continue
+		}
+		out = append(out, pctSize{pct: p, size: sz})
+		if sz > maxSize {
+			maxSize = sz
+		}
+	}
+	if len(out) == 0 {
+		return nil, def
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].pct == out[j].pct {
+			return out[i].size < out[j].size
+		}
+		return out[i].pct < out[j].pct
+	})
+	return out, maxSize
 }
 
 func (ks *ycsbKeyspace) totalRecords() int64 {
@@ -198,6 +344,7 @@ func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
 	perWorker := (records + cfg.Concurrency - 1) / cfg.Concurrency
 	errCh := make(chan error, cfg.Concurrency)
 	var wg sync.WaitGroup
+	sizer := newValueSizer(cfg)
 	for worker := 0; worker < cfg.Concurrency; worker++ {
 		start := worker * perWorker
 		end := min((worker+1)*perWorker, records)
@@ -208,17 +355,14 @@ func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
 		go func(s, e int) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(cfg.Seed + int64(s)))
-			value := make([]byte, cfg.ValueSize)
 			for i := s; i < e; i++ {
 				key := formatYCSBKey(int64(i))
-				if _, err := rng.Read(value); err != nil {
+				val := randomValue(rng, sizer.Next(rng))
+				if err := engine.Insert(key, val); err != nil {
 					errCh <- err
 					return
 				}
-				if err := engine.Insert(key, value); err != nil {
-					errCh <- err
-					return
-				}
+				valueBufPool.Put(val)
 			}
 		}(start, end)
 	}
@@ -237,6 +381,7 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 	totalOps := cfg.Operations
 	opsPerWorker := (totalOps + cfg.Concurrency - 1) / cfg.Concurrency
 	latRec := newLatencyRecorder(totalOps)
+	valRec := newIntRecorder(totalOps)
 	var loadedOps atomic.Int64
 	var (
 		readOps   atomic.Int64
@@ -285,6 +430,11 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 	}
 
 	keySpan := uint64(cfg.RecordCount + cfg.Operations*2)
+	sizer := newValueSizer(cfg)
+	maxBuf := sizer.maxSize
+	if maxBuf <= 0 {
+		maxBuf = cfg.ValueSize
+	}
 
 	for worker := 0; worker < cfg.Concurrency; worker++ {
 		localStart := worker * opsPerWorker
@@ -303,35 +453,41 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 				switch opType {
 				case "read":
 					key := selectExistingKey(readGen, state)
-					valBuf := valueBufPool.Get(cfg.ValueSize)
-					if _, err := engine.Read(key, valBuf); err != nil {
+					valBuf := valueBufPool.Get(maxBuf)
+					out, err := engine.Read(key, valBuf)
+					if err != nil {
 						errCh <- fmt.Errorf("%s read: %w", engine.Name(), err)
 						return
 					}
+					valRec.Record(len(out))
 					valueBufPool.Put(valBuf)
 					readOps.Add(1)
-					dataBytes.Add(int64(cfg.ValueSize))
+					dataBytes.Add(int64(len(out)))
 				case "update":
 					key := selectExistingKey(readGen, state)
-					val := randomValue(rng, cfg.ValueSize)
+					sz := sizer.Next(rng)
+					val := randomValue(rng, sz)
 					if err := engine.Update(key, val); err != nil {
 						errCh <- fmt.Errorf("%s update: %w", engine.Name(), err)
 						return
 					}
 					valueBufPool.Put(val)
 					updateOps.Add(1)
-					dataBytes.Add(int64(cfg.ValueSize))
+					valRec.Record(sz)
+					dataBytes.Add(int64(sz))
 				case "insert":
 					id := state.nextInsertID()
 					key := formatYCSBKey(id)
-					val := randomValue(rng, cfg.ValueSize)
+					sz := sizer.Next(rng)
+					val := randomValue(rng, sz)
 					if err := engine.Insert(key, val); err != nil {
 						errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
 						return
 					}
 					valueBufPool.Put(val)
 					insertOps.Add(1)
-					dataBytes.Add(int64(cfg.ValueSize))
+					valRec.Record(sz)
+					dataBytes.Add(int64(sz))
 				case "scan":
 					key := selectExistingKey(readGen, state)
 					items, err := engine.Scan(key, cfg.ScanLength)
@@ -346,12 +502,14 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					}
 				case "readmodifywrite":
 					key := selectExistingKey(readGen, state)
-					valBuf := valueBufPool.Get(cfg.ValueSize)
-					if _, err := engine.Read(key, valBuf); err != nil {
+					valBuf := valueBufPool.Get(maxBuf)
+					out, err := engine.Read(key, valBuf)
+					if err != nil {
 						errCh <- fmt.Errorf("%s read: %w", engine.Name(), err)
 						return
 					}
-					val := randomValue(rng, cfg.ValueSize)
+					readSize := len(out)
+					val := randomValue(rng, sizer.Next(rng))
 					if err := engine.Update(key, val); err != nil {
 						errCh <- fmt.Errorf("%s update: %w", engine.Name(), err)
 						return
@@ -359,7 +517,9 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					valueBufPool.Put(valBuf)
 					valueBufPool.Put(val)
 					rmwOps.Add(1)
-					dataBytes.Add(int64(cfg.ValueSize) * 2)
+					valRec.Record(readSize)
+					valRec.Record(len(val))
+					dataBytes.Add(int64(readSize + len(val)))
 				default:
 					errCh <- fmt.Errorf("unknown op %s", opType)
 					return
@@ -400,6 +560,10 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 		ScanOps:            scanOps.Load(),
 		ReadModifyWriteOps: rmwOps.Load(),
 		ScanItems:          scanItems.Load(),
+		ValueAvg:           valRec.Average(),
+		ValueP50:           valRec.Percentile(50),
+		ValueP95:           valRec.Percentile(95),
+		ValueP99:           valRec.Percentile(99),
 	}
 	result.Finalize()
 	result.P50LatencyNS = latRec.Percentile(50)
@@ -538,7 +702,7 @@ func writeYCSBSummary(results []BenchmarkResult, dir string) error {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	header := []string{"name", "engine", "workload", "ops", "ops_per_sec", "avg_ns", "p50_ns", "p95_ns", "p99_ns", "duration_ns", "data_bytes", "data_mb", "reads", "updates", "inserts", "scans", "scan_items", "rmw"}
+	header := []string{"name", "engine", "workload", "ops", "ops_per_sec", "avg_ns", "p50_ns", "p95_ns", "p99_ns", "duration_ns", "data_bytes", "data_mb", "reads", "updates", "inserts", "scans", "scan_items", "rmw", "val_avg", "val_p50", "val_p95", "val_p99"}
 	if err := w.Write(header); err != nil {
 		return err
 	}
@@ -562,6 +726,10 @@ func writeYCSBSummary(results []BenchmarkResult, dir string) error {
 			fmt.Sprintf("%d", r.ScanOps),
 			fmt.Sprintf("%d", r.ScanItems),
 			fmt.Sprintf("%d", r.ReadModifyWriteOps),
+			fmt.Sprintf("%.0f", r.ValueAvg),
+			fmt.Sprintf("%.0f", r.ValueP50),
+			fmt.Sprintf("%.0f", r.ValueP95),
+			fmt.Sprintf("%.0f", r.ValueP99),
 		}
 		if err := w.Write(row); err != nil {
 			return err

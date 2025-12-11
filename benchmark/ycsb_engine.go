@@ -97,3 +97,64 @@ func (r *latencyRecorder) Samples() []int64 {
 	copy(out, r.samples)
 	return out
 }
+
+type intRecorder struct {
+	mu      sync.Mutex
+	samples []int
+}
+
+func newIntRecorder(capacity int) *intRecorder {
+	return &intRecorder{
+		samples: make([]int, 0, capacity),
+	}
+}
+
+func (r *intRecorder) Record(v int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.samples = append(r.samples, v)
+	r.mu.Unlock()
+}
+
+func (r *intRecorder) Percentile(p float64) float64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.samples) == 0 || p <= 0 {
+		return 0
+	}
+	if p >= 100 {
+		p = 100
+	}
+	sorted := make([]int, len(r.samples))
+	copy(sorted, r.samples)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	idx := int(float64(len(sorted)-1) * (p / 100.0))
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return float64(sorted[idx])
+}
+
+func (r *intRecorder) Average() float64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.samples) == 0 {
+		return 0
+	}
+	var sum int64
+	for _, v := range r.samples {
+		sum += int64(v)
+	}
+	return float64(sum) / float64(len(r.samples))
+}
