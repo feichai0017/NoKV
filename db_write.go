@@ -135,7 +135,7 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 			qBytes := atomic.LoadInt64(&cq.pendingBytes)
 			cq.notEmpty.Signal()
 			cq.mu.Unlock()
-			db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
+			db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
 			return nil
 		}
 		cq.notFull.Wait()
@@ -218,7 +218,7 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	qBytes := atomic.LoadInt64(&cq.pendingBytes)
 	cq.notFull.Broadcast()
 	cq.mu.Unlock()
-	db.writeMetrics.updateQueue(qLen, int(qEntries), qBytes)
+	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
 	return batch
 }
 
@@ -277,7 +277,7 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 	}
 
 	if db.writeMetrics != nil {
-		db.writeMetrics.recordBatch(len(requests), totalEntries, totalSize, waitSum)
+		db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
 	}
 
 	if db.vwriter != nil {
@@ -293,7 +293,7 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 	if db.writeMetrics != nil {
 		valueLogDur = max(time.Since(batchStart), 0)
 		if valueLogDur > 0 {
-			db.writeMetrics.recordValueLog(valueLogDur)
+			db.writeMetrics.RecordValueLog(valueLogDur)
 		}
 	}
 
@@ -305,7 +305,7 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 		totalDur := max(time.Since(batchStart), 0)
 		applyDur := max(totalDur-valueLogDur, 0)
 		if applyDur > 0 {
-			db.writeMetrics.recordApply(applyDur)
+			db.writeMetrics.RecordApply(applyDur)
 		}
 	}
 

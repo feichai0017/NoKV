@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -142,18 +143,18 @@ func (w *walWatchdog) observe() {
 	}
 	w.lastTickUnix.Store(time.Now().Unix())
 
-	metrics := w.db.wal.Metrics()
+	wmetrics := w.db.wal.Metrics()
 	segmentMetrics := w.db.wal.SegmentMetrics()
 	var ptrs map[uint64]manifest.RaftLogPointer
 	if man := w.db.Manifest(); man != nil {
 		ptrs = man.RaftPointerSnapshot()
 	}
-	analysis := analyzeWALBacklog(metrics, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics, ptrs)
 
 	w.removableCount.Store(int64(len(analysis.RemovableSegments)))
 	w.lastRatioBits.Store(math.Float64bits(analysis.TypedRecordRatio))
 
-	warning, reason := walTypedWarning(analysis.TypedRecordRatio, analysis.SegmentsWithRaft, w.warnRatio, w.warnSegments)
+	warning, reason := metrics.WALTypedWarning(analysis.TypedRecordRatio, analysis.SegmentsWithRaft, w.warnRatio, w.warnSegments)
 	w.warnActive.Store(warning)
 	if warning {
 		w.warnReason.Store(reason)

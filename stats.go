@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/internal/metrics"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
@@ -697,7 +698,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	s.compactionValueWeight.Set(snap.CompactionValueWeight)
 
 	if s.db.writeMetrics != nil {
-		wsnap := s.db.writeMetrics.snapshot()
+		wsnap := s.db.writeMetrics.Snapshot()
 		snap.WriteQueueDepth = wsnap.QueueLen
 		snap.WriteQueueEntries = wsnap.QueueEntries
 		snap.WriteQueueBytes = wsnap.QueueBytes
@@ -741,7 +742,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.RaftGroupCount = len(ptrs)
 	}
 
-	analysis := analyzeWALBacklog(wstats, segmentMetrics, ptrs)
+	analysis := metrics.AnalyzeWALBacklog(wstats, segmentMetrics, ptrs)
 	snap.WALRecordCounts = analysis.RecordCounts
 	snap.WALSegmentsWithRaftRecords = analysis.SegmentsWithRaft
 	snap.WALRemovableRaftSegments = len(analysis.RemovableSegments)
@@ -797,7 +798,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.RaftLagWarning = true
 	}
 
-	warning, reason := walTypedWarning(snap.WALTypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
+	warning, reason := metrics.WALTypedWarning(snap.WALTypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
 	if watchdog := s.db.walWatchdog; watchdog != nil {
 		wsnap := watchdog.snapshot()
 		snap.WALAutoGCRuns = wsnap.AutoRuns
