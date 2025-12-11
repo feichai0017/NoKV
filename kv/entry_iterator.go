@@ -7,7 +7,9 @@ import (
 
 // EntryIterator sequentially decodes entries stored using the unified
 // value-log/WAL layout:
-//   | header(varint fields) | key bytes | value bytes | crc32 (4B) |
+//
+//	| header(varint fields) | key bytes | value bytes | crc32 (4B) |
+//
 // The header encodes key length, value length, meta, and expiresAt via
 // uvarint encoding (see EntryHeader).
 type EntryIterator struct {

@@ -11,8 +11,8 @@ const (
 	// +----------------+------------------+
 	// | keyID(8 bytes) |  baseIV(12 bytes)|
 	// +----------------+------------------+
-	ValueLogHeaderSize    = 20
-	valuePtrEncodedSize   = 12
+	ValueLogHeaderSize  = 20
+	valuePtrEncodedSize = 12
 )
 
 // ValueStruct is the serialized form of a value (inline or pointer) used inside

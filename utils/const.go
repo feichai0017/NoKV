@@ -31,7 +31,6 @@ const (
 	KVWriteChCapacity        = 1000
 )
 
-
 // codec
 var (
 	MagicText    = [4]byte{'H', 'A', 'R', 'D'}
