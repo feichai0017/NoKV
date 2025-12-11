@@ -32,6 +32,8 @@ func TestBenchmarkYCSB(t *testing.T) {
 		ValueSize:   *ycsbValueSize,
 		Concurrency: *ycsbConcurrency,
 		ScanLength:  *ycsbScanLength,
+		TargetOps:   *ycsbTargetOps,
+		StatusEvery: *ycsbStatusInterval,
 		Workloads:   workloads,
 		Engines:     engines,
 	}
