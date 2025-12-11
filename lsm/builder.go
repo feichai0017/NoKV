@@ -7,8 +7,8 @@ import (
 	"io"
 	"math"
 	"os"
-	"sync"
 	"sort"
+	"sync"
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/file"

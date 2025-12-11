@@ -2,7 +2,6 @@ package kv
 
 import (
 	"testing"
-
 )
 
 func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
