@@ -21,14 +21,12 @@ func newRocksDBEngine(opts ycsbEngineOptions) ycsbEngine {
 }
 
 type rocksdbEngine struct {
-	opts         ycsbEngineOptions
-	db           *C.rocksdb_transactiondb_t
-	options      *C.rocksdb_options_t
-	txnDBOptions *C.rocksdb_transactiondb_options_t
-	readOpts     *C.rocksdb_readoptions_t
-	writeOpts    *C.rocksdb_writeoptions_t
-	txnOptions   *C.rocksdb_transaction_options_t
-	cache        *C.rocksdb_cache_t
+	opts      ycsbEngineOptions
+	db        *C.rocksdb_t
+	options   *C.rocksdb_options_t
+	readOpts  *C.rocksdb_readoptions_t
+	writeOpts *C.rocksdb_writeoptions_t
+	cache     *C.rocksdb_cache_t
 }
 
 func (e *rocksdbEngine) Name() string { return "RocksDB" }
@@ -74,9 +72,7 @@ func (e *rocksdbEngine) Open(clean bool) error {
 	defer C.free(unsafe.Pointer(cDir))
 
 	var errStr *C.char
-	txnOpts := C.rocksdb_transactiondb_options_create()
-	e.txnDBOptions = txnOpts
-	db := C.rocksdb_transactiondb_open(opts, txnOpts, cDir, &errStr)
+	db := C.rocksdb_open(opts, cDir, &errStr)
 	if errStr != nil {
 		defer C.free(unsafe.Pointer(errStr))
 		return errors.New(C.GoString(errStr))
@@ -89,7 +85,6 @@ func (e *rocksdbEngine) Open(clean bool) error {
 	if e.opts.SyncWrites {
 		C.rocksdb_writeoptions_set_sync(e.writeOpts, 1)
 	}
-	e.txnOptions = C.rocksdb_transaction_options_create()
 	return nil
 }
 
@@ -106,17 +101,9 @@ func (e *rocksdbEngine) Close() error {
 		C.rocksdb_writeoptions_destroy(e.writeOpts)
 		e.writeOpts = nil
 	}
-	if e.txnOptions != nil {
-		C.rocksdb_transaction_options_destroy(e.txnOptions)
-		e.txnOptions = nil
-	}
 	if e.options != nil {
 		C.rocksdb_options_destroy(e.options)
 		e.options = nil
-	}
-	if e.txnDBOptions != nil {
-		C.rocksdb_transactiondb_options_destroy(e.txnDBOptions)
-		e.txnDBOptions = nil
 	}
 	if e.cache != nil {
 		C.rocksdb_cache_destroy(e.cache)
@@ -129,87 +116,81 @@ func (e *rocksdbEngine) Read(key []byte, dst []byte) ([]byte, error) {
 	if e.db == nil {
 		return nil, fmt.Errorf("rocksdb not open")
 	}
-	return e.withTxnRead(func(txn *C.rocksdb_transaction_t) ([]byte, error) {
-		var valLen C.size_t
-		var errStr *C.char
-		val := C.rocksdb_transaction_get(
-			txn,
-			e.readOpts,
-			bytesPtr(key),
-			C.size_t(len(key)),
-			&valLen,
-			&errStr,
-		)
-		if errStr != nil {
-			defer C.free(unsafe.Pointer(errStr))
-			return nil, errors.New(C.GoString(errStr))
+	var valLen C.size_t
+	var errStr *C.char
+	val := C.rocksdb_get(
+		e.db,
+		e.readOpts,
+		bytesPtr(key),
+		C.size_t(len(key)),
+		&valLen,
+		&errStr,
+	)
+	if errStr != nil {
+		defer C.free(unsafe.Pointer(errStr))
+		return nil, errors.New(C.GoString(errStr))
+	}
+	if val != nil && valLen > 0 {
+		goBytes := C.GoBytes(unsafe.Pointer(val), C.int(valLen))
+		if cap(dst) < len(goBytes) {
+			dst = make([]byte, len(goBytes))
 		}
-		if val != nil && valLen > 0 {
-			goBytes := C.GoBytes(unsafe.Pointer(val), C.int(valLen))
-			if cap(dst) < len(goBytes) {
-				dst = make([]byte, len(goBytes))
-			}
-			dst = dst[:len(goBytes)]
-			copy(dst, goBytes)
-			C.rocksdb_free(unsafe.Pointer(val))
-			return dst, nil
-		}
-		if val != nil {
-			C.rocksdb_free(unsafe.Pointer(val))
-		}
-		return dst[:0], nil
-	})
+		dst = dst[:len(goBytes)]
+		copy(dst, goBytes)
+		C.rocksdb_free(unsafe.Pointer(val))
+		return dst, nil
+	}
+	if val != nil {
+		C.rocksdb_free(unsafe.Pointer(val))
+	}
+	return dst[:0], nil
 }
 
 func (e *rocksdbEngine) Insert(key, value []byte) error {
-	return e.putTxn(key, value)
+	return e.put(key, value)
 }
 
 func (e *rocksdbEngine) Update(key, value []byte) error {
-	return e.putTxn(key, value)
+	return e.put(key, value)
 }
 
-func (e *rocksdbEngine) putTxn(key, value []byte) error {
-	_, err := e.withTxn(func(txn *C.rocksdb_transaction_t) (int, []byte, error) {
-		var errStr *C.char
-		C.rocksdb_transaction_put(
-			txn,
-			bytesPtr(key),
-			C.size_t(len(key)),
-			bytesPtr(value),
-			C.size_t(len(value)),
-			&errStr,
-		)
-		if errStr != nil {
-			defer C.free(unsafe.Pointer(errStr))
-			return 0, nil, errors.New(C.GoString(errStr))
-		}
-		return 0, nil, nil
-	})
-	return err
+func (e *rocksdbEngine) put(key, value []byte) error {
+	var errStr *C.char
+	C.rocksdb_put(
+		e.db,
+		e.writeOpts,
+		bytesPtr(key),
+		C.size_t(len(key)),
+		bytesPtr(value),
+		C.size_t(len(value)),
+		&errStr,
+	)
+	if errStr != nil {
+		defer C.free(unsafe.Pointer(errStr))
+		return errors.New(C.GoString(errStr))
+	}
+	return nil
 }
 
 func (e *rocksdbEngine) Scan(startKey []byte, count int) (int, error) {
-	return e.withTxn(func(txn *C.rocksdb_transaction_t) (int, error) {
-		it := C.rocksdb_transaction_create_iterator(txn, e.readOpts)
-		defer C.rocksdb_iter_destroy(it)
-		if len(startKey) > 0 {
-			C.rocksdb_iter_seek(it, bytesPtr(startKey), C.size_t(len(startKey)))
-		} else {
-			C.rocksdb_iter_seek_to_first(it)
+	it := C.rocksdb_create_iterator(e.db, e.readOpts)
+	defer C.rocksdb_iter_destroy(it)
+	if len(startKey) > 0 {
+		C.rocksdb_iter_seek(it, bytesPtr(startKey), C.size_t(len(startKey)))
+	} else {
+		C.rocksdb_iter_seek_to_first(it)
+	}
+	read := 0
+	for read < count && C.rocksdb_iter_valid(it) != 0 {
+		var vLen C.size_t
+		val := C.rocksdb_iter_value(it, &vLen)
+		if val != nil {
+			C.rocksdb_free(unsafe.Pointer(val))
 		}
-		read := 0
-		for read < count && C.rocksdb_iter_valid(it) != 0 {
-			var vLen C.size_t
-			val := C.rocksdb_iter_value(it, &vLen)
-			if val != nil {
-				C.rocksdb_free(unsafe.Pointer(val))
-			}
-			read++
-			C.rocksdb_iter_next(it)
-		}
-		return read, nil
-	})
+		read++
+		C.rocksdb_iter_next(it)
+	}
+	return read, nil
 }
 
 func bytesPtr(b []byte) *C.char {
@@ -217,28 +198,4 @@ func bytesPtr(b []byte) *C.char {
 		return nil
 	}
 	return (*C.char)(unsafe.Pointer(&b[0]))
-}
-
-func (e *rocksdbEngine) withTxnRead(fn func(txn *C.rocksdb_transaction_t) ([]byte, error)) ([]byte, error) {
-	_, out, err := e.withTxn(func(txn *C.rocksdb_transaction_t) (int, []byte, error) {
-		val, err := fn(txn)
-		return 0, val, err
-	})
-	return out, err
-}
-
-func (e *rocksdbEngine) withTxn(fn func(txn *C.rocksdb_transaction_t) (int, []byte, error)) (int, []byte, error) {
-	txn := C.rocksdb_transaction_begin(e.db, e.writeOpts, e.txnOptions, nil)
-	defer C.rocksdb_transaction_destroy(txn)
-	count, val, err := fn(txn)
-	if err != nil {
-		return count, val, err
-	}
-	var errStr *C.char
-	C.rocksdb_transaction_commit(txn, &errStr)
-	if errStr != nil {
-		defer C.free(unsafe.Pointer(errStr))
-		return count, val, errors.New(C.GoString(errStr))
-	}
-	return count, val, nil
 }
