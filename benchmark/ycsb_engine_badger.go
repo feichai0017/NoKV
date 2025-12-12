@@ -52,7 +52,8 @@ func (e *badgerEngine) Open(clean bool) error {
 		WithCompression(comp).
 		WithValueThreshold(int64(e.opts.ValueThreshold)).
 		WithBlockCacheSize(int64(blockCacheMB) << 20).
-		WithIndexCacheSize(int64(indexCacheMB) << 20)
+		WithIndexCacheSize(int64(indexCacheMB) << 20).
+		WithDetectConflicts(false)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return err
