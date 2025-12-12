@@ -42,7 +42,7 @@ func (e *nokvEngine) Open(clean bool) error {
 		ValueThreshold:     int64(e.opts.ValueThreshold),
 		MaxBatchCount:      10000,
 		MaxBatchSize:       128 << 20,
-		DetectConflicts:    true,
+		DetectConflicts:    false,
 		SyncWrites:         e.opts.SyncWrites,
 	}
 	if e.opts.BlockCacheMB >= 0 {
