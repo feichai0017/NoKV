@@ -165,8 +165,10 @@ func (t *table) shouldPinHandleLocked() bool {
 	if t == nil {
 		return false
 	}
-	// Keep handles for hot levels (L0/L1) to minimize reopens.
-	return t.lvl <= 1
+	// keep SSTable handles pinned for the
+	// lifetime of the table to avoid invalidating mmap-backed blocks cached
+	// elsewhere. This prevents close/reopen races that can invalidate slices.
+	return true
 }
 
 func (t *table) refreshHandlePolicy() {
