@@ -28,9 +28,6 @@ type Options struct {
 	// AccessPattern lets callers hint expected IO behaviour (sequential scans,
 	// random point lookups, etc.) so the file layer can tune madvise settings.
 	AccessPattern AccessPattern
-	// ZeroCopy keeps block data backed by mmap instead of copying. Callers must
-	// ensure the underlying table stays pinned for the iterator lifetime.
-	ZeroCopy bool
 	// PrefetchBlocks controls how many blocks ahead to prefetch eagerly. Zero
 	// disables prefetch.
 	PrefetchBlocks int
@@ -39,9 +36,6 @@ type Options struct {
 	PrefetchWorkers int
 	// PrefetchAdaptive enables dynamic tuning of prefetch based on hit/miss stats.
 	PrefetchAdaptive bool
-	// BypassBlockCache skips block-cache lookups/insertions, relying on OS page
-	// cache + zero-copy for large scans to avoid double cache.
-	BypassBlockCache bool
 	// Metrics tags for observability.
 	MetricTag string
 }

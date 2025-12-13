@@ -21,8 +21,8 @@ die() {
 
 default_workloads="A,B,C,D,F"
 default_engines="nokv,badger,rocksdb"
-default_records=1000000
-default_ops=1000000
+default_records=5000000
+default_ops=5000000
 default_conc=16
 
 ycsb_engines="${YCSB_ENGINES:-$default_engines}"
