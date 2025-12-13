@@ -289,7 +289,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(bd.size)})
-	dst, err := t.ss.Bytes(0, bd.size)
+	dst, err := t.ss.View(0, bd.size)
 	if err != nil {
 		return nil, err
 	}

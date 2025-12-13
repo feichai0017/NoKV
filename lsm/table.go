@@ -444,15 +444,8 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := ss.Bytes(off, sz)
-	if err != nil {
-		release()
-		return nil, err
-	}
-	out := make([]byte, len(data))
-	copy(out, data)
-	release()
-	return out, nil
+	defer release()
+	return ss.Bytes(off, sz)
 }
 
 const maxUint32 = uint64(math.MaxUint32)

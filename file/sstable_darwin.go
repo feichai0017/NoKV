@@ -164,6 +164,11 @@ func (ss *SSTable) Bytes(off, sz int) ([]byte, error) {
 	return ss.f.Bytes(off, sz)
 }
 
+// View exposes a direct mmap-backed slice for callers that need to write into the SST.
+func (ss *SSTable) View(off, sz int) ([]byte, error) {
+	return ss.f.View(off, sz)
+}
+
 // Size 返回底层文件的尺寸
 func (ss *SSTable) Size() int64 {
 	fileStats, err := ss.f.Fd.Stat()

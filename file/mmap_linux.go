@@ -102,6 +102,32 @@ func (m *MmapFile) NewReader(offset int) io.Reader {
 // Bytes returns data starting from offset off of size sz. If there's not enough data, it would
 // return nil slice and io.EOF.
 func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {
+	if m == nil || m.Fd == nil || sz < 0 || off < 0 {
+		return nil, io.EOF
+	}
+	if sz == 0 {
+		return []byte{}, nil
+	}
+	buf := make([]byte, sz)
+	n, err := m.Fd.ReadAt(buf, int64(off))
+	if err != nil {
+		if err == io.EOF && n == sz {
+			return buf, nil
+		}
+		if n > 0 {
+			return buf[:n], err
+		}
+		return nil, err
+	}
+	if n != sz {
+		return buf[:n], io.ErrUnexpectedEOF
+	}
+	return buf, nil
+}
+
+// View returns a direct slice over the mmap'd region without copying.
+// Use this only when the caller owns the file lifetime (e.g., building SSTables).
+func (m *MmapFile) View(off, sz int) ([]byte, error) {
 	if m == nil || m.Data == nil || sz < 0 || off < 0 {
 		return nil, io.EOF
 	}
