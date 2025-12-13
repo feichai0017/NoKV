@@ -102,6 +102,9 @@ func (m *MmapFile) NewReader(offset int) io.Reader {
 // Bytes returns data starting from offset off of size sz. If there's not enough data, it would
 // return nil slice and io.EOF.
 func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {
+	if m == nil || m.Data == nil || sz < 0 || off < 0 {
+		return nil, io.EOF
+	}
 	if len(m.Data[off:]) < sz {
 		return nil, io.EOF
 	}

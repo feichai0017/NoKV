@@ -63,7 +63,7 @@ func (ss *SSTable) SetMaxKey(maxKey []byte) {
 	ss.maxKey = maxKey
 }
 func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
-	readPos := len(ss.f.Data)
+	readPos := int(ss.Size())
 
 	// Read checksum len from the last 4 bytes.
 	readPos -= 4
