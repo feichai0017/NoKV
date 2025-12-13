@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/utils/mmap"
 	"github.com/pkg/errors"
@@ -19,7 +18,6 @@ import (
 type MmapFile struct {
 	Data []byte
 	Fd   *os.File
-	gen  uint64
 }
 
 // OpenMmapFileUsing os
@@ -53,7 +51,6 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 	return &MmapFile{
 		Data: buf,
 		Fd:   fd,
-		gen:  1,
 	}, rerr
 }
 
@@ -208,7 +205,6 @@ func (m *MmapFile) Remap(writable bool) error {
 		return err
 	}
 	m.Data = buf
-	atomic.AddUint64(&m.gen, 1)
 	return nil
 }
 
@@ -271,18 +267,10 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	}
 	var err error
 	m.Data, err = mmap.Mmap(m.Fd, true, maxSz) // Mmap up to max size.
-	if err == nil {
-		atomic.AddUint64(&m.gen, 1)
-	}
 	return err
 }
 
 // ReName 兼容接口
 func (m *MmapFile) ReName(name string) error {
 	return nil
-}
-
-// Generation returns the current mapping generation, incremented after remap/truncate.
-func (m *MmapFile) Generation() uint64 {
-	return atomic.LoadUint64(&m.gen)
 }

@@ -325,10 +325,10 @@ func (t *table) indexKey() uint64 {
 
 // 去加载sst对应的block
 func (t *table) block(idx int) (*block, error) {
-	return t.loadBlock(idx, true, true, false)
+	return t.loadBlock(idx, true)
 }
 
-func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, error) {
+func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	utils.CondPanicFunc(idx < 0, func() error { return fmt.Errorf("idx=%d", idx) })
 	index := t.index()
 	if index == nil {
@@ -340,10 +340,8 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	if copyData && !bypassCache {
-		if cached, ok := t.lm.cache.getBlock(t.lvl, t, key, hot); ok && cached != nil {
-			return cached, nil
-		}
+	if cached, ok := t.lm.cache.getBlock(t.lvl, t, key, hot); ok && cached != nil {
+		return cached, nil
 	}
 
 	ko, ok := t.blockOffset(idx)
@@ -353,27 +351,11 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 		tbl:    t,
 	}
 
-	var (
-		err error
-		gen uint64
-		rel func()
-	)
-	if b.data, gen, rel, err = t.read(b.offset, int(ko.GetLen()), copyData); err != nil {
+	var err error
+	if b.data, err = t.read(b.offset, int(ko.GetLen())); err != nil {
 		return nil, errors.Wrapf(err,
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.fid, b.offset, ko.GetLen())
-	}
-	if !copyData && gen != t.ss.Generation() {
-		if rel != nil {
-			rel()
-			rel = nil
-		}
-		if b.data, _, _, err = t.read(b.offset, int(ko.GetLen()), true); err != nil {
-			return nil, err
-		}
-		copyData = true
-	} else if !copyData {
-		cacheZeroCopyUses.Add(1)
 	}
 
 	// Binary Format for a Data Block (read from disk):
@@ -399,9 +381,6 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 	b.data = b.data[:readPos]
 
 	if err = b.verifyCheckSum(); err != nil {
-		if rel != nil {
-			rel()
-		}
 		return nil, err
 	}
 
@@ -414,12 +393,7 @@ func (t *table) loadBlock(idx int, hot, copyData, bypassCache bool) (*block, err
 
 	b.entriesIndexStart = entriesIndexStart
 
-	if copyData && !bypassCache {
-		t.lm.cache.addBlock(t.lvl, t, key, b, hot)
-	} else {
-		cacheBypassCount.Add(1)
-	}
-	b.release = rel
+	t.lm.cache.addBlock(t.lvl, t, key, b, hot)
 
 	return b, nil
 }
@@ -461,27 +435,24 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	if idx < 0 || idx >= len(offsets) {
 		return false
 	}
-	_, err := t.loadBlock(idx, hot, true, false)
+	_, err := t.loadBlock(idx, hot)
 	return err == nil
 }
 
-func (t *table) read(off, sz int, copyData bool) ([]byte, uint64, func(), error) {
+func (t *table) read(off, sz int) ([]byte, error) {
 	ss, release, err := t.pinSSTable()
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, err
 	}
 	data, err := ss.Bytes(off, sz)
 	if err != nil {
 		release()
-		return nil, 0, nil, err
-	}
-	if !copyData {
-		return data, ss.Generation(), release, nil
+		return nil, err
 	}
 	out := make([]byte, len(data))
 	copy(out, data)
 	release()
-	return out, ss.Generation(), nil, nil
+	return out, nil
 }
 
 const maxUint32 = uint64(math.MaxUint32)
@@ -538,14 +509,9 @@ type tableIterator struct {
 	bi           *blockIterator
 	err          error
 	index        *pb.TableIndex
-	copyData     bool
-	release      func()
 	closeCh      chan struct{}
 	wg           sync.WaitGroup
 	closeOnce    sync.Once
-	bypassCache  bool
-	autoBypass   bool
-	blocksRead   int
 	prefetchRing *utils.Ring[int]
 	prefetchPool *utils.Pool
 	hitCount     *expvar.Int
@@ -553,14 +519,14 @@ type tableIterator struct {
 }
 
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
-	return it.t.loadBlock(idx, true, it.copyData, it.bypassCache)
+	return it.t.loadBlock(idx, true)
 }
 
 func (it *tableIterator) prefetchNext(idx int) {
 	if it.opt == nil || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
 		return
 	}
-	if !it.copyData || it.index == nil {
+	if it.index == nil {
 		return
 	}
 	limit := len(it.index.GetOffsets())
@@ -588,36 +554,17 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options == nil {
 		options = &utils.Options{}
 	}
-	// Heuristic: if caller scans forward and prefetches multiple blocks, bypass block cache to reduce double caching.
-	if !options.BypassBlockCache && options.IsAsc && options.PrefetchBlocks > 0 {
-		options.BypassBlockCache = true
-	}
-	// Adaptive: if no explicit prefetch but caller is ascending and request count is large, enable prefetch and bypass.
-	if !options.BypassBlockCache && options.IsAsc && options.PrefetchBlocks == 0 && t.lm != nil {
-		// Use a small default prefetch window for scans without explicit prefetch.
-		options.PrefetchBlocks = 4
-		options.BypassBlockCache = true
-	}
 	if options.IsAsc && options.PrefetchBlocks > 0 {
 		// Best-effort advise for long forward scans; ignore errors.
 		t.adviseIterator(options)
 	}
 
-	// Long forward scans prefer zero-copy to reduce allocations; callers can
-	// override via ZeroCopy.
-	if options.IsAsc && options.PrefetchBlocks > 0 {
-		options.ZeroCopy = true
-	}
-
-	copyData := !options.ZeroCopy
 	it := &tableIterator{
-		opt:         options,
-		t:           t,
-		bi:          getBlockIterator(),
-		index:       t.index(),
-		copyData:    copyData,
-		closeCh:     make(chan struct{}),
-		bypassCache: options.BypassBlockCache,
+		opt:     options,
+		t:       t,
+		bi:      getBlockIterator(),
+		index:   t.index(),
+		closeCh: make(chan struct{}),
 	}
 	if options.PrefetchBlocks > 0 {
 		it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
@@ -641,7 +588,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 					}
 					if err := it.prefetchPool.Submit(func() {
 						it.t.IncrRef()
-						if _, err := it.t.loadBlock(idx, false, true, it.bypassCache); err == nil {
+						if _, err := it.t.loadBlock(idx, false); err == nil {
 							prefetchCompleted.Add(1)
 						} else {
 							prefetchAborted.Add(1)
@@ -664,7 +611,7 @@ func (t *table) adviseIterator(options *utils.Options) {
 	}
 	pattern := options.AccessPattern
 	if pattern == utils.AccessPatternAuto {
-		if options.IsAsc || options.BypassBlockCache {
+		if options.IsAsc {
 			pattern = utils.AccessPatternSequential
 		} else {
 			pattern = utils.AccessPatternRandom
@@ -687,14 +634,6 @@ func (it *tableIterator) Next() {
 	}
 
 	if len(it.bi.data) == 0 {
-		if !it.bypassCache && it.opt != nil && it.opt.IsAsc {
-			it.blocksRead++
-			if it.blocksRead >= 16 {
-				it.bypassCache = true
-				it.autoBypass = true
-				cacheAutoBypass.Add(1)
-			}
-		}
 		block, err := it.fetchBlock(it.blockPos)
 		if err != nil {
 			it.err = err
@@ -744,10 +683,6 @@ func (it *tableIterator) Close() error {
 			it.prefetchPool.Release()
 		}
 	})
-	if it.release != nil {
-		it.release()
-		it.release = nil
-	}
 	it.bi.Close()
 	return it.t.DecrRef()
 }
@@ -762,8 +697,6 @@ func (it *tableIterator) seekToFirst() {
 		return
 	}
 	it.blockPos = 0
-	it.blocksRead = 0
-	it.autoBypass = false
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
@@ -789,8 +722,6 @@ func (it *tableIterator) seekToLast() {
 		return
 	}
 	it.blockPos = numBlocks - 1
-	it.blocksRead = 0
-	it.autoBypass = false
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err

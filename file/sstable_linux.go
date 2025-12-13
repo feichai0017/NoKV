@@ -132,14 +132,6 @@ func (ss *SSTable) HasBloomFilter() bool {
 	return ss.hasBloomFilter
 }
 
-// Generation reflects the current mmap generation for zero-copy safety.
-func (ss *SSTable) Generation() uint64 {
-	if ss == nil || ss.f == nil {
-		return 0
-	}
-	return ss.f.Generation()
-}
-
 // Advise forwards the read pattern hint to the underlying mmap.
 func (ss *SSTable) Advise(pattern utils.AccessPattern) error {
 	if ss == nil || ss.f == nil {
