@@ -221,6 +221,17 @@ type blockEntry struct {
 	idx int
 	tbl *table
 	blk *block
+
+	releaseOnce sync.Once
+}
+
+func (be *blockEntry) release() {
+	if be == nil || be.tbl == nil {
+		return
+	}
+	be.releaseOnce.Do(func() {
+		_ = be.tbl.DecrRef()
+	})
 }
 
 func newBlockCache(capacity int) *blockCache {
@@ -244,6 +255,7 @@ func newBlockCache(capacity int) *blockCache {
 				return
 			}
 			clearTableSlot(item.Value)
+			item.Value.release()
 			bc.removeHotEntry(item.Value)
 		},
 	})
@@ -325,6 +337,9 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, 
 		tbl: tbl,
 		blk: blk,
 	}
+	if entry.tbl != nil {
+		entry.tbl.IncrRef()
+	}
 	if hot && c.hot != nil {
 		c.promoteHot(entry)
 	}
@@ -338,14 +353,24 @@ func (c *blockCache) del(tbl *table, key uint64) {
 	if c == nil {
 		return
 	}
+	var entry *blockEntry
 	if tbl != nil {
 		idx := blockIndexFromKey(key)
-		if idx < len(tbl.cacheSlots) && tbl.cacheSlots[idx] != nil {
+		if idx < len(tbl.cacheSlots) {
+			entry = tbl.cacheSlots[idx]
 			tbl.cacheSlots[idx] = nil
+		}
+	}
+	if entry == nil && c.rc != nil {
+		if be, ok := c.rc.Get(key); ok {
+			entry = be
 		}
 	}
 	if c.rc != nil {
 		c.rc.Del(key)
+	}
+	if entry != nil {
+		entry.release()
 	}
 }
 
@@ -370,6 +395,9 @@ func (c *blockCache) storeTableSlot(tbl *table, be *blockEntry) {
 		grown := make([]*blockEntry, idx+1)
 		copy(grown, tbl.cacheSlots)
 		tbl.cacheSlots = grown
+	}
+	if prev := tbl.cacheSlots[idx]; prev != nil && prev != be {
+		prev.release()
 	}
 	tbl.cacheSlots[idx] = be
 }
