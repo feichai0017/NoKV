@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+# Set default permissions for all jobs
+permissions:
+  contents: read
+
 jobs:
   # Code quality checks
   lint:

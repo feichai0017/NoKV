@@ -137,14 +137,14 @@ go run ./benchmark/benchmark_results.go \
 
 Typical results on modern hardware (indicative):
 
-| Workload | Throughput (ops/sec) | P99 Latency (μs) |
-|----------|---------------------|------------------|
-| A (Mixed)| ~50K                | ~2000            |
-| B (Read) | ~100K               | ~800             |
-| C (Read) | ~120K               | ~600             |
-| D (Latest)| ~80K               | ~1200            |
-| E (Scan) | ~10K                | ~15000           |
-| F (RMW)  | ~45K                | ~2500            |
+| Workload   | Throughput (ops/sec) | P99 Latency (μs) |
+|------------|----------------------|------------------|
+| A (Mixed)  | ~50K                 | ~2000            |
+| B (Read)   | ~100K                | ~800             |
+| C (Read)   | ~120K                | ~600             |
+| D (Latest) | ~80K                 | ~1200            |
+| E (Scan)   | ~10K                 | ~15000           |
+| F (RMW)    | ~45K                 | ~2500            |
 
 *Note: Actual performance varies based on hardware, configuration, and data characteristics.*
 
