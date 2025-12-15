@@ -1,0 +1,173 @@
+run:
+  # Timeout for analysis
+  timeout: 5m
+
+  # Which dirs to skip: issues from them won't be reported
+  skip-dirs:
+    - third_party
+    - vendor
+    - testdata
+    - pb  # generated protobuf code
+
+  # Which files to skip: they will be analyzed, but issues from them won't be reported
+  skip-files:
+    - ".*\\.pb\\.go$"
+    - ".*_gen\\.go$"
+
+linters:
+  enable:
+    # Enabled by default
+    - errcheck      # Checks for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Reports suspicious constructs
+    - ineffassign   # Detects ineffectual assignments
+    - staticcheck   # Advanced Go linter
+    - unused        # Checks for unused code
+
+    # Additional recommended linters
+    - gofmt         # Checks whether code was gofmt-ed
+    - goimports     # Check import statements are formatted according to the 'goimport' command
+    - misspell      # Finds commonly misspelled English words
+    - revive        # Fast, configurable, extensible, flexible, and beautiful linter for Go
+    - unconvert     # Remove unnecessary type conversions
+    - unparam       # Reports unused function parameters
+    - gosec         # Inspects source code for security problems
+    - bodyclose     # Checks whether HTTP response body is closed successfully
+    - noctx         # Finds sending http request without context.Context
+    - rowserrcheck  # Checks whether Err of rows is checked successfully
+    - sqlclosecheck # Checks that sql.Rows and sql.Stmt are closed
+    - goconst       # Finds repeated strings that could be replaced by a constant
+    - gocyclo       # Computes and checks the cyclomatic complexity of functions
+    - dupl          # Tool for code clone detection
+    - prealloc      # Finds slice declarations that could potentially be preallocated
+    - exportloopref # Checks for pointers to enclosing loop variables
+    - nilerr        # Finds code that returns nil even if it checks that error is not nil
+
+linters-settings:
+  errcheck:
+    # Report about not checking of errors in type assertions: `a := b.(MyStruct)`;
+    check-type-assertions: true
+    # Report about assignment of errors to blank identifier: `num, _ := strconv.Atoi(numStr)`;
+    check-blank: true
+
+  govet:
+    # Enable all analyzers
+    enable-all: true
+    # Disable specific analyzers
+    disable:
+      - fieldalignment  # Too strict for this project
+      - shadow          # Can be noisy
+
+  gocyclo:
+    # Minimal code complexity to report
+    min-complexity: 15
+
+  dupl:
+    # Tokens count to trigger issue
+    threshold: 100
+
+  goconst:
+    # Minimal length of string constant
+    min-len: 3
+    # Minimal occurrences count to trigger
+    min-occurrences: 3
+    # Ignore test files
+    ignore-tests: true
+
+  misspell:
+    locale: US
+    ignore-words:
+      - NoKV
+      - sstable
+      - memtable
+      - vlog
+      - raft
+
+  gosec:
+    # Select which gosec rules to enable
+    includes: []
+    # Select which gosec rules to disable
+    excludes:
+      - G104  # Audit errors not checked (covered by errcheck)
+      - G404  # Use of weak random number generator (math/rand instead of crypto/rand)
+
+  revive:
+    # Enable all rules by default; disable specific ones below
+    rules:
+      # Disabled rules
+      - name: line-length-limit
+        disabled: true
+      - name: function-length
+        disabled: true
+      - name: max-public-structs
+        disabled: true
+      - name: cognitive-complexity
+        disabled: true
+      - name: cyclomatic
+        disabled: true
+      - name: add-constant
+        disabled: true
+      - name: flag-parameter
+        disabled: true
+
+      # Enabled rules with custom config
+      - name: var-naming
+        arguments:
+          - ["ID", "DB", "WAL", "LSM", "SST", "TTL", "GC", "URL", "HTTP", "MVCC", "RESP", "TSO"]
+
+issues:
+  # Maximum issues count per one linter
+  max-issues-per-linter: 0
+
+  # Maximum count of issues with the same text
+  max-same-issues: 0
+
+  # Exclude some linters from running on tests files
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - goconst
+
+    # Exclude some staticcheck messages
+    - linters:
+        - staticcheck
+      text: "SA9003:"  # empty branch
+
+    # Exclude lll issues for long lines with go:generate
+    - linters:
+        - lll
+      source: "^//go:generate "
+
+    # Ignore errors in main packages
+    - path: cmd/
+      text: "Error return value of"
+
+    # Allow log.Fatal in main functions
+    - path: cmd/.*main\.go
+      linters:
+        - revive
+      text: "deep-exit"
+
+  # Independently from option `exclude` golangci-lint uses default exclude patterns
+  exclude-use-default: true
+
+  # Fix found issues (if it's supported by the linter)
+  fix: false
+
+output:
+  # Format: colored-line-number|line-number|json|tab|checkstyle|code-climate|junit-xml|github-actions
+  format: colored-line-number
+
+  # Print lines of code with issue
+  print-issued-lines: true
+
+  # Print linter name in the end of issue text
+  print-linter-name: true
+
+  # Sort results by: filepath, line and column
+  sort-results: true
