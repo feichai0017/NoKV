@@ -209,6 +209,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 | Topic | Document |
 | --- | --- |
+| **📊 Project Analysis** | **[中文版](docs/project-analysis-zh.md) \| [English](docs/project-analysis-en.md)** |
 | Architecture deep dive | [docs/architecture.md](docs/architecture.md) |
 | WAL internals | [docs/wal.md](docs/wal.md) |
 | Flush pipeline | [docs/flush.md](docs/flush.md) |
@@ -225,6 +226,8 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 | CLI reference | [docs/cli.md](docs/cli.md) |
 | RaftStore overview | [docs/raftstore.md](docs/raftstore.md) |
 | Redis gateway | [docs/nokv-redis.md](docs/nokv-redis.md) |
+
+> 📖 **New**: Comprehensive project analysis reports are now available! These in-depth technical assessments cover architecture design, code quality, SOLID principles, and career guidance for database engineers. Perfect for learning, job seeking, and technical evaluation. [Read more →](docs/ANALYSIS_README.md)
 
 ---
 
