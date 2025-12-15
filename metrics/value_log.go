@@ -20,6 +20,6 @@ type ValueLogMetrics struct {
 	Head           kv.ValuePtr
 }
 
-func IncValueLogGCRuns() { valueLogGCRuns.Add(1) }
+func IncValueLogGCRuns()          { valueLogGCRuns.Add(1) }
 func IncValueLogSegmentsRemoved() { valueLogSegmentsRemoved.Add(1) }
-func IncValueLogHeadUpdates() { valueLogHeadUpdates.Add(1) }
+func IncValueLogHeadUpdates()     { valueLogHeadUpdates.Add(1) }
