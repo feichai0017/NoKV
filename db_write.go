@@ -35,6 +35,9 @@ func (db *DB) initWriteBatchOptions() {
 	if db.opt.WriteBatchWait < 0 {
 		db.opt.WriteBatchWait = 0
 	}
+	if db.opt.CommitPipelineDepth <= 0 {
+		db.opt.CommitPipelineDepth = 4
+	}
 }
 
 func (db *DB) applyThrottle(enable bool) {
@@ -223,13 +226,79 @@ func (db *DB) nextCommitBatch() *commitBatch {
 }
 
 func (db *DB) commitWorker() {
-	defer db.commitWG.Done()
+	defer func() {
+		close(db.commitVlogCh)
+		db.commitWG.Done()
+	}()
 	for {
 		batch := db.nextCommitBatch()
 		if batch == nil {
 			return
 		}
-		db.handleCommitRequests(batch.reqs)
+		db.commitVlogCh <- batch
+	}
+}
+
+func (db *DB) commitVlogWorker() {
+	defer func() {
+		close(db.commitApplyCh)
+		db.commitWG.Done()
+	}()
+	for batch := range db.commitVlogCh {
+		if batch == nil {
+			continue
+		}
+		batch.batchStart = time.Now()
+		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.reqs, batch.batchStart)
+		if len(requests) == 0 {
+			db.finishCommitRequests(batch.reqs, nil)
+			db.releaseCommitBatch(batch)
+			continue
+		}
+		batch.requests = requests
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
+		}
+
+		var err error
+		if db.vwriter != nil {
+			err = db.vwriter.WriteRequests(requests)
+		} else {
+			err = db.vlog.write(requests)
+		}
+		if err != nil {
+			db.finishCommitRequests(batch.reqs, err)
+			db.releaseCommitBatch(batch)
+			continue
+		}
+		if db.writeMetrics != nil {
+			batch.valueLogDur = max(time.Since(batch.batchStart), 0)
+			if batch.valueLogDur > 0 {
+				db.writeMetrics.RecordValueLog(batch.valueLogDur)
+			}
+		}
+		db.commitApplyCh <- batch
+	}
+}
+
+func (db *DB) commitApplyWorker() {
+	defer db.commitWG.Done()
+	for batch := range db.commitApplyCh {
+		if batch == nil {
+			continue
+		}
+		err := db.applyRequests(batch.requests)
+		if err == nil && db.opt.SyncWrites {
+			err = db.wal.Sync()
+		}
+		if db.writeMetrics != nil {
+			totalDur := max(time.Since(batch.batchStart), 0)
+			applyDur := max(totalDur-batch.valueLogDur, 0)
+			if applyDur > 0 {
+				db.writeMetrics.RecordApply(applyDur)
+			}
+		}
+		db.finishCommitRequests(batch.reqs, err)
 		db.releaseCommitBatch(batch)
 	}
 }
@@ -244,19 +313,13 @@ func (db *DB) stopCommitWorkers() {
 	db.commitWG.Wait()
 }
 
-func (db *DB) handleCommitRequests(reqs []*commitRequest) {
-	if len(reqs) == 0 {
-		return
-	}
-
+func (db *DB) collectCommitRequests(reqs []*commitRequest, now time.Time) ([]*request, int, int64, int64) {
 	requests := make([]*request, 0, len(reqs))
 	var (
 		totalEntries int
 		totalSize    int64
 		waitSum      int64
 	)
-	batchStart := time.Now()
-	now := batchStart
 	for _, cr := range reqs {
 		if cr == nil || cr.req == nil {
 			continue
@@ -270,59 +333,16 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 			r.enqueueAt = time.Time{}
 		}
 	}
-
-	if len(requests) == 0 {
-		db.finishCommitRequests(reqs, nil)
-		return
-	}
-
-	if db.writeMetrics != nil {
-		db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
-	}
-
-	if db.vwriter != nil {
-		if err := db.vwriter.WriteRequests(requests); err != nil {
-			db.finishCommitRequests(reqs, err)
-			return
-		}
-	} else if err := db.vlog.write(requests); err != nil {
-		db.finishCommitRequests(reqs, err)
-		return
-	}
-	var valueLogDur time.Duration
-	if db.writeMetrics != nil {
-		valueLogDur = max(time.Since(batchStart), 0)
-		if valueLogDur > 0 {
-			db.writeMetrics.RecordValueLog(valueLogDur)
-		}
-	}
-
-	if err := db.applyRequests(requests); err != nil {
-		db.finishCommitRequests(reqs, err)
-		return
-	}
-	if db.writeMetrics != nil {
-		totalDur := max(time.Since(batchStart), 0)
-		applyDur := max(totalDur-valueLogDur, 0)
-		if applyDur > 0 {
-			db.writeMetrics.RecordApply(applyDur)
-		}
-	}
-
-	if db.opt.SyncWrites {
-		if err := db.wal.Sync(); err != nil {
-			db.finishCommitRequests(reqs, err)
-			return
-		}
-	}
-
-	db.finishCommitRequests(reqs, nil)
+	return requests, totalEntries, totalSize, waitSum
 }
 
 func (db *DB) releaseCommitBatch(batch *commitBatch) {
 	if batch == nil || batch.pool == nil {
 		return
 	}
+	batch.requests = nil
+	batch.batchStart = time.Time{}
+	batch.valueLogDur = 0
 	reqs := batch.reqs
 	for i := range reqs {
 		reqs[i] = nil

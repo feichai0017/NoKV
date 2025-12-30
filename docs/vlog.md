@@ -20,7 +20,7 @@ The design echoes BadgerDB's value log while remaining manifest-driven like Rock
 ```
 
 * Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go#L53-L92) discovers existing segments at open.
-* `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go#L298-L307) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
+* `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go#L540-L560) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
 * Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go#L76-L125).
 
 ---
@@ -38,8 +38,8 @@ The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries writte
 
 * Header fields are varint-encoded (`kv.EntryHeader`).
 * The first 20 bytes of every segment are reserved (`kv.ValueLogHeaderSize`) for future metadata; iteration always skips this fixed header.
-* `file.LogFile.EncodeEntry`/`DecodeEntry` perform the layout work, and each append finishes with a CRC32 to detect torn writes.
-* `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L348-L418) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
+* `kv.EncodeEntry` and the entry iterator (`kv.EntryIterator`) perform the layout work, and each append finishes with a CRC32 to detect torn writes.
+* `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L765-L832) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
 
 ---
 
@@ -47,20 +47,20 @@ The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries writte
 
 ```go
 mgr, _ := vlog.Open(vlog.Config{Dir: "...", MaxSize: 1<<29})
-ptr, _ := mgr.Append(payload)
-_ = mgr.Rotate()        // when ptr.Offset+ptr.Len exceeds MaxSize
+ptr, _ := mgr.AppendEntry(entry)
+ptrs, _ := mgr.AppendEntries(entries, writeMask)
 val, unlock, _ := mgr.Read(ptr)
-unlock()                // release read lock
-_ = mgr.Rewind(*ptr)    // rollback partially written batch
-_ = mgr.Remove(fid)     // close + delete file
+unlock()             // release per-file lock
+_ = mgr.Rewind(*ptr) // rollback partially written batch
+_ = mgr.Remove(fid)  // close + delete file
 ```
 
 Key behaviours:
 
-1. **Append + Rotate** – [`Manager.Append`](../vlog/manager.go#L108-L160) writes into the active file and bumps the in-memory offset. Rotation calls [`Manager.Rotate`](../vlog/manager.go#L162-L198), syncing the old file via `file.LogFile.DoneWriting` before creating the next `%05d.vlog`.
+1. **Append + Rotate** – [`Manager.AppendEntry`](../vlog/manager.go#L232-L273) encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed `MaxSize`; manual rotation is rare.
 2. **Crash recovery** – [`Manager.Rewind`](../vlog/manager.go#L437-L520) truncates the active file and removes newer files when a write batch fails mid-flight. `valueLog.write` uses this to guarantee idempotent WAL/value log ordering.
-3. **Safe reads** – [`Manager.Read`](../vlog/manager.go#L200-L226) grabs a per-file `RWMutex`, copies the bytes into a new slice, and hands back an unlock function so callers release the file lock quickly.
-4. **Verification** – [`VerifyDir`](../vlog/manager.go#L308-L411) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
+3. **Safe reads** – [`Manager.Read`](../vlog/manager.go#L444-L457) grabs a per-file `RWMutex` and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.
+4. **Verification** – [`VerifyDir`](../vlog/manager.go#L703-L763) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
 
 Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.
 
@@ -70,24 +70,24 @@ Compared with RocksDB's blob manager the surface is intentionally small—NoKV t
 
 ```mermaid
 sequenceDiagram
-    participant Batch as writeBatch
-    participant VLog as valueLog.write
+    participant Enq as commitWorker
+    participant VLog as commitVlogWorker
     participant Mgr as vlog.Manager
+    participant Apply as commitApplyWorker
     participant WAL as wal.Manager
     participant Mem as MemTable
-    Batch->>VLog: processValueLogBatches(entries)
-    VLog->>Mgr: Append(payload)
-    Mgr-->>VLog: ValuePtr(fid, offset, len)
-    VLog->>Mgr: Rotate? (threshold)
-    VLog-->>Batch: Ptr list
-    Batch->>WAL: Append(entries+ptrs)
-    Batch->>Mem: apply to skiplist
+    Enq->>VLog: batch requests
+    VLog->>Mgr: AppendEntries(entries, writeMask)
+    Mgr-->>VLog: ValuePtr list
+    VLog-->>Apply: batch + ptrs
+    Apply->>WAL: Append(entries+ptrs)
+    Apply->>Mem: apply to skiplist
 ```
 
-1. [`valueLog.write`](../vlog.go#L240-L272) iterates through batched entries. For entries staying in LSM (`shouldWriteValueToLSM`), it records a zero `ValuePtr`. Others stream their bytes via `kv.EncodeEntryTo` straight into the vlog.
-2. If the append would exceed `Options.ValueLogFileSize`, the manager rotates before continuing. The WAL append happens **after** the value log append so that crash replay observes consistent pointers.
-3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L139-L209) exercises both append- and rotate-failure paths.
-4. `Txn.Commit` piggybacks on the same pipeline: pending writes are turned into entries and routed through `processValueLogBatches` before the WAL write, ensuring MVCC correctness.
+1. [`valueLog.write`](../vlog.go#L238-L268) builds a write mask for each batch, then delegates to [`Manager.AppendEntries`](../vlog/manager.go#L367-L444). Entries staying in LSM (`shouldWriteValueToLSM`) receive zero-value pointers.
+2. Rotation is handled inside the manager when the reserved bytes would exceed `MaxSize`. The WAL append happens **after** the value log append so crash replay observes consistent pointers.
+3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L188-L254) exercises both append- and rotate-failure paths.
+4. `Txn.Commit` and batched writes share the same pipeline: requests flow through `commitVlogWorker` and `commitApplyWorker`, keeping MVCC and durability ordering consistent.
 
 Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.
 

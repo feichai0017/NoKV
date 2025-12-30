@@ -37,6 +37,19 @@ type valueLogWriter interface {
 	WriteRequests(reqs []*request) error
 }
 
+func (vlog *valueLog) setValueLogFileSize(sz int) {
+	if vlog == nil || sz <= 0 {
+		return
+	}
+	vlog.opt.ValueLogFileSize = sz
+	if vlog.db != nil && vlog.db.opt != nil {
+		vlog.db.opt.ValueLogFileSize = sz
+	}
+	if vlog.manager != nil {
+		vlog.manager.SetMaxSize(int64(sz))
+	}
+}
+
 func (vlog *valueLog) logf(format string, args ...any) {
 	if vlog == nil || !vlog.opt.ValueLogVerbose {
 		return
@@ -244,23 +257,18 @@ func (vlog *valueLog) write(reqs []*request) error {
 
 	for _, req := range reqs {
 		req.Ptrs = req.Ptrs[:0]
-		for _, e := range req.Entries {
-			if vlog.db.shouldWriteValueToLSM(e) {
-				req.Ptrs = append(req.Ptrs, kv.ValuePtr{})
-				continue
-			}
-			ptr, err := vlog.manager.AppendEntry(e)
-			if err != nil {
-				return fail(err, "rewind value log after append failure")
-			}
-			req.Ptrs = append(req.Ptrs, *ptr)
-
-			if int(ptr.Offset)+int(ptr.Len) > vlog.opt.ValueLogFileSize {
-				if err := vlog.manager.Rotate(); err != nil {
-					return fail(err, "rewind value log after rotate failure")
-				}
+		writeMask := make([]bool, len(req.Entries))
+		for i, e := range req.Entries {
+			if !vlog.db.shouldWriteValueToLSM(e) {
+				writeMask[i] = true
 			}
 		}
+
+		ptrs, err := vlog.manager.AppendEntries(req.Entries, writeMask)
+		if err != nil {
+			return fail(err, "rewind value log after append failure")
+		}
+		req.Ptrs = append(req.Ptrs, ptrs...)
 	}
 	return nil
 }
@@ -304,6 +312,7 @@ func (db *DB) initVLog() {
 		opt:       *db.opt,
 		garbageCh: make(chan struct{}, 1),
 	}
+	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)
 	vlog.reconcileManifest(status)
 	db.vhead = vp
 	if vp != nil {

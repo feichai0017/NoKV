@@ -1,25 +1,12 @@
 package utils
 
 import (
-	"container/heap"
 	"context"
 	"sync"
 	"sync/atomic"
 )
 
-type uint64Heap []uint64
-
-func (u uint64Heap) Len() int           { return len(u) }
-func (u uint64Heap) Less(i, j int) bool { return u[i] < u[j] }
-func (u uint64Heap) Swap(i, j int)      { u[i], u[j] = u[j], u[i] }
-func (u *uint64Heap) Push(x any)        { *u = append(*u, x.(uint64)) }
-func (u *uint64Heap) Pop() any {
-	old := *u
-	n := len(old)
-	x := old[n-1]
-	*u = old[0 : n-1]
-	return x
-}
+const defaultWatermarkWindow = 1 << 16
 
 // WaterMark is used to keep track of the minimum un-finished index.  Typically, an index k becomes
 // finished or "done" according to a WaterMark once Done(k) has been called
@@ -37,18 +24,23 @@ type WaterMark struct {
 	Name      string
 
 	mu      sync.Mutex
-	pending map[uint64]int
 	waiters map[uint64]chan struct{}
-	indices uint64Heap
+	window  atomic.Value // *watermarkWindow
+}
+
+type watermarkWindow struct {
+	base  uint64
+	slots []atomic.Int32
 }
 
 // Init initializes a WaterMark struct. MUST be called before using it.
 func (w *WaterMark) Init(closer *Closer) {
 	const defaultCap = 128
-	w.pending = make(map[uint64]int, defaultCap)
 	w.waiters = make(map[uint64]chan struct{}, defaultCap)
-	w.indices = make(uint64Heap, 0, defaultCap)
-	heap.Init(&w.indices)
+	w.window.Store(&watermarkWindow{
+		base:  1,
+		slots: make([]atomic.Int32, defaultWatermarkWindow),
+	})
 	// Legacy closers expected each watermark processor to call Done once.
 	// We no longer run a background goroutine, so mark it done immediately
 	// to avoid leaking waiters on shutdown.
@@ -128,44 +120,116 @@ func (w *WaterMark) WaitForMark(ctx context.Context, index uint64) error {
 	}
 }
 
-func (w *WaterMark) addIndex(index uint64, delta int) {
+func (w *WaterMark) addIndex(index uint64, delta int32) {
 	if index == 0 {
 		return
 	}
-	w.mu.Lock()
-	if _, present := w.pending[index]; !present {
-		heap.Push(&w.indices, index)
+	win := w.ensureWindow(index)
+	offset := index - win.base
+	if offset < uint64(len(win.slots)) {
+		win.slots[offset].Add(delta)
 	}
-	w.pending[index] += delta
-	w.advanceLocked()
-	w.mu.Unlock()
+	w.tryAdvance()
 }
 
-func (w *WaterMark) advanceLocked() {
-	doneUntil := w.DoneUntil()
-	until := doneUntil
-
-	for len(w.indices) > 0 {
-		min := w.indices[0]
-		if pending := w.pending[min]; pending > 0 {
-			break
+func (w *WaterMark) tryAdvance() {
+	for {
+		doneUntil := w.DoneUntil()
+		lastIndex := w.LastIndex()
+		if doneUntil >= lastIndex {
+			return
 		}
-		heap.Pop(&w.indices)
-		delete(w.pending, min)
-		until = min
-	}
-
-	if until != doneUntil {
-		atomic.StoreUint64(&w.doneUntil, until)
-		w.notifyWaitersLocked(doneUntil, until)
+		next := doneUntil + 1
+		win := w.loadWindow()
+		if next < win.base || next >= win.base+uint64(len(win.slots)) {
+			w.ensureWindow(next)
+			continue
+		}
+		offset := next - win.base
+		if win.slots[offset].Load() > 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&w.doneUntil, doneUntil, next) {
+			w.notifyWaiters(doneUntil, next)
+			continue
+		}
 	}
 }
 
-func (w *WaterMark) notifyWaitersLocked(prev, until uint64) {
+func (w *WaterMark) notifyWaitersLocked(_ uint64, until uint64) {
 	for idx, ch := range w.waiters {
 		if idx <= until {
 			close(ch)
 			delete(w.waiters, idx)
 		}
 	}
+}
+
+func (w *WaterMark) notifyWaiters(prev, until uint64) {
+	w.mu.Lock()
+	w.notifyWaitersLocked(prev, until)
+	w.mu.Unlock()
+}
+
+func (w *WaterMark) ensureWindow(index uint64) *watermarkWindow {
+	win := w.loadWindow()
+	if index >= win.base && index < win.base+uint64(len(win.slots)) {
+		return win
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	win = w.loadWindow()
+	if index >= win.base && index < win.base+uint64(len(win.slots)) {
+		return win
+	}
+	w.rebuildWindowLocked(index, win)
+	return w.loadWindow()
+}
+
+func (w *WaterMark) rebuildWindowLocked(index uint64, win *watermarkWindow) {
+	done := w.DoneUntil()
+	newBase := done + 1
+	if index < newBase {
+		index = newBase
+	}
+	size := len(win.slots)
+	if size == 0 {
+		size = defaultWatermarkWindow
+	}
+	needed := index - newBase + 1
+	for uint64(size) < needed {
+		size <<= 1
+	}
+	newSlots := make([]atomic.Int32, size)
+	for i := range win.slots {
+		count := win.slots[i].Load()
+		if count == 0 {
+			continue
+		}
+		idx := win.base + uint64(i)
+		if idx < newBase {
+			continue
+		}
+		offset := idx - newBase
+		if offset >= uint64(size) {
+			continue
+		}
+		newSlots[offset].Store(count)
+	}
+	w.window.Store(&watermarkWindow{
+		base:  newBase,
+		slots: newSlots,
+	})
+}
+
+func (w *WaterMark) loadWindow() *watermarkWindow {
+	if w.window.Load() == nil {
+		win := &watermarkWindow{
+			base:  1,
+			slots: make([]atomic.Int32, defaultWatermarkWindow),
+		}
+		w.window.Store(win)
+		return win
+	}
+	return w.window.Load().(*watermarkWindow)
 }

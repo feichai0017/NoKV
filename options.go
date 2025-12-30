@@ -66,6 +66,9 @@ type Options struct {
 	// momentarily empty, letting small bursts share one WAL fsync/apply pass.
 	// Zero disables the delay.
 	WriteBatchWait time.Duration
+	// CommitPipelineDepth controls the buffering between commit queue, value log
+	// writes, and LSM apply. Values <= 0 fall back to a small default.
+	CommitPipelineDepth int
 
 	// Block cache configuration for read path optimization. Cached blocks
 	// target L0/L1; colder data relies on the OS page cache.
@@ -154,6 +157,7 @@ func NewDefaultOptions() *Options {
 		HotWriteBurstThreshold:        8,
 		HotWriteBatchMultiplier:       2,
 		WriteBatchWait:                200 * time.Microsecond,
+		CommitPipelineDepth:           4,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,
