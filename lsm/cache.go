@@ -3,6 +3,7 @@ package lsm
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 
 	"github.com/dgraph-io/ristretto/v2"
 
@@ -161,11 +162,11 @@ func (c *cache) delIndex(fid uint64) {
 	c.indexs.Del(fid)
 }
 
-func (c *cache) getBlock(level int, tbl *table, key uint64, hot bool) (*block, bool) {
+func (c *cache) getBlock(level int, key uint64, hot bool) (*block, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(level, tbl, key, hot)
+	blk, ok := c.blocks.get(level, key, hot)
 	if ok {
 		c.metrics.RecordBlock(level, true)
 		return blk, true
@@ -185,7 +186,7 @@ func (c *cache) dropBlock(key uint64) {
 	if c == nil || c.blocks == nil {
 		return
 	}
-	c.blocks.del(nil, key)
+	c.blocks.del(key)
 }
 
 func (c *cache) getBloom(fid uint64) (utils.Filter, bool) {
@@ -214,11 +215,12 @@ func (c *cache) metricsSnapshot() metrics.CacheSnapshot {
 type blockCache struct {
 	rc  *ristretto.Cache[uint64, *blockEntry]
 	hot *coreCache.ClockProCache[*blockEntry]
+
+	closing atomic.Bool
 }
 
 type blockEntry struct {
 	key uint64
-	idx int
 	tbl *table
 	blk *block
 
@@ -254,7 +256,9 @@ func newBlockCache(capacity int) *blockCache {
 			if item == nil || item.Value == nil {
 				return
 			}
-			clearTableSlot(item.Value)
+			if bc.closing.Load() {
+				return
+			}
 			item.Value.release()
 			bc.removeHotEntry(item.Value)
 		},
@@ -264,10 +268,6 @@ func newBlockCache(capacity int) *blockCache {
 	}
 	bc.rc = rc
 	return bc
-}
-
-func blockIndexFromKey(key uint64) int {
-	return int(uint32(key))
 }
 
 func (c *blockCache) getHot(key uint64) (*blockEntry, bool) {
@@ -291,31 +291,14 @@ func (c *blockCache) removeHotEntry(be *blockEntry) {
 	c.hot.Delete(be.key)
 }
 
-func (c *blockCache) get(level int, tbl *table, key uint64, hotHint bool) (*block, bool) {
+func (c *blockCache) get(level int, key uint64, hotHint bool) (*block, bool) {
 	if be, ok := c.getHot(key); ok && be != nil && be.blk != nil {
-		if tbl != nil {
-			c.storeTableSlot(tbl, be)
-		}
 		return be.blk, true
-	}
-	if tbl != nil {
-		idx := blockIndexFromKey(key)
-		if idx < len(tbl.cacheSlots) {
-			if be := tbl.cacheSlots[idx]; be != nil && be.blk != nil {
-				if hotHint {
-					c.promoteHot(be)
-				}
-				return be.blk, true
-			}
-		}
 	}
 	if c == nil || c.rc == nil {
 		return nil, false
 	}
 	if be, ok := c.rc.Get(key); ok && be != nil && be.blk != nil {
-		if tbl != nil {
-			c.storeTableSlot(tbl, be)
-		}
 		if hotHint {
 			c.promoteHot(be)
 		}
@@ -333,7 +316,6 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, 
 	}
 	entry := &blockEntry{
 		key: key,
-		idx: blockIndexFromKey(key),
 		tbl: tbl,
 		blk: blk,
 	}
@@ -343,76 +325,28 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, 
 	if hot && c.hot != nil {
 		c.promoteHot(entry)
 	}
-	if tbl != nil {
-		c.storeTableSlot(tbl, entry)
-	}
 	_ = c.rc.Set(key, entry, 1)
 }
 
-func (c *blockCache) del(tbl *table, key uint64) {
-	if c == nil {
+func (c *blockCache) del(key uint64) {
+	if c == nil || c.rc == nil {
 		return
 	}
-	var entry *blockEntry
-	if tbl != nil {
-		idx := blockIndexFromKey(key)
-		if idx < len(tbl.cacheSlots) {
-			entry = tbl.cacheSlots[idx]
-			tbl.cacheSlots[idx] = nil
-		}
+	if c.hot != nil {
+		c.hot.Delete(key)
 	}
-	if entry == nil && c.rc != nil {
-		if be, ok := c.rc.Get(key); ok {
-			entry = be
-		}
-	}
-	if c.rc != nil {
-		c.rc.Del(key)
-	}
-	if entry != nil {
-		entry.release()
-	}
+	c.rc.Del(key)
 }
 
 func (c *blockCache) close() {
 	if c == nil {
 		return
 	}
+	c.closing.Store(true)
 	if c.rc != nil {
 		c.rc.Close()
 	}
-}
-
-func (c *blockCache) storeTableSlot(tbl *table, be *blockEntry) {
-	if tbl == nil || be == nil {
-		return
-	}
-	idx := be.idx
-	if idx < 0 {
-		return
-	}
-	if idx >= len(tbl.cacheSlots) {
-		grown := make([]*blockEntry, idx+1)
-		copy(grown, tbl.cacheSlots)
-		tbl.cacheSlots = grown
-	}
-	if prev := tbl.cacheSlots[idx]; prev != nil && prev != be {
-		prev.release()
-	}
-	tbl.cacheSlots[idx] = be
-}
-
-func clearTableSlot(be *blockEntry) {
-	if be == nil || be.tbl == nil {
-		return
-	}
-	idx := be.idx
-	if idx < 0 || idx >= len(be.tbl.cacheSlots) {
-		return
-	}
-	if be.tbl.cacheSlots[idx] == be {
-		be.tbl.cacheSlots[idx] = nil
-	}
+	c.hot = nil
 }
 
 type bloomCache struct {

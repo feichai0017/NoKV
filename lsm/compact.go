@@ -625,7 +625,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	if err != nil {
 		return err
 	}
+	cleanupNeeded := true
 	defer func() {
+		if !cleanupNeeded {
+			return
+		}
 		// Only assign to err, if it's not already nil.
 		if decErr := decr(); err == nil {
 			err = decErr
@@ -675,6 +679,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	if err := lm.manifestMgr.LogEdits(manifestEdits...); err != nil {
 		return err
 	}
+	cleanupNeeded = false
 
 	defer decrRefs(cd.top)
 	if cd.ingestMerge {

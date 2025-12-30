@@ -63,15 +63,16 @@ func TestCacheHotColdMetrics(t *testing.T) {
 	tbl := &table{}
 	blk := &block{tbl: tbl}
 	cache.addBlock(0, tbl, 1, blk, true)
-	if v, ok := cache.getBlock(0, tbl, 1, true); !ok || v == nil {
+	cache.blocks.rc.Wait()
+	if v, ok := cache.getBlock(0, 1, true); !ok || v == nil {
 		t.Fatalf("expected hot block hit")
 	}
 	// Miss on different key.
-	cache.getBlock(0, tbl, 2, false)
+	cache.getBlock(0, 2, false)
 
-	cache.addBlock(1, tbl, 42, &block{tbl: tbl}, false)
-	if v, ok := cache.getBlock(1, tbl, 42, false); !ok || v == nil {
-		t.Fatalf("expected cold block hit")
+	cache.addBlock(1, tbl, 42, &block{tbl: tbl}, true)
+	if v, ok := cache.getBlock(1, 42, true); !ok || v == nil {
+		t.Fatalf("expected L1 block hit")
 	}
 
 	filter := utils.NewFilter([]uint32{utils.Hash([]byte("foo"))}, 10)

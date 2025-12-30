@@ -20,6 +20,28 @@ type ingestShard struct {
 	valueSize int64
 }
 
+func (sh *ingestShard) rebuildRanges() {
+	if sh == nil {
+		return
+	}
+	sh.ranges = sh.ranges[:0]
+	for _, t := range sh.tables {
+		if t == nil {
+			continue
+		}
+		sh.ranges = append(sh.ranges, tableRange{
+			min: t.MinKey(),
+			max: t.MaxKey(),
+			tbl: t,
+		})
+	}
+	if len(sh.ranges) > 1 {
+		sort.Slice(sh.ranges, func(i, j int) bool {
+			return utils.CompareKeys(sh.ranges[i].min, sh.ranges[j].min) < 0
+		})
+	}
+}
+
 type ingestBuffer struct {
 	shards []ingestShard
 }
@@ -48,11 +70,28 @@ func (buf *ingestBuffer) add(t *table) {
 	sh.tables = append(sh.tables, t)
 	sh.size += t.Size()
 	sh.valueSize += int64(t.ValueSize())
+	sh.rebuildRanges()
 }
 
 func (buf *ingestBuffer) addBatch(ts []*table) {
+	if len(ts) == 0 {
+		return
+	}
+	buf.ensureInit()
+	updated := make(map[int]struct{})
 	for _, t := range ts {
-		buf.add(t)
+		if t == nil {
+			continue
+		}
+		idx := shardIndexForRange(t.MinKey())
+		sh := &buf.shards[idx]
+		sh.tables = append(sh.tables, t)
+		sh.size += t.Size()
+		sh.valueSize += int64(t.ValueSize())
+		updated[idx] = struct{}{}
+	}
+	for idx := range updated {
+		buf.shards[idx].rebuildRanges()
 	}
 }
 
@@ -85,6 +124,7 @@ func (buf *ingestBuffer) remove(toDel map[uint64]struct{}) {
 		if sh.valueSize < 0 {
 			sh.valueSize = 0
 		}
+		sh.rebuildRanges()
 	}
 }
 
@@ -112,33 +152,6 @@ func (buf ingestBuffer) totalValueSize() int64 {
 	return n
 }
 
-func (buf ingestBuffer) cloneWithRefs() ingestBuffer {
-	var out ingestBuffer
-	out.shards = make([]ingestShard, len(buf.shards))
-	for i, sh := range buf.shards {
-		dst := &out.shards[i]
-		dst.size = sh.size
-		dst.valueSize = sh.valueSize
-		dst.tables = append([]*table(nil), sh.tables...)
-		for _, t := range dst.tables {
-			if t != nil {
-				t.IncrRef()
-				dst.ranges = append(dst.ranges, tableRange{
-					min: t.MinKey(),
-					max: t.MaxKey(),
-					tbl: t,
-				})
-			}
-		}
-		if len(dst.ranges) > 1 {
-			sort.Slice(dst.ranges, func(i, j int) bool {
-				return utils.CompareKeys(dst.ranges[i].min, dst.ranges[j].min) < 0
-			})
-		}
-	}
-	return out
-}
-
 func (buf ingestBuffer) allTables() []*table {
 	var out []*table
 	for _, sh := range buf.shards {
@@ -156,6 +169,7 @@ func (buf *ingestBuffer) sortShards() {
 				return utils.CompareKeys(sh.tables[a].MinKey(), sh.tables[b].MinKey()) < 0
 			})
 		}
+		sh.rebuildRanges()
 	}
 }
 
@@ -297,7 +311,6 @@ func (lh *levelHandler) addIngest(t *table) {
 	lh.ingest.ensureInit()
 	t.setLevel(lh.levelNum)
 	lh.ingest.add(t)
-	lh.refreshViewLocked()
 }
 
 func (lh *levelHandler) addIngestBatch(ts []*table) {
@@ -309,28 +322,17 @@ func (lh *levelHandler) addIngestBatch(ts []*table) {
 			continue
 		}
 		t.setLevel(lh.levelNum)
-		lh.ingest.add(t)
 	}
-	lh.refreshViewLocked()
+	lh.ingest.addBatch(ts)
 }
 
 func (lh *levelHandler) ingestValueBytes() int64 {
-	if v := lh.loadView(); v != nil {
-		return v.ingest.totalValueSize()
-	}
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.ingest.totalValueSize()
 }
 
 func (lh *levelHandler) ingestValueDensity() float64 {
-	if v := lh.loadView(); v != nil {
-		total := v.ingest.totalSize()
-		if total <= 0 {
-			return 0
-		}
-		return float64(v.ingest.totalValueSize()) / float64(total)
-	}
 	lh.RLock()
 	defer lh.RUnlock()
 	total := lh.ingest.totalSize()
@@ -364,47 +366,23 @@ func (lh *levelHandler) ingestDensityLocked() float64 {
 }
 
 func (lh *levelHandler) maxIngestAgeSeconds() float64 {
-	v := lh.loadView()
-	if v != nil {
-		return v.ingest.maxAgeSeconds()
-	}
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.ingest.maxAgeSeconds()
 }
 
-func (lh *levelHandler) ingestDensityLockedView(v *levelView) float64 {
-	if v == nil {
-		return 0
-	}
-	total := v.ingest.totalSize()
-	if total <= 0 {
-		return 0
-	}
-	return float64(v.ingest.totalValueSize()) / float64(total)
-}
-
 func (lh *levelHandler) numIngestTables() int {
-	if v := lh.loadView(); v != nil {
-		return v.ingest.tableCount()
-	}
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.ingest.tableCount()
 }
 
 func (lh *levelHandler) ingestDataSize() int64 {
-	if v := lh.loadView(); v != nil {
-		return v.ingest.totalSize()
-	}
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.ingest.totalSize()
 }
 
-func (lh *levelHandler) searchIngestSSTView(key []byte, v *levelView) (*kv.Entry, error) {
-	if v == nil {
-		return nil, utils.ErrKeyNotFound
-	}
-	return v.ingest.search(key)
+func (lh *levelHandler) searchIngestSST(key []byte) (*kv.Entry, error) {
+	return lh.ingest.search(key)
 }
