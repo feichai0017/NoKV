@@ -170,7 +170,9 @@ func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 	}); err != nil {
 		return nil, err
 	}
-	lf.Bootstrap()
+	if err := lf.Bootstrap(); err != nil {
+		return nil, err
+	}
 	m.files[fid] = lf
 	if fid > m.maxFid {
 		m.maxFid = fid
@@ -549,7 +551,7 @@ func VerifyDir(cfg Config) error {
 		}
 		if int64(valid) < info.Size() {
 			if err := os.Truncate(path, int64(valid)); err != nil {
-				utils.Err(fmt.Errorf("value log verify truncate %s: %w", path, err))
+				_ = utils.Err(fmt.Errorf("value log verify truncate %s: %w", path, err))
 			}
 		}
 	}
@@ -558,14 +560,14 @@ func VerifyDir(cfg Config) error {
 
 func extractFID(path string) uint64 {
 	var fid uint64
-	fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid)
+	if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
+		_ = utils.Err(err)
+		return 0
+	}
 	return fid
 }
 
 func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
-	if lf == nil {
-		return 0, fmt.Errorf("sanitize value log: nil log file")
-	}
 	start, err := firstNonZeroOffset(lf)
 	if err != nil {
 		return 0, err
@@ -664,7 +666,7 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	}
 
 	var firstErr error
-	if err := active.SetWritable(); err != nil && firstErr == nil {
+	if err := active.SetWritable(); err != nil {
 		firstErr = err
 	}
 	for _, item := range extra {
@@ -716,9 +718,6 @@ func (m *Manager) ListFIDs() []uint32 {
 }
 
 func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, error) {
-	if lf == nil {
-		return 0, fmt.Errorf("value log iterate: nil logfile")
-	}
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}

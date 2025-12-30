@@ -43,14 +43,14 @@ func TestServerStartsTinyKvService(t *testing.T) {
 	require.NotNil(t, srv.Transport())
 	require.NotNil(t, srv.Service())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer conn.Close()
 
 	client := pb.NewTinyKvClient(conn)
-	_, err = client.KvGet(context.Background(), &pb.KvGetRequest{})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = client.KvGet(ctx, &pb.KvGetRequest{})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)

@@ -62,7 +62,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
 		if t, err = builder.flush(lm, tableName); err != nil {
-			utils.Err(err)
+			_ = utils.Err(err)
 			return nil
 		}
 	} else {
@@ -85,7 +85,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
 	// +-------------------------+-----------------------+------------------------------+
 	if err := t.ss.Init(); err != nil {
-		utils.Err(err)
+		_ = utils.Err(err)
 		return nil
 	}
 
@@ -145,7 +145,7 @@ func (t *table) index() *pb.TableIndex {
 		return idx
 	}
 	if err := t.openSSTableLocked(true); err != nil {
-		utils.Err(err)
+		_ = utils.Err(err)
 		return nil
 	}
 	idx := t.ss.Indexs()
@@ -279,7 +279,9 @@ func (t *table) pinSSTable() (*file.SSTable, func(), error) {
 // Search search for a key in the table
 func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
-	defer t.DecrRef()
+	defer func() {
+		_ = t.DecrRef()
+	}()
 	// get the index
 	idx := t.index()
 	if idx == nil {
@@ -318,19 +320,21 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
 		if version := kv.ParseTs(e.Key); *maxVs < version {
 			*maxVs = version
-			return e, nil
+			clone := &kv.Entry{
+				Key:          kv.SafeCopy(nil, e.Key),
+				Value:        kv.SafeCopy(nil, e.Value),
+				ExpiresAt:    e.ExpiresAt,
+				CF:           e.CF,
+				Meta:         e.Meta,
+				Version:      version,
+				Offset:       e.Offset,
+				Hlen:         e.Hlen,
+				ValThreshold: e.ValThreshold,
+			}
+			return clone, nil
 		}
 	}
 	return nil, utils.ErrKeyNotFound
-}
-
-func (t *table) indexKey() uint64 {
-	return t.fid
-}
-
-// 去加载sst对应的block
-func (t *table) block(idx int) (*block, error) {
-	return t.loadBlock(idx, true)
 }
 
 func (t *table) loadBlock(idx int, hot bool) (*block, error) {
@@ -408,7 +412,9 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 		return false
 	}
 	t.IncrRef()
-	defer t.DecrRef()
+	defer func() {
+		_ = t.DecrRef()
+	}()
 
 	index := t.index()
 	if index == nil {
@@ -512,8 +518,6 @@ type tableIterator struct {
 	closeOnce    sync.Once
 	prefetchRing *utils.Ring[int]
 	prefetchPool *utils.Pool
-	hitCount     *expvar.Int
-	missCount    *expvar.Int
 }
 
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
@@ -591,7 +595,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 						} else {
 							prefetchAborted.Add(1)
 						}
-						it.t.DecrRef()
+						_ = it.t.DecrRef()
 					}); err != nil {
 						prefetchAborted.Add(1)
 					}
@@ -682,6 +686,8 @@ func (it *tableIterator) Close() error {
 		}
 	})
 	it.bi.Close()
+	putBlockIterator(it.bi)
+	it.bi = nil
 	return it.t.DecrRef()
 }
 func (it *tableIterator) seekToFirst() {

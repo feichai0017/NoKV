@@ -219,21 +219,6 @@ func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-// splitIntoRanges picks up to maxParts non-overlapping batches from the shard with the largest backlog.
-func (buf *ingestBuffer) largestShard() *ingestShard {
-	buf.ensureInit()
-	var sel *ingestShard
-	var maxSize int64
-	for i := range buf.shards {
-		sh := &buf.shards[i]
-		if sh.size > maxSize && len(sh.tables) > 0 {
-			maxSize = sh.size
-			sel = sh
-		}
-	}
-	return sel
-}
-
 func (buf ingestBuffer) shardOrderBySize() []int {
 	buf.ensureInit()
 	type shardView struct {
@@ -340,21 +325,6 @@ func (lh *levelHandler) ingestValueDensity() float64 {
 		return 0
 	}
 	return float64(lh.ingest.totalValueSize()) / float64(total)
-}
-
-func (lh *levelHandler) ingestValueBias(weight float64) float64 {
-	if weight <= 0 {
-		return 1.0
-	}
-	density := lh.ingestValueDensity()
-	bias := 1.0 + weight*density
-	if bias > 4.0 {
-		return 4.0
-	}
-	if bias < 1.0 {
-		return 1.0
-	}
-	return bias
 }
 
 func (lh *levelHandler) ingestDensityLocked() float64 {

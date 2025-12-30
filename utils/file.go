@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,7 +24,7 @@ func FID(name string) uint64 {
 	name = strings.TrimSuffix(name, ".sst")
 	id, err := strconv.Atoi(name)
 	if err != nil {
-		Err(err)
+		_ = Err(err)
 		return 0
 	}
 	return uint64(id)
@@ -70,14 +69,17 @@ func SyncDir(dir string) error {
 
 // LoadIDMap Get the id of all sst files in the current folder
 func LoadIDMap(dir string) map[uint64]struct{} {
-	fileInfos, err := ioutil.ReadDir(dir)
-	Err(err)
 	idMap := make(map[uint64]struct{})
-	for _, info := range fileInfos {
-		if info.IsDir() {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		_ = Err(err)
+		return idMap
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		fileID := FID(info.Name())
+		fileID := FID(entry.Name())
 		if fileID != 0 {
 			idMap[fileID] = struct{}{}
 		}

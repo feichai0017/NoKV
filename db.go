@@ -86,6 +86,11 @@ type (
 		size       int64
 		hot        bool
 	}
+
+	commitBatch struct {
+		reqs []*commitRequest
+		pool *[]*commitRequest
+	}
 )
 
 type cfCounters struct {
@@ -103,7 +108,8 @@ func Open(opt *Options) *DB {
 	db.headLogDelta = valueLogHeadLogInterval
 	db.initWriteBatchOptions()
 	db.commitBatchPool.New = func() any {
-		return make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
+		return &batch
 	}
 
 	if db.opt.BlockCacheSize < 0 {
@@ -383,7 +389,7 @@ func (db *DB) Set(data *kv.Entry) error {
 		vp  *kv.ValuePtr
 		err error
 	)
-	if data.CF.Valid() == false {
+	if !data.CF.Valid() {
 		data.CF = kv.CFDefault
 	}
 	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
@@ -586,7 +592,13 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	}
 
 	// Pick a log file and run GC
-	return db.vlog.runGC(discardRatio, &head)
+	if err := db.vlog.runGC(discardRatio, &head); err != nil {
+		if stderrors.Is(err, utils.ErrEmptyKey) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (db *DB) runValueLogGCPeriodically() {
@@ -606,7 +618,7 @@ func (db *DB) runValueLogGCPeriodically() {
 				if err == utils.ErrNoRewrite {
 					db.vlog.logf("No rewrite on GC.")
 				} else {
-					utils.Err(err)
+					_ = utils.Err(err)
 				}
 			}
 		case <-db.vlog.lfDiscardStats.closer.CloseSignal:

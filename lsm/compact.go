@@ -524,10 +524,6 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	return false
 }
 
-func (lm *levelManager) fillTablesIngest(cd *compactDef) bool {
-	return lm.fillTablesIngestShard(cd, -1)
-}
-
 func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
@@ -681,7 +677,9 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	cleanupNeeded = false
 
-	defer decrRefs(cd.top)
+	defer func() {
+		_ = decrRefs(cd.top)
+	}()
 	if cd.ingestMerge {
 		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
 			return err
@@ -1302,23 +1300,6 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 	}
 }
 
-// checkOverlap 检查是否与下一层存在重合
-func (lm *levelManager) checkOverlap(tables []*table, lev int) bool {
-	kr := getKeyRange(tables...)
-	for i, lh := range lm.levels {
-		if i < lev { // Skip upper levels.
-			continue
-		}
-		lh.RLock()
-		left, right := lh.overlappingTables(levelHandlerRLocked{}, kr)
-		lh.RUnlock()
-		if right-left > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // 判断是否过期 是可删除
 func IsDeletedOrExpired(e *kv.Entry) bool {
 	if e.Value == nil {
@@ -1468,7 +1449,6 @@ type keyRange struct {
 	left  []byte
 	right []byte
 	inf   bool
-	size  int64 // size is used for Key splits.
 }
 
 func (r keyRange) isEmpty() bool {

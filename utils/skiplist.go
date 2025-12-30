@@ -541,14 +541,6 @@ func (s *SkipListIterator) SeekToLast() {
 	s.n = s.list.findLast()
 }
 
-// UniIterator is a unidirectional memtable iterator. It is a thin wrapper around
-// Iterator. We like to keep Iterator as before, because it is more powerful and
-// we might support bidirectional iterators in the future.
-type UniIterator struct {
-	iter     *Iterator
-	reversed bool
-}
-
 // FastRand is a fast thread local random function.
 //
 //go:linkname FastRand runtime.fastrand

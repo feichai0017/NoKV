@@ -10,7 +10,6 @@ import (
 // Manager provides hashed latches on keys to serialize conflicting
 // operations. It mirrors the lightweight latch manager used in TinyKV.
 type Manager struct {
-	mu      sync.Mutex
 	stripes []sync.Mutex
 }
 

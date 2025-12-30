@@ -99,13 +99,18 @@ func (c *cache) close() error {
 }
 
 func newCache(opt *Options) *cache {
+	if opt == nil {
+		opt = &Options{}
+	}
 	counters := metrics.NewCacheCounters()
-	hotCap := max(opt.BlockCacheSize, 0)
+	blockCacheSize := opt.BlockCacheSize
+	bloomCacheSize := opt.BloomCacheSize
+	hotCap := max(blockCacheSize, 0)
 	blocks := newBlockCache(hotCap)
-	blooms := newBloomCache(opt.BloomCacheSize)
+	blooms := newBloomCache(bloomCacheSize)
 	hotIdxCap := 64
-	if opt != nil && opt.BlockCacheSize > 0 {
-		hotIdxCap = min(max(opt.BlockCacheSize/64, 32), 256)
+	if blockCacheSize > 0 {
+		hotIdxCap = min(max(blockCacheSize/64, 32), 256)
 	}
 	return &cache{
 		indexs:   coreCache.NewCache(defaultCacheSize),
@@ -180,13 +185,6 @@ func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block, hot bool
 		return
 	}
 	c.blocks.addWithTier(level, tbl, key, blk, hot)
-}
-
-func (c *cache) dropBlock(key uint64) {
-	if c == nil || c.blocks == nil {
-		return
-	}
-	c.blocks.del(key)
 }
 
 func (c *cache) getBloom(fid uint64) (utils.Filter, bool) {
@@ -326,16 +324,6 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, 
 		c.promoteHot(entry)
 	}
 	_ = c.rc.Set(key, entry, 1)
-}
-
-func (c *blockCache) del(key uint64) {
-	if c == nil || c.rc == nil {
-		return
-	}
-	if c.hot != nil {
-		c.hot.Delete(key)
-	}
-	c.rc.Del(key)
 }
 
 func (c *blockCache) close() {

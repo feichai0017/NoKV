@@ -71,12 +71,3 @@ func (q *snapshotResendQueue) first() (myraft.Message, bool) {
 	}
 	return myraft.Message{}, false
 }
-
-func (q *snapshotResendQueue) clearAll() {
-	if q == nil {
-		return
-	}
-	q.mu.Lock()
-	q.pendings = make(map[uint64]myraft.Message)
-	q.mu.Unlock()
-}

@@ -26,7 +26,6 @@ type tableBuilder struct {
 	keyCount      uint32
 	keyHashes     []uint32
 	maxVersion    uint64
-	baseKey       []byte
 	staleDataSize int
 	estimateSz    int64
 	valueSize     int64

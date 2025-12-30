@@ -26,7 +26,6 @@ func runNoKVTest(t *testing.T, opts *Options, test func(t *testing.T, db *DB)) {
 	require.NoError(t, err)
 	defer removeDir(dir)
 	if opts == nil {
-		opts = new(Options)
 		opts = getTestOptions(dir)
 	} else {
 		opts.WorkDir = dir

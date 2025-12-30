@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -92,7 +93,7 @@ func New(cfg Config) (*Client, error) {
 			return nil, fmt.Errorf("client: invalid store endpoint %+v", endpoint)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
-		conn, err := grpc.DialContext(ctx, endpoint.Addr, dialOpts...)
+		conn, err := dialStore(ctx, endpoint.Addr, dialOpts...)
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("client: dial %s: %w", endpoint.Addr, err)
@@ -129,6 +130,24 @@ func New(cfg Config) (*Client, error) {
 		regions:    regions,
 		maxRetries: maxRetries,
 	}, nil
+}
+
+func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, err
+	}
+	conn.Connect()
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return conn, nil
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			_ = conn.Close()
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // Close terminates outstanding store connections.

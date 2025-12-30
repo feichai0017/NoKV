@@ -81,7 +81,7 @@ func (vlog *valueLog) flushDiscardStats() {
 				select {
 				case stats := <-vlog.lfDiscardStats.flushChan:
 					if err := process(stats, false); err != nil {
-						utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+						_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
 					}
 				default:
 					goto drainComplete
@@ -89,12 +89,12 @@ func (vlog *valueLog) flushDiscardStats() {
 			}
 		drainComplete:
 			if err := process(nil, true); err != nil {
-				utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
 			}
 			return
 		case stats := <-vlog.lfDiscardStats.flushChan:
 			if err := process(stats, false); err != nil {
-				utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
 			}
 		}
 	}
@@ -149,9 +149,18 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		if time.Since(start) > 10*time.Second {
 			return false, utils.ErrStop
 		}
+		if e == nil || len(e.Key) == 0 {
+			return false, nil
+		}
 		cf, userKey, _ := kv.SplitInternalKey(e.Key)
+		if len(userKey) == 0 {
+			return false, nil
+		}
 		entry, err := vlog.db.GetCF(cf, userKey)
 		if err != nil {
+			if errors.Is(err, utils.ErrEmptyKey) {
+				return false, nil
+			}
 			return false, err
 		}
 		if kv.DiscardEntry(e, entry) {
@@ -205,12 +214,17 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 	var size int64
 
 	process := func(e *kv.Entry, ptr *kv.ValuePtr) error {
+		if e == nil || len(e.Key) == 0 {
+			return nil
+		}
 		entry, err := vlog.db.lsm.Get(e.Key)
 		if err != nil {
 			// If LSM can't find it (e.g., concurrent compaction/move), fall back to the
 			// value log copy so we don't drop a live key.
 			if errors.Is(err, utils.ErrKeyNotFound) {
 				entry = e
+			} else if errors.Is(err, utils.ErrEmptyKey) {
+				return nil
 			} else {
 				return err
 			}
@@ -301,24 +315,6 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 
 func (vlog *valueLog) iteratorCount() int {
 	return int(atomic.LoadInt32(&vlog.numActiveIterators))
-}
-
-func (vlog *valueLog) decrIteratorCount() error {
-	if atomic.AddInt32(&vlog.numActiveIterators, -1) != 0 {
-		return nil
-	}
-
-	vlog.filesToDeleteLock.Lock()
-	fids := append([]uint32(nil), vlog.filesToBeDeleted...)
-	vlog.filesToBeDeleted = nil
-	vlog.filesToDeleteLock.Unlock()
-
-	for _, fid := range fids {
-		if err := vlog.removeValueLogFile(fid); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (vlog *valueLog) filterPendingDeletes(fids []uint32) []uint32 {

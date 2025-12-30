@@ -31,7 +31,9 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if lm.manifestMgr != nil {
 		lm.manifestMgr.SetSync(opt.ManifestSync)
 	}
-	lm.build()
+	if err := lm.build(); err != nil {
+		panic(err)
+	}
 	lm.compaction = newCompactionManager(lm)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
@@ -155,7 +157,7 @@ func (lm *levelManager) build() error {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 			if _, err := os.Stat(fileName); err != nil {
-				utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
+				_ = utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
 				missing = append(missing, meta)
 				continue
 			}
@@ -477,20 +479,6 @@ func (lh *levelHandler) add(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
 	lh.totalValueSize += int64(t.ValueSize())
-}
-
-func (lh *levelHandler) addBatch(ts []*table) {
-	lh.Lock()
-	defer lh.Unlock()
-	for _, t := range ts {
-		if t != nil {
-			t.setLevel(lh.levelNum)
-			lh.totalSize += t.Size()
-			lh.totalStaleSize += int64(t.StaleDataSize())
-			lh.totalValueSize += int64(t.ValueSize())
-		}
-	}
-	lh.tables = append(lh.tables, ts...)
 }
 
 func (lh *levelHandler) getTotalSize() int64 {
