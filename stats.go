@@ -96,7 +96,7 @@ type Stats struct {
 	compactionValueWeight  *expvar.Float
 	lsmValueDensityMax     *expvar.Float
 	lsmValueDensityAlert   *expvar.Int
-	regionMetrics          *storepkg.RegionMetrics
+	regionMetrics          atomic.Pointer[storepkg.RegionMetrics]
 	regionTotal            *expvar.Int
 	regionNew              *expvar.Int
 	regionRunning          *expvar.Int
@@ -444,7 +444,7 @@ func (s *Stats) SetRegionMetrics(rm *storepkg.RegionMetrics) {
 	if s == nil {
 		return
 	}
-	s.regionMetrics = rm
+	s.regionMetrics.Store(rm)
 }
 
 func (s *Stats) run() {
@@ -712,7 +712,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	snap.WriteThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
 	snap.HotWriteLimited = atomic.LoadUint64(&s.db.hotWriteLimited)
 
-	if rm := s.regionMetrics; rm != nil {
+	if rm := s.regionMetrics.Load(); rm != nil {
 		rms := rm.Snapshot()
 		snap.RegionTotal = int64(rms.Total)
 		snap.RegionNew = int64(rms.New)

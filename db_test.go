@@ -58,7 +58,7 @@ func TestAPI(t *testing.T) {
 		it := iter.Item()
 		t.Logf("db.NewIterator key=%s, value=%s, expiresAt=%d", it.Entry().Key, it.Entry().Value, it.Entry().ExpiresAt)
 	}
-	t.Logf("db.Stats.EntryNum=%+v", db.Info().EntryNum)
+	t.Logf("db.Stats.EntryNum=%+v", atomic.LoadInt64(&db.Info().EntryNum))
 	// 删除
 	if err := db.Del([]byte("hello")); err != nil {
 		t.Fatal(err)
