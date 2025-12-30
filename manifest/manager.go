@@ -860,13 +860,13 @@ func decodeEdit(data []byte) (Edit, error) {
 			if pos > len(data) {
 				return Edit{}, fmt.Errorf("manifest value log update truncated")
 			}
-				valid := false
-				if pos < len(data) {
-					valid = data[pos] == 1
-				}
-				edit.ValueLog = &ValueLogMeta{
-					FileID: uint32(fid64),
-					Offset: offset,
+			valid := false
+			if pos < len(data) {
+				valid = data[pos] == 1
+			}
+			edit.ValueLog = &ValueLogMeta{
+				FileID: uint32(fid64),
+				Offset: offset,
 				Valid:  valid,
 			}
 		}

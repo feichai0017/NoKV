@@ -73,7 +73,6 @@ func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
 	return protoClone(region.meta), true
 }
 
-
 func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.PrewriteRequest) (*pb.PrewriteResponse, *pb.RegionError) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()

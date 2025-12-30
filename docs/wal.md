@@ -1,6 +1,6 @@
 # WAL Subsystem
 
-NoKV's write-ahead log mirrors RocksDB's durability model—every write hits the WAL before any memtable or vlog mutation—but is implemented as a compact Go module similar to Badger's journal. This document maps the code to the behaviour surfaced in tests and CLI output.
+NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via `lsm.Set`), while values that are routed to the value log are written *before* the WAL so that replay always sees durable value pointers.
 
 ---
 
@@ -57,7 +57,9 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 
 | Call Site | Purpose |
 | --- | --- |
-| `DB.doWrites` | Batches encode via `kv.WalCodec` and call `wal.Manager.Append`. Returned offsets are embedded into memtable mutations and transaction commit paths. |
+| `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the skiplist. |
+| `DB.commitApplyWorker` | Uses `writeToLSM` to apply batched writes, which flow into `lsm.Set` and thus WAL. |
+| `DB.Set` | Direct write path: calls `lsm.Set`, which appends to WAL and updates the memtable. |
 | `manifest.Manager.LogEdit` | Uses `EntryInfo.SegmentID` to persist the WAL checkpoint (`EditLogPointer`). This acts as the `log number` seen in RocksDB manifest entries. |
 | `lsm/flush.Manager.Update` | Once an SST is installed, WAL segments older than the checkpoint are released (`wal.Manager.Remove`). |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |

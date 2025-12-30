@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
@@ -36,21 +35,25 @@ type Manager struct {
 	hooks     ManagerTestingHooks
 }
 
-type logFileAppender struct {
-	lf  *file.LogFile
-	off uint32
+const entryBufferMaxReuse = 1 << 20
+
+var entryBufferPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
 }
 
-func (a *logFileAppender) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
+func getEntryBuffer() *bytes.Buffer {
+	return entryBufferPool.Get().(*bytes.Buffer)
+}
+
+func putEntryBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
 	}
-	if err := a.lf.Write(a.off, p); err != nil {
-		return 0, err
+	if buf.Cap() > entryBufferMaxReuse {
+		return
 	}
-	lenp := len(p)
-	a.off += uint32(lenp)
-	return lenp, nil
+	buf.Reset()
+	entryBufferPool.Put(buf)
 }
 
 // ManagerTestingHooks provides callbacks that are used only in tests to inject
@@ -67,6 +70,57 @@ func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
 	m.hooks = h
+}
+
+func (m *Manager) SetMaxSize(maxSize int64) {
+	if maxSize <= 0 {
+		return
+	}
+	m.filesLock.Lock()
+	m.cfg.MaxSize = maxSize
+	m.filesLock.Unlock()
+}
+
+// runBeforeAppendHook invokes the testing hook (if any) before an append.
+func (m *Manager) runBeforeAppendHook(data []byte) error {
+	m.filesLock.RLock()
+	hook := m.hooks.BeforeAppend
+	m.filesLock.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(m, data)
+}
+
+func (m *Manager) appendPayload(payload []byte) (*kv.ValuePtr, error) {
+	lf, fid, start, err := m.reserveAppend(len(payload))
+	if err != nil {
+		return nil, err
+	}
+	lf.Lock.Lock()
+	err = lf.Write(start, payload)
+	lf.Lock.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &kv.ValuePtr{Fid: fid, Offset: start, Len: uint32(len(payload))}, nil
+}
+
+func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
+	if m.active != nil {
+		return m.active, m.activeID, nil
+	}
+	next := uint32(0)
+	if len(m.files) > 0 {
+		next = m.maxFid + 1
+	}
+	if _, err := m.create(next); err != nil {
+		return nil, 0, err
+	}
+	m.active = m.files[m.maxFid]
+	m.activeID = m.maxFid
+	m.offset = uint32(kv.ValueLogHeaderSize)
+	return m.active, m.activeID, nil
 }
 
 func Open(cfg Config) (*Manager, error) {
@@ -185,49 +239,31 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 	if e == nil {
 		return nil, fmt.Errorf("vlog manager: nil entry")
 	}
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-
-	if m.active == nil {
-		if _, err := m.create(m.maxFid + 1); err != nil {
-			return nil, err
-		}
-		m.active = m.files[m.maxFid]
-		m.activeID = m.maxFid
-		m.offset = 0
+	buf := getEntryBuffer()
+	payload, err := kv.EncodeEntry(buf, e)
+	if err != nil {
+		putEntryBuffer(buf)
+		return nil, err
 	}
-
-	if hook := m.hooks.BeforeAppend; hook != nil {
-		var tmp bytes.Buffer
-		sz, err := kv.EncodeEntryTo(&tmp, e)
-		if err != nil {
-			return nil, err
-		}
-		if err := hook(m, tmp.Bytes()); err != nil {
-			return nil, err
-		}
-		start := m.offset
-		if err := m.active.Write(start, tmp.Bytes()); err != nil {
-			return nil, err
-		}
-		m.offset = start + uint32(sz)
-		return &kv.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
+	if err := m.runBeforeAppendHook(payload); err != nil {
+		putEntryBuffer(buf)
+		return nil, err
 	}
-
-	start := m.offset
-	writer := &logFileAppender{lf: m.active, off: start}
-	sz, err := kv.EncodeEntryTo(writer, e)
+	ptr, err := m.appendPayload(payload)
+	putEntryBuffer(buf)
 	if err != nil {
 		return nil, err
 	}
-	m.offset = writer.off
-	return &kv.ValuePtr{Fid: m.activeID, Offset: start, Len: uint32(sz)}, nil
+	return ptr, nil
 }
 
 func (m *Manager) Rotate() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
+	return m.rotateLocked()
+}
 
+func (m *Manager) rotateLocked() error {
 	if hook := m.hooks.BeforeRotate; hook != nil {
 		if err := hook(m); err != nil {
 			return err
@@ -246,8 +282,163 @@ func (m *Manager) Rotate() error {
 	}
 	m.active = m.files[nextID]
 	m.activeID = nextID
-	m.offset = 0
+	m.offset = uint32(kv.ValueLogHeaderSize)
 	return nil
+}
+
+func (m *Manager) reserveAppend(sz int) (*file.LogFile, uint32, uint32, error) {
+	if sz <= 0 {
+		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
+	}
+	m.filesLock.Lock()
+	defer m.filesLock.Unlock()
+	lf, fid, err := m.ensureActiveLocked()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if m.offset < uint32(kv.ValueLogHeaderSize) {
+		m.offset = uint32(kv.ValueLogHeaderSize)
+	}
+	if int(m.offset)+sz > int(m.cfg.MaxSize) {
+		if err := m.rotateLocked(); err != nil {
+			return nil, 0, 0, err
+		}
+		lf, fid, err = m.ensureActiveLocked()
+		if err != nil {
+			return nil, 0, 0, err
+		}
+	}
+	start := m.offset
+	m.offset += uint32(sz)
+	return lf, fid, start, nil
+}
+
+func (m *Manager) reserveBatch(sz int) (*file.LogFile, uint32, uint32, error) {
+	if sz <= 0 {
+		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
+	}
+	m.filesLock.Lock()
+	defer m.filesLock.Unlock()
+	lf, fid, err := m.ensureActiveLocked()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if m.offset < uint32(kv.ValueLogHeaderSize) {
+		m.offset = uint32(kv.ValueLogHeaderSize)
+	}
+	if int(m.offset)+sz > int(m.cfg.MaxSize) {
+		if err := m.rotateLocked(); err != nil {
+			return nil, 0, 0, err
+		}
+		lf, fid, err = m.ensureActiveLocked()
+		if err != nil {
+			return nil, 0, 0, err
+		}
+	}
+	start := m.offset
+	m.offset += uint32(sz)
+	return lf, fid, start, nil
+}
+
+// AppendEntries encodes and appends a batch of entries into the value log.
+// The writeMask (when provided) selects which entries are written; skipped
+// entries receive zero-value pointers in the result.
+func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.ValuePtr, error) {
+	ptrs := make([]kv.ValuePtr, len(entries))
+	if len(entries) == 0 {
+		return ptrs, nil
+	}
+	if writeMask != nil && len(writeMask) != len(entries) {
+		return nil, fmt.Errorf("vlog manager: write mask size mismatch")
+	}
+
+	payloads := make([][]byte, len(entries))
+	buffers := make([]*bytes.Buffer, 0, len(entries))
+	total := 0
+	releaseBuffers := func() {
+		for _, b := range buffers {
+			putEntryBuffer(b)
+		}
+	}
+
+	for i, e := range entries {
+		write := true
+		if writeMask != nil {
+			write = writeMask[i]
+		}
+		if !write {
+			continue
+		}
+		if e == nil {
+			releaseBuffers()
+			return nil, fmt.Errorf("vlog manager: nil entry")
+		}
+		buf := getEntryBuffer()
+		payload, err := kv.EncodeEntry(buf, e)
+		if err != nil {
+			putEntryBuffer(buf)
+			releaseBuffers()
+			return nil, err
+		}
+		if err := m.runBeforeAppendHook(payload); err != nil {
+			putEntryBuffer(buf)
+			releaseBuffers()
+			return nil, err
+		}
+		payloads[i] = payload
+		buffers = append(buffers, buf)
+		total += len(payload)
+	}
+
+	if total == 0 {
+		releaseBuffers()
+		return ptrs, nil
+	}
+
+	if m.cfg.MaxSize > 0 && int64(total) > m.cfg.MaxSize {
+		for i, payload := range payloads {
+			if payload == nil {
+				continue
+			}
+			ptr, err := m.appendPayload(payload)
+			if err != nil {
+				releaseBuffers()
+				return nil, err
+			}
+			ptrs[i] = *ptr
+		}
+		releaseBuffers()
+		return ptrs, nil
+	}
+
+	lf, fid, start, err := m.reserveBatch(total)
+	if err != nil {
+		releaseBuffers()
+		return nil, err
+	}
+
+	offset := start
+	lf.Lock.Lock()
+	for i, payload := range payloads {
+		if payload == nil {
+			continue
+		}
+		if err := lf.Write(offset, payload); err != nil {
+			lf.Lock.Unlock()
+			releaseBuffers()
+			return nil, err
+		}
+		ptrs[i] = kv.ValuePtr{
+			Fid:    fid,
+			Offset: offset,
+			Len:    uint32(len(payload)),
+		}
+		offset += uint32(len(payload))
+	}
+	lf.Lock.Unlock()
+
+	releaseBuffers()
+	return ptrs, nil
 }
 
 func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
@@ -303,7 +494,7 @@ func (m *Manager) Remove(fid uint32) error {
 			maxID = id
 		}
 	}
-	atomic.StoreUint32(&m.maxFid, maxID)
+	m.maxFid = maxID
 
 	if fid == m.activeID {
 		if len(m.files) == 0 {
@@ -331,11 +522,15 @@ func (m *Manager) Remove(fid uint32) error {
 }
 
 func (m *Manager) MaxFID() uint32 {
-	return atomic.LoadUint32(&m.maxFid)
+	m.filesLock.RLock()
+	defer m.filesLock.RUnlock()
+	return m.maxFid
 }
 
 func (m *Manager) ActiveFID() uint32 {
-	return atomic.LoadUint32(&m.activeID)
+	m.filesLock.RLock()
+	defer m.filesLock.RUnlock()
+	return m.activeID
 }
 
 func (m *Manager) Head() kv.ValuePtr {
@@ -703,6 +898,8 @@ func (m *Manager) Close() error {
 		delete(m.files, fid)
 	}
 	m.active = nil
+	m.activeID = 0
+	m.offset = 0
 	return firstErr
 }
 

@@ -24,9 +24,11 @@ sequenceDiagram
     participant Client
     participant DB
     participant Oracle
+    participant VLog as commitVlogWorker
+    participant Mgr as vlog.Manager
+    participant Apply as commitApplyWorker
     participant WAL
-    participant VLog
-    participant LSM
+    participant Mem as MemTable
     Client->>DB: NewTransaction(update)
     DB->>Oracle: readTs()
     Oracle-->>DB: snapshot ts (nextTxnTs-1)
@@ -38,9 +40,11 @@ sequenceDiagram
         Oracle-->>DB: ErrConflict
     else success
         Oracle-->>DB: commitTs
-        DB->>VLog: processValueLogBatches(entries)
-        DB->>WAL: Append(entries with commitTs)
-        WAL-->>DB: ack
+        DB->>VLog: batch requests
+        VLog->>Mgr: AppendEntries(entries, writeMask)
+        VLog-->>Apply: batch + ptrs
+        Apply->>WAL: Append(entries with commitTs)
+        Apply->>Mem: apply to skiplist
         DB->>Oracle: doneCommit(commitTs)
     end
 ```
@@ -50,7 +54,7 @@ sequenceDiagram
 3. **Conflict detection** – When `Options.DetectConflicts` is enabled, `oracle.newCommitTs` iterates `oracle.committedTxns` and compares read fingerprints against keys written by newer commits. This mirrors Badger's optimistic strategy.
 4. **Commit timestamp** – `newCommitTs` increments `nextTxnTs`, registers the commit in `txnMark`, and stores the conflict key set for future comparisons.
 5. **Apply** – `Txn.commitAndSend` assigns the commit timestamp to each pending entry (`kv.KeyWithTs`), enqueues them through `sendToWriteCh`, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle's `doneCommit` release the commit watermark.
-6. **Value log ordering** – As with non-transactional writes, `processValueLogBatches` executes before the WAL append. On failure `vlog.manager.Rewind` ensures partial writes do not leak.
+6. **Value log ordering** – As with non-transactional writes, the vlog stage (`commitVlogWorker` → `valueLog.write` → `Manager.AppendEntries`) executes before the WAL append. On failure `vlog.manager.Rewind` ensures partial writes do not leak.
 
 RocksDB's default WriteBatch lacks conflict detection, relying on application-level locking; NoKV ships with snapshot isolation and optional detection, similar to Badger's `Txn` but with integrated metrics and iterator pooling.
 
@@ -103,7 +107,7 @@ type Txn struct {
 | Stage | Failure Handling |
 | --- | --- |
 | Conflict | `oracle.newCommitTs` returns `(0, true)`; `Txn.Commit` surfaces `utils.ErrConflict` and leaves state untouched. |
-| Value log append | `processValueLogBatches` rewinds via `Manager.Rewind`; `req.Wait` returns the error so callers can retry safely. |
+| Value log append | `valueLog.write` rewinds via `Manager.Rewind`; `req.Wait` returns the error so callers can retry safely. |
 | WAL append | `sendToWriteCh` propagates WAL errors; commit watermark is cleared immediately in that case. |
 | Callback mode | `Txn.CommitWith` schedules `runTxnCallback` on a goroutine; user callbacks always execute (success or error). |
 

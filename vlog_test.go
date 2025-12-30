@@ -227,7 +227,7 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	defer db.Close()
 
 	head := db.vlog.manager.Head()
-	db.vlog.opt.ValueLogFileSize = 256
+	db.vlog.setValueLogFileSize(256)
 	var rotates int
 	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
 		BeforeRotate: func(m *vlogpkg.Manager) error {

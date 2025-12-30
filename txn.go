@@ -17,18 +17,15 @@ import (
 type oracle struct {
 	detectConflicts bool // Determines if the txns should be checked for conflicts.
 
-	sync.Mutex // For nextTxnTs and commits.
-	// writeChLock lock is for ensuring that transactions go to the write
-	// channel in the same order as their commit timestamps.
-	writeChLock sync.Mutex
-	nextTxnTs   uint64
+	sync.Mutex // Guards committedTxns/intentTable cleanup and conflict checks.
+	nextTxnTs  atomic.Uint64
 
 	// Used to block NewTransaction, so all previous commits ars visible to a new read.
 	txnMark *utils.WaterMark
 
 	// Either of these is used to determine which versions can be permanently
 	// discarded during compaction.
-	readMark  *utils.WaterMark // Used by DB.
+	readMark *utils.WaterMark // Used by DB.
 
 	// committedTxns contains all committed writes (contains fingerprints
 	// of keys written and their latest commit counter).
@@ -70,11 +67,11 @@ func newOracle(opt Options) *oracle {
 		//
 		// WaterMarks must be 64-bit aligned for atomic package, hence we must use pointers here.
 		// See https://golang.org/pkg/sync/atomic/#pkg-note-BUG.
-		readMark:  &utils.WaterMark{Name: "corekv.PendingReads"},
-		txnMark:   &utils.WaterMark{Name: "corekv.TxnTimestamp"},
-		closer:    utils.NewCloserInitial(2),
-		nextTxnTs: 1,
+		readMark: &utils.WaterMark{Name: "corekv.PendingReads"},
+		txnMark:  &utils.WaterMark{Name: "corekv.TxnTimestamp"},
+		closer:   utils.NewCloserInitial(2),
 	}
+	orc.nextTxnTs.Store(1)
 	orc.readMark.Init(orc.closer)
 	orc.txnMark.Init(orc.closer)
 	return orc
@@ -86,13 +83,13 @@ func (o *oracle) initCommitState(committed uint64) {
 	}
 
 	o.Lock()
-	if committed >= o.nextTxnTs {
-		o.nextTxnTs = committed + 1
-	}
 	if committed > o.lastCleanupTs {
 		o.lastCleanupTs = committed
 	}
 	o.Unlock()
+	if committed >= o.nextTxnTs.Load() {
+		o.nextTxnTs.Store(committed + 1)
+	}
 
 	o.readMark.SetDoneUntil(committed)
 	o.txnMark.SetDoneUntil(committed)
@@ -129,11 +126,8 @@ func (o *oracle) txnMetricsSnapshot() metrics.TxnMetrics {
 }
 
 func (o *oracle) readTs() uint64 {
-	var readTs uint64
-	o.Lock()
-	readTs = o.nextTxnTs - 1
+	readTs := o.nextTxnTs.Load() - 1
 	o.readMark.Begin(readTs)
-	o.Unlock()
 
 	// Wait for all txns which have no conflicts, have been assigned a commit
 	// timestamp and are going through the write to value log and LSM tree
@@ -189,8 +183,7 @@ func (o *oracle) newCommitTs(txn *Txn) (uint64, bool) {
 	o.cleanupCommittedTransactions()
 
 	// This is the general case, when user doesn't specify the read and commit ts.
-	ts := o.nextTxnTs
-	o.nextTxnTs++
+	ts := o.nextTxnTs.Add(1) - 1
 	o.txnMark.Begin(ts)
 
 	utils.AssertTrue(ts >= o.lastCleanupTs)
@@ -376,6 +369,7 @@ func exceedsSize(prefix string, max int64, key []byte) error {
 }
 
 const maxKeySize = 65000
+
 func (txn *Txn) modify(e *kv.Entry) error {
 	switch {
 	case !txn.update:
@@ -608,15 +602,9 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	var entries []*kv.Entry
 	var commitTs uint64
 
-	// The following logic has to be guarded by a lock, because we are using
-	// a single nextTxnTs to apply to all the entries in a transaction.
-	// So, we get a commit timestamp, and apply it to all entries, before
-	// releasing the lock.
-	orc.writeChLock.Lock()
 	var conflict bool
 	commitTs, conflict = orc.newCommitTs(txn)
 	if conflict {
-		orc.writeChLock.Unlock()
 		orc.trackTxnConflict()
 		return nil, utils.ErrConflict
 	}
@@ -642,7 +630,6 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 		processEntry(e)
 	}
 	txn.clearPendingWrites() // Clear the map to prevent double-free in Discard.
-	orc.writeChLock.Unlock()
 
 	req, err := txn.db.sendToWriteCh(entries)
 	if err != nil {

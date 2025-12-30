@@ -49,6 +49,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ### 2.1 WAL & MemTable
 - `wal.Manager` appends `[len|payload|crc]` records, rotates segments, and replays logs on crash.
 - `MemTable` accumulates writes until full, then enters the flush queue; `flush.Manager` runs `Prepare → Build → Install → Release`, logs edits, and releases WAL segments.
+- Writes are pipelined through `commitWorker → commitVlogWorker → commitApplyWorker`, so value-log IO and LSM/WAL apply run in parallel without blocking the entire queue.
 
 ### 2.2 ValueLog
 - Large values are written to the ValueLog before the WAL append; the resulting `ValuePtr` is stored in WAL/LSM so replay can recover.
