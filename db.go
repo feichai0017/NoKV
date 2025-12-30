@@ -269,12 +269,18 @@ func Open(opt *Options) *DB {
 	if pipelineDepth <= 0 {
 		pipelineDepth = 4
 	}
+	applyWorkers := opt.CommitApplyConcurrency
+	if applyWorkers <= 0 {
+		applyWorkers = 1
+	}
 	db.commitVlogCh = make(chan *commitBatch, pipelineDepth)
 	db.commitApplyCh = make(chan *commitBatch, pipelineDepth)
-	db.commitWG.Add(3)
+	db.commitWG.Add(2 + applyWorkers)
 	go db.commitWorker()
 	go db.commitVlogWorker()
-	go db.commitApplyWorker()
+	for i := 0; i < applyWorkers; i++ {
+		go db.commitApplyWorker()
+	}
 	db.walWatchdog = newWalWatchdog(db)
 	if db.walWatchdog != nil {
 		db.walWatchdog.start()

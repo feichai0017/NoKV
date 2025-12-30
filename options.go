@@ -69,6 +69,9 @@ type Options struct {
 	// CommitPipelineDepth controls the buffering between commit queue, value log
 	// writes, and LSM apply. Values <= 0 fall back to a small default.
 	CommitPipelineDepth int
+	// CommitApplyConcurrency controls how many apply workers write into the LSM.
+	// Values <= 0 fall back to CommitPipelineDepth.
+	CommitApplyConcurrency int
 
 	// Block cache configuration for read path optimization. Cached blocks
 	// target L0/L1; colder data relies on the OS page cache.
@@ -158,6 +161,7 @@ func NewDefaultOptions() *Options {
 		HotWriteBatchMultiplier:       2,
 		WriteBatchWait:                200 * time.Microsecond,
 		CommitPipelineDepth:           4,
+		CommitApplyConcurrency:        4,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,

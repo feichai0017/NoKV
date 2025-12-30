@@ -233,12 +233,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	pointerEdit := manifest.Edit{
 		Type:      manifest.EditLogPointer,
 		LogSeg:    immutable.segmentID,
-		LogOffset: uint64(immutable.walSize),
+		LogOffset: uint64(atomic.LoadInt64(&immutable.walSize)),
 	}
 	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
 		return err
 	}
-	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize))
+	lm.setLogPointer(immutable.segmentID, uint64(atomic.LoadInt64(&immutable.walSize)))
 	lm.levels[0].add(table)
 	if lm.canRemoveWalSegment(uint32(fid)) {
 		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
