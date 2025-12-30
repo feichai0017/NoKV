@@ -26,7 +26,7 @@ sequenceDiagram
     participant Oracle
     participant VLog as commitVlogWorker
     participant Mgr as vlog.Manager
-    participant Apply as commitApplyWorker
+    participant Apply as commitApplyWorkers
     participant WAL
     participant Mem as MemTable
     Client->>DB: NewTransaction(update)

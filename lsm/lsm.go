@@ -348,17 +348,33 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	// graceful shutdown
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-	// check if the current memtable is full, if so, create a new memtable, and write the current memtable to immutables
-	// otherwise, write to the current memtable
-	if lsm.memTable.walSize+
-		int64(kv.EstimateEncodeSize(entry)) > lsm.option.MemTableSize {
-		lsm.Rotate()
-	}
-
-	if err = lsm.memTable.set(entry); err != nil {
+	// If the current memtable is full, rotate it under write lock; otherwise
+	// hold the read lock while writing to prevent concurrent rotation.
+	estimate := int64(kv.EstimateEncodeSize(entry))
+	for {
+		lsm.lock.RLock()
+		mt := lsm.memTable
+		if mt == nil {
+			lsm.lock.RUnlock()
+			return errors.New("lsm: memtable not initialized")
+		}
+		if atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+			lsm.lock.RUnlock()
+			var old *memTable
+			lsm.lock.Lock()
+			if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+				old = lsm.rotateLocked()
+			}
+			lsm.lock.Unlock()
+			if old != nil {
+				lsm.submitFlush(old)
+			}
+			continue
+		}
+		err = mt.set(entry)
+		lsm.lock.RUnlock()
 		return err
 	}
-	return err
 }
 
 // Get _
@@ -417,11 +433,16 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 
 func (lsm *LSM) Rotate() {
 	lsm.lock.Lock()
+	old := lsm.rotateLocked()
+	lsm.lock.Unlock()
+	lsm.submitFlush(old)
+}
+
+func (lsm *LSM) rotateLocked() *memTable {
 	old := lsm.memTable
 	lsm.immutables = append(lsm.immutables, old)
 	lsm.memTable = lsm.NewMemtable()
-	lsm.lock.Unlock()
-	lsm.submitFlush(old)
+	return old
 }
 
 func (lsm *LSM) GetMemTables() ([]*memTable, func()) {

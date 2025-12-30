@@ -38,6 +38,12 @@ func (db *DB) initWriteBatchOptions() {
 	if db.opt.CommitPipelineDepth <= 0 {
 		db.opt.CommitPipelineDepth = 4
 	}
+	if db.opt.CommitApplyConcurrency <= 0 {
+		db.opt.CommitApplyConcurrency = db.opt.CommitPipelineDepth
+		if db.opt.CommitApplyConcurrency <= 0 {
+			db.opt.CommitApplyConcurrency = 1
+		}
+	}
 }
 
 func (db *DB) applyThrottle(enable bool) {

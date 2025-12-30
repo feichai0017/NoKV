@@ -24,7 +24,6 @@ type memTable struct {
 	lsm        *LSM
 	segmentID  uint32
 	sl         *utils.Skiplist
-	walBuf     *bytes.Buffer
 	maxVersion uint64
 	walSize    int64
 }
@@ -81,7 +80,6 @@ func (lsm *LSM) NewMemtable() *memTable {
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
-		walBuf:    getWalBuffer(),
 		walSize:   0,
 	}
 }
@@ -90,27 +88,23 @@ func (m *memTable) close() error {
 	if m == nil {
 		return nil
 	}
-	putWalBuffer(m.walBuf)
-	m.walBuf = nil
 	return nil
 }
 
 func (m *memTable) set(entry *kv.Entry) error {
-	buf := m.walBuf
-	if buf == nil {
-		buf = getWalBuffer()
-		m.walBuf = buf
-	}
+	buf := getWalBuffer()
 	payload, err := kv.EncodeEntry(buf, entry)
 	if err != nil {
+		putWalBuffer(buf)
 		return err
 	}
 	infos, err := m.lsm.wal.Append(payload)
+	putWalBuffer(buf)
 	if err != nil {
 		return err
 	}
 	if len(infos) > 0 {
-		m.walSize += int64(infos[0].Length) + 8
+		atomic.AddInt64(&m.walSize, int64(infos[0].Length)+8)
 	}
 	m.sl.Add(entry)
 	return nil
@@ -205,7 +199,6 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		lsm:       lsm,
 		segmentID: uint32(fid),
 		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
-		walBuf:    getWalBuffer(),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntry {
@@ -220,7 +213,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		}
 		mt.sl.Add(entry)
 		entry.DecrRef()
-		mt.walSize += int64(info.Length) + 8
+		atomic.AddInt64(&mt.walSize, int64(info.Length)+8)
 		return nil
 	})
 	if err != nil {
