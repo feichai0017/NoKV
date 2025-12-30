@@ -91,7 +91,11 @@ func TestHitStorage(t *testing.T) {
 	hitBloom := func() {
 		ee := utils.BuildEntry()
 		// 查询不存在的key 如果命中则说明一定不存在
-		v, err := lsm.levels.levels[0].tables[0].Search(ee.Key, &ee.Version)
+		tables := lsm.levels.levels[0].tablesSnapshot()
+		if len(tables) == 0 {
+			t.Fatalf("expected L0 tables for bloom test")
+		}
+		v, err := tables[0].Search(ee.Key, &ee.Version)
 		utils.CondPanic(v != nil, fmt.Errorf("[hitBloom] v != nil"))
 		utils.CondPanic(err != utils.ErrKeyNotFound, fmt.Errorf("[hitBloom] err != utils.ErrKeyNotFound"))
 	}
@@ -153,6 +157,11 @@ func TestCompact(t *testing.T) {
 	defer lsm.Close()
 	ok := false
 	hasTable := func(lh *levelHandler, fid uint64) bool {
+		if lh == nil {
+			return false
+		}
+		lh.RLock()
+		defer lh.RUnlock()
 		for _, t := range lh.tables {
 			if t.fid == fid {
 				return true
@@ -180,7 +189,7 @@ func TestCompact(t *testing.T) {
 		}
 
 		before := make(map[uint64]struct{})
-		for _, tbl := range lsm.levels.levels[0].tables {
+		for _, tbl := range lsm.levels.levels[0].tablesSnapshot() {
 			before[tbl.fid] = struct{}{}
 		}
 		lsm.levels.compaction.runOnce(1)
@@ -199,7 +208,7 @@ func TestCompact(t *testing.T) {
 		fid := lsm.levels.maxFID + 1
 		cd := buildCompactDef(lsm, 0, 0, 0)
 		// 非常tricky的处理方法，为了能通过检查
-		tricky(cd.thisLevel.tables)
+		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTablesL0ToL0(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] lsm.levels.fillTablesL0ToL0(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
@@ -214,7 +223,7 @@ func TestCompact(t *testing.T) {
 		fid := lsm.levels.maxFID + 1
 		cd := buildCompactDef(lsm, 0, 0, 1)
 		// 非常tricky的处理方法，为了能通过检查
-		tricky(cd.thisLevel.tables)
+		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
@@ -230,7 +239,7 @@ func TestCompact(t *testing.T) {
 		prevMax := lsm.levels.maxFID
 		cd := buildCompactDef(lsm, 6, 6, 6)
 		// 非常tricky的处理方法，为了能通过检查
-		tricky(cd.thisLevel.tables)
+		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
 			pri := compactionPriority{
@@ -241,7 +250,7 @@ func TestCompact(t *testing.T) {
 				adjusted:   2,
 			}
 			utils.Err(lsm.levels.doCompact(0, pri))
-			tricky(cd.thisLevel.tables)
+			tricky(cd.thisLevel.tablesSnapshot())
 			ok = lsm.levels.fillTables(cd)
 		}
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
@@ -253,22 +262,28 @@ func TestCompact(t *testing.T) {
 		if hasTable(lsm.levels.levels[6], prevMax+1) {
 			ok = true
 		} else {
-			for _, tbl := range lsm.levels.levels[6].tables {
+			level := lsm.levels.levels[6]
+			level.RLock()
+			for _, tbl := range level.tables {
 				if tbl.fid > prevMax {
 					ok = true
 					break
 				}
 			}
 			if !ok {
-				for _, sh := range lsm.levels.levels[6].ingest.shards {
+				for _, sh := range level.ingest.shards {
 					for _, tbl := range sh.tables {
 						if tbl.fid > prevMax {
 							ok = true
 							break
 						}
 					}
+					if ok {
+						break
+					}
 				}
 			}
+			level.RUnlock()
 		}
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] fid not found"))
 	}
@@ -276,12 +291,26 @@ func TestCompact(t *testing.T) {
 		baseTest(t, lsm, 128)
 		cd := buildCompactDef(lsm, 0, 0, 1)
 		// 非常tricky的处理方法，为了能通过检查
-		tricky(cd.thisLevel.tables)
+		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[parallerCompact] lsm.levels.fillTables(cd) ret == false"))
 		// 构建完全相同两个压缩计划的执行，以便于百分比构建 压缩冲突
-		go lsm.levels.runCompactDef(0, 0, *cd)
-		lsm.levels.runCompactDef(0, 0, *cd)
+		errCh := make(chan error, 1)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- lsm.levels.runCompactDef(0, 0, *cd)
+		}()
+		errMain := lsm.levels.runCompactDef(0, 0, *cd)
+		wg.Wait()
+		errBg := <-errCh
+		if errBg != nil {
+			t.Fatalf("parallel compaction error: %v", errBg)
+		}
+		if errMain != nil {
+			t.Fatalf("parallel compaction error: %v", errMain)
+		}
 		// 检查compact status状态查看是否在执行并行压缩
 		isParaller := false
 		for _, state := range lsm.levels.compactState.levels {
@@ -305,11 +334,12 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 
 	// Move one L0 table to the max level ingest buffer.
 	l0 := lsm.levels.levels[0]
-	if len(l0.tables) == 0 {
+	tables := l0.tablesSnapshot()
+	if len(tables) == 0 {
 		t.Fatalf("expected L0 tables before ingest merge test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
-	cd.top = []*table{l0.tables[0]}
+	cd.top = []*table{tables[0]}
 	cd.thisRange = getKeyRange(cd.top...)
 	cd.nextRange = cd.thisRange
 	if err := lsm.levels.moveToIngest(cd); err != nil {
@@ -321,7 +351,7 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	if beforeIngest == 0 {
 		t.Fatalf("expected ingest tables after moveToIngest")
 	}
-	beforeMain := len(target.tables)
+	beforeMain := target.numTables()
 
 	pri := compactionPriority{
 		level:       6,
@@ -339,8 +369,8 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	if afterIngest == 0 {
 		t.Fatalf("expected ingest tables to remain after merge")
 	}
-	if len(target.tables) != beforeMain {
-		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, len(target.tables))
+	if target.numTables() != beforeMain {
+		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, target.numTables())
 	}
 }
 
@@ -357,11 +387,12 @@ func TestIngestShardParallelSafety(t *testing.T) {
 		baseTest(t, lsm, 512)
 	}
 	l0 := lsm.levels.levels[0]
-	if len(l0.tables) == 0 {
+	tables := l0.tablesSnapshot()
+	if len(tables) == 0 {
 		t.Fatalf("expected L0 tables for parallel ingest test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
-	cd.top = []*table{l0.tables[0]}
+	cd.top = []*table{tables[0]}
 	cd.thisRange = getKeyRange(cd.top...)
 	cd.nextRange = cd.thisRange
 	if err := lsm.levels.moveToIngest(cd); err != nil {

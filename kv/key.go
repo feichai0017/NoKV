@@ -60,7 +60,17 @@ func KeyWithTs(key []byte, ts uint64) []byte {
 // CF marker uses 3 fixed bytes (0xFF,'C','F') plus the CF byte. Timestamp is
 // bitwise inverted (^ts) so that newer versions sort before older ones.
 func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
-	return KeyWithTs(EncodeKeyWithCF(cf, key), ts)
+	if !cf.Valid() {
+		cf = CFDefault
+	}
+	out := make([]byte, cfHeaderSize+len(key)+8)
+	out[0] = cfMarker0
+	out[1] = cfMarker1
+	out[2] = cfMarker2
+	out[3] = byte(cf)
+	copy(out[cfHeaderSize:], key)
+	binary.BigEndian.PutUint64(out[len(out)-8:], math.MaxUint64-ts)
+	return out
 }
 
 // SplitInternalKey decodes (column family, user key, timestamp) from an internal

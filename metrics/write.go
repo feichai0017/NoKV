@@ -1,25 +1,28 @@
 package metrics
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // WriteMetrics aggregates queue and latency counters for the write pipeline.
 type WriteMetrics struct {
-	queueLen     int64
-	queueEntries int64
-	queueBytes   int64
+	queueLen     atomic.Int64
+	queueEntries atomic.Int64
+	queueBytes   atomic.Int64
 
-	batchCount   int64
-	batchEntries int64
-	batchBytes   int64
+	batchCount   atomic.Int64
+	batchEntries atomic.Int64
+	batchBytes   atomic.Int64
 
-	waitSumNs   int64
-	waitSamples int64
+	waitSumNs   atomic.Int64
+	waitSamples atomic.Int64
 
-	vlogSumNs   int64
-	vlogSamples int64
+	vlogSumNs   atomic.Int64
+	vlogSamples atomic.Int64
 
-	applySumNs   int64
-	applySamples int64
+	applySumNs   atomic.Int64
+	applySamples atomic.Int64
 }
 
 // WriteMetricsSnapshot is a read-only view of WriteMetrics counters.
@@ -46,63 +49,75 @@ func (m *WriteMetrics) UpdateQueue(len int, entries int, bytes int64) {
 	if m == nil {
 		return
 	}
-	m.queueLen = int64(len)
-	m.queueEntries = int64(entries)
-	m.queueBytes = bytes
+	m.queueLen.Store(int64(len))
+	m.queueEntries.Store(int64(entries))
+	m.queueBytes.Store(bytes)
 }
 
 func (m *WriteMetrics) RecordBatch(reqs int, entries int, size int64, waitSumNs int64) {
 	if m == nil {
 		return
 	}
-	m.batchCount += int64(reqs)
-	m.batchEntries += int64(entries)
-	m.batchBytes += size
-	m.waitSumNs += waitSumNs
-	m.waitSamples += int64(reqs)
+	m.batchCount.Add(int64(reqs))
+	m.batchEntries.Add(int64(entries))
+	m.batchBytes.Add(size)
+	m.waitSumNs.Add(waitSumNs)
+	m.waitSamples.Add(int64(reqs))
 }
 
 func (m *WriteMetrics) RecordValueLog(d time.Duration) {
 	if m == nil {
 		return
 	}
-	m.vlogSumNs += d.Nanoseconds()
-	m.vlogSamples++
+	m.vlogSumNs.Add(d.Nanoseconds())
+	m.vlogSamples.Add(1)
 }
 
 func (m *WriteMetrics) RecordApply(d time.Duration) {
 	if m == nil {
 		return
 	}
-	m.applySumNs += d.Nanoseconds()
-	m.applySamples++
+	m.applySumNs.Add(d.Nanoseconds())
+	m.applySamples.Add(1)
 }
 
 func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	if m == nil {
 		return WriteMetricsSnapshot{}
 	}
+	queueLen := m.queueLen.Load()
+	queueEntries := m.queueEntries.Load()
+	queueBytes := m.queueBytes.Load()
+	batchCount := m.batchCount.Load()
+	batchEntries := m.batchEntries.Load()
+	batchBytes := m.batchBytes.Load()
+	waitSumNs := m.waitSumNs.Load()
+	waitSamples := m.waitSamples.Load()
+	vlogSumNs := m.vlogSumNs.Load()
+	vlogSamples := m.vlogSamples.Load()
+	applySumNs := m.applySumNs.Load()
+	applySamples := m.applySamples.Load()
 	snap := WriteMetricsSnapshot{
-		QueueLen:        m.queueLen,
-		QueueEntries:    m.queueEntries,
-		QueueBytes:      m.queueBytes,
-		Batches:         m.batchCount,
-		RequestSamples:  m.waitSamples,
-		ValueLogSamples: m.vlogSamples,
-		ApplySamples:    m.applySamples,
+		QueueLen:        queueLen,
+		QueueEntries:    queueEntries,
+		QueueBytes:      queueBytes,
+		Batches:         batchCount,
+		RequestSamples:  waitSamples,
+		ValueLogSamples: vlogSamples,
+		ApplySamples:    applySamples,
 	}
-	if m.batchCount > 0 {
-		snap.AvgBatchEntries = float64(m.batchEntries) / float64(m.batchCount)
-		snap.AvgBatchBytes = float64(m.batchBytes) / float64(m.batchCount)
+	if batchCount > 0 {
+		snap.AvgBatchEntries = float64(batchEntries) / float64(batchCount)
+		snap.AvgBatchBytes = float64(batchBytes) / float64(batchCount)
 	}
-	if m.waitSamples > 0 {
-		snap.AvgRequestWaitMs = float64(m.waitSumNs) / float64(m.waitSamples) / 1e6
+	if waitSamples > 0 {
+		snap.AvgRequestWaitMs = float64(waitSumNs) / float64(waitSamples) / 1e6
 	}
-	if m.vlogSamples > 0 {
-		snap.AvgValueLogMs = float64(m.vlogSumNs) / float64(m.vlogSamples) / 1e6
+	if vlogSamples > 0 {
+		snap.AvgValueLogMs = float64(vlogSumNs) / float64(vlogSamples) / 1e6
 	}
-	if m.applySamples > 0 {
-		snap.AvgApplyMs = float64(m.applySumNs) / float64(m.applySamples) / 1e6
+	if applySamples > 0 {
+		snap.AvgApplyMs = float64(applySumNs) / float64(applySamples) / 1e6
 	}
 	return snap
 }

@@ -25,8 +25,17 @@ func (it *Item) Entry() *kv.Entry {
 func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 	iter := &Iterator{}
 	iter.iters = make([]utils.Iterator, 0)
-	iter.iters = append(iter.iters, lsm.memTable.NewIterator(opt))
-	for _, imm := range lsm.immutables {
+	lsm.lock.RLock()
+	mem := lsm.memTable
+	immutables := append([]*memTable(nil), lsm.immutables...)
+	lsm.lock.RUnlock()
+	if mem != nil {
+		iter.iters = append(iter.iters, mem.NewIterator(opt))
+	}
+	for _, imm := range immutables {
+		if imm == nil {
+			continue
+		}
 		iter.iters = append(iter.iters, imm.NewIterator(opt))
 	}
 	iter.iters = append(iter.iters, lsm.levels.iterators()...)

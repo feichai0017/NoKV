@@ -44,9 +44,9 @@ type table struct {
 
 	idx atomic.Pointer[pb.TableIndex]
 
-	mu         sync.Mutex
-	ss         *file.SSTable
-	pins       int32
+	mu   sync.Mutex
+	ss   *file.SSTable
+	pins int32
 }
 
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
@@ -295,7 +295,11 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 				t.lm.cache.addBloom(t.fid, bloomFilter)
 			}
 		}
-		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(key) {
+		probe := key
+		if len(key) > 8 {
+			probe = kv.ParseKey(key)
+		}
+		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}

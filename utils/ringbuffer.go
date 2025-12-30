@@ -8,11 +8,16 @@ import (
 // Ring is a fixed-size MPSC ring buffer with lock-free push/pop.
 // Capacity must be a power of two; constructor will round up.
 type Ring[T any] struct {
-	buf    []T
+	buf    []ringSlot[T]
 	mask   uint64
 	head   uint64 // next slot to pop
 	tail   uint64 // next slot to push
 	closed atomic.Bool
+}
+
+type ringSlot[T any] struct {
+	seq atomic.Uint64
+	val T
 }
 
 // NewRing creates a ring buffer with at least the given capacity.
@@ -22,10 +27,14 @@ func NewRing[T any](capacity int) *Ring[T] {
 		capacity = 2
 	}
 	size := nextPow2(uint64(capacity))
-	return &Ring[T]{
-		buf:  make([]T, size),
+	r := &Ring[T]{
+		buf:  make([]ringSlot[T], size),
 		mask: size - 1,
 	}
+	for i := range r.buf {
+		r.buf[i].seq.Store(uint64(i))
+	}
+	return r
 }
 
 // Push inserts v; returns false if the ring is full or closed.
@@ -34,14 +43,18 @@ func (r *Ring[T]) Push(v T) bool {
 		return false
 	}
 	for {
-		tail := atomic.LoadUint64(&r.tail)
-		head := atomic.LoadUint64(&r.head)
-		if tail-head >= r.mask+1 {
+		pos := atomic.LoadUint64(&r.tail)
+		slot := &r.buf[pos&r.mask]
+		seq := slot.seq.Load()
+		diff := int64(seq) - int64(pos)
+		if diff == 0 {
+			if atomic.CompareAndSwapUint64(&r.tail, pos, pos+1) {
+				slot.val = v
+				slot.seq.Store(pos + 1)
+				return true
+			}
+		} else if diff < 0 {
 			return false
-		}
-		if atomic.CompareAndSwapUint64(&r.tail, tail, tail+1) {
-			r.buf[tail&r.mask] = v
-			return true
 		}
 		runtime.Gosched()
 	}
@@ -52,15 +65,20 @@ func (r *Ring[T]) Pop() (val T, ok bool) {
 	if r == nil {
 		return val, false
 	}
+	size := r.mask + 1
 	for {
-		head := atomic.LoadUint64(&r.head)
-		tail := atomic.LoadUint64(&r.tail)
-		if head == tail {
+		pos := atomic.LoadUint64(&r.head)
+		slot := &r.buf[pos&r.mask]
+		seq := slot.seq.Load()
+		diff := int64(seq) - int64(pos+1)
+		if diff == 0 {
+			if atomic.CompareAndSwapUint64(&r.head, pos, pos+1) {
+				val = slot.val
+				slot.seq.Store(pos + size)
+				return val, true
+			}
+		} else if diff < 0 {
 			return val, false
-		}
-		if atomic.CompareAndSwapUint64(&r.head, head, head+1) {
-			val = r.buf[head&r.mask]
-			return val, true
 		}
 		runtime.Gosched()
 	}

@@ -17,12 +17,13 @@ func TestCompactionMoveToIngest(t *testing.T) {
 	}
 
 	l0 := lsm.levels.levels[0]
-	if len(l0.tables) == 0 {
+	tables := l0.tablesSnapshot()
+	if len(tables) == 0 {
 		t.Fatalf("expected L0 to have tables after writes")
 	}
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
-	cd.top = []*table{l0.tables[0]}
+	cd.top = []*table{tables[0]}
 	cd.thisRange = getKeyRange(cd.top...)
 	cd.nextRange = cd.thisRange
 	if cd.nextLevel == nil {
@@ -39,15 +40,23 @@ func TestCompactionMoveToIngest(t *testing.T) {
 	}
 
 	// Ensure the moved table has been removed from the source level.
+	found := false
+	cd.nextLevel.RLock()
 	for _, sh := range cd.nextLevel.ingest.shards {
 		for _, tbl := range sh.tables {
 			if tbl.fid == cd.top[0].fid {
-				goto Found
+				found = true
+				break
 			}
 		}
+		if found {
+			break
+		}
 	}
-	t.Fatalf("table %d not found in ingest buffer", cd.top[0].fid)
-Found:
+	cd.nextLevel.RUnlock()
+	if !found {
+		t.Fatalf("table %d not found in ingest buffer", cd.top[0].fid)
+	}
 }
 
 func TestCacheHotColdMetrics(t *testing.T) {
@@ -102,10 +111,11 @@ func TestCompactStatusGuards(t *testing.T) {
 	baseTest(t, lsm, 256)
 
 	l0 := lsm.levels.levels[0]
-	if len(l0.tables) == 0 {
+	tables := l0.tablesSnapshot()
+	if len(tables) == 0 {
 		t.Fatalf("expected L0 tables for compact status test")
 	}
-	tbl := l0.tables[0]
+	tbl := tables[0]
 
 	cd := compactDef{
 		thisLevel: l0,

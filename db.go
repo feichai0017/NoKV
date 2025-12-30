@@ -248,7 +248,7 @@ func Open(opt *Options) *DB {
 	db.orc = newOracle(*opt)
 	db.orc.initCommitState(recoveredVersion)
 	// 启动 sstable 的合并压缩过程
-	go db.lsm.StartCompacter()
+	db.lsm.StartCompacter()
 	// 准备vlog gc
 	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
 	db.commitQueue.ring = utils.NewRing[*commitRequest](queueCap)
@@ -256,12 +256,12 @@ func Open(opt *Options) *DB {
 	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
 	db.commitWG.Add(1)
 	go db.commitWorker()
-	// 启动 info 统计过程
-	db.stats.StartStats()
 	db.walWatchdog = newWalWatchdog(db)
 	if db.walWatchdog != nil {
 		db.walWatchdog.start()
 	}
+	// 启动 info 统计过程
+	db.stats.StartStats()
 	if db.opt.ValueLogGCInterval > 0 {
 		if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
 			db.vlog.lfDiscardStats.closer.Add(1)
@@ -312,6 +312,10 @@ func (db *DB) Close() error {
 
 	db.stopCommitWorkers()
 
+	if err := db.stats.close(); err != nil {
+		return err
+	}
+
 	if db.walWatchdog != nil {
 		db.walWatchdog.stop()
 		db.walWatchdog = nil
@@ -327,9 +331,6 @@ func (db *DB) Close() error {
 		db.prefetchRing = nil
 	}
 
-	if err := db.stats.close(); err != nil {
-		return err
-	}
 	if err := db.lsm.Close(); err != nil {
 		return err
 	}
