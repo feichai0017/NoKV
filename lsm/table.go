@@ -47,7 +47,6 @@ type table struct {
 	mu         sync.Mutex
 	ss         *file.SSTable
 	pins       int32
-	cacheSlots []*blockEntry
 }
 
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
@@ -342,7 +341,7 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	if cached, ok := t.lm.cache.getBlock(t.lvl, t, key, hot); ok && cached != nil {
+	if cached, ok := t.lm.cache.getBlock(t.lvl, key, hot); ok && cached != nil {
 		return cached, nil
 	}
 
@@ -829,14 +828,6 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 func (t *table) DecrRef() error {
 	newRef := atomic.AddInt32(&t.ref, -1)
 	if newRef == 0 {
-		idx := t.index()
-		offsets := 0
-		if idx != nil {
-			offsets = len(idx.GetOffsets())
-		}
-		for i := 0; i < offsets; i++ {
-			t.lm.cache.dropBlock(t.blockCacheKey(i))
-		}
 		if err := t.Delete(); err != nil {
 			return err
 		}

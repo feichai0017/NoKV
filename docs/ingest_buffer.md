@@ -14,7 +14,7 @@ flowchart LR
 
 ## Design Highlights
 - **Sharded by key prefix**: ingest tables are routed into fixed shards (top bits of the first byte). Sharding cuts cross-range overlap and enables safe parallel drain.
-- **Snapshot-friendly reads**: ingest tables live in `levelView` alongside main tables; reads/iterators/prefetch use a consistent snapshot without holding locks.
+- **Snapshot-friendly reads**: ingest tables are read under the level `RLock`, and iterators hold table refs so mmap-backed data stays valid without additional snapshots.
 - **Two ingest paths**:
   - *Ingest-only compaction*: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by `compactState`.
   - *Ingest-merge*: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.

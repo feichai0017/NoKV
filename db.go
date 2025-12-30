@@ -171,7 +171,7 @@ func Open(opt *Options) *DB {
 		MemTableSize:            opt.MemTableSize,
 		SSTableMaxSz:            opt.SSTableMaxSz,
 		BlockSize:               8 * 1024,
-		BloomFalsePositive:      0, //0.01,
+		BloomFalsePositive:      0.01,
 		BaseLevelSize:           baseLevelSize,
 		LevelSizeMultiplier:     8,
 		BaseTableSize:           baseTableSize,

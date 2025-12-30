@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/utils"
@@ -20,6 +21,8 @@ type nokvEngine struct {
 	valuePool sync.Pool
 	valueSize int
 	valueCap  int
+	statsStop chan struct{}
+	statsWG   sync.WaitGroup
 }
 
 func (e *nokvEngine) Name() string { return "NoKV" }
@@ -56,10 +59,16 @@ func (e *nokvEngine) Open(clean bool) error {
 	}
 	e.valueCap = e.valueSize
 	e.valuePool.New = func() any { return make([]byte, e.valueCap) }
+	e.startStatsTicker()
 	return nil
 }
 
 func (e *nokvEngine) Close() error {
+	if e.statsStop != nil {
+		close(e.statsStop)
+		e.statsWG.Wait()
+		e.statsStop = nil
+	}
 	if e.db == nil {
 		return nil
 	}
@@ -112,4 +121,66 @@ func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 		return 0, err
 	}
 	return read, nil
+}
+
+func (e *nokvEngine) startStatsTicker() {
+	interval := os.Getenv("NOKV_BENCH_STATS_INTERVAL")
+	if interval == "" || e.db == nil {
+		return
+	}
+	d, err := time.ParseDuration(interval)
+	if err != nil || d <= 0 {
+		return
+	}
+	e.statsStop = make(chan struct{})
+	e.statsWG.Add(1)
+	go func() {
+		defer e.statsWG.Done()
+		ticker := time.NewTicker(d)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				e.printStats()
+			case <-e.statsStop:
+				return
+			}
+		}
+	}()
+}
+
+func (e *nokvEngine) printStats() {
+	if e.db == nil {
+		return
+	}
+	snap := e.db.Info().Snapshot()
+	var (
+		l0Tables int
+		l0Bytes  int64
+		l0Ingest int
+	)
+	for _, lvl := range snap.LSMLevels {
+		if lvl.Level == 0 {
+			l0Tables = lvl.TableCount
+			l0Bytes = lvl.SizeBytes
+			l0Ingest = lvl.IngestTables
+			break
+		}
+	}
+	fmt.Printf("[NoKV Stats] entries=%d l0_tables=%d l0_bytes=%d l0_ingest=%d flush_pending=%d compaction_backlog=%d compaction_max=%.2f write_q=%d write_entries=%d write_bytes=%d throttle=%v vlog_segments=%d vlog_pending=%d vlog_discard=%d\n",
+		snap.Entries,
+		l0Tables,
+		l0Bytes,
+		l0Ingest,
+		snap.FlushPending,
+		snap.CompactionBacklog,
+		snap.CompactionMaxScore,
+		snap.WriteQueueDepth,
+		snap.WriteQueueEntries,
+		snap.WriteQueueBytes,
+		snap.WriteThrottleActive,
+		snap.ValueLogSegments,
+		snap.ValueLogPendingDel,
+		snap.ValueLogDiscardQueue,
+	)
 }

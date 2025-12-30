@@ -20,7 +20,7 @@ die() {
 }
 
 default_workloads="A,B,C,D,F"
-default_engines="nokv,badger,rocksdb"
+default_engines="nokv,badger"
 default_records=5000000
 default_ops=5000000
 default_conc=16
