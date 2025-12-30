@@ -150,14 +150,6 @@ func (ds *DiskStorage) saveEntriesLocked(entries []myraft.Entry) error {
 	return ds.persistEntriesLocked()
 }
 
-func (ds *DiskStorage) loadHardStateLocked() (myraft.HardState, error) {
-	return ds.hardState, nil
-}
-
-func (ds *DiskStorage) loadSnapshotLocked() (myraft.Snapshot, error) {
-	return ds.snapshot, nil
-}
-
 func (ds *DiskStorage) SaveReadyState(rd myraft.Ready) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()

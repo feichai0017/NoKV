@@ -60,15 +60,6 @@ func (r *raftLogTracker) setInjected(flag bool) {
 	r.mu.Unlock()
 }
 
-func (r *raftLogTracker) lastState() (manifest.RaftLogPointer, error) {
-	if r == nil {
-		return manifest.RaftLogPointer{}, nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.lastPointer, r.lastError
-}
-
 func (r *raftLogTracker) Info() *RaftLogInfo {
 	if r == nil {
 		return nil

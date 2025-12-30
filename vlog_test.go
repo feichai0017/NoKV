@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	kvpkg "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
@@ -56,7 +57,7 @@ func TestVlogBase(t *testing.T) {
 	b.Entries = []*kvpkg.Entry{e1, e2}
 
 	// 直接写入vlog中
-	log.write([]*request{b})
+	require.NoError(t, log.write([]*request{b}))
 	e1.DecrRef()
 	e2.DecrRef()
 	require.Len(t, b.Ptrs, 2)
@@ -127,7 +128,7 @@ func TestValueGC(t *testing.T) {
 		require.NoError(t, db.Set(e))
 		e.DecrRef()
 	}
-	db.RunValueLogGC(0.9)
+	require.NoError(t, db.RunValueLogGC(0.9))
 	for _, e := range kvList {
 		item, err := db.Get(e.Key)
 		require.NoError(t, err)
@@ -258,7 +259,8 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 
 func newRandEntry(sz int) *kvpkg.Entry {
 	v := make([]byte, sz)
-	rand.Read(v[:rand.Intn(sz)])
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	_, _ = rng.Read(v[:rng.Intn(sz)])
 	e := utils.BuildEntry()
 	e.Value = v
 	return e

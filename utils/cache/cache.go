@@ -19,10 +19,6 @@ type Cache struct {
 	data      map[uint64]*list.Element
 }
 
-type Options struct {
-	lruPct uint8
-}
-
 // NewCache size means the number of data to be cached
 func NewCache(size int) *Cache {
 	//define the percentage of window cache, here is 1%

@@ -28,7 +28,6 @@ type oracle struct {
 
 	// Either of these is used to determine which versions can be permanently
 	// discarded during compaction.
-	discardTs uint64           // Used by ManagedDB.
 	readMark  *utils.WaterMark // Used by DB.
 
 	// committedTxns contains all committed writes (contains fingerprints
@@ -144,31 +143,6 @@ func (o *oracle) readTs() uint64 {
 	return readTs
 }
 
-func (o *oracle) nextTs() uint64 {
-	o.Lock()
-	defer o.Unlock()
-	return o.nextTxnTs
-}
-
-func (o *oracle) incrementNextTs() {
-	o.Lock()
-	defer o.Unlock()
-	o.nextTxnTs++
-}
-
-// Any deleted or invalid versions at or below ts would be discarded during
-// compaction to reclaim disk space in LSM tree and thence value log.
-func (o *oracle) setDiscardTs(ts uint64) {
-	o.Lock()
-	defer o.Unlock()
-	o.discardTs = ts
-	o.cleanupCommittedTransactions()
-}
-
-func (o *oracle) discardAtOrBelow() uint64 {
-	return o.readMark.DoneUntil()
-}
-
 // hasConflict must be called while having a lock.
 func (o *oracle) hasConflict(txn *Txn) bool {
 	if len(txn.reads) == 0 {
@@ -254,9 +228,7 @@ func (o *oracle) cleanupCommittedTransactions() { // Must be called under o.Lock
 		return
 	}
 	// Same logic as discardAtOrBelow but unlocked
-	var maxReadTs uint64
-
-	maxReadTs = o.readMark.DoneUntil()
+	maxReadTs := o.readMark.DoneUntil()
 
 	utils.AssertTrue(maxReadTs >= o.lastCleanupTs)
 
@@ -404,8 +376,6 @@ func exceedsSize(prefix string, max int64, key []byte) error {
 }
 
 const maxKeySize = 65000
-const maxValSize = 1 << 20
-
 func (txn *Txn) modify(e *kv.Entry) error {
 	switch {
 	case !txn.update:

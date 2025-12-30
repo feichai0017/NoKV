@@ -126,7 +126,6 @@ func initFilter(numEntries int, bitsPerKey int) *BloomFilter {
 	// For small len(keys), we can see a very high false positive rate. Fix it
 	// by enforcing a minimum bloom filter length.
 	nBytes := (nBits + 7) / 8
-	nBits = nBytes * 8
 	filter := make([]byte, nBytes+1)
 
 	//record the K value of this Bloom Filter

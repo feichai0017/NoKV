@@ -474,7 +474,6 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 
 	// Restart peers with persistent storage.
 	net2 := newMemoryNetwork()
-	var peers2 []*raftstore.Peer
 	for i, n := range nodes {
 		db := openDBAt(t, n.dbDir)
 		rc := myraft.Config{
@@ -498,7 +497,6 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		t.Cleanup(func(peer *raftstore.Peer) func() {
 			return func() { _ = peer.Close() }
 		}(peer))
-		peers2 = append(peers2, peer)
 		nodes[i].db = db
 	}
 

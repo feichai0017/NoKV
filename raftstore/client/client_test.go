@@ -73,20 +73,6 @@ func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
 	return protoClone(region.meta), true
 }
 
-func (mc *mockCluster) leaderPeer(regionID uint64) *pb.RegionPeer {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	region, ok := mc.regions[regionID]
-	if !ok || region == nil {
-		return nil
-	}
-	for _, peer := range region.meta.GetPeers() {
-		if peer.GetStoreId() == region.leaderStore {
-			return protoClonePeer(peer)
-		}
-	}
-	return nil
-}
 
 func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.PrewriteRequest) (*pb.PrewriteResponse, *pb.RegionError) {
 	mc.mu.Lock()
@@ -331,7 +317,9 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	pb.RegisterTinyKvServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	go srv.Serve(lis)
+	go func() {
+		_ = srv.Serve(lis)
+	}()
 	return lis.Addr().String(), func() {
 		srv.Stop()
 		_ = lis.Close()

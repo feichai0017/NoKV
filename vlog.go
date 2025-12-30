@@ -85,7 +85,7 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 		if !meta.Valid {
 			if _, ok := existing[fid]; ok {
 				if err := vlog.manager.Remove(fid); err != nil {
-					utils.Err(fmt.Errorf("value log reconcile remove fid %d: %v", fid, err))
+					_ = utils.Err(fmt.Errorf("value log reconcile remove fid %d: %v", fid, err))
 					continue
 				}
 				delete(existing, fid)
@@ -101,7 +101,7 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 			delete(existing, fid)
 			continue
 		}
-		utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
+		_ = utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
 	}
 	if !hasValid {
 		return
@@ -112,11 +112,11 @@ func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta)
 			continue
 		}
 		if err := vlog.manager.Remove(fid); err != nil {
-			utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d: %v", fid, err))
+			_ = utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d: %v", fid, err))
 			continue
 		}
 		metrics.IncValueLogSegmentsRemoved()
-		utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d", fid))
+		_ = utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d", fid))
 	}
 }
 
@@ -138,7 +138,7 @@ func (vlog *valueLog) removeValueLogFile(fid uint32) error {
 	if err := vlog.manager.Remove(fid); err != nil {
 		if hasMeta {
 			if errRestore := vlog.db.lsm.LogValueLogUpdate(&meta); errRestore != nil {
-				utils.Err(fmt.Errorf("value log delete rollback fid %d: %v", fid, errRestore))
+				_ = utils.Err(fmt.Errorf("value log delete rollback fid %d: %v", fid, errRestore))
 			}
 		}
 		return errors.Wrapf(err, "remove value log fid %d", fid)
@@ -211,7 +211,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 	}
 	if err := vlog.populateDiscardStats(); err != nil {
 		if err != utils.ErrKeyNotFound {
-			utils.Err(fmt.Errorf("failed to populate discard stats: %w", err))
+			_ = utils.Err(fmt.Errorf("failed to populate discard stats: %w", err))
 		}
 	}
 	return nil
@@ -237,7 +237,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 			req.Ptrs = req.Ptrs[:0]
 		}
 		if rewindErr := vlog.manager.Rewind(head); rewindErr != nil {
-			utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
+			_ = utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
 		}
 		return err
 	}
@@ -328,12 +328,13 @@ func (db *DB) getHead() (*kv.ValuePtr, uint64) {
 }
 
 func (db *DB) replayFunction() func(*kv.Entry, *kv.ValuePtr) error {
-	toLSM := func(k []byte, vs kv.ValueStruct) {
+	toLSM := func(k []byte, vs kv.ValueStruct) error {
 		e := kv.NewEntry(k, vs.Value)
 		e.ExpiresAt = vs.ExpiresAt
 		e.Meta = vs.Meta
-		db.lsm.Set(e)
+		err := db.lsm.Set(e)
 		e.DecrRef()
+		return err
 	}
 
 	return func(e *kv.Entry, vp *kv.ValuePtr) error {
@@ -355,7 +356,9 @@ func (db *DB) replayFunction() func(*kv.Entry, *kv.ValuePtr) error {
 			Meta:      meta,
 			ExpiresAt: e.ExpiresAt,
 		}
-		toLSM(nk, v)
+		if err := toLSM(nk, v); err != nil {
+			return err
+		}
 		return nil
 	}
 }
@@ -394,7 +397,7 @@ func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 		return
 	}
 	if err := db.lsm.LogValueLogHead(next); err != nil {
-		utils.Err(fmt.Errorf("log value log head: %w", err))
+		_ = utils.Err(fmt.Errorf("log value log head: %w", err))
 		return
 	}
 	metrics.IncValueLogHeadUpdates()

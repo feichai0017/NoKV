@@ -46,7 +46,9 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 
 	if fileSize == 0 {
 		dir, _ := filepath.Split(filename)
-		go SyncDir(dir)
+		go func() {
+			_ = SyncDir(dir)
+		}()
 	}
 	return &MmapFile{
 		Data: buf,
@@ -154,21 +156,12 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	return m.Data[start : start+sz], start + sz, nil
 }
 
-const oneGB = 1 << 30
-
 // AppendBuffer 向内存中追加一个buffer，如果空间不足则重新映射，扩大空间
 func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	size := len(m.Data)
 	needSize := len(buf)
 	end := int(offset) + needSize
 	if end > size {
-		growBy := size
-		if growBy > oneGB {
-			growBy = oneGB
-		}
-		if growBy < needSize {
-			growBy = needSize
-		}
 		if err := m.Truncature(int64(end)); err != nil {
 			return err
 		}

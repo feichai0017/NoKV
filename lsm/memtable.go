@@ -165,7 +165,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 					continue
 				}
 				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
-					utils.Err(errors.Wrapf(err, "remove wal segment %d", fid))
+					_ = utils.Err(errors.Wrapf(err, "remove wal segment %d", fid))
 				}
 				continue
 			}

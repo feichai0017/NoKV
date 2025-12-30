@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"fmt"
 	"math/rand"
 	"time"
 )
@@ -116,14 +115,4 @@ func (r cmRow) clear() {
 	for i := range r {
 		r[i] = 0
 	}
-}
-
-func (r cmRow) string() string {
-	s := ""
-	for i := range len(r) * 2 {
-		idx := uint64(i)
-		s += fmt.Sprintf("%02d ", (r[idx/2]>>((idx&1)*4))&0x0f)
-	}
-	s = s[:len(s)-1]
-	return s
 }

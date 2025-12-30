@@ -47,9 +47,9 @@ func (db *DB) applyThrottle(enable bool) {
 		return
 	}
 	if enable {
-		utils.Err(errWriteThrottleEnabled)
+		_ = utils.Err(errWriteThrottleEnabled)
 	} else {
-		utils.Err(errWriteThrottleRelease)
+		_ = utils.Err(errWriteThrottleRelease)
 	}
 }
 
@@ -142,7 +142,7 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	}
 }
 
-func (db *DB) nextCommitBatch() []*commitRequest {
+func (db *DB) nextCommitBatch() *commitBatch {
 	cq := &db.commitQueue
 	cq.mu.Lock()
 	for cq.ring.Len() == 0 && atomic.LoadUint32(&cq.closed) == 0 {
@@ -153,8 +153,8 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 		return nil
 	}
 
-	batch := db.commitBatchPool.Get().([]*commitRequest)
-	batch = batch[:0]
+	batchPtr := db.commitBatchPool.Get().(*[]*commitRequest)
+	batch := (*batchPtr)[:0]
 	pendingEntries := int64(0)
 	pendingBytes := int64(0)
 	coalesceWait := db.opt.WriteBatchWait
@@ -219,18 +219,18 @@ func (db *DB) nextCommitBatch() []*commitRequest {
 	cq.notFull.Broadcast()
 	cq.mu.Unlock()
 	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
-	return batch
+	return &commitBatch{reqs: batch, pool: batchPtr}
 }
 
 func (db *DB) commitWorker() {
 	defer db.commitWG.Done()
 	for {
-		reqs := db.nextCommitBatch()
-		if reqs == nil {
+		batch := db.nextCommitBatch()
+		if batch == nil {
 			return
 		}
-		db.handleCommitRequests(reqs)
-		db.releaseCommitBatch(reqs)
+		db.handleCommitRequests(batch.reqs)
+		db.releaseCommitBatch(batch)
 	}
 }
 
@@ -319,14 +319,16 @@ func (db *DB) handleCommitRequests(reqs []*commitRequest) {
 	db.finishCommitRequests(reqs, nil)
 }
 
-func (db *DB) releaseCommitBatch(batch []*commitRequest) {
-	if batch == nil {
+func (db *DB) releaseCommitBatch(batch *commitBatch) {
+	if batch == nil || batch.pool == nil {
 		return
 	}
-	for i := range batch {
-		batch[i] = nil
+	reqs := batch.reqs
+	for i := range reqs {
+		reqs[i] = nil
 	}
-	db.commitBatchPool.Put(batch[:0])
+	*batch.pool = reqs[:0]
+	db.commitBatchPool.Put(batch.pool)
 }
 
 func (db *DB) applyRequests(reqs []*request) error {
@@ -370,7 +372,9 @@ func (db *DB) writeToLSM(b *request) error {
 			entry.Meta = entry.Meta | kv.BitValuePointer
 			entry.Value = b.Ptrs[i].Encode()
 		}
-		db.lsm.Set(entry)
+		if err := db.lsm.Set(entry); err != nil {
+			return err
+		}
 		db.recordCFWrite(entry.CF, 1)
 	}
 	return nil

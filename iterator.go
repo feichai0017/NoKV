@@ -138,10 +138,10 @@ func (iter *DBIterator) Close() error {
 }
 
 func (iter *DBIterator) populate() {
-	iter.valid = false
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.valid = false
 	iter.item.valueBuf = iter.item.valueBuf[:0]
 	for iter.iitr.Valid() {
 		item := iter.iitr.Item()

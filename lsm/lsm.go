@@ -23,7 +23,6 @@ type LSM struct {
 	wal        *wal.Manager
 	flushMgr   *flush.Manager
 	flushWG    sync.WaitGroup
-	maxMemFID  uint32
 
 	throttleFn func(bool)
 	throttled  int32
@@ -473,17 +472,23 @@ func (lsm *LSM) startFlushWorkers(n int) {
 				}
 				mt, _ := task.Data.(*memTable)
 				if mt == nil {
-					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable"))
+					if err := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable")); err != nil {
+						_ = utils.Err(err)
+					}
 					continue
 				}
 
 				func() {
 					defer mt.DecrRef()
 					if err := lsm.levels.flush(mt); err != nil {
-						lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err)
+						if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err); updateErr != nil {
+							_ = utils.Err(updateErr)
+						}
 						return
 					}
-					lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil)
+					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil); updateErr != nil {
+						_ = utils.Err(updateErr)
+					}
 					lsm.lock.Lock()
 					for idx, imm := range lsm.immutables {
 						if imm == mt {
@@ -493,7 +498,9 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					}
 					lsm.lock.Unlock()
 					_ = mt.close()
-					lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil)
+					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil); updateErr != nil {
+						_ = utils.Err(updateErr)
+					}
 				}()
 			}
 		}()

@@ -422,12 +422,6 @@ func newIntVar(val int64) *expvar.Int {
 	return v
 }
 
-func newFloatVar(val float64) *expvar.Float {
-	v := new(expvar.Float)
-	v.Set(val)
-	return v
-}
-
 // StartStats runs periodic collection of internal backlog metrics.
 func (s *Stats) StartStats() {
 	if s == nil {

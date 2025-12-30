@@ -10,7 +10,6 @@ import (
 )
 
 type Iterator struct {
-	it    Item
 	iters []utils.Iterator
 }
 type Item struct {
@@ -86,31 +85,8 @@ func (iter *memIterator) Close() error {
 func (iter *memIterator) Seek(key []byte) {
 }
 
-// Iterator on levelManager
-type levelIterator struct {
-	it    *utils.Item
-	iters []*Iterator
-}
-
 func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {
 	return lm.iterators()
-}
-func (iter *levelIterator) Next() {
-}
-func (iter *levelIterator) Valid() bool {
-	return false
-}
-func (iter *levelIterator) Rewind() {
-
-}
-func (iter *levelIterator) Item() utils.Item {
-	return &Item{}
-}
-func (iter *levelIterator) Close() error {
-	return nil
-}
-
-func (iter *levelIterator) Seek(key []byte) {
 }
 
 // ConcatIterator merge multiple iterators into one
@@ -352,8 +328,6 @@ func (mi *MergeIterator) fix() {
 	case cmp < 0: // Small is less than bigger().
 		if mi.reverse {
 			mi.swapSmall()
-		} else {
-			// we don't need to do anything. Small already points to the smallest.
 		}
 		return
 	default: // bigger() is less than small.

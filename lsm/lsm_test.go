@@ -51,7 +51,7 @@ func TestClose(t *testing.T) {
 		first := buildLSM()
 		first.StartCompacter()
 		baseTest(t, first, 128)
-		utils.Err(first.Close())
+		_ = utils.Err(first.Close())
 
 		// 重启后可正常工作才算成功
 		reopened := buildLSM()
@@ -69,11 +69,13 @@ func TestHitStorage(t *testing.T) {
 	lsm := buildLSM()
 	defer lsm.Close()
 	e := utils.BuildEntry()
-	lsm.Set(e)
+	if err := lsm.Set(e); err != nil {
+		t.Fatalf("lsm.Set: %v", err)
+	}
 	// 命中内存表
 	hitMemtable := func() {
 		v, err := lsm.memTable.Get(e.Key)
-		utils.Err(err)
+		_ = utils.Err(err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
 	// 命中L0层
@@ -214,7 +216,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
-		utils.Err(err)
+		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[0], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
 	}
@@ -229,7 +231,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
-		utils.Err(err)
+		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[1], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
 	}
@@ -249,7 +251,7 @@ func TestCompact(t *testing.T) {
 				score:      2,
 				adjusted:   2,
 			}
-			utils.Err(lsm.levels.doCompact(0, pri))
+			_ = utils.Err(lsm.levels.doCompact(0, pri))
 			tricky(cd.thisLevel.tablesSnapshot())
 			ok = lsm.levels.fillTables(cd)
 		}
@@ -257,7 +259,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 6, *cd)
 		// 删除全局状态，便于下游测试逻辑
 		lsm.levels.compactState.delete(*cd)
-		utils.Err(err)
+		_ = utils.Err(err)
 		ok = false
 		if hasTable(lsm.levels.levels[6], prevMax+1) {
 			ok = true
@@ -416,7 +418,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	_ = target.numIngestTables()
 
 	// Simulate restart and ensure ingest state can be recovered (may be empty if fully drained).
-	utils.Err(lsm.Close())
+	_ = utils.Err(lsm.Close())
 	lsm = buildLSM()
 	defer lsm.Close()
 	_ = lsm.levels.levels[6].numIngestTables()
@@ -434,10 +436,10 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//caseList = append(caseList, e)
 
 	// 随机构建数据进行测试
-	utils.Err(lsm.Set(e))
+	_ = utils.Err(lsm.Set(e))
 	for i := 1; i < n; i++ {
 		ee := utils.BuildEntry()
-		utils.Err(lsm.Set(ee))
+		_ = utils.Err(lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}
 	// 从levels中进行GET

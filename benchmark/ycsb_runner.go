@@ -655,8 +655,11 @@ func (vp *valuePool) Get(size int) []byte {
 		return nil
 	}
 	if v := vp.pool.Get(); v != nil {
-		if buf, ok := v.([]byte); ok && cap(buf) >= size {
-			return buf[:size]
+		if bufPtr, ok := v.(*[]byte); ok {
+			buf := *bufPtr
+			if cap(buf) >= size {
+				return buf[:size]
+			}
 		}
 	}
 	return make([]byte, size)
@@ -667,7 +670,8 @@ func (vp *valuePool) Put(buf []byte) {
 		return
 	}
 	vp.releases.Add(1)
-	vp.pool.Put(buf)
+	buf = buf[:0]
+	vp.pool.Put(&buf)
 }
 
 func randomValue(rng *rand.Rand, size int) []byte {

@@ -35,8 +35,6 @@ func (e *badgerEngine) Open(clean bool) error {
 		comp = options.Snappy
 	case "zstd":
 		comp = options.ZSTD
-	default:
-		comp = options.None
 	}
 	blockCacheMB := e.opts.BadgerBlockCacheMB
 	if blockCacheMB <= 0 {

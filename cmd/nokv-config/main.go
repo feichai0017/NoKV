@@ -54,7 +54,9 @@ func runStores(args []string) error {
 	fs := flag.NewFlagSet("stores", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -84,7 +86,9 @@ func runRegions(args []string) error {
 	fs := flag.NewFlagSet("regions", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -120,7 +124,9 @@ func runTSO(args []string) error {
 	fs := flag.NewFlagSet("tso", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -205,7 +211,9 @@ func runManifest(args []string) error {
 	stateStr := fs.String("state", "running", "region state (running|tombstone)")
 	var peerFlags multiValue
 	fs.Var(&peerFlags, "peer", "peer mapping: storeID:peerID (repeatable)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if *workdir == "" {
 		return fmt.Errorf("--workdir is required")
