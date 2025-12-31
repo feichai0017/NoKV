@@ -58,7 +58,7 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 | Call Site | Purpose |
 | --- | --- |
 | `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the skiplist. |
-| `DB.commitApplyWorker(s)` | Apply workers use `writeToLSM` to apply batched writes, which flow into `lsm.Set` and thus WAL. |
+| `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which flows into `lsm.Set` and thus WAL. |
 | `DB.Set` | Direct write path: calls `lsm.Set`, which appends to WAL and updates the memtable. |
 | `manifest.Manager.LogEdit` | Uses `EntryInfo.SegmentID` to persist the WAL checkpoint (`EditLogPointer`). This acts as the `log number` seen in RocksDB manifest entries. |
 | `lsm/flush.Manager.Update` | Once an SST is installed, WAL segments older than the checkpoint are released (`wal.Manager.Remove`). |

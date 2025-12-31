@@ -232,27 +232,11 @@ func (db *DB) nextCommitBatch() *commitBatch {
 }
 
 func (db *DB) commitWorker() {
-	defer func() {
-		close(db.commitVlogCh)
-		db.commitWG.Done()
-	}()
+	defer db.commitWG.Done()
 	for {
 		batch := db.nextCommitBatch()
 		if batch == nil {
 			return
-		}
-		db.commitVlogCh <- batch
-	}
-}
-
-func (db *DB) commitVlogWorker() {
-	defer func() {
-		close(db.commitApplyCh)
-		db.commitWG.Done()
-	}()
-	for batch := range db.commitVlogCh {
-		if batch == nil {
-			continue
 		}
 		batch.batchStart = time.Now()
 		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.reqs, batch.batchStart)
@@ -283,17 +267,8 @@ func (db *DB) commitVlogWorker() {
 				db.writeMetrics.RecordValueLog(batch.valueLogDur)
 			}
 		}
-		db.commitApplyCh <- batch
-	}
-}
 
-func (db *DB) commitApplyWorker() {
-	defer db.commitWG.Done()
-	for batch := range db.commitApplyCh {
-		if batch == nil {
-			continue
-		}
-		err := db.applyRequests(batch.requests)
+		err = db.applyRequests(batch.requests)
 		if err == nil && db.opt.SyncWrites {
 			err = db.wal.Sync()
 		}
