@@ -29,7 +29,7 @@ type table struct {
 	lm  *levelManager
 	fid uint64
 	ref int32 // For file garbage collection. Atomic.
-	lvl int
+	lvl atomic.Int32
 
 	minKey []byte
 	maxKey []byte
@@ -179,8 +179,12 @@ func (t *table) refreshHandlePolicy() {
 }
 
 func (t *table) setLevel(level int) {
-	t.lvl = level
+	t.lvl.Store(int32(level))
 	t.refreshHandlePolicy()
+}
+
+func (t *table) level() int {
+	return int(t.lvl.Load())
 }
 
 func (t *table) openSSTableLocked(loadIndex bool) error {
@@ -349,7 +353,8 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	if cached, ok := t.lm.cache.getBlock(t.lvl, key, hot); ok && cached != nil {
+	lvl := t.level()
+	if cached, ok := t.lm.cache.getBlock(lvl, key, hot); ok && cached != nil {
 		return cached, nil
 	}
 
@@ -402,7 +407,7 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.addBlock(t.lvl, t, key, b, hot)
+	t.lm.cache.addBlock(lvl, t, key, b, hot)
 
 	return b, nil
 }

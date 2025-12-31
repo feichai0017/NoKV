@@ -57,8 +57,6 @@ type (
 		writeMetrics     *metrics.WriteMetrics
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
-		commitVlogCh     chan *commitBatch
-		commitApplyCh    chan *commitBatch
 		commitBatchPool  sync.Pool
 		iterPool         *iteratorPool
 		prefetchRing     *utils.Ring[prefetchRequest]
@@ -265,22 +263,8 @@ func Open(opt *Options) *DB {
 	db.commitQueue.ring = utils.NewRing[*commitRequest](queueCap)
 	db.commitQueue.notEmpty = sync.NewCond(&db.commitQueue.mu)
 	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
-	pipelineDepth := opt.CommitPipelineDepth
-	if pipelineDepth <= 0 {
-		pipelineDepth = 4
-	}
-	applyWorkers := opt.CommitApplyConcurrency
-	if applyWorkers <= 0 {
-		applyWorkers = 1
-	}
-	db.commitVlogCh = make(chan *commitBatch, pipelineDepth)
-	db.commitApplyCh = make(chan *commitBatch, pipelineDepth)
-	db.commitWG.Add(2 + applyWorkers)
+	db.commitWG.Add(1)
 	go db.commitWorker()
-	go db.commitVlogWorker()
-	for i := 0; i < applyWorkers; i++ {
-		go db.commitApplyWorker()
-	}
 	db.walWatchdog = newWalWatchdog(db)
 	if db.walWatchdog != nil {
 		db.walWatchdog.start()

@@ -70,24 +70,20 @@ Compared with RocksDB's blob manager the surface is intentionally small—NoKV t
 
 ```mermaid
 sequenceDiagram
-    participant Enq as commitWorker
-    participant VLog as commitVlogWorker
+    participant Commit as commitWorker
     participant Mgr as vlog.Manager
-    participant Apply as commitApplyWorkers
     participant WAL as wal.Manager
     participant Mem as MemTable
-    Enq->>VLog: batch requests
-    VLog->>Mgr: AppendEntries(entries, writeMask)
-    Mgr-->>VLog: ValuePtr list
-    VLog-->>Apply: batch + ptrs
-    Apply->>WAL: Append(entries+ptrs)
-    Apply->>Mem: apply to skiplist
+    Commit->>Mgr: AppendEntries(entries, writeMask)
+    Mgr-->>Commit: ValuePtr list
+    Commit->>WAL: Append(entries+ptrs)
+    Commit->>Mem: apply to skiplist
 ```
 
 1. [`valueLog.write`](../vlog.go#L238-L268) builds a write mask for each batch, then delegates to [`Manager.AppendEntries`](../vlog/manager.go#L367-L444). Entries staying in LSM (`shouldWriteValueToLSM`) receive zero-value pointers.
 2. Rotation is handled inside the manager when the reserved bytes would exceed `MaxSize`. The WAL append happens **after** the value log append so crash replay observes consistent pointers.
 3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L188-L254) exercises both append- and rotate-failure paths.
-4. `Txn.Commit` and batched writes share the same pipeline: requests flow through `commitVlogWorker` and the `commitApplyWorker` pool, keeping MVCC and durability ordering consistent.
+4. `Txn.Commit` and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.
 
 Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.
 
