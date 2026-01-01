@@ -40,11 +40,11 @@ Deeper levels rely on OS page cache + mmap readahead
 
 ```mermaid
 flowchart LR
-    Read --> CheckHot
-    CheckHot -->|hit| Return
-    CheckHot -->|miss| LoadFromTable (mmap + OS page cache)
-    LoadFromTable --> InsertHot
-    InsertHot --> Return
+  Read --> CheckHot
+  CheckHot -->|hit| Return
+  CheckHot -->|miss| LoadFromTable["LoadFromTable (mmap + OS page cache)"]
+  LoadFromTable --> InsertHot
+  InsertHot --> Return
 ```
 
 By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflecting the higher re-use for top levels.
