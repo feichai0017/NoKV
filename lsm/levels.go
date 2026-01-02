@@ -665,8 +665,8 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 			if table == nil {
 				continue
 			}
-			if utils.CompareKeys(key, table.MinKey()) < 0 ||
-				utils.CompareKeys(key, table.MaxKey()) > 0 {
+			if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
+				utils.CompareUserKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
 			if table.prefetchBlockForKey(key, hot) {
@@ -725,13 +725,13 @@ func (lh *levelHandler) searchLNSST(key []byte) (*kv.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	if len(lh.tables) > 0 && (bytes.Compare(key, lh.tables[0].MinKey()) < 0 ||
-		bytes.Compare(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0) {
+	if len(lh.tables) > 0 && (utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
+		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0) {
 		return nil
 	}
 	for i := len(lh.tables) - 1; i >= 0; i-- {
-		if bytes.Compare(key, lh.tables[i].MinKey()) > -1 &&
-			bytes.Compare(key, lh.tables[i].MaxKey()) < 1 {
+		if utils.CompareUserKeys(key, lh.tables[i].MinKey()) > -1 &&
+			utils.CompareUserKeys(key, lh.tables[i].MaxKey()) < 1 {
 			return lh.tables[i]
 		}
 	}
@@ -741,12 +741,9 @@ func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
 }
 
-type levelHandlerRLocked struct{}
-
 // overlappingTables returns the tables that intersect with key range. Returns a half-interval.
-// This function should already have acquired a read lock, and this is so important the caller must
-// pass an empty parameter declaring such.
-func (lh *levelHandler) overlappingTables(_ levelHandlerRLocked, kr keyRange) (int, int) {
+// Caller must already hold a read lock.
+func (lh *levelHandler) overlappingTables(kr keyRange) (int, int) {
 	if len(kr.left) == 0 || len(kr.right) == 0 {
 		return 0, 0
 	}
@@ -835,6 +832,26 @@ func (lh *levelHandler) deleteIngestTables(toDel []*table) error {
 	}
 
 	lh.ingest.remove(toDelMap)
+
+	lh.Unlock()
+
+	return decrRefs(toDel)
+}
+
+func (lh *levelHandler) replaceIngestTables(toDel, toAdd []*table) error {
+	lh.Lock()
+
+	toDelMap := make(map[uint64]struct{})
+	for _, t := range toDel {
+		if t == nil {
+			continue
+		}
+		toDelMap[t.fid] = struct{}{}
+	}
+	lh.ingest.remove(toDelMap)
+	if len(toAdd) > 0 {
+		lh.ingest.addBatch(toAdd)
+	}
 
 	lh.Unlock()
 

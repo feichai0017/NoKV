@@ -498,7 +498,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 			continue
 		}
 		cd.top = []*table{t}
-		left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
+		left, right := cd.nextLevel.overlappingTables(cd.thisRange)
 
 		cd.bot = make([]*table, right-left)
 		copy(cd.bot, cd.nextLevel.tables[left:right])
@@ -565,7 +565,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	}
 	cd.thisRange = getKeyRange(cd.top...)
 
-	left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
+	left, right := cd.nextLevel.overlappingTables(cd.thisRange)
 	if right > left {
 		cd.bot = make([]*table, right-left)
 		copy(cd.bot, cd.nextLevel.tables[left:right])
@@ -681,10 +681,9 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		_ = decrRefs(cd.top)
 	}()
 	if cd.ingestMerge {
-		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
+		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
 			return err
 		}
-		thisLevel.ingest.addBatch(newTables)
 		if thisLevel.levelNum > 0 {
 			thisLevel.Sort()
 		}
@@ -1024,7 +1023,15 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 		}
 		toDel[tbl.fid] = struct{}{}
 	}
-	cd.thisLevel.Lock()
+
+	// Update in-memory state atomically across the source and target levels to avoid
+	// a visibility gap for readers walking L0 -> Ln.
+	first, second := cd.thisLevel, cd.nextLevel
+	if first.levelNum > second.levelNum {
+		first, second = second, first
+	}
+	first.Lock()
+	second.Lock()
 	var remaining []*table
 	for _, tbl := range cd.thisLevel.tables {
 		if _, found := toDel[tbl.fid]; found {
@@ -1034,12 +1041,19 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 		remaining = append(remaining, tbl)
 	}
 	cd.thisLevel.tables = remaining
-	cd.thisLevel.Unlock()
 
-	cd.nextLevel.addIngestBatch(cd.top)
-	if cd.nextLevel.levelNum > 0 {
-		cd.nextLevel.Sort()
+	cd.nextLevel.ingest.ensureInit()
+	for _, t := range cd.top {
+		if t == nil {
+			continue
+		}
+		t.setLevel(cd.nextLevel.levelNum)
 	}
+	cd.nextLevel.ingest.addBatch(cd.top)
+	cd.nextLevel.ingest.sortShards()
+	second.Unlock()
+	first.Unlock()
+
 	if lm.compaction != nil {
 		lm.compaction.trigger("ingest-buffer")
 	}
@@ -1080,7 +1094,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	cd.thisRange = getKeyRange(out...)
 	cd.top = out
 
-	left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
+	left, right := cd.nextLevel.overlappingTables(cd.thisRange)
 	cd.bot = make([]*table, right-left)
 	copy(cd.bot, cd.nextLevel.tables[left:right])
 

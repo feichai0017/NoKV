@@ -101,6 +101,12 @@ func CompareKeys(key1, key2 []byte) int {
 	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
 }
 
+// CompareUserKeys compares keys ignoring any internal timestamp suffix.
+// It accepts either internal keys or raw user keys.
+func CompareUserKeys(key1, key2 []byte) int {
+	return bytes.Compare(kv.ParseKey(key1), kv.ParseKey(key2))
+}
+
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
 	if len(expected) < 8 {

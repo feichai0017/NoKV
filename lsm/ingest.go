@@ -197,18 +197,14 @@ func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
 		if len(sh.ranges) == 0 {
 			continue
 		}
-		idx := sort.Search(len(sh.ranges), func(i int) bool {
-			return utils.CompareKeys(key, sh.ranges[i].max) <= 0
-		})
-		for i := idx; i < len(sh.ranges); i++ {
-			rng := sh.ranges[i]
+		for _, rng := range sh.ranges {
 			if rng.tbl == nil {
 				continue
 			}
-			if utils.CompareKeys(key, rng.min) < 0 {
+			if utils.CompareUserKeys(key, rng.min) < 0 {
 				break
 			}
-			if utils.CompareKeys(key, rng.max) > 0 {
+			if utils.CompareUserKeys(key, rng.max) > 0 {
 				continue
 			}
 			if entry, err := rng.tbl.Search(key, &version); err == nil {
