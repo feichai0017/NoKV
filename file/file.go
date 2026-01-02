@@ -1,3 +1,4 @@
+// Package file provides low-level file and mmap primitives shared by WAL, vlog, and SST layers.
 package file
 
 import "io"

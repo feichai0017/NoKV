@@ -2,14 +2,23 @@
 
 NoKV keeps the LSM tree lean by separating large values into sequential **value log** (vlog) files. The module is split between
 
-- [`vlog/manager.go`](../vlog/manager.go) – owns the open file set, append/rotate/read primitives, and crash recovery helpers.
+- [`vlog/manager.go`](../vlog/manager.go) – owns the open file set, rotation, and segment lifecycle helpers.
+- [`vlog/io.go`](../vlog/io.go) – append/read/iterate/verify/sample IO paths.
 - [`vlog.go`](../vlog.go) – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).
 
 The design echoes BadgerDB's value log while remaining manifest-driven like RocksDB's `blob_db`: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.
 
 ---
 
-## 1. Directory Layout & Naming
+## 1. Layering (Engine View)
+
+- `file/` – mmap-backed `LogFile` primitives (open/close/truncate/lock) shared by WAL/vlog/SST.
+- `vlog/` – segment manager + IO helpers; focused on append/read/verify without DB policy.
+- `vlog.go` / `vlog_gc.go` – DB-facing policy: write ordering, manifest edits, GC scheduling.
+
+---
+
+## 2. Directory Layout & Naming
 
 ```text
 <workdir>/
@@ -20,12 +29,12 @@ The design echoes BadgerDB's value log while remaining manifest-driven like Rock
 ```
 
 * Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go#L53-L92) discovers existing segments at open.
-* `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go#L540-L560) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
+* `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
 * Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go#L76-L125).
 
 ---
 
-## 2. Record Format
+## 3. Record Format
 
 The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries written to the value log and the WAL are byte-identical.
 
@@ -39,11 +48,11 @@ The vlog uses the shared encoding helper (`kv.EncodeEntryTo`), so entries writte
 * Header fields are varint-encoded (`kv.EntryHeader`).
 * The first 20 bytes of every segment are reserved (`kv.ValueLogHeaderSize`) for future metadata; iteration always skips this fixed header.
 * `kv.EncodeEntry` and the entry iterator (`kv.EntryIterator`) perform the layout work, and each append finishes with a CRC32 to detect torn writes.
-* `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/manager.go#L765-L832) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
+* `vlog.VerifyDir` scans all segments with [`sanitizeValueLog`](../vlog/io.go) to trim corrupted tails after crashes, mirroring RocksDB's `blob_file::Sanitize`. Badger performs a similar truncation pass at startup.
 
 ---
 
-## 3. Manager API Surface
+## 4. Manager API Surface
 
 ```go
 mgr, _ := vlog.Open(vlog.Config{Dir: "...", MaxSize: 1<<29})
@@ -57,16 +66,16 @@ _ = mgr.Remove(fid)  // close + delete file
 
 Key behaviours:
 
-1. **Append + Rotate** – [`Manager.AppendEntry`](../vlog/manager.go#L232-L273) encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed `MaxSize`; manual rotation is rare.
-2. **Crash recovery** – [`Manager.Rewind`](../vlog/manager.go#L437-L520) truncates the active file and removes newer files when a write batch fails mid-flight. `valueLog.write` uses this to guarantee idempotent WAL/value log ordering.
-3. **Safe reads** – [`Manager.Read`](../vlog/manager.go#L444-L457) grabs a per-file `RWMutex` and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.
-4. **Verification** – [`VerifyDir`](../vlog/manager.go#L703-L763) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
+1. **Append + Rotate** – [`Manager.AppendEntry`](../vlog/io.go) encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed `MaxSize`; manual rotation is rare.
+2. **Crash recovery** – [`Manager.Rewind`](../vlog/manager.go) truncates the active file and removes newer files when a write batch fails mid-flight. `valueLog.write` uses this to guarantee idempotent WAL/value log ordering.
+3. **Safe reads** – [`Manager.Read`](../vlog/io.go) grabs a per-file `RWMutex` and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.
+4. **Verification** – [`VerifyDir`](../vlog/io.go) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
 
 Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.
 
 ---
 
-## 4. Integration with DB Writes
+## 5. Integration with DB Writes
 
 ```mermaid
 sequenceDiagram

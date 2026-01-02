@@ -1,3 +1,4 @@
+// Package wal implements the write-ahead log manager and replay logic.
 package wal
 
 import (
