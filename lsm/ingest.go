@@ -294,19 +294,6 @@ func (lh *levelHandler) addIngest(t *table) {
 	lh.ingest.add(t)
 }
 
-func (lh *levelHandler) addIngestBatch(ts []*table) {
-	lh.Lock()
-	defer lh.Unlock()
-	lh.ingest.ensureInit()
-	for _, t := range ts {
-		if t == nil {
-			continue
-		}
-		t.setLevel(lh.levelNum)
-	}
-	lh.ingest.addBatch(ts)
-}
-
 func (lh *levelHandler) ingestValueBytes() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
