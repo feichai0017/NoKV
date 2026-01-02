@@ -33,6 +33,6 @@ const (
 
 // codec
 var (
-	MagicText    = [4]byte{'H', 'A', 'R', 'D'}
+	MagicText    = [4]byte{'N', 'O', 'K', 'V'}
 	MagicVersion = uint32(1)
 )

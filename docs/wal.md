@@ -23,7 +23,7 @@ uint32 length (big-endian)
 uint32 checksum (CRC32 Castagnoli)
 ```
 
-- Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli).
+- Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in `wal/record.go`.
 - Appends are buffered by `bufio.Writer` so batches become single system calls.
 - Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestReplayTruncatedTail`).
 
