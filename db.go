@@ -186,7 +186,7 @@ func Open(opt *Options) *DB {
 		BaseTableSize:           baseTableSize,
 		TableSizeMultiplier:     2,
 		NumLevelZeroTables:      numL0Tables,
-		MaxLevelNum:             7,
+		MaxLevelNum:             utils.MaxLevelNum,
 		NumCompactors:           numCompactors,
 		IngestCompactBatchSize:  ingestBatchSize,
 		IngestBacklogMergeScore: mergeScore,

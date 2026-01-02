@@ -1,6 +1,6 @@
 # Manifest & Version Management
 
-The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV's implementation (`manifest/manager.go`) borrows RocksDB's `VersionEdit + CURRENT` pattern while adding metadata required for value separation.
+The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV's implementation (`manifest/manager.go`, `manifest/codec.go`, `manifest/types.go`) borrows RocksDB's `VersionEdit + CURRENT` pattern while adding metadata required for value separation.
 
 ---
 
@@ -14,7 +14,7 @@ WorkDir/
 ```
 
 - `CURRENT` is atomically swapped via `CURRENT.tmp` → `CURRENT` rename.
-- Each `MANIFEST-*` contains a series of binary edits prefixed by the magic string `"NoKV"`.
+- Each `MANIFEST-*` contains a series of binary edits prefixed by the magic string `"NoKV"` (encoding lives in `manifest/codec.go`).
 - During `manifest.Open`, `loadCurrent` opens the file referenced by CURRENT; if missing, `createNew` bootstraps an empty manifest.
 
 ---

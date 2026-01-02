@@ -30,7 +30,7 @@ func NewRecordIterator(r io.Reader, bufSize int) *RecordIterator {
 	return &RecordIterator{reader: br}
 }
 
-// Next advances the stream to the next record.
+// Next advances the stream to the next record. The payload excludes the type byte.
 func (rs *RecordIterator) Next() bool {
 	if rs == nil || rs.err != nil {
 		return false
@@ -43,12 +43,13 @@ func (rs *RecordIterator) Next() bool {
 	}
 
 	rs.recType = recType
-	rs.buffer = payload // Store the payload directly
+	// payload already excludes the type byte.
+	rs.buffer = payload
 	rs.length = length
 	return true
 }
 
-// Record returns a copy of the record payload excluding the type byte.
+// Record returns a copy of the record payload (type byte excluded).
 func (rs *RecordIterator) Record() []byte {
 	if rs == nil {
 		return nil
