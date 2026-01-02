@@ -1,3 +1,4 @@
+// Package NoKV provides the embedded database API and engine wiring.
 package NoKV
 
 import (

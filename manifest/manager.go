@@ -1,3 +1,4 @@
+// Package manifest persists SST, WAL checkpoint, vlog, and raft metadata.
 package manifest
 
 import (
