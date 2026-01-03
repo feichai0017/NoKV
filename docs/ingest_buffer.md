@@ -16,9 +16,10 @@ flowchart LR
 - **Sharded by key prefix**: ingest tables are routed into fixed shards (top bits of the first byte). Sharding cuts cross-range overlap and enables safe parallel drain.
 - **Snapshot-friendly reads**: ingest tables are read under the level `RLock`, and iterators hold table refs so mmap-backed data stays valid without additional snapshots.
 - **Two ingest paths**:
-  - *Ingest-only compaction*: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by `compactState`.
+  - *Ingest-only compaction*: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by `compact.State`.
   - *Ingest-merge*: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.
 - **Adaptive scheduling**:
+  - Shard selection is driven by `compact.PickShardOrder` / `compact.PickShardByBacklog` using per-shard size, age, and density.
   - Shard parallelism scales with backlog score (based on shard size/target file size) bounded by `IngestShardParallelism`.
   - Batch size scales with shard backlog to drain faster under pressure.
   - Ingest-merge triggers when backlog score exceeds `IngestBacklogMergeScore` (default 2.0), with dynamic lowering under extreme backlog/age.
@@ -31,7 +32,7 @@ flowchart LR
 
 ## Benefits
 - **Lower write amplification**: bursty L0 SSTables land in ingest first; ingest-merge prunes duplicates before full compaction.
-- **Reduced contention**: sharding + compactState allow parallel ingest drain with minimal overlap.
+- **Reduced contention**: sharding + `compact.State` allow parallel ingest drain with minimal overlap.
 - **Predictable reads**: ingest is part of the read snapshot, so moving tables in/out does not change read semantics.
 - **Tunable and observable**: knobs for parallelism and merge aggressiveness, with per-path metrics to guide tuning.
 

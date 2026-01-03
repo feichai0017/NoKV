@@ -3,6 +3,7 @@ package lsm
 import (
 	"testing"
 
+	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -24,8 +25,8 @@ func TestCompactionMoveToIngest(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table{tables[0]}
-	cd.thisRange = getKeyRange(cd.top...)
-	cd.nextRange = cd.thisRange
+	cd.plan.ThisRange = getKeyRange(cd.top...)
+	cd.plan.NextRange = cd.plan.ThisRange
 	if cd.nextLevel == nil {
 		cd.nextLevel = lsm.levels.levels[1]
 	}
@@ -121,19 +122,25 @@ func TestCompactStatusGuards(t *testing.T) {
 		thisLevel: l0,
 		nextLevel: l0,
 		top:       []*table{tbl},
-		thisRange: getKeyRange(tbl),
-		nextRange: getKeyRange(tbl),
+		plan: compact.Plan{
+			ThisLevel:    0,
+			NextLevel:    0,
+			ThisRange:    getKeyRange(tbl),
+			NextRange:    getKeyRange(tbl),
+			ThisFileSize: 1,
+			NextFileSize: 1,
+		},
 		thisSize:  tbl.Size(),
 	}
 	cs := lsm.newCompactStatus()
-	if !cs.compareAndAdd(thisAndNextLevelRLocked{}, cd) {
+	if !cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected first compareAndAdd to succeed")
 	}
-	if cs.compareAndAdd(thisAndNextLevelRLocked{}, cd) {
+	if cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected overlapping compaction to be rejected")
 	}
-	cs.delete(cd)
-	if !cs.compareAndAdd(thisAndNextLevelRLocked{}, cd) {
+	cs.Delete(cd.stateEntry())
+	if !cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected compareAndAdd to succeed after delete")
 	}
 }

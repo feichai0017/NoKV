@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -173,6 +174,42 @@ func (buf *ingestBuffer) sortShards() {
 	}
 }
 
+func (buf ingestBuffer) shardViews() []compact.IngestShardView {
+	buf.ensureInit()
+	now := time.Now()
+	var views []compact.IngestShardView
+	for i, sh := range buf.shards {
+		if len(sh.tables) == 0 {
+			continue
+		}
+		maxAge := float64(0)
+		if len(sh.tables) > 0 {
+			for _, t := range sh.tables {
+				if t == nil {
+					continue
+				}
+				age := now.Sub(t.createdAt).Seconds()
+				if age > maxAge {
+					maxAge = age
+				}
+			}
+		}
+		density := float64(0)
+		if sh.size > 0 {
+			density = float64(sh.valueSize) / float64(sh.size)
+		}
+		views = append(views, compact.IngestShardView{
+			Index:        i,
+			TableCount:   len(sh.tables),
+			SizeBytes:    sh.size,
+			ValueBytes:   sh.valueSize,
+			MaxAgeSec:    maxAge,
+			ValueDensity: density,
+		})
+	}
+	return views
+}
+
 func (buf ingestBuffer) prefetch(key []byte, hot bool) bool {
 	for _, sh := range buf.shards {
 		for _, table := range sh.tables {
@@ -217,23 +254,8 @@ func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
 
 func (buf ingestBuffer) shardOrderBySize() []int {
 	buf.ensureInit()
-	type shardView struct {
-		idx  int
-		size int64
-	}
-	var views []shardView
-	for i, sh := range buf.shards {
-		if len(sh.tables) == 0 {
-			continue
-		}
-		views = append(views, shardView{idx: i, size: sh.size})
-	}
-	sort.Slice(views, func(i, j int) bool { return views[i].size > views[j].size })
-	var out []int
-	for _, v := range views {
-		out = append(out, v.idx)
-	}
-	return out
+	views := buf.shardViews()
+	return compact.PickShardOrder(compact.IngestPickInput{Shards: views})
 }
 
 func (buf ingestBuffer) shardByIndex(idx int) *ingestShard {
@@ -246,11 +268,8 @@ func (buf ingestBuffer) shardByIndex(idx int) *ingestShard {
 
 func (lh *levelHandler) ingestShardByBacklog() int {
 	lh.ingest.ensureInit()
-	order := lh.ingest.shardOrderBySize()
-	if len(order) == 0 {
-		return -1
-	}
-	return order[0]
+	views := lh.ingest.shardViews()
+	return compact.PickShardByBacklog(compact.IngestPickInput{Shards: views})
 }
 
 func (buf ingestBuffer) maxAgeSeconds() float64 {

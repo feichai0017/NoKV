@@ -59,7 +59,27 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - `manifest.Manager` stores SST metadata, WAL checkpoints, ValueLog metadata, and (importantly) Region descriptors used by raftstore.
 - `CURRENT` provides crash-safe pointer updates; Region state is replicated through manifest edits.
 
-### 2.4 MVCC
+### 2.4 LSM Compaction & Ingest Buffer
+- `compact.Manager` drives compaction cycles; `lsm.levelManager` supplies table metadata and executes the plan.
+- Planning is split: `compact.PlanFor*` selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.
+- `compact.State` guards overlapping key ranges and tracks in-flight table IDs.
+- Ingest shard selection is policy-driven in `compact` (`PickShardOrder` / `PickShardByBacklog`) while the ingest buffer remains in `lsm`.
+
+```mermaid
+flowchart TD
+  Manager["compact.Manager"] --> LSM["lsm.levelManager"]
+  LSM -->|TableMeta snapshot| Planner["compact.PlanFor*"]
+  Planner --> Plan["compact.Plan (fid+range)"]
+  Plan -->|resolvePlanLocked| Exec["LSM executor"]
+  Exec --> State["compact.State guard"]
+  Exec --> Build["subcompact/build SST"]
+  Build --> Manifest["manifest edits"]
+  L0["L0 tables"] -->|moveToIngest| Ingest["ingest buffer shards"]
+  Ingest -->|ingest-only| Main["Main tables"]
+  Ingest -->|ingest-merge| Ingest
+```
+
+### 2.5 MVCC
 - `txn.go` exposes MVCC transactions with timestamps from `oracle`.
 - `mvcc` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
 - Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.

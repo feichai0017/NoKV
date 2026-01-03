@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -34,7 +35,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if err := lm.build(); err != nil {
 		panic(err)
 	}
-	lm.compaction = newCompactionManager(lm)
+	lm.compaction = compact.NewManager(lm, lm.opt.NumCompactors)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
 	}
@@ -48,8 +49,8 @@ type levelManager struct {
 	manifestMgr      *manifest.Manager
 	levels           []*levelHandler
 	lsm              *LSM
-	compactState     *compactStatus
-	compaction       *compactionManager
+	compactState     *compact.State
+	compaction       *compact.Manager
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
@@ -246,7 +247,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 	}
 	if lm.compaction != nil {
-		lm.compaction.trigger("flush")
+		lm.compaction.Trigger("flush")
 	}
 	return nil
 }
@@ -297,8 +298,8 @@ func (lm *levelManager) compactionStats() (int64, float64) {
 	prios := lm.pickCompactLevels()
 	var max float64
 	for _, p := range prios {
-		if p.adjusted > max {
-			max = p.adjusted
+		if p.Adjusted > max {
+			max = p.Adjusted
 		}
 	}
 	return int64(len(prios)), max
@@ -329,11 +330,11 @@ func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 }
 
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	compactionRunsTotal.Add(1)
+	compact.CompactionRunsTotal.Add(1)
 	lastMs := duration.Milliseconds()
-	compactionLastDurationMs.Set(lastMs)
-	if lastMs > compactionMaxDurationMs.Value() {
-		compactionMaxDurationMs.Set(lastMs)
+	compact.CompactionLastDurationMs.Set(lastMs)
+	if lastMs > compact.CompactionMaxDurationMs.Value() {
+		compact.CompactionMaxDurationMs.Set(lastMs)
 	}
 	atomic.AddUint64(&lm.compactionRuns, 1)
 	last := duration.Nanoseconds()
@@ -739,22 +740,6 @@ func (lh *levelHandler) getTableForKey(key []byte) *table {
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
-}
-
-// overlappingTables returns the tables that intersect with key range. Returns a half-interval.
-// Caller must already hold a read lock.
-func (lh *levelHandler) overlappingTables(kr keyRange) (int, int) {
-	if len(kr.left) == 0 || len(kr.right) == 0 {
-		return 0, 0
-	}
-	tables := lh.tables
-	left := sort.Search(len(tables), func(i int) bool {
-		return utils.CompareKeys(kr.left, tables[i].MaxKey()) <= 0
-	})
-	right := sort.Search(len(tables), func(i int) bool {
-		return utils.CompareKeys(kr.right, tables[i].MaxKey()) < 0
-	})
-	return left, right
 }
 
 // replaceTables will replace tables[left:right] with newTables. Note this EXCLUDES tables[right].
