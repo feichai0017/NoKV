@@ -51,13 +51,16 @@ func (w *WaterMark) Init(closer *Closer) {
 
 // Begin sets the last index to the given value.
 func (w *WaterMark) Begin(index uint64) {
-	atomic.StoreUint64(&w.lastIndex, index)
+	w.setLastIndex(index)
 	w.addIndex(index, 1)
 }
 
 // BeginMany works like Begin but accepts multiple indices.
 func (w *WaterMark) BeginMany(indices []uint64) {
-	atomic.StoreUint64(&w.lastIndex, indices[len(indices)-1])
+	if len(indices) == 0 {
+		return
+	}
+	w.setLastIndex(indices[len(indices)-1])
 	for _, idx := range indices {
 		w.addIndex(idx, 1)
 	}
@@ -95,6 +98,12 @@ func (w *WaterMark) LastIndex() uint64 {
 	return atomic.LoadUint64(&w.lastIndex)
 }
 
+// SetLastIndex advances the last index without changing the watermark counts.
+// It only moves forward to preserve monotonicity.
+func (w *WaterMark) SetLastIndex(index uint64) {
+	w.setLastIndex(index)
+}
+
 // WaitForMark waits until the given index is marked as done.
 func (w *WaterMark) WaitForMark(ctx context.Context, index uint64) error {
 	if w.DoneUntil() >= index {
@@ -130,6 +139,18 @@ func (w *WaterMark) addIndex(index uint64, delta int32) {
 		win.slots[offset].Add(delta)
 	}
 	w.tryAdvance()
+}
+
+func (w *WaterMark) setLastIndex(index uint64) {
+	for {
+		cur := atomic.LoadUint64(&w.lastIndex)
+		if index <= cur {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&w.lastIndex, cur, index) {
+			return
+		}
+	}
 }
 
 func (w *WaterMark) tryAdvance() {

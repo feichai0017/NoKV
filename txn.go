@@ -93,6 +93,7 @@ func (o *oracle) initCommitState(committed uint64) {
 
 	o.readMark.SetDoneUntil(committed)
 	o.txnMark.SetDoneUntil(committed)
+	o.txnMark.SetLastIndex(committed)
 }
 
 func (o *oracle) Stop() {
@@ -127,6 +128,9 @@ func (o *oracle) txnMetricsSnapshot() metrics.TxnMetrics {
 
 func (o *oracle) readTs() uint64 {
 	readTs := o.nextTxnTs.Load() - 1
+	if last := o.txnMark.LastIndex(); last < readTs {
+		readTs = last
+	}
 	o.readMark.Begin(readTs)
 
 	// Wait for all txns which have no conflicts, have been assigned a commit
@@ -184,9 +188,9 @@ func (o *oracle) newCommitTs(txn *Txn) (uint64, bool) {
 
 	// This is the general case, when user doesn't specify the read and commit ts.
 	ts := o.nextTxnTs.Add(1) - 1
-	o.txnMark.Begin(ts)
 
 	utils.AssertTrue(ts >= o.lastCleanupTs)
+	o.txnMark.Begin(ts)
 
 	if o.detectConflicts {
 		// We should ensure that txns are not added to o.committedTxns slice when
