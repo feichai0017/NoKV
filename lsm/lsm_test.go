@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -86,7 +87,7 @@ func TestHitStorage(t *testing.T) {
 	// 命中非L0层
 	hitNotL0 := func() {
 		// 通过压缩将compact生成非L0数据, 会命中l6层
-		lsm.levels.compaction.runOnce(0)
+		lsm.levels.compaction.RunOnce(0)
 		baseTest(t, lsm, 128)
 	}
 	// 命中bf
@@ -194,7 +195,7 @@ func TestCompact(t *testing.T) {
 		for _, tbl := range lsm.levels.levels[0].tablesSnapshot() {
 			before[tbl.fid] = struct{}{}
 		}
-		lsm.levels.compaction.runOnce(1)
+		lsm.levels.compaction.RunOnce(1)
 		ok = false
 		for fid := range before {
 			if hasTable(lsm.levels.levels[6], fid) {
@@ -215,7 +216,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] lsm.levels.fillTablesL0ToL0(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// 删除全局状态，便于下游测试逻辑
-		lsm.levels.compactState.delete(*cd)
+		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[0], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
@@ -230,7 +231,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// 删除全局状态，便于下游测试逻辑
-		lsm.levels.compactState.delete(*cd)
+		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[1], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
@@ -244,12 +245,12 @@ func TestCompact(t *testing.T) {
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
-			pri := compactionPriority{
-				level:      6,
-				ingestOnly: true,
-				t:          lsm.levels.levelTargets(),
-				score:      2,
-				adjusted:   2,
+			pri := compact.Priority{
+				Level:      6,
+				IngestOnly: true,
+				Target:     lsm.levels.levelTargets(),
+				Score:      2,
+				Adjusted:   2,
 			}
 			_ = utils.Err(lsm.levels.doCompact(0, pri))
 			tricky(cd.thisLevel.tablesSnapshot())
@@ -258,7 +259,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 6, *cd)
 		// 删除全局状态，便于下游测试逻辑
-		lsm.levels.compactState.delete(*cd)
+		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = false
 		if hasTable(lsm.levels.levels[6], prevMax+1) {
@@ -314,13 +315,7 @@ func TestCompact(t *testing.T) {
 			t.Fatalf("parallel compaction error: %v", errMain)
 		}
 		// 检查compact status状态查看是否在执行并行压缩
-		isParaller := false
-		for _, state := range lsm.levels.compactState.levels {
-			if len(state.ranges) != 0 {
-				isParaller = true
-			}
-		}
-		utils.CondPanic(!isParaller, fmt.Errorf("[parallerCompact] not is paralle"))
+		utils.CondPanic(!lsm.levels.compactState.HasRanges(), fmt.Errorf("[parallerCompact] not is paralle"))
 	}
 	// 运行N次测试多个sst的影响
 	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
@@ -342,8 +337,8 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
-	cd.thisRange = getKeyRange(cd.top...)
-	cd.nextRange = cd.thisRange
+	cd.plan.ThisRange = getKeyRange(cd.top...)
+	cd.plan.NextRange = cd.plan.ThisRange
 	if err := lsm.levels.moveToIngest(cd); err != nil {
 		t.Fatalf("moveToIngest: %v", err)
 	}
@@ -355,13 +350,13 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	}
 	beforeMain := target.numTables()
 
-	pri := compactionPriority{
-		level:       6,
-		score:       5.0,
-		adjusted:    5.0,
-		t:           lsm.levels.levelTargets(),
-		ingestOnly:  true,
-		ingestMerge: true,
+	pri := compact.Priority{
+		Level:       6,
+		Score:       5.0,
+		Adjusted:    5.0,
+		Target:      lsm.levels.levelTargets(),
+		IngestOnly:  true,
+		IngestMerge: true,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("ingest merge compact failed: %v", err)
@@ -395,19 +390,19 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
-	cd.thisRange = getKeyRange(cd.top...)
-	cd.nextRange = cd.thisRange
+	cd.plan.ThisRange = getKeyRange(cd.top...)
+	cd.plan.NextRange = cd.plan.ThisRange
 	if err := lsm.levels.moveToIngest(cd); err != nil {
 		t.Fatalf("moveToIngest: %v", err)
 	}
 
 	// Trigger parallel ingest-only compactions across shards.
-	pri := compactionPriority{
-		level:      6,
-		score:      6.0,
-		adjusted:   6.0,
-		t:          lsm.levels.levelTargets(),
-		ingestOnly: true,
+	pri := compact.Priority{
+		Level:      6,
+		Score:      6.0,
+		Adjusted:   6.0,
+		Target:     lsm.levels.levelTargets(),
+		IngestOnly: true,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel ingest compaction failed: %v", err)
@@ -497,28 +492,43 @@ func runTest(n int, testFunList ...func()) {
 
 // 构建compactDef对象
 func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
-	t := targets{
-		targetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
-		fileSz:    []int64{1024, 2097152, 2097152, 2097152, 2097152, 2097152, 2097152},
-		baseLevel: nextLevel,
+	t := compact.Targets{
+		TargetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
+		FileSz:    []int64{1024, 2097152, 2097152, 2097152, 2097152, 2097152, 2097152},
+		BaseLevel: nextLevel,
 	}
+	levelFileSize := func(level int) int64 {
+		if level >= 0 && level < len(t.FileSz) && t.FileSz[level] > 0 {
+			return t.FileSz[level]
+		}
+		if level >= 0 && level < len(t.TargetSz) && t.TargetSz[level] > 0 {
+			return t.TargetSz[level]
+		}
+		return 0
+	}
+	pri := buildCompactionPriority(lsm, thisLevel, t)
 	def := &compactDef{
 		compactorId: id,
 		thisLevel:   lsm.levels.levels[thisLevel],
 		nextLevel:   lsm.levels.levels[nextLevel],
-		t:           t,
-		p:           buildCompactionPriority(lsm, thisLevel, t),
+		plan: compact.Plan{
+			ThisLevel:    thisLevel,
+			NextLevel:    nextLevel,
+			ThisFileSize: levelFileSize(thisLevel),
+			NextFileSize: levelFileSize(nextLevel),
+		},
+		adjusted: pri.Adjusted,
 	}
 	return def
 }
 
 // 构建CompactionPriority对象
-func buildCompactionPriority(lsm *LSM, thisLevel int, t targets) compactionPriority {
-	return compactionPriority{
-		level:    thisLevel,
-		score:    8.6,
-		adjusted: 860,
-		t:        t,
+func buildCompactionPriority(lsm *LSM, thisLevel int, t compact.Targets) compact.Priority {
+	return compact.Priority{
+		Level:    thisLevel,
+		Score:    8.6,
+		Adjusted: 860,
+		Target:   t,
 	}
 }
 

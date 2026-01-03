@@ -336,7 +336,7 @@ func (lsm *LSM) StartCompacter() {
 	}
 	lsm.closer.Add(n)
 	for i := 0; i < n; i++ {
-		go lsm.levels.compaction.start(i)
+		go lsm.levels.compaction.Start(i, lsm.closer.CloseSignal, lsm.closer.Done)
 	}
 }
 
