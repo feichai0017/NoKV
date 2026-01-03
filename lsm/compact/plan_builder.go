@@ -9,7 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// TableMeta captures the metadata needed to plan a compaction.
+// TableMeta captures the metadata needed to plan a compaction (no table refs).
 type TableMeta struct {
 	ID         uint64
 	MinKey     []byte

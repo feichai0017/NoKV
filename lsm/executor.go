@@ -35,6 +35,8 @@ type compactDef struct {
 	adjusted float64
 }
 
+// Compaction flow: pick a Plan in compact, resolve table IDs here, then execute the merge.
+
 func (cd *compactDef) targetFileSize() int64 {
 	return cd.fileSize(cd.plan.ThisLevel)
 }
