@@ -358,29 +358,27 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
+	if cd.thisLevel.numTables() == 0 {
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
+			meta := cd.thisLevel.ingest.allMeta()
+			if len(meta) == 0 {
+				return false
+			}
+			plan, ok := compact.PlanForIngestFallback(cd.thisLevel.levelNum, meta)
+			if !ok {
+				return false
+			}
+			cd.plan.IngestMerge = true
+			cd.applyPlan(plan)
+			if !lm.resolvePlanLocked(cd) {
+				return false
+			}
+			return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+		}
+		return false
+	}
 	tables := make([]*table, cd.thisLevel.numTables())
 	copy(tables, cd.thisLevel.tables)
-	useIngestFallback := false
-	if len(tables) == 0 {
-		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
-			tables = append(tables, cd.thisLevel.ingest.allTables()...)
-			useIngestFallback = true
-		} else {
-			return false
-		}
-	}
-	if useIngestFallback {
-		plan, ok := compact.PlanForIngestFallback(cd.thisLevel.levelNum, tableMetaSnapshot(tables))
-		if !ok {
-			return false
-		}
-		cd.plan.IngestMerge = true
-		cd.applyPlan(plan)
-		if !lm.resolvePlanLocked(cd) {
-			return false
-		}
-		return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
-	}
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {
 		return lm.fillMaxLevelTables(tables, cd)
@@ -411,11 +409,11 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	if shardIdx < 0 {
 		shardIdx = cd.thisLevel.ingestShardByBacklog()
 	}
-	sh := cd.thisLevel.ingest.shardByIndex(shardIdx)
-	if sh == nil || len(sh.tables) == 0 {
+	shMeta := cd.thisLevel.ingest.shardMetaByIndex(shardIdx)
+	if len(shMeta) == 0 {
 		return false
 	}
-	plan, ok := compact.PlanForIngestShard(cd.thisLevel.levelNum, tableMetaSnapshot(sh.tables), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
+	plan, ok := compact.PlanForIngestShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
 	if !ok {
 		return false
 	}
