@@ -161,6 +161,29 @@ func (buf ingestBuffer) allTables() []*table {
 	return out
 }
 
+func (buf *ingestBuffer) allMeta() []compact.TableMeta {
+	if buf == nil {
+		return nil
+	}
+	buf.ensureInit()
+	return tableMetaSnapshot(buf.allTables())
+}
+
+func (buf *ingestBuffer) shardMetaByIndex(idx int) []compact.TableMeta {
+	if buf == nil {
+		return nil
+	}
+	buf.ensureInit()
+	if idx < 0 || idx >= len(buf.shards) {
+		return nil
+	}
+	sh := buf.shards[idx]
+	if len(sh.tables) == 0 {
+		return nil
+	}
+	return tableMetaSnapshot(sh.tables)
+}
+
 func (buf *ingestBuffer) sortShards() {
 	buf.ensureInit()
 	for i := range buf.shards {
@@ -256,14 +279,6 @@ func (buf ingestBuffer) shardOrderBySize() []int {
 	buf.ensureInit()
 	views := buf.shardViews()
 	return compact.PickShardOrder(compact.IngestPickInput{Shards: views})
-}
-
-func (buf ingestBuffer) shardByIndex(idx int) *ingestShard {
-	buf.ensureInit()
-	if idx < 0 || idx >= len(buf.shards) {
-		return nil
-	}
-	return &buf.shards[idx]
 }
 
 func (lh *levelHandler) ingestShardByBacklog() int {
