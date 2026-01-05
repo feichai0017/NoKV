@@ -18,6 +18,41 @@ seed data, then executes each workload and collects:
 - Machine: MacBook Pro (Apple M3 Pro)
 - Memory: 36 GB
 
+## YCSB Architecture
+
+The YCSB harness is organized as a Go test entrypoint plus a small engine
+abstraction so every storage engine is driven by the same workload generator,
+key distribution, and metrics pipeline.
+
+Flow:
+
+```
+scripts/run_benchmarks.sh
+  -> go test ./benchmark -run TestBenchmarkYCSB -args <flags>
+     -> TestBenchmarkYCSB (benchmark/ycsb_test.go)
+        -> runYCSBBenchmarks (benchmark/ycsb_runner.go)
+           -> engine.Open(clean)
+           -> ycsbLoad (parallel preload)
+           -> [optional warm-up]
+           -> ycsbRunWorkload (parallel workload run)
+           -> engine.Close
+```
+
+Key components:
+
+- Engine interface: `benchmark/ycsb_engine.go` defines `Read/Insert/Update/Scan`
+  and per-engine implementations live in `benchmark/ycsb_engine_*`.
+- Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/F mixes,
+  request ratios, and key distributions (zipfian/uniform/latest).
+- Value generator: fixed/uniform/normal/percentile sizing with a shared buffer
+  pool to reduce allocations (`valuePool`).
+- Concurrency model: each workload runs with `ycsb_conc` goroutines; each op
+  records latency samples and operation counts; optional global throttling is
+  available via `ycsb_target_ops`.
+- Results pipeline: summaries are printed to stdout, written as CSV under
+  `benchmark_data/ycsb/results`, and a text report is saved under
+  `benchmark_results/benchmark_results_*.txt`.
+
 ## Full Results
 
 ```

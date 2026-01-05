@@ -794,7 +794,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 
 	warning, reason := metrics.WALTypedWarning(snap.WALTypedRecordRatio, analysis.SegmentsWithRaft, s.db.opt.WALTypedRecordWarnRatio, s.db.opt.WALTypedRecordWarnSegments)
 	if watchdog := s.db.walWatchdog; watchdog != nil {
-		wsnap := watchdog.snapshot()
+		wsnap := watchdog.Snapshot()
 		snap.WALAutoGCRuns = wsnap.AutoRuns
 		snap.WALAutoGCRemoved = wsnap.SegmentsRemoved
 		snap.WALAutoGCLastUnix = wsnap.LastAutoUnix

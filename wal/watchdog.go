@@ -1,4 +1,4 @@
-package NoKV
+package wal
 
 import (
 	"log"
@@ -12,14 +12,39 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-type walWatchdog struct {
-	db           *DB
+// WatchdogConfig controls WAL watchdog behavior.
+type WatchdogConfig struct {
+	Manager      *Manager
+	Interval     time.Duration
+	MinRemovable int
+	MaxBatch     int
+	WarnRatio    float64
+	WarnSegments int64
+	RaftPointers func() map[uint64]manifest.RaftLogPointer
+}
+
+// WatchdogSnapshot captures WAL watchdog state for reporting.
+type WatchdogSnapshot struct {
+	AutoRuns          uint64
+	SegmentsRemoved   uint64
+	LastAutoUnix      int64
+	LastTickUnix      int64
+	RemovableSegments int
+	TypedRatio        float64
+	Warning           bool
+	WarningReason     string
+}
+
+// Watchdog periodically inspects WAL backlog and can remove stale segments.
+type Watchdog struct {
+	manager      *Manager
 	interval     time.Duration
 	minRemovable int
 	maxBatch     int
 	warnRatio    float64
 	warnSegments int64
 	autoEnabled  bool
+	raftPointers func() map[uint64]manifest.RaftLogPointer
 	closer       *utils.Closer
 
 	autoRuns        atomic.Uint64
@@ -32,52 +57,40 @@ type walWatchdog struct {
 	warnReason      atomic.Value
 }
 
-type walWatchdogSnapshot struct {
-	AutoRuns          uint64
-	SegmentsRemoved   uint64
-	LastAutoUnix      int64
-	LastTickUnix      int64
-	RemovableSegments int
-	TypedRatio        float64
-	Warning           bool
-	WarningReason     string
-}
-
-func newWalWatchdog(db *DB) *walWatchdog {
-	if db == nil || db.opt == nil {
+// NewWatchdog constructs a watchdog from the provided configuration.
+func NewWatchdog(cfg WatchdogConfig) *Watchdog {
+	if cfg.Manager == nil {
 		return nil
 	}
-	cfg := db.opt
-	if !cfg.EnableWALWatchdog {
-		return nil
-	}
-	interval := cfg.WALAutoGCInterval
+	interval := cfg.Interval
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
-	minRemovable := cfg.WALAutoGCMinRemovable
+	minRemovable := cfg.MinRemovable
 	if minRemovable <= 0 {
 		minRemovable = 1
 	}
-	maxBatch := cfg.WALAutoGCMaxBatch
+	maxBatch := cfg.MaxBatch
 	if maxBatch <= 0 {
 		maxBatch = 4
 	}
-	watcher := &walWatchdog{
-		db:           db,
+	w := &Watchdog{
+		manager:      cfg.Manager,
 		interval:     interval,
 		minRemovable: minRemovable,
 		maxBatch:     maxBatch,
-		warnRatio:    cfg.WALTypedRecordWarnRatio,
-		warnSegments: cfg.WALTypedRecordWarnSegments,
-		autoEnabled:  cfg.WALAutoGCMinRemovable > 0 && cfg.WALAutoGCMaxBatch > 0,
+		warnRatio:    cfg.WarnRatio,
+		warnSegments: cfg.WarnSegments,
+		autoEnabled:  cfg.MinRemovable > 0 && cfg.MaxBatch > 0,
+		raftPointers: cfg.RaftPointers,
 		closer:       utils.NewCloser(),
 	}
-	watcher.warnReason.Store("")
-	return watcher
+	w.warnReason.Store("")
+	return w
 }
 
-func (w *walWatchdog) start() {
+// Start launches the background watchdog loop.
+func (w *Watchdog) Start() {
 	if w == nil {
 		return
 	}
@@ -85,26 +98,29 @@ func (w *walWatchdog) start() {
 	go w.run()
 }
 
-func (w *walWatchdog) stop() {
+// Stop terminates the background watchdog loop.
+func (w *Watchdog) Stop() {
 	if w == nil {
 		return
 	}
 	w.closer.Close()
 }
 
-func (w *walWatchdog) runOnce() {
+// RunOnce executes a single watchdog inspection cycle.
+func (w *Watchdog) RunOnce() {
 	if w == nil {
 		return
 	}
 	w.observe()
 }
 
-func (w *walWatchdog) snapshot() walWatchdogSnapshot {
+// Snapshot returns the current watchdog snapshot.
+func (w *Watchdog) Snapshot() WatchdogSnapshot {
 	if w == nil {
-		return walWatchdogSnapshot{}
+		return WatchdogSnapshot{}
 	}
 	ratioBits := w.lastRatioBits.Load()
-	snap := walWatchdogSnapshot{
+	snap := WatchdogSnapshot{
 		AutoRuns:          w.autoRuns.Load(),
 		SegmentsRemoved:   w.segmentsRemoved.Load(),
 		LastAutoUnix:      w.lastAutoUnix.Load(),
@@ -119,7 +135,7 @@ func (w *walWatchdog) snapshot() walWatchdogSnapshot {
 	return snap
 }
 
-func (w *walWatchdog) run() {
+func (w *Watchdog) run() {
 	defer w.closer.Done()
 
 	ticker := time.NewTicker(w.interval)
@@ -137,17 +153,17 @@ func (w *walWatchdog) run() {
 	}
 }
 
-func (w *walWatchdog) observe() {
-	if w == nil || w.db == nil || w.db.wal == nil {
+func (w *Watchdog) observe() {
+	if w == nil || w.manager == nil {
 		return
 	}
 	w.lastTickUnix.Store(time.Now().Unix())
 
-	wmetrics := w.db.wal.Metrics()
-	segmentMetrics := w.db.wal.SegmentMetrics()
+	wmetrics := w.manager.Metrics()
+	segmentMetrics := w.manager.SegmentMetrics()
 	var ptrs map[uint64]manifest.RaftLogPointer
-	if man := w.db.Manifest(); man != nil {
-		ptrs = man.RaftPointerSnapshot()
+	if w.raftPointers != nil {
+		ptrs = w.raftPointers()
 	}
 	analysis := metrics.AnalyzeWALBacklog(wmetrics, segmentMetrics, ptrs)
 
@@ -176,7 +192,7 @@ func (w *walWatchdog) observe() {
 
 	removed := 0
 	for _, id := range batch {
-		if err := w.db.wal.RemoveSegment(id); err != nil {
+		if err := w.manager.RemoveSegment(id); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
