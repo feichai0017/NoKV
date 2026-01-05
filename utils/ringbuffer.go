@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 )
 
-// Ring is a fixed-size MPSC ring buffer with lock-free push/pop.
+// Ring is a fixed-size MPMC ring buffer with lock-free push/pop.
 // Capacity must be a power of two; constructor will round up.
 type Ring[T any] struct {
 	buf    []ringSlot[T]

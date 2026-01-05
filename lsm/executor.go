@@ -28,7 +28,7 @@ type compactDef struct {
 	top []*table
 	bot []*table
 
-	splits    []compact.KeyRange
+	splits []compact.KeyRange
 
 	thisSize int64
 
@@ -147,7 +147,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		}
 		baseLimit := lm.opt.IngestShardParallelism
 		if baseLimit <= 0 {
-			baseLimit = max(lm.opt.NumCompactors / 2, 1)
+			baseLimit = max(lm.opt.NumCompactors/2, 1)
 		}
 		if baseLimit > len(order) {
 			baseLimit = len(order)
@@ -735,7 +735,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 	// In an edge case, 142 tables in bottom led to 48 splits. That's too many splits, because it
 	// then uses up a lot of memory for table builder.
 	// We should keep it so we have at max 5 splits.
-	width := max(int(math.Ceil(float64(len(cd.bot)) / 5.0)), 3)
+	width := max(int(math.Ceil(float64(len(cd.bot))/5.0)), 3)
 	skr := cd.plan.ThisRange
 	skr.Extend(cd.plan.NextRange)
 
