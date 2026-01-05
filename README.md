@@ -15,7 +15,7 @@
     <a href="https://codecov.io/gh/feichai0017/NoKV">
       <img src="https://codecov.io/gh/feichai0017/NoKV/branch/main/graph/badge.svg" alt="Coverage"/>
     </a>
-    <img src="https://img.shields.io/badge/go-1.23+-blue.svg" alt="Go Version"/>
+    <img src="https://img.shields.io/badge/go-1.24+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
   </p>
   <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
@@ -199,7 +199,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) every command runs inside local MVCC transactions; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit so NX/XX, TTL, arithmetic and multi-key writes match the single-node semantics.
 - TTL metadata is stored under `!redis:ttl!<key>` and is automatically cleaned up when reads detect expiration.
 - `--metrics-addr` publishes `NoKV.Redis` statistics via expvar and `--tso-url` can point to an external TSO service (otherwise a local oracle is used).
-- A ready-to-use cluster configuration is available at `cmd/nokv-redis/raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
+- A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
 
 > For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).
 

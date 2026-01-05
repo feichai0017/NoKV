@@ -29,16 +29,16 @@ Use `GOBIN` if you prefer a custom binary directory.
 
 - Reads `StatsSnapshot` either offline (`--workdir`) or via HTTP (`--expvar`).
 - Output fields include:
-  - `flush.queue`, `flush.wait_ms`, `flush.build_ms`
-  - `compaction.backlog`, `wal.active_segment`, `wal.removed_segments`
-  - `value_log.head_fid`, `value_log.gc_runs`
-  - `txns.active`, `txns.committed`, `txns.conflicts`
-  - `regions.total (new/running/removing/tombstone/other)`
+  - `flush_queue_length`, `flush_wait_ms`, `flush_build_ms`
+  - `compaction_backlog`, `wal_active_segment`, `wal_segments_removed`
+  - `vlog_head`, `vlog_segments`, `vlog_pending_deletes`, `vlog_discard_queue`
+  - `txns_active`, `txns_committed`, `txns_conflicts`
+  - `region_total` (plus `region_new`, `region_running`, `region_removing`, `region_tombstone`, `region_other`)
   - `hot_keys` (Top-N hits captured by `hotring`)
 - Example:
 
 ```bash
-nokv stats --workdir ./testdata/db --json | jq '.flush.queue'
+nokv stats --workdir ./testdata/db --json | jq '.flush_queue_length'
 ```
 
 ### `nokv manifest`
