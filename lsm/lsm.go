@@ -73,6 +73,9 @@ type Options struct {
 
 	// ManifestSync controls whether manifest edits are fsynced immediately.
 	ManifestSync bool
+	// ManifestRewriteThreshold triggers a manifest rewrite when the manifest
+	// grows beyond this size (bytes). Values <= 0 disable rewrites.
+	ManifestRewriteThreshold int64
 }
 
 // Close  _

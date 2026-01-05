@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/feichai0017/NoKV/manifest"
@@ -515,4 +516,56 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 		t.Fatalf("reopen after verify: %v", err)
 	}
 	defer mgr.Close()
+}
+
+func TestManagerRewrite(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer mgr.Close()
+
+	mgr.SetRewriteThreshold(1)
+
+	if err := mgr.LogEdit(manifest.Edit{
+		Type: manifest.EditAddFile,
+		File: &manifest.FileMeta{Level: 0, FileID: 10, Size: 1},
+	}); err != nil {
+		t.Fatalf("log edit: %v", err)
+	}
+	if err := mgr.LogEdit(manifest.Edit{
+		Type:      manifest.EditLogPointer,
+		LogSeg:    3,
+		LogOffset: 128,
+	}); err != nil {
+		t.Fatalf("log pointer: %v", err)
+	}
+
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatalf("read current: %v", err)
+	}
+	currentName := strings.TrimSpace(string(current))
+	if currentName == "MANIFEST-000001" || currentName == "" {
+		t.Fatalf("expected rewritten manifest, got %q", currentName)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr, err = manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer mgr.Close()
+
+	version := mgr.Current()
+	if len(version.Levels[0]) != 1 || version.Levels[0][0].FileID != 10 {
+		t.Fatalf("expected file 10 after rewrite: %+v", version.Levels[0])
+	}
+	if version.LogSegment != 3 || version.LogOffset != 128 {
+		t.Fatalf("expected log pointer preserved, got seg=%d off=%d", version.LogSegment, version.LogOffset)
+	}
 }

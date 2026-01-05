@@ -31,6 +31,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	}
 	if lm.manifestMgr != nil {
 		lm.manifestMgr.SetSync(opt.ManifestSync)
+		lm.manifestMgr.SetRewriteThreshold(opt.ManifestRewriteThreshold)
 	}
 	if err := lm.build(); err != nil {
 		panic(err)
