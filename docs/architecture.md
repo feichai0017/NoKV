@@ -84,6 +84,12 @@ flowchart TD
 - `mvcc` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
 - Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.
 
+### 2.6 Write Pipeline & Backpressure
+- Writes enqueue into a commit queue (`db_write.go`) where requests are coalesced into batches before a commit worker drains them.
+- The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; `SyncWrites` adds a WAL fsync step.
+- Batch sizing adapts to backlog (`WriteBatchMaxCount/Size`, `WriteBatchWait`) and hot-key pressure can expand batch limits temporarily to drain spikes.
+- Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and HotRing can reject hot keys via `WriteHotKeyLimit`.
+
 ---
 
 ## 3. Replication Layer (raftstore)

@@ -79,7 +79,29 @@ The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, mak
 
 ---
 
-## 6. Recovery Walkthrough
+## 6. WAL Watchdog (Auto GC)
+
+The WAL watchdog runs inside the DB process to keep WAL backlog in check and
+surface warnings when raft-typed records dominate the log. It:
+
+- Samples WAL metrics + per-segment metrics and combines them with
+  `manifest.RaftPointerSnapshot()` to compute removable segments.
+- Removes up to `WALAutoGCMaxBatch` segments when at least
+  `WALAutoGCMinRemovable` are eligible.
+- Exposes counters (`WALAutoGCRuns/Removed/LastUnix`) and warning state
+  (`WALTypedRecordRatio/Warning/Reason`) through `StatsSnapshot`.
+
+Relevant options (see `options.go` for defaults):
+- `EnableWALWatchdog`
+- `WALAutoGCInterval`
+- `WALAutoGCMinRemovable`
+- `WALAutoGCMaxBatch`
+- `WALTypedRecordWarnRatio`
+- `WALTypedRecordWarnSegments`
+
+---
+
+## 7. Recovery Walkthrough
 
 1. `wal.Open` reopens the highest segment, leaving the file pointer at the end (`switchSegmentLocked`).
 2. `manifest.Manager` supplies the WAL checkpoint (segment + offset) while building the version. Replay skips entries up to this checkpoint, ensuring we only reapply writes not yet materialised in SSTables.
@@ -88,7 +110,7 @@ The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, mak
 
 ---
 
-## 7. Operational Tips
+## 8. Operational Tips
 
 - Configure `SyncOnWrite` for synchronous durability (default async like RocksDB's default). For latency-sensitive deployments, consider enabling to emulate Badger's `SyncWrites`.
 - After large flushes, forcing `Rotate` keeps WAL files short, reducing replay time.
@@ -96,7 +118,7 @@ The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, mak
 
 ---
 
-## 8. Truncation Metadata
+## 9. Truncation Metadata
 
 - `raftstore/engine/wal_storage` keeps a per-group index of `[firstIndex,lastIndex]` spans for each WAL record so it can map raft log indices back to the segment that stored them.
 - When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via `LogRaftTruncate` with the index/term, segment ID (`RaftLogPointer.SegmentIndex`), and byte offset (`RaftLogPointer.TruncatedOffset`) that delimit the remaining WAL data.
