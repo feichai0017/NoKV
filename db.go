@@ -44,7 +44,7 @@ type (
 		dirLock          *utils.DirLock
 		lsm              *lsm.LSM
 		wal              *wal.Manager
-		walWatchdog      *walWatchdog
+		walWatchdog      *wal.Watchdog
 		vlog             *valueLog
 		vwriter          valueLogWriter
 		stats            *Stats
@@ -266,9 +266,24 @@ func Open(opt *Options) *DB {
 	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
 	db.commitWG.Add(1)
 	go db.commitWorker()
-	db.walWatchdog = newWalWatchdog(db)
-	if db.walWatchdog != nil {
-		db.walWatchdog.start()
+	if db.opt.EnableWALWatchdog {
+		db.walWatchdog = wal.NewWatchdog(wal.WatchdogConfig{
+			Manager:      db.wal,
+			Interval:     db.opt.WALAutoGCInterval,
+			MinRemovable: db.opt.WALAutoGCMinRemovable,
+			MaxBatch:     db.opt.WALAutoGCMaxBatch,
+			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
+			WarnSegments: db.opt.WALTypedRecordWarnSegments,
+			RaftPointers: func() map[uint64]manifest.RaftLogPointer {
+				if man := db.Manifest(); man != nil {
+					return man.RaftPointerSnapshot()
+				}
+				return nil
+			},
+		})
+		if db.walWatchdog != nil {
+			db.walWatchdog.Start()
+		}
 	}
 	// 启动 info 统计过程
 	db.stats.StartStats()
@@ -327,7 +342,7 @@ func (db *DB) Close() error {
 	}
 
 	if db.walWatchdog != nil {
-		db.walWatchdog.stop()
+		db.walWatchdog.Stop()
 		db.walWatchdog = nil
 	}
 
