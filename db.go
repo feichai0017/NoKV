@@ -73,9 +73,11 @@ type (
 
 	commitQueue struct {
 		ring           *utils.Ring[*commitRequest]
-		mu             sync.Mutex
-		notEmpty       *sync.Cond
-		notFull        *sync.Cond
+		items          chan struct{}
+		spaces         chan struct{}
+		closeCh        chan struct{}
+		queueLen       int64
+		inflight       int64
 		pendingBytes   int64
 		pendingEntries int64
 		closed         uint32
@@ -262,9 +264,7 @@ func Open(opt *Options) *DB {
 	db.lsm.StartCompacter()
 	// 准备vlog gc
 	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
-	db.commitQueue.ring = utils.NewRing[*commitRequest](queueCap)
-	db.commitQueue.notEmpty = sync.NewCond(&db.commitQueue.mu)
-	db.commitQueue.notFull = sync.NewCond(&db.commitQueue.mu)
+	db.commitQueue.init(queueCap)
 	db.commitWG.Add(1)
 	go db.commitWorker()
 	if db.opt.EnableWALWatchdog {
