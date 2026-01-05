@@ -11,11 +11,20 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
 
-const currentFileName = "CURRENT"
+const (
+	currentFileName         = "CURRENT"
+	manifestFilePrefix      = "MANIFEST-"
+	manifestFileWidth       = 6
+	defaultRewriteThreshold = 64 << 20
+	manifestFilePermissions = 0o666
+	manifestTempCurrentName = "CURRENT.tmp"
+)
 
 // Manager controls manifest file operations.
 type Manager struct {
@@ -25,6 +34,9 @@ type Manager struct {
 	manifest   *os.File
 	version    Version
 	syncWrites bool
+
+	rewriteThreshold int64
+	nextFileID       uint64
 }
 
 // Open loads manifest from CURRENT file or creates a new one.
@@ -35,13 +47,18 @@ func Open(dir string) (*Manager, error) {
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return nil, err
 	}
-	mgr := &Manager{dir: dir, syncWrites: true}
+	mgr := &Manager{
+		dir:              dir,
+		syncWrites:       true,
+		rewriteThreshold: defaultRewriteThreshold,
+	}
 	if err := mgr.loadCurrent(); err != nil {
 		if err := mgr.createNew(); err != nil {
 			return nil, err
 		}
 		return mgr, nil
 	}
+	mgr.initNextFileID()
 	if err := mgr.replay(); err != nil {
 		mgr.Close()
 		return nil, err
@@ -57,19 +74,20 @@ func (m *Manager) loadCurrent() error {
 	}
 	m.current = string(data)
 	manifestPath := filepath.Join(m.dir, m.current)
-	m.manifest, err = os.OpenFile(manifestPath, os.O_RDWR, 0o666)
+	m.manifest, err = os.OpenFile(manifestPath, os.O_RDWR, manifestFilePermissions)
 	return err
 }
 
 func (m *Manager) createNew() error {
-	fileName := "MANIFEST-000001"
+	fileName := manifestFileName(1)
 	path := filepath.Join(m.dir, fileName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o666)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
 	m.manifest = f
 	m.current = fileName
+	m.nextFileID = 2
 	if err := m.writeCurrent(); err != nil {
 		return err
 	}
@@ -83,8 +101,8 @@ func (m *Manager) createNew() error {
 }
 
 func (m *Manager) writeCurrent() error {
-	tmp := filepath.Join(m.dir, "CURRENT.tmp")
-	if err := os.WriteFile(tmp, []byte(m.current), 0o666); err != nil {
+	tmp := filepath.Join(m.dir, manifestTempCurrentName)
+	if err := os.WriteFile(tmp, []byte(m.current), manifestFilePermissions); err != nil {
 		return err
 	}
 	dst := filepath.Join(m.dir, currentFileName)
@@ -226,7 +244,7 @@ func (m *Manager) logEditsLocked(edits []Edit) error {
 	for _, edit := range edits {
 		m.apply(edit)
 	}
-	return nil
+	return m.maybeRewriteLocked()
 }
 
 func requiresSync(edit Edit) bool {
@@ -236,6 +254,225 @@ func requiresSync(edit Edit) bool {
 	default:
 		return false
 	}
+}
+
+// SetRewriteThreshold configures how large the manifest file can grow before
+// a rewrite is attempted. Values <= 0 disable automatic rewrites.
+func (m *Manager) SetRewriteThreshold(bytes int64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.rewriteThreshold = bytes
+	m.mu.Unlock()
+}
+
+// Rewrite forces a manifest rewrite using the current version snapshot.
+func (m *Manager) Rewrite() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rewriteLocked()
+}
+
+func (m *Manager) maybeRewriteLocked() error {
+	if m.rewriteThreshold <= 0 || m.manifest == nil {
+		return nil
+	}
+	info, err := m.manifest.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < m.rewriteThreshold {
+		return nil
+	}
+	return m.rewriteLocked()
+}
+
+func (m *Manager) rewriteLocked() error {
+	if m.manifest == nil {
+		return nil
+	}
+	fileName, err := m.nextManifestFileLocked()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(m.dir, fileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	if err != nil {
+		return err
+	}
+	buf := bufio.NewWriter(f)
+	if err := m.writeSnapshot(buf); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := buf.Flush(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if m.syncWrites {
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	oldName := m.current
+	m.current = fileName
+	if err := m.writeCurrent(); err != nil {
+		m.current = oldName
+		return err
+	}
+	if m.manifest != nil {
+		_ = m.manifest.Close()
+	}
+	m.manifest, err = os.OpenFile(path, os.O_RDWR, manifestFilePermissions)
+	if err != nil {
+		return err
+	}
+	if _, err := m.manifest.Seek(0, io.SeekEnd); err != nil {
+		_ = m.manifest.Close()
+		return err
+	}
+	if oldName != "" && oldName != fileName {
+		_ = os.Remove(filepath.Join(m.dir, oldName))
+	}
+	return nil
+}
+
+func (m *Manager) writeSnapshot(w io.Writer) error {
+	version := m.version
+	levels := make([]int, 0, len(version.Levels))
+	for level := range version.Levels {
+		levels = append(levels, level)
+	}
+	sort.Ints(levels)
+	for _, level := range levels {
+		files := append([]FileMeta(nil), version.Levels[level]...)
+		sort.Slice(files, func(i, j int) bool { return files[i].FileID < files[j].FileID })
+		for _, meta := range files {
+			metaCopy := meta
+			metaCopy.Level = level
+			if err := writeEdit(w, Edit{Type: EditAddFile, File: &metaCopy}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := writeEdit(w, Edit{Type: EditLogPointer, LogSeg: version.LogSegment, LogOffset: version.LogOffset}); err != nil {
+		return err
+	}
+
+	if len(version.ValueLogs) > 0 {
+		fids := make([]uint32, 0, len(version.ValueLogs))
+		for fid := range version.ValueLogs {
+			fids = append(fids, fid)
+		}
+		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+		for _, fid := range fids {
+			meta := version.ValueLogs[fid]
+			metaCopy := meta
+			if meta.Valid {
+				if err := writeEdit(w, Edit{Type: EditUpdateValueLog, ValueLog: &metaCopy}); err != nil {
+					return err
+				}
+			} else {
+				if err := writeEdit(w, Edit{Type: EditDeleteValueLog, ValueLog: &metaCopy}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if version.ValueLogHead.Valid {
+		head := version.ValueLogHead
+		if err := writeEdit(w, Edit{Type: EditValueLogHead, ValueLog: &head}); err != nil {
+			return err
+		}
+	}
+
+	if len(version.RaftPointers) > 0 {
+		groupIDs := make([]uint64, 0, len(version.RaftPointers))
+		for id := range version.RaftPointers {
+			groupIDs = append(groupIDs, id)
+		}
+		sort.Slice(groupIDs, func(i, j int) bool { return groupIDs[i] < groupIDs[j] })
+		for _, id := range groupIDs {
+			ptr := version.RaftPointers[id]
+			ptrCopy := ptr
+			if err := writeEdit(w, Edit{Type: EditRaftPointer, Raft: &ptrCopy}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(version.Regions) > 0 {
+		regionIDs := make([]uint64, 0, len(version.Regions))
+		for id := range version.Regions {
+			regionIDs = append(regionIDs, id)
+		}
+		sort.Slice(regionIDs, func(i, j int) bool { return regionIDs[i] < regionIDs[j] })
+		for _, id := range regionIDs {
+			meta := CloneRegionMeta(version.Regions[id])
+			edit := RegionEdit{Meta: meta}
+			if err := writeEdit(w, Edit{Type: EditRegion, Region: &edit}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) initNextFileID() {
+	m.nextFileID = parseManifestFileID(strings.TrimSpace(m.current)) + 1
+	if m.nextFileID == 1 {
+		m.nextFileID = 2
+	}
+}
+
+func (m *Manager) nextManifestFileLocked() (string, error) {
+	id := m.nextFileID
+	if id == 0 {
+		id = 1
+	}
+	for {
+		name := manifestFileName(id)
+		if _, err := os.Stat(filepath.Join(m.dir, name)); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				m.nextFileID = id + 1
+				return name, nil
+			}
+			return "", err
+		}
+		id++
+	}
+}
+
+func manifestFileName(id uint64) string {
+	return fmt.Sprintf("%s%0*d", manifestFilePrefix, manifestFileWidth, id)
+}
+
+func parseManifestFileID(name string) uint64 {
+	name = strings.TrimSpace(name)
+	if !strings.HasPrefix(name, manifestFilePrefix) {
+		return 0
+	}
+	raw := strings.TrimPrefix(name, manifestFilePrefix)
+	if raw == "" {
+		return 0
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // Current returns a snapshot of the current version.
@@ -431,7 +668,7 @@ func Verify(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("manifest: directory required")
 	}
-	tmp := filepath.Join(dir, "CURRENT.tmp")
+	tmp := filepath.Join(dir, manifestTempCurrentName)
 	if _, err := os.Stat(tmp); err == nil {
 		_ = os.Remove(tmp)
 	}

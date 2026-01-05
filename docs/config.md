@@ -16,7 +16,7 @@ calling `NoKV.Open(opt)`.
 Key option groups (see `options.go` for the full list):
 
 - **Paths & durability**
-  - `WorkDir`, `SyncWrites`, `ManifestSync`
+  - `WorkDir`, `SyncWrites`, `ManifestSync`, `ManifestRewriteThreshold`
 - **Write pipeline**
   - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `WriteBatchWait`
   - `CommitPipelineDepth`, `CommitApplyConcurrency`

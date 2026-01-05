@@ -52,6 +52,9 @@ type Options struct {
 
 	SyncWrites   bool
 	ManifestSync bool
+	// ManifestRewriteThreshold triggers a manifest rewrite when the active
+	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
+	ManifestRewriteThreshold int64
 	// WriteHotKeyLimit caps how many consecutive writes a single key can issue
 	// before the DB returns utils.ErrHotKeyWriteThrottle. Zero disables write-path
 	// throttling.
@@ -156,6 +159,7 @@ func NewDefaultOptions() *Options {
 		BloomCacheSize:                1024,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
+		ManifestRewriteThreshold:      64 << 20,
 		WriteHotKeyLimit:              128,
 		HotWriteBurstThreshold:        8,
 		HotWriteBatchMultiplier:       2,

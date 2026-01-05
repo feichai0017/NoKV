@@ -30,6 +30,8 @@ const (
     EditValueLogHead
     EditDeleteValueLog
     EditUpdateValueLog
+    EditRaftPointer
+    EditRegion
 )
 ```
 
@@ -40,8 +42,7 @@ Each edit serialises one logical action:
 - `EditDeleteValueLog` – marks a vlog segment logically deleted (GC has reclaimed it).
 - `EditUpdateValueLog` – updates metadata for an existing vlog file (used when GC rewrites a segment).
 - `EditRaftPointer` – persists raft-group WAL progress (segment, offset, applied/truncated index & term, etc.).
-
-> **Roadmap – Region metadata**: Future manifest revisions will persist the Region catalog (`RegionMeta`, lifecycle state, peer list) via dedicated `EditRegion*` entries. See the Phase 4 roadmap for details.
+- `EditRegion` – persists Region metadata (key range, epoch, peers, lifecycle state).
 
 `manifest.Manager.apply` interprets each edit and updates the in-memory `Version` structure, which is consumed by LSM initialisation and value log recovery.
 
@@ -56,6 +57,8 @@ type Version struct {
     LogOffset    uint64
     ValueLogs    map[uint32]ValueLogMeta
     ValueLogHead ValueLogMeta
+    RaftPointers map[uint64]RaftLogPointer
+    Regions      map[uint64]RegionMeta
 }
 ```
 
@@ -85,7 +88,7 @@ sequenceDiagram
 
 - **Open/Rebuild** – `replay` reads all edits, applying them sequentially (`bufio.Reader` ensures streaming). If any edit fails to decode, recovery aborts so operators can inspect the manifest, similar to RocksDB's strictness.
 - **LogEdit** – obtains the mutex, appends the encoded edit, flushes, and updates the in-memory `Version` before returning.
-- **Rewrite** – when compactions delete many files, a rewrite compacts the manifest: write a new file with the full version, rename, then update `CURRENT`. Tests (`manifest/manager_test.go::TestRewrite`) cover crashes between these steps.
+- **Rewrite** – when the manifest grows beyond `Options.ManifestRewriteThreshold`, the manager writes a new `MANIFEST-xxxxxx` containing a full snapshot of the current `Version`, fsyncs it, updates `CURRENT`, and removes the old file. This mirrors RocksDB's `max_manifest_file_size` behavior while keeping recovery simple.
 - **Close** – flushes and closes the underlying file handle; the version stays available for introspection via `Manager.Version()` (used by CLI).
 
 ---
