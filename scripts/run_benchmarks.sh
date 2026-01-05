@@ -20,7 +20,7 @@ die() {
 }
 
 default_workloads="A,B,C,D,F"
-default_engines="nokv,badger"
+default_engines="nokv,badger,rocksdb"
 default_records=10000000
 default_ops=10000000
 default_conc=16
@@ -94,7 +94,7 @@ args=(
   -benchdir "${benchdir}"
   -seed "${ycsb_seed}"
   -sync="${ycsb_sync}"
-  -value_threshold 32
+  -value_threshold 1024
   -badger_block_cache_mb "${ycsb_block_cache_mb}"
   -badger_index_cache_mb "${ycsb_block_cache_mb}"
   -badger_compression "${ycsb_badger_comp}"

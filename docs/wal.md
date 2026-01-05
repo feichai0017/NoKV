@@ -18,12 +18,14 @@ On open, `wal.Manager` scans the directory, sorts segment IDs, and resumes the h
 ## 2. Record Format
 
 ```text
-uint32 length (big-endian)
-[]byte payload (encoded Entry batch)
-uint32 checksum (CRC32 Castagnoli)
+uint32 length (big-endian, includes type + payload)
+uint8  type
+[]byte payload
+uint32 checksum (CRC32 Castagnoli over type + payload)
 ```
 
 - Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in `wal/record.go`.
+- The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.
 - Appends are buffered by `bufio.Writer` so batches become single system calls.
 - Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestReplayTruncatedTail`).
 
