@@ -219,6 +219,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 | Cache & bloom filters | [docs/cache.md](docs/cache.md) |
 | Hot key analytics | [docs/hotring.md](docs/hotring.md) |
 | Stats & observability | [docs/stats.md](docs/stats.md) |
+| Configuration & options | [docs/config.md](docs/config.md) |
 | File abstractions | [docs/file.md](docs/file.md) |
 | Crash recovery playbook | [docs/recovery.md](docs/recovery.md) |
 | Testing matrix | [docs/testing.md](docs/testing.md) |

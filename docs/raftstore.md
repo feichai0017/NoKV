@@ -93,7 +93,29 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 ---
 
-## 8. Observability
+## 8. Control Plane & Region Operations
+
+### 8.1 Topology & Routing
+- Topology is sourced from `raft_config.example.json` (via `config.LoadFile`) and
+  reused by scripts, Docker Compose, and the Redis gateway.
+- The client builds a static region map (`[]RegionConfig`) and store endpoints
+  from the same file; there is no dynamic PD-style reconfiguration today.
+- The built-in scheduler currently emits leader-transfer operations only
+  (see `raftstore/scheduler`), acting as a minimal control plane.
+
+### 8.2 Split / Merge
+- **Split**: leaders call `Store.ProposeSplit`, which writes a split
+  `AdminCommand` into the parent region's raft log. On apply,
+  `Store.SplitRegion` updates the parent range/epoch and starts the child peer.
+- **Merge**: leaders call `Store.ProposeMerge`, writing a merge `AdminCommand`.
+  On apply, the target region range/epoch is expanded and the source peer is
+  stopped/removed from the manifest.
+- These operations are explicit and are not auto-triggered by size/traffic
+  heuristics; a higher-level controller could call the same APIs.
+
+---
+
+## 9. Observability
 
 - `store.RegionMetrics()` feeds into `StatsSnapshot`, making region counts and backlog visible via expvar and `nokv stats`.
 - `nokv regions` shows manifest-backed regions: ID, range, peers, state.
@@ -112,7 +134,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 ---
 
-## 9. Extending raftstore
+## 10. Extending raftstore
 
 - **Adding peers**: update the manifest with new Region metadata, then call `Store.StartPeer` on the target node.
 - **Follower or lease reads**: extend `ReadCommand` to include ReadIndex or leader lease checks; current design only serves leader reads.

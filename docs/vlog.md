@@ -12,9 +12,17 @@ The design echoes BadgerDB's value log while remaining manifest-driven like Rock
 
 ## 1. Layering (Engine View)
 
-- `file/` – mmap-backed `LogFile` primitives (open/close/truncate/lock) shared by WAL/vlog/SST.
-- `vlog/` – segment manager + IO helpers; focused on append/read/verify without DB policy.
-- `vlog.go` / `vlog_gc.go` – DB-facing policy: write ordering, manifest edits, GC scheduling.
+The value log is split into three layers so IO can stay reusable while DB
+policy lives in the core package:
+
+- **DB policy layer (`vlog.go`, `vlog_gc.go`)** – integrates the manager with
+  the DB write path, persists vlog metadata in the manifest, and drives GC
+  scheduling based on discard stats.
+- **Value-log manager (`vlog/`)** – owns segment lifecycle (open/rotate/remove),
+  encodes/decodes entries, and exposes append/read/sample APIs without touching
+  MVCC or LSM policy.
+- **File IO (`file/`)** – mmap-backed `LogFile` primitives (open/close/truncate,
+  read/write, read-only remap) shared by WAL/vlog/SST.
 
 ---
 
