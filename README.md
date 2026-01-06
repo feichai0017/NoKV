@@ -17,6 +17,7 @@
     </a>
     <img src="https://img.shields.io/badge/go-1.24+-blue.svg" alt="Go Version"/>
     <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
+	<a href="https://deepwiki.com/feichai0017/NoKV"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
   </p>
   <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
 </div>
