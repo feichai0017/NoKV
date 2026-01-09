@@ -5,7 +5,6 @@ import (
 	"math/bits"
 	"runtime"
 	"sort"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -77,6 +76,8 @@ func arenaPayloadFromOffset(arena *Arena, offset uint32) *nodePayload {
 }
 
 // ART implements an adaptive radix tree for memtable indexing.
+// Concurrency model: optimistic reads (version validation) + write locks on
+// the mutation path. Ordered iteration walks the tree in key order.
 type ART struct {
 	tree *artTree
 	ref  atomic.Int32
@@ -151,11 +152,9 @@ func (a *ART) DecrRef() {
 }
 
 type artTree struct {
-	root    atomic.Pointer[artNode]
-	minLeaf atomic.Pointer[artNode]
-	maxLeaf atomic.Pointer[artNode]
-	linkMu  sync.Mutex
-	arena   *Arena
+	// OLC: readers validate node versions, writers lock nodes on the path.
+	root  atomic.Pointer[artNode]
+	arena *Arena
 }
 
 func newARTree(arenaSize int64) *artTree {
@@ -177,8 +176,6 @@ func (t *artTree) release() {
 		return
 	}
 	t.root.Store(nil)
-	t.minLeaf.Store(nil)
-	t.maxLeaf.Store(nil)
 	t.arena = nil
 }
 
@@ -212,13 +209,12 @@ func (t *artTree) tryInsert(key []byte, value kv.ValueStruct) bool {
 	root := t.root.Load()
 	if root == nil {
 		leaf := newARTLeaf(t.arena, key, value)
-		if t.root.CompareAndSwap(nil, leaf) {
-			t.linkLeaf(leaf, nil)
-			return true
-		}
-		return false
+		return t.root.CompareAndSwap(nil, leaf)
 	}
 
+	// OLC invariants:
+	// - Writers lock nodes in top-down order and keep the lock until the mutation is finalized.
+	// - Readers use version checks to detect concurrent writers and restart if needed.
 	node := root
 	node.writeLock()
 	if t.root.Load() != root {
@@ -226,88 +222,77 @@ func (t *artTree) tryInsert(key []byte, value kv.ValueStruct) bool {
 		return false
 	}
 
+	// Lock-coupled descent: hold each node lock until we finalize the mutation.
 	locked := []*artNode{node}
 	depth := 0
 	var parent *artNode
 	var parentKey byte
-	var succSubtree *artNode
 
 	for {
 		if node.isLeaf() {
-			if bytes.Equal(node.leafKey(t.arena), key) {
-				node.storeValue(t.arena, value)
-				unlockNodes(locked)
-				return true
-			}
-			leaf := newARTLeaf(t.arena, key, value)
-			var successor *artNode
-			if CompareKeys(leaf.leafKey(t.arena), node.leafKey(t.arena)) < 0 {
-				successor = node
-			} else {
-				successor = node.nextNode(t.arena)
-			}
-			newParent := splitLeaf(t.arena, node, leaf, depth)
-			if parent == nil {
-				t.root.Store(newParent)
-			} else {
-				parent.replaceChild(t.arena, parentKey, newParent)
-			}
-			t.linkLeaf(leaf, successor)
-			unlockNodes(locked)
-			return true
+			return t.insertAtLeaf(locked, parent, parentKey, node, key, value, depth)
 		}
 
-		prefix, match, cmp := matchPrefix(t.arena, node, key, depth)
+		_, match, cmp := matchPrefix(t.arena, node, key, depth)
 		if cmp != 0 {
-			leaf := newARTLeaf(t.arena, key, value)
-			var successor *artNode
-			if cmp < 0 {
-				successor = minLeafUnlocked(t.arena, node)
-			} else {
-				var ok bool
-				successor, ok = minLeafNode(t.arena, succSubtree)
-				if !ok {
-					unlockNodes(locked)
-					return false
-				}
-			}
-			newParent := splitPrefix(t.arena, node, leaf, depth, match)
-			if parent == nil {
-				t.root.Store(newParent)
-			} else {
-				parent.replaceChild(t.arena, parentKey, newParent)
-			}
-			t.linkLeaf(leaf, successor)
-			unlockNodes(locked)
-			return true
+			return t.insertAtPrefixMismatch(locked, parent, parentKey, node, key, value, depth, match)
 		}
 
-		depth += len(prefix)
-		b := keyByte(key, depth)
-		eq, gt := node.findChildGE(t.arena, b)
-		if gt != nil {
-			succSubtree = gt
-		}
-		if eq == nil {
-			leaf := newARTLeaf(t.arena, key, value)
-			successor, ok := minLeafNode(t.arena, succSubtree)
-			if !ok {
-				unlockNodes(locked)
-				return false
-			}
-			node.addChild(t.arena, b, leaf)
-			t.linkLeaf(leaf, successor)
-			unlockNodes(locked)
-			return true
+		next, nextKey, nextDepth := t.prepareChildInsert(node, depth, key)
+		if next == nil {
+			return t.insertAtMissingChild(locked, node, nextKey, key, value)
 		}
 
 		parent = node
-		parentKey = b
-		node = eq
+		parentKey = nextKey
+		node = next
 		node.writeLock()
 		locked = append(locked, node)
-		depth++
+		depth = nextDepth
 	}
+}
+
+func (t *artTree) insertAtLeaf(locked []*artNode, parent *artNode, parentKey byte, leaf *artNode, key []byte, value kv.ValueStruct, depth int) bool {
+	if bytes.Equal(leaf.leafKey(t.arena), key) {
+		leaf.storeValue(t.arena, value)
+		unlockNodes(locked)
+		return true
+	}
+	newLeaf := newARTLeaf(t.arena, key, value)
+	newParent := splitLeaf(t.arena, leaf, newLeaf, depth)
+	t.linkNewParent(parent, parentKey, newParent)
+	unlockNodes(locked)
+	return true
+}
+
+func (t *artTree) insertAtPrefixMismatch(locked []*artNode, parent *artNode, parentKey byte, node *artNode, key []byte, value kv.ValueStruct, depth, match int) bool {
+	newLeaf := newARTLeaf(t.arena, key, value)
+	newParent := splitPrefix(t.arena, node, newLeaf, depth, match)
+	t.linkNewParent(parent, parentKey, newParent)
+	unlockNodes(locked)
+	return true
+}
+
+func (t *artTree) prepareChildInsert(node *artNode, depth int, key []byte) (*artNode, byte, int) {
+	nextDepth := depth + len(node.prefixBytes(t.arena))
+	b := keyByte(key, nextDepth)
+	eq, _ := node.findChild(t.arena, b)
+	return eq, b, nextDepth + 1
+}
+
+func (t *artTree) insertAtMissingChild(locked []*artNode, node *artNode, childKey byte, key []byte, value kv.ValueStruct) bool {
+	newLeaf := newARTLeaf(t.arena, key, value)
+	node.addChild(t.arena, childKey, newLeaf)
+	unlockNodes(locked)
+	return true
+}
+
+func (t *artTree) linkNewParent(parent *artNode, parentKey byte, newParent *artNode) {
+	if parent == nil {
+		t.root.Store(newParent)
+		return
+	}
+	parent.replaceChild(t.arena, parentKey, newParent)
 }
 
 func (t *artTree) lowerBound(key []byte) *artNode {
@@ -316,17 +301,6 @@ func (t *artTree) lowerBound(key []byte) *artNode {
 	}
 	arena := t.arena
 	for {
-		min := t.minLeaf.Load()
-		if min == nil {
-			return nil
-		}
-		if CompareKeys(key, min.leafKey(arena)) <= 0 {
-			return min
-		}
-		max := t.maxLeaf.Load()
-		if max != nil && CompareKeys(key, max.leafKey(arena)) > 0 {
-			return nil
-		}
 		root := t.root.Load()
 		if root == nil {
 			return nil
@@ -347,8 +321,9 @@ func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) (*artNod
 		if CompareKeys(node.leafKey(arena), key) >= 0 {
 			return node, true
 		}
-		return node.nextNode(arena), true
+		return nil, true
 	}
+	// Optimistic read: grab version, validate before returning.
 	version, ok := node.readLockOrRestart()
 	if !ok {
 		return nil, false
@@ -376,7 +351,7 @@ func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) (*artNod
 		return nil, true
 	}
 	b := keyByte(key, depth)
-	eq, gt := node.findChildGE(arena, b)
+	eq, gt := node.findChild(arena, b)
 	if !node.readUnlockOrRestart(version) {
 		return nil, false
 	}
@@ -400,6 +375,7 @@ func minLeafNode(arena *Arena, node *artNode) (*artNode, bool) {
 		if node == nil {
 			return nil, true
 		}
+		// Optimistically walk to the smallest leaf under this subtree.
 		if node.isLeaf() {
 			return node, true
 		}
@@ -415,47 +391,9 @@ func minLeafNode(arena *Arena, node *artNode) (*artNode, bool) {
 	}
 }
 
-func minLeafUnlocked(arena *Arena, node *artNode) *artNode {
-	for node != nil && !node.isLeaf() {
-		node = node.minChild(arena)
-	}
-	return node
-}
-
 func unlockNodes(nodes []*artNode) {
 	for i := len(nodes) - 1; i >= 0; i-- {
 		nodes[i].writeUnlock()
-	}
-}
-
-func (t *artTree) linkLeaf(leaf, successor *artNode) {
-	if leaf == nil || t == nil {
-		return
-	}
-	arena := t.arena
-	// Maintain the leaf linked list for ordered iteration.
-	t.linkMu.Lock()
-	defer t.linkMu.Unlock()
-	if successor == nil {
-		prev := t.maxLeaf.Load()
-		leaf.setPrevNode(arena, prev)
-		if prev != nil {
-			prev.setNextNode(arena, leaf)
-		} else {
-			t.minLeaf.Store(leaf)
-		}
-		t.maxLeaf.Store(leaf)
-		return
-	}
-
-	prev := successor.prevNode(arena)
-	leaf.setPrevNode(arena, prev)
-	leaf.setNextNode(arena, successor)
-	successor.setPrevNode(arena, leaf)
-	if prev != nil {
-		prev.setNextNode(arena, leaf)
-	} else {
-		t.minLeaf.Store(leaf)
 	}
 }
 
@@ -558,7 +496,8 @@ type nodePayload struct {
 	count    int
 	keys     []byte
 	children []uint32
-	idx      []byte
+	// idx maps [0..255] -> child index+1 for Node48 (0 == empty).
+	idx []byte
 }
 
 func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
@@ -593,11 +532,9 @@ type artNode struct {
 	prefix               [artMaxPrefixLen]byte
 	prefixOverflowOffset uint32
 
-	// Leaf metadata and list pointers live in the arena to avoid GC pressure.
+	// Leaf metadata lives in the arena to avoid GC pressure.
 	leafKeyOffset uint32
 	leafKeySize   uint16
-	prevOffset    atomic.Uint32
-	nextOffset    atomic.Uint32
 }
 
 func newARTNode(arena *Arena, kind uint8, prefix []byte, payload *nodePayload) *artNode {
@@ -632,6 +569,8 @@ func (n *artNode) readLockOrRestart() (uint64, bool) {
 	if n == nil {
 		return 0, false
 	}
+	// Readers record a version, perform their lookup, then re-check the version.
+	// Any write sets the lock bit and bumps the version on unlock.
 	version := n.version.Load()
 	if version&artNodeLockBit != 0 {
 		return 0, false
@@ -650,6 +589,7 @@ func (n *artNode) writeLock() {
 	if n == nil {
 		return
 	}
+	// Set the low bit as the write lock; version bump happens on unlock.
 	for {
 		version := n.version.Load()
 		if version&artNodeLockBit != 0 {
@@ -667,6 +607,7 @@ func (n *artNode) writeUnlock() {
 		return
 	}
 	version := n.version.Load()
+	// Clear lock bit and bump version to invalidate optimistic readers.
 	n.version.Store((version + 1) &^ artNodeLockBit)
 }
 
@@ -697,34 +638,6 @@ func (n *artNode) setPayload(arena *Arena, payload *nodePayload) {
 		return
 	}
 	n.payloadOffset.Store(arenaPayloadOffset(arena, payload))
-}
-
-func (n *artNode) prevNode(arena *Arena) *artNode {
-	if n == nil {
-		return nil
-	}
-	return arenaNodeFromOffset(arena, n.prevOffset.Load())
-}
-
-func (n *artNode) nextNode(arena *Arena) *artNode {
-	if n == nil {
-		return nil
-	}
-	return arenaNodeFromOffset(arena, n.nextOffset.Load())
-}
-
-func (n *artNode) setPrevNode(arena *Arena, prev *artNode) {
-	if n == nil {
-		return
-	}
-	n.prevOffset.Store(arenaNodeOffset(arena, prev))
-}
-
-func (n *artNode) setNextNode(arena *Arena, next *artNode) {
-	if n == nil {
-		return
-	}
-	n.nextOffset.Store(arenaNodeOffset(arena, next))
 }
 
 func (n *artNode) loadValue(arena *Arena) kv.ValueStruct {
@@ -790,11 +703,12 @@ func (n *artNode) ensurePayload(arena *Arena) *nodePayload {
 	return payload
 }
 
-func (n *artNode) findChildGE(arena *Arena, key byte) (*artNode, *artNode) {
+func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 	payload := n.payloadPtr(arena)
 	if payload == nil {
 		return nil, nil
 	}
+	// Return the exact child (if any) and the next greater child for lowerBound.
 	switch n.kind {
 	case artNode4Kind:
 		for i := 0; i < payload.count; i++ {
@@ -836,6 +750,8 @@ func (n *artNode) findChildGE(arena *Arena, key byte) (*artNode, *artNode) {
 		}
 		return nil, arenaNodeFromOffset(arena, payload.children[idx])
 	case artNode48Kind:
+		// Node48 stores child pointers compacted in children[0..count),
+		// with idx[key] mapping to child index+1.
 		if int(key) < len(payload.idx) {
 			pos := payload.idx[key]
 			if pos > 0 {
@@ -849,6 +765,7 @@ func (n *artNode) findChildGE(arena *Arena, key byte) (*artNode, *artNode) {
 		}
 		return nil, findGreaterChild48(arena, payload, int(key)+1)
 	case artNode256Kind:
+		// Node256 stores direct byte -> child mapping.
 		if int(key) < len(payload.children) {
 			eq := arenaNodeFromOffset(arena, payload.children[key])
 			gt := findGreaterChild256(arena, payload, int(key)+1)
@@ -1007,6 +924,7 @@ func (n *artNode) addChildSmall(arena *Arena, key byte, child *artNode) {
 
 func (n *artNode) addChild48(arena *Arena, key byte, child *artNode) {
 	payload := n.ensurePayload(arena)
+	// Node48 stores child slots densely and records the slot index in idx.
 	if payload.idx[key] != 0 {
 		idx := int(payload.idx[key] - 1)
 		if idx < len(payload.children) {
@@ -1048,6 +966,7 @@ func (n *artNode) growNode(arena *Arena, kind uint8) {
 		}
 		n.kind = artNode16Kind
 	case artNode48Kind:
+		// Expand into a dense Node48 layout with idx indirection.
 		oldKeys := payload.keys
 		oldChildren := payload.children
 		idx := arena.allocByteSlice(256, 256)
@@ -1061,6 +980,7 @@ func (n *artNode) growNode(arena *Arena, kind uint8) {
 		payload.children = children
 		n.kind = artNode48Kind
 	case artNode256Kind:
+		// Expand into direct 256-way child array.
 		oldKeys := payload.keys
 		oldIdx := payload.idx
 		oldChildren := payload.children
@@ -1092,7 +1012,13 @@ type artIterator struct {
 	tree  *artTree
 	owner *ART
 	curr  *artNode
+	stack []iterFrame
 	entry kv.Entry
+}
+
+type iterFrame struct {
+	node *artNode
+	idx  int
 }
 
 func (it *artIterator) Next() {
@@ -1103,7 +1029,8 @@ func (it *artIterator) Next() {
 		it.curr = nil
 		return
 	}
-	it.curr = it.curr.nextNode(it.tree.arena)
+	// Walk to the next leaf by climbing until we find the next child.
+	it.advance()
 }
 
 func (it *artIterator) Valid() bool {
@@ -1114,7 +1041,9 @@ func (it *artIterator) Rewind() {
 	if it == nil || it.tree == nil {
 		return
 	}
-	it.curr = it.tree.minLeaf.Load()
+	it.stack = it.stack[:0]
+	root := it.tree.root.Load()
+	it.descendToMin(root)
 }
 
 func (it *artIterator) Item() Item {
@@ -1143,5 +1072,175 @@ func (it *artIterator) Seek(key []byte) {
 	if it == nil || it.tree == nil {
 		return
 	}
-	it.curr = it.tree.lowerBound(key)
+	it.stack = it.stack[:0]
+	leaf := it.tree.lowerBound(key)
+	if leaf == nil {
+		it.curr = nil
+		return
+	}
+	it.buildStackToLeaf(leaf)
+}
+
+func (it *artIterator) descendToMin(node *artNode) {
+	if it == nil || it.tree == nil || it.tree.arena == nil {
+		it.curr = nil
+		return
+	}
+	for node != nil && !node.isLeaf() {
+		child, nextIdx := it.nextChild(node, 0)
+		if child == nil {
+			it.curr = nil
+			return
+		}
+		it.stack = append(it.stack, iterFrame{node: node, idx: nextIdx})
+		node = child
+	}
+	it.curr = node
+}
+
+func (it *artIterator) advance() {
+	for len(it.stack) > 0 {
+		top := &it.stack[len(it.stack)-1]
+		child, nextIdx := it.nextChild(top.node, top.idx)
+		if child == nil {
+			it.stack = it.stack[:len(it.stack)-1]
+			continue
+		}
+		top.idx = nextIdx
+		it.descendToMin(child)
+		return
+	}
+	it.curr = nil
+}
+
+func (it *artIterator) nextChild(node *artNode, idx int) (*artNode, int) {
+	if node == nil || it.tree == nil || it.tree.arena == nil {
+		return nil, 0
+	}
+	arena := it.tree.arena
+	payload := node.payloadPtr(arena)
+	if payload == nil {
+		return nil, 0
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	switch node.kind {
+	case artNode4Kind, artNode16Kind:
+		for i := idx; i < payload.count; i++ {
+			child := arenaNodeFromOffset(arena, payload.children[i])
+			if child != nil {
+				return child, i + 1
+			}
+		}
+	case artNode48Kind:
+		for i := idx; i < len(payload.idx); i++ {
+			pos := payload.idx[i]
+			if pos == 0 {
+				continue
+			}
+			childIdx := int(pos - 1)
+			if childIdx >= len(payload.children) {
+				continue
+			}
+			child := arenaNodeFromOffset(arena, payload.children[childIdx])
+			if child != nil {
+				return child, i + 1
+			}
+		}
+	case artNode256Kind:
+		for i := idx; i < len(payload.children); i++ {
+			if payload.children[i] == 0 {
+				continue
+			}
+			child := arenaNodeFromOffset(arena, payload.children[i])
+			if child != nil {
+				return child, i + 1
+			}
+		}
+	}
+	return nil, 0
+}
+
+func (it *artIterator) childForKey(node *artNode, key byte) (*artNode, int) {
+	if node == nil || it.tree == nil || it.tree.arena == nil {
+		return nil, 0
+	}
+	arena := it.tree.arena
+	payload := node.payloadPtr(arena)
+	if payload == nil {
+		return nil, 0
+	}
+	switch node.kind {
+	case artNode4Kind, artNode16Kind:
+		for i := 0; i < payload.count; i++ {
+			if payload.keys[i] == key {
+				child := arenaNodeFromOffset(arena, payload.children[i])
+				if child == nil {
+					return nil, 0
+				}
+				return child, i + 1
+			}
+		}
+	case artNode48Kind:
+		pos := payload.idx[key]
+		if pos == 0 {
+			return nil, 0
+		}
+		childIdx := int(pos - 1)
+		if childIdx >= len(payload.children) {
+			return nil, 0
+		}
+		child := arenaNodeFromOffset(arena, payload.children[childIdx])
+		if child == nil {
+			return nil, 0
+		}
+		return child, int(key) + 1
+	case artNode256Kind:
+		if payload.children[key] == 0 {
+			return nil, 0
+		}
+		child := arenaNodeFromOffset(arena, payload.children[key])
+		if child == nil {
+			return nil, 0
+		}
+		return child, int(key) + 1
+	}
+	return nil, 0
+}
+
+func (it *artIterator) buildStackToLeaf(leaf *artNode) {
+	if leaf == nil || it.tree == nil || it.tree.arena == nil {
+		it.curr = nil
+		it.stack = it.stack[:0]
+		return
+	}
+	arena := it.tree.arena
+	key := leaf.leafKey(arena)
+	node := it.tree.root.Load()
+	depth := 0
+	it.stack = it.stack[:0]
+	for node != nil && !node.isLeaf() {
+		prefix := node.prefixBytes(arena)
+		if len(prefix) > 0 {
+			match, cmp := comparePrefix(prefix, key, depth)
+			if cmp != 0 || match < len(prefix) {
+				it.curr = nil
+				it.stack = it.stack[:0]
+				return
+			}
+			depth += len(prefix)
+		}
+		childKey := keyByte(key, depth)
+		child, nextIdx := it.childForKey(node, childKey)
+		if child == nil {
+			it.curr = nil
+			it.stack = it.stack[:0]
+			return
+		}
+		it.stack = append(it.stack, iterFrame{node: node, idx: nextIdx})
+		node = child
+		depth++
+	}
+	it.curr = node
 }

@@ -1,8 +1,13 @@
 package utils
 
 import (
+	"errors"
 	"math"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/kv"
 )
@@ -67,5 +72,83 @@ func TestARTIteratorOrder(t *testing.T) {
 	entry := it.Item().Entry()
 	if entry == nil || !kv.SameKey(seek, entry.Key) {
 		t.Fatalf("seek mismatch: got %v", entry)
+	}
+}
+
+func TestARTConcurrentWriteIterate(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	defer art.DecrRef()
+
+	var (
+		stop  int32
+		wg    sync.WaitGroup
+		keys  = [][]byte{[]byte("k0"), []byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")}
+		vers  = []uint64{1, 2, 3, 4, 5}
+		errCh = make(chan error, 1)
+	)
+
+	report := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case errCh <- err:
+			atomic.StoreInt32(&stop, 1)
+		default:
+		}
+	}
+
+	// Writers: continuously update a small keyset with different versions.
+	for i := range 4 {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for atomic.LoadInt32(&stop) == 0 {
+				for j, k := range keys {
+					entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
+					entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, vers[(worker+j)%len(vers)])
+					art.Add(entry)
+					entry.DecrRef()
+				}
+			}
+		}(i)
+	}
+
+	// Reader: iterate and validate ordering under concurrent writes.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		deadline := time.Now().Add(200 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			it := art.NewIterator(nil)
+			it.Rewind()
+			for ; it.Valid(); it.Next() {
+				item := it.Item()
+				if item == nil {
+					report(errors.New("nil entry during iteration"))
+					break
+				}
+				entry := item.Entry()
+				if entry == nil {
+					report(errors.New("nil entry during iteration"))
+					break
+				}
+				if len(entry.Key) == 0 {
+					report(errors.New("empty key during iteration"))
+					break
+				}
+			}
+			_ = it.Close()
+			runtime.Gosched()
+		}
+	}()
+
+	time.Sleep(250 * time.Millisecond)
+	atomic.StoreInt32(&stop, 1)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatalf("%v", err)
+	default:
 	}
 }
