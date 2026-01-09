@@ -42,6 +42,7 @@ type node struct {
 
 	// A byte slice is 24 bytes. We are trying to save space here.
 	keyOffset uint32 // Immutable. No need to lock to access key.
+	self      uint32 // Immutable offset of this node in the arena.
 	keySize   uint16 // Immutable. No need to lock to access key.
 
 	// Height of the tower.
@@ -92,6 +93,7 @@ func newNode(arena *Arena, key []byte, v kv.ValueStruct, height int) *node {
 	val := encodeValue(arena.putVal(v), v.EncodedSize())
 
 	node := arena.getNode(nodeOffset)
+	node.self = nodeOffset
 	node.keyOffset = keyOffset
 	node.keySize = uint16(len(key))
 	node.height = uint16(height)

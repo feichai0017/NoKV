@@ -79,14 +79,6 @@ func arenaSizeFor(memTableSize int64) int64 {
 	return base * 2
 }
 
-func arenaSizeForART(memTableSize int64) int64 {
-	base := arenaSizeFor(memTableSize)
-	if base > math.MaxInt64/2 {
-		return math.MaxInt64
-	}
-	return base * 2
-}
-
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
 func (lsm *LSM) NewMemtable() *memTable {
 	newFid := atomic.AddUint64(&(lsm.levels.maxFID), 1)
@@ -290,7 +282,7 @@ func newMemIndex(opt *Options) memIndex {
 	}
 	switch opt.MemTableEngine {
 	case "art":
-		return utils.NewART(arenaSizeForART(opt.MemTableSize))
+		return utils.NewART(arenaSizeFor(opt.MemTableSize))
 	case "", "skiplist":
 		fallthrough
 	default:

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"log"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -12,6 +13,8 @@ import (
 const (
 	// DefaultArenaSize is the default allocation size for in-memory indexes.
 	DefaultArenaSize = int64(64 << 20)
+
+	minArenaChunkSize = int64(1 << 20)
 
 	offsetSize = int(unsafe.Sizeof(uint32(0)))
 
@@ -26,42 +29,58 @@ const (
 
 // Arena should be lock-free.
 type Arena struct {
-	n          uint32
-	shouldGrow bool
-	buf        []byte
+	n         uint32
+	chunkSize uint32
+	chunks    atomic.Value // [][]byte
+	chunksMu  sync.Mutex
 }
 
 // newArena returns a new arena.
 func newArena(n int64) *Arena {
 	// Don't store data at position 0 in order to reserve offset=0 as a kind
 	// of nil pointer.
-	out := &Arena{
-		n:   1,
-		buf: make([]byte, n),
+	if n <= 0 {
+		n = DefaultArenaSize
 	}
+	if n > int64(^uint32(0)) {
+		n = int64(^uint32(0))
+	}
+	chunkSize := n
+	if chunkSize > DefaultArenaSize {
+		chunkSize = DefaultArenaSize
+	}
+	if chunkSize < minArenaChunkSize {
+		chunkSize = minArenaChunkSize
+	}
+	out := &Arena{
+		n:         1,
+		chunkSize: uint32(chunkSize),
+	}
+	first := make([]byte, int(chunkSize))
+	out.chunks.Store([][]byte{first})
 	return out
 }
 
 func (s *Arena) allocate(sz uint32) uint32 {
-	offset := atomic.AddUint32(&s.n, sz)
-	if !s.shouldGrow {
-		AssertTrue(int(offset) <= len(s.buf))
-		return offset - sz
+	AssertTrue(s != nil)
+	AssertTrue(sz > 0)
+	AssertTrue(sz <= s.chunkSize)
+	for {
+		cur := atomic.LoadUint32(&s.n)
+		start := cur
+		end := start + sz
+		startChunk := start / s.chunkSize
+		endChunk := (end - 1) / s.chunkSize
+		if startChunk != endChunk {
+			start = (startChunk + 1) * s.chunkSize
+			end = start + sz
+			endChunk = (end - 1) / s.chunkSize
+		}
+		if atomic.CompareAndSwapUint32(&s.n, cur, end) {
+			s.ensureChunk(endChunk)
+			return start
+		}
 	}
-
-	// We are keeping extra bytes in the end so that the checkptr doesn't fail. We apply some
-	// intelligence to reduce the size of the node by only keeping towers upto valid height and not
-	// maxHeight. This reduces the node's size, but checkptr doesn't know about its reduced size.
-	// checkptr tries to verify that the node of size MaxNodeSize resides on a single heap
-	// allocation which causes this error: checkptr:converted pointer straddles multiple allocations
-	if int(offset) > len(s.buf)-MaxNodeSize {
-		growBy := max(min(uint32(len(s.buf)), 1<<30), sz)
-		newBuf := make([]byte, len(s.buf)+int(growBy))
-		AssertTrue(len(s.buf) == copy(newBuf, s.buf))
-		s.buf = newBuf
-		// fmt.Print(len(s.buf), " ")
-	}
-	return offset - sz
 }
 
 func (s *Arena) allocAligned(size, align int) uint32 {
@@ -72,6 +91,7 @@ func (s *Arena) allocAligned(size, align int) uint32 {
 		align = 1
 	}
 	pad := align - 1
+	AssertTrue(uint32(size+pad) <= s.chunkSize)
 	offset := s.allocate(uint32(size + pad))
 	return (offset + uint32(pad)) & ^uint32(pad)
 }
@@ -80,8 +100,9 @@ func (s *Arena) allocBytes(length int) []byte {
 	if s == nil || length <= 0 {
 		return nil
 	}
+	AssertTrue(uint32(length) <= s.chunkSize)
 	offset := s.allocate(uint32(length))
-	return s.buf[offset : offset+uint32(length)]
+	return s.bytesAt(offset, length)
 }
 
 func (s *Arena) allocByteSlice(length, capacity int) []byte {
@@ -110,8 +131,13 @@ func (s *Arena) allocUint32Slice(length, capacity int) []uint32 {
 	}
 	elemSize := int(unsafe.Sizeof(uint32(0)))
 	align := int(unsafe.Alignof(uint32(0)))
+	AssertTrue(uint32(elemSize*capacity) <= s.chunkSize)
 	offset := s.allocAligned(elemSize*capacity, align)
-	raw := unsafe.Slice((*uint32)(unsafe.Pointer(&s.buf[offset])), capacity)
+	ptr := (*uint32)(s.addr(offset))
+	if ptr == nil {
+		return nil
+	}
+	raw := unsafe.Slice(ptr, capacity)
 	return raw[:length:capacity]
 }
 
@@ -142,14 +168,18 @@ func (s *Arena) putNode(height int) uint32 {
 func (s *Arena) putVal(v kv.ValueStruct) uint32 {
 	l := uint32(v.EncodedSize())
 	offset := s.allocate(l)
-	v.EncodeValue(s.buf[offset:])
+	buf := s.bytesAt(offset, int(l))
+	v.EncodeValue(buf)
 	return offset
 }
 
 func (s *Arena) putKey(key []byte) uint32 {
 	keySz := uint32(len(key))
+	if keySz == 0 {
+		return 0
+	}
 	offset := s.allocate(keySz)
-	buf := s.buf[offset : offset+keySz]
+	buf := s.bytesAt(offset, int(keySz))
 	AssertTrue(len(key) == copy(buf, key))
 	return offset
 }
@@ -160,18 +190,18 @@ func (s *Arena) getNode(offset uint32) *node {
 	if offset == 0 {
 		return nil
 	}
-	return (*node)(unsafe.Pointer(&s.buf[offset]))
+	return (*node)(s.addr(offset))
 }
 
 // getKey returns byte slice at offset.
 func (s *Arena) getKey(offset uint32, size uint16) []byte {
-	return s.buf[offset : offset+uint32(size)]
+	return s.bytesAt(offset, int(size))
 }
 
 // getVal returns byte slice at offset. The given size should be just the value
 // size and should NOT include the meta bytes.
 func (s *Arena) getVal(offset uint32, size uint32) (ret kv.ValueStruct) {
-	ret.DecodeValue(s.buf[offset : offset+size])
+	ret.DecodeValue(s.bytesAt(offset, int(size)))
 	return
 }
 
@@ -181,9 +211,79 @@ func (s *Arena) getNodeOffset(nd *node) uint32 {
 	if nd == nil {
 		return 0 //return nil pointer
 	}
-	//get the offset of node in the arena
-	//unsafe.Pointer is equivalent to void*, uintptr can convert the address of void* to a numeric variable
-	return uint32(uintptr(unsafe.Pointer(nd)) - uintptr(unsafe.Pointer(&s.buf[0])))
+	return nd.self
+}
+
+func (s *Arena) bytesAt(offset uint32, length int) []byte {
+	if s == nil || length <= 0 || offset == 0 {
+		return nil
+	}
+	chunk, off := s.chunkFor(offset)
+	if chunk == nil {
+		return nil
+	}
+	start := int(off)
+	end := start + length
+	AssertTrue(end <= len(chunk))
+	return chunk[start:end]
+}
+
+func (s *Arena) addr(offset uint32) unsafe.Pointer {
+	if s == nil || offset == 0 {
+		return nil
+	}
+	chunk, off := s.chunkFor(offset)
+	if chunk == nil {
+		return nil
+	}
+	return unsafe.Pointer(&chunk[int(off)])
+}
+
+func (s *Arena) chunkFor(offset uint32) ([]byte, uint32) {
+	if s == nil {
+		return nil, 0
+	}
+	chunks := s.loadChunks()
+	if len(chunks) == 0 {
+		return nil, 0
+	}
+	idx := offset / s.chunkSize
+	off := offset % s.chunkSize
+	if int(idx) >= len(chunks) {
+		return nil, 0
+	}
+	return chunks[idx], off
+}
+
+func (s *Arena) loadChunks() [][]byte {
+	if s == nil {
+		return nil
+	}
+	val := s.chunks.Load()
+	if val == nil {
+		return nil
+	}
+	return val.([][]byte)
+}
+
+func (s *Arena) ensureChunk(idx uint32) {
+	chunks := s.loadChunks()
+	if int(idx) < len(chunks) {
+		return
+	}
+	s.chunksMu.Lock()
+	defer s.chunksMu.Unlock()
+
+	chunks = s.loadChunks()
+	if int(idx) < len(chunks) {
+		return
+	}
+	next := make([][]byte, len(chunks), int(idx)+1)
+	copy(next, chunks)
+	for len(next) <= int(idx) {
+		next = append(next, make([]byte, int(s.chunkSize)))
+	}
+	s.chunks.Store(next)
 }
 
 // AssertTrue asserts that b is true. Otherwise, it would log fatal.
