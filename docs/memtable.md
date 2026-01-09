@@ -33,7 +33,7 @@ type memIndex interface {
 * **Arena sizing** – `utils.NewSkiplist` uses `arenaSizeFor`; `utils.NewART` uses `arenaSizeForART` to reserve more space for variable node payloads and prefix spills.
 * **WAL coupling** – every `Set` uses `kv.EncodeEntry` to materialise the payload to the active WAL segment before inserting into the chosen index. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – `LSM.NewMemtable` atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.
-* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256), keeps leaf keys in order with a linked list, and uses optimistic version checks for reads with localized locks for writes.
+* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.
 
 ---
 
