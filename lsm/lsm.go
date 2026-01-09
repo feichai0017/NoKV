@@ -381,6 +381,83 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	}
 }
 
+// SetBatch writes a batch of entries to the active memtable, batching WAL appends
+// per memtable segment while keeping the same rotation semantics as Set.
+func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	lsm.closer.Add(1)
+	defer lsm.closer.Done()
+
+outer:
+	for i := 0; i < len(entries); {
+		entry := entries[i]
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
+		estimate := int64(kv.EstimateEncodeSize(entry))
+		for {
+			lsm.lock.RLock()
+			mt := lsm.memTable
+			if mt == nil {
+				lsm.lock.RUnlock()
+				return errors.New("lsm: memtable not initialized")
+			}
+			avail := lsm.option.MemTableSize - atomic.LoadInt64(&mt.walSize)
+			if avail <= 0 {
+				lsm.lock.RUnlock()
+				var old *memTable
+				lsm.lock.Lock()
+				if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+					old = lsm.rotateLocked()
+				}
+				lsm.lock.Unlock()
+				if old != nil {
+					lsm.submitFlush(old)
+				}
+				continue
+			}
+
+			start := i
+			used := int64(0)
+			for i < len(entries) {
+				entry = entries[i]
+				if entry == nil || len(entry.Key) == 0 {
+					lsm.lock.RUnlock()
+					return utils.ErrEmptyKey
+				}
+				est := int64(kv.EstimateEncodeSize(entry))
+				if used+est > avail {
+					if i == start {
+						lsm.lock.RUnlock()
+						var old *memTable
+						lsm.lock.Lock()
+						if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+est > lsm.option.MemTableSize {
+							old = lsm.rotateLocked()
+						}
+						lsm.lock.Unlock()
+						if old != nil {
+							lsm.submitFlush(old)
+						}
+						continue outer
+					}
+					break
+				}
+				used += est
+				i++
+			}
+			err := mt.setBatch(entries[start:i])
+			lsm.lock.RUnlock()
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
 // Get _
 func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {

@@ -33,10 +33,6 @@ type valueLog struct {
 	lfDiscardStats     *lfDiscardStats
 }
 
-type valueLogWriter interface {
-	WriteRequests(reqs []*request) error
-}
-
 func (vlog *valueLog) setValueLogFileSize(sz int) {
 	if vlog == nil || sz <= 0 {
 		return

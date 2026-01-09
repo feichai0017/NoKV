@@ -46,7 +46,6 @@ type (
 		wal              *wal.Manager
 		walWatchdog      *wal.Watchdog
 		vlog             *valueLog
-		vwriter          valueLogWriter
 		stats            *Stats
 		blockWrites      int32
 		vhead            *kv.ValuePtr
