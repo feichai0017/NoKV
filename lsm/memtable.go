@@ -107,24 +107,8 @@ func (m *memTable) close() error {
 }
 
 func (m *memTable) Set(entry *kv.Entry) error {
-	buf := getWalBuffer()
-	payload, err := kv.EncodeEntry(buf, entry)
-	if err != nil {
-		putWalBuffer(buf)
-		return err
-	}
-	infos, err := m.lsm.wal.Append(payload)
-	putWalBuffer(buf)
-	if err != nil {
-		return err
-	}
-	if len(infos) > 0 {
-		atomic.AddInt64(&m.walSize, int64(infos[0].Length)+8)
-	}
-	if m.index != nil {
-		m.index.Add(entry)
-	}
-	return nil
+	entries := [1]*kv.Entry{entry}
+	return m.setBatch(entries[:])
 }
 
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
@@ -147,6 +131,44 @@ func (m *memTable) Size() int64 {
 		return 0
 	}
 	return m.index.MemSize()
+}
+
+func (m *memTable) setBatch(entries []*kv.Entry) error {
+	if m == nil || len(entries) == 0 {
+		return nil
+	}
+	payloads := make([][]byte, 0, len(entries))
+	buffers := make([]*bytes.Buffer, 0, len(entries))
+	releaseBuffers := func() {
+		for _, buf := range buffers {
+			putWalBuffer(buf)
+		}
+	}
+	for _, entry := range entries {
+		buf := getWalBuffer()
+		payload, err := kv.EncodeEntry(buf, entry)
+		if err != nil {
+			putWalBuffer(buf)
+			releaseBuffers()
+			return err
+		}
+		payloads = append(payloads, payload)
+		buffers = append(buffers, buf)
+	}
+	infos, err := m.lsm.wal.Append(payloads...)
+	releaseBuffers()
+	if err != nil {
+		return err
+	}
+	for _, info := range infos {
+		atomic.AddInt64(&m.walSize, int64(info.Length)+8)
+	}
+	if m.index != nil {
+		for _, entry := range entries {
+			m.index.Add(entry)
+		}
+	}
+	return nil
 }
 
 // recovery rebuilds memtables from existing WAL segments.

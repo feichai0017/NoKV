@@ -342,12 +342,8 @@ func (db *DB) commitWorker() {
 			db.writeMetrics.RecordBatch(len(requests), totalEntries, totalSize, waitSum)
 		}
 
-		var err error
-		if db.vwriter != nil {
-			err = db.vwriter.WriteRequests(requests)
-		} else {
-			err = db.vlog.write(requests)
-		}
+		err := db.vlog.write(requests)
+
 		if err != nil {
 			db.finishCommitRequests(batch.reqs, err)
 			db.releaseCommitBatch(batch)
@@ -460,10 +456,10 @@ func (db *DB) writeToLSM(b *request) error {
 			entry.Meta = entry.Meta | kv.BitValuePointer
 			entry.Value = b.Ptrs[i].Encode()
 		}
-		if err := db.lsm.Set(entry); err != nil {
-			return err
-		}
 		db.recordCFWrite(entry.CF, 1)
+	}
+	if err := db.lsm.SetBatch(b.Entries); err != nil {
+		return err
 	}
 	return nil
 }
