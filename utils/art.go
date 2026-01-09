@@ -161,7 +161,7 @@ func (a *ART) DecrRef() {
 }
 
 type artTree struct {
-	// OLC: readers validate node versions, writers lock nodes on the path.
+	// COW + CAS: readers are lock-free; writers clone payloads and CAS root/parent.
 	root  atomic.Pointer[artNode]
 	arena *Arena
 }
@@ -416,7 +416,7 @@ func splitPrefix(arena *Arena, node, incoming *artNode, depth int, match int) *a
 	existingKey := nodePrefix[match]
 	incomingKey := keyByte(incoming.leafKey(arena), depth+match)
 
-	trimmed := cloneInnerNodeWithPrefix(arena, node, nodePrefix[match+1:], node.payloadPtr(arena))
+	trimmed := cloneInnerNode(arena, node, node.kind, nodePrefix[match+1:], node.payloadPtr(arena))
 	if trimmed == nil {
 		return nil
 	}
@@ -451,7 +451,7 @@ func newTwoChildNode(arena *Arena, prefix []byte, aKey byte, aChild *artNode, bK
 	return parent
 }
 
-func cloneInnerNodeWithPayload(arena *Arena, src *artNode, kind uint8, payload *nodePayload) *artNode {
+func cloneInnerNode(arena *Arena, src *artNode, kind uint8, prefix []byte, payload *nodePayload) *artNode {
 	if arena == nil || src == nil {
 		return nil
 	}
@@ -463,20 +463,17 @@ func cloneInnerNodeWithPayload(arena *Arena, src *artNode, kind uint8, payload *
 	*n = artNode{}
 	n.self = self
 	n.kind = kind
-	n.prefixLen = src.prefixLen
-	n.prefix = src.prefix
-	n.prefixOverflowOffset = src.prefixOverflowOffset
+	if prefix == nil {
+		n.prefixLen = src.prefixLen
+		n.prefix = src.prefix
+		n.prefixOverflowOffset = src.prefixOverflowOffset
+	} else {
+		n.setPrefix(arena, prefix)
+	}
 	if payload != nil {
 		n.setPayload(arena, payload)
 	}
 	return n
-}
-
-func cloneInnerNodeWithPrefix(arena *Arena, src *artNode, prefix []byte, payload *nodePayload) *artNode {
-	if arena == nil || src == nil {
-		return nil
-	}
-	return newARTNode(arena, src.kind, prefix, payload)
 }
 
 func insertChild(arena *Arena, node *artNode, key byte, child *artNode) (*artNode, bool) {
@@ -488,7 +485,7 @@ func insertChild(arena *Arena, node *artNode, key byte, child *artNode) (*artNod
 	if !ok || newPayload == nil {
 		return nil, false
 	}
-	return cloneInnerNodeWithPayload(arena, node, newKind, newPayload), true
+	return cloneInnerNode(arena, node, newKind, nil, newPayload), true
 }
 
 func clonePayloadReplaceChild(arena *Arena, payload *nodePayload, kind uint8, key byte, oldChild, newChild *artNode) *nodePayload {
@@ -497,194 +494,193 @@ func clonePayloadReplaceChild(arena *Arena, payload *nodePayload, kind uint8, ke
 	}
 	oldOff := arenaNodeOffset(arena, oldChild)
 	newOff := arenaNodeOffset(arena, newChild)
-	switch kind {
-	case artNode4Kind, artNode16Kind:
-		newPayload := initPayloadForKind(arena, kind)
-		if newPayload == nil {
-			return nil
-		}
-		newPayload.count = payload.count
-		copy(newPayload.keys, payload.keys)
-		copy(newPayload.children, payload.children)
-		for i := 0; i < payload.count; i++ {
-			if payload.keys[i] != key {
-				continue
-			}
-			if payload.children[i] != oldOff {
-				return nil
-			}
-			newPayload.children[i] = newOff
-			return newPayload
-		}
-	case artNode48Kind:
-		newPayload := initPayloadForKind(arena, artNode48Kind)
-		if newPayload == nil {
-			return nil
-		}
-		newPayload.count = payload.count
-		copy(newPayload.idx, payload.idx)
-		copy(newPayload.children, payload.children)
-		pos := payload.idx[key]
-		if pos == 0 {
-			return nil
-		}
-		idx := int(pos - 1)
-		if idx >= len(payload.children) || payload.children[idx] != oldOff {
-			return nil
-		}
-		newPayload.children[idx] = newOff
-		return newPayload
-	case artNode256Kind:
-		newPayload := initPayloadForKind(arena, artNode256Kind)
-		if newPayload == nil {
-			return nil
-		}
-		newPayload.count = payload.count
-		copy(newPayload.children, payload.children)
-		if payload.children[key] != oldOff {
-			return nil
-		}
-		newPayload.children[key] = newOff
-		return newPayload
+	newPayload := clonePayloadToKind(arena, payload, kind, kind)
+	if newPayload == nil {
+		return nil
 	}
-	return nil
+	if !payloadReplace(kind, newPayload, key, oldOff, newOff) {
+		return nil
+	}
+	return newPayload
 }
 
 func clonePayloadInsert(arena *Arena, payload *nodePayload, kind uint8, key byte, child *artNode) (*nodePayload, uint8, bool) {
 	if arena == nil || child == nil {
 		return nil, kind, false
 	}
-	if payload == nil {
-		payload = &nodePayload{}
+	count := 0
+	if payload != nil {
+		count = payload.count
 	}
 	childOff := arenaNodeOffset(arena, child)
+	targetKind := kind
 	switch kind {
 	case artNode4Kind:
-		if payload.count < artNode4Cap {
-			newPayload := clonePayloadSmallInsert(arena, payload, artNode4Kind, key, childOff)
-			return newPayload, artNode4Kind, newPayload != nil
+		if count >= artNode4Cap {
+			targetKind = artNode16Kind
 		}
-		newPayload := clonePayloadSmallInsert(arena, payload, artNode16Kind, key, childOff)
-		return newPayload, artNode16Kind, newPayload != nil
 	case artNode16Kind:
-		if payload.count < artNode16Cap {
-			newPayload := clonePayloadSmallInsert(arena, payload, artNode16Kind, key, childOff)
-			return newPayload, artNode16Kind, newPayload != nil
+		if count >= artNode16Cap {
+			targetKind = artNode48Kind
 		}
-		newPayload, ok := clonePayload16To48Insert(arena, payload, key, childOff)
-		return newPayload, artNode48Kind, ok
 	case artNode48Kind:
-		if payload.count < artNode48Cap {
-			newPayload, ok := clonePayload48Insert(arena, payload, key, childOff)
-			return newPayload, artNode48Kind, ok
+		if count >= artNode48Cap {
+			targetKind = artNode256Kind
 		}
-		newPayload, ok := clonePayload48To256Insert(arena, payload, key, childOff)
-		return newPayload, artNode256Kind, ok
 	case artNode256Kind:
-		if payload.count >= 256 {
+		if count >= 256 {
 			return nil, artNode256Kind, false
 		}
-		newPayload, ok := clonePayload256Insert(arena, payload, key, childOff)
-		return newPayload, artNode256Kind, ok
 	}
-	return nil, kind, false
+
+	newPayload := clonePayloadToKind(arena, payload, kind, targetKind)
+	if newPayload == nil {
+		return nil, targetKind, false
+	}
+	if !payloadInsert(targetKind, newPayload, key, childOff) {
+		return nil, targetKind, false
+	}
+	return newPayload, targetKind, true
 }
 
-func clonePayloadSmallInsert(arena *Arena, payload *nodePayload, kind uint8, key byte, childOff uint32) *nodePayload {
-	newPayload := initPayloadForKind(arena, kind)
+func clonePayloadToKind(arena *Arena, payload *nodePayload, fromKind, toKind uint8) *nodePayload {
+	switch toKind {
+	case artNode4Kind, artNode16Kind:
+		if fromKind != artNode4Kind && fromKind != artNode16Kind {
+			return nil
+		}
+	case artNode48Kind:
+		if fromKind != artNode4Kind && fromKind != artNode16Kind && fromKind != artNode48Kind {
+			return nil
+		}
+	case artNode256Kind:
+		if fromKind != artNode4Kind && fromKind != artNode16Kind && fromKind != artNode48Kind && fromKind != artNode256Kind {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	newPayload := initPayloadForKind(arena, toKind)
 	if newPayload == nil {
 		return nil
 	}
-	count := max(payload.count, 0)
-	copy(newPayload.keys, payload.keys[:count])
-	copy(newPayload.children, payload.children[:count])
-	idx := sort.Search(count, func(i int) bool { return newPayload.keys[i] >= key })
-	if idx < count && newPayload.keys[idx] == key {
-		return nil
+	if payload == nil || payload.count == 0 {
+		return newPayload
 	}
-	copy(newPayload.keys[idx+1:], newPayload.keys[idx:count])
-	copy(newPayload.children[idx+1:], newPayload.children[idx:count])
-	newPayload.keys[idx] = key
-	newPayload.children[idx] = childOff
-	newPayload.count = count + 1
+	newPayload.count = payload.count
+
+	switch toKind {
+	case artNode4Kind, artNode16Kind:
+		copy(newPayload.keys, payload.keys[:payload.count])
+		copy(newPayload.children, payload.children[:payload.count])
+	case artNode48Kind:
+		if fromKind == artNode48Kind {
+			copy(newPayload.idx, payload.idx)
+			copy(newPayload.children, payload.children)
+			return newPayload
+		}
+		for i := 0; i < payload.count; i++ {
+			k := payload.keys[i]
+			newPayload.idx[k] = byte(i + 1)
+			newPayload.children[i] = payload.children[i]
+		}
+	case artNode256Kind:
+		switch fromKind {
+		case artNode256Kind:
+			copy(newPayload.children, payload.children)
+		case artNode48Kind:
+			for i := 0; i < len(payload.idx); i++ {
+				pos := payload.idx[i]
+				if pos == 0 {
+					continue
+				}
+				idx := int(pos - 1)
+				if idx < len(payload.children) {
+					newPayload.children[i] = payload.children[idx]
+				}
+			}
+		default:
+			for i := 0; i < payload.count; i++ {
+				k := payload.keys[i]
+				newPayload.children[k] = payload.children[i]
+			}
+		}
+	}
 	return newPayload
 }
 
-func clonePayload16To48Insert(arena *Arena, payload *nodePayload, key byte, childOff uint32) (*nodePayload, bool) {
-	if payload.count > artNode16Cap {
-		return nil, false
+func payloadInsert(kind uint8, payload *nodePayload, key byte, childOff uint32) bool {
+	switch kind {
+	case artNode4Kind, artNode16Kind:
+		if payload.count >= len(payload.keys) {
+			return false
+		}
+		idx := sort.Search(payload.count, func(i int) bool { return payload.keys[i] >= key })
+		if idx < payload.count && payload.keys[idx] == key {
+			return false
+		}
+		copy(payload.keys[idx+1:], payload.keys[idx:payload.count])
+		copy(payload.children[idx+1:], payload.children[idx:payload.count])
+		payload.keys[idx] = key
+		payload.children[idx] = childOff
+		payload.count++
+		return true
+	case artNode48Kind:
+		if payload.count >= artNode48Cap {
+			return false
+		}
+		if payload.idx[key] != 0 {
+			return false
+		}
+		payload.children[payload.count] = childOff
+		payload.idx[key] = byte(payload.count + 1)
+		payload.count++
+		return true
+	case artNode256Kind:
+		if payload.children[key] != 0 {
+			return false
+		}
+		payload.children[key] = childOff
+		payload.count++
+		return true
+	default:
+		return false
 	}
-	newPayload := initPayloadForKind(arena, artNode48Kind)
-	if newPayload == nil {
-		return nil, false
-	}
-	for i := 0; i < payload.count; i++ {
-		k := payload.keys[i]
-		newPayload.idx[k] = byte(i + 1)
-		newPayload.children[i] = payload.children[i]
-	}
-	if newPayload.idx[key] != 0 || payload.count >= artNode48Cap {
-		return nil, false
-	}
-	newPayload.children[payload.count] = childOff
-	newPayload.idx[key] = byte(payload.count + 1)
-	newPayload.count = payload.count + 1
-	return newPayload, true
 }
 
-func clonePayload48Insert(arena *Arena, payload *nodePayload, key byte, childOff uint32) (*nodePayload, bool) {
-	newPayload := initPayloadForKind(arena, artNode48Kind)
-	if newPayload == nil {
-		return nil, false
-	}
-	newPayload.count = payload.count
-	copy(newPayload.idx, payload.idx)
-	copy(newPayload.children, payload.children)
-	if newPayload.idx[key] != 0 || payload.count >= artNode48Cap {
-		return nil, false
-	}
-	newPayload.children[payload.count] = childOff
-	newPayload.idx[key] = byte(payload.count + 1)
-	newPayload.count++
-	return newPayload, true
-}
-
-func clonePayload48To256Insert(arena *Arena, payload *nodePayload, key byte, childOff uint32) (*nodePayload, bool) {
-	newPayload := initPayloadForKind(arena, artNode256Kind)
-	if newPayload == nil {
-		return nil, false
-	}
-	for i := 0; i < len(payload.idx); i++ {
-		pos := payload.idx[i]
+func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff uint32) bool {
+	switch kind {
+	case artNode4Kind, artNode16Kind:
+		for i := 0; i < payload.count; i++ {
+			if payload.keys[i] != key {
+				continue
+			}
+			if payload.children[i] != oldOff {
+				return false
+			}
+			payload.children[i] = newOff
+			return true
+		}
+	case artNode48Kind:
+		pos := payload.idx[key]
 		if pos == 0 {
-			continue
+			return false
 		}
 		idx := int(pos - 1)
-		if idx < len(payload.children) {
-			newPayload.children[i] = payload.children[idx]
+		if idx >= len(payload.children) || payload.children[idx] != oldOff {
+			return false
 		}
+		payload.children[idx] = newOff
+		return true
+	case artNode256Kind:
+		if payload.children[key] != oldOff {
+			return false
+		}
+		payload.children[key] = newOff
+		return true
 	}
-	if newPayload.children[key] != 0 {
-		return nil, false
-	}
-	newPayload.children[key] = childOff
-	newPayload.count = payload.count + 1
-	return newPayload, true
-}
-
-func clonePayload256Insert(arena *Arena, payload *nodePayload, key byte, childOff uint32) (*nodePayload, bool) {
-	newPayload := initPayloadForKind(arena, artNode256Kind)
-	if newPayload == nil {
-		return nil, false
-	}
-	newPayload.count = payload.count
-	copy(newPayload.children, payload.children)
-	if newPayload.children[key] != 0 {
-		return nil, false
-	}
-	newPayload.children[key] = childOff
-	newPayload.count++
-	return newPayload, true
+	return false
 }
 
 func minInt(a, b int) int {
@@ -729,7 +725,6 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 }
 
 type artNode struct {
-	version       atomic.Uint64
 	value         atomic.Uint64
 	payloadOffset atomic.Uint32
 	self          uint32
