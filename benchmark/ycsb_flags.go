@@ -17,7 +17,7 @@ var (
 	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression codec: none|snappy|zstd")
 
 	ycsbWorkloads        = flag.String("ycsb_workloads", "A,B,C,D,F", "comma-separated YCSB workloads (A-F)")
-	ycsbEngines          = flag.String("ycsb_engines", "nokv,badger", "comma-separated engines to benchmark (nokv,badger,rocksdb)")
+	ycsbEngines          = flag.String("ycsb_engines", "nokv,badger", "comma-separated engines to benchmark (nokv,nokv-skiplist,nokv-art,badger,rocksdb)")
 	ycsbRecords          = flag.Int("ycsb_records", 1000000, "number of records to preload during YCSB load phase")
 	ycsbOperations       = flag.Int("ycsb_ops", 1000000, "number of transactional operations per workload")
 	ycsbConcurrency      = flag.Int("ycsb_conc", 16, "worker goroutine count for YCSB transactional phase")

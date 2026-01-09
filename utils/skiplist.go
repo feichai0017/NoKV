@@ -403,6 +403,11 @@ func (s *Skiplist) NewSkipListIterator() Iterator {
 	return &SkipListIterator{list: s}
 }
 
+// NewIterator returns a skiplist iterator. Options are ignored.
+func (s *Skiplist) NewIterator(_ *Options) Iterator {
+	return s.NewSkipListIterator()
+}
+
 // MemSize returns the size of the Skiplist in terms of how much memory is used within its internal
 // arena.
 func (s *Skiplist) MemSize() int64 { return s.arena.size() }

@@ -10,6 +10,9 @@ import (
 )
 
 const (
+	// DefaultArenaSize is the default allocation size for in-memory indexes.
+	DefaultArenaSize = int64(64 << 20)
+
 	offsetSize = int(unsafe.Sizeof(uint32(0)))
 
 	// Always align nodes on 64-bit boundaries, even on 32-bit architectures,
@@ -59,6 +62,57 @@ func (s *Arena) allocate(sz uint32) uint32 {
 		// fmt.Print(len(s.buf), " ")
 	}
 	return offset - sz
+}
+
+func (s *Arena) allocAligned(size, align int) uint32 {
+	if s == nil || size <= 0 {
+		return 0
+	}
+	if align <= 0 {
+		align = 1
+	}
+	pad := align - 1
+	offset := s.allocate(uint32(size + pad))
+	return (offset + uint32(pad)) & ^uint32(pad)
+}
+
+func (s *Arena) allocBytes(length int) []byte {
+	if s == nil || length <= 0 {
+		return nil
+	}
+	offset := s.allocate(uint32(length))
+	return s.buf[offset : offset+uint32(length)]
+}
+
+func (s *Arena) allocByteSlice(length, capacity int) []byte {
+	if capacity <= 0 {
+		return nil
+	}
+	if length < 0 {
+		length = 0
+	}
+	if length > capacity {
+		length = capacity
+	}
+	buf := s.allocBytes(capacity)
+	return buf[:length:capacity]
+}
+
+func (s *Arena) allocUint32Slice(length, capacity int) []uint32 {
+	if s == nil || capacity <= 0 {
+		return nil
+	}
+	if length < 0 {
+		length = 0
+	}
+	if length > capacity {
+		length = capacity
+	}
+	elemSize := int(unsafe.Sizeof(uint32(0)))
+	align := int(unsafe.Alignof(uint32(0)))
+	offset := s.allocAligned(elemSize*capacity, align)
+	raw := unsafe.Slice((*uint32)(unsafe.Pointer(&s.buf[offset])), capacity)
+	return raw[:length:capacity]
 }
 
 func (s *Arena) size() int64 {

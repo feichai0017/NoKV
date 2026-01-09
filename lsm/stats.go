@@ -16,10 +16,10 @@ func (lsm *LSM) EntryCount() int64 {
 			defer release()
 		}
 		for _, mt := range tables {
-			if mt == nil || mt.sl == nil {
+			if mt == nil || mt.index == nil {
 				continue
 			}
-			total += countSkiplistEntries(mt.sl)
+			total += countMemIndexEntries(mt.index)
 		}
 	}
 	if lsm.levels != nil {
@@ -28,11 +28,14 @@ func (lsm *LSM) EntryCount() int64 {
 	return total
 }
 
-func countSkiplistEntries(sl *utils.Skiplist) int64 {
-	if sl == nil {
+func countMemIndexEntries(idx memIndex) int64 {
+	if idx == nil {
 		return 0
 	}
-	itr := sl.NewSkipListIterator()
+	itr := idx.NewIterator(&utils.Options{})
+	if itr == nil {
+		return 0
+	}
 	defer itr.Close()
 	itr.Rewind()
 	var count int64

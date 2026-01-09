@@ -65,24 +65,50 @@ type memIterator struct {
 }
 
 func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
-	return &memIterator{innerIter: m.sl.NewSkipListIterator()}
+	if m == nil || m.index == nil {
+		return nil
+	}
+	inner := m.index.NewIterator(opt)
+	if inner == nil {
+		return nil
+	}
+	return &memIterator{innerIter: inner}
 }
 func (iter *memIterator) Next() {
+	if iter.innerIter == nil {
+		return
+	}
 	iter.innerIter.Next()
 }
 func (iter *memIterator) Valid() bool {
+	if iter.innerIter == nil {
+		return false
+	}
 	return iter.innerIter.Valid()
 }
 func (iter *memIterator) Rewind() {
+	if iter.innerIter == nil {
+		return
+	}
 	iter.innerIter.Rewind()
 }
 func (iter *memIterator) Item() utils.Item {
+	if iter.innerIter == nil {
+		return nil
+	}
 	return iter.innerIter.Item()
 }
 func (iter *memIterator) Close() error {
+	if iter.innerIter == nil {
+		return nil
+	}
 	return iter.innerIter.Close()
 }
 func (iter *memIterator) Seek(key []byte) {
+	if iter.innerIter == nil {
+		return
+	}
+	iter.innerIter.Seek(key)
 }
 
 func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {

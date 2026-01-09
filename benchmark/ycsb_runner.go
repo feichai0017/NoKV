@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	NoKV "github.com/feichai0017/NoKV"
 )
 
 type ycsbWorkload struct {
@@ -300,6 +302,10 @@ func runYCSBBenchmarks(cfg ycsbConfig, opts ycsbEngineOptions) ([]BenchmarkResul
 		switch engineName {
 		case "nokv":
 			engine = newNoKVEngine(opts)
+		case "nokv-skiplist":
+			engine = newNoKVEngineWithMemtable(opts, "nokv-skiplist", "NoKV-skiplist", NoKV.MemTableEngineSkiplist)
+		case "nokv-art":
+			engine = newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", NoKV.MemTableEngineART)
 		case "badger":
 			engine = newBadgerEngine(opts)
 		case "rocksdb":

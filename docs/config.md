@@ -26,7 +26,7 @@ Key option groups (see `options.go` for the full list):
   - `ValueLogGCSampleSizeRatio`, `ValueLogGCSampleCountRatio`,
     `ValueLogGCSampleFromHead`
 - **LSM & compaction**
-  - `MemTableSize`, `SSTableMaxSz`, `NumCompactors`
+  - `MemTableSize`, `MemTableEngine`, `SSTableMaxSz`, `NumCompactors`
   - `NumLevelZeroTables`, `IngestCompactBatchSize`, `IngestBacklogMergeScore`
   - `CompactionValueWeight`, `CompactionValueAlertThreshold`
 - **Caches**

@@ -12,23 +12,47 @@ import (
 )
 
 func newNoKVEngine(opts ycsbEngineOptions) ycsbEngine {
-	return &nokvEngine{opts: opts}
+	return newNoKVEngineWithMemtable(opts, "nokv", "NoKV", NoKV.MemTableEngineART)
 }
 
 type nokvEngine struct {
-	opts      ycsbEngineOptions
-	db        *NoKV.DB
-	valuePool sync.Pool
-	valueSize int
-	valueCap  int
-	statsStop chan struct{}
-	statsWG   sync.WaitGroup
+	opts           ycsbEngineOptions
+	db             *NoKV.DB
+	valuePool      sync.Pool
+	valueSize      int
+	valueCap       int
+	statsStop      chan struct{}
+	statsWG        sync.WaitGroup
+	engineID       string
+	name           string
+	memtableEngine NoKV.MemTableEngine
 }
 
-func (e *nokvEngine) Name() string { return "NoKV" }
+func newNoKVEngineWithMemtable(opts ycsbEngineOptions, engineID, name string, memtable NoKV.MemTableEngine) ycsbEngine {
+	return &nokvEngine{
+		opts:           opts,
+		engineID:       engineID,
+		name:           name,
+		memtableEngine: memtable,
+	}
+}
+
+func (e *nokvEngine) Name() string {
+	if e.name != "" {
+		return e.name
+	}
+	if e.engineID != "" {
+		return e.engineID
+	}
+	return "NoKV"
+}
 
 func (e *nokvEngine) Open(clean bool) error {
-	dir := e.opts.engineDir("nokv")
+	engineID := e.engineID
+	if engineID == "" {
+		engineID = "nokv"
+	}
+	dir := e.opts.engineDir(engineID)
 	if clean {
 		if err := ensureCleanDir(dir); err != nil {
 			return fmt.Errorf("nokv: ensure dir: %w", err)
@@ -47,6 +71,9 @@ func (e *nokvEngine) Open(clean bool) error {
 		MaxBatchSize:       128 << 20,
 		DetectConflicts:    false,
 		SyncWrites:         e.opts.SyncWrites,
+	}
+	if e.memtableEngine != "" {
+		opt.MemTableEngine = e.memtableEngine
 	}
 	if e.opts.BlockCacheMB >= 0 {
 		// BlockCacheSize counts blocks; translate MB to ~4KB blocks for parity with other engines.
