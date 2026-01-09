@@ -153,7 +153,7 @@ func NewDefaultOptions() *Options {
 	opt := &Options{
 		WorkDir:                   "./work_test",
 		MemTableSize:              64 << 20,
-		MemTableEngine:            MemTableEngineSkiplist,
+		MemTableEngine:            MemTableEngineART,
 		SSTableMaxSz:              256 << 20,
 		HotRingEnabled:            true,
 		HotRingBits:               12,
