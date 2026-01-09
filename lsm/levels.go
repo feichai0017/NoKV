@@ -197,7 +197,10 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	fid := uint64(immutable.segmentID)
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
-	iter := immutable.sl.NewSkipListIterator()
+	iter := immutable.NewIterator(&utils.Options{})
+	if iter == nil {
+		return nil
+	}
 	defer iter.Close()
 
 	iter.Rewind()

@@ -11,6 +11,7 @@ type Options struct {
 	ValueThreshold     int64
 	WorkDir            string
 	MemTableSize       int64
+	MemTableEngine     MemTableEngine
 	SSTableMaxSz       int64
 	MaxBatchCount      int64
 	MaxBatchSize       int64 // max batch size in bytes
@@ -139,11 +140,20 @@ type Options struct {
 	IngestShardParallelism int
 }
 
+// MemTableEngine selects the in-memory index implementation used by memtables.
+type MemTableEngine string
+
+const (
+	MemTableEngineSkiplist MemTableEngine = "skiplist"
+	MemTableEngineART      MemTableEngine = "art"
+)
+
 // NewDefaultOptions 返回默认的options
 func NewDefaultOptions() *Options {
 	opt := &Options{
 		WorkDir:                   "./work_test",
 		MemTableSize:              64 << 20,
+		MemTableEngine:            MemTableEngineSkiplist,
 		SSTableMaxSz:              256 << 20,
 		HotRingEnabled:            true,
 		HotRingBits:               12,

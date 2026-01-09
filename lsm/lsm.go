@@ -32,9 +32,10 @@ type LSM struct {
 
 // Options _
 type Options struct {
-	WorkDir      string
-	MemTableSize int64
-	SSTableMaxSz int64
+	WorkDir        string
+	MemTableSize   int64
+	MemTableEngine string
+	SSTableMaxSz   int64
 	// BlockSize is the size of each block inside SSTable in bytes.
 	BlockSize int
 	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
@@ -374,7 +375,7 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 			}
 			continue
 		}
-		err = mt.set(entry)
+		err = mt.Set(entry)
 		lsm.lock.RUnlock()
 		return err
 	}
@@ -431,7 +432,13 @@ func (lsm *LSM) MemTableIsNil() bool {
 }
 
 func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
-	return lsm.memTable.sl
+	if lsm == nil || lsm.memTable == nil || lsm.memTable.index == nil {
+		return nil
+	}
+	if sl, ok := lsm.memTable.index.(*utils.Skiplist); ok {
+		return sl
+	}
+	return nil
 }
 
 func (lsm *LSM) Rotate() {

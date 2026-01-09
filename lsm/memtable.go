@@ -19,11 +19,20 @@ import (
 
 type MemTable = memTable
 
+type memIndex interface {
+	Add(*kv.Entry)
+	Search([]byte) kv.ValueStruct
+	NewIterator(*utils.Options) utils.Iterator
+	MemSize() int64
+	IncrRef()
+	DecrRef()
+}
+
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
 	lsm        *LSM
 	segmentID  uint32
-	sl         *utils.Skiplist
+	index      memIndex
 	maxVersion uint64
 	walSize    int64
 }
@@ -56,16 +65,22 @@ func putWalBuffer(buf *bytes.Buffer) {
 	walBufferPool.Put(buf)
 }
 
-const defaultArenaBase = int64(64 << 20)
-
 func arenaSizeFor(memTableSize int64) int64 {
 	base := memTableSize
 	if base <= 0 {
-		base = defaultArenaBase
+		base = utils.DefaultArenaSize
 	}
-	if base < defaultArenaBase {
-		base = defaultArenaBase
+	if base < utils.DefaultArenaSize {
+		base = utils.DefaultArenaSize
 	}
+	if base > math.MaxInt64/2 {
+		return math.MaxInt64
+	}
+	return base * 2
+}
+
+func arenaSizeForART(memTableSize int64) int64 {
+	base := arenaSizeFor(memTableSize)
 	if base > math.MaxInt64/2 {
 		return math.MaxInt64
 	}
@@ -79,7 +94,7 @@ func (lsm *LSM) NewMemtable() *memTable {
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
-		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
+		index:     newMemIndex(lsm.option),
 		walSize:   0,
 	}
 }
@@ -91,7 +106,7 @@ func (m *memTable) close() error {
 	return nil
 }
 
-func (m *memTable) set(entry *kv.Entry) error {
+func (m *memTable) Set(entry *kv.Entry) error {
 	buf := getWalBuffer()
 	payload, err := kv.EncodeEntry(buf, entry)
 	if err != nil {
@@ -106,12 +121,17 @@ func (m *memTable) set(entry *kv.Entry) error {
 	if len(infos) > 0 {
 		atomic.AddInt64(&m.walSize, int64(infos[0].Length)+8)
 	}
-	m.sl.Add(entry)
+	if m.index != nil {
+		m.index.Add(entry)
+	}
 	return nil
 }
 
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
-	vs := m.sl.Search(key)
+	var vs kv.ValueStruct
+	if m.index != nil {
+		vs = m.index.Search(key)
+	}
 	e := kv.EntryPool.Get().(*kv.Entry)
 	e.Key = key
 	e.Value = vs.Value
@@ -123,7 +143,10 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 }
 
 func (m *memTable) Size() int64 {
-	return m.sl.MemSize()
+	if m == nil || m.index == nil {
+		return 0
+	}
+	return m.index.MemSize()
 }
 
 // recovery rebuilds memtables from existing WAL segments.
@@ -177,7 +200,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	for _, fid := range fids {
 		mt, err := lsm.openMemTable(fid)
 		utils.CondPanic(err != nil, err)
-		if mt.sl.MemSize() == 0 {
+		if mt.Size() == 0 {
 			continue
 		}
 		tables = append(tables, mt)
@@ -198,7 +221,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 	mt := &memTable{
 		lsm:       lsm,
 		segmentID: uint32(fid),
-		sl:        utils.NewSkiplist(arenaSizeFor(lsm.option.MemTableSize)),
+		index:     newMemIndex(lsm.option),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		if info.Type != wal.RecordTypeEntry {
@@ -211,7 +234,9 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
 			mt.maxVersion = ts
 		}
-		mt.sl.Add(entry)
+		if mt.index != nil {
+			mt.index.Add(entry)
+		}
 		entry.DecrRef()
 		atomic.AddInt64(&mt.walSize, int64(info.Length)+8)
 		return nil
@@ -222,11 +247,31 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 	return mt, nil
 }
 
-// reference counting helpers, delegate to skiplist.
+// reference counting helpers, delegate to the backing index.
 func (mt *memTable) IncrRef() {
-	mt.sl.IncrRef()
+	if mt == nil || mt.index == nil {
+		return
+	}
+	mt.index.IncrRef()
 }
 
 func (mt *memTable) DecrRef() {
-	mt.sl.DecrRef()
+	if mt == nil || mt.index == nil {
+		return
+	}
+	mt.index.DecrRef()
+}
+
+func newMemIndex(opt *Options) memIndex {
+	if opt == nil {
+		return utils.NewSkiplist(arenaSizeFor(0))
+	}
+	switch opt.MemTableEngine {
+	case "art":
+		return utils.NewART(arenaSizeForART(opt.MemTableSize))
+	case "", "skiplist":
+		fallthrough
+	default:
+		return utils.NewSkiplist(arenaSizeFor(opt.MemTableSize))
+	}
 }

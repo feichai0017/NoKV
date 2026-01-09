@@ -181,6 +181,7 @@ func Open(opt *Options) *DB {
 	db.lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:                  opt.WorkDir,
 		MemTableSize:             opt.MemTableSize,
+		MemTableEngine:           string(opt.MemTableEngine),
 		SSTableMaxSz:             opt.SSTableMaxSz,
 		BlockSize:                8 * 1024,
 		BloomFalsePositive:       0.01,
