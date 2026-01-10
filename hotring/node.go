@@ -3,13 +3,12 @@ package hotring
 import (
 	"runtime"
 	"sync/atomic"
-	"unsafe"
 )
 
 type Node struct {
 	key   string
 	tag   uint32
-	next  unsafe.Pointer
+	next  atomic.Pointer[Node]
 	count int32
 
 	window       []int32
@@ -26,20 +25,8 @@ func NewNode(key string, tag uint32) *Node {
 	}
 }
 
-// NewCompareItem 我们只需要 Tag 和 Key 来进行比较
-func NewCompareItem(key string, tag uint32) *Node {
-	return &Node{
-		key: key,
-		tag: tag,
-	}
-}
-
 func (n *Node) Next() *Node {
-	next := atomic.LoadPointer(&n.next)
-	if next != nil {
-		return (*Node)(next)
-	}
-	return nil
+	return n.next.Load()
 }
 
 // Less 先比较节点的 Tag 值，Tag 值相同时，再比较 Key 值大小
@@ -75,15 +62,11 @@ func (n *Node) ResetCounter() {
 }
 
 func (n *Node) SetNext(next *Node) {
-	atomic.StorePointer(&n.next, unsafe.Pointer(next))
-}
-
-func (n *Node) StoreNext(next *Node) {
-	atomic.StorePointer(&n.next, unsafe.Pointer(next))
+	n.next.Store(next)
 }
 
 func (n *Node) CompareAndSwapNext(old, next *Node) bool {
-	return atomic.CompareAndSwapPointer(&n.next, unsafe.Pointer(old), unsafe.Pointer(next))
+	return n.next.CompareAndSwap(old, next)
 }
 
 func (n *Node) Increment() int32 {
