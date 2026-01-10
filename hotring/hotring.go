@@ -165,7 +165,7 @@ func (h *HotRing) Touch(key string) int32 {
 	}
 	slot, slots := h.slotState()
 	index, tag := h.hashParts(key)
-	compareItem := NewCompareItem(key, tag)
+	compareItem := NewNode(key, tag)
 	node, inserted := h.findOrInsert(index, compareItem, slots, slot)
 	if node == nil {
 		return 0
@@ -183,7 +183,7 @@ func (h *HotRing) Frequency(key string) int32 {
 	}
 	slot, slots := h.slotState()
 	index, tag := h.hashParts(key)
-	node := h.search(index, NewCompareItem(key, tag))
+	node := h.search(index, NewNode(key, tag))
 	return h.nodeCount(node, slots, slot)
 }
 
@@ -198,7 +198,7 @@ func (h *HotRing) TouchAndClamp(key string, limit int32) (count int32, limited b
 	}
 	slot, slots := h.slotState()
 	index, tag := h.hashParts(key)
-	compareItem := NewCompareItem(key, tag)
+	compareItem := NewNode(key, tag)
 	node, inserted := h.findOrInsert(index, compareItem, slots, slot)
 	if node == nil {
 		return 0, false
@@ -219,7 +219,7 @@ func (h *HotRing) Remove(key string) {
 		return
 	}
 	index, tag := h.hashParts(key)
-	compareItem := NewCompareItem(key, tag)
+	compareItem := NewNode(key, tag)
 	bucket := &h.buckets[index]
 	for {
 		head := bucket.Load()
@@ -343,7 +343,7 @@ func (h *HotRing) findOrInsert(index uint32, compareItem *Node, slots int, slot 
 		if slots > 0 {
 			newNode.ResetCounterWithWindow(slots, slot)
 		}
-		newNode.StoreNext(curr)
+		newNode.SetNext(curr)
 
 		if prev == nil {
 			if bucket.CompareAndSwap(head, newNode) {
