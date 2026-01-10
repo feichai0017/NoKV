@@ -2,7 +2,6 @@ package utils
 
 import (
 	"log"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -31,8 +30,7 @@ const (
 type Arena struct {
 	n         uint32
 	chunkSize uint32
-	chunks    atomic.Value // [][]byte
-	chunksMu  sync.Mutex
+	chunks    []atomic.Pointer[byte]
 }
 
 // newArena returns a new arena.
@@ -52,12 +50,14 @@ func newArena(n int64) *Arena {
 	if chunkSize < minArenaChunkSize {
 		chunkSize = minArenaChunkSize
 	}
+	AssertTrue(chunkSize > 0)
 	out := &Arena{
 		n:         1,
 		chunkSize: uint32(chunkSize),
+		chunks:    make([]atomic.Pointer[byte], maxChunks(uint32(chunkSize))),
 	}
 	first := make([]byte, int(chunkSize))
-	out.chunks.Store([][]byte{first})
+	out.chunks[0].Store(&first[0])
 	return out
 }
 
@@ -70,14 +70,13 @@ func (s *Arena) allocate(sz uint32) uint32 {
 		start := cur
 		end := start + sz
 		startChunk := start / s.chunkSize
-		endChunk := (end - 1) / s.chunkSize
-		if startChunk != endChunk {
+		if startChunk != (end-1)/s.chunkSize {
 			start = (startChunk + 1) * s.chunkSize
 			end = start + sz
-			endChunk = (end - 1) / s.chunkSize
+			startChunk = start / s.chunkSize
 		}
 		if atomic.CompareAndSwapUint32(&s.n, cur, end) {
-			s.ensureChunk(endChunk)
+			s.ensureChunk(startChunk)
 			return start
 		}
 	}
@@ -218,10 +217,11 @@ func (s *Arena) bytesAt(offset uint32, length int) []byte {
 	if s == nil || length <= 0 || offset == 0 {
 		return nil
 	}
-	chunk, off := s.chunkFor(offset)
-	if chunk == nil {
+	ptr, off := s.chunkFor(offset)
+	if ptr == nil {
 		return nil
 	}
+	chunk := unsafe.Slice(ptr, int(s.chunkSize))
 	start := int(off)
 	end := start + length
 	AssertTrue(end <= len(chunk))
@@ -232,58 +232,50 @@ func (s *Arena) addr(offset uint32) unsafe.Pointer {
 	if s == nil || offset == 0 {
 		return nil
 	}
-	chunk, off := s.chunkFor(offset)
-	if chunk == nil {
+	ptr, off := s.chunkFor(offset)
+	if ptr == nil {
 		return nil
 	}
-	return unsafe.Pointer(&chunk[int(off)])
+	return unsafe.Add(unsafe.Pointer(ptr), uintptr(off))
 }
 
-func (s *Arena) chunkFor(offset uint32) ([]byte, uint32) {
-	if s == nil {
-		return nil, 0
-	}
-	chunks := s.loadChunks()
-	if len(chunks) == 0 {
+func (s *Arena) chunkFor(offset uint32) (*byte, uint32) {
+	if s == nil || offset == 0 {
 		return nil, 0
 	}
 	idx := offset / s.chunkSize
 	off := offset % s.chunkSize
-	if int(idx) >= len(chunks) {
+	if int(idx) >= len(s.chunks) {
 		return nil, 0
 	}
-	return chunks[idx], off
-}
-
-func (s *Arena) loadChunks() [][]byte {
-	if s == nil {
-		return nil
-	}
-	val := s.chunks.Load()
-	if val == nil {
-		return nil
-	}
-	return val.([][]byte)
+	return s.chunks[idx].Load(), off
 }
 
 func (s *Arena) ensureChunk(idx uint32) {
-	chunks := s.loadChunks()
-	if int(idx) < len(chunks) {
+	if s == nil {
 		return
 	}
-	s.chunksMu.Lock()
-	defer s.chunksMu.Unlock()
+	AssertTrue(int(idx) < len(s.chunks))
+	if s.chunks[idx].Load() != nil {
+		return
+	}
+	for {
+		if s.chunks[idx].Load() != nil {
+			return
+		}
+		buf := make([]byte, int(s.chunkSize))
+		if s.chunks[idx].CompareAndSwap(nil, &buf[0]) {
+			return
+		}
+	}
+}
 
-	chunks = s.loadChunks()
-	if int(idx) < len(chunks) {
-		return
+func maxChunks(chunkSize uint32) int {
+	if chunkSize == 0 {
+		return 0
 	}
-	next := make([][]byte, len(chunks), int(idx)+1)
-	copy(next, chunks)
-	for len(next) <= int(idx) {
-		next = append(next, make([]byte, int(s.chunkSize)))
-	}
-	s.chunks.Store(next)
+	max := uint64(^uint32(0))
+	return int(max/uint64(chunkSize) + 1)
 }
 
 // AssertTrue asserts that b is true. Otherwise, it would log fatal.
