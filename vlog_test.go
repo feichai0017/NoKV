@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +87,60 @@ func TestVlogBase(t *testing.T) {
 	require.Equal(t, []byte("samplekeyb"), entry2.Key)
 	require.Equal(t, []byte(val2), entry2.Value)
 	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
+}
+
+func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
+	clearDir()
+
+	prevSync := opt.SyncWrites
+	prevThreshold := opt.ValueThreshold
+	prevFileSize := opt.ValueLogFileSize
+	opt.SyncWrites = true
+	opt.ValueThreshold = 0
+	opt.ValueLogFileSize = 256
+	defer func() {
+		opt.SyncWrites = prevSync
+		opt.ValueThreshold = prevThreshold
+		opt.ValueLogFileSize = prevFileSize
+	}()
+
+	db := Open(opt)
+	defer db.Close()
+	log := db.vlog
+
+	var mu sync.Mutex
+	synced := make(map[uint32]int)
+	log.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+		BeforeSync: func(_ *vlogpkg.Manager, fid uint32) error {
+			mu.Lock()
+			synced[fid]++
+			mu.Unlock()
+			return nil
+		},
+	})
+
+	payload := bytes.Repeat([]byte("v"), 180)
+	e1 := kvpkg.NewEntry([]byte("sync-key-1"), payload)
+	e2 := kvpkg.NewEntry([]byte("sync-key-2"), payload)
+	req := &request{Entries: []*kvpkg.Entry{e1, e2}}
+
+	require.NoError(t, log.write([]*request{req}))
+	e1.DecrRef()
+	e2.DecrRef()
+
+	if len(req.Ptrs) != 2 {
+		t.Fatalf("expected 2 value pointers, got %d", len(req.Ptrs))
+	}
+	if req.Ptrs[0].Fid == req.Ptrs[1].Fid {
+		t.Fatalf("expected pointers in different vlog segments, got fid=%d", req.Ptrs[0].Fid)
+	}
+
+	mu.Lock()
+	syncedCount := len(synced)
+	mu.Unlock()
+	if syncedCount < 2 {
+		t.Fatalf("expected sync for multiple segments, got %d", syncedCount)
+	}
 }
 
 func clearDir() {

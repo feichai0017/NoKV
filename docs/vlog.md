@@ -132,11 +132,11 @@ RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV
 
 1. `DB.Open` restores the manifest and fetches the last persisted head pointer.
 2. [`valueLog.open`](../vlog.go#L175-L224) launches `flushDiscardStats` and iterates every vlog file via [`valueLog.replayLog`](../vlog.go#L706-L866). Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.
-3. `valueLog.replayLog` streams entries, invoking the provided `replayFn` (usually WAL re-application) for any value that should be materialised into the memtable.
+3. `valueLog.replayLog` streams entries to validate checksums and trims torn tails; it does **not** reapply data into the LSM. WAL replay remains the sole source of committed state.
 4. `Manager.VerifyDir` trims torn records so replay never sees corrupt payloads.
-5. After replay, `valueLog.populateDiscardStats` rehydrates discard counters from the persisted JSON entry if present.
+5. After validation, `valueLog.populateDiscardStats` rehydrates discard counters from the persisted JSON entry if present.
 
-The flow matches Badger's recovery (scan vlog → replay WAL) but adds manifest-backed head checks, similar to RocksDB's reliance on `MANIFEST` to mark blob files live or obsolete.
+The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored on WAL + manifest checkpoints, similar to RocksDB's reliance on `MANIFEST` to mark blob files live or obsolete.
 
 ---
 

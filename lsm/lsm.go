@@ -474,14 +474,21 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	immutables := append([]*memTable(nil), lsm.immutables...)
 	lsm.lock.RUnlock()
 
+	isMemHit := func(entry *kv.Entry) bool {
+		if entry == nil {
+			return false
+		}
+		return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
+	}
+
 	if active != nil {
-		if entry, err = active.Get(key); entry != nil && entry.Value != nil {
+		if entry, err = active.Get(key); isMemHit(entry) {
 			return entry, err
 		}
 	}
 
 	for i := len(immutables) - 1; i >= 0; i-- {
-		if entry, err = immutables[i].Get(key); entry != nil && entry.Value != nil {
+		if entry, err = immutables[i].Get(key); isMemHit(entry) {
 			return entry, err
 		}
 	}

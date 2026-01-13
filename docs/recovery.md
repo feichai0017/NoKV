@@ -11,18 +11,18 @@ flowchart TD
     Start[DB.Open]
     Verify[runRecoveryChecks]
     Manifest[manifest.Open → replay]
-    VLog[valueLog.recover]
     WAL[wal.Manager.Replay]
+    VLog[valueLog.recover]
     Flush[Recreate memtables]
     Stats[Stats.StartStats]
 
-    Start --> Verify --> Manifest --> VLog --> WAL --> Flush --> Stats
+    Start --> Verify --> Manifest --> WAL --> VLog --> Flush --> Stats
 ```
 
 1. **Directory verification** – `DB.runRecoveryChecks` calls `manifest.Verify`, `wal.VerifyDir`, and initialises the vlog directory. Missing directories fail fast.
 2. **Manifest replay** – `manifest.Open` reads `CURRENT`, replays `EditAddFile/DeleteFile`, `EditLogPointer`, and vlog edits into an in-memory `Version`.
-3. **ValueLog reconciliation** – `valueLog.recover` scans existing `.vlog` files, drops segments marked invalid, and restores the head pointer from manifest metadata.
-4. **WAL replay** – `wal.Manager.Replay` processes segments newer than the manifest checkpoint, rebuilding memtables and pending vlog data.
+3. **WAL replay** – `wal.Manager.Replay` processes segments newer than the manifest checkpoint, rebuilding memtables from committed entries.
+4. **ValueLog reconciliation** – `valueLog.recover` scans existing `.vlog` files, drops segments marked invalid, and trims torn tails to the last valid entry.
 5. **Flush backlog** – Immutable memtables recreated from WAL are resubmitted to `flush.Manager`; temporary `.sst.tmp` files are either reinstalled or cleaned up.
 6. **Stats bootstrap** – the metrics goroutine restarts so CLI commands immediately reflect queue backlogs and GC status.
 
@@ -39,7 +39,7 @@ This mirrors RocksDB's `DBImpl::Recover` while extending to handle value log met
 | Flush crash after install | crash after logging manifest edit but before WAL release | Manifest still lists SST; recovery verifies file exists and releases WAL on reopen | `db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest` |
 | ValueLog GC crash | delete edit written, file still on disk | Recovery removes stale `.vlog` file and keeps manifest consistent | `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` |
 | Manifest rewrite crash | new MANIFEST written, CURRENT not updated | Recovery keeps using old manifest; stale temp file cleaned | `db_recovery_test.go::TestRecoveryManifestRewriteCrash` |
-| Transaction in-flight | crash between WAL append and memtable update | WAL replay reapplies entry; transactions remain atomic because commit order is WAL → vlog → memtable | `txn_test.go::TestTxnCommitPersists` |
+| Transaction in-flight | crash between WAL append and memtable update | WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable | `txn_test.go::TestTxnCommitPersists` |
 
 ---
 
