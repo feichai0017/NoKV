@@ -153,6 +153,40 @@ func TestPsarameter(t *testing.T) {
 	runTest(1, testNil)
 }
 
+func TestMemtableTombstoneShadowsSST(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	key := []byte("tombstone-key-00000000")
+	val := []byte("value")
+
+	e := kv.NewEntry(key, val)
+	if err := lsm.Set(e); err != nil {
+		t.Fatalf("lsm.Set: %v", err)
+	}
+
+	lsm.Rotate()
+	waitForL0(t, lsm)
+
+	del := kv.NewEntry(key, nil)
+	del.Meta = kv.BitDelete
+	if err := lsm.Set(del); err != nil {
+		t.Fatalf("lsm.Set tombstone: %v", err)
+	}
+
+	got, err := lsm.Get(key)
+	if err != nil {
+		t.Fatalf("lsm.Get: %v", err)
+	}
+	if got.Meta&kv.BitDelete == 0 {
+		t.Fatalf("expected tombstone entry, got meta=%d", got.Meta)
+	}
+	if len(got.Value) != 0 {
+		t.Fatalf("expected empty tombstone value, got %q", got.Value)
+	}
+}
+
 // TestCompact 测试L0到Lmax压缩
 func TestCompact(t *testing.T) {
 	clearDir()
@@ -539,6 +573,19 @@ func tricky(tables []*table) {
 		t, _ := time.Parse("2006-01-02 15:04:05", "1995-08-10 00:00:00")
 		table.createdAt = t
 	}
+}
+
+func waitForL0(t *testing.T, lsm *LSM) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if lsm.FlushPending() == 0 && lsm.levels.levels[0].numTables() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for L0 table (pending=%d tables=%d)",
+		lsm.FlushPending(), lsm.levels.levels[0].numTables())
 }
 
 func clearDir() {

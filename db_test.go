@@ -3,6 +3,7 @@ package NoKV
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -610,6 +611,33 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 		"wal_segments_with_raft": snapAfter.WALSegmentsWithRaftRecords,
 		"wal_removable_segments": snapAfter.WALRemovableRaftSegments,
 	})
+}
+
+func TestRecoverySkipsValueLogReplay(t *testing.T) {
+	dir := t.TempDir()
+	opt := NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.ValueLogFileSize = 1 << 16
+	opt.ValueThreshold = 1 << 20
+	opt.EnableWALWatchdog = false
+	opt.ValueLogGCInterval = 0
+
+	db := Open(opt)
+
+	userKey := []byte("vlog-replay-key")
+	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint32)
+	entry := kv.NewEntry(internalKey, []byte("payload"))
+	_, err := db.vlog.manager.AppendEntry(entry)
+	require.NoError(t, err)
+	entry.DecrRef()
+	require.NoError(t, db.vlog.manager.SyncActive())
+	require.NoError(t, db.Close())
+
+	db2 := Open(opt)
+	defer func() { _ = db2.Close() }()
+
+	_, err = db2.Get(userKey)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {

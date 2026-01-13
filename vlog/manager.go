@@ -39,6 +39,7 @@ type Manager struct {
 type ManagerTestingHooks struct {
 	BeforeAppend func(*Manager, []byte) error
 	BeforeRotate func(*Manager) error
+	BeforeSync   func(*Manager, uint32) error
 }
 
 // SetTestingHooks installs testing callbacks on the manager. It is intended for
@@ -67,6 +68,17 @@ func (m *Manager) runBeforeAppendHook(data []byte) error {
 		return nil
 	}
 	return hook(m, data)
+}
+
+// runBeforeSyncHook invokes the testing hook (if any) before syncing a segment.
+func (m *Manager) runBeforeSyncHook(fid uint32) error {
+	m.filesLock.RLock()
+	hook := m.hooks.BeforeSync
+	m.filesLock.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(m, fid)
 }
 
 func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
@@ -309,6 +321,62 @@ func (m *Manager) Head() kv.ValuePtr {
 		Fid:    m.activeID,
 		Offset: m.offset,
 	}
+}
+
+// SyncActive fsyncs the current active value log segment.
+// It is primarily used in tests; the write path syncs all touched segments via SyncFIDs.
+func (m *Manager) SyncActive() error {
+	if m == nil {
+		return nil
+	}
+	m.filesLock.RLock()
+	lf := m.active
+	fid := m.activeID
+	m.filesLock.RUnlock()
+	if lf == nil {
+		return nil
+	}
+	if err := m.runBeforeSyncHook(fid); err != nil {
+		return err
+	}
+	lf.Lock.Lock()
+	defer lf.Lock.Unlock()
+	return lf.Sync()
+}
+
+// SyncFIDs fsyncs the provided value log segments.
+func (m *Manager) SyncFIDs(fids []uint32) error {
+	if m == nil || len(fids) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(fids))
+	for _, fid := range fids {
+		if _, ok := seen[fid]; ok {
+			continue
+		}
+		seen[fid] = struct{}{}
+
+		m.filesLock.RLock()
+		lf := m.files[fid]
+		if lf != nil {
+			lf.Lock.Lock()
+		}
+		m.filesLock.RUnlock()
+
+		if lf == nil {
+			continue
+		}
+		if err := m.runBeforeSyncHook(fid); err != nil {
+			lf.Lock.Unlock()
+			return err
+		}
+		err := lf.Sync()
+		lf.Lock.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SegmentSize reports the current size of the segment identified by fid.

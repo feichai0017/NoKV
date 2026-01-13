@@ -177,6 +177,9 @@ func (vlog *valueLog) newValuePtr(e *kv.Entry) (*kv.ValuePtr, error) {
 }
 
 func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
+	if replayFn == nil {
+		replayFn = func(*kv.Entry, *kv.ValuePtr) error { return nil }
+	}
 	vlog.lfDiscardStats.closer.Add(1)
 	go vlog.flushDiscardStats()
 
@@ -194,7 +197,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 		if fid == ptr.Fid {
 			offset = ptr.Offset + ptr.Len
 		}
-		vlog.logf("Replaying file id: %d at offset: %d", fid, offset)
+		vlog.logf("Scanning file id: %d at offset: %d", fid, offset)
 		start := time.Now()
 		if err := vlog.replayLog(fid, offset, replayFn, fid == activeFID); err != nil {
 			if err == utils.ErrDeleteVlogFile {
@@ -205,7 +208,7 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 			}
 			return err
 		}
-		vlog.logf("Replay took: %s", time.Since(start))
+		vlog.logf("Scan took: %s", time.Since(start))
 
 		if fid != activeFID {
 			if err := vlog.manager.SegmentInit(fid); err != nil {
@@ -251,12 +254,14 @@ func (vlog *valueLog) write(reqs []*request) error {
 		return err
 	}
 
+	wrote := false
 	for _, req := range reqs {
 		req.Ptrs = req.Ptrs[:0]
 		writeMask := make([]bool, len(req.Entries))
 		for i, e := range req.Entries {
 			if !vlog.db.shouldWriteValueToLSM(e) {
 				writeMask[i] = true
+				wrote = true
 			}
 		}
 
@@ -265,6 +270,25 @@ func (vlog *valueLog) write(reqs []*request) error {
 			return fail(err, "rewind value log after append failure")
 		}
 		req.Ptrs = append(req.Ptrs, ptrs...)
+	}
+	if wrote && vlog.db != nil && vlog.db.opt.SyncWrites {
+		fids := make([]uint32, 0, len(reqs))
+		seen := make(map[uint32]struct{}, len(reqs))
+		for _, req := range reqs {
+			for _, ptr := range req.Ptrs {
+				if ptr.IsZero() {
+					continue
+				}
+				if _, ok := seen[ptr.Fid]; ok {
+					continue
+				}
+				seen[ptr.Fid] = struct{}{}
+				fids = append(fids, ptr.Fid)
+			}
+		}
+		if err := vlog.manager.SyncFIDs(fids); err != nil {
+			return fail(err, "sync value log after append")
+		}
 	}
 	return nil
 }
@@ -316,7 +340,7 @@ func (db *DB) initVLog() {
 	} else {
 		db.lastLoggedHead = kv.ValuePtr{}
 	}
-	if err := vlog.open(vp, db.replayFunction()); err != nil {
+	if err := vlog.open(vp, nil); err != nil {
 		utils.Panic(err)
 	}
 	db.vlog = vlog
@@ -330,42 +354,6 @@ func (db *DB) getHead() (*kv.ValuePtr, uint64) {
 	}
 	ptr := vp
 	return &ptr, uint64(ptr.Offset)
-}
-
-func (db *DB) replayFunction() func(*kv.Entry, *kv.ValuePtr) error {
-	toLSM := func(k []byte, vs kv.ValueStruct) error {
-		e := kv.NewEntry(k, vs.Value)
-		e.ExpiresAt = vs.ExpiresAt
-		e.Meta = vs.Meta
-		err := db.lsm.Set(e)
-		e.DecrRef()
-		return err
-	}
-
-	return func(e *kv.Entry, vp *kv.ValuePtr) error {
-		nk := make([]byte, len(e.Key))
-		copy(nk, e.Key)
-		var nv []byte
-		meta := e.Meta
-		if db.shouldWriteValueToLSM(e) {
-			nv = make([]byte, len(e.Value))
-			copy(nv, e.Value)
-		} else {
-			nv = vp.Encode()
-			meta = meta | kv.BitValuePointer
-		}
-		db.updateHead([]kv.ValuePtr{*vp})
-
-		v := kv.ValueStruct{
-			Value:     nv,
-			Meta:      meta,
-			ExpiresAt: e.ExpiresAt,
-		}
-		if err := toLSM(nk, v); err != nil {
-			return err
-		}
-		return nil
-	}
 }
 
 func (db *DB) updateHead(ptrs []kv.ValuePtr) {

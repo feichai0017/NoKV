@@ -105,7 +105,7 @@ Relevant options (see `options.go` for defaults):
 
 1. `wal.Open` reopens the highest segment, leaving the file pointer at the end (`switchSegmentLocked`).
 2. `manifest.Manager` supplies the WAL checkpoint (segment + offset) while building the version. Replay skips entries up to this checkpoint, ensuring we only reapply writes not yet materialised in SSTables.
-3. `wal.Manager.Replay` feeds payloads into `DB.replayFunction`, which repopulates memtables and the value log head—mirroring RocksDB's `DBImpl::RecoverLogFile`.
+3. `wal.Manager.Replay` (invoked by the LSM recovery path) rebuilds memtables from entries newer than the manifest checkpoint. Value-log recovery only validates/truncates segments and does not reapply data.
 4. If the final record is partially written, the CRC mismatch stops replay and the segment is truncated during recovery tests, mimicking RocksDB's tolerant behaviour.
 
 ---
