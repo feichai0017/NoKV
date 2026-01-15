@@ -84,6 +84,6 @@ func main() {
 	} else {
 		log.Printf("Error: Key still exists!")
 	}
-	
+
 	fmt.Println("\nDemo finished successfully.")
 }
