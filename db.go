@@ -23,10 +23,14 @@ import (
 	"github.com/feichai0017/NoKV/wal"
 )
 
+// nonTxnMaxVersion is the sentinel MVCC version used by non-transactional APIs.
+// Non-transactional reads/writes must not be mixed with MVCC/Txn writes.
+const nonTxnMaxVersion = math.MaxUint64
+
 type (
 	// NoKV对外提供的功能集合
 	CoreAPI interface {
-		Set(data *kv.Entry) error
+		Set(key, value []byte) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
 		SetCF(cf kv.ColumnFamily, key, value []byte) error
@@ -383,23 +387,36 @@ func (db *DB) Del(key []byte) error {
 
 // DelCF deletes a key from the specified column family.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
-	// 写入一个值为nil的entry 作为墓碑消息实现删除
-	e := kv.NewEntryWithCF(cf, key, nil)
-	e.Meta = kv.BitDelete
-	err := db.Set(e)
-	e.DecrRef()
-	return err
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	entry := kv.NewEntryWithCF(cf, key, nil)
+	entry.Meta = kv.BitDelete
+	defer entry.DecrRef()
+	return db.setEntry(entry)
+}
+
+// Set writes a key/value pair into the default column family.
+func (db *DB) Set(key, value []byte) error {
+	return db.SetCF(kv.CFDefault, key, value)
 }
 
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
-	e := kv.NewEntryWithCF(cf, key, value)
-	err := db.Set(e)
-	e.DecrRef()
-	return err
+	// Non-transactional API: do not mix with MVCC/Txn writes.
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	data := kv.NewEntryWithCF(cf, key, value)
+	if value == nil {
+		data.Meta = kv.BitDelete
+	}
+	defer data.DecrRef()
+	return db.setEntry(data)
 }
 
-func (db *DB) Set(data *kv.Entry) error {
+// setEntry persists an entry using the non-transactional write path.
+func (db *DB) setEntry(data *kv.Entry) error {
 	if data == nil || len(data.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
@@ -415,7 +432,7 @@ func (db *DB) Set(data *kv.Entry) error {
 	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
 		return err
 	}
-	data.Key = kv.InternalKey(data.CF, data.Key, math.MaxUint32)
+	data.Key = kv.InternalKey(data.CF, data.Key, nonTxnMaxVersion)
 	// 如果value不应该直接写入LSM 则先写入 vlog文件，这时必须保证vlog具有重放功能
 	// 以便于崩溃后恢复数据
 	if !db.shouldWriteValueToLSM(data) {
@@ -532,8 +549,8 @@ func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	}
 
 	originKey := key
-	// 添加时间戳用于查询
-	internalKey := kv.InternalKey(cf, key, math.MaxUint32)
+	// Non-transactional API: use the max sentinel timestamp (not for MVCC).
+	internalKey := kv.InternalKey(cf, key, nonTxnMaxVersion)
 
 	var (
 		entry *kv.Entry

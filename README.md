@@ -84,7 +84,7 @@ func main() {
 	defer db.Close()
 
 	key := []byte("hello")
-	if err := db.SetCF(utils.CFDefault, key, []byte("world")); err != nil {
+	if err := db.Set(key, []byte("world")); err != nil {
 		log.Fatalf("set failed: %v", err)
 	}
 

@@ -28,7 +28,7 @@ func TestAPI(t *testing.T) {
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.Set(e); err != nil {
+		if err := db.setEntry(e); err != nil {
 			t.Fatal(err)
 		}
 		e.DecrRef()
@@ -54,7 +54,6 @@ func TestAPI(t *testing.T) {
 		IsAsc:  false,
 	})
 	defer func() { _ = iter.Close() }()
-	defer func() { _ = iter.Close() }()
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		it := iter.Item()
 		t.Logf("db.NewIterator key=%s, value=%s, expiresAt=%d", it.Entry().Key, it.Entry().Value, it.Entry().ExpiresAt)
@@ -68,7 +67,7 @@ func TestAPI(t *testing.T) {
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.Set(e); err != nil {
+		if err := db.setEntry(e); err != nil {
 			t.Fatal(err)
 		}
 		e.DecrRef()
@@ -237,9 +236,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	for i := range 48 {
 		val := make([]byte, 512)
 		key := fmt.Appendf(nil, "key-%03d", i)
-		e := kv.NewEntry(key, val)
-		require.NoError(t, db.Set(e))
-		e.DecrRef()
+		require.NoError(t, db.Set(key, val))
 	}
 	fids := db.vlog.manager.ListFIDs()
 	require.GreaterOrEqual(t, len(fids), 2)
@@ -292,9 +289,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	db := Open(opt)
 	key := []byte("orphan-key")
 	val := make([]byte, 512)
-	e := kv.NewEntry(key, val)
-	require.NoError(t, db.Set(e))
-	e.DecrRef()
+	require.NoError(t, db.Set(key, val))
 
 	headPtr := db.vlog.manager.Head()
 	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
@@ -357,9 +352,7 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	for i := range 256 {
 		key := fmt.Appendf(nil, "sst-crash-%03d", i)
 		val := make([]byte, 128)
-		e := kv.NewEntry(key, val)
-		require.NoError(t, db.Set(e))
-		e.DecrRef()
+		require.NoError(t, db.Set(key, val))
 	}
 	require.NoError(t, db.Close())
 
@@ -403,9 +396,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	}
 
 	db := Open(opt)
-	e := kv.NewEntry([]byte("rewrite-key"), []byte("rewrite-val"))
-	require.NoError(t, db.Set(e))
-	e.DecrRef()
+	require.NoError(t, db.Set([]byte("rewrite-key"), []byte("rewrite-val")))
 	require.NoError(t, db.Close())
 
 	current := filepath.Join(dir, "CURRENT")
@@ -532,9 +523,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	db := Open(opt)
 	key := []byte("wal-crash-key")
 	val := []byte("wal-crash-value")
-	e := kv.NewEntry(key, val)
-	require.NoError(t, db.Set(e))
-	e.DecrRef()
+	require.NoError(t, db.Set(key, val))
 
 	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
 	_ = db.stats.close()
@@ -625,7 +614,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	db := Open(opt)
 
 	userKey := []byte("vlog-replay-key")
-	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint32)
+	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint64)
 	entry := kv.NewEntry(internalKey, []byte("payload"))
 	_, err := db.vlog.manager.AppendEntry(entry)
 	require.NoError(t, err)
