@@ -54,7 +54,7 @@ sequenceDiagram
 
 1. **Active → Immutable** – when `mt.Size()` crosses thresholds (`Options.MemTableSize`), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.
 2. **Flush** – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in `memTable.segmentID` once the SST is durably installed.
-3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes, rebuilding `maxVersion` for MVCC.
+3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes, rebuilding `maxVersion` for the oracle.
 
 Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger's arena allocator for simplicity.
 

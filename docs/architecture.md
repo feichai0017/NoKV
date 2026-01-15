@@ -128,10 +128,10 @@ flowchart TD
 | --- | --- | --- |
 | `KvGet` | `store.ReadCommand` → `kv.Apply` GET | `pb.GetResponse` / `RegionError` |
 | `KvScan` | `store.ReadCommand` → `kv.Apply` SCAN | `pb.ScanResponse` / `RegionError` |
-| `KvPrewrite` | `store.ProposeCommand` → `mvcc.Prewrite` | `pb.PrewriteResponse` |
-| `KvCommit` | `store.ProposeCommand` → `mvcc.Commit` | `pb.CommitResponse` |
-| `KvResolveLock` | `mvcc.ResolveLock` | `pb.ResolveLockResponse` |
-| `KvCheckTxnStatus` | `mvcc.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
+| `KvPrewrite` | `store.ProposeCommand` → `percolator.Prewrite` | `pb.PrewriteResponse` |
+| `KvCommit` | `store.ProposeCommand` → `percolator.Commit` | `pb.CommitResponse` |
+| `KvResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
+| `KvCheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
 
 `nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). `scripts/run_local_cluster.sh` builds the CLI, writes a minimal region manifest, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
 

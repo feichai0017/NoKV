@@ -8,9 +8,9 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/mvcc"
-	"github.com/feichai0017/NoKV/mvcc/latch"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -39,19 +39,19 @@ func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 			}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Get{Get: result}})
 		case pb.CmdType_CMD_PREWRITE:
-			result := &pb.PrewriteResponse{Errors: mvcc.Prewrite(db, defaultLatches, r.GetPrewrite())}
+			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, defaultLatches, r.GetPrewrite())}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
 		case pb.CmdType_CMD_COMMIT:
-			err := mvcc.Commit(db, defaultLatches, r.GetCommit())
+			err := percolator.Commit(db, defaultLatches, r.GetCommit())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
 		case pb.CmdType_CMD_BATCH_ROLLBACK:
-			err := mvcc.BatchRollback(db, defaultLatches, r.GetBatchRollback())
+			err := percolator.BatchRollback(db, defaultLatches, r.GetBatchRollback())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_BatchRollback{BatchRollback: &pb.BatchRollbackResponse{Error: err}}})
 		case pb.CmdType_CMD_RESOLVE_LOCK:
-			count, err := mvcc.ResolveLock(db, defaultLatches, r.GetResolveLock())
+			count, err := percolator.ResolveLock(db, defaultLatches, r.GetResolveLock())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_ResolveLock{ResolveLock: &pb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
 		case pb.CmdType_CMD_CHECK_TXN_STATUS:
-			result := mvcc.CheckTxnStatus(db, defaultLatches, r.GetCheckTxnStatus())
+			result := percolator.CheckTxnStatus(db, defaultLatches, r.GetCheckTxnStatus())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_CheckTxnStatus{CheckTxnStatus: result}})
 		case pb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
@@ -78,7 +78,7 @@ func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, 
 	if req == nil {
 		return &pb.GetResponse{NotFound: true}, nil, nil
 	}
-	reader := mvcc.NewReader(db)
+	reader := percolator.NewReader(db)
 	lock, err := reader.GetLock(req.GetKey())
 	if err != nil {
 		return nil, nil, err
@@ -128,7 +128,7 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 
 	resp := &pb.ScanResponse{}
 	iter.Rewind()
-	reader := mvcc.NewReader(db)
+	reader := percolator.NewReader(db)
 	for iter.Valid() && len(resp.Kvs) < limit {
 		item := iter.Item()
 		if item == nil {
@@ -215,7 +215,7 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 			iter.Next()
 			continue
 		}
-		write, err := mvcc.DecodeWrite(entry.Value)
+		write, err := percolator.DecodeWrite(entry.Value)
 		if err != nil {
 			return nil, false, err
 		}
@@ -246,7 +246,7 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 	return nil, false, nil
 }
 
-func lockedError(key []byte, lock *mvcc.Lock) *pb.KeyError {
+func lockedError(key []byte, lock *percolator.Lock) *pb.KeyError {
 	if lock == nil {
 		return nil
 	}

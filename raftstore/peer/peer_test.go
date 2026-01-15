@@ -11,8 +11,8 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/mvcc"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -275,12 +275,12 @@ func TestPeerPrewriteCommit(t *testing.T) {
 		}},
 	}
 	require.NoError(t, peers[0].ProposeCommand(commit))
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		net.Tick()
 	}
 	net.Flush()
 
-	reader := mvcc.NewReader(dbs[0])
+	reader := percolator.NewReader(dbs[0])
 	val, err := reader.GetValue([]byte("txn-key"), 10)
 	require.NoError(t, err)
 	require.Equal(t, []byte("txn-value"), val)
