@@ -73,7 +73,6 @@ import (
 	"log"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 func main() {
