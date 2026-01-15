@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"maps"
-	"math"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -161,7 +160,7 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 	}
 	key := req.key
 	if db.lsm != nil {
-		internal := kv.InternalKey(kv.CFDefault, []byte(key), math.MaxUint32)
+		internal := kv.InternalKey(kv.CFDefault, []byte(key), nonTxnMaxVersion)
 		db.lsm.Prefetch(internal, req.hot)
 	}
 	for {

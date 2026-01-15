@@ -25,7 +25,7 @@ func TestARTGetLatest(t *testing.T) {
 		entry.DecrRef()
 	}
 
-	seekKey := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint32)
+	seekKey := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 	vs := art.Search(seekKey)
 	if string(vs.Value) != "v3" {
 		t.Fatalf("expected latest value v3, got %q", string(vs.Value))
@@ -64,7 +64,7 @@ func TestARTIteratorOrder(t *testing.T) {
 		last = entry.Key
 	}
 
-	seek := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint32)
+	seek := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
 	it.Seek(seek)
 	if !it.Valid() {
 		t.Fatalf("expected seek to be valid")

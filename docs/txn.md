@@ -129,6 +129,7 @@ NoKV inherits Badger's optimistic concurrency but strengthens durability orderin
 ## 6. Operational Notes
 
 * **Long-running reads**: watch `NoKV.Txns.Active` and `oracle.readMark.DoneUntil()`—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.
+* **Non-transactional APIs**: `DB.Set/Get/Del` and `SetCF/GetCF/DelCF` use a MaxUint64 sentinel version for "latest". Do not mix these writes with MVCC/Txn writes in the same database.
 * **Managed mode**: exposing `Txn.SetEntry` with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.
 * **Throttling**: combine `HotRing.TouchAndClamp` with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.
 

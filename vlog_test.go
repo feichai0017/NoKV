@@ -173,14 +173,14 @@ func TestValueGC(t *testing.T) {
 		}
 	}()
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		e := newRandEntry(sz)
 		eCopy := kvpkg.NewEntry(e.Key, e.Value)
 		eCopy.Meta = e.Meta
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, db.Set(e))
+		require.NoError(t, db.setEntry(e))
 		e.DecrRef()
 	}
 	require.NoError(t, db.RunValueLogGC(0.9))
@@ -391,7 +391,8 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	defer db.applyThrottle(false)
 
 	e := kvpkg.NewEntry([]byte("gc-skip"), []byte("v"))
-	require.NoError(t, db.Set(e))
+	require.NoError(t, db.Set(e.Key, e.Value))
+	e.DecrRef()
 
 	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
 		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)
