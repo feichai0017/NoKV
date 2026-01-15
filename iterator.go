@@ -108,7 +108,11 @@ func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
-	iter.iitr.Seek(key)
+	// Convert user key to internal key for seeking.
+	// We use MaxUint64 as version to seek to the latest version of the key.
+	// We default to CFDefault as DBIterator currently doesn't support specifying CF.
+	internalKey := kv.InternalKey(kv.CFDefault, key, nonTxnMaxVersion)
+	iter.iitr.Seek(internalKey)
 	iter.populate()
 }
 
