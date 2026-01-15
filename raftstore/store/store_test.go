@@ -11,8 +11,8 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/mvcc"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -627,7 +627,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	require.Len(t, resp.GetResponses(), 1)
 	require.Nil(t, resp.GetResponses()[0].GetCommit().GetError())
 
-	reader := mvcc.NewReader(db)
+	reader := percolator.NewReader(db)
 	val, err := reader.GetValue([]byte("cmd-key"), 50)
 	require.NoError(t, err)
 	require.Equal(t, []byte("cmd-value"), val)
