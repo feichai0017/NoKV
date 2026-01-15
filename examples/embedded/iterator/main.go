@@ -57,7 +57,7 @@ func main() {
 
 	for ; iter.Valid(); iter.Next() {
 		item := iter.Item()
-		
+
 		// 检查 key 是否还以 prefix 开头，如果不是说明已经遍历完了目标范围
 		// (虽然在这个例子里所有数据都是这个 prefix，但在真实场景中很重要)
 		// 注意：这里的 item.Key() 返回的是 InternalKey，需要处理一下或者只看 User Key
@@ -74,41 +74,41 @@ func main() {
 		}
 
 		fmt.Printf("- %s: %s\n", keyStr, valStr)
-		
+
 		// 记得释放 Entry
 		entry.DecrRef()
 	}
-	
-	// Note: NoKV's MemTable implementation (SkipList) currently ignores the IsAsc option 
-	// and only supports forward iteration. Reverse scanning will not work correctly 
+
+	// Note: NoKV's MemTable implementation (SkipList) currently ignores the IsAsc option
+	// and only supports forward iteration. Reverse scanning will not work correctly
 	// for data that is still in memory. It might work for on-disk SSTables if supported there.
 	// For this example, we skip the reverse scan demo.
 
 	/*
-	// 4. 倒序遍历 (Reverse Scan) - Not currently supported for MemTables
-	fmt.Println("\nReverse scanning (Top 2):")
-	iterDesc := db.NewIterator(&utils.Options{IsAsc: false})
-	defer iterDesc.Close()
-	
-	// 从最后一个可能的 key 开始 (product:005 的下一个字节)
-	iterDesc.Seek([]byte(prefix + "\xff")) 
-	
-	count := 0
-	for ; iterDesc.Valid(); iterDesc.Next() {
-		entry := iterDesc.Item().Entry()
-		keyStr := string(entry.Key)
-		if len(keyStr) < len(prefix) || keyStr[:len(prefix)] != prefix {
+		// 4. 倒序遍历 (Reverse Scan) - Not currently supported for MemTables
+		fmt.Println("\nReverse scanning (Top 2):")
+		iterDesc := db.NewIterator(&utils.Options{IsAsc: false})
+		defer iterDesc.Close()
+
+		// 从最后一个可能的 key 开始 (product:005 的下一个字节)
+		iterDesc.Seek([]byte(prefix + "\xff"))
+
+		count := 0
+		for ; iterDesc.Valid(); iterDesc.Next() {
+			entry := iterDesc.Item().Entry()
+			keyStr := string(entry.Key)
+			if len(keyStr) < len(prefix) || keyStr[:len(prefix)] != prefix {
+				entry.DecrRef()
+				break
+			}
+
+			fmt.Printf("- %s: %s\n", keyStr, string(entry.Value))
 			entry.DecrRef()
-			break
+
+			count++
+			if count >= 2 {
+				break
+			}
 		}
-		
-		fmt.Printf("- %s: %s\n", keyStr, string(entry.Value))
-		entry.DecrRef()
-		
-		count++
-		if count >= 2 {
-			break
-		}
-	}
 	*/
 }
