@@ -19,7 +19,7 @@ jobs:
       - name: Set up mdBook
         uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: "0.4.40"
+          mdbook-version: "0.5.2"
       - name: Install mdbook-mermaid
         uses: taiki-e/install-action@v2
         with:
