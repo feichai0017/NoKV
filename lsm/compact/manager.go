@@ -24,8 +24,7 @@ type Priority struct {
 	Adjusted     float64
 	DropPrefixes [][]byte
 	Target       Targets
-	IngestOnly   bool
-	IngestMerge  bool
+	IngestMode   IngestMode
 	StatsTag     string
 }
 

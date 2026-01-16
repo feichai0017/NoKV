@@ -112,16 +112,17 @@ func PickPriorities(in PickerInput) []Priority {
 	}
 	prios := make([]Priority, len(in.Levels))
 	var extras []Priority
-	addPriority := func(level int, score float64, ingest bool, merge bool) {
+	addPriority := func(level int, score float64, mode IngestMode) {
 		pri := Priority{
-			Level:       level,
-			Score:       score,
-			Adjusted:    score,
-			Target:      in.Targets,
-			IngestOnly:  ingest,
-			IngestMerge: merge,
-			StatsTag:    "regular",
+			Level:      level,
+			Score:      score,
+			Adjusted:   score,
+			Target:     in.Targets,
+			IngestMode: mode,
+			StatsTag:   "regular",
 		}
+		ingest := mode.UsesIngest()
+		merge := mode.KeepsIngest()
 		if in.CompactionValueWeight > 0 && level < len(in.Levels) {
 			lvl := in.Levels[level]
 			var valueBytes int64
@@ -177,7 +178,7 @@ func PickPriorities(in PickerInput) []Priority {
 	if numL0 <= 0 {
 		numL0 = 1
 	}
-	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), false, false)
+	addPriority(0, float64(in.Levels[0].NumTables)/float64(numL0), IngestNone)
 
 	for i := 1; i < len(in.Levels); i++ {
 		lvl := in.Levels[i]
@@ -198,7 +199,7 @@ func PickPriorities(in PickerInput) []Priority {
 				ageFactor := math.Min(ageSec/60.0, 4.0)
 				ingestScore += ageFactor
 			}
-			addPriority(i, ingestScore+1.0, true, false)
+			addPriority(i, ingestScore+1.0, IngestDrain)
 			trigger := in.IngestBacklogMergeScore
 			if trigger <= 0 {
 				trigger = 2.0
@@ -211,20 +212,19 @@ func PickPriorities(in PickerInput) []Priority {
 			}
 			if ingestScore >= dynTrigger {
 				pri := Priority{
-					Level:       i,
-					Score:       ingestScore * 0.8,
-					Adjusted:    ingestScore * 0.8,
-					Target:      in.Targets,
-					IngestOnly:  true,
-					IngestMerge: true,
-					StatsTag:    "ingest-merge",
+					Level:      i,
+					Score:      ingestScore * 0.8,
+					Adjusted:   ingestScore * 0.8,
+					Target:     in.Targets,
+					IngestMode: IngestKeep,
+					StatsTag:   "ingest-merge",
 				}
 				prios = append(prios, pri)
 			}
 			continue
 		}
 		sz := lvl.TotalSize - lvl.DelSize
-		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), false, false)
+		addPriority(i, float64(sz)/float64(in.Targets.TargetSz[i]), IngestNone)
 	}
 
 	var prevLevel int
