@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	// 初始化opt
+	// Test options for value log tests.
 	opt = &Options{
 		WorkDir:          "./work_test",
 		SSTableMaxSz:     1 << 10,
@@ -35,14 +35,14 @@ var (
 )
 
 func TestVlogBase(t *testing.T) {
-	// 清理目录
+	// Clean work directory.
 	clearDir()
-	// 打开DB
+	// Open DB.
 	db := Open(opt)
 	defer db.Close()
 	log := db.vlog
 	var err error
-	// 创建一个简单的kv entry对象
+	// Create a simple key/value entry.
 	const val1 = "sampleval012345678901234567890123"
 	const val2 = "samplevalb012345678901234567890123"
 	require.True(t, int64(len(val1)) >= db.opt.ValueThreshold)
@@ -53,23 +53,23 @@ func TestVlogBase(t *testing.T) {
 	e2 := kvpkg.NewEntry([]byte("samplekeyb"), []byte(val2))
 	e2.Meta = kvpkg.BitValuePointer
 
-	// 构建一个批量请求的request
+	// Build a batched request.
 	b := new(request)
 	b.Entries = []*kvpkg.Entry{e1, e2}
 
-	// 直接写入vlog中
+	// Write directly into the value log.
 	require.NoError(t, log.write([]*request{b}))
 	e1.DecrRef()
 	e2.DecrRef()
 	require.Len(t, b.Ptrs, 2)
 	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
 
-	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
+	// Read back the value log entries via value pointers.
 	payload1, unlock1, err1 := log.manager.Read(&b.Ptrs[0])
 	payload2, unlock2, err2 := log.manager.Read(&b.Ptrs[1])
 	require.NoError(t, err1)
 	require.NoError(t, err2)
-	// 关闭会调的锁
+	// Release callbacks.
 	defer kvpkg.RunCallback(unlock1)
 	defer kvpkg.RunCallback(unlock2)
 	entry1, err := kvpkg.DecodeEntry(payload1)

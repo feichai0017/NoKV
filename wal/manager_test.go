@@ -117,7 +117,7 @@ func TestManagerReplayHandlesTruncate(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	// Truncate最后两个字节，保持至少一条完整记录。
+	// Truncate the last two bytes to leave at least one full record.
 	info, err := os.Stat(active)
 	if err != nil {
 		t.Fatalf("stat: %v", err)

@@ -17,7 +17,7 @@ var (
 	gopath = path.Join(os.Getenv("GOPATH"), "src") + "/"
 )
 
-// NotFoundKey 找不到key
+// ErrKeyNotFound indicates a missing key.
 var (
 	// ErrValueLogSize is returned when opt.ValueLogFileSize option is not within the valid
 	// range.
@@ -96,7 +96,7 @@ var (
 	ErrEmptyRecord = errors.New("wal: empty record")
 )
 
-// Panic 如果err 不为nil 则panicc
+// Panic panics when err is non-nil.
 func Panic(err error) {
 	if err != nil {
 		panic(err)

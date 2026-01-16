@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	// 初始化opt
+	// Shared test options.
 	opt = &Options{
 		WorkDir:             "../work_test",
 		SSTableMaxSz:        1024,
@@ -32,20 +32,20 @@ var (
 	}
 )
 
-// TestBase 正确性测试
+// TestBase is a basic correctness test.
 func TestBase(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer lsm.Close()
 	test := func() {
-		// 基准测试
+		// Baseline test.
 		baseTest(t, lsm, 128)
 	}
-	// 运行N次测试多个sst的影响
+	// Run N times to exercise multiple SSTables.
 	runTest(1, test)
 }
 
-// TestClose 测试优雅关闭
+// TestClose exercises graceful shutdown and restart.
 func TestClose(t *testing.T) {
 	clearDir()
 	test := func() {
@@ -54,17 +54,17 @@ func TestClose(t *testing.T) {
 		baseTest(t, first, 128)
 		_ = utils.Err(first.Close())
 
-		// 重启后可正常工作才算成功
+		// A successful restart must still pass the base test.
 		reopened := buildLSM()
 		reopened.StartCompacter()
 		defer reopened.Close()
 		baseTest(t, reopened, 128)
 	}
-	// 运行N次测试多个sst的影响
+	// Run N times to exercise multiple SSTables.
 	runTest(1, test)
 }
 
-// 命中不同存储介质的逻辑分支测试
+// TestHitStorage exercises read paths across storage tiers.
 func TestHitStorage(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -73,27 +73,27 @@ func TestHitStorage(t *testing.T) {
 	if err := lsm.Set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
-	// 命中内存表
+	// Hit the memtable path.
 	hitMemtable := func() {
 		v, err := lsm.memTable.Get(e.Key)
 		_ = utils.Err(err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
-	// 命中L0层
+	// Hit the L0 path.
 	hitL0 := func() {
-		// baseTest的测试就包含 在命中L0的sst查询
+		// baseTest already covers L0 SST lookups.
 		baseTest(t, lsm, 128)
 	}
-	// 命中非L0层
+	// Hit a non-L0 path.
 	hitNotL0 := func() {
-		// 通过压缩将compact生成非L0数据, 会命中l6层
+		// Compaction produces non-L0 data; this should hit L6.
 		lsm.levels.compaction.RunOnce(0)
 		baseTest(t, lsm, 128)
 	}
-	// 命中bf
+	// Exercise the bloom-filter miss path.
 	hitBloom := func() {
 		ee := utils.BuildEntry()
-		// 查询不存在的key 如果命中则说明一定不存在
+		// Query a missing key; a bloom-filter miss confirms absence.
 		tables := lsm.levels.levels[0].tablesSnapshot()
 		if len(tables) == 0 {
 			t.Fatalf("expected L0 tables for bloom test")
@@ -139,7 +139,7 @@ func TestLSMThrottleCallback(t *testing.T) {
 	}
 }
 
-// Testparameter 测试异常参数
+// TestPsarameter verifies invalid argument handling.
 func TestPsarameter(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -149,7 +149,7 @@ func TestPsarameter(t *testing.T) {
 		_, err := lsm.Get(nil)
 		utils.CondPanic(err != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
 	}
-	// TODO p2 优先级的case先忽略
+	// TODO: skip p2 priority cases for now.
 	runTest(1, testNil)
 }
 
@@ -187,7 +187,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	}
 }
 
-// TestCompact 测试L0到Lmax压缩
+// TestCompact exercises L0->Lmax compaction.
 func TestCompact(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -240,16 +240,16 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[l0TOLMax] fid not found"))
 	}
 	l0ToL0 := func() {
-		// 先写一些数据进来
+		// Seed some data first.
 		baseTest(t, lsm, 128)
 		fid := lsm.levels.maxFID + 1
 		cd := buildCompactDef(lsm, 0, 0, 0)
-		// 非常tricky的处理方法，为了能通过检查
+		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTablesL0ToL0(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] lsm.levels.fillTablesL0ToL0(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
-		// 删除全局状态，便于下游测试逻辑
+		// Clear global state to isolate downstream tests.
 		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[0], fid)
@@ -259,12 +259,12 @@ func TestCompact(t *testing.T) {
 		baseTest(t, lsm, 128)
 		fid := lsm.levels.maxFID + 1
 		cd := buildCompactDef(lsm, 0, 0, 1)
-		// 非常tricky的处理方法，为了能通过检查
+		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
-		// 删除全局状态，便于下游测试逻辑
+		// Clear global state to isolate downstream tests.
 		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[1], fid)
@@ -275,7 +275,7 @@ func TestCompact(t *testing.T) {
 		baseTest(t, lsm, 128)
 		prevMax := lsm.levels.maxFID
 		cd := buildCompactDef(lsm, 6, 6, 6)
-		// 非常tricky的处理方法，为了能通过检查
+		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
@@ -292,7 +292,7 @@ func TestCompact(t *testing.T) {
 		}
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 6, *cd)
-		// 删除全局状态，便于下游测试逻辑
+		// Clear global state to isolate downstream tests.
 		lsm.levels.compactState.Delete(cd.stateEntry())
 		_ = utils.Err(err)
 		ok = false
@@ -327,11 +327,11 @@ func TestCompact(t *testing.T) {
 	parallerCompact := func() {
 		baseTest(t, lsm, 128)
 		cd := buildCompactDef(lsm, 0, 0, 1)
-		// 非常tricky的处理方法，为了能通过检查
+		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		utils.CondPanic(!ok, fmt.Errorf("[parallerCompact] lsm.levels.fillTables(cd) ret == false"))
-		// 构建完全相同两个压缩计划的执行，以便于百分比构建 压缩冲突
+		// Execute two identical compaction plans to simulate contention.
 		errCh := make(chan error, 1)
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -348,10 +348,10 @@ func TestCompact(t *testing.T) {
 		if errMain != nil {
 			t.Fatalf("parallel compaction error: %v", errMain)
 		}
-		// 检查compact status状态查看是否在执行并行压缩
+		// Verify compaction status reflects parallel work.
 		utils.CondPanic(!lsm.levels.compactState.HasRanges(), fmt.Errorf("[parallerCompact] not is paralle"))
 	}
-	// 运行N次测试多个sst的影响
+	// Run N times to exercise multiple SSTables.
 	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
 }
 
@@ -452,9 +452,9 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	_ = lsm.levels.levels[6].numIngestTables()
 }
 
-// 正确性测试
-func baseTest(t *testing.T, lsm *LSM, n int) {
-	// 用来跟踪调试的
+// baseTest performs correctness checks.
+func baseTest(_ *testing.T, lsm *LSM, n int) {
+	// Tracking entry for debugging.
 	e := &kv.Entry{
 		Key:       []byte("CRTS😁NoKVMrGSBtL12345678"),
 		Value:     []byte("我草了"),
@@ -463,21 +463,21 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//caseList := make([]*kv.Entry, 0)
 	//caseList = append(caseList, e)
 
-	// 随机构建数据进行测试
+	// Randomized data to exercise write paths.
 	_ = utils.Err(lsm.Set(e))
 	for i := 1; i < n; i++ {
 		ee := utils.BuildEntry()
 		_ = utils.Err(lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}
-	// 从levels中进行GET
+	// Read back from the levels.
 	v, err := lsm.Get(e.Key)
 	utils.Panic(err)
 	utils.CondPanic(!bytes.Equal(e.Value, v.Value), fmt.Errorf("lsm.Get(e.Key) value not equal !!!"))
-	// TODO range功能待完善
+	// TODO: complete range-scan testing.
 	//retList := make([]*kv.Entry, 0)
 	// testRange := func(isAsc bool) {
-	// 	// Range 确保写入进去的每个lsm都可以被读取到
+	// 	// Range ensures every written LSM entry is readable.
 	// 	iter := lsm.NewIterator(&utils.Options{IsAsc: true})
 	// 	for iter.Rewind(); iter.Valid(); iter.Next() {
 	// 		e := iter.Item().Entry()
@@ -494,13 +494,13 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	// 		}
 	// 	}
 	// }
-	// // 测试升序
+	// // Test ascending order.
 	// testRange(true)
-	// // 测试降序
+	// // Test descending order.
 	// testRange(false)
 }
 
-// 驱动模块
+// buildLSM is the test harness helper.
 func buildLSM() *LSM {
 	// init DB Basic Test
 	c := make(chan map[uint32]int64, 16)
@@ -514,7 +514,7 @@ func buildLSM() *LSM {
 	return lsm
 }
 
-// 运行测试用例
+// runTest executes the provided test functions n times.
 func runTest(n int, testFunList ...func()) {
 	for _, f := range testFunList {
 		for range n {
@@ -523,7 +523,7 @@ func runTest(n int, testFunList ...func()) {
 	}
 }
 
-// 构建compactDef对象
+// buildCompactDef constructs a compaction definition for tests.
 func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 	t := compact.Targets{
 		TargetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
@@ -555,7 +555,7 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 	return def
 }
 
-// 构建CompactionPriority对象
+// buildCompactionPriority constructs a compaction priority for tests.
 func buildCompactionPriority(lsm *LSM, thisLevel int, t compact.Targets) compact.Priority {
 	return compact.Priority{
 		Level:    thisLevel,
@@ -566,7 +566,7 @@ func buildCompactionPriority(lsm *LSM, thisLevel int, t compact.Targets) compact
 }
 
 func tricky(tables []*table) {
-	// 非常tricky的处理方法，为了能通过检查，检查所有逻辑分支
+	// Use a test-only tweak to satisfy validation checks across branches.
 	for _, table := range tables {
 		table.staleDataSize = 10 << 20
 		t, _ := time.Parse("2006-01-02 15:04:05", "1995-08-10 00:00:00")

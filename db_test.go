@@ -25,7 +25,7 @@ func TestAPI(t *testing.T) {
 	clearDir()
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
-	// 写入
+	// Write entries.
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
@@ -33,7 +33,7 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.DecrRef()
-		// 查询
+		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
 		} else {
@@ -49,7 +49,7 @@ func TestAPI(t *testing.T) {
 		}
 	}
 
-	// 迭代器
+	// Iterator scan.
 	iter := db.NewIterator(&utils.Options{
 		Prefix: []byte("hello"),
 		IsAsc:  false,
@@ -60,7 +60,7 @@ func TestAPI(t *testing.T) {
 		t.Logf("db.NewIterator key=%s, value=%s, expiresAt=%d", it.Entry().Key, it.Entry().Value, it.Entry().ExpiresAt)
 	}
 	t.Logf("db.Stats.EntryNum=%+v", atomic.LoadInt64(&db.Info().EntryNum))
-	// 删除
+	// Delete.
 	if err := db.Del([]byte("hello")); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.DecrRef()
-		// 查询
+		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
 		} else {

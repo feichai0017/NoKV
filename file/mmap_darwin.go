@@ -156,7 +156,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	return m.Data[start : start+sz], start + sz, nil
 }
 
-// AppendBuffer 向内存中追加一个buffer，如果空间不足则重新映射，扩大空间
+// AppendBuffer appends data into the mmap region, growing the mapping if needed.
 func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	size := len(m.Data)
 	needSize := len(buf)
@@ -262,7 +262,7 @@ func SyncDir(dir string) error {
 	return nil
 }
 
-// Truncature 兼容接口
+// Truncature truncates and remaps the file to the provided size.
 func (m *MmapFile) Truncature(maxSz int64) error {
 	if err := m.Sync(); err != nil {
 		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
@@ -278,7 +278,7 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	return err
 }
 
-// ReName 兼容接口
+// ReName is a no-op placeholder for compatibility.
 func (m *MmapFile) ReName(name string) error {
 	return nil
 }
