@@ -22,3 +22,4 @@
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)
 - [Notes](notes/README.md)
+  - [2026-01-16 mmap choice](notes/2026-01-16-mmap-choice.md)
