@@ -36,3 +36,41 @@ func TestLogFileBootstrapReadWrite(t *testing.T) {
 	require.NoError(t, lf.SetWritable())
 	require.False(t, lf.ro)
 }
+
+func TestLogFileLifecycleHelpers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog2")
+	opt := &Options{
+		FID:      9,
+		FileName: path,
+		MaxSz:    1 << 20,
+	}
+
+	var lf LogFile
+	require.NoError(t, lf.Open(opt))
+	defer lf.Close()
+
+	require.NoError(t, lf.Bootstrap())
+
+	payload := []byte("log-data")
+	offset := kv.ValueLogHeaderSize
+	require.NoError(t, lf.Write(uint32(offset), payload))
+	require.Greater(t, lf.Size(), int64(0))
+
+	require.NoError(t, lf.Sync())
+	pos, err := lf.Seek(0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), pos)
+
+	require.NotNil(t, lf.FD())
+	require.Equal(t, path, lf.FileName())
+
+	end := uint32(offset + len(payload))
+	require.NoError(t, lf.DoneWriting(end))
+	require.Equal(t, int64(end), lf.Size())
+
+	require.NoError(t, lf.Truncate(int64(offset)))
+	require.Equal(t, int64(offset), lf.Size())
+
+	require.NoError(t, lf.Init())
+}

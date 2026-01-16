@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -124,6 +125,114 @@ func TestColumnFamilies(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("default"), e.Value)
 	e.DecrRef()
+}
+
+func newTestOptions(t *testing.T) *Options {
+	t.Helper()
+	opt := NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.MemTableSize = 1 << 20
+	opt.SSTableMaxSz = 1 << 20
+	opt.ValueLogFileSize = 1 << 20
+	opt.ValueThreshold = 1 << 20
+	opt.DetectConflicts = true
+	return opt
+}
+
+func TestVersionedEntryRoundTrip(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("versioned-key")
+	version := uint64(42)
+	value := []byte("value-42")
+
+	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, version, value, 0))
+
+	entry, err := db.GetVersionedEntry(kv.CFDefault, key, version)
+	require.NoError(t, err)
+	require.Equal(t, kv.CFDefault, entry.CF)
+	require.Equal(t, key, entry.Key)
+	require.Equal(t, version, entry.Version)
+	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
+}
+
+func TestVersionedEntryDeleteTombstone(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("versioned-delete")
+	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, 1, []byte("v1"), 0))
+	require.NoError(t, db.DeleteVersionedEntry(kv.CFDefault, key, 2))
+
+	entry, err := db.GetVersionedEntry(kv.CFDefault, key, 2)
+	require.NoError(t, err)
+	require.Equal(t, key, entry.Key)
+	require.Equal(t, uint64(2), entry.Version)
+	require.True(t, entry.Meta&kv.BitDelete > 0)
+	entry.DecrRef()
+
+	entry, err = db.GetVersionedEntry(kv.CFDefault, key, 1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("v1"), entry.Value)
+	require.Equal(t, uint64(1), entry.Version)
+	entry.DecrRef()
+}
+
+func TestDBIteratorSeekAndValueCopy(t *testing.T) {
+	t.Run("inline", func(t *testing.T) {
+		opt := newTestOptions(t)
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		require.NoError(t, db.Set([]byte("a"), []byte("va")))
+		require.NoError(t, db.Set([]byte("b"), []byte("vb")))
+		require.NoError(t, db.Set([]byte("c"), []byte("vc")))
+
+		it := db.NewIterator(&utils.Options{IsAsc: true})
+		defer func() { _ = it.Close() }()
+		it.Seek([]byte("b"))
+		require.True(t, it.Valid())
+		item := it.Item()
+		require.Equal(t, []byte("b"), item.Entry().Key)
+		val, err := item.(*Item).ValueCopy(nil)
+		require.NoError(t, err)
+		require.Equal(t, []byte("vb"), val)
+	})
+
+	t.Run("value-pointer", func(t *testing.T) {
+		opt := newTestOptions(t)
+		opt.ValueThreshold = 0
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		value := bytes.Repeat([]byte("p"), 64)
+		require.NoError(t, db.Set([]byte("k"), value))
+
+		it := db.NewIterator(&utils.Options{IsAsc: true, OnlyUseKey: true})
+		defer func() { _ = it.Close() }()
+		it.Seek([]byte("k"))
+		require.True(t, it.Valid())
+		item := it.Item()
+		require.True(t, kv.IsValuePtr(item.Entry()))
+		val, err := item.(*Item).ValueCopy(nil)
+		require.NoError(t, err)
+		require.Equal(t, value, val)
+	})
+}
+
+func TestCFHotKeyEncoding(t *testing.T) {
+	key := []byte("hot-key")
+	require.Equal(t, string(key), cfHotKey(kv.CFDefault, key))
+	require.Equal(t, string(key), cfHotKey(kv.ColumnFamily(0), key))
+
+	encoded := cfHotKey(kv.CFLock, key)
+	require.Len(t, encoded, len(key)+1)
+	require.Equal(t, byte(kv.CFLock), encoded[0])
+	require.Equal(t, string(key), encoded[1:])
 }
 
 func TestRequestLoadEntriesCopiesSlice(t *testing.T) {

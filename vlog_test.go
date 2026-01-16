@@ -89,6 +89,34 @@ func TestVlogBase(t *testing.T) {
 	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
 }
 
+func TestVersionedEntryValueLogPointer(t *testing.T) {
+	clearDir()
+	prevThreshold := opt.ValueThreshold
+	prevFileSize := opt.ValueLogFileSize
+	opt.ValueThreshold = 0
+	opt.ValueLogFileSize = 1 << 20
+	defer func() {
+		opt.ValueThreshold = prevThreshold
+		opt.ValueLogFileSize = prevFileSize
+	}()
+
+	db := Open(opt)
+	defer db.Close()
+
+	key := []byte("versioned-vlog")
+	version := uint64(7)
+	value := bytes.Repeat([]byte("v"), 64)
+
+	require.NoError(t, db.SetVersionedEntry(kvpkg.CFDefault, key, version, value, 0))
+	entry, err := db.GetVersionedEntry(kvpkg.CFDefault, key, version)
+	require.NoError(t, err)
+	require.Equal(t, kvpkg.CFDefault, entry.CF)
+	require.Equal(t, key, entry.Key)
+	require.Equal(t, version, entry.Version)
+	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
+}
+
 func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	clearDir()
 
