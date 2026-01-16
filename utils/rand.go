@@ -35,7 +35,7 @@ func Float64() float64 {
 	return res
 }
 
-// 生成随机字符串作为key和value
+// randStr generates a random string for keys and values.
 func randStr(length int) string {
 	if length <= 0 {
 		return ""
@@ -48,7 +48,7 @@ func randStr(length int) string {
 	return string(result)
 }
 
-// 构建entry对象
+// BuildEntry constructs a random entry for tests.
 func BuildEntry() *kv.Entry {
 	key := fmt.Appendf(nil, "%s%s", randStr(16), "12345678")
 	value := []byte(randStr(128))

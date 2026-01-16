@@ -108,7 +108,7 @@ func (cd *compactDef) unlockLevels() {
 	cd.thisLevel.RUnlock()
 }
 
-// doCompact 选择level的某些表合并到目标level
+// doCompact selects tables from a level and merges them into the target level.
 func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	l := p.Level
 	utils.CondPanic(l >= lm.opt.MaxLevelNum, errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum")) // Sanity check.
@@ -116,7 +116,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	if t.BaseLevel == 0 {
 		t = lm.levelTargets()
 	}
-	// 创建真正的压缩计划
+	// Build the concrete compaction plan.
 	cd := compactDef{
 		compactorId: id,
 		plan: compact.Plan{
@@ -150,7 +150,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		if baseLimit > len(order) {
 			baseLimit = len(order)
 		}
-		// Adaptive bump: more backlog ⇒ allow more shards, capped by shard count.
+		// Adaptive bump: more backlog => allow more shards, capped by shard count.
 		shardLimit := baseLimit
 		if p.Score > 1.0 {
 			shardLimit += int(math.Ceil(p.Score / 2))
@@ -181,7 +181,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		return nil
 	}
 
-	// 如果是第0层 对齐单独填充处理
+	// L0 uses a dedicated selection path.
 	if l == 0 {
 		cd.setNextLevel(lm, t, lm.levels[t.BaseLevel])
 		if !lm.fillTablesL0(&cd) {
@@ -198,7 +198,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		}
 	} else {
 		cd.setNextLevel(lm, t, cd.thisLevel)
-		// 如果不是最后一层，则压缩到下一层即可
+		// For non-last levels, compact into the next level.
 		if !cd.thisLevel.isLastLevel() {
 			cd.setNextLevel(lm, t, lm.levels[l+1])
 		}
@@ -206,7 +206,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			return utils.ErrFillTables
 		}
 		cleanup = true
-		// 继续执行常规归并
+		// Continue with the normal merge path.
 		if err := lm.runCompactDef(id, l, cd); err != nil {
 			log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
 			return err
@@ -215,7 +215,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		return nil
 	}
 
-	// 执行合并计划
+	// Execute the merge plan.
 	if err := lm.runCompactDef(id, l, cd); err != nil {
 		// This compaction couldn't be done successfully.
 		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
@@ -255,7 +255,7 @@ func (lm *levelManager) DoCompact(id int, p compact.Priority) error {
 	return lm.doCompact(id, p)
 }
 
-// pickCompactLevel 选择合适的level执行合并，返回判断的优先级
+// pickCompactLevels chooses compaction candidates and returns priorities.
 func (lm *levelManager) pickCompactLevels() (prios []compact.Priority) {
 	input := lm.buildPickerInput()
 	if len(input.Levels) == 0 {
@@ -432,11 +432,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 
 	utils.CondPanic(len(cd.splits) != 0, errors.New("len(cd.splits) != 0"))
 	if thisLevel == nextLevel {
-		// l0 to l0 和 lmax to lmax 不做特殊处理
+		// No special handling for L0->L0 and Lmax->Lmax.
 	} else {
 		lm.addSplits(&cd)
 	}
-	// 追加一个空的
+	// Append an empty range placeholder when no split is found.
 	if len(cd.splits) == 0 {
 		cd.splits = append(cd.splits, compact.KeyRange{})
 	}
@@ -457,7 +457,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}()
 	changeSet := buildChangeSet(&cd, newTables)
 
-	// 更新 manifest
+	// Update the manifest.
 	var manifestEdits []manifest.Edit
 	levelByID := make(map[uint64]int, len(cd.top)+len(cd.bot))
 	for _, t := range cd.top {
@@ -650,7 +650,7 @@ func newCreateChange(id uint64, level int) *pb.ManifestChange {
 	}
 }
 
-// compactBuildTables 合并两个层的sst文件
+// compactBuildTables merges SSTables from two levels.
 func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, func() error, error) {
 
 	topTables := cd.top
@@ -673,8 +673,9 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		return append(iters, NewConcatIterator(botTables, iterOpt))
 	}
 
-	// 开始并行执行压缩过程
+	// Start parallel compaction tasks.
 	res := make(chan *table, 3)
+	// Throttle inflight builders to bound memory and file handles.
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 	for _, kr := range cd.splits {
 		kr := kr
@@ -688,7 +689,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		}
 	}
 
-	// mapreduce的方式收集table的句柄
+	// Collect table handles via fan-in.
 	var newTables []*table
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -699,20 +700,20 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		}
 	}()
 
-	// 在这里等待所有的压缩过程完成
+	// Wait for all compaction tasks to finish.
 	err := inflightBuilders.Finish()
-	// channel 资源回收
+	// Release channel resources.
 	close(res)
-	// 等待所有的builder刷到磁盘
+	// Wait for all builders to flush to disk.
 	wg.Wait()
 
 	if err == nil {
-		// 同步刷盘，保证数据一定落盘
+		// Sync the workdir to ensure data is persisted.
 		err = utils.SyncDir(lm.opt.WorkDir)
 	}
 
 	if err != nil {
-		// 如果出现错误，则删除索引新创建的文件
+		// On error, delete newly created files.
 		_ = decrRefs(newTables)
 		return nil, nil, fmt.Errorf("while running compactions for: %+v, %v", cd, err)
 	}
@@ -723,7 +724,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
 
-// 并行的运行子压缩情况
+// addSplits prepares key ranges for parallel sub-compactions.
 func (lm *levelManager) addSplits(cd *compactDef) {
 	cd.splits = cd.splits[:0]
 
@@ -750,14 +751,14 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 			return
 		}
 		if i%width == width-1 {
-			// 设置最大值为右区间
+			// Set the right bound to the max key.
 			right := kv.KeyWithTs(kv.ParseKey(t.MaxKey()), math.MaxUint64)
 			addRange(right)
 		}
 	}
 }
 
-// max level 和 max level 的压缩
+// fillMaxLevelTables handles max-level compaction.
 func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
 	plan, ok := compact.PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
 	if !ok {
@@ -770,7 +771,7 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
 }
 
-// fillTablesL0 先尝试从l0 到lbase的压缩，如果失败则对l0自己压缩
+// fillTablesL0 tries L0->Lbase first, then falls back to L0->L0.
 func (lm *levelManager) fillTablesL0(cd *compactDef) bool {
 	if ok := lm.fillTablesL0ToLbase(cd); ok {
 		return true
@@ -862,7 +863,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if cd.nextLevel.levelNum == 0 {
 		utils.Panic(errors.New("base level can be zero"))
 	}
-	// 如果优先级低于1 则不执行
+	// Skip if priority is below 1.
 	if cd.adjusted > 0.0 && cd.adjusted < 1.0 {
 		// Do not compact to Lbase if adjusted score is less than 1.0.
 		return false
@@ -885,10 +886,10 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
 }
 
-// fillTablesL0ToL0 l0到l0压缩
+// fillTablesL0ToL0 performs L0->L0 compaction.
 func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	if cd.compactorId != 0 {
-		// 只要0号压缩处理器可以执行，避免l0tol0的资源竞争
+		// Only allow compactor 0 to avoid L0->L0 contention.
 		return false
 	}
 
@@ -911,7 +912,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	now := time.Now()
 	plan, ok := compact.PlanForL0ToL0(cd.thisLevel.levelNum, tableMetaSnapshot(top), cd.plan.ThisFileSize, lm.compactState, now)
 	if !ok {
-		// 满足条件的sst小于4个那就不压缩了
+		// Skip when fewer than four tables qualify.
 		return false
 	}
 	cd.applyPlan(plan)
@@ -919,16 +920,16 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 		return false
 	}
 
-	// 在这个过程中避免任何l0到其他层的合并
+	// Avoid L0->other-level compactions during this phase.
 	lm.compactState.AddRangeWithTables(cd.thisLevel.levelNum, compact.InfRange, cd.plan.TopIDs)
 
-	//  l0 to l0的压缩最终都会压缩为一个文件，这大大减少了l0层文件数量，减少了读放大
+	// L0->L0 compaction collapses into a single file, reducing L0 count and read amplification.
 	cd.plan.ThisFileSize = math.MaxUint32
 	cd.plan.NextFileSize = cd.plan.ThisFileSize
 	return true
 }
 
-// getKeyRange 返回一组sst的区间合并后的最大与最小值
+// getKeyRange returns the merged min/max key range for a set of tables.
 func getKeyRange(tables ...*table) compact.KeyRange {
 	if len(tables) == 0 {
 		return compact.KeyRange{}
@@ -967,11 +968,11 @@ func (lm *levelManager) updateDiscardStats(discardStats map[uint32]int64) {
 	}
 }
 
-// 真正执行并行压缩的子压缩文件
+// subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
-	// 更新 discardStats
+	// Track discardStats for value log GC.
 	discardStats := make(map[uint32]int64)
 	valueBias := 1.0
 	if cd.thisLevel != nil {
@@ -998,25 +999,25 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			//version := kv.ParseTs(key)
 			isExpired := IsDeletedOrExpired(it.Item().Entry())
 			if !kv.SameKey(key, lastKey) {
-				// 如果迭代器返回的key大于当前key的范围就不用执行了
+				// Stop when the iterator key is beyond the range.
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
-					// 如果超过预估的sst文件大小，则直接结束
+					// Stop when the SST size estimate is exceeded.
 					break
 				}
-				// 把当前的key变为 lastKey
+				// Update lastKey with the current key.
 				lastKey = kv.SafeCopy(lastKey, key)
 				//umVersions = 0
-				// 如果左边界没有，则当前key给到左边界
+				// If the left bound is empty, set it to the current key.
 				if len(tableKr.Left) == 0 {
 					tableKr.Left = kv.SafeCopy(tableKr.Left, key)
 				}
-				// 更新右边界
+				// Update the right bound.
 				tableKr.Right = lastKey
 			}
-			// 判断是否是过期内容，是的话就删除
+			// Drop expired entries.
 			valueLen := entryValueLen(it.Item().Entry())
 			switch {
 			case isExpired:
@@ -1028,7 +1029,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 		}
 	}
 
-	//如果 key range left还存在 则seek到这里 说明遍历中途停止了
+	// If the left bound remains, seek there to resume a partial scan.
 	if len(kr.Left) > 0 {
 		it.Seek(kr.Left)
 	} else {
@@ -1040,7 +1041,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 		if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 			break
 		}
-		// 为构建任务拷贝一份 Options，避免后台调整与运行中 compaction 互相影响。
+		// Copy Options so background tuning does not affect the active compaction.
 		builderOpt := lm.opt.Clone()
 		builder := newTableBuilerWithSSTSize(builderOpt, cd.plan.NextFileSize)
 
@@ -1059,12 +1060,12 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			// Can't return from here, until I decrRef all the tables that I built so far.
 			break
 		}
-		// 充分发挥 ssd的并行 写入特性
+		// Leverage SSD parallel write throughput.
 		go func(builder *tableBuilder) {
 			defer inflightBuilders.Done(nil)
 			defer builder.Close()
 			var tbl *table
-			newFID := atomic.AddUint64(&lm.maxFID, 1) // compact的时候是没有memtable的，这里自增maxFID即可。
+			newFID := atomic.AddUint64(&lm.maxFID, 1) // Compaction does not allocate memtables; advance maxFID.
 			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
 			tbl = openTable(lm, sstName, builder)
 			if tbl == nil {
@@ -1075,7 +1076,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	}
 }
 
-// 判断是否过期 是可删除
+// IsDeletedOrExpired reports whether an entry should be dropped.
 func IsDeletedOrExpired(e *kv.Entry) bool {
 	if e.Value == nil {
 		return true

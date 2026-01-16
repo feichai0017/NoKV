@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SSTable 文件的内存封装
+// SSTable is the in-memory wrapper for an on-disk table file.
 type SSTable struct {
 	lock           *sync.RWMutex
 	f              *MmapFile
@@ -31,21 +31,21 @@ type SSTable struct {
 	createdAt      time.Time
 }
 
-// OpenSStable 打开一个 sst文件
+// OpenSStable opens or creates an SSTable file.
 func OpenSStable(opt *Options) *SSTable {
 	omf, err := OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	_ = utils.Err(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
 
-// Init 初始化
+// Init loads metadata from the SSTable footer and index.
 func (ss *SSTable) Init() error {
 	var ko *pb.BlockOffset
 	var err error
 	if ko, err = ss.initTable(); err != nil {
 		return err
 	}
-	// 从文件中获取创建时间
+	// Capture the file creation time from the filesystem.
 	stat, _ := ss.f.Fd.Stat()
 	statType := stat.Sys().(*syscall.Stat_t)
 	ss.createdAt = time.Unix(statType.Atimespec.Sec, statType.Atimespec.Nsec)
@@ -58,7 +58,7 @@ func (ss *SSTable) Init() error {
 	return nil
 }
 
-// SetMaxKey max 需要使用table的迭代器，来获取最后一个block的最后一个key
+// SetMaxKey records the max key discovered by table iteration.
 func (ss *SSTable) SetMaxKey(maxKey []byte) {
 	ss.maxKey = maxKey
 }
@@ -102,7 +102,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	return nil, errors.New("read index fail, offset is nil")
 }
 
-// Close 关闭
+// Close releases the underlying file.
 func (ss *SSTable) Close() error {
 	return ss.f.Close()
 }
@@ -112,17 +112,17 @@ func (ss *SSTable) Indexs() *pb.TableIndex {
 	return ss.idxTables
 }
 
-// MaxKey 当前最大的key
+// MaxKey returns the largest key in the table.
 func (ss *SSTable) MaxKey() []byte {
 	return ss.maxKey
 }
 
-// MinKey 当前最小的key
+// MinKey returns the smallest key in the table.
 func (ss *SSTable) MinKey() []byte {
 	return ss.minKey
 }
 
-// FID 获取fid
+// FID returns the file ID.
 func (ss *SSTable) FID() uint64 {
 	return ss.fid
 }
@@ -169,7 +169,7 @@ func (ss *SSTable) View(off, sz int) ([]byte, error) {
 	return ss.f.View(off, sz)
 }
 
-// Size 返回底层文件的尺寸
+// Size returns the size of the underlying file.
 func (ss *SSTable) Size() int64 {
 	fileStats, err := ss.f.Fd.Stat()
 	utils.Panic(err)

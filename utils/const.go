@@ -23,7 +23,7 @@ const (
 	MaxValueLogSize                   = 10 << 20
 	// This is O_DSYNC (datasync) on platforms that support it -- see file_unix.go
 	datasyncFileFlag = 0x0
-	// 基于可变长编码,其最可能的编码
+	// MaxHeaderSize is the worst-case size for uvarint encoding.
 	MaxHeaderSize            = 21
 	VlogHeaderSize           = 0
 	MaxVlogFileSize   uint32 = math.MaxUint32

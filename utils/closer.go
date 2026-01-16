@@ -9,7 +9,7 @@ var (
 	dummyCloserChan <-chan struct{}
 )
 
-// Closer _用于资源回收的信号控制
+// Closer coordinates shutdown and resource cleanup.
 type Closer struct {
 	waiting sync.WaitGroup
 
@@ -18,7 +18,7 @@ type Closer struct {
 	cancel      context.CancelFunc
 }
 
-// NewCloser _
+// NewCloser returns a Closer with an open CloseSignal channel.
 func NewCloser() *Closer {
 	closer := &Closer{waiting: sync.WaitGroup{}}
 	closer.CloseSignal = make(chan struct{})
@@ -32,18 +32,18 @@ func NewCloserInitial(initial int) *Closer {
 	return ret
 }
 
-// Close 上游通知下游协程进行资源回收，并等待协程通知回收完毕
+// Close signals downstream goroutines and waits for them to finish.
 func (c *Closer) Close() {
 	close(c.CloseSignal)
 	c.waiting.Wait()
 }
 
-// Done 标示协程已经完成资源回收，通知上游正式关闭
+// Done marks a goroutine as finished.
 func (c *Closer) Done() {
 	c.waiting.Done()
 }
 
-// Add 添加wait 计数
+// Add adjusts the WaitGroup counter.
 func (c *Closer) Add(n int) {
 	c.waiting.Add(n)
 }

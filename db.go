@@ -28,7 +28,7 @@ import (
 const nonTxnMaxVersion = math.MaxUint64
 
 type (
-	// NoKV对外提供的功能集合
+	// CoreAPI describes the externally exposed NoKV operations.
 	CoreAPI interface {
 		Set(key, value []byte) error
 		Get(key []byte) (*kv.Entry, error)
@@ -41,7 +41,7 @@ type (
 		Close() error
 	}
 
-	// DB 对外暴露的接口对象 全局唯一，持有各种资源句柄
+	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
 		sync.RWMutex
 		opt              *Options
@@ -180,7 +180,7 @@ func Open(opt *Options) *DB {
 	if baseLevelSize < 32<<20 {
 		baseLevelSize = 32 << 20
 	}
-	// 初始化LSM结构
+	// Initialize the LSM tree.
 	db.lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:                  opt.WorkDir,
 		MemTableSize:             opt.MemTableSize,
@@ -212,10 +212,10 @@ func Open(opt *Options) *DB {
 	for i := range db.cfMetrics {
 		db.cfMetrics[i] = &cfCounters{}
 	}
-	// 初始化vlog结构
+	// Initialize the value log.
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
-	// 初始化统计信息
+	// Initialize stats tracking.
 	db.stats = newStats(db)
 
 	if opt.HotRingEnabled {
@@ -264,9 +264,9 @@ func Open(opt *Options) *DB {
 
 	db.orc = newOracle(*opt)
 	db.orc.initCommitState(recoveredVersion)
-	// 启动 sstable 的合并压缩过程
+	// Start the SSTable compaction loop.
 	db.lsm.StartCompacter()
-	// 准备vlog gc
+	// Initialize the commit queue and GC plumbing.
 	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
 	db.commitQueue.init(queueCap)
 	db.commitWG.Add(1)
@@ -290,7 +290,7 @@ func Open(opt *Options) *DB {
 			db.walWatchdog.Start()
 		}
 	}
-	// 启动 info 统计过程
+	// Start periodic stats collection.
 	db.stats.StartStats()
 	if db.opt.ValueLogGCInterval > 0 {
 		if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
@@ -420,8 +420,9 @@ func (db *DB) setEntry(data *kv.Entry) error {
 	if data == nil || len(data.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	// 做一些必要性的检查
-	// 如果value 大于一个阈值 则创建值指针，并将其写入vlog中
+	// Run basic sanity checks before mutating the write path.
+	// If the value exceeds the threshold, store a value pointer in the LSM
+	// and append the payload to the value log.
 	var (
 		vp  *kv.ValuePtr
 		err error
@@ -432,9 +433,10 @@ func (db *DB) setEntry(data *kv.Entry) error {
 	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
 		return err
 	}
+	// Internal keys include CF and version; non-transactional writes use max version.
 	data.Key = kv.InternalKey(data.CF, data.Key, nonTxnMaxVersion)
-	// 如果value不应该直接写入LSM 则先写入 vlog文件，这时必须保证vlog具有重放功能
-	// 以便于崩溃后恢复数据
+	// If the value should not be inlined into the LSM, append it to the value
+	// log first so crash replay can rebuild pointers.
 	if !db.shouldWriteValueToLSM(data) {
 		if vp, err = db.vlog.newValuePtr(data); err != nil {
 			return err
@@ -556,11 +558,11 @@ func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 		entry *kv.Entry
 		err   error
 	)
-	// 从LSM中查询entry，这时不确定entry是不是值指针
+	// Fetch entry from the LSM; it may still be a value pointer.
 	if entry, err = db.lsm.Get(internalKey); err != nil {
 		return entry, err
 	}
-	// 检查从lsm拿到的value是否是value ptr,是则从vlog中拿值
+	// Resolve value pointers from the value log when needed.
 	if entry != nil && kv.IsValuePtr(entry) {
 		var vp kv.ValuePtr
 		vp.Decode(entry.Value)
@@ -601,7 +603,7 @@ func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
 }
 
 func (db *DB) Info() *Stats {
-	// 读取stats结构，打包数据并返回
+	// Return the current stats snapshot.
 	return db.stats
 }
 
@@ -622,7 +624,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	}
 	defer val.DecrRef()
 
-	// 内部key head 一定是value ptr 不需要检查内容
+	// The internal head key always stores a value pointer; no type check needed.
 	var head kv.ValuePtr
 	if len(val.Value) > 0 {
 		head.Decode(val.Value)

@@ -101,8 +101,8 @@ func (ri *readTsIterator) Seek(key []byte) {
 	ri.ensureVisible()
 }
 
-// NewIterator 方法会生成一个新的事务迭代器。
-// 在 Option 中，可以设置只迭代 Key，或者迭代 Key-Value
+// NewIterator creates a transactional iterator.
+// Options can request key-only iteration or full key/value iteration.
 func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 	if txn.discarded {
 		panic("Transaction has already been discarded")

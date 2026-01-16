@@ -2,7 +2,7 @@ package utils
 
 import "github.com/feichai0017/NoKV/kv"
 
-// Iterator 迭代器
+// Iterator abstracts key/value iteration.
 type Iterator interface {
 	Next()
 	Valid() bool

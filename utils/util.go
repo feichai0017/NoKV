@@ -14,7 +14,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// FID 根据file name 获取其fid
+// FID parses the file ID from an sstable filename.
 func FID(name string) uint64 {
 	name = path.Base(name)
 	if !strings.HasSuffix(name, ".sst") {
@@ -43,7 +43,7 @@ func CreateSyncedFile(filename string, sync bool) (*os.File, error) {
 	return os.OpenFile(filename, flags, 0600)
 }
 
-// FileNameSSTable  sst 文件名
+// FileNameSSTable returns the SSTable filename for the given ID.
 func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }

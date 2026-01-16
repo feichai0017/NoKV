@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBaseManifest  manifest 文件整体性测试
+// TestBaseManifest validates manifest integrity across restarts.
 func TestBaseManifest(t *testing.T) {
 	clearDir()
 	recovery := func() {
-		// 每次运行都是相当于意外重启
+		// Each run simulates an unexpected restart.
 		lsm := buildLSM()
-		// 测试正确性
+		// Validate correctness after recovery.
 		baseTest(t, lsm, 128)
 		lsm.Close()
 	}
-	// 运行这个闭包5次进行测试
+	// Run the closure multiple times to exercise recovery.
 	runTest(5, recovery)
 }
 
@@ -37,7 +37,7 @@ func TestManifestChecksum(t *testing.T) {
 
 func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string) {
 	clearDir()
-	// 创建lsm，然后再将其关闭
+	// Create the LSM and close it to generate a manifest.
 	{
 		lsm := buildLSM()
 		require.NoError(t, lsm.Close())
@@ -47,7 +47,7 @@ func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string
 	manifestName := strings.TrimSpace(string(currentData))
 	fp, err := os.OpenFile(filepath.Join(opt.WorkDir, manifestName), os.O_RDWR, 0)
 	require.NoError(t, err)
-	// 写入一个错误的值
+	// Inject a bad byte at the given offset.
 	_, err = fp.WriteAt([]byte{'X'}, off)
 	require.NoError(t, err)
 	require.NoError(t, fp.Close())
@@ -56,7 +56,7 @@ func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string
 			require.Contains(t, err.(error).Error(), errorContent)
 		}
 	}()
-	// 在此打开 lsm 此时会panic
+	// Re-open LSM; it should panic on corruption.
 	lsm := buildLSM()
 	require.NoError(t, lsm.Close())
 }

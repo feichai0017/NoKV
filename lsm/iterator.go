@@ -230,7 +230,7 @@ func (s *ConcatIterator) Close() error {
 	return nil
 }
 
-// MergeIterator 多路合并迭代器
+// MergeIterator merges multiple iterators into a single ordered stream.
 // NOTE: MergeIterator owns the array of iterators and is responsible for closing them.
 type MergeIterator struct {
 	left  node

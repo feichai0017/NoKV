@@ -6,7 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// Options NoKV 总的配置文件
+// Options holds the top-level database configuration.
 type Options struct {
 	ValueThreshold     int64
 	WorkDir            string
@@ -60,7 +60,7 @@ type Options struct {
 	// before the DB returns utils.ErrHotKeyWriteThrottle. Zero disables write-path
 	// throttling.
 	WriteHotKeyLimit int32
-	// HotWriteBurstThreshold marks a key as “hot” for batching when its write
+	// HotWriteBurstThreshold marks a key as "hot" for batching when its write
 	// frequency exceeds this count; zero disables hot write batching.
 	HotWriteBurstThreshold int32
 	// HotWriteBatchMultiplier scales write batch limits when a hot key is
@@ -142,7 +142,7 @@ const (
 	MemTableEngineART      MemTableEngine = "art"
 )
 
-// NewDefaultOptions 返回默认的options
+// NewDefaultOptions returns the default option set.
 func NewDefaultOptions() *Options {
 	opt := &Options{
 		WorkDir:                   "./work_test",

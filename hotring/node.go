@@ -29,7 +29,7 @@ func (n *Node) Next() *Node {
 	return n.next.Load()
 }
 
-// Less 先比较节点的 Tag 值，Tag 值相同时，再比较 Key 值大小
+// Less compares by tag first, then by key when tags are equal.
 func (n *Node) Less(c *Node) bool {
 	if c == nil {
 		return false

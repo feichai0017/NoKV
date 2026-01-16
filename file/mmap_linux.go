@@ -162,7 +162,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 
 const oneGB = 1 << 30
 
-// AppendBuffer 向内存中追加一个buffer，如果空间不足则重新映射，扩大空间
+// AppendBuffer appends data into the mmap region, growing the mapping if needed.
 func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	size := len(m.Data)
 	needSize := len(buf)

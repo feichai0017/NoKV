@@ -745,12 +745,10 @@ func (it *tableIterator) seekToLast() {
 	it.err = it.bi.Error()
 }
 
-// Seek
-// 二分法搜索 offsets
-// 如果idx == 0 说明key只能在第一个block中 block[0].MinKey <= key
-// 否则 block[0].MinKey > key
-// 如果在 idx-1 的block中未找到key 那才可能在 idx 中
-// 如果都没有，则当前key不再此table
+// Seek uses binary search over block offsets.
+// If idx == 0, the key can only be in the first block (block[0].MinKey <= key).
+// Otherwise block[0].MinKey > key and we probe idx-1 first, then idx if needed.
+// If neither block contains the key, it is not present in this table.
 func (it *tableIterator) Seek(key []byte) {
 	if it.index == nil {
 		it.err = io.EOF

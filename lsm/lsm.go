@@ -48,7 +48,7 @@ type Options struct {
 	// compact
 	NumCompactors       int
 	BaseLevelSize       int64
-	LevelSizeMultiplier int // 决定level之间期望的size比例
+	LevelSizeMultiplier int // Target size ratio between levels.
 	TableSizeMultiplier int
 	BaseTableSize       int64
 	NumLevelZeroTables  int
