@@ -34,7 +34,7 @@ type SSTable struct {
 // OpenSStable open a sst file
 func OpenSStable(opt *Options) *SSTable {
 	omf, err := OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
-	utils.Err(err)
+	_ = utils.Err(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
 
