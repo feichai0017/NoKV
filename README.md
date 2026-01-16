@@ -205,30 +205,6 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 ---
 
-## 📚 Documentation
-
-| Topic | Document |
-| --- | --- |
-| Architecture deep dive | [docs/architecture.md](docs/architecture.md) |
-| WAL internals | [docs/wal.md](docs/wal.md) |
-| Flush pipeline | [docs/flush.md](docs/flush.md) |
-| Memtable lifecycle | [docs/memtable.md](docs/memtable.md) |
-| Transactions & MVCC | [docs/txn.md](docs/txn.md) |
-| Manifest semantics | [docs/manifest.md](docs/manifest.md) |
-| ValueLog manager | [docs/vlog.md](docs/vlog.md) |
-| Cache & bloom filters | [docs/cache.md](docs/cache.md) |
-| Hot key analytics | [docs/hotring.md](docs/hotring.md) |
-| Stats & observability | [docs/stats.md](docs/stats.md) |
-| Configuration & options | [docs/config.md](docs/config.md) |
-| File abstractions | [docs/file.md](docs/file.md) |
-| Crash recovery playbook | [docs/recovery.md](docs/recovery.md) |
-| Testing matrix | [docs/testing.md](docs/testing.md) |
-| CLI reference | [docs/cli.md](docs/cli.md) |
-| RaftStore overview | [docs/raftstore.md](docs/raftstore.md) |
-| Redis gateway | [docs/nokv-redis.md](docs/nokv-redis.md) |
-
----
-
 ## 📄 License
 
 Apache-2.0. See [LICENSE](LICENSE).
