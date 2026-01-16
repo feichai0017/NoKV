@@ -18,6 +18,7 @@ flowchart LR
 - **Two ingest paths**:
   - *Ingest-only compaction*: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by `compact.State`.
   - *Ingest-merge*: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.
+- **IngestMode enum**: plans carry an `IngestMode` with `IngestNone`, `IngestDrain`, and `IngestKeep`. `IngestDrain` corresponds to ingest-only, while `IngestKeep` corresponds to ingest-merge.
 - **Adaptive scheduling**:
   - Shard selection is driven by `compact.PickShardOrder` / `compact.PickShardByBacklog` using per-shard size, age, and density.
   - Shard parallelism scales with backlog score (based on shard size/target file size) bounded by `IngestShardParallelism`.
