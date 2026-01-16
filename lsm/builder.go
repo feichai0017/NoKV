@@ -37,7 +37,7 @@ type buildData struct {
 	size      int
 }
 type block struct {
-	offset            int //当前block的offset 首地址
+	offset            int // Offset of the block start within the table.
 	checksum          []byte
 	entriesIndexStart int
 	chkLen            int
@@ -175,7 +175,7 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	return tb.curBlock.estimateSz > int64(tb.opt.BlockSize)
 }
 
-// AddStaleKey 记录陈旧key所占用的空间大小，用于日志压缩时的决策
+// AddStaleKey tracks stale key bytes for compaction decisions.
 func (tb *tableBuilder) AddStaleKey(e *kv.Entry) {
 	tb.AddStaleEntryWithLen(e, entryValueLen(e))
 }
@@ -192,7 +192,7 @@ func (tb *tableBuilder) AddKey(e *kv.Entry) {
 	tb.AddKeyWithLen(e, entryValueLen(e))
 }
 
-// AddKeyWithLen 添加 key，并显式指定 value 长度（用于区分内联值和 ValuePtr）。
+// AddKeyWithLen adds a key with an explicit value length (inline vs ValuePtr).
 func (tb *tableBuilder) AddKeyWithLen(e *kv.Entry, valueLen uint32) {
 	tb.add(e, valueLen, false)
 }
@@ -331,7 +331,7 @@ func (tb *tableBuilder) done() buildData {
 		bits := utils.BloomBitsPerKey(len(tb.keyHashes), tb.opt.BloomFalsePositive)
 		f = utils.NewFilter(tb.keyHashes, bits)
 	}
-	// TODO 构建 sst的索引
+	// TODO: build SSTable index more efficiently.
 	// Overall SSTable Binary Format:
 	// +--------------------+--------------------+ ... +--------------------+--------------------+
 	// | Data Block 1       | Data Block 2       |     | Data Block N       | Index Block (Proto)|
@@ -393,7 +393,7 @@ func (b *tableBuilder) writeBlockOffset(bl *block, startOffset uint32) *pb.Block
 	return offset
 }
 
-// TODO: 如何能更好的预估builder的长度呢？
+// TODO: better estimate builder size before serialization.
 func (b *tableBuilder) ReachedCapacity() bool {
 	return b.estimateSz > b.sstSize
 }

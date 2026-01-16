@@ -35,13 +35,13 @@ func (lf *LogFile) Open(opt *Options) error {
 	if err != nil {
 		return utils.WarpErr("Unable to run file.Stat", err)
 	}
-	// 获取文件尺寸
+	// Load the current file size.
 	sz := fi.Size()
 	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
 		uint32(sz), uint32(math.MaxUint32)))
 	lf.size = uint32(sz)
 	lf.ro = flag == os.O_RDONLY
-	// TODO 是否要在这里弄一个header放一些元数据呢?
+	// TODO: consider reserving a header region for metadata.
 	return nil
 }
 
@@ -75,7 +75,7 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 		return errors.Wrapf(err, "Unable to sync value log: %q", lf.FileName())
 	}
 
-	// 写嘛 总是要锁一下的
+	// Writes must hold the lock for consistency.
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 
@@ -129,7 +129,7 @@ func (lf *LogFile) Size() int64 {
 	return int64(atomic.LoadUint32(&lf.size))
 }
 
-// 完成log文件的初始化
+// Bootstrap initializes a new log file.
 func (lf *LogFile) Bootstrap() error {
 	if lf == nil {
 		return fmt.Errorf("logfile bootstrap: nil receiver")

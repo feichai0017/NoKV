@@ -484,7 +484,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		txn.addReadKey(cfKey)
 	}
 
-	// 使用事务的readTs作为时间戳查询
+	// Query using the transaction's readTs.
 	seek := kv.InternalKey(kv.CFDefault, key, txn.readTs)
 	vs, err := txn.db.lsm.Get(seek)
 	if err != nil {
@@ -493,7 +493,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		}
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
-	// 处理值指针
+	// Resolve value pointers.
 	if vs != nil && kv.IsValuePtr(vs) {
 		var vp kv.ValuePtr
 		vp.Decode(vs.Value)

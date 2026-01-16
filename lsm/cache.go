@@ -20,7 +20,7 @@ const defaultCacheSize = 1024
 type CacheMetrics = metrics.CacheSnapshot
 
 type cache struct {
-	indexs   *coreCache.Cache // key fid， value *pb.TableIndex
+	indexs   *coreCache.Cache // key: fid, value: *pb.TableIndex
 	indexHot *hotIndexCache
 	blocks   *blockCache
 	blooms   *bloomCache

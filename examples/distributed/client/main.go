@@ -10,17 +10,17 @@ import (
 )
 
 func main() {
-	// 1. 初始化 Redis 客户端
-	// NoKV 的 Redis Gateway 默认监听 6380
+	// 1. Initialize a Redis client.
+	// NoKV's Redis gateway listens on 6380 by default.
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "127.0.0.1:6380",
-		Password: "", // NoKV 目前没有实现鉴权
-		DB:       0,  // 默认 DB
+		Password: "", // NoKV does not implement auth yet.
+		DB:       0,  // Default DB.
 	})
 
 	ctx := context.Background()
 
-	// 2. 测试连接
+	// 2. Test the connection.
 	fmt.Println("Connecting to NoKV Cluster via Redis Protocol...")
 	pong, err := rdb.Ping(ctx).Result()
 	if err != nil {
@@ -28,7 +28,7 @@ func main() {
 	}
 	fmt.Printf("Connected: %s\n", pong)
 
-	// 3. 写入数据 (SET)
+	// 3. Write data (SET).
 	key := "user:10086"
 	value := "Gopher"
 	fmt.Printf("\n> SET %s %s\n", key, value)
@@ -38,7 +38,7 @@ func main() {
 	}
 	fmt.Println("Set success!")
 
-	// 4. 读取数据 (GET)
+	// 4. Read data (GET).
 	fmt.Printf("\n> GET %s\n", key)
 	val, err := rdb.Get(ctx, key).Result()
 	if err != nil {
@@ -46,8 +46,8 @@ func main() {
 	}
 	fmt.Printf("Result: %s\n", val)
 
-	// 5. 设置过期时间 (EXPIRE / TTL)
-	// NoKV 支持 TTL
+	// 5. Set expiry (EXPIRE / TTL).
+	// NoKV supports TTL.
 	fmt.Printf("\n> EXPIRE %s 60s\n", key)
 	ok, err := rdb.Expire(ctx, key, 60*time.Second).Result()
 	if err != nil {
@@ -56,8 +56,8 @@ func main() {
 		fmt.Printf("Expire set: %v\n", ok)
 	}
 
-	// 6. 原子计数 (INCR)
-	// 这通常涉及到分布式事务处理
+	// 6. Atomic counter (INCR).
+	// This often involves distributed transaction coordination.
 	counterKey := "page_view"
 	fmt.Printf("\n> INCR %s\n", counterKey)
 	newVal, err := rdb.Incr(ctx, counterKey).Result()
@@ -67,7 +67,7 @@ func main() {
 		fmt.Printf("Counter is now: %d\n", newVal)
 	}
 
-	// 7. 删除数据 (DEL)
+	// 7. Delete data (DEL).
 	fmt.Printf("\n> DEL %s\n", key)
 	deleted, err := rdb.Del(ctx, key).Result()
 	if err != nil {
@@ -75,7 +75,7 @@ func main() {
 	}
 	fmt.Printf("Deleted keys: %d\n", deleted)
 
-	// 8. 验证删除
+	// 8. Verify deletion.
 	_, err = rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
 		fmt.Println("Verified: Key does not exist.")
