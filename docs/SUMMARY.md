@@ -21,4 +21,4 @@
 - [Testing](testing.md)
 - [Scripts](scripts.md)
 - [NoKV Redis](nokv-redis.md)
-- [Notes](notes.md)
+- [Notes](notes/README.md)

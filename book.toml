@@ -8,3 +8,7 @@ src = "docs"
 site-url = "/NoKV/"
 git-repository-url = "https://github.com/feichai0017/NoKV"
 git-repository-icon = "fa-github"
+additional-js = ["mermaid-init.js"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
