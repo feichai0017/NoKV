@@ -8,8 +8,8 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 
 ```
 ┌─────────────────────────┐   TinyKv gRPC   ┌─────────────────────────┐
-│ raftstore Service       │◀──────────────▶│ raftstore/client         │
-└───────────┬────────────┘                 │  (Get / Scan / Mutate)   │
+│ raftstore Service       │◀──────────────▶ │ raftstore/client        │
+└───────────┬─────────────┘                 │  (Get / Scan / Mutate)  │
             │                               └─────────────────────────┘
             │ ReadCommand / ProposeCommand
             ▼
@@ -22,7 +22,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
             │ Apply via kv.Apply
             ▼
 ┌─────────────────────────┐
-│ kv.Apply + mvcc package │
+│ kv.Apply + percolator   │
 │  ├ Get / Scan           │
 │  ├ Prewrite / Commit    │
 │  └ Latch manager        │
@@ -81,7 +81,7 @@ flowchart TD
 
 ### 2.5 MVCC
 - `txn.go` exposes MVCC transactions with timestamps from `oracle`.
-- `mvcc` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
+- `percolator` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
 - Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.
 
 ### 2.6 Write Pipeline & Backpressure
