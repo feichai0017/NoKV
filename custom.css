@@ -1,24 +1,18 @@
 .menu-title {
-  padding-left: 36px;
-  position: relative;
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
 }
 
 .menu-title::before {
   background: url("{{ resource \"docs/assets/logo.svg\" }}") no-repeat center / contain;
   content: "";
+  display: inline-block;
   height: 26px;
-  left: 0;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
   width: 26px;
 }
 
 @media (max-width: 600px) {
-  .menu-title {
-    padding-left: 28px;
-  }
-
   .menu-title::before {
     height: 20px;
     width: 20px;

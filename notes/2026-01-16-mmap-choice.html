@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Notes - NoKV Docs</title>
+        <title>2026-01-16 mmap choice - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,34 +178,49 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="notes"><a class="header" href="#notes">Notes</a></h1>
-<p>Use this folder to capture per-debug or per-investigation notes. Keep entries short, factual, and easy to skim.</p>
-<h2 id="add-a-new-note"><a class="header" href="#add-a-new-note">Add a new note</a></h2>
-<ol>
-<li>Create a new file in <code>docs/notes/</code> named <code>YYYY-MM-DD-short-title.md</code>.</li>
-<li>Add it to <code>docs/SUMMARY.md</code> under Notes.</li>
-<li>Use the template below to keep entries consistent.</li>
-</ol>
-<h2 id="template"><a class="header" href="#template">Template</a></h2>
-<h3 id="context"><a class="header" href="#context">Context</a></h3>
-<h3 id="symptom"><a class="header" href="#symptom">Symptom</a></h3>
-<h3 id="repro"><a class="header" href="#repro">Repro</a></h3>
-<h3 id="investigation"><a class="header" href="#investigation">Investigation</a></h3>
-<h3 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h3>
-<h3 id="fix"><a class="header" href="#fix">Fix</a></h3>
-<h3 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h3>
+                        <h1 id="2026-01-16-mmap-choice"><a class="header" href="#2026-01-16-mmap-choice">2026-01-16 mmap choice</a></h1>
+<p>这条是更完整的碎碎念记录，想把 mmap 的选择理由写得清楚一些，尤其是围绕 SSTable 和 VLog 的定义、使用场景和读写交互逻辑。整体风格我会尽量偏人类口吻，少一点工程式要点，多一点连贯说明。</p>
+<h2 id="概念与定位"><a class="header" href="#概念与定位">概念与定位</a></h2>
+<p>SSTable 是 LSM 的核心持久化文件，按 key 有序且不可变，内部由索引、数据块与过滤器等结构组成，因此它在读路径里几乎无处不在。VLog 则用于存放较大的 value，写入时顺序追加，LSM 内只保存 value pointer，读取时再回查 VLog。用一句话概括就是：SSTable 读密集且不可变，VLog 顺序写但读是随机的。</p>
+<h2 id="读写交互逻辑"><a class="header" href="#读写交互逻辑">读写交互逻辑</a></h2>
+<p>下面这张图展示了写入与读取的主要交互路径，重点是读路径几乎一定触达 SSTable，而 VLog 只在 value 外置时才参与。</p>
+<pre class="mermaid">flowchart LR
+  W[Write] --&gt; M[Memtable + WAL]
+  M --&gt; C{Value large?}
+  C -- no --&gt; I[Inline value]
+  C -- yes --&gt; V[Append to VLog]
+  V --&gt; P[Store ValuePtr]
+  M --&gt; F[Flush/Compaction]
+  F --&gt; S[SSTable]
+
+  R[Read] --&gt; Q[Memtable/LSM search]
+  Q --&gt; T{Inline?}
+  T -- yes --&gt; U[Return value]
+  T -- no --&gt; G[ValuePtr -&gt; VLog read]
+  G --&gt; U
+</pre>
+
+<h2 id="io-方案对比的直观理解"><a class="header" href="#io-方案对比的直观理解">IO 方案对比的直观理解</a></h2>
+<p>mmap 的核心优势是随机读成本低，系统调用少，而且读取可以直接落在 OS 的页缓存路径上；但它的缺点也很明确，RSS 和 page cache 不可控，写入必须处理好 msync 语义，并且跨平台细节差异较多。相比之下，pread 或 buffered read 配合自建 cache 更容易控制内存和行为，但会引入额外拷贝和系统调用成本。direct I/O 能绕过 page cache，避免污染，但工程复杂度高，并且在随机读场景并不总是更快。</p>
+<h2 id="为什么-sstable-更适合-mmap"><a class="header" href="#为什么-sstable-更适合-mmap">为什么 SSTable 更适合 mmap</a></h2>
+<p>SSTable 不可变且读取频繁，映射稳定，很少需要 remap，这使得 mmap 的工程成本低而收益明显。加上读路径以随机读为主，mmap 能把很多读转化成轻量页缺失，配合 OS 的页缓存形成自然的热点命中。因此在 SSTable 上采用 mmap 通常是可预期且合理的选择。</p>
+<h2 id="为什么我们在-vlog-上也用了-mmap"><a class="header" href="#为什么我们在-vlog-上也用了-mmap">为什么我们在 VLog 上也用了 mmap</a></h2>
+<p>我们目前的实现方式是让 VLog 直接走 mmap，这样读路径可以用 Bytes/View 直接得到切片，写入也可以通过 mmap buffer 追加并配合 msync 落盘，这让实现保持简洁并与 SSTable 的风格一致。代价在于 VLog 文件往往更大，随机读更分散，page cache 污染风险显著更高，RSS 波动也更容易出现。如果 value 的冷热分布不稳定，mmap 带来的缓存收益不一定能抵消它的副作用。</p>
+<h2 id="与-badger-的思路对比"><a class="header" href="#与-badger-的思路对比">与 Badger 的思路对比</a></h2>
+<p>Badger 更倾向于把 mmap 用在 SSTable，而在 VLog 上偏向 FileIO 或 pread，目的就是减少大文件对页缓存的冲击，让热点集中在 SSTable 的 block 上。它也提供了可配置的模式，但整体倾向体现了一个理念：热点应主要由 SSTable 驱动，VLog 更应该谨慎消耗 page cache。</p>
+<h2 id="linux-侧的-io-选择"><a class="header" href="#linux-侧的-io-选择">Linux 侧的 IO 选择</a></h2>
+<p>在 Linux 上我们可以组合使用多种 IO 手段，比如常规的 read/pread/write，以及 mmap 配合 madvise 提示访问模式，也可以用 posix_fadvise 或 readahead 做预读提示；如果需要更细粒度控制，还可以使用 O_DIRECT 进行 direct I/O，或者基于 io_uring 做异步 IO。我们在 file 包中已经实现了一个基础的 io_uring 框架，后续如果要做更强的异步读写或并发调度，可以基于它扩展。</p>
+<h2 id="小结"><a class="header" href="#小结">小结</a></h2>
+<p>SSTable 的读密集与不可变特性让 mmap 成为一个相对稳妥的默认选择，而 VLog 的大文件与随机读特性让 mmap 的代价更明显。当前实现偏向工程简化，但从长期来看，VLog 可能更适合 pread + 小型缓存的策略，并在热点稳定时再开放 mmap 作为可选模式。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../nokv-redis.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-01-16-mmap-choice.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -213,13 +228,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../nokv-redis.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-01-16-mmap-choice.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
