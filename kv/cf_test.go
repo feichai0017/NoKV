@@ -29,3 +29,27 @@ func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
 		t.Fatalf("expected ts 42, got %d", ts)
 	}
 }
+
+func TestColumnFamilyStringAndParse(t *testing.T) {
+	if CFDefault.String() != "default" {
+		t.Fatalf("expected default, got %s", CFDefault.String())
+	}
+	if CFLock.String() != "lock" {
+		t.Fatalf("expected lock, got %s", CFLock.String())
+	}
+	if CFWrite.String() != "write" {
+		t.Fatalf("expected write, got %s", CFWrite.String())
+	}
+	if ColumnFamily(99).String() == "" {
+		t.Fatalf("expected unknown CF string to be non-empty")
+	}
+
+	cf, err := ParseColumnFamily("DEFAULT")
+	if err != nil || cf != CFDefault {
+		t.Fatalf("expected parse default, got %v err=%v", cf, err)
+	}
+	_, err = ParseColumnFamily("unknown")
+	if err == nil {
+		t.Fatalf("expected error for unknown CF")
+	}
+}

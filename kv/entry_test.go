@@ -120,6 +120,52 @@ func TestValuePtrEncodeDecode(t *testing.T) {
 	assert.Equal(t, ValuePtr{}, decoded)
 }
 
+func TestEntryHelpers(t *testing.T) {
+	e := NewEntry([]byte("k"), []byte("v"))
+	defer e.DecrRef()
+	if e.Entry() != e {
+		t.Fatalf("expected Entry() to return receiver")
+	}
+	if e.CF != CFDefault {
+		t.Fatalf("expected default CF, got %v", e.CF)
+	}
+
+	e2 := NewEntryWithCF(CFLock, []byte("lk"), []byte("lv"))
+	defer e2.DecrRef()
+	if e2.CF != CFLock {
+		t.Fatalf("expected CFLock, got %v", e2.CF)
+	}
+
+	if !e2.WithColumnFamily(CFWrite).CF.Valid() {
+		t.Fatalf("expected valid CF after WithColumnFamily")
+	}
+
+	if e2.IsDeletedOrExpired() {
+		t.Fatalf("unexpected deleted/expired for live entry")
+	}
+
+	e2.Value = nil
+	if !e2.IsDeletedOrExpired() {
+		t.Fatalf("expected deleted entry")
+	}
+
+	e2.Value = []byte("lv")
+	e2.WithTTL(1)
+	if e2.ExpiresAt == 0 {
+		t.Fatalf("expected ttl to set expiresAt")
+	}
+
+	if e2.EncodedSize() == 0 {
+		t.Fatalf("expected encoded size > 0")
+	}
+
+	szInline := e2.EstimateSize(32)
+	szPtr := e2.EstimateSize(1)
+	if szInline >= szPtr {
+		t.Fatalf("expected pointer estimate > inline estimate")
+	}
+}
+
 func encodeValueStruct(v ValueStruct) []byte {
 	buf := make([]byte, v.EncodedSize())
 	v.EncodeValue(buf)
