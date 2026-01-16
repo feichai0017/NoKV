@@ -10,8 +10,7 @@ type Plan struct {
 	NextRange    KeyRange
 	ThisFileSize int64
 	NextFileSize int64
-	IngestOnly   bool
-	IngestMerge  bool
+	IngestMode   IngestMode
 	DropPrefixes [][]byte
 	StatsTag     string
 }

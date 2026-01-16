@@ -281,7 +281,7 @@ func TestCompact(t *testing.T) {
 		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
 			pri := compact.Priority{
 				Level:      6,
-				IngestOnly: true,
+				IngestMode: compact.IngestDrain,
 				Target:     lsm.levels.levelTargets(),
 				Score:      2,
 				Adjusted:   2,
@@ -385,12 +385,11 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	beforeMain := target.numTables()
 
 	pri := compact.Priority{
-		Level:       6,
-		Score:       5.0,
-		Adjusted:    5.0,
-		Target:      lsm.levels.levelTargets(),
-		IngestOnly:  true,
-		IngestMerge: true,
+		Level:      6,
+		Score:      5.0,
+		Adjusted:   5.0,
+		Target:     lsm.levels.levelTargets(),
+		IngestMode: compact.IngestKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("ingest merge compact failed: %v", err)
@@ -436,7 +435,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 		Score:      6.0,
 		Adjusted:   6.0,
 		Target:     lsm.levels.levelTargets(),
-		IngestOnly: true,
+		IngestMode: compact.IngestDrain,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel ingest compaction failed: %v", err)

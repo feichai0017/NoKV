@@ -68,8 +68,7 @@ func (cd *compactDef) setNextLevel(lm *levelManager, t compact.Targets, next *le
 func (cd *compactDef) applyPlan(plan compact.Plan) {
 	plan.ThisFileSize = cd.plan.ThisFileSize
 	plan.NextFileSize = cd.plan.NextFileSize
-	plan.IngestOnly = cd.plan.IngestOnly
-	plan.IngestMerge = cd.plan.IngestMerge
+	plan.IngestMode = cd.plan.IngestMode
 	plan.DropPrefixes = cd.plan.DropPrefixes
 	plan.StatsTag = cd.plan.StatsTag
 	cd.plan = plan
@@ -79,7 +78,7 @@ func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
 	}
-	topFromIngest := cd.plan.IngestOnly || cd.plan.IngestMerge
+	topFromIngest := cd.plan.IngestMode.UsesIngest()
 	top := resolveTablesLocked(cd.thisLevel, cd.plan.TopIDs, topFromIngest)
 	if len(cd.plan.TopIDs) != len(top) {
 		return false
@@ -123,8 +122,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		plan: compact.Plan{
 			ThisLevel:    l,
 			ThisFileSize: lm.targetFileSizeForLevel(t, l),
-			IngestOnly:   p.IngestOnly,
-			IngestMerge:  p.IngestMerge,
+			IngestMode:   p.IngestMode,
 			DropPrefixes: p.DropPrefixes,
 			StatsTag:     p.StatsTag,
 		},
@@ -139,7 +137,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		}
 	}()
 
-	if p.IngestOnly && l > 0 {
+	if p.IngestMode.UsesIngest() && l > 0 {
 		cd.setNextLevel(lm, t, cd.thisLevel)
 		order := cd.thisLevel.ingest.shardOrderBySize()
 		if len(order) == 0 {
@@ -166,7 +164,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			if !lm.fillTablesIngestShard(&sub, order[i]) {
 				continue
 			}
-			sub.plan.IngestMerge = p.IngestMerge
+			sub.plan.IngestMode = p.IngestMode
 			sub.plan.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
 				log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, sub)
@@ -368,7 +366,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 			if !ok {
 				return false
 			}
-			cd.plan.IngestMerge = true
+			cd.plan.IngestMode = compact.IngestKeep
 			cd.applyPlan(plan)
 			if !lm.resolvePlanLocked(cd) {
 				return false
@@ -485,7 +483,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 					ValueSize: tbl.ValueSize(),
-					Ingest:    cd.plan.IngestMerge,
+					Ingest:    cd.plan.IngestMode == compact.IngestKeep,
 				},
 			}
 			manifestEdits = append(manifestEdits, add)
@@ -506,7 +504,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	defer func() {
 		_ = decrRefs(cd.top)
 	}()
-	if cd.plan.IngestMerge {
+	if cd.plan.IngestMode == compact.IngestKeep {
 		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
 			return err
 		}
@@ -539,9 +537,9 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			dur.Round(time.Millisecond))
 	}
 	// Record ingest metrics if applicable.
-	if cd.plan.IngestOnly {
+	if cd.plan.IngestMode.UsesIngest() {
 		tablesCompacted := len(cd.top) + len(cd.bot)
-		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMerge, time.Since(timeStart), tablesCompacted)
+		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMode == compact.IngestKeep, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
 	return nil
