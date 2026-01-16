@@ -20,6 +20,10 @@ jobs:
         uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: "0.4.40"
+      - name: Install mdbook-mermaid
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook-mermaid
       - name: Build
         run: mdbook build
       - name: Deploy to GitHub Pages
