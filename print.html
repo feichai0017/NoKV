@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-97c42887.js";
+            window.path_to_searchindex_js = "searchindex-b433c4b4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-63bfbb8a.js"></script>
+        <script src="toc-e455a035.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -2342,7 +2342,7 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <h3 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h3>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-01-16-mmap-choice"><a class="header" href="#2026-01-16-mmap-choice">2026-01-16 mmap choice</a></h1>
-<p>这条是更完整的碎碎念记录，想把 mmap 的选择理由写得清楚一些，尤其是围绕 SSTable 和 VLog 的定义、使用场景和读写交互逻辑。整体风格我会尽量偏人类口吻，少一点工程式要点，多一点连贯说明。</p>
+<p>这是一些碎碎念记录，想把 mmap 的选择理由写得清楚一些，尤其是围绕 SSTable 和 VLog 的定义、使用场景和读写交互逻辑。</p>
 <h2 id="概念与定位"><a class="header" href="#概念与定位">概念与定位</a></h2>
 <p>SSTable 是 LSM 的核心持久化文件，按 key 有序且不可变，内部由索引、数据块与过滤器等结构组成，因此它在读路径里几乎无处不在。VLog 则用于存放较大的 value，写入时顺序追加，LSM 内只保存 value pointer，读取时再回查 VLog。用一句话概括就是：SSTable 读密集且不可变，VLog 顺序写但读是随机的。</p>
 <h2 id="读写交互逻辑"><a class="header" href="#读写交互逻辑">读写交互逻辑</a></h2>
@@ -2375,6 +2375,43 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <p>在 Linux 上我们可以组合使用多种 IO 手段，比如常规的 read/pread/write，以及 mmap 配合 madvise 提示访问模式，也可以用 posix_fadvise 或 readahead 做预读提示；如果需要更细粒度控制，还可以使用 O_DIRECT 进行 direct I/O，或者基于 io_uring 做异步 IO。我们在 file 包中已经实现了一个基础的 io_uring 框架，后续如果要做更强的异步读写或并发调度，可以基于它扩展。</p>
 <h2 id="小结"><a class="header" href="#小结">小结</a></h2>
 <p>SSTable 的读密集与不可变特性让 mmap 成为一个相对稳妥的默认选择，而 VLog 的大文件与随机读特性让 mmap 的代价更明显。当前实现偏向工程简化，但从长期来看，VLog 可能更适合 pread + 小型缓存的策略，并在热点稳定时再开放 mmap 作为可选模式。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
+<p>这条记录和之前的 mmap choice 一样，是一份偏叙述的 note，用来讲 HotRing 的设计动机、交互流程以及我对它的理解。它不是一个“理论最优”的结构，但它足够轻、足够快，也足够实用。</p>
+<h2 id="设计动机"><a class="header" href="#设计动机">设计动机</a></h2>
+<p>在 LSM 系统里，热点通常不是均匀分布的，一小撮 key 会持续放大缓存抖动、读放大和写冲突。HotRing 的定位就是把这种热点快速“变成可见”，让我们能在监控、限流、调优时快速找到真正的热源，而不是只看到一堆模糊的全局指标。</p>
+<h2 id="交互逻辑"><a class="header" href="#交互逻辑">交互逻辑</a></h2>
+<p>HotRing 并不改变读写路径，只是以旁路的方式记录访问频次。读请求成功命中后调用 Touch，写请求在启用了 WriteHotKeyLimit 时调用 TouchAndClamp。统计系统定期拉取 TopN，CLI 可以直接显示热点。</p>
+<pre class="mermaid">flowchart LR
+  R[Read path] --&gt; L[LSM lookup]
+  L --&gt; H[HotRing.Touch]
+  W[Write path] --&gt; C[HotRing.TouchAndClamp]
+  H --&gt; B[Bucket list update]
+  C --&gt; B
+  B --&gt; S[TopN snapshot]
+  S --&gt; X[Stats/CLI/Debug]
+</pre>
+
+<h2 id="示例代码"><a class="header" href="#示例代码">示例代码</a></h2>
+<pre><code class="language-go">ring := hotring.NewHotRing(12, nil)
+ring.EnableSlidingWindow(8, 250*time.Millisecond)
+ring.EnableDecay(time.Second, 1)
+
+ring.Touch("user:42")
+count, limited := ring.TouchAndClamp("user:42", 128)
+if limited {
+    // 可以记录告警，或触发写入限流
+    _ = count
+}
+
+hot := ring.TopN(16)
+_ = hot
+</code></pre>
+<h2 id="结构直觉与实现选择"><a class="header" href="#结构直觉与实现选择">结构直觉与实现选择</a></h2>
+<p>HotRing 的内部是“固定桶 + 有序链表”。key 先哈希到桶，然后在桶内按 tag + key 排序。读路径无锁，写路径使用 CAS 插入节点，避免全局锁带来的抖动。它没有引入复杂的近似结构，而是尽量保持数据结构简单，让它能长期存在于读写路径上而不成为负担。</p>
+<p>时间语义方面它提供了两种手段：滑动窗口让突发热点迅速出现，衰减机制让历史热点自然淡出，这两者叠加后，结果更符合“实际热度”的直觉。</p>
+<h2 id="个人心得"><a class="header" href="#个人心得">个人心得</a></h2>
+<p>HotRing 最有意思的点不是“聪明”，而是“够用且稳定”。它把热点从不可见变成可见，又不会因为自己太复杂而制造新的热点。很多时候工程上真正需要的是“一个很快能工作的热键探测器”，而不是一个理论上更漂亮、但成本更高的结构。</p>
 
                     </main>
 

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Compaction - NoKV Docs</title>
+        <title>2026-01-16 hotring design - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b433c4b4.js";
+            window.path_to_searchindex_js = "../searchindex-b433c4b4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e455a035.js"></script>
+        <script src="../toc-e455a035.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,108 +178,51 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="compaction--cache-strategy"><a class="header" href="#compaction--cache-strategy">Compaction &amp; Cache Strategy</a></h1>
-<blockquote>
-<p>NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with an ingest buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.</p>
-</blockquote>
-<hr>
-<h2 id="1-overview"><a class="header" href="#1-overview">1. Overview</a></h2>
-<p>Compactions are orchestrated by <code>compact.Manager</code> with <code>lsm.levelManager</code> implementing the executor hooks. Each level owns two lists of tables:</p>
-<ul>
-<li><code>tables</code> – the canonical sorted run for the level.</li>
-<li><code>ingest</code> – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.</li>
-</ul>
-<p>The compaction manager periodically calls into the executor to build a list of <code>compact.Priority</code> entries.  The priorities consider three signals:</p>
-<ol>
-<li><strong>L0 table count</strong> – loosely capped by <code>Options.NumLevelZeroTables</code>.</li>
-<li><strong>Level size vs target</strong> – computed by <code>levelTargets()</code>, which dynamically adjusts the “base” level depending on total data volume.</li>
-<li><strong>Ingest buffer backlog</strong> – if a level’s <code>ingest</code> shards have data, they receive elevated scores so staged tables are merged promptly.</li>
-</ol>
-<p>The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.</p>
-<p>Planning now happens via <code>compact.Plan</code>: LSM snapshots table metadata into <code>compact.TableMeta</code>, <code>compact.PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
-<hr>
-<h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
-<p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
-<ol>
-<li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
-<li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
-<li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
-</ol>
-<p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
-<p>Compaction tests (<code>lsm/compaction_cache_test.go</code>) now assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
-<hr>
-<h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
-<p>To prevent overlapping compactions:</p>
-<ul>
-<li><code>compact.State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
-<li>Attempts to register a compaction whose ranges intersect an existing one are rejected.</li>
-<li>When a compaction finishes, <code>compact.State.Delete</code> removes the ranges and table IDs from the guard.</li>
-</ul>
-<p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
-<hr>
-<h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
-<p>NoKV’s cache is split into three parts (<code>lsm/cache.go</code>):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Component</th><th>Purpose</th><th>Metrics hook</th></tr>
-</thead>
-<tbody>
-<tr><td>Block cache (hot)</td><td>LRU list capturing most recent hits (typically L0/L1).</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
-<tr><td>Block cache (cold)</td><td>CLOCK cache for deeper levels, keeping the memory footprint bounded.</td><td>Same as above</td></tr>
-<tr><td>Bloom cache</td><td>Stores decoded bloom filters to reduce disk touches.</td><td><code>recordBloom(hit)</code></td></tr>
-</tbody>
-</table>
-</div>
-<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster.  <code>TestCacheHotColdMetrics</code> verifies that the hot and cold tiers tick the counters as expected.</p>
-<hr>
-<h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
-<p>Compaction informs value‑log GC via discard statistics:</p>
-<ol>
-<li>During <code>subcompact</code>, every entry merged out is inspected.  If it stores a <code>ValuePtr</code>, the amount is added to the discard map.</li>
-<li>At the end of subcompaction, the accumulated discard map is pushed through <code>setDiscardStatsCh</code>.</li>
-<li><code>valueLog</code> receives the stats and can safely rewrite or delete vlog segments with predominantly obsolete data.</li>
-</ol>
-<p>This tight coupling keeps the value log from growing indefinitely after heavy overwrite workloads.</p>
-<hr>
-<h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
-<p>Relevant tests to keep compaction healthy:</p>
-<ul>
-<li><code>lsm/compaction_cache_test.go</code>
-<ul>
-<li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
-<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
-<li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
-</ul>
-</li>
-<li><code>lsm/lsm_test.go</code>
-<ul>
-<li><code>TestCompact</code> / <code>TestHitStorage</code> – end‑to‑end verification that data remains queryable across memtable flushes and compactions.</li>
-</ul>
-</li>
-</ul>
-<p>When adding new compaction heuristics or cache tiers, extend these tests (or introduce new ones) so the behaviour stays observable.</p>
-<hr>
-<h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
-<ul>
-<li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
-<li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
-<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data依赖 OS page cache。</li>
-<li>Keep an eye on <code>NoKV.ValueLog.GcRuns</code> and <code>ValueLogHeadUpdates</code>; if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
-</ul>
-<p>With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.</p>
+                        <h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
+<p>这条记录和之前的 mmap choice 一样，是一份偏叙述的 note，用来讲 HotRing 的设计动机、交互流程以及我对它的理解。它不是一个“理论最优”的结构，但它足够轻、足够快，也足够实用。</p>
+<h2 id="设计动机"><a class="header" href="#设计动机">设计动机</a></h2>
+<p>在 LSM 系统里，热点通常不是均匀分布的，一小撮 key 会持续放大缓存抖动、读放大和写冲突。HotRing 的定位就是把这种热点快速“变成可见”，让我们能在监控、限流、调优时快速找到真正的热源，而不是只看到一堆模糊的全局指标。</p>
+<h2 id="交互逻辑"><a class="header" href="#交互逻辑">交互逻辑</a></h2>
+<p>HotRing 并不改变读写路径，只是以旁路的方式记录访问频次。读请求成功命中后调用 Touch，写请求在启用了 WriteHotKeyLimit 时调用 TouchAndClamp。统计系统定期拉取 TopN，CLI 可以直接显示热点。</p>
+<pre class="mermaid">flowchart LR
+  R[Read path] --&gt; L[LSM lookup]
+  L --&gt; H[HotRing.Touch]
+  W[Write path] --&gt; C[HotRing.TouchAndClamp]
+  H --&gt; B[Bucket list update]
+  C --&gt; B
+  B --&gt; S[TopN snapshot]
+  S --&gt; X[Stats/CLI/Debug]
+</pre>
+
+<h2 id="示例代码"><a class="header" href="#示例代码">示例代码</a></h2>
+<pre><code class="language-go">ring := hotring.NewHotRing(12, nil)
+ring.EnableSlidingWindow(8, 250*time.Millisecond)
+ring.EnableDecay(time.Second, 1)
+
+ring.Touch("user:42")
+count, limited := ring.TouchAndClamp("user:42", 128)
+if limited {
+    // 可以记录告警，或触发写入限流
+    _ = count
+}
+
+hot := ring.TopN(16)
+_ = hot
+</code></pre>
+<h2 id="结构直觉与实现选择"><a class="header" href="#结构直觉与实现选择">结构直觉与实现选择</a></h2>
+<p>HotRing 的内部是“固定桶 + 有序链表”。key 先哈希到桶，然后在桶内按 tag + key 排序。读路径无锁，写路径使用 CAS 插入节点，避免全局锁带来的抖动。它没有引入复杂的近似结构，而是尽量保持数据结构简单，让它能长期存在于读写路径上而不成为负担。</p>
+<p>时间语义方面它提供了两种手段：滑动窗口让突发热点迅速出现，衰减机制让历史热点自然淡出，这两者叠加后，结果更符合“实际热度”的直觉。</p>
+<h2 id="个人心得"><a class="header" href="#个人心得">个人心得</a></h2>
+<p>HotRing 最有意思的点不是“聪明”，而是“够用且稳定”。它把热点从不可见变成可见，又不会因为自己太复杂而制造新的热点。很多时候工程上真正需要的是“一个很快能工作的热键探测器”，而不是一个理论上更漂亮、但成本更高的结构。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="flush.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-01-16-mmap-choice.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="ingest_buffer.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -287,13 +230,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="flush.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-01-16-mmap-choice.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="ingest_buffer.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
@@ -311,16 +251,16 @@
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 
