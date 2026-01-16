@@ -205,13 +205,6 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 ---
 
-## 📚 Video
-
-[![NoKV Demo Video](https://img.youtube.com/vi/BSGMz66juCg/maxresdefault.jpg)](https://www.youtube.com/watch?v=BSGMz66juCg)
-
-
----
-
 ## 📄 License
 
 Apache-2.0. See [LICENSE](LICENSE).
