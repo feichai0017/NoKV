@@ -1,0 +1,314 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Compaction - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html" class="active"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="compaction--cache-strategy"><a class="header" href="#compaction--cache-strategy">Compaction &amp; Cache Strategy</a></h1>
+<blockquote>
+<p>NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with an ingest buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.</p>
+</blockquote>
+<hr />
+<h2 id="1-overview"><a class="header" href="#1-overview">1. Overview</a></h2>
+<p>Compactions are orchestrated by <code>compact.Manager</code> with <code>lsm.levelManager</code> implementing the executor hooks. Each level owns two lists of tables:</p>
+<ul>
+<li><code>tables</code> – the canonical sorted run for the level.</li>
+<li><code>ingest</code> – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.</li>
+</ul>
+<p>The compaction manager periodically calls into the executor to build a list of <code>compact.Priority</code> entries.  The priorities consider three signals:</p>
+<ol>
+<li><strong>L0 table count</strong> – loosely capped by <code>Options.NumLevelZeroTables</code>.</li>
+<li><strong>Level size vs target</strong> – computed by <code>levelTargets()</code>, which dynamically adjusts the “base” level depending on total data volume.</li>
+<li><strong>Ingest buffer backlog</strong> – if a level’s <code>ingest</code> shards have data, they receive elevated scores so staged tables are merged promptly.</li>
+</ol>
+<p>The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.</p>
+<p>Planning now happens via <code>compact.Plan</code>: LSM snapshots table metadata into <code>compact.TableMeta</code>, <code>compact.PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
+<hr />
+<h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
+<p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
+<ol>
+<li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
+<li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
+<li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
+</ol>
+<p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
+<p>Compaction tests (<code>lsm/compaction_cache_test.go</code>) now assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<hr />
+<h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
+<p>To prevent overlapping compactions:</p>
+<ul>
+<li><code>compact.State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
+<li>Attempts to register a compaction whose ranges intersect an existing one are rejected.</li>
+<li>When a compaction finishes, <code>compact.State.Delete</code> removes the ranges and table IDs from the guard.</li>
+</ul>
+<p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
+<hr />
+<h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
+<p>NoKV’s cache is split into three parts (<code>lsm/cache.go</code>):</p>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>Purpose</th><th>Metrics hook</th></tr></thead><tbody>
+<tr><td>Block cache (hot)</td><td>LRU list capturing most recent hits (typically L0/L1).</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
+<tr><td>Block cache (cold)</td><td>CLOCK cache for deeper levels, keeping the memory footprint bounded.</td><td>Same as above</td></tr>
+<tr><td>Bloom cache</td><td>Stores decoded bloom filters to reduce disk touches.</td><td><code>recordBloom(hit)</code></td></tr>
+</tbody></table>
+</div>
+<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster.  <code>TestCacheHotColdMetrics</code> verifies that the hot and cold tiers tick the counters as expected.</p>
+<hr />
+<h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
+<p>Compaction informs value‑log GC via discard statistics:</p>
+<ol>
+<li>During <code>subcompact</code>, every entry merged out is inspected.  If it stores a <code>ValuePtr</code>, the amount is added to the discard map.</li>
+<li>At the end of subcompaction, the accumulated discard map is pushed through <code>setDiscardStatsCh</code>.</li>
+<li><code>valueLog</code> receives the stats and can safely rewrite or delete vlog segments with predominantly obsolete data.</li>
+</ol>
+<p>This tight coupling keeps the value log from growing indefinitely after heavy overwrite workloads.</p>
+<hr />
+<h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
+<p>Relevant tests to keep compaction healthy:</p>
+<ul>
+<li><code>lsm/compaction_cache_test.go</code>
+<ul>
+<li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
+<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
+<li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
+</ul>
+</li>
+<li><code>lsm/lsm_test.go</code>
+<ul>
+<li><code>TestCompact</code> / <code>TestHitStorage</code> – end‑to‑end verification that data remains queryable across memtable flushes and compactions.</li>
+</ul>
+</li>
+</ul>
+<p>When adding new compaction heuristics or cache tiers, extend these tests (or introduce new ones) so the behaviour stays observable.</p>
+<hr />
+<h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
+<ul>
+<li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
+<li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
+<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data依赖 OS page cache。</li>
+<li>Keep an eye on <code>NoKV.ValueLog.GcRuns</code> and <code>ValueLogHeadUpdates</code>; if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
+</ul>
+<p>With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="flush.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="ingest_buffer.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="flush.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="ingest_buffer.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

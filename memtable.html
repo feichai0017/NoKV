@@ -1,0 +1,311 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Memtable - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html" class="active"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="memtable-design--lifecycle"><a class="header" href="#memtable-design--lifecycle">Memtable Design &amp; Lifecycle</a></h1>
+<p>NoKV's write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the flush manager (<code>lsm/flush</code>).</p>
+<hr />
+<h2 id="1-structure"><a class="header" href="#1-structure">1. Structure</a></h2>
+<pre><code class="language-go">type memTable struct {
+    lsm        *LSM
+    segmentID  uint32       // WAL segment backing this memtable
+    index      memIndex
+    maxVersion uint64
+    walSize    int64
+}
+</code></pre>
+<p>The memtable index is an interface that can be backed by either a skiplist or ART:</p>
+<pre><code class="language-go">type memIndex interface {
+    Add(*kv.Entry)
+    Search([]byte) kv.ValueStruct
+    NewIterator(*utils.Options) utils.Iterator
+    MemSize() int64
+    IncrRef()
+    DecrRef()
+}
+</code></pre>
+<ul>
+<li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>skiplist</code> (default) or <code>art</code> via <code>newMemIndex</code>. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.</li>
+<li><strong>Arena sizing</strong> – <code>utils.NewSkiplist</code> uses <code>arenaSizeFor</code>; <code>utils.NewART</code> uses <code>arenaSizeForART</code> to reserve more space for variable node payloads and prefix spills.</li>
+<li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
+<li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB's <code>logfile_number</code> field.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.</li>
+</ul>
+<hr />
+<h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant WAL
+    participant MT as MemTable
+    participant Flush
+    participant Manifest
+    WAL-&gt;&gt;MT: Append+Set(entry)
+    MT-&gt;&gt;Flush: freeze (Size() &gt;= limit)
+    Flush-&gt;&gt;Manifest: LogPointer + AddFile
+    Manifest--&gt;&gt;Flush: ack
+    Flush-&gt;&gt;WAL: Release segments ≤ segmentID
+</code></pre>
+<ol>
+<li><strong>Active → Immutable</strong> – when <code>mt.Size()</code> crosses thresholds (<code>Options.MemTableSize</code>), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
+<li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
+<li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes, rebuilding <code>maxVersion</code> for the oracle.</li>
+</ol>
+<p>Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger's arena allocator for simplicity.</p>
+<hr />
+<h2 id="3-read-semantics"><a class="header" href="#3-read-semantics">3. Read Semantics</a></h2>
+<ul>
+<li><code>memTable.Get</code> looks up the chosen index and returns a copy of the entry. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
+<li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's <code>MemTable::Ref/Unref</code> lifecycle.</li>
+<li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
+</ul>
+<hr />
+<h2 id="4-integration-with-other-subsystems"><a class="header" href="#4-integration-with-other-subsystems">4. Integration with Other Subsystems</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Subsystem</th><th>Interaction</th></tr></thead><tbody>
+<tr><td>Transactions</td><td><code>Txn.commitAndSend</code> writes entries into the active memtable after WAL append; pending writes bypass the memtable until commit so per-txn isolation is preserved.</td></tr>
+<tr><td>Manifest</td><td>Flush completion logs <code>EditLogPointer(segmentID)</code> so restart can discard WAL files already persisted into SSTs.</td></tr>
+<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
+<tr><td>Value Log</td><td><code>lsm.flush</code> emits discard stats keyed by <code>segmentID</code>, letting the value log GC know when entries become obsolete.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-comparison"><a class="header" href="#5-comparison">5. Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Aspect</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena</td></tr>
+<tr><td>WAL linkage</td><td><code>logfile_number</code> per memtable</td><td>Segment ID stored in vlog entries</td><td><code>segmentID</code> on <code>memTable</code>, logged via manifest</td></tr>
+<tr><td>Recovery</td><td>Memtable replays from WAL, referencing <code>MANIFEST</code></td><td>Replays WAL segments</td><td>Replays WAL segments, prunes ≤ manifest log pointer</td></tr>
+<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>Size-based with explicit queue metrics</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
+<ul>
+<li>Tuning <code>Options.MemTableSize</code> affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.</li>
+<li>Monitor <code>NoKV.Stats.Flush.*</code> metrics to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.</li>
+<li>Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine's manifest-driven cleanup.</li>
+</ul>
+<p>See <a href="flush.html"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="cli.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="flush.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="cli.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="flush.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

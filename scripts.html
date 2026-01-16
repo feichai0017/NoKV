@@ -1,0 +1,293 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Scripts - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html" class="active"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
+<p>NoKV ships a small collection of helper scripts to streamline local experimentation, demos, diagnostics, and automation. This page summarises what each script does, how to use it, and which shared configuration it consumes.</p>
+<hr />
+<h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
+<h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – builds <code>nokv</code>, <code>nokv-config</code>, and <code>nokv-tso</code>, reads <code>raft_config.json</code>, seeds manifests, and starts the TinyKv nodes (plus TSO when configured). If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
+</code></pre>
+</li>
+</ul>
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
+<blockquote>
+<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, always stop the script with <code>Ctrl+C</code> and wait for the <code>Shutting down...</code> message. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
+</blockquote>
+<h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – manifest-only bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a manifest are detected and skipped.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+</code></pre>
+The script iterates over every store in the config and writes Region metadata via <code>nokv-config manifest</code> into the provided path template.</li>
+</ul>
+<h3 id="scriptsserve_from_configsh"><a class="header" href="#scriptsserve_from_configsh"><code>scripts/serve_from_config.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – translate <code>raft_config.json</code> into a <code>nokv serve</code> command, avoiding manual <code>--peer</code> lists. It resolves peer IDs from the region metadata and maps every peer (other than the local store) to its advertised address so that gRPC transport works out of the box.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/serve_from_config.sh \
+    --config ./raft_config.json \
+    --store-id 1 \
+    --workdir ./artifacts/cluster/store-1 \
+    --scope local   # use --scope docker inside containers
+</code></pre>
+<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
+</ul>
+<hr />
+<h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Script</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
+<tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes the comparison benchmarks (NoKV vs Badger/RocksDB).</td></tr>
+<tr><td><code>scripts/analyze_pprof.sh</code></td><td>Aggregates CPU/heap profiles from <code>pprof_output/</code> and renders SVG/PNG summaries.</td></tr>
+<tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
+<tr><td><code>scripts/gen.sh</code></td><td>Generates mock data or helper artefacts (see inline comments for details).</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
+<h3 id="scriptstso"><a class="header" href="#scriptstso"><code>scripts/tso</code></a></h3>
+<p>A small Go program (not shell) that exposes an HTTP timestamp oracle:</p>
+<pre><code class="language-bash">go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
+</code></pre>
+<p><code>run_local_cluster.sh</code> and Docker Compose invoke it automatically when <code>tso.listen_addr</code> is present in the shared config.</p>
+<hr />
+<h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
+<ul>
+<li><code>nokv-config stores</code> / <code>regions</code> / <code>tso</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
+<li><code>nokv-config manifest</code> writes Region metadata into manifests and replaces the historical <code>manifestctl</code> binary.</li>
+<li><code>cmd/nokv-redis</code> reads the same config; when <code>--tso-url</code> is omitted it falls back to the <code>tso</code> section.</li>
+<li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
+</ul>
+<p>Maintaining a single <code>raft_config.json</code> keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="testing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="nokv-redis.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="testing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="nokv-redis.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

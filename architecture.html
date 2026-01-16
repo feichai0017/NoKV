@@ -1,0 +1,410 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Architecture - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html" class="active"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
+<p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a TinyKv-compatible distributed service. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
+<hr />
+<h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
+<pre><code>┌─────────────────────────┐   TinyKv gRPC   ┌─────────────────────────┐
+│ raftstore Service       │◀──────────────▶│ raftstore/client         │
+└───────────┬────────────┘                 │  (Get / Scan / Mutate)   │
+            │                               └─────────────────────────┘
+            │ ReadCommand / ProposeCommand
+            ▼
+┌─────────────────────────┐
+│ store.Store / peer.Peer │  ← multi-Raft region lifecycle
+│  ├ Manifest snapshot    │
+│  ├ Router / RegionHooks │
+│  └ transport (gRPC)     │
+└───────────┬─────────────┘
+            │ Apply via kv.Apply
+            ▼
+┌─────────────────────────┐
+│ kv.Apply + mvcc package │
+│  ├ Get / Scan           │
+│  ├ Prewrite / Commit    │
+│  └ Latch manager        │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ Embedded NoKV core      │
+│  ├ WAL Manager          │
+│  ├ MemTable / Flush     │
+│  ├ ValueLog + GC        │
+│  └ Manifest / Stats     │
+└─────────────────────────┘
+</code></pre>
+<ul>
+<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
+<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve TinyKv RPCs.</li>
+<li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
+</ul>
+<hr />
+<h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
+<h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
+<ul>
+<li><code>wal.Manager</code> appends <code>[len|payload|crc]</code> records, rotates segments, and replays logs on crash.</li>
+<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
+<li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
+</ul>
+<h3 id="22-valuelog"><a class="header" href="#22-valuelog">2.2 ValueLog</a></h3>
+<ul>
+<li>Large values are written to the ValueLog before the WAL append; the resulting <code>ValuePtr</code> is stored in WAL/LSM so replay can recover.</li>
+<li><code>vlog.Manager</code> tracks the active head and uses flush discard stats to trigger GC; manifest records new heads and removed segments.</li>
+</ul>
+<h3 id="23-manifest"><a class="header" href="#23-manifest">2.3 Manifest</a></h3>
+<ul>
+<li><code>manifest.Manager</code> stores SST metadata, WAL checkpoints, ValueLog metadata, and (importantly) Region descriptors used by raftstore.</li>
+<li><code>CURRENT</code> provides crash-safe pointer updates; Region state is replicated through manifest edits.</li>
+</ul>
+<h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
+<ul>
+<li><code>compact.Manager</code> drives compaction cycles; <code>lsm.levelManager</code> supplies table metadata and executes the plan.</li>
+<li>Planning is split: <code>compact.PlanFor*</code> selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.</li>
+<li><code>compact.State</code> guards overlapping key ranges and tracks in-flight table IDs.</li>
+<li>Ingest shard selection is policy-driven in <code>compact</code> (<code>PickShardOrder</code> / <code>PickShardByBacklog</code>) while the ingest buffer remains in <code>lsm</code>.</li>
+</ul>
+<pre><code class="language-mermaid">flowchart TD
+  Manager["compact.Manager"] --&gt; LSM["lsm.levelManager"]
+  LSM --&gt;|TableMeta snapshot| Planner["compact.PlanFor*"]
+  Planner --&gt; Plan["compact.Plan (fid+range)"]
+  Plan --&gt;|resolvePlanLocked| Exec["LSM executor"]
+  Exec --&gt; State["compact.State guard"]
+  Exec --&gt; Build["subcompact/build SST"]
+  Build --&gt; Manifest["manifest edits"]
+  L0["L0 tables"] --&gt;|moveToIngest| Ingest["ingest buffer shards"]
+  Ingest --&gt;|ingest-only| Main["Main tables"]
+  Ingest --&gt;|ingest-merge| Ingest
+</code></pre>
+<h3 id="25-mvcc"><a class="header" href="#25-mvcc">2.5 MVCC</a></h3>
+<ul>
+<li><code>txn.go</code> exposes MVCC transactions with timestamps from <code>oracle</code>.</li>
+<li><code>mvcc</code> package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> simply dispatches Raft commands to these helpers.</li>
+<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.</li>
+</ul>
+<h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
+<ul>
+<li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
+<li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
+<li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
+<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
+</ul>
+<hr />
+<h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Package</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
+<tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
+<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping manifest metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for TinyKv RPC.</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and TinyKv service into a reusable node instance.</td></tr>
+</tbody></table>
+</div>
+<h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
+<ol>
+<li><code>raftstore.NewServer</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers TinyKv RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li>CLI (<code>nokv serve</code>) or application enumerates <code>Manifest.RegionSnapshot()</code> and calls <code>Store.StartPeer</code> for every Region containing the local store:
+<ul>
+<li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
+<li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
+</ul>
+</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>, allowing dynamic updates from a scheduler.</li>
+</ol>
+<h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
+<ul>
+<li><strong>ReadCommand</strong> (<code>KvGet</code>/<code>KvScan</code>): validate Region &amp; leader, flush pending Ready, then run <code>commandApplier</code> (i.e. <code>kv.Apply</code> in read mode) to fetch data directly from the DB. This yields leader-strong reads without a Raft round trip.</li>
+<li><strong>ProposeCommand</strong> (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in <code>kv.Apply</code> which maps to MVCC operations.</li>
+</ul>
+<h3 id="33-transport"><a class="header" href="#33-transport">3.3 Transport</a></h3>
+<ul>
+<li>gRPC server handles Step RPCs and TinyKv RPCs on the same endpoint; peers are registered via <code>SetPeer</code>.</li>
+<li>Retry policies (<code>WithRetry</code>) and TLS credentials are configurable. Tests cover partitions, blocked peers, and slow followers.</li>
+</ul>
+<hr />
+<h2 id="4-tinykv-service"><a class="header" href="#4-tinykv-service">4. TinyKv Service</a></h2>
+<p><code>raftstore/kv/service.go</code> exposes pb.TinyKv RPCs:</p>
+<div class="table-wrapper"><table><thead><tr><th>RPC</th><th>Execution</th><th>Result</th></tr></thead><tbody>
+<tr><td><code>KvGet</code></td><td><code>store.ReadCommand</code> → <code>kv.Apply</code> GET</td><td><code>pb.GetResponse</code> / <code>RegionError</code></td></tr>
+<tr><td><code>KvScan</code></td><td><code>store.ReadCommand</code> → <code>kv.Apply</code> SCAN</td><td><code>pb.ScanResponse</code> / <code>RegionError</code></td></tr>
+<tr><td><code>KvPrewrite</code></td><td><code>store.ProposeCommand</code> → <code>percolator.Prewrite</code></td><td><code>pb.PrewriteResponse</code></td></tr>
+<tr><td><code>KvCommit</code></td><td><code>store.ProposeCommand</code> → <code>percolator.Commit</code></td><td><code>pb.CommitResponse</code></td></tr>
+<tr><td><code>KvResolveLock</code></td><td><code>percolator.ResolveLock</code></td><td><code>pb.ResolveLockResponse</code></td></tr>
+<tr><td><code>KvCheckTxnStatus</code></td><td><code>percolator.CheckTxnStatus</code></td><td><code>pb.CheckTxnStatusResponse</code></td></tr>
+</tbody></table>
+</div>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal region manifest, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<hr />
+<h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
+<p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
+<ul>
+<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>[]RegionConfig</code> describing region boundaries and known leaders.</li>
+<li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
+<li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
+<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, reuse the TSO sample under <code>scripts/tso</code> to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches the stores declared in the config, and starts the HTTP TSO allocator when the <code>tso</code> block is present.</li>
+</ul>
+<p><strong>Example (two regions)</strong></p>
+<ol>
+<li>Regions <code>[a,m)</code> and <code>[m,+∞)</code>, each led by a different store.</li>
+<li><code>Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)</code> prewrites and commits across the relevant regions.</li>
+<li><code>Get/Scan</code> retries automatically if the leader changes.</li>
+<li>See <code>raftstore/server/server_client_integration_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
+</ol>
+<hr />
+<h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
+<ul>
+<li>Manifest edits capture Region metadata, WAL checkpoints, and ValueLog pointers. Restart simply reads <code>CURRENT</code> and replays edits.</li>
+<li>WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.</li>
+<li><code>Stats.StartStats</code> resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via <code>nokv stats</code>.</li>
+</ul>
+<hr />
+<h2 id="7-observability--tooling"><a class="header" href="#7-observability--tooling">7. Observability &amp; Tooling</a></h2>
+<ul>
+<li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
+<li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
+<li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
+<li>Scripts:
+<ul>
+<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>
+<li><code>scripts/recovery_scenarios.sh</code> – crash-recovery test harness.</li>
+<li><code>scripts/transport_chaos.sh</code> – inject network faults and observe transport metrics.</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h2 id="8-when-to-use-nokv"><a class="header" href="#8-when-to-use-nokv">8. When to Use NoKV</a></h2>
+<ul>
+<li><strong>Embedded</strong>: call <code>NoKV.Open</code>, use the MVCC store locally.</li>
+<li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
+<li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
+</ul>
+<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="config.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="config.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

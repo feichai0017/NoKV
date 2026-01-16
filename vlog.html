@@ -1,0 +1,371 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Value Log - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html" class="active"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="value-log-vlog-design"><a class="header" href="#value-log-vlog-design">Value Log (vlog) Design</a></h1>
+<p>NoKV keeps the LSM tree lean by separating large values into sequential <strong>value log</strong> (vlog) files. The module is split between</p>
+<ul>
+<li><a href="../vlog/manager.go"><code>vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
+<li><a href="../vlog/io.go"><code>vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
+<li><a href="../vlog.go"><code>vlog.go</code></a> – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).</li>
+</ul>
+<p>The design echoes BadgerDB's value log while remaining manifest-driven like RocksDB's <code>blob_db</code>: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.</p>
+<hr />
+<h2 id="1-layering-engine-view"><a class="header" href="#1-layering-engine-view">1. Layering (Engine View)</a></h2>
+<p>The value log is split into three layers so IO can stay reusable while DB
+policy lives in the core package:</p>
+<ul>
+<li><strong>DB policy layer (<code>vlog.go</code>, <code>vlog_gc.go</code>)</strong> – integrates the manager with
+the DB write path, persists vlog metadata in the manifest, and drives GC
+scheduling based on discard stats.</li>
+<li><strong>Value-log manager (<code>vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
+encodes/decodes entries, and exposes append/read/sample APIs without touching
+MVCC or LSM policy.</li>
+<li><strong>File IO (<code>file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
+read/write, read-only remap) shared by WAL/vlog/SST.</li>
+</ul>
+<hr />
+<h2 id="2-directory-layout--naming"><a class="header" href="#2-directory-layout--naming">2. Directory Layout &amp; Naming</a></h2>
+<pre><code class="language-text">&lt;workdir&gt;/
+  vlog/
+    00000.vlog
+    00001.vlog
+    ...
+</code></pre>
+<ul>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/</code>. <a href="../vlog/manager.go#L53-L92"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
+<li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go#L76-L125"><code>valueLog.reconcileManifest</code></a>.</li>
+</ul>
+<hr />
+<h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
+<p>The vlog uses the shared encoding helper (<code>kv.EncodeEntryTo</code>), so entries written to the value log and the WAL are byte-identical.</p>
+<pre><code>+--------+----------+------+-------------+-----------+-------+
+| KeyLen | ValueLen | Meta | ExpiresAt   | Key bytes | Value |
++--------+----------+------+-------------+-----------+-------+
+                                             + CRC32 (4 B)
+</code></pre>
+<ul>
+<li>Header fields are varint-encoded (<code>kv.EntryHeader</code>).</li>
+<li>The first 20 bytes of every segment are reserved (<code>kv.ValueLogHeaderSize</code>) for future metadata; iteration always skips this fixed header.</li>
+<li><code>kv.EncodeEntry</code> and the entry iterator (<code>kv.EntryIterator</code>) perform the layout work, and each append finishes with a CRC32 to detect torn writes.</li>
+<li><code>vlog.VerifyDir</code> scans all segments with <a href="../vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB's <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
+</ul>
+<hr />
+<h2 id="4-manager-api-surface"><a class="header" href="#4-manager-api-surface">4. Manager API Surface</a></h2>
+<pre><code class="language-go">mgr, _ := vlog.Open(vlog.Config{Dir: "...", MaxSize: 1&lt;&lt;29})
+ptr, _ := mgr.AppendEntry(entry)
+ptrs, _ := mgr.AppendEntries(entries, writeMask)
+val, unlock, _ := mgr.Read(ptr)
+unlock()             // release per-file lock
+_ = mgr.Rewind(*ptr) // rollback partially written batch
+_ = mgr.Remove(fid)  // close + delete file
+</code></pre>
+<p>Key behaviours:</p>
+<ol>
+<li><strong>Append + Rotate</strong> – <a href="../vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
+<li><strong>Crash recovery</strong> – <a href="../vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
+<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> grabs a per-file <code>RWMutex</code> and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.</li>
+<li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
+</ol>
+<p>Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
+<hr />
+<h2 id="5-integration-with-db-writes"><a class="header" href="#5-integration-with-db-writes">5. Integration with DB Writes</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant Commit as commitWorker
+    participant Mgr as vlog.Manager
+    participant WAL as wal.Manager
+    participant Mem as MemTable
+    Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
+    Mgr--&gt;&gt;Commit: ValuePtr list
+    Commit-&gt;&gt;WAL: Append(entries+ptrs)
+    Commit-&gt;&gt;Mem: apply to skiplist
+</code></pre>
+<ol>
+<li><a href="../vlog.go#L238-L268"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/manager.go#L367-L444"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
+<li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
+<li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go#L188-L254"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
+<li><code>Txn.Commit</code> and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.</li>
+</ol>
+<p>Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.</p>
+<hr />
+<h2 id="5-discard-statistics--gc"><a class="header" href="#5-discard-statistics--gc">5. Discard Statistics &amp; GC</a></h2>
+<pre><code class="language-mermaid">flowchart LR
+  FlushMgr -- "obsolete ptrs" --&gt; DiscardStats
+  DiscardStats --&gt;|"batch json"| writeCh
+  valuePtr["valueLog.newValuePtr(lfDiscardStatsKey)"]
+  writeCh --&gt; valuePtr
+  valueLog -- "GC trigger" --&gt; Manager
+
+</code></pre>
+<ul>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from <code>lsm.FlushTable</code> completion (<code>valueLog.lfDiscardStats.push</code> inside <code>lsm/flush</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
+<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/manager.go#L336-L401"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog.go#L316-L417"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head (using <code>Manager.Append</code>) and then <a href="../vlog.go#L418-L531"><code>valueLog.rewrite</code></a> schedules deletion edits in the manifest.
+<ul>
+<li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
+</ul>
+</li>
+<li>Completed deletions are logged via <code>lsm.LogValueLogDelete</code> so the manifest can skip them during replay. When GC rotates to a new head, <code>valueLog.updateHead</code> records the pointer and bumps the <code>NoKV.ValueLog.HeadUpdates</code> counter.</li>
+</ul>
+<p>RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.</p>
+<hr />
+<h2 id="6-recovery-semantics"><a class="header" href="#6-recovery-semantics">6. Recovery Semantics</a></h2>
+<ol>
+<li><code>DB.Open</code> restores the manifest and fetches the last persisted head pointer.</li>
+<li><a href="../vlog.go#L175-L224"><code>valueLog.open</code></a> launches <code>flushDiscardStats</code> and iterates every vlog file via <a href="../vlog.go#L706-L866"><code>valueLog.replayLog</code></a>. Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.</li>
+<li><code>valueLog.replayLog</code> streams entries to validate checksums and trims torn tails; it does <strong>not</strong> reapply data into the LSM. WAL replay remains the sole source of committed state.</li>
+<li><code>Manager.VerifyDir</code> trims torn records so replay never sees corrupt payloads.</li>
+<li>After validation, <code>valueLog.populateDiscardStats</code> rehydrates discard counters from the persisted JSON entry if present.</li>
+</ol>
+<p>The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored on WAL + manifest checkpoints, similar to RocksDB's reliance on <code>MANIFEST</code> to mark blob files live or obsolete.</p>
+<hr />
+<h2 id="7-observability--cli"><a class="header" href="#7-observability--cli">7. Observability &amp; CLI</a></h2>
+<ul>
+<li>Metrics in <a href="../stats.go#L12-L126"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/manager.go#L308-L411"><code>vlog.VerifyDir</code></a> before describing segments.</li>
+<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
+</ul>
+<hr />
+<h2 id="8-quick-comparison"><a class="header" href="#8-quick-comparison">8. Quick Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Capability</th><th>RocksDB BlobDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Head tracking</td><td>In MANIFEST (blob log number + offset)</td><td>Internal to vlog directory</td><td>Manifest entry via <code>EditValueLogHead</code></td></tr>
+<tr><td>GC trigger</td><td>Compaction sampling, blob garbage score</td><td>Discard stats from LSM tables</td><td>Discard stats flushed through <code>lfDiscardStats</code></td></tr>
+<tr><td>Failure recovery</td><td>Blob DB and WAL coordinate two-phase commits</td><td>Replays value log then LSM</td><td>Rewind-on-error + manifest-backed deletes</td></tr>
+<tr><td>Read path</td><td>Separate blob cache</td><td>Direct read + checksum</td><td><code>Manager.Read</code> with copy + per-file lock</td></tr>
+</tbody></table>
+</div>
+<p>By anchoring the vlog state in the manifest and exposing rewind/verify primitives, NoKV maintains the determinism of RocksDB while keeping Badger's simple sequential layout.</p>
+<hr />
+<h2 id="9-further-reading"><a class="header" href="#9-further-reading">9. Further Reading</a></h2>
+<ul>
+<li><a href="recovery.html#value-log-recovery"><code>docs/recovery.md</code></a> – failure matrix covering append crashes, GC interruptions, and manifest rewrites.</li>
+<li><a href="cache.html#value-pointer-reads"><code>docs/cache.md</code></a> – how vlog-backed entries interact with the block cache.</li>
+<li><a href="stats.html#value-log-metrics"><code>docs/stats.md</code></a> – metric names surfaced for monitoring.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="wal.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="manifest.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="wal.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="manifest.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

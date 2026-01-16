@@ -1,0 +1,338 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>WAL - NoKV Docs</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html" class="active"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="wal-subsystem"><a class="header" href="#wal-subsystem">WAL Subsystem</a></h1>
+<p>NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via <code>lsm.Set</code>), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
+<hr />
+<h2 id="1-file-layout--naming"><a class="header" href="#1-file-layout--naming">1. File Layout &amp; Naming</a></h2>
+<ul>
+<li>Location: <code>${Options.WorkDir}/wal/</code>.</li>
+<li>Naming pattern: <code>%05d.wal</code> (e.g. <code>00001.wal</code>).</li>
+<li>Rotation threshold: configurable via <code>wal.Config.SegmentSize</code> (defaults to 64 MiB, minimum 64 KiB).</li>
+<li>Verification: <code>wal.VerifyDir</code> ensures the directory exists prior to <code>DB.Open</code>.</li>
+</ul>
+<p>On open, <code>wal.Manager</code> scans the directory, sorts segment IDs, and resumes the highest ID—exactly how RocksDB re-opens its MANIFEST and WAL sequence files.</p>
+<hr />
+<h2 id="2-record-format"><a class="header" href="#2-record-format">2. Record Format</a></h2>
+<pre><code class="language-text">uint32 length (big-endian, includes type + payload)
+uint8  type
+[]byte payload
+uint32 checksum (CRC32 Castagnoli over type + payload)
+</code></pre>
+<ul>
+<li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>wal/record.go</code>.</li>
+<li>The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.</li>
+<li>Appends are buffered by <code>bufio.Writer</code> so batches become single system calls.</li>
+<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestReplayTruncatedTail</code>).</li>
+</ul>
+<hr />
+<h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
+<pre><code class="language-go">mgr, _ := wal.Open(wal.Config{Dir: path})
+infos, _ := mgr.Append(batchPayload)
+_ = mgr.Sync()
+_ = mgr.Rotate()
+_ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
+    // reapply to memtable
+    return nil
+})
+</code></pre>
+<p>Key behaviours:</p>
+<ul>
+<li><code>Append</code> automatically calls <code>ensureCapacity</code> to decide when to rotate; it returns <code>EntryInfo{SegmentID, Offset, Length}</code> for each payload so higher layers can build value pointers or manifest checkpoints.</li>
+<li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
+<li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB's <code>LogFileManager::SwitchLog</code>).</li>
+<li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
+<li>Metrics (<code>wal.Manager.Metrics</code>) reveal the active segment ID, total segments, and number of removed segments—these feed directly into <code>StatsSnapshot</code> and <code>nokv stats</code> output.</li>
+</ul>
+<p>Compared with Badger: Badger keeps a single vlog for both data and durability. NoKV splits WAL (durability) from vlog (value separation), matching RocksDB's separation of WAL and blob files.</p>
+<hr />
+<h2 id="4-integration-points"><a class="header" href="#4-integration-points">4. Integration Points</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Call Site</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
+<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
+<tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
+<tr><td><code>manifest.Manager.LogEdit</code></td><td>Uses <code>EntryInfo.SegmentID</code> to persist the WAL checkpoint (<code>EditLogPointer</code>). This acts as the <code>log number</code> seen in RocksDB manifest entries.</td></tr>
+<tr><td><code>lsm/flush.Manager.Update</code></td><td>Once an SST is installed, WAL segments older than the checkpoint are released (<code>wal.Manager.Remove</code>).</td></tr>
+<tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-metrics--observability"><a class="header" href="#5-metrics--observability">5. Metrics &amp; Observability</a></h2>
+<p><code>Stats.collect</code> reads the manager metrics and exposes them as:</p>
+<ul>
+<li><code>NoKV.WAL.ActiveSegment</code></li>
+<li><code>NoKV.WAL.SegmentCount</code></li>
+<li><code>NoKV.WAL.RemovedSegments</code></li>
+</ul>
+<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB's <code>LOG</code> number growth.</p>
+<hr />
+<h2 id="6-wal-watchdog-auto-gc"><a class="header" href="#6-wal-watchdog-auto-gc">6. WAL Watchdog (Auto GC)</a></h2>
+<p>The WAL watchdog runs inside the DB process to keep WAL backlog in check and
+surface warnings when raft-typed records dominate the log. It:</p>
+<ul>
+<li>Samples WAL metrics + per-segment metrics and combines them with
+<code>manifest.RaftPointerSnapshot()</code> to compute removable segments.</li>
+<li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
+<code>WALAutoGCMinRemovable</code> are eligible.</li>
+<li>Exposes counters (<code>WALAutoGCRuns/Removed/LastUnix</code>) and warning state
+(<code>WALTypedRecordRatio/Warning/Reason</code>) through <code>StatsSnapshot</code>.</li>
+</ul>
+<p>Relevant options (see <code>options.go</code> for defaults):</p>
+<ul>
+<li><code>EnableWALWatchdog</code></li>
+<li><code>WALAutoGCInterval</code></li>
+<li><code>WALAutoGCMinRemovable</code></li>
+<li><code>WALAutoGCMaxBatch</code></li>
+<li><code>WALTypedRecordWarnRatio</code></li>
+<li><code>WALTypedRecordWarnSegments</code></li>
+</ul>
+<hr />
+<h2 id="7-recovery-walkthrough"><a class="header" href="#7-recovery-walkthrough">7. Recovery Walkthrough</a></h2>
+<ol>
+<li><code>wal.Open</code> reopens the highest segment, leaving the file pointer at the end (<code>switchSegmentLocked</code>).</li>
+<li><code>manifest.Manager</code> supplies the WAL checkpoint (segment + offset) while building the version. Replay skips entries up to this checkpoint, ensuring we only reapply writes not yet materialised in SSTables.</li>
+<li><code>wal.Manager.Replay</code> (invoked by the LSM recovery path) rebuilds memtables from entries newer than the manifest checkpoint. Value-log recovery only validates/truncates segments and does not reapply data.</li>
+<li>If the final record is partially written, the CRC mismatch stops replay and the segment is truncated during recovery tests, mimicking RocksDB's tolerant behaviour.</li>
+</ol>
+<hr />
+<h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
+<ul>
+<li>Configure <code>SyncOnWrite</code> for synchronous durability (default async like RocksDB's default). For latency-sensitive deployments, consider enabling to emulate Badger's <code>SyncWrites</code>.</li>
+<li>After large flushes, forcing <code>Rotate</code> keeps WAL files short, reducing replay time.</li>
+<li>Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB's <code>Checkpoints</code>.</li>
+</ul>
+<hr />
+<h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
+<ul>
+<li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
+<li>When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via <code>LogRaftTruncate</code> with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
+<li><code>lsm/levelManager.canRemoveWalSegment</code> now blocks garbage collection whenever any raft group still references a segment through its truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
+</ul>
+<p>For broader context, read the <a href="architecture.html">architecture overview</a> and <a href="flush.html">flush pipeline</a> documents.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="ingest_buffer.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="vlog.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="ingest_buffer.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="vlog.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,2171 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>NoKV Docs</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="index.html"><strong aria-hidden="true">1.</strong> Overview</a></li><li class="chapter-item expanded "><a href="architecture.html"><strong aria-hidden="true">2.</strong> Architecture</a></li><li class="chapter-item expanded "><a href="config.html"><strong aria-hidden="true">3.</strong> Configuration</a></li><li class="chapter-item expanded "><a href="cli.html"><strong aria-hidden="true">4.</strong> CLI</a></li><li class="chapter-item expanded "><a href="memtable.html"><strong aria-hidden="true">5.</strong> Memtable</a></li><li class="chapter-item expanded "><a href="flush.html"><strong aria-hidden="true">6.</strong> Flush</a></li><li class="chapter-item expanded "><a href="compaction.html"><strong aria-hidden="true">7.</strong> Compaction</a></li><li class="chapter-item expanded "><a href="ingest_buffer.html"><strong aria-hidden="true">8.</strong> Ingest Buffer</a></li><li class="chapter-item expanded "><a href="wal.html"><strong aria-hidden="true">9.</strong> WAL</a></li><li class="chapter-item expanded "><a href="vlog.html"><strong aria-hidden="true">10.</strong> Value Log</a></li><li class="chapter-item expanded "><a href="manifest.html"><strong aria-hidden="true">11.</strong> Manifest</a></li><li class="chapter-item expanded "><a href="file.html"><strong aria-hidden="true">12.</strong> File</a></li><li class="chapter-item expanded "><a href="cache.html"><strong aria-hidden="true">13.</strong> Cache</a></li><li class="chapter-item expanded "><a href="hotring.html"><strong aria-hidden="true">14.</strong> Hotring</a></li><li class="chapter-item expanded "><a href="txn.html"><strong aria-hidden="true">15.</strong> Transactions</a></li><li class="chapter-item expanded "><a href="raftstore.html"><strong aria-hidden="true">16.</strong> Raftstore</a></li><li class="chapter-item expanded "><a href="recovery.html"><strong aria-hidden="true">17.</strong> Recovery</a></li><li class="chapter-item expanded "><a href="stats.html"><strong aria-hidden="true">18.</strong> Stats</a></li><li class="chapter-item expanded "><a href="testing.html"><strong aria-hidden="true">19.</strong> Testing</a></li><li class="chapter-item expanded "><a href="scripts.html"><strong aria-hidden="true">20.</strong> Scripts</a></li><li class="chapter-item expanded "><a href="nokv-redis.html"><strong aria-hidden="true">21.</strong> NoKV Redis</a></li><li class="chapter-item expanded "><a href="notes.html"><strong aria-hidden="true">22.</strong> Notes</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">NoKV Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="nokv-documentation"><a class="header" href="#nokv-documentation">NoKV Documentation</a></h1>
+<p>This book collects the project docs under <code>docs/</code> and makes them readable via
+mdBook + GitHub Pages. Use the table of contents on the left to navigate.</p>
+<p>Notes:</p>
+<ul>
+<li>The content here mirrors the files in <code>docs/</code>.</li>
+<li>Personal notes can be added in <code>notes.md</code>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
+<p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a TinyKv-compatible distributed service. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
+<hr />
+<h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
+<pre><code>┌─────────────────────────┐   TinyKv gRPC   ┌─────────────────────────┐
+│ raftstore Service       │◀──────────────▶│ raftstore/client         │
+└───────────┬────────────┘                 │  (Get / Scan / Mutate)   │
+            │                               └─────────────────────────┘
+            │ ReadCommand / ProposeCommand
+            ▼
+┌─────────────────────────┐
+│ store.Store / peer.Peer │  ← multi-Raft region lifecycle
+│  ├ Manifest snapshot    │
+│  ├ Router / RegionHooks │
+│  └ transport (gRPC)     │
+└───────────┬─────────────┘
+            │ Apply via kv.Apply
+            ▼
+┌─────────────────────────┐
+│ kv.Apply + mvcc package │
+│  ├ Get / Scan           │
+│  ├ Prewrite / Commit    │
+│  └ Latch manager        │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ Embedded NoKV core      │
+│  ├ WAL Manager          │
+│  ├ MemTable / Flush     │
+│  ├ ValueLog + GC        │
+│  └ Manifest / Stats     │
+└─────────────────────────┘
+</code></pre>
+<ul>
+<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
+<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve TinyKv RPCs.</li>
+<li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
+</ul>
+<hr />
+<h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
+<h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
+<ul>
+<li><code>wal.Manager</code> appends <code>[len|payload|crc]</code> records, rotates segments, and replays logs on crash.</li>
+<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
+<li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
+</ul>
+<h3 id="22-valuelog"><a class="header" href="#22-valuelog">2.2 ValueLog</a></h3>
+<ul>
+<li>Large values are written to the ValueLog before the WAL append; the resulting <code>ValuePtr</code> is stored in WAL/LSM so replay can recover.</li>
+<li><code>vlog.Manager</code> tracks the active head and uses flush discard stats to trigger GC; manifest records new heads and removed segments.</li>
+</ul>
+<h3 id="23-manifest"><a class="header" href="#23-manifest">2.3 Manifest</a></h3>
+<ul>
+<li><code>manifest.Manager</code> stores SST metadata, WAL checkpoints, ValueLog metadata, and (importantly) Region descriptors used by raftstore.</li>
+<li><code>CURRENT</code> provides crash-safe pointer updates; Region state is replicated through manifest edits.</li>
+</ul>
+<h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
+<ul>
+<li><code>compact.Manager</code> drives compaction cycles; <code>lsm.levelManager</code> supplies table metadata and executes the plan.</li>
+<li>Planning is split: <code>compact.PlanFor*</code> selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.</li>
+<li><code>compact.State</code> guards overlapping key ranges and tracks in-flight table IDs.</li>
+<li>Ingest shard selection is policy-driven in <code>compact</code> (<code>PickShardOrder</code> / <code>PickShardByBacklog</code>) while the ingest buffer remains in <code>lsm</code>.</li>
+</ul>
+<pre><code class="language-mermaid">flowchart TD
+  Manager["compact.Manager"] --&gt; LSM["lsm.levelManager"]
+  LSM --&gt;|TableMeta snapshot| Planner["compact.PlanFor*"]
+  Planner --&gt; Plan["compact.Plan (fid+range)"]
+  Plan --&gt;|resolvePlanLocked| Exec["LSM executor"]
+  Exec --&gt; State["compact.State guard"]
+  Exec --&gt; Build["subcompact/build SST"]
+  Build --&gt; Manifest["manifest edits"]
+  L0["L0 tables"] --&gt;|moveToIngest| Ingest["ingest buffer shards"]
+  Ingest --&gt;|ingest-only| Main["Main tables"]
+  Ingest --&gt;|ingest-merge| Ingest
+</code></pre>
+<h3 id="25-mvcc"><a class="header" href="#25-mvcc">2.5 MVCC</a></h3>
+<ul>
+<li><code>txn.go</code> exposes MVCC transactions with timestamps from <code>oracle</code>.</li>
+<li><code>mvcc</code> package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> simply dispatches Raft commands to these helpers.</li>
+<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.</li>
+</ul>
+<h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
+<ul>
+<li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
+<li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
+<li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
+<li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
+</ul>
+<hr />
+<h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Package</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
+<tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
+<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping manifest metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for TinyKv RPC.</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and TinyKv service into a reusable node instance.</td></tr>
+</tbody></table>
+</div>
+<h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
+<ol>
+<li><code>raftstore.NewServer</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers TinyKv RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li>CLI (<code>nokv serve</code>) or application enumerates <code>Manifest.RegionSnapshot()</code> and calls <code>Store.StartPeer</code> for every Region containing the local store:
+<ul>
+<li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
+<li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
+</ul>
+</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>, allowing dynamic updates from a scheduler.</li>
+</ol>
+<h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
+<ul>
+<li><strong>ReadCommand</strong> (<code>KvGet</code>/<code>KvScan</code>): validate Region &amp; leader, flush pending Ready, then run <code>commandApplier</code> (i.e. <code>kv.Apply</code> in read mode) to fetch data directly from the DB. This yields leader-strong reads without a Raft round trip.</li>
+<li><strong>ProposeCommand</strong> (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in <code>kv.Apply</code> which maps to MVCC operations.</li>
+</ul>
+<h3 id="33-transport"><a class="header" href="#33-transport">3.3 Transport</a></h3>
+<ul>
+<li>gRPC server handles Step RPCs and TinyKv RPCs on the same endpoint; peers are registered via <code>SetPeer</code>.</li>
+<li>Retry policies (<code>WithRetry</code>) and TLS credentials are configurable. Tests cover partitions, blocked peers, and slow followers.</li>
+</ul>
+<hr />
+<h2 id="4-tinykv-service"><a class="header" href="#4-tinykv-service">4. TinyKv Service</a></h2>
+<p><code>raftstore/kv/service.go</code> exposes pb.TinyKv RPCs:</p>
+<div class="table-wrapper"><table><thead><tr><th>RPC</th><th>Execution</th><th>Result</th></tr></thead><tbody>
+<tr><td><code>KvGet</code></td><td><code>store.ReadCommand</code> → <code>kv.Apply</code> GET</td><td><code>pb.GetResponse</code> / <code>RegionError</code></td></tr>
+<tr><td><code>KvScan</code></td><td><code>store.ReadCommand</code> → <code>kv.Apply</code> SCAN</td><td><code>pb.ScanResponse</code> / <code>RegionError</code></td></tr>
+<tr><td><code>KvPrewrite</code></td><td><code>store.ProposeCommand</code> → <code>percolator.Prewrite</code></td><td><code>pb.PrewriteResponse</code></td></tr>
+<tr><td><code>KvCommit</code></td><td><code>store.ProposeCommand</code> → <code>percolator.Commit</code></td><td><code>pb.CommitResponse</code></td></tr>
+<tr><td><code>KvResolveLock</code></td><td><code>percolator.ResolveLock</code></td><td><code>pb.ResolveLockResponse</code></td></tr>
+<tr><td><code>KvCheckTxnStatus</code></td><td><code>percolator.CheckTxnStatus</code></td><td><code>pb.CheckTxnStatusResponse</code></td></tr>
+</tbody></table>
+</div>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal region manifest, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<hr />
+<h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
+<p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
+<ul>
+<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>[]RegionConfig</code> describing region boundaries and known leaders.</li>
+<li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
+<li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
+<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, reuse the TSO sample under <code>scripts/tso</code> to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches the stores declared in the config, and starts the HTTP TSO allocator when the <code>tso</code> block is present.</li>
+</ul>
+<p><strong>Example (two regions)</strong></p>
+<ol>
+<li>Regions <code>[a,m)</code> and <code>[m,+∞)</code>, each led by a different store.</li>
+<li><code>Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)</code> prewrites and commits across the relevant regions.</li>
+<li><code>Get/Scan</code> retries automatically if the leader changes.</li>
+<li>See <code>raftstore/server/server_client_integration_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
+</ol>
+<hr />
+<h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
+<ul>
+<li>Manifest edits capture Region metadata, WAL checkpoints, and ValueLog pointers. Restart simply reads <code>CURRENT</code> and replays edits.</li>
+<li>WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.</li>
+<li><code>Stats.StartStats</code> resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via <code>nokv stats</code>.</li>
+</ul>
+<hr />
+<h2 id="7-observability--tooling"><a class="header" href="#7-observability--tooling">7. Observability &amp; Tooling</a></h2>
+<ul>
+<li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
+<li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
+<li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
+<li>Scripts:
+<ul>
+<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>
+<li><code>scripts/recovery_scenarios.sh</code> – crash-recovery test harness.</li>
+<li><code>scripts/transport_chaos.sh</code> – inject network faults and observe transport metrics.</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h2 id="8-when-to-use-nokv"><a class="header" href="#8-when-to-use-nokv">8. When to Use NoKV</a></h2>
+<ul>
+<li><strong>Embedded</strong>: call <code>NoKV.Open</code>, use the MVCC store locally.</li>
+<li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
+<li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
+</ul>
+<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="configuration--options"><a class="header" href="#configuration--options">Configuration &amp; Options</a></h1>
+<p>NoKV exposes two configuration surfaces:</p>
+<ol>
+<li><strong>Runtime options</strong> for the embedded engine (<code>Options</code> in <code>options.go</code>).</li>
+<li><strong>Cluster topology</strong> for distributed mode (<code>raft_config.example.json</code> via
+<code>config.LoadFile/Validate</code>).</li>
+</ol>
+<hr />
+<h2 id="1-runtime-options-embedded-engine"><a class="header" href="#1-runtime-options-embedded-engine">1. Runtime Options (Embedded Engine)</a></h2>
+<p><code>NoKV.NewDefaultOptions()</code> returns a tuned baseline. Override fields before
+calling <code>NoKV.Open(opt)</code>.</p>
+<p>Key option groups (see <code>options.go</code> for the full list):</p>
+<ul>
+<li><strong>Paths &amp; durability</strong>
+<ul>
+<li><code>WorkDir</code>, <code>SyncWrites</code>, <code>ManifestSync</code>, <code>ManifestRewriteThreshold</code></li>
+</ul>
+</li>
+<li><strong>Write pipeline</strong>
+<ul>
+<li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
+<li><code>CommitPipelineDepth</code>, <code>CommitApplyConcurrency</code></li>
+</ul>
+</li>
+<li><strong>Value log</strong>
+<ul>
+<li><code>ValueThreshold</code>, <code>ValueLogFileSize</code>, <code>ValueLogMaxEntries</code></li>
+<li><code>ValueLogGCInterval</code>, <code>ValueLogGCDiscardRatio</code></li>
+<li><code>ValueLogGCSampleSizeRatio</code>, <code>ValueLogGCSampleCountRatio</code>,
+<code>ValueLogGCSampleFromHead</code></li>
+</ul>
+</li>
+<li><strong>LSM &amp; compaction</strong>
+<ul>
+<li><code>MemTableSize</code>, <code>MemTableEngine</code>, <code>SSTableMaxSz</code>, <code>NumCompactors</code></li>
+<li><code>NumLevelZeroTables</code>, <code>IngestCompactBatchSize</code>, <code>IngestBacklogMergeScore</code></li>
+<li><code>CompactionValueWeight</code>, <code>CompactionValueAlertThreshold</code></li>
+</ul>
+</li>
+<li><strong>Caches</strong>
+<ul>
+<li><code>BlockCacheSize</code>, <code>BloomCacheSize</code></li>
+</ul>
+</li>
+<li><strong>Hot key throttling</strong>
+<ul>
+<li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
+<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
+</ul>
+</li>
+<li><strong>WAL watchdog</strong>
+<ul>
+<li><code>EnableWALWatchdog</code>, <code>WALAutoGCInterval</code></li>
+<li><code>WALAutoGCMinRemovable</code>, <code>WALAutoGCMaxBatch</code></li>
+<li><code>WALTypedRecordWarnRatio</code>, <code>WALTypedRecordWarnSegments</code></li>
+</ul>
+</li>
+<li><strong>Raft lag warnings (stats only)</strong>
+<ul>
+<li><code>RaftLagWarnSegments</code></li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-go">opt := NoKV.NewDefaultOptions()
+opt.WorkDir = "./data"
+opt.SyncWrites = true
+opt.ValueThreshold = 1024
+opt.WriteBatchMaxCount = 128
+db := NoKV.Open(opt)
+defer db.Close()
+</code></pre>
+<hr />
+<h2 id="2-raft-topology-file"><a class="header" href="#2-raft-topology-file">2. Raft Topology File</a></h2>
+<p><code>raft_config.example.json</code> is the single source of truth for distributed
+topology. It is consumed by scripts, <code>cmd/nokv-redis</code>, and the <code>config</code> package.</p>
+<p>Minimal shape:</p>
+<pre><code class="language-jsonc">{
+  "max_retries": 8,
+  "tso": { "listen_addr": "127.0.0.1:9494", "advertise_url": "http://127.0.0.1:9494" },
+  "stores": [
+    { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
+  ],
+  "regions": [
+    {
+      "id": 1,
+      "start_key": "-",
+      "end_key": "-",
+      "epoch": { "version": 1, "conf_version": 1 },
+      "peers": [{ "store_id": 1, "peer_id": 101 }],
+      "leader_store_id": 1
+    }
+  ]
+}
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>start_key</code> / <code>end_key</code> accept plain strings, <code>hex:&lt;bytes&gt;</code>, or base64. Use
+<code>"-"</code> or empty for unbounded ranges.</li>
+<li><code>stores</code> define both host and docker addresses for local runs vs containers.</li>
+<li><code>leader_store_id</code> is optional; clients use it for initial routing hints.</li>
+</ul>
+<p>Programmatic loading:</p>
+<pre><code class="language-go">cfg, _ := config.LoadFile("raft_config.example.json")
+if err := cfg.Validate(); err != nil { /* handle */ }
+</code></pre>
+<p>Related tools:</p>
+<ul>
+<li><code>scripts/run_local_cluster.sh --config raft_config.example.json</code></li>
+<li><code>go run ./cmd/nokv-redis --raft-config raft_config.example.json</code></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="cli-cmdnokv-reference"><a class="header" href="#cli-cmdnokv-reference">CLI (<code>cmd/nokv</code>) Reference</a></h1>
+<p>The <code>nokv</code> command provides operational visibility similar to RocksDB's <code>ldb</code> and Badger's <code>badger</code> CLI, but emits JSON to integrate easily with scripts and CI pipelines.</p>
+<hr />
+<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
+<pre><code class="language-bash">go install ./cmd/nokv
+</code></pre>
+<p>Use <code>GOBIN</code> if you prefer a custom binary directory.</p>
+<hr />
+<h2 id="shared-flags"><a class="header" href="#shared-flags">Shared Flags</a></h2>
+<ul>
+<li><code>--workdir &lt;path&gt;</code> – location of the NoKV database (must contain <code>CURRENT</code>).</li>
+<li><code>--json</code> – emit structured JSON (default is human-readable tables).</li>
+<li><code>--expvar &lt;url&gt;</code> – for <code>stats</code> command, pull metrics from a running process exposing <code>expvar</code>.</li>
+<li><code>--no-region-metrics</code> – for <code>stats</code> offline mode; skip attaching <code>RegionMetrics</code> and report manifest-only figures.</li>
+</ul>
+<hr />
+<h2 id="subcommands"><a class="header" href="#subcommands">Subcommands</a></h2>
+<h3 id="nokv-stats"><a class="header" href="#nokv-stats"><code>nokv stats</code></a></h3>
+<ul>
+<li>Reads <code>StatsSnapshot</code> either offline (<code>--workdir</code>) or via HTTP (<code>--expvar</code>).</li>
+<li>Output fields include:
+<ul>
+<li><code>flush_queue_length</code>, <code>flush_wait_ms</code>, <code>flush_build_ms</code></li>
+<li><code>compaction_backlog</code>, <code>wal_active_segment</code>, <code>wal_segments_removed</code></li>
+<li><code>vlog_head</code>, <code>vlog_segments</code>, <code>vlog_pending_deletes</code>, <code>vlog_discard_queue</code></li>
+<li><code>txns_active</code>, <code>txns_committed</code>, <code>txns_conflicts</code></li>
+<li><code>region_total</code> (plus <code>region_new</code>, <code>region_running</code>, <code>region_removing</code>, <code>region_tombstone</code>, <code>region_other</code>)</li>
+<li><code>hot_keys</code> (Top-N hits captured by <code>hotring</code>)</li>
+</ul>
+</li>
+<li>Example:</li>
+</ul>
+<pre><code class="language-bash">nokv stats --workdir ./testdata/db --json | jq '.flush_queue_length'
+</code></pre>
+<h3 id="nokv-manifest"><a class="header" href="#nokv-manifest"><code>nokv manifest</code></a></h3>
+<ul>
+<li>Parses the manifest using <code>manifest.Manager.Version()</code>.</li>
+<li>Reports per-level file counts, smallest/largest keys, WAL checkpoint, and ValueLog metadata.</li>
+<li>Helpful for verifying flush/compaction results and ensuring manifest rewrites succeeded.</li>
+</ul>
+<h3 id="nokv-vlog"><a class="header" href="#nokv-vlog"><code>nokv vlog</code></a></h3>
+<ul>
+<li>Lists vlog segments with status flags (<code>active</code>, <code>candidate_for_gc</code>, <code>deleted</code>).</li>
+<li>Shows head file/offset and pending GC actions.</li>
+<li>Use after running GC or recovery to confirm stale segments are purged.</li>
+</ul>
+<hr />
+<h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
+<ul>
+<li>Combine with <code>RECOVERY_TRACE_METRICS=1</code> to cross-check logs: run tests, then inspect CLI output to ensure metrics match expectations.</li>
+<li>In CI, capture JSON output and diff against golden files to detect regressions (see <code>cmd/nokv/main_test.go</code>).</li>
+<li>When comparing against RocksDB/Badger, treat <code>nokv manifest</code> + <code>nokv vlog</code> as equivalents to <code>ldb manifest_dump</code> and Badger's <code>badger</code> <code>inspect vlog</code> commands.</li>
+</ul>
+<hr />
+<p>For architecture context, see <a href="architecture.html">architecture.md</a> and the module deep dives.</p>
+<ul>
+<li><strong><code>nokv regions</code></strong> – Dumps the manifest-backed Region catalog (ID/state/key range/peers). Supports <code>--json</code> for automation and complements the Region metrics shown in <code>nokv stats</code>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="memtable-design--lifecycle"><a class="header" href="#memtable-design--lifecycle">Memtable Design &amp; Lifecycle</a></h1>
+<p>NoKV's write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the flush manager (<code>lsm/flush</code>).</p>
+<hr />
+<h2 id="1-structure"><a class="header" href="#1-structure">1. Structure</a></h2>
+<pre><code class="language-go">type memTable struct {
+    lsm        *LSM
+    segmentID  uint32       // WAL segment backing this memtable
+    index      memIndex
+    maxVersion uint64
+    walSize    int64
+}
+</code></pre>
+<p>The memtable index is an interface that can be backed by either a skiplist or ART:</p>
+<pre><code class="language-go">type memIndex interface {
+    Add(*kv.Entry)
+    Search([]byte) kv.ValueStruct
+    NewIterator(*utils.Options) utils.Iterator
+    MemSize() int64
+    IncrRef()
+    DecrRef()
+}
+</code></pre>
+<ul>
+<li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>skiplist</code> (default) or <code>art</code> via <code>newMemIndex</code>. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.</li>
+<li><strong>Arena sizing</strong> – <code>utils.NewSkiplist</code> uses <code>arenaSizeFor</code>; <code>utils.NewART</code> uses <code>arenaSizeForART</code> to reserve more space for variable node payloads and prefix spills.</li>
+<li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
+<li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB's <code>logfile_number</code> field.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.</li>
+</ul>
+<hr />
+<h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant WAL
+    participant MT as MemTable
+    participant Flush
+    participant Manifest
+    WAL-&gt;&gt;MT: Append+Set(entry)
+    MT-&gt;&gt;Flush: freeze (Size() &gt;= limit)
+    Flush-&gt;&gt;Manifest: LogPointer + AddFile
+    Manifest--&gt;&gt;Flush: ack
+    Flush-&gt;&gt;WAL: Release segments ≤ segmentID
+</code></pre>
+<ol>
+<li><strong>Active → Immutable</strong> – when <code>mt.Size()</code> crosses thresholds (<code>Options.MemTableSize</code>), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
+<li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
+<li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes, rebuilding <code>maxVersion</code> for the oracle.</li>
+</ol>
+<p>Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger's arena allocator for simplicity.</p>
+<hr />
+<h2 id="3-read-semantics"><a class="header" href="#3-read-semantics">3. Read Semantics</a></h2>
+<ul>
+<li><code>memTable.Get</code> looks up the chosen index and returns a copy of the entry. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
+<li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's <code>MemTable::Ref/Unref</code> lifecycle.</li>
+<li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
+</ul>
+<hr />
+<h2 id="4-integration-with-other-subsystems"><a class="header" href="#4-integration-with-other-subsystems">4. Integration with Other Subsystems</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Subsystem</th><th>Interaction</th></tr></thead><tbody>
+<tr><td>Transactions</td><td><code>Txn.commitAndSend</code> writes entries into the active memtable after WAL append; pending writes bypass the memtable until commit so per-txn isolation is preserved.</td></tr>
+<tr><td>Manifest</td><td>Flush completion logs <code>EditLogPointer(segmentID)</code> so restart can discard WAL files already persisted into SSTs.</td></tr>
+<tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
+<tr><td>Value Log</td><td><code>lsm.flush</code> emits discard stats keyed by <code>segmentID</code>, letting the value log GC know when entries become obsolete.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-comparison"><a class="header" href="#5-comparison">5. Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Aspect</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena</td></tr>
+<tr><td>WAL linkage</td><td><code>logfile_number</code> per memtable</td><td>Segment ID stored in vlog entries</td><td><code>segmentID</code> on <code>memTable</code>, logged via manifest</td></tr>
+<tr><td>Recovery</td><td>Memtable replays from WAL, referencing <code>MANIFEST</code></td><td>Replays WAL segments</td><td>Replays WAL segments, prunes ≤ manifest log pointer</td></tr>
+<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>Size-based with explicit queue metrics</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
+<ul>
+<li>Tuning <code>Options.MemTableSize</code> affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.</li>
+<li>Monitor <code>NoKV.Stats.Flush.*</code> metrics to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.</li>
+<li>Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine's manifest-driven cleanup.</li>
+</ul>
+<p>See <a href="flush.html"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
+<p>NoKV's flush subsystem translates immutable memtables into persisted SSTables while coordinating WAL checkpoints and ValueLog discard statistics. The code lives in <a href="../lsm/flush"><code>lsm/flush</code></a> and is tightly integrated with <code>DB.doWrites</code> and <code>manifest.Manager</code>.</p>
+<hr />
+<h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
+<ol>
+<li><strong>Reliability</strong> – ensure immutables become SSTables atomically, and failures are recoverable.</li>
+<li><strong>Coordination</strong> – release WAL segments only after manifest commits, and feed discard stats to ValueLog GC.</li>
+<li><strong>Observability</strong> – expose queue depth, stage durations, and task counts through <code>Stats.collect</code> and the CLI.</li>
+</ol>
+<p>Compared with RocksDB: the stage transitions mirror RocksDB's flush job lifecycle (<code>PickMemTable</code>, <code>WriteLevel0Table</code>, <code>InstallMemTable</code>), while the discard stats channel is inspired by Badger's integration with vlog GC.</p>
+<hr />
+<h2 id="2-stage-machine"><a class="header" href="#2-stage-machine">2. Stage Machine</a></h2>
+<pre><code class="language-mermaid">flowchart LR
+    Active[Active MemTable]
+    Immutable[Immutable MemTable]
+    FlushQ[flush.Manager queue]
+    Build[StageBuild]
+    Install[StageInstall]
+    Release[StageRelease]
+
+    Active --&gt;|threshold reached| Immutable --&gt; FlushQ
+    FlushQ --&gt; Build --&gt; Install --&gt; Release --&gt; Active
+</code></pre>
+<ul>
+<li><strong>StagePrepare</strong> – <code>Manager.Submit</code> assigns a task ID, records enqueue time, and bumps queue metrics.</li>
+<li><strong>StageBuild</strong> – <code>Manager.Next</code> hands tasks to background workers. <code>buildTable</code> serialises data into a temporary <code>.sst.tmp</code> using <code>lsm/builder.go</code>.</li>
+<li><strong>StageInstall</strong> – manifest edits (<code>EditAddFile</code>, <code>EditLogPointer</code>) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.</li>
+<li><strong>StageRelease</strong> – metrics record release duration, discard stats are flushed to <code>valueLog.lfDiscardStats</code>, and <code>wal.Manager.Remove</code> drops obsolete segments.</li>
+</ul>
+<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These appear as <code>NoKV.Flush.Queue</code>, <code>NoKV.Flush.BuildAvgMs</code>, etc., in CLI output.</p>
+<hr />
+<h2 id="3-key-types"><a class="header" href="#3-key-types">3. Key Types</a></h2>
+<pre><code class="language-go">type Task struct {
+    ID        uint64
+    SegmentID uint32
+    Stage     Stage
+    Data      any      // memtable pointer, temp file info, etc.
+    Err       error
+}
+
+type Manager struct {
+    queue []*Task
+    active map[uint64]*Task
+    cond  *sync.Cond
+    // atomic metrics fields (pending, queueLen, waitNs...)
+}
+</code></pre>
+<ul>
+<li><code>Stage</code> enumerates <code>StagePrepare</code>, <code>StageBuild</code>, <code>StageInstall</code>, <code>StageRelease</code>.</li>
+<li><code>Metrics</code> aggregates pending/active counts and nanosecond accumulators; the CLI converts them to human-friendly durations.</li>
+<li>The queue uses condition variables to coordinate between background workers and producers; the design avoids busy waiting, unlike some RocksDB flush queues.</li>
+</ul>
+<hr />
+<h2 id="4-execution-path-in-code"><a class="header" href="#4-execution-path-in-code">4. Execution Path in Code</a></h2>
+<ol>
+<li><code>DB.applyBatches</code> detects when the active memtable is full and hands it to <code>lsm.LSM.scheduleFlush</code>, which calls <code>flush.Manager.Submit</code>.</li>
+<li>Background goroutines call <code>Next</code> to retrieve tasks; <code>lsm.(*LSM).runFlushMemTable</code> performs the build and install phases.</li>
+<li><code>lsm.(*LSM).installLevel0Table</code> writes the manifest edit and renames the SST (atomic <code>os.Rename</code>, same as RocksDB's flush job).</li>
+<li>After install, <code>valueLog.updateDiscardStats</code> is called so GC can reclaim vlog entries belonging to dropped keys.</li>
+<li>Once release completes, <code>wal.Manager.Remove</code> evicts segments whose entries are fully represented in SSTs, matching RocksDB's <code>LogFileManager::PurgeObsoleteLogs</code>.</li>
+</ol>
+<hr />
+<h2 id="5-recovery-considerations"><a class="header" href="#5-recovery-considerations">5. Recovery Considerations</a></h2>
+<ul>
+<li><strong>Before Install</strong> – temp files remain in <code>tmp/</code>. On restart, no manifest entry exists, so <code>lsm.LSM.replayManifest</code> ignores them and the memtable is rebuilt from WAL.</li>
+<li><strong>After Install but before Release</strong> – manifest records the SST while WAL segments may still exist. Recovery sees the edit, ensures the file exists, and release metrics resume from StageRelease.</li>
+<li><strong>Metrics</strong> – because timing data is stored atomically in the manager, recovery resets counters but does not prevent the CLI from reporting backlog immediately after restart.</li>
+</ul>
+<p>RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visibility.</p>
+<hr />
+<h2 id="6-observability--cli"><a class="header" href="#6-observability--cli">6. Observability &amp; CLI</a></h2>
+<ul>
+<li><code>StatsSnapshot.Flush.Queue</code> – number of pending tasks.</li>
+<li><code>StatsSnapshot.Flush.WaitMs</code> – average wait time before build.</li>
+<li><code>StatsSnapshot.Flush.BuildMs</code> – average build duration.</li>
+<li><code>StatsSnapshot.Flush.Completed</code> – cumulative tasks finished.</li>
+</ul>
+<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these metrics alongside compaction and transaction statistics, enabling operators to detect stalled flush workers or WAL backlog quickly.</p>
+<hr />
+<h2 id="7-interplay-with-valuelog-gc"><a class="header" href="#7-interplay-with-valuelog-gc">7. Interplay with ValueLog GC</a></h2>
+<p>Flush completion sends discard stats via <code>db.lsm.SetDiscardStatsCh(&amp;(db.vlog.lfDiscardStats.flushChan))</code>. ValueLog GC uses this feed to determine how much of each vlog segment is obsolete, similar to Badger's discard ratio heuristic. Without flush-driven stats, vlog GC would have to rescan SSTables, so this channel is crucial for keeping GC cheap.</p>
+<hr />
+<h2 id="8-testing-matrix"><a class="header" href="#8-testing-matrix">8. Testing Matrix</a></h2>
+<ul>
+<li><code>lsm/flush/manager_test.go</code> (implicit via <code>lsm/lsm_test.go</code>) validates stage transitions and metrics.</li>
+<li><code>db_recovery_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
+<li>Future additions: inject write failures during <code>StageBuild</code> to test retry logic, analogous to RocksDB's simulated IO errors.</li>
+</ul>
+<p>See the <a href="recovery.html">recovery plan</a> and <a href="testing.html">testing matrix</a> for more context.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="compaction--cache-strategy"><a class="header" href="#compaction--cache-strategy">Compaction &amp; Cache Strategy</a></h1>
+<blockquote>
+<p>NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with an ingest buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.</p>
+</blockquote>
+<hr />
+<h2 id="1-overview"><a class="header" href="#1-overview">1. Overview</a></h2>
+<p>Compactions are orchestrated by <code>compact.Manager</code> with <code>lsm.levelManager</code> implementing the executor hooks. Each level owns two lists of tables:</p>
+<ul>
+<li><code>tables</code> – the canonical sorted run for the level.</li>
+<li><code>ingest</code> – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.</li>
+</ul>
+<p>The compaction manager periodically calls into the executor to build a list of <code>compact.Priority</code> entries.  The priorities consider three signals:</p>
+<ol>
+<li><strong>L0 table count</strong> – loosely capped by <code>Options.NumLevelZeroTables</code>.</li>
+<li><strong>Level size vs target</strong> – computed by <code>levelTargets()</code>, which dynamically adjusts the “base” level depending on total data volume.</li>
+<li><strong>Ingest buffer backlog</strong> – if a level’s <code>ingest</code> shards have data, they receive elevated scores so staged tables are merged promptly.</li>
+</ol>
+<p>The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.</p>
+<p>Planning now happens via <code>compact.Plan</code>: LSM snapshots table metadata into <code>compact.TableMeta</code>, <code>compact.PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
+<hr />
+<h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
+<p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
+<ol>
+<li>Records a <code>manifest.EditDeleteFile</code> for the source level.</li>
+<li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
+<li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
+</ol>
+<p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
+<p>Compaction tests (<code>lsm/compaction_cache_test.go</code>) now assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<hr />
+<h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
+<p>To prevent overlapping compactions:</p>
+<ul>
+<li><code>compact.State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
+<li>Attempts to register a compaction whose ranges intersect an existing one are rejected.</li>
+<li>When a compaction finishes, <code>compact.State.Delete</code> removes the ranges and table IDs from the guard.</li>
+</ul>
+<p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
+<hr />
+<h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
+<p>NoKV’s cache is split into three parts (<code>lsm/cache.go</code>):</p>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>Purpose</th><th>Metrics hook</th></tr></thead><tbody>
+<tr><td>Block cache (hot)</td><td>LRU list capturing most recent hits (typically L0/L1).</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
+<tr><td>Block cache (cold)</td><td>CLOCK cache for deeper levels, keeping the memory footprint bounded.</td><td>Same as above</td></tr>
+<tr><td>Bloom cache</td><td>Stores decoded bloom filters to reduce disk touches.</td><td><code>recordBloom(hit)</code></td></tr>
+</tbody></table>
+</div>
+<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster.  <code>TestCacheHotColdMetrics</code> verifies that the hot and cold tiers tick the counters as expected.</p>
+<hr />
+<h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
+<p>Compaction informs value‑log GC via discard statistics:</p>
+<ol>
+<li>During <code>subcompact</code>, every entry merged out is inspected.  If it stores a <code>ValuePtr</code>, the amount is added to the discard map.</li>
+<li>At the end of subcompaction, the accumulated discard map is pushed through <code>setDiscardStatsCh</code>.</li>
+<li><code>valueLog</code> receives the stats and can safely rewrite or delete vlog segments with predominantly obsolete data.</li>
+</ol>
+<p>This tight coupling keeps the value log from growing indefinitely after heavy overwrite workloads.</p>
+<hr />
+<h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
+<p>Relevant tests to keep compaction healthy:</p>
+<ul>
+<li><code>lsm/compaction_cache_test.go</code>
+<ul>
+<li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
+<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
+<li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
+</ul>
+</li>
+<li><code>lsm/lsm_test.go</code>
+<ul>
+<li><code>TestCompact</code> / <code>TestHitStorage</code> – end‑to‑end verification that data remains queryable across memtable flushes and compactions.</li>
+</ul>
+</li>
+</ul>
+<p>When adding new compaction heuristics or cache tiers, extend these tests (or introduce new ones) so the behaviour stays observable.</p>
+<hr />
+<h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
+<ul>
+<li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
+<li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
+<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data依赖 OS page cache。</li>
+<li>Keep an eye on <code>NoKV.ValueLog.GcRuns</code> and <code>ValueLogHeadUpdates</code>; if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
+</ul>
+<p>With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="ingest-buffer-architecture-english"><a class="header" href="#ingest-buffer-architecture-english">Ingest Buffer Architecture (English)</a></h1>
+<p>The ingest buffer is a per-level staging area for SSTables—typically promoted from L0—designed to <strong>absorb bursts, reduce overlap, and unlock parallel compaction</strong> without touching the main level tables immediately. It combines fixed sharding, adaptive scheduling, and optional ingest-only merge to keep write amplification and contention low.</p>
+<pre><code class="language-mermaid">flowchart LR
+  L0["L0 SSTables"] --&gt;|moveToIngest| Ingest["Ingest Buffer (sharded)"]
+  subgraph levelN["Level N"]
+    Ingest --&gt;|ingest-only compact| MainTables["Main Tables"]
+    Ingest --&gt;|ingest-merge| Ingest
+  end
+  Ingest -.read path merge.-&gt; ClientReads["Reads/Iterators"]
+</code></pre>
+<h2 id="design-highlights"><a class="header" href="#design-highlights">Design Highlights</a></h2>
+<ul>
+<li><strong>Sharded by key prefix</strong>: ingest tables are routed into fixed shards (top bits of the first byte). Sharding cuts cross-range overlap and enables safe parallel drain.</li>
+<li><strong>Snapshot-friendly reads</strong>: ingest tables are read under the level <code>RLock</code>, and iterators hold table refs so mmap-backed data stays valid without additional snapshots.</li>
+<li><strong>Two ingest paths</strong>:
+<ul>
+<li><em>Ingest-only compaction</em>: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by <code>compact.State</code>.</li>
+<li><em>Ingest-merge</em>: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.</li>
+</ul>
+</li>
+<li><strong>Adaptive scheduling</strong>:
+<ul>
+<li>Shard selection is driven by <code>compact.PickShardOrder</code> / <code>compact.PickShardByBacklog</code> using per-shard size, age, and density.</li>
+<li>Shard parallelism scales with backlog score (based on shard size/target file size) bounded by <code>IngestShardParallelism</code>.</li>
+<li>Batch size scales with shard backlog to drain faster under pressure.</li>
+<li>Ingest-merge triggers when backlog score exceeds <code>IngestBacklogMergeScore</code> (default 2.0), with dynamic lowering under extreme backlog/age.</li>
+</ul>
+</li>
+<li><strong>Observability</strong>: expvar/stats expose ingest-only vs ingest-merge counts, duration, and tables processed, plus ingest size/value density per level/shard.</li>
+</ul>
+<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
+<ul>
+<li><code>IngestShardParallelism</code>: max shards to compact in parallel (default <code>max(NumCompactors/2, 2)</code>, auto-scaled by backlog).</li>
+<li><code>IngestCompactBatchSize</code>: base batch size per ingest compaction (auto-boosted by shard backlog).</li>
+<li><code>IngestBacklogMergeScore</code>: backlog score threshold to trigger ingest-merge (default 2.0).</li>
+</ul>
+<h2 id="benefits"><a class="header" href="#benefits">Benefits</a></h2>
+<ul>
+<li><strong>Lower write amplification</strong>: bursty L0 SSTables land in ingest first; ingest-merge prunes duplicates before full compaction.</li>
+<li><strong>Reduced contention</strong>: sharding + <code>compact.State</code> allow parallel ingest drain with minimal overlap.</li>
+<li><strong>Predictable reads</strong>: ingest is part of the read snapshot, so moving tables in/out does not change read semantics.</li>
+<li><strong>Tunable and observable</strong>: knobs for parallelism and merge aggressiveness, with per-path metrics to guide tuning.</li>
+</ul>
+<h2 id="future-work"><a class="header" href="#future-work">Future Work</a></h2>
+<ul>
+<li>Deeper adaptive policies (IO/latency-aware), richer shard-level metrics, and more exhaustive parallel/restart testing under fault injection.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="wal-subsystem"><a class="header" href="#wal-subsystem">WAL Subsystem</a></h1>
+<p>NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via <code>lsm.Set</code>), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
+<hr />
+<h2 id="1-file-layout--naming"><a class="header" href="#1-file-layout--naming">1. File Layout &amp; Naming</a></h2>
+<ul>
+<li>Location: <code>${Options.WorkDir}/wal/</code>.</li>
+<li>Naming pattern: <code>%05d.wal</code> (e.g. <code>00001.wal</code>).</li>
+<li>Rotation threshold: configurable via <code>wal.Config.SegmentSize</code> (defaults to 64 MiB, minimum 64 KiB).</li>
+<li>Verification: <code>wal.VerifyDir</code> ensures the directory exists prior to <code>DB.Open</code>.</li>
+</ul>
+<p>On open, <code>wal.Manager</code> scans the directory, sorts segment IDs, and resumes the highest ID—exactly how RocksDB re-opens its MANIFEST and WAL sequence files.</p>
+<hr />
+<h2 id="2-record-format"><a class="header" href="#2-record-format">2. Record Format</a></h2>
+<pre><code class="language-text">uint32 length (big-endian, includes type + payload)
+uint8  type
+[]byte payload
+uint32 checksum (CRC32 Castagnoli over type + payload)
+</code></pre>
+<ul>
+<li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>wal/record.go</code>.</li>
+<li>The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.</li>
+<li>Appends are buffered by <code>bufio.Writer</code> so batches become single system calls.</li>
+<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestReplayTruncatedTail</code>).</li>
+</ul>
+<hr />
+<h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
+<pre><code class="language-go">mgr, _ := wal.Open(wal.Config{Dir: path})
+infos, _ := mgr.Append(batchPayload)
+_ = mgr.Sync()
+_ = mgr.Rotate()
+_ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
+    // reapply to memtable
+    return nil
+})
+</code></pre>
+<p>Key behaviours:</p>
+<ul>
+<li><code>Append</code> automatically calls <code>ensureCapacity</code> to decide when to rotate; it returns <code>EntryInfo{SegmentID, Offset, Length}</code> for each payload so higher layers can build value pointers or manifest checkpoints.</li>
+<li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
+<li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB's <code>LogFileManager::SwitchLog</code>).</li>
+<li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
+<li>Metrics (<code>wal.Manager.Metrics</code>) reveal the active segment ID, total segments, and number of removed segments—these feed directly into <code>StatsSnapshot</code> and <code>nokv stats</code> output.</li>
+</ul>
+<p>Compared with Badger: Badger keeps a single vlog for both data and durability. NoKV splits WAL (durability) from vlog (value separation), matching RocksDB's separation of WAL and blob files.</p>
+<hr />
+<h2 id="4-integration-points"><a class="header" href="#4-integration-points">4. Integration Points</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Call Site</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
+<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
+<tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
+<tr><td><code>manifest.Manager.LogEdit</code></td><td>Uses <code>EntryInfo.SegmentID</code> to persist the WAL checkpoint (<code>EditLogPointer</code>). This acts as the <code>log number</code> seen in RocksDB manifest entries.</td></tr>
+<tr><td><code>lsm/flush.Manager.Update</code></td><td>Once an SST is installed, WAL segments older than the checkpoint are released (<code>wal.Manager.Remove</code>).</td></tr>
+<tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-metrics--observability"><a class="header" href="#5-metrics--observability">5. Metrics &amp; Observability</a></h2>
+<p><code>Stats.collect</code> reads the manager metrics and exposes them as:</p>
+<ul>
+<li><code>NoKV.WAL.ActiveSegment</code></li>
+<li><code>NoKV.WAL.SegmentCount</code></li>
+<li><code>NoKV.WAL.RemovedSegments</code></li>
+</ul>
+<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB's <code>LOG</code> number growth.</p>
+<hr />
+<h2 id="6-wal-watchdog-auto-gc"><a class="header" href="#6-wal-watchdog-auto-gc">6. WAL Watchdog (Auto GC)</a></h2>
+<p>The WAL watchdog runs inside the DB process to keep WAL backlog in check and
+surface warnings when raft-typed records dominate the log. It:</p>
+<ul>
+<li>Samples WAL metrics + per-segment metrics and combines them with
+<code>manifest.RaftPointerSnapshot()</code> to compute removable segments.</li>
+<li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
+<code>WALAutoGCMinRemovable</code> are eligible.</li>
+<li>Exposes counters (<code>WALAutoGCRuns/Removed/LastUnix</code>) and warning state
+(<code>WALTypedRecordRatio/Warning/Reason</code>) through <code>StatsSnapshot</code>.</li>
+</ul>
+<p>Relevant options (see <code>options.go</code> for defaults):</p>
+<ul>
+<li><code>EnableWALWatchdog</code></li>
+<li><code>WALAutoGCInterval</code></li>
+<li><code>WALAutoGCMinRemovable</code></li>
+<li><code>WALAutoGCMaxBatch</code></li>
+<li><code>WALTypedRecordWarnRatio</code></li>
+<li><code>WALTypedRecordWarnSegments</code></li>
+</ul>
+<hr />
+<h2 id="7-recovery-walkthrough"><a class="header" href="#7-recovery-walkthrough">7. Recovery Walkthrough</a></h2>
+<ol>
+<li><code>wal.Open</code> reopens the highest segment, leaving the file pointer at the end (<code>switchSegmentLocked</code>).</li>
+<li><code>manifest.Manager</code> supplies the WAL checkpoint (segment + offset) while building the version. Replay skips entries up to this checkpoint, ensuring we only reapply writes not yet materialised in SSTables.</li>
+<li><code>wal.Manager.Replay</code> (invoked by the LSM recovery path) rebuilds memtables from entries newer than the manifest checkpoint. Value-log recovery only validates/truncates segments and does not reapply data.</li>
+<li>If the final record is partially written, the CRC mismatch stops replay and the segment is truncated during recovery tests, mimicking RocksDB's tolerant behaviour.</li>
+</ol>
+<hr />
+<h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
+<ul>
+<li>Configure <code>SyncOnWrite</code> for synchronous durability (default async like RocksDB's default). For latency-sensitive deployments, consider enabling to emulate Badger's <code>SyncWrites</code>.</li>
+<li>After large flushes, forcing <code>Rotate</code> keeps WAL files short, reducing replay time.</li>
+<li>Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB's <code>Checkpoints</code>.</li>
+</ul>
+<hr />
+<h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
+<ul>
+<li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
+<li>When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via <code>LogRaftTruncate</code> with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
+<li><code>lsm/levelManager.canRemoveWalSegment</code> now blocks garbage collection whenever any raft group still references a segment through its truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
+</ul>
+<p>For broader context, read the <a href="architecture.html">architecture overview</a> and <a href="flush.html">flush pipeline</a> documents.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="value-log-vlog-design"><a class="header" href="#value-log-vlog-design">Value Log (vlog) Design</a></h1>
+<p>NoKV keeps the LSM tree lean by separating large values into sequential <strong>value log</strong> (vlog) files. The module is split between</p>
+<ul>
+<li><a href="../vlog/manager.go"><code>vlog/manager.go</code></a> – owns the open file set, rotation, and segment lifecycle helpers.</li>
+<li><a href="../vlog/io.go"><code>vlog/io.go</code></a> – append/read/iterate/verify/sample IO paths.</li>
+<li><a href="../vlog.go"><code>vlog.go</code></a> – integrates the manager with the DB write path, discard statistics, and garbage collection (GC).</li>
+</ul>
+<p>The design echoes BadgerDB's value log while remaining manifest-driven like RocksDB's <code>blob_db</code>: vlog metadata (head pointer, pending deletions) is persisted inside the manifest so recovery can reconstruct the exact state without scanning the filesystem.</p>
+<hr />
+<h2 id="1-layering-engine-view"><a class="header" href="#1-layering-engine-view">1. Layering (Engine View)</a></h2>
+<p>The value log is split into three layers so IO can stay reusable while DB
+policy lives in the core package:</p>
+<ul>
+<li><strong>DB policy layer (<code>vlog.go</code>, <code>vlog_gc.go</code>)</strong> – integrates the manager with
+the DB write path, persists vlog metadata in the manifest, and drives GC
+scheduling based on discard stats.</li>
+<li><strong>Value-log manager (<code>vlog/</code>)</strong> – owns segment lifecycle (open/rotate/remove),
+encodes/decodes entries, and exposes append/read/sample APIs without touching
+MVCC or LSM policy.</li>
+<li><strong>File IO (<code>file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
+read/write, read-only remap) shared by WAL/vlog/SST.</li>
+</ul>
+<hr />
+<h2 id="2-directory-layout--naming"><a class="header" href="#2-directory-layout--naming">2. Directory Layout &amp; Naming</a></h2>
+<pre><code class="language-text">&lt;workdir&gt;/
+  vlog/
+    00000.vlog
+    00001.vlog
+    ...
+</code></pre>
+<ul>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/</code>. <a href="../vlog/manager.go#L53-L92"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
+<li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go#L76-L125"><code>valueLog.reconcileManifest</code></a>.</li>
+</ul>
+<hr />
+<h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
+<p>The vlog uses the shared encoding helper (<code>kv.EncodeEntryTo</code>), so entries written to the value log and the WAL are byte-identical.</p>
+<pre><code>+--------+----------+------+-------------+-----------+-------+
+| KeyLen | ValueLen | Meta | ExpiresAt   | Key bytes | Value |
++--------+----------+------+-------------+-----------+-------+
+                                             + CRC32 (4 B)
+</code></pre>
+<ul>
+<li>Header fields are varint-encoded (<code>kv.EntryHeader</code>).</li>
+<li>The first 20 bytes of every segment are reserved (<code>kv.ValueLogHeaderSize</code>) for future metadata; iteration always skips this fixed header.</li>
+<li><code>kv.EncodeEntry</code> and the entry iterator (<code>kv.EntryIterator</code>) perform the layout work, and each append finishes with a CRC32 to detect torn writes.</li>
+<li><code>vlog.VerifyDir</code> scans all segments with <a href="../vlog/io.go"><code>sanitizeValueLog</code></a> to trim corrupted tails after crashes, mirroring RocksDB's <code>blob_file::Sanitize</code>. Badger performs a similar truncation pass at startup.</li>
+</ul>
+<hr />
+<h2 id="4-manager-api-surface"><a class="header" href="#4-manager-api-surface">4. Manager API Surface</a></h2>
+<pre><code class="language-go">mgr, _ := vlog.Open(vlog.Config{Dir: "...", MaxSize: 1&lt;&lt;29})
+ptr, _ := mgr.AppendEntry(entry)
+ptrs, _ := mgr.AppendEntries(entries, writeMask)
+val, unlock, _ := mgr.Read(ptr)
+unlock()             // release per-file lock
+_ = mgr.Rewind(*ptr) // rollback partially written batch
+_ = mgr.Remove(fid)  // close + delete file
+</code></pre>
+<p>Key behaviours:</p>
+<ol>
+<li><strong>Append + Rotate</strong> – <a href="../vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
+<li><strong>Crash recovery</strong> – <a href="../vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
+<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> grabs a per-file <code>RWMutex</code> and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.</li>
+<li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
+</ol>
+<p>Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
+<hr />
+<h2 id="5-integration-with-db-writes"><a class="header" href="#5-integration-with-db-writes">5. Integration with DB Writes</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant Commit as commitWorker
+    participant Mgr as vlog.Manager
+    participant WAL as wal.Manager
+    participant Mem as MemTable
+    Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
+    Mgr--&gt;&gt;Commit: ValuePtr list
+    Commit-&gt;&gt;WAL: Append(entries+ptrs)
+    Commit-&gt;&gt;Mem: apply to skiplist
+</code></pre>
+<ol>
+<li><a href="../vlog.go#L238-L268"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/manager.go#L367-L444"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
+<li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
+<li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go#L188-L254"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
+<li><code>Txn.Commit</code> and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.</li>
+</ol>
+<p>Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.</p>
+<hr />
+<h2 id="5-discard-statistics--gc"><a class="header" href="#5-discard-statistics--gc">5. Discard Statistics &amp; GC</a></h2>
+<pre><code class="language-mermaid">flowchart LR
+  FlushMgr -- "obsolete ptrs" --&gt; DiscardStats
+  DiscardStats --&gt;|"batch json"| writeCh
+  valuePtr["valueLog.newValuePtr(lfDiscardStatsKey)"]
+  writeCh --&gt; valuePtr
+  valueLog -- "GC trigger" --&gt; Manager
+
+</code></pre>
+<ul>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from <code>lsm.FlushTable</code> completion (<code>valueLog.lfDiscardStats.push</code> inside <code>lsm/flush</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
+<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/manager.go#L336-L401"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog.go#L316-L417"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head (using <code>Manager.Append</code>) and then <a href="../vlog.go#L418-L531"><code>valueLog.rewrite</code></a> schedules deletion edits in the manifest.
+<ul>
+<li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
+</ul>
+</li>
+<li>Completed deletions are logged via <code>lsm.LogValueLogDelete</code> so the manifest can skip them during replay. When GC rotates to a new head, <code>valueLog.updateHead</code> records the pointer and bumps the <code>NoKV.ValueLog.HeadUpdates</code> counter.</li>
+</ul>
+<p>RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.</p>
+<hr />
+<h2 id="6-recovery-semantics"><a class="header" href="#6-recovery-semantics">6. Recovery Semantics</a></h2>
+<ol>
+<li><code>DB.Open</code> restores the manifest and fetches the last persisted head pointer.</li>
+<li><a href="../vlog.go#L175-L224"><code>valueLog.open</code></a> launches <code>flushDiscardStats</code> and iterates every vlog file via <a href="../vlog.go#L706-L866"><code>valueLog.replayLog</code></a>. Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.</li>
+<li><code>valueLog.replayLog</code> streams entries to validate checksums and trims torn tails; it does <strong>not</strong> reapply data into the LSM. WAL replay remains the sole source of committed state.</li>
+<li><code>Manager.VerifyDir</code> trims torn records so replay never sees corrupt payloads.</li>
+<li>After validation, <code>valueLog.populateDiscardStats</code> rehydrates discard counters from the persisted JSON entry if present.</li>
+</ol>
+<p>The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored on WAL + manifest checkpoints, similar to RocksDB's reliance on <code>MANIFEST</code> to mark blob files live or obsolete.</p>
+<hr />
+<h2 id="7-observability--cli"><a class="header" href="#7-observability--cli">7. Observability &amp; CLI</a></h2>
+<ul>
+<li>Metrics in <a href="../stats.go#L12-L126"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/manager.go#L308-L411"><code>vlog.VerifyDir</code></a> before describing segments.</li>
+<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
+</ul>
+<hr />
+<h2 id="8-quick-comparison"><a class="header" href="#8-quick-comparison">8. Quick Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Capability</th><th>RocksDB BlobDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Head tracking</td><td>In MANIFEST (blob log number + offset)</td><td>Internal to vlog directory</td><td>Manifest entry via <code>EditValueLogHead</code></td></tr>
+<tr><td>GC trigger</td><td>Compaction sampling, blob garbage score</td><td>Discard stats from LSM tables</td><td>Discard stats flushed through <code>lfDiscardStats</code></td></tr>
+<tr><td>Failure recovery</td><td>Blob DB and WAL coordinate two-phase commits</td><td>Replays value log then LSM</td><td>Rewind-on-error + manifest-backed deletes</td></tr>
+<tr><td>Read path</td><td>Separate blob cache</td><td>Direct read + checksum</td><td><code>Manager.Read</code> with copy + per-file lock</td></tr>
+</tbody></table>
+</div>
+<p>By anchoring the vlog state in the manifest and exposing rewind/verify primitives, NoKV maintains the determinism of RocksDB while keeping Badger's simple sequential layout.</p>
+<hr />
+<h2 id="9-further-reading"><a class="header" href="#9-further-reading">9. Further Reading</a></h2>
+<ul>
+<li><a href="recovery.html#value-log-recovery"><code>docs/recovery.md</code></a> – failure matrix covering append crashes, GC interruptions, and manifest rewrites.</li>
+<li><a href="cache.html#value-pointer-reads"><code>docs/cache.md</code></a> – how vlog-backed entries interact with the block cache.</li>
+<li><a href="stats.html#value-log-metrics"><code>docs/stats.md</code></a> – metric names surfaced for monitoring.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="manifest--version-management"><a class="header" href="#manifest--version-management">Manifest &amp; Version Management</a></h1>
+<p>The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV's implementation (<code>manifest/manager.go</code>, <code>manifest/codec.go</code>, <code>manifest/types.go</code>) borrows RocksDB's <code>VersionEdit + CURRENT</code> pattern while adding metadata required for value separation.</p>
+<hr />
+<h2 id="1-file-layout"><a class="header" href="#1-file-layout">1. File Layout</a></h2>
+<pre><code class="language-text">WorkDir/
+  CURRENT             # stores the active MANIFEST file name
+  MANIFEST-000001     # log of manifest edits
+  MANIFEST-000002     # newer file after rewrite
+</code></pre>
+<ul>
+<li><code>CURRENT</code> is atomically swapped via <code>CURRENT.tmp</code> → <code>CURRENT</code> rename.</li>
+<li>Each <code>MANIFEST-*</code> contains a series of binary edits prefixed by the magic string <code>"NoKV"</code> (encoding lives in <code>manifest/codec.go</code>).</li>
+<li>During <code>manifest.Open</code>, <code>loadCurrent</code> opens the file referenced by CURRENT; if missing, <code>createNew</code> bootstraps an empty manifest.</li>
+</ul>
+<hr />
+<h2 id="2-edit-types"><a class="header" href="#2-edit-types">2. Edit Types</a></h2>
+<pre><code class="language-go">type EditType uint8
+const (
+    EditAddFile EditType = iota
+    EditDeleteFile
+    EditLogPointer
+    EditValueLogHead
+    EditDeleteValueLog
+    EditUpdateValueLog
+    EditRaftPointer
+    EditRegion
+)
+</code></pre>
+<p>Each edit serialises one logical action:</p>
+<ul>
+<li><code>EditAddFile</code> / <code>EditDeleteFile</code> – manage SST metadata (<code>FileMeta</code>: level, fileID, size, key bounds, timestamps).</li>
+<li><code>EditLogPointer</code> – persists the latest WAL segment + offset checkpoint, analogous to RocksDB's <code>log_number</code> and <code>prev_log_number</code> fields.</li>
+<li><code>EditValueLogHead</code> – records the head pointer for vlog append, ensuring recovery resumes from the correct file/offset.</li>
+<li><code>EditDeleteValueLog</code> – marks a vlog segment logically deleted (GC has reclaimed it).</li>
+<li><code>EditUpdateValueLog</code> – updates metadata for an existing vlog file (used when GC rewrites a segment).</li>
+<li><code>EditRaftPointer</code> – persists raft-group WAL progress (segment, offset, applied/truncated index &amp; term, etc.).</li>
+<li><code>EditRegion</code> – persists Region metadata (key range, epoch, peers, lifecycle state).</li>
+</ul>
+<p><code>manifest.Manager.apply</code> interprets each edit and updates the in-memory <code>Version</code> structure, which is consumed by LSM initialisation and value log recovery.</p>
+<hr />
+<h2 id="3-version-structure"><a class="header" href="#3-version-structure">3. Version Structure</a></h2>
+<pre><code class="language-go">type Version struct {
+    Levels       map[int][]FileMeta
+    LogSegment   uint32
+    LogOffset    uint64
+    ValueLogs    map[uint32]ValueLogMeta
+    ValueLogHead ValueLogMeta
+    RaftPointers map[uint64]RaftLogPointer
+    Regions      map[uint64]RegionMeta
+}
+</code></pre>
+<ul>
+<li><code>Levels</code> mirrors the LSM tree levels; during recovery <code>lsm.LSM</code> loads files per level.</li>
+<li><code>LogSegment</code>/<code>LogOffset</code> ensure WAL replay starts exactly where persistent state ended.</li>
+<li><code>ValueLogs</code> holds metadata for every known vlog file; <code>ValueLogHead</code> caches the active head for quick access.</li>
+</ul>
+<p>Compared with RocksDB: RocksDB's manifest stores blob file metadata when <code>BlobDB</code> is enabled. NoKV integrates vlog metadata natively to avoid a separate blob manifest.</p>
+<hr />
+<h2 id="4-lifecycle"><a class="header" href="#4-lifecycle">4. Lifecycle</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant DB
+    participant Manifest
+    participant CURRENT
+    DB-&gt;&gt;Manifest: Open(dir)
+    Manifest-&gt;&gt;CURRENT: read file name
+    Manifest-&gt;&gt;Manifest: replay edits → Version
+    DB-&gt;&gt;Manifest: LogEdit(EditAddFile+LogPointer)
+    Manifest-&gt;&gt;Manifest: append edit
+    Manifest--&gt;&gt;DB: updated Version
+    Note over Manifest,CURRENT: On rewrite -&gt; write tmp -&gt; rename CURRENT
+</code></pre>
+<ul>
+<li><strong>Open/Rebuild</strong> – <code>replay</code> reads all edits, applying them sequentially (<code>bufio.Reader</code> ensures streaming). If any edit fails to decode, recovery aborts so operators can inspect the manifest, similar to RocksDB's strictness.</li>
+<li><strong>LogEdit</strong> – obtains the mutex, appends the encoded edit, flushes, and updates the in-memory <code>Version</code> before returning.</li>
+<li><strong>Rewrite</strong> – when the manifest grows beyond <code>Options.ManifestRewriteThreshold</code>, the manager writes a new <code>MANIFEST-xxxxxx</code> containing a full snapshot of the current <code>Version</code>, fsyncs it, updates <code>CURRENT</code>, and removes the old file. This mirrors RocksDB's <code>max_manifest_file_size</code> behavior while keeping recovery simple.</li>
+<li><strong>Close</strong> – flushes and closes the underlying file handle; the version stays available for introspection via <code>Manager.Version()</code> (used by CLI).</li>
+</ul>
+<hr />
+<h2 id="5-interaction-with-other-modules"><a class="header" href="#5-interaction-with-other-modules">5. Interaction with Other Modules</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Module</th><th>Manifest usage</th></tr></thead><tbody>
+<tr><td><code>lsm</code></td><td><code>installLevel0Table</code> logs <code>EditAddFile</code> + <code>EditLogPointer</code> to checkpoint WAL progress. Compaction deletes old files via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>wal</code></td><td>Manifest's log pointer tells WAL replay where to resume.</td></tr>
+<tr><td><code>vlog</code></td><td><code>valueLog.rewrite</code> writes <code>EditUpdateValueLog</code> / <code>EditDeleteValueLog</code> after GC, ensuring stale segments are not reopened.</td></tr>
+<tr><td><code>CLI</code></td><td><code>nokv manifest</code> reads <code>manifest.Manager.Version()</code> and prints levels, vlog head, and deletion status.</td></tr>
+</tbody></table>
+</div>
+<p>Badger keeps a separate <code>value.log</code> directory without manifest-level bookkeeping; NoKV's integrated manifest avoids scanning the filesystem during recovery.</p>
+<hr />
+<h2 id="6-recovery-scenarios"><a class="header" href="#6-recovery-scenarios">6. Recovery Scenarios</a></h2>
+<ol>
+<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB's lost table handling.</li>
+<li><strong>ValueLog deletion</strong> – <code>TestRecoveryRemovesStaleValueLogSegment</code> ensures <code>EditDeleteValueLog</code> entries trigger file removal during recovery.</li>
+<li><strong>Manifest rewrite crash</strong> – <code>TestRecoveryManifestRewriteCrash</code> simulates a crash after writing the new manifest but before updating <code>CURRENT</code>; recovery still points to the old manifest and resumes safely, exactly like RocksDB's two-phase rewrite.</li>
+<li><strong>Stale WAL pointer</strong> – WAL replay respects <code>LogSegment/Offset</code>; tests cover truncated WALs to confirm idempotency.</li>
+</ol>
+<hr />
+<h2 id="7-cli-output"><a class="header" href="#7-cli-output">7. CLI Output</a></h2>
+<p><code>nokv manifest --workdir &lt;dir&gt; --json</code> prints:</p>
+<ul>
+<li>Level file counts and key ranges.</li>
+<li><code>wal_log_segment</code> / <code>wal_log_offset</code> checkpoint.</li>
+<li><code>value_log_head</code> metadata.</li>
+<li>List of vlog files with <code>valid</code> status (mirroring RocksDB's blob file dump).</li>
+</ul>
+<p>This structured output enables automated validation in CI and ad-hoc audits.</p>
+<hr />
+<h2 id="8-extensibility"><a class="header" href="#8-extensibility">8. Extensibility</a></h2>
+<ul>
+<li><strong>Column families</strong> – add a column family identifier to <code>FileMeta</code> and extend edits accordingly, as RocksDB does.</li>
+<li><strong>Snapshots</strong> – persistent snapshots can be derived from manifest versions (keep a copy of the current Version and WAL pointer).</li>
+<li><strong>Remote manifests</strong> – similar to RocksDB's remote compaction, storing manifests in object storage is straightforward because edits are append-only.</li>
+</ul>
+<p>For end-to-end recovery context, see <a href="recovery.html">recovery.md</a> and the <a href="architecture.html">architecture overview</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="file-abstractions"><a class="header" href="#file-abstractions">File Abstractions</a></h1>
+<p>The <code>file</code> package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.</p>
+<hr />
+<h2 id="1-core-types"><a class="header" href="#1-core-types">1. Core Types</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Purpose</th><th>Key Methods</th></tr></thead><tbody>
+<tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
+<tr><td><a href="../file/file.go#L18-L27"><code>CoreFile</code></a></td><td>Interface abstracting platform-specific operations.</td><td><code>NewReader</code>, <code>Bytes</code>, <code>Sync</code>, <code>Delete</code>.</td></tr>
+<tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
+<tr><td><a href="../file/vlog.go#L16-L130"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>EncodeEntry</code>.</td></tr>
+</tbody></table>
+</div>
+<p>Darwin-specific builds live alongside (<code>mmap_darwin.go</code>, <code>sstable_darwin.go</code>) ensuring the package compiles on macOS without manual tuning.</p>
+<hr />
+<h2 id="2-mmap-management"><a class="header" href="#2-mmap-management">2. Mmap Management</a></h2>
+<ul>
+<li><code>OpenMmapFile</code> opens or creates a file, optionally extending it to <code>maxSz</code>, then mmaps it. The returned <code>MmapFile</code> exposes <code>Data []byte</code> and the underlying <code>*os.File</code> handle.</li>
+<li>Writes grow the map on demand: <code>AppendBuffer</code> checks if the write would exceed the current mapping and calls <code>Truncature</code> to expand (doubling up to 1 GiB increments).</li>
+<li><code>Sync</code> flushes dirty pages (<code>mmap.Msync</code>), while <code>Delete</code> unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.</li>
+</ul>
+<p>RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.</p>
+<hr />
+<h2 id="3-logfile-semantics"><a class="header" href="#3-logfile-semantics">3. LogFile Semantics</a></h2>
+<p><code>LogFile</code> wraps <code>MmapFile</code> to simplify value-log operations:</p>
+<pre><code class="language-go">lf := &amp;file.LogFile{}
+_ = lf.Open(&amp;file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1&lt;&lt;29})
+ptr, _ := lf.EncodeEntry(entry, buf, offset)
+_ = lf.Write(offset, buf.Bytes())
+_ = lf.DoneWriting(nextOffset)
+</code></pre>
+<ul>
+<li><code>Open</code> mmaps the file and records current size (guarded to <code>&lt; 4 GiB</code>).</li>
+<li><code>Read</code> validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.</li>
+<li><code>EncodeEntry</code> uses the shared <code>kv.EntryHeader</code> and CRC32 helpers to produce the exact on-disk layout consumed by <code>vlog.Manager</code> and <code>wal.Manager</code>.</li>
+<li><code>DoneWriting</code> syncs, truncates to the provided offset, reinitialises the mmap, and keeps the file open in read-write mode—supporting subsequent appends.</li>
+<li><code>Rewind</code> (via <code>vlog.Manager.Rewind</code>) leverages <code>LogFile.Truncate</code> and <code>Init</code> to roll back partial batches after errors.</li>
+</ul>
+<hr />
+<h2 id="4-sst-helpers"><a class="header" href="#4-sst-helpers">4. SST Helpers</a></h2>
+<p>While SSTable builders/readers live under <code>lsm/table.go</code>, they rely on <code>file</code> helpers to map index/data blocks efficiently. The build tags (<code>sstable_linux.go</code>, <code>sstable_darwin.go</code>) provide OS-specific tuning for direct I/O hints or mmap flags.</p>
+<hr />
+<h2 id="5-comparison-1"><a class="header" href="#5-comparison-1">5. Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Engine</th><th>Approach</th></tr></thead><tbody>
+<tr><td>RocksDB</td><td>C++ Env &amp; random-access file wrappers.</td></tr>
+<tr><td>Badger</td><td><code>y.File</code> abstraction with mmap.</td></tr>
+<tr><td>NoKV</td><td>Go-native mmap wrappers with explicit log helpers.</td></tr>
+</tbody></table>
+</div>
+<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>mmap_linux_test.go</code>).</p>
+<hr />
+<h2 id="6-operational-notes-1"><a class="header" href="#6-operational-notes-1">6. Operational Notes</a></h2>
+<ul>
+<li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
+<li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
+<li><code>SyncDir</code> (see <code>mmap_linux.go</code>) is invoked when new files are created to persist directory entries, similar to RocksDB's <code>Env::FsyncDir</code>.</li>
+</ul>
+<p>For more on how these primitives plug into higher layers, see <a href="wal.html"><code>docs/wal.md</code></a> and <a href="vlog.html"><code>docs/vlog.md</code></a>.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="cache--bloom-filters"><a class="header" href="#cache--bloom-filters">Cache &amp; Bloom Filters</a></h1>
+<p>NoKV's LSM tier layers a multi-level block cache with bloom filter caching to accelerate lookups. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
+<hr />
+<h2 id="1-components"><a class="header" href="#1-components">1. Components</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>Purpose</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>cache.indexs</code> + <code>indexHot</code></td><td>Table index cache (<code>fid</code> → <code>*pb.TableIndex</code>) reused across reopen + small CLOCK hot tier fed by HotRing hits.</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
+<tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots; hot block tier (small CLOCK) keeps hotspot blocks resident.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>bloomCache</code> + <code>hot</code></td><td>LRU cache of bloom filter bitsets per SST plus small CLOCK hot tier to protect frequent filters.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
+</tbody></table>
+</div>
+<p>Badger uses a similar block cache split (<code>Pinner</code>/<code>Cache</code>) while RocksDB exposes block cache(s) via the <code>BlockBasedTableOptions</code>. NoKV keeps it Go-native and GC-friendly.</p>
+<hr />
+<h3 id="11-index-cache--handles"><a class="header" href="#11-index-cache--handles">1.1 Index Cache &amp; Handles</a></h3>
+<ul>
+<li>SSTable metadata stays with the <code>table</code> struct, while decoded protobuf indexes are stored in <code>cache.indexs</code>. Lookups first hit the cache before falling back to disk.</li>
+<li>SST handles are reopened on demand for lower levels. L0/L1 tables keep their file descriptors pinned, while deeper levels close them once no iterator is using the table.</li>
+</ul>
+<hr />
+<h2 id="2-block-cache-strategy"><a class="header" href="#2-block-cache-strategy">2. Block Cache Strategy</a></h2>
+<pre><code class="language-text">User-space block cache (L0/L1, parsed blocks, Ristretto LFU-ish)
+Small hot tier (CLOCK) for hotspot blocks
+Deeper levels rely on OS page cache + mmap readahead
+</code></pre>
+<ul>
+<li><code>Options.BlockCacheSize</code> sets capacity in <strong>blocks</strong> (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.</li>
+<li>Hot tier: requests marked <code>hot</code> (prefetch/hotspot reads) promote blocks into the small CLOCK hot set derived from the main capacity, making them harder to evict under long-tail traffic.</li>
+<li>Per-table direct slots (<code>table.cacheSlots[idx]</code>) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).</li>
+<li>Evictions clear the table slot via <code>OnEvict</code>; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.</li>
+<li>Access patterns: <code>getBlock</code> also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.</li>
+</ul>
+<pre><code class="language-mermaid">flowchart LR
+  Read --&gt; CheckHot
+  CheckHot --&gt;|hit| Return
+  CheckHot --&gt;|miss| LoadFromTable["LoadFromTable (mmap + OS page cache)"]
+  LoadFromTable --&gt; InsertHot
+  InsertHot --&gt; Return
+</code></pre>
+<p>By default only L0 and L1 blocks are cached (<code>level &gt; 1</code> short-circuits), reflecting the higher re-use for top levels.</p>
+<hr />
+<h2 id="3-bloom-cache"><a class="header" href="#3-bloom-cache">3. Bloom Cache</a></h2>
+<ul>
+<li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
+<li>Main tier is LRU with a tiny CLOCK hot set to protect frequently hit filters from being washed out by scans.</li>
+<li>Capacity is controlled by <code>Options.BloomCacheSize</code>; the hot CLOCK tier auto-scales from a few dozen up to a few hundred entries.</li>
+<li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.BloomHitRate</code>.</li>
+</ul>
+<hr />
+<h2 id="4-metrics--observability"><a class="header" href="#4-metrics--observability">4. Metrics &amp; Observability</a></h2>
+<p><code>cache.metricsSnapshot()</code> produces:</p>
+<pre><code class="language-go">type CacheMetrics struct {
+    L0Hits, L0Misses uint64
+    L1Hits, L1Misses uint64
+    BloomHits, BloomMisses uint64
+    IndexHits, IndexMisses uint64
+}
+</code></pre>
+<p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
+<hr />
+<h2 id="5-hot-integration-hotring"><a class="header" href="#5-hot-integration-hotring">5. Hot Integration (HotRing)</a></h2>
+<ul>
+<li>Hot detection: HotRing counts on read/write paths raise a <code>hot</code> flag once thresholds are met; only hot keys trigger prefetch.</li>
+<li>Cache promotion: hot hits/prefetch promote blocks into the CLOCK hot tier and promote indexes/Blooms into their CLOCK tiers; cold data stays in the main cache to avoid pollution.</li>
+<li>Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.</li>
+<li>Tuning: Hot thresholds come from HotRing options (window/decay configurable); hot tier capacities are small and derived from existing cache sizes.</li>
+</ul>
+<hr />
+<h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
+<ul>
+<li>Keys stored as value pointers (large values) still populate block cache entries for the key/index block. The value payload is read directly from the vlog (<code>valueLog.read</code>), so block cache hit rates remain meaningful.</li>
+<li>Discard stats from flushes can demote cached blocks via <code>cache.dropBlock</code>, ensuring obsolete SST data leaves the cache quickly.</li>
+</ul>
+<hr />
+<h2 id="7-comparison"><a class="header" href="#7-comparison">7. Comparison</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Hot/cold tiers</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto (hot) + OS page cache (cold)</td></tr>
+<tr><td>Bloom cache</td><td>Enabled per table, no explicit cache</td><td>Optional</td><td>Dedicated LRU storing filters</td></tr>
+<tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.Cache.*</code> hit rates</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="8-operational-tips-1"><a class="header" href="#8-operational-tips-1">8. Operational Tips</a></h2>
+<ul>
+<li>If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.</li>
+<li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
+</ul>
+<p>More on SST layout lives in <a href="manifest.html"><code>docs/manifest.md</code></a> and <a href="architecture.html#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="hotring--hot-key-tracking"><a class="header" href="#hotring--hot-key-tracking">HotRing – Hot Key Tracking</a></h1>
+<p><code>hotring</code> is NoKV's built-in hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation resides in <a href="../hotring"><code>hotring/</code></a>.</p>
+<hr />
+<h2 id="1-motivation"><a class="header" href="#1-motivation">1. Motivation</a></h2>
+<ul>
+<li><strong>Cache hints</strong> – <code>DB.prefetchLoop</code> (see <a href="../db.go"><code>db.go</code></a>) consumes hot keys to schedule asynchronous reads into the block cache.</li>
+<li><strong>Operational insight</strong> – <code>StatsSnapshot.HotKeys</code> and <code>nokv stats --json</code> surface the hottest keys, aiding debugging of traffic hotspots.</li>
+<li><strong>Throttling</strong> – <code>HotRing.TouchAndClamp</code> enables simple rate caps: once a key crosses a threshold, callers can back off or log alerts.</li>
+</ul>
+<p>Compared with RocksDB (which exposes block access stats via <code>perf_context</code>) and Badger (which lacks built-in hot-key reporting), NoKV offers a lightweight but concurrent-friendly tracker out of the box.</p>
+<hr />
+<h2 id="2-data-structure"><a class="header" href="#2-data-structure">2. Data Structure</a></h2>
+<pre><code class="language-text">HotRing
+  buckets[] -&gt; per-bucket lock-free linked list (Node)
+  hashFn   -&gt; hash(key) -&gt; uint32
+  hashMask -&gt; selects bucket (power of two size)
+</code></pre>
+<ul>
+<li>Each bucket stores a sorted linked list of <a href="../hotring/node.go"><code>Node</code></a> ordered by <code>(tag, key)</code>, where <code>tag</code> is derived from the upper bits of the hash. Head pointers are <code>atomic.Pointer[Node]</code>, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.</li>
+<li><code>defaultTableBits = 12</code> → 4096 buckets by default (<code>NewHotRing</code>). The mask ensures cheap modulo operations.</li>
+<li>Nodes keep a <code>count</code> (int32) updated atomically and a <code>next</code> pointer stored via <code>unsafe.Pointer</code>. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.</li>
+</ul>
+<pre><code class="language-mermaid">flowchart LR
+  Key(key) --&gt;|hash| Bucket["buckets[index] (atomic head)"]
+  Bucket --&gt; Node1
+  Node1 --&gt; Node2
+  Node2 --&gt; Node3
+  Node3 --&gt; Nil[(nil)]
+</code></pre>
+<hr />
+<h2 id="3-core-operations"><a class="header" href="#3-core-operations">3. Core Operations</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Behaviour</th><th>Notes</th></tr></thead><tbody>
+<tr><td><a href="../hotring/hotring.go"><code>Touch</code></a></td><td>Insert or increment key's counter.</td><td>CAS-splices a new node if missing, then increments (window-aware when enabled).</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>Frequency</code></a></td><td>Read-only counter lookup.</td><td>Lock-free lookup; uses sliding-window totals when configured.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>TouchAndClamp</code></a></td><td>Increment unless <code>count &gt;= limit</code>, returning <code>(count, limited)</code>.</td><td>Throttling follows sliding-window totals so hot bursts clamp quickly.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>TopN</code></a></td><td>Snapshot hottest keys sorted by count desc.</td><td>Walks buckets without locks, then sorts a copy.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>KeysAbove</code></a></td><td>Return all keys with counters ≥ threshold.</td><td>Handy for targeted throttling or debugging hot shards.</td></tr>
+</tbody></table>
+</div>
+<p>Bucket ordering is preserved by <code>findOrInsert</code>, which CASes either the bucket head or the predecessor’s <code>next</code> pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.</p>
+<hr />
+<h2 id="4-integration-points-1"><a class="header" href="#4-integration-points-1">4. Integration Points</a></h2>
+<ul>
+<li><strong>DB reads</strong> – <code>Txn.Get</code> and iterators call <code>db.recordRead</code>, which in turn invokes <code>HotRing.Touch</code> for every successful lookup. Writes touch the ring only when <code>Options.WriteHotKeyLimit</code> is set, so throttling can clamp abusive keys.</li>
+<li><strong>Stats</strong> – <a href="../stats.go#L41-L87"><code>StatsSnapshot</code></a> copies <code>hot.TopN</code> into <code>HotKeys</code>. <code>expvar</code> publishes the same view under <code>NoKV.Stats.HotKeys</code> for automation.</li>
+<li><strong>Caching</strong> – <code>lsm/cache</code> can promote blocks referenced by frequently touched keys, keeping the hot tier warm.</li>
+</ul>
+<hr />
+<h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Engine</th><th>Approach</th></tr></thead><tbody>
+<tr><td>RocksDB</td><td>External – <code>TRACE</code> / <code>perf_context</code> requires manual sampling.</td></tr>
+<tr><td>Badger</td><td>None built-in.</td></tr>
+<tr><td>NoKV</td><td>In-process ring with expvar/CLI export and throttling helpers.</td></tr>
+</tbody></table>
+</div>
+<p>The HotRing emphasises simplicity: lock-free bucket lists with atomic counters (plus optional per-node window tracking), avoiding sketches while staying light enough for hundreds of thousands of hot keys.</p>
+<hr />
+<h2 id="6-operational-tips"><a class="header" href="#6-operational-tips">6. Operational Tips</a></h2>
+<ul>
+<li><code>Options.HotRingTopK</code> controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.</li>
+<li>Combine <code>TouchAndClamp</code> with request middleware to detect abusive tenants: when <code>limited</code> is true, log the key and latency impact.</li>
+<li>Resetting the ring is as simple as instantiating a new <code>HotRing</code>—useful for benchmarks that require clean counters between phases.</li>
+</ul>
+<p>For end-to-end examples see <a href="stats.html#hot-key-export"><code>docs/stats.md</code></a> and the CLI walkthrough in <a href="cli.html#hot-key-output"><code>docs/cli.md</code></a>.</p>
+<hr />
+<h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
+<p><code>Options.WriteHotKeyLimit</code> wires HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code> or transactional <code>Txn.Set*</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
+<p>Operational hints:</p>
+<ul>
+<li><code>StatsSnapshot.HotWriteLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
+<li>Applications should surface <code>utils.ErrHotKeyWriteThrottle</code> to callers (e.g. HTTP 429) so clients can back off.</li>
+<li>Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.</li>
+<li>Set the limit conservatively (e.g. a few dozen) and pair it with richer <code>HotRing</code> analytics (top-K stats, expvar export) to identify outliers before tuning.</li>
+</ul>
+<hr />
+<h2 id="8-time-based-decay--sliding-window"><a class="header" href="#8-time-based-decay--sliding-window">8. Time-Based Decay &amp; Sliding Window</a></h2>
+<p>HotRing now exposes two complementary controls so “old” hotspots fade away automatically:</p>
+<ol>
+<li><strong>Periodic decay (<code>Options.HotRingDecayInterval</code> + <code>HotRingDecayShift</code>)</strong><br />
+Every <code>interval</code> the global counters are right-shifted (<code>count &gt;&gt;= shift</code>). This keeps <code>TopN</code> and stats output focused on recent traffic even if writes stop abruptly.</li>
+<li><strong>Sliding window (<code>Options.HotRingWindowSlots</code> + <code>HotRingWindowSlotDuration</code>)</strong><br />
+Per-key windows split time into <code>slots</code>, each lasting <code>slotDuration</code>. <code>Touch</code> only accumulates inside the current slot; once the window slides past, the stale contribution is dropped. <code>TouchAndClamp</code> and <code>Frequency</code> use the sliding-window total, so write throttling reflects short-term pressure instead of lifetime counts.</li>
+</ol>
+<p>Disable either mechanism by setting the interval/durations to zero. Typical starting points:</p>
+<div class="table-wrapper"><table><thead><tr><th>Option</th><th>Default value</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>HotRingDecayInterval</code></td><td><code>1s</code></td><td>Halve legacy counters once per second.</td></tr>
+<tr><td><code>HotRingDecayShift</code></td><td><code>1</code></td><td>Simple divide-by-two decay.</td></tr>
+<tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Keep ~8 buckets of recency data.</td></tr>
+<tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>Roughly 2s window for throttling.</td></tr>
+</tbody></table>
+</div>
+<p>With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="transaction--mvcc-design"><a class="header" href="#transaction--mvcc-design">Transaction &amp; MVCC Design</a></h1>
+<p>NoKV provides snapshot-isolated transactions backed by a lightweight <strong>oracle</strong> that hands out timestamps, tracks conflicts, and coordinates with the write pipeline. The implementation lives entirely in <a href="../txn.go"><code>txn.go</code></a> with metrics surfaced via <a href="../stats.go"><code>stats.go</code></a>.</p>
+<hr />
+<h2 id="1-components-at-a-glance"><a class="header" href="#1-components-at-a-glance">1. Components at a Glance</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>Purpose</th><th>Key Functions</th></tr></thead><tbody>
+<tr><td><code>oracle</code></td><td>Issues read/commit timestamps, performs conflict checks, persists watermark progress.</td><td><a href="../txn.go#L80-L100"><code>readTs</code></a>, <a href="../txn.go#L142-L190"><code>newCommitTs</code></a>, <a href="../txn.go#L206-L208"><code>doneCommit</code></a></td></tr>
+<tr><td><code>Txn</code></td><td>User-facing transaction state: pending writes, read-set fingerprints, MVCC metadata.</td><td><a href="../txn.go#L412-L425"><code>SetEntry</code></a>, <a href="../txn.go#L428-L502"><code>Get</code></a>, <a href="../txn.go#L618-L671"><code>Commit</code></a></td></tr>
+<tr><td><code>pendingWritesIterator</code></td><td>Allows iterator merge to see unflushed txn writes.</td><td><a href="../txn.go#L324-L347"><code>newPendingWritesIterator</code></a></td></tr>
+<tr><td>Metrics</td><td>Tracks counts of started/committed/conflicted txns.</td><td><a href="../txn.go#L58-L66"><code>trackTxnStart</code></a>, <a href="../txn.go#L72-L78"><code>txnMetricsSnapshot</code></a></td></tr>
+</tbody></table>
+</div>
+<p>The oracle is initialised during <code>DB.Open</code>, sharing lineage with BadgerDB's MVCC model. Unlike RocksDB—which relies on WriteBatch/TwoPhaseCommit extensions—transactions are first-class citizens, and the core engine enforces ordering.</p>
+<hr />
+<h2 id="2-timestamp--conflict-flow"><a class="header" href="#2-timestamp--conflict-flow">2. Timestamp &amp; Conflict Flow</a></h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    participant Client
+    participant DB
+    participant Oracle
+    participant Commit as commitWorker
+    participant Mgr as vlog.Manager
+    participant WAL
+    participant Mem as MemTable
+    Client-&gt;&gt;DB: NewTransaction(update)
+    DB-&gt;&gt;Oracle: readTs()
+    Oracle--&gt;&gt;DB: snapshot ts (nextTxnTs-1)
+    Client-&gt;&gt;DB: Set/Delete/Get
+    DB-&gt;&gt;Txn: stage pendingWrites, record read hashes
+    Client-&gt;&gt;DB: Commit
+    DB-&gt;&gt;Oracle: newCommitTs(txn)
+    alt conflict
+        Oracle--&gt;&gt;DB: ErrConflict
+    else success
+        Oracle--&gt;&gt;DB: commitTs
+        DB-&gt;&gt;Commit: batch requests
+        Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
+        Commit-&gt;&gt;WAL: Append(entries with commitTs)
+        Commit-&gt;&gt;Mem: apply to skiplist
+        DB-&gt;&gt;Oracle: doneCommit(commitTs)
+    end
+</code></pre>
+<ol>
+<li><strong>Start</strong> – <code>DB.newTransaction</code> calls <a href="../txn.go#L80-L100"><code>oracle.readTs</code></a>, which waits for all prior commits to finish (<code>txnMark.WaitForMark</code>) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the <code>startVersion</code> themselves (see <a href="txn.html#timestamp-sources">Timestamp sources</a>).</li>
+<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.</li>
+<li><strong>Conflict detection</strong> – When <code>Options.DetectConflicts</code> is enabled, <code>oracle.newCommitTs</code> iterates <code>oracle.committedTxns</code> and compares read fingerprints against keys written by newer commits. This mirrors Badger's optimistic strategy.</li>
+<li><strong>Commit timestamp</strong> – <code>newCommitTs</code> increments <code>nextTxnTs</code>, registers the commit in <code>txnMark</code>, and stores the conflict key set for future comparisons.</li>
+<li><strong>Apply</strong> – <code>Txn.commitAndSend</code> assigns the commit timestamp to each pending entry (<code>kv.KeyWithTs</code>), enqueues them through <code>sendToWriteCh</code>, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle's <code>doneCommit</code> release the commit watermark.</li>
+<li><strong>Value log ordering</strong> – As with non-transactional writes, the commit worker runs <code>valueLog.write</code> (which calls <code>Manager.AppendEntries</code>) before the WAL append. On failure <code>vlog.manager.Rewind</code> ensures partial writes do not leak.</li>
+</ol>
+<p>RocksDB's default WriteBatch lacks conflict detection, relying on application-level locking; NoKV ships with snapshot isolation and optional detection, similar to Badger's <code>Txn</code> but with integrated metrics and iterator pooling.</p>
+<hr />
+<h2 id="3-data-structures"><a class="header" href="#3-data-structures">3. Data Structures</a></h2>
+<h3 id="oracle-watermarks"><a class="header" href="#oracle-watermarks">Oracle Watermarks</a></h3>
+<pre><code class="language-text">oracle{
+  nextTxnTs       // next commit timestamp to assign
+  txnMark         // watermark waiting for WAL/vlog durability
+  readMark        // tracks oldest active read timestamp
+  committedTxns[] // sliding window of conflict key sets
+}
+</code></pre>
+<ul>
+<li><code>txnMark</code> / <code>readMark</code> are <code>utils.WaterMark</code> instances. They guarantee all writes with timestamp ≤ <code>readTs</code> are durable before a new read snapshot begins, mirroring Badger's approach to avoid reading half-committed data.</li>
+<li><code>cleanupCommittedTransactions</code> prunes conflict history based on the oldest outstanding read, preventing unbounded memory use.</li>
+</ul>
+<h3 id="txn-state"><a class="header" href="#txn-state">Txn State</a></h3>
+<pre><code class="language-go">type Txn struct {
+    readTs   uint64
+    commitTs uint64
+    pendingWrites map[string]*kv.Entry
+    conflictKeys  map[uint64]struct{}
+    reads         []uint64
+    numIterators  int32
+    discarded     bool
+    update        bool
+}
+</code></pre>
+<ul>
+<li>Pending writes retain the caller's entry pointers until commit; NoKV copies values only when moving them into the write batch.</li>
+<li>Read fingerprints use <code>kv.MemHash</code>, so conflict detection is order-independent and compact.</li>
+<li>MVCC versions are encoded in the key suffix (<code>KeyWithTs</code>), matching the LSM's descending version order.</li>
+</ul>
+<h3 id="iterator-integration"><a class="header" href="#iterator-integration">Iterator Integration</a></h3>
+<ul>
+<li><code>Txn.newPendingWritesIterator</code> materialises staged entries as a sorted slice, allowing transaction iterators to merge them with memtables/SST tables. This ensures <code>Txn.NewIterator</code> sees writes immediately without affecting other snapshots.</li>
+<li><code>Txn.numIterators</code> enforces that all iterators close before commit/discard—helpful for catching resource leaks in tests (<code>txn_iterator_test.go</code>).</li>
+</ul>
+<hr />
+<h2 id="4-commit--error-handling"><a class="header" href="#4-commit--error-handling">4. Commit &amp; Error Handling</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Stage</th><th>Failure Handling</th></tr></thead><tbody>
+<tr><td>Conflict</td><td><code>oracle.newCommitTs</code> returns <code>(0, true)</code>; <code>Txn.Commit</code> surfaces <code>utils.ErrConflict</code> and leaves state untouched.</td></tr>
+<tr><td>Value log append</td><td><code>valueLog.write</code> rewinds via <code>Manager.Rewind</code>; <code>req.Wait</code> returns the error so callers can retry safely.</td></tr>
+<tr><td>WAL append</td><td><code>sendToWriteCh</code> propagates WAL errors; commit watermark is cleared immediately in that case.</td></tr>
+<tr><td>Callback mode</td><td><code>Txn.CommitWith</code> schedules <code>runTxnCallback</code> on a goroutine; user callbacks always execute (success or error).</td></tr>
+</tbody></table>
+</div>
+<p>The final call to <code>Txn.Discard</code> runs regardless of success, marking the read watermark done and decrementing the oracle's active counter.</p>
+<hr />
+<h2 id="5-comparisons-1"><a class="header" href="#5-comparisons-1">5. Comparisons</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>Isolation</td><td>Optional (WritePrepared/2PC)</td><td>Snapshot isolation</td><td>Snapshot isolation with <code>WaterMark</code> barriers</td></tr>
+<tr><td>Conflict detection</td><td>External</td><td>Optional optimistic</td><td>Optional optimistic keyed by <code>utils.MemHash</code></td></tr>
+<tr><td>Iterator view</td><td>Snapshot handles, manual merging</td><td>Built-in</td><td>Built-in with pending write iterator</td></tr>
+<tr><td>Metrics</td><td><code>rocksdb.transactions.*</code> when enabled</td><td>Basic stats</td><td><code>NoKV.Txns.*</code> expvar counters + CLI</td></tr>
+</tbody></table>
+</div>
+<p>NoKV inherits Badger's optimistic concurrency but strengthens durability ordering by coupling commits with the same write pipeline that non-transactional writes use. Compared with RocksDB's transactional library, the Go implementation remains lightweight and requires no external locks.</p>
+<hr />
+<h2 id="6-operational-notes-2"><a class="header" href="#6-operational-notes-2">6. Operational Notes</a></h2>
+<ul>
+<li><strong>Long-running reads</strong>: watch <code>NoKV.Txns.Active</code> and <code>oracle.readMark.DoneUntil()</code>—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.</li>
+<li><strong>Non-transactional APIs</strong>: <code>DB.Set/Get/Del</code> and <code>SetCF/GetCF/DelCF</code> use a MaxUint64 sentinel version for "latest". Do not mix these writes with MVCC/Txn writes in the same database.</li>
+<li><strong>Managed mode</strong>: exposing <code>Txn.SetEntry</code> with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.</li>
+<li><strong>Throttling</strong>: combine <code>HotRing.TouchAndClamp</code> with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.</li>
+</ul>
+<p>See <a href="testing.html#transactions"><code>docs/testing.md</code></a> for the regression matrix covering conflict detection, iterator semantics, and managed timestamps.</p>
+<hr />
+<h2 id="7-timestamp-sources"><a class="header" href="#7-timestamp-sources">7. Timestamp Sources</a></h2>
+<p>Replica nodes do <strong>not</strong> generate timestamps during TinyKV RPC handling; the values sent in <code>KvPrewrite</code>/<code>KvCommit</code> are applied verbatim. For teaching and prototyping you can pick from two approaches:</p>
+<ul>
+<li>
+<p><strong>Single-client experiments</strong> – choose monotonically increasing integers in your client code (as shown in <code>raftstore/client/client_test.go</code>).</p>
+</li>
+<li>
+<p><strong>Shared allocator</strong> – run the sample TSO service under <code>scripts/tso</code> to hand out globally increasing timestamps:</p>
+<pre><code class="language-bash">go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
+
+# request one timestamp
+curl -s http://127.0.0.1:9494/tso
+# request a batch of 16
+curl -s "http://127.0.0.1:9494/tso?batch=16"
+</code></pre>
+<p>Each call returns JSON (<code>{"timestamp":123,"count":1}</code>), where <code>timestamp</code> is the first value in the allocated range. Clients can use the first value for <code>startVersion</code>, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.</p>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="raftstore-deep-dive"><a class="header" href="#raftstore-deep-dive">RaftStore Deep Dive</a></h1>
+<p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
+<hr />
+<h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Package</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
+<tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
+<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv).</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and TinyKv server into a reusable node primitive.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="2-boot-sequence"><a class="header" href="#2-boot-sequence">2. Boot Sequence</a></h2>
+<ol>
+<li>
+<p><strong>Construct Server</strong></p>
+<pre><code class="language-go">srv, _ := raftstore.NewServer(raftstore.ServerConfig{
+    DB: db,
+    Store: raftstore.StoreConfig{StoreID: 1},
+    Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
+    TransportAddr: "127.0.0.1:20160",
+})
+</code></pre>
+<ul>
+<li>A gRPC transport is created, the TinyKv service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
+<li><code>store.Store</code> loads <code>manifest.RegionSnapshot()</code> to rebuild the Region catalog (router + metrics).</li>
+</ul>
+</li>
+<li>
+<p><strong>Start local peers</strong></p>
+<ul>
+<li>CLI (<code>nokv serve</code>) iterates the manifest snapshot and calls <code>Store.StartPeer</code> for every region that includes the local store.</li>
+<li>Each <code>peer.Config</code> carries raft parameters, the transport reference, <code>kv.NewEntryApplier</code>, WAL/manifest handles, and Region metadata.</li>
+<li><code>StartPeer</code> registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.</li>
+</ul>
+</li>
+<li>
+<p><strong>Peer connectivity</strong></p>
+<ul>
+<li><code>transport.SetPeer(storeID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer storeID=addr</code>.</li>
+<li>Additional services can reuse the same gRPC server through <code>transport.WithServerRegistrar</code>.</li>
+</ul>
+</li>
+</ol>
+<hr />
+<h2 id="3-command-execution"><a class="header" href="#3-command-execution">3. Command Execution</a></h2>
+<h3 id="read-strong-leader-read"><a class="header" href="#read-strong-leader-read">Read (strong leader read)</a></h3>
+<ol>
+<li><code>kv.Service.KvGet</code> builds <code>pb.RaftCmdRequest</code> and invokes <code>Store.ReadCommand</code>.</li>
+<li><code>validateCommand</code> ensures the region exists, epoch matches, and the local peer is leader; a RegionError is returned otherwise.</li>
+<li><code>peer.Flush()</code> drains pending Ready, guaranteeing the latest committed log is applied.</li>
+<li><code>commandApplier</code> (i.e. <code>kv.Apply</code>) runs GET/SCAN directly against the DB, using MVCC readers to honour locks and version visibility.</li>
+</ol>
+<h3 id="write-via-propose"><a class="header" href="#write-via-propose">Write (via Propose)</a></h3>
+<ol>
+<li>Write RPCs (Prewrite/Commit/…) call <code>Store.ProposeCommand</code>, encoding the command and routing to the leader peer.</li>
+<li>The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to <code>kv.Apply</code>, which maps Prewrite/Commit/ResolveLock to the <code>mvcc</code> package.</li>
+<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.</li>
+</ol>
+<hr />
+<h2 id="4-transport"><a class="header" href="#4-transport">4. Transport</a></h2>
+<ul>
+<li>gRPC transport listens on <code>TransportAddr</code>, serving both raft Step RPC and TinyKv RPC.</li>
+<li><code>SetPeer</code> updates the mapping of remote store IDs to addresses; <code>BlockPeer</code> can be used by tests or chaos tooling.</li>
+<li>Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.</li>
+</ul>
+<hr />
+<h2 id="5-storage-backend-engine"><a class="header" href="#5-storage-backend-engine">5. Storage Backend (engine)</a></h2>
+<ul>
+<li><code>WALStorage</code> piggybacks on the embedded WAL: each Raft group writes typed entries, HardState, and snapshots into the shared log.</li>
+<li><code>LogRaftPointer</code> and <code>LogRaftTruncate</code> edit manifest metadata so WAL GC knows how far it can compact per group.</li>
+<li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
+</ul>
+<hr />
+<h2 id="6-tinykv-rpc-integration"><a class="header" href="#6-tinykv-rpc-integration">6. TinyKv RPC Integration</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>RPC</th><th>Execution Path</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>KvGet</code> / <code>KvScan</code></td><td><code>ReadCommand</code> → <code>kv.Apply</code> (read mode)</td><td>No raft round-trip; leader-only.</td></tr>
+<tr><td><code>KvPrewrite</code> / <code>KvCommit</code> / <code>KvBatchRollback</code> / <code>KvResolveLock</code> / <code>KvCheckTxnStatus</code></td><td><code>ProposeCommand</code> → command pipeline → raft log → <code>kv.Apply</code></td><td>Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.</td></tr>
+</tbody></table>
+</div>
+<p>The <code>cmd/nokv serve</code> command uses <code>raftstore.Server</code> internally and prints a manifest summary (key ranges, peers) so operators can verify the node’s view at startup.</p>
+<hr />
+<h2 id="7-client-interaction-raftstoreclient"><a class="header" href="#7-client-interaction-raftstoreclient">7. Client Interaction (<code>raftstore/client</code>)</a></h2>
+<ul>
+<li>Region-aware routing with NotLeader/EpochNotMatch retry.</li>
+<li><code>Mutate</code> splits mutations by region and performs two-phase commit (primary first). <code>Put</code> / <code>Delete</code> are convenience wrappers.</li>
+<li><code>Scan</code> transparently walks region boundaries.</li>
+<li>End-to-end coverage lives in <code>raftstore/server/server_client_integration_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
+</ul>
+<hr />
+<h2 id="8-control-plane--region-operations"><a class="header" href="#8-control-plane--region-operations">8. Control Plane &amp; Region Operations</a></h2>
+<h3 id="81-topology--routing"><a class="header" href="#81-topology--routing">8.1 Topology &amp; Routing</a></h3>
+<ul>
+<li>Topology is sourced from <code>raft_config.example.json</code> (via <code>config.LoadFile</code>) and
+reused by scripts, Docker Compose, and the Redis gateway.</li>
+<li>The client builds a static region map (<code>[]RegionConfig</code>) and store endpoints
+from the same file; there is no dynamic PD-style reconfiguration today.</li>
+<li>The built-in scheduler currently emits leader-transfer operations only
+(see <code>raftstore/scheduler</code>), acting as a minimal control plane.</li>
+</ul>
+<h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
+<ul>
+<li><strong>Split</strong>: leaders call <code>Store.ProposeSplit</code>, which writes a split
+<code>AdminCommand</code> into the parent region's raft log. On apply,
+<code>Store.SplitRegion</code> updates the parent range/epoch and starts the child peer.</li>
+<li><strong>Merge</strong>: leaders call <code>Store.ProposeMerge</code>, writing a merge <code>AdminCommand</code>.
+On apply, the target region range/epoch is expanded and the source peer is
+stopped/removed from the manifest.</li>
+<li>These operations are explicit and are not auto-triggered by size/traffic
+heuristics; a higher-level controller could call the same APIs.</li>
+</ul>
+<hr />
+<h2 id="9-observability"><a class="header" href="#9-observability">9. Observability</a></h2>
+<ul>
+<li><code>store.RegionMetrics()</code> feeds into <code>StatsSnapshot</code>, making region counts and backlog visible via expvar and <code>nokv stats</code>.</li>
+<li><code>nokv regions</code> shows manifest-backed regions: ID, range, peers, state.</li>
+<li><code>scripts/transport_chaos.sh</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
+</ul>
+<h3 id="store-internals-at-a-glance"><a class="header" href="#store-internals-at-a-glance">Store internals at a glance</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>File</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td>Peer set</td><td><a href="../raftstore/store/peer_set.go"><code>peer_set.go</code></a></td><td>Tracks active peers, synchronises router registration, exposes thread-safe lookups/iteration.</td></tr>
+<tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
+<tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks.</td></tr>
+<tr><td>Operation scheduler</td><td><a href="../raftstore/store/operation_scheduler.go"><code>operation_scheduler.go</code></a></td><td>Buffers planner output, enforces cooldown &amp; burst limits, dispatches leader transfers or other operations.</td></tr>
+<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions.</td></tr>
+<tr><td>Global registry</td><td><a href="../raftstore/store/global.go"><code>global.go</code></a></td><td>Records live stores for CLI/scripting (<code>Store.Close()</code> automatically unregisters instances).</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="10-extending-raftstore"><a class="header" href="#10-extending-raftstore">10. Extending raftstore</a></h2>
+<ul>
+<li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
+<li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
+<li><strong>Scheduler integration</strong>: pair <code>RegionSnapshot()</code> and <code>RegionMetrics()</code> with an external scheduler (PD-like) for dynamic balancing.</li>
+</ul>
+<p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="crash-recovery-playbook"><a class="header" href="#crash-recovery-playbook">Crash Recovery Playbook</a></h1>
+<p>This playbook documents how NoKV rebuilds state after a crash and which automated checks ensure correctness. It ties together WAL replay, manifest reconciliation, ValueLog GC, and flush pipelines—mirroring RocksDB's layered recovery while incorporating Badger-style value log hygiene.</p>
+<hr />
+<h2 id="1-recovery-phases"><a class="header" href="#1-recovery-phases">1. Recovery Phases</a></h2>
+<pre><code class="language-mermaid">flowchart TD
+    Start[DB.Open]
+    Verify[runRecoveryChecks]
+    Manifest[manifest.Open → replay]
+    WAL[wal.Manager.Replay]
+    VLog[valueLog.recover]
+    Flush[Recreate memtables]
+    Stats[Stats.StartStats]
+
+    Start --&gt; Verify --&gt; Manifest --&gt; WAL --&gt; VLog --&gt; Flush --&gt; Stats
+</code></pre>
+<ol>
+<li><strong>Directory verification</strong> – <code>DB.runRecoveryChecks</code> calls <code>manifest.Verify</code>, <code>wal.VerifyDir</code>, and initialises the vlog directory. Missing directories fail fast.</li>
+<li><strong>Manifest replay</strong> – <code>manifest.Open</code> reads <code>CURRENT</code>, replays <code>EditAddFile/DeleteFile</code>, <code>EditLogPointer</code>, and vlog edits into an in-memory <code>Version</code>.</li>
+<li><strong>WAL replay</strong> – <code>wal.Manager.Replay</code> processes segments newer than the manifest checkpoint, rebuilding memtables from committed entries.</li>
+<li><strong>ValueLog reconciliation</strong> – <code>valueLog.recover</code> scans existing <code>.vlog</code> files, drops segments marked invalid, and trims torn tails to the last valid entry.</li>
+<li><strong>Flush backlog</strong> – Immutable memtables recreated from WAL are resubmitted to <code>flush.Manager</code>; temporary <code>.sst.tmp</code> files are either reinstalled or cleaned up.</li>
+<li><strong>Stats bootstrap</strong> – the metrics goroutine restarts so CLI commands immediately reflect queue backlogs and GC status.</li>
+</ol>
+<p>This mirrors RocksDB's <code>DBImpl::Recover</code> while extending to handle value log metadata automatically.</p>
+<hr />
+<h2 id="2-failure-scenarios--expected-outcomes"><a class="header" href="#2-failure-scenarios--expected-outcomes">2. Failure Scenarios &amp; Expected Outcomes</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Failure Point</th><th>Example Simulation</th><th>Expected Recovery Behaviour</th><th>Tests</th></tr></thead><tbody>
+<tr><td>WAL tail truncation</td><td>truncate last 2 bytes of <code>000005.wal</code></td><td>Replay stops at truncated record, previously flushed SST remains intact</td><td><code>wal/manager_test.go::TestReplayTruncatedTail</code></td></tr>
+<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_recovery_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
+<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
+<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
+<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_recovery_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
+<tr><td>Transaction in-flight</td><td>crash between WAL append and memtable update</td><td>WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable</td><td><code>txn_test.go::TestTxnCommitPersists</code></td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="3-automation--tooling"><a class="header" href="#3-automation--tooling">3. Automation &amp; Tooling</a></h2>
+<h3 id="31-go-test-matrix"><a class="header" href="#31-go-test-matrix">3.1 Go Test Matrix</a></h3>
+<pre><code class="language-bash">GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./... -run 'Recovery'
+</code></pre>
+<ul>
+<li>Exercises WAL replay, manifest cleanup, vlog GC, and managed transaction recovery.</li>
+<li>Set <code>RECOVERY_TRACE_METRICS=1</code> to emit structured logs (key/value pairs) for each scenario.</li>
+</ul>
+<h3 id="32-shell-script-harness"><a class="header" href="#32-shell-script-harness">3.2 Shell Script Harness</a></h3>
+<p><code>scripts/recovery_scenarios.sh</code> orchestrates the matrix end-to-end:</p>
+<ol>
+<li>Spins up a temporary database, injects writes, and crashes at chosen checkpoints.</li>
+<li>Reopens the database and validates via CLI (<code>nokv stats</code>, <code>nokv manifest</code>, <code>nokv vlog</code>).</li>
+<li>Archives logs under <code>artifacts/recovery/&lt;scenario&gt;.log</code> for CI inspection.</li>
+</ol>
+<h3 id="33-cli-validation"><a class="header" href="#33-cli-validation">3.3 CLI Validation</a></h3>
+<ul>
+<li><code>nokv manifest --workdir &lt;dir&gt;</code>: confirm WAL checkpoint, level files, vlog head.</li>
+<li><code>nokv stats --workdir &lt;dir&gt;</code>: observe flush backlog drop to zero after replay.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code>: ensure stale segments disappear after GC recovery.</li>
+</ul>
+<p>These commands give the same insight as RocksDB's <code>ldb manifest_dump</code> or Badger's CLI but with JSON output for automation.</p>
+<hr />
+<h2 id="4-metrics-emitted-during-recovery"><a class="header" href="#4-metrics-emitted-during-recovery">4. Metrics Emitted During Recovery</a></h2>
+<p>When <code>RECOVERY_TRACE_METRICS=1</code>:</p>
+<ul>
+<li><code>RECOVERY_METRIC phase="manifest" ...</code> – manifest replay progress.</li>
+<li><code>RECOVERY_METRIC phase="wal" segment=... offset=...</code> – WAL records applied.</li>
+<li><code>RECOVERY_METRIC phase="vlog_gc" fid=... action="delete"</code> – vlog cleanup status.</li>
+</ul>
+<p><code>StatsSnapshot</code> also exposes:</p>
+<ul>
+<li><code>NoKV.Flush.Queue</code> – remaining flush tasks.</li>
+<li><code>NoKV.ValueLog.HeadFID</code> – head file after recovery.</li>
+<li><code>NoKV.Txns.Active</code> – should reset to zero post-recovery.</li>
+</ul>
+<hr />
+<h2 id="5-comparison-with-rocksdb--badger"><a class="header" href="#5-comparison-with-rocksdb--badger">5. Comparison with RocksDB &amp; Badger</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Aspect</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr></thead><tbody>
+<tr><td>WAL replay</td><td><code>DBImpl::RecoverLogFiles</code> replays per log number</td><td>Journal (value log) is replayed into LSM</td><td>Dedicated WAL manager with manifest checkpoint, plus vlog trim</td></tr>
+<tr><td>Manifest reconciliation</td><td>Removes missing files, handles CURRENT rewrite</td><td>Minimal manifest (mainly tables)</td><td>Tracks SST + vlog metadata; auto-cleans missing SST/vlog</td></tr>
+<tr><td>Value log recovery</td><td>Optional (BlobDB) requires external blob manifest</td><td>Primary log, re-scanned on start</td><td>Manifest-backed head + discard stats to avoid rescan</td></tr>
+<tr><td>Tooling</td><td><code>ldb</code> for manifest dump</td><td><code>badger</code> CLI</td><td><code>nokv</code> CLI with JSON output</td></tr>
+</tbody></table>
+</div>
+<p>NoKV inherits RocksDB's strict manifest semantics and Badger's value log durability, yielding deterministic restart behaviour even under mixed workloads.</p>
+<hr />
+<h2 id="6-extending-the-matrix"><a class="header" href="#6-extending-the-matrix">6. Extending the Matrix</a></h2>
+<p>Future enhancements to cover:</p>
+<ul>
+<li><strong>Compaction crash</strong> – simulate partial compaction output and verify manifest rollback.</li>
+<li><strong>Prefetch queue state</strong> – ensure hot-key prefetch map resets cleanly.</li>
+<li><strong>Raft integration</strong> – once replication is added, validate raft log catch-up interacts correctly with WAL replay.</li>
+</ul>
+<p>Contributions adding new recovery scenarios should update this document and the shell harness to keep observability aligned.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="stats--observability-pipeline"><a class="header" href="#stats--observability-pipeline">Stats &amp; Observability Pipeline</a></h1>
+<p>NoKV exposes internal health via the Go <code>expvar</code> package and the <code>nokv stats</code> CLI. The statistics subsystem is implemented in <a href="../stats.go"><code>stats.go</code></a> and runs continuously once the DB is open.</p>
+<hr />
+<h2 id="1-architecture"><a class="header" href="#1-architecture">1. Architecture</a></h2>
+<pre><code class="language-mermaid">flowchart TD
+    subgraph Collectors
+        Flush[lsm.FlushMetrics]
+        Levels[lsm.CompactionStats]
+        VLog[valueLog.metrics]
+        WAL[wal.Manager.Metrics]
+        Txn[oracle.txnMetricsSnapshot]
+        Cache[lsm.CacheMetrics]
+        Hot[hotring.TopN]
+    end
+    Collectors --&gt; Stats
+    Stats --&gt;|expvar publish| Runtime
+    Stats --&gt;|Snapshot| CLI
+</code></pre>
+<ul>
+<li><code>newStats</code> wires together reusable <code>expvar.Int/Float</code> gauges (avoiding duplicates if the process restarts an embedded DB).</li>
+<li><code>Stats.StartStats</code> launches a goroutine that ticks every 5s (configurable via <code>Stats.interval</code>) to refresh values.</li>
+<li><code>Stats.Snapshot</code> can be called on-demand (e.g. CLI) without mutating expvar state.</li>
+</ul>
+<hr />
+<h2 id="2-snapshot-fields"><a class="header" href="#2-snapshot-fields">2. Snapshot Fields</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Source</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>Entries</code></td><td><code>lsm.EntryCount()</code></td><td>Total MVCC entries (L0-Ln + memtables). Mirrors <code>Stats.EntryNum</code> for backwards compat.</td></tr>
+<tr><td><code>FlushPending/Queue/Active</code></td><td><code>lsm.FlushMetrics()</code></td><td>Pending immutables, queue length, workers currently building SSTs.</td></tr>
+<tr><td><code>FlushWait/Build/ReleaseMs</code></td><td>Derived from <code>WaitNs/BuildNs/ReleaseNs</code> averages</td><td>End-to-end latency of flush pipeline stages.</td></tr>
+<tr><td><code>CompactionBacklog/MaxScore</code></td><td><code>lsm.CompactionStats()</code></td><td>How many level files await compaction and the hottest score.</td></tr>
+<tr><td><code>ValueLogSegments/PendingDel/DiscardQueue/Head</code></td><td><code>valueLog.metrics()</code></td><td>Tracks vlog utilisation and GC backlog.</td></tr>
+<tr><td><code>WALActiveSegment/SegmentCount/Removed/ActiveSize</code></td><td><code>wal.Manager.Metrics()</code></td><td>Observes WAL rotation cadence and current segment byte usage (pairs with raft lag metrics).</td></tr>
+<tr><td><code>WALTypedRecordRatio/Warning/Reason</code></td><td>WAL backlog watchdog (<code>Stats.Snapshot</code>)</td><td>Tracks ratio of raft typed records in the WAL and surfaces warnings with reasons when exceeding thresholds.</td></tr>
+<tr><td><code>WALAutoGCRuns/Removed/LastUnix</code></td><td>WAL backlog watchdog</td><td>Automated WAL GC passes, total segments removed, and the Unix timestamp of the last run.</td></tr>
+<tr><td><code>WriteQueueDepth/Entries/Bytes</code></td><td><code>writeMetrics.snapshot()</code></td><td>Size of the asynchronous write queue.</td></tr>
+<tr><td><code>WriteAvg*</code></td><td><code>writeMetrics</code> averages</td><td>Request wait times, vlog latency, apply latency.</td></tr>
+<tr><td><code>WriteBatchesTotal</code></td><td><code>writeMetrics</code></td><td>Lifetime batches processed.</td></tr>
+<tr><td><code>HotWriteLimited</code></td><td><code>db.hotWriteLimited</code></td><td>Number of write attempts rejected by <code>Options.WriteHotKeyLimit</code> (HotRing write throttling).</td></tr>
+<tr><td><code>WriteThrottleActive</code></td><td><code>db.blockWrites</code></td><td>Indicates when writes are being throttled.</td></tr>
+<tr><td><code>TxnsActive/Started/Committed/Conflicts</code></td><td><code>oracle.txnMetricsSnapshot()</code></td><td>MVCC activity counters.</td></tr>
+<tr><td><code>HotKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot key counts.</td></tr>
+<tr><td><code>BlockL0/L1/BloomHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>Block and bloom cache hit ratios.</td></tr>
+<tr><td><code>IndexHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>SST 索引块缓存命中率。</td></tr>
+<tr><td><code>IteratorReused</code></td><td><code>iteratorPool.reused()</code></td><td>Frequency of iterator pooling hits.</td></tr>
+<tr><td><code>RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning</code></td><td><code>manifest.RaftPointerSnapshot()</code></td><td>Tracks follower backlogs; <code>LagWarnThreshold</code> comes from <code>Options.RaftLagWarnSegments</code>, and <code>RaftLagWarning</code> toggles when any group exceeds it.</td></tr>
+<tr><td><code>RegionTotal/New/Running/Removing/Tombstone/Other</code></td><td><code>store.RegionMetrics</code></td><td>Multi-Raft region state distribution. CLI attaches the first available <code>RegionMetrics</code> by default; pass <code>--no-region-metrics</code> to disable.</td></tr>
+</tbody></table>
+</div>
+<p>All values are exported under the <code>NoKV.*</code> namespace via expvar (see <code>newStats</code>).</p>
+<hr />
+<h2 id="3-cli--json-output"><a class="header" href="#3-cli--json-output">3. CLI &amp; JSON Output</a></h2>
+<ul>
+<li><code>nokv stats --workdir &lt;dir&gt;</code> prints a human-readable table (queue lengths, throughput, hot keys, region totals). It automatically attaches <code>RegionMetrics</code> when available; add <code>--no-region-metrics</code> to produce a manifest-only snapshot.</li>
+<li>When <code>RaftLagWarning=true</code> the CLI emits an extra <code>Raft.Warning</code> line; it also surfaces <code>Regions.Total (...)</code> so operators can quickly gauge Region lifecycle health.</li>
+<li><code>nokv stats --json</code> emits the raw snapshot for automation. Example snippet:</li>
+</ul>
+<pre><code class="language-json">{
+  "entries": 1048576,
+  "flush_queue_length": 2,
+  "vlog_head": {"fid": 5, "offset": 184320},
+  "hot_keys": [{"key": "user:123", "count": 42}]
+}
+</code></pre>
+<p>The CLI internally instantiates a read-only DB handle, calls <code>Stats.Snapshot</code>, and formats the response—no background goroutine is needed.</p>
+<hr />
+<h2 id="4-integration-with-other-modules"><a class="header" href="#4-integration-with-other-modules">4. Integration with Other Modules</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Module</th><th>Contribution</th></tr></thead><tbody>
+<tr><td>WAL</td><td><code>wal.Manager.Metrics()</code> counts active/removable segments, aiding post-recovery validation.</td></tr>
+<tr><td>Value Log</td><td><code>valueLog.metrics()</code> exposes GC backlog, enabling alerting when discard queues stall.</td></tr>
+<tr><td>HotRing</td><td>Publishes hot key JSON via expvar so dashboards can visualise top offenders.</td></tr>
+<tr><td>Transactions</td><td>Oracle counters help gauge contention (high conflicts → tune workload).</td></tr>
+<tr><td>Cache</td><td>Hit rates clarify whether cache sizing (hot/cold tier) needs adjustment.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-comparisons-2"><a class="header" href="#5-comparisons-2">5. Comparisons</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Engine</th><th>Observability</th></tr></thead><tbody>
+<tr><td>RocksDB</td><td><code>iostats</code>, <code>perf_context</code>, <code>ldb</code> commands. Requires manual parsing.</td></tr>
+<tr><td>Badger</td><td>Prometheus metrics (optional).</td></tr>
+<tr><td>NoKV</td><td>Built-in expvar gauges + CLI + recovery trace toggles.</td></tr>
+</tbody></table>
+</div>
+<p>NoKV emphasises zero-dependency observability. Everything is consumable via HTTP <code>/debug/vars</code> or the CLI, making it easy to integrate with Go services.</p>
+<hr />
+<h2 id="6-operational-guidance"><a class="header" href="#6-operational-guidance">6. Operational Guidance</a></h2>
+<ul>
+<li>Watch <code>FlushQueueLength</code> and <code>CompactionBacklog</code> together—if both grow, increase flush workers or adjust level sizes.</li>
+<li><code>ValueLogDiscardQueue &gt; 0</code> for extended periods indicates GC is blocked; inspect <code>NoKV.ValueLog.GcRuns</code> and consider tuning thresholds.</li>
+<li><code>WriteThrottleActive</code> toggling frequently suggests L0 is overwhelmed; cross-check <code>BlockL0HitRate</code> and compaction metrics.</li>
+<li><code>HotWriteLimited</code> climbing steadily means HotRing write throttling is firing—surface <code>utils.ErrHotKeyWriteThrottle</code> to clients and investigate abusive keys via the <code>HotKeys</code> list.</li>
+<li><code>RaftLagWarning</code> toggling to <code>true</code> means at least one follower lags the leader by more than <code>Options.RaftLagWarnSegments</code>; inspect <code>Raft.Warning</code> from the CLI and consider snapshot resend or throttling the offending node.</li>
+<li><code>Regions.Total</code> should match the expected cluster topology; sustained <code>Removing/Tombstone</code> counts indicate stalled cleanup—investigate split/merge logic or stuck replicas.</li>
+</ul>
+<p>Refer to <a href="testing.html#4-observability-in-tests"><code>docs/testing.md</code></a> for scripted checks that validate stats during CI runs.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="testing--validation-matrix"><a class="header" href="#testing--validation-matrix">Testing &amp; Validation Matrix</a></h1>
+<p>This document inventories NoKV's automated coverage and provides guidance for extending tests. It aligns module-level unit tests, integration suites, and benchmarking harnesses with the architectural features described elsewhere.</p>
+<hr />
+<h2 id="1-quick-commands"><a class="header" href="#1-quick-commands">1. Quick Commands</a></h2>
+<pre><code class="language-bash"># All unit + integration tests (uses local module caches)
+GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...
+
+# Focused transaction suite
+go test ./... -run '^TestTxn|TestConflict|TestTxnIterator'
+
+# Crash recovery scenarios
+RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+
+# gRPC transport chaos tests + watchdog metrics
+CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
+
+# Sample timestamp allocator (TSO) for multi-client transaction tests
+go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
+
+# Local three-node cluster (includes manifest bootstrap + optional TSO)
+./scripts/run_local_cluster.sh --config ./raft_config.example.json
+# Tear down with Ctrl+C
+
+# Docker-compose sandbox (3 nodes + TSO)
+docker compose up --build
+docker compose down -v
+
+# Build RocksDB locally (installs into ./third_party/rocksdb/dist by default)
+./scripts/build_rocksdb.sh
+# YCSB baseline (records=1e6, ops=1e6, warmup=1e5, conc=16)
+./scripts/run_benchmarks.sh
+# YCSB with RocksDB (requires CGO, `benchmark_rocksdb`, and the RocksDB build above)
+LD_LIBRARY_PATH="$(pwd)/third_party/rocksdb/dist/lib:${LD_LIBRARY_PATH}" \
+CGO_CFLAGS="-I$(pwd)/third_party/rocksdb/dist/include" \
+CGO_LDFLAGS="-L$(pwd)/third_party/rocksdb/dist/lib -lrocksdb -lz -lbz2 -lsnappy -lzstd -llz4" \
+YCSB_ENGINES="nokv,badger,rocksdb" ./scripts/run_benchmarks.sh
+# One-click script (auto-detect RocksDB, supports `YCSB_*` env vars to override defaults)
+./scripts/run_benchmarks.sh
+# Quick smoke run (smaller dataset)
+NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
+./scripts/run_benchmarks.sh -ycsb_workloads=A -ycsb_engines=nokv
+</code></pre>
+<blockquote>
+<p>Tip: Pin <code>GOCACHE</code>/<code>GOMODCACHE</code> in CI to keep build artefacts local and avoid permission issues.</p>
+</blockquote>
+<hr />
+<h2 id="2-module-coverage-overview"><a class="header" href="#2-module-coverage-overview">2. Module Coverage Overview</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Module</th><th>Tests</th><th>Coverage Highlights</th><th>Gaps / Next Steps</th></tr></thead><tbody>
+<tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compact_test.go</code>, <code>lsm/flush/*_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>manifest/levels_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
+<tr><td>ValueLog</td><td><code>vlog/vlog_test.go</code>, <code>vlog/gc_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite, concurrent iterator safety.</td><td>Long-running GC with transactions, discard ratio edge cases.</td></tr>
+<tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>txn_metrics_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
+<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_recovery_test.go</code>, <code>db_recovery_managed_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
+<tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
+<tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring &amp; TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
+<tr><td>Scripts &amp; Tooling</td><td><code>scripts/scripts_test.go</code>, <code>cmd/nokv-config/main_test.go</code></td><td><code>serve_from_config.sh</code> address scoping (host/docker) and manifest skipping, <code>nokv-config</code> JSON/simple formats, manifest logging CLI.</td><td>Golden coverage for <code>run_local_cluster.sh</code>, failure-path diagnostics.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments, add more workloads (D/E/F) and multi-GB datasets.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="3-system-scenarios"><a class="header" href="#3-system-scenarios">3. System Scenarios</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Scenario</th><th>Coverage</th><th>Focus</th></tr></thead><tbody>
+<tr><td>Crash recovery</td><td><code>db_recovery_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
+<tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
+<tr><td>Transaction contention</td><td><code>TestConflict</code>, <code>TestTxnReadAfterWrite</code>, <code>TestTxnDiscard</code></td><td>Oracle watermark handling, conflict errors, managed commit path.</td></tr>
+<tr><td>Value separation + GC</td><td><code>vlog/gc_test.go</code>, <code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
+<tr><td>Iterator consistency</td><td><code>txn_iterator_test.go</code>, <code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
+<tr><td>Throttling / backpressure</td><td><code>lsm/compact_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
+<tr><td>Distributed TinyKv client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
+<tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/RocksDB, produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="4-observability-in-tests"><a class="header" href="#4-observability-in-tests">4. Observability in Tests</a></h2>
+<ul>
+<li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; consumed by recovery script and helpful when triaging CI failures.</li>
+<li><strong>TRANSPORT_METRIC logs</strong> – emitted by <code>scripts/transport_chaos.sh</code> when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
+<li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
+<li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/benchmark_results/*.txt</code> for historical comparison. Aligns with README instructions.</li>
+</ul>
+<hr />
+<h2 id="5-extending-coverage"><a class="header" href="#5-extending-coverage">5. Extending Coverage</a></h2>
+<ol>
+<li><strong>Property-based testing</strong> – integrate <code>testing/quick</code> or third-party generators to randomise transaction sequences (Badger uses similar fuzz tests for transaction ordering).</li>
+<li><strong>Stress harness</strong> – add a Go-based stress driver to run mixed read/write workloads for hours, capturing metrics akin to RocksDB's <code>db_stress</code> tool.</li>
+<li><strong>Distributed readiness</strong> – when Raft or replication is introduced, craft tests that validate WAL shipping combined with manifest updates.</li>
+<li><strong>CLI smoke tests</strong> – simulate corrupted directories to ensure CLI emits actionable errors.</li>
+</ol>
+<p>Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
+<p>NoKV ships a small collection of helper scripts to streamline local experimentation, demos, diagnostics, and automation. This page summarises what each script does, how to use it, and which shared configuration it consumes.</p>
+<hr />
+<h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
+<h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – builds <code>nokv</code>, <code>nokv-config</code>, and <code>nokv-tso</code>, reads <code>raft_config.json</code>, seeds manifests, and starts the TinyKv nodes (plus TSO when configured). If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
+</code></pre>
+</li>
+</ul>
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
+<blockquote>
+<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, always stop the script with <code>Ctrl+C</code> and wait for the <code>Shutting down...</code> message. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
+</blockquote>
+<h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – manifest-only bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a manifest are detected and skipped.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+</code></pre>
+The script iterates over every store in the config and writes Region metadata via <code>nokv-config manifest</code> into the provided path template.</li>
+</ul>
+<h3 id="scriptsserve_from_configsh"><a class="header" href="#scriptsserve_from_configsh"><code>scripts/serve_from_config.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – translate <code>raft_config.json</code> into a <code>nokv serve</code> command, avoiding manual <code>--peer</code> lists. It resolves peer IDs from the region metadata and maps every peer (other than the local store) to its advertised address so that gRPC transport works out of the box.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/serve_from_config.sh \
+    --config ./raft_config.json \
+    --store-id 1 \
+    --workdir ./artifacts/cluster/store-1 \
+    --scope local   # use --scope docker inside containers
+</code></pre>
+<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
+</ul>
+<hr />
+<h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Script</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
+<tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes the comparison benchmarks (NoKV vs Badger/RocksDB).</td></tr>
+<tr><td><code>scripts/analyze_pprof.sh</code></td><td>Aggregates CPU/heap profiles from <code>pprof_output/</code> and renders SVG/PNG summaries.</td></tr>
+<tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
+<tr><td><code>scripts/gen.sh</code></td><td>Generates mock data or helper artefacts (see inline comments for details).</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
+<h3 id="scriptstso"><a class="header" href="#scriptstso"><code>scripts/tso</code></a></h3>
+<p>A small Go program (not shell) that exposes an HTTP timestamp oracle:</p>
+<pre><code class="language-bash">go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
+</code></pre>
+<p><code>run_local_cluster.sh</code> and Docker Compose invoke it automatically when <code>tso.listen_addr</code> is present in the shared config.</p>
+<hr />
+<h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
+<ul>
+<li><code>nokv-config stores</code> / <code>regions</code> / <code>tso</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
+<li><code>nokv-config manifest</code> writes Region metadata into manifests and replaces the historical <code>manifestctl</code> binary.</li>
+<li><code>cmd/nokv-redis</code> reads the same config; when <code>--tso-url</code> is omitted it falls back to the <code>tso</code> section.</li>
+<li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
+</ul>
+<p>Maintaining a single <code>raft_config.json</code> keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="redis-gateway"><a class="header" href="#redis-gateway">Redis Gateway</a></h1>
+<p><code>cmd/nokv-redis</code> exposes NoKV through a RESP-compatible endpoint. The gateway reuses the engine’s MVCC/transaction semantics and can operate in two modes:</p>
+<div class="table-wrapper"><table><thead><tr><th>Mode</th><th>Description</th><th>Key flags</th></tr></thead><tbody>
+<tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run inside <code>db.Update</code> / <code>db.View</code>, providing atomic single-key updates and snapshot reads across multiple keys.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. When <code>--tso-url</code> is omitted, the gateway consults the <code>tso</code> block in <code>raft_config.json</code> and falls back to a local oracle if the block is absent.</td><td><code>--raft-config &lt;file&gt;</code><br><code>--tso-url http://host:port</code> (optional)</td></tr>
+</tbody></table>
+</div>
+<h2 id="usage-examples"><a class="header" href="#usage-examples">Usage examples</a></h2>
+<h3 id="embedded-backend"><a class="header" href="#embedded-backend">Embedded backend</a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv-redis \
+  --addr 127.0.0.1:6380 \
+  --workdir ./work_redis \
+  --metrics-addr 127.0.0.1:9100  # optional expvar endpoint
+</code></pre>
+<p>Validate with <code>redis-cli -p 6380 ping</code>. Metrics are exposed at <code>http://127.0.0.1:9100/debug/vars</code> under the <code>NoKV.Redis</code> key.</p>
+<h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
+<ol>
+<li>
+<p>Start TinyKv and, if configured, the TSO using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv-tso</code> automatically when <code>tso.listen_addr</code> is present:</p>
+<pre><code class="language-bash">./scripts/run_local_cluster.sh
+# or: docker compose up --build
+</code></pre>
+</li>
+<li>
+<p>Run the gateway:</p>
+<pre><code class="language-bash">go run ./cmd/nokv-redis \
+  --addr 127.0.0.1:6380 \
+  --raft-config raft_config.example.json
+</code></pre>
+<p>Supply <code>--tso-url</code> only when you need to override the config file; otherwise the gateway uses <code>tso.advertise_url</code> (or <code>listen_addr</code>) from the same JSON. If the block is missing, it falls back to the embedded timestamp oracle.</p>
+</li>
+</ol>
+<h2 id="supported-commands"><a class="header" href="#supported-commands">Supported commands</a></h2>
+<ul>
+<li>String operations: <code>GET</code>, <code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>DEL</code>, <code>MGET</code>, <code>MSET</code>, <code>EXISTS</code></li>
+<li>Integer operations: <code>INCR</code>, <code>DECR</code>, <code>INCRBY</code>, <code>DECRBY</code></li>
+<li>Utility: <code>PING</code>, <code>ECHO</code>, <code>QUIT</code></li>
+</ul>
+<p>In both modes write commands are atomic. The Raft backend batches multi-key updates (<code>MSET</code>, <code>DEL</code>, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use snapshot transactions locally (<code>db.View</code>) and leader reads with TTL checks remotely.</p>
+<h2 id="configuration-file"><a class="header" href="#configuration-file">Configuration file</a></h2>
+<p><code>raft_config.example.json</code> is shared by <code>scripts/run_local_cluster.sh</code>, Docker Compose, and the Redis gateway. Important fields:</p>
+<ul>
+<li><code>stores</code> – store ID, gRPC address, and optional container listen/advertise addresses</li>
+<li><code>regions</code> – region ID, start/end keys (use <code>hex:&lt;bytes&gt;</code> for binary data), epoch, peer list, leader store ID</li>
+<li><code>max_retries</code> – maximum retries for region errors in the distributed client</li>
+</ul>
+<p>Use <code>nokv-config</code> to inspect or validate the configuration:</p>
+<pre><code class="language-bash">nokv-config stores --config raft_config.json
+nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id, peers:.peers}'
+</code></pre>
+<p>For Go tooling, import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to reuse the same schema and defaults across CLIs, scripts, and applications.</p>
+<h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
+<p>With <code>--metrics-addr</code> enabled the gateway publishes <code>NoKV.Redis</code> on <code>/debug/vars</code>, for example:</p>
+<pre><code class="language-json">{
+  "commands_total": 128,
+  "errors_total": 0,
+  "connections_active": 1,
+  "connections_accepted": 4,
+  "commands_per_operation": {
+    "PING": 4,
+    "SET": 32,
+    "GET": 64,
+    "MGET": 8,
+    "DEL": 10,
+    "INCR": 10
+  }
+}
+</code></pre>
+<p>These counters are part of the process-wide expvar output and can be scraped alongside the rest of NoKV’s metrics.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="notes"><a class="header" href="#notes">Notes</a></h1>
+<p>Use this page to capture personal notes while reading the docs.</p>
+<h2 id="ideas"><a class="header" href="#ideas">Ideas</a></h2>
+<ul>
+<li></li>
+</ul>
+<h2 id="questions"><a class="header" href="#questions">Questions</a></h2>
+<ul>
+<li></li>
+</ul>
+<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
+<ul>
+<li></li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+    </div>
+    </body>
+</html>
