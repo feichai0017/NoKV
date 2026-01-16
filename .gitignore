@@ -13,6 +13,7 @@ benchmark/benchmark_results/
 .gomodcache
 
 build/
+book/
 
 cpu.pprof
 mem.pprof
