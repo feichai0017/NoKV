@@ -1,10 +1,17 @@
 package pb
 
 import (
+	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestKVMajorFieldsRoundTrip(t *testing.T) {
@@ -143,4 +150,123 @@ func TestCommitAndResolveMessages(t *testing.T) {
 	commitResp := decodedResp.GetCommit()
 	require.NotNil(t, commitResp)
 	require.Equal(t, "not leader", commitResp.GetError().GetRetryable())
+}
+
+type fakeConn struct {
+	methods []string
+}
+
+func (c *fakeConn) Invoke(_ context.Context, method string, _ any, _ any, _ ...grpc.CallOption) error {
+	c.methods = append(c.methods, method)
+	return nil
+}
+
+func (c *fakeConn) NewStream(_ context.Context, _ *grpc.StreamDesc, _ string, _ ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, status.Error(codes.Unimplemented, "no stream")
+}
+
+type fakeRegistrar struct {
+	desc *grpc.ServiceDesc
+	srv  any
+}
+
+func (r *fakeRegistrar) RegisterService(desc *grpc.ServiceDesc, srv any) {
+	r.desc = desc
+	r.srv = srv
+}
+
+func TestAllMessageMethods(t *testing.T) {
+	for i := range file_pb_proto_msgTypes {
+		msg := file_pb_proto_msgTypes[i].New().Interface()
+		rv := reflect.ValueOf(msg)
+		for m := 0; m < rv.NumMethod(); m++ {
+			method := rv.Type().Method(m)
+			if method.Type.NumIn() != 1 {
+				continue
+			}
+			if strings.HasPrefix(method.Name, "XXX_") {
+				continue
+			}
+			method.Func.Call([]reflect.Value{rv})
+		}
+
+		data, err := proto.Marshal(msg)
+		require.NoError(t, err)
+		clone := file_pb_proto_msgTypes[i].New().Interface()
+		require.NoError(t, proto.Unmarshal(data, clone))
+		require.True(t, proto.Equal(msg, clone))
+	}
+}
+
+func TestEnumHelpers(t *testing.T) {
+	tests := []struct {
+		desc protoreflectEnum
+	}{
+		{desc: CmdType_CMD_GET},
+		{desc: CheckTxnStatusAction_CheckTxnStatusNoAction},
+		{desc: ManifestChange_CREATE},
+		{desc: AdminCommand_SPLIT},
+		{desc: Mutation_Put},
+	}
+	for _, tt := range tests {
+		_ = tt.desc.Descriptor()
+		_ = tt.desc.Number()
+		_, _ = tt.desc.EnumDescriptor()
+	}
+}
+
+type protoreflectEnum interface {
+	Descriptor() protoreflect.EnumDescriptor
+	Number() protoreflect.EnumNumber
+	EnumDescriptor() ([]byte, []int)
+}
+
+func TestTinyKvClientAndServerHelpers(t *testing.T) {
+	conn := &fakeConn{}
+	client := NewTinyKvClient(conn)
+
+	_, err := client.KvGet(context.Background(), &KvGetRequest{})
+	require.NoError(t, err)
+	_, err = client.KvBatchGet(context.Background(), &KvBatchGetRequest{})
+	require.NoError(t, err)
+	_, err = client.KvScan(context.Background(), &KvScanRequest{})
+	require.NoError(t, err)
+	_, err = client.KvPrewrite(context.Background(), &KvPrewriteRequest{})
+	require.NoError(t, err)
+	_, err = client.KvCommit(context.Background(), &KvCommitRequest{})
+	require.NoError(t, err)
+	_, err = client.KvBatchRollback(context.Background(), &KvBatchRollbackRequest{})
+	require.NoError(t, err)
+	_, err = client.KvResolveLock(context.Background(), &KvResolveLockRequest{})
+	require.NoError(t, err)
+	_, err = client.KvCheckTxnStatus(context.Background(), &KvCheckTxnStatusRequest{})
+	require.NoError(t, err)
+
+	require.Len(t, conn.methods, 8)
+	require.Equal(t, TinyKv_KvGet_FullMethodName, conn.methods[0])
+
+	reg := &fakeRegistrar{}
+	RegisterTinyKvServer(reg, UnimplementedTinyKvServer{})
+	require.NotNil(t, reg.desc)
+	require.Equal(t, "pb.TinyKv", reg.desc.ServiceName)
+	require.NotNil(t, reg.srv)
+
+	srv := UnimplementedTinyKvServer{}
+	_, err = srv.KvGet(context.Background(), &KvGetRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvBatchGet(context.Background(), &KvBatchGetRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvScan(context.Background(), &KvScanRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvPrewrite(context.Background(), &KvPrewriteRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvCommit(context.Background(), &KvCommitRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvBatchRollback(context.Background(), &KvBatchRollbackRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvResolveLock(context.Background(), &KvResolveLockRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.KvCheckTxnStatus(context.Background(), &KvCheckTxnStatusRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
 }

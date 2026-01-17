@@ -152,3 +152,41 @@ func TestSkipListIterator(t *testing.T) {
 		fmt.Printf("iter key %s, value %s", iter.Item().Entry().Key, iter.Item().Entry().Value)
 	}
 }
+
+func TestSkipListIteratorSeekAndPrev(t *testing.T) {
+	list := NewSkiplist(32)
+	require.True(t, list.Empty())
+
+	keys := [][]byte{
+		kv.KeyWithTs([]byte("a"), 1),
+		kv.KeyWithTs([]byte("b"), 1),
+		kv.KeyWithTs([]byte("c"), 1),
+	}
+	for _, k := range keys {
+		list.Add(kv.NewEntry(k, []byte("val")))
+	}
+	require.False(t, list.Empty())
+	require.Greater(t, list.MemSize(), int64(0))
+
+	iterIface := list.NewSkipListIterator()
+	iter, ok := iterIface.(*SkipListIterator)
+	require.True(t, ok)
+	iter.Seek(kv.KeyWithTs([]byte("b"), 1))
+	require.True(t, iter.Valid())
+	require.Equal(t, "b", string(kv.ParseKey(iter.Key())))
+
+	iter.Prev()
+	require.Equal(t, "a", string(kv.ParseKey(iter.Key())))
+
+	iter.SeekForPrev(kv.KeyWithTs([]byte("bb"), 1))
+	require.Equal(t, "b", string(kv.ParseKey(iter.Key())))
+
+	iter.SeekToLast()
+	require.Equal(t, "c", string(kv.ParseKey(iter.Key())))
+
+	iter.SeekToFirst()
+	require.Equal(t, "a", string(kv.ParseKey(iter.Key())))
+
+	_ = iter.ValueUint64()
+	require.NoError(t, iter.Close())
+}

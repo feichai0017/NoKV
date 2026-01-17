@@ -2,6 +2,8 @@ package utils
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func (f Filter) String() string {
@@ -140,4 +142,8 @@ func TestHash(t *testing.T) {
 			t.Errorf("s=%q: got 0x%08x, want 0x%08x", tc.s, got, tc.want)
 		}
 	}
+}
+
+func TestBloomBitsPerKey(t *testing.T) {
+	require.Greater(t, BloomBitsPerKey(100, 0.01), 0)
 }
