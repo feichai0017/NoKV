@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,6 +164,72 @@ func TestEntryHelpers(t *testing.T) {
 	szPtr := e2.EstimateSize(1)
 	if szInline >= szPtr {
 		t.Fatalf("expected pointer estimate > inline estimate")
+	}
+}
+
+func TestValueHelpers(t *testing.T) {
+	ptr := ValuePtr{Len: 2, Offset: 3, Fid: 4}
+	if ptr.IsZero() {
+		t.Fatalf("expected non-zero ValuePtr")
+	}
+	if ptr.Less(nil) {
+		t.Fatalf("expected Less to be false for nil")
+	}
+	if !ptr.Less(&ValuePtr{Len: 5, Offset: 3, Fid: 4}) {
+		t.Fatalf("expected ptr to be less than larger len")
+	}
+
+	entry := &Entry{Meta: BitValuePointer}
+	if !IsValuePtr(entry) {
+		t.Fatalf("expected IsValuePtr to be true")
+	}
+
+	u32 := uint32(0xAABBCCDD)
+	if got := BytesToU32(U32ToBytes(u32)); got != u32 {
+		t.Fatalf("expected round-trip u32, got %x", got)
+	}
+	u64 := uint64(0x1122334455667788)
+	if got := BytesToU64(U64ToBytes(u64)); got != u64 {
+		t.Fatalf("expected round-trip u64, got %x", got)
+	}
+	if BytesToU32Slice(nil) != nil {
+		t.Fatalf("expected nil slice for empty input")
+	}
+	if U32SliceToBytes(nil) != nil {
+		t.Fatalf("expected nil bytes for empty input")
+	}
+	u32s := []uint32{1, 2, 3}
+	raw := U32SliceToBytes(u32s)
+	back := BytesToU32Slice(raw)
+	require.Equal(t, u32s, back)
+
+	called := false
+	RunCallback(nil)
+	RunCallback(func() { called = true })
+	if !called {
+		t.Fatalf("expected callback to run")
+	}
+
+	if !IsDeletedOrExpired(BitDelete, 0) {
+		t.Fatalf("expected deleted meta to be expired")
+	}
+	if IsDeletedOrExpired(0, 0) {
+		t.Fatalf("expected non-expiring value to be live")
+	}
+	if !IsDeletedOrExpired(0, uint64(time.Now().Add(-time.Second).Unix())) {
+		t.Fatalf("expected past ttl to be expired")
+	}
+	if IsDeletedOrExpired(0, uint64(time.Now().Add(time.Hour).Unix())) {
+		t.Fatalf("expected future ttl to be live")
+	}
+
+	vs := &Entry{Meta: BitValuePointer, ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}
+	if DiscardEntry(nil, vs) {
+		t.Fatalf("expected pointer entry to be retained")
+	}
+	vs.Meta = 0
+	if !DiscardEntry(nil, vs) {
+		t.Fatalf("expected inline entry to be discarded")
 	}
 }
 

@@ -26,7 +26,8 @@ type clusterValue struct {
 }
 
 type clusterPending struct {
-	value []byte
+	value  []byte
+	delete bool
 }
 
 type clusterRegion struct {
@@ -96,6 +97,8 @@ func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.Prewrit
 		switch mut.GetOp() {
 		case pb.Mutation_Put:
 			pending[string(mut.GetKey())] = clusterPending{value: append([]byte(nil), mut.GetValue()...)}
+		case pb.Mutation_Delete:
+			pending[string(mut.GetKey())] = clusterPending{delete: true}
 		default:
 			return &pb.PrewriteResponse{
 				Errors: []*pb.KeyError{{Abort: "unsupported mutation"}},
@@ -130,9 +133,13 @@ func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *pb.CommitReq
 		if !ok {
 			continue
 		}
-		region.committed[string(key)] = clusterValue{
-			value:         append([]byte(nil), pend.value...),
-			commitVersion: req.GetCommitVersion(),
+		if pend.delete {
+			delete(region.committed, string(key))
+		} else {
+			region.committed[string(key)] = clusterValue{
+				value:         append([]byte(nil), pend.value...),
+				commitVersion: req.GetCommitVersion(),
+			}
 		}
 		delete(pending, string(key))
 	}
@@ -410,6 +417,149 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 	snap, ok := cluster.regionMeta(1)
 	require.True(t, ok)
 	require.NotNil(t, snap)
+}
+
+func TestClientBatchGetAndMutateHelpers(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("m"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               2,
+				StartKey:         []byte("m"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 201},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	clientCfg := client.Config{
+		Stores: []client.StoreEndpoint{
+			{StoreID: 1, Addr: addr},
+		},
+		Regions: []client.RegionConfig{
+			{Meta: cluster.regions[1].meta, LeaderStoreID: 1},
+			{Meta: cluster.regions[2].meta, LeaderStoreID: 1},
+		},
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	}
+
+	cli, err := client.New(clientCfg)
+	require.NoError(t, err)
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, cli.Put(ctx, []byte("alfa"), []byte("value-a"), 10, 20, 3000))
+	require.NoError(t, cli.Put(ctx, []byte("zulu"), []byte("value-z"), 11, 21, 3000))
+
+	got, err := cli.BatchGet(ctx, [][]byte{[]byte("alfa"), []byte("zulu")}, 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), got["alfa"].GetValue())
+	require.Equal(t, []byte("value-z"), got["zulu"].GetValue())
+
+	require.NoError(t, cli.Delete(ctx, []byte("alfa"), 60, 61, 3000))
+	got, err = cli.BatchGet(ctx, [][]byte{[]byte("alfa")}, 70)
+	require.NoError(t, err)
+	require.True(t, got["alfa"].GetNotFound())
+
+	err = cli.Mutate(ctx, []byte("primary"), []*pb.Mutation{
+		{Op: pb.Mutation_Put, Key: []byte("other"), Value: []byte("v")},
+	}, 1, 2, 3000)
+	require.Error(t, err)
+
+	require.NoError(t, cli.Mutate(ctx, []byte("alfa"), []*pb.Mutation{
+		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v2")},
+		{Op: pb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v3")},
+	}, 80, 81, 3000))
+
+	resp, err := cli.CheckTxnStatus(ctx, []byte("alfa"), 1, 2)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+
+	resolved, err := cli.ResolveLocks(ctx, 1, 0, [][]byte{[]byte("alfa"), []byte("zulu")})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), resolved)
+
+	errStr := (&client.KeyConflictError{Errors: []*pb.KeyError{{Abort: "boom"}}}).Error()
+	require.Contains(t, errStr, "client: prewrite key errors")
+}
+
+type errorService struct {
+	pb.UnimplementedTinyKvServer
+}
+
+func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+	return nil, status.Error(codes.Unavailable, "boom")
+}
+
+func startErrorStore(t *testing.T) (string, func()) {
+	t.Helper()
+	srv := grpc.NewServer()
+	pb.RegisterTinyKvServer(srv, &errorService{})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	return lis.Addr().String(), func() {
+		srv.Stop()
+		_ = lis.Close()
+	}
+}
+
+func TestNormalizeRPCErrorOnGet(t *testing.T) {
+	addr, stop := startErrorStore(t)
+	defer stop()
+
+	meta := &pb.RegionMeta{
+		Id:               1,
+		StartKey:         nil,
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	}
+	cli, err := client.New(client.Config{
+		Stores: []client.StoreEndpoint{
+			{StoreID: 1, Addr: addr},
+		},
+		Regions: []client.RegionConfig{
+			{Meta: meta, LeaderStoreID: 1},
+		},
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	defer cli.Close()
+
+	_, err = cli.Get(context.Background(), []byte("key"), 1)
+	require.Error(t, err)
 }
 
 // Utility helpers

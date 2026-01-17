@@ -261,6 +261,69 @@ func TestServicePrewriteCommit(t *testing.T) {
 	require.Nil(t, commitResp.GetResponse().GetError())
 }
 
+func TestServiceBatchGetEmpty(t *testing.T) {
+	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
+	resp, err := h.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+		Context: h.ctx,
+		Request: &pb.BatchGetRequest{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetResponse())
+	require.Len(t, resp.GetResponse().GetResponses(), 0)
+}
+
+func TestServiceInvalidContext(t *testing.T) {
+	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
+	_, err := h.service.KvGet(context.Background(), &pb.KvGetRequest{})
+	require.Error(t, err)
+
+	_, err = h.service.KvScan(context.Background(), &pb.KvScanRequest{})
+	require.Error(t, err)
+}
+
+func TestServiceResolveAndCheckStatus(t *testing.T) {
+	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
+
+	key := []byte("lock-key")
+	prewriteKey(t, h.service, h.ctx, key, []byte("value"), 10)
+
+	resp, err := h.service.KvCheckTxnStatus(context.Background(), &pb.KvCheckTxnStatusRequest{
+		Context: h.ctx,
+		Request: &pb.CheckTxnStatusRequest{
+			PrimaryKey:         key,
+			LockTs:             10,
+			CurrentTs:          20,
+			CallerStartTs:      20,
+			RollbackIfNotExist: true,
+			CurrentTime:        1,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	resolveResp, err := h.service.KvResolveLock(context.Background(), &pb.KvResolveLockRequest{
+		Context: h.ctx,
+		Request: &pb.ResolveLockRequest{
+			StartVersion:  10,
+			CommitVersion: 0,
+			Keys:          [][]byte{entrykv.SafeCopy(nil, key)},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resolveResp)
+
+	rollbackResp, err := h.service.KvBatchRollback(context.Background(), &pb.KvBatchRollbackRequest{
+		Context: h.ctx,
+		Request: &pb.BatchRollbackRequest{
+			Keys:         [][]byte{entrykv.SafeCopy(nil, key)},
+			StartVersion: 10,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rollbackResp)
+}
+
 func TestServiceRegionEpochMismatch(t *testing.T) {
 	db := openTestDB(t)
 	applier := kv.NewApplier(db)

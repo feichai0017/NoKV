@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -231,6 +232,68 @@ func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
 	ptr, ok := manifestMgr.RaftPointer(1)
 	require.True(t, ok)
 	require.NoError(t, validateManifestPointer(walMgr, ptr))
+}
+
+func TestWALStorageHardStateAndEntries(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	manifestMgr := openManifestManager(t, dir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:  1,
+		WAL:      walMgr,
+		Manifest: manifestMgr,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, ws.SetHardState(myraft.HardState{}))
+	hard := myraft.HardState{Term: 2, Vote: 5, Commit: 2}
+	require.NoError(t, ws.SetHardState(hard))
+
+	hs, _, err := ws.InitialState()
+	require.NoError(t, err)
+	require.Equal(t, hard, hs)
+
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 1, Term: 1, Data: []byte("e1")},
+		{Index: 2, Term: 2, Data: []byte("e2")},
+	}))
+
+	first, err := ws.FirstIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first)
+
+	term, err := ws.Term(2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), term)
+
+	entries, err := ws.Entries(1, 3, math.MaxUint64)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	require.NoError(t, ws.MaybeCompact(2, 1))
+}
+
+func TestWALStorageEncodingHelpers(t *testing.T) {
+	hs := myraft.HardState{Term: 3, Vote: 7, Commit: 9}
+	data, err := encodeRaftHardState(5, hs)
+	require.NoError(t, err)
+	groupID, decoded, err := decodeRaftHardState(data)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), groupID)
+	require.Equal(t, hs, decoded)
+
+	snap := myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{Index: 11, Term: 4},
+		Data:     []byte("snap"),
+	}
+	snapData, err := encodeRaftSnapshot(8, snap)
+	require.NoError(t, err)
+	groupID, decodedSnap, err := decodeRaftSnapshot(snapData)
+	require.NoError(t, err)
+	require.Equal(t, uint64(8), groupID)
+	require.Equal(t, snap.Metadata.Index, decodedSnap.Metadata.Index)
+	require.Equal(t, snap.Metadata.Term, decodedSnap.Metadata.Term)
 }
 
 func TestWALSnapshotExportImport(t *testing.T) {

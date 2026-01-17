@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/manifest"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunManifestCmd(t *testing.T) {
@@ -167,4 +172,91 @@ func TestRunRegionsCmd(t *testing.T) {
 		t.Fatalf("expected regions array in output: %v", payload)
 	}
 	_ = len(regions)
+}
+
+func TestFetchExpvarSnapshot(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]any{
+			"NoKV.Stats.Entries":           float64(12),
+			"NoKV.Stats.ValueLog.Segments": map[string]any{"value": float64(2)},
+			"NoKV.Stats.HotKeys":           map[string]any{"k1": map[string]any{"value": float64(3)}},
+			"NoKV.Stats.LSM.Levels": []any{
+				map[string]any{"level": float64(0), "tables": float64(1)},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	url := strings.TrimPrefix(server.URL, "http://")
+	snap, err := fetchExpvarSnapshot(url)
+	require.NoError(t, err)
+	require.Equal(t, int64(12), snap.Entries)
+	require.Equal(t, 2, snap.ValueLogSegments)
+	require.Len(t, snap.HotKeys, 1)
+	require.Equal(t, "k1", snap.HotKeys[0].Key)
+	require.Len(t, snap.LSMLevels, 1)
+	require.Equal(t, 0, snap.LSMLevels[0].Level)
+}
+
+func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
+	snap := parseExpvarSnapshot(map[string]any{
+		"NoKV.Stats.HotKeys": []any{
+			map[string]any{"key": "k2", "count": float64(4)},
+		},
+	})
+	require.Len(t, snap.HotKeys, 1)
+	require.Equal(t, "k2", snap.HotKeys[0].Key)
+	require.Equal(t, int32(4), snap.HotKeys[0].Count)
+}
+
+func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
+	snap := parseExpvarSnapshot(map[string]any{
+		"NoKV.Stats.HotKeys": map[string]any{
+			"k3": map[string]any{"value": float64(7)},
+		},
+	})
+	require.Len(t, snap.HotKeys, 1)
+	require.Equal(t, "k3", snap.HotKeys[0].Key)
+	require.Equal(t, int32(7), snap.HotKeys[0].Count)
+}
+
+func TestFormatHelpers(t *testing.T) {
+	require.Equal(t, "running", formatRegionState(manifest.RegionStateRunning))
+	require.Equal(t, "unknown(99)", formatRegionState(99))
+
+	peers := []manifest.PeerMeta{{StoreID: 1, PeerID: 2}}
+	require.Equal(t, "[{store:1 peer:2}]", formatPeers(peers))
+
+	files := []manifest.FileMeta{
+		{FileID: 1, Size: 10, ValueSize: 5},
+		{FileID: 2, Size: 20, ValueSize: 7},
+	}
+	require.Equal(t, []uint64{1, 2}, fileIDs(files))
+	require.Equal(t, uint64(30), totalSize(files))
+	require.Equal(t, uint64(12), totalValue(files))
+}
+
+func TestRunSchedulerCmdNoStore(t *testing.T) {
+	stores := storepkg.Stores()
+	for _, st := range stores {
+		storepkg.UnregisterStore(st)
+	}
+	var buf bytes.Buffer
+	err := runSchedulerCmd(&buf, []string{"-json"})
+	require.Error(t, err)
+}
+
+func TestPrintUsage(t *testing.T) {
+	var buf bytes.Buffer
+	printUsage(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "Usage: nokv") {
+		t.Fatalf("expected usage header, got %q", out)
+	}
+	if !strings.Contains(out, "serve") {
+		t.Fatalf("expected serve command in usage, got %q", out)
+	}
 }
