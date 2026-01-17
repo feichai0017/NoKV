@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -757,4 +758,121 @@ func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	txn.Discard()
 	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+}
+
+func TestCFHotKey(t *testing.T) {
+	key := []byte("k")
+	require.Equal(t, "k", cfHotKey(kv.CFDefault, key))
+	require.Equal(t, string(key), cfHotKey(kv.ColumnFamily(0), key))
+
+	expected := append([]byte{byte(kv.CFWrite)}, key...)
+	require.Equal(t, string(expected), cfHotKey(kv.CFWrite, key))
+}
+
+func TestHotWriteAndThrottle(t *testing.T) {
+	db := &DB{
+		opt: &Options{
+			HotWriteBurstThreshold: 1,
+			WriteHotKeyLimit:       1,
+		},
+		hot: hotring.NewHotRing(8, nil),
+	}
+
+	entry := kv.NewEntry([]byte("hot"), []byte("v"))
+	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
+
+	err := db.maybeThrottleWrite(kv.CFDefault, entry.Key)
+	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
+	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+}
+
+func TestRecordReadEnqueuesPrefetch(t *testing.T) {
+	db := &DB{
+		opt:          &Options{},
+		hot:          hotring.NewHotRing(8, nil),
+		prefetchRing: utils.NewRing[prefetchRequest](2),
+		prefetchHot:  1,
+	}
+	db.prefetchState.Store(&prefetchState{
+		pend:       make(map[string]struct{}),
+		prefetched: make(map[string]time.Time),
+	})
+
+	db.recordRead([]byte("k1"))
+	req, ok := db.prefetchRing.Pop()
+	require.True(t, ok)
+	require.Equal(t, "k1", req.key)
+	require.True(t, req.hot)
+}
+
+func TestEnqueuePrefetchRingFull(t *testing.T) {
+	db := &DB{
+		opt:          &Options{},
+		prefetchRing: utils.NewRing[prefetchRequest](2),
+	}
+	db.prefetchState.Store(&prefetchState{
+		pend:       make(map[string]struct{}),
+		prefetched: make(map[string]time.Time),
+	})
+
+	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-1"}))
+	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-2"}))
+
+	db.enqueuePrefetch("blocked", true)
+	state := db.prefetchState.Load()
+	_, pending := state.pend["blocked"]
+	require.False(t, pending)
+}
+
+func TestExecutePrefetchUpdatesState(t *testing.T) {
+	db := &DB{
+		opt:              &Options{},
+		prefetchCooldown: 10 * time.Millisecond,
+	}
+	state := &prefetchState{
+		pend:       map[string]struct{}{"k1": {}},
+		prefetched: make(map[string]time.Time),
+	}
+	db.prefetchState.Store(state)
+
+	db.executePrefetch(prefetchRequest{key: "k1"})
+	next := db.prefetchState.Load()
+	_, pending := next.pend["k1"]
+	require.False(t, pending)
+	expiry, ok := next.prefetched["k1"]
+	require.True(t, ok)
+	require.True(t, expiry.After(time.Now().Add(-time.Millisecond)))
+
+	db.prefetchCooldown = 0
+	next.pend["k2"] = struct{}{}
+	db.prefetchState.Store(next)
+	db.executePrefetch(prefetchRequest{key: "k2"})
+	final := db.prefetchState.Load()
+	_, pending = final.pend["k2"]
+	require.False(t, pending)
+	_, ok = final.prefetched["k2"]
+	require.False(t, ok)
+}
+
+func TestPrefetchLoopDrainsRing(t *testing.T) {
+	db := &DB{
+		opt:          &Options{},
+		prefetchRing: utils.NewRing[prefetchRequest](2),
+	}
+	db.prefetchState.Store(&prefetchState{
+		pend:       map[string]struct{}{"k": {}},
+		prefetched: make(map[string]time.Time),
+	})
+
+	db.prefetchWG.Add(1)
+	go db.prefetchLoop()
+
+	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "k"}))
+	time.Sleep(5 * time.Millisecond)
+	db.prefetchRing.Close()
+	db.prefetchWG.Wait()
+
+	state := db.prefetchState.Load()
+	_, pending := state.pend["k"]
+	require.False(t, pending)
 }

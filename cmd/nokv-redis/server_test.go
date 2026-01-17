@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"strings"
@@ -205,6 +206,66 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	if got := send("*1\r\n$4\r\nQUIT\r\n"); got != "+OK\r\n" {
 		t.Fatalf("QUIT: got %q", got)
 	}
+}
+
+func TestParseRESPInline(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("PING\r\n"))
+	out, err := parseRESP(r)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("PING")}, out)
+}
+
+func TestParseRESPArray(t *testing.T) {
+	payload := "*2\r\n$4\r\nPING\r\n$4\r\nPONG\r\n"
+	r := bufio.NewReader(strings.NewReader(payload))
+	out, err := parseRESP(r)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("PING"), []byte("PONG")}, out)
+}
+
+func TestParseRESPNilArray(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("*-1\r\n"))
+	out, err := parseRESP(r)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestParseRESPInvalidMultiBulk(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("*bad\r\n"))
+	_, err := parseRESP(r)
+	require.Error(t, err)
+}
+
+func TestParseRESPInvalidBulkPrefix(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("*1\r\n+OK\r\n"))
+	_, err := parseRESP(r)
+	require.Error(t, err)
+}
+
+func TestReadLineInvalidTerminator(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("oops\n"))
+	_, err := readLine(r)
+	require.Error(t, err)
+}
+
+func TestExpectCRLFFailure(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("x\n"))
+	err := expectCRLF(r)
+	require.Error(t, err)
+}
+
+func TestWriteArray(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	require.NoError(t, writeArray(w, nil))
+	require.NoError(t, w.Flush())
+	require.Equal(t, "*-1\r\n", buf.String())
+
+	buf.Reset()
+	w.Reset(&buf)
+	require.NoError(t, writeArray(w, [][]byte{[]byte("a"), []byte("b")}))
+	require.NoError(t, w.Flush())
+	require.Equal(t, "*2\r\n$1\r\na\r\n$1\r\nb\r\n", buf.String())
 }
 
 type stubBackend struct {
