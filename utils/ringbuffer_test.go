@@ -32,7 +32,7 @@ func TestRingConcurrent(t *testing.T) {
 	done := make(chan struct{})
 	// producer
 	go func() {
-		for i := 0; i < 1000; i++ {
+		for i := range 1000 {
 			for !r.Push(i) {
 				runtime.Gosched()
 			}
