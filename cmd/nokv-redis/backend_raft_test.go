@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +32,7 @@ type stubTinyKvServer struct {
 	commitCalls      int
 	lockVersion      uint64
 	lockKey          []byte
+	responses        map[string]*pb.GetResponse
 }
 
 func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
@@ -92,7 +96,20 @@ func (s *stubTinyKvServer) KvResolveLock(ctx context.Context, req *pb.KvResolveL
 
 func (s *stubTinyKvServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
 	responses := make([]*pb.GetResponse, len(req.GetRequest().GetRequests()))
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range responses {
+		getReq := req.GetRequest().GetRequests()[i]
+		if getReq == nil {
+			responses[i] = &pb.GetResponse{NotFound: true}
+			continue
+		}
+		if s.responses != nil {
+			if resp, ok := s.responses[string(getReq.GetKey())]; ok {
+				responses[i] = resp
+				continue
+			}
+		}
 		responses[i] = &pb.GetResponse{NotFound: true}
 	}
 	return &pb.KvBatchGetResponse{Response: &pb.BatchGetResponse{Responses: responses}}, nil
@@ -374,4 +391,300 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 	if stub.commitCalls == 0 {
 		t.Fatalf("expected commit to run after resolving lock")
 	}
+}
+
+func TestRaftBackendGetWithTTL(t *testing.T) {
+	storeAddr, stub, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	if err != nil {
+		t.Fatalf("new raft backend: %v", err)
+	}
+	defer func() {
+		_ = backend.Close()
+	}()
+
+	key := []byte("ttl-key")
+	valueKey := string(key)
+	expireAt := uint64(time.Now().Add(time.Hour).Unix())
+	ttlBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(ttlBuf, expireAt)
+
+	stub.mu.Lock()
+	stub.responses = map[string]*pb.GetResponse{
+		valueKey:                {Value: []byte("value")},
+		string(ttlMetaKey(key)): {Value: ttlBuf},
+	}
+	stub.mu.Unlock()
+
+	val, err := backend.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !val.Found {
+		t.Fatalf("expected value to be found")
+	}
+	if val.ExpiresAt != expireAt {
+		t.Fatalf("expected expire %d, got %d", expireAt, val.ExpiresAt)
+	}
+}
+
+func TestRaftBackendExpireCleanup(t *testing.T) {
+	storeAddr, stub, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	if err != nil {
+		t.Fatalf("new raft backend: %v", err)
+	}
+	defer func() {
+		_ = backend.Close()
+	}()
+
+	key := []byte("expired-key")
+	expireAt := uint64(time.Now().Add(-time.Hour).Unix())
+	ttlBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(ttlBuf, expireAt)
+
+	stub.mu.Lock()
+	stub.responses = map[string]*pb.GetResponse{
+		string(key):             {Value: []byte("value")},
+		string(ttlMetaKey(key)): {Value: ttlBuf},
+	}
+	before := stub.commitCalls
+	stub.mu.Unlock()
+
+	val, err := backend.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if val.Found {
+		t.Fatalf("expected expired value to be deleted")
+	}
+
+	stub.mu.Lock()
+	after := stub.commitCalls
+	stub.mu.Unlock()
+	if after <= before {
+		t.Fatalf("expected delete mutation to commit")
+	}
+}
+
+func TestRaftBackendIncrByAndErrors(t *testing.T) {
+	storeAddr, stub, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	if err != nil {
+		t.Fatalf("new raft backend: %v", err)
+	}
+	defer func() {
+		_ = backend.Close()
+	}()
+
+	key := []byte("counter")
+	stub.mu.Lock()
+	stub.responses = map[string]*pb.GetResponse{
+		string(key): {Value: []byte("10")},
+	}
+	stub.mu.Unlock()
+
+	val, err := backend.IncrBy(key, 5)
+	if err != nil {
+		t.Fatalf("incrby: %v", err)
+	}
+	if val != 15 {
+		t.Fatalf("expected 15, got %d", val)
+	}
+
+	stub.mu.Lock()
+	stub.responses[string(key)] = &pb.GetResponse{Value: []byte("abc")}
+	stub.mu.Unlock()
+	if _, err := backend.IncrBy(key, 1); err == nil {
+		t.Fatalf("expected non-integer error")
+	}
+
+	stub.mu.Lock()
+	stub.responses[string(key)] = &pb.GetResponse{Value: []byte(strconv.FormatInt(math.MaxInt64, 10))}
+	stub.mu.Unlock()
+	if _, err := backend.IncrBy(key, 1); err == nil {
+		t.Fatalf("expected overflow error")
+	}
+}
+
+func TestRaftBackendMGetAndExists(t *testing.T) {
+	storeAddr, stub, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	if err != nil {
+		t.Fatalf("new raft backend: %v", err)
+	}
+	defer func() {
+		_ = backend.Close()
+	}()
+
+	key1 := []byte("k1")
+	key2 := []byte("k2")
+	key3 := []byte("k3")
+	expireAt := uint64(time.Now().Add(time.Hour).Unix())
+	ttlBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(ttlBuf, expireAt)
+
+	stub.mu.Lock()
+	stub.responses = map[string]*pb.GetResponse{
+		string(key1):                      {Value: []byte("v1")},
+		string(key2):                      {Value: []byte("v2")},
+		string(ttlMetaKey(key2)):          {Value: ttlBuf},
+		string(ttlMetaKey(key3)):          {Value: ttlBuf},
+		string(append([]byte{}, key3...)): {NotFound: true},
+	}
+	stub.mu.Unlock()
+
+	vals, err := backend.MGet([][]byte{key1, key2, key3})
+	if err != nil {
+		t.Fatalf("mget: %v", err)
+	}
+	if len(vals) != 3 {
+		t.Fatalf("expected 3 values, got %d", len(vals))
+	}
+	if !vals[0].Found || string(vals[0].Value) != "v1" {
+		t.Fatalf("expected k1 to be found")
+	}
+	if !vals[1].Found || vals[1].ExpiresAt != expireAt {
+		t.Fatalf("expected k2 ttl %d, got %+v", expireAt, vals[1])
+	}
+	if vals[2].Found {
+		t.Fatalf("expected k3 to be missing")
+	}
+
+	count, err := backend.Exists([][]byte{key1, key2, key3})
+	if err != nil {
+		t.Fatalf("exists: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 existing keys, got %d", count)
+	}
+
+	stub.mu.Lock()
+	commits := stub.commitCalls
+	stub.mu.Unlock()
+	if commits == 0 {
+		t.Fatalf("expected cleanup delete to commit")
+	}
+}
+
+func TestRaftBackendMSetAndDel(t *testing.T) {
+	storeAddr, stub, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	if err != nil {
+		t.Fatalf("new raft backend: %v", err)
+	}
+	defer func() {
+		_ = backend.Close()
+	}()
+
+	if err := backend.MSet([][2][]byte{{[]byte("a"), []byte("1")}, {[]byte("b"), []byte("2")}}); err != nil {
+		t.Fatalf("mset: %v", err)
+	}
+	if err := backend.MSet([][2][]byte{{nil, []byte("bad")}}); err == nil {
+		t.Fatalf("expected error for empty key")
+	}
+
+	stub.mu.Lock()
+	before := stub.commitCalls
+	stub.responses = map[string]*pb.GetResponse{
+		"a": {Value: []byte("1")},
+	}
+	stub.mu.Unlock()
+
+	removed, err := backend.Del([][]byte{[]byte("a"), []byte("missing")})
+	if err != nil {
+		t.Fatalf("del: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed, got %d", removed)
+	}
+	stub.mu.Lock()
+	after := stub.commitCalls
+	stub.mu.Unlock()
+	if after <= before {
+		t.Fatalf("expected delete commit")
+	}
+}
+
+func TestDecodeTTLFromResponse(t *testing.T) {
+	if got := decodeTTLFromResponse(nil); got != 0 {
+		t.Fatalf("expected 0 for nil response")
+	}
+	if got := decodeTTLFromResponse(&pb.GetResponse{NotFound: true}); got != 0 {
+		t.Fatalf("expected 0 for not found")
+	}
+	if got := decodeTTLFromResponse(&pb.GetResponse{Value: []byte("short")}); got != 0 {
+		t.Fatalf("expected 0 for short ttl")
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, 123)
+	if got := decodeTTLFromResponse(&pb.GetResponse{Value: buf}); got != 123 {
+		t.Fatalf("expected 123, got %d", got)
+	}
+}
+
+func TestUniqueKeys(t *testing.T) {
+	keys := uniqueKeys([][]byte{
+		[]byte("a"),
+		[]byte("a"),
+		nil,
+		[]byte("b"),
+		[]byte(""),
+	})
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 unique keys, got %d", len(keys))
+	}
+}
+
+func writeBackendConfig(t *testing.T, storeAddr string) string {
+	t.Helper()
+	cfg := config.File{
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID:       1,
+				StartKey: "",
+				EndKey:   "",
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
 }

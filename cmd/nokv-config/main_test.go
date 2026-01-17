@@ -89,6 +89,35 @@ func TestRunManifestWritesRegion(t *testing.T) {
 	require.Equal(t, manifest.PeerMeta{StoreID: 1, PeerID: 1001}, meta.Peers[0])
 }
 
+func TestMainStoresCommand(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = []string{
+		"nokv-config",
+		"stores",
+		"--config",
+		cfgPath,
+		"--format",
+		"json",
+	}
+
+	_, err := captureStdout(t, func() error {
+		main()
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestPrintUsage(t *testing.T) {
+	output, err := captureStdout(t, func() error {
+		printUsage()
+		return nil
+	})
+	require.NoError(t, err)
+	require.Contains(t, output, "Usage: nokv-config")
+}
+
 func captureStdout(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	orig := os.Stdout

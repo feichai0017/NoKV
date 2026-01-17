@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
+	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -73,5 +75,92 @@ func requireNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStoreAndRouterHelpers(t *testing.T) {
+	store := NewStore(nil)
+	if store.Router() == nil {
+		t.Fatalf("expected router to be non-nil")
+	}
+	factory := func(cfg *peer.Config) (*peer.Peer, error) {
+		return nil, nil
+	}
+	store.SetPeerFactory(factory)
+	if store.peerFactory == nil {
+		t.Fatalf("expected peer factory to be set")
+	}
+
+	snap := store.RegionSnapshot()
+	if len(snap.Regions) != 0 {
+		t.Fatalf("expected empty region snapshot")
+	}
+	if store.RegionMetrics() == nil {
+		t.Fatalf("expected region metrics to be initialized")
+	}
+
+	router := NewRouter()
+	if err := router.SendRaft(1, myraft.Message{To: 1}); err == nil {
+		t.Fatalf("expected SendRaft to fail for missing peer")
+	}
+	if err := router.SendPropose(1, []byte("data")); err == nil {
+		t.Fatalf("expected SendPropose to fail for missing peer")
+	}
+	if err := router.SendCommand(1, nil); err == nil {
+		t.Fatalf("expected SendCommand to fail for nil request")
+	}
+	if err := router.SendCommand(1, &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}); err == nil {
+		t.Fatalf("expected SendCommand to fail for missing peer")
+	}
+	if err := router.SendTick(1); err == nil {
+		t.Fatalf("expected SendTick to fail for missing peer")
+	}
+}
+
+func TestStoreReadCommandValidation(t *testing.T) {
+	store := NewStore(nil)
+
+	if _, err := store.ReadCommand(&pb.RaftCmdRequest{}); err == nil {
+		t.Fatalf("expected missing region id error")
+	}
+
+	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}
+	resp, err := store.ReadCommand(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil || resp.RegionError == nil || resp.RegionError.EpochNotMatch == nil {
+		t.Fatalf("expected epoch not match error")
+	}
+}
+
+func TestStoreStepErrors(t *testing.T) {
+	var nilStore *Store
+	if err := nilStore.Step(myraft.Message{To: 1}); err == nil {
+		t.Fatalf("expected error for nil store")
+	}
+
+	store := NewStore(nil)
+	if err := store.Step(myraft.Message{}); err == nil {
+		t.Fatalf("expected error for missing recipient")
+	}
+}
+
+func TestReadOnlyRequestPredicate(t *testing.T) {
+	if isReadOnlyRequest(nil) {
+		t.Fatalf("expected nil request to be read-only false")
+	}
+	readReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
+		{CmdType: pb.CmdType_CMD_GET},
+		{CmdType: pb.CmdType_CMD_SCAN},
+	}}
+	if !isReadOnlyRequest(readReq) {
+		t.Fatalf("expected read-only request to return true")
+	}
+	writeReq := &pb.RaftCmdRequest{Requests: []*pb.Request{
+		{CmdType: pb.CmdType_CMD_PREWRITE},
+	}}
+	if isReadOnlyRequest(writeReq) {
+		t.Fatalf("expected write request to return false")
 	}
 }

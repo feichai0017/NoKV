@@ -1,8 +1,10 @@
 package vlog
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -206,5 +208,124 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	wantSize := int64(ptr1.Offset + ptr1.Len)
 	if infoAfter.Size() != wantSize {
 		t.Fatalf("expected truncated size %d, got %d", wantSize, infoAfter.Size())
+	}
+}
+
+func TestManagerHooksAndSync(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer mgr.Close()
+
+	mgr.SetTestingHooks(ManagerTestingHooks{
+		BeforeAppend: func(_ *Manager, payload []byte) error {
+			if len(payload) == 0 {
+				return errors.New("empty payload")
+			}
+			return errors.New("append hook")
+		},
+	})
+	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v"))); err == nil {
+		t.Fatalf("expected append hook error")
+	}
+
+	mgr.SetTestingHooks(ManagerTestingHooks{
+		BeforeRotate: func(*Manager) error {
+			return errors.New("rotate hook")
+		},
+	})
+	if err := mgr.Rotate(); err == nil {
+		t.Fatalf("expected rotate hook error")
+	}
+
+	mgr.SetTestingHooks(ManagerTestingHooks{
+		BeforeSync: func(*Manager, uint32) error {
+			return errors.New("sync hook")
+		},
+	})
+	if err := mgr.SyncActive(); err == nil {
+		t.Fatalf("expected sync hook error")
+	}
+}
+
+func TestManagerSyncFIDsDedup(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer mgr.Close()
+
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	var calls int32
+	mgr.SetTestingHooks(ManagerTestingHooks{
+		BeforeSync: func(_ *Manager, fid uint32) error {
+			if fid != vp.Fid {
+				return errors.New("unexpected fid")
+			}
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	})
+
+	if err := mgr.SyncFIDs([]uint32{vp.Fid, vp.Fid, vp.Fid + 10}); err != nil {
+		t.Fatalf("sync fids: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected single sync call, got %d", got)
+	}
+}
+
+func TestManagerSegmentOps(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer mgr.Close()
+
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	size, err := mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size: %v", err)
+	}
+	if size <= 0 {
+		t.Fatalf("expected size > 0, got %d", size)
+	}
+	if err := mgr.SegmentInit(vp.Fid); err != nil {
+		t.Fatalf("segment init: %v", err)
+	}
+	if err := mgr.SegmentTruncate(vp.Fid, uint32(kv.ValueLogHeaderSize)); err != nil {
+		t.Fatalf("segment truncate: %v", err)
+	}
+	size, err = mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size after truncate: %v", err)
+	}
+	if size != int64(kv.ValueLogHeaderSize) {
+		t.Fatalf("expected size %d after truncate, got %d", kv.ValueLogHeaderSize, size)
+	}
+	if err := mgr.SegmentBootstrap(vp.Fid); err != nil {
+		t.Fatalf("segment bootstrap: %v", err)
+	}
+	size, err = mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size after bootstrap: %v", err)
+	}
+	if size < int64(kv.ValueLogHeaderSize) {
+		t.Fatalf("expected size >= %d after bootstrap, got %d", kv.ValueLogHeaderSize, size)
+	}
+	if _, err := mgr.SegmentSize(vp.Fid + 10); err == nil {
+		t.Fatalf("expected error for missing fid")
 	}
 }

@@ -3,6 +3,7 @@ package lsm
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -185,6 +187,178 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	if len(got.Value) != 0 {
 		t.Fatalf("expected empty tombstone value, got %q", got.Value)
 	}
+}
+
+func TestIngestBufferAccounting(t *testing.T) {
+	now := time.Now()
+	t1 := &table{
+		fid:           1,
+		minKey:        kv.KeyWithTs([]byte{0x00, 'a'}, 1),
+		maxKey:        kv.KeyWithTs([]byte{0x00, 'z'}, 1),
+		size:          100,
+		valueSize:     40,
+		createdAt:     now.Add(-2 * time.Minute),
+		maxVersion:    7,
+		staleDataSize: 2,
+	}
+	t2 := &table{
+		fid:        2,
+		minKey:     kv.KeyWithTs([]byte{0x80, 'a'}, 1),
+		maxKey:     kv.KeyWithTs([]byte{0x80, 'z'}, 1),
+		size:       200,
+		valueSize:  100,
+		createdAt:  now.Add(-1 * time.Minute),
+		maxVersion: 5,
+	}
+	t3 := &table{
+		fid:        3,
+		minKey:     kv.KeyWithTs([]byte{0x40, 'a'}, 1),
+		maxKey:     kv.KeyWithTs([]byte{0x40, 'z'}, 1),
+		size:       50,
+		valueSize:  10,
+		createdAt:  now.Add(-3 * time.Minute),
+		maxVersion: 4,
+	}
+
+	var buf ingestBuffer
+	buf.add(t1)
+	buf.addBatch([]*table{t2, t3})
+
+	if got := buf.tableCount(); got != 3 {
+		t.Fatalf("expected 3 tables, got %d", got)
+	}
+	if got := buf.totalSize(); got != 350 {
+		t.Fatalf("expected size 350, got %d", got)
+	}
+	if got := buf.totalValueSize(); got != 150 {
+		t.Fatalf("expected value size 150, got %d", got)
+	}
+	if buf.maxAgeSeconds() <= 0 {
+		t.Fatalf("expected max age > 0")
+	}
+
+	order := buf.shardOrderBySize()
+	if len(order) != 3 {
+		t.Fatalf("expected 3 shard order entries, got %d", len(order))
+	}
+	if order[0] != shardIndexForRange(t2.minKey) {
+		t.Fatalf("expected largest shard first, got %v", order)
+	}
+
+	meta := buf.allMeta()
+	if len(meta) != 3 {
+		t.Fatalf("expected 3 metas, got %d", len(meta))
+	}
+	if meta[0].MaxVersion == 0 {
+		t.Fatalf("expected max version in meta")
+	}
+	if buf.shardMetaByIndex(99) != nil {
+		t.Fatalf("expected nil shard meta for invalid index")
+	}
+
+	buf.sortShards()
+	views := buf.shardViews()
+	if len(views) != 3 {
+		t.Fatalf("expected 3 shard views, got %d", len(views))
+	}
+
+	buf.remove(map[uint64]struct{}{1: {}})
+	if got := buf.tableCount(); got != 2 {
+		t.Fatalf("expected 2 tables after remove, got %d", got)
+	}
+}
+
+func TestLevelHandlerIngestMetrics(t *testing.T) {
+	now := time.Now()
+	t1 := &table{
+		fid:        10,
+		minKey:     kv.KeyWithTs([]byte{0x00, 'a'}, 1),
+		maxKey:     kv.KeyWithTs([]byte{0x00, 'z'}, 1),
+		size:       120,
+		valueSize:  30,
+		createdAt:  now.Add(-time.Minute),
+		maxVersion: 1,
+	}
+	t2 := &table{
+		fid:        11,
+		minKey:     kv.KeyWithTs([]byte{0x80, 'a'}, 1),
+		maxKey:     kv.KeyWithTs([]byte{0x80, 'z'}, 1),
+		size:       60,
+		valueSize:  10,
+		createdAt:  now.Add(-2 * time.Minute),
+		maxVersion: 1,
+	}
+
+	lh := &levelHandler{levelNum: 3}
+	lh.addIngest(t1)
+	lh.addIngest(t2)
+
+	if got := lh.numIngestTables(); got != 2 {
+		t.Fatalf("expected 2 ingest tables, got %d", got)
+	}
+	if got := lh.ingestDataSize(); got != 180 {
+		t.Fatalf("expected ingest size 180, got %d", got)
+	}
+	if got := lh.ingestValueBytes(); got != 40 {
+		t.Fatalf("expected ingest value bytes 40, got %d", got)
+	}
+	expectDensity := float64(40) / float64(180)
+	if math.Abs(lh.ingestValueDensity()-expectDensity) > 1e-9 {
+		t.Fatalf("unexpected ingest density")
+	}
+	if math.Abs(lh.ingestDensityLocked()-expectDensity) > 1e-9 {
+		t.Fatalf("unexpected ingest density locked")
+	}
+	if lh.maxIngestAgeSeconds() <= 0 {
+		t.Fatalf("expected non-zero max ingest age")
+	}
+	if idx := lh.ingestShardByBacklog(); idx < 0 {
+		t.Fatalf("expected valid ingest shard index")
+	}
+}
+
+func TestLSMMetricsAPIs(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	lsm.SetHotKeyProvider(func() [][]byte {
+		return nil
+	})
+
+	entry := utils.BuildEntry()
+	requireNoError := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	requireNoError(lsm.Set(entry))
+
+	_ = lsm.FlushPending()
+	_ = lsm.FlushMetrics()
+	_, _ = lsm.CompactionStats()
+	_, _, _ = lsm.CompactionDurations()
+	_ = lsm.LevelMetrics()
+	_ = lsm.CacheMetrics()
+	_ = lsm.MaxVersion()
+
+	if lsm.CompactionValueWeight() <= 0 {
+		t.Fatalf("expected compaction value weight to be positive")
+	}
+	if lsm.CompactionValueAlertThreshold() <= 0 {
+		t.Fatalf("expected compaction value alert threshold to be positive")
+	}
+	if lsm.ManifestManager() == nil {
+		t.Fatalf("expected manifest manager to be available")
+	}
+
+	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Fid: 1, Offset: 2}))
+	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{FileID: 1, Offset: 5, Valid: true}))
+	_, _ = lsm.ValueLogHead()
+	_ = lsm.ValueLogStatus()
+	_ = lsm.CurrentVersion()
+	requireNoError(lsm.LogValueLogDelete(1))
 }
 
 // TestCompact exercises L0->Lmax compaction.

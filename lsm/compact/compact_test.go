@@ -167,6 +167,15 @@ func TestPlanBuilderSelections(t *testing.T) {
 	require.Equal(t, 4, len(plan.TopIDs))
 }
 
+func TestStateAddRangeAndDebug(t *testing.T) {
+	state := NewState(1)
+	kr := KeyRange{Left: ikey("a", 1), Right: ikey("b", 1)}
+	state.AddRangeWithTables(0, kr, []uint64{10, 20})
+	require.True(t, state.HasTable(10))
+	require.Contains(t, kr.String(), "left=")
+	require.NotEmpty(t, state.levels[0].debug())
+}
+
 func TestTableHelpers(t *testing.T) {
 	require.Nil(t, tableIDsFromMeta(nil))
 
