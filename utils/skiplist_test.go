@@ -147,6 +147,12 @@ func TestSkipListIterator(t *testing.T) {
 	list.Add(entry2_new)
 	assert.Equal(t, entry2_new.Value, list.Search(entry2_new.Key).Value)
 
+	iterIface := list.NewIterator(nil)
+	iterAlt, ok := iterIface.(*SkipListIterator)
+	require.True(t, ok)
+	iterAlt.Rewind()
+	require.NoError(t, iterAlt.Close())
+
 	iter := list.NewSkipListIterator()
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		fmt.Printf("iter key %s, value %s", iter.Item().Entry().Key, iter.Item().Entry().Value)

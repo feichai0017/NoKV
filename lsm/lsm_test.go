@@ -268,6 +268,131 @@ func TestIngestBufferAccounting(t *testing.T) {
 	}
 }
 
+func TestTableIteratorSeekAndPrefetch(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builderOpt.BloomFalsePositive = 0.01
+	builder := newTableBuiler(&builderOpt)
+
+	for i := 0; i < 20; i++ {
+		key := kv.KeyWithTs([]byte(fmt.Sprintf("k%02d", i)), 1)
+		value := bytes.Repeat([]byte{'v'}, 48)
+		builder.AddKey(kv.NewEntry(key, value))
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
+	tbl := openTable(lsm.levels, tableName, builder)
+	if tbl == nil {
+		t.Fatalf("expected table from builder")
+	}
+	defer func() {
+		_ = tbl.DecrRef()
+	}()
+
+	tbl.mu.Lock()
+	tbl.closeSSTableLocked()
+	tbl.mu.Unlock()
+
+	tbl.idx.Store(nil)
+	tbl.lm.cache.delIndex(tbl.fid)
+	tbl.keyCount = 0
+	tbl.maxVersion = 0
+	tbl.hasBloom = false
+
+	seekKey := kv.KeyWithTs([]byte("k10"), 1)
+	if !tbl.prefetchBlockForKey(seekKey, true) {
+		t.Fatalf("expected prefetch to load block")
+	}
+
+	if tbl.KeyCount() == 0 {
+		t.Fatalf("expected key count to be available")
+	}
+	if tbl.MaxVersionVal() == 0 {
+		t.Fatalf("expected max version to be available")
+	}
+	if !tbl.HasBloomFilter() {
+		t.Fatalf("expected bloom filter to be available")
+	}
+
+	idx := tbl.index()
+	if idx == nil {
+		t.Fatalf("expected table index")
+	}
+	if _, ok := tbl.blockOffset(len(idx.GetOffsets())); !ok {
+		t.Fatalf("expected block offset lookup to succeed")
+	}
+
+	it := tbl.NewIterator(&utils.Options{IsAsc: true, PrefetchBlocks: 1, PrefetchWorkers: 1})
+	tblIter, ok := it.(*tableIterator)
+	if !ok {
+		t.Fatalf("expected table iterator, got %T", it)
+	}
+	tblIter.Rewind()
+	if !tblIter.Valid() {
+		t.Fatalf("expected iterator to be valid after rewind")
+	}
+	if tblIter.bi != nil {
+		_ = tblIter.bi.Rewind()
+	}
+	tblIter.Seek(seekKey)
+	if tblIter.Valid() {
+		_ = tblIter.Item()
+	}
+	tblIter.Next()
+	_ = tblIter.Valid()
+	if err := tblIter.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	it = tbl.NewIterator(&utils.Options{IsAsc: false})
+	tblIter = it.(*tableIterator)
+	tblIter.Rewind()
+	if tblIter.Valid() {
+		_ = tblIter.Item()
+	}
+	tblIter.Seek(seekKey)
+	_ = tblIter.Valid()
+	_ = tblIter.Close()
+}
+
+func TestFillMaxLevelTables(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	maxLevel := lsm.option.MaxLevelNum - 1
+	if maxLevel < 1 {
+		t.Fatalf("invalid max level %d", maxLevel)
+	}
+
+	tbl := &table{
+		fid:           101,
+		minKey:        kv.KeyWithTs([]byte("a"), 1),
+		maxKey:        kv.KeyWithTs([]byte("z"), 1),
+		size:          1 << 20,
+		staleDataSize: 11 << 20,
+		createdAt:     time.Now().Add(-2 * time.Hour),
+		maxVersion:    1,
+	}
+
+	lsm.levels.levels[maxLevel].tables = []*table{tbl}
+	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
+	cd.lockLevels()
+	defer cd.unlockLevels()
+
+	ok := lsm.levels.fillMaxLevelTables([]*table{tbl}, cd)
+	if !ok {
+		t.Fatalf("expected max-level compaction plan")
+	}
+	if len(cd.top) != 1 || cd.top[0] != tbl {
+		t.Fatalf("expected compaction to select the max-level table")
+	}
+}
+
 func TestLevelHandlerIngestMetrics(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
@@ -359,6 +484,146 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	_ = lsm.ValueLogStatus()
 	_ = lsm.CurrentVersion()
 	requireNoError(lsm.LogValueLogDelete(1))
+}
+
+func TestLSMBatchAndMemHelpers(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.KeyWithTs([]byte("b1"), 1), []byte("v1")),
+		kv.NewEntry(kv.KeyWithTs([]byte("b2"), 1), []byte("v2")),
+	}
+	if err := lsm.SetBatch(nil); err != nil {
+		t.Fatalf("unexpected error on empty batch: %v", err)
+	}
+	if err := lsm.SetBatch(entries); err != nil {
+		t.Fatalf("set batch: %v", err)
+	}
+	if err := lsm.SetBatch([]*kv.Entry{{}}); err == nil {
+		t.Fatalf("expected empty key error")
+	}
+
+	if lsm.MemTableIsNil() {
+		t.Fatalf("expected memtable to be initialized")
+	}
+	if lsm.MemSize() <= 0 {
+		t.Fatalf("expected memtable size to be positive")
+	}
+	if lsm.GetSkipListFromMemTable() == nil {
+		t.Fatalf("expected skiplist-backed memtable")
+	}
+
+	tables, release := lsm.GetMemTables()
+	if len(tables) == 0 {
+		t.Fatalf("expected memtables snapshot")
+	}
+	if release != nil {
+		release()
+	}
+
+	lsm.levels.levels[0].tables = []*table{{keyCount: 2}}
+	if count := lsm.EntryCount(); count <= 0 {
+		t.Fatalf("expected entry count > 0, got %d", count)
+	}
+
+	lsm.Prefetch(entries[0].Key, false)
+	lsm.Prefetch(nil, false)
+}
+
+func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	var events []bool
+	lsm.SetThrottleCallback(func(on bool) {
+		events = append(events, on)
+	})
+
+	// Force a low L0 table limit so AdjustThrottle toggles quickly.
+	lsm.levels.opt.NumLevelZeroTables = 1
+	l0 := lsm.levels.levels[0]
+	l0.tables = []*table{{}, {}, {}}
+	lsm.levels.AdjustThrottle()
+	l0.tables = nil
+	lsm.levels.AdjustThrottle()
+	if len(events) != 2 || !events[0] || events[1] {
+		t.Fatalf("unexpected throttle events: %+v", events)
+	}
+
+	lsm.levels.setLogPointer(3, 9)
+	seg, off := lsm.levels.logPointer()
+	if seg != 3 || off != 9 {
+		t.Fatalf("unexpected log pointer %d/%d", seg, off)
+	}
+
+	lsm.levels.recordCompactionMetrics(5 * time.Millisecond)
+	lastMs, maxMs, runs := lsm.levels.compactionDurations()
+	if runs == 0 || lastMs <= 0 || maxMs <= 0 {
+		t.Fatalf("unexpected compaction metrics: last=%f max=%f runs=%d", lastMs, maxMs, runs)
+	}
+
+	l0.tables = []*table{{maxVersion: 7, keyCount: 2}}
+	if v := lsm.levels.maxVersion(); v != 7 {
+		t.Fatalf("expected max version 7, got %d", v)
+	}
+
+	if !lsm.levels.canRemoveWalSegment(1) {
+		t.Fatalf("expected WAL segment to be removable without raft pointers")
+	}
+	_ = lsm.levels.cacheMetrics()
+}
+
+func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
+	min := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
+	max := kv.InternalKey(kv.CFDefault, []byte("z"), 1)
+	if keyInRange(min, max, nil) {
+		t.Fatalf("expected nil key to be out of range")
+	}
+	if !keyInRange(min, max, []byte("m")) {
+		t.Fatalf("expected key to be in range")
+	}
+	if keyInRange(min, max, []byte("0")) {
+		t.Fatalf("expected key to be out of range")
+	}
+
+	lh := &levelHandler{levelNum: 2}
+	lh.tables = []*table{
+		{minKey: min, maxKey: max},
+	}
+	lh.ingest.ensureInit()
+	lh.ingest.add(&table{
+		minKey:    kv.InternalKey(kv.CFDefault, []byte("k"), 1),
+		maxKey:    kv.InternalKey(kv.CFDefault, []byte("p"), 1),
+		size:      50,
+		valueSize: 20,
+	})
+
+	hotKeys := [][]byte{[]byte("b"), []byte("k"), []byte("x")}
+	score := lh.hotOverlapScore(hotKeys, false)
+	expected := float64(3) / float64(len(hotKeys))
+	if math.Abs(score-expected) > 1e-9 {
+		t.Fatalf("unexpected hot overlap score: %.2f", score)
+	}
+	ingestScore := lh.hotOverlapScore(hotKeys, true)
+	if math.Abs(ingestScore-(1.0/3.0)) > 1e-9 {
+		t.Fatalf("unexpected ingest overlap score: %.2f", ingestScore)
+	}
+
+	lh.totalSize = 100
+	lh.totalValueSize = 40
+	lh.totalStaleSize = 10
+	metrics := lh.metricsSnapshot()
+	if metrics.ValueDensity <= 0 || metrics.IngestValueDensity <= 0 {
+		t.Fatalf("expected non-zero density metrics")
+	}
+
+	tbl := &table{hasBloom: true}
+	if !tbl.HasBloomFilter() {
+		t.Fatalf("expected bloom filter to be reported")
+	}
 }
 
 // TestCompact exercises L0->Lmax compaction.

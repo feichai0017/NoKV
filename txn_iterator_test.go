@@ -98,6 +98,7 @@ func TestPendingWritesIterator(t *testing.T) {
 	require.NotNil(t, itr)
 	itr.Rewind()
 	require.True(t, itr.Valid())
+	require.NotNil(t, itr.Item())
 	_, key, ts := kv.SplitInternalKey(itr.Key())
 	require.Equal(t, []byte("a"), key)
 	require.Equal(t, txn.readTs, ts)
@@ -145,6 +146,30 @@ func TestTxnDeleteAndReadTs(t *testing.T) {
 			return err
 		})
 		require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	})
+}
+
+func TestTxnKeyIteratorAndValidForPrefix(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		txn := db.NewTransaction(true)
+		defer txn.Discard()
+		require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("apple"), []byte("v1"))))
+		require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("apricot"), []byte("v2"))))
+		require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("banana"), []byte("v3"))))
+
+		iter := txn.NewKeyIterator([]byte("apple"), IteratorOptions{})
+		defer iter.Close()
+		iter.Rewind()
+		require.True(t, iter.Valid())
+		item := iter.Item()
+		require.NotNil(t, item)
+		require.Equal(t, "apple", string(kv.ParseKey(item.Entry().Key)))
+		require.True(t, iter.ValidForPrefix([]byte("app")))
+		require.False(t, iter.ValidForPrefix([]byte("ban")))
+
+		require.Panics(t, func() {
+			txn.NewKeyIterator([]byte("x"), IteratorOptions{Prefix: []byte("x")})
+		})
 	})
 }
 
