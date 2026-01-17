@@ -442,6 +442,112 @@ func TestLevelHandlerIngestMetrics(t *testing.T) {
 	}
 }
 
+func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
+	t.Helper()
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builderOpt.BloomFalsePositive = 0.01
+	builder := newTableBuiler(&builderOpt)
+
+	keys := []string{"a", "b", "c"}
+	for _, k := range keys {
+		key := kv.KeyWithTs([]byte(k), 1)
+		builder.AddKey(kv.NewEntry(key, []byte("val-"+k)))
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tbl := openTable(lsm.levels, tableName, builder)
+	if tbl == nil {
+		t.Fatalf("expected table from builder")
+	}
+	return tbl
+}
+
+func TestIngestSearchAndPrefetch(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	tbl := buildTestTable(t, lsm, 7)
+	defer func() { _ = tbl.DecrRef() }()
+
+	key := kv.KeyWithTs([]byte("b"), 1)
+
+	var buf ingestBuffer
+	buf.add(tbl)
+
+	found, err := buf.search(key)
+	if err != nil {
+		t.Fatalf("ingest search: %v", err)
+	}
+	if found == nil {
+		t.Fatalf("expected entry")
+	}
+	if string(found.Key) != string(key) {
+		t.Fatalf("expected key %q, got %q", key, found.Key)
+	}
+
+	if !buf.prefetch(key, true) {
+		t.Fatalf("expected prefetch hit")
+	}
+
+	_, err = buf.search(kv.KeyWithTs([]byte("missing"), 1))
+	if err != utils.ErrKeyNotFound {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestLevelSearchIngestAndLN(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	tbl := buildTestTable(t, lsm, 9)
+	defer func() { _ = tbl.DecrRef() }()
+
+	key := kv.KeyWithTs([]byte("c"), 1)
+
+	lh := &levelHandler{levelNum: 3}
+	lh.ingest.add(tbl)
+	found, err := lh.searchIngestSST(key)
+	if err != nil || found == nil {
+		t.Fatalf("ingest search err=%v entry=%v", err, found)
+	}
+
+	lh.tables = []*table{tbl}
+	found, err = lh.searchLNSST(key)
+	if err != nil || found == nil {
+		t.Fatalf("level search err=%v entry=%v", err, found)
+	}
+
+	if lh.getTableForKey(kv.KeyWithTs([]byte("z"), 1)) != nil {
+		t.Fatalf("expected no table for key")
+	}
+
+	ingestHit, err := lh.Get(key)
+	if err != nil || ingestHit == nil {
+		t.Fatalf("level get err=%v entry=%v", err, ingestHit)
+	}
+	if !lh.prefetch(key, true) {
+		t.Fatalf("expected level prefetch hit")
+	}
+
+	l0 := &levelHandler{levelNum: 0, tables: []*table{tbl}}
+	l0Hit, err := l0.Get(key)
+	if err != nil || l0Hit == nil {
+		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
+	}
+	if !l0.prefetch(key, true) {
+		t.Fatalf("expected l0 prefetch hit")
+	}
+
+	lsm.levels.levels[0].tables = []*table{tbl}
+	lmHit, err := lsm.levels.Get(key)
+	if err != nil || lmHit == nil {
+		t.Fatalf("levels get err=%v entry=%v", err, lmHit)
+	}
+}
+
 func TestLSMMetricsAPIs(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
