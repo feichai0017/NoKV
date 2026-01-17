@@ -36,3 +36,8 @@ func TestWrapHelpers(t *testing.T) {
 	require.Contains(t, Wrapf(err, "msg %d", 2).Error(), "msg 2")
 	require.NotEmpty(t, location(1, false))
 }
+
+func TestCheckAndAssertTruefNoop(t *testing.T) {
+	Check(nil)
+	AssertTruef(true, "should not fail")
+}

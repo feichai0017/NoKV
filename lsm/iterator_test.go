@@ -165,3 +165,41 @@ func TestLSMNewIterators(t *testing.T) {
 	wrapped.Seek(entry.Key)
 	require.NoError(t, wrapped.Close())
 }
+
+func TestConcatIteratorSeekAndNext(t *testing.T) {
+	tbl := &table{
+		minKey: kv.KeyWithTs([]byte("a"), 1),
+		maxKey: kv.KeyWithTs([]byte("z"), 1),
+	}
+	entries := []*kv.Entry{
+		{Key: kv.KeyWithTs([]byte("b"), 1), Value: []byte("vb")},
+		{Key: kv.KeyWithTs([]byte("d"), 1), Value: []byte("vd")},
+	}
+	iter := &sliceIterator{entries: entries}
+
+	ci := NewConcatIterator([]*table{tbl}, &utils.Options{IsAsc: true})
+	ci.iters[0] = iter
+	ci.setIdx(0)
+
+	ci.Rewind()
+	if !ci.Valid() {
+		t.Fatalf("expected concat iterator to be valid after rewind")
+	}
+	if ci.Item() == nil {
+		t.Fatalf("expected non-nil item")
+	}
+
+	ci.Seek(kv.KeyWithTs([]byte("c"), 1))
+	if !ci.Valid() {
+		t.Fatalf("expected concat iterator valid after seek")
+	}
+	got := kv.ParseKey(ci.Item().Entry().Key)
+	if string(got) != "d" {
+		t.Fatalf("expected seek to land on d, got %q", string(got))
+	}
+
+	ci.Next()
+	if ci.Valid() {
+		t.Fatalf("expected iterator to be exhausted")
+	}
+}
