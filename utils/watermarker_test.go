@@ -78,3 +78,41 @@ func TestWaterMarkSetDoneUntil(t *testing.T) {
 		t.Fatalf("wait should succeed after SetDoneUntil: %v", err)
 	}
 }
+
+func TestWaterMarkBeginDoneMany(t *testing.T) {
+	w := &WaterMark{Name: "test.many"}
+	w.Init(nil)
+
+	w.BeginMany([]uint64{3, 4, 5})
+	if got := w.LastIndex(); got != 5 {
+		t.Fatalf("expected lastIndex=5, got %d", got)
+	}
+
+	w.DoneMany([]uint64{3, 4, 5})
+	if got := w.DoneUntil(); got != 5 {
+		t.Fatalf("expected doneUntil=5, got %d", got)
+	}
+}
+
+func TestWaterMarkSetLastIndexMonotonic(t *testing.T) {
+	w := &WaterMark{Name: "test.lastindex"}
+	w.Init(nil)
+
+	w.SetLastIndex(10)
+	w.SetLastIndex(5)
+	if got := w.LastIndex(); got != 10 {
+		t.Fatalf("expected lastIndex to remain 10, got %d", got)
+	}
+}
+
+func TestWaterMarkWindowRebuild(t *testing.T) {
+	w := &WaterMark{Name: "test.window"}
+	w.Init(nil)
+
+	// Force a window rebuild by jumping far ahead.
+	w.Begin(1 << 18)
+	w.Done(1 << 18)
+	if got := w.DoneUntil(); got == 0 {
+		t.Fatalf("expected doneUntil to advance, got %d", got)
+	}
+}

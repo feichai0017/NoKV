@@ -17,7 +17,7 @@ type fixedSource struct {
 }
 
 func (s fixedSource) Int63() int64 { return s.val }
-func (s fixedSource) Seed(seed int64) {
+func (s *fixedSource) Seed(seed int64) {
 	s.val = seed
 }
 
@@ -32,7 +32,7 @@ func randWithFloat(p float64) *rand.Rand {
 	if val < 0 {
 		val = 0
 	}
-	return rand.New(fixedSource{val: val})
+	return rand.New(&fixedSource{val: val})
 }
 
 type fakeEngine struct {
@@ -194,6 +194,32 @@ func TestValuePoolAndRandomValue(t *testing.T) {
 	out := randomValue(rand.New(rand.NewSource(1)), 4)
 	require.Len(t, out, 4)
 	valueBufPool.Put(out)
+}
+
+func TestGeneratorsAndRunYCSBErrors(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	zipf := newZipfGenerator(rng, 10)
+	require.Equal(t, int64(0), zipf.Next(0))
+	val := zipf.Next(5)
+	require.GreaterOrEqual(t, val, int64(0))
+	require.Less(t, val, int64(5))
+
+	uni := &uniformGenerator{r: rand.New(rand.NewSource(2))}
+	require.Equal(t, int64(0), uni.Next(0))
+	uniVal := uni.Next(7)
+	require.GreaterOrEqual(t, uniVal, int64(0))
+	require.Less(t, uniVal, int64(7))
+
+	state := &ycsbKeyspace{}
+	latest := newLatestGenerator(rand.New(rand.NewSource(3)), 10, state)
+	require.Equal(t, int64(0), latest.Next(0))
+	state.baseRecords = 10
+	latestVal := latest.Next(10)
+	require.GreaterOrEqual(t, latestVal, int64(0))
+	require.Less(t, latestVal, int64(10))
+
+	_, err := runYCSBBenchmarks(ycsbConfig{Engines: []string{"unknown"}}, ycsbEngineOptions{})
+	require.Error(t, err)
 }
 
 func TestWriteYCSBSummary(t *testing.T) {

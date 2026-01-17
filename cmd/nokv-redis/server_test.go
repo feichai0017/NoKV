@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRedisGatewayBasicCommands(t *testing.T) {
@@ -203,4 +205,69 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	if got := send("*1\r\n$4\r\nQUIT\r\n"); got != "+OK\r\n" {
 		t.Fatalf("QUIT: got %q", got)
 	}
+}
+
+type stubBackend struct {
+	mget      []*redisValue
+	msetErr   error
+	exists    int64
+	incrValue int64
+	incrErr   error
+}
+
+func (b *stubBackend) Get([]byte) (*redisValue, error)               { return nil, nil }
+func (b *stubBackend) Set(setArgs) (bool, error)                     { return false, nil }
+func (b *stubBackend) Del([][]byte) (int64, error)                   { return 0, nil }
+func (b *stubBackend) MGet(keys [][]byte) ([]*redisValue, error)     { return b.mget, nil }
+func (b *stubBackend) MSet(pairs [][2][]byte) error                  { return b.msetErr }
+func (b *stubBackend) Exists(keys [][]byte) (int64, error)           { return b.exists, nil }
+func (b *stubBackend) IncrBy(key []byte, delta int64) (int64, error) { return b.incrValue, b.incrErr }
+func (b *stubBackend) Close() error                                  { return nil }
+
+func TestExecMGetAndExists(t *testing.T) {
+	backend := &stubBackend{
+		mget: []*redisValue{
+			{Value: []byte("foo"), Found: true},
+			{Found: false},
+		},
+		exists: 1,
+	}
+	server := newServer(backend)
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	require.NoError(t, server.execMGet(writer, [][]byte{[]byte("k1"), []byte("k2")}))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "*2\r\n$3\r\nfoo\r\n$-1\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execExists(writer, [][]byte{[]byte("k1")}))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, ":1\r\n", buf.String())
+}
+
+func TestExecMSetAndIncrErrors(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	require.NoError(t, server.execMSet(writer, [][]byte{[]byte("k1"), []byte("v1")}))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "+OK\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	backend.incrErr = errNotInteger
+	require.NoError(t, server.execIncrBy(writer, []byte("k1"), 1))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "-"+errNotIntegerMsg+"\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	backend.incrErr = errOverflow
+	require.NoError(t, server.execIncrBy(writer, []byte("k1"), 1))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "-"+errOverflowMsg+"\r\n", buf.String())
 }

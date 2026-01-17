@@ -27,3 +27,5 @@ artifacts/
 work_redis
 
 third_party/
+
+coverage.out

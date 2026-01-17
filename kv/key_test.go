@@ -30,3 +30,22 @@ func TestKeyHelpers(t *testing.T) {
 		t.Fatalf("expected stable MemHashString for same input")
 	}
 }
+
+func TestBytesToStringAndSafeCopy(t *testing.T) {
+	if got := BytesToString(nil); got != "" {
+		t.Fatalf("expected empty string for nil, got %q", got)
+	}
+	input := []byte("hello")
+	if got := BytesToString(input); got != "hello" {
+		t.Fatalf("expected hello, got %q", got)
+	}
+	orig := []byte("copy")
+	out := SafeCopy(nil, orig)
+	if string(out) != "copy" {
+		t.Fatalf("expected copy, got %q", out)
+	}
+	orig[0] = 'C'
+	if string(out) != "copy" {
+		t.Fatalf("expected SafeCopy to detach from source")
+	}
+}
