@@ -152,3 +152,90 @@ func TestARTConcurrentWriteIterate(t *testing.T) {
 	default:
 	}
 }
+
+func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	defer art.DecrRef()
+
+	keys := [][]byte{[]byte("aa"), []byte("ab"), []byte("ba")}
+	for i, k := range keys {
+		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
+		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, uint64(i+1))
+		art.Add(entry)
+		entry.DecrRef()
+	}
+
+	if art.MemSize() == 0 {
+		t.Fatalf("expected MemSize to be non-zero")
+	}
+
+	for _, k := range keys {
+		seek := kv.InternalKey(kv.CFDefault, k, math.MaxUint64)
+		vs := art.Search(seek)
+		if len(vs.Value) == 0 {
+			t.Fatalf("expected value for key %q", k)
+		}
+	}
+
+	art48 := NewART(DefaultArenaSize)
+	defer art48.DecrRef()
+
+	for i := 0; i < 20; i++ {
+		k := []byte{byte(i + 1), 'x'}
+		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
+		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		art48.Add(entry)
+		entry.DecrRef()
+	}
+
+	root48 := art48.tree.root.Load()
+	if root48 == nil || root48.kind != artNode48Kind {
+		t.Fatalf("expected node48 root, got %v", root48)
+	}
+	eq, gt := root48.findChild(art48.tree.arena, 0)
+	if eq != nil || gt == nil {
+		t.Fatalf("expected greater child lookup in node48")
+	}
+
+	it48 := art48.NewIterator(nil)
+	artIt48, ok := it48.(*artIterator)
+	if !ok {
+		t.Fatalf("expected art iterator, got %T", it48)
+	}
+	child, nextIdx := artIt48.childForKey(root48, 5)
+	if child == nil || nextIdx == 0 {
+		t.Fatalf("expected child lookup in node48")
+	}
+	_ = artIt48.Close()
+
+	art256 := NewART(DefaultArenaSize)
+	defer art256.DecrRef()
+
+	for i := 0; i < 60; i++ {
+		k := []byte{byte(i), 'y'}
+		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
+		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		art256.Add(entry)
+		entry.DecrRef()
+	}
+
+	root256 := art256.tree.root.Load()
+	if root256 == nil || root256.kind != artNode256Kind {
+		t.Fatalf("expected node256 root, got %v", root256)
+	}
+	eq, gt = root256.findChild(art256.tree.arena, 10)
+	if eq == nil || gt == nil {
+		t.Fatalf("expected greater child lookup in node256")
+	}
+
+	it256 := art256.NewIterator(nil)
+	artIt256, ok := it256.(*artIterator)
+	if !ok {
+		t.Fatalf("expected art iterator, got %T", it256)
+	}
+	child, nextIdx = artIt256.childForKey(root256, 10)
+	if child == nil || nextIdx == 0 {
+		t.Fatalf("expected child lookup in node256")
+	}
+	_ = artIt256.Close()
+}

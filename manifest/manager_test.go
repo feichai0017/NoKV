@@ -569,3 +569,65 @@ func TestManagerRewrite(t *testing.T) {
 		t.Fatalf("expected log pointer preserved, got seg=%d off=%d", version.LogSegment, version.LogOffset)
 	}
 }
+
+func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer mgr.Close()
+
+	mgr.SetSync(true)
+	if got := mgr.Dir(); got != dir {
+		t.Fatalf("expected dir %s, got %s", dir, got)
+	}
+
+	if err := mgr.LogValueLogUpdate(manifest.ValueLogMeta{FileID: 7, Offset: 9, Valid: true}); err != nil {
+		t.Fatalf("log value log update: %v", err)
+	}
+	status := mgr.ValueLogStatus()
+	if len(status) != 1 || status[7].Offset != 9 {
+		t.Fatalf("unexpected value log status: %+v", status)
+	}
+
+	ptr := manifest.RaftLogPointer{GroupID: 1, Segment: 2, Offset: 3}
+	if err := mgr.LogRaftPointer(ptr); err != nil {
+		t.Fatalf("log raft pointer: %v", err)
+	}
+	ptrs := mgr.RaftPointerSnapshot()
+	if got := ptrs[1]; got.Segment != 2 || got.Offset != 3 {
+		t.Fatalf("unexpected raft pointer snapshot: %+v", got)
+	}
+
+	if err := mgr.Rewrite(); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	meta := manifest.RegionMeta{
+		ID:       1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+		Peers: []manifest.PeerMeta{
+			{StoreID: 1, PeerID: 10},
+		},
+	}
+	cp := manifest.CloneRegionMeta(meta)
+	meta.StartKey[0] = 'z'
+	if string(cp.StartKey) != "a" {
+		t.Fatalf("expected clone to preserve start key")
+	}
+
+	ptrMeta := manifest.CloneRegionMetaPtr(&meta)
+	meta.EndKey[0] = 'y'
+	if string(ptrMeta.EndKey) != "b" {
+		t.Fatalf("expected cloned ptr meta to preserve end key")
+	}
+
+	metaMap := map[uint64]manifest.RegionMeta{1: meta}
+	cloned := manifest.CloneRegionMetas(metaMap)
+	meta.Peers[0].PeerID = 99
+	if cloned[1].Peers[0].PeerID != 10 {
+		t.Fatalf("expected cloned map to preserve peers")
+	}
+}

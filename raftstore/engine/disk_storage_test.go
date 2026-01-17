@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,4 +121,33 @@ func TestDiskStorageRemovesEmptyHardState(t *testing.T) {
 	require.NoError(t, ds.SetHardState(myraft.HardState{}))
 	_, err = os.Stat(hardPath)
 	require.True(t, os.IsNotExist(err))
+}
+
+func TestOpenDiskStorageRequiresDir(t *testing.T) {
+	_, err := OpenDiskStorage("")
+	require.Error(t, err)
+}
+
+func TestDiskStorageLoadSnapshotUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, snapFileName)
+	require.NoError(t, os.WriteFile(path, []byte("snap"), 0o600))
+	require.NoError(t, os.Chmod(path, 0))
+
+	_, err := OpenDiskStorage(dir)
+	require.Error(t, err)
+}
+
+func TestDiskStorageLoadEntriesCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, logFileName)
+	f, err := os.Create(logPath)
+	require.NoError(t, err)
+	require.NoError(t, binary.Write(f, binary.LittleEndian, uint32(10)))
+	_, err = f.Write([]byte{0x01, 0x02})
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = OpenDiskStorage(dir)
+	require.Error(t, err)
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -501,6 +503,83 @@ func TestServiceKvScanLeaderRead(t *testing.T) {
 	require.Len(t, next.GetResponse().GetKvs(), 1)
 	require.Equal(t, []byte("bk"), next.GetResponse().GetKvs()[0].GetKey())
 	require.Equal(t, []byte("value-b"), next.GetResponse().GetKvs()[0].GetValue())
+}
+
+func TestServiceBatchGetEdgeCases(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        6,
+		peerID:         66,
+		regionID:       1001,
+		campaignLeader: true,
+	})
+
+	_, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{Context: env.ctx})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	resp, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+		Context: env.ctx,
+		Request: &pb.BatchGetRequest{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetResponse())
+	require.Empty(t, resp.GetResponse().GetResponses())
+
+	prewriteKey(t, env.service, env.ctx, []byte("aa"), []byte("value-a"), 200)
+	commitKey(t, env.service, env.ctx, []byte("aa"), 200, 250)
+
+	prewriteKey(t, env.service, env.ctx, []byte("bb"), []byte("value-b"), 300)
+	commitKey(t, env.service, env.ctx, []byte("bb"), 300, 350)
+
+	batchResp, err := env.service.KvBatchGet(context.Background(), &pb.KvBatchGetRequest{
+		Context: env.ctx,
+		Request: &pb.BatchGetRequest{Requests: []*pb.GetRequest{
+			{Key: []byte("aa"), Version: 260},
+			nil,
+			{Key: []byte("missing"), Version: 260},
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, batchResp)
+	require.Nil(t, batchResp.GetRegionError())
+	require.NotNil(t, batchResp.GetResponse())
+	require.Len(t, batchResp.GetResponse().GetResponses(), 2)
+}
+
+func TestServiceHeaderAndScanErrors(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        7,
+		peerID:         77,
+		regionID:       1101,
+		campaignLeader: true,
+	})
+
+	_, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: &pb.Context{RegionId: 0},
+		Request: &pb.GetRequest{Key: []byte("k"), Version: 1},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = env.service.KvScan(context.Background(), &pb.KvScanRequest{
+		Context: env.ctx,
+		Request: &pb.ScanRequest{
+			StartKey: []byte("a"),
+			Limit:    1,
+			Reverse:  true,
+		},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.Unimplemented, status.Code(err))
 }
 
 func TestServiceKvScanNotLeader(t *testing.T) {
