@@ -67,7 +67,7 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 
 	for _, h := range keys {
 		delta := h>>17 | h<<15
-		for j := uint32(0); j < k; j++ {
+		for range k {
 			bitPos := h % uint32(nBits)
 			filter[bitPos/8] |= 1 << (bitPos % 8)
 			h += delta
