@@ -1,4 +1,4 @@
-package client_test
+package client
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/feichai0017/NoKV/pb"
-	"github.com/feichai0017/NoKV/raftstore/client"
 )
 
 type clusterValue struct {
@@ -369,12 +368,12 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 	addrFollower, stopFollower := startMockStore(t, cluster, 2)
 	defer stopFollower()
 
-	clientCfg := client.Config{
-		Stores: []client.StoreEndpoint{
+	clientCfg := Config{
+		Stores: []StoreEndpoint{
 			{StoreID: 2, Addr: addrFollower},
 			{StoreID: 1, Addr: addrLeader},
 		},
-		Regions: []client.RegionConfig{
+		Regions: []RegionConfig{
 			{
 				Meta:          cluster.regions[1].meta,
 				LeaderStoreID: 2,
@@ -389,7 +388,7 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 		},
 	}
 
-	cli, err := client.New(clientCfg)
+	cli, err := New(clientCfg)
 	require.NoError(t, err)
 	defer cli.Close()
 
@@ -452,11 +451,11 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	addr, stop := startMockStore(t, cluster, 1)
 	defer stop()
 
-	clientCfg := client.Config{
-		Stores: []client.StoreEndpoint{
+	clientCfg := Config{
+		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []client.RegionConfig{
+		Regions: []RegionConfig{
 			{Meta: cluster.regions[1].meta, LeaderStoreID: 1},
 			{Meta: cluster.regions[2].meta, LeaderStoreID: 1},
 		},
@@ -465,7 +464,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 		},
 	}
 
-	cli, err := client.New(clientCfg)
+	cli, err := New(clientCfg)
 	require.NoError(t, err)
 	defer cli.Close()
 
@@ -503,7 +502,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), resolved)
 
-	errStr := (&client.KeyConflictError{Errors: []*pb.KeyError{{Abort: "boom"}}}).Error()
+	errStr := (&KeyConflictError{Errors: []*pb.KeyError{{Abort: "boom"}}}).Error()
 	require.Contains(t, errStr, "client: prewrite key errors")
 }
 
@@ -544,11 +543,11 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 			{StoreId: 1, PeerId: 101},
 		},
 	}
-	cli, err := client.New(client.Config{
-		Stores: []client.StoreEndpoint{
+	cli, err := New(Config{
+		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []client.RegionConfig{
+		Regions: []RegionConfig{
 			{Meta: meta, LeaderStoreID: 1},
 		},
 		DialOptions: []grpc.DialOption{
@@ -608,4 +607,68 @@ func epochNotMatch(regions map[uint64]*clusterRegion) *pb.RegionError {
 
 func statusInvalidArgument(msg string) error {
 	return status.Error(codes.InvalidArgument, msg)
+}
+
+func TestContainsKeyAndCompare(t *testing.T) {
+	require.False(t, containsKey(nil, []byte("a")))
+
+	meta := &pb.RegionMeta{
+		StartKey: []byte("b"),
+		EndKey:   []byte("d"),
+	}
+	require.False(t, containsKey(meta, []byte("a")))
+	require.True(t, containsKey(meta, []byte("b")))
+	require.True(t, containsKey(meta, []byte("c")))
+	require.False(t, containsKey(meta, []byte("d")))
+
+	require.Equal(t, 0, bytesCompare([]byte("a"), []byte("a")))
+	require.Equal(t, -1, bytesCompare([]byte("a"), []byte("b")))
+	require.Equal(t, 1, bytesCompare([]byte("b"), []byte("a")))
+	require.Equal(t, -1, bytesCompare([]byte("a"), []byte("aa")))
+	require.Equal(t, 1, bytesCompare([]byte("aa"), []byte("a")))
+}
+
+func TestIncrementKey(t *testing.T) {
+	require.Equal(t, []byte("ab\x01"), incrementKey([]byte("ab\x00")))
+	require.Equal(t, []byte{0x01, 0x00}, incrementKey([]byte{0x00, 0xff}))
+	require.Equal(t, []byte{0x00, 0x00, 0x00}, incrementKey([]byte{0xff, 0xff}))
+}
+
+func TestCloneHelpers(t *testing.T) {
+	meta := &pb.RegionMeta{StartKey: []byte("a"), EndKey: []byte("z")}
+	clone := cloneRegionMeta(meta)
+	require.NotSame(t, meta, clone)
+	meta.StartKey[0] = 'b'
+	require.Equal(t, []byte("a"), clone.StartKey)
+
+	mut := &pb.Mutation{Key: []byte("k"), Value: []byte("v")}
+	mutClone := cloneMutation(mut)
+	require.NotSame(t, mut, mutClone)
+	mut.Key[0] = 'x'
+	require.Equal(t, []byte("k"), mutClone.Key)
+
+	require.Nil(t, cloneRegionMeta(nil))
+	require.Nil(t, cloneMutation(nil))
+}
+
+func TestCollectKeysAndPrimary(t *testing.T) {
+	muts := []*pb.Mutation{
+		{Key: []byte("a")},
+		nil,
+		{Key: []byte("b")},
+	}
+	keys := collectKeys(muts)
+	require.Equal(t, [][]byte{[]byte("a"), []byte("b")}, keys)
+
+	require.True(t, mutationHasPrimary(muts, []byte("a")))
+	require.False(t, mutationHasPrimary(muts, []byte("c")))
+
+	clone := cloneKeys(keys)
+	require.Equal(t, keys, clone)
+	keys[0][0] = 'x'
+	require.Equal(t, []byte("a"), clone[0])
+}
+
+func TestNormalizeRPCError(t *testing.T) {
+	require.NoError(t, normalizeRPCError(nil))
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -259,4 +261,66 @@ func TestPrintUsage(t *testing.T) {
 	if !strings.Contains(out, "serve") {
 		t.Fatalf("expected serve command in usage, got %q", out)
 	}
+}
+
+func TestEnsureManifestExists(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureManifestExists(dir); err == nil {
+		t.Fatalf("expected missing manifest error")
+	}
+
+	path := filepath.Join(dir, "CURRENT")
+	if err := os.WriteFile(path, []byte("MANIFEST-000001"), 0o644); err != nil {
+		t.Fatalf("write CURRENT: %v", err)
+	}
+	if err := ensureManifestExists(dir); err != nil {
+		t.Fatalf("expected manifest to exist: %v", err)
+	}
+}
+
+func TestRunSchedulerCmdWithStore(t *testing.T) {
+	withStoreRegistry(t, func() {
+		storepkg.RegisterStore(&storepkg.Store{})
+		var buf bytes.Buffer
+		require.NoError(t, runSchedulerCmd(&buf, nil))
+		require.Contains(t, buf.String(), "Stores (0)")
+		require.Contains(t, buf.String(), "Regions (0)")
+
+		buf.Reset()
+		require.NoError(t, runSchedulerCmd(&buf, []string{"-json"}))
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	})
+}
+
+func TestFirstRegionMetricsNone(t *testing.T) {
+	withStoreRegistry(t, func() {
+		if got := firstRegionMetrics(); got != nil {
+			t.Fatalf("expected nil region metrics")
+		}
+	})
+}
+
+func TestMainHelp(t *testing.T) {
+	oldArgs := os.Args
+	os.Args = []string{"nokv", "help"}
+	defer func() { os.Args = oldArgs }()
+	main()
+}
+
+func withStoreRegistry(t *testing.T, fn func()) {
+	t.Helper()
+	original := storepkg.Stores()
+	for _, st := range original {
+		storepkg.UnregisterStore(st)
+	}
+	defer func() {
+		for _, st := range storepkg.Stores() {
+			storepkg.UnregisterStore(st)
+		}
+		for _, st := range original {
+			storepkg.RegisterStore(st)
+		}
+	}()
+	fn()
 }
