@@ -17,6 +17,7 @@ const (
 type ingestShard struct {
 	tables    []*table
 	ranges    []tableRange
+	prefixMax [][]byte
 	size      int64
 	valueSize int64
 }
@@ -26,6 +27,7 @@ func (sh *ingestShard) rebuildRanges() {
 		return
 	}
 	sh.ranges = sh.ranges[:0]
+	sh.prefixMax = sh.prefixMax[:0]
 	for _, t := range sh.tables {
 		if t == nil {
 			continue
@@ -40,6 +42,13 @@ func (sh *ingestShard) rebuildRanges() {
 		sort.Slice(sh.ranges, func(i, j int) bool {
 			return utils.CompareKeys(sh.ranges[i].min, sh.ranges[j].min) < 0
 		})
+	}
+	var max []byte
+	for _, rng := range sh.ranges {
+		if max == nil || utils.CompareUserKeys(rng.max, max) > 0 {
+			max = rng.max
+		}
+		sh.prefixMax = append(sh.prefixMax, max)
 	}
 }
 
@@ -251,26 +260,59 @@ func (buf ingestBuffer) prefetch(key []byte, hot bool) bool {
 	return false
 }
 
-func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
-	var version uint64
+func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
+	if maxVersion == nil {
+		var tmp uint64
+		maxVersion = &tmp
+	}
+	var best *kv.Entry
 	for _, sh := range buf.shards {
 		if len(sh.ranges) == 0 {
 			continue
 		}
-		for _, rng := range sh.ranges {
+		ranges := sh.ranges
+		if len(ranges) == 0 {
+			continue
+		}
+		lo, hi := 0, len(ranges)
+		for lo < hi {
+			mid := (lo + hi) / 2
+			if utils.CompareUserKeys(key, ranges[mid].min) >= 0 {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		for i := lo - 1; i >= 0; i-- {
+			if i < len(sh.prefixMax) && utils.CompareUserKeys(key, sh.prefixMax[i]) > 0 {
+				break
+			}
+			rng := ranges[i]
 			if rng.tbl == nil {
 				continue
-			}
-			if utils.CompareUserKeys(key, rng.min) < 0 {
-				break
 			}
 			if utils.CompareUserKeys(key, rng.max) > 0 {
 				continue
 			}
-			if entry, err := rng.tbl.Search(key, &version); err == nil {
-				return entry, nil
+			if rng.tbl.MaxVersionVal() <= *maxVersion {
+				continue
+			}
+			if entry, err := rng.tbl.Search(key, maxVersion); err == nil {
+				if best != nil {
+					best.DecrRef()
+				}
+				best = entry
+				continue
+			} else if err != utils.ErrKeyNotFound {
+				if best != nil {
+					best.DecrRef()
+				}
+				return nil, err
 			}
 		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
 }
@@ -370,6 +412,6 @@ func (lh *levelHandler) ingestDataSize() int64 {
 	return lh.ingest.totalSize()
 }
 
-func (lh *levelHandler) searchIngestSST(key []byte) (*kv.Entry, error) {
-	return lh.ingest.search(key)
+func (lh *levelHandler) searchIngestSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
+	return lh.ingest.search(key, maxVersion)
 }

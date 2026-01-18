@@ -465,15 +465,10 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	}
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-	var (
-		entry *kv.Entry
-		err   error
-	)
-	lsm.lock.RLock()
-	active := lsm.memTable
-	immutables := append([]*memTable(nil), lsm.immutables...)
-	lsm.lock.RUnlock()
-
+	tables, release := lsm.GetMemTables()
+	if release != nil {
+		defer release()
+	}
 	isMemHit := func(entry *kv.Entry) bool {
 		if entry == nil {
 			return false
@@ -481,15 +476,16 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 	}
 
-	if active != nil {
-		if entry, err = active.Get(key); isMemHit(entry) {
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		entry, err := mt.Get(key)
+		if isMemHit(entry) {
 			return entry, err
 		}
-	}
-
-	for i := len(immutables) - 1; i >= 0; i-- {
-		if entry, err = immutables[i].Get(key); isMemHit(entry) {
-			return entry, err
+		if entry != nil {
+			entry.DecrRef()
 		}
 	}
 	// query from the level manager

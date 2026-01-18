@@ -324,17 +324,13 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
 		if version := kv.ParseTs(e.Key); *maxVs < version {
 			*maxVs = version
-			clone := &kv.Entry{
-				Key:          kv.SafeCopy(nil, e.Key),
-				Value:        kv.SafeCopy(nil, e.Value),
-				ExpiresAt:    e.ExpiresAt,
-				CF:           e.CF,
-				Meta:         e.Meta,
-				Version:      version,
-				Offset:       e.Offset,
-				Hlen:         e.Hlen,
-				ValThreshold: e.ValThreshold,
-			}
+			clone := kv.NewEntryWithCF(e.CF, kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
+			clone.ExpiresAt = e.ExpiresAt
+			clone.Meta = e.Meta
+			clone.Version = version
+			clone.Offset = e.Offset
+			clone.Hlen = e.Hlen
+			clone.ValThreshold = e.ValThreshold
 			return clone, nil
 		}
 	}
