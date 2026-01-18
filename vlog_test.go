@@ -340,6 +340,27 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	require.Equal(t, 1, rotates)
 }
 
+func TestValueLogReadCopiesSmallValue(t *testing.T) {
+	clearDir()
+	prevThreshold := opt.ValueThreshold
+	opt.ValueThreshold = 0
+	defer func() { opt.ValueThreshold = prevThreshold }()
+
+	db := Open(opt)
+	defer db.Close()
+
+	entry := kvpkg.NewEntry([]byte("small-read"), []byte("v"))
+	entry.Key = kvpkg.InternalKey(kvpkg.CFDefault, entry.Key, nonTxnMaxVersion)
+	vp, err := db.vlog.newValuePtr(entry)
+	entry.DecrRef()
+	require.NoError(t, err)
+
+	val, cb, err := db.vlog.read(vp)
+	require.NoError(t, err)
+	require.Nil(t, cb)
+	require.Equal(t, []byte("v"), val)
+}
+
 func newRandEntry(sz int) *kvpkg.Entry {
 	v := make([]byte, sz)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
