@@ -4,13 +4,14 @@ package vlog
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
@@ -20,17 +21,24 @@ type Config struct {
 	Dir      string
 	FileMode os.FileMode
 	MaxSize  int64
+
+	StoreFactory SegmentStoreFactory
 }
 
 type Manager struct {
 	cfg       Config
 	filesLock sync.RWMutex
-	files     map[uint32]*file.LogFile
+	files     map[uint32]*segment
+	index     atomic.Value
 	maxFid    uint32
-	active    *file.LogFile
+	active    *segment
 	activeID  uint32
 	offset    uint32
 	hooks     ManagerTestingHooks
+}
+
+type segmentIndex struct {
+	files map[uint32]*segment
 }
 
 // ManagerTestingHooks provides callbacks that are used only in tests to inject
@@ -59,6 +67,22 @@ func (m *Manager) SetMaxSize(maxSize int64) {
 	m.filesLock.Unlock()
 }
 
+// loadIndex returns a lock-free snapshot of the segment map.
+func (m *Manager) loadIndex() *segmentIndex {
+	if idx := m.index.Load(); idx != nil {
+		return idx.(*segmentIndex)
+	}
+	return &segmentIndex{files: make(map[uint32]*segment)}
+}
+
+// refreshIndexLocked publishes a copy-on-write snapshot of the segment map.
+// Caller must hold m.filesLock.
+func (m *Manager) refreshIndexLocked() {
+	next := make(map[uint32]*segment, len(m.files))
+	maps.Copy(next, m.files)
+	m.index.Store(&segmentIndex{files: next})
+}
+
 // runBeforeAppendHook invokes the testing hook (if any) before an append.
 func (m *Manager) runBeforeAppendHook(data []byte) error {
 	m.filesLock.RLock()
@@ -81,9 +105,10 @@ func (m *Manager) runBeforeSyncHook(fid uint32) error {
 	return hook(m, fid)
 }
 
-func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
+// ensureActiveLocked returns the active segment store; caller must hold m.filesLock.
+func (m *Manager) ensureActiveLocked() (SegmentStore, uint32, error) {
 	if m.active != nil {
-		return m.active, m.activeID, nil
+		return m.active.store, m.activeID, nil
 	}
 	next := uint32(0)
 	if len(m.files) > 0 {
@@ -95,7 +120,8 @@ func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 	m.active = m.files[m.maxFid]
 	m.activeID = m.maxFid
 	m.offset = uint32(kv.ValueLogHeaderSize)
-	return m.active, m.activeID, nil
+	m.refreshIndexLocked()
+	return m.active.store, m.activeID, nil
 }
 
 func Open(cfg Config) (*Manager, error) {
@@ -108,23 +134,25 @@ func Open(cfg Config) (*Manager, error) {
 	if cfg.FileMode == 0 {
 		cfg.FileMode = utils.DefaultFileMode
 	}
+	if cfg.MaxSize == 0 {
+		cfg.MaxSize = int64(1 << 29)
+	}
+	if cfg.StoreFactory == nil {
+		cfg.StoreFactory = defaultSegmentStoreFactory()
+	}
 	mgr := &Manager{
 		cfg:   cfg,
-		files: make(map[uint32]*file.LogFile),
-	}
-	if mgr.cfg.MaxSize == 0 {
-		mgr.cfg.MaxSize = int64(1 << 29)
+		files: make(map[uint32]*segment),
 	}
 	if err := mgr.populate(); err != nil {
 		return nil, err
 	}
 	fresh := false
 	if len(mgr.files) == 0 {
-		lf, err := mgr.create(0)
-		if err != nil {
+		if _, err := mgr.create(0); err != nil {
 			return nil, err
 		}
-		mgr.active = lf
+		mgr.active = mgr.files[0]
 		mgr.activeID = 0
 		fresh = true
 	} else {
@@ -135,13 +163,16 @@ func Open(cfg Config) (*Manager, error) {
 		if fresh {
 			mgr.offset = uint32(kv.ValueLogHeaderSize)
 		} else {
-			off, err := mgr.active.Seek(0, io.SeekEnd)
+			off, err := mgr.active.store.Seek(0, io.SeekEnd)
 			if err != nil {
 				return nil, err
 			}
 			mgr.offset = uint32(off)
 		}
 	}
+	mgr.filesLock.Lock()
+	mgr.refreshIndexLocked()
+	mgr.filesLock.Unlock()
 	return mgr, nil
 }
 
@@ -167,46 +198,27 @@ func (m *Manager) populate() error {
 		if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
 			continue
 		}
-		lf := &file.LogFile{}
-		if err := lf.Open(&file.Options{
-			FID:      uint64(fid),
-			FileName: path,
-			Dir:      m.cfg.Dir,
-			Flag: func() int {
-				if fid == max {
-					return os.O_CREATE | os.O_RDWR
-				}
-				return os.O_RDONLY
-			}(),
-			MaxSz: int(m.cfg.MaxSize),
-		}); err != nil {
+		readonly := fid != max
+		store, err := m.cfg.StoreFactory.Open(fid, path, m.cfg.Dir, m.cfg.MaxSize, readonly)
+		if err != nil {
 			return err
 		}
-		m.files[fid] = lf
+		m.files[fid] = newSegment(store, readonly)
 	}
 	return nil
 }
 
-func (m *Manager) create(fid uint32) (*file.LogFile, error) {
+func (m *Manager) create(fid uint32) (SegmentStore, error) {
 	path := filepath.Join(m.cfg.Dir, fmt.Sprintf("%05d.vlog", fid))
-	lf := &file.LogFile{}
-	if err := lf.Open(&file.Options{
-		FID:      uint64(fid),
-		FileName: path,
-		Dir:      m.cfg.Dir,
-		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(m.cfg.MaxSize),
-	}); err != nil {
+	store, err := m.cfg.StoreFactory.Create(fid, path, m.cfg.Dir, m.cfg.MaxSize)
+	if err != nil {
 		return nil, err
 	}
-	if err := lf.Bootstrap(); err != nil {
-		return nil, err
-	}
-	m.files[fid] = lf
+	m.files[fid] = newSegment(store, false)
 	if fid > m.maxFid {
 		m.maxFid = fid
 	}
-	return lf, nil
+	return store, nil
 }
 
 func (m *Manager) Rotate() error {
@@ -215,6 +227,7 @@ func (m *Manager) Rotate() error {
 	return m.rotateLocked()
 }
 
+// rotateLocked rotates the active segment; caller must hold m.filesLock.
 func (m *Manager) rotateLocked() error {
 	if hook := m.hooks.BeforeRotate; hook != nil {
 		if err := hook(m); err != nil {
@@ -222,11 +235,12 @@ func (m *Manager) rotateLocked() error {
 		}
 	}
 	if m.active != nil {
-		if err := m.active.DoneWriting(m.offset); err != nil {
+		if err := m.active.store.DoneWriting(m.offset); err != nil {
 			return err
 		}
 		// Previous active becomes read-only to reduce cache/RSS.
-		_ = m.active.SetReadOnly()
+		_ = m.active.store.SetReadOnly()
+		m.active.seal()
 	}
 	nextID := m.maxFid + 1
 	if _, err := m.create(nextID); err != nil {
@@ -235,34 +249,41 @@ func (m *Manager) rotateLocked() error {
 	m.active = m.files[nextID]
 	m.activeID = nextID
 	m.offset = uint32(kv.ValueLogHeaderSize)
+	m.refreshIndexLocked()
 	return nil
 }
 
-func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {
-	m.filesLock.RLock()
-	lf, ok := m.files[fid]
+// getStoreForRead returns a store and release callback without acquiring m.filesLock.
+// Sealed segments are pinned; active segments use the store read lock.
+func (m *Manager) getStoreForRead(fid uint32) (SegmentStore, func(), error) {
+	seg, ok := m.loadIndex().files[fid]
 	if !ok {
-		m.filesLock.RUnlock()
 		return nil, nil, pkgerrors.Errorf("value log file %d not found", fid)
 	}
-	lf.Lock.RLock()
-	m.filesLock.RUnlock()
-	return lf, lf.Lock.RUnlock, nil
+	if seg.isClosing() {
+		return nil, nil, pkgerrors.Errorf("value log file %d closing", fid)
+	}
+	if seg.isSealed() {
+		if !seg.pinRead() {
+			return nil, nil, pkgerrors.Errorf("value log file %d closing", fid)
+		}
+		return seg.store, seg.unpinRead, nil
+	}
+	seg.store.RLock()
+	return seg.store, seg.store.RUnlock, nil
 }
 
-func (m *Manager) getFile(fid uint32) (*file.LogFile, error) {
-	m.filesLock.RLock()
-	lf, ok := m.files[fid]
-	m.filesLock.RUnlock()
+func (m *Manager) getFile(fid uint32) (SegmentStore, error) {
+	seg, ok := m.loadIndex().files[fid]
 	if !ok {
 		return nil, pkgerrors.Errorf("value log file %d not found", fid)
 	}
-	return lf, nil
+	return seg.store, nil
 }
 
 func (m *Manager) Remove(fid uint32) error {
 	m.filesLock.Lock()
-	lf, ok := m.files[fid]
+	seg, ok := m.files[fid]
 	if !ok {
 		m.filesLock.Unlock()
 		return nil
@@ -286,20 +307,25 @@ func (m *Manager) Remove(fid uint32) error {
 			m.activeID = maxID
 			m.active = m.files[maxID]
 			if m.active != nil {
-				if size := m.active.Size(); size >= 0 {
+				if size := m.active.store.Size(); size >= 0 {
 					m.offset = uint32(size)
 				}
 			}
 		}
 	}
+	m.refreshIndexLocked()
 	m.filesLock.Unlock()
 
-	lf.Lock.Lock()
-	defer lf.Lock.Unlock()
-	if err := lf.Close(); err != nil {
+	seg.beginClose()
+	if seg.isSealed() {
+		seg.waitForNoPins()
+	}
+	seg.store.Lock()
+	defer seg.store.Unlock()
+	if err := seg.store.Close(); err != nil {
 		return err
 	}
-	return os.Remove(lf.FileName())
+	return os.Remove(seg.store.FileName())
 }
 
 func (m *Manager) MaxFID() uint32 {
@@ -330,18 +356,18 @@ func (m *Manager) SyncActive() error {
 		return nil
 	}
 	m.filesLock.RLock()
-	lf := m.active
+	seg := m.active
 	fid := m.activeID
 	m.filesLock.RUnlock()
-	if lf == nil {
+	if seg == nil || seg.store == nil {
 		return nil
 	}
 	if err := m.runBeforeSyncHook(fid); err != nil {
 		return err
 	}
-	lf.Lock.Lock()
-	defer lf.Lock.Unlock()
-	return lf.Sync()
+	seg.store.Lock()
+	defer seg.store.Unlock()
+	return seg.store.Sync()
 }
 
 // SyncFIDs fsyncs the provided value log segments.
@@ -357,21 +383,21 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 		seen[fid] = struct{}{}
 
 		m.filesLock.RLock()
-		lf := m.files[fid]
-		if lf != nil {
-			lf.Lock.Lock()
+		seg := m.files[fid]
+		if seg != nil && seg.store != nil {
+			seg.store.Lock()
 		}
 		m.filesLock.RUnlock()
 
-		if lf == nil {
+		if seg == nil || seg.store == nil {
 			continue
 		}
 		if err := m.runBeforeSyncHook(fid); err != nil {
-			lf.Lock.Unlock()
+			seg.store.Unlock()
 			return err
 		}
-		err := lf.Sync()
-		lf.Lock.Unlock()
+		err := seg.store.Sync()
+		seg.store.Unlock()
 		if err != nil {
 			return err
 		}
@@ -381,44 +407,44 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 
 // SegmentSize reports the current size of the segment identified by fid.
 func (m *Manager) SegmentSize(fid uint32) (int64, error) {
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return 0, err
 	}
-	return lf.Size(), nil
+	return store.Size(), nil
 }
 
 // SegmentInit refreshes the mmap metadata for the specified segment.
 func (m *Manager) SegmentInit(fid uint32) error {
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return err
 	}
-	return lf.Init()
+	return store.Init()
 }
 
 // SegmentBootstrap rewrites the header of the provided segment, resetting its
 // logical contents. It is typically used when truncation shrinks a file below
 // the header size and the segment needs to be treated as empty.
 func (m *Manager) SegmentBootstrap(fid uint32) error {
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return err
 	}
-	lf.Lock.Lock()
-	defer lf.Lock.Unlock()
-	return lf.Bootstrap()
+	store.Lock()
+	defer store.Unlock()
+	return store.Bootstrap()
 }
 
 // SegmentTruncate shrinks the segment to the provided offset.
 func (m *Manager) SegmentTruncate(fid uint32, offset uint32) error {
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return err
 	}
-	lf.Lock.Lock()
-	defer lf.Lock.Unlock()
-	return lf.Truncate(int64(offset))
+	store.Lock()
+	defer store.Unlock()
+	return store.Truncate(int64(offset))
 }
 
 // Rewind rolls back the active head to the provided pointer, truncating any bytes
@@ -428,30 +454,31 @@ func (m *Manager) SegmentTruncate(fid uint32, offset uint32) error {
 func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	var (
 		extra []struct {
-			lf   *file.LogFile
+			seg  *segment
 			name string
 		}
-		active *file.LogFile
+		active *segment
 	)
 
 	m.filesLock.Lock()
-	for fid, lf := range m.files {
+	for fid, seg := range m.files {
 		if fid > ptr.Fid {
 			extra = append(extra, struct {
-				lf   *file.LogFile
+				seg  *segment
 				name string
-			}{lf: lf, name: lf.FileName()})
+			}{seg: seg, name: seg.store.FileName()})
 			delete(m.files, fid)
 		}
 	}
-	lf, ok := m.files[ptr.Fid]
+	seg, ok := m.files[ptr.Fid]
 	if ok {
-		active = lf
-		m.active = lf
+		active = seg
+		m.active = seg
 		m.activeID = ptr.Fid
 		m.maxFid = ptr.Fid
 		m.offset = ptr.Offset
 	}
+	m.refreshIndexLocked()
 	m.filesLock.Unlock()
 
 	if !ok {
@@ -459,28 +486,35 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	}
 
 	var firstErr error
-	if err := active.SetWritable(); err != nil {
+	active.beginClose()
+	active.waitForNoPins()
+	if err := active.store.SetWritable(); err != nil {
 		firstErr = err
 	}
+	active.activate()
 	for _, item := range extra {
-		item.lf.Lock.Lock()
-		if err := item.lf.Close(); err != nil && firstErr == nil {
+		item.seg.beginClose()
+		if item.seg.isSealed() {
+			item.seg.waitForNoPins()
+		}
+		item.seg.store.Lock()
+		if err := item.seg.store.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
-		item.lf.Lock.Unlock()
+		item.seg.store.Unlock()
 		if err := os.Remove(item.name); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 
-	active.Lock.Lock()
-	if err := active.Truncate(int64(ptr.Offset)); err != nil && firstErr == nil {
+	active.store.Lock()
+	if err := active.store.Truncate(int64(ptr.Offset)); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := active.Init(); err != nil && firstErr == nil {
+	if err := active.store.Init(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	active.Lock.Unlock()
+	active.store.Unlock()
 
 	return firstErr
 }
@@ -489,8 +523,12 @@ func (m *Manager) Close() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
 	var firstErr error
-	for fid, lf := range m.files {
-		if err := lf.Close(); err != nil && firstErr == nil {
+	for fid, seg := range m.files {
+		seg.beginClose()
+		if seg.isSealed() {
+			seg.waitForNoPins()
+		}
+		if err := seg.store.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		delete(m.files, fid)
@@ -498,14 +536,14 @@ func (m *Manager) Close() error {
 	m.active = nil
 	m.activeID = 0
 	m.offset = 0
+	m.refreshIndexLocked()
 	return firstErr
 }
 
 func (m *Manager) ListFIDs() []uint32 {
-	m.filesLock.RLock()
-	defer m.filesLock.RUnlock()
-	fids := make([]uint32, 0, len(m.files))
-	for fid := range m.files {
+	idx := m.loadIndex()
+	fids := make([]uint32, 0, len(idx.files))
+	for fid := range idx.files {
 		fids = append(fids, fid)
 	}
 	slices.Sort(fids)
