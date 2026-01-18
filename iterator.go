@@ -187,7 +187,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 			if cb != nil {
 				defer kv.RunCallback(cb)
 			}
-			if err != nil || len(val) == 0 {
+			if err != nil {
 				return false
 			}
 			iter.valueBuf = append(iter.valueBuf[:0], val...)
