@@ -528,6 +528,7 @@ func (lsm *LSM) Rotate() {
 	lsm.submitFlush(old)
 }
 
+// rotateLocked swaps the active memtable; caller must hold lsm.lock.
 func (lsm *LSM) rotateLocked() *memTable {
 	old := lsm.memTable
 	lsm.immutables = append(lsm.immutables, old)

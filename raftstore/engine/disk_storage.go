@@ -142,6 +142,7 @@ func (ds *DiskStorage) loadHardState() error {
 	return nil
 }
 
+// saveEntriesLocked appends entries and persists; caller must hold ds.mu.
 func (ds *DiskStorage) saveEntriesLocked(entries []myraft.Entry) error {
 	if err := ds.mem.Append(entries); err != nil {
 		return err
@@ -247,6 +248,7 @@ func (ds *DiskStorage) InitialState() (myraft.HardState, myraft.ConfState, error
 	return ds.mem.InitialState()
 }
 
+// refreshEntriesLocked reloads entries after snapshot; caller must hold ds.mu.
 func (ds *DiskStorage) refreshEntriesLocked() error {
 	first, err := ds.mem.FirstIndex()
 	if err != nil {
@@ -269,6 +271,7 @@ func (ds *DiskStorage) refreshEntriesLocked() error {
 	return nil
 }
 
+// persistEntriesLocked flushes entry log state; caller must hold ds.mu.
 func (ds *DiskStorage) persistEntriesLocked() error {
 	path := filepath.Join(ds.dir, logFileName)
 	if len(ds.entries) == 0 {
@@ -300,6 +303,7 @@ func (ds *DiskStorage) persistEntriesLocked() error {
 	return os.Rename(tmp, path)
 }
 
+// persistHardStateLocked writes hard state to disk; caller must hold ds.mu.
 func (ds *DiskStorage) persistHardStateLocked() error {
 	path := filepath.Join(ds.dir, hardFileName)
 	if myraft.IsEmptyHardState(ds.hardState) {
@@ -312,6 +316,7 @@ func (ds *DiskStorage) persistHardStateLocked() error {
 	return atomicWriteFile(path, data)
 }
 
+// persistSnapshotLocked writes snapshot metadata to disk; caller must hold ds.mu.
 func (ds *DiskStorage) persistSnapshotLocked() error {
 	path := filepath.Join(ds.dir, snapFileName)
 	if myraft.IsEmptySnap(ds.snapshot) {

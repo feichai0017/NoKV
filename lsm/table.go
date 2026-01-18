@@ -160,6 +160,7 @@ func (t *table) index() *pb.TableIndex {
 	return idx
 }
 
+// shouldPinHandleLocked reports handle policy; caller must hold t.mu.
 func (t *table) shouldPinHandleLocked() bool {
 	if t == nil {
 		return false
@@ -187,6 +188,7 @@ func (t *table) level() int {
 	return int(t.lvl.Load())
 }
 
+// openSSTableLocked opens the SSTable handle; caller must hold t.mu.
 func (t *table) openSSTableLocked(loadIndex bool) error {
 	if t.ss != nil {
 		return nil
@@ -230,6 +232,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 	return nil
 }
 
+// closeSSTableLocked closes the SSTable handle; caller must hold t.mu.
 func (t *table) closeSSTableLocked() {
 	if t.ss == nil {
 		return
