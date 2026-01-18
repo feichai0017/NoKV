@@ -130,3 +130,102 @@ func TestEmbeddedBackendSetErrorOnEmptyKey(t *testing.T) {
 	require.False(t, ok)
 	require.ErrorIs(t, err, utils.ErrEmptyKey)
 }
+
+func TestEmbeddedBackendGetMissingKey(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	val, err := backend.Get([]byte("missing"))
+	require.NoError(t, err)
+	require.False(t, val.Found)
+}
+
+func TestEmbeddedBackendSetPlainAndExpire(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	expireAt := uint64(time.Now().Add(10 * time.Second).Unix())
+	ok, err := backend.Set(setArgs{
+		Key: []byte("plain"), Value: []byte("v1"), ExpireAt: expireAt,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	val, err := backend.Get([]byte("plain"))
+	require.NoError(t, err)
+	require.True(t, val.Found)
+	require.Equal(t, expireAt, val.ExpiresAt)
+}
+
+func TestEmbeddedBackendSetNXAfterExpire(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	expireAt := uint64(time.Now().Unix() + 1)
+	ok, err := backend.Set(setArgs{
+		Key: []byte("exp"), Value: []byte("v"), ExpireAt: expireAt,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	time.Sleep(1200 * time.Millisecond)
+	ok, err = backend.Set(setArgs{
+		Key: []byte("exp"), Value: []byte("v2"), NX: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestEmbeddedBackendDelExpiredKey(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	expireAt := uint64(time.Now().Unix() + 1)
+	ok, err := backend.Set(setArgs{
+		Key: []byte("gone"), Value: []byte("v"), ExpireAt: expireAt,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	time.Sleep(1200 * time.Millisecond)
+	removed, err := backend.Del([][]byte{[]byte("gone")})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), removed)
+}
+
+func TestEmbeddedBackendMGetMissingAndExpired(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	expireAt := uint64(time.Now().Unix() + 1)
+	ok, err := backend.Set(setArgs{
+		Key: []byte("exp"), Value: []byte("v"), ExpireAt: expireAt,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	time.Sleep(1200 * time.Millisecond)
+	vals, err := backend.MGet([][]byte{[]byte("exp"), []byte("missing")})
+	require.NoError(t, err)
+	require.Len(t, vals, 2)
+	require.False(t, vals[0].Found)
+	require.False(t, vals[1].Found)
+}
+
+func TestEmbeddedBackendMSetEmptyKey(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	err := backend.MSet([][2][]byte{{nil, []byte("v")}})
+	require.ErrorIs(t, err, utils.ErrEmptyKey)
+}
+
+func TestEmbeddedBackendIncrByErrors(t *testing.T) {
+	backend := newTestEmbeddedBackend(t)
+	_, err := backend.Set(setArgs{Key: []byte("bad"), Value: []byte("x")})
+	require.NoError(t, err)
+	_, err = backend.IncrBy([]byte("bad"), 1)
+	require.ErrorIs(t, err, errNotInteger)
+
+	_, err = backend.Set(setArgs{Key: []byte("max"), Value: []byte("9223372036854775807")})
+	require.NoError(t, err)
+	_, err = backend.IncrBy([]byte("max"), 1)
+	require.ErrorIs(t, err, errOverflow)
+}
+
+func TestStrconvParseIntSafe(t *testing.T) {
+	val, err := strconvParseIntSafe([]byte(" "))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), val)
+
+	_, err = strconvParseIntSafe([]byte("nope"))
+	require.Error(t, err)
+}

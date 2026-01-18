@@ -78,3 +78,85 @@ func TestValidateFailsOnUnknownStoreInRegion(t *testing.T) {
 		t.Fatalf("expected validation error for unknown store in region")
 	}
 }
+
+func TestLoadFileMissing(t *testing.T) {
+	if _, err := LoadFile(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatalf("expected error for missing file")
+	}
+}
+
+func TestLoadFileInvalidJSON(t *testing.T) {
+	path := writeTempConfig(t, "{not-json")
+	if _, err := LoadFile(path); err == nil {
+		t.Fatalf("expected json error")
+	}
+}
+
+func TestValidateNilFile(t *testing.T) {
+	var cfg *File
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for nil config")
+	}
+}
+
+func TestValidateStoreIDZero(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 0, Addr: "x"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for store_id zero")
+	}
+}
+
+func TestValidateRegionIDZero(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+		Regions: []Region{{
+			ID:            0,
+			Peers:         []Peer{{StoreID: 1, PeerID: 2}},
+			LeaderStoreID: 1,
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for region id zero")
+	}
+}
+
+func TestValidateLeaderStoreMissing(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+		Regions: []Region{{
+			ID:            1,
+			LeaderStoreID: 2,
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for missing leader store")
+	}
+}
+
+func TestValidatePeerMissingIDs(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+		Regions: []Region{{
+			ID:    1,
+			Peers: []Peer{{StoreID: 0, PeerID: 0}},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for invalid peer ids")
+	}
+}
+
+func TestValidatePeerUnknownStore(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+		Regions: []Region{{
+			ID:    1,
+			Peers: []Peer{{StoreID: 2, PeerID: 10}},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for unknown peer store")
+	}
+}

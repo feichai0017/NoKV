@@ -3,9 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -269,19 +272,27 @@ func TestWriteArray(t *testing.T) {
 }
 
 type stubBackend struct {
+	getVal    *redisValue
+	getErr    error
+	setOK     bool
+	setErr    error
+	delCount  int64
+	delErr    error
 	mget      []*redisValue
+	mgetErr   error
 	msetErr   error
 	exists    int64
+	existsErr error
 	incrValue int64
 	incrErr   error
 }
 
-func (b *stubBackend) Get([]byte) (*redisValue, error)               { return nil, nil }
-func (b *stubBackend) Set(setArgs) (bool, error)                     { return false, nil }
-func (b *stubBackend) Del([][]byte) (int64, error)                   { return 0, nil }
-func (b *stubBackend) MGet(keys [][]byte) ([]*redisValue, error)     { return b.mget, nil }
+func (b *stubBackend) Get([]byte) (*redisValue, error)               { return b.getVal, b.getErr }
+func (b *stubBackend) Set(setArgs) (bool, error)                     { return b.setOK, b.setErr }
+func (b *stubBackend) Del([][]byte) (int64, error)                   { return b.delCount, b.delErr }
+func (b *stubBackend) MGet(keys [][]byte) ([]*redisValue, error)     { return b.mget, b.mgetErr }
 func (b *stubBackend) MSet(pairs [][2][]byte) error                  { return b.msetErr }
-func (b *stubBackend) Exists(keys [][]byte) (int64, error)           { return b.exists, nil }
+func (b *stubBackend) Exists(keys [][]byte) (int64, error)           { return b.exists, b.existsErr }
 func (b *stubBackend) IncrBy(key []byte, delta int64) (int64, error) { return b.incrValue, b.incrErr }
 func (b *stubBackend) Close() error                                  { return nil }
 
@@ -332,3 +343,335 @@ func TestExecMSetAndIncrErrors(t *testing.T) {
 	require.NoError(t, writer.Flush())
 	require.Equal(t, "-"+errOverflowMsg+"\r\n", buf.String())
 }
+
+func TestIsRetryableAcceptError(t *testing.T) {
+	require.False(t, isRetryableAcceptError(nil))
+
+	timeoutErr := &net.OpError{Op: "accept", Err: timeoutError{}}
+	require.True(t, isRetryableAcceptError(timeoutErr))
+
+	connReset := &net.OpError{Op: "accept", Err: syscall.ECONNRESET}
+	require.True(t, isRetryableAcceptError(connReset))
+
+	connAbort := &net.OpError{Op: "accept", Err: syscall.ECONNABORTED}
+	require.True(t, isRetryableAcceptError(connAbort))
+
+	otherErr := &net.OpError{Op: "read", Err: syscall.ECONNRESET}
+	require.False(t, isRetryableAcceptError(otherErr))
+}
+
+func TestServeRetryableErrorAndClose(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	ln := &errorListener{
+		errs: []error{
+			&net.OpError{Op: "accept", Err: timeoutError{}},
+			net.ErrClosed,
+		},
+	}
+	require.NoError(t, server.Serve(ln))
+}
+
+func TestServeNonRetryableError(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	ln := &errorListener{
+		errs: []error{errors.New("boom")},
+	}
+	require.Error(t, server.Serve(ln))
+}
+
+func TestHandleConnEOF(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	conn := newScriptedConn(nil)
+	server.handleConn(conn)
+}
+
+func TestHandleConnParseError(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	conn := newScriptedConn([]byte("*1\r\n+OK\r\n"))
+	server.handleConn(conn)
+	require.Contains(t, conn.out.String(), "-ERR")
+}
+
+func TestHandleConnFlushOnEmptyLine(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	conn := newScriptedConn([]byte("PING\r\n\r\n"))
+	server.handleConn(conn)
+	require.Contains(t, conn.out.String(), "+PONG")
+}
+
+func TestHandleConnTimeout(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	conn := &timeoutConn{}
+	server.handleConn(conn)
+	require.Contains(t, conn.out.String(), "-ERR timeout")
+}
+
+func TestExecuteInvalidArgs(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+	cases := []struct {
+		args [][]byte
+		want string
+	}{
+		{[][]byte{[]byte("ECHO")}, "-ERR"},
+		{[][]byte{[]byte("GET")}, "-ERR"},
+		{[][]byte{[]byte("SET"), []byte("k")}, "-ERR"},
+		{[][]byte{[]byte("DEL")}, "-ERR"},
+		{[][]byte{[]byte("MGET")}, "-ERR"},
+		{[][]byte{[]byte("MSET"), []byte("k")}, "-ERR"},
+		{[][]byte{[]byte("INCR")}, "-ERR"},
+		{[][]byte{[]byte("DECR")}, "-ERR"},
+		{[][]byte{[]byte("INCRBY"), []byte("k")}, "-ERR"},
+		{[][]byte{[]byte("DECRBY"), []byte("k")}, "-ERR"},
+		{[][]byte{[]byte("EXISTS")}, "-ERR"},
+		{[][]byte{[]byte("UNKNOWN")}, "-ERR"},
+	}
+	for _, tc := range cases {
+		var buf strings.Builder
+		writer := bufio.NewWriter(&buf)
+		require.NoError(t, server.execute(writer, tc.args))
+		require.NoError(t, writer.Flush())
+		require.Contains(t, buf.String(), tc.want)
+	}
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	require.NoError(t, server.execute(writer, [][]byte{[]byte("INCRBY"), []byte("k"), []byte("nope")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), errNotIntegerMsg)
+}
+
+func TestExecSetErrorsAndOptions(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("NX"), []byte("XX")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "-ERR")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("EX")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "-ERR")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("EX"), []byte("bad")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "value is not an integer")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("EX"), []byte("0")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "invalid expire time")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("KEEPTTL")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "syntax error")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("BAD")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "syntax error")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	backend.setOK = true
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("EXAT"), []byte("123")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "+OK")
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v"), []byte("PXAT"), []byte("1000")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "+OK")
+}
+
+func TestExecSetBackendErrors(t *testing.T) {
+	backend := &stubBackend{}
+	server := newServer(backend)
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	backend.setErr = errConditionNotMet
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v")}))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "$-1\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	backend.setErr = errUnsupported
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v")}))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "-ERR")
+
+	backend.setErr = errors.New("boom")
+	err := server.execSet(writer, [][]byte{[]byte("k"), []byte("v")})
+	require.Error(t, err)
+
+	buf.Reset()
+	writer.Reset(&buf)
+	backend.setErr = nil
+	backend.setOK = false
+	require.NoError(t, server.execSet(writer, [][]byte{[]byte("k"), []byte("v")}))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "$-1\r\n", buf.String())
+}
+
+func TestExecBackendErrors(t *testing.T) {
+	backend := &stubBackend{
+		getErr:    errors.New("get"),
+		delErr:    errors.New("del"),
+		mgetErr:   errors.New("mget"),
+		msetErr:   errUnsupported,
+		existsErr: errors.New("exists"),
+		incrErr:   errUnsupported,
+	}
+	server := newServer(backend)
+	writer := bufio.NewWriter(io.Discard)
+
+	require.Error(t, server.execGet(writer, []byte("k")))
+	require.Error(t, server.execDel(writer, [][]byte{[]byte("k")}))
+	require.Error(t, server.execMGet(writer, [][]byte{[]byte("k")}))
+	require.NoError(t, server.execMSet(writer, [][]byte{[]byte("k"), []byte("v")}))
+	require.Error(t, server.execExists(writer, [][]byte{[]byte("k")}))
+
+	var buf strings.Builder
+	writer = bufio.NewWriter(&buf)
+	require.NoError(t, server.execIncrBy(writer, []byte("k"), 1))
+	require.NoError(t, writer.Flush())
+	require.Contains(t, buf.String(), "-ERR")
+}
+
+func TestParseRESPAdditionalCases(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("*1\r\n$bad\r\n"))
+	_, err := parseRESP(r)
+	require.Error(t, err)
+
+	r = bufio.NewReader(strings.NewReader("*1\r\n$-1\r\n"))
+	out, err := parseRESP(r)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Nil(t, out[0])
+
+	r = bufio.NewReader(strings.NewReader("*1\r\n$3\r\nhi\r\n"))
+	_, err = parseRESP(r)
+	require.Error(t, err)
+
+	r = bufio.NewReader(strings.NewReader("*1\r\n$1\r\na\n"))
+	_, err = parseRESP(r)
+	require.Error(t, err)
+
+	r = bufio.NewReader(strings.NewReader("\r\n"))
+	out, err = parseRESP(r)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestReadLineError(t *testing.T) {
+	r := bufio.NewReader(errReader{})
+	_, err := readLine(r)
+	require.Error(t, err)
+}
+
+func TestExpectCRLFSecondByteError(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("\r"))
+	err := expectCRLF(r)
+	require.Error(t, err)
+}
+
+func TestWriteHelpersErrors(t *testing.T) {
+	w := bufio.NewWriterSize(errWriter{}, 1)
+	require.Error(t, writeInteger(w, 1))
+	require.Error(t, writeBulk(w, []byte("data")))
+	require.Error(t, writeArray(w, [][]byte{[]byte("a")}))
+
+	var buf strings.Builder
+	writer := bufio.NewWriter(&buf)
+	require.NoError(t, writeError(writer, "oops"))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "-ERR oops\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, writeError(writer, "WRONG nope"))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "-WRONG nope\r\n", buf.String())
+}
+
+type errorListener struct {
+	errs []error
+}
+
+func (l *errorListener) Accept() (net.Conn, error) {
+	if len(l.errs) == 0 {
+		return nil, net.ErrClosed
+	}
+	err := l.errs[0]
+	l.errs = l.errs[1:]
+	return nil, err
+}
+
+func (l *errorListener) Close() error { return nil }
+func (l *errorListener) Addr() net.Addr {
+	return &net.TCPAddr{}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+type scriptedConn struct {
+	reader *bytes.Reader
+	out    bytes.Buffer
+}
+
+func newScriptedConn(data []byte) *scriptedConn {
+	return &scriptedConn{reader: bytes.NewReader(data)}
+}
+
+func (c *scriptedConn) Read(p []byte) (int, error)       { return c.reader.Read(p) }
+func (c *scriptedConn) Write(p []byte) (int, error)      { return c.out.Write(p) }
+func (c *scriptedConn) Close() error                     { return nil }
+func (c *scriptedConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *scriptedConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+type timeoutConn struct {
+	out bytes.Buffer
+}
+
+func (c *timeoutConn) Read(p []byte) (int, error)       { return 0, timeoutError{} }
+func (c *timeoutConn) Write(p []byte) (int, error)      { return c.out.Write(p) }
+func (c *timeoutConn) Close() error                     { return nil }
+func (c *timeoutConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *timeoutConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *timeoutConn) SetDeadline(time.Time) error      { return nil }
+func (c *timeoutConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *timeoutConn) SetWriteDeadline(time.Time) error { return nil }
+
+type errReader struct{}
+
+func (errReader) Read(p []byte) (int, error) { return 0, io.EOF }
+
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("write") }

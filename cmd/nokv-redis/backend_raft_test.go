@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -19,6 +21,8 @@ import (
 
 	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/raftstore/client"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
@@ -317,11 +321,12 @@ func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
 		t.Fatalf("expected localOracle allocator, got %T", backend.ts)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = backend.client.Get(ctx, []byte("key"), 1)
-	if err == nil {
-		t.Fatalf("expected unimplemented error from stub server")
+	val, err := backend.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("expected nil error from stub server, got %v", err)
+	}
+	if val == nil || val.Found {
+		t.Fatalf("expected missing value")
 	}
 }
 
@@ -687,4 +692,445 @@ func writeBackendConfig(t *testing.T, storeAddr string) string {
 		t.Fatalf("write config: %v", err)
 	}
 	return cfgPath
+}
+
+type stubTSO struct {
+	next uint64
+	err  error
+}
+
+func (s *stubTSO) Reserve(n uint64) (uint64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("reserve: n must be >= 1")
+	}
+	start := s.next + 1
+	s.next += n
+	return start, nil
+}
+
+type stubRaftClient struct {
+	batchGet    map[string]*pb.GetResponse
+	batchGetErr error
+	mutateErr   error
+	mutateFn    func() error
+	mutateCalls int
+	checkResp   *pb.CheckTxnStatusResponse
+	checkErr    error
+	resolveResp uint64
+	resolveErr  error
+	resolveKeys [][]byte
+}
+
+func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
+	if s.batchGetErr != nil {
+		return nil, s.batchGetErr
+	}
+	out := make(map[string]*pb.GetResponse, len(keys))
+	for _, key := range keys {
+		k := string(key)
+		if resp, ok := s.batchGet[k]; ok {
+			out[k] = resp
+			continue
+		}
+		out[k] = &pb.GetResponse{NotFound: true}
+	}
+	return out, nil
+}
+
+func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+	s.mutateCalls++
+	if s.mutateFn != nil {
+		return s.mutateFn()
+	}
+	if s.mutateErr != nil {
+		return s.mutateErr
+	}
+	return nil
+}
+
+func (s *stubRaftClient) CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*pb.CheckTxnStatusResponse, error) {
+	return s.checkResp, s.checkErr
+}
+
+func (s *stubRaftClient) ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+	s.resolveKeys = s.resolveKeys[:0]
+	for _, key := range keys {
+		s.resolveKeys = append(s.resolveKeys, append([]byte(nil), key...))
+	}
+	if s.resolveErr != nil {
+		return 0, s.resolveErr
+	}
+	if s.resolveResp != 0 {
+		return s.resolveResp, nil
+	}
+	return uint64(len(keys)), nil
+}
+
+func (s *stubRaftClient) Close() error {
+	return nil
+}
+
+func newStubBackend() (*raftBackend, *stubRaftClient, *stubTSO) {
+	client := &stubRaftClient{}
+	ts := &stubTSO{next: 100}
+	return &raftBackend{client: client, ts: ts}, client, ts
+}
+
+func TestLocalOracleReserveZero(t *testing.T) {
+	var oracle localOracle
+	_, err := oracle.Reserve(0)
+	require.Error(t, err)
+}
+
+func TestHTTPTSOReserveErrors(t *testing.T) {
+	tso := newHTTPTSO("http://example")
+	_, err := tso.Reserve(0)
+	require.Error(t, err)
+
+	tso = &httpTSO{url: "http://bad host", client: &http.Client{}}
+	_, err = tso.Reserve(1)
+	require.Error(t, err)
+
+	tso = &httpTSO{
+		url: "http://example",
+		client: &http.Client{
+			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("boom")
+			}),
+		},
+	}
+	_, err = tso.Reserve(1)
+	require.Error(t, err)
+
+	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer statusServer.Close()
+	tso = newHTTPTSO(statusServer.URL)
+	_, err = tso.Reserve(1)
+	require.Error(t, err)
+
+	badJSONServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("{bad-json"))
+	}))
+	defer badJSONServer.Close()
+	tso = newHTTPTSO(badJSONServer.URL)
+	_, err = tso.Reserve(1)
+	require.Error(t, err)
+
+	countServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"timestamp": uint64(1),
+			"count":     uint64(1),
+		})
+	}))
+	defer countServer.Close()
+	tso = newHTTPTSO(countServer.URL)
+	_, err = tso.Reserve(2)
+	require.Error(t, err)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestNewRaftBackendErrors(t *testing.T) {
+	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "", "host")
+	require.Error(t, err)
+
+	cfg := config.File{
+		Stores: []config.Store{
+			{StoreID: 1, Addr: "127.0.0.1:1"},
+			{StoreID: 1, Addr: "127.0.0.1:2"},
+		},
+		Regions: []config.Region{
+			{
+				ID: 1,
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+			},
+		},
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "cfg.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+	_, err = newRaftBackend(cfgPath, "", "host")
+	require.Error(t, err)
+
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+	cfg = config.File{
+		Stores: []config.Store{{StoreID: 1, Addr: storeAddr}},
+		Regions: []config.Region{{
+			ID: 1,
+			Epoch: config.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+			Peers: []config.Peer{{StoreID: 1, PeerID: 101}},
+		}},
+		TSO: &config.TSO{
+			ListenAddr: "127.0.0.1:9494",
+		},
+	}
+	raw, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	cfgPath = filepath.Join(dir, "cfg2.json")
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+	httpTSO, ok := backend.ts.(*httpTSO)
+	require.True(t, ok)
+	require.Equal(t, "http://127.0.0.1:9494", httpTSO.url)
+}
+
+func TestRaftBackendCloseNil(t *testing.T) {
+	var backend *raftBackend
+	require.NoError(t, backend.Close())
+	backend = &raftBackend{}
+	require.NoError(t, backend.Close())
+}
+
+func TestRaftBackendGetErrors(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	ts.err = errors.New("boom")
+	_, err := backend.Get([]byte("k"))
+	require.Error(t, err)
+
+	ts.err = nil
+	stub.batchGetErr = errors.New("batch")
+	_, err = backend.Get([]byte("k"))
+	require.Error(t, err)
+}
+
+func TestRaftBackendSetBranches(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+	_, err := backend.Set(setArgs{Key: nil})
+	require.Error(t, err)
+
+	stub.batchGet = map[string]*pb.GetResponse{
+		"key": {Value: []byte("v")},
+	}
+	ok, err := backend.Set(setArgs{Key: []byte("key"), Value: []byte("v2"), NX: true})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, 0, stub.mutateCalls)
+
+	stub.batchGet = map[string]*pb.GetResponse{}
+	ok, err = backend.Set(setArgs{Key: []byte("missing"), Value: []byte("v"), XX: true})
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = backend.Set(setArgs{Key: []byte("ttl"), Value: []byte("v"), ExpireAt: 123})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	stub.mutateErr = errors.New("mutate")
+	_, err = backend.Set(setArgs{Key: []byte("err"), Value: []byte("v")})
+	require.Error(t, err)
+}
+
+func TestRaftBackendDelBranches(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	count, err := backend.Del(nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), count)
+
+	ts.err = errors.New("boom")
+	_, err = backend.Del([][]byte{[]byte("k")})
+	require.Error(t, err)
+
+	ts.err = nil
+	stub.batchGetErr = errors.New("batch")
+	_, err = backend.Del([][]byte{[]byte("k")})
+	require.Error(t, err)
+
+	stub.batchGetErr = nil
+	stub.batchGet = map[string]*pb.GetResponse{
+		"k": {Value: []byte("v")},
+	}
+	stub.mutateErr = errors.New("mutate")
+	_, err = backend.Del([][]byte{[]byte("k")})
+	require.Error(t, err)
+}
+
+func TestRaftBackendMGetErrors(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	vals, err := backend.MGet(nil)
+	require.NoError(t, err)
+	require.Nil(t, vals)
+
+	ts.err = errors.New("boom")
+	_, err = backend.MGet([][]byte{[]byte("k")})
+	require.Error(t, err)
+
+	ts.err = nil
+	stub.batchGetErr = errors.New("batch")
+	_, err = backend.MGet([][]byte{[]byte("k")})
+	require.Error(t, err)
+
+	stub.batchGetErr = nil
+	stub.batchGet = map[string]*pb.GetResponse{
+		string(ttlMetaKey([]byte("k"))): {Value: []byte{0, 0, 0, 0, 0, 0, 0, 1}},
+	}
+	stub.mutateErr = errors.New("mutate")
+	_, err = backend.MGet([][]byte{[]byte("k")})
+	require.Error(t, err)
+}
+
+func TestRaftBackendMSetBranches(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+	require.NoError(t, backend.MSet(nil))
+	require.Error(t, backend.MSet([][2][]byte{{nil, []byte("v")}}))
+
+	stub.mutateErr = errors.New("mutate")
+	require.Error(t, backend.MSet([][2][]byte{{[]byte("k"), []byte("v")}}))
+}
+
+func TestRaftBackendExists(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	stub.batchGet = map[string]*pb.GetResponse{
+		"a": {Value: []byte("1")},
+	}
+	count, err := backend.Exists([][]byte{[]byte("a"), []byte("b")})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+
+	ts.err = errors.New("boom")
+	_, err = backend.Exists([][]byte{[]byte("a")})
+	require.Error(t, err)
+}
+
+func TestRaftBackendIncrByErrors(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	ts.err = errors.New("boom")
+	_, err := backend.IncrBy([]byte("k"), 1)
+	require.Error(t, err)
+
+	ts.err = nil
+	stub.batchGetErr = errors.New("batch")
+	_, err = backend.IncrBy([]byte("k"), 1)
+	require.Error(t, err)
+
+	stub.batchGetErr = nil
+	stub.batchGet = map[string]*pb.GetResponse{
+		"k": {Value: []byte("abc")},
+	}
+	_, err = backend.IncrBy([]byte("k"), 1)
+	require.ErrorIs(t, err, errNotInteger)
+
+	stub.batchGet = map[string]*pb.GetResponse{
+		"k": {Value: []byte(fmt.Sprintf("%d", math.MaxInt64))},
+	}
+	_, err = backend.IncrBy([]byte("k"), 1)
+	require.ErrorIs(t, err, errOverflow)
+
+	stub.batchGet = map[string]*pb.GetResponse{
+		"k": {Value: []byte(fmt.Sprintf("%d", math.MinInt64))},
+	}
+	_, err = backend.IncrBy([]byte("k"), -1)
+	require.ErrorIs(t, err, errOverflow)
+}
+
+func TestBuildValueAtVersionBranches(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+	key := []byte("k1")
+	ttlBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(ttlBuf, uint64(time.Now().Unix()+100))
+
+	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true}, &pb.GetResponse{Value: ttlBuf})
+	require.NoError(t, err)
+	require.False(t, val.Found)
+	require.NotZero(t, stub.mutateCalls)
+
+	stub.mutateCalls = 0
+	expiredBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(expiredBuf, uint64(time.Now().Add(-time.Hour).Unix()))
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: expiredBuf})
+	require.NoError(t, err)
+	require.False(t, val.Found)
+	require.NotZero(t, stub.mutateCalls)
+
+	stub.mutateCalls = 0
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: ttlBuf})
+	require.NoError(t, err)
+	require.True(t, val.Found)
+	require.Equal(t, []byte("v"), val.Value)
+}
+
+func TestMutatePaths(t *testing.T) {
+	backend, stub, ts := newStubBackend()
+	require.NoError(t, backend.mutate([]byte("k")))
+
+	ts.err = errors.New("reserve")
+	err := backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	require.Error(t, err)
+
+	ts.err = nil
+	stub.mutateErr = errors.New("boom")
+	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	require.Error(t, err)
+
+	conflict := &client.KeyConflictError{Errors: []*pb.KeyError{{Locked: &pb.Locked{
+		Key:         []byte("k"),
+		PrimaryLock: []byte("k"),
+		LockVersion: 1,
+	}}}}
+	stub.mutateErr = conflict
+	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
+	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	require.Error(t, err)
+
+	stub.mutateErr = nil
+	stub.mutateFn = func() error { return conflict }
+	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
+	stub.resolveErr = nil
+	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mutate retries exhausted")
+}
+
+func TestResolveKeyConflictsAndLocks(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+	require.False(t, backend.resolveKeyConflicts(nil))
+	require.False(t, backend.resolveKeyConflicts(&client.KeyConflictError{}))
+
+	conflicts := &client.KeyConflictError{Errors: []*pb.KeyError{nil, {}}}
+	require.True(t, backend.resolveKeyConflicts(conflicts))
+
+	lock := &pb.Locked{
+		PrimaryLock: []byte("p"),
+		Key:         ttlMetaKey([]byte("k")),
+		LockVersion: 1,
+	}
+	stub.checkErr = errors.New("check")
+	require.False(t, backend.resolveSingleLock(lock))
+
+	stub.checkErr = nil
+	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: 1}
+	require.False(t, backend.resolveSingleLock(lock))
+
+	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
+	require.False(t, backend.resolveSingleLock(lock))
+
+	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
+	stub.resolveErr = errors.New("resolve")
+	require.False(t, backend.resolveSingleLock(lock))
+
+	stub.resolveErr = nil
+	require.True(t, backend.resolveSingleLock(lock))
+	require.NotEmpty(t, stub.resolveKeys)
 }

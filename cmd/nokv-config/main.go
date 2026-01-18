@@ -13,10 +13,13 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 )
 
+var exit = os.Exit
+var getwd = os.Getwd
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
-		os.Exit(1)
+		exit(1)
 	}
 
 	subcmd := os.Args[1]
@@ -34,17 +37,17 @@ func main() {
 		err = runManifest(args)
 	default:
 		printUsage()
-		os.Exit(1)
+		exit(1)
 	}
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nokv-config %s: %v\n", subcmd, err)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
 func defaultConfigPath() string {
-	if cwd, err := os.Getwd(); err == nil {
+	if cwd, err := getwd(); err == nil {
 		return filepath.Join(cwd, "raft_config.example.json")
 	}
 	return "raft_config.example.json"
