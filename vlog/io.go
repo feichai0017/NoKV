@@ -11,7 +11,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
@@ -39,13 +38,13 @@ func putEntryBuffer(buf *bytes.Buffer) {
 }
 
 func (m *Manager) appendPayload(payload []byte) (*kv.ValuePtr, error) {
-	lf, fid, start, err := m.reserveAppend(len(payload))
+	store, fid, start, err := m.reserve(len(payload))
 	if err != nil {
 		return nil, err
 	}
-	lf.Lock.Lock()
-	err = lf.Write(start, payload)
-	lf.Lock.Unlock()
+	store.Lock()
+	err = store.Write(start, payload)
+	store.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -75,34 +74,8 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 	return ptr, nil
 }
 
-func (m *Manager) reserveAppend(sz int) (*file.LogFile, uint32, uint32, error) {
-	if sz <= 0 {
-		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
-	}
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-	lf, fid, err := m.ensureActiveLocked()
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	if m.offset < uint32(kv.ValueLogHeaderSize) {
-		m.offset = uint32(kv.ValueLogHeaderSize)
-	}
-	if int(m.offset)+sz > int(m.cfg.MaxSize) {
-		if err := m.rotateLocked(); err != nil {
-			return nil, 0, 0, err
-		}
-		lf, fid, err = m.ensureActiveLocked()
-		if err != nil {
-			return nil, 0, 0, err
-		}
-	}
-	start := m.offset
-	m.offset += uint32(sz)
-	return lf, fid, start, nil
-}
-
-func (m *Manager) reserveBatch(sz int) (*file.LogFile, uint32, uint32, error) {
+// reserve allocates space in the active segment, rotating if needed.
+func (m *Manager) reserve(sz int) (SegmentStore, uint32, uint32, error) {
 	if sz <= 0 {
 		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
 	}
@@ -200,20 +173,20 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 		return ptrs, nil
 	}
 
-	lf, fid, start, err := m.reserveBatch(total)
+	store, fid, start, err := m.reserve(total)
 	if err != nil {
 		releaseBuffers()
 		return nil, err
 	}
 
 	offset := start
-	lf.Lock.Lock()
+	store.Lock()
 	for i, payload := range payloads {
 		if payload == nil {
 			continue
 		}
-		if err := lf.Write(offset, payload); err != nil {
-			lf.Lock.Unlock()
+		if err := store.Write(offset, payload); err != nil {
+			store.Unlock()
 			releaseBuffers()
 			return nil, err
 		}
@@ -224,26 +197,66 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 		}
 		offset += uint32(len(payload))
 	}
-	lf.Lock.Unlock()
+	store.Unlock()
 
 	releaseBuffers()
 	return ptrs, nil
 }
 
 func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
-	lf, unlock, err := m.getFileRLocked(ptr.Fid)
+	store, unlock, err := m.getStoreForRead(ptr.Fid)
 	if err != nil {
 		if unlock != nil {
 			unlock()
 		}
 		return nil, nil, err
 	}
-	buf, err := lf.Read(ptr)
+	buf, err := store.Read(ptr)
 	if err != nil {
 		unlock()
 		return nil, nil, err
 	}
 	return buf, unlock, nil
+}
+
+type ReadMode uint8
+
+const (
+	ReadModeZeroCopy ReadMode = iota
+	ReadModeCopy
+	ReadModeAuto
+)
+
+// ReadOptions defines how values are materialized from the value log.
+type ReadOptions struct {
+	Mode                ReadMode
+	SmallValueThreshold int
+}
+
+// ReadValue decodes the value payload and optionally copies it based on the read mode.
+func (m *Manager) ReadValue(ptr *kv.ValuePtr, opt ReadOptions) ([]byte, func(), error) {
+	raw, unlock, err := m.Read(ptr)
+	if err != nil {
+		return nil, unlock, err
+	}
+	val, _, err := kv.DecodeValueSlice(raw)
+	if err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	switch opt.Mode {
+	case ReadModeCopy:
+		copied := kv.SafeCopy(nil, val)
+		unlock()
+		return copied, nil, nil
+	case ReadModeAuto:
+		if opt.SmallValueThreshold > 0 && len(val) <= opt.SmallValueThreshold {
+			copied := kv.SafeCopy(nil, val)
+			unlock()
+			return copied, nil, nil
+		}
+	}
+	return val, unlock, nil
 }
 
 // Iterate streams value-log records from the given file identifier starting at
@@ -254,11 +267,11 @@ func (m *Manager) Iterate(fid uint32, offset uint32, fn kv.LogEntry) (uint32, er
 	if fn == nil {
 		return offset, fmt.Errorf("vlog manager iterate: nil callback")
 	}
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return 0, err
 	}
-	return iterateLogFile(lf, offset, fn)
+	return iterateLogFile(store, fid, offset, fn)
 }
 
 // SampleOptions controls value-log sampling behaviour.
@@ -290,12 +303,12 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 	if cb == nil {
 		return nil, fmt.Errorf("vlog manager sample: nil callback")
 	}
-	lf, err := m.getFile(fid)
+	store, err := m.getFile(fid)
 	if err != nil {
 		return nil, err
 	}
 
-	size := lf.Size()
+	size := store.Size()
 
 	stats := &SampleStats{}
 
@@ -324,7 +337,7 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 	}
 
 	var skipped float64
-	_, err = iterateLogFile(lf, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
+	_, err = iterateLogFile(store, fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		esz := float64(vp.Len) / float64(utils.Mi)
 
 		if skipped < skipMiB {
@@ -375,27 +388,25 @@ func VerifyDir(cfg Config) error {
 	if cfg.MaxSize == 0 {
 		cfg.MaxSize = int64(1 << 29)
 	}
+	if cfg.StoreFactory == nil {
+		cfg.StoreFactory = defaultSegmentStoreFactory()
+	}
 	files, err := filepath.Glob(filepath.Join(cfg.Dir, "*.vlog"))
 	if err != nil {
 		return err
 	}
 	sort.Strings(files)
 	for _, path := range files {
-		lf := &file.LogFile{}
-		if err := lf.Open(&file.Options{
-			FID:      extractFID(path),
-			FileName: path,
-			Dir:      cfg.Dir,
-			Flag:     os.O_CREATE | os.O_RDWR,
-			MaxSz:    int(cfg.MaxSize),
-		}); err != nil {
+		fid := uint32(extractFID(path))
+		store, err := cfg.StoreFactory.Open(fid, path, cfg.Dir, cfg.MaxSize, false)
+		if err != nil {
 			if stderrors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return err
 		}
-		valid, err := sanitizeValueLog(lf)
-		closeErr := lf.Close()
+		valid, err := sanitizeValueLog(store)
+		closeErr := store.Close()
 		if err != nil && !stderrors.Is(err, utils.ErrTruncate) {
 			return err
 		}
@@ -424,15 +435,15 @@ func extractFID(path string) uint64 {
 	return fid
 }
 
-func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
-	start, err := firstNonZeroOffset(lf)
+func sanitizeValueLog(store SegmentStore) (uint32, error) {
+	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := lf.Seek(int64(start), io.SeekStart); err != nil {
+	if _, err := store.Seek(int64(start), io.SeekStart); err != nil {
 		return 0, err
 	}
-	eIter := kv.NewEntryIterator(lf.FD())
+	eIter := kv.NewEntryIterator(store.FD())
 	defer eIter.Close()
 
 	offset := start
@@ -453,14 +464,14 @@ func sanitizeValueLog(lf *file.LogFile) (uint32, error) {
 	}
 }
 
-func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
-	size := lf.Size()
+func firstNonZeroOffset(store SegmentStore) (uint32, error) {
+	size := store.Size()
 	start := int64(kv.ValueLogHeaderSize)
 	if size <= start {
 		return uint32(start), nil
 	}
 	buf := make([]byte, 1<<20)
-	fd := lf.FD()
+	fd := store.FD()
 	for offset := start; offset < size; {
 		toRead := len(buf)
 		if rem := size - offset; rem < int64(toRead) {
@@ -485,19 +496,19 @@ func firstNonZeroOffset(lf *file.LogFile) (uint32, error) {
 	return uint32(start), nil
 }
 
-func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, error) {
+func iterateLogFile(store SegmentStore, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}
-	if int64(offset) == lf.Size() {
+	if int64(offset) == store.Size() {
 		return offset, nil
 	}
 
-	if _, err := lf.Seek(int64(offset), io.SeekStart); err != nil {
-		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", lf.FileName())
+	if _, err := store.Seek(int64(offset), io.SeekStart); err != nil {
+		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", store.FileName())
 	}
 
-	stream := kv.NewEntryIterator(lf.FD())
+	stream := kv.NewEntryIterator(store.FD())
 	defer stream.Close()
 
 	validEndOffset := offset
@@ -511,7 +522,7 @@ func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, er
 		vp := kv.ValuePtr{
 			Len:    recordLen,
 			Offset: entry.Offset,
-			Fid:    lf.FID,
+			Fid:    fid,
 		}
 		validEndOffset = currentOffset + recordLen
 		currentOffset = validEndOffset
@@ -521,7 +532,7 @@ func iterateLogFile(lf *file.LogFile, offset uint32, fn kv.LogEntry) (uint32, er
 			if callErr == utils.ErrStop {
 				return validEndOffset, nil
 			}
-			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", lf.FileName()), callErr)
+			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", store.FileName()), callErr)
 		}
 	}
 

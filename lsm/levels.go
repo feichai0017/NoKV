@@ -569,6 +569,7 @@ func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 	}
 }
 
+// densityLocked computes value density; caller must hold lh lock.
 func (lh *levelHandler) densityLocked() float64 {
 	if lh.totalSize <= 0 {
 		return 0
