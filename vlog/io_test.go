@@ -78,6 +78,53 @@ func TestAppendEntriesBatchAndIterate(t *testing.T) {
 	}
 }
 
+func TestReadAfterRotateSealsSegment(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir, FileMode: utils.DefaultFileMode, MaxSize: 1 << 20})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer mgr.Close()
+
+	entry := kv.NewEntry([]byte("sealed-key"), []byte("sealed-val"))
+	ptrs, err := mgr.AppendEntries([]*kv.Entry{entry}, nil)
+	entry.DecrRef()
+	if err != nil {
+		t.Fatalf("append entries: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("expected 1 pointer, got %d", len(ptrs))
+	}
+	oldFID := ptrs[0].Fid
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	lf := mgr.files[oldFID]
+	if lf == nil || !lf.IsSealed() {
+		t.Fatalf("expected sealed segment for fid %d", oldFID)
+	}
+
+	data, unlock, err := mgr.Read(&ptrs[0])
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if unlock != nil {
+		unlock()
+	}
+	decoded, err := kv.DecodeEntry(data)
+	if err != nil {
+		t.Fatalf("decode entry: %v", err)
+	}
+	if string(decoded.Key) != "sealed-key" {
+		t.Fatalf("expected key sealed-key, got %q", string(decoded.Key))
+	}
+	if string(decoded.Value) != "sealed-val" {
+		t.Fatalf("expected value sealed-val, got %q", string(decoded.Value))
+	}
+	decoded.DecrRef()
+}
+
 func TestIterateStopsEarly(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := Open(Config{Dir: dir})

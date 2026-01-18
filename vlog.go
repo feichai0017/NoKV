@@ -17,6 +17,7 @@ import (
 const (
 	defaultDiscardStatsFlushThreshold = 100
 	valueLogHeadLogInterval           = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
+	valueLogSmallCopyThreshold        = 4 << 10         // copy small values to reduce read lock hold.
 )
 
 var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
@@ -238,6 +239,11 @@ func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
 	if err != nil {
 		unlock()
 		return nil, nil, err
+	}
+	if len(val) <= valueLogSmallCopyThreshold {
+		copied := kv.SafeCopy(nil, val)
+		unlock()
+		return copied, nil, nil
 	}
 	return val, unlock, nil
 }
