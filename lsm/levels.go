@@ -652,10 +652,30 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	if lh.levelNum == 0 {
 		return lh.searchL0SST(key)
 	}
-	if entry, err := lh.searchIngestSST(key); entry != nil {
-		return entry, err
+	var (
+		best   *kv.Entry
+		maxVer uint64
+	)
+	if entry, err := lh.searchIngestSST(key, &maxVer); err == nil {
+		best = entry
+	} else if err != utils.ErrKeyNotFound {
+		return nil, err
 	}
-	return lh.searchLNSST(key)
+	if entry, err := lh.searchLNSST(key, &maxVer); err == nil {
+		if best != nil {
+			best.DecrRef()
+		}
+		best = entry
+	} else if err != utils.ErrKeyNotFound {
+		if best != nil {
+			best.DecrRef()
+		}
+		return nil, err
+	}
+	if best != nil {
+		return best, nil
+	}
+	return nil, utils.ErrKeyNotFound
 }
 
 func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
@@ -709,23 +729,56 @@ func (lh *levelHandler) Sort() {
 }
 
 func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
-	var version uint64
+	var (
+		version uint64
+		best    *kv.Entry
+	)
 	for _, table := range lh.tables {
-		if entry, err := table.Search(key, &version); err == nil {
-			return entry, nil
+		if table == nil {
+			continue
 		}
+		if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
+			utils.CompareUserKeys(key, table.MaxKey()) > 0 {
+			continue
+		}
+		if table.MaxVersionVal() <= version {
+			continue
+		}
+		if entry, err := table.Search(key, &version); err == nil {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+			continue
+		} else if err != utils.ErrKeyNotFound {
+			if best != nil {
+				best.DecrRef()
+			}
+			return nil, err
+		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) searchLNSST(key []byte) (*kv.Entry, error) {
+func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
 	table := lh.getTableForKey(key)
-	var version uint64
 	if table == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-	if entry, err := table.Search(key, &version); err == nil {
+	if maxVersion != nil && table.MaxVersionVal() <= *maxVersion {
+		return nil, utils.ErrKeyNotFound
+	}
+	if maxVersion == nil {
+		var tmp uint64
+		maxVersion = &tmp
+	}
+	if entry, err := table.Search(key, maxVersion); err == nil {
 		return entry, nil
+	} else if err != utils.ErrKeyNotFound {
+		return nil, err
 	}
 	return nil, utils.ErrKeyNotFound
 }
