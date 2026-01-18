@@ -17,6 +17,7 @@ import (
 const (
 	defaultDiscardStatsFlushThreshold = 100
 	valueLogHeadLogInterval           = uint32(1 << 20) // 1 MiB persistence interval for value-log head.
+	valueLogSmallCopyThreshold        = 4 << 10         // copy small values to reduce read lock hold.
 )
 
 var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
@@ -230,16 +231,10 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 }
 
 func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
-	data, unlock, err := vlog.manager.Read(vp)
-	if err != nil {
-		return nil, unlock, err
-	}
-	val, _, err := kv.DecodeValueSlice(data)
-	if err != nil {
-		unlock()
-		return nil, nil, err
-	}
-	return val, unlock, nil
+	return vlog.manager.ReadValue(vp, vlogpkg.ReadOptions{
+		Mode:                vlogpkg.ReadModeAuto,
+		SmallValueThreshold: valueLogSmallCopyThreshold,
+	})
 }
 
 func (vlog *valueLog) write(reqs []*request) error {

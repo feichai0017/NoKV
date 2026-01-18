@@ -222,6 +222,7 @@ func (m *Manager) LogEdits(edits ...Edit) error {
 	return m.logEditsLocked(edits)
 }
 
+// logEditsLocked appends edits and updates the manifest; caller must hold m.mu.
 func (m *Manager) logEditsLocked(edits []Edit) error {
 	var buf bytes.Buffer
 	syncNeeded := false
@@ -277,6 +278,7 @@ func (m *Manager) Rewrite() error {
 	return m.rewriteLocked()
 }
 
+// maybeRewriteLocked rewrites the manifest if threshold exceeded; caller must hold m.mu.
 func (m *Manager) maybeRewriteLocked() error {
 	if m.rewriteThreshold <= 0 || m.manifest == nil {
 		return nil
@@ -291,6 +293,7 @@ func (m *Manager) maybeRewriteLocked() error {
 	return m.rewriteLocked()
 }
 
+// rewriteLocked rewrites the manifest file; caller must hold m.mu.
 func (m *Manager) rewriteLocked() error {
 	if m.manifest == nil {
 		return nil
@@ -437,6 +440,7 @@ func (m *Manager) initNextFileID() {
 	}
 }
 
+// nextManifestFileLocked picks the next manifest filename; caller must hold m.mu.
 func (m *Manager) nextManifestFileLocked() (string, error) {
 	id := m.nextFileID
 	if id == 0 {
