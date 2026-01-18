@@ -245,6 +245,14 @@ func (m *Manager) getFileRLocked(fid uint32) (*file.LogFile, func(), error) {
 		m.filesLock.RUnlock()
 		return nil, nil, pkgerrors.Errorf("value log file %d not found", fid)
 	}
+	if lf.IsSealed() {
+		if !lf.PinRead() {
+			m.filesLock.RUnlock()
+			return nil, nil, pkgerrors.Errorf("value log file %d closing", fid)
+		}
+		m.filesLock.RUnlock()
+		return lf, lf.UnpinRead, nil
+	}
 	lf.Lock.RLock()
 	m.filesLock.RUnlock()
 	return lf, lf.Lock.RUnlock, nil
@@ -294,6 +302,10 @@ func (m *Manager) Remove(fid uint32) error {
 	}
 	m.filesLock.Unlock()
 
+	lf.BeginClose()
+	if lf.IsSealed() {
+		lf.WaitForNoPins()
+	}
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 	if err := lf.Close(); err != nil {
@@ -490,6 +502,10 @@ func (m *Manager) Close() error {
 	defer m.filesLock.Unlock()
 	var firstErr error
 	for fid, lf := range m.files {
+		lf.BeginClose()
+		if lf.IsSealed() {
+			lf.WaitForNoPins()
+		}
 		if err := lf.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
