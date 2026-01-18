@@ -476,7 +476,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	var buf ingestBuffer
 	buf.add(tbl)
 
-	found, err := buf.search(key)
+	found, err := buf.search(key, nil)
 	if err != nil {
 		t.Fatalf("ingest search: %v", err)
 	}
@@ -486,12 +486,13 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	if string(found.Key) != string(key) {
 		t.Fatalf("expected key %q, got %q", key, found.Key)
 	}
+	found.DecrRef()
 
 	if !buf.prefetch(key, true) {
 		t.Fatalf("expected prefetch hit")
 	}
 
-	_, err = buf.search(kv.KeyWithTs([]byte("missing"), 1))
+	_, err = buf.search(kv.KeyWithTs([]byte("missing"), 1), nil)
 	if err != utils.ErrKeyNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -509,16 +510,18 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 
 	lh := &levelHandler{levelNum: 3}
 	lh.ingest.add(tbl)
-	found, err := lh.searchIngestSST(key)
+	found, err := lh.searchIngestSST(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("ingest search err=%v entry=%v", err, found)
 	}
+	found.DecrRef()
 
 	lh.tables = []*table{tbl}
-	found, err = lh.searchLNSST(key)
+	found, err = lh.searchLNSST(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("level search err=%v entry=%v", err, found)
 	}
+	found.DecrRef()
 
 	if lh.getTableForKey(kv.KeyWithTs([]byte("z"), 1)) != nil {
 		t.Fatalf("expected no table for key")
@@ -528,6 +531,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	if err != nil || ingestHit == nil {
 		t.Fatalf("level get err=%v entry=%v", err, ingestHit)
 	}
+	ingestHit.DecrRef()
 	if !lh.prefetch(key, true) {
 		t.Fatalf("expected level prefetch hit")
 	}
@@ -537,6 +541,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	if err != nil || l0Hit == nil {
 		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
 	}
+	l0Hit.DecrRef()
 	if !l0.prefetch(key, true) {
 		t.Fatalf("expected l0 prefetch hit")
 	}
@@ -546,6 +551,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	if err != nil || lmHit == nil {
 		t.Fatalf("levels get err=%v entry=%v", err, lmHit)
 	}
+	lmHit.DecrRef()
 }
 
 func TestLSMMetricsAPIs(t *testing.T) {
