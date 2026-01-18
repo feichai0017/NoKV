@@ -74,6 +74,7 @@ func (cd *compactDef) applyPlan(plan compact.Plan) {
 	cd.plan = plan
 }
 
+// resolvePlanLocked binds plan tables; caller must hold cd level locks.
 func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
@@ -555,6 +556,7 @@ func tablesToString(tables []*table) []string {
 	return res
 }
 
+// resolveTablesLocked maps IDs to tables; caller must hold lh lock.
 func resolveTablesLocked(lh *levelHandler, ids []uint64, ingest bool) []*table {
 	if lh == nil || len(ids) == 0 {
 		return nil
