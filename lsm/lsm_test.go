@@ -463,6 +463,24 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 	return tbl
 }
 
+func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uint64, val string) *table {
+	t.Helper()
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builderOpt.BloomFalsePositive = 0.01
+	builder := newTableBuiler(&builderOpt)
+
+	ikey := kv.KeyWithTs([]byte(key), ver)
+	builder.AddKey(kv.NewEntry(ikey, []byte(val)))
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tbl := openTable(lsm.levels, tableName, builder)
+	if tbl == nil {
+		t.Fatalf("expected table from builder")
+	}
+	return tbl
+}
+
 func TestIngestSearchAndPrefetch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -503,26 +521,8 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 	lsm := buildLSM()
 	defer lsm.Close()
 
-	makeTable := func(fid uint64, key string, ver uint64, val string) *table {
-		t.Helper()
-		builderOpt := *opt
-		builderOpt.BlockSize = 64
-		builderOpt.BloomFalsePositive = 0.01
-		builder := newTableBuiler(&builderOpt)
-
-		ikey := kv.KeyWithTs([]byte(key), ver)
-		builder.AddKey(kv.NewEntry(ikey, []byte(val)))
-
-		tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-		tbl := openTable(lsm.levels, tableName, builder)
-		if tbl == nil {
-			t.Fatalf("expected table from builder")
-		}
-		return tbl
-	}
-
-	tblOld := makeTable(11, "b", 1, "v1")
-	tblNew := makeTable(12, "b", 3, "v3")
+	tblOld := buildTableWithEntry(t, lsm, 11, "b", 1, "v1")
+	tblNew := buildTableWithEntry(t, lsm, 12, "b", 3, "v3")
 	defer func() { _ = tblOld.DecrRef() }()
 	defer func() { _ = tblNew.DecrRef() }()
 
@@ -539,6 +539,105 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 		t.Fatalf("expected latest value v3, got %q", string(found.Value))
 	}
 	found.DecrRef()
+}
+
+func TestLevelGetPrefersMainVersion(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	ingestTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
+	mainTbl := buildTableWithEntry(t, lsm, 22, "k", 3, "new")
+	defer func() { _ = ingestTbl.DecrRef() }()
+	defer func() { _ = mainTbl.DecrRef() }()
+
+	lh := &levelHandler{levelNum: 3}
+	lh.ingest.add(ingestTbl)
+	lh.tables = []*table{mainTbl}
+
+	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+	got, err := lh.Get(key)
+	if err != nil || got == nil {
+		t.Fatalf("level get err=%v entry=%v", err, got)
+	}
+	if string(got.Value) != "new" {
+		t.Fatalf("expected main value new, got %q", string(got.Value))
+	}
+	got.DecrRef()
+}
+
+func TestLevelGetMainWhenIngestEmpty(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	mainTbl := buildTableWithEntry(t, lsm, 23, "k", 2, "main")
+	defer func() { _ = mainTbl.DecrRef() }()
+
+	lh := &levelHandler{levelNum: 2}
+	lh.tables = []*table{mainTbl}
+
+	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+	got, err := lh.Get(key)
+	if err != nil || got == nil {
+		t.Fatalf("level get err=%v entry=%v", err, got)
+	}
+	if string(got.Value) != "main" {
+		t.Fatalf("expected main value, got %q", string(got.Value))
+	}
+	got.DecrRef()
+}
+
+func TestL0SearchPrefersLatestVersion(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	tblOther := buildTableWithEntry(t, lsm, 31, "a", 2, "va")
+	tblOld := buildTableWithEntry(t, lsm, 32, "b", 1, "v1")
+	tblNew := buildTableWithEntry(t, lsm, 33, "b", 3, "v3")
+	defer func() { _ = tblOther.DecrRef() }()
+	defer func() { _ = tblOld.DecrRef() }()
+	defer func() { _ = tblNew.DecrRef() }()
+
+	key := kv.KeyWithTs([]byte("b"), math.MaxUint64)
+	l0 := &levelHandler{levelNum: 0, tables: []*table{tblOther, tblOld, tblNew}}
+	got, err := l0.searchL0SST(key)
+	if err != nil || got == nil {
+		t.Fatalf("l0 search err=%v entry=%v", err, got)
+	}
+	if string(got.Value) != "v3" {
+		t.Fatalf("expected latest value v3, got %q", string(got.Value))
+	}
+	got.DecrRef()
+
+	l0 = &levelHandler{levelNum: 0, tables: []*table{tblNew, tblOld}}
+	got, err = l0.searchL0SST(key)
+	if err != nil || got == nil {
+		t.Fatalf("l0 search err=%v entry=%v", err, got)
+	}
+	if string(got.Value) != "v3" {
+		t.Fatalf("expected latest value v3, got %q", string(got.Value))
+	}
+	got.DecrRef()
+}
+
+func TestLevelSearchRespectsMaxVersion(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	tbl := buildTableWithEntry(t, lsm, 41, "k", 2, "v2")
+	defer func() { _ = tbl.DecrRef() }()
+
+	lh := &levelHandler{levelNum: 3, tables: []*table{tbl}}
+	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+
+	maxVer := uint64(5)
+	got, err := lh.searchLNSST(key, &maxVer)
+	if err != utils.ErrKeyNotFound || got != nil {
+		t.Fatalf("expected not found, got err=%v entry=%v", err, got)
+	}
 }
 
 func TestLevelSearchIngestAndLN(t *testing.T) {
