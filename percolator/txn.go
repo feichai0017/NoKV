@@ -242,6 +242,7 @@ func CheckTxnStatus(db *NoKV.DB, latches *latch.Manager, req *pb.CheckTxnStatusR
 	return resp
 }
 
+// keyErrorLocked builds a KeyError for a locked key.
 func keyErrorLocked(key []byte, lock *Lock) *pb.KeyError {
 	return &pb.KeyError{
 		Locked: &pb.Locked{

@@ -231,21 +231,10 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 }
 
 func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
-	data, unlock, err := vlog.manager.Read(vp)
-	if err != nil {
-		return nil, unlock, err
-	}
-	val, _, err := kv.DecodeValueSlice(data)
-	if err != nil {
-		unlock()
-		return nil, nil, err
-	}
-	if len(val) <= valueLogSmallCopyThreshold {
-		copied := kv.SafeCopy(nil, val)
-		unlock()
-		return copied, nil, nil
-	}
-	return val, unlock, nil
+	return vlog.manager.ReadValue(vp, vlogpkg.ReadOptions{
+		Mode:                vlogpkg.ReadModeAuto,
+		SmallValueThreshold: valueLogSmallCopyThreshold,
+	})
 }
 
 func (vlog *valueLog) write(reqs []*request) error {

@@ -39,6 +39,36 @@ func TestManagerAppendRead(t *testing.T) {
 	}
 }
 
+func TestManagerReadValueAutoCopiesSmall(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer mgr.Close()
+
+	entry := kv.NewEntry([]byte("key"), []byte("v"))
+	vp, err := mgr.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	val, release, err := mgr.ReadValue(vp, ReadOptions{
+		Mode:                ReadModeAuto,
+		SmallValueThreshold: 16,
+	})
+	if err != nil {
+		t.Fatalf("read value: %v", err)
+	}
+	if release != nil {
+		release()
+		t.Fatalf("expected copied value to return nil release")
+	}
+	if string(val) != "v" {
+		t.Fatalf("value mismatch: got %q", val)
+	}
+}
+
 func TestManagerRotate(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := Open(Config{Dir: dir})

@@ -5,7 +5,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -20,10 +19,6 @@ type LogFile struct {
 	size uint32
 	f    *MmapFile
 	ro   bool
-
-	sealed   uint32
-	closing  uint32
-	pinCount int32
 }
 
 func (lf *LogFile) Open(opt *Options) error {
@@ -46,9 +41,6 @@ func (lf *LogFile) Open(opt *Options) error {
 		uint32(sz), uint32(math.MaxUint32)))
 	lf.size = uint32(sz)
 	lf.ro = flag == os.O_RDONLY
-	if lf.ro {
-		atomic.StoreUint32(&lf.sealed, 1)
-	}
 	// TODO: consider reserving a header region for metadata.
 	return nil
 }
@@ -186,44 +178,6 @@ func (lf *LogFile) Sync() error {
 	return lf.f.Sync()
 }
 
-func (lf *LogFile) IsSealed() bool {
-	return atomic.LoadUint32(&lf.sealed) == 1
-}
-
-func (lf *LogFile) setSealed(sealed bool) {
-	var val uint32
-	if sealed {
-		val = 1
-	}
-	atomic.StoreUint32(&lf.sealed, val)
-}
-
-func (lf *LogFile) PinRead() bool {
-	if atomic.LoadUint32(&lf.closing) == 1 {
-		return false
-	}
-	atomic.AddInt32(&lf.pinCount, 1)
-	if atomic.LoadUint32(&lf.closing) == 1 {
-		atomic.AddInt32(&lf.pinCount, -1)
-		return false
-	}
-	return true
-}
-
-func (lf *LogFile) UnpinRead() {
-	atomic.AddInt32(&lf.pinCount, -1)
-}
-
-func (lf *LogFile) BeginClose() {
-	atomic.StoreUint32(&lf.closing, 1)
-}
-
-func (lf *LogFile) WaitForNoPins() {
-	for atomic.LoadInt32(&lf.pinCount) > 0 {
-		runtime.Gosched()
-	}
-}
-
 // SetReadOnly remaps the file as read-only and advises the OS to drop pages.
 func (lf *LogFile) SetReadOnly() error {
 	lf.Lock.Lock()
@@ -236,14 +190,11 @@ func (lf *LogFile) SetReadOnly() error {
 	}
 	_ = lf.f.Advise(utils.AccessPatternDontNeed)
 	lf.ro = true
-	lf.setSealed(true)
 	return nil
 }
 
 // SetWritable remaps the file back to writable mode.
 func (lf *LogFile) SetWritable() error {
-	lf.setSealed(false)
-	lf.WaitForNoPins()
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 	if !lf.ro {

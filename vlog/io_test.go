@@ -100,8 +100,8 @@ func TestReadAfterRotateSealsSegment(t *testing.T) {
 		t.Fatalf("rotate: %v", err)
 	}
 
-	lf := mgr.files[oldFID]
-	if lf == nil || !lf.IsSealed() {
+	seg := mgr.files[oldFID]
+	if seg == nil || !seg.isSealed() {
 		t.Fatalf("expected sealed segment for fid %d", oldFID)
 	}
 

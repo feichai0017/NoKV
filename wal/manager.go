@@ -172,6 +172,7 @@ func (m *Manager) segmentPath(id uint32) string {
 	return filepath.Join(m.cfg.Dir, fmt.Sprintf("%05d.wal", id))
 }
 
+// switchSegmentLocked replaces the active segment; caller must hold m.mu.
 func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
@@ -306,6 +307,7 @@ func (m *Manager) Rotate() error {
 	return m.rotateLocked()
 }
 
+// rotateLocked advances to a new segment; caller must hold m.mu.
 func (m *Manager) rotateLocked() error {
 	nextID := m.activeID + 1
 	return m.switchSegmentLocked(nextID, true)

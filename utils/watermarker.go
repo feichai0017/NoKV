@@ -177,6 +177,7 @@ func (w *WaterMark) tryAdvance() {
 	}
 }
 
+// notifyWaitersLocked updates waiters; caller must hold w.mu.
 func (w *WaterMark) notifyWaitersLocked(_ uint64, until uint64) {
 	for idx, ch := range w.waiters {
 		if idx <= until {
@@ -207,6 +208,7 @@ func (w *WaterMark) ensureWindow(index uint64) *watermarkWindow {
 	return w.loadWindow()
 }
 
+// rebuildWindowLocked resizes the window; caller must hold w.mu.
 func (w *WaterMark) rebuildWindowLocked(index uint64, win *watermarkWindow) {
 	done := w.DoneUntil()
 	newBase := done + 1

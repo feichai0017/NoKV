@@ -386,6 +386,7 @@ func (lh *levelHandler) ingestValueDensity() float64 {
 	return float64(lh.ingest.totalValueSize()) / float64(total)
 }
 
+// ingestDensityLocked computes ingest value density; caller must hold lh lock.
 func (lh *levelHandler) ingestDensityLocked() float64 {
 	total := lh.ingest.totalSize()
 	if total <= 0 {
