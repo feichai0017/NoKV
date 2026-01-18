@@ -19,6 +19,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+var notifyContext = signal.NotifyContext
+
 func runServeCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	workDir := fs.String("workdir", "", "database work directory")
@@ -129,7 +131,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 	fmt.Fprintln(w, "Press Ctrl+C to stop")
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	<-ctx.Done()
 	fmt.Fprintln(w, "\nShutting down...")

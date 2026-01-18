@@ -2,17 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,6 +123,14 @@ func TestRunVlogCmd(t *testing.T) {
 	}
 }
 
+func TestRunVlogCmdPlain(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	err := runVlogCmd(&buf, []string{"-workdir", dir})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Active FID")
+}
+
 func TestRenderStatsWarnLine(t *testing.T) {
 	var buf bytes.Buffer
 	snap := NoKV.StatsSnapshot{
@@ -147,6 +161,14 @@ func TestRenderStatsWarnLine(t *testing.T) {
 	if !strings.Contains(out, "Compaction.ValueWeight") {
 		t.Fatalf("expected Compaction.ValueWeight line in output, got: %q", out)
 	}
+}
+
+func TestRunManifestCmdPlain(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	err := runManifestCmd(&buf, []string{"-workdir", dir})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Manifest Log Pointer")
 }
 func TestRunRegionsCmd(t *testing.T) {
 	dir := t.TempDir()
@@ -203,6 +225,19 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	require.Equal(t, 0, snap.LSMLevels[0].Level)
 }
 
+func TestFetchExpvarSnapshotWithPath(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"NoKV.Stats.Entries": float64(2)})
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	snap, err := fetchExpvarSnapshot(server.URL + "/debug/vars")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), snap.Entries)
+}
+
 func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
 		"NoKV.Stats.HotKeys": []any{
@@ -225,12 +260,27 @@ func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 	require.Equal(t, int32(7), snap.HotKeys[0].Count)
 }
 
+func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
+	snap := parseExpvarSnapshot(map[string]any{
+		"NoKV.Stats.HotKeys": map[string]any{
+			"k4": float64(3),
+		},
+	})
+	require.Len(t, snap.HotKeys, 1)
+	require.Equal(t, "k4", snap.HotKeys[0].Key)
+	require.Equal(t, int32(3), snap.HotKeys[0].Count)
+}
+
 func TestFormatHelpers(t *testing.T) {
+	require.Equal(t, "new", formatRegionState(manifest.RegionStateNew))
 	require.Equal(t, "running", formatRegionState(manifest.RegionStateRunning))
+	require.Equal(t, "removing", formatRegionState(manifest.RegionStateRemoving))
+	require.Equal(t, "tombstone", formatRegionState(manifest.RegionStateTombstone))
 	require.Equal(t, "unknown(99)", formatRegionState(99))
 
 	peers := []manifest.PeerMeta{{StoreID: 1, PeerID: 2}}
 	require.Equal(t, "[{store:1 peer:2}]", formatPeers(peers))
+	require.Equal(t, "[]", formatPeers(nil))
 
 	files := []manifest.FileMeta{
 		{FileID: 1, Size: 10, ValueSize: 5},
@@ -308,6 +358,458 @@ func TestMainHelp(t *testing.T) {
 	main()
 }
 
+func TestMainMissingArgs(t *testing.T) {
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv"}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 1, code)
+}
+
+func TestMainUnknownCommand(t *testing.T) {
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "nope"}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 1, code)
+}
+
+func TestMainStatsError(t *testing.T) {
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "stats"}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 1, code)
+}
+
+func TestMainManifestCommand(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "manifest", "-workdir", dir}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestMainVlogCommand(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "vlog", "-workdir", dir}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestMainRegionsCommand(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	require.NoError(t, err)
+	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+		ID:       1,
+		State:    manifest.RegionStateRunning,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 10}},
+	}))
+	require.NoError(t, mgr.Close())
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "regions", "-workdir", dir}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestMainSchedulerCommand(t *testing.T) {
+	withStoreRegistry(t, func() {
+		storepkg.RegisterStore(&storepkg.Store{})
+		code := captureExitCode(t, func() {
+			oldArgs := os.Args
+			os.Args = []string{"nokv", "scheduler", "-json"}
+			defer func() { os.Args = oldArgs }()
+			main()
+		})
+		require.Equal(t, 0, code)
+	})
+}
+
+func TestMainServeCommand(t *testing.T) {
+	origNotify := notifyContext
+	notifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { notifyContext = origNotify })
+
+	dir := t.TempDir()
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "serve", "-workdir", dir, "-store-id", "1", "-addr", "127.0.0.1:0"}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestRunStatsCmdMissingFlags(t *testing.T) {
+	var buf bytes.Buffer
+	err := runStatsCmd(&buf, nil)
+	require.Error(t, err)
+}
+
+func TestRunStatsCmdParseError(t *testing.T) {
+	var buf bytes.Buffer
+	err := runStatsCmd(&buf, []string{"-bad-flag"})
+	require.Error(t, err)
+}
+
+func TestRunStatsCmdNoRegionMetrics(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	err := runStatsCmd(&buf, []string{"-workdir", dir, "-no-region-metrics", "-json"})
+	require.NoError(t, err)
+}
+
+func TestRunStatsCmdExpvarPlain(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]any{
+			"NoKV.Stats.Entries": float64(9),
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	var buf bytes.Buffer
+	err := runStatsCmd(&buf, []string{"-expvar", server.URL})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Entries")
+}
+
+func TestFetchExpvarSnapshotBadStatus(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	_, err := fetchExpvarSnapshot(server.URL)
+	require.Error(t, err)
+}
+
+func TestFetchExpvarSnapshotBadJSON(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("{bad-json"))
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	_, err := fetchExpvarSnapshot(server.URL)
+	require.Error(t, err)
+}
+
+func TestFetchExpvarSnapshotTrailingSlash(t *testing.T) {
+	handler := http.NewServeMux()
+	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"NoKV.Stats.Entries": float64(1)})
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	url := strings.TrimPrefix(server.URL, "http://") + "/"
+	snap, err := fetchExpvarSnapshot(url)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), snap.Entries)
+}
+
+func TestParseExpvarSnapshotFull(t *testing.T) {
+	data := map[string]any{
+		"NoKV.Stats.Entries":                 float64(11),
+		"NoKV.Stats.Flush.Pending":           map[string]any{"value": float64(2)},
+		"NoKV.Stats.Compaction.MaxScore":     map[string]any{"value": float64(1.5)},
+		"NoKV.Stats.Write.HotKeyLimited":     float64(-4),
+		"NoKV.Stats.ValueLog.Segments":       float64(3),
+		"NoKV.Stats.ValueLog.PendingDeletes": map[string]any{"value": float64(1)},
+		"NoKV.Stats.ValueLog.DiscardQueue":   map[string]any{"value": float64(2)},
+		"NoKV.Stats.Raft.Groups":             float64(2),
+		"NoKV.Stats.Raft.LaggingGroups":      float64(1),
+		"NoKV.Stats.Raft.MaxLagSegments":     float64(5),
+		"NoKV.Stats.Raft.MinSegment":         float64(1),
+		"NoKV.Stats.Raft.MaxSegment":         float64(9),
+		"NoKV.Stats.LSM.ValueBytes":          float64(10),
+		"NoKV.Stats.Compaction.ValueWeight":  map[string]any{"value": float64(2.0)},
+		"NoKV.Stats.LSM.ValueDensityMax":     map[string]any{"value": float64(3.5)},
+		"NoKV.Stats.LSM.ValueDensityAlert":   float64(1),
+		"NoKV.Stats.Region.Total":            float64(4),
+		"NoKV.Stats.Region.New":              float64(1),
+		"NoKV.Stats.Region.Running":          float64(1),
+		"NoKV.Stats.Region.Removing":         float64(1),
+		"NoKV.Stats.Region.Tombstone":        float64(1),
+		"NoKV.Stats.Region.Other":            float64(0),
+		"NoKV.Txns.Active":                   float64(2),
+		"NoKV.Txns.Started":                  float64(3),
+		"NoKV.Txns.Committed":                float64(4),
+		"NoKV.Txns.Conflicts":                float64(5),
+		"NoKV.Stats.HotKeys": []any{
+			map[string]any{"key": "hot", "count": map[string]any{"value": float64(9)}},
+		},
+		"NoKV.Stats.LSM.Levels": []any{
+			map[string]any{
+				"level":              float64(0),
+				"tables":             float64(1),
+				"size_bytes":         float64(10),
+				"value_bytes":        float64(5),
+				"stale_bytes":        float64(2),
+				"ingest_tables":      float64(1),
+				"ingest_size_bytes":  float64(3),
+				"ingest_value_bytes": float64(4),
+			},
+		},
+	}
+	snap := parseExpvarSnapshot(data)
+	require.Equal(t, int64(11), snap.Entries)
+	require.Equal(t, uint64(0), snap.HotWriteLimited)
+	require.True(t, snap.LSMValueDensityAlert)
+	require.Len(t, snap.HotKeys, 1)
+	require.Len(t, snap.LSMLevels, 1)
+}
+
+func TestRenderStatsFull(t *testing.T) {
+	var buf bytes.Buffer
+	snap := NoKV.StatsSnapshot{
+		Entries:                        1,
+		FlushPending:                   2,
+		CompactionBacklog:              3,
+		CompactionMaxScore:             4.5,
+		FlushLastWaitMs:                1,
+		FlushMaxWaitMs:                 2,
+		FlushLastBuildMs:               3,
+		FlushMaxBuildMs:                4,
+		FlushLastReleaseMs:             5,
+		FlushMaxReleaseMs:              6,
+		CompactionLastDurationMs:       1.2,
+		CompactionMaxDurationMs:        2.3,
+		CompactionRuns:                 1,
+		ValueLogSegments:               1,
+		ValueLogPendingDel:             1,
+		ValueLogDiscardQueue:           1,
+		ValueLogHead:                   kv.ValuePtr{Fid: 1, Offset: 2, Len: 3},
+		HotWriteLimited:                2,
+		CompactionValueWeight:          1.0,
+		CompactionValueWeightSuggested: 2.0,
+		LSMValueDensityMax:             1.5,
+		LSMValueDensityAlert:           true,
+		WALActiveSegment:               1,
+		WALSegmentCount:                2,
+		WALActiveSize:                  4096,
+		WALSegmentsRemoved:             1,
+		WALRecordCounts:                wal.RecordMetrics{Entries: 1},
+		WALSegmentsWithRaftRecords:     1,
+		WALRemovableRaftSegments:       1,
+		WALTypedRecordRatio:            0.5,
+		WALTypedRecordWarning:          true,
+		WALTypedRecordReason:           "ratio low",
+		WALAutoGCRuns:                  1,
+		WALAutoGCRemoved:               2,
+		WALAutoGCLastUnix:              time.Now().Unix(),
+		RaftGroupCount:                 1,
+		RaftLaggingGroups:              1,
+		RaftMaxLagSegments:             2,
+		RaftMinLogSegment:              1,
+		RaftMaxLogSegment:              2,
+		RaftLagWarnThreshold:           1,
+		RaftLagWarning:                 true,
+		TxnsActive:                     1,
+		TxnsStarted:                    2,
+		TxnsCommitted:                  3,
+		TxnsConflicts:                  4,
+		RegionTotal:                    5,
+		RegionNew:                      1,
+		RegionRunning:                  1,
+		RegionRemoving:                 1,
+		RegionTombstone:                1,
+		RegionOther:                    1,
+		LSMValueBytesTotal:             10,
+		LSMLevels: []NoKV.LSMLevelStats{{
+			Level:            0,
+			TableCount:       1,
+			SizeBytes:        2,
+			ValueBytes:       3,
+			StaleBytes:       4,
+			IngestTables:     1,
+			IngestSizeBytes:  2,
+			IngestValueBytes: 3,
+		}},
+		ColumnFamilies: map[string]NoKV.ColumnFamilySnapshot{
+			"default": {Reads: 1, Writes: 2},
+		},
+		HotKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
+	}
+	require.NoError(t, renderStats(&buf, snap, false))
+	out := buf.String()
+	require.Contains(t, out, "ValueLog.Head")
+	require.Contains(t, out, "LSM.Levels:")
+	require.Contains(t, out, "ColumnFamilies:")
+	require.Contains(t, out, "HotKeys:")
+}
+
+func TestLocalStatsSnapshotMissingWorkdir(t *testing.T) {
+	_, err := localStatsSnapshot("", false)
+	require.Error(t, err)
+}
+
+func TestRunVlogCmdMissingDir(t *testing.T) {
+	var buf bytes.Buffer
+	err := runVlogCmd(&buf, []string{"-workdir", t.TempDir()})
+	require.Error(t, err)
+}
+
+func TestRunVlogCmdMissingWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	require.Error(t, runVlogCmd(&buf, nil))
+}
+
+func TestRunRegionsCmdPlainNoRegions(t *testing.T) {
+	var buf bytes.Buffer
+	err := runRegionsCmd(&buf, []string{"-workdir", t.TempDir()})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Regions: (none)")
+}
+
+func TestRunRegionsCmdMissingWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	require.Error(t, runRegionsCmd(&buf, nil))
+}
+
+func TestRunRegionsCmdPlainWithRegion(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir)
+	require.NoError(t, err)
+	meta := manifest.RegionMeta{
+		ID:       10,
+		State:    manifest.RegionStateTombstone,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 10}},
+	}
+	require.NoError(t, mgr.LogRegionUpdate(meta))
+	require.NoError(t, mgr.Close())
+
+	var buf bytes.Buffer
+	err = runRegionsCmd(&buf, []string{"-workdir", dir})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "tombstone")
+}
+
+func TestRunManifestCmdMissingWorkdir(t *testing.T) {
+	var buf bytes.Buffer
+	err := runManifestCmd(&buf, nil)
+	require.Error(t, err)
+}
+
+func TestRunManifestCmdMissingManifest(t *testing.T) {
+	var buf bytes.Buffer
+	err := runManifestCmd(&buf, []string{"-workdir", t.TempDir()})
+	require.Error(t, err)
+}
+
+func TestRunSchedulerCmdSnapshot(t *testing.T) {
+	withStoreRegistry(t, func() {
+		coord := scheduler.NewCoordinator()
+		store := storepkg.NewStoreWithConfig(storepkg.Config{
+			StoreID:   1,
+			Scheduler: coord,
+		})
+		defer store.Close()
+
+		coord.SubmitStoreHeartbeat(scheduler.StoreStats{
+			StoreID:   1,
+			RegionNum: 2,
+			LeaderNum: 1,
+			Capacity:  1024,
+			Available: 512,
+		})
+		coord.SubmitRegionHeartbeat(manifest.RegionMeta{
+			ID:       21,
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
+			Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 11}},
+		})
+
+		var buf bytes.Buffer
+		require.NoError(t, runSchedulerCmd(&buf, nil))
+		out := buf.String()
+		require.Contains(t, out, "Stores (1)")
+		require.Contains(t, out, "region=21")
+		require.Contains(t, out, "last_heartbeat=")
+	})
+}
+
+func TestFirstRegionMetricsFound(t *testing.T) {
+	withStoreRegistry(t, func() {
+		store := storepkg.NewStoreWithConfig(storepkg.Config{})
+		defer store.Close()
+		require.NotNil(t, firstRegionMetrics())
+	})
+}
+
+func TestLocalStatsSnapshotWithMetrics(t *testing.T) {
+	withStoreRegistry(t, func() {
+		store := storepkg.NewStoreWithConfig(storepkg.Config{})
+		defer store.Close()
+		dir := prepareDBWorkdir(t)
+		_, err := localStatsSnapshot(dir, true)
+		require.NoError(t, err)
+	})
+}
+
+func TestEnsureManifestExistsStatError(t *testing.T) {
+	origStat := stat
+	stat = func(string) (os.FileInfo, error) {
+		return nil, errors.New("boom")
+	}
+	t.Cleanup(func() { stat = origStat })
+	require.Error(t, ensureManifestExists(t.TempDir()))
+}
+
+func captureExitCode(t *testing.T, fn func()) (code int) {
+	t.Helper()
+	origExit := exit
+	defer func() { exit = origExit }()
+	exit = func(code int) {
+		panic(code)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			if c, ok := r.(int); ok {
+				code = c
+				return
+			}
+			panic(r)
+		}
+	}()
+	fn()
+	return code
+}
+
 func withStoreRegistry(t *testing.T, fn func()) {
 	t.Helper()
 	original := storepkg.Stores()
@@ -323,4 +825,16 @@ func withStoreRegistry(t *testing.T, fn func()) {
 		}
 	}()
 	fn()
+}
+
+func prepareDBWorkdir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.ValueThreshold = 0
+	db := NoKV.Open(opt)
+	require.NoError(t, db.Set([]byte("seed"), []byte("value")))
+	require.NoError(t, db.Close())
+	return dir
 }

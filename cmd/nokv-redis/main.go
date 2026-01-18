@@ -14,6 +14,18 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 )
 
+var exit = os.Exit
+
+var fatalf = func(format string, args ...any) {
+	log.Printf(format, args...)
+	exit(1)
+}
+
+var newDefaultOptions = NoKV.NewDefaultOptions
+
+var listen = net.Listen
+var signalNotify = signal.Notify
+
 func main() {
 	var (
 		workDir     = flag.String("workdir", "./work_redis", "database work directory")
@@ -25,7 +37,7 @@ func main() {
 	)
 	flag.Parse()
 
-	opt := NoKV.NewDefaultOptions()
+	opt := newDefaultOptions()
 	opt.WorkDir = *workDir
 	if opt.MaxBatchCount <= 0 {
 		opt.MaxBatchCount = int64(opt.WriteBatchMaxCount)
@@ -49,7 +61,7 @@ func main() {
 		var err error
 		backend, err = newRaftBackend(*raftConfig, *tsoURL, *addrScope)
 		if err != nil {
-			log.Fatalf("raft backend init: %v", err)
+			fatalf("raft backend init: %v", err)
 		}
 	} else {
 		db = NoKV.Open(opt)
@@ -66,9 +78,9 @@ func main() {
 		}
 	}()
 
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		fatalf("listen: %v", err)
 	}
 	defer ln.Close()
 
@@ -92,7 +104,7 @@ func main() {
 	log.Printf("NoKV Redis gateway listening on %s (workdir=%s)", *addr, *workDir)
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signalNotify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	select {
 	case sig := <-sigCh:

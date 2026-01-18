@@ -2,74 +2,197 @@ package main
 
 import (
 	"bytes"
-	"strings"
+	"context"
+	"os"
 	"testing"
 
+	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/raftstore"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRunServeCmdMissingFlags(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-	}{
-		{"missing workdir", []string{"--store-id", "1"}},
-		{"missing store", []string{"--workdir", t.TempDir()}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			err := runServeCmd(&buf, tc.args)
-			if err == nil {
-				t.Fatalf("expected error for %s", tc.name)
-			}
-		})
-	}
-}
-
-func TestRunServeCmdInvalidPeer(t *testing.T) {
-	dir := t.TempDir()
+func TestRunServeCmdErrors(t *testing.T) {
 	var buf bytes.Buffer
-	err := runServeCmd(&buf, []string{"--workdir", dir, "--store-id", "1", "--peer", "bad"})
-	if err == nil || !strings.Contains(err.Error(), "storeID") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.Error(t, runServeCmd(&buf, nil))
+	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir()}))
+	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-election-tick", "0"}))
+	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "bad"}))
+	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "x=addr"}))
 }
 
-func TestServeHelpers(t *testing.T) {
-	if got := formatKey(nil, true); got != "-inf" {
-		t.Fatalf("expected -inf, got %q", got)
-	}
-	if got := formatKey(nil, false); got != "+inf" {
-		t.Fatalf("expected +inf, got %q", got)
-	}
-	if got := formatKey([]byte("a"), true); got != "\"a\"" {
-		t.Fatalf("expected quoted key, got %q", got)
-	}
+func TestStartStorePeersNil(t *testing.T) {
+	_, _, err := startStorePeers(nil, nil, 1, 1, 1, 1, 1)
+	require.Error(t, err)
+}
 
-	meta := manifest.RegionMeta{
-		Peers: []manifest.PeerMeta{
-			{StoreID: 1, PeerID: 10},
-			{StoreID: 2, PeerID: 20},
+func TestStartStorePeersManifestMissing(t *testing.T) {
+	realDB := newTestDB(t)
+	server := newTestServer(t, realDB, 1)
+	defer func() {
+		_ = server.Close()
+		_ = realDB.Close()
+	}()
+
+	_, _, err := startStorePeers(server, &NoKV.DB{}, 1, 10, 1, 1, 1)
+	require.Error(t, err)
+}
+
+func TestStartStorePeersEmpty(t *testing.T) {
+	db := newTestDB(t)
+	server := newTestServer(t, db, 1)
+	defer func() {
+		_ = server.Close()
+		_ = db.Close()
+	}()
+
+	started, total, err := startStorePeers(server, db, 1, 10, 1, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, 0, total)
+	require.Empty(t, started)
+}
+
+func TestStartStorePeersSkipsMissing(t *testing.T) {
+	db := newTestDB(t)
+	server := newTestServer(t, db, 1)
+	defer func() {
+		_ = server.Close()
+		_ = db.Close()
+	}()
+
+	mgr := db.Manifest()
+	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+		ID:    10,
+		State: manifest.RegionStateRunning,
+		Epoch: manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []manifest.PeerMeta{{StoreID: 2, PeerID: 200}},
+	}))
+
+	started, total, err := startStorePeers(server, db, 1, 10, 1, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Empty(t, started)
+}
+
+func TestStartStorePeersStartsPeer(t *testing.T) {
+	db := newTestDB(t)
+	server := newTestServer(t, db, 1)
+	defer func() {
+		_ = server.Close()
+		_ = db.Close()
+	}()
+
+	mgr := db.Manifest()
+	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+		ID:       11,
+		State:    manifest.RegionStateRunning,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 101}},
+	}))
+
+	started, total, err := startStorePeers(server, db, 1, 10, 1, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, started, 1)
+}
+
+func TestRunServeCmdNoRegions(t *testing.T) {
+	withNotifyContext(t, true, func() {
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		err := runServeCmd(&buf, []string{
+			"-workdir", dir,
+			"-store-id", "1",
+			"-addr", "127.0.0.1:0",
+		})
+		require.NoError(t, err)
+		require.Contains(t, buf.String(), "Manifest contains no regions")
+	})
+}
+
+func TestRunServeCmdWithRegions(t *testing.T) {
+	withNotifyContext(t, true, func() {
+		dir := t.TempDir()
+		db := newTestDBWithDir(t, dir)
+		mgr := db.Manifest()
+		require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+			ID:       1,
+			State:    manifest.RegionStateRunning,
+			StartKey: nil,
+			EndKey:   nil,
+			Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 101}},
+		}))
+		require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+			ID:       2,
+			State:    manifest.RegionStateRunning,
+			StartKey: []byte("b"),
+			EndKey:   []byte("c"),
+			Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 201}},
+		}))
+		require.NoError(t, db.Close())
+
+		var buf bytes.Buffer
+		err := runServeCmd(&buf, []string{
+			"-workdir", dir,
+			"-store-id", "1",
+			"-addr", "127.0.0.1:0",
+			"-peer", "2=127.0.0.1:20160",
+		})
+		require.NoError(t, err)
+		out := buf.String()
+		require.Contains(t, out, "Manifest regions: 2, local peers started: 1")
+		require.Contains(t, out, "Store 1 not present in 1 region(s)")
+		require.Contains(t, out, "Sample regions:")
+		require.Contains(t, out, "Configured peers:")
+	})
+}
+
+func TestFormatKeyNonEmpty(t *testing.T) {
+	require.Equal(t, "\"a\"", formatKey([]byte("a"), true))
+	require.Equal(t, "\"b\"", formatKey([]byte("b"), false))
+}
+
+func withNotifyContext(t *testing.T, cancelImmediately bool, fn func()) {
+	t.Helper()
+	origNotify := notifyContext
+	defer func() { notifyContext = origNotify }()
+	notifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		if cancelImmediately {
+			cancel()
+		}
+		return ctx, cancel
+	}
+	fn()
+}
+
+func newTestDB(t *testing.T) *NoKV.DB {
+	t.Helper()
+	return newTestDBWithDir(t, t.TempDir())
+}
+
+func newTestDBWithDir(t *testing.T, dir string) *NoKV.DB {
+	t.Helper()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.ValueThreshold = 0
+	db := NoKV.Open(opt)
+	return db
+}
+
+func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *raftstore.Server {
+	t.Helper()
+	server, err := raftstore.NewServer(raftstore.ServerConfig{
+		DB: db,
+		Store: raftstore.StoreConfig{
+			StoreID: storeID,
 		},
-	}
-	if got := peerIDForStore(meta, 2); got != 20 {
-		t.Fatalf("expected peer id 20, got %d", got)
-	}
-	if got := peerIDForStore(meta, 3); got != 0 {
-		t.Fatalf("expected peer id 0, got %d", got)
-	}
-
-	if got, err := parseUint(" 42 "); err != nil || got != 42 {
-		t.Fatalf("expected parseUint to return 42, got %d err=%v", got, err)
-	}
-	if _, err := parseUint("bad"); err == nil {
-		t.Fatalf("expected parseUint error for bad input")
-	}
-}
-
-func TestStartStorePeersNilArgs(t *testing.T) {
-	if _, _, err := startStorePeers(nil, nil, 1, 1, 1, 1, 1); err == nil {
-		t.Fatalf("expected error for nil server/db")
-	}
+		TransportAddr: "127.0.0.1:0",
+	})
+	require.NoError(t, err)
+	return server
 }

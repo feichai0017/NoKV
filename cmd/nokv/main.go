@@ -18,10 +18,13 @@ import (
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
+var exit = os.Exit
+var stat = os.Stat
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage(os.Stdout)
-		os.Exit(1)
+		exit(1)
 	}
 
 	cmd := os.Args[1]
@@ -49,7 +52,7 @@ func main() {
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -649,7 +652,7 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 }
 
 func ensureManifestExists(workDir string) error {
-	if _, err := os.Stat(filepath.Join(workDir, "CURRENT")); err != nil {
+	if _, err := stat(filepath.Join(workDir, "CURRENT")); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("manifest not found in %s", workDir)
 		}
