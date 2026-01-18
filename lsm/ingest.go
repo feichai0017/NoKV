@@ -251,8 +251,12 @@ func (buf ingestBuffer) prefetch(key []byte, hot bool) bool {
 	return false
 }
 
-func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
-	var version uint64
+func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
+	if maxVersion == nil {
+		var tmp uint64
+		maxVersion = &tmp
+	}
+	var best *kv.Entry
 	for _, sh := range buf.shards {
 		if len(sh.ranges) == 0 {
 			continue
@@ -267,10 +271,25 @@ func (buf ingestBuffer) search(key []byte) (*kv.Entry, error) {
 			if utils.CompareUserKeys(key, rng.max) > 0 {
 				continue
 			}
-			if entry, err := rng.tbl.Search(key, &version); err == nil {
-				return entry, nil
+			if rng.tbl.MaxVersionVal() <= *maxVersion {
+				continue
+			}
+			if entry, err := rng.tbl.Search(key, maxVersion); err == nil {
+				if best != nil {
+					best.DecrRef()
+				}
+				best = entry
+				continue
+			} else if err != utils.ErrKeyNotFound {
+				if best != nil {
+					best.DecrRef()
+				}
+				return nil, err
 			}
 		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
 }
@@ -370,6 +389,6 @@ func (lh *levelHandler) ingestDataSize() int64 {
 	return lh.ingest.totalSize()
 }
 
-func (lh *levelHandler) searchIngestSST(key []byte) (*kv.Entry, error) {
-	return lh.ingest.search(key)
+func (lh *levelHandler) searchIngestSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
+	return lh.ingest.search(key, maxVersion)
 }
