@@ -498,6 +498,49 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	}
 }
 
+func TestIngestSearchPrefersLatestVersion(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer lsm.Close()
+
+	makeTable := func(fid uint64, key string, ver uint64, val string) *table {
+		t.Helper()
+		builderOpt := *opt
+		builderOpt.BlockSize = 64
+		builderOpt.BloomFalsePositive = 0.01
+		builder := newTableBuiler(&builderOpt)
+
+		ikey := kv.KeyWithTs([]byte(key), ver)
+		builder.AddKey(kv.NewEntry(ikey, []byte(val)))
+
+		tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+		tbl := openTable(lsm.levels, tableName, builder)
+		if tbl == nil {
+			t.Fatalf("expected table from builder")
+		}
+		return tbl
+	}
+
+	tblOld := makeTable(11, "b", 1, "v1")
+	tblNew := makeTable(12, "b", 3, "v3")
+	defer func() { _ = tblOld.DecrRef() }()
+	defer func() { _ = tblNew.DecrRef() }()
+
+	var buf ingestBuffer
+	buf.add(tblOld)
+	buf.add(tblNew)
+
+	key := kv.KeyWithTs([]byte("b"), math.MaxUint64)
+	found, err := buf.search(key, nil)
+	if err != nil || found == nil {
+		t.Fatalf("ingest search err=%v entry=%v", err, found)
+	}
+	if string(found.Value) != "v3" {
+		t.Fatalf("expected latest value v3, got %q", string(found.Value))
+	}
+	found.DecrRef()
+}
+
 func TestLevelSearchIngestAndLN(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
