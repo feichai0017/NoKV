@@ -22,12 +22,20 @@ import (
 )
 
 type raftBackend struct {
-	client *client.Client
+	client raftClient
 	ts     timestampAllocator
 }
 
 type timestampAllocator interface {
 	Reserve(n uint64) (uint64, error)
+}
+
+type raftClient interface {
+	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error)
+	Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+	CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*pb.CheckTxnStatusResponse, error)
+	ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
+	Close() error
 }
 
 type localOracle struct {
