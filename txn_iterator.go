@@ -250,9 +250,6 @@ func (it *TxnIterator) materializeEntry(entry *kv.Entry, cf kv.ColumnFamily, use
 			}
 			it.valueBuf = append(it.valueBuf[:0], val...)
 			kv.RunCallback(cb)
-			if len(it.valueBuf) == 0 {
-				return false
-			}
 			it.entry.Value = it.valueBuf
 			it.entry.Meta &^= kv.BitValuePointer
 			it.item.valueBuf = it.entry.Value
