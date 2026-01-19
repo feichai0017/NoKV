@@ -17,7 +17,7 @@
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
       <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" />
     </a>
-    <a href="https://github.com/avelino/awesome-go#databases">
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
       <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
     </a>
   </p>
