@@ -2,25 +2,38 @@
 
 <div align="center">
   <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
+
   <p>
+    <!-- Build / Quality -->
     <a href="https://github.com/feichai0017/NoKV/actions">
-      <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status"/>
-    </a>
-    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img src="https://pkg.go.dev/badge/github.com/feichai0017/NoKV.svg" alt="Go Reference"/>
-    </a>
-    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
-      <img src="https://goreportcard.com/badge/github.com/feichai0017/NoKV" alt="Go Report Card"/>
+      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
     </a>
     <a href="https://codecov.io/gh/feichai0017/NoKV">
-      <img src="https://codecov.io/gh/feichai0017/NoKV/branch/main/graph/badge.svg" alt="Coverage"/>
+      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
     </a>
-    <img src="https://img.shields.io/badge/go-1.24+-blue.svg" alt="Go Version"/>
-    <img src="https://img.shields.io/badge/license-Apache%202.0-yellow.svg" alt="License"/>
-	<a href="https://deepwiki.com/feichai0017/NoKV"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
+      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
+    </a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
+      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" />
+    </a>
+    <a href="https://github.com/avelino/awesome-go#databases">
+      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
+    </a>
   </p>
+
+  <p>
+    <!-- Meta -->
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV">
+      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
+    </a>
+  </p>
+
   <p><strong>LSM Tree • ValueLog • MVCC • Multi-Raft Regions • Redis-Compatible</strong></p>
 </div>
+
 
 NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline with Badger-inspired value separation. You can embed it locally, drive it via multi-Raft regions, or front it with a Redis protocol gateway—all from a single topology file.
 
