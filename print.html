@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-92e99022.js";
+            window.path_to_searchindex_js = "searchindex-b433c4b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e455a035.js"></script>
@@ -412,7 +412,6 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><code>ValueLogGCInterval</code>, <code>ValueLogGCDiscardRatio</code></li>
 <li><code>ValueLogGCSampleSizeRatio</code>, <code>ValueLogGCSampleCountRatio</code>,
 <code>ValueLogGCSampleFromHead</code></li>
-<li><code>ValueLogUseIOUring</code>, <code>ValueLogIOUringEntries</code>, <code>ValueLogIOUringFlags</code></li>
 </ul>
 </li>
 <li><strong>LSM &amp; compaction</strong>
@@ -1063,20 +1062,6 @@ _ = mgr.Remove(fid)  // close + delete file
 <li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
 </ol>
 <p>Compared with RocksDB’s blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
-<hr>
-<h2 id="41-io_uring-write-path-linux"><a class="header" href="#41-io_uring-write-path-linux">4.1 io_uring Write Path (Linux)</a></h2>
-<p>The value log can optionally route writes through <code>io_uring</code> to reduce syscall
-overhead under sustained ingest. Reads remain mmap-backed; only the append path
-switches to <code>io_uring</code> submits.</p>
-<pre><code class="language-go">opt := NoKV.NewDefaultOptions()
-opt.ValueLogUseIOUring = true
-opt.ValueLogIOUringEntries = 256
-opt.ValueLogIOUringFlags = 0
-db := NoKV.Open(opt)
-defer db.Close()
-</code></pre>
-<p>Enable this only on Linux kernels with <code>io_uring</code> support. Leave it disabled to
-keep the default mmap append path.</p>
 <hr>
 <h2 id="5-integration-with-db-writes"><a class="header" href="#5-integration-with-db-writes">5. Integration with DB Writes</a></h2>
 <pre class="mermaid">sequenceDiagram
