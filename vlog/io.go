@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
@@ -42,9 +43,9 @@ func (m *Manager) appendPayload(payload []byte) (*kv.ValuePtr, error) {
 	if err != nil {
 		return nil, err
 	}
-	store.Lock()
+	store.Lock.Lock()
 	err = store.Write(start, payload)
-	store.Unlock()
+	store.Lock.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +76,7 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 }
 
 // reserve allocates space in the active segment, rotating if needed.
-func (m *Manager) reserve(sz int) (SegmentStore, uint32, uint32, error) {
+func (m *Manager) reserve(sz int) (*file.LogFile, uint32, uint32, error) {
 	if sz <= 0 {
 		return nil, 0, 0, fmt.Errorf("vlog manager: invalid append size %d", sz)
 	}
@@ -180,13 +181,13 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 	}
 
 	offset := start
-	store.Lock()
+	store.Lock.Lock()
 	for i, payload := range payloads {
 		if payload == nil {
 			continue
 		}
 		if err := store.Write(offset, payload); err != nil {
-			store.Unlock()
+			store.Lock.Unlock()
 			releaseBuffers()
 			return nil, err
 		}
@@ -197,7 +198,7 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 		}
 		offset += uint32(len(payload))
 	}
-	store.Unlock()
+	store.Lock.Unlock()
 
 	releaseBuffers()
 	return ptrs, nil
@@ -388,9 +389,6 @@ func VerifyDir(cfg Config) error {
 	if cfg.MaxSize == 0 {
 		cfg.MaxSize = int64(1 << 29)
 	}
-	if cfg.StoreFactory == nil {
-		cfg.StoreFactory = defaultSegmentStoreFactory()
-	}
 	files, err := filepath.Glob(filepath.Join(cfg.Dir, "*.vlog"))
 	if err != nil {
 		return err
@@ -398,7 +396,7 @@ func VerifyDir(cfg Config) error {
 	sort.Strings(files)
 	for _, path := range files {
 		fid := uint32(extractFID(path))
-		store, err := cfg.StoreFactory.Open(fid, path, cfg.Dir, cfg.MaxSize, false)
+		store, err := openLogFile(fid, path, cfg.Dir, cfg.MaxSize, false)
 		if err != nil {
 			if stderrors.Is(err, os.ErrNotExist) {
 				continue
@@ -435,7 +433,7 @@ func extractFID(path string) uint64 {
 	return fid
 }
 
-func sanitizeValueLog(store SegmentStore) (uint32, error) {
+func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 	start, err := firstNonZeroOffset(store)
 	if err != nil {
 		return 0, err
@@ -464,7 +462,7 @@ func sanitizeValueLog(store SegmentStore) (uint32, error) {
 	}
 }
 
-func firstNonZeroOffset(store SegmentStore) (uint32, error) {
+func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
 	size := store.Size()
 	start := int64(kv.ValueLogHeaderSize)
 	if size <= start {
@@ -496,7 +494,7 @@ func firstNonZeroOffset(store SegmentStore) (uint32, error) {
 	return uint32(start), nil
 }
 
-func iterateLogFile(store SegmentStore, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
+func iterateLogFile(store *file.LogFile, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}

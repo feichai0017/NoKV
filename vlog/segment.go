@@ -3,6 +3,8 @@ package vlog
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/feichai0017/NoKV/file"
 )
 
 type segmentState uint32
@@ -14,14 +16,14 @@ const (
 )
 
 type segment struct {
-	store    SegmentStore
+	store    *file.LogFile
 	pinMu    sync.Mutex
 	pinCond  *sync.Cond
 	state    uint32
 	pinCount int32
 }
 
-func newSegment(store SegmentStore, sealed bool) *segment {
+func newSegment(store *file.LogFile, sealed bool) *segment {
 	st := segmentActive
 	if sealed {
 		st = segmentSealed

@@ -3,7 +3,6 @@ package vlog
 
 import (
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
@@ -21,8 +21,6 @@ type Config struct {
 	Dir      string
 	FileMode os.FileMode
 	MaxSize  int64
-
-	StoreFactory SegmentStoreFactory
 }
 
 type Manager struct {
@@ -106,7 +104,7 @@ func (m *Manager) runBeforeSyncHook(fid uint32) error {
 }
 
 // ensureActiveLocked returns the active segment store; caller must hold m.filesLock.
-func (m *Manager) ensureActiveLocked() (SegmentStore, uint32, error) {
+func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 	if m.active != nil {
 		return m.active.store, m.activeID, nil
 	}
@@ -137,9 +135,6 @@ func Open(cfg Config) (*Manager, error) {
 	if cfg.MaxSize == 0 {
 		cfg.MaxSize = int64(1 << 29)
 	}
-	if cfg.StoreFactory == nil {
-		cfg.StoreFactory = defaultSegmentStoreFactory()
-	}
 	mgr := &Manager{
 		cfg:   cfg,
 		files: make(map[uint32]*segment),
@@ -162,18 +157,44 @@ func Open(cfg Config) (*Manager, error) {
 	if mgr.active != nil {
 		if fresh {
 			mgr.offset = uint32(kv.ValueLogHeaderSize)
-		} else {
-			off, err := mgr.active.store.Seek(0, io.SeekEnd)
-			if err != nil {
-				return nil, err
-			}
-			mgr.offset = uint32(off)
+		} else if size := mgr.active.store.Size(); size >= 0 {
+			mgr.offset = uint32(size)
 		}
 	}
 	mgr.filesLock.Lock()
 	mgr.refreshIndexLocked()
 	mgr.filesLock.Unlock()
 	return mgr, nil
+}
+
+func openLogFile(fid uint32, path string, dir string, maxSize int64, readOnly bool) (*file.LogFile, error) {
+	flag := os.O_CREATE | os.O_RDWR
+	if readOnly {
+		flag = os.O_RDONLY
+	}
+	lf := &file.LogFile{}
+	if err := lf.Open(&file.Options{
+		FID:      uint64(fid),
+		FileName: path,
+		Dir:      dir,
+		Flag:     flag,
+		MaxSz:    int(maxSize),
+	}); err != nil {
+		return nil, err
+	}
+	return lf, nil
+}
+
+func createLogFile(fid uint32, path string, dir string, maxSize int64) (*file.LogFile, error) {
+	lf, err := openLogFile(fid, path, dir, maxSize, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := lf.Bootstrap(); err != nil {
+		_ = lf.Close()
+		return nil, err
+	}
+	return lf, nil
 }
 
 func (m *Manager) populate() error {
@@ -199,7 +220,7 @@ func (m *Manager) populate() error {
 			continue
 		}
 		readonly := fid != max
-		store, err := m.cfg.StoreFactory.Open(fid, path, m.cfg.Dir, m.cfg.MaxSize, readonly)
+		store, err := openLogFile(fid, path, m.cfg.Dir, m.cfg.MaxSize, readonly)
 		if err != nil {
 			return err
 		}
@@ -208,9 +229,9 @@ func (m *Manager) populate() error {
 	return nil
 }
 
-func (m *Manager) create(fid uint32) (SegmentStore, error) {
+func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 	path := filepath.Join(m.cfg.Dir, fmt.Sprintf("%05d.vlog", fid))
-	store, err := m.cfg.StoreFactory.Create(fid, path, m.cfg.Dir, m.cfg.MaxSize)
+	store, err := createLogFile(fid, path, m.cfg.Dir, m.cfg.MaxSize)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +276,7 @@ func (m *Manager) rotateLocked() error {
 
 // getStoreForRead returns a store and release callback without acquiring m.filesLock.
 // Sealed segments are pinned; active segments use the store read lock.
-func (m *Manager) getStoreForRead(fid uint32) (SegmentStore, func(), error) {
+func (m *Manager) getStoreForRead(fid uint32) (*file.LogFile, func(), error) {
 	seg, ok := m.loadIndex().files[fid]
 	if !ok {
 		return nil, nil, pkgerrors.Errorf("value log file %d not found", fid)
@@ -269,11 +290,11 @@ func (m *Manager) getStoreForRead(fid uint32) (SegmentStore, func(), error) {
 		}
 		return seg.store, seg.unpinRead, nil
 	}
-	seg.store.RLock()
-	return seg.store, seg.store.RUnlock, nil
+	seg.store.Lock.RLock()
+	return seg.store, seg.store.Lock.RUnlock, nil
 }
 
-func (m *Manager) getFile(fid uint32) (SegmentStore, error) {
+func (m *Manager) getFile(fid uint32) (*file.LogFile, error) {
 	seg, ok := m.loadIndex().files[fid]
 	if !ok {
 		return nil, pkgerrors.Errorf("value log file %d not found", fid)
@@ -320,8 +341,8 @@ func (m *Manager) Remove(fid uint32) error {
 	if seg.isSealed() {
 		seg.waitForNoPins()
 	}
-	seg.store.Lock()
-	defer seg.store.Unlock()
+	seg.store.Lock.Lock()
+	defer seg.store.Lock.Unlock()
 	if err := seg.store.Close(); err != nil {
 		return err
 	}
@@ -365,8 +386,8 @@ func (m *Manager) SyncActive() error {
 	if err := m.runBeforeSyncHook(fid); err != nil {
 		return err
 	}
-	seg.store.Lock()
-	defer seg.store.Unlock()
+	seg.store.Lock.Lock()
+	defer seg.store.Lock.Unlock()
 	return seg.store.Sync()
 }
 
@@ -385,7 +406,7 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 		m.filesLock.RLock()
 		seg := m.files[fid]
 		if seg != nil && seg.store != nil {
-			seg.store.Lock()
+			seg.store.Lock.Lock()
 		}
 		m.filesLock.RUnlock()
 
@@ -393,11 +414,11 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 			continue
 		}
 		if err := m.runBeforeSyncHook(fid); err != nil {
-			seg.store.Unlock()
+			seg.store.Lock.Unlock()
 			return err
 		}
 		err := seg.store.Sync()
-		seg.store.Unlock()
+		seg.store.Lock.Unlock()
 		if err != nil {
 			return err
 		}
@@ -431,8 +452,8 @@ func (m *Manager) SegmentBootstrap(fid uint32) error {
 	if err != nil {
 		return err
 	}
-	store.Lock()
-	defer store.Unlock()
+	store.Lock.Lock()
+	defer store.Lock.Unlock()
 	return store.Bootstrap()
 }
 
@@ -442,8 +463,8 @@ func (m *Manager) SegmentTruncate(fid uint32, offset uint32) error {
 	if err != nil {
 		return err
 	}
-	store.Lock()
-	defer store.Unlock()
+	store.Lock.Lock()
+	defer store.Lock.Unlock()
 	return store.Truncate(int64(offset))
 }
 
@@ -497,24 +518,24 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 		if item.seg.isSealed() {
 			item.seg.waitForNoPins()
 		}
-		item.seg.store.Lock()
+		item.seg.store.Lock.Lock()
 		if err := item.seg.store.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
-		item.seg.store.Unlock()
+		item.seg.store.Lock.Unlock()
 		if err := os.Remove(item.name); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 
-	active.store.Lock()
+	active.store.Lock.Lock()
 	if err := active.store.Truncate(int64(ptr.Offset)); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if err := active.store.Init(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	active.store.Unlock()
+	active.store.Lock.Unlock()
 
 	return firstErr
 }
