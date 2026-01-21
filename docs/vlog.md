@@ -22,7 +22,8 @@ policy lives in the core package:
   encodes/decodes entries, and exposes append/read/sample APIs without touching
   MVCC or LSM policy.
 - **File IO (`file/`)** – mmap-backed `LogFile` primitives (open/close/truncate,
-  read/write, read-only remap) shared by WAL/vlog/SST.
+  read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
+  `LogFile` directly instead of an intermediate store abstraction.
 
 ---
 
@@ -76,7 +77,7 @@ Key behaviours:
 
 1. **Append + Rotate** – [`Manager.AppendEntry`](../vlog/io.go) encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed `MaxSize`; manual rotation is rare.
 2. **Crash recovery** – [`Manager.Rewind`](../vlog/manager.go) truncates the active file and removes newer files when a write batch fails mid-flight. `valueLog.write` uses this to guarantee idempotent WAL/value log ordering.
-3. **Safe reads** – [`Manager.Read`](../vlog/io.go) grabs a per-file `RWMutex` and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.
+3. **Safe reads** – [`Manager.Read`](../vlog/io.go) returns an mmap-backed slice plus an unlock callback. Active segments take a per-file `RWMutex`, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.
 4. **Verification** – [`VerifyDir`](../vlog/io.go) validates entire directories (used by CLI and recovery) by parsing headers and CRCs.
 
 Compared with RocksDB's blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.
