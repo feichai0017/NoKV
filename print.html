@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b433c4b4.js";
+            window.path_to_searchindex_js = "searchindex-c4187fdd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e455a035.js"></script>
@@ -1015,7 +1015,8 @@ scheduling based on discard stats.</li>
 encodes/decodes entries, and exposes append/read/sample APIs without touching
 MVCC or LSM policy.</li>
 <li><strong>File IO (<code>file/</code>)</strong> – mmap-backed <code>LogFile</code> primitives (open/close/truncate,
-read/write, read-only remap) shared by WAL/vlog/SST.</li>
+read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
+<code>LogFile</code> directly instead of an intermediate store abstraction.</li>
 </ul>
 <hr>
 <h2 id="2-directory-layout--naming"><a class="header" href="#2-directory-layout--naming">2. Directory Layout &amp; Naming</a></h2>
@@ -1058,7 +1059,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <ol>
 <li><strong>Append + Rotate</strong> – <a href="../vlog/io.go"><code>Manager.AppendEntry</code></a> encodes and appends into the active file. The reservation path handles rotation when the active segment would exceed <code>MaxSize</code>; manual rotation is rare.</li>
 <li><strong>Crash recovery</strong> – <a href="../vlog/manager.go"><code>Manager.Rewind</code></a> truncates the active file and removes newer files when a write batch fails mid-flight. <code>valueLog.write</code> uses this to guarantee idempotent WAL/value log ordering.</li>
-<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> grabs a per-file <code>RWMutex</code> and returns an mmap-backed slice plus an unlock callback. Callers that need ownership should copy the bytes before releasing the lock.</li>
+<li><strong>Safe reads</strong> – <a href="../vlog/io.go"><code>Manager.Read</code></a> returns an mmap-backed slice plus an unlock callback. Active segments take a per-file <code>RWMutex</code>, while sealed segments use a pin/unpin path to avoid long-held locks; callers that need ownership should copy the bytes before releasing the lock.</li>
 <li><strong>Verification</strong> – <a href="../vlog/io.go"><code>VerifyDir</code></a> validates entire directories (used by CLI and recovery) by parsing headers and CRCs.</li>
 </ol>
 <p>Compared with RocksDB’s blob manager the surface is intentionally small—NoKV treats the manager as an append-only log with rewind semantics, while RocksDB maintains index structures inside the blob file metadata.</p>
