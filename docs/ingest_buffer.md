@@ -6,8 +6,8 @@ The ingest buffer is a per-level staging area for SSTables—typically promoted 
 flowchart LR
   L0["L0 SSTables"] -->|moveToIngest| Ingest["Ingest Buffer (sharded)"]
   subgraph levelN["Level N"]
-    Ingest -->|ingest-only compact| MainTables["Main Tables"]
-    Ingest -->|ingest-merge| Ingest
+    Ingest -->|IngestDrain (ingest-only)| MainTables["Main Tables"]
+    Ingest -->|IngestKeep (ingest-merge)| Ingest
   end
   Ingest -.read path merge.-> ClientReads["Reads/Iterators"]
 ```
