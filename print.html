@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c4187fdd.js";
+            window.path_to_searchindex_js = "searchindex-d87e9139.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e455a035.js"></script>
@@ -835,8 +835,8 @@ type Manager struct {
 <pre class="mermaid">flowchart LR
   L0["L0 SSTables"] --&gt;|moveToIngest| Ingest["Ingest Buffer (sharded)"]
   subgraph levelN["Level N"]
-    Ingest --&gt;|ingest-only compact| MainTables["Main Tables"]
-    Ingest --&gt;|ingest-merge| Ingest
+    Ingest --&gt;|IngestDrain (ingest-only)| MainTables["Main Tables"]
+    Ingest --&gt;|IngestKeep (ingest-merge)| Ingest
   end
   Ingest -.read path merge.-&gt; ClientReads["Reads/Iterators"]
 </pre>
