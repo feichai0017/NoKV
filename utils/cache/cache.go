@@ -138,7 +138,7 @@ func (c *Cache) get(key any) (any, bool) {
 	if keyHash <= math.MaxUint32 {
 		c.door.Allow(uint32(keyHash))
 	}
-	c.c.Increment(uint64(item.key))
+	c.c.Increment(item.key)
 
 	v := item.value
 
