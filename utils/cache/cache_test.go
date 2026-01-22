@@ -92,7 +92,7 @@ func TestCacheLargeUint64Key(t *testing.T) {
 	require.True(t, ok, "Get should find the value for large uint64 key")
 	require.Equal(t, testValue, val, "Retrieved value should match the stored value")
 
-	// Get again to trigger bloom filter interaction code path
+	// Get again to verify the large key code path where bloom filter is skipped
 	val, ok = c.Get(largeKey)
 	require.True(t, ok, "Second Get should still find the value")
 	require.Equal(t, testValue, val, "Retrieved value should still match")
