@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,6 +26,11 @@ func FID(name string) uint64 {
 	id, err := strconv.Atoi(name)
 	if err != nil {
 		_ = Err(err)
+		return 0
+	}
+	// Ensure the parsed ID fits into 32 bits so downstream uint32 casts are safe.
+	if id < 0 || uint64(id) > math.MaxUint32 {
+		_ = Err(fmt.Errorf("FID out of range: %d", id))
 		return 0
 	}
 	return uint64(id)
