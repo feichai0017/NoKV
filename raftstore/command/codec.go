@@ -11,6 +11,11 @@ const (
 	// PayloadPrefix marks raft log entries carrying RaftCmdRequest payloads.
 	// It must not collide with the admin command prefix defined in peer.go.
 	PayloadPrefix byte = 0xCE
+
+	// maxRaftCmdRequestSize defines an upper bound on the size of a marshaled
+	// RaftCmdRequest. This avoids integer overflow and excessively large
+	// allocations when encoding commands.
+	maxRaftCmdRequestSize = 64 * 1024 * 1024 // 64 MiB
 )
 
 // Encode serialises the provided RaftCmdRequest and prefixes it with the
@@ -22,6 +27,13 @@ func Encode(req *pb.RaftCmdRequest) ([]byte, error) {
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > maxRaftCmdRequestSize {
+		return nil, fmt.Errorf("raftstore: raft command too large (%d bytes)", len(data))
+	}
+	// Guard against integer overflow in len(data)+1 on all platforms.
+	if len(data) == int(^uint(0)>>1) {
+		return nil, fmt.Errorf("raftstore: raft command size causes overflow")
 	}
 	buf := make([]byte, len(data)+1)
 	buf[0] = PayloadPrefix
