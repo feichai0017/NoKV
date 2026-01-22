@@ -6,7 +6,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/dgraph-io/badger/v4 v4.9.0
 	github.com/dgraph-io/ristretto/v2 v2.3.0
-	github.com/panjf2000/ants/v2 v2.11.3
+	github.com/panjf2000/ants/v2 v2.11.4
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/raft/v3 v3.6.0
