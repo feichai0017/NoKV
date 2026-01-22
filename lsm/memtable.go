@@ -176,7 +176,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		if !strings.HasSuffix(base, ".wal") {
 			continue
 		}
-		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 64)
+		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 32)
 		if err != nil {
 			utils.Panic(err)
 		}
