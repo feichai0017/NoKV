@@ -36,11 +36,12 @@ func NewCache(size int) *Cache {
 	data := make(map[uint64]*list.Element, size)
 
 	return &Cache{
-		lru:  newWindowLRU(lruSz, data),
-		slru: newSLRU(data, slruO, slruSz-slruO),
-		door: newFilter(size, 0.01), //set the error rate of bloom filter to 0.01
-		c:    newCmSketch(int64(size)),
-		data: data, //share the same map to store data
+		lru:       newWindowLRU(lruSz, data),
+		slru:      newSLRU(data, slruO, slruSz-slruO),
+		door:      newFilter(size, 0.01), //set the error rate of bloom filter to 0.01
+		c:         newCmSketch(int64(size)),
+		data:      data, //share the same map to store data
+		threshold: int32(size * 10),
 	}
 
 }
@@ -83,8 +84,10 @@ func (c *Cache) set(key, value any) bool {
 
 	// PK, must appear in bloomfilter once, then allow PK
 	// appear in bf, means access frequency >= 2
-	if !c.door.Allow(uint32(eitem.key)) {
-		return true
+	if keyHash <= math.MaxUint32 {
+		if !c.door.Allow(uint32(eitem.key)) {
+			return true
+		}
 	}
 
 	// estimate the access frequency of the evicted data in windowlru and LFU
