@@ -176,7 +176,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		if !strings.HasSuffix(base, ".wal") {
 			continue
 		}
-		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 64)
+		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 32)
 		if err != nil {
 			utils.Panic(err)
 		}
@@ -191,6 +191,9 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
+				if fid > math.MaxUint32 {
+					utils.Panic(errors.Errorf("wal segment id %d exceeds uint32 range", fid))
+				}
 				if !lsm.levels.canRemoveWalSegment(uint32(fid)) {
 					cleaned = append(cleaned, fid)
 					continue
