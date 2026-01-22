@@ -175,21 +175,22 @@ func (c *Cache) keyToHash(key any) (uint64, uint64) {
 	}
 	switch k := key.(type) {
 	case uint64:
-		return k, 0
+		// Limit integer-based keys to 32 bits so that downstream uint32 casts are safe.
+		return uint64(uint32(k)), 0
 	case string:
 		return MemHashString(k), xxhash.Sum64String(k)
 	case []byte:
 		return MemHash(k), xxhash.Sum64(k)
 	case byte:
-		return uint64(k), 0
+		return uint64(uint32(k)), 0
 	case int:
-		return uint64(k), 0
+		return uint64(uint32(k)), 0
 	case int32:
-		return uint64(k), 0
+		return uint64(uint32(k)), 0
 	case uint32:
 		return uint64(k), 0
 	case int64:
-		return uint64(k), 0
+		return uint64(uint32(k)), 0
 	default:
 		panic("Key type not supported")
 	}
