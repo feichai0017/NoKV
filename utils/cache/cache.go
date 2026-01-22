@@ -2,6 +2,7 @@ package cache
 
 import (
 	"container/list"
+	"math"
 	"sync"
 	"unsafe"
 
@@ -118,7 +119,9 @@ func (c *Cache) get(key any) (any, bool) {
 
 	val, ok := c.data[keyHash]
 	if !ok {
-		c.door.Allow(uint32(keyHash))
+		if keyHash <= math.MaxUint32 {
+			c.door.Allow(uint32(keyHash))
+		}
 		c.c.Increment(keyHash)
 		return nil, false
 	}
@@ -126,11 +129,15 @@ func (c *Cache) get(key any) (any, bool) {
 	item := val.Value.(*storeItem)
 
 	if item.conflict != conflictHash {
-		c.door.Allow(uint32(keyHash))
+		if keyHash <= math.MaxUint32 {
+			c.door.Allow(uint32(keyHash))
+		}
 		c.c.Increment(keyHash)
 		return nil, false
 	}
-	c.door.Allow(uint32(keyHash))
+	if keyHash <= math.MaxUint32 {
+		c.door.Allow(uint32(keyHash))
+	}
 	c.c.Increment(item.key)
 
 	v := item.value
