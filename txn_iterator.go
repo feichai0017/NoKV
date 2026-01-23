@@ -282,7 +282,7 @@ func (it *TxnIterator) Valid() bool {
 // ValidForPrefix returns false when iteration is done
 // or when the current key is not prefixed by the specified prefix.
 func (it *TxnIterator) ValidForPrefix(prefix []byte) bool {
-	return it.Valid() && bytes.HasPrefix(kv.ParseKey(it.item.Entry().Key), prefix)
+	return it.Valid() && bytes.HasPrefix(it.item.Entry().Key, prefix)
 }
 
 // Close would close the iterator. It is important to call this when you're done with iteration.
