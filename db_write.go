@@ -125,6 +125,12 @@ func (db *DB) initWriteBatchOptions() {
 	if db.opt.WriteBatchMaxSize <= 0 {
 		db.opt.WriteBatchMaxSize = defaultWriteBatchMaxSize
 	}
+	if db.opt.MaxBatchCount <= 0 {
+		db.opt.MaxBatchCount = int64(db.opt.WriteBatchMaxCount)
+	}
+	if db.opt.MaxBatchSize <= 0 {
+		db.opt.MaxBatchSize = db.opt.WriteBatchMaxSize
+	}
 	if db.opt.WriteBatchWait < 0 {
 		db.opt.WriteBatchWait = 0
 	}
@@ -146,9 +152,15 @@ func (db *DB) applyThrottle(enable bool) {
 	}
 }
 
-func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
-	if atomic.LoadInt32(&db.blockWrites) == 1 {
-		return nil, utils.ErrBlockedWrites
+func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request, error) {
+	for atomic.LoadInt32(&db.blockWrites) == 1 {
+		if !waitOnThrottle {
+			return nil, utils.ErrBlockedWrites
+		}
+		if atomic.LoadUint32(&db.isClosed) == 1 || atomic.LoadUint32(&db.commitQueue.closed) == 1 {
+			return nil, utils.ErrBlockedWrites
+		}
+		time.Sleep(200 * time.Microsecond)
 	}
 	var size int64
 	count := int64(len(entries))
@@ -186,7 +198,7 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry) (*request, error) {
 
 // Check(kv.BatchSet(entries))
 func (db *DB) batchSet(entries []*kv.Entry) error {
-	req, err := db.sendToWriteCh(entries)
+	req, err := db.sendToWriteCh(entries, true)
 	if err != nil {
 		return err
 	}

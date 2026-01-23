@@ -436,12 +436,12 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	db := Open(opt)
 	defer db.Close()
 
-	db.applyThrottle(true)
-	defer db.applyThrottle(false)
-
 	e := kvpkg.NewEntry([]byte("gc-skip"), []byte("v"))
 	require.NoError(t, db.Set(e.Key, e.Value))
 	e.DecrRef()
+
+	db.applyThrottle(true)
+	defer db.applyThrottle(false)
 
 	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
 		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)

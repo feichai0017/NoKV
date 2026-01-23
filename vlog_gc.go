@@ -64,7 +64,7 @@ func (vlog *valueLog) flushDiscardStats() {
 
 		entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, lfDiscardStatsKey, 1), encodedDS)
 		entries := []*kv.Entry{entry}
-		req, err := vlog.db.sendToWriteCh(entries)
+		req, err := vlog.db.sendToWriteCh(entries, false)
 		if err != nil {
 			entry.DecrRef()
 			return errors.Wrapf(err, "failed to push discard stats to write channel")
