@@ -613,6 +613,9 @@ func clonePayloadToKind(arena *Arena, payload *nodePayload, fromKind, toKind uin
 func payloadInsert(kind uint8, payload *nodePayload, key byte, childOff uint32) bool {
 	switch kind {
 	case artNode4Kind, artNode16Kind:
+		if payload.count > len(payload.keys) || payload.count > len(payload.children) {
+			return false
+		}
 		if payload.count >= len(payload.keys) {
 			return false
 		}
@@ -627,6 +630,9 @@ func payloadInsert(kind uint8, payload *nodePayload, key byte, childOff uint32) 
 		payload.count++
 		return true
 	case artNode48Kind:
+		if int(key) >= len(payload.idx) || len(payload.children) == 0 {
+			return false
+		}
 		if payload.count >= artNode48Cap {
 			return false
 		}
@@ -638,6 +644,9 @@ func payloadInsert(kind uint8, payload *nodePayload, key byte, childOff uint32) 
 		payload.count++
 		return true
 	case artNode256Kind:
+		if int(key) >= len(payload.children) {
+			return false
+		}
 		if payload.children[key] != 0 {
 			return false
 		}
@@ -652,6 +661,9 @@ func payloadInsert(kind uint8, payload *nodePayload, key byte, childOff uint32) 
 func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff uint32) bool {
 	switch kind {
 	case artNode4Kind, artNode16Kind:
+		if payload.count > len(payload.keys) || payload.count > len(payload.children) {
+			return false
+		}
 		for i := 0; i < payload.count; i++ {
 			if payload.keys[i] != key {
 				continue
@@ -663,6 +675,9 @@ func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff u
 			return true
 		}
 	case artNode48Kind:
+		if int(key) >= len(payload.idx) || len(payload.children) == 0 {
+			return false
+		}
 		pos := payload.idx[key]
 		if pos == 0 {
 			return false
@@ -674,6 +689,9 @@ func payloadReplace(kind uint8, payload *nodePayload, key byte, oldOff, newOff u
 		payload.children[idx] = newOff
 		return true
 	case artNode256Kind:
+		if int(key) >= len(payload.children) {
+			return false
+		}
 		if payload.children[key] != oldOff {
 			return false
 		}
