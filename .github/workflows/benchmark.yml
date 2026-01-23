@@ -1,0 +1,43 @@
+name: Benchmark
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, reopened, synchronize, labeled]
+
+jobs:
+  micro-bench:
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-benchmark')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+
+      - name: Run micro benchmarks
+        run: |
+          go test -bench=. -run=^$ ./... -count=1 | tee benchmark.txt
+
+      - name: Track benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'go'
+          output-file-path: benchmark.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.event_name == 'push' }}
+          comment-on-alert: ${{ github.event_name == 'pull_request' }}
+          alert-threshold: '130%'
+          fail-on-alert: false
+
+      - name: Run YCSB benchmarks (NoKV)
+        env:
+          YCSB_GO_TEST_TIMEOUT: 60m
+        run: make bench
