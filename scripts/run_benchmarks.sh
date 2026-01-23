@@ -20,7 +20,7 @@ die() {
 }
 
 default_workloads="A,B,C,D,F"
-default_engines="nokv,badger"
+default_engines="nokv"
 default_records=10000000
 default_ops=10000000
 default_conc=16
@@ -39,6 +39,7 @@ ycsb_badger_comp="${YCSB_BADGER_COMPRESSION:-none}"
 ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
 benchdir="${YCSB_BENCHDIR:-benchmark_data}"
 ycsb_warm_ops="${YCSB_WARM_OPS:-100000}"
+ycsb_timeout="${YCSB_GO_TEST_TIMEOUT:-}"
 
 export NOKV_RUN_BENCHMARKS=1
 
@@ -123,6 +124,9 @@ export GOCACHE GOMODCACHE
 cmd=(go test)
 if [[ -n "${build_tags}" ]]; then
   cmd+=(${build_tags})
+fi
+if [[ -n "${ycsb_timeout}" ]]; then
+  cmd+=(-timeout "${ycsb_timeout}")
 fi
 cmd+=(./benchmark -run TestBenchmarkYCSB -count=1 -args)
 cmd+=("${args[@]}")
