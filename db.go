@@ -420,13 +420,6 @@ func (db *DB) setEntry(data *kv.Entry) error {
 	if data == nil || len(data.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	// Run basic sanity checks before mutating the write path.
-	// If the value exceeds the threshold, store a value pointer in the LSM
-	// and append the payload to the value log.
-	var (
-		vp  *kv.ValuePtr
-		err error
-	)
 	if !data.CF.Valid() {
 		data.CF = kv.CFDefault
 	}
@@ -435,23 +428,12 @@ func (db *DB) setEntry(data *kv.Entry) error {
 	}
 	// Internal keys include CF and version; non-transactional writes use max version.
 	data.Key = kv.InternalKey(data.CF, data.Key, nonTxnMaxVersion)
-	// If the value should not be inlined into the LSM, append it to the value
-	// log first so crash replay can rebuild pointers.
-	if !db.shouldWriteValueToLSM(data) {
-		if vp, err = db.vlog.newValuePtr(data); err != nil {
-			return err
-		}
-		data.Meta |= kv.BitValuePointer
-		data.Value = vp.Encode()
-	}
-	if err := db.lsm.Set(data); err != nil {
+
+	// Delegate to the commit pipeline to leverage batching and VLog offloading.
+	data.IncrRef()
+	if err := db.batchSet([]*kv.Entry{data}); err != nil {
+		data.DecrRef()
 		return err
-	}
-	db.recordCFWrite(data.CF, 1)
-	if db.opt.SyncWrites {
-		if err := db.wal.Sync(); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -475,22 +457,12 @@ func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, 
 	}
 
 	entry.Key = kv.InternalKey(entry.CF, entry.Key, version)
-	if meta&kv.BitDelete == 0 && len(entry.Value) > 0 && !db.shouldWriteValueToLSM(entry) {
-		vp, err := db.vlog.newValuePtr(entry)
-		if err != nil {
-			return err
-		}
-		entry.Meta |= kv.BitValuePointer
-		entry.Value = vp.Encode()
-	}
-	if err := db.lsm.Set(entry); err != nil {
+
+	// Delegate to the commit pipeline to leverage batching and VLog offloading.
+	entry.IncrRef()
+	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
+		entry.DecrRef()
 		return err
-	}
-	db.recordCFWrite(cf, 1)
-	if db.opt.SyncWrites {
-		if err := db.wal.Sync(); err != nil {
-			return err
-		}
 	}
 	return nil
 }
