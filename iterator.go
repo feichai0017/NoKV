@@ -81,6 +81,16 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	return itr
 }
 
+// NewInternalIterator returns an iterator over internal keys (CF marker + user key + timestamp).
+// Callers must interpret kv.Entry.Key using kv.SplitInternalKey.
+func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
+	if opt == nil {
+		opt = &utils.Options{}
+	}
+	iters := db.lsm.NewIterators(opt)
+	return lsm.NewMergeIterator(iters, !opt.IsAsc)
+}
+
 func (iter *DBIterator) Next() {
 	if iter == nil || iter.iitr == nil {
 		return

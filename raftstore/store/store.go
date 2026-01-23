@@ -38,6 +38,7 @@ type Store struct {
 	operationHook  func(scheduler.Operation)
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
+	commandTimeout time.Duration
 	operations     *operationScheduler
 	heartbeat      *heartbeatLoop
 }
@@ -120,6 +121,10 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if operationBurst == 0 {
 		operationBurst = 4
 	}
+	commandTimeout := cfg.CommandTimeout
+	if commandTimeout <= 0 {
+		commandTimeout = 3 * time.Second
+	}
 	s := &Store{
 		router:         router,
 		peers:          newPeerSet(router),
@@ -133,6 +138,7 @@ func NewStoreWithConfig(cfg Config) *Store {
 		planner:        planner,
 		operationHook:  cfg.OperationObserver,
 		commandApplier: cfg.CommandApplier,
+		commandTimeout: commandTimeout,
 	}
 	s.regions = newRegionManager(cfg.Manifest, combinedHooks)
 	s.command = newCommandPipeline(cfg.CommandApplier)
@@ -681,6 +687,10 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.Re
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
 		return nil, meta, resp, nil
 	}
+	if err := validateRequestKeys(meta, req); err != nil {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
+		return nil, meta, resp, nil
+	}
 	peer := s.regions.peer(regionID)
 	if peer == nil {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(&meta)}
@@ -718,21 +728,28 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		s.command.removeProposal(id)
 		return nil, err
 	}
-	result := <-prop.ch
-	if result.err != nil {
-		return nil, result.err
+	timer := time.NewTimer(s.commandTimeout)
+	defer timer.Stop()
+	select {
+	case result := <-prop.ch:
+		if result.err != nil {
+			return nil, result.err
+		}
+		if result.resp == nil {
+			return &pb.RaftCmdResponse{Header: req.Header}, nil
+		}
+		return result.resp, nil
+	case <-timer.C:
+		s.command.removeProposal(id)
+		return nil, fmt.Errorf("raftstore: command %d timed out", id)
 	}
-	if result.resp == nil {
-		return &pb.RaftCmdResponse{Header: req.Header}, nil
-	}
-	return result.resp, nil
 }
 
 // ReadCommand executes the provided read-only raft command locally on the
 // leader. The command must only include read operations (Get/Scan). The method
 // returns a RegionError when the store is not leader for the target region.
 func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
-	peer, _, regionResp, err := s.validateCommand(req)
+	peer, meta, regionResp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
 	}
@@ -767,6 +784,9 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if err != nil {
 		return nil, err
 	}
+	if out != nil {
+		trimScanResponse(meta, req, out)
+	}
 	return out, nil
 }
 
@@ -796,6 +816,114 @@ func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta manifest.RegionMeta) *pb
 		return epochNotMatchError(&meta)
 	}
 	return nil
+}
+
+func validateRequestKeys(meta manifest.RegionMeta, req *pb.RaftCmdRequest) *pb.RegionError {
+	if req == nil {
+		return nil
+	}
+	for _, r := range req.GetRequests() {
+		if r == nil {
+			continue
+		}
+		switch r.GetCmdType() {
+		case pb.CmdType_CMD_GET:
+			key := r.GetGet().GetKey()
+			if len(key) > 0 && !keyInRange(meta, key) {
+				return epochNotMatchError(&meta)
+			}
+		case pb.CmdType_CMD_SCAN:
+			start := r.GetScan().GetStartKey()
+			if len(start) > 0 && !keyInRange(meta, start) {
+				return epochNotMatchError(&meta)
+			}
+		case pb.CmdType_CMD_PREWRITE:
+			for _, mut := range r.GetPrewrite().GetMutations() {
+				if mut == nil {
+					continue
+				}
+				key := mut.GetKey()
+				if len(key) > 0 && !keyInRange(meta, key) {
+					return epochNotMatchError(&meta)
+				}
+			}
+		case pb.CmdType_CMD_COMMIT:
+			for _, key := range r.GetCommit().GetKeys() {
+				if len(key) > 0 && !keyInRange(meta, key) {
+					return epochNotMatchError(&meta)
+				}
+			}
+		case pb.CmdType_CMD_BATCH_ROLLBACK:
+			for _, key := range r.GetBatchRollback().GetKeys() {
+				if len(key) > 0 && !keyInRange(meta, key) {
+					return epochNotMatchError(&meta)
+				}
+			}
+		case pb.CmdType_CMD_RESOLVE_LOCK:
+			for _, key := range r.GetResolveLock().GetKeys() {
+				if len(key) > 0 && !keyInRange(meta, key) {
+					return epochNotMatchError(&meta)
+				}
+			}
+		case pb.CmdType_CMD_CHECK_TXN_STATUS:
+			key := r.GetCheckTxnStatus().GetPrimaryKey()
+			if len(key) > 0 && !keyInRange(meta, key) {
+				return epochNotMatchError(&meta)
+			}
+		default:
+			return epochNotMatchError(&meta)
+		}
+	}
+	return nil
+}
+
+func keyInRange(meta manifest.RegionMeta, key []byte) bool {
+	if len(key) == 0 {
+		return true
+	}
+	if len(meta.StartKey) > 0 && bytes.Compare(key, meta.StartKey) < 0 {
+		return false
+	}
+	if len(meta.EndKey) > 0 && bytes.Compare(key, meta.EndKey) >= 0 {
+		return false
+	}
+	return true
+}
+
+func trimScanResponse(meta manifest.RegionMeta, req *pb.RaftCmdRequest, resp *pb.RaftCmdResponse) {
+	if req == nil || resp == nil {
+		return
+	}
+	if len(resp.Responses) == 0 {
+		return
+	}
+	requests := req.GetRequests()
+	for i, r := range requests {
+		if r == nil || r.GetCmdType() != pb.CmdType_CMD_SCAN {
+			continue
+		}
+		if i >= len(resp.Responses) {
+			return
+		}
+		out := resp.Responses[i]
+		if out == nil {
+			continue
+		}
+		scan := out.GetScan()
+		if scan == nil || len(scan.Kvs) == 0 {
+			continue
+		}
+		kept := scan.Kvs[:0]
+		for _, kv := range scan.Kvs {
+			if kv == nil {
+				continue
+			}
+			if keyInRange(meta, kv.Key) {
+				kept = append(kept, kv)
+			}
+		}
+		scan.Kvs = kept
+	}
 }
 
 func epochNotMatchError(meta *manifest.RegionMeta) *pb.RegionError {
