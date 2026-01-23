@@ -635,7 +635,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 	}
 	txn.clearPendingWrites() // Clear the map to prevent double-free in Discard.
 
-	req, err := txn.db.sendToWriteCh(entries)
+	req, err := txn.db.sendToWriteCh(entries, true)
 	if err != nil {
 		orc.doneCommit(commitTs)
 		return nil, err
