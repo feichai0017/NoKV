@@ -125,6 +125,7 @@ cmd=(go test)
 if [[ -n "${build_tags}" ]]; then
   cmd+=(${build_tags})
 fi
+cmd+=(-v)
 if [[ -n "${ycsb_timeout}" ]]; then
   cmd+=(-timeout "${ycsb_timeout}")
 fi
