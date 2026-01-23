@@ -129,9 +129,12 @@ func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, err
 }
 
 func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
-	iter := r.db.NewIterator(&utils.Options{IsAsc: true})
+	iter := r.db.NewInternalIterator(&utils.Options{IsAsc: true})
 	defer iter.Close()
-	iter.Rewind()
+	if iter == nil {
+		return nil
+	}
+	iter.Seek(kv.InternalKey(kv.CFWrite, key, math.MaxUint64))
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
@@ -139,20 +142,17 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			continue
 		}
 		entry := item.Entry()
-		if entry.CF != kv.CFWrite {
-			if bytes.Compare(entry.Key, key) > 0 {
-				break
-			}
+		if entry == nil {
 			iter.Next()
 			continue
 		}
-		cmp := bytes.Compare(entry.Key, key)
-		if cmp > 0 {
+		cf, userKey, ts := kv.SplitInternalKey(entry.Key)
+		if cf != kv.CFWrite {
 			break
 		}
-		if cmp < 0 {
+		if !bytes.Equal(userKey, key) {
 			iter.Next()
-			continue
+			break
 		}
 		if entry.Meta&kv.BitDelete > 0 {
 			iter.Next()
@@ -162,7 +162,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 		if err != nil {
 			return err
 		}
-		if !fn(write, entry.Version) {
+		if !fn(write, ts) {
 			break
 		}
 		iter.Next()

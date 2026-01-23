@@ -54,4 +54,5 @@ type Config struct {
 	OperationBurst     int
 	OperationObserver  func(scheduler.Operation)
 	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	CommandTimeout     time.Duration
 }

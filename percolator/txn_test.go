@@ -112,6 +112,21 @@ func TestCommitMissingLock(t *testing.T) {
 	require.Contains(t, err.GetAbort(), "lock not found")
 }
 
+func TestReaderMostRecentWriteSkipsOtherCF(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, db.Set([]byte("b"), []byte("vb")))
+
+	entry := EncodeWrite(Write{Kind: pb.Mutation_Put, StartTs: 1})
+	require.NoError(t, db.SetVersionedEntry(kv.CFWrite, []byte("a"), 10, entry, 0))
+
+	reader := NewReader(db)
+	write, commitTs, err := reader.MostRecentWrite([]byte("a"))
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, uint64(10), commitTs)
+	require.Equal(t, uint64(1), write.StartTs)
+}
+
 func TestBatchRollbackRemovesLock(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)

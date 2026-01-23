@@ -8,6 +8,7 @@ import (
 	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -503,6 +504,46 @@ func TestServiceKvScanLeaderRead(t *testing.T) {
 	require.Len(t, next.GetResponse().GetKvs(), 1)
 	require.Equal(t, []byte("bk"), next.GetResponse().GetKvs()[0].GetKey())
 	require.Equal(t, []byte("value-b"), next.GetResponse().GetKvs()[0].GetValue())
+}
+
+func TestServiceKvScanRespectsRegionEnd(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        7,
+		peerID:         77,
+		regionID:       1101,
+		startKey:       []byte("a"),
+		endKey:         []byte("m"),
+		campaignLeader: true,
+	})
+
+	prewriteKey(t, env.service, env.ctx, []byte("ak"), []byte("value-a"), 100)
+	commitKey(t, env.service, env.ctx, []byte("ak"), 100, 120)
+
+	prewriteKey(t, env.service, env.ctx, []byte("bk"), []byte("value-b"), 200)
+	commitKey(t, env.service, env.ctx, []byte("bk"), 200, 220)
+
+	startTs := uint64(10)
+	commitTs := uint64(20)
+	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0))
+	write := percolator.EncodeWrite(percolator.Write{Kind: pb.Mutation_Put, StartTs: startTs})
+	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFWrite, []byte("mz"), commitTs, write, 0))
+
+	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
+		Context: env.ctx,
+		Request: &pb.ScanRequest{
+			StartKey:     []byte("a"),
+			Limit:        10,
+			Version:      500,
+			IncludeStart: true,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetResponse())
+	for _, kv := range resp.GetResponse().GetKvs() {
+		require.Less(t, string(kv.GetKey()), "m")
+	}
 }
 
 func TestServiceBatchGetEdgeCases(t *testing.T) {
