@@ -77,7 +77,7 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	}
 	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
-	itr.iitr = lsm.NewMergeIterator(ctx.iters, opt.IsAsc)
+	itr.iitr = lsm.NewMergeIterator(ctx.iters, !opt.IsAsc)
 	return itr
 }
 
