@@ -37,7 +37,7 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 		}
 		iter.iters = append(iter.iters, imm.NewIterator(opt))
 	}
-	iter.iters = append(iter.iters, lsm.levels.iterators()...)
+	iter.iters = append(iter.iters, lsm.levels.iterators(opt)...)
 	return iter.iters
 }
 func (iter *Iterator) Next() {
@@ -112,7 +112,7 @@ func (iter *memIterator) Seek(key []byte) {
 }
 
 func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {
-	return lm.iterators()
+	return lm.iterators(options)
 }
 
 // ConcatIterator merge multiple iterators into one
@@ -152,7 +152,7 @@ func (s *ConcatIterator) Rewind() {
 	if len(s.iters) == 0 {
 		return
 	}
-	if !s.options.IsAsc {
+	if s.options.IsAsc {
 		s.setIdx(0)
 	} else {
 		s.setIdx(len(s.iters) - 1)
@@ -201,7 +201,7 @@ func (s *ConcatIterator) Next() {
 		return
 	}
 	for { // In case there are empty tables.
-		if !s.options.IsAsc {
+		if s.options.IsAsc {
 			s.setIdx(s.idx + 1)
 		} else {
 			s.setIdx(s.idx - 1)

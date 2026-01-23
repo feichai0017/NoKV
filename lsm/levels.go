@@ -106,11 +106,10 @@ func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
 	lm.hotProvider.Store(fn)
 }
 
-func (lm *levelManager) iterators() []utils.Iterator {
-
+func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
 	itrs := make([]utils.Iterator, 0, len(lm.levels))
 	for _, level := range lm.levels {
-		itrs = append(itrs, level.iterators()...)
+		itrs = append(itrs, level.iterators(opt)...)
 	}
 	return itrs
 }
@@ -920,8 +919,11 @@ func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, 
 	}
 }
 
-func (lh *levelHandler) iterators() []utils.Iterator {
-	topt := &utils.Options{IsAsc: true}
+func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
+	topt := &utils.Options{}
+	if opt != nil {
+		*topt = *opt
+	}
 	lh.RLock()
 	defer lh.RUnlock()
 	if lh.levelNum == 0 {
