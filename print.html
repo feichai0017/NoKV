@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b2e7bf26.js";
+            window.path_to_searchindex_js = "searchindex-ec641ed7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1acdd229.js"></script>
@@ -309,25 +309,25 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
-    Client[Client / Redis] --&gt;|RESP Protocol| Gateway[Redis Gateway]
-    Gateway --&gt;|RaftCmd| RaftStoreNode["RaftStore"]
-
-    subgraph RaftStoreLayer["RaftStore Distributed Layer"]
-        RaftStoreNode --&gt;|Propose| RaftLog["Raft Log WAL"]
-        RaftLog --&gt;|Consensus| Apply[Apply Worker]
+    Client["Client / Redis"] --&gt;|RESP Protocol| Gateway["Redis Gateway"]
+    Gateway --&gt;|RaftCmd| RaftStore
+    
+    subgraph "RaftStore (Distributed Layer)"
+        RaftStore --&gt;|Propose| RaftLog["Raft Log (WAL)"]
+        RaftLog --&gt;|Consensus| Apply["Apply Worker"]
     end
-
-    subgraph StorageEngine["Storage Engine LSM"]
+    
+    subgraph "Storage Engine (LSM)"
         Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTables["SSTables L0-L6"]
-        SSTables --&gt;|Compact| SSTables
-
-        Apply --&gt;|Large Value| VLog[Value Log]
+        MemTable --&gt;|Flush| SSTable["SSTables (L0-L6)"]
+        SSTable --&gt;|Compact| SSTable
+        
+        Apply --&gt;|Large Value| VLog["Value Log"]
     end
-
-    subgraph CacheLayer["Cache Layer"]
-        BlockCache[Block Cache (Ristretto)] -.-&gt; SSTables
-        IndexCache[Index Cache (W-TinyLFU)] -.-&gt; SSTables
+    
+    subgraph "Cache Layer"
+        BlockCache["Block Cache (Ristretto)"] -.-&gt; SSTable
+        IndexCache["Index Cache (W-TinyLFU)"] -.-&gt; SSTable
     end
 </pre>
 
