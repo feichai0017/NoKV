@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b0b73f3c.js";
+            window.path_to_searchindex_js = "searchindex-cc91a280.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e455a035.js"></script>
@@ -251,8 +251,8 @@
   Exec --&gt; Build["subcompact/build SST"]
   Build --&gt; Manifest["manifest edits"]
   L0["L0 tables"] --&gt;|moveToIngest| Ingest["ingest buffer shards"]
-  Ingest --&gt;|ingest-only| Main["Main tables"]
-  Ingest --&gt;|ingest-merge| Ingest
+  Ingest --&gt;|IngestDrain: ingest-only| Main["Main tables"]
+  Ingest --&gt;|IngestKeep: ingest-merge| Ingest
 </pre>
 
 <h3 id="25-mvcc"><a class="header" href="#25-mvcc">2.5 MVCC</a></h3>

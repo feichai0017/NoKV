@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b0b73f3c.js";
+            window.path_to_searchindex_js = "searchindex-cc91a280.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e455a035.js"></script>
@@ -178,13 +178,13 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="ingest-buffer-architecture-english"><a class="header" href="#ingest-buffer-architecture-english">Ingest Buffer Architecture (English)</a></h1>
-<p>The ingest buffer is a per-level staging area for SSTables—typically promoted from L0—designed to <strong>absorb bursts, reduce overlap, and unlock parallel compaction</strong> without touching the main level tables immediately. It combines fixed sharding, adaptive scheduling, and optional ingest-only merge to keep write amplification and contention low.</p>
+                        <h1 id="ingest-buffer-architecture"><a class="header" href="#ingest-buffer-architecture">Ingest Buffer Architecture</a></h1>
+<p>The ingest buffer is a per-level staging area for SSTables—typically promoted from L0—designed to <strong>absorb bursts, reduce overlap, and unlock parallel compaction</strong> without touching the main level tables immediately. It combines fixed sharding, adaptive scheduling, and optional <code>IngestKeep</code> (ingest-merge) passes to keep write amplification and contention low.</p>
 <pre class="mermaid">flowchart LR
   L0["L0 SSTables"] --&gt;|moveToIngest| Ingest["Ingest Buffer (sharded)"]
   subgraph levelN["Level N"]
-    Ingest --&gt;|IngestDrain (ingest-only)| MainTables["Main Tables"]
-    Ingest --&gt;|IngestKeep (ingest-merge)| Ingest
+    Ingest --&gt;|IngestDrain: ingest-only| MainTables["Main Tables"]
+    Ingest --&gt;|IngestKeep: ingest-merge| Ingest
   end
   Ingest -.read path merge.-&gt; ClientReads["Reads/Iterators"]
 </pre>
@@ -199,7 +199,7 @@
 <li><em>Ingest-merge</em>: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.</li>
 </ul>
 </li>
-<li><strong>IngestMode enum</strong>: plans carry an <code>IngestMode</code> with <code>IngestNone</code>, <code>IngestDrain</code>, and <code>IngestKeep</code>. <code>IngestDrain</code> corresponds to ingest-only, while <code>IngestKeep</code> corresponds to ingest-merge.</li>
+<li><strong>IngestMode enum</strong>: plans carry an <code>IngestMode</code> with <code>IngestNone</code>, <code>IngestDrain</code>, and <code>IngestKeep</code>. <code>IngestDrain</code> corresponds to ingest-only (drain into main tables), while <code>IngestKeep</code> corresponds to ingest-merge (compact within ingest).</li>
 <li><strong>Adaptive scheduling</strong>:
 <ul>
 <li>Shard selection is driven by <code>compact.PickShardOrder</code> / <code>compact.PickShardByBacklog</code> using per-shard size, age, and density.</li>
@@ -208,17 +208,17 @@
 <li>Ingest-merge triggers when backlog score exceeds <code>IngestBacklogMergeScore</code> (default 2.0), with dynamic lowering under extreme backlog/age.</li>
 </ul>
 </li>
-<li><strong>Observability</strong>: expvar/stats expose ingest-only vs ingest-merge counts, duration, and tables processed, plus ingest size/value density per level/shard.</li>
+<li><strong>Observability</strong>: expvar/stats expose <code>IngestDrain</code> vs <code>IngestKeep</code> counts, duration, and tables processed, plus ingest size/value density per level/shard.</li>
 </ul>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <ul>
 <li><code>IngestShardParallelism</code>: max shards to compact in parallel (default <code>max(NumCompactors/2, 2)</code>, auto-scaled by backlog).</li>
 <li><code>IngestCompactBatchSize</code>: base batch size per ingest compaction (auto-boosted by shard backlog).</li>
-<li><code>IngestBacklogMergeScore</code>: backlog score threshold to trigger ingest-merge (default 2.0).</li>
+<li><code>IngestBacklogMergeScore</code>: backlog score threshold to trigger <code>IngestKeep</code>/ingest-merge (default 2.0).</li>
 </ul>
 <h2 id="benefits"><a class="header" href="#benefits">Benefits</a></h2>
 <ul>
-<li><strong>Lower write amplification</strong>: bursty L0 SSTables land in ingest first; ingest-merge prunes duplicates before full compaction.</li>
+<li><strong>Lower write amplification</strong>: bursty L0 SSTables land in ingest first; <code>IngestKeep</code>/ingest-merge prunes duplicates before full compaction.</li>
 <li><strong>Reduced contention</strong>: sharding + <code>compact.State</code> allow parallel ingest drain with minimal overlap.</li>
 <li><strong>Predictable reads</strong>: ingest is part of the read snapshot, so moving tables in/out does not change read semantics.</li>
 <li><strong>Tunable and observable</strong>: knobs for parallelism and merge aggressiveness, with per-path metrics to guide tuning.</li>
