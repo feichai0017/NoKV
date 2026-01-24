@@ -75,8 +75,8 @@ flowchart TD
   Exec --> Build["subcompact/build SST"]
   Build --> Manifest["manifest edits"]
   L0["L0 tables"] -->|moveToIngest| Ingest["ingest buffer shards"]
-  Ingest -->|ingest-only| Main["Main tables"]
-  Ingest -->|ingest-merge| Ingest
+  Ingest -->|IngestDrain: ingest-only| Main["Main tables"]
+  Ingest -->|IngestKeep: ingest-merge| Ingest
 ```
 
 ### 2.5 MVCC
