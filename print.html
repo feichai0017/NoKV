@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-37f7e0d0.js";
+            window.path_to_searchindex_js = "searchindex-b2e7bf26.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1acdd229.js"></script>
@@ -312,14 +312,14 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
     Client[Client / Redis] --&gt;|RESP Protocol| Gateway[Redis Gateway]
     Gateway --&gt;|RaftCmd| RaftStoreNode["RaftStore"]
 
-    subgraph RaftStoreLayer["RaftStore (Distributed Layer)"]
-        RaftStoreNode --&gt;|Propose| RaftLog[Raft Log (WAL)]
+    subgraph RaftStoreLayer["RaftStore Distributed Layer"]
+        RaftStoreNode --&gt;|Propose| RaftLog["Raft Log WAL"]
         RaftLog --&gt;|Consensus| Apply[Apply Worker]
     end
 
-    subgraph StorageEngine["Storage Engine (LSM)"]
+    subgraph StorageEngine["Storage Engine LSM"]
         Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTables[SSTables (L0-L6)]
+        MemTable --&gt;|Flush| SSTables["SSTables L0-L6"]
         SSTables --&gt;|Compact| SSTables
 
         Apply --&gt;|Large Value| VLog[Value Log]
