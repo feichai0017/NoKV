@@ -1,6 +1,7 @@
 # Summary
 
 - [Overview](README.md)
+- [Getting Started](getting_started.md)
 - [Architecture](architecture.md)
 - [Configuration](config.md)
 - [CLI](cli.md)
