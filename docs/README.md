@@ -113,14 +113,14 @@ graph TD
     Client[Client / Redis] -->|RESP Protocol| Gateway[Redis Gateway]
     Gateway -->|RaftCmd| RaftStoreNode["RaftStore"]
 
-    subgraph RaftStoreLayer["RaftStore (Distributed Layer)"]
-        RaftStoreNode -->|Propose| RaftLog[Raft Log (WAL)]
+    subgraph RaftStoreLayer["RaftStore Distributed Layer"]
+        RaftStoreNode -->|Propose| RaftLog["Raft Log WAL"]
         RaftLog -->|Consensus| Apply[Apply Worker]
     end
 
-    subgraph StorageEngine["Storage Engine (LSM)"]
+    subgraph StorageEngine["Storage Engine LSM"]
         Apply -->|Batch Set| MemTable
-        MemTable -->|Flush| SSTables[SSTables (L0-L6)]
+        MemTable -->|Flush| SSTables["SSTables L0-L6"]
         SSTables -->|Compact| SSTables
 
         Apply -->|Large Value| VLog[Value Log]
