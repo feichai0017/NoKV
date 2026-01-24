@@ -8,24 +8,40 @@
   </p>
 
   <p>
-    <a href="https://github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/github/stars/feichai0017/NoKV?style=for-the-badge&color=blue" alt="Stars">
+    <!-- Build / Quality -->
+    <a href="https://github.com/feichai0017/NoKV/actions">
+      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
+    </a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV">
+      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
+    </a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
+      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
     </a>
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
+      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" />
     </a>
-    <a href="https://github.com/feichai0017/NoKV/blob/main/LICENSE">
-      <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
+      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
+    </a>
+  </p>
+
+  <p>
+    <!-- Meta -->
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV">
+      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
     </a>
   </p>
 
   <p>
     <a href="getting_started.html" style="text-decoration: none;">
-        <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
+      <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
     </a>
     &nbsp;&nbsp;
     <a href="architecture.html" style="text-decoration: none;">
-        <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
+      <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
     </a>
   </p>
 </div>
@@ -95,24 +111,24 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 ```mermaid
 graph TD
     Client[Client / Redis] -->|RESP Protocol| Gateway[Redis Gateway]
-    Gateway -->|RaftCmd| RaftStore
-    
-    subgraph "RaftStore (Distributed Layer)"
-        RaftStore -->|Propose| RaftLog[Raft Log (WAL)]
+    Gateway -->|RaftCmd| RaftStoreNode["RaftStore"]
+
+    subgraph RaftStoreLayer["RaftStore (Distributed Layer)"]
+        RaftStoreNode -->|Propose| RaftLog[Raft Log (WAL)]
         RaftLog -->|Consensus| Apply[Apply Worker]
     end
-    
-    subgraph "Storage Engine (LSM)"
+
+    subgraph StorageEngine["Storage Engine (LSM)"]
         Apply -->|Batch Set| MemTable
-        MemTable -->|Flush| SSTable[SSTables (L0-L6)]
-        SSTable -->|Compact| SSTable
-        
+        MemTable -->|Flush| SSTables[SSTables (L0-L6)]
+        SSTables -->|Compact| SSTables
+
         Apply -->|Large Value| VLog[Value Log]
     end
-    
-    subgraph "Cache Layer"
-        BlockCache[Block Cache (Ristretto)] -.-> SSTable
-        IndexCache[Index Cache (W-TinyLFU)] -.-> SSTable
+
+    subgraph CacheLayer["Cache Layer"]
+        BlockCache[Block Cache (Ristretto)] -.-> SSTables
+        IndexCache[Index Cache (W-TinyLFU)] -.-> SSTables
     end
 ```
 
