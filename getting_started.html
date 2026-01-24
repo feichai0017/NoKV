@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Transactions - NoKV Docs</title>
+        <title>Getting Started - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,168 +178,95 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="transaction--mvcc-design"><a class="header" href="#transaction--mvcc-design">Transaction &amp; MVCC Design</a></h1>
-<p>NoKV provides snapshot-isolated transactions backed by a lightweight <strong>oracle</strong> that hands out timestamps, tracks conflicts, and coordinates with the write pipeline. The implementation lives entirely in <a href="../txn.go"><code>txn.go</code></a> with metrics surfaced via <a href="../stats.go"><code>stats.go</code></a>.</p>
-<hr>
-<h2 id="1-components-at-a-glance"><a class="header" href="#1-components-at-a-glance">1. Components at a Glance</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Component</th><th>Purpose</th><th>Key Functions</th></tr>
-</thead>
-<tbody>
-<tr><td><code>oracle</code></td><td>Issues read/commit timestamps, performs conflict checks, persists watermark progress.</td><td><a href="../txn.go#L80-L100"><code>readTs</code></a>, <a href="../txn.go#L142-L190"><code>newCommitTs</code></a>, <a href="../txn.go#L206-L208"><code>doneCommit</code></a></td></tr>
-<tr><td><code>Txn</code></td><td>User-facing transaction state: pending writes, read-set fingerprints, MVCC metadata.</td><td><a href="../txn.go#L412-L425"><code>SetEntry</code></a>, <a href="../txn.go#L428-L502"><code>Get</code></a>, <a href="../txn.go#L618-L671"><code>Commit</code></a></td></tr>
-<tr><td><code>pendingWritesIterator</code></td><td>Allows iterator merge to see unflushed txn writes.</td><td><a href="../txn.go#L324-L347"><code>newPendingWritesIterator</code></a></td></tr>
-<tr><td>Metrics</td><td>Tracks counts of started/committed/conflicted txns.</td><td><a href="../txn.go#L58-L66"><code>trackTxnStart</code></a>, <a href="../txn.go#L72-L78"><code>txnMetricsSnapshot</code></a></td></tr>
-</tbody>
-</table>
-</div>
-<p>The oracle is initialised during <code>DB.Open</code>, sharing lineage with BadgerDB’s MVCC model. Unlike RocksDB—which relies on WriteBatch/TwoPhaseCommit extensions—transactions are first-class citizens, and the core engine enforces ordering.</p>
-<hr>
-<h2 id="2-timestamp--conflict-flow"><a class="header" href="#2-timestamp--conflict-flow">2. Timestamp &amp; Conflict Flow</a></h2>
-<pre class="mermaid">sequenceDiagram
-    participant Client
-    participant DB
-    participant Oracle
-    participant Commit as commitWorker
-    participant Mgr as vlog.Manager
-    participant WAL
-    participant Mem as MemTable
-    Client-&gt;&gt;DB: NewTransaction(update)
-    DB-&gt;&gt;Oracle: readTs()
-    Oracle--&gt;&gt;DB: snapshot ts (nextTxnTs-1)
-    Client-&gt;&gt;DB: Set/Delete/Get
-    DB-&gt;&gt;Txn: stage pendingWrites, record read hashes
-    Client-&gt;&gt;DB: Commit
-    DB-&gt;&gt;Oracle: newCommitTs(txn)
-    alt conflict
-        Oracle--&gt;&gt;DB: ErrConflict
-    else success
-        Oracle--&gt;&gt;DB: commitTs
-        DB-&gt;&gt;Commit: batch requests
-        Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
-        Commit-&gt;&gt;WAL: Append(entries with commitTs)
-        Commit-&gt;&gt;Mem: apply to skiplist
-        DB-&gt;&gt;Oracle: doneCommit(commitTs)
-    end
-</pre>
+                        <h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
+<p>This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a few minutes.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<ul>
+<li>Go 1.24+</li>
+<li>Git</li>
+<li>(Optional) Docker + Docker Compose for containerized runs</li>
+</ul>
+<h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
+<p>This launches a 3-node Raft cluster plus the optional TSO helper.</p>
+<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
+</code></pre>
+<p>Start the Redis-compatible gateway in another shell:</p>
+<pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+</code></pre>
+<p>Quick smoke test:</p>
+<pre><code class="language-bash">redis-cli -p 6380 ping
+</code></pre>
+<h3 id="inspect-stats"><a class="header" href="#inspect-stats">Inspect stats</a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
+</code></pre>
+<h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
+<p>This runs the cluster and gateway in containers.</p>
+<pre><code class="language-bash">docker compose up --build
+</code></pre>
+<p>Tear down:</p>
+<pre><code class="language-bash">docker compose down -v
+</code></pre>
+<h2 id="embedded-usage-single-process"><a class="header" href="#embedded-usage-single-process">Embedded Usage (single-process)</a></h2>
+<p>Use NoKV as a library when you do not need raftstore.</p>
+<pre><code class="language-go">package main
 
-<ol>
-<li><strong>Start</strong> – <code>DB.newTransaction</code> calls <a href="../txn.go#L80-L100"><code>oracle.readTs</code></a>, which waits for all prior commits to finish (<code>txnMark.WaitForMark</code>) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the <code>startVersion</code> themselves (see <a href="#timestamp-sources">Timestamp sources</a>).</li>
-<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.</li>
-<li><strong>Conflict detection</strong> – When <code>Options.DetectConflicts</code> is enabled, <code>oracle.newCommitTs</code> iterates <code>oracle.committedTxns</code> and compares read fingerprints against keys written by newer commits. This mirrors Badger’s optimistic strategy.</li>
-<li><strong>Commit timestamp</strong> – <code>newCommitTs</code> increments <code>nextTxnTs</code>, registers the commit in <code>txnMark</code>, and stores the conflict key set for future comparisons.</li>
-<li><strong>Apply</strong> – <code>Txn.commitAndSend</code> assigns the commit timestamp to each pending entry (<code>kv.KeyWithTs</code>), enqueues them through <code>sendToWriteCh</code>, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle’s <code>doneCommit</code> release the commit watermark.</li>
-<li><strong>Value log ordering</strong> – As with non-transactional writes, the commit worker runs <code>valueLog.write</code> (which calls <code>Manager.AppendEntries</code>) before the WAL append. On failure <code>vlog.manager.Rewind</code> ensures partial writes do not leak.</li>
-</ol>
-<p>RocksDB’s default WriteBatch lacks conflict detection, relying on application-level locking; NoKV ships with snapshot isolation and optional detection, similar to Badger’s <code>Txn</code> but with integrated metrics and iterator pooling.</p>
-<hr>
-<h2 id="3-data-structures"><a class="header" href="#3-data-structures">3. Data Structures</a></h2>
-<h3 id="oracle-watermarks"><a class="header" href="#oracle-watermarks">Oracle Watermarks</a></h3>
-<pre><code class="language-text">oracle{
-  nextTxnTs       // next commit timestamp to assign
-  txnMark         // watermark waiting for WAL/vlog durability
-  readMark        // tracks oldest active read timestamp
-  committedTxns[] // sliding window of conflict key sets
+import (
+	"fmt"
+	"log"
+
+	NoKV "github.com/feichai0017/NoKV"
+)
+
+func main() {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = "./workdir-demo"
+
+	db := NoKV.Open(opt)
+	defer db.Close()
+
+	key := []byte("hello")
+	if err := db.Set(key, []byte("world")); err != nil {
+		log.Fatalf("set failed: %v", err)
+	}
+
+	entry, err := db.Get(key)
+	if err != nil {
+		log.Fatalf("get failed: %v", err)
+	}
+	fmt.Printf("value=%s\n", entry.Value)
+	entry.DecrRef()
 }
 </code></pre>
-<ul>
-<li><code>txnMark</code> / <code>readMark</code> are <code>utils.WaterMark</code> instances. They guarantee all writes with timestamp ≤ <code>readTs</code> are durable before a new read snapshot begins, mirroring Badger’s approach to avoid reading half-committed data.</li>
-<li><code>cleanupCommittedTransactions</code> prunes conflict history based on the oldest outstanding read, preventing unbounded memory use.</li>
-</ul>
-<h3 id="txn-state"><a class="header" href="#txn-state">Txn State</a></h3>
-<pre><code class="language-go">type Txn struct {
-    readTs   uint64
-    commitTs uint64
-    pendingWrites map[string]*kv.Entry
-    conflictKeys  map[uint64]struct{}
-    reads         []uint64
-    numIterators  int32
-    discarded     bool
-    update        bool
-}
+<h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
+<p>Micro benchmarks:</p>
+<pre><code class="language-bash">go test -bench=. -run=^$ ./...
 </code></pre>
-<ul>
-<li>Pending writes retain the caller’s entry pointers until commit; NoKV copies values only when moving them into the write batch.</li>
-<li>Read fingerprints use <code>kv.MemHash</code>, so conflict detection is order-independent and compact.</li>
-<li>MVCC versions are encoded in the key suffix (<code>KeyWithTs</code>), matching the LSM’s descending version order.</li>
-</ul>
-<h3 id="iterator-integration"><a class="header" href="#iterator-integration">Iterator Integration</a></h3>
-<ul>
-<li><code>Txn.newPendingWritesIterator</code> materialises staged entries as a sorted slice, allowing transaction iterators to merge them with memtables/SST tables. This ensures <code>Txn.NewIterator</code> sees writes immediately without affecting other snapshots.</li>
-<li><code>Txn.numIterators</code> enforces that all iterators close before commit/discard—helpful for catching resource leaks in tests (<code>txn_iterator_test.go</code>).</li>
-</ul>
-<hr>
-<h2 id="4-commit--error-handling"><a class="header" href="#4-commit--error-handling">4. Commit &amp; Error Handling</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Stage</th><th>Failure Handling</th></tr>
-</thead>
-<tbody>
-<tr><td>Conflict</td><td><code>oracle.newCommitTs</code> returns <code>(0, true)</code>; <code>Txn.Commit</code> surfaces <code>utils.ErrConflict</code> and leaves state untouched.</td></tr>
-<tr><td>Value log append</td><td><code>valueLog.write</code> rewinds via <code>Manager.Rewind</code>; <code>req.Wait</code> returns the error so callers can retry safely.</td></tr>
-<tr><td>WAL append</td><td><code>sendToWriteCh</code> propagates WAL errors; commit watermark is cleared immediately in that case.</td></tr>
-<tr><td>Callback mode</td><td><code>Txn.CommitWith</code> schedules <code>runTxnCallback</code> on a goroutine; user callbacks always execute (success or error).</td></tr>
-</tbody>
-</table>
-</div>
-<p>The final call to <code>Txn.Discard</code> runs regardless of success, marking the read watermark done and decrementing the oracle’s active counter.</p>
-<hr>
-<h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr>
-</thead>
-<tbody>
-<tr><td>Isolation</td><td>Optional (WritePrepared/2PC)</td><td>Snapshot isolation</td><td>Snapshot isolation with <code>WaterMark</code> barriers</td></tr>
-<tr><td>Conflict detection</td><td>External</td><td>Optional optimistic</td><td>Optional optimistic keyed by <code>utils.MemHash</code></td></tr>
-<tr><td>Iterator view</td><td>Snapshot handles, manual merging</td><td>Built-in</td><td>Built-in with pending write iterator</td></tr>
-<tr><td>Metrics</td><td><code>rocksdb.transactions.*</code> when enabled</td><td>Basic stats</td><td><code>NoKV.Txns.*</code> expvar counters + CLI</td></tr>
-</tbody>
-</table>
-</div>
-<p>NoKV inherits Badger’s optimistic concurrency but strengthens durability ordering by coupling commits with the same write pipeline that non-transactional writes use. Compared with RocksDB’s transactional library, the Go implementation remains lightweight and requires no external locks.</p>
-<hr>
-<h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
-<ul>
-<li><strong>Long-running reads</strong>: watch <code>NoKV.Txns.Active</code> and <code>oracle.readMark.DoneUntil()</code>—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.</li>
-<li><strong>Non-transactional APIs</strong>: <code>DB.Set/Get/Del</code> and <code>SetCF/GetCF/DelCF</code> use a MaxUint64 sentinel version for “latest”. Do not mix these writes with MVCC/Txn writes in the same database.</li>
-<li><strong>Managed mode</strong>: exposing <code>Txn.SetEntry</code> with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.</li>
-<li><strong>Throttling</strong>: combine <code>HotRing.TouchAndClamp</code> with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.</li>
-</ul>
-<p>See <a href="testing.html#transactions"><code>docs/testing.md</code></a> for the regression matrix covering conflict detection, iterator semantics, and managed timestamps.</p>
-<hr>
-<h2 id="7-timestamp-sources"><a class="header" href="#7-timestamp-sources">7. Timestamp Sources</a></h2>
-<p>Replica nodes do <strong>not</strong> generate timestamps during TinyKV RPC handling; the values sent in <code>KvPrewrite</code>/<code>KvCommit</code> are applied verbatim. For teaching and prototyping you can pick from two approaches:</p>
-<ul>
-<li>
-<p><strong>Single-client experiments</strong> – choose monotonically increasing integers in your client code (as shown in <code>raftstore/client/client_test.go</code>).</p>
-</li>
-<li>
-<p><strong>Shared allocator</strong> – run the sample TSO service under <code>scripts/tso</code> to hand out globally increasing timestamps:</p>
-<pre><code class="language-bash">go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
-
-# request one timestamp
-curl -s http://127.0.0.1:9494/tso
-# request a batch of 16
-curl -s "http://127.0.0.1:9494/tso?batch=16"
+<p>YCSB (NoKV engine only by default):</p>
+<pre><code class="language-bash">make bench
 </code></pre>
-<p>Each call returns JSON (<code>{"timestamp":123,"count":1}</code>), where <code>timestamp</code> is the first value in the allocated range. Clients can use the first value for <code>startVersion</code>, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.</p>
-</li>
+<p>Override defaults with env vars:</p>
+<pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
+</code></pre>
+<h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
+<p>If a local run crashes or you want a clean slate:</p>
+<pre><code class="language-bash">make clean
+</code></pre>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<ul>
+<li><strong>WAL replay errors after crash</strong>: wipe the workdir and restart the cluster.</li>
+<li><strong>Port conflicts</strong>: adjust addresses in <code>raft_config.example.json</code>.</li>
+<li><strong>Slow startup</strong>: reduce <code>YCSB_RECORDS</code> or <code>YCSB_OPS</code> when benchmarking locally.</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="hotring.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="raftstore.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -349,11 +276,11 @@ curl -s "http://127.0.0.1:9494/tso?batch=16"
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="hotring.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="raftstore.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

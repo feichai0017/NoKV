@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc91a280.js";
+            window.path_to_searchindex_js = "searchindex-37f7e0d0.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e455a035.js"></script>
+        <script src="toc-1acdd229.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,25 +192,42 @@
 
   
 <p>
-    <a href="https://github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/github/stars/feichai0017/NoKV?style=for-the-badge&amp;color=blue" alt="Stars">
+    <!-- Build / Quality -->
+    <a href="https://github.com/feichai0017/NoKV/actions">
+      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
+    </a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV">
+      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
+    </a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
+      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
     </a>
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&amp;logo=go" alt="Go Version">
+      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&amp;logoColor=white" />
     </a>
-    <a href="https://github.com/feichai0017/NoKV/blob/main/LICENSE">
-      <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
+      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
     </a>
   </p>
 
   
 <p>
-    <a href="getting_started.html" style="text-decoration: none;">
-        <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
+    <!-- Meta -->
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&amp;logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV">
+      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
+    </a>
+  </p>
+
+  
+<p>
+    <a href="#getting-started" style="text-decoration: none;">
+      <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
     </a>
       
     <a href="#nokv-architecture-overview" style="text-decoration: none;">
-        <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
+      <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
     </a>
   </p>
 
@@ -293,24 +310,24 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
     Client[Client / Redis] --&gt;|RESP Protocol| Gateway[Redis Gateway]
-    Gateway --&gt;|RaftCmd| RaftStore
-    
-    subgraph "RaftStore (Distributed Layer)"
-        RaftStore --&gt;|Propose| RaftLog[Raft Log (WAL)]
+    Gateway --&gt;|RaftCmd| RaftStoreNode["RaftStore"]
+
+    subgraph RaftStoreLayer["RaftStore (Distributed Layer)"]
+        RaftStoreNode --&gt;|Propose| RaftLog[Raft Log (WAL)]
         RaftLog --&gt;|Consensus| Apply[Apply Worker]
     end
-    
-    subgraph "Storage Engine (LSM)"
+
+    subgraph StorageEngine["Storage Engine (LSM)"]
         Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTable[SSTables (L0-L6)]
-        SSTable --&gt;|Compact| SSTable
-        
+        MemTable --&gt;|Flush| SSTables[SSTables (L0-L6)]
+        SSTables --&gt;|Compact| SSTables
+
         Apply --&gt;|Large Value| VLog[Value Log]
     end
-    
-    subgraph "Cache Layer"
-        BlockCache[Block Cache (Ristretto)] -.-&gt; SSTable
-        IndexCache[Index Cache (W-TinyLFU)] -.-&gt; SSTable
+
+    subgraph CacheLayer["Cache Layer"]
+        BlockCache[Block Cache (Ristretto)] -.-&gt; SSTables
+        IndexCache[Index Cache (W-TinyLFU)] -.-&gt; SSTables
     end
 </pre>
 
@@ -327,6 +344,87 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 <div align="center">
   <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>
 </div>
+
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
+<p>This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a few minutes.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<ul>
+<li>Go 1.24+</li>
+<li>Git</li>
+<li>(Optional) Docker + Docker Compose for containerized runs</li>
+</ul>
+<h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
+<p>This launches a 3-node Raft cluster plus the optional TSO helper.</p>
+<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
+</code></pre>
+<p>Start the Redis-compatible gateway in another shell:</p>
+<pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+</code></pre>
+<p>Quick smoke test:</p>
+<pre><code class="language-bash">redis-cli -p 6380 ping
+</code></pre>
+<h3 id="inspect-stats"><a class="header" href="#inspect-stats">Inspect stats</a></h3>
+<pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
+</code></pre>
+<h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
+<p>This runs the cluster and gateway in containers.</p>
+<pre><code class="language-bash">docker compose up --build
+</code></pre>
+<p>Tear down:</p>
+<pre><code class="language-bash">docker compose down -v
+</code></pre>
+<h2 id="embedded-usage-single-process"><a class="header" href="#embedded-usage-single-process">Embedded Usage (single-process)</a></h2>
+<p>Use NoKV as a library when you do not need raftstore.</p>
+<pre><code class="language-go">package main
+
+import (
+	"fmt"
+	"log"
+
+	NoKV "github.com/feichai0017/NoKV"
+)
+
+func main() {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = "./workdir-demo"
+
+	db := NoKV.Open(opt)
+	defer db.Close()
+
+	key := []byte("hello")
+	if err := db.Set(key, []byte("world")); err != nil {
+		log.Fatalf("set failed: %v", err)
+	}
+
+	entry, err := db.Get(key)
+	if err != nil {
+		log.Fatalf("get failed: %v", err)
+	}
+	fmt.Printf("value=%s\n", entry.Value)
+	entry.DecrRef()
+}
+</code></pre>
+<h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
+<p>Micro benchmarks:</p>
+<pre><code class="language-bash">go test -bench=. -run=^$ ./...
+</code></pre>
+<p>YCSB (NoKV engine only by default):</p>
+<pre><code class="language-bash">make bench
+</code></pre>
+<p>Override defaults with env vars:</p>
+<pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
+</code></pre>
+<h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
+<p>If a local run crashes or you want a clean slate:</p>
+<pre><code class="language-bash">make clean
+</code></pre>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<ul>
+<li><strong>WAL replay errors after crash</strong>: wipe the workdir and restart the cluster.</li>
+<li><strong>Port conflicts</strong>: adjust addresses in <code>raft_config.example.json</code>.</li>
+<li><strong>Slow startup</strong>: reduce <code>YCSB_RECORDS</code> or <code>YCSB_OPS</code> when benchmarking locally.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
 <p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a TinyKv-compatible distributed service. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>

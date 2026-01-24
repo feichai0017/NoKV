@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc91a280.js";
+            window.path_to_searchindex_js = "searchindex-37f7e0d0.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e455a035.js"></script>
+        <script src="toc-1acdd229.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,25 +191,42 @@
 
   
 <p>
-    <a href="https://github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/github/stars/feichai0017/NoKV?style=for-the-badge&amp;color=blue" alt="Stars">
+    <!-- Build / Quality -->
+    <a href="https://github.com/feichai0017/NoKV/actions">
+      <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
+    </a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV">
+      <img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" />
+    </a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV">
+      <img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" />
     </a>
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
-      <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&amp;logo=go" alt="Go Version">
+      <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&amp;logoColor=white" />
     </a>
-    <a href="https://github.com/feichai0017/NoKV/blob/main/LICENSE">
-      <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
+      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
+    </a>
+  </p>
+
+  
+<p>
+    <!-- Meta -->
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&amp;logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV">
+      <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
     </a>
   </p>
 
   
 <p>
     <a href="getting_started.html" style="text-decoration: none;">
-        <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
+      <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
     </a>
       
     <a href="architecture.html" style="text-decoration: none;">
-        <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
+      <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
     </a>
   </p>
 
@@ -292,24 +309,24 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
     Client[Client / Redis] --&gt;|RESP Protocol| Gateway[Redis Gateway]
-    Gateway --&gt;|RaftCmd| RaftStore
-    
-    subgraph "RaftStore (Distributed Layer)"
-        RaftStore --&gt;|Propose| RaftLog[Raft Log (WAL)]
+    Gateway --&gt;|RaftCmd| RaftStoreNode["RaftStore"]
+
+    subgraph RaftStoreLayer["RaftStore (Distributed Layer)"]
+        RaftStoreNode --&gt;|Propose| RaftLog[Raft Log (WAL)]
         RaftLog --&gt;|Consensus| Apply[Apply Worker]
     end
-    
-    subgraph "Storage Engine (LSM)"
+
+    subgraph StorageEngine["Storage Engine (LSM)"]
         Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTable[SSTables (L0-L6)]
-        SSTable --&gt;|Compact| SSTable
-        
+        MemTable --&gt;|Flush| SSTables[SSTables (L0-L6)]
+        SSTables --&gt;|Compact| SSTables
+
         Apply --&gt;|Large Value| VLog[Value Log]
     end
-    
-    subgraph "Cache Layer"
-        BlockCache[Block Cache (Ristretto)] -.-&gt; SSTable
-        IndexCache[Index Cache (W-TinyLFU)] -.-&gt; SSTable
+
+    subgraph CacheLayer["Cache Layer"]
+        BlockCache[Block Cache (Ristretto)] -.-&gt; SSTables
+        IndexCache[Index Cache (W-TinyLFU)] -.-&gt; SSTables
     end
 </pre>
 
@@ -327,12 +344,13 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
   <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>
 </div>
 
+
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="getting_started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -343,7 +361,7 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="getting_started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
