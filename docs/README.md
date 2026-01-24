@@ -110,25 +110,25 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
 
 ```mermaid
 graph TD
-    Client[Client / Redis] -->|RESP Protocol| Gateway[Redis Gateway]
-    Gateway -->|RaftCmd| RaftStoreNode["RaftStore"]
-
-    subgraph RaftStoreLayer["RaftStore Distributed Layer"]
-        RaftStoreNode -->|Propose| RaftLog["Raft Log WAL"]
-        RaftLog -->|Consensus| Apply[Apply Worker]
+    Client["Client / Redis"] -->|RESP Protocol| Gateway["Redis Gateway"]
+    Gateway -->|RaftCmd| RaftStore
+    
+    subgraph "RaftStore (Distributed Layer)"
+        RaftStore -->|Propose| RaftLog["Raft Log (WAL)"]
+        RaftLog -->|Consensus| Apply["Apply Worker"]
     end
-
-    subgraph StorageEngine["Storage Engine LSM"]
+    
+    subgraph "Storage Engine (LSM)"
         Apply -->|Batch Set| MemTable
-        MemTable -->|Flush| SSTables["SSTables L0-L6"]
-        SSTables -->|Compact| SSTables
-
-        Apply -->|Large Value| VLog[Value Log]
+        MemTable -->|Flush| SSTable["SSTables (L0-L6)"]
+        SSTable -->|Compact| SSTable
+        
+        Apply -->|Large Value| VLog["Value Log"]
     end
-
-    subgraph CacheLayer["Cache Layer"]
-        BlockCache[Block Cache (Ristretto)] -.-> SSTables
-        IndexCache[Index Cache (W-TinyLFU)] -.-> SSTables
+    
+    subgraph "Cache Layer"
+        BlockCache["Block Cache (Ristretto)"] -.-> SSTable
+        IndexCache["Index Cache (W-TinyLFU)"] -.-> SSTable
     end
 ```
 
