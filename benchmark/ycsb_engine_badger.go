@@ -84,16 +84,14 @@ func (e *badgerEngine) Read(key []byte, dst []byte) ([]byte, error) {
 }
 
 func (e *badgerEngine) Insert(key, value []byte) error {
-	val := append([]byte(nil), value...)
 	return e.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, val)
+		return txn.Set(key, value)
 	})
 }
 
 func (e *badgerEngine) Update(key, value []byte) error {
-	val := append([]byte(nil), value...)
 	return e.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, val)
+		return txn.Set(key, value)
 	})
 }
 
