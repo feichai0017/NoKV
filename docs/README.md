@@ -58,7 +58,7 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
     <h3 style="margin-top: 0;">🏎️ Extreme Performance</h3>
-    <p><strong>Lock-Free</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs. <strong>io_uring</strong> support for Linux.</p>
+    <p><strong>Lock-light</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs.</p>
   </div>
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
