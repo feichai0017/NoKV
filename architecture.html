@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ec641ed7.js";
+            window.path_to_searchindex_js = "searchindex-ecf3f00e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1acdd229.js"></script>
@@ -221,7 +221,7 @@
 <h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
-<li><code>wal.Manager</code> appends <code>[len|payload|crc]</code> records, rotates segments, and replays logs on crash.</li>
+<li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
 <li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
 <li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
 </ul>
@@ -259,7 +259,7 @@
 <ul>
 <li><code>txn.go</code> exposes MVCC transactions with timestamps from <code>oracle</code>.</li>
 <li><code>percolator</code> package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> simply dispatches Raft commands to these helpers.</li>
-<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.</li>
+<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They have no background goroutine; waiters block on per-index channels while advancement uses a mutex + atomics.</li>
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
 <ul>

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ec641ed7.js";
+            window.path_to_searchindex_js = "searchindex-ecf3f00e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1acdd229.js"></script>
@@ -244,7 +244,7 @@
 <h3 style="margin-top: 0;">🏎️ Extreme Performance</h3>
 
     
-<p><strong>Lock-Free</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs. <strong>io_uring</strong> support for Linux.</p>
+<p><strong>Lock-light</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs.</p>
 
   </div>
 
@@ -469,7 +469,7 @@ func main() {
 <h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
-<li><code>wal.Manager</code> appends <code>[len|payload|crc]</code> records, rotates segments, and replays logs on crash.</li>
+<li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
 <li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
 <li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
 </ul>
@@ -507,7 +507,7 @@ func main() {
 <ul>
 <li><code>txn.go</code> exposes MVCC transactions with timestamps from <code>oracle</code>.</li>
 <li><code>percolator</code> package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> simply dispatches Raft commands to these helpers.</li>
-<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.</li>
+<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They have no background goroutine; waiters block on per-index channels while advancement uses a mutex + atomics.</li>
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
 <ul>
@@ -1265,9 +1265,9 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
     ...
 </code></pre>
 <ul>
-<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/</code>. <a href="../vlog/manager.go#L53-L92"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
 <li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
-<li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go#L76-L125"><code>valueLog.reconcileManifest</code></a>.</li>
+<li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
 </ul>
 <hr>
 <h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
@@ -1315,9 +1315,9 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ol>
-<li><a href="../vlog.go#L238-L268"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/manager.go#L367-L444"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
+<li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
 <li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
-<li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go#L188-L254"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
+<li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
 <li><code>Txn.Commit</code> and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.</li>
 </ol>
 <p>Badger follows the same ordering (value log first, then write batch). RocksDB’s blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.</p>
@@ -1335,7 +1335,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <ul>
 <li><code>lfDiscardStats</code> aggregates per-file discard counts from <code>lsm.FlushTable</code> completion (<code>valueLog.lfDiscardStats.push</code> inside <code>lsm/flush</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
-<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/manager.go#L336-L401"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog.go#L316-L417"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head (using <code>Manager.Append</code>) and then <a href="../vlog.go#L418-L531"><code>valueLog.rewrite</code></a> schedules deletion edits in the manifest.
+<li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>
 <li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
 </ul>
@@ -1347,7 +1347,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <h2 id="6-recovery-semantics"><a class="header" href="#6-recovery-semantics">6. Recovery Semantics</a></h2>
 <ol>
 <li><code>DB.Open</code> restores the manifest and fetches the last persisted head pointer.</li>
-<li><a href="../vlog.go#L175-L224"><code>valueLog.open</code></a> launches <code>flushDiscardStats</code> and iterates every vlog file via <a href="../vlog.go#L706-L866"><code>valueLog.replayLog</code></a>. Files marked invalid in the manifest are removed; valid ones are registered in the manager’s file map.</li>
+<li><a href="../vlog.go"><code>valueLog.open</code></a> launches <code>flushDiscardStats</code> and iterates every vlog file via <a href="../vlog.go"><code>valueLog.replayLog</code></a>. Files marked invalid in the manifest are removed; valid ones are registered in the manager’s file map.</li>
 <li><code>valueLog.replayLog</code> streams entries to validate checksums and trims torn tails; it does <strong>not</strong> reapply data into the LSM. WAL replay remains the sole source of committed state.</li>
 <li><code>Manager.VerifyDir</code> trims torn records so replay never sees corrupt payloads.</li>
 <li>After validation, <code>valueLog.populateDiscardStats</code> rehydrates discard counters from the persisted JSON entry if present.</li>
@@ -1356,8 +1356,8 @@ _ = mgr.Remove(fid)  // close + delete file
 <hr>
 <h2 id="7-observability--cli"><a class="header" href="#7-observability--cli">7. Observability &amp; CLI</a></h2>
 <ul>
-<li>Metrics in <a href="../stats.go#L12-L126"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
-<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/manager.go#L308-L411"><code>vlog.VerifyDir</code></a> before describing segments.</li>
+<li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
 <li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
 </ul>
 <hr>
