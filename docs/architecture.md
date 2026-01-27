@@ -47,7 +47,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ## 2. Embedded Engine
 
 ### 2.1 WAL & MemTable
-- `wal.Manager` appends `[len|payload|crc]` records, rotates segments, and replays logs on crash.
+- `wal.Manager` appends `[len|type|payload|crc]` records (typed WAL), rotates segments, and replays logs on crash.
 - `MemTable` accumulates writes until full, then enters the flush queue; `flush.Manager` runs `Prepare → Build → Install → Release`, logs edits, and releases WAL segments.
 - Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.
 
@@ -82,7 +82,7 @@ flowchart TD
 ### 2.5 MVCC
 - `txn.go` exposes MVCC transactions with timestamps from `oracle`.
 - `percolator` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
-- Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They are synchronous (no goroutine/channel) and advance with a single mutex + atomics to reduce select/cond wait.
+- Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They have no background goroutine; waiters block on per-index channels while advancement uses a mutex + atomics.
 
 ### 2.6 Write Pipeline & Backpressure
 - Writes enqueue into a commit queue (`db_write.go`) where requests are coalesced into batches before a commit worker drains them.

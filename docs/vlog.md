@@ -37,9 +37,9 @@ policy lives in the core package:
     ...
 ```
 
-* Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go#L53-L92) discovers existing segments at open.
+* Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go) discovers existing segments at open.
 * `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
-* Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go#L76-L125).
+* Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go).
 
 ---
 
@@ -98,9 +98,9 @@ sequenceDiagram
     Commit->>Mem: apply to skiplist
 ```
 
-1. [`valueLog.write`](../vlog.go#L238-L268) builds a write mask for each batch, then delegates to [`Manager.AppendEntries`](../vlog/manager.go#L367-L444). Entries staying in LSM (`shouldWriteValueToLSM`) receive zero-value pointers.
+1. [`valueLog.write`](../vlog.go) builds a write mask for each batch, then delegates to [`Manager.AppendEntries`](../vlog/io.go). Entries staying in LSM (`shouldWriteValueToLSM`) receive zero-value pointers.
 2. Rotation is handled inside the manager when the reserved bytes would exceed `MaxSize`. The WAL append happens **after** the value log append so crash replay observes consistent pointers.
-3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go#L188-L254) exercises both append- and rotate-failure paths.
+3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go) exercises both append- and rotate-failure paths.
 4. `Txn.Commit` and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.
 
 Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.
@@ -121,7 +121,7 @@ flowchart LR
 
 * `lfDiscardStats` aggregates per-file discard counts from `lsm.FlushTable` completion (`valueLog.lfDiscardStats.push` inside `lsm/flush`). Once the in-memory counter crosses [`discardStatsFlushThreshold`](../vlog.go#L27), it marshals the map into JSON and writes it back through the DB pipeline under the special key `!NoKV!discard`.
 * `valueLog.flushDiscardStats` consumes those stats, ensuring they are persisted even across crashes. During recovery `valueLog.populateDiscardStats` replays the JSON payload to repopulate the in-memory map.
-* GC uses `discardRatio = discardedBytes/totalBytes` derived from [`Manager.Sample`](../vlog/manager.go#L336-L401), which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog.go#L316-L417) rewrites live entries into the current head (using `Manager.Append`) and then [`valueLog.rewrite`](../vlog.go#L418-L531) schedules deletion edits in the manifest.
+* GC uses `discardRatio = discardedBytes/totalBytes` derived from [`Manager.Sample`](../vlog/io.go), which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog_gc.go) rewrites live entries into the current head via `db.batchSet` (the normal commit pipeline) and then [`valueLog.rewrite`](../vlog_gc.go) triggers manifest delete edits through `removeValueLogFile`.
   * Sampling behaviour is controlled by `Options.ValueLogGCSampleSizeRatio` (default 0.10 of the file) and `Options.ValueLogGCSampleCountRatio` (default 1% of the configured entry limit). Setting either to `<=0` keeps the default heuristics. `Options.ValueLogGCSampleFromHead` starts sampling from the beginning instead of a random window.
 * Completed deletions are logged via `lsm.LogValueLogDelete` so the manifest can skip them during replay. When GC rotates to a new head, `valueLog.updateHead` records the pointer and bumps the `NoKV.ValueLog.HeadUpdates` counter.
 
@@ -132,7 +132,7 @@ RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV
 ## 6. Recovery Semantics
 
 1. `DB.Open` restores the manifest and fetches the last persisted head pointer.
-2. [`valueLog.open`](../vlog.go#L175-L224) launches `flushDiscardStats` and iterates every vlog file via [`valueLog.replayLog`](../vlog.go#L706-L866). Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.
+2. [`valueLog.open`](../vlog.go) launches `flushDiscardStats` and iterates every vlog file via [`valueLog.replayLog`](../vlog.go). Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.
 3. `valueLog.replayLog` streams entries to validate checksums and trims torn tails; it does **not** reapply data into the LSM. WAL replay remains the sole source of committed state.
 4. `Manager.VerifyDir` trims torn records so replay never sees corrupt payloads.
 5. After validation, `valueLog.populateDiscardStats` rehydrates discard counters from the persisted JSON entry if present.
@@ -143,8 +143,8 @@ The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored 
 
 ## 7. Observability & CLI
 
-* Metrics in [`stats.go`](../stats.go#L12-L126) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
-* `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/manager.go#L308-L411) before describing segments.
+* Metrics in [`stats.go`](../stats.go) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
+* `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/io.go) before describing segments.
 * Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable `Options.ValueLogVerbose` to emit replay/GC messages to stdout.
 
 ---
