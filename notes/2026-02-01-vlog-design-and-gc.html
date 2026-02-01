@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting Started - NoKV Docs</title>
+        <title>2026-02-01 vlog design and gc - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fe1861e1.js";
+            window.path_to_searchindex_js = "../searchindex-fe1861e1.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-d8cfaf9e.js"></script>
+        <script src="../toc-d8cfaf9e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,97 +178,191 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
-<p>This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a few minutes.</p>
-<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+                        <h1 id="2026-02-01-vlog-design-and-gc"><a class="header" href="#2026-02-01-vlog-design-and-gc">2026-02-01 vlog design and gc</a></h1>
+<p>本文档详细记录了 NoKV 中 ValueLog 组件的设计思路、核心机制（GC）以及底层文件系统的实现细节。NoKV 采用了类似 BadgerDB 的键值分离（Key-Value Separation）架构，其中 ValueLog 是承载实际数据的主体。</p>
+<hr>
+<h2 id="1-核心架构三层洋葱模型"><a class="header" href="#1-核心架构三层洋葱模型">1. 核心架构：三层洋葱模型</a></h2>
+<p>ValueLog 的实现采用了典型的分层架构，自顶向下分为三层：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">层级</th><th style="text-align: left">模块/文件</th><th style="text-align: left">核心职责</th><th style="text-align: left">关键技术</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>业务逻辑层</strong></td><td style="text-align: left"><code>vlog.go</code></td><td style="text-align: left">负责 GC 调度、垃圾统计 (Discard Stats)、与 LSM 的交互（索引重建）</td><td style="text-align: left">协程调度, 统计聚合</td></tr>
+<tr><td style="text-align: left"><strong>文件管理层</strong></td><td style="text-align: left"><code>vlog/manager.go</code></td><td style="text-align: left">管理 <code>.vlog</code> 文件集合，处理文件轮转 (Rotation)、ID 映射、并发引用</td><td style="text-align: left">读写锁, 原子计数 (Pinning)</td></tr>
+<tr><td style="text-align: left"><strong>底层 IO 层</strong></td><td style="text-align: left"><code>file/</code> (<code>mmap</code>)</td><td style="text-align: left">封装 OS 文件操作，提供高性能的内存映射读写接口</td><td style="text-align: left"><code>mmap</code>, <code>msync</code>, Zero-Copy</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="架构示意图-mermaid"><a class="header" href="#架构示意图-mermaid">架构示意图 (Mermaid)</a></h3>
+<pre class="mermaid">graph TD
+    subgraph "LSM Tree (Keys)"
+        LSM[LSM Components] --&gt;|ValuePtr| VLogPtr[Value Pointer]
+    end
+
+    subgraph "ValueLog Subsystem"
+        VLog[vlog.go&lt;br&gt;(Coordinator)]
+        Mgr[vlog/manager.go&lt;br&gt;(Segment Manager)]
+        
+        subgraph "Physical Files (.vlog)"
+            F1[00001.vlog&lt;br&gt;(Sealed)]
+            F2[00002.vlog&lt;br&gt;(Sealed)]
+            F3[00003.vlog&lt;br&gt;(Active)]
+        end
+        
+        VLog --&gt;|Write/GC| Mgr
+        Mgr --&gt;|Append| F3
+        Mgr --&gt;|Read| F1
+        Mgr --&gt;|Read| F2
+    end
+
+    LSM -.-&gt;|Points to| F1
+    LSM -.-&gt;|Points to| F2
+    LSM -.-&gt;|Points to| F3
+</pre>
+
+<hr>
+<h2 id="2-底层文件系统设计-file"><a class="header" href="#2-底层文件系统设计-file">2. 底层文件系统设计 (<code>file/</code>)</a></h2>
+<p>NoKV 放弃了标准的 <code>read/write</code> 系统调用，全面采用 <strong>Memory Mapped Files (mmap)</strong>。</p>
+<h3 id="21-为什么选择-mmap"><a class="header" href="#21-为什么选择-mmap">2.1 为什么选择 mmap？</a></h3>
 <ul>
-<li>Go 1.24+</li>
-<li>Git</li>
-<li>(Optional) Docker + Docker Compose for containerized runs</li>
+<li><strong>极致读性能</strong>：读取文件等同于访问内存数组 (<code>data[offset : offset+len]</code>)。实现了用户态的 <strong>Zero Copy</strong>（零拷贝），避免了内核到用户空间的 buffer拷贝。</li>
+<li><strong>简化 IO 逻辑</strong>：不需要处理复杂的 <code>seek</code> 和 <code>read</code> 循环，由操作系统负责缺页加载（Page Fault）。</li>
 </ul>
-<h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus the optional TSO helper.</p>
-<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
-</code></pre>
-<p>Start the Redis-compatible gateway in another shell:</p>
-<pre><code class="language-bash">go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
-</code></pre>
-<p>Quick smoke test:</p>
-<pre><code class="language-bash">redis-cli -p 6380 ping
-</code></pre>
-<h3 id="inspect-stats"><a class="header" href="#inspect-stats">Inspect stats</a></h3>
-<pre><code class="language-bash">go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
-</code></pre>
-<h2 id="option-b-docker-compose"><a class="header" href="#option-b-docker-compose">Option B: Docker Compose</a></h2>
-<p>This runs the cluster and gateway in containers.</p>
-<pre><code class="language-bash">docker compose up --build
-</code></pre>
-<p>Tear down:</p>
-<pre><code class="language-bash">docker compose down -v
-</code></pre>
-<h2 id="embedded-usage-single-process"><a class="header" href="#embedded-usage-single-process">Embedded Usage (single-process)</a></h2>
-<p>Use NoKV as a library when you do not need raftstore.</p>
-<pre><code class="language-go">package main
-
-import (
-	"fmt"
-	"log"
-
-	NoKV "github.com/feichai0017/NoKV"
-)
-
-func main() {
-	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = "./workdir-demo"
-
-	db := NoKV.Open(opt)
-	defer db.Close()
-
-	key := []byte("hello")
-	if err := db.Set(key, []byte("world")); err != nil {
-		log.Fatalf("set failed: %v", err)
-	}
-
-	entry, err := db.Get(key)
-	if err != nil {
-		log.Fatalf("get failed: %v", err)
-	}
-	fmt.Printf("value=%s\n", entry.Value)
-	entry.DecrRef()
-}
-</code></pre>
-<h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
-<p>Micro benchmarks:</p>
-<pre><code class="language-bash">go test -bench=. -run=^$ ./...
-</code></pre>
-<p>YCSB (NoKV engine only by default):</p>
-<pre><code class="language-bash">make bench
-</code></pre>
-<p>Override defaults with env vars:</p>
-<pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
-</code></pre>
-<h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
-<p>If a local run crashes or you want a clean slate:</p>
-<pre><code class="language-bash">make clean
-</code></pre>
-<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<h3 id="22-实现细节-filemmap_go"><a class="header" href="#22-实现细节-filemmap_go">2.2 实现细节 (<code>file/mmap_*.go</code>)</a></h3>
 <ul>
-<li><strong>WAL replay errors after crash</strong>: wipe the workdir and restart the cluster.</li>
-<li><strong>Port conflicts</strong>: adjust addresses in <code>raft_config.example.json</code>.</li>
-<li><strong>Slow startup</strong>: reduce <code>YCSB_RECORDS</code> or <code>YCSB_OPS</code> when benchmarking locally.</li>
+<li><strong>写入 (Append)</strong>：直接 <code>copy</code> 数据到映射的 byte slice 中。</li>
+<li><strong>扩容 (Truncate &amp; Remap)</strong>：
+<ul>
+<li><code>mmap</code> 映射区域大小固定。</li>
+<li>当空间不足时，调用 <code>ftruncate</code> 增大物理文件 -&gt; <code>munmap</code> 解除映射 -&gt; <code>mmap</code> 重新映射更大的空间。</li>
+<li><strong>优化</strong>：通常预分配一定大小（如 1GB）以减少重映射带来的性能抖动。</li>
 </ul>
+</li>
+<li><strong>持久化 (Sync)</strong>：调用 <code>msync</code>，强制脏页（Dirty Pages）刷盘。</li>
+</ul>
+<hr>
+<h2 id="3-文件管理与并发控制-vlogmanagergo"><a class="header" href="#3-文件管理与并发控制-vlogmanagergo">3. 文件管理与并发控制 (<code>vlog/manager.go</code>)</a></h2>
+<h3 id="31-文件分片-segmentation"><a class="header" href="#31-文件分片-segmentation">3.1 文件分片 (Segmentation)</a></h3>
+<p>数据被切分为多个固定大小（配置项 <code>ValueLogFileSize</code>）的 Segment 文件。</p>
+<ul>
+<li><strong>Active Segment</strong>：当前唯一可写的头部文件。</li>
+<li><strong>Sealed Segment</strong>：写满后转为只读（逻辑上），等待 GC 或读取。</li>
+</ul>
+<h3 id="32-并发安全机制-pinning"><a class="header" href="#32-并发安全机制-pinning">3.2 并发安全机制 (Pinning)</a></h3>
+<p>为了防止在 <strong>GC 删除文件</strong> 时，仍有 <strong>读请求</strong> 访问该文件，NoKV 实现了一套基于原子计数的引用保护机制。</p>
+<ul>
+<li><strong>Pin (加锁)</strong>：读请求开始时，<code>atomic.AddInt32(&amp;pinCount, 1)</code>。</li>
+<li><strong>Unpin (解锁)</strong>：读请求结束时，<code>atomic.AddInt32(&amp;pinCount, -1)</code>。</li>
+<li><strong>Wait (阻塞)</strong>：GC 线程在删除文件前，调用 <code>waitForNoPins()</code>，阻塞直到 <code>pinCount</code> 归零。</li>
+</ul>
+<hr>
+<h2 id="4-垃圾回收-gc-设计"><a class="header" href="#4-垃圾回收-gc-设计">4. 垃圾回收 (GC) 设计</a></h2>
+<p>由于 LSM Tree 只能删除 Key 的索引，ValueLog 中的旧数据（无效 Value）会永久占用磁盘。GC 是 KV 分离架构中最关键的一环。</p>
+<h3 id="41-核心策略重写-rewrite"><a class="header" href="#41-核心策略重写-rewrite">4.1 核心策略：重写 (Rewrite)</a></h3>
+<p>NoKV 不支持在文件中间“打洞”删除，而是采用 <strong>“采样搬运 + 整体删除”</strong> 的策略。</p>
+<h3 id="42-gc-流程图"><a class="header" href="#42-gc-流程图">4.2 GC 流程图</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant GC as GC Thread
+    participant Stats as Discard Stats
+    participant OldFile as Old Segment (Fid: 10)
+    participant LSM as LSM Tree
+    participant NewFile as Active Segment
+
+    Note over GC, Stats: 1. 选妃 (Pick Candidate)
+    GC-&gt;&gt;Stats: 查询垃圾最多的文件
+    Stats--&gt;&gt;GC: 推荐 Fid: 10
+
+    Note over GC, OldFile: 2. 验货 (Sampling)
+    GC-&gt;&gt;OldFile: 随机读取 10% 数据
+    GC-&gt;&gt;LSM: 检查 Key 是否存活?
+    LSM--&gt;&gt;GC: 返回 Key 状态
+    
+    alt 垃圾比例 &gt; 阈值
+        Note over GC, NewFile: 3. 搬家 (Rewrite)
+        loop 遍历整个文件
+            GC-&gt;&gt;OldFile: 读取 Entry
+            GC-&gt;&gt;LSM: Double Check (并发安全检查)
+            alt 指针仍指向 OldFile
+                GC-&gt;&gt;NewFile: Append (作为新数据写入)
+                GC-&gt;&gt;LSM: 更新 Key 指向新地址
+            else 指针已变更
+                Note right of GC: 数据已被用户更新，丢弃
+            end
+        end
+        
+        Note over GC, OldFile: 4. 拆迁 (Delete)
+        GC-&gt;&gt;OldFile: WaitForNoPins()
+        GC-&gt;&gt;OldFile: rm 00010.vlog
+    else 垃圾比例低
+        Note right of GC: 放弃，稍后再试
+    end
+</pre>
+
+<h3 id="43-关键设计心得"><a class="header" href="#43-关键设计心得">4.3 关键设计心得</a></h3>
+<ol>
+<li><strong>Discard Stats (垃圾统计)</strong>：
+<ul>
+<li>每次 LSM Compaction 丢弃 Key 时，都会记录对应的 ValueLog 文件 ID 增加了多少垃圾。</li>
+<li>统计信息定期持久化到内部 Key <code>!badger!discard</code> 中，防止重启丢失。</li>
+</ul>
+</li>
+<li><strong>并发更新保护</strong>：
+<ul>
+<li>在 GC 搬运数据的瞬间，用户可能并发更新了该 Key。</li>
+<li><strong>解决方案</strong>：GC 在写入新值前，再次检查 LSM Tree。如果发现 LSM 中的 ValuePtr 已经指向了<strong>更新的文件</strong>（Fid 更大）或<strong>更新的偏移量</strong>，说明用户抢先更新了，GC 放弃搬运旧值，保证了数据一致性。</li>
+</ul>
+</li>
+<li><strong>IO 优化</strong>：
+<ul>
+<li>利用 <code>mmap</code> 进行快速采样。</li>
+<li>只有在确信“有大量垃圾”时才执行昂贵的全文件扫描和重写。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="5-总结"><a class="header" href="#5-总结">5. 总结</a></h2>
+<p>NoKV 的 ValueLog 设计在<strong>工程实现</strong>上做出了以下权衡：</p>
+<ul>
+<li><strong>空间换时间</strong>：允许一定的磁盘空间浪费（GC 阈值），换取极高的写入性能（顺序写）。</li>
+<li><strong>复杂性换性能</strong>：引入了复杂的 GC 机制和并发引用计数，换取了 KV 分离带来的 LSM 写放大降低（Write Amplification Reduction）。</li>
+<li><strong>OS 亲和性</strong>：充分利用 <code>mmap</code> 和 Page Cache，减少了用户态的内存拷贝和缓冲管理开销。</li>
+</ul>
+<hr>
+<h2 id="6-未来展望kv-分离架构的前沿演进"><a class="header" href="#6-未来展望kv-分离架构的前沿演进">6. 未来展望：KV 分离架构的前沿演进</a></h2>
+<p>对于 KV 分离（Key-Value Separation）存储架构，NoKV 目前处于“经典 WiscKey 实现”的阶段。针对 Range Scan 性能差和 GC 开销大这两大痛点，以下是 NoKV 未来演进的方向：</p>
+<h3 id="61-优化-gc-开销从盲目追加到冷热分离"><a class="header" href="#61-优化-gc-开销从盲目追加到冷热分离">6.1 优化 GC 开销：从“盲目追加”到“冷热分离”</a></h3>
+<p><strong>现状</strong>：NoKV 目前是简单的 Append-Only，冷热数据混杂在同一个 Vlog 文件中，导致 GC 时需要重复搬运冷数据。</p>
+<p><strong>演进方向（参考 HashKV）</strong>：</p>
+<ul>
+<li><strong>Hash 分区</strong>：根据 <code>Hash(Key)</code> 将 Value 写入不同的 Partition。</li>
+<li><strong>收益</strong>：同一个 Key 的历史版本集中在特定分区。更新频繁的 Key 所在分区变脏极快，GC 时可能直接删除整个分区文件，实现“零搬运”回收。</li>
+</ul>
+<h3 id="62-优化范围查询小-value-内联-inlining"><a class="header" href="#62-优化范围查询小-value-内联-inlining">6.2 优化范围查询：小 Value 内联 (Inlining)</a></h3>
+<p><strong>现状</strong>：无论 Value 多小都会分离，导致 Range Scan 时产生大量随机 I/O。</p>
+<p><strong>演进方向（参考 RocksDB BlobDB）</strong>：</p>
+<ul>
+<li><strong>阈值控制</strong>：引入 <code>min_blob_size</code> 参数（如 1KB）。</li>
+<li><strong>逻辑</strong>：小于 1KB 的 Value 直接存入 SSTable（In-place），大于 1KB 的才进入 ValueLog。</li>
+<li><strong>收益</strong>：在 YCSB-Scan 场景下，由于小对象随 Key 顺序读取，性能将获得质的提升。</li>
+</ul>
+<h3 id="63-硬件协同zns-ssd-与-nvm"><a class="header" href="#63-硬件协同zns-ssd-与-nvm">6.3 硬件协同：ZNS SSD 与 NVM</a></h3>
+<ul>
+<li><strong>ZNS (Zoned Namespace) SSD</strong>：利用其顺序写的物理特性，消除 SSD 内部的 FTL GC，实现底层层面的零写放大。</li>
+<li><strong>NVM (非易失内存)</strong>：将 VLog 的索引或 L0/L1 层存放在 NVM，极大降低元数据访问延迟。</li>
+</ul>
+<h3 id="64-nokv-的独特地位"><a class="header" href="#64-nokv-的独特地位">6.4 NoKV 的独特地位</a></h3>
+<p>NoKV 目前的 <strong>WiscKey + HotRing</strong> 组合已经解决了一个经典痛点：LSM 在热点访问下的倾斜问题。未来通过引入 <strong>小对象内联</strong> 和 <strong>冷热分区</strong>，NoKV 将进化为更具竞争力的工业级分布式存储引擎。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-01-16-hotring-design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -276,13 +370,10 @@ func main() {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-01-16-hotring-design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
@@ -300,16 +391,16 @@ func main() {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 
