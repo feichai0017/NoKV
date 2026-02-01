@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-faf775e8.js";
+            window.path_to_searchindex_js = "searchindex-4ab2608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-d8cfaf9e.js"></script>
@@ -2652,12 +2652,12 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
         Limiter[Write Limiter]
     end
     
-    DB --&gt;|1. Touch(key)| Tracker
-    Tracker --&gt;|2. Update Counters| Window
-    Decay -.-&gt;|3. Age Out| Window
+    DB --&gt;|"1. Touch(key)"| Tracker
+    Tracker --&gt;|"2. Update Counters"| Window
+    Decay -.-&gt;|"3. Age Out"| Window
     
-    Tracker -.-&gt;|4. TopN Report| LSM
-    LSM --&gt;|5. Hot Hint| Cache
+    Tracker -.-&gt;|"4. TopN Report"| LSM
+    LSM --&gt;|"5. Hot Hint"| Cache
     
     style Tracker fill:#f9f,stroke:#333
     style Cache fill:#ff9,stroke:#333
