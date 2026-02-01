@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fe1861e1.js";
+            window.path_to_searchindex_js = "../searchindex-faf775e8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-d8cfaf9e.js"></script>
@@ -179,41 +179,141 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
-<p>这条记录和之前的 mmap choice 一样，是一份偏叙述的 note，用来讲 HotRing 的设计动机、交互流程以及我对它的理解。它不是一个“理论最优”的结构，但它足够轻、足够快，也足够实用。</p>
-<h2 id="设计动机"><a class="header" href="#设计动机">设计动机</a></h2>
-<p>在 LSM 系统里，热点通常不是均匀分布的，一小撮 key 会持续放大缓存抖动、读放大和写冲突。HotRing 的定位就是把这种热点快速“变成可见”，让我们能在监控、限流、调优时快速找到真正的热源，而不是只看到一堆模糊的全局指标。</p>
-<h2 id="交互逻辑"><a class="header" href="#交互逻辑">交互逻辑</a></h2>
-<p>HotRing 并不改变读写路径，只是以旁路的方式记录访问频次。读请求成功命中后调用 Touch，写请求在启用了 WriteHotKeyLimit 时调用 TouchAndClamp。统计系统定期拉取 TopN，CLI 可以直接显示热点。</p>
-<pre class="mermaid">flowchart LR
-  R[Read path] --&gt; L[LSM lookup]
-  L --&gt; H[HotRing.Touch]
-  W[Write path] --&gt; C[HotRing.TouchAndClamp]
-  H --&gt; B[Bucket list update]
-  C --&gt; B
-  B --&gt; S[TopN snapshot]
-  S --&gt; X[Stats/CLI/Debug]
+<p>本文档详细记录了 NoKV 中 <code>hotring</code> 模块的设计灵感、架构定位、核心实现以及未来展望。这是一个从学术论文汲取灵感，并转化为工业级“热点探测器”的典型案例。</p>
+<hr>
+<h2 id="1-设计灵感取其神而弃其形"><a class="header" href="#1-设计灵感取其神而弃其形">1. 设计灵感：取其神而弃其形</a></h2>
+<p><strong>来源</strong>：<a href="https://www.usenix.org/conference/fast20/presentation/chen-jiqiang">HotRing: A Hotspot-Aware In-Memory Key-Value Store (FAST ’20)</a></p>
+<h3 id="11-论文解决的痛点"><a class="header" href="#11-论文解决的痛点">1.1 论文解决的痛点</a></h3>
+<p>在传统的 Hash 索引（链地址法）中，如果链表很长且热点数据位于链表尾部，每次访问热点都需要遍历大量冷数据，造成严重的 CPU Cache Miss 和长尾延迟。HotRing 提出将链表改为<strong>环形结构</strong>，并让 Head 指针智能指向热点节点，从而实现 $O(1)$ 的热点访问。</p>
+<h3 id="12-nokv-的工程转化"><a class="header" href="#12-nokv-的工程转化">1.2 NoKV 的工程转化</a></h3>
+<p>NoKV 并没有照搬论文作为主索引（因为主索引是 LSM Tree），而是提取了 <strong>“热点感知”</strong> 这一核心思想，设计了一个<strong>轻量级、旁路式</strong>的热点统计模块。</p>
+<ul>
+<li><strong>差异点</strong>：
+<ul>
+<li><strong>定位</strong>：论文是存数据的<strong>索引</strong>；NoKV 是记账的<strong>统计器</strong>。</li>
+<li><strong>结构</strong>：论文是<strong>环形链表 + 智能指针</strong>；NoKV 是<strong>分片 Hash + 有序链表 + 滑动窗口</strong>。</li>
+</ul>
+</li>
+<li><strong>核心价值</strong>：在百万级 QPS 下，以极低的开销（无锁、旁路）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。</li>
+</ul>
+<hr>
+<h2 id="2-核心架构反馈驱动设计-feedback-driven"><a class="header" href="#2-核心架构反馈驱动设计-feedback-driven">2. 核心架构：反馈驱动设计 (Feedback-Driven)</a></h2>
+<p>NoKV 的 HotRing 不仅仅是一个统计工具，它是整个系统“自适应优化”的大脑。</p>
+<h3 id="21-架构全景图"><a class="header" href="#21-架构全景图">2.1 架构全景图</a></h3>
+<pre class="mermaid">graph TD
+    Client[Client Request] --&gt; DB[DB Layer]
+    
+    subgraph "HotRing Subsystem (The Brain)"
+        Tracker[Hot Key Tracker]
+        Window[Sliding Window]
+        Decay[Decay Loop]
+    end
+    
+    subgraph "Execution Layer"
+        LSM[LSM Tree]
+        Cache[Block Cache]
+        Limiter[Write Limiter]
+    end
+    
+    DB --&gt;|1. Touch(key)| Tracker
+    Tracker --&gt;|2. Update Counters| Window
+    Decay -.-&gt;|3. Age Out| Window
+    
+    Tracker -.-&gt;|4. TopN Report| LSM
+    LSM --&gt;|5. Hot Hint| Cache
+    
+    style Tracker fill:#f9f,stroke:#333
+    style Cache fill:#ff9,stroke:#333
 </pre>
 
-<h2 id="示例代码"><a class="header" href="#示例代码">示例代码</a></h2>
-<pre><code class="language-go">ring := hotring.NewHotRing(12, nil)
-ring.EnableSlidingWindow(8, 250*time.Millisecond)
-ring.EnableDecay(time.Second, 1)
-
-ring.Touch("user:42")
-count, limited := ring.TouchAndClamp("user:42", 128)
-if limited {
-    // 可以记录告警，或触发写入限流
-    _ = count
+<h3 id="22-关键交互流程"><a class="header" href="#22-关键交互流程">2.2 关键交互流程</a></h3>
+<ol>
+<li><strong>探测 (Probe)</strong>：读写请求到达 DB 层时，旁路调用 <code>HotRing.Touch(key)</code>。</li>
+<li><strong>计算 (Compute)</strong>：HotRing 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
+<li><strong>反馈 (Feedback)</strong>：
+<ul>
+<li><strong>缓存联动</strong>：DB 定期将 TopN 热点推送给 LSM Tree。当加载 Block 时，如果发现包含热点 Key，则打上 <code>HotHint</code> 标记，将其直接晋升到 <strong>VIP 热区缓存 (Clock-Pro Hot Cache)</strong>，防止被冷数据逐出。</li>
+<li><strong>写入限流</strong>：对于写频率过高的 Key，<code>TouchAndClamp</code> 会触发限流保护。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="3-实现细节深度解析"><a class="header" href="#3-实现细节深度解析">3. 实现细节深度解析</a></h2>
+<h3 id="31-数据结构无锁分片哈希"><a class="header" href="#31-数据结构无锁分片哈希">3.1 数据结构：无锁分片哈希</a></h3>
+<p>为了支撑高并发，HotRing 采用了极致的无锁设计。</p>
+<ul>
+<li><strong>Sharding</strong>：顶层是一个 <code>atomic.Pointer[Node]</code> 数组（Buckets），减少竞争。</li>
+<li><strong>Ordered List</strong>：链表节点按 <code>(Tag, Key)</code> 排序。
+<ul>
+<li><strong>优势</strong>：查找失败可以提前终止（Fail Fast），无需遍历全链表。</li>
+</ul>
+</li>
+<li><strong>CAS Insertion</strong>：
+<pre><code class="language-go">// 伪代码：无锁插入
+for {
+    prev, curr := findPosition(bucket, key)
+    if prev.CompareAndSwapNext(curr, newNode) {
+        return success
+    }
+    // CAS 失败说明有并发修改，重试
 }
-
-hot := ring.TopN(16)
-_ = hot
 </code></pre>
-<h2 id="结构直觉与实现选择"><a class="header" href="#结构直觉与实现选择">结构直觉与实现选择</a></h2>
-<p>HotRing 的内部是“固定桶 + 有序链表”。key 先哈希到桶，然后在桶内按 tag + key 排序。读路径无锁，写路径使用 CAS 插入节点，避免全局锁带来的抖动。它没有引入复杂的近似结构，而是尽量保持数据结构简单，让它能长期存在于读写路径上而不成为负担。</p>
-<p>时间语义方面它提供了两种手段：滑动窗口让突发热点迅速出现，衰减机制让历史热点自然淡出，这两者叠加后，结果更符合“实际热度”的直觉。</p>
-<h2 id="个人心得"><a class="header" href="#个人心得">个人心得</a></h2>
-<p>HotRing 最有意思的点不是“聪明”，而是“够用且稳定”。它把热点从不可见变成可见，又不会因为自己太复杂而制造新的热点。很多时候工程上真正需要的是“一个很快能工作的热键探测器”，而不是一个理论上更漂亮、但成本更高的结构。</p>
+</li>
+</ul>
+<h3 id="32-统计算法滑动窗口与衰减"><a class="header" href="#32-统计算法滑动窗口与衰减">3.2 统计算法：滑动窗口与衰减</a></h3>
+<p>如何区分“历史热点”和“突发热点”？</p>
+<ol>
+<li><strong>滑动窗口 (Sliding Window)</strong>：
+<ul>
+<li>将时间切分为多个 Slot（如 8 个 Slot，每个 250ms）。</li>
+<li><code>Touch</code> 时根据 <code>Timestamp % Slots</code> 写入对应 Slot。</li>
+<li><strong>效果</strong>：能够精准反映“最近 2 秒”的热度，过期数据自动失效。</li>
+</ul>
+</li>
+<li><strong>衰减 (Decay)</strong>：
+<ul>
+<li>后台协程定期将所有 Counter 右移一位（<code>count &gt;&gt; 1</code>）。</li>
+<li><strong>效果</strong>：模拟热度的“半衰期”，让不再访问的旧热点逐渐冷却。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="4-实际应用场景"><a class="header" href="#4-实际应用场景">4. 实际应用场景</a></h2>
+<h3 id="41-可观测性-observability"><a class="header" href="#41-可观测性-observability">4.1 可观测性 (Observability)</a></h3>
+<p>运维人员可以通过 CLI 实时查看系统热点，瞬间定位“谁在打挂数据库”。</p>
+<pre><code class="language-bash">$ nokv stats --hot-keys
+Top 5 Hot Keys (Last 5s):
+1. "sku:1001" - 52,000 QPS
+2. "user:888" - 12,000 QPS
+</code></pre>
+<h3 id="42-缓存保活-cache-pinning"><a class="header" href="#42-缓存保活-cache-pinning">4.2 缓存保活 (Cache Pinning)</a></h3>
+<p>这是 NoKV 最精妙的设计。</p>
+<ul>
+<li><strong>问题</strong>：全表扫描（Scan）往往会把 Block Cache 里的热点数据挤出去（Cache Pollution）。</li>
+<li><strong>解法</strong>：通过 HotRing 识别出的热点 Block，进入 Cache 时自带“免死金牌”（进入 Clock-Pro 的 Hot 区域），无论 Scan 怎么扫，VIP 热点不受影响。</li>
+</ul>
+<hr>
+<h2 id="5-未来展望"><a class="header" href="#5-未来展望">5. 未来展望</a></h2>
+<p>基于目前的 HotRing 基础，NoKV 未来可以实现更高级的特性：</p>
+<ol>
+<li><strong>写吸收 (Write Absorption)</strong>：
+<ul>
+<li>对于超高频写入的热点（如计数器），可以在内存中聚合 100 次更新为 1 次 VLog 写入，大幅降低 LSM 写放大。</li>
+</ul>
+</li>
+<li><strong>动态数据迁移</strong>：
+<ul>
+<li>在分布式场景下，发现某个 Region 出现热点，自动触发 Region Split 或将该热点 Key 迁移到专用节点。</li>
+</ul>
+</li>
+<li><strong>智能索引优化</strong>：
+<ul>
+<li>对于长期热点，甚至可以考虑将其 Value 直接内联到内存索引中（LSM MemTable 不刷盘），实现真正的 In-Memory 性能。</li>
+</ul>
+</li>
+</ol>
+<h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
+<p>NoKV 的 <code>hotring</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用最简单的无锁结构解决了工程中最头疼的<strong>缓存污染</strong>和<strong>监控盲区</strong>问题。</p>
 
                     </main>
 

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fe1861e1.js";
+            window.path_to_searchindex_js = "../searchindex-faf775e8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-d8cfaf9e.js"></script>
@@ -202,13 +202,13 @@
     end
 
     subgraph "ValueLog Subsystem"
-        VLog[vlog.go&lt;br&gt;(Coordinator)]
-        Mgr[vlog/manager.go&lt;br&gt;(Segment Manager)]
+        VLog["vlog.go&lt;br&gt;(Coordinator)"]
+        Mgr["vlog/manager.go&lt;br&gt;(Segment Manager)"]
         
         subgraph "Physical Files (.vlog)"
-            F1[00001.vlog&lt;br&gt;(Sealed)]
-            F2[00002.vlog&lt;br&gt;(Sealed)]
-            F3[00003.vlog&lt;br&gt;(Active)]
+            F1["00001.vlog&lt;br&gt;(Sealed)"]
+            F2["00002.vlog&lt;br&gt;(Sealed)"]
+            F3["00003.vlog&lt;br&gt;(Active)"]
         end
         
         VLog --&gt;|Write/GC| Mgr
