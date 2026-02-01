@@ -23,13 +23,13 @@ graph TD
     end
 
     subgraph "ValueLog Subsystem"
-        VLog[vlog.go<br>(Coordinator)]
-        Mgr[vlog/manager.go<br>(Segment Manager)]
+        VLog["vlog.go<br>(Coordinator)"]
+        Mgr["vlog/manager.go<br>(Segment Manager)"]
         
         subgraph "Physical Files (.vlog)"
-            F1[00001.vlog<br>(Sealed)]
-            F2[00002.vlog<br>(Sealed)]
-            F3[00003.vlog<br>(Active)]
+            F1["00001.vlog<br>(Sealed)"]
+            F2["00002.vlog<br>(Sealed)"]
+            F3["00003.vlog<br>(Active)"]
         end
         
         VLog -->|Write/GC| Mgr
