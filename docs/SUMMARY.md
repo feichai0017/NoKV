@@ -25,3 +25,4 @@
 - [Notes](notes/README.md)
   - [2026-01-16 mmap choice](notes/2026-01-16-mmap-choice.md)
   - [2026-01-16 hotring design](notes/2026-01-16-hotring-design.md)
+  - [2026-02-01 vlog design and gc](notes/2026-02-01-vlog-design-and-gc.md)
