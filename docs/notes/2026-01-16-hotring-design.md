@@ -43,12 +43,12 @@ graph TD
         Limiter[Write Limiter]
     end
     
-    DB -->|1. Touch(key)| Tracker
-    Tracker -->|2. Update Counters| Window
-    Decay -.->|3. Age Out| Window
+    DB -->|"1. Touch(key)"| Tracker
+    Tracker -->|"2. Update Counters"| Window
+    Decay -.->|"3. Age Out"| Window
     
-    Tracker -.->|4. TopN Report| LSM
-    LSM -->|5. Hot Hint| Cache
+    Tracker -.->|"4. TopN Report"| LSM
+    LSM -->|"5. Hot Hint"| Cache
     
     style Tracker fill:#f9f,stroke:#333
     style Cache fill:#ff9,stroke:#333
