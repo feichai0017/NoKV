@@ -1,52 +1,106 @@
 # 2026-01-16 mmap choice
 
-这是一些碎碎念记录，想把 mmap 的选择理由写得清楚一些，尤其是围绕 SSTable 和 VLog 的定义、使用场景和读写交互逻辑。
+本文档详细对比了主流文件 I/O 模型的差异，并解析 NoKV 在不同组件（SSTable, WAL, VLog）中做出不同 I/O 选择的深层原因与权衡。
 
-## 概念与定位
+## 1. I/O 模型的四国杀
 
-SSTable 是 LSM 的核心持久化文件，按 key 有序且不可变，内部由索引、数据块与过滤器等结构组成，因此它在读路径里几乎无处不在。VLog 则用于存放较大的 value，写入时顺序追加，LSM 内只保存 value pointer，读取时再回查 VLog。用一句话概括就是：SSTable 读密集且不可变，VLog 顺序写但读是随机的。
+在 Linux/Unix 环境下，我们在设计存储引擎时通常面临四种选择。理解它们的优劣是做出正确架构决策的前提。
 
-## 读写交互逻辑
+| 特性 | 标准 I/O (`read`/`write`) | 内存映射 (`mmap`) | 直接 I/O (`O_DIRECT`) | 异步 I/O (`io_uring`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **机制** | 系统调用，数据在 Kernel Buffer 和 User Buffer 间拷贝 | 建立虚拟内存映射，缺页中断加载，**零拷贝** | 绕过 Page Cache，直接 DMA 到用户内存 | 提交请求队列，内核异步完成，零系统调用开销 |
+| **优势** | 简单，通用，Page Cache 自动预读 | **读延迟极低** (像访问内存一样)，代码简单 | **完全可控** (内存/刷盘)，无 GC 干扰 | 吞吐量极高，CPU 占用低 |
+| **痛点** | **拷贝开销** (CPU copy)，高频调用 Context Switch | **不可控** (Page Fault 阻塞，TLB shootdown)，大文件污染 Cache | **复杂** (需自建 Buffer Pool，对齐限制) | **极复杂** (编程模型完全不同) |
+| **适用** | 日志追加 (WAL) | 只读索引，随机小读 (SSTable) | 数据库自管理缓存 (MySQL, ScyllaDB) | 超高并发网络/磁盘 IO |
 
-下面这张图展示了写入与读取的主要交互路径，重点是读路径几乎一定触达 SSTable，而 VLog 只在 value 外置时才参与。
+---
+
+## 2. NoKV 的选择：因地制宜
+
+NoKV 没有“一种 IO 走天下”，而是根据不同组件的访问模式（Access Pattern）选择了最适合的方案。
+
+### 2.1 SSTable：坚定选择 `mmap`
+
+SSTable 是 LSM Tree 的数据文件，具有 **不可变 (Immutable)** 和 **随机读 (Random Read)** 的特性。
+
+*   **痛点**：如果用标准 `pread`，每次 `Get(key)` 都要发起一次系统调用。在 100k QPS 下，上下文切换（Context Switch）的开销是巨大的。
+*   **mmap 的解法**：
+    *   **零拷贝**：数据直接映射到用户空间，`slice = data[offset:len]`，没有 `memcpy`。
+    *   **零系统调用**：热点数据如果在物理内存中，读取就是纯内存访问，纳秒级延迟。
+    *   **OS 帮我管缓存**：利用操作系统的 Page Cache 管理热点，不用自己写复杂的 LRU Cache。
+
+### 2.2 WAL：回归标准 `os.File` + `bufio`
+
+WAL (Write Ahead Log) 是 **顺序追加 (Append Only)** 且 **持久化敏感** 的。
+
+*   **mmap 的痛点**：
+    *   **文件扩容麻烦**：mmap 需要预先 `ftruncate` 占位，写满了要 `remap`，这在追写场景下很笨重。
+    *   **落盘不可控**：虽然有 `msync`，但 OS 何时把 Dirty Page 刷盘是不确定的。对于要求 `fsync` 严格落盘的 WAL，标准 IO 更可控。
+*   **NoKV 的选择**：使用标准 I/O 配合 `bufio.Writer`。
+    *   `bufio` 提供了用户态缓冲，减少了 `write` 系统调用次数。
+    *   `fsync` 语义清晰，确保数据不丢。
+
+### 2.3 ValueLog：目前的妥协 (mmap)
+
+ValueLog 也是 **顺序写**，但面临 **随机读**（KV 分离查询时）。
+
+*   **现状**：NoKV 目前对 VLog 也使用了 `mmap`。
+*   **原因**：
+    1.  **代码统一**：复用 SSTable 的底层 `file` 包封装。
+    2.  **读取便利**：VLog 的读取通常是离散的，`mmap` 提供的切片访问非常方便接口设计。
+*   **潜在痛点 (Trade-off)**：
+    *   **Page Cache 污染**：VLog 文件通常很大（几十 GB），如果对 VLog 进行大范围扫描或 Compaction，`mmap` 会导致大量冷数据涌入 Page Cache，把 SSTable 的热点数据挤出去。
+    *   **未来优化方向**：业界（如 Badger）倾向于对 VLog 使用 `pread` (Standard IO) 甚至 `O_DIRECT`，以避免污染 OS 缓存。NoKV 未来可能会引入 `madvise(MADV_RANDOM)` 或切换到 `pread` 来优化这一点。
+
+---
+
+## 3. 读写交互逻辑图
+
+下面这张图展示了不同 IO 模型在 NoKV 读写流中的位置：
 
 ```mermaid
-flowchart LR
-  W[Write] --> M[Memtable + WAL]
-  M --> C{Value large?}
-  C -- no --> I[Inline value]
-  C -- yes --> V[Append to VLog]
-  V --> P[Store ValuePtr]
-  M --> F[Flush/Compaction]
-  F --> S[SSTable]
-
-  R[Read] --> Q[Memtable/LSM search]
-  Q --> T{Inline?}
-  T -- yes --> U[Return value]
-  T -- no --> G[ValuePtr -> VLog read]
-  G --> U
+flowchart TD
+    subgraph "Write Path"
+        Mem[MemTable]
+        WAL[WAL (Standard IO)]
+        Flush[Flush/Compact]
+    end
+    
+    subgraph "Persistence"
+        SST[SSTable (mmap)]
+        VLog[ValueLog (mmap)]
+    end
+    
+    Write[Set(k, v)] --> Mem
+    Write --> WAL
+    
+    Mem -->|Full| Flush
+    Flush -->|Small Values| SST
+    Flush -->|Large Values| VLog
+    
+    subgraph "Read Path"
+        Get[Get(k)]
+        LSM[LSM Search]
+        
+        Get --> LSM
+        LSM -->|1. Index Lookups| SST
+        SST -->|2. Zero Copy Read| Kernel[Page Cache]
+        
+        LSM -->|3. ValuePtr Found| VLog
+        VLog -->|4. Random Read| Kernel
+    end
+    
+    style WAL fill:#f9f,stroke:#333,stroke-width:2px
+    style SST fill:#bfb,stroke:#333,stroke-width:2px
+    style VLog fill:#bfb,stroke:#333,stroke-width:2px
 ```
 
-## IO 方案对比的直观理解
+## 4. 总结
 
-mmap 的核心优势是随机读成本低，系统调用少，而且读取可以直接落在 OS 的页缓存路径上；但它的缺点也很明确，RSS 和 page cache 不可控，写入必须处理好 msync 语义，并且跨平台细节差异较多。相比之下，pread 或 buffered read 配合自建 cache 更容易控制内存和行为，但会引入额外拷贝和系统调用成本。direct I/O 能绕过 page cache，避免污染，但工程复杂度高，并且在随机读场景并不总是更快。
+NoKV 的 I/O 选型策略是 **“读写分治，稳定为王”**：
 
-## 为什么 SSTable 更适合 mmap
+1.  **读密集 (SST)**：选 `mmap`，榨干内存带宽，减少 CPU 开销。
+2.  **写敏感 (WAL)**：选 `Standard IO`，确保数据安全和追加性能。
+3.  **大容量 (VLog)**：目前选 `mmap` (工程便利)，保留向 `pread` 演进的可能 (防止缓存污染)。
 
-SSTable 不可变且读取频繁，映射稳定，很少需要 remap，这使得 mmap 的工程成本低而收益明显。加上读路径以随机读为主，mmap 能把很多读转化成轻量页缺失，配合 OS 的页缓存形成自然的热点命中。因此在 SSTable 上采用 mmap 通常是可预期且合理的选择。
-
-## 为什么我们在 VLog 上也用了 mmap
-
-我们目前的实现方式是让 VLog 直接走 mmap，这样读路径可以用 Bytes/View 直接得到切片，写入也可以通过 mmap buffer 追加并配合 msync 落盘，这让实现保持简洁并与 SSTable 的风格一致。代价在于 VLog 文件往往更大，随机读更分散，page cache 污染风险显著更高，RSS 波动也更容易出现。如果 value 的冷热分布不稳定，mmap 带来的缓存收益不一定能抵消它的副作用。
-
-## 与 Badger 的思路对比
-
-Badger 更倾向于把 mmap 用在 SSTable，而在 VLog 上偏向 FileIO 或 pread，目的就是减少大文件对页缓存的冲击，让热点集中在 SSTable 的 block 上。它也提供了可配置的模式，但整体倾向体现了一个理念：热点应主要由 SSTable 驱动，VLog 更应该谨慎消耗 page cache。
-
-## Linux 侧的 IO 选择
-
-在 Linux 上我们可以组合使用多种 IO 手段，比如常规的 read/pread/write，以及 mmap 配合 madvise 提示访问模式，也可以用 posix_fadvise 或 readahead 做预读提示；如果需要更细粒度控制，还可以使用 O_DIRECT 进行 direct I/O，或者基于 io_uring 做异步 IO。我们在 file 包中已经实现了一个基础的 io_uring 框架，后续如果要做更强的异步读写或并发调度，可以基于它扩展。
-
-## 小结
-
-SSTable 的读密集与不可变特性让 mmap 成为一个相对稳妥的默认选择，而 VLog 的大文件与随机读特性让 mmap 的代价更明显。当前实现偏向工程简化，但从长期来看，VLog 可能更适合 pread + 小型缓存的策略，并在热点稳定时再开放 mmap 作为可选模式。
+理解这些权衡，是掌握存储引擎底层性能优化的关键。

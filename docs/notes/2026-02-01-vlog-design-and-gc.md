@@ -47,7 +47,7 @@ graph TD
 
 ## 2. 底层文件系统设计 (`file/`)
 
-NoKV 放弃了标准的 `read/write` 系统调用，全面采用 **Memory Mapped Files (mmap)**。
+NoKV 放弃了标准的 `read/write` 系统调用，全面采用 **Memory Mapped Files (mmap)** 来管理 VLog。
 
 ### 2.1 为什么选择 mmap？
 *   **极致读性能**：读取文件等同于访问内存数组 (`data[offset : offset+len]`)。实现了用户态的 **Zero Copy**（零拷贝），避免了内核到用户空间的 buffer拷贝。
@@ -58,8 +58,7 @@ NoKV 放弃了标准的 `read/write` 系统调用，全面采用 **Memory Mapped
 *   **扩容 (Truncate & Remap)**：
     *   `mmap` 映射区域大小固定。
     *   当空间不足时，调用 `ftruncate` 增大物理文件 -> `munmap` 解除映射 -> `mmap` 重新映射更大的空间。
-    *   **优化**：通常预分配一定大小（如 1GB）以减少重映射带来的性能抖动。
-*   **持久化 (Sync)**：调用 `msync`，强制脏页（Dirty Pages）刷盘。
+*   **持久化 (Sync)**：NoKV 的 WAL 使用标准 IO (bufio) 以保证持久性，而 VLog 默认依赖 OS 刷盘。只有当 `SyncWrites` 开启时，VLog 才会显式调用 `msync`。
 
 ---
 
@@ -67,8 +66,7 @@ NoKV 放弃了标准的 `read/write` 系统调用，全面采用 **Memory Mapped
 
 ### 3.1 文件分片 (Segmentation)
 数据被切分为多个固定大小（配置项 `ValueLogFileSize`）的 Segment 文件。
-*   **Active Segment**：当前唯一可写的头部文件。
-*   **Sealed Segment**：写满后转为只读（逻辑上），等待 GC 或读取。
+*   **Manifest 维护**：VLog 的生命周期（Head 指针、删除操作）通过 Manifest 文件进行持久化，而不是仅依赖扫描目录。这保证了崩溃恢复的一致性。
 
 ### 3.2 并发安全机制 (Pinning)
 为了防止在 **GC 删除文件** 时，仍有 **读请求** 访问该文件，NoKV 实现了一套基于原子计数的引用保护机制。
@@ -127,15 +125,14 @@ sequenceDiagram
 ```
 
 ### 4.3 关键设计心得
-1.  **Discard Stats (垃圾统计)**：
+1.  **Value Threshold (阈值控制)**：
+    *   并非所有 Value 都进 VLog。默认只有大于 **1KB** (`utils.DefaultValueThreshold`) 的 Value 才会分离。小 Value 依然内联在 LSM Tree 中，以优化小对象的 Range Scan 性能。
+2.  **Discard Stats (垃圾统计)**：
     *   每次 LSM Compaction 丢弃 Key 时，都会记录对应的 ValueLog 文件 ID 增加了多少垃圾。
-    *   统计信息定期持久化到内部 Key `!badger!discard` 中，防止重启丢失。
-2.  **并发更新保护**：
+    *   统计信息定期持久化到内部 Key `!NoKV!discard` 中，防止重启丢失。
+3.  **并发更新保护**：
     *   在 GC 搬运数据的瞬间，用户可能并发更新了该 Key。
     *   **解决方案**：GC 在写入新值前，再次检查 LSM Tree。如果发现 LSM 中的 ValuePtr 已经指向了**更新的文件**（Fid 更大）或**更新的偏移量**，说明用户抢先更新了，GC 放弃搬运旧值，保证了数据一致性。
-3.  **IO 优化**：
-    *   利用 `mmap` 进行快速采样。
-    *   只有在确信“有大量垃圾”时才执行昂贵的全文件扫描和重写。
 
 ---
 
@@ -161,11 +158,10 @@ NoKV 的 ValueLog 设计在**工程实现**上做出了以下权衡：
 *   **收益**：同一个 Key 的历史版本集中在特定分区。更新频繁的 Key 所在分区变脏极快，GC 时可能直接删除整个分区文件，实现“零搬运”回收。
 
 ### 6.2 优化范围查询：小 Value 内联 (Inlining)
-**现状**：无论 Value 多小都会分离，导致 Range Scan 时产生大量随机 I/O。
+**现状**：虽然已有阈值控制，但中等大小的 Value 依然会导致 Scan 性能下降。
 
 **演进方向（参考 RocksDB BlobDB）**：
-*   **阈值控制**：引入 `min_blob_size` 参数（如 1KB）。
-*   **逻辑**：小于 1KB 的 Value 直接存入 SSTable（In-place），大于 1KB 的才进入 ValueLog。
+*   **更灵活的阈值**：动态调整 `min_blob_size`。
 *   **收益**：在 YCSB-Scan 场景下，由于小对象随 Key 顺序读取，性能将获得质的提升。
 
 ### 6.3 硬件协同：ZNS SSD 与 NVM

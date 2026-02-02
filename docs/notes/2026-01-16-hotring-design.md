@@ -17,7 +17,7 @@ NoKV 并没有照搬论文作为主索引（因为主索引是 LSM Tree），而
 *   **差异点**：
     *   **定位**：论文是存数据的**索引**；NoKV 是记账的**统计器**。
     *   **结构**：论文是**环形链表 + 智能指针**；NoKV 是**分片 Hash + 有序链表 + 滑动窗口**。
-*   **核心价值**：在百万级 QPS 下，以极低的开销（无锁、旁路）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。
+*   **核心价值**：在百万级 QPS 下，以极低的开销（Lock-Free List）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。
 
 ---
 
@@ -40,6 +40,7 @@ graph TD
     subgraph "Execution Layer"
         LSM[LSM Tree]
         Cache[Block Cache]
+        Compaction[Compaction Picker]
         Limiter[Write Limiter]
     end
     
@@ -47,41 +48,32 @@ graph TD
     Tracker -->|"2. Update Counters"| Window
     Decay -.->|"3. Age Out"| Window
     
-    Tracker -.->|"4. TopN Report"| LSM
-    LSM -->|"5. Hot Hint"| Cache
-    
-    style Tracker fill:#f9f,stroke:#333
-    style Cache fill:#ff9,stroke:#333
+    Tracker -.->|"4. TopN Report"| Compaction
+    Compaction -->|"5. Hot Score"| LSM
 ```
 
 ### 2.2 关键交互流程
-1.  **探测 (Probe)**：读写请求到达 DB 层时，旁路调用 `HotRing.Touch(key)`。
+1.  **探测 (Probe)**：
+    *   **读路径**：每次 `Get` 命中时调用 `Touch`。
+    *   **写路径**：只有当启用了限流（`WriteHotKeyLimit`）或突发检测时，才会调用 `TouchAndClamp`。
 2.  **计算 (Compute)**：HotRing 内部利用**滑动窗口**算法计算实时 QPS。
 3.  **反馈 (Feedback)**：
-    *   **缓存联动**：DB 定期将 TopN 热点推送给 LSM Tree。当加载 Block 时，如果发现包含热点 Key，则打上 `HotHint` 标记，将其直接晋升到 **VIP 热区缓存 (Clock-Pro Hot Cache)**，防止被冷数据逐出。
+    *   **Compaction 评分**：`lsm/compact` 在选择压缩层级时，会参考 `HotRing.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
+    *   **缓存预取 (Prefetch)**：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。
     *   **写入限流**：对于写频率过高的 Key，`TouchAndClamp` 会触发限流保护。
 
 ---
 
 ## 3. 实现细节深度解析
 
-### 3.1 数据结构：无锁分片哈希
-为了支撑高并发，HotRing 采用了极致的无锁设计。
+### 3.1 并发控制：Lock-Free 与 Spin-Lock
+为了支撑高并发，HotRing 采用了混合并发策略：
 
-*   **Sharding**：顶层是一个 `atomic.Pointer[Node]` 数组（Buckets），减少竞争。
-*   **Ordered List**：链表节点按 `(Tag, Key)` 排序。
-    *   **优势**：查找失败可以提前终止（Fail Fast），无需遍历全链表。
-*   **CAS Insertion**：
-    ```go
-    // 伪代码：无锁插入
-    for {
-        prev, curr := findPosition(bucket, key)
-        if prev.CompareAndSwapNext(curr, newNode) {
-            return success
-        }
-        // CAS 失败说明有并发修改，重试
-    }
-    ```
+*   **主链表 (Buckets & List)**：采用 **Lock-Free** 的 CAS 操作进行节点插入。
+    *   **Ordered List**：链表节点按 `(Tag, Key)` 排序，查找失败可提前终止。
+*   **滑动窗口 (Window Counters)**：由于涉及复杂的窗口滚动和数组更新，使用了轻量级的 **Spin-Lock (自旋锁)** 保护。
+    *   `node.lockWindow()`: `CAS(&lock, 0, 1)`。
+*   **衰减 (Decay)**：后台协程定期衰减时，会有互斥锁保护 `decayMu`，但实际的计数器衰减是原子操作。
 
 ### 3.2 统计算法：滑动窗口与衰减
 如何区分“历史热点”和“突发热点”？
@@ -101,16 +93,17 @@ graph TD
 ### 4.1 可观测性 (Observability)
 运维人员可以通过 CLI 实时查看系统热点，瞬间定位“谁在打挂数据库”。
 ```bash
-$ nokv stats --hot-keys
-Top 5 Hot Keys (Last 5s):
-1. "sku:1001" - 52,000 QPS
-2. "user:888" - 12,000 QPS
+# 使用 stats 命令查看
+$ go run cmd/nokv/main.go stats --workdir ./work_test
+...
+Hot Keys:
+  key: user:1001, count: 52000
+  key: config:global, count: 12000
 ```
 
-### 4.2 缓存保活 (Cache Pinning)
-这是 NoKV 最精妙的设计。
-*   **问题**：全表扫描（Scan）往往会把 Block Cache 里的热点数据挤出去（Cache Pollution）。
-*   **解法**：通过 HotRing 识别出的热点 Block，进入 Cache 时自带“免死金牌”（进入 Clock-Pro 的 Hot 区域），无论 Scan 怎么扫，VIP 热点不受影响。
+### 4.2 缓存与性能 (Performance)
+*   **VIP 缓存区 (Hot Tier)**：LSM Cache 内部维护了一个小型的 `Clock-Pro` 缓存（Hot Tier）。虽然它不是绝对的“免死金牌”（仍可能被更热的数据挤出），但它为热点 Block 提供了比普通 LRU 更强的保护。
+*   **热点压缩优先**：通过 HotRing 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。
 
 ---
 
@@ -122,9 +115,7 @@ Top 5 Hot Keys (Last 5s):
     *   对于超高频写入的热点（如计数器），可以在内存中聚合 100 次更新为 1 次 VLog 写入，大幅降低 LSM 写放大。
 2.  **动态数据迁移**：
     *   在分布式场景下，发现某个 Region 出现热点，自动触发 Region Split 或将该热点 Key 迁移到专用节点。
-3.  **智能索引优化**：
-    *   对于长期热点，甚至可以考虑将其 Value 直接内联到内存索引中（LSM MemTable 不刷盘），实现真正的 In-Memory 性能。
 
 ## 6. 总结
 
-NoKV 的 `hotring` 是一个 **“学术灵感 + 工程务实”** 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用最简单的无锁结构解决了工程中最头疼的**缓存污染**和**监控盲区**问题。
+NoKV 的 `hotring` 是一个 **“学术灵感 + 工程务实”** 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的**监控盲区**问题，并成功反哺了 Compaction 调度。
