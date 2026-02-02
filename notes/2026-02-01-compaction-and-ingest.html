@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Stats - NoKV Docs</title>
+        <title>2026-02-01 compaction and ingest - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ef9bec81.js";
+            window.path_to_searchindex_js = "../searchindex-ef9bec81.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-55d6ed17.js"></script>
+        <script src="../toc-55d6ed17.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,131 +178,149 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="stats--observability-pipeline"><a class="header" href="#stats--observability-pipeline">Stats &amp; Observability Pipeline</a></h1>
-<p>NoKV exposes internal health via the Go <code>expvar</code> package and the <code>nokv stats</code> CLI. The statistics subsystem is implemented in <a href="../stats.go"><code>stats.go</code></a> and runs continuously once the DB is open.</p>
+                        <h1 id="2026-02-01-compaction-and-ingest"><a class="header" href="#2026-02-01-compaction-and-ingest">2026-02-01 compaction and ingest</a></h1>
+<p>本文档深入解析 NoKV 的 <strong>Compaction（压缩）</strong> 机制与 <strong>Ingest Buffer（导入缓冲）</strong> 的协同设计。这是 NoKV 解决 LSM Tree 经典的“写停顿（Write Stall）”问题的核心武器，也是体现其工业级稳定性的关键设计。</p>
 <hr>
-<h2 id="1-architecture"><a class="header" href="#1-architecture">1. Architecture</a></h2>
-<pre class="mermaid">flowchart TD
-    subgraph Collectors
-        Flush[lsm.FlushMetrics]
-        Levels[lsm.CompactionStats]
-        VLog[valueLog.metrics]
-        WAL[wal.Manager.Metrics]
-        Txn[oracle.txnMetricsSnapshot]
-        Cache[lsm.CacheMetrics]
-        Hot[hotring.TopN]
-    end
-    Collectors --&gt; Stats
-    Stats --&gt;|expvar publish| Runtime
-    Stats --&gt;|Snapshot| CLI
-</pre>
+<h2 id="1-设计理念拒绝写停顿"><a class="header" href="#1-设计理念拒绝写停顿">1. 设计理念：拒绝“写停顿”</a></h2>
+<p>在 LSM Tree 架构中，数据从 MemTable 刷入 L0 层。由于 L0 层的 SSTable 之间 Key 是重叠的，当 L0 文件数量达到上限（如 15 个）时，必须触发 L0 -&gt; L1 的 Compaction。</p>
+<ul>
+<li><strong>传统痛点</strong>：L0 -&gt; L1 的 Compaction 需要将 L0 文件与 L1 中所有重叠的文件读出，进行归并排序（Merge Sort），然后重写。这个过程涉及大量 IO 和 CPU，耗时较长。</li>
+<li><strong>后果</strong>：如果写入速度超过了 L0 -&gt; L1 的压缩速度，L0 就会被填满，系统被迫触发 <strong>Write Stall</strong>（限制甚至停止写入），导致严重的性能抖动。</li>
+</ul>
+<p><strong>NoKV 的哲学</strong>：</p>
+<blockquote>
+<p><strong>“先收下，再整理。”</strong>
+当 L0 拥堵时，不要阻塞写入去等待漫长的排序，而是先把 L0 的文件“甩”给下一层，让下一层暂时“保管”，等有空了再慢慢整理。</p>
+</blockquote>
+<hr>
+<h2 id="2-核心组件ingest-buffer"><a class="header" href="#2-核心组件ingest-buffer">2. 核心组件：Ingest Buffer</a></h2>
+<p>为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：<strong>Ingest Buffer</strong>。</p>
+<h3 id="21-结构定义-lsmingestgo"><a class="header" href="#21-结构定义-lsmingestgo">2.1 结构定义 (<code>lsm/ingest.go</code>)</a></h3>
+<p>它不是一个简单的队列，而是一个<strong>分片化</strong>的容器：</p>
+<pre><code class="language-go">type ingestBuffer struct {
+    shards []ingestShard // 默认 4 个分片
+}
 
-<ul>
-<li><code>newStats</code> wires together reusable <code>expvar.Int/Float</code> gauges (avoiding duplicates if the process restarts an embedded DB).</li>
-<li><code>Stats.StartStats</code> launches a goroutine that ticks every 5s (configurable via <code>Stats.interval</code>) to refresh values.</li>
-<li><code>Stats.Snapshot</code> can be called on-demand (e.g. CLI) without mutating expvar state.</li>
-</ul>
-<hr>
-<h2 id="2-snapshot-fields"><a class="header" href="#2-snapshot-fields">2. Snapshot Fields</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Source</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Entries</code></td><td><code>lsm.EntryCount()</code></td><td>Total MVCC entries (L0-Ln + memtables). Mirrors <code>Stats.EntryNum</code> for backwards compat.</td></tr>
-<tr><td><code>FlushPending/Queue/Active</code></td><td><code>lsm.FlushMetrics()</code></td><td>Pending immutables, queue length, workers currently building SSTs.</td></tr>
-<tr><td><code>FlushWait/Build/ReleaseMs</code></td><td>Derived from <code>WaitNs/BuildNs/ReleaseNs</code> averages</td><td>End-to-end latency of flush pipeline stages.</td></tr>
-<tr><td><code>CompactionBacklog/MaxScore</code></td><td><code>lsm.CompactionStats()</code></td><td>How many level files await compaction and the hottest score.</td></tr>
-<tr><td><code>ValueLogSegments/PendingDel/DiscardQueue/Head</code></td><td><code>valueLog.metrics()</code></td><td>Tracks vlog utilisation and GC backlog.</td></tr>
-<tr><td><code>WALActiveSegment/SegmentCount/Removed/ActiveSize</code></td><td><code>wal.Manager.Metrics()</code></td><td>Observes WAL rotation cadence and current segment byte usage (pairs with raft lag metrics).</td></tr>
-<tr><td><code>WALTypedRecordRatio/Warning/Reason</code></td><td>WAL backlog watchdog (<code>Stats.Snapshot</code>)</td><td>Tracks ratio of raft typed records in the WAL and surfaces warnings with reasons when exceeding thresholds.</td></tr>
-<tr><td><code>WALAutoGCRuns/Removed/LastUnix</code></td><td>WAL backlog watchdog</td><td>Automated WAL GC passes, total segments removed, and the Unix timestamp of the last run.</td></tr>
-<tr><td><code>WriteQueueDepth/Entries/Bytes</code></td><td><code>writeMetrics.snapshot()</code></td><td>Size of the asynchronous write queue.</td></tr>
-<tr><td><code>WriteAvg*</code></td><td><code>writeMetrics</code> averages</td><td>Request wait times, vlog latency, apply latency.</td></tr>
-<tr><td><code>WriteBatchesTotal</code></td><td><code>writeMetrics</code></td><td>Lifetime batches processed.</td></tr>
-<tr><td><code>HotWriteLimited</code></td><td><code>db.hotWriteLimited</code></td><td>Number of write attempts rejected by <code>Options.WriteHotKeyLimit</code> (HotRing write throttling).</td></tr>
-<tr><td><code>WriteThrottleActive</code></td><td><code>db.blockWrites</code></td><td>Indicates when writes are being throttled.</td></tr>
-<tr><td><code>TxnsActive/Started/Committed/Conflicts</code></td><td><code>oracle.txnMetricsSnapshot()</code></td><td>MVCC activity counters.</td></tr>
-<tr><td><code>HotKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot key counts.</td></tr>
-<tr><td><code>BlockL0/L1/BloomHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>Block and bloom cache hit ratios.</td></tr>
-<tr><td><code>IndexHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>SST 索引块缓存命中率。</td></tr>
-<tr><td><code>IteratorReused</code></td><td><code>iteratorPool.reused()</code></td><td>Frequency of iterator pooling hits.</td></tr>
-<tr><td><code>RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning</code></td><td><code>manifest.RaftPointerSnapshot()</code></td><td>Tracks follower backlogs; <code>LagWarnThreshold</code> comes from <code>Options.RaftLagWarnSegments</code>, and <code>RaftLagWarning</code> toggles when any group exceeds it.</td></tr>
-<tr><td><code>RegionTotal/New/Running/Removing/Tombstone/Other</code></td><td><code>store.RegionMetrics</code></td><td>Multi-Raft region state distribution. CLI attaches the first available <code>RegionMetrics</code> by default; pass <code>--no-region-metrics</code> to disable.</td></tr>
-</tbody>
-</table>
-</div>
-<p>All values are exported under the <code>NoKV.*</code> namespace via expvar (see <code>newStats</code>).</p>
-<hr>
-<h2 id="3-cli--json-output"><a class="header" href="#3-cli--json-output">3. CLI &amp; JSON Output</a></h2>
-<ul>
-<li><code>nokv stats --workdir &lt;dir&gt;</code> prints a human-readable table (queue lengths, throughput, hot keys, region totals). It automatically attaches <code>RegionMetrics</code> when available; add <code>--no-region-metrics</code> to produce a manifest-only snapshot.</li>
-<li>When <code>RaftLagWarning=true</code> the CLI emits an extra <code>Raft.Warning</code> line; it also surfaces <code>Regions.Total (...)</code> so operators can quickly gauge Region lifecycle health.</li>
-<li><code>nokv stats --json</code> emits the raw snapshot for automation. Example snippet:</li>
-</ul>
-<pre><code class="language-json">{
-  "entries": 1048576,
-  "flush_queue_length": 2,
-  "vlog_head": {"fid": 5, "offset": 184320},
-  "hot_keys": [{"key": "user:123", "count": 42}]
+type ingestShard struct {
+    tables    []*table   // 暂存在这里的 SSTable 列表
+    ranges    []tableRange // 对应的 Key 范围索引
 }
 </code></pre>
-<p>The CLI internally instantiates a read-only DB handle, calls <code>Stats.Snapshot</code>, and formats the response—no background goroutine is needed.</p>
-<hr>
-<h2 id="4-integration-with-other-modules"><a class="header" href="#4-integration-with-other-modules">4. Integration with Other Modules</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Module</th><th>Contribution</th></tr>
-</thead>
-<tbody>
-<tr><td>WAL</td><td><code>wal.Manager.Metrics()</code> counts active/removable segments, aiding post-recovery validation.</td></tr>
-<tr><td>Value Log</td><td><code>valueLog.metrics()</code> exposes GC backlog, enabling alerting when discard queues stall.</td></tr>
-<tr><td>HotRing</td><td>Publishes hot key JSON via expvar so dashboards can visualise top offenders.</td></tr>
-<tr><td>Transactions</td><td>Oracle counters help gauge contention (high conflicts → tune workload).</td></tr>
-<tr><td>Cache</td><td>Hit rates clarify whether cache sizing (hot/cold tier) needs adjustment.</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Engine</th><th>Observability</th></tr>
-</thead>
-<tbody>
-<tr><td>RocksDB</td><td><code>iostats</code>, <code>perf_context</code>, <code>ldb</code> commands. Requires manual parsing.</td></tr>
-<tr><td>Badger</td><td>Prometheus metrics (optional).</td></tr>
-<tr><td>NoKV</td><td>Built-in expvar gauges + CLI + recovery trace toggles.</td></tr>
-</tbody>
-</table>
-</div>
-<p>NoKV emphasises zero-dependency observability. Everything is consumable via HTTP <code>/debug/vars</code> or the CLI, making it easy to integrate with Go services.</p>
-<hr>
-<h2 id="6-operational-guidance"><a class="header" href="#6-operational-guidance">6. Operational Guidance</a></h2>
 <ul>
-<li>Watch <code>FlushQueueLength</code> and <code>CompactionBacklog</code> together—if both grow, increase flush workers or adjust level sizes.</li>
-<li><code>ValueLogDiscardQueue &gt; 0</code> for extended periods indicates GC is blocked; inspect <code>NoKV.ValueLog.GcRuns</code> and consider tuning thresholds.</li>
-<li><code>WriteThrottleActive</code> toggling frequently suggests L0 is overwhelmed; cross-check <code>BlockL0HitRate</code> and compaction metrics.</li>
-<li><code>HotWriteLimited</code> climbing steadily means HotRing write throttling is firing—surface <code>utils.ErrHotKeyWriteThrottle</code> to clients and investigate abusive keys via the <code>HotKeys</code> list.</li>
-<li><code>RaftLagWarning</code> toggling to <code>true</code> means at least one follower lags the leader by more than <code>Options.RaftLagWarnSegments</code>; inspect <code>Raft.Warning</code> from the CLI and consider snapshot resend or throttling the offending node.</li>
-<li><code>Regions.Total</code> should match the expected cluster topology; sustained <code>Removing/Tombstone</code> counts indicate stalled cleanup—investigate split/merge logic or stuck replicas.</li>
+<li><strong>分片 (Sharding)</strong>：根据 Key 的前缀将暂存的表分配到不同的 Shard。</li>
+<li><strong>并行性</strong>：这允许后台的多个 Compactor 线程并行地处理不同 Key 范围的积压数据。</li>
 </ul>
-<p>Refer to <a href="testing.html#4-observability-in-tests"><code>docs/testing.md</code></a> for scripted checks that validate stats during CI runs.</p>
+<hr>
+<h2 id="3-交互逻辑救火与还债"><a class="header" href="#3-交互逻辑救火与还债">3. 交互逻辑：救火与还债</a></h2>
+<p>NoKV 的 Compaction 流程被设计为“快慢双轨”制。</p>
+<h3 id="31-快路径l0-溢出卸载-offloading"><a class="header" href="#31-快路径l0-溢出卸载-offloading">3.1 快路径：L0 溢出卸载 (Offloading)</a></h3>
+<p>这是应对 Write Stall 的“救火”机制。</p>
+<ul>
+<li><strong>触发</strong>：L0 文件数过多。</li>
+<li><strong>动作 (<code>moveToIngest</code>)</strong>：
+<ol>
+<li>不进行数据合并。</li>
+<li>直接将 L0 的 SSTable 文件从 L0 列表中移除。</li>
+<li>将这些文件加入到 L1 的 <code>Ingest Buffer</code> 中。</li>
+</ol>
+</li>
+<li><strong>代价</strong>：纯元数据操作，<strong>微秒级</strong>完成。</li>
+<li><strong>结果</strong>：L0 瞬间清空，写停顿解除。L1 暂时持有这些未排序的文件。</li>
+</ul>
+<pre class="mermaid">graph TD
+    subgraph "Before: L0 Congested"
+        L0[L0: 15 SSTables (Full)]
+        L1[L1: Sorted SSTables]
+    end
+    
+    subgraph "Action: Offload (Fast)"
+        Move[Move to Ingest]
+    end
+    
+    subgraph "After: L0 Empty"
+        L0_New[L0: Empty]
+        L1_New[L1: Sorted SSTables]
+        L1_Ingest[L1 Ingest Buffer: 15 Unsorted Tables]
+    end
+    
+    L0 --&gt; Move --&gt; L1_Ingest
+</pre>
+
+<h3 id="32-慢路径后台异步归并-merge"><a class="header" href="#32-慢路径后台异步归并-merge">3.2 慢路径：后台异步归并 (Merge)</a></h3>
+<p>这是“还债”机制，确保存储结构的最终有序性。</p>
+<ul>
+<li><strong>触发</strong>：Compactor 发现某层的 <code>Ingest Buffer</code> 积压严重（<code>Score &gt; 1</code>）。</li>
+<li><strong>模式选择 (IngestMode)</strong>：
+<ul>
+<li><strong>IngestDrain</strong>：将 Ingest Shard 合并进 Main Tables，彻底清空缓冲。</li>
+<li><strong>IngestKeep</strong>：合并 Shard，但如果下游压力也大，可能会将输出结果继续保留在 Ingest Buffer 中（暂存结果），以避免写入放大的级联效应。</li>
+</ul>
+</li>
+<li><strong>动作 (<code>fillTablesIngestShard</code>)</strong>：
+<ol>
+<li>挑选一个积压最严重的 <code>Shard</code>。</li>
+<li>锁定该 Shard 和 L1 中与其 Key 范围重叠的 <code>Main Tables</code>。</li>
+<li>执行标准的归并排序。</li>
+<li>生成新的 <code>Main Tables</code>，清空该 Shard。</li>
+</ol>
+</li>
+</ul>
+<hr>
+<h2 id="4-读路径的权衡"><a class="header" href="#4-读路径的权衡">4. 读路径的权衡</a></h2>
+<p>这种设计本质上是 <strong>“空间换时间”</strong> 和 <strong>“读写权衡”</strong>。我们牺牲了一点点读性能，换取了极致的写稳定性。</p>
+<p><strong>查询流程 (<code>Get</code>)</strong>：</p>
+<ol>
+<li><strong>查 MemTable</strong>。</li>
+<li><strong>查 L0</strong>。</li>
+<li><strong>查 L1</strong>：
+<ul>
+<li><strong>先查 L1 Ingest Buffer</strong>：因为这里面是从 L0 刚“甩”下来的新数据，版本更新。
+<ul>
+<li>需要在 Shard 内进行二分查找（因为 buffer 内的表之间可能有重叠）。</li>
+</ul>
+</li>
+<li><strong>后查 L1 Main Tables</strong>：这是标准的有序数据，查找很快。</li>
+</ul>
+</li>
+<li><strong>查 L2…</strong></li>
+</ol>
+<hr>
+<h2 id="5-协同设计value-aware-compaction"><a class="header" href="#5-协同设计value-aware-compaction">5. 协同设计：Value-Aware Compaction</a></h2>
+<p>除了处理写抖动，Compaction 还承担了<strong>回收 VLog 空间</strong>的任务。</p>
+<ul>
+<li><strong>痛点</strong>：在 KV 分离架构中，LSM 里的删除只是写了一个 Tombstone，VLog 里的旧 Value 依然占着磁盘。</li>
+<li><strong>方案</strong>：
+<ul>
+<li><strong>Value Density (价值密度)</strong>：Compaction Picker 会计算每一层的 <code>TotalValueBytes / TotalSizeBytes</code>。</li>
+<li><strong>Discard Stats (失效统计)</strong>：虽然 VLog GC 依赖专门的 discard stats，但 Compaction 必须负责通过重写 SSTable 来丢弃那些指向无效 Value 的指针。</li>
+<li><strong>策略</strong>：Compaction 会优先选择 Value 密度异常（或者包含大量 Stale 数据）的层级进行压缩，主动触发指针清理。</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
+<p>NoKV 的 Compaction 和 Ingest Buffer 设计解决了一组复杂的工程矛盾：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">问题</th><th style="text-align: left">传统方案</th><th style="text-align: left">NoKV 方案</th><th style="text-align: left">收益</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>L0 拥堵</strong></td><td style="text-align: left">阻塞写入，强制合并</td><td style="text-align: left"><strong>L0 -&gt; Ingest Buffer</strong> (快速卸载)</td><td style="text-align: left"><strong>零写停顿 (Zero Write Stall)</strong></td></tr>
+<tr><td style="text-align: left"><strong>合并卡顿</strong></td><td style="text-align: left">单线程大合并</td><td style="text-align: left"><strong>Sharding + Subcompaction</strong></td><td style="text-align: left">并行处理，利用多核/SSD 优势</td></tr>
+<tr><td style="text-align: left"><strong>VLog 膨胀</strong></td><td style="text-align: left">被动等待</td><td style="text-align: left"><strong>Value-Aware Scoring</strong></td><td style="text-align: left">主动出击，加速空间回收</td></tr>
+</tbody>
+</table>
+</div>
+<p>这是一个非常成熟的工业级设计，它不仅关注“存得下”，更关注“写得稳”和“删得掉”。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="recovery.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-01-vlog-design-and-gc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="testing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -310,13 +328,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="recovery.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-01-vlog-design-and-gc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="testing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
@@ -334,16 +349,16 @@
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

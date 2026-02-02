@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-efb9c508.js";
+            window.path_to_searchindex_js = "../searchindex-ef9bec81.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-d8cfaf9e.js"></script>
+        <script src="../toc-55d6ed17.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -226,22 +226,17 @@
 </ul>
 </li>
 </ul>
-<h3 id="23-valuelog目前的妥协-mmap"><a class="header" href="#23-valuelog目前的妥协-mmap">2.3 ValueLog：目前的妥协 (mmap)</a></h3>
+<h3 id="23-valuelog目前的妥协-mmap--madvise"><a class="header" href="#23-valuelog目前的妥协-mmap--madvise">2.3 ValueLog：目前的妥协 (mmap + madvise)</a></h3>
 <p>ValueLog 也是 <strong>顺序写</strong>，但面临 <strong>随机读</strong>（KV 分离查询时）。</p>
 <ul>
 <li><strong>现状</strong>：NoKV 目前对 VLog 也使用了 <code>mmap</code>。</li>
-<li><strong>原因</strong>：
-<ol>
-<li><strong>代码统一</strong>：复用 SSTable 的底层 <code>file</code> 包封装。</li>
-<li><strong>读取便利</strong>：VLog 的读取通常是离散的，<code>mmap</code> 提供的切片访问非常方便接口设计。</li>
-</ol>
-</li>
-<li><strong>潜在痛点 (Trade-off)</strong>：
+<li><strong>写入控制</strong>：虽然使用 mmap 写入，但代码中显式调用了 <code>madvise(MADV_DONTNEED)</code>。
 <ul>
-<li><strong>Page Cache 污染</strong>：VLog 文件通常很大（几十 GB），如果对 VLog 进行大范围扫描或 Compaction，<code>mmap</code> 会导致大量冷数据涌入 Page Cache，把 SSTable 的热点数据挤出去。</li>
-<li><strong>未来优化方向</strong>：业界（如 Badger）倾向于对 VLog 使用 <code>pread</code> (Standard IO) 甚至 <code>O_DIRECT</code>，以避免污染 OS 缓存。NoKV 未来可能会引入 <code>madvise(MADV_RANDOM)</code> 或切换到 <code>pread</code> 来优化这一点。</li>
+<li>在 <code>DoneWriting</code>（文件写满轮转）和 <code>SetReadOnly</code> 时，系统会通知内核“我不再需要这些页面了”。</li>
+<li><strong>目的</strong>：主动释放 VLog 刚刚写入的大量脏页占用的 Page Cache，防止它们把 SSTable 的热点数据（索引、Filter）挤出内存。</li>
 </ul>
 </li>
+<li><strong>持久化</strong>：只有当 <code>SyncWrites: true</code> 时，才会调用 <code>msync</code>。平时依赖 OS 的后台刷盘。</li>
 </ul>
 <hr>
 <h2 id="3-读写交互逻辑图"><a class="header" href="#3-读写交互逻辑图">3. 读写交互逻辑图</a></h2>
@@ -249,32 +244,32 @@
 <pre class="mermaid">flowchart TD
     subgraph "Write Path"
         Mem[MemTable]
-        WAL[WAL (Standard IO)]
-        Flush[Flush/Compact]
+        WAL["WAL (Standard IO)"]
+        Flush["Flush/Compact"]
     end
     
     subgraph "Persistence"
-        SST[SSTable (mmap)]
-        VLog[ValueLog (mmap)]
+        SST["SSTable (mmap)"]
+        VLog["ValueLog (mmap)"]
     end
     
-    Write[Set(k, v)] --&gt; Mem
+    Write["Set(k, v)"] --&gt; Mem
     Write --&gt; WAL
     
     Mem --&gt;|Full| Flush
-    Flush --&gt;|Small Values| SST
-    Flush --&gt;|Large Values| VLog
+    Flush --&gt;|"Small Values"| SST
+    Flush --&gt;|"Large Values"| VLog
     
     subgraph "Read Path"
-        Get[Get(k)]
-        LSM[LSM Search]
+        Get["Get(k)"]
+        LSM["LSM Search"]
         
         Get --&gt; LSM
-        LSM --&gt;|1. Index Lookups| SST
-        SST --&gt;|2. Zero Copy Read| Kernel[Page Cache]
+        LSM --&gt;|"1. Index Lookups"| SST
+        SST --&gt;|"2. Zero Copy Read"| Kernel["Page Cache"]
         
-        LSM --&gt;|3. ValuePtr Found| VLog
-        VLog --&gt;|4. Random Read| Kernel
+        LSM --&gt;|"3. ValuePtr Found"| VLog
+        VLog --&gt;|"4. Random Read"| Kernel
     end
     
     style WAL fill:#f9f,stroke:#333,stroke-width:2px
@@ -287,7 +282,7 @@
 <ol>
 <li><strong>读密集 (SST)</strong>：选 <code>mmap</code>，榨干内存带宽，减少 CPU 开销。</li>
 <li><strong>写敏感 (WAL)</strong>：选 <code>Standard IO</code>，确保数据安全和追加性能。</li>
-<li><strong>大容量 (VLog)</strong>：目前选 <code>mmap</code> (工程便利)，保留向 <code>pread</code> 演进的可能 (防止缓存污染)。</li>
+<li><strong>大容量 (VLog)</strong>：选 <code>mmap</code> + <code>madvise</code>，利用切片读取的便利性，同时主动管理缓存污染。</li>
 </ol>
 <p>理解这些权衡，是掌握存储引擎底层性能优化的关键。</p>
 
