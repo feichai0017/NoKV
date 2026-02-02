@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4ab2608c.js";
+            window.path_to_searchindex_js = "../searchindex-efb9c508.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-d8cfaf9e.js"></script>
@@ -194,7 +194,7 @@
 <li><strong>结构</strong>：论文是<strong>环形链表 + 智能指针</strong>；NoKV 是<strong>分片 Hash + 有序链表 + 滑动窗口</strong>。</li>
 </ul>
 </li>
-<li><strong>核心价值</strong>：在百万级 QPS 下，以极低的开销（无锁、旁路）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。</li>
+<li><strong>核心价值</strong>：在百万级 QPS 下，以极低的开销（Lock-Free List）精准识别系统中的“热点”，为缓存优化和限流提供数据支撑。</li>
 </ul>
 <hr>
 <h2 id="2-核心架构反馈驱动设计-feedback-driven"><a class="header" href="#2-核心架构反馈驱动设计-feedback-driven">2. 核心架构：反馈驱动设计 (Feedback-Driven)</a></h2>
@@ -212,6 +212,7 @@
     subgraph "Execution Layer"
         LSM[LSM Tree]
         Cache[Block Cache]
+        Compaction[Compaction Picker]
         Limiter[Write Limiter]
     end
     
@@ -219,46 +220,43 @@
     Tracker --&gt;|"2. Update Counters"| Window
     Decay -.-&gt;|"3. Age Out"| Window
     
-    Tracker -.-&gt;|"4. TopN Report"| LSM
-    LSM --&gt;|"5. Hot Hint"| Cache
-    
-    style Tracker fill:#f9f,stroke:#333
-    style Cache fill:#ff9,stroke:#333
+    Tracker -.-&gt;|"4. TopN Report"| Compaction
+    Compaction --&gt;|"5. Hot Score"| LSM
 </pre>
 
 <h3 id="22-关键交互流程"><a class="header" href="#22-关键交互流程">2.2 关键交互流程</a></h3>
 <ol>
-<li><strong>探测 (Probe)</strong>：读写请求到达 DB 层时，旁路调用 <code>HotRing.Touch(key)</code>。</li>
+<li><strong>探测 (Probe)</strong>：
+<ul>
+<li><strong>读路径</strong>：每次 <code>Get</code> 命中时调用 <code>Touch</code>。</li>
+<li><strong>写路径</strong>：只有当启用了限流（<code>WriteHotKeyLimit</code>）或突发检测时，才会调用 <code>TouchAndClamp</code>。</li>
+</ul>
+</li>
 <li><strong>计算 (Compute)</strong>：HotRing 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
 <li><strong>反馈 (Feedback)</strong>：
 <ul>
-<li><strong>缓存联动</strong>：DB 定期将 TopN 热点推送给 LSM Tree。当加载 Block 时，如果发现包含热点 Key，则打上 <code>HotHint</code> 标记，将其直接晋升到 <strong>VIP 热区缓存 (Clock-Pro Hot Cache)</strong>，防止被冷数据逐出。</li>
+<li><strong>Compaction 评分</strong>：<code>lsm/compact</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
+<li><strong>缓存预取 (Prefetch)</strong>：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。</li>
 <li><strong>写入限流</strong>：对于写频率过高的 Key，<code>TouchAndClamp</code> 会触发限流保护。</li>
 </ul>
 </li>
 </ol>
 <hr>
 <h2 id="3-实现细节深度解析"><a class="header" href="#3-实现细节深度解析">3. 实现细节深度解析</a></h2>
-<h3 id="31-数据结构无锁分片哈希"><a class="header" href="#31-数据结构无锁分片哈希">3.1 数据结构：无锁分片哈希</a></h3>
-<p>为了支撑高并发，HotRing 采用了极致的无锁设计。</p>
+<h3 id="31-并发控制lock-free-与-spin-lock"><a class="header" href="#31-并发控制lock-free-与-spin-lock">3.1 并发控制：Lock-Free 与 Spin-Lock</a></h3>
+<p>为了支撑高并发，HotRing 采用了混合并发策略：</p>
 <ul>
-<li><strong>Sharding</strong>：顶层是一个 <code>atomic.Pointer[Node]</code> 数组（Buckets），减少竞争。</li>
-<li><strong>Ordered List</strong>：链表节点按 <code>(Tag, Key)</code> 排序。
+<li><strong>主链表 (Buckets &amp; List)</strong>：采用 <strong>Lock-Free</strong> 的 CAS 操作进行节点插入。
 <ul>
-<li><strong>优势</strong>：查找失败可以提前终止（Fail Fast），无需遍历全链表。</li>
+<li><strong>Ordered List</strong>：链表节点按 <code>(Tag, Key)</code> 排序，查找失败可提前终止。</li>
 </ul>
 </li>
-<li><strong>CAS Insertion</strong>：
-<pre><code class="language-go">// 伪代码：无锁插入
-for {
-    prev, curr := findPosition(bucket, key)
-    if prev.CompareAndSwapNext(curr, newNode) {
-        return success
-    }
-    // CAS 失败说明有并发修改，重试
-}
-</code></pre>
+<li><strong>滑动窗口 (Window Counters)</strong>：由于涉及复杂的窗口滚动和数组更新，使用了轻量级的 <strong>Spin-Lock (自旋锁)</strong> 保护。
+<ul>
+<li><code>node.lockWindow()</code>: <code>CAS(&amp;lock, 0, 1)</code>。</li>
+</ul>
 </li>
+<li><strong>衰减 (Decay)</strong>：后台协程定期衰减时，会有互斥锁保护 <code>decayMu</code>，但实际的计数器衰减是原子操作。</li>
 </ul>
 <h3 id="32-统计算法滑动窗口与衰减"><a class="header" href="#32-统计算法滑动窗口与衰减">3.2 统计算法：滑动窗口与衰减</a></h3>
 <p>如何区分“历史热点”和“突发热点”？</p>
@@ -281,16 +279,17 @@ for {
 <h2 id="4-实际应用场景"><a class="header" href="#4-实际应用场景">4. 实际应用场景</a></h2>
 <h3 id="41-可观测性-observability"><a class="header" href="#41-可观测性-observability">4.1 可观测性 (Observability)</a></h3>
 <p>运维人员可以通过 CLI 实时查看系统热点，瞬间定位“谁在打挂数据库”。</p>
-<pre><code class="language-bash">$ nokv stats --hot-keys
-Top 5 Hot Keys (Last 5s):
-1. "sku:1001" - 52,000 QPS
-2. "user:888" - 12,000 QPS
+<pre><code class="language-bash"># 使用 stats 命令查看
+$ go run cmd/nokv/main.go stats --workdir ./work_test
+...
+Hot Keys:
+  key: user:1001, count: 52000
+  key: config:global, count: 12000
 </code></pre>
-<h3 id="42-缓存保活-cache-pinning"><a class="header" href="#42-缓存保活-cache-pinning">4.2 缓存保活 (Cache Pinning)</a></h3>
-<p>这是 NoKV 最精妙的设计。</p>
+<h3 id="42-缓存与性能-performance"><a class="header" href="#42-缓存与性能-performance">4.2 缓存与性能 (Performance)</a></h3>
 <ul>
-<li><strong>问题</strong>：全表扫描（Scan）往往会把 Block Cache 里的热点数据挤出去（Cache Pollution）。</li>
-<li><strong>解法</strong>：通过 HotRing 识别出的热点 Block，进入 Cache 时自带“免死金牌”（进入 Clock-Pro 的 Hot 区域），无论 Scan 怎么扫，VIP 热点不受影响。</li>
+<li><strong>VIP 缓存区 (Hot Tier)</strong>：LSM Cache 内部维护了一个小型的 <code>Clock-Pro</code> 缓存（Hot Tier）。虽然它不是绝对的“免死金牌”（仍可能被更热的数据挤出），但它为热点 Block 提供了比普通 LRU 更强的保护。</li>
+<li><strong>热点压缩优先</strong>：通过 HotRing 的反馈，系统能主动将热点数据所在的重叠 SSTable 进行合并，将热点数据的查询路径压缩到最短。</li>
 </ul>
 <hr>
 <h2 id="5-未来展望"><a class="header" href="#5-未来展望">5. 未来展望</a></h2>
@@ -306,14 +305,9 @@ Top 5 Hot Keys (Last 5s):
 <li>在分布式场景下，发现某个 Region 出现热点，自动触发 Region Split 或将该热点 Key 迁移到专用节点。</li>
 </ul>
 </li>
-<li><strong>智能索引优化</strong>：
-<ul>
-<li>对于长期热点，甚至可以考虑将其 Value 直接内联到内存索引中（LSM MemTable 不刷盘），实现真正的 In-Memory 性能。</li>
-</ul>
-</li>
 </ol>
 <h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
-<p>NoKV 的 <code>hotring</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用最简单的无锁结构解决了工程中最头疼的<strong>缓存污染</strong>和<strong>监控盲区</strong>问题。</p>
+<p>NoKV 的 <code>hotring</code> 是一个 <strong>“学术灵感 + 工程务实”</strong> 的典范。它没有追求理论上完美的环形索引结构，而是抓住了“热点感知”这一核心价值，用混合并发结构（Lock-Free + SpinLock）解决了工程中最头疼的<strong>监控盲区</strong>问题，并成功反哺了 Compaction 调度。</p>
 
                     </main>
 

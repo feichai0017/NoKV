@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4ab2608c.js";
+            window.path_to_searchindex_js = "../searchindex-efb9c508.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-d8cfaf9e.js"></script>
@@ -224,7 +224,7 @@
 
 <hr>
 <h2 id="2-底层文件系统设计-file"><a class="header" href="#2-底层文件系统设计-file">2. 底层文件系统设计 (<code>file/</code>)</a></h2>
-<p>NoKV 放弃了标准的 <code>read/write</code> 系统调用，全面采用 <strong>Memory Mapped Files (mmap)</strong>。</p>
+<p>NoKV 放弃了标准的 <code>read/write</code> 系统调用，全面采用 <strong>Memory Mapped Files (mmap)</strong> 来管理 VLog。</p>
 <h3 id="21-为什么选择-mmap"><a class="header" href="#21-为什么选择-mmap">2.1 为什么选择 mmap？</a></h3>
 <ul>
 <li><strong>极致读性能</strong>：读取文件等同于访问内存数组 (<code>data[offset : offset+len]</code>)。实现了用户态的 <strong>Zero Copy</strong>（零拷贝），避免了内核到用户空间的 buffer拷贝。</li>
@@ -237,18 +237,16 @@
 <ul>
 <li><code>mmap</code> 映射区域大小固定。</li>
 <li>当空间不足时，调用 <code>ftruncate</code> 增大物理文件 -&gt; <code>munmap</code> 解除映射 -&gt; <code>mmap</code> 重新映射更大的空间。</li>
-<li><strong>优化</strong>：通常预分配一定大小（如 1GB）以减少重映射带来的性能抖动。</li>
 </ul>
 </li>
-<li><strong>持久化 (Sync)</strong>：调用 <code>msync</code>，强制脏页（Dirty Pages）刷盘。</li>
+<li><strong>持久化 (Sync)</strong>：NoKV 的 WAL 使用标准 IO (bufio) 以保证持久性，而 VLog 默认依赖 OS 刷盘。只有当 <code>SyncWrites</code> 开启时，VLog 才会显式调用 <code>msync</code>。</li>
 </ul>
 <hr>
 <h2 id="3-文件管理与并发控制-vlogmanagergo"><a class="header" href="#3-文件管理与并发控制-vlogmanagergo">3. 文件管理与并发控制 (<code>vlog/manager.go</code>)</a></h2>
 <h3 id="31-文件分片-segmentation"><a class="header" href="#31-文件分片-segmentation">3.1 文件分片 (Segmentation)</a></h3>
 <p>数据被切分为多个固定大小（配置项 <code>ValueLogFileSize</code>）的 Segment 文件。</p>
 <ul>
-<li><strong>Active Segment</strong>：当前唯一可写的头部文件。</li>
-<li><strong>Sealed Segment</strong>：写满后转为只读（逻辑上），等待 GC 或读取。</li>
+<li><strong>Manifest 维护</strong>：VLog 的生命周期（Head 指针、删除操作）通过 Manifest 文件进行持久化，而不是仅依赖扫描目录。这保证了崩溃恢复的一致性。</li>
 </ul>
 <h3 id="32-并发安全机制-pinning"><a class="header" href="#32-并发安全机制-pinning">3.2 并发安全机制 (Pinning)</a></h3>
 <p>为了防止在 <strong>GC 删除文件</strong> 时，仍有 <strong>读请求</strong> 访问该文件，NoKV 实现了一套基于原子计数的引用保护机制。</p>
@@ -302,22 +300,21 @@
 
 <h3 id="43-关键设计心得"><a class="header" href="#43-关键设计心得">4.3 关键设计心得</a></h3>
 <ol>
+<li><strong>Value Threshold (阈值控制)</strong>：
+<ul>
+<li>并非所有 Value 都进 VLog。默认只有大于 <strong>1KB</strong> (<code>utils.DefaultValueThreshold</code>) 的 Value 才会分离。小 Value 依然内联在 LSM Tree 中，以优化小对象的 Range Scan 性能。</li>
+</ul>
+</li>
 <li><strong>Discard Stats (垃圾统计)</strong>：
 <ul>
 <li>每次 LSM Compaction 丢弃 Key 时，都会记录对应的 ValueLog 文件 ID 增加了多少垃圾。</li>
-<li>统计信息定期持久化到内部 Key <code>!badger!discard</code> 中，防止重启丢失。</li>
+<li>统计信息定期持久化到内部 Key <code>!NoKV!discard</code> 中，防止重启丢失。</li>
 </ul>
 </li>
 <li><strong>并发更新保护</strong>：
 <ul>
 <li>在 GC 搬运数据的瞬间，用户可能并发更新了该 Key。</li>
 <li><strong>解决方案</strong>：GC 在写入新值前，再次检查 LSM Tree。如果发现 LSM 中的 ValuePtr 已经指向了<strong>更新的文件</strong>（Fid 更大）或<strong>更新的偏移量</strong>，说明用户抢先更新了，GC 放弃搬运旧值，保证了数据一致性。</li>
-</ul>
-</li>
-<li><strong>IO 优化</strong>：
-<ul>
-<li>利用 <code>mmap</code> 进行快速采样。</li>
-<li>只有在确信“有大量垃圾”时才执行昂贵的全文件扫描和重写。</li>
 </ul>
 </li>
 </ol>
@@ -340,11 +337,10 @@
 <li><strong>收益</strong>：同一个 Key 的历史版本集中在特定分区。更新频繁的 Key 所在分区变脏极快，GC 时可能直接删除整个分区文件，实现“零搬运”回收。</li>
 </ul>
 <h3 id="62-优化范围查询小-value-内联-inlining"><a class="header" href="#62-优化范围查询小-value-内联-inlining">6.2 优化范围查询：小 Value 内联 (Inlining)</a></h3>
-<p><strong>现状</strong>：无论 Value 多小都会分离，导致 Range Scan 时产生大量随机 I/O。</p>
+<p><strong>现状</strong>：虽然已有阈值控制，但中等大小的 Value 依然会导致 Scan 性能下降。</p>
 <p><strong>演进方向（参考 RocksDB BlobDB）</strong>：</p>
 <ul>
-<li><strong>阈值控制</strong>：引入 <code>min_blob_size</code> 参数（如 1KB）。</li>
-<li><strong>逻辑</strong>：小于 1KB 的 Value 直接存入 SSTable（In-place），大于 1KB 的才进入 ValueLog。</li>
+<li><strong>更灵活的阈值</strong>：动态调整 <code>min_blob_size</code>。</li>
 <li><strong>收益</strong>：在 YCSB-Scan 场景下，由于小对象随 Key 顺序读取，性能将获得质的提升。</li>
 </ul>
 <h3 id="63-硬件协同zns-ssd-与-nvm"><a class="header" href="#63-硬件协同zns-ssd-与-nvm">6.3 硬件协同：ZNS SSD 与 NVM</a></h3>
