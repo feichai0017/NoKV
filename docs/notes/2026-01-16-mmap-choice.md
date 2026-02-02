@@ -40,17 +40,15 @@ WAL (Write Ahead Log) 是 **顺序追加 (Append Only)** 且 **持久化敏感**
     *   `bufio` 提供了用户态缓冲，减少了 `write` 系统调用次数。
     *   `fsync` 语义清晰，确保数据不丢。
 
-### 2.3 ValueLog：目前的妥协 (mmap)
+### 2.3 ValueLog：目前的妥协 (mmap + madvise)
 
 ValueLog 也是 **顺序写**，但面临 **随机读**（KV 分离查询时）。
 
 *   **现状**：NoKV 目前对 VLog 也使用了 `mmap`。
-*   **原因**：
-    1.  **代码统一**：复用 SSTable 的底层 `file` 包封装。
-    2.  **读取便利**：VLog 的读取通常是离散的，`mmap` 提供的切片访问非常方便接口设计。
-*   **潜在痛点 (Trade-off)**：
-    *   **Page Cache 污染**：VLog 文件通常很大（几十 GB），如果对 VLog 进行大范围扫描或 Compaction，`mmap` 会导致大量冷数据涌入 Page Cache，把 SSTable 的热点数据挤出去。
-    *   **未来优化方向**：业界（如 Badger）倾向于对 VLog 使用 `pread` (Standard IO) 甚至 `O_DIRECT`，以避免污染 OS 缓存。NoKV 未来可能会引入 `madvise(MADV_RANDOM)` 或切换到 `pread` 来优化这一点。
+*   **写入控制**：虽然使用 mmap 写入，但代码中显式调用了 `madvise(MADV_DONTNEED)`。
+    *   在 `DoneWriting`（文件写满轮转）和 `SetReadOnly` 时，系统会通知内核“我不再需要这些页面了”。
+    *   **目的**：主动释放 VLog 刚刚写入的大量脏页占用的 Page Cache，防止它们把 SSTable 的热点数据（索引、Filter）挤出内存。
+*   **持久化**：只有当 `SyncWrites: true` 时，才会调用 `msync`。平时依赖 OS 的后台刷盘。
 
 ---
 
@@ -62,32 +60,32 @@ ValueLog 也是 **顺序写**，但面临 **随机读**（KV 分离查询时）�
 flowchart TD
     subgraph "Write Path"
         Mem[MemTable]
-        WAL[WAL (Standard IO)]
-        Flush[Flush/Compact]
+        WAL["WAL (Standard IO)"]
+        Flush["Flush/Compact"]
     end
     
     subgraph "Persistence"
-        SST[SSTable (mmap)]
-        VLog[ValueLog (mmap)]
+        SST["SSTable (mmap)"]
+        VLog["ValueLog (mmap)"]
     end
     
-    Write[Set(k, v)] --> Mem
+    Write["Set(k, v)"] --> Mem
     Write --> WAL
     
     Mem -->|Full| Flush
-    Flush -->|Small Values| SST
-    Flush -->|Large Values| VLog
+    Flush -->|"Small Values"| SST
+    Flush -->|"Large Values"| VLog
     
     subgraph "Read Path"
-        Get[Get(k)]
-        LSM[LSM Search]
+        Get["Get(k)"]
+        LSM["LSM Search"]
         
         Get --> LSM
-        LSM -->|1. Index Lookups| SST
-        SST -->|2. Zero Copy Read| Kernel[Page Cache]
+        LSM -->|"1. Index Lookups"| SST
+        SST -->|"2. Zero Copy Read"| Kernel["Page Cache"]
         
-        LSM -->|3. ValuePtr Found| VLog
-        VLog -->|4. Random Read| Kernel
+        LSM -->|"3. ValuePtr Found"| VLog
+        VLog -->|"4. Random Read"| Kernel
     end
     
     style WAL fill:#f9f,stroke:#333,stroke-width:2px
@@ -101,6 +99,6 @@ NoKV 的 I/O 选型策略是 **“读写分治，稳定为王”**：
 
 1.  **读密集 (SST)**：选 `mmap`，榨干内存带宽，减少 CPU 开销。
 2.  **写敏感 (WAL)**：选 `Standard IO`，确保数据安全和追加性能。
-3.  **大容量 (VLog)**：目前选 `mmap` (工程便利)，保留向 `pread` 演进的可能 (防止缓存污染)。
+3.  **大容量 (VLog)**：选 `mmap` + `madvise`，利用切片读取的便利性，同时主动管理缓存污染。
 
 理解这些权衡，是掌握存储引擎底层性能优化的关键。
