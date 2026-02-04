@@ -3,13 +3,15 @@ package NoKV
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -18,8 +20,8 @@ import (
 
 type lfDiscardStats struct {
 	sync.RWMutex
-	m                 map[uint32]int64
-	flushChan         chan map[uint32]int64
+	m                 map[manifest.ValueLogID]int64
+	flushChan         chan map[manifest.ValueLogID]int64
 	closer            *utils.Closer
 	updatesSinceFlush int
 	flushThreshold    int
@@ -28,7 +30,7 @@ type lfDiscardStats struct {
 func (vlog *valueLog) flushDiscardStats() {
 	defer vlog.lfDiscardStats.closer.Done()
 
-	mergeStats := func(stats map[uint32]int64, force bool) ([]byte, error) {
+	mergeStats := func(stats map[manifest.ValueLogID]int64, force bool) ([]byte, error) {
 		vlog.lfDiscardStats.Lock()
 		defer vlog.lfDiscardStats.Unlock()
 		for fid, count := range stats {
@@ -48,7 +50,7 @@ func (vlog *valueLog) flushDiscardStats() {
 			return nil, nil
 		}
 
-		encodedDS, err := json.Marshal(vlog.lfDiscardStats.m)
+		encodedDS, err := encodeDiscardStats(vlog.lfDiscardStats.m)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +58,7 @@ func (vlog *valueLog) flushDiscardStats() {
 		return encodedDS, nil
 	}
 
-	process := func(stats map[uint32]int64, force bool) error {
+	process := func(stats map[manifest.ValueLogID]int64, force bool) error {
 		encodedDS, err := mergeStats(stats, force)
 		if err != nil || encodedDS == nil {
 			return err
@@ -99,24 +101,24 @@ func (vlog *valueLog) flushDiscardStats() {
 	}
 }
 
-func (vlog *valueLog) runGC(discardRatio float64, head *kv.ValuePtr) error {
+func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) error {
 	select {
 	case vlog.garbageCh <- struct{}{}:
 		defer func() {
 			<-vlog.garbageCh
 		}()
 
-		files := vlog.pickLog(head)
+		files := vlog.pickLog(heads)
 		if len(files) == 0 {
 			return utils.ErrNoRewrite
 		}
-		tried := make(map[uint32]bool)
-		for _, fid := range files {
-			if _, done := tried[fid]; done {
+		tried := make(map[manifest.ValueLogID]bool)
+		for _, id := range files {
+			if _, done := tried[id]; done {
 				continue
 			}
-			tried[fid] = true
-			if err := vlog.doRunGC(fid, discardRatio); err == nil {
+			tried[id] = true
+			if err := vlog.doRunGC(id.Bucket, id.FileID, discardRatio); err == nil {
 				return nil
 			} else if err != utils.ErrNoRewrite {
 				return err
@@ -128,15 +130,19 @@ func (vlog *valueLog) runGC(discardRatio float64, head *kv.ValuePtr) error {
 	}
 }
 
-func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
+func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (err error) {
 	defer func() {
 		if err == nil {
 			vlog.lfDiscardStats.Lock()
-			delete(vlog.lfDiscardStats.m, fid)
+			delete(vlog.lfDiscardStats.m, manifest.ValueLogID{Bucket: bucket, FileID: fid})
 			vlog.lfDiscardStats.Unlock()
 		}
 	}()
 
+	mgr, err := vlog.managerFor(bucket)
+	if err != nil {
+		return err
+	}
 	opts := vlogpkg.SampleOptions{
 		SizeRatio:     vlog.gcSampleSizeRatio(),
 		CountRatio:    vlog.gcSampleCountRatio(),
@@ -144,7 +150,7 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		MaxEntries:    vlog.opt.ValueLogMaxEntries,
 	}
 	start := time.Now()
-	stats, err := vlog.manager.Sample(fid, opts, func(e *kv.Entry, vp *kv.ValuePtr) (bool, error) {
+	stats, err := mgr.Sample(fid, opts, func(e *kv.Entry, vp *kv.ValuePtr) (bool, error) {
 		if time.Since(start) > 10*time.Second {
 			return false, utils.ErrStop
 		}
@@ -172,6 +178,9 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		var newVP kv.ValuePtr
 		newVP.Decode(entry.Value)
 
+		if newVP.Bucket != bucket {
+			return true, nil
+		}
 		if newVP.Fid > fid || (newVP.Fid == fid && newVP.Offset > e.Offset) {
 			return true, nil
 		}
@@ -188,7 +197,7 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		return utils.ErrNoRewrite
 	}
 
-	vlog.logf("Fid: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
+	vlog.logf("Fid: %d bucket: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, bucket, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
 
 	sizeWindow := stats.SizeWindow
 	if sizeWindow == 0 {
@@ -198,16 +207,20 @@ func (vlog *valueLog) doRunGC(fid uint32, discardRatio float64) (err error) {
 		return utils.ErrNoRewrite
 	}
 
-	if err = vlog.rewrite(fid); err != nil {
+	if err = vlog.rewrite(bucket, fid); err != nil {
 		return err
 	}
 	metrics.IncValueLogGCRuns()
 	return nil
 }
 
-func (vlog *valueLog) rewrite(fid uint32) error {
-	activeFID := vlog.manager.ActiveFID()
-	utils.CondPanic(fid >= activeFID, fmt.Errorf("fid to move: %d. Current active fid: %d", fid, activeFID))
+func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
+	mgr, err := vlog.managerFor(bucket)
+	if err != nil {
+		return err
+	}
+	activeFID := mgr.ActiveFID()
+	utils.CondPanic(fid >= activeFID, fmt.Errorf("fid to move: %d. Current active fid: %d (bucket %d)", fid, activeFID, bucket))
 
 	wb := make([]*kv.Entry, 0, 1000)
 	var size int64
@@ -239,6 +252,9 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 		var diskVP kv.ValuePtr
 		diskVP.Decode(entry.Value)
 
+		if diskVP.Bucket != bucket {
+			return nil
+		}
 		if diskVP.Fid > fid || (diskVP.Fid == fid && diskVP.Offset > ptr.Offset) {
 			return nil
 		}
@@ -264,7 +280,7 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 		return nil
 	}
 
-	if _, err := vlog.manager.Iterate(fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
+	if _, err := mgr.Iterate(fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		return process(e, vp)
 	}); err != nil && err != utils.ErrStop {
 		return err
@@ -300,12 +316,12 @@ func (vlog *valueLog) rewrite(fid uint32) error {
 	if vlog.iteratorCount() == 0 {
 		deleteNow = true
 	} else {
-		vlog.filesToBeDeleted = append(vlog.filesToBeDeleted, fid)
+		vlog.filesToBeDeleted = append(vlog.filesToBeDeleted, manifest.ValueLogID{Bucket: bucket, FileID: fid})
 	}
 	vlog.filesToDeleteLock.Unlock()
 
 	if deleteNow {
-		if err := vlog.removeValueLogFile(fid); err != nil {
+		if err := vlog.removeValueLogFile(bucket, fid); err != nil {
 			return err
 		}
 	}
@@ -316,87 +332,99 @@ func (vlog *valueLog) iteratorCount() int {
 	return int(atomic.LoadInt32(&vlog.numActiveIterators))
 }
 
-func (vlog *valueLog) filterPendingDeletes(fids []uint32) []uint32 {
+func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifest.ValueLogID {
 	vlog.filesToDeleteLock.Lock()
 	defer vlog.filesToDeleteLock.Unlock()
 
 	if len(vlog.filesToBeDeleted) == 0 {
-		out := make([]uint32, len(fids))
+		out := make([]manifest.ValueLogID, len(fids))
 		copy(out, fids)
 		return out
 	}
 
-	toDelete := make(map[uint32]struct{}, len(vlog.filesToBeDeleted))
-	for _, fid := range vlog.filesToBeDeleted {
-		toDelete[fid] = struct{}{}
+	toDelete := make(map[manifest.ValueLogID]struct{}, len(vlog.filesToBeDeleted))
+	for _, id := range vlog.filesToBeDeleted {
+		toDelete[id] = struct{}{}
 	}
 
-	out := make([]uint32, 0, len(fids))
-	for _, fid := range fids {
-		if _, ok := toDelete[fid]; ok {
+	out := make([]manifest.ValueLogID, 0, len(fids))
+	for _, id := range fids {
+		if _, ok := toDelete[id]; ok {
 			continue
 		}
-		out = append(out, fid)
+		out = append(out, id)
 	}
 	return out
 }
 
-func (vlog *valueLog) pickLog(head *kv.ValuePtr) (files []uint32) {
-	fids := vlog.manager.ListFIDs()
-	if len(fids) <= 1 {
-		return nil
-	}
-	fids = vlog.filterPendingDeletes(fids)
-	if len(fids) <= 1 {
+func (vlog *valueLog) pickLog(heads map[uint32]kv.ValuePtr) (files []manifest.ValueLogID) {
+	if len(vlog.managers) == 0 {
 		return nil
 	}
 
-	activeFID := vlog.manager.ActiveFID()
-	candidate := struct {
-		fid     uint32
-		discard int64
-	}{math.MaxUint32, 0}
+	var (
+		bestID      manifest.ValueLogID
+		bestDiscard int64
+	)
 
 	vlog.lfDiscardStats.RLock()
-	for _, fid := range fids {
-		if fid >= head.Fid || fid >= activeFID {
-			break
+	for id, discard := range vlog.lfDiscardStats.m {
+		if int(id.Bucket) >= len(vlog.managers) {
+			continue
 		}
-		if vlog.lfDiscardStats.m[fid] > candidate.discard {
-			candidate.fid = fid
-			candidate.discard = vlog.lfDiscardStats.m[fid]
+		mgr := vlog.managers[id.Bucket]
+		if mgr == nil {
+			continue
+		}
+		activeFID := mgr.ActiveFID()
+		head := heads[id.Bucket]
+		if id.FileID >= activeFID {
+			continue
+		}
+		if head.Fid != 0 && id.FileID >= head.Fid {
+			continue
+		}
+		if discard > bestDiscard {
+			bestDiscard = discard
+			bestID = id
 		}
 	}
 	vlog.lfDiscardStats.RUnlock()
 
-	if candidate.fid != math.MaxUint32 {
-		files = append(files, candidate.fid)
+	if bestDiscard > 0 {
+		files = append(files, bestID)
 	}
 
-	idxHead := 0
-	for i, fid := range fids {
-		if fid == head.Fid {
-			idxHead = i
-			break
+	candidates := make([]manifest.ValueLogID, 0)
+	for bucket, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
 		}
-		if fid > head.Fid {
-			idxHead = i
-			break
+		head := heads[uint32(bucket)]
+		activeFID := mgr.ActiveFID()
+		for _, fid := range mgr.ListFIDs() {
+			if fid >= activeFID {
+				continue
+			}
+			if head.Fid != 0 && fid >= head.Fid {
+				continue
+			}
+			candidates = append(candidates, manifest.ValueLogID{Bucket: uint32(bucket), FileID: fid})
 		}
 	}
-	if idxHead == 0 {
-		idxHead = 1
+	if len(candidates) == 0 {
+		return files
 	}
-	idx := rand.Intn(idxHead)
-	if idx > 0 {
-		idx = rand.Intn(idx + 1)
+	candidates = vlog.filterPendingDeletes(candidates)
+	if len(candidates) == 0 {
+		return files
 	}
-	files = append(files, fids[idx])
+	files = append(files, candidates[rand.Intn(len(candidates))])
 	return files
 }
 
 func (vlog *valueLog) populateDiscardStats() error {
-	var statsMap map[uint32]int64
+	var statsMap map[manifest.ValueLogID]int64
 	vs, err := vlog.db.GetCF(kv.CFDefault, lfDiscardStatsKey)
 	if err != nil {
 		return err
@@ -418,7 +446,8 @@ func (vlog *valueLog) populateDiscardStats() error {
 	if len(val) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(val, &statsMap); err != nil {
+	statsMap, err = decodeDiscardStats(val)
+	if err != nil {
 		return errors.Wrapf(err, "failed to unmarshal discard stats")
 	}
 	vlog.logf("Value Log Discard stats: %v", statsMap)
@@ -440,4 +469,40 @@ func (vlog *valueLog) gcSampleCountRatio() float64 {
 		return 0.01
 	}
 	return r
+}
+
+func encodeDiscardStats(stats map[manifest.ValueLogID]int64) ([]byte, error) {
+	wire := make(map[string]int64, len(stats))
+	for id, count := range stats {
+		key := fmt.Sprintf("%d:%d", id.Bucket, id.FileID)
+		wire[key] = count
+	}
+	return json.Marshal(wire)
+}
+
+func decodeDiscardStats(data []byte) (map[manifest.ValueLogID]int64, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	wire := make(map[string]int64)
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, err
+	}
+	out := make(map[manifest.ValueLogID]int64, len(wire))
+	for key, count := range wire {
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid discard stat key: %s", key)
+		}
+		bucket, err := strconv.ParseUint(parts[0], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discard stat bucket: %w", err)
+		}
+		fid, err := strconv.ParseUint(parts[1], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discard stat fid: %w", err)
+		}
+		out[manifest.ValueLogID{Bucket: uint32(bucket), FileID: uint32(fid)}] = count
+	}
+	return out, nil
 }

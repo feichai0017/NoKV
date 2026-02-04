@@ -17,7 +17,7 @@ type ValueLogMetrics struct {
 	Segments       int
 	PendingDeletes int
 	DiscardQueue   int
-	Head           kv.ValuePtr
+	Heads          map[uint32]kv.ValuePtr
 }
 
 func IncValueLogGCRuns()          { valueLogGCRuns.Add(1) }

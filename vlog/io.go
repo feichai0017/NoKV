@@ -49,7 +49,7 @@ func (m *Manager) appendPayload(payload []byte) (*kv.ValuePtr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &kv.ValuePtr{Fid: fid, Offset: start, Len: uint32(len(payload))}, nil
+	return &kv.ValuePtr{Fid: fid, Offset: start, Len: uint32(len(payload)), Bucket: m.bucket}, nil
 }
 
 // AppendEntry encodes and appends the provided entry directly into the active value log.
@@ -195,6 +195,7 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 			Fid:    fid,
 			Offset: offset,
 			Len:    uint32(len(payload)),
+			Bucket: m.bucket,
 		}
 		offset += uint32(len(payload))
 	}
@@ -272,7 +273,7 @@ func (m *Manager) Iterate(fid uint32, offset uint32, fn kv.LogEntry) (uint32, er
 	if err != nil {
 		return 0, err
 	}
-	return iterateLogFile(store, fid, offset, fn)
+	return iterateLogFile(store, m.bucket, fid, offset, fn)
 }
 
 // SampleOptions controls value-log sampling behaviour.
@@ -338,7 +339,7 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 	}
 
 	var skipped float64
-	_, err = iterateLogFile(store, fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
+	_, err = iterateLogFile(store, m.bucket, fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		esz := float64(vp.Len) / float64(utils.Mi)
 
 		if skipped < skipMiB {
@@ -494,7 +495,7 @@ func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
 	return uint32(start), nil
 }
 
-func iterateLogFile(store *file.LogFile, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
+func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint32, fn kv.LogEntry) (uint32, error) {
 	if offset == 0 {
 		offset = uint32(kv.ValueLogHeaderSize)
 	}
@@ -521,6 +522,7 @@ func iterateLogFile(store *file.LogFile, fid uint32, offset uint32, fn kv.LogEnt
 			Len:    recordLen,
 			Offset: entry.Offset,
 			Fid:    fid,
+			Bucket: bucket,
 		}
 		validEndOffset = currentOffset + recordLen
 		currentOffset = validEndOffset

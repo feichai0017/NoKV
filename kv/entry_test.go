@@ -107,16 +107,16 @@ func TestEntryIterator(t *testing.T) {
 }
 
 func TestValuePtrEncodeDecode(t *testing.T) {
-	ptr := ValuePtr{Len: 1, Offset: 2, Fid: 3}
+	ptr := ValuePtr{Len: 1, Offset: 2, Fid: 3, Bucket: 4}
 	encoded := ptr.Encode()
 	assert.Equal(t, valuePtrEncodedSize, len(encoded))
-	assert.Equal(t, []byte{0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3}, encoded)
+	assert.Equal(t, []byte{0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4}, encoded)
 
 	var decoded ValuePtr
 	decoded.Decode(encoded)
 	assert.Equal(t, ptr, decoded)
 
-	decoded.Len, decoded.Offset, decoded.Fid = 9, 9, 9
+	decoded.Len, decoded.Offset, decoded.Fid, decoded.Bucket = 9, 9, 9, 9
 	decoded.Decode([]byte{1, 2}) // short buffer clears ptr
 	assert.Equal(t, ValuePtr{}, decoded)
 }

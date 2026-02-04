@@ -66,7 +66,7 @@ type Options struct {
 	// exceeds this ratio.
 	CompactionValueAlertThreshold float64
 
-	DiscardStatsCh *chan map[uint32]int64
+	DiscardStatsCh *chan map[manifest.ValueLogID]int64
 
 	// HotKeyProvider optionally surfaces the hottest keys so compaction can
 	// prioritise ranges with heavy access.
@@ -120,7 +120,7 @@ func (lsm *LSM) Close() error {
 }
 
 // SetDiscardStatsCh updates the discard stats channel used during compaction.
-func (lsm *LSM) SetDiscardStatsCh(ch *chan map[uint32]int64) {
+func (lsm *LSM) SetDiscardStatsCh(ch *chan map[manifest.ValueLogID]int64) {
 	lsm.option.DiscardStatsCh = ch
 	if lsm.levels != nil {
 		lsm.levels.opt.DiscardStatsCh = ch
@@ -261,8 +261,8 @@ func (lsm *LSM) LogValueLogHead(ptr *kv.ValuePtr) error {
 }
 
 // LogValueLogDelete records removal of a value log segment.
-func (lsm *LSM) LogValueLogDelete(fid uint32) error {
-	return lsm.levels.LogValueLogDelete(fid)
+func (lsm *LSM) LogValueLogDelete(bucket uint32, fid uint32) error {
+	return lsm.levels.LogValueLogDelete(bucket, fid)
 }
 
 // LogValueLogUpdate restores or amends metadata for a value log segment.
@@ -281,17 +281,28 @@ func (lsm *LSM) ManifestManager() *manifest.Manager {
 	return lsm.levels.manifestMgr
 }
 
-// ValueLogHead returns the persisted head pointer, if any.
-func (lsm *LSM) ValueLogHead() (kv.ValuePtr, bool) {
-	meta := lsm.levels.ValueLogHead()
-	if !meta.Valid {
-		return kv.ValuePtr{}, false
+// ValueLogHead returns persisted head pointers keyed by bucket.
+func (lsm *LSM) ValueLogHead() map[uint32]kv.ValuePtr {
+	heads := lsm.levels.ValueLogHead()
+	if len(heads) == 0 {
+		return nil
 	}
-	return kv.ValuePtr{Fid: meta.FileID, Offset: uint32(meta.Offset)}, true
+	out := make(map[uint32]kv.ValuePtr, len(heads))
+	for bucket, meta := range heads {
+		if !meta.Valid {
+			continue
+		}
+		out[bucket] = kv.ValuePtr{
+			Bucket: bucket,
+			Fid:    meta.FileID,
+			Offset: uint32(meta.Offset),
+		}
+	}
+	return out
 }
 
 // ValueLogStatus returns manifest tracked value log metadata.
-func (lsm *LSM) ValueLogStatus() map[uint32]manifest.ValueLogMeta {
+func (lsm *LSM) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	if lsm.levels == nil {
 		return nil
 	}
