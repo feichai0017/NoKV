@@ -118,8 +118,11 @@ func TestRunVlogCmd(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal vlog output: %v", err)
 	}
-	if _, ok := payload["segments"]; !ok {
-		t.Fatalf("expected segments array in vlog output")
+	if _, ok := payload["segments"]; ok {
+		return
+	}
+	if _, ok := payload["buckets"]; !ok {
+		t.Fatalf("expected segments or buckets array in vlog output")
 	}
 }
 
@@ -609,7 +612,7 @@ func TestRenderStatsFull(t *testing.T) {
 		ValueLogSegments:               1,
 		ValueLogPendingDel:             1,
 		ValueLogDiscardQueue:           1,
-		ValueLogHead:                   kv.ValuePtr{Fid: 1, Offset: 2, Len: 3},
+		ValueLogHeads:                  map[uint32]kv.ValuePtr{0: {Bucket: 0, Fid: 1, Offset: 2, Len: 3}},
 		HotWriteLimited:                2,
 		CompactionValueWeight:          1.0,
 		CompactionValueWeightSuggested: 2.0,

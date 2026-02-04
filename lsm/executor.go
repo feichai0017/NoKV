@@ -963,7 +963,7 @@ func iteratorsReversed(th []*table, opt *utils.Options) []utils.Iterator {
 	}
 	return out
 }
-func (lm *levelManager) updateDiscardStats(discardStats map[uint32]int64) {
+func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
 	select {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
 	default:
@@ -975,7 +975,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
 	// Track discardStats for value log GC.
-	discardStats := make(map[uint32]int64)
+	discardStats := make(map[manifest.ValueLogID]int64)
 	valueBias := 1.0
 	if cd.thisLevel != nil {
 		valueBias = cd.thisLevel.valueBias(lm.opt.CompactionValueWeight)
@@ -991,7 +991,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			if weighted < 1 {
 				weighted = float64(vp.Len)
 			}
-			discardStats[vp.Fid] += int64(math.Round(weighted))
+			discardStats[manifest.ValueLogID{Bucket: vp.Bucket, FileID: vp.Fid}] += int64(math.Round(weighted))
 		}
 	}
 	addKeys := func(builder *tableBuilder) {

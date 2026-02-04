@@ -732,12 +732,12 @@ func TestLSMMetricsAPIs(t *testing.T) {
 		t.Fatalf("expected manifest manager to be available")
 	}
 
-	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Fid: 1, Offset: 2}))
-	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{FileID: 1, Offset: 5, Valid: true}))
-	_, _ = lsm.ValueLogHead()
+	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Bucket: 0, Fid: 1, Offset: 2}))
+	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{Bucket: 0, FileID: 1, Offset: 5, Valid: true}))
+	_ = lsm.ValueLogHead()
 	_ = lsm.ValueLogStatus()
 	_ = lsm.CurrentVersion()
-	requireNoError(lsm.LogValueLogDelete(1))
+	requireNoError(lsm.LogValueLogDelete(0, 1))
 }
 
 func TestLSMBatchAndMemHelpers(t *testing.T) {
@@ -1196,7 +1196,7 @@ func baseTest(_ *testing.T, lsm *LSM, n int) {
 // buildLSM is the test harness helper.
 func buildLSM() *LSM {
 	// init DB Basic Test
-	c := make(chan map[uint32]int64, 16)
+	c := make(chan map[manifest.ValueLogID]int64, 16)
 	opt.DiscardStatsCh = &c
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	if err != nil {

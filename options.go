@@ -17,6 +17,9 @@ type Options struct {
 	MaxBatchSize       int64 // max batch size in bytes
 	ValueLogFileSize   int
 	ValueLogMaxEntries uint32
+	// ValueLogBucketCount controls how many hash buckets the value log uses.
+	// Values <= 1 disable bucketization.
+	ValueLogBucketCount int
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
 	// log garbage collection. Zero or negative values disable automatic GC.
@@ -181,6 +184,7 @@ func NewDefaultOptions() *Options {
 		ValueLogGCDiscardRatio:        0.5,
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
+		ValueLogBucketCount:           16,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 
