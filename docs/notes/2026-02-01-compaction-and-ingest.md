@@ -58,21 +58,21 @@ NoKV 的 Compaction 流程被设计为“快慢双轨”制。
 
 ```mermaid
 graph TD
-    subgraph "Before: L0 Congested"
+    subgraph Before_L0_Congested["Before: L0 Congested"]
         L0["L0: 15 SSTables (Full)"]
         L1["L1: Sorted SSTables"]
     end
-    
-    subgraph "Action: Offload (Fast)"
+
+    subgraph Action_Offload_Fast["Action: Offload (Fast)"]
         Move["Move to Ingest"]
     end
-    
-    subgraph "After: L0 Empty"
+
+    subgraph After_L0_Empty["After: L0 Empty"]
         L0_New["L0: Empty"]
         L1_New["L1: Sorted SSTables"]
         L1_Ingest["L1 Ingest Buffer: 15 Unsorted Tables"]
     end
-    
+
     L0 --> Move --> L1_Ingest
 ```
 
