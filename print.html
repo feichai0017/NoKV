@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ef9bec81.js";
+            window.path_to_searchindex_js = "searchindex-79339507.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-55d6ed17.js"></script>
@@ -3042,21 +3042,21 @@ type ingestShard struct {
 <li><strong>结果</strong>：L0 瞬间清空，写停顿解除。L1 暂时持有这些未排序的文件。</li>
 </ul>
 <pre class="mermaid">graph TD
-    subgraph "Before: L0 Congested"
-        L0[L0: 15 SSTables (Full)]
-        L1[L1: Sorted SSTables]
+    subgraph Before_L0_Congested["Before: L0 Congested"]
+        L0["L0: 15 SSTables (Full)"]
+        L1["L1: Sorted SSTables"]
     end
-    
-    subgraph "Action: Offload (Fast)"
-        Move[Move to Ingest]
+
+    subgraph Action_Offload_Fast["Action: Offload (Fast)"]
+        Move["Move to Ingest"]
     end
-    
-    subgraph "After: L0 Empty"
-        L0_New[L0: Empty]
-        L1_New[L1: Sorted SSTables]
-        L1_Ingest[L1 Ingest Buffer: 15 Unsorted Tables]
+
+    subgraph After_L0_Empty["After: L0 Empty"]
+        L0_New["L0: Empty"]
+        L1_New["L1: Sorted SSTables"]
+        L1_Ingest["L1 Ingest Buffer: 15 Unsorted Tables"]
     end
-    
+
     L0 --&gt; Move --&gt; L1_Ingest
 </pre>
 
