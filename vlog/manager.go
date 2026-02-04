@@ -21,10 +21,12 @@ type Config struct {
 	Dir      string
 	FileMode os.FileMode
 	MaxSize  int64
+	Bucket   uint32
 }
 
 type Manager struct {
 	cfg       Config
+	bucket    uint32
 	filesLock sync.RWMutex
 	files     map[uint32]*segment
 	index     atomic.Value
@@ -136,8 +138,9 @@ func Open(cfg Config) (*Manager, error) {
 		cfg.MaxSize = int64(1 << 29)
 	}
 	mgr := &Manager{
-		cfg:   cfg,
-		files: make(map[uint32]*segment),
+		cfg:    cfg,
+		bucket: cfg.Bucket,
+		files:  make(map[uint32]*segment),
 	}
 	if err := mgr.populate(); err != nil {
 		return nil, err
@@ -367,6 +370,7 @@ func (m *Manager) Head() kv.ValuePtr {
 	return kv.ValuePtr{
 		Fid:    m.activeID,
 		Offset: m.offset,
+		Bucket: m.bucket,
 	}
 }
 
@@ -473,6 +477,9 @@ func (m *Manager) SegmentTruncate(fid uint32, offset uint32) error {
 // used to recover from value log write failures so that partially written
 // batches don't leave garbage in the log.
 func (m *Manager) Rewind(ptr kv.ValuePtr) error {
+	if ptr.Bucket != m.bucket {
+		return pkgerrors.Errorf("rewind: bucket mismatch: want %d got %d", m.bucket, ptr.Bucket)
+	}
 	var (
 		extra []struct {
 			seg  *segment

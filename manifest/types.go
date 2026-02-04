@@ -14,9 +14,16 @@ type FileMeta struct {
 
 // ValueLogMeta describes a value log segment.
 type ValueLogMeta struct {
+	Bucket uint32
 	FileID uint32
 	Offset uint64
 	Valid  bool
+}
+
+// ValueLogID identifies a value log segment within a bucket.
+type ValueLogID struct {
+	Bucket uint32
+	FileID uint32
 }
 
 // PeerMeta describes a peer replica for a region.
@@ -115,8 +122,8 @@ type Version struct {
 	Levels       map[int][]FileMeta
 	LogSegment   uint32
 	LogOffset    uint64
-	ValueLogs    map[uint32]ValueLogMeta
-	ValueLogHead ValueLogMeta
+	ValueLogs    map[ValueLogID]ValueLogMeta
+	ValueLogHead map[uint32]ValueLogMeta
 	RaftPointers map[uint64]RaftLogPointer
 	Regions      map[uint64]RegionMeta
 }

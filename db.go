@@ -52,8 +52,8 @@ type (
 		vlog             *valueLog
 		stats            *Stats
 		blockWrites      int32
-		vhead            *kv.ValuePtr
-		lastLoggedHead   kv.ValuePtr
+		vheads           map[uint32]kv.ValuePtr
+		lastLoggedHeads  map[uint32]kv.ValuePtr
 		headLogDelta     uint32
 		isClosed         uint32
 		orc              *oracle
@@ -106,10 +106,6 @@ type cfCounters struct {
 	writes uint64
 	reads  uint64
 }
-
-var (
-	head = []byte("!NoKV!head") // For storing value offset for replay.
-)
 
 // Open DB
 func Open(opt *Options) *DB {
@@ -314,14 +310,21 @@ func (db *DB) runRecoveryChecks() error {
 		return err
 	}
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-	cfg := vlogpkg.Config{
-		Dir:      vlogDir,
-		FileMode: utils.DefaultFileMode,
-		MaxSize:  int64(db.opt.ValueLogFileSize),
+	bucketCount := db.opt.ValueLogBucketCount
+	if bucketCount <= 1 {
+		bucketCount = 1
 	}
-	if err := vlogpkg.VerifyDir(cfg); err != nil {
-		if !stderrors.Is(err, os.ErrNotExist) {
-			return err
+	for bucket := 0; bucket < bucketCount; bucket++ {
+		cfg := vlogpkg.Config{
+			Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
+			FileMode: utils.DefaultFileMode,
+			MaxSize:  int64(db.opt.ValueLogFileSize),
+			Bucket:   uint32(bucket),
+		}
+		if err := vlogpkg.VerifyDir(cfg); err != nil {
+			if !stderrors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
 	}
 	return nil
@@ -584,26 +587,21 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return utils.ErrInvalidRequest
 	}
-	// Find head on disk
-	headKey := kv.InternalKey(kv.CFDefault, head, math.MaxUint64)
-	val, err := db.lsm.Get(headKey)
-	if err != nil {
-		if err == utils.ErrKeyNotFound {
-			val = kv.NewEntry(headKey, []byte{})
-		} else {
-			return fmt.Errorf("retrieving head from on-disk LSM: %w", err)
+	heads := db.lsm.ValueLogHead()
+	if len(heads) == 0 {
+		heads = db.vheads
+	}
+	if len(heads) == 0 && db.vlog != nil {
+		heads = make(map[uint32]kv.ValuePtr)
+		for bucket, mgr := range db.vlog.managers {
+			if mgr == nil {
+				continue
+			}
+			heads[uint32(bucket)] = mgr.Head()
 		}
 	}
-	defer val.DecrRef()
-
-	// The internal head key always stores a value pointer; no type check needed.
-	var head kv.ValuePtr
-	if len(val.Value) > 0 {
-		head.Decode(val.Value)
-	}
-
 	// Pick a log file and run GC
-	if err := db.vlog.runGC(discardRatio, &head); err != nil {
+	if err := db.vlog.runGC(discardRatio, heads); err != nil {
 		if stderrors.Is(err, utils.ErrEmptyKey) {
 			return nil
 		}
