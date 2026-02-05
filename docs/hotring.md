@@ -57,6 +57,7 @@ Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket he
 * **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which in turn invokes `HotRing.Touch` for every successful lookup. Writes touch the ring only when `Options.WriteHotKeyLimit` is set, so throttling can clamp abusive keys.
 * **Stats** – [`StatsSnapshot`](../stats.go#L41-L87) copies `hot.TopN` into `HotKeys`. `expvar` publishes the same view under `NoKV.Stats.HotKeys` for automation.
 * **Caching** – `lsm/cache` can promote blocks referenced by frequently touched keys, keeping the hot tier warm.
+* **Value log routing** – a dedicated HotRing instance powers **vlog hot/cold bucket routing**. It tracks *write* hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (`ValueLogHotBucketCount`) once `ValueLogHotKeyThreshold` is reached; cold keys go to the cold range.
 
 ---
 
