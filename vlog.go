@@ -1,6 +1,7 @@
 package NoKV
 
 import (
+	"maps"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -513,9 +514,7 @@ func (db *DB) initVLog() {
 		db.vheads = make(map[uint32]kv.ValuePtr)
 	}
 	db.lastLoggedHeads = make(map[uint32]kv.ValuePtr, len(db.vheads))
-	for bucket, head := range db.vheads {
-		db.lastLoggedHeads[bucket] = head
-	}
+	maps.Copy(db.lastLoggedHeads, db.vheads)
 	if err := vlog.open(heads, nil); err != nil {
 		utils.Panic(err)
 	}

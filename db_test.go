@@ -332,14 +332,14 @@ func logRecoveryMetric(t *testing.T, name string, payload any) {
 func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   0,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 14,
+		WorkDir:             dir,
+		ValueThreshold:      0,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 14,
 		ValueLogBucketCount: 1,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -388,14 +388,14 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   0,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 14,
+		WorkDir:             dir,
+		ValueThreshold:      0,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 14,
 		ValueLogBucketCount: 1,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -623,14 +623,14 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 16,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
+		WorkDir:             dir,
+		ValueThreshold:      1 << 20,
+		MemTableSize:        1 << 16,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 20,
 		ValueLogBucketCount: 1,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -669,14 +669,14 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	root := t.TempDir()
 	opt := &Options{
-		WorkDir:          root,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
+		WorkDir:             root,
+		ValueThreshold:      1 << 20,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 20,
 		ValueLogBucketCount: 1,
-		MaxBatchCount:    32,
-		MaxBatchSize:     1 << 20,
+		MaxBatchCount:       32,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
