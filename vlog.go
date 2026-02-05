@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
@@ -31,6 +32,7 @@ type valueLog struct {
 	numActiveIterators int32
 	db                 *DB
 	opt                Options
+	hot                *hotring.HotRing
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
 }
@@ -157,6 +159,54 @@ func (vlog *valueLog) managerFor(bucket uint32) (*vlogpkg.Manager, error) {
 		return nil, fmt.Errorf("value log: missing manager for bucket %d", bucket)
 	}
 	return mgr, nil
+}
+
+func (vlog *valueLog) bucketForEntry(e *kv.Entry) uint32 {
+	if vlog == nil || e == nil {
+		return 0
+	}
+	buckets := vlog.bucketCount
+	if buckets <= 1 {
+		return 0
+	}
+	hotBuckets := vlog.opt.ValueLogHotBucketCount
+	threshold := vlog.opt.ValueLogHotKeyThreshold
+	if hotBuckets <= 0 || threshold <= 0 || vlog.hot == nil {
+		return kv.ValueLogBucket(e.Key, buckets)
+	}
+	if uint32(hotBuckets) >= buckets {
+		hotBuckets = int(buckets) - 1
+		if hotBuckets <= 0 {
+			return kv.ValueLogBucket(e.Key, buckets)
+		}
+	}
+
+	cf := e.CF
+	userKey := e.Key
+	if len(e.Key) > 0 {
+		parsedCF, parsedKey, _ := kv.SplitInternalKey(e.Key)
+		if len(parsedKey) > 0 {
+			userKey = parsedKey
+			if parsedCF.Valid() {
+				cf = parsedCF
+			}
+		}
+	}
+	skey := cfHotKey(cf, userKey)
+	if skey == "" {
+		return kv.ValueLogBucket(e.Key, buckets)
+	}
+
+	count := vlog.hot.Touch(skey)
+	hash := kv.ValueLogHash(e.Key)
+	if count >= threshold {
+		return hash % uint32(hotBuckets)
+	}
+	coldBuckets := buckets - uint32(hotBuckets)
+	if coldBuckets == 0 {
+		return kv.ValueLogBucketFromHash(hash, buckets)
+	}
+	return uint32(hotBuckets) + (hash % coldBuckets)
 }
 
 func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
@@ -325,7 +375,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 		for i, e := range req.Entries {
 			if !vlog.db.shouldWriteValueToLSM(e) {
 				wrote = true
-				bucket := kv.ValueLogBucket(e.Key, vlog.bucketCount)
+				bucket := vlog.bucketForEntry(e)
 				bucketEntries[bucket] = append(bucketEntries[bucket], i)
 			}
 		}
@@ -386,6 +436,9 @@ func (vlog *valueLog) close() error {
 		return nil
 	}
 	<-vlog.lfDiscardStats.closer.CloseSignal
+	if vlog.hot != nil {
+		vlog.hot.Close()
+	}
 	var firstErr error
 	for _, mgr := range vlog.managers {
 		if mgr == nil {
@@ -402,13 +455,23 @@ func (db *DB) initVLog() {
 	heads := db.getHeads()
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
 
-	bucketCount := db.opt.ValueLogBucketCount
-	if bucketCount <= 1 {
-		bucketCount = 1
+	bucketCount := max(db.opt.ValueLogBucketCount, 1)
+
+	var hot *hotring.HotRing
+	if db.opt.HotRingEnabled &&
+		db.opt.ValueLogHotBucketCount > 0 &&
+		db.opt.ValueLogHotKeyThreshold > 0 {
+		hot = hotring.NewHotRing(db.opt.HotRingBits, nil)
+		if db.opt.HotRingWindowSlots > 0 && db.opt.HotRingWindowSlotDuration > 0 {
+			hot.EnableSlidingWindow(db.opt.HotRingWindowSlots, db.opt.HotRingWindowSlotDuration)
+		}
+		if db.opt.HotRingDecayInterval > 0 && db.opt.HotRingDecayShift > 0 {
+			hot.EnableDecay(db.opt.HotRingDecayInterval, db.opt.HotRingDecayShift)
+		}
 	}
 
 	managers := make([]*vlogpkg.Manager, bucketCount)
-	for bucket := 0; bucket < bucketCount; bucket++ {
+	for bucket := range bucketCount {
 		bucketDir := filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket))
 		manager, err := vlogpkg.Open(vlogpkg.Config{
 			Dir:      bucketDir,
@@ -440,6 +503,7 @@ func (db *DB) initVLog() {
 		},
 		db:        db,
 		opt:       *db.opt,
+		hot:       hot,
 		garbageCh: make(chan struct{}, 1),
 	}
 	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)
