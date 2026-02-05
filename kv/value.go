@@ -12,7 +12,7 @@ const (
 	// | keyID(8 bytes) |  baseIV(12 bytes)|
 	// +----------------+------------------+
 	ValueLogHeaderSize  = 20
-	valuePtrEncodedSize = 12
+	valuePtrEncodedSize = 16
 )
 
 // ValueStruct is the serialized form of a value (inline or pointer) used inside
@@ -74,20 +74,24 @@ func sizeVarint(x uint64) (n int) {
 // Value when entries exceed ValueThreshold. Its binary encoding is a fixed-size
 // struct copied by value (see Encode/Decode):
 //
-//	+------+--------+-----+
-//	| Len  | Offset | Fid |
-//	+------+--------+-----+
-//	| 4B   | 4B     | 4B  |
-//	+------+--------+-----+
+//	+------+--------+-----+--------+
+//	| Len  | Offset | Fid | Bucket |
+//	+------+--------+-----+--------+
+//	| 4B   | 4B     | 4B  | 4B     |
+//	+------+--------+-----+--------+
 type ValuePtr struct {
 	Len    uint32
 	Offset uint32
 	Fid    uint32
+	Bucket uint32
 }
 
 func (p ValuePtr) Less(o *ValuePtr) bool {
 	if o == nil {
 		return false
+	}
+	if p.Bucket != o.Bucket {
+		return p.Bucket < o.Bucket
 	}
 	if p.Fid != o.Fid {
 		return p.Fid < o.Fid
@@ -99,7 +103,7 @@ func (p ValuePtr) Less(o *ValuePtr) bool {
 }
 
 func (p ValuePtr) IsZero() bool {
-	return p.Fid == 0 && p.Offset == 0 && p.Len == 0
+	return p.Fid == 0 && p.Offset == 0 && p.Len == 0 && p.Bucket == 0
 }
 
 // Encode encodes the pointer using fixed big-endian fields to remain portable across architectures.
@@ -108,6 +112,7 @@ func (p ValuePtr) Encode() []byte {
 	binary.BigEndian.PutUint32(b[0:4], p.Len)
 	binary.BigEndian.PutUint32(b[4:8], p.Offset)
 	binary.BigEndian.PutUint32(b[8:12], p.Fid)
+	binary.BigEndian.PutUint32(b[12:16], p.Bucket)
 	return b
 }
 
@@ -120,6 +125,7 @@ func (p *ValuePtr) Decode(b []byte) {
 	p.Len = binary.BigEndian.Uint32(b[0:4])
 	p.Offset = binary.BigEndian.Uint32(b[4:8])
 	p.Fid = binary.BigEndian.Uint32(b[8:12])
+	p.Bucket = binary.BigEndian.Uint32(b[12:16])
 }
 
 func IsValuePtr(e *Entry) bool {

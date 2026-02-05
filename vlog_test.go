@@ -2,6 +2,8 @@ package NoKV
 
 import (
 	"bytes"
+	"expvar"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -21,16 +23,19 @@ import (
 var (
 	// Test options for value log tests.
 	opt = &Options{
-		WorkDir:          "./work_test",
-		SSTableMaxSz:     1 << 10,
-		MemTableSize:     1 << 10,
-		ValueLogFileSize: 1 << 20,
-		ValueThreshold:   0,
-		MaxBatchCount:    10,
-		MaxBatchSize:     1 << 20,
-		HotRingEnabled:   true,
-		HotRingBits:      8,
-		HotRingTopK:      8,
+		WorkDir:                 "./work_test",
+		SSTableMaxSz:            1 << 10,
+		MemTableSize:            1 << 10,
+		ValueLogFileSize:        1 << 20,
+		ValueThreshold:          0,
+		ValueLogBucketCount:     1,
+		ValueLogHotBucketCount:  0,
+		ValueLogHotKeyThreshold: 0,
+		MaxBatchCount:           10,
+		MaxBatchSize:            1 << 20,
+		HotRingEnabled:          true,
+		HotRingBits:             8,
+		HotRingTopK:             8,
 	}
 )
 
@@ -65,8 +70,12 @@ func TestVlogBase(t *testing.T) {
 	t.Logf("Pointer written: %+v %+v\n", b.Ptrs[0], b.Ptrs[1])
 
 	// Read back the value log entries via value pointers.
-	payload1, unlock1, err1 := log.manager.Read(&b.Ptrs[0])
-	payload2, unlock2, err2 := log.manager.Read(&b.Ptrs[1])
+	mgr1, err := log.managerFor(b.Ptrs[0].Bucket)
+	require.NoError(t, err)
+	mgr2, err := log.managerFor(b.Ptrs[1].Bucket)
+	require.NoError(t, err)
+	payload1, unlock1, err1 := mgr1.Read(&b.Ptrs[0])
+	payload2, unlock2, err2 := mgr2.Read(&b.Ptrs[1])
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	// Release callbacks.
@@ -87,6 +96,60 @@ func TestVlogBase(t *testing.T) {
 	require.Equal(t, []byte("samplekeyb"), entry2.Key)
 	require.Equal(t, []byte(val2), entry2.Value)
 	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
+}
+
+func TestValueLogHotBucketRouting(t *testing.T) {
+	clearDir()
+
+	prevBucketCount := opt.ValueLogBucketCount
+	prevHotBucketCount := opt.ValueLogHotBucketCount
+	prevHotKeyThreshold := opt.ValueLogHotKeyThreshold
+	prevValueThreshold := opt.ValueThreshold
+	prevHotRingEnabled := opt.HotRingEnabled
+	prevHotRingBits := opt.HotRingBits
+	prevHotRingTopK := opt.HotRingTopK
+
+	opt.ValueLogBucketCount = 4
+	opt.ValueLogHotBucketCount = 2
+	opt.ValueLogHotKeyThreshold = 2
+	opt.ValueThreshold = 0
+	opt.HotRingEnabled = true
+	opt.HotRingBits = 8
+	opt.HotRingTopK = 8
+	defer func() {
+		opt.ValueLogBucketCount = prevBucketCount
+		opt.ValueLogHotBucketCount = prevHotBucketCount
+		opt.ValueLogHotKeyThreshold = prevHotKeyThreshold
+		opt.ValueThreshold = prevValueThreshold
+		opt.HotRingEnabled = prevHotRingEnabled
+		opt.HotRingBits = prevHotRingBits
+		opt.HotRingTopK = prevHotRingTopK
+	}()
+
+	db := Open(opt)
+	defer db.Close()
+	log := db.vlog
+
+	payload := bytes.Repeat([]byte("v"), 64)
+	hotBuckets := uint32(opt.ValueLogHotBucketCount)
+
+	e1 := kvpkg.NewEntry([]byte("hot-key"), payload)
+	e1.Meta = kvpkg.BitValuePointer
+	req1 := &request{Entries: []*kvpkg.Entry{e1}}
+	require.NoError(t, log.write([]*request{req1}))
+	e1.DecrRef()
+
+	require.Len(t, req1.Ptrs, 1)
+	require.GreaterOrEqual(t, req1.Ptrs[0].Bucket, hotBuckets)
+
+	e2 := kvpkg.NewEntry([]byte("hot-key"), payload)
+	e2.Meta = kvpkg.BitValuePointer
+	req2 := &request{Entries: []*kvpkg.Entry{e2}}
+	require.NoError(t, log.write([]*request{req2}))
+	e2.DecrRef()
+
+	require.Len(t, req2.Ptrs, 1)
+	require.Less(t, req2.Ptrs[0].Bucket, hotBuckets)
 }
 
 func TestVersionedEntryValueLogPointer(t *testing.T) {
@@ -137,15 +200,21 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	log := db.vlog
 
 	var mu sync.Mutex
-	synced := make(map[uint32]int)
-	log.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
-		BeforeSync: func(_ *vlogpkg.Manager, fid uint32) error {
-			mu.Lock()
-			synced[fid]++
-			mu.Unlock()
-			return nil
-		},
-	})
+	synced := make(map[manifest.ValueLogID]int)
+	for bucket, mgr := range log.managers {
+		if mgr == nil {
+			continue
+		}
+		b := uint32(bucket)
+		mgr.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+			BeforeSync: func(_ *vlogpkg.Manager, fid uint32) error {
+				mu.Lock()
+				synced[manifest.ValueLogID{Bucket: b, FileID: fid}]++
+				mu.Unlock()
+				return nil
+			},
+		})
+	}
 
 	payload := bytes.Repeat([]byte("v"), 180)
 	e1 := kvpkg.NewEntry([]byte("sync-key-1"), payload)
@@ -159,8 +228,8 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	if len(req.Ptrs) != 2 {
 		t.Fatalf("expected 2 value pointers, got %d", len(req.Ptrs))
 	}
-	if req.Ptrs[0].Fid == req.Ptrs[1].Fid {
-		t.Fatalf("expected pointers in different vlog segments, got fid=%d", req.Ptrs[0].Fid)
+	if req.Ptrs[0].Fid == req.Ptrs[1].Fid && req.Ptrs[0].Bucket == req.Ptrs[1].Bucket {
+		t.Fatalf("expected pointers in different vlog segments or buckets, got fid=%d bucket=%d", req.Ptrs[0].Fid, req.Ptrs[0].Bucket)
 	}
 
 	mu.Lock()
@@ -183,6 +252,19 @@ func clearDir() {
 		panic(err)
 	}
 	opt.WorkDir = dir
+}
+
+func keyForBucket(t *testing.T, bucket int, buckets int) []byte {
+	t.Helper()
+	for i := 0; i < 10000; i++ {
+		userKey := []byte(fmt.Sprintf("gc-bucket-key-%d", i))
+		internal := kvpkg.InternalKey(kvpkg.CFDefault, userKey, 1)
+		if kvpkg.ValueLogBucket(internal, uint32(buckets)) == uint32(bucket) {
+			return userKey
+		}
+	}
+	t.Fatalf("unable to find key for bucket %d", bucket)
+	return nil
 }
 
 func TestValueGC(t *testing.T) {
@@ -223,6 +305,54 @@ func TestValueGC(t *testing.T) {
 	}
 }
 
+func TestValueLogGCParallelScheduling(t *testing.T) {
+	cfg := *opt
+	cfg.WorkDir = t.TempDir()
+	cfg.ValueThreshold = 0
+	cfg.ValueLogBucketCount = 2
+	cfg.ValueLogHotBucketCount = 0
+	cfg.ValueLogHotKeyThreshold = 0
+	cfg.ValueLogFileSize = 4 << 10
+	cfg.ValueLogGCParallelism = 2
+	cfg.ValueLogGCInterval = 0
+	cfg.NumCompactors = 2
+
+	db := Open(&cfg)
+	defer db.Close()
+
+	key0 := keyForBucket(t, 0, cfg.ValueLogBucketCount)
+	key1 := keyForBucket(t, 1, cfg.ValueLogBucketCount)
+	payload := bytes.Repeat([]byte("x"), 512)
+
+	hasSealed := func() bool {
+		for bucket := 0; bucket < cfg.ValueLogBucketCount; bucket++ {
+			mgr, err := db.vlog.managerFor(uint32(bucket))
+			require.NoError(t, err)
+			if len(mgr.ListFIDs()) < 2 {
+				return false
+			}
+		}
+		return true
+	}
+
+	for i := 0; i < 200 && !hasSealed(); i++ {
+		require.NoError(t, db.Set(key0, payload))
+		require.NoError(t, db.Set(key1, payload))
+	}
+	require.True(t, hasSealed(), "expected sealed vlog segments in each bucket")
+
+	scheduledVar := expvar.Get("NoKV.ValueLog.GcScheduled")
+	require.NotNil(t, scheduledVar)
+	before := scheduledVar.(*expvar.Int).Value()
+
+	_ = db.RunValueLogGC(0.99)
+
+	after := scheduledVar.(*expvar.Int).Value()
+	if after-before < 2 {
+		t.Fatalf("expected parallel GC scheduling, delta=%d", after-before)
+	}
+}
+
 func TestValueLogIterateReleasesEntries(t *testing.T) {
 	clearDir()
 	db := Open(opt)
@@ -235,10 +365,10 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 	require.NoError(t, txn.Commit())
 
 	vlog := db.vlog
-	active := vlog.manager.ActiveFID()
+	active := vlog.managers[0].ActiveFID()
 
 	var captured []*kvpkg.Entry
-	_, err := vlog.manager.Iterate(active, kvpkg.ValueLogHeaderSize, func(e *kvpkg.Entry, vp *kvpkg.ValuePtr) error {
+	_, err := vlog.managers[0].Iterate(active, kvpkg.ValueLogHeaderSize, func(e *kvpkg.Entry, vp *kvpkg.ValuePtr) error {
 		captured = append(captured, e)
 		return nil
 	})
@@ -274,9 +404,9 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	db := Open(&cfg)
 	defer db.Close()
 
-	head := db.vlog.manager.Head()
+	head := db.vlog.managers[0].Head()
 	var calls int
-	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+	db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{
 		BeforeAppend: func(m *vlogpkg.Manager, data []byte) error {
 			calls++
 			if calls == 2 {
@@ -285,7 +415,7 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 			return nil
 		},
 	})
-	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+	defer db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{})
 
 	req := requestPool.Get().(*request)
 	req.reset()
@@ -299,7 +429,7 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 
 	err := db.vlog.write([]*request{req})
 	require.Error(t, err)
-	require.Equal(t, head, db.vlog.manager.Head())
+	require.Equal(t, head, db.vlog.managers[0].Head())
 	require.Len(t, req.Ptrs, 0)
 }
 
@@ -309,10 +439,10 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	db := Open(&cfg)
 	defer db.Close()
 
-	head := db.vlog.manager.Head()
+	head := db.vlog.managers[0].Head()
 	db.vlog.setValueLogFileSize(256)
 	var rotates int
-	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+	db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{
 		BeforeRotate: func(m *vlogpkg.Manager) error {
 			rotates++
 			if rotates == 1 {
@@ -321,7 +451,7 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 			return nil
 		},
 	})
-	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+	defer db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{})
 
 	req := requestPool.Get().(*request)
 	req.reset()
@@ -335,7 +465,7 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 
 	err := db.vlog.write([]*request{req})
 	require.Error(t, err)
-	require.Equal(t, head, db.vlog.manager.Head())
+	require.Equal(t, head, db.vlog.managers[0].Head())
 	require.Len(t, req.Ptrs, 0)
 	require.Equal(t, 1, rotates)
 }
@@ -394,34 +524,36 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 		t.Fatalf("batchSet: %v", err)
 	}
 
-	head := db.vlog.manager.Head()
-	if meta, ok := db.lsm.ValueLogHead(); !ok {
+	head := db.vlog.managers[0].Head()
+	heads := db.lsm.ValueLogHead()
+	meta, ok := heads[0]
+	if !ok {
 		t.Fatalf("expected manifest head")
-	} else {
-		if meta.Fid != head.Fid {
-			t.Fatalf("manifest fid %d does not match manager %d", meta.Fid, head.Fid)
-		}
-		if meta.Offset != head.Offset {
-			t.Fatalf("manifest offset %d does not match manager %d", meta.Offset, head.Offset)
-		}
+	}
+	if meta.Fid != head.Fid {
+		t.Fatalf("manifest fid %d does not match manager %d", meta.Fid, head.Fid)
+	}
+	if meta.Offset != head.Offset {
+		t.Fatalf("manifest offset %d does not match manager %d", meta.Offset, head.Offset)
 	}
 }
 
 func TestValueLogReconcileManifestRemovesInvalid(t *testing.T) {
 	tmp := t.TempDir()
-	mgr, err := vlogpkg.Open(vlogpkg.Config{Dir: tmp, FileMode: utils.DefaultFileMode, MaxSize: 1 << 20})
+	mgr, err := vlogpkg.Open(vlogpkg.Config{Dir: tmp, FileMode: utils.DefaultFileMode, MaxSize: 1 << 20, Bucket: 0})
 	require.NoError(t, err)
 	defer mgr.Close()
 
 	require.NoError(t, mgr.Rotate())
 
 	vlog := &valueLog{
-		dirPath: tmp,
-		manager: mgr,
+		dirPath:     tmp,
+		bucketCount: 1,
+		managers:    []*vlogpkg.Manager{mgr},
 	}
 
-	vlog.reconcileManifest(map[uint32]manifest.ValueLogMeta{
-		0: {FileID: 0, Valid: false},
+	vlog.reconcileManifest(map[manifest.ValueLogID]manifest.ValueLogMeta{
+		{Bucket: 0, FileID: 0}: {Bucket: 0, FileID: 0, Valid: false},
 	})
 
 	_, err = os.Stat(filepath.Join(tmp, "00000.vlog"))

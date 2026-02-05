@@ -49,17 +49,18 @@ func removeDir(dir string) {
 
 func getTestOptions(dir string) *Options {
 	opt = &Options{
-		WorkDir:          dir,
-		SSTableMaxSz:     1 << 10,
-		MemTableSize:     1 << 10,
-		ValueLogFileSize: 1 << 20,
-		ValueThreshold:   0,
-		MaxBatchCount:    20,
-		MaxBatchSize:     1 << 20,
-		DetectConflicts:  true,
-		HotRingEnabled:   true,
-		HotRingBits:      8,
-		HotRingTopK:      8,
+		WorkDir:             dir,
+		SSTableMaxSz:        1 << 10,
+		MemTableSize:        1 << 10,
+		ValueLogFileSize:    1 << 20,
+		ValueThreshold:      0,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       20,
+		MaxBatchSize:        1 << 20,
+		DetectConflicts:     true,
+		HotRingEnabled:      true,
+		HotRingBits:         8,
+		HotRingTopK:         8,
 	}
 	return opt
 }
@@ -350,9 +351,9 @@ func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
 	db := Open(&cfg)
 	defer db.Close()
 
-	head := db.vlog.manager.Head()
+	head := db.vlog.managers[0].Head()
 	var calls int
-	db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{
+	db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{
 		BeforeAppend: func(m *vlogpkg.Manager, data []byte) error {
 			calls++
 			if calls == 1 {
@@ -361,7 +362,7 @@ func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
 			return nil
 		},
 	})
-	defer db.vlog.manager.SetTestingHooks(vlogpkg.ManagerTestingHooks{})
+	defer db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{})
 
 	err := db.Update(func(txn *Txn) error {
 		return txn.Set([]byte("txn-key"), bytes.Repeat([]byte("v"), 256))
@@ -370,7 +371,7 @@ func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
 		t.Fatalf("expected error from value log failure")
 	}
 
-	require.Equal(t, head, db.vlog.manager.Head())
+	require.Equal(t, head, db.vlog.managers[0].Head())
 	_, err = db.Get([]byte("txn-key"))
 	require.Equal(t, utils.ErrKeyNotFound, err)
 }

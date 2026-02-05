@@ -332,13 +332,14 @@ func logRecoveryMetric(t *testing.T, name string, payload any) {
 func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   0,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 14,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:             dir,
+		ValueThreshold:      0,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 14,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -348,13 +349,13 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 		key := fmt.Appendf(nil, "key-%03d", i)
 		require.NoError(t, db.Set(key, val))
 	}
-	fids := db.vlog.manager.ListFIDs()
+	fids := db.vlog.managers[0].ListFIDs()
 	require.GreaterOrEqual(t, len(fids), 2)
 	staleFID := fids[0]
 
-	require.NoError(t, db.lsm.LogValueLogDelete(staleFID))
+	require.NoError(t, db.lsm.LogValueLogDelete(0, staleFID))
 
-	stalePath := filepath.Join(dir, "vlog", fmt.Sprintf("%05d.vlog", staleFID))
+	stalePath := filepath.Join(dir, "vlog", "bucket-000", fmt.Sprintf("%05d.vlog", staleFID))
 	if _, err := os.Stat(stalePath); err != nil {
 		t.Fatalf("expected stale value log file %s to exist: %v", stalePath, err)
 	}
@@ -370,7 +371,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	require.True(t, removed, "expected stale value log file to be deleted on recovery")
 
 	status := db2.lsm.ValueLogStatus()
-	meta, ok := status[staleFID]
+	meta, ok := status[manifest.ValueLogID{Bucket: 0, FileID: staleFID}]
 	if ok {
 		require.False(t, meta.Valid)
 	}
@@ -387,13 +388,14 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   0,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 14,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:             dir,
+		ValueThreshold:      0,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 14,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -401,31 +403,31 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	val := make([]byte, 512)
 	require.NoError(t, db.Set(key, val))
 
-	headPtr := db.vlog.manager.Head()
+	headPtr := db.vlog.managers[0].Head()
 	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
 	headCopy := headPtr
 	require.NoError(t, db.lsm.LogValueLogHead(&headCopy))
 	before := db.lsm.ValueLogStatus()
-	beforeInfo := make(map[uint32]bool, len(before))
-	for fid, meta := range before {
-		beforeInfo[fid] = meta.Valid
+	beforeInfo := make(map[manifest.ValueLogID]bool, len(before))
+	for id, meta := range before {
+		beforeInfo[id] = meta.Valid
 	}
 	require.NoError(t, db.Close())
 
 	orphanFID := uint32(123)
-	orphanPath := filepath.Join(dir, "vlog", fmt.Sprintf("%05d.vlog", orphanFID))
+	orphanPath := filepath.Join(dir, "vlog", "bucket-000", fmt.Sprintf("%05d.vlog", orphanFID))
 	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o666))
 
 	db2 := Open(opt)
 	defer db2.Close()
 
-	headMeta, hasHead := db2.lsm.ValueLogHead()
+	headMeta, hasHead := db2.lsm.ValueLogHead()[0]
 	status := db2.lsm.ValueLogStatus()
-	statusInfo := make(map[uint32]bool, len(status))
-	for fid, meta := range status {
-		statusInfo[fid] = meta.Valid
+	statusInfo := make(map[manifest.ValueLogID]bool, len(status))
+	for id, meta := range status {
+		statusInfo[id] = meta.Valid
 	}
-	remainingFIDs := db2.vlog.manager.ListFIDs()
+	remainingFIDs := db2.vlog.managers[0].ListFIDs()
 
 	_, err := os.Stat(orphanPath)
 	require.Error(t, err)
@@ -621,13 +623,14 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
-		WorkDir:          dir,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 16,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
-		MaxBatchCount:    100,
-		MaxBatchSize:     1 << 20,
+		WorkDir:             dir,
+		ValueThreshold:      1 << 20,
+		MemTableSize:        1 << 16,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 20,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       100,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -637,7 +640,11 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 
 	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
 	_ = db.stats.close()
-	_ = db.vlog.manager.Close()
+	for _, mgr := range db.vlog.managers {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}
 	_ = db.wal.Close()
 	if db.dirLock != nil {
 		_ = db.dirLock.Release()
@@ -662,13 +669,14 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	root := t.TempDir()
 	opt := &Options{
-		WorkDir:          root,
-		ValueThreshold:   1 << 20,
-		MemTableSize:     1 << 12,
-		SSTableMaxSz:     1 << 20,
-		ValueLogFileSize: 1 << 20,
-		MaxBatchCount:    32,
-		MaxBatchSize:     1 << 20,
+		WorkDir:             root,
+		ValueThreshold:      1 << 20,
+		MemTableSize:        1 << 12,
+		SSTableMaxSz:        1 << 20,
+		ValueLogFileSize:    1 << 20,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       32,
+		MaxBatchSize:        1 << 20,
 	}
 
 	db := Open(opt)
@@ -718,6 +726,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	opt.WorkDir = dir
 	opt.ValueLogFileSize = 1 << 16
 	opt.ValueThreshold = 1 << 20
+	opt.ValueLogBucketCount = 1
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
 
@@ -726,10 +735,10 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	userKey := []byte("vlog-replay-key")
 	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint64)
 	entry := kv.NewEntry(internalKey, []byte("payload"))
-	_, err := db.vlog.manager.AppendEntry(entry)
+	_, err := db.vlog.managers[0].AppendEntry(entry)
 	require.NoError(t, err)
 	entry.DecrRef()
-	require.NoError(t, db.vlog.manager.SyncActive())
+	require.NoError(t, db.vlog.managers[0].SyncActive())
 	require.NoError(t, db.Close())
 
 	db2 := Open(opt)

@@ -17,6 +17,15 @@ type Options struct {
 	MaxBatchSize       int64 // max batch size in bytes
 	ValueLogFileSize   int
 	ValueLogMaxEntries uint32
+	// ValueLogBucketCount controls how many hash buckets the value log uses.
+	// Values <= 1 disable bucketization.
+	ValueLogBucketCount int
+	// ValueLogHotBucketCount reserves this many buckets for hot keys when
+	// HotRing-based routing is enabled. Values <= 0 disable hot/cold splitting.
+	ValueLogHotBucketCount int
+	// ValueLogHotKeyThreshold marks a key as hot once its HotRing counter reaches
+	// this value. Values <= 0 disable HotRing-based routing.
+	ValueLogHotKeyThreshold int32
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
 	// log garbage collection. Zero or negative values disable automatic GC.
@@ -24,6 +33,21 @@ type Options struct {
 	// ValueLogGCDiscardRatio is the discard ratio for a value log file to be
 	// considered for garbage collection. It must be in the range (0.0, 1.0).
 	ValueLogGCDiscardRatio float64
+	// ValueLogGCParallelism controls how many value-log GC tasks can run in
+	// parallel. Values <= 0 auto-tune based on compaction workers.
+	ValueLogGCParallelism int
+	// ValueLogGCReduceScore lowers GC parallelism when compaction max score meets
+	// or exceeds this threshold. Values <= 0 use defaults.
+	ValueLogGCReduceScore float64
+	// ValueLogGCSkipScore skips GC when compaction max score meets or exceeds this
+	// threshold. Values <= 0 use defaults.
+	ValueLogGCSkipScore float64
+	// ValueLogGCReduceBacklog lowers GC parallelism when compaction backlog meets
+	// or exceeds this threshold. Values <= 0 use defaults.
+	ValueLogGCReduceBacklog int
+	// ValueLogGCSkipBacklog skips GC when compaction backlog meets or exceeds this
+	// threshold. Values <= 0 use defaults.
+	ValueLogGCSkipBacklog int
 
 	// Value log GC sampling parameters. Ratios <= 0 fall back to defaults.
 	ValueLogGCSampleSizeRatio  float64
@@ -179,8 +203,16 @@ func NewDefaultOptions() *Options {
 		CompactionValueAlertThreshold: 0.6,
 		ValueLogGCInterval:            10 * time.Minute,
 		ValueLogGCDiscardRatio:        0.5,
+		ValueLogGCParallelism:         0,
+		ValueLogGCReduceScore:         2.0,
+		ValueLogGCSkipScore:           4.0,
+		ValueLogGCReduceBacklog:       0,
+		ValueLogGCSkipBacklog:         0,
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
+		ValueLogBucketCount:           16,
+		ValueLogHotBucketCount:        4,
+		ValueLogHotKeyThreshold:       8,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 

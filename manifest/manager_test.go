@@ -197,24 +197,24 @@ func TestManagerValueLog(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	if err := mgr.LogValueLogHead(2, 4096); err != nil {
+	if err := mgr.LogValueLogHead(0, 2, 4096); err != nil {
 		t.Fatalf("log value log head: %v", err)
 	}
 	version := mgr.Current()
-	meta := mgr.ValueLogHead()
+	meta := mgr.ValueLogHead()[0]
 	if !meta.Valid || meta.FileID != 2 || meta.Offset != 4096 {
 		t.Fatalf("value log head mismatch: %+v", meta)
 	}
-	if err := mgr.LogValueLogDelete(2); err != nil {
+	if err := mgr.LogValueLogDelete(0, 2); err != nil {
 		t.Fatalf("log value log delete: %v", err)
 	}
 	version = mgr.Current()
-	if meta, ok := version.ValueLogs[2]; !ok {
+	if meta, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 2}]; !ok {
 		t.Fatalf("expected value log entry tracked after deletion")
 	} else if meta.Valid {
 		t.Fatalf("expected value log entry marked invalid")
 	}
-	meta = mgr.ValueLogHead()
+	meta = mgr.ValueLogHead()[0]
 	if meta.Valid {
 		t.Fatalf("expected head cleared after deletion: %+v", meta)
 	}
@@ -227,27 +227,27 @@ func TestManagerValueLogUpdate(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	if err := mgr.LogValueLogHead(3, 2048); err != nil {
+	if err := mgr.LogValueLogHead(0, 3, 2048); err != nil {
 		t.Fatalf("log head: %v", err)
 	}
-	if err := mgr.LogValueLogDelete(3); err != nil {
+	if err := mgr.LogValueLogDelete(0, 3); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
-	meta := manifest.ValueLogMeta{FileID: 3, Offset: 2048, Valid: true}
+	meta := manifest.ValueLogMeta{Bucket: 0, FileID: 3, Offset: 2048, Valid: true}
 	if err := mgr.LogValueLogUpdate(meta); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
 	current := mgr.Current()
-	restored, ok := current.ValueLogs[3]
+	restored, ok := current.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 3}]
 	if !ok {
 		t.Fatalf("expected fid 3 metadata after update")
 	}
 	if !restored.Valid || restored.Offset != 2048 {
 		t.Fatalf("unexpected restored meta: %+v", restored)
 	}
-	head := mgr.ValueLogHead()
+	head := mgr.ValueLogHead()[0]
 	if head.Valid {
 		t.Fatalf("expected head to remain cleared after update: %+v", head)
 	}
@@ -263,7 +263,7 @@ func TestManagerValueLogUpdate(t *testing.T) {
 	defer mgr.Close()
 
 	current = mgr.Current()
-	restored, ok = current.ValueLogs[3]
+	restored, ok = current.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 3}]
 	if !ok {
 		t.Fatalf("expected fid 3 metadata after reopen")
 	}
@@ -422,13 +422,13 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	if err := mgr.LogValueLogHead(1, 128); err != nil {
+	if err := mgr.LogValueLogHead(0, 1, 128); err != nil {
 		t.Fatalf("log head 1: %v", err)
 	}
-	if err := mgr.LogValueLogDelete(1); err != nil {
+	if err := mgr.LogValueLogDelete(0, 1); err != nil {
 		t.Fatalf("delete head 1: %v", err)
 	}
-	if err := mgr.LogValueLogHead(2, 4096); err != nil {
+	if err := mgr.LogValueLogHead(0, 2, 4096); err != nil {
 		t.Fatalf("log head 2: %v", err)
 	}
 	if err := mgr.Close(); err != nil {
@@ -442,12 +442,12 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 	defer mgr.Close()
 
 	version := mgr.Current()
-	if meta1, ok := version.ValueLogs[1]; !ok {
+	if meta1, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 1}]; !ok {
 		t.Fatalf("expected fid 1 metadata after replay")
 	} else if meta1.Valid {
 		t.Fatalf("expected fid 1 to remain invalid after deletion: %+v", meta1)
 	}
-	if meta2, ok := version.ValueLogs[2]; !ok {
+	if meta2, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 2}]; !ok {
 		t.Fatalf("expected fid 2 metadata after replay")
 	} else {
 		if !meta2.Valid {
@@ -457,7 +457,7 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 			t.Fatalf("unexpected fid 2 offset: %d", meta2.Offset)
 		}
 	}
-	head := mgr.ValueLogHead()
+	head := mgr.ValueLogHead()[0]
 	if !head.Valid || head.FileID != 2 || head.Offset != 4096 {
 		t.Fatalf("unexpected replay head: %+v", head)
 	}
@@ -583,11 +583,11 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 		t.Fatalf("expected dir %s, got %s", dir, got)
 	}
 
-	if err := mgr.LogValueLogUpdate(manifest.ValueLogMeta{FileID: 7, Offset: 9, Valid: true}); err != nil {
+	if err := mgr.LogValueLogUpdate(manifest.ValueLogMeta{Bucket: 0, FileID: 7, Offset: 9, Valid: true}); err != nil {
 		t.Fatalf("log value log update: %v", err)
 	}
 	status := mgr.ValueLogStatus()
-	if len(status) != 1 || status[7].Offset != 9 {
+	if len(status) != 1 || status[manifest.ValueLogID{Bucket: 0, FileID: 7}].Offset != 9 {
 		t.Fatalf("unexpected value log status: %+v", status)
 	}
 
