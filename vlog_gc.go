@@ -488,6 +488,22 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 		limit = len(vlog.managers)
 	}
 
+	existing := make([]map[uint32]struct{}, len(vlog.managers))
+	for bucket, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
+		}
+		fids := mgr.ListFIDs()
+		if len(fids) == 0 {
+			continue
+		}
+		set := make(map[uint32]struct{}, len(fids))
+		for _, fid := range fids {
+			set[fid] = struct{}{}
+		}
+		existing[bucket] = set
+	}
+
 	bestID := make([]manifest.ValueLogID, len(vlog.managers))
 	bestDiscard := make([]int64, len(vlog.managers))
 	bestSet := make([]bool, len(vlog.managers))
@@ -495,6 +511,12 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	vlog.lfDiscardStats.RLock()
 	for id, discard := range vlog.lfDiscardStats.m {
 		if int(id.Bucket) >= len(vlog.managers) {
+			continue
+		}
+		if existing[id.Bucket] == nil {
+			continue
+		}
+		if _, ok := existing[id.Bucket][id.FileID]; !ok {
 			continue
 		}
 		mgr := vlog.managers[id.Bucket]
