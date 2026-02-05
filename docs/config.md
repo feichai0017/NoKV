@@ -23,8 +23,11 @@ Key option groups (see `options.go` for the full list):
 - **Value log**
   - `ValueThreshold`, `ValueLogFileSize`, `ValueLogMaxEntries`
   - `ValueLogGCInterval`, `ValueLogGCDiscardRatio`
+  - `ValueLogGCParallelism`, `ValueLogGCReduceScore`, `ValueLogGCSkipScore`
+  - `ValueLogGCReduceBacklog`, `ValueLogGCSkipBacklog`
   - `ValueLogGCSampleSizeRatio`, `ValueLogGCSampleCountRatio`,
     `ValueLogGCSampleFromHead`
+  - `ValueLogBucketCount`, `ValueLogHotBucketCount`, `ValueLogHotKeyThreshold`
 - **LSM & compaction**
   - `MemTableSize`, `MemTableEngine`, `SSTableMaxSz`, `NumCompactors`
   - `NumLevelZeroTables`, `IngestCompactBatchSize`, `IngestBacklogMergeScore`

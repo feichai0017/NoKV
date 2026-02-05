@@ -32,6 +32,14 @@
    * 通过 HotRing 统计“写热点”。
    * 热 key → 热桶范围 `[0..hotBuckets-1]`  
    * 冷 key → 冷桶范围 `[hotBuckets..bucketCount-1]`
+   * 默认配置采用 `ValueLogBucketCount=16`、`ValueLogHotBucketCount=4`、`ValueLogHotKeyThreshold=8`（可按负载调整）。
+
+4. **并行 GC + 压力控制**  
+   * 多桶 GC 可并行，但 **同一桶只允许一个 GC**（锁自由的桶级互斥）。
+   * 并行度 `ValueLogGCParallelism` 默认自动取 `max(NumCompactors/2, 1)`，并受桶数上限约束。
+   * compaction 压力高时会 **降级或跳过 GC**：
+     * `ValueLogGCReduceScore / ReduceBacklog` 触发并行度减半。
+     * `ValueLogGCSkipScore / SkipBacklog` 触发本轮跳过。
 
 ---
 

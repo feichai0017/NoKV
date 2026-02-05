@@ -3,7 +3,7 @@ package NoKV
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,25 +108,148 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 			<-vlog.garbageCh
 		}()
 
-		files := vlog.pickLog(heads)
+		limit, throttled, skipped := vlog.effectiveGCParallelism()
+		if skipped {
+			metrics.IncValueLogGCSkipped()
+			return utils.ErrNoRewrite
+		}
+		if throttled {
+			metrics.IncValueLogGCThrottled()
+		}
+		if limit <= 0 {
+			metrics.IncValueLogGCSkipped()
+			return utils.ErrNoRewrite
+		}
+
+		files := vlog.pickLogs(heads, limit)
 		if len(files) == 0 {
 			return utils.ErrNoRewrite
 		}
-		tried := make(map[manifest.ValueLogID]bool)
+		results := make(chan error, len(files))
+		scheduled := 0
+
 		for _, id := range files {
-			if _, done := tried[id]; done {
+			if !vlog.tryStartBucketGC(id.Bucket) {
 				continue
 			}
-			tried[id] = true
-			if err := vlog.doRunGC(id.Bucket, id.FileID, discardRatio); err == nil {
-				return nil
-			} else if err != utils.ErrNoRewrite {
-				return err
+			if !vlog.tryAcquireGCToken() {
+				vlog.finishBucketGC(id.Bucket)
+				continue
 			}
+			scheduled++
+			metrics.IncValueLogGCScheduled()
+			metrics.IncValueLogGCActive()
+			go func(job manifest.ValueLogID) {
+				defer vlog.releaseGCToken()
+				defer vlog.finishBucketGC(job.Bucket)
+				defer metrics.DecValueLogGCActive()
+				err := vlog.doRunGC(job.Bucket, job.FileID, discardRatio)
+				results <- err
+			}(id)
+		}
+
+		if scheduled == 0 {
+			return utils.ErrNoRewrite
+		}
+
+		success := false
+		var firstErr error
+		for i := 0; i < scheduled; i++ {
+			err := <-results
+			if err == nil {
+				success = true
+				continue
+			}
+			if err != utils.ErrNoRewrite && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if success {
+			return nil
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 		return utils.ErrNoRewrite
 	default:
+		metrics.IncValueLogGCRejected()
 		return utils.ErrRejected
+	}
+}
+
+func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, skipped bool) {
+	base := vlog.gcParallelism
+	if base <= 1 {
+		if base <= 0 {
+			return 0, false, true
+		}
+		return base, false, false
+	}
+	if vlog.db == nil || vlog.db.lsm == nil {
+		return base, false, false
+	}
+
+	reduceScore := vlog.opt.ValueLogGCReduceScore
+	if reduceScore <= 0 {
+		reduceScore = 2.0
+	}
+	skipScore := vlog.opt.ValueLogGCSkipScore
+	if skipScore <= 0 {
+		skipScore = 4.0
+	}
+	reduceBacklog := vlog.opt.ValueLogGCReduceBacklog
+	if reduceBacklog <= 0 {
+		reduceBacklog = max(vlog.opt.NumCompactors, 2)
+	}
+	skipBacklog := vlog.opt.ValueLogGCSkipBacklog
+	if skipBacklog <= 0 {
+		skipBacklog = max(reduceBacklog*2, 4)
+	}
+
+	backlog, maxScore := vlog.db.lsm.CompactionStats()
+	if (skipBacklog > 0 && backlog >= int64(skipBacklog)) || (skipScore > 0 && maxScore >= skipScore) {
+		return 0, true, true
+	}
+	if (reduceBacklog > 0 && backlog >= int64(reduceBacklog)) || (reduceScore > 0 && maxScore >= reduceScore) {
+		effective = max(base/2, 1)
+		return effective, true, false
+	}
+	return base, false, false
+}
+
+func (vlog *valueLog) tryStartBucketGC(bucket uint32) bool {
+	if int(bucket) >= len(vlog.gcBucketBusy) {
+		return false
+	}
+	return vlog.gcBucketBusy[bucket].CompareAndSwap(0, 1)
+}
+
+func (vlog *valueLog) finishBucketGC(bucket uint32) {
+	if int(bucket) >= len(vlog.gcBucketBusy) {
+		return
+	}
+	vlog.gcBucketBusy[bucket].Store(0)
+}
+
+func (vlog *valueLog) tryAcquireGCToken() bool {
+	if vlog.gcTokens == nil {
+		return true
+	}
+	select {
+	case vlog.gcTokens <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (vlog *valueLog) releaseGCToken() {
+	if vlog.gcTokens == nil {
+		return
+	}
+	select {
+	case <-vlog.gcTokens:
+	default:
 	}
 }
 
@@ -357,15 +480,17 @@ func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifes
 	return out
 }
 
-func (vlog *valueLog) pickLog(heads map[uint32]kv.ValuePtr) (files []manifest.ValueLogID) {
-	if len(vlog.managers) == 0 {
+func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files []manifest.ValueLogID) {
+	if len(vlog.managers) == 0 || limit <= 0 {
 		return nil
 	}
+	if limit > len(vlog.managers) {
+		limit = len(vlog.managers)
+	}
 
-	var (
-		bestID      manifest.ValueLogID
-		bestDiscard int64
-	)
+	bestID := make([]manifest.ValueLogID, len(vlog.managers))
+	bestDiscard := make([]int64, len(vlog.managers))
+	bestSet := make([]bool, len(vlog.managers))
 
 	vlog.lfDiscardStats.RLock()
 	for id, discard := range vlog.lfDiscardStats.m {
@@ -384,20 +509,39 @@ func (vlog *valueLog) pickLog(heads map[uint32]kv.ValuePtr) (files []manifest.Va
 		if head.Fid != 0 && id.FileID >= head.Fid {
 			continue
 		}
-		if discard > bestDiscard {
-			bestDiscard = discard
-			bestID = id
+		if discard > bestDiscard[id.Bucket] {
+			bestDiscard[id.Bucket] = discard
+			bestID[id.Bucket] = id
+			bestSet[id.Bucket] = true
 		}
 	}
 	vlog.lfDiscardStats.RUnlock()
 
-	if bestDiscard > 0 {
-		files = append(files, bestID)
+	files = make([]manifest.ValueLogID, 0, limit)
+	selectedBuckets := make([]bool, len(vlog.managers))
+	for bucket := range bestSet {
+		if !bestSet[bucket] || bestDiscard[bucket] <= 0 {
+			continue
+		}
+		files = append(files, bestID[bucket])
+		selectedBuckets[bucket] = true
+	}
+	files = vlog.filterPendingDeletes(files)
+	if len(files) > 1 {
+		sort.Slice(files, func(i, j int) bool {
+			return bestDiscard[files[i].Bucket] > bestDiscard[files[j].Bucket]
+		})
+	}
+	if len(files) > limit {
+		files = files[:limit]
+	}
+	if len(files) >= limit {
+		return files
 	}
 
 	candidates := make([]manifest.ValueLogID, 0)
 	for bucket, mgr := range vlog.managers {
-		if mgr == nil {
+		if mgr == nil || selectedBuckets[bucket] {
 			continue
 		}
 		head := heads[uint32(bucket)]
@@ -419,7 +563,21 @@ func (vlog *valueLog) pickLog(heads map[uint32]kv.ValuePtr) (files []manifest.Va
 	if len(candidates) == 0 {
 		return files
 	}
-	files = append(files, candidates[rand.Intn(len(candidates))])
+	start := int(atomic.AddUint64(&vlog.gcPickSeed, 1))
+	if start < 0 {
+		start = 0
+	}
+	for i := 0; i < len(candidates); i++ {
+		id := candidates[(start+i)%len(candidates)]
+		if selectedBuckets[id.Bucket] {
+			continue
+		}
+		files = append(files, id)
+		selectedBuckets[id.Bucket] = true
+		if len(files) >= limit {
+			break
+		}
+	}
 	return files
 }
 
