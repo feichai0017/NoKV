@@ -17,6 +17,23 @@
 
 ---
 
+## 1.1 参考论文与工程对标
+
+以下论文/系统是 NoKV compaction 与 ingest buffer 设计的主要参考坐标（按主题分类）：
+
+* **LSM 设计与调参理论**：
+  * [Monkey (SIGMOD 2017)](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store) —— 全局调参、Bloom 过滤器与合并策略的权衡模型。
+  * [Dostoevsky (SIGMOD 2018)](https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores) —— Lazy Leveling / 低合并成本的层级策略。
+* **写停顿与稳定性**：
+  * [bLSM (SIGMOD 2012)](https://dblp.uni-trier.de/rec/conf/sigmod/SearsR12.html) —— 强调写入吞吐稳定与 tail latency。
+  * [Performance Stability in LSM-based Storage Systems](https://arxiv.org/abs/1906.09667) —— compaction 抖动与写停顿成因分析。
+* **工程系统实践**：
+  * [RocksDB Compaction (官方文档)](https://github.com/facebook/rocksdb/wiki/Compaction) —— leveled/tiered/universal 与 L0 处理策略。
+  * [PebblesDB](https://utsaslab.github.io/pebblesdb/) —— 碎片化/分片思路降低写放大。
+  * [Co-KV](https://arxiv.org/abs/1807.04151) —— 把 compaction 视作核心瓶颈的系统研究。
+
+---
+
 ## 2. 核心组件：Ingest Buffer
 
 为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：**Ingest Buffer**。
@@ -128,3 +145,34 @@ NoKV 的 Compaction 和 Ingest Buffer 设计解决了一组复杂的工程矛盾
 | **VLog 膨胀** | 被动等待 | **Value-Aware Scoring** | 主动出击，加速空间回收 |
 
 这是一个非常成熟的工业级设计，它不仅关注“存得下”，更关注“写得稳”和“删得掉”。
+
+---
+
+## 7. 与论文原始设计的关键对比（我们做了哪些改动）
+
+### 7.1 与 bLSM / Performance Stability 的对比
+| 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
+| :-- | :-- | :-- | :-- |
+| 写停顿主因是 L0 拥堵 + Compaction 过慢 | 强调稳定吞吐 | **Ingest Buffer + 快速卸载** | 写停顿几乎消失 |
+| 需要把后台任务节奏“拉平” | 关注 tail latency | **分片 + 并行 compaction + 动态调度** | 把抖动压在后台 |
+
+### 7.2 与 Monkey / Dostoevsky 的对比
+| 论文观点 | 原文侧重点 | NoKV 改动 | 实际影响 |
+| :-- | :-- | :-- | :-- |
+| LSM 参数需全局权衡（读/写/空间） | 理论模型 | **引入 ingest buffer 作为工程缓冲层** | 实际调参更稳定 |
+| Lazy leveling 降低合并成本 | 减少写放大 | **IngestKeep/Drain 模式** | 热点时延降低 |
+
+### 7.3 与 RocksDB / PebblesDB 的对比
+| 系统 | 原始设计 | NoKV 改动 | 说明 |
+| :-- | :-- | :-- | :-- |
+| RocksDB | L0 → leveled，universal 作为可选 | **引入每层 ingest 缓冲区** | 更适合 burst 场景 |
+| PebblesDB | 碎片化 LSM | **按前缀分片 shard** | 保持范围局部性 |
+
+### 7.4 与论文原型不同的工程化点
+
+* **分片并行**：按 key 前缀 shard，使 ingest 与 compaction 可并行而不互相覆盖。
+* **IngestKeep / IngestDrain**：把“快速止血”和“慢速还债”拆成两条路径。
+* **Value-aware compaction**：与 VLog discard stats 联动，把无效指针尽快清掉。
+* **调度基于 backlog/score**：优先处理最急的 shard，而非随机挑选。
+
+> 简单总结：论文解决的是“理论最优解”，NoKV 做的是“工程稳定性 + 可运维”。
