@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-5946475c.js";
+            window.path_to_searchindex_js = "searchindex-350d6c49.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -231,6 +231,7 @@
 <li><strong>DB reads</strong> – <code>Txn.Get</code> and iterators call <code>db.recordRead</code>, which in turn invokes <code>HotRing.Touch</code> for every successful lookup. Writes touch the ring only when <code>Options.WriteHotKeyLimit</code> is set, so throttling can clamp abusive keys.</li>
 <li><strong>Stats</strong> – <a href="../stats.go#L41-L87"><code>StatsSnapshot</code></a> copies <code>hot.TopN</code> into <code>HotKeys</code>. <code>expvar</code> publishes the same view under <code>NoKV.Stats.HotKeys</code> for automation.</li>
 <li><strong>Caching</strong> – <code>lsm/cache</code> can promote blocks referenced by frequently touched keys, keeping the hot tier warm.</li>
+<li><strong>Value log routing</strong> – a dedicated HotRing instance powers <strong>vlog hot/cold bucket routing</strong>. It tracks <em>write</em> hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (<code>ValueLogHotBucketCount</code>) once <code>ValueLogHotKeyThreshold</code> is reached; cold keys go to the cold range.</li>
 </ul>
 <hr>
 <h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
