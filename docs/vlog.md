@@ -32,14 +32,19 @@ policy lives in the core package:
 ```text
 <workdir>/
   vlog/
-    00000.vlog
-    00001.vlog
+    bucket-000/
+      00000.vlog
+      00001.vlog
+    bucket-001/
+      00000.vlog
+      00001.vlog
     ...
 ```
 
-* Files are named `%05d.vlog` and live under `workdir/vlog/`. [`Manager.populate`](../vlog/manager.go) discovers existing segments at open.
+* Files are named `%05d.vlog` and live under `workdir/vlog/bucket-XXX/` when `Options.ValueLogBucketCount > 1`. [`Manager.populate`](../vlog/manager.go) discovers existing segments at open.
 * `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
 * Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go).
+* When HotRing routing is enabled (`ValueLogHotBucketCount` + `ValueLogHotKeyThreshold`), buckets are split into hot vs cold ranges to isolate update-heavy keys from GC pressure.
 
 ---
 
@@ -107,7 +112,7 @@ Badger follows the same ordering (value log first, then write batch). RocksDB's 
 
 ---
 
-## 5. Discard Statistics & GC
+## 6. Discard Statistics & GC
 
 ```mermaid
 flowchart LR
@@ -129,7 +134,26 @@ RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV
 
 ---
 
-## 6. Recovery Semantics
+## 7. GC Scheduling & Parallelism
+
+NoKV runs value-log GC with **bucket-aware parallelism** while protecting the LSM from overload:
+
+* `ValueLogGCParallelism` controls the maximum number of concurrent GC tasks. When set to `<= 0`, it auto-tunes to `max(NumCompactors/2, 1)` and is capped by the bucket count.
+* Each bucket has a lock-free guard, so **no two GC jobs run in the same bucket** at once.
+* A lightweight semaphore limits total concurrency without blocking the GC scheduler thread.
+
+### Pressure-aware throttling
+
+Compaction backlog and score feed into the GC scheduler:
+
+* **Reduce**: when compaction backlog or max score crosses `ValueLogGCReduceBacklog` / `ValueLogGCReduceScore`, GC parallelism is halved.
+* **Skip**: when compaction backlog or max score crosses `ValueLogGCSkipBacklog` / `ValueLogGCSkipScore`, GC is skipped for that tick.
+
+This keeps GC throughput high under light load but avoids compaction starvation under pressure.
+
+---
+
+## 8. Recovery Semantics
 
 1. `DB.Open` restores the manifest and fetches the last persisted head pointer.
 2. [`valueLog.open`](../vlog.go) launches `flushDiscardStats` and iterates every vlog file via [`valueLog.replayLog`](../vlog.go). Files marked invalid in the manifest are removed; valid ones are registered in the manager's file map.
@@ -141,15 +165,16 @@ The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored 
 
 ---
 
-## 7. Observability & CLI
+## 9. Observability & CLI
 
 * Metrics in [`stats.go`](../stats.go) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
+* GC scheduling exposes `NoKV.ValueLog.GcParallelism`, `NoKV.ValueLog.GcActive`, `NoKV.ValueLog.GcScheduled`, `NoKV.ValueLog.GcThrottled`, `NoKV.ValueLog.GcSkipped`, and `NoKV.ValueLog.GcRejected` for diagnostics.
 * `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/io.go) before describing segments.
 * Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable `Options.ValueLogVerbose` to emit replay/GC messages to stdout.
 
 ---
 
-## 8. Quick Comparison
+## 10. Quick Comparison
 
 | Capability | RocksDB BlobDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
@@ -162,7 +187,7 @@ By anchoring the vlog state in the manifest and exposing rewind/verify primitive
 
 ---
 
-## 9. Further Reading
+## 11. Further Reading
 
 * [`docs/recovery.md`](recovery.md#value-log-recovery) – failure matrix covering append crashes, GC interruptions, and manifest rewrites.
 * [`docs/cache.md`](cache.md#value-pointer-reads) – how vlog-backed entries interact with the block cache.

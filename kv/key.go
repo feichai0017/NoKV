@@ -3,6 +3,7 @@ package kv
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"math"
 	"unsafe"
 )
@@ -108,4 +109,35 @@ func BytesToString(b []byte) string {
 // SafeCopy does append(a[:0], src...).
 func SafeCopy(a, src []byte) []byte {
 	return append(a[:0], src...)
+}
+
+// ValueLogBucket returns the hash bucket for a key when using a bucketed value log.
+// The hash is computed on the key without the MVCC timestamp suffix, so all
+// versions of a key land in the same bucket.
+func ValueLogBucket(key []byte, buckets uint32) uint32 {
+	if buckets <= 1 {
+		return 0
+	}
+	return ValueLogBucketFromHash(ValueLogHash(key), buckets)
+}
+
+// ValueLogHash returns the stable hash used for value-log bucket routing.
+// The hash is computed on the key without the MVCC timestamp suffix.
+func ValueLogHash(key []byte) uint32 {
+	if len(key) == 0 {
+		return 0
+	}
+	base := ParseKey(key)
+	if len(base) == 0 {
+		return 0
+	}
+	return crc32.Checksum(base, CastagnoliCrcTable)
+}
+
+// ValueLogBucketFromHash maps a precomputed hash to a bucket index.
+func ValueLogBucketFromHash(hash uint32, buckets uint32) uint32 {
+	if buckets <= 1 {
+		return 0
+	}
+	return hash % buckets
 }

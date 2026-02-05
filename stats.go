@@ -188,7 +188,7 @@ type StatsSnapshot struct {
 	ValueLogSegments               int                             `json:"vlog_segments"`
 	ValueLogPendingDel             int                             `json:"vlog_pending_deletes"`
 	ValueLogDiscardQueue           int                             `json:"vlog_discard_queue"`
-	ValueLogHead                   kv.ValuePtr                     `json:"vlog_head"`
+	ValueLogHeads                  map[uint32]kv.ValuePtr          `json:"vlog_heads,omitempty"`
 	WALActiveSegment               int64                           `json:"wal_active_segment"`
 	WALSegmentCount                int64                           `json:"wal_segment_count"`
 	WALActiveSize                  int64                           `json:"wal_active_size"`
@@ -816,7 +816,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLogSegments = stats.Segments
 		snap.ValueLogPendingDel = stats.PendingDeletes
 		snap.ValueLogDiscardQueue = stats.DiscardQueue
-		snap.ValueLogHead = stats.Head
+		snap.ValueLogHeads = stats.Heads
 	}
 	if s.db.orc != nil {
 		tm := s.db.orc.txnMetricsSnapshot()
