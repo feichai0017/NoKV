@@ -179,11 +179,8 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 
 func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, skipped bool) {
 	base := vlog.gcParallelism
-	if base <= 1 {
-		if base <= 0 {
-			return 0, false, true
-		}
-		return base, false, false
+	if base <= 0 {
+		return 0, false, true
 	}
 	if vlog.db == nil || vlog.db.lsm == nil {
 		return base, false, false
@@ -212,6 +209,9 @@ func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, s
 	}
 	if (reduceBacklog > 0 && backlog >= int64(reduceBacklog)) || (reduceScore > 0 && maxScore >= reduceScore) {
 		effective = max(base/2, 1)
+		if effective <= 0 {
+			effective = 1
+		}
 		return effective, true, false
 	}
 	return base, false, false
