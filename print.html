@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf78d328.js";
+            window.path_to_searchindex_js = "searchindex-5946475c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -2809,6 +2809,23 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 </ul>
 </li>
 </ol>
+<hr>
+<h2 id="33-与论文算法的关键差异工程化改动"><a class="header" href="#33-与论文算法的关键差异工程化改动">3.3 与论文/算法的关键差异（工程化改动）</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">对比点</th><th style="text-align: left">论文 / 经典算法</th><th style="text-align: left">NoKV HotRing</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">目标</td><td style="text-align: left">作为索引或严格频率估计</td><td style="text-align: left"><strong>作为系统级热点反馈信号</strong></td></tr>
+<tr><td style="text-align: left">数据结构</td><td style="text-align: left">环形链表/Sketch</td><td style="text-align: left"><strong>哈希分桶 + 有序链表</strong></td></tr>
+<tr><td style="text-align: left">误差控制</td><td style="text-align: left">明确误差界</td><td style="text-align: left"><strong>工程可接受范围</strong></td></tr>
+<tr><td style="text-align: left">并发</td><td style="text-align: left">复杂锁或全局结构</td><td style="text-align: left"><strong>Lock-Free + 轻量自旋锁</strong></td></tr>
+<tr><td style="text-align: left">时间维度</td><td style="text-align: left">常态累计</td><td style="text-align: left"><strong>滑动窗口 + 衰减</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>结论：NoKV HotRing 是“<strong>工程可用</strong>”优先的实现，而不是“<strong>数学最优</strong>”优先。</p>
 <hr>
 <h2 id="4-实际应用场景"><a class="header" href="#4-实际应用场景">4. 实际应用场景</a></h2>
 <h3 id="41-可观测性-observability"><a class="header" href="#41-可观测性-observability">4.1 可观测性 (Observability)</a></h3>
