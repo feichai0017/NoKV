@@ -5,6 +5,7 @@ import (
 	"maps"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
@@ -34,6 +35,10 @@ type valueLog struct {
 	db                 *DB
 	opt                Options
 	hot                *hotring.HotRing
+	gcTokens           chan struct{}
+	gcParallelism      int
+	gcBucketBusy       []atomic.Uint32
+	gcPickSeed         uint64
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
 }
@@ -457,6 +462,16 @@ func (db *DB) initVLog() {
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
 
 	bucketCount := max(db.opt.ValueLogBucketCount, 1)
+	gcParallelism := db.opt.ValueLogGCParallelism
+	if gcParallelism <= 0 {
+		gcParallelism = max(db.opt.NumCompactors/2, 1)
+	}
+	if gcParallelism < 1 {
+		gcParallelism = 1
+	}
+	if gcParallelism > bucketCount {
+		gcParallelism = bucketCount
+	}
 
 	var hot *hotring.HotRing
 	if db.opt.HotRingEnabled &&
@@ -502,11 +517,15 @@ func (db *DB) initVLog() {
 			flushChan:      make(chan map[manifest.ValueLogID]int64, 16),
 			flushThreshold: threshold,
 		},
-		db:        db,
-		opt:       *db.opt,
-		hot:       hot,
-		garbageCh: make(chan struct{}, 1),
+		db:            db,
+		opt:           *db.opt,
+		hot:           hot,
+		gcTokens:      make(chan struct{}, gcParallelism),
+		gcParallelism: gcParallelism,
+		gcBucketBusy:  make([]atomic.Uint32, bucketCount),
+		garbageCh:     make(chan struct{}, 1),
 	}
+	metrics.SetValueLogGCParallelism(gcParallelism)
 	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)
 	vlog.reconcileManifest(status)
 	db.vheads = heads

@@ -33,6 +33,21 @@ type Options struct {
 	// ValueLogGCDiscardRatio is the discard ratio for a value log file to be
 	// considered for garbage collection. It must be in the range (0.0, 1.0).
 	ValueLogGCDiscardRatio float64
+	// ValueLogGCParallelism controls how many value-log GC tasks can run in
+	// parallel. Values <= 0 auto-tune based on compaction workers.
+	ValueLogGCParallelism int
+	// ValueLogGCReduceScore lowers GC parallelism when compaction max score meets
+	// or exceeds this threshold. Values <= 0 use defaults.
+	ValueLogGCReduceScore float64
+	// ValueLogGCSkipScore skips GC when compaction max score meets or exceeds this
+	// threshold. Values <= 0 use defaults.
+	ValueLogGCSkipScore float64
+	// ValueLogGCReduceBacklog lowers GC parallelism when compaction backlog meets
+	// or exceeds this threshold. Values <= 0 use defaults.
+	ValueLogGCReduceBacklog int
+	// ValueLogGCSkipBacklog skips GC when compaction backlog meets or exceeds this
+	// threshold. Values <= 0 use defaults.
+	ValueLogGCSkipBacklog int
 
 	// Value log GC sampling parameters. Ratios <= 0 fall back to defaults.
 	ValueLogGCSampleSizeRatio  float64
@@ -188,6 +203,11 @@ func NewDefaultOptions() *Options {
 		CompactionValueAlertThreshold: 0.6,
 		ValueLogGCInterval:            10 * time.Minute,
 		ValueLogGCDiscardRatio:        0.5,
+		ValueLogGCParallelism:         0,
+		ValueLogGCReduceScore:         2.0,
+		ValueLogGCSkipScore:           4.0,
+		ValueLogGCReduceBacklog:       0,
+		ValueLogGCSkipBacklog:         0,
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
 		ValueLogBucketCount:           16,

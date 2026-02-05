@@ -2,6 +2,8 @@ package NoKV
 
 import (
 	"bytes"
+	"expvar"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -252,6 +254,19 @@ func clearDir() {
 	opt.WorkDir = dir
 }
 
+func keyForBucket(t *testing.T, bucket int, buckets int) []byte {
+	t.Helper()
+	for i := 0; i < 10000; i++ {
+		userKey := []byte(fmt.Sprintf("gc-bucket-key-%d", i))
+		internal := kvpkg.InternalKey(kvpkg.CFDefault, userKey, 1)
+		if kvpkg.ValueLogBucket(internal, uint32(buckets)) == uint32(bucket) {
+			return userKey
+		}
+	}
+	t.Fatalf("unable to find key for bucket %d", bucket)
+	return nil
+}
+
 func TestValueGC(t *testing.T) {
 	clearDir()
 	opt.ValueLogFileSize = 1 << 20
@@ -287,6 +302,54 @@ func TestValueGC(t *testing.T) {
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
 		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
 		item.DecrRef()
+	}
+}
+
+func TestValueLogGCParallelScheduling(t *testing.T) {
+	cfg := *opt
+	cfg.WorkDir = t.TempDir()
+	cfg.ValueThreshold = 0
+	cfg.ValueLogBucketCount = 2
+	cfg.ValueLogHotBucketCount = 0
+	cfg.ValueLogHotKeyThreshold = 0
+	cfg.ValueLogFileSize = 4 << 10
+	cfg.ValueLogGCParallelism = 2
+	cfg.ValueLogGCInterval = 0
+	cfg.NumCompactors = 2
+
+	db := Open(&cfg)
+	defer db.Close()
+
+	key0 := keyForBucket(t, 0, cfg.ValueLogBucketCount)
+	key1 := keyForBucket(t, 1, cfg.ValueLogBucketCount)
+	payload := bytes.Repeat([]byte("x"), 512)
+
+	hasSealed := func() bool {
+		for bucket := 0; bucket < cfg.ValueLogBucketCount; bucket++ {
+			mgr, err := db.vlog.managerFor(uint32(bucket))
+			require.NoError(t, err)
+			if len(mgr.ListFIDs()) < 2 {
+				return false
+			}
+		}
+		return true
+	}
+
+	for i := 0; i < 200 && !hasSealed(); i++ {
+		require.NoError(t, db.Set(key0, payload))
+		require.NoError(t, db.Set(key1, payload))
+	}
+	require.True(t, hasSealed(), "expected sealed vlog segments in each bucket")
+
+	scheduledVar := expvar.Get("NoKV.ValueLog.GcScheduled")
+	require.NotNil(t, scheduledVar)
+	before := scheduledVar.(*expvar.Int).Value()
+
+	_ = db.RunValueLogGC(0.99)
+
+	after := scheduledVar.(*expvar.Int).Value()
+	if after-before < 2 {
+		t.Fatalf("expected parallel GC scheduling, delta=%d", after-before)
 	}
 }
 
