@@ -20,6 +20,12 @@ type Options struct {
 	// ValueLogBucketCount controls how many hash buckets the value log uses.
 	// Values <= 1 disable bucketization.
 	ValueLogBucketCount int
+	// ValueLogHotBucketCount reserves this many buckets for hot keys when
+	// HotRing-based routing is enabled. Values <= 0 disable hot/cold splitting.
+	ValueLogHotBucketCount int
+	// ValueLogHotKeyThreshold marks a key as hot once its HotRing counter reaches
+	// this value. Values <= 0 disable HotRing-based routing.
+	ValueLogHotKeyThreshold int32
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
 	// log garbage collection. Zero or negative values disable automatic GC.
@@ -185,6 +191,8 @@ func NewDefaultOptions() *Options {
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
 		ValueLogBucketCount:           16,
+		ValueLogHotBucketCount:        4,
+		ValueLogHotKeyThreshold:       8,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 
