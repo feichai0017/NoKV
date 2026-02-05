@@ -30,6 +30,10 @@
 * **热冷分离**：热点更新影响局部桶，冷数据保持稳定。
 * **轻 GC**：热点桶高频回收，冷桶低频维护。
 
+### 1.3 参考论文（标题）
+* **[WiscKey: Separating Keys from Values in SSD-conscious Storage](https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu)**
+* **[HashKV: Enabling Efficient Updates in KV Storage via Hashing](https://www.usenix.org/conference/atc18/presentation/chan)**
+
 ---
 
 ## 2. 设计目标（工程化视角）
@@ -38,6 +42,14 @@
 2) **GC 不扰动主路径**：并行但受控，避免和 compaction 争 IO。  
 3) **热点更新局部化**：尽量把垃圾限制在热桶。  
 4) **可观测 + 可调参**：让调参是“看得见的系统工程”。  
+
+---
+
+## 2.1 设计约束与假设
+
+* **Crash Recovery 必须可靠**：vlog 的 head/删除状态必须可恢复。
+* **写放大优先于读放大**：更倾向把写成本压低，读路径可容忍一次额外跳转。
+* **GC 可退让**：GC 是“后台维护”，不能把 compaction 压死。
 
 ---
 
@@ -100,6 +112,22 @@ flowchart TD
 ```
 
 这保证了：**LSM 索引只需持有 ValuePtr 即可定位到具体桶 + 文件 + 偏移**。
+
+---
+
+## 4.2 Manifest 与恢复关系（NoKV 特有工程点）
+
+与论文原型不同，NoKV **把 vlog 的 head 与删除事件写入 manifest**：
+
+```mermaid
+flowchart LR
+  A["vlog append"] --> B["update head"]
+  B --> C["manifest edit"]
+  C --> D["crash recovery"]
+  D --> E["rebuild vlog state"]
+```
+
+这样恢复时不依赖完整目录扫描，避免误删/误开段。
 
 ---
 
@@ -206,6 +234,27 @@ flowchart LR
 阈值参数：
 * `ValueLogGCReduceScore / ValueLogGCReduceBacklog`
 * `ValueLogGCSkipScore / ValueLogGCSkipBacklog`
+
+---
+
+## 8.3 与论文实现的关键差异（重点对比）
+
+### WiscKey vs NoKV
+| 维度 | WiscKey | NoKV |
+| :-- | :-- | :-- |
+| vlog 元数据 | 论文原型不强调 manifest | **manifest 记录 head/删除** |
+| GC 触发 | 依赖扫描与 stale ratio | **来自 LSM discard stats** |
+| GC 并行 | 未强调 | **多桶并行 + 压力控制** |
+| 热点处理 | 无显式热冷 | **HotRing 驱动热/冷桶** |
+
+### HashKV vs NoKV
+| 维度 | HashKV | NoKV |
+| :-- | :-- | :-- |
+| 分区策略 | 哈希分区 | **哈希分桶 + 热/冷分流** |
+| 目标 | 降低更新放大 | **降低 GC 波动 + write amp** |
+| GC 调度 | 以分区为单位 | **分桶并行 + compaction 压力控制** |
+
+> 结论：NoKV 保留论文的“核心思想”，但在**恢复一致性、调度策略、观测性**上做了工程化强化。
 
 ---
 
