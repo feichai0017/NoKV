@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7da7f608.js";
+            window.path_to_searchindex_js = "searchindex-cf78d328.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -2858,6 +2858,30 @@ Hot Keys:
 当 L0 拥堵时，不要阻塞写入去等待漫长的排序，而是先把 L0 的文件“甩”给下一层，让下一层暂时“保管”，等有空了再慢慢整理。</p>
 </blockquote>
 <hr>
+<h2 id="11-参考论文与工程对标"><a class="header" href="#11-参考论文与工程对标">1.1 参考论文与工程对标</a></h2>
+<p>以下论文/系统是 NoKV compaction 与 ingest buffer 设计的主要参考坐标（按主题分类）：</p>
+<ul>
+<li><strong>LSM 设计与调参理论</strong>：
+<ul>
+<li><a href="https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store">Monkey (SIGMOD 2017)</a> —— 全局调参、Bloom 过滤器与合并策略的权衡模型。</li>
+<li><a href="https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores">Dostoevsky (SIGMOD 2018)</a> —— Lazy Leveling / 低合并成本的层级策略。</li>
+</ul>
+</li>
+<li><strong>写停顿与稳定性</strong>：
+<ul>
+<li><a href="https://dblp.uni-trier.de/rec/conf/sigmod/SearsR12.html">bLSM (SIGMOD 2012)</a> —— 强调写入吞吐稳定与 tail latency。</li>
+<li><a href="https://arxiv.org/abs/1906.09667">Performance Stability in LSM-based Storage Systems</a> —— compaction 抖动与写停顿成因分析。</li>
+</ul>
+</li>
+<li><strong>工程系统实践</strong>：
+<ul>
+<li><a href="https://github.com/facebook/rocksdb/wiki/Compaction">RocksDB Compaction (官方文档)</a> —— leveled/tiered/universal 与 L0 处理策略。</li>
+<li><a href="https://utsaslab.github.io/pebblesdb/">PebblesDB</a> —— 碎片化/分片思路降低写放大。</li>
+<li><a href="https://arxiv.org/abs/1807.04151">Co-KV</a> —— 把 compaction 视作核心瓶颈的系统研究。</li>
+</ul>
+</li>
+</ul>
+<hr>
 <h2 id="2-核心组件ingest-buffer"><a class="header" href="#2-核心组件ingest-buffer">2. 核心组件：Ingest Buffer</a></h2>
 <p>为了实现上述哲学，NoKV 为每一层（Level 1+）引入了一个特殊的结构：<strong>Ingest Buffer</strong>。</p>
 <h3 id="21-结构定义-lsmingestgo"><a class="header" href="#21-结构定义-lsmingestgo">2.1 结构定义 (<code>lsm/ingest.go</code>)</a></h3>
@@ -2977,6 +3001,54 @@ type ingestShard struct {
 </table>
 </div>
 <p>这是一个非常成熟的工业级设计，它不仅关注“存得下”，更关注“写得稳”和“删得掉”。</p>
+<hr>
+<h2 id="7-与论文原始设计的关键对比我们做了哪些改动"><a class="header" href="#7-与论文原始设计的关键对比我们做了哪些改动">7. 与论文原始设计的关键对比（我们做了哪些改动）</a></h2>
+<h3 id="71-与-blsm--performance-stability-的对比"><a class="header" href="#71-与-blsm--performance-stability-的对比">7.1 与 bLSM / Performance Stability 的对比</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">论文观点</th><th style="text-align: left">原文侧重点</th><th style="text-align: left">NoKV 改动</th><th style="text-align: left">实际影响</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">写停顿主因是 L0 拥堵 + Compaction 过慢</td><td style="text-align: left">强调稳定吞吐</td><td style="text-align: left"><strong>Ingest Buffer + 快速卸载</strong></td><td style="text-align: left">写停顿几乎消失</td></tr>
+<tr><td style="text-align: left">需要把后台任务节奏“拉平”</td><td style="text-align: left">关注 tail latency</td><td style="text-align: left"><strong>分片 + 并行 compaction + 动态调度</strong></td><td style="text-align: left">把抖动压在后台</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="72-与-monkey--dostoevsky-的对比"><a class="header" href="#72-与-monkey--dostoevsky-的对比">7.2 与 Monkey / Dostoevsky 的对比</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">论文观点</th><th style="text-align: left">原文侧重点</th><th style="text-align: left">NoKV 改动</th><th style="text-align: left">实际影响</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">LSM 参数需全局权衡（读/写/空间）</td><td style="text-align: left">理论模型</td><td style="text-align: left"><strong>引入 ingest buffer 作为工程缓冲层</strong></td><td style="text-align: left">实际调参更稳定</td></tr>
+<tr><td style="text-align: left">Lazy leveling 降低合并成本</td><td style="text-align: left">减少写放大</td><td style="text-align: left"><strong>IngestKeep/Drain 模式</strong></td><td style="text-align: left">热点时延降低</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="73-与-rocksdb--pebblesdb-的对比"><a class="header" href="#73-与-rocksdb--pebblesdb-的对比">7.3 与 RocksDB / PebblesDB 的对比</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">系统</th><th style="text-align: left">原始设计</th><th style="text-align: left">NoKV 改动</th><th style="text-align: left">说明</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">RocksDB</td><td style="text-align: left">L0 → leveled，universal 作为可选</td><td style="text-align: left"><strong>引入每层 ingest 缓冲区</strong></td><td style="text-align: left">更适合 burst 场景</td></tr>
+<tr><td style="text-align: left">PebblesDB</td><td style="text-align: left">碎片化 LSM</td><td style="text-align: left"><strong>按前缀分片 shard</strong></td><td style="text-align: left">保持范围局部性</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="74-与论文原型不同的工程化点"><a class="header" href="#74-与论文原型不同的工程化点">7.4 与论文原型不同的工程化点</a></h3>
+<ul>
+<li><strong>分片并行</strong>：按 key 前缀 shard，使 ingest 与 compaction 可并行而不互相覆盖。</li>
+<li><strong>IngestKeep / IngestDrain</strong>：把“快速止血”和“慢速还债”拆成两条路径。</li>
+<li><strong>Value-aware compaction</strong>：与 VLog discard stats 联动，把无效指针尽快清掉。</li>
+<li><strong>调度基于 backlog/score</strong>：优先处理最急的 shard，而非随机挑选。</li>
+</ul>
+<blockquote>
+<p>简单总结：论文解决的是“理论最优解”，NoKV 做的是“工程稳定性 + 可运维”。</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化"><a class="header" href="#2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化">2026-02-05 vlog 设计与 GC（WiscKey + HashKV 工程化）</a></h1>
 <p>这份笔记把 NoKV 的 ValueLog（vlog）设计、GC 机制、以及最近的并行化与热冷分流优化整理成一份完整版本。内容融合 <strong>WiscKey</strong>（KV 分离）与 <strong>HashKV</strong>（哈希分区/热冷分离）两条主线，并结合当前实现细节与参数策略。</p>
