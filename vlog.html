@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-79339507.js";
+            window.path_to_searchindex_js = "searchindex-9238c8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-55d6ed17.js"></script>
+        <script src="toc-c2519e36.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -205,14 +205,19 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <h2 id="2-directory-layout--naming"><a class="header" href="#2-directory-layout--naming">2. Directory Layout &amp; Naming</a></h2>
 <pre><code class="language-text">&lt;workdir&gt;/
   vlog/
-    00000.vlog
-    00001.vlog
+    bucket-000/
+      00000.vlog
+      00001.vlog
+    bucket-001/
+      00000.vlog
+      00001.vlog
     ...
 </code></pre>
 <ul>
-<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
+<li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
 <li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
+<li>When HotRing routing is enabled (<code>ValueLogHotBucketCount</code> + <code>ValueLogHotKeyThreshold</code>), buckets are split into hot vs cold ranges to isolate update-heavy keys from GC pressure.</li>
 </ul>
 <hr>
 <h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
@@ -267,7 +272,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </ol>
 <p>Badger follows the same ordering (value log first, then write batch). RocksDB’s blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.</p>
 <hr>
-<h2 id="5-discard-statistics--gc"><a class="header" href="#5-discard-statistics--gc">5. Discard Statistics &amp; GC</a></h2>
+<h2 id="6-discard-statistics--gc"><a class="header" href="#6-discard-statistics--gc">6. Discard Statistics &amp; GC</a></h2>
 <pre class="mermaid">flowchart LR
   FlushMgr -- "obsolete ptrs" --&gt; DiscardStats
   DiscardStats --&gt;|"batch json"| writeCh
@@ -289,7 +294,22 @@ _ = mgr.Remove(fid)  // close + delete file
 </ul>
 <p>RocksDB’s blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.</p>
 <hr>
-<h2 id="6-recovery-semantics"><a class="header" href="#6-recovery-semantics">6. Recovery Semantics</a></h2>
+<h2 id="7-gc-scheduling--parallelism"><a class="header" href="#7-gc-scheduling--parallelism">7. GC Scheduling &amp; Parallelism</a></h2>
+<p>NoKV runs value-log GC with <strong>bucket-aware parallelism</strong> while protecting the LSM from overload:</p>
+<ul>
+<li><code>ValueLogGCParallelism</code> controls the maximum number of concurrent GC tasks. When set to <code>&lt;= 0</code>, it auto-tunes to <code>max(NumCompactors/2, 1)</code> and is capped by the bucket count.</li>
+<li>Each bucket has a lock-free guard, so <strong>no two GC jobs run in the same bucket</strong> at once.</li>
+<li>A lightweight semaphore limits total concurrency without blocking the GC scheduler thread.</li>
+</ul>
+<h3 id="pressure-aware-throttling"><a class="header" href="#pressure-aware-throttling">Pressure-aware throttling</a></h3>
+<p>Compaction backlog and score feed into the GC scheduler:</p>
+<ul>
+<li><strong>Reduce</strong>: when compaction backlog or max score crosses <code>ValueLogGCReduceBacklog</code> / <code>ValueLogGCReduceScore</code>, GC parallelism is halved.</li>
+<li><strong>Skip</strong>: when compaction backlog or max score crosses <code>ValueLogGCSkipBacklog</code> / <code>ValueLogGCSkipScore</code>, GC is skipped for that tick.</li>
+</ul>
+<p>This keeps GC throughput high under light load but avoids compaction starvation under pressure.</p>
+<hr>
+<h2 id="8-recovery-semantics"><a class="header" href="#8-recovery-semantics">8. Recovery Semantics</a></h2>
 <ol>
 <li><code>DB.Open</code> restores the manifest and fetches the last persisted head pointer.</li>
 <li><a href="../vlog.go"><code>valueLog.open</code></a> launches <code>flushDiscardStats</code> and iterates every vlog file via <a href="../vlog.go"><code>valueLog.replayLog</code></a>. Files marked invalid in the manifest are removed; valid ones are registered in the manager’s file map.</li>
@@ -299,14 +319,15 @@ _ = mgr.Remove(fid)  // close + delete file
 </ol>
 <p>The flow mirrors Badger’s vlog scanning but keeps state reconstruction anchored on WAL + manifest checkpoints, similar to RocksDB’s reliance on <code>MANIFEST</code> to mark blob files live or obsolete.</p>
 <hr>
-<h2 id="7-observability--cli"><a class="header" href="#7-observability--cli">7. Observability &amp; CLI</a></h2>
+<h2 id="9-observability--cli"><a class="header" href="#9-observability--cli">9. Observability &amp; CLI</a></h2>
 <ul>
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
+<li>GC scheduling exposes <code>NoKV.ValueLog.GcParallelism</code>, <code>NoKV.ValueLog.GcActive</code>, <code>NoKV.ValueLog.GcScheduled</code>, <code>NoKV.ValueLog.GcThrottled</code>, <code>NoKV.ValueLog.GcSkipped</code>, and <code>NoKV.ValueLog.GcRejected</code> for diagnostics.</li>
 <li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
 <li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
 </ul>
 <hr>
-<h2 id="8-quick-comparison"><a class="header" href="#8-quick-comparison">8. Quick Comparison</a></h2>
+<h2 id="10-quick-comparison"><a class="header" href="#10-quick-comparison">10. Quick Comparison</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -322,7 +343,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </div>
 <p>By anchoring the vlog state in the manifest and exposing rewind/verify primitives, NoKV maintains the determinism of RocksDB while keeping Badger’s simple sequential layout.</p>
 <hr>
-<h2 id="9-further-reading"><a class="header" href="#9-further-reading">9. Further Reading</a></h2>
+<h2 id="11-further-reading"><a class="header" href="#11-further-reading">11. Further Reading</a></h2>
 <ul>
 <li><a href="recovery.html#value-log-recovery"><code>docs/recovery.md</code></a> – failure matrix covering append crashes, GC interruptions, and manifest rewrites.</li>
 <li><a href="cache.html#value-pointer-reads"><code>docs/cache.md</code></a> – how vlog-backed entries interact with the block cache.</li>

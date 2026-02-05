@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Flush - NoKV Docs</title>
+        <title>2026-02-05 vlog design insights - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9238c8b4.js";
+            window.path_to_searchindex_js = "../searchindex-9238c8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2519e36.js"></script>
+        <script src="../toc-c2519e36.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,108 +178,106 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush subsystem translates immutable memtables into persisted SSTables while coordinating WAL checkpoints and ValueLog discard statistics. The code lives in <a href="../lsm/flush"><code>lsm/flush</code></a> and is tightly integrated with <code>DB.doWrites</code> and <code>manifest.Manager</code>.</p>
+                        <h1 id="2026-02-05-vlog-设计心得wisckey--hashkv-借鉴"><a class="header" href="#2026-02-05-vlog-设计心得wisckey--hashkv-借鉴">2026-02-05 vlog 设计心得（WiscKey + HashKV 借鉴）</a></h1>
+<p>这篇笔记记录 NoKV 在 ValueLog（vlog）上的设计取舍与工程化落地。整体思路来自两篇论文：
+<strong>WiscKey</strong>（KV 分离）和 <strong>HashKV</strong>（哈希分区/热冷分离）。</p>
 <hr>
-<h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
+<h2 id="1-论文借鉴点"><a class="header" href="#1-论文借鉴点">1. 论文借鉴点</a></h2>
+<h3 id="11-wisckey"><a class="header" href="#11-wisckey">1.1 WiscKey</a></h3>
+<ul>
+<li><strong>KV 分离</strong>：LSM 只存 Key + ValuePtr，大 Value 顺序写入 vlog。</li>
+<li><strong>顺序写 + 随机读</strong>：写入性能极高，但读路径需要根据 ValuePtr 追溯 vlog。</li>
+<li><strong>GC 重要性</strong>：旧值需要通过 GC 回收，避免 vlog 长期膨胀。</li>
+</ul>
+<h3 id="12-hashkv"><a class="header" href="#12-hashkv">1.2 HashKV</a></h3>
+<ul>
+<li><strong>哈希分区</strong>：ValueLog 被划分为多个 partition/bucket。</li>
+<li><strong>更新局部化</strong>：同一 key 的历史版本聚集在一个分区，热点更新不会污染整个 vlog。</li>
+<li><strong>更轻 GC</strong>：热分区可以更频繁 GC，冷分区可以保持稳定。</li>
+</ul>
+<hr>
+<h2 id="2-nokv-的工程化落地"><a class="header" href="#2-nokv-的工程化落地">2. NoKV 的工程化落地</a></h2>
 <ol>
-<li><strong>Reliability</strong> – ensure immutables become SSTables atomically, and failures are recoverable.</li>
-<li><strong>Coordination</strong> – release WAL segments only after manifest commits, and feed discard stats to ValueLog GC.</li>
-<li><strong>Observability</strong> – expose queue depth, stage durations, and task counts through <code>Stats.collect</code> and the CLI.</li>
+<li>
+<p><strong>多桶 vlog</strong><br><code>ValueLogBucketCount &gt; 1</code> 时，vlog 按 hash 分桶，目录布局变为：
+<code>workdir/vlog/bucket-XXX/00000.vlog</code>。</p>
+</li>
+<li>
+<p><strong>ValuePtr 扩展</strong><br>ValuePtr 显式记录 <code>Bucket/Fid/Offset/Len</code>，使 LSM 可以准确指向桶内文件。</p>
+</li>
+<li>
+<p><strong>热/冷分流（HotRing 驱动）</strong></p>
+<ul>
+<li>通过 HotRing 统计“写热点”。</li>
+<li>热 key → 热桶范围 <code>[0..hotBuckets-1]</code></li>
+<li>冷 key → 冷桶范围 <code>[hotBuckets..bucketCount-1]</code></li>
+<li>默认配置采用 <code>ValueLogBucketCount=16</code>、<code>ValueLogHotBucketCount=4</code>、<code>ValueLogHotKeyThreshold=8</code>（可按负载调整）。</li>
+</ul>
+</li>
+<li>
+<p><strong>并行 GC + 压力控制</strong></p>
+<ul>
+<li>多桶 GC 可并行，但 <strong>同一桶只允许一个 GC</strong>（锁自由的桶级互斥）。</li>
+<li>并行度 <code>ValueLogGCParallelism</code> 默认自动取 <code>max(NumCompactors/2, 1)</code>，并受桶数上限约束。</li>
+<li>compaction 压力高时会 <strong>降级或跳过 GC</strong>：
+<ul>
+<li><code>ValueLogGCReduceScore / ReduceBacklog</code> 触发并行度减半。</li>
+<li><code>ValueLogGCSkipScore / SkipBacklog</code> 触发本轮跳过。</li>
+</ul>
+</li>
+</ul>
+</li>
 </ol>
-<p>Compared with RocksDB: the stage transitions mirror RocksDB’s flush job lifecycle (<code>PickMemTable</code>, <code>WriteLevel0Table</code>, <code>InstallMemTable</code>), while the discard stats channel is inspired by Badger’s integration with vlog GC.</p>
 <hr>
-<h2 id="2-stage-machine"><a class="header" href="#2-stage-machine">2. Stage Machine</a></h2>
-<pre class="mermaid">flowchart LR
-    Active[Active MemTable]
-    Immutable[Immutable MemTable]
-    FlushQ[flush.Manager queue]
-    Build[StageBuild]
-    Install[StageInstall]
-    Release[StageRelease]
-
-    Active --&gt;|threshold reached| Immutable --&gt; FlushQ
-    FlushQ --&gt; Build --&gt; Install --&gt; Release --&gt; Active
+<h2 id="3-设计示意图"><a class="header" href="#3-设计示意图">3. 设计示意图</a></h2>
+<pre class="mermaid">flowchart TD
+    A["Entry 写入"] --&gt; B["ValueLog 路由&lt;br/&gt;hash + HotRing"]
+    B --&gt; C["热桶范围&lt;br/&gt;bucket 0..H-1"]
+    B --&gt; D["冷桶范围&lt;br/&gt;bucket H..N-1"]
+    C --&gt; E["vlog/manager Append"]
+    D --&gt; E
+    E --&gt; F["ValuePtr&lt;br/&gt;(bucket,fid,offset)"]
+    F --&gt; G["WAL + LSM (索引)"]
 </pre>
 
-<ul>
-<li><strong>StagePrepare</strong> – <code>Manager.Submit</code> assigns a task ID, records enqueue time, and bumps queue metrics.</li>
-<li><strong>StageBuild</strong> – <code>Manager.Next</code> hands tasks to background workers. <code>buildTable</code> serialises data into a temporary <code>.sst.tmp</code> using <code>lsm/builder.go</code>.</li>
-<li><strong>StageInstall</strong> – manifest edits (<code>EditAddFile</code>, <code>EditLogPointer</code>) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.</li>
-<li><strong>StageRelease</strong> – metrics record release duration, discard stats are flushed to <code>valueLog.lfDiscardStats</code>, and <code>wal.Manager.Remove</code> drops obsolete segments.</li>
-</ul>
-<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These appear as <code>NoKV.Flush.Queue</code>, <code>NoKV.Flush.BuildAvgMs</code>, etc., in CLI output.</p>
-<hr>
-<h2 id="3-key-types"><a class="header" href="#3-key-types">3. Key Types</a></h2>
-<pre><code class="language-go">type Task struct {
-    ID        uint64
-    SegmentID uint32
-    Stage     Stage
-    Data      any      // memtable pointer, temp file info, etc.
-    Err       error
-}
+<pre class="mermaid">flowchart LR
+    H["热桶"] --&gt; H1["高更新率"]
+    H1 --&gt; H2["discard 比例高"]
+    H2 --&gt; H3["GC 更频繁、更局部"]
+    C["冷桶"] --&gt; C1["更新少"]
+    C1 --&gt; C2["discard 比例低"]
+    C2 --&gt; C3["GC 更保守"]
+</pre>
 
-type Manager struct {
-    queue []*Task
-    active map[uint64]*Task
-    cond  *sync.Cond
-    // atomic metrics fields (pending, queueLen, waitNs...)
-}
-</code></pre>
-<ul>
-<li><code>Stage</code> enumerates <code>StagePrepare</code>, <code>StageBuild</code>, <code>StageInstall</code>, <code>StageRelease</code>.</li>
-<li><code>Metrics</code> aggregates pending/active counts and nanosecond accumulators; the CLI converts them to human-friendly durations.</li>
-<li>The queue uses condition variables to coordinate between background workers and producers; the design avoids busy waiting, unlike some RocksDB flush queues.</li>
-</ul>
 <hr>
-<h2 id="4-execution-path-in-code"><a class="header" href="#4-execution-path-in-code">4. Execution Path in Code</a></h2>
+<h2 id="4-设计优点"><a class="header" href="#4-设计优点">4. 设计优点</a></h2>
 <ol>
-<li><code>DB.applyBatches</code> detects when the active memtable is full and hands it to <code>lsm.LSM.scheduleFlush</code>, which calls <code>flush.Manager.Submit</code>.</li>
-<li>Background goroutines call <code>Next</code> to retrieve tasks; <code>lsm.(*LSM).runFlushMemTable</code> performs the build and install phases.</li>
-<li><code>lsm.(*LSM).installLevel0Table</code> writes the manifest edit and renames the SST (atomic <code>os.Rename</code>, same as RocksDB’s flush job).</li>
-<li>After install, <code>valueLog.updateDiscardStats</code> is called so GC can reclaim vlog entries belonging to dropped keys.</li>
-<li>Once release completes, <code>wal.Manager.Remove</code> evicts segments whose entries are fully represented in SSTs, matching RocksDB’s <code>LogFileManager::PurgeObsoleteLogs</code>.</li>
+<li><strong>GC 局部化</strong>：热点更新集中在热桶，冷数据不被“连坐”重写。</li>
+<li><strong>降低写放大</strong>：避免全局 vlog 被少量热 key 污染而频繁 GC。</li>
+<li><strong>更可控的调参</strong>：热桶与冷桶可配置不同 GC 策略与阈值。</li>
+<li><strong>并行扩展空间</strong>：多桶天然适合并行 GC 或独立 IO 调度。</li>
 </ol>
 <hr>
-<h2 id="5-recovery-considerations"><a class="header" href="#5-recovery-considerations">5. Recovery Considerations</a></h2>
+<h2 id="5-代价与注意点"><a class="header" href="#5-代价与注意点">5. 代价与注意点</a></h2>
 <ul>
-<li><strong>Before Install</strong> – temp files remain in <code>tmp/</code>. On restart, no manifest entry exists, so <code>lsm.LSM.replayManifest</code> ignores them and the memtable is rebuilt from WAL.</li>
-<li><strong>After Install but before Release</strong> – manifest records the SST while WAL segments may still exist. Recovery sees the edit, ensures the file exists, and release metrics resume from StageRelease.</li>
-<li><strong>Metrics</strong> – because timing data is stored atomically in the manager, recovery resets counters but does not prevent the CLI from reporting backlog immediately after restart.</li>
+<li><strong>桶数过多</strong>会导致文件碎片化、head 数量膨胀。</li>
+<li><strong>热桶过小</strong>会让热桶文件轮转更频繁。</li>
+<li><strong>热度阈值</strong>需要根据写入分布调优，过低会把冷 key 误判为热。</li>
 </ul>
-<p>RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visibility.</p>
 <hr>
-<h2 id="6-observability--cli"><a class="header" href="#6-observability--cli">6. Observability &amp; CLI</a></h2>
-<ul>
-<li><code>StatsSnapshot.Flush.Queue</code> – number of pending tasks.</li>
-<li><code>StatsSnapshot.Flush.WaitMs</code> – average wait time before build.</li>
-<li><code>StatsSnapshot.Flush.BuildMs</code> – average build duration.</li>
-<li><code>StatsSnapshot.Flush.Completed</code> – cumulative tasks finished.</li>
-</ul>
-<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these metrics alongside compaction and transaction statistics, enabling operators to detect stalled flush workers or WAL backlog quickly.</p>
-<hr>
-<h2 id="7-interplay-with-valuelog-gc"><a class="header" href="#7-interplay-with-valuelog-gc">7. Interplay with ValueLog GC</a></h2>
-<p>Flush completion sends discard stats via <code>db.lsm.SetDiscardStatsCh(&amp;(db.vlog.lfDiscardStats.flushChan))</code>. ValueLog GC uses this feed to determine how much of each vlog segment is obsolete, similar to Badger’s discard ratio heuristic. Without flush-driven stats, vlog GC would have to rescan SSTables, so this channel is crucial for keeping GC cheap.</p>
-<hr>
-<h2 id="8-testing-matrix"><a class="header" href="#8-testing-matrix">8. Testing Matrix</a></h2>
-<ul>
-<li><code>lsm/flush/manager_test.go</code> (implicit via <code>lsm/lsm_test.go</code>) validates stage transitions and metrics.</li>
-<li><code>db_recovery_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
-<li>Future additions: inject write failures during <code>StageBuild</code> to test retry logic, analogous to RocksDB’s simulated IO errors.</li>
-</ul>
-<p>See the <a href="recovery.html">recovery plan</a> and <a href="testing.html">testing matrix</a> for more context.</p>
+<h2 id="6-总结"><a class="header" href="#6-总结">6. 总结</a></h2>
+<p>NoKV 的 vlog 设计以 WiscKey 的 KV 分离为基础，结合 HashKV 的哈希分区思路，
+最终落地为 <strong>“多桶 + 热冷分流”</strong> 的工程方案：顺序写性能保持不变，但 GC 的
+成本和波动被压缩到热桶范围内，整体更稳定、可控。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="memtable.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="compaction.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -287,13 +285,10 @@ type Manager struct {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="memtable.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="compaction.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
@@ -311,16 +306,16 @@ type Manager struct {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
 
 
 
