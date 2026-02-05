@@ -2,6 +2,7 @@
 package NoKV
 
 import (
+	"maps"
 	stderrors "errors"
 	"fmt"
 	"math"
@@ -589,7 +590,12 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	}
 	heads := db.lsm.ValueLogHead()
 	if len(heads) == 0 {
-		heads = db.vheads
+		db.RLock()
+		if len(db.vheads) > 0 {
+			heads = make(map[uint32]kv.ValuePtr, len(db.vheads))
+			maps.Copy(heads, db.vheads)
+		}
+		db.RUnlock()
 	}
 	if len(heads) == 0 && db.vlog != nil {
 		heads = make(map[uint32]kv.ValuePtr)
