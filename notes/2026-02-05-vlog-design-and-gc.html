@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-edaddf85.js";
+            window.path_to_searchindex_js = "../searchindex-7da7f608.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e01647bd.js"></script>
@@ -211,6 +211,11 @@
 <li><strong>热冷分离</strong>：热点更新影响局部桶，冷数据保持稳定。</li>
 <li><strong>轻 GC</strong>：热点桶高频回收，冷桶低频维护。</li>
 </ul>
+<h3 id="13-参考论文标题"><a class="header" href="#13-参考论文标题">1.3 参考论文（标题）</a></h3>
+<ul>
+<li><strong><a href="https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu">WiscKey: Separating Keys from Values in SSD-conscious Storage</a></strong></li>
+<li><strong><a href="https://www.usenix.org/conference/atc18/presentation/chan">HashKV: Enabling Efficient Updates in KV Storage via Hashing</a></strong></li>
+</ul>
 <hr>
 <h2 id="2-设计目标工程化视角"><a class="header" href="#2-设计目标工程化视角">2. 设计目标（工程化视角）</a></h2>
 <ol>
@@ -219,6 +224,13 @@
 <li><strong>热点更新局部化</strong>：尽量把垃圾限制在热桶。</li>
 <li><strong>可观测 + 可调参</strong>：让调参是“看得见的系统工程”。</li>
 </ol>
+<hr>
+<h2 id="21-设计约束与假设"><a class="header" href="#21-设计约束与假设">2.1 设计约束与假设</a></h2>
+<ul>
+<li><strong>Crash Recovery 必须可靠</strong>：vlog 的 head/删除状态必须可恢复。</li>
+<li><strong>写放大优先于读放大</strong>：更倾向把写成本压低，读路径可容忍一次额外跳转。</li>
+<li><strong>GC 可退让</strong>：GC 是“后台维护”，不能把 compaction 压死。</li>
+</ul>
 <hr>
 <h2 id="3-架构总览分层模型"><a class="header" href="#3-架构总览分层模型">3. 架构总览（分层模型）</a></h2>
 <pre class="mermaid">flowchart TD
@@ -266,6 +278,17 @@
 | 4B   | 4B     | 4B  | 4B     |
 </code></pre>
 <p>这保证了：<strong>LSM 索引只需持有 ValuePtr 即可定位到具体桶 + 文件 + 偏移</strong>。</p>
+<hr>
+<h2 id="42-manifest-与恢复关系nokv-特有工程点"><a class="header" href="#42-manifest-与恢复关系nokv-特有工程点">4.2 Manifest 与恢复关系（NoKV 特有工程点）</a></h2>
+<p>与论文原型不同，NoKV <strong>把 vlog 的 head 与删除事件写入 manifest</strong>：</p>
+<pre class="mermaid">flowchart LR
+  A["vlog append"] --&gt; B["update head"]
+  B --&gt; C["manifest edit"]
+  C --&gt; D["crash recovery"]
+  D --&gt; E["rebuild vlog state"]
+</pre>
+
+<p>这样恢复时不依赖完整目录扫描，避免误删/误开段。</p>
 <hr>
 <h2 id="5-写入路径顺序追加"><a class="header" href="#5-写入路径顺序追加">5. 写入路径（顺序追加）</a></h2>
 <pre class="mermaid">sequenceDiagram
@@ -356,6 +379,38 @@
 <li><code>ValueLogGCReduceScore / ValueLogGCReduceBacklog</code></li>
 <li><code>ValueLogGCSkipScore / ValueLogGCSkipBacklog</code></li>
 </ul>
+<hr>
+<h2 id="83-与论文实现的关键差异重点对比"><a class="header" href="#83-与论文实现的关键差异重点对比">8.3 与论文实现的关键差异（重点对比）</a></h2>
+<h3 id="wisckey-vs-nokv"><a class="header" href="#wisckey-vs-nokv">WiscKey vs NoKV</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">维度</th><th style="text-align: left">WiscKey</th><th style="text-align: left">NoKV</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">vlog 元数据</td><td style="text-align: left">论文原型不强调 manifest</td><td style="text-align: left"><strong>manifest 记录 head/删除</strong></td></tr>
+<tr><td style="text-align: left">GC 触发</td><td style="text-align: left">依赖扫描与 stale ratio</td><td style="text-align: left"><strong>来自 LSM discard stats</strong></td></tr>
+<tr><td style="text-align: left">GC 并行</td><td style="text-align: left">未强调</td><td style="text-align: left"><strong>多桶并行 + 压力控制</strong></td></tr>
+<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left"><strong>HotRing 驱动热/冷桶</strong></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="hashkv-vs-nokv"><a class="header" href="#hashkv-vs-nokv">HashKV vs NoKV</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">维度</th><th style="text-align: left">HashKV</th><th style="text-align: left">NoKV</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">分区策略</td><td style="text-align: left">哈希分区</td><td style="text-align: left"><strong>哈希分桶 + 热/冷分流</strong></td></tr>
+<tr><td style="text-align: left">目标</td><td style="text-align: left">降低更新放大</td><td style="text-align: left"><strong>降低 GC 波动 + write amp</strong></td></tr>
+<tr><td style="text-align: left">GC 调度</td><td style="text-align: left">以分区为单位</td><td style="text-align: left"><strong>分桶并行 + compaction 压力控制</strong></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p>结论：NoKV 保留论文的“核心思想”，但在<strong>恢复一致性、调度策略、观测性</strong>上做了工程化强化。</p>
+</blockquote>
 <hr>
 <h2 id="9-可观测性与调参抓手"><a class="header" href="#9-可观测性与调参抓手">9. 可观测性与调参抓手</a></h2>
 <p>关键指标（expvar）：</p>
