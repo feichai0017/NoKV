@@ -259,11 +259,11 @@ func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	if ptr == nil {
 		return nil
 	}
-	return lm.manifestMgr.LogValueLogHead(ptr.Fid, uint64(ptr.Offset))
+	return lm.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
 }
 
-func (lm *levelManager) LogValueLogDelete(fid uint32) error {
-	return lm.manifestMgr.LogValueLogDelete(fid)
+func (lm *levelManager) LogValueLogDelete(bucket uint32, fid uint32) error {
+	return lm.manifestMgr.LogValueLogDelete(bucket, fid)
 }
 
 func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
@@ -273,11 +273,11 @@ func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lm.manifestMgr.LogValueLogUpdate(*meta)
 }
 
-func (lm *levelManager) ValueLogHead() manifest.ValueLogMeta {
+func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
 }
 
-func (lm *levelManager) ValueLogStatus() map[uint32]manifest.ValueLogMeta {
+func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
 }
 

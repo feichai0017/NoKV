@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,7 +94,8 @@ func (m *Manager) createNew() error {
 	}
 	m.version = Version{
 		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[uint32]ValueLogMeta),
+		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
+		ValueLogHead: make(map[uint32]ValueLogMeta),
 		RaftPointers: make(map[uint64]RaftLogPointer),
 		Regions:      make(map[uint64]RegionMeta),
 	}
@@ -115,7 +117,8 @@ func (m *Manager) writeCurrent() error {
 func (m *Manager) replay() error {
 	m.version = Version{
 		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[uint32]ValueLogMeta),
+		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
+		ValueLogHead: make(map[uint32]ValueLogMeta),
 		RaftPointers: make(map[uint64]RaftLogPointer),
 		Regions:      make(map[uint64]RegionMeta),
 	}
@@ -154,29 +157,36 @@ func (m *Manager) apply(edit Edit) {
 		if edit.ValueLog != nil {
 			meta := *edit.ValueLog
 			meta.Valid = true
-			m.version.ValueLogs[meta.FileID] = meta
-			m.version.ValueLogHead = meta
+			id := ValueLogID{Bucket: meta.Bucket, FileID: meta.FileID}
+			m.version.ValueLogs[id] = meta
+			if m.version.ValueLogHead == nil {
+				m.version.ValueLogHead = make(map[uint32]ValueLogMeta)
+			}
+			m.version.ValueLogHead[meta.Bucket] = meta
 		}
 	case EditDeleteValueLog:
 		if edit.ValueLog != nil {
-			meta := m.version.ValueLogs[edit.ValueLog.FileID]
+			id := ValueLogID{Bucket: edit.ValueLog.Bucket, FileID: edit.ValueLog.FileID}
+			meta := m.version.ValueLogs[id]
+			meta.Bucket = edit.ValueLog.Bucket
 			meta.FileID = edit.ValueLog.FileID
 			meta.Offset = 0
 			meta.Valid = false
-			m.version.ValueLogs[edit.ValueLog.FileID] = meta
-			if m.version.ValueLogHead.FileID == edit.ValueLog.FileID {
-				m.version.ValueLogHead = ValueLogMeta{}
+			m.version.ValueLogs[id] = meta
+			if head, ok := m.version.ValueLogHead[meta.Bucket]; ok && head.FileID == meta.FileID {
+				delete(m.version.ValueLogHead, meta.Bucket)
 			}
 		}
 	case EditUpdateValueLog:
 		if edit.ValueLog != nil {
 			meta := *edit.ValueLog
-			m.version.ValueLogs[meta.FileID] = meta
-			if m.version.ValueLogHead.FileID == meta.FileID {
+			id := ValueLogID{Bucket: meta.Bucket, FileID: meta.FileID}
+			m.version.ValueLogs[id] = meta
+			if head, ok := m.version.ValueLogHead[meta.Bucket]; ok && head.FileID == meta.FileID {
 				if meta.Valid {
-					m.version.ValueLogHead = meta
+					m.version.ValueLogHead[meta.Bucket] = meta
 				} else {
-					m.version.ValueLogHead = ValueLogMeta{}
+					delete(m.version.ValueLogHead, meta.Bucket)
 				}
 			}
 		}
@@ -375,13 +385,18 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 	}
 
 	if len(version.ValueLogs) > 0 {
-		fids := make([]uint32, 0, len(version.ValueLogs))
-		for fid := range version.ValueLogs {
-			fids = append(fids, fid)
+		ids := make([]ValueLogID, 0, len(version.ValueLogs))
+		for id := range version.ValueLogs {
+			ids = append(ids, id)
 		}
-		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
-		for _, fid := range fids {
-			meta := version.ValueLogs[fid]
+		sort.Slice(ids, func(i, j int) bool {
+			if ids[i].Bucket == ids[j].Bucket {
+				return ids[i].FileID < ids[j].FileID
+			}
+			return ids[i].Bucket < ids[j].Bucket
+		})
+		for _, id := range ids {
+			meta := version.ValueLogs[id]
 			metaCopy := meta
 			if meta.Valid {
 				if err := writeEdit(w, Edit{Type: EditUpdateValueLog, ValueLog: &metaCopy}); err != nil {
@@ -394,10 +409,17 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 			}
 		}
 	}
-	if version.ValueLogHead.Valid {
-		head := version.ValueLogHead
-		if err := writeEdit(w, Edit{Type: EditValueLogHead, ValueLog: &head}); err != nil {
-			return err
+	if len(version.ValueLogHead) > 0 {
+		buckets := make([]uint32, 0, len(version.ValueLogHead))
+		for bucket := range version.ValueLogHead {
+			buckets = append(buckets, bucket)
+		}
+		slices.Sort(buckets)
+		for _, bucket := range buckets {
+			head := version.ValueLogHead[bucket]
+			if err := writeEdit(w, Edit{Type: EditValueLogHead, ValueLog: &head}); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -406,7 +428,7 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 		for id := range version.RaftPointers {
 			groupIDs = append(groupIDs, id)
 		}
-		sort.Slice(groupIDs, func(i, j int) bool { return groupIDs[i] < groupIDs[j] })
+		slices.Sort(groupIDs)
 		for _, id := range groupIDs {
 			ptr := version.RaftPointers[id]
 			ptrCopy := ptr
@@ -421,7 +443,7 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 		for id := range version.Regions {
 			regionIDs = append(regionIDs, id)
 		}
-		sort.Slice(regionIDs, func(i, j int) bool { return regionIDs[i] < regionIDs[j] })
+		slices.Sort(regionIDs)
 		for _, id := range regionIDs {
 			meta := CloneRegionMeta(version.Regions[id])
 			edit := RegionEdit{Meta: meta}
@@ -487,8 +509,8 @@ func (m *Manager) Current() Version {
 		LogSegment:   m.version.LogSegment,
 		LogOffset:    m.version.LogOffset,
 		Levels:       make(map[int][]FileMeta),
-		ValueLogs:    make(map[uint32]ValueLogMeta),
-		ValueLogHead: m.version.ValueLogHead,
+		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
+		ValueLogHead: make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead)),
 		RaftPointers: make(map[uint64]RaftLogPointer, len(m.version.RaftPointers)),
 		Regions:      make(map[uint64]RegionMeta, len(m.version.Regions)),
 	}
@@ -496,6 +518,7 @@ func (m *Manager) Current() Version {
 		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
 	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
+	maps.Copy(cp.ValueLogHead, m.version.ValueLogHead)
 	maps.Copy(cp.RaftPointers, m.version.RaftPointers)
 	for id, meta := range m.version.Regions {
 		metaCopy := meta
@@ -528,8 +551,9 @@ func (m *Manager) Close() error {
 }
 
 // LogValueLogHead records the active value log head pointer.
-func (m *Manager) LogValueLogHead(fid uint32, offset uint64) error {
+func (m *Manager) LogValueLogHead(bucket uint32, fid uint32, offset uint64) error {
 	meta := &ValueLogMeta{
+		Bucket: bucket,
 		FileID: fid,
 		Offset: offset,
 		Valid:  true,
@@ -538,8 +562,9 @@ func (m *Manager) LogValueLogHead(fid uint32, offset uint64) error {
 }
 
 // LogValueLogDelete records value log segment deletion.
-func (m *Manager) LogValueLogDelete(fid uint32) error {
+func (m *Manager) LogValueLogDelete(bucket uint32, fid uint32) error {
 	meta := &ValueLogMeta{
+		Bucket: bucket,
 		FileID: fid,
 		Valid:  false,
 	}
@@ -553,17 +578,19 @@ func (m *Manager) LogValueLogUpdate(meta ValueLogMeta) error {
 }
 
 // ValueLogHead returns the latest persisted value log head.
-func (m *Manager) ValueLogHead() ValueLogMeta {
+func (m *Manager) ValueLogHead() map[uint32]ValueLogMeta {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.version.ValueLogHead
+	out := make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead))
+	maps.Copy(out, m.version.ValueLogHead)
+	return out
 }
 
 // ValueLogStatus returns a copy of all tracked value log segment metadata.
-func (m *Manager) ValueLogStatus() map[uint32]ValueLogMeta {
+func (m *Manager) ValueLogStatus() map[ValueLogID]ValueLogMeta {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make(map[uint32]ValueLogMeta, len(m.version.ValueLogs))
+	out := make(map[ValueLogID]ValueLogMeta, len(m.version.ValueLogs))
 	maps.Copy(out, m.version.ValueLogs)
 	return out
 }

@@ -2,10 +2,13 @@ package NoKV
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
@@ -24,12 +27,18 @@ var lfDiscardStatsKey = []byte("!NoKV!discard") // For storing lfDiscardStats
 
 type valueLog struct {
 	dirPath            string
-	manager            *vlogpkg.Manager
+	bucketCount        uint32
+	managers           []*vlogpkg.Manager
 	filesToDeleteLock  sync.Mutex
-	filesToBeDeleted   []uint32
+	filesToBeDeleted   []manifest.ValueLogID
 	numActiveIterators int32
 	db                 *DB
 	opt                Options
+	hot                *hotring.HotRing
+	gcTokens           chan struct{}
+	gcParallelism      int
+	gcBucketBusy       []atomic.Uint32
+	gcPickSeed         uint64
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
 }
@@ -42,8 +51,11 @@ func (vlog *valueLog) setValueLogFileSize(sz int) {
 	if vlog.db != nil && vlog.db.opt != nil {
 		vlog.db.opt.ValueLogFileSize = sz
 	}
-	if vlog.manager != nil {
-		vlog.manager.SetMaxSize(int64(sz))
+	for _, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
+		}
+		mgr.SetMaxSize(int64(sz))
 	}
 }
 
@@ -56,12 +68,21 @@ func (vlog *valueLog) logf(format string, args ...any) {
 
 // metrics captures backlog counters for the value log.
 func (vlog *valueLog) metrics() metrics.ValueLogMetrics {
-	if vlog == nil || vlog.manager == nil {
+	if vlog == nil || len(vlog.managers) == 0 {
 		return metrics.ValueLogMetrics{}
 	}
+	heads := make(map[uint32]kv.ValuePtr, len(vlog.managers))
+	segments := 0
+	for bucket, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
+		}
+		segments += len(mgr.ListFIDs())
+		heads[uint32(bucket)] = mgr.Head()
+	}
 	stats := metrics.ValueLogMetrics{
-		Segments: len(vlog.manager.ListFIDs()),
-		Head:     vlog.manager.Head(),
+		Segments: segments,
+		Heads:    heads,
 	}
 
 	if vlog.lfDiscardStats != nil {
@@ -75,64 +96,132 @@ func (vlog *valueLog) metrics() metrics.ValueLogMetrics {
 	return stats
 }
 
-func (vlog *valueLog) reconcileManifest(status map[uint32]manifest.ValueLogMeta) {
-	if vlog == nil || vlog.manager == nil || len(status) == 0 {
+func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.ValueLogMeta) {
+	if vlog == nil || len(vlog.managers) == 0 || len(status) == 0 {
 		return
 	}
-	existing := make(map[uint32]struct{})
-	for _, fid := range vlog.manager.ListFIDs() {
-		existing[fid] = struct{}{}
-	}
-	var (
-		maxTracked uint32
-		maxValid   uint32
-		hasValid   bool
-	)
-	for fid, meta := range status {
-		if fid > maxTracked {
-			maxTracked = fid
+	for bucket, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
 		}
-		if !meta.Valid {
-			if _, ok := existing[fid]; ok {
-				if err := vlog.manager.Remove(fid); err != nil {
-					_ = utils.Err(fmt.Errorf("value log reconcile remove fid %d: %v", fid, err))
-					continue
-				}
-				delete(existing, fid)
-				metrics.IncValueLogSegmentsRemoved()
+		existing := make(map[uint32]struct{})
+		for _, fid := range mgr.ListFIDs() {
+			existing[fid] = struct{}{}
+		}
+		var (
+			maxValid uint32
+			hasValid bool
+		)
+		for id, meta := range status {
+			if id.Bucket != uint32(bucket) {
+				continue
 			}
+			fid := id.FileID
+			if !meta.Valid {
+				if _, ok := existing[fid]; ok {
+					if err := mgr.Remove(fid); err != nil {
+						_ = utils.Err(fmt.Errorf("value log reconcile remove fid %d (bucket %d): %v", fid, bucket, err))
+						continue
+					}
+					delete(existing, fid)
+					metrics.IncValueLogSegmentsRemoved()
+				}
+				continue
+			}
+			hasValid = true
+			if fid > maxValid {
+				maxValid = fid
+			}
+			if _, ok := existing[fid]; ok {
+				delete(existing, fid)
+				continue
+			}
+			_ = utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d (bucket %d)", fid, bucket))
+		}
+		if !hasValid {
 			continue
 		}
-		hasValid = true
-		if fid > maxValid {
-			maxValid = fid
+		threshold := maxValid
+		for fid := range existing {
+			if fid <= threshold {
+				continue
+			}
+			if err := mgr.Remove(fid); err != nil {
+				_ = utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d (bucket %d): %v", fid, bucket, err))
+				continue
+			}
+			metrics.IncValueLogSegmentsRemoved()
+			_ = utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d (bucket %d)", fid, bucket))
 		}
-		if _, ok := existing[fid]; ok {
-			delete(existing, fid)
-			continue
-		}
-		_ = utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d", fid))
-	}
-	if !hasValid {
-		return
-	}
-	threshold := maxValid
-	for fid := range existing {
-		if fid <= threshold {
-			continue
-		}
-		if err := vlog.manager.Remove(fid); err != nil {
-			_ = utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d: %v", fid, err))
-			continue
-		}
-		metrics.IncValueLogSegmentsRemoved()
-		_ = utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d", fid))
 	}
 }
 
-func (vlog *valueLog) removeValueLogFile(fid uint32) error {
+func (vlog *valueLog) managerFor(bucket uint32) (*vlogpkg.Manager, error) {
+	if vlog == nil || int(bucket) >= len(vlog.managers) {
+		return nil, fmt.Errorf("value log: invalid bucket %d", bucket)
+	}
+	mgr := vlog.managers[bucket]
+	if mgr == nil {
+		return nil, fmt.Errorf("value log: missing manager for bucket %d", bucket)
+	}
+	return mgr, nil
+}
+
+func (vlog *valueLog) bucketForEntry(e *kv.Entry) uint32 {
+	if vlog == nil || e == nil {
+		return 0
+	}
+	buckets := vlog.bucketCount
+	if buckets <= 1 {
+		return 0
+	}
+	hotBuckets := vlog.opt.ValueLogHotBucketCount
+	threshold := vlog.opt.ValueLogHotKeyThreshold
+	if hotBuckets <= 0 || threshold <= 0 || vlog.hot == nil {
+		return kv.ValueLogBucket(e.Key, buckets)
+	}
+	if uint32(hotBuckets) >= buckets {
+		hotBuckets = int(buckets) - 1
+		if hotBuckets <= 0 {
+			return kv.ValueLogBucket(e.Key, buckets)
+		}
+	}
+
+	cf := e.CF
+	userKey := e.Key
+	if len(e.Key) > 0 {
+		parsedCF, parsedKey, _ := kv.SplitInternalKey(e.Key)
+		if len(parsedKey) > 0 {
+			userKey = parsedKey
+			if parsedCF.Valid() {
+				cf = parsedCF
+			}
+		}
+	}
+	skey := cfHotKey(cf, userKey)
+	if skey == "" {
+		return kv.ValueLogBucket(e.Key, buckets)
+	}
+
+	count := vlog.hot.Touch(skey)
+	hash := kv.ValueLogHash(e.Key)
+	if count >= threshold {
+		return hash % uint32(hotBuckets)
+	}
+	coldBuckets := buckets - uint32(hotBuckets)
+	if coldBuckets == 0 {
+		return kv.ValueLogBucketFromHash(hash, buckets)
+	}
+	return uint32(hotBuckets) + (hash % coldBuckets)
+}
+
+func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
 	if vlog == nil || vlog.db == nil || vlog.db.lsm == nil {
 		return fmt.Errorf("valueLog.removeValueLogFile: missing dependencies")
+	}
+	mgr, err := vlog.managerFor(bucket)
+	if err != nil {
+		return err
 	}
 	status := vlog.db.lsm.ValueLogStatus()
 	var (
@@ -140,18 +229,18 @@ func (vlog *valueLog) removeValueLogFile(fid uint32) error {
 		hasMeta bool
 	)
 	if status != nil {
-		meta, hasMeta = status[fid]
+		meta, hasMeta = status[manifest.ValueLogID{Bucket: bucket, FileID: fid}]
 	}
-	if err := vlog.db.lsm.LogValueLogDelete(fid); err != nil {
-		return errors.Wrapf(err, "log value log delete fid %d", fid)
+	if err := vlog.db.lsm.LogValueLogDelete(bucket, fid); err != nil {
+		return errors.Wrapf(err, "log value log delete fid %d (bucket %d)", fid, bucket)
 	}
-	if err := vlog.manager.Remove(fid); err != nil {
+	if err := mgr.Remove(fid); err != nil {
 		if hasMeta {
 			if errRestore := vlog.db.lsm.LogValueLogUpdate(&meta); errRestore != nil {
-				_ = utils.Err(fmt.Errorf("value log delete rollback fid %d: %v", fid, errRestore))
+				_ = utils.Err(fmt.Errorf("value log delete rollback fid %d (bucket %d): %v", fid, bucket, errRestore))
 			}
 		}
-		return errors.Wrapf(err, "remove value log fid %d", fid)
+		return errors.Wrapf(err, "remove value log fid %d (bucket %d)", fid, bucket)
 	}
 	metrics.IncValueLogSegmentsRemoved()
 	return nil
@@ -177,50 +266,61 @@ func (vlog *valueLog) newValuePtr(e *kv.Entry) (*kv.ValuePtr, error) {
 	return &vp, nil
 }
 
-func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
+func (vlog *valueLog) open(heads map[uint32]kv.ValuePtr, replayFn kv.LogEntry) error {
 	if replayFn == nil {
 		replayFn = func(*kv.Entry, *kv.ValuePtr) error { return nil }
 	}
 	vlog.lfDiscardStats.closer.Add(1)
 	go vlog.flushDiscardStats()
 
-	fids := vlog.manager.ListFIDs()
-	if len(fids) == 0 {
-		return errors.New("valueLog.open: no value log files found")
+	if len(vlog.managers) == 0 {
+		return errors.New("valueLog.open: no value log buckets found")
 	}
 	vlog.filesToDeleteLock.Lock()
 	vlog.filesToBeDeleted = nil
 	vlog.filesToDeleteLock.Unlock()
 
-	activeFID := vlog.manager.ActiveFID()
-	for _, fid := range fids {
-		offset := uint32(0)
-		if fid == ptr.Fid {
-			offset = ptr.Offset + ptr.Len
+	for bucket, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
 		}
-		vlog.logf("Scanning file id: %d at offset: %d", fid, offset)
-		start := time.Now()
-		if err := vlog.replayLog(fid, offset, replayFn, fid == activeFID); err != nil {
-			if err == utils.ErrDeleteVlogFile {
-				if removeErr := vlog.removeValueLogFile(fid); removeErr != nil {
-					return removeErr
-				}
-				continue
+		fids := mgr.ListFIDs()
+		if len(fids) == 0 {
+			return fmt.Errorf("valueLog.open: no value log files found for bucket %d", bucket)
+		}
+		head := heads[uint32(bucket)]
+		activeFID := mgr.ActiveFID()
+		for _, fid := range fids {
+			offset := uint32(0)
+			if head.Bucket == uint32(bucket) && fid == head.Fid {
+				offset = head.Offset + head.Len
 			}
-			return err
-		}
-		vlog.logf("Scan took: %s", time.Since(start))
-
-		if fid != activeFID {
-			if err := vlog.manager.SegmentInit(fid); err != nil {
+			vlog.logf("Scanning file id: %d bucket: %d at offset: %d", fid, bucket, offset)
+			start := time.Now()
+			if err := vlog.replayLog(uint32(bucket), fid, offset, replayFn, fid == activeFID); err != nil {
+				if err == utils.ErrDeleteVlogFile {
+					if removeErr := vlog.removeValueLogFile(uint32(bucket), fid); removeErr != nil {
+						return removeErr
+					}
+					continue
+				}
 				return err
 			}
-		}
-	}
+			vlog.logf("Scan took: %s", time.Since(start))
 
-	head := vlog.manager.Head()
-	if vlog.db.vhead == nil || vlog.db.vhead.IsZero() {
-		vlog.db.vhead = &head
+			if fid != activeFID {
+				if err := mgr.SegmentInit(fid); err != nil {
+					return err
+				}
+			}
+		}
+		if vlog.db.vheads == nil {
+			vlog.db.vheads = make(map[uint32]kv.ValuePtr)
+		}
+		headPtr := mgr.Head()
+		if _, ok := vlog.db.vheads[uint32(bucket)]; !ok || vlog.db.vheads[uint32(bucket)].IsZero() {
+			vlog.db.vheads[uint32(bucket)] = headPtr
+		}
 	}
 	if err := vlog.populateDiscardStats(); err != nil {
 		if err != utils.ErrKeyNotFound {
@@ -231,58 +331,107 @@ func (vlog *valueLog) open(ptr *kv.ValuePtr, replayFn kv.LogEntry) error {
 }
 
 func (vlog *valueLog) read(vp *kv.ValuePtr) ([]byte, func(), error) {
-	return vlog.manager.ReadValue(vp, vlogpkg.ReadOptions{
+	if vp == nil {
+		return nil, nil, errors.New("valueLog.read: nil value pointer")
+	}
+	mgr, err := vlog.managerFor(vp.Bucket)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mgr.ReadValue(vp, vlogpkg.ReadOptions{
 		Mode:                vlogpkg.ReadModeAuto,
 		SmallValueThreshold: valueLogSmallCopyThreshold,
 	})
 }
 
 func (vlog *valueLog) write(reqs []*request) error {
-	head := vlog.manager.Head()
+	heads := make(map[uint32]kv.ValuePtr)
+	touched := make(map[uint32]struct{})
 	fail := func(err error, context string) error {
 		for _, req := range reqs {
 			req.Ptrs = req.Ptrs[:0]
 		}
-		if rewindErr := vlog.manager.Rewind(head); rewindErr != nil {
-			_ = utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
+		for bucket := range touched {
+			mgr, mgrErr := vlog.managerFor(bucket)
+			if mgrErr != nil {
+				continue
+			}
+			if head, ok := heads[bucket]; ok {
+				if rewindErr := mgr.Rewind(head); rewindErr != nil {
+					_ = utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
+				}
+			}
 		}
 		return err
 	}
-
 	wrote := false
 	for _, req := range reqs {
-		req.Ptrs = req.Ptrs[:0]
-		writeMask := make([]bool, len(req.Entries))
-		for i, e := range req.Entries {
-			if !vlog.db.shouldWriteValueToLSM(e) {
-				writeMask[i] = true
-				wrote = true
+		if req == nil {
+			continue
+		}
+		if cap(req.Ptrs) < len(req.Entries) {
+			req.Ptrs = make([]kv.ValuePtr, len(req.Entries))
+		} else {
+			req.Ptrs = req.Ptrs[:len(req.Entries)]
+			for i := range req.Ptrs {
+				req.Ptrs[i] = kv.ValuePtr{}
 			}
 		}
-
-		ptrs, err := vlog.manager.AppendEntries(req.Entries, writeMask)
-		if err != nil {
-			return fail(err, "rewind value log after append failure")
+		bucketEntries := make(map[uint32][]int)
+		for i, e := range req.Entries {
+			if !vlog.db.shouldWriteValueToLSM(e) {
+				wrote = true
+				bucket := vlog.bucketForEntry(e)
+				bucketEntries[bucket] = append(bucketEntries[bucket], i)
+			}
 		}
-		req.Ptrs = append(req.Ptrs, ptrs...)
+		for bucket, idxs := range bucketEntries {
+			mgr, err := vlog.managerFor(bucket)
+			if err != nil {
+				return fail(err, "value log bucket manager")
+			}
+			if _, ok := heads[bucket]; !ok {
+				heads[bucket] = mgr.Head()
+			}
+			entries := make([]*kv.Entry, len(idxs))
+			for i, idx := range idxs {
+				entries[i] = req.Entries[idx]
+			}
+			ptrs, err := mgr.AppendEntries(entries, nil)
+			if err != nil {
+				return fail(err, "rewind value log after append failure")
+			}
+			for i, idx := range idxs {
+				req.Ptrs[idx] = ptrs[i]
+			}
+			touched[bucket] = struct{}{}
+		}
 	}
 	if wrote && vlog.db != nil && vlog.db.opt.SyncWrites {
-		fids := make([]uint32, 0, len(reqs))
-		seen := make(map[uint32]struct{}, len(reqs))
+		byBucket := make(map[uint32]map[uint32]struct{})
 		for _, req := range reqs {
 			for _, ptr := range req.Ptrs {
 				if ptr.IsZero() {
 					continue
 				}
-				if _, ok := seen[ptr.Fid]; ok {
-					continue
+				if _, ok := byBucket[ptr.Bucket]; !ok {
+					byBucket[ptr.Bucket] = make(map[uint32]struct{})
 				}
-				seen[ptr.Fid] = struct{}{}
-				fids = append(fids, ptr.Fid)
+				byBucket[ptr.Bucket][ptr.Fid] = struct{}{}
 			}
 		}
-		if err := vlog.manager.SyncFIDs(fids); err != nil {
-			return fail(err, "sync value log after append")
+		for bucket, fids := range byBucket {
+			mgr, err := vlog.managerFor(bucket)
+			if err != nil {
+				return fail(err, "sync value log after append")
+			}
+			list := make([]uint32, 0, len(fids))
+			for fid := range fids {
+				list = append(list, fid)
+			}
+			if err := mgr.SyncFIDs(list); err != nil {
+				return fail(err, "sync value log after append")
+			}
 		}
 	}
 	return nil
@@ -293,18 +442,62 @@ func (vlog *valueLog) close() error {
 		return nil
 	}
 	<-vlog.lfDiscardStats.closer.CloseSignal
-	return vlog.manager.Close()
+	if vlog.hot != nil {
+		vlog.hot.Close()
+	}
+	var firstErr error
+	for _, mgr := range vlog.managers {
+		if mgr == nil {
+			continue
+		}
+		if err := mgr.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (db *DB) initVLog() {
-	vp, _ := db.getHead()
+	heads := db.getHeads()
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-	manager, err := vlogpkg.Open(vlogpkg.Config{
-		Dir:      vlogDir,
-		FileMode: utils.DefaultFileMode,
-		MaxSize:  int64(db.opt.ValueLogFileSize),
-	})
-	utils.Panic(err)
+
+	bucketCount := max(db.opt.ValueLogBucketCount, 1)
+	gcParallelism := db.opt.ValueLogGCParallelism
+	if gcParallelism <= 0 {
+		gcParallelism = max(db.opt.NumCompactors/2, 1)
+	}
+	if gcParallelism < 1 {
+		gcParallelism = 1
+	}
+	if gcParallelism > bucketCount {
+		gcParallelism = bucketCount
+	}
+
+	var hot *hotring.HotRing
+	if db.opt.HotRingEnabled &&
+		db.opt.ValueLogHotBucketCount > 0 &&
+		db.opt.ValueLogHotKeyThreshold > 0 {
+		hot = hotring.NewHotRing(db.opt.HotRingBits, nil)
+		if db.opt.HotRingWindowSlots > 0 && db.opt.HotRingWindowSlotDuration > 0 {
+			hot.EnableSlidingWindow(db.opt.HotRingWindowSlots, db.opt.HotRingWindowSlotDuration)
+		}
+		if db.opt.HotRingDecayInterval > 0 && db.opt.HotRingDecayShift > 0 {
+			hot.EnableDecay(db.opt.HotRingDecayInterval, db.opt.HotRingDecayShift)
+		}
+	}
+
+	managers := make([]*vlogpkg.Manager, bucketCount)
+	for bucket := range bucketCount {
+		bucketDir := filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket))
+		manager, err := vlogpkg.Open(vlogpkg.Config{
+			Dir:      bucketDir,
+			FileMode: utils.DefaultFileMode,
+			MaxSize:  int64(db.opt.ValueLogFileSize),
+			Bucket:   uint32(bucket),
+		})
+		utils.Panic(err)
+		managers[bucket] = manager
+	}
 
 	status := db.lsm.ValueLogStatus()
 
@@ -315,91 +508,100 @@ func (db *DB) initVLog() {
 
 	vlog := &valueLog{
 		dirPath:          vlogDir,
-		manager:          manager,
-		filesToBeDeleted: make([]uint32, 0),
+		bucketCount:      uint32(bucketCount),
+		managers:         managers,
+		filesToBeDeleted: make([]manifest.ValueLogID, 0),
 		lfDiscardStats: &lfDiscardStats{
-			m:              make(map[uint32]int64),
+			m:              make(map[manifest.ValueLogID]int64),
 			closer:         utils.NewCloser(),
-			flushChan:      make(chan map[uint32]int64, 16),
+			flushChan:      make(chan map[manifest.ValueLogID]int64, 16),
 			flushThreshold: threshold,
 		},
-		db:        db,
-		opt:       *db.opt,
-		garbageCh: make(chan struct{}, 1),
+		db:            db,
+		opt:           *db.opt,
+		hot:           hot,
+		gcTokens:      make(chan struct{}, gcParallelism),
+		gcParallelism: gcParallelism,
+		gcBucketBusy:  make([]atomic.Uint32, bucketCount),
+		garbageCh:     make(chan struct{}, 1),
 	}
+	metrics.SetValueLogGCParallelism(gcParallelism)
 	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)
 	vlog.reconcileManifest(status)
-	db.vhead = vp
-	if vp != nil {
-		db.lastLoggedHead = *vp
-	} else {
-		db.lastLoggedHead = kv.ValuePtr{}
+	db.vheads = heads
+	if db.vheads == nil {
+		db.vheads = make(map[uint32]kv.ValuePtr)
 	}
-	if err := vlog.open(vp, nil); err != nil {
+	db.lastLoggedHeads = make(map[uint32]kv.ValuePtr, len(db.vheads))
+	maps.Copy(db.lastLoggedHeads, db.vheads)
+	if err := vlog.open(heads, nil); err != nil {
 		utils.Panic(err)
 	}
 	db.vlog = vlog
 }
 
-func (db *DB) getHead() (*kv.ValuePtr, uint64) {
-	vp, ok := db.lsm.ValueLogHead()
-	if !ok {
-		var zero kv.ValuePtr
-		return &zero, 0
+func (db *DB) getHeads() map[uint32]kv.ValuePtr {
+	heads := db.lsm.ValueLogHead()
+	if len(heads) == 0 {
+		return make(map[uint32]kv.ValuePtr)
 	}
-	ptr := vp
-	return &ptr, uint64(ptr.Offset)
+	return heads
 }
 
 func (db *DB) updateHead(ptrs []kv.ValuePtr) {
-	var (
-		ptr   kv.ValuePtr
-		found bool
-	)
-	for i := len(ptrs) - 1; i >= 0; i-- {
-		p := ptrs[i]
-		if !p.IsZero() {
-			ptr = p
-			found = true
-			break
+	touched := make(map[uint32]struct{})
+	for _, p := range ptrs {
+		if p.IsZero() {
+			continue
 		}
+		touched[p.Bucket] = struct{}{}
 	}
-	if !found || ptr.IsZero() {
+	if len(touched) == 0 {
 		return
 	}
-
-	if db.vlog == nil || db.vlog.manager == nil {
+	if db.vlog == nil {
 		return
 	}
-	head := db.vlog.manager.Head()
-	if head.IsZero() {
-		return
+	if db.vheads == nil {
+		db.vheads = make(map[uint32]kv.ValuePtr)
 	}
-
-	next := &kv.ValuePtr{Fid: head.Fid, Offset: head.Offset}
-	if db.vhead != nil && next.Less(db.vhead) {
-		utils.CondPanic(true, fmt.Errorf("value log head regression: prev=%+v next=%+v", db.vhead, next))
+	if db.lastLoggedHeads == nil {
+		db.lastLoggedHeads = make(map[uint32]kv.ValuePtr)
 	}
-	db.vhead = next
-	if !db.shouldPersistHead(next) {
-		return
+	for bucket := range touched {
+		mgr, err := db.vlog.managerFor(bucket)
+		if err != nil {
+			continue
+		}
+		head := mgr.Head()
+		if head.IsZero() {
+			continue
+		}
+		next := &kv.ValuePtr{Bucket: bucket, Fid: head.Fid, Offset: head.Offset, Len: head.Len}
+		if prev, ok := db.vheads[bucket]; ok && next.Less(&prev) {
+			utils.CondPanic(true, fmt.Errorf("value log head regression: bucket=%d prev=%+v next=%+v", bucket, prev, next))
+		}
+		db.vheads[bucket] = *next
+		if !db.shouldPersistHead(next, bucket) {
+			continue
+		}
+		if err := db.lsm.LogValueLogHead(next); err != nil {
+			_ = utils.Err(fmt.Errorf("log value log head: %w", err))
+			continue
+		}
+		metrics.IncValueLogHeadUpdates()
+		db.lastLoggedHeads[bucket] = *next
 	}
-	if err := db.lsm.LogValueLogHead(next); err != nil {
-		_ = utils.Err(fmt.Errorf("log value log head: %w", err))
-		return
-	}
-	metrics.IncValueLogHeadUpdates()
-	db.lastLoggedHead = *next
 }
 
-func (db *DB) shouldPersistHead(next *kv.ValuePtr) bool {
+func (db *DB) shouldPersistHead(next *kv.ValuePtr, bucket uint32) bool {
 	if db == nil || next == nil || next.IsZero() {
 		return false
 	}
 	if db.headLogDelta == 0 {
 		return true
 	}
-	last := db.lastLoggedHead
+	last := db.lastLoggedHeads[bucket]
 	if last.IsZero() {
 		return true
 	}
@@ -415,12 +617,16 @@ func (db *DB) shouldPersistHead(next *kv.ValuePtr) bool {
 	return false
 }
 
-func (vlog *valueLog) replayLog(fid uint32, offset uint32, replayFn kv.LogEntry, isActive bool) error {
-	endOffset, err := vlog.manager.Iterate(fid, offset, replayFn)
+func (vlog *valueLog) replayLog(bucket uint32, fid uint32, offset uint32, replayFn kv.LogEntry, isActive bool) error {
+	mgr, err := vlog.managerFor(bucket)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to replay logfile: fid=%d", fid)
+		return err
 	}
-	size, err := vlog.manager.SegmentSize(fid)
+	endOffset, err := mgr.Iterate(fid, offset, replayFn)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to replay logfile: fid=%d bucket=%d", fid, bucket)
+	}
+	size, err := mgr.SegmentSize(fid)
 	if err != nil {
 		return err
 	}
@@ -432,11 +638,11 @@ func (vlog *valueLog) replayLog(fid uint32, offset uint32, replayFn kv.LogEntry,
 		if !isActive {
 			return utils.ErrDeleteVlogFile
 		}
-		return vlog.manager.SegmentBootstrap(fid)
+		return mgr.SegmentBootstrap(fid)
 	}
 
-	vlog.logf("Truncating vlog file %05d to offset: %d", fid, endOffset)
-	if err := vlog.manager.SegmentTruncate(fid, endOffset); err != nil {
+	vlog.logf("Truncating vlog file %05d (bucket %d) to offset: %d", fid, bucket, endOffset)
+	if err := mgr.SegmentTruncate(fid, endOffset); err != nil {
 		return utils.WarpErr(fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
 	}
 	return nil

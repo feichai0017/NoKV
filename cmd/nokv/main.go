@@ -120,9 +120,20 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLogSegments)
 	fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLogPendingDel)
 	fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLogDiscardQueue)
-	if !snap.ValueLogHead.IsZero() {
-		fmt.Fprintf(w, "ValueLog.Head          fid=%d offset=%d len=%d\n",
-			snap.ValueLogHead.Fid, snap.ValueLogHead.Offset, snap.ValueLogHead.Len)
+	if len(snap.ValueLogHeads) > 0 {
+		buckets := make([]uint32, 0, len(snap.ValueLogHeads))
+		for bucket := range snap.ValueLogHeads {
+			buckets = append(buckets, bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		for _, bucket := range buckets {
+			head := snap.ValueLogHeads[bucket]
+			if head.IsZero() {
+				continue
+			}
+			fmt.Fprintf(w, "ValueLog.Head[%d]       fid=%d offset=%d len=%d\n",
+				bucket, head.Fid, head.Offset, head.Len)
+		}
 	}
 	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.HotWriteLimited)
 	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.CompactionValueWeight)
@@ -233,18 +244,30 @@ func runManifestCmd(w io.Writer, args []string) error {
 	defer mgr.Close()
 
 	version := mgr.Current()
-	head := mgr.ValueLogHead()
-
 	out := map[string]any{
 		"log_pointer": map[string]any{
 			"segment": version.LogSegment,
 			"offset":  version.LogOffset,
 		},
-		"value_log_head": map[string]any{
-			"fid":    head.FileID,
-			"offset": head.Offset,
-			"valid":  head.Valid,
-		},
+	}
+	heads := mgr.ValueLogHead()
+	if len(heads) > 0 {
+		buckets := make([]uint32, 0, len(heads))
+		for bucket := range heads {
+			buckets = append(buckets, bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		valueLogHeads := make([]map[string]any, 0, len(buckets))
+		for _, bucket := range buckets {
+			meta := heads[bucket]
+			valueLogHeads = append(valueLogHeads, map[string]any{
+				"bucket": bucket,
+				"fid":    meta.FileID,
+				"offset": meta.Offset,
+				"valid":  meta.Valid,
+			})
+		}
+		out["value_log_heads"] = valueLogHeads
 	}
 
 	levelInfo := make([]map[string]any, 0, len(version.Levels))
@@ -267,15 +290,21 @@ func runManifestCmd(w io.Writer, args []string) error {
 	out["levels"] = levelInfo
 
 	var valueLogs []map[string]any
-	var fids []uint32
-	for fid := range version.ValueLogs {
-		fids = append(fids, fid)
+	var ids []manifest.ValueLogID
+	for id := range version.ValueLogs {
+		ids = append(ids, id)
 	}
-	sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
-	for _, fid := range fids {
-		meta := version.ValueLogs[fid]
+	sort.Slice(ids, func(i, j int) bool {
+		if ids[i].Bucket == ids[j].Bucket {
+			return ids[i].FileID < ids[j].FileID
+		}
+		return ids[i].Bucket < ids[j].Bucket
+	})
+	for _, id := range ids {
+		meta := version.ValueLogs[id]
 		valueLogs = append(valueLogs, map[string]any{
-			"fid":    fid,
+			"bucket": id.Bucket,
+			"fid":    id.FileID,
 			"offset": meta.Offset,
 			"valid":  meta.Valid,
 		})
@@ -289,7 +318,17 @@ func runManifestCmd(w io.Writer, args []string) error {
 	}
 
 	fmt.Fprintf(w, "Manifest Log Pointer : segment=%d offset=%d\n", version.LogSegment, version.LogOffset)
-	fmt.Fprintf(w, "ValueLog Head        : fid=%d offset=%d valid=%v\n", head.FileID, head.Offset, head.Valid)
+	if heads != nil {
+		buckets := make([]uint32, 0, len(heads))
+		for bucket := range heads {
+			buckets = append(buckets, bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		for _, bucket := range buckets {
+			meta := heads[bucket]
+			fmt.Fprintf(w, "ValueLog Head[%d]     : fid=%d offset=%d valid=%v\n", bucket, meta.FileID, meta.Offset, meta.Valid)
+		}
+	}
 	fmt.Fprintln(w, "Levels:")
 	for _, lvl := range levelInfo {
 		fmt.Fprintf(w, "  - L%d files=%d total=%d bytes value=%d bytes ids=%v\n",
@@ -297,7 +336,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 	}
 	fmt.Fprintln(w, "ValueLog segments:")
 	for _, vl := range valueLogs {
-		fmt.Fprintf(w, "  - fid=%d offset=%d valid=%v\n", vl["fid"], vl["offset"], vl["valid"])
+		fmt.Fprintf(w, "  - bucket=%d fid=%d offset=%d valid=%v\n", vl["bucket"], vl["fid"], vl["offset"], vl["valid"])
 	}
 	return nil
 }
@@ -319,34 +358,78 @@ func runVlogCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("vlog directory not found: %s", vlogDir)
 	}
 
-	manager, err := vlogpkg.Open(vlogpkg.Config{Dir: vlogDir})
-	if err != nil {
-		return err
+	bucketDirs, _ := filepath.Glob(filepath.Join(vlogDir, "bucket-*"))
+	if len(bucketDirs) == 0 {
+		manager, err := vlogpkg.Open(vlogpkg.Config{Dir: vlogDir})
+		if err != nil {
+			return err
+		}
+		defer manager.Close()
+
+		head := manager.Head()
+		fids := manager.ListFIDs()
+		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+
+		out := map[string]any{
+			"active_fid": manager.ActiveFID(),
+			"head": map[string]any{
+				"fid":    head.Fid,
+				"offset": head.Offset,
+			},
+			"segments": fids,
+		}
+
+		if *asJSON {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
+		}
+
+		fmt.Fprintf(w, "Active FID : %d\n", manager.ActiveFID())
+		fmt.Fprintf(w, "Head       : fid=%d offset=%d\n", head.Fid, head.Offset)
+		fmt.Fprintf(w, "Segments   : %v\n", fids)
+		return nil
 	}
-	defer manager.Close()
 
-	head := manager.Head()
-	fids := manager.ListFIDs()
-	sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
-
-	out := map[string]any{
-		"active_fid": manager.ActiveFID(),
-		"head": map[string]any{
-			"fid":    head.Fid,
-			"offset": head.Offset,
-		},
-		"segments": fids,
+	sort.Strings(bucketDirs)
+	bucketInfo := make([]map[string]any, 0, len(bucketDirs))
+	for _, dir := range bucketDirs {
+		base := filepath.Base(dir)
+		var bucket int
+		if _, err := fmt.Sscanf(base, "bucket-%03d", &bucket); err != nil {
+			continue
+		}
+		manager, err := vlogpkg.Open(vlogpkg.Config{Dir: dir, Bucket: uint32(bucket)})
+		if err != nil {
+			return err
+		}
+		head := manager.Head()
+		fids := manager.ListFIDs()
+		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+		bucketInfo = append(bucketInfo, map[string]any{
+			"bucket":     bucket,
+			"active_fid": manager.ActiveFID(),
+			"head": map[string]any{
+				"fid":    head.Fid,
+				"offset": head.Offset,
+			},
+			"segments": fids,
+		})
+		_ = manager.Close()
 	}
 
 	if *asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return enc.Encode(map[string]any{"buckets": bucketInfo})
 	}
-
-	fmt.Fprintf(w, "Active FID : %d\n", manager.ActiveFID())
-	fmt.Fprintf(w, "Head       : fid=%d offset=%d\n", head.Fid, head.Offset)
-	fmt.Fprintf(w, "Segments   : %v\n", fids)
+	for _, info := range bucketInfo {
+		fmt.Fprintf(w, "Bucket %d\n", info["bucket"])
+		fmt.Fprintf(w, "  Active FID : %d\n", info["active_fid"])
+		head := info["head"].(map[string]any)
+		fmt.Fprintf(w, "  Head       : fid=%d offset=%d\n", head["fid"], head["offset"])
+		fmt.Fprintf(w, "  Segments   : %v\n", info["segments"])
+	}
 	return nil
 }
 
