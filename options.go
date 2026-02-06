@@ -64,6 +64,14 @@ type Options struct {
 	HotRingEnabled  bool
 	HotRingBits     uint8
 	HotRingTopK     int
+	// HotRingRotationInterval enables dual-ring rotation for hotness tracking.
+	// Zero disables rotation.
+	HotRingRotationInterval time.Duration
+	// HotRingNodeCap caps the number of tracked keys per ring. Zero disables the cap.
+	HotRingNodeCap uint64
+	// HotRingNodeSampleBits controls stable sampling once the cap is reached.
+	// A value of 0 enforces a strict cap; larger values sample 1/2^N keys.
+	HotRingNodeSampleBits uint8
 	// HotRingDecayInterval controls how often HotRing halves its global counters.
 	// Zero disables periodic decay.
 	HotRingDecayInterval time.Duration
@@ -176,6 +184,9 @@ func NewDefaultOptions() *Options {
 		HotRingEnabled:            true,
 		HotRingBits:               12,
 		HotRingTopK:               16,
+		HotRingRotationInterval:   0,
+		HotRingNodeCap:            0,
+		HotRingNodeSampleBits:     0,
 		HotRingDecayInterval:      time.Second,
 		HotRingDecayShift:         1,
 		HotRingWindowSlots:        8,
