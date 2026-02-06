@@ -1,6 +1,6 @@
 # HotRing – Hot Key Tracking
 
-`hotring` is NoKV's built-in hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation resides in [`hotring/`](../hotring).
+`hotring` is NoKV's hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in the standalone module [`github.com/feichai0017/hotring`](https://github.com/feichai0017/hotring).
 
 ---
 
@@ -23,7 +23,7 @@ HotRing
   hashMask -> selects bucket (power of two size)
 ```
 
-* Each bucket stores a sorted linked list of [`Node`](../hotring/node.go) ordered by `(tag, key)`, where `tag` is derived from the upper bits of the hash. Head pointers are `atomic.Pointer[Node]`, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.
+* Each bucket stores a sorted linked list of [`Node`](https://github.com/feichai0017/hotring/blob/main/node.go) ordered by `(tag, key)`, where `tag` is derived from the upper bits of the hash. Head pointers are `atomic.Pointer[Node]`, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.
 * `defaultTableBits = 12` → 4096 buckets by default (`NewHotRing`). The mask ensures cheap modulo operations.
 * Nodes keep a `count` (int32) updated atomically and a `next` pointer stored via `unsafe.Pointer`. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.
 
@@ -42,11 +42,11 @@ flowchart LR
 
 | Method | Behaviour | Notes |
 | --- | --- | --- |
-| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
-| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
-| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
-| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
-| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
+| [`Touch`](https://github.com/feichai0017/hotring/blob/main/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
+| [`Frequency`](https://github.com/feichai0017/hotring/blob/main/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
+| [`TouchAndClamp`](https://github.com/feichai0017/hotring/blob/main/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
+| [`TopN`](https://github.com/feichai0017/hotring/blob/main/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
+| [`KeysAbove`](https://github.com/feichai0017/hotring/blob/main/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
 
 Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket head or the predecessor’s `next` pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.
 
