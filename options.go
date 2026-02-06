@@ -82,6 +82,28 @@ type Options struct {
 	HotRingWindowSlots int
 	// HotRingWindowSlotDuration sets the duration of each sliding-window bucket.
 	HotRingWindowSlotDuration time.Duration
+	// ValueLogHotRingOverride uses the dedicated ValueLogHotRing* settings instead
+	// of the global HotRing configuration when routing hot value-log keys.
+	ValueLogHotRingOverride bool
+	// ValueLogHotRingBits controls the hash bucket count for the value-log ring.
+	// Zero uses the default HotRing bucket count.
+	ValueLogHotRingBits uint8
+	// ValueLogHotRingRotationInterval enables rotation for the value-log ring.
+	// Zero disables rotation.
+	ValueLogHotRingRotationInterval time.Duration
+	// ValueLogHotRingNodeCap caps the number of tracked keys per value-log ring.
+	ValueLogHotRingNodeCap uint64
+	// ValueLogHotRingNodeSampleBits controls stable sampling for value-log keys.
+	// A value of 0 enforces a strict cap; larger values sample 1/2^N keys.
+	ValueLogHotRingNodeSampleBits uint8
+	// ValueLogHotRingDecayInterval controls how often the value-log ring decays counters.
+	ValueLogHotRingDecayInterval time.Duration
+	// ValueLogHotRingDecayShift determines decay aggressiveness for the value-log ring.
+	ValueLogHotRingDecayShift uint32
+	// ValueLogHotRingWindowSlots controls the number of sliding-window buckets for the value-log ring.
+	ValueLogHotRingWindowSlots int
+	// ValueLogHotRingWindowSlotDuration sets the duration of each value-log window bucket.
+	ValueLogHotRingWindowSlotDuration time.Duration
 
 	SyncWrites   bool
 	ManifestSync bool
@@ -177,20 +199,29 @@ const (
 // NewDefaultOptions returns the default option set.
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:                   "./work_test",
-		MemTableSize:              64 << 20,
-		MemTableEngine:            MemTableEngineSkiplist,
-		SSTableMaxSz:              256 << 20,
-		HotRingEnabled:            true,
-		HotRingBits:               12,
-		HotRingTopK:               16,
-		HotRingRotationInterval:   0,
-		HotRingNodeCap:            0,
-		HotRingNodeSampleBits:     0,
-		HotRingDecayInterval:      time.Second,
-		HotRingDecayShift:         1,
-		HotRingWindowSlots:        8,
-		HotRingWindowSlotDuration: 250 * time.Millisecond,
+		WorkDir:                           "./work_test",
+		MemTableSize:                      64 << 20,
+		MemTableEngine:                    MemTableEngineSkiplist,
+		SSTableMaxSz:                      256 << 20,
+		HotRingEnabled:                    true,
+		HotRingBits:                       12,
+		HotRingTopK:                       16,
+		HotRingRotationInterval:           0,
+		HotRingNodeCap:                    0,
+		HotRingNodeSampleBits:             0,
+		ValueLogHotRingOverride:           false,
+		ValueLogHotRingBits:               0,
+		ValueLogHotRingRotationInterval:   0,
+		ValueLogHotRingNodeCap:            0,
+		ValueLogHotRingNodeSampleBits:     0,
+		ValueLogHotRingDecayInterval:      0,
+		ValueLogHotRingDecayShift:         0,
+		ValueLogHotRingWindowSlots:        0,
+		ValueLogHotRingWindowSlotDuration: 0,
+		HotRingDecayInterval:              time.Second,
+		HotRingDecayShift:                 1,
+		HotRingWindowSlots:                8,
+		HotRingWindowSlotDuration:         250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,

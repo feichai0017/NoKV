@@ -476,7 +476,7 @@ func (db *DB) initVLog() {
 	if db.opt.HotRingEnabled &&
 		db.opt.ValueLogHotBucketCount > 0 &&
 		db.opt.ValueLogHotKeyThreshold > 0 {
-		hot = newHotTracker(db.opt)
+		hot = newHotTrackerForVLog(db.opt)
 	}
 
 	managers := make([]*vlogpkg.Manager, bucketCount)
