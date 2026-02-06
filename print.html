@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-776766c3.js";
+            window.path_to_searchindex_js = "searchindex-49577c46.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -671,6 +671,7 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <ul>
 <li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
 <li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
+<li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
 </ul>
 </li>
 <li><strong>WAL watchdog</strong>
@@ -1809,6 +1810,50 @@ Deeper levels rely on OS page cache + mmap readahead
 </table>
 </div>
 <p>With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.</p>
+<hr>
+<h2 id="9-bounding-growth-node-cap--rotation"><a class="header" href="#9-bounding-growth-node-cap--rotation">9. Bounding Growth (Node Cap &amp; Rotation)</a></h2>
+<p>HotRing does not automatically evict keys. To keep memory predictable in high-cardinality
+workloads, use a <strong>node cap</strong> (with optional sampling) and/or <strong>ring rotation</strong>.</p>
+<h3 id="node-cap--sampling"><a class="header" href="#node-cap--sampling">Node cap + sampling</a></h3>
+<ul>
+<li><code>Options.HotRingNodeCap</code> sets a per-ring upper bound on tracked keys.</li>
+<li><code>Options.HotRingNodeSampleBits</code> controls stable sampling once the cap is hit:
+<ul>
+<li><code>0</code> = strict cap (no new keys after the cap).</li>
+<li><code>N</code> = allow roughly <code>1/2^N</code> of new keys (soft cap).</li>
+</ul>
+</li>
+</ul>
+<h3 id="dual-ring-rotation"><a class="header" href="#dual-ring-rotation">Dual-ring rotation</a></h3>
+<ul>
+<li><code>Options.HotRingRotationInterval</code> enables dual-ring rotation:
+<ul>
+<li><strong>active</strong> ring receives new touches</li>
+<li><strong>warm</strong> ring keeps the previous generation to avoid sudden drops</li>
+</ul>
+</li>
+<li>Merge semantics:
+<ul>
+<li><code>Frequency</code> / <code>TouchAndClamp</code> → <code>max(active, warm)</code></li>
+<li><code>TopN</code> / <code>KeysAbove</code> → <code>sum(active, warm)</code></li>
+</ul>
+</li>
+</ul>
+<p><strong>Memory note:</strong> rotation keeps two rings, so the upper bound is roughly
+<code>2 × HotRingNodeCap</code>. If you have a fixed budget, halve the per-ring cap.</p>
+<p>Suggested starting points:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>HotRingNodeCap</code></td><td>Hard cap per ring (0 disables).</td></tr>
+<tr><td><code>HotRingNodeSampleBits</code></td><td>Soft cap sampling rate.</td></tr>
+<tr><td><code>HotRingRotationInterval</code></td><td>Rotation period (0 disables).</td></tr>
+</tbody>
+</table>
+</div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="transaction--mvcc-design"><a class="header" href="#transaction--mvcc-design">Transaction &amp; MVCC Design</a></h1>
 <p>NoKV provides snapshot-isolated transactions backed by a lightweight <strong>oracle</strong> that hands out timestamps, tracks conflicts, and coordinates with the write pipeline. The implementation lives entirely in <a href="../txn.go"><code>txn.go</code></a> with metrics surfaced via <a href="../stats.go"><code>stats.go</code></a>.</p>
