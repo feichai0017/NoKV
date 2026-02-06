@@ -37,11 +37,11 @@ func (s *prefetchState) clone() *prefetchState {
 }
 
 func (db *DB) recordRead(key []byte) {
-	if db == nil || db.hot == nil || len(key) == 0 {
+	if db == nil || db.hotRead == nil || len(key) == 0 {
 		return
 	}
 	skey := string(key)
-	count := db.hot.Touch(skey)
+	count := db.hotRead.Touch(skey)
 	if db.prefetchRing == nil {
 		return
 	}
@@ -55,7 +55,7 @@ func (db *DB) recordRead(key []byte) {
 }
 
 func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
-	if db == nil || db.hot == nil || len(key) == 0 {
+	if db == nil || db.hotWrite == nil || len(key) == 0 {
 		return nil
 	}
 	limit := db.opt.WriteHotKeyLimit
@@ -63,7 +63,7 @@ func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
 		return nil
 	}
 	skey := cfHotKey(cf, key)
-	_, limited := db.hot.TouchAndClamp(skey, limit)
+	_, limited := db.hotWrite.TouchAndClamp(skey, limit)
 	if !limited {
 		return nil
 	}
@@ -83,7 +83,7 @@ func cfHotKey(cf kv.ColumnFamily, key []byte) string {
 
 // isHotWrite tags a small set as hot when repeated writes hit HotRing.
 func (db *DB) isHotWrite(entries []*kv.Entry) bool {
-	if db == nil || db.hot == nil {
+	if db == nil || db.hotWrite == nil {
 		return false
 	}
 	if len(entries) != 1 {
@@ -95,8 +95,7 @@ func (db *DB) isHotWrite(entries []*kv.Entry) bool {
 	}
 	k := entries[0]
 	key := cfHotKey(k.CF, k.Key)
-	_, limited := db.hot.TouchAndClamp(key, thr)
-	return limited
+	return db.hotWrite.Frequency(key) >= thr
 }
 
 func (db *DB) enqueuePrefetch(key string, hot bool) {
