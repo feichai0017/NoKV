@@ -92,8 +92,8 @@ Global HotRing defaults (`NewDefaultOptions`):
 | `HotRingEnabled` | `true` | Master switch for DB hot tracking. |
 | `HotRingBits` | `12` | 4096 buckets. |
 | `HotRingTopK` | `16` | Top-K hot keys for stats/CLI. |
-| `HotRingDecayInterval` | `1s` | Periodic decay enabled. |
-| `HotRingDecayShift` | `1` | Halve counters each interval. |
+| `HotRingDecayInterval` | `0` | Decay disabled by default. |
+| `HotRingDecayShift` | `0` | Decay disabled by default. |
 | `HotRingWindowSlots` | `8` | Sliding window enabled. |
 | `HotRingWindowSlotDuration` | `250ms` | ~2s window. |
 | `HotRingRotationInterval` | `30m` | Dual-ring rotation enabled. |
@@ -146,8 +146,8 @@ Disable either mechanism by setting the interval/durations to zero. Typical star
 
 | Option | Default value | Effect |
 | --- | --- | --- |
-| `HotRingDecayInterval` | `1s` | Halve legacy counters once per second. |
-| `HotRingDecayShift` | `1` | Simple divide-by-two decay. |
+| `HotRingDecayInterval` | `0` | Decay disabled by default. |
+| `HotRingDecayShift` | `0` | Decay disabled by default. |
 | `HotRingWindowSlots` | `8` | Keep ~8 buckets of recency data. |
 | `HotRingWindowSlotDuration` | `250ms` | Roughly 2s window for throttling. |
 

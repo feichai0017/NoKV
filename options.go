@@ -218,8 +218,8 @@ func NewDefaultOptions() *Options {
 		ValueLogHotRingDecayShift:         0,
 		ValueLogHotRingWindowSlots:        6,
 		ValueLogHotRingWindowSlotDuration: 100 * time.Millisecond,
-		HotRingDecayInterval:              time.Second,
-		HotRingDecayShift:                 1,
+		HotRingDecayInterval:              0,
+		HotRingDecayShift:                 0,
 		HotRingWindowSlots:                8,
 		HotRingWindowSlotDuration:         250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
