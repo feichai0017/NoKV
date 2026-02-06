@@ -184,7 +184,7 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 | ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
 | Transactions | MVCC `oracle`, managed/unmanaged transactions, iterator snapshots. | [`txn.go`](./txn.go) | [Transactions & MVCC](docs/txn.md) |
 | RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
-| HotRing | Hot key tracking, throttling helpers. | [`hotring/`](./hotring) | [HotRing overview](docs/hotring.md) |
+| HotRing | Hot key tracking, throttling helpers. | [`github.com/feichai0017/hotring`](https://github.com/feichai0017/hotring) | [HotRing overview](docs/hotring.md) |
 | Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
 | Filesystem | mmap-backed file helpers shared by SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
 
