@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-49577c46.js";
+            window.path_to_searchindex_js = "searchindex-3c4e9e48.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -672,6 +672,7 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
 <li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
 <li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
+<li><code>ValueLogHotRingOverride</code> + <code>ValueLogHotRing*</code> overrides</li>
 </ul>
 </li>
 <li><strong>WAL watchdog</strong>
@@ -1779,6 +1780,50 @@ Deeper levels rely on OS page cache + mmap readahead
 </ul>
 <p>For end-to-end examples see <a href="#hot-key-export"><code>docs/stats.md</code></a> and the CLI walkthrough in <a href="#hot-key-output"><code>docs/cli.md</code></a>.</p>
 <hr>
+<h2 id="61-default-configuration"><a class="header" href="#61-default-configuration">6.1 Default Configuration</a></h2>
+<p>Global HotRing defaults (<code>NewDefaultOptions</code>):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default value</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>HotRingEnabled</code></td><td><code>true</code></td><td>Master switch for DB hot tracking.</td></tr>
+<tr><td><code>HotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
+<tr><td><code>HotRingTopK</code></td><td><code>16</code></td><td>Top-K hot keys for stats/CLI.</td></tr>
+<tr><td><code>HotRingDecayInterval</code></td><td><code>1s</code></td><td>Periodic decay enabled.</td></tr>
+<tr><td><code>HotRingDecayShift</code></td><td><code>1</code></td><td>Halve counters each interval.</td></tr>
+<tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>
+<tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>~2s window.</td></tr>
+<tr><td><code>HotRingRotationInterval</code></td><td><code>30m</code></td><td>Dual-ring rotation enabled.</td></tr>
+<tr><td><code>HotRingNodeCap</code></td><td><code>500,000</code></td><td>Strict cap per ring.</td></tr>
+<tr><td><code>HotRingNodeSampleBits</code></td><td><code>0</code></td><td>Strict cap (no sampling).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Value-log override defaults (<code>ValueLogHotRing*</code>):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default value</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ValueLogHotRingOverride</code></td><td><code>true</code></td><td>Use dedicated VLog settings.</td></tr>
+<tr><td><code>ValueLogHotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
+<tr><td><code>ValueLogHotRingRotationInterval</code></td><td><code>10m</code></td><td>Faster rotation for write-hotness.</td></tr>
+<tr><td><code>ValueLogHotRingNodeCap</code></td><td><code>200,000</code></td><td>Strict cap per ring.</td></tr>
+<tr><td><code>ValueLogHotRingNodeSampleBits</code></td><td><code>0</code></td><td>Strict cap (no sampling).</td></tr>
+<tr><td><code>ValueLogHotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled (window handles recency).</td></tr>
+<tr><td><code>ValueLogHotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled.</td></tr>
+<tr><td><code>ValueLogHotRingWindowSlots</code></td><td><code>6</code></td><td>~600ms window.</td></tr>
+<tr><td><code>ValueLogHotRingWindowSlotDuration</code></td><td><code>100ms</code></td><td>Shorter write-hotness window.</td></tr>
+</tbody>
+</table>
+</div>
+<p>When <code>ValueLogHotRingOverride=false</code>, the value-log ring inherits the global HotRing
+settings. When override is enabled, <strong>zeros disable features</strong> (except <code>bits=0</code>,
+which falls back to the ring default).</p>
+<hr>
 <h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
 <p><code>Options.WriteHotKeyLimit</code> wires HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code> or transactional <code>Txn.Set*</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
 <p>Operational hints:</p>
@@ -1854,6 +1899,18 @@ workloads, use a <strong>node cap</strong> (with optional sampling) and/or <stro
 </tbody>
 </table>
 </div>
+<hr>
+<h2 id="10-value-log-overrides"><a class="header" href="#10-value-log-overrides">10. Value Log Overrides</a></h2>
+<p>NoKV maintains a <strong>second HotRing</strong> dedicated to value-log hot/cold routing. By
+default this override is enabled so the write-only ring can use faster rotation
+and a shorter window. You can disable it to inherit the global HotRing config:</p>
+<ul>
+<li><code>Options.ValueLogHotRingOverride = false</code> (inherit global settings)</li>
+<li>Or keep it enabled and tune <code>ValueLogHotRing*</code> fields explicitly.</li>
+</ul>
+<p>When override is enabled, <strong>the value-log ring uses the override values verbatim</strong>;
+zeros disable a feature (for example, rotation). If override is disabled, it
+inherits the global <code>HotRing*</code> configuration.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="transaction--mvcc-design"><a class="header" href="#transaction--mvcc-design">Transaction &amp; MVCC Design</a></h1>
 <p>NoKV provides snapshot-isolated transactions backed by a lightweight <strong>oracle</strong> that hands out timestamps, tracks conflicts, and coordinates with the write pipeline. The implementation lives entirely in <a href="../txn.go"><code>txn.go</code></a> with metrics surfaced via <a href="../stats.go"><code>stats.go</code></a>.</p>
