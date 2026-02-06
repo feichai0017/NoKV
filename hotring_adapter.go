@@ -22,32 +22,87 @@ type hotRingConfigurer interface {
 	EnableNodeSampling(cap uint64, sampleBits uint8)
 }
 
+type hotRingConfig struct {
+	bits             uint8
+	rotationInterval time.Duration
+	windowSlots      int
+	windowSlotDur    time.Duration
+	decayInterval    time.Duration
+	decayShift       uint32
+	nodeCap          uint64
+	nodeSampleBits   uint8
+}
+
 func newHotTracker(opt *Options) hotTracker {
 	if opt == nil || !opt.HotRingEnabled {
 		return nil
 	}
-	if opt.HotRingRotationInterval > 0 {
-		ring := hotring.NewRotatingHotRing(opt.HotRingBits, nil)
-		applyHotRingConfig(ring, opt)
-		ring.EnableRotation(opt.HotRingRotationInterval)
+	return newHotTrackerFromConfig(hotRingConfigFromOptions(opt))
+}
+
+func newHotTrackerForVLog(opt *Options) hotTracker {
+	if opt == nil || !opt.HotRingEnabled {
+		return nil
+	}
+	return newHotTrackerFromConfig(hotRingConfigForVLog(opt))
+}
+
+func newHotTrackerFromConfig(cfg hotRingConfig) hotTracker {
+	if cfg.rotationInterval > 0 {
+		ring := hotring.NewRotatingHotRing(cfg.bits, nil)
+		applyHotRingConfig(ring, cfg)
+		ring.EnableRotation(cfg.rotationInterval)
 		return ring
 	}
-	ring := hotring.NewHotRing(opt.HotRingBits, nil)
-	applyHotRingConfig(ring, opt)
+	ring := hotring.NewHotRing(cfg.bits, nil)
+	applyHotRingConfig(ring, cfg)
 	return ring
 }
 
-func applyHotRingConfig(ring hotRingConfigurer, opt *Options) {
-	if ring == nil || opt == nil {
+func applyHotRingConfig(ring hotRingConfigurer, cfg hotRingConfig) {
+	if ring == nil {
 		return
 	}
-	if opt.HotRingWindowSlots > 0 && opt.HotRingWindowSlotDuration > 0 {
-		ring.EnableSlidingWindow(opt.HotRingWindowSlots, opt.HotRingWindowSlotDuration)
+	if cfg.windowSlots > 0 && cfg.windowSlotDur > 0 {
+		ring.EnableSlidingWindow(cfg.windowSlots, cfg.windowSlotDur)
 	}
-	if opt.HotRingDecayInterval > 0 && opt.HotRingDecayShift > 0 {
-		ring.EnableDecay(opt.HotRingDecayInterval, opt.HotRingDecayShift)
+	if cfg.decayInterval > 0 && cfg.decayShift > 0 {
+		ring.EnableDecay(cfg.decayInterval, cfg.decayShift)
 	}
-	if opt.HotRingNodeCap > 0 {
-		ring.EnableNodeSampling(opt.HotRingNodeCap, opt.HotRingNodeSampleBits)
+	if cfg.nodeCap > 0 {
+		ring.EnableNodeSampling(cfg.nodeCap, cfg.nodeSampleBits)
+	}
+}
+
+func hotRingConfigFromOptions(opt *Options) hotRingConfig {
+	if opt == nil {
+		return hotRingConfig{}
+	}
+	return hotRingConfig{
+		bits:             opt.HotRingBits,
+		rotationInterval: opt.HotRingRotationInterval,
+		windowSlots:      opt.HotRingWindowSlots,
+		windowSlotDur:    opt.HotRingWindowSlotDuration,
+		decayInterval:    opt.HotRingDecayInterval,
+		decayShift:       opt.HotRingDecayShift,
+		nodeCap:          opt.HotRingNodeCap,
+		nodeSampleBits:   opt.HotRingNodeSampleBits,
+	}
+}
+
+func hotRingConfigForVLog(opt *Options) hotRingConfig {
+	base := hotRingConfigFromOptions(opt)
+	if opt == nil || !opt.ValueLogHotRingOverride {
+		return base
+	}
+	return hotRingConfig{
+		bits:             opt.ValueLogHotRingBits,
+		rotationInterval: opt.ValueLogHotRingRotationInterval,
+		windowSlots:      opt.ValueLogHotRingWindowSlots,
+		windowSlotDur:    opt.ValueLogHotRingWindowSlotDuration,
+		decayInterval:    opt.ValueLogHotRingDecayInterval,
+		decayShift:       opt.ValueLogHotRingDecayShift,
+		nodeCap:          opt.ValueLogHotRingNodeCap,
+		nodeSampleBits:   opt.ValueLogHotRingNodeSampleBits,
 	}
 }
