@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3c4e9e48.js";
+            window.path_to_searchindex_js = "searchindex-91cf8ef9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -1791,8 +1791,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <tr><td><code>HotRingEnabled</code></td><td><code>true</code></td><td>Master switch for DB hot tracking.</td></tr>
 <tr><td><code>HotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
 <tr><td><code>HotRingTopK</code></td><td><code>16</code></td><td>Top-K hot keys for stats/CLI.</td></tr>
-<tr><td><code>HotRingDecayInterval</code></td><td><code>1s</code></td><td>Periodic decay enabled.</td></tr>
-<tr><td><code>HotRingDecayShift</code></td><td><code>1</code></td><td>Halve counters each interval.</td></tr>
+<tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
+<tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>
 <tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>~2s window.</td></tr>
 <tr><td><code>HotRingRotationInterval</code></td><td><code>30m</code></td><td>Dual-ring rotation enabled.</td></tr>
@@ -1847,14 +1847,17 @@ which falls back to the ring default).</p>
 <tr><th>Option</th><th>Default value</th><th>Effect</th></tr>
 </thead>
 <tbody>
-<tr><td><code>HotRingDecayInterval</code></td><td><code>1s</code></td><td>Halve legacy counters once per second.</td></tr>
-<tr><td><code>HotRingDecayShift</code></td><td><code>1</code></td><td>Simple divide-by-two decay.</td></tr>
+<tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
+<tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Keep ~8 buckets of recency data.</td></tr>
 <tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>Roughly 2s window for throttling.</td></tr>
 </tbody>
 </table>
 </div>
 <p>With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.</p>
+<p>Note: in NoKV, configuration normalization treats the sliding window as higher
+priority. If a window is enabled, decay is automatically disabled to avoid
+redundant background work.</p>
 <hr>
 <h2 id="9-bounding-growth-node-cap--rotation"><a class="header" href="#9-bounding-growth-node-cap--rotation">9. Bounding Growth (Node Cap &amp; Rotation)</a></h2>
 <p>HotRing does not automatically evict keys. To keep memory predictable in high-cardinality
@@ -1866,6 +1869,7 @@ workloads, use a <strong>node cap</strong> (with optional sampling) and/or <stro
 <ul>
 <li><code>0</code> = strict cap (no new keys after the cap).</li>
 <li><code>N</code> = allow roughly <code>1/2^N</code> of new keys (soft cap).</li>
+<li>When <code>HotRingNodeCap = 0</code>, sampling is disabled.</li>
 </ul>
 </li>
 </ul>
