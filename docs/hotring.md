@@ -96,23 +96,23 @@ Global HotRing defaults (`NewDefaultOptions`):
 | `HotRingDecayShift` | `1` | Halve counters each interval. |
 | `HotRingWindowSlots` | `8` | Sliding window enabled. |
 | `HotRingWindowSlotDuration` | `250ms` | ~2s window. |
-| `HotRingRotationInterval` | `0` | Rotation disabled. |
-| `HotRingNodeCap` | `0` | Node cap disabled. |
-| `HotRingNodeSampleBits` | `0` | No sampling (cap disabled anyway). |
+| `HotRingRotationInterval` | `30m` | Dual-ring rotation enabled. |
+| `HotRingNodeCap` | `500,000` | Strict cap per ring. |
+| `HotRingNodeSampleBits` | `0` | Strict cap (no sampling). |
 
 Value-log override defaults (`ValueLogHotRing*`):
 
 | Option | Default value | Notes |
 | --- | --- | --- |
-| `ValueLogHotRingOverride` | `false` | Inherit global HotRing config. |
-| `ValueLogHotRingBits` | `0` | Uses ring default when override enabled. |
-| `ValueLogHotRingRotationInterval` | `0` | Rotation disabled. |
-| `ValueLogHotRingNodeCap` | `0` | Node cap disabled. |
-| `ValueLogHotRingNodeSampleBits` | `0` | No sampling. |
-| `ValueLogHotRingDecayInterval` | `0` | Decay disabled. |
+| `ValueLogHotRingOverride` | `true` | Use dedicated VLog settings. |
+| `ValueLogHotRingBits` | `12` | 4096 buckets. |
+| `ValueLogHotRingRotationInterval` | `10m` | Faster rotation for write-hotness. |
+| `ValueLogHotRingNodeCap` | `200,000` | Strict cap per ring. |
+| `ValueLogHotRingNodeSampleBits` | `0` | Strict cap (no sampling). |
+| `ValueLogHotRingDecayInterval` | `0` | Decay disabled (window handles recency). |
 | `ValueLogHotRingDecayShift` | `0` | Decay disabled. |
-| `ValueLogHotRingWindowSlots` | `0` | Sliding window disabled. |
-| `ValueLogHotRingWindowSlotDuration` | `0` | Sliding window disabled. |
+| `ValueLogHotRingWindowSlots` | `6` | ~600ms window. |
+| `ValueLogHotRingWindowSlotDuration` | `100ms` | Shorter write-hotness window. |
 
 When `ValueLogHotRingOverride=false`, the value-log ring inherits the global HotRing
 settings. When override is enabled, **zeros disable features** (except `bits=0`,
@@ -191,11 +191,12 @@ Suggested starting points:
 
 ## 10. Value Log Overrides
 
-NoKV maintains a **second HotRing** dedicated to value-log hot/cold routing. If you
-want different tuning for that write-only ring, enable overrides:
+NoKV maintains a **second HotRing** dedicated to value-log hot/cold routing. By
+default this override is enabled so the write-only ring can use faster rotation
+and a shorter window. You can disable it to inherit the global HotRing config:
 
-* `Options.ValueLogHotRingOverride = true`
-* Set `ValueLogHotRing*` fields explicitly.
+* `Options.ValueLogHotRingOverride = false` (inherit global settings)
+* Or keep it enabled and tune `ValueLogHotRing*` fields explicitly.
 
 When override is enabled, **the value-log ring uses the override values verbatim**;
 zeros disable a feature (for example, rotation). If override is disabled, it
