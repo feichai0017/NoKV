@@ -153,6 +153,10 @@ Disable either mechanism by setting the interval/durations to zero. Typical star
 
 With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.
 
+Note: in NoKV, configuration normalization treats the sliding window as higher
+priority. If a window is enabled, decay is automatically disabled to avoid
+redundant background work.
+
 ---
 
 ## 9. Bounding Growth (Node Cap & Rotation)
@@ -166,6 +170,7 @@ workloads, use a **node cap** (with optional sampling) and/or **ring rotation**.
 * `Options.HotRingNodeSampleBits` controls stable sampling once the cap is hit:
   * `0` = strict cap (no new keys after the cap).
   * `N` = allow roughly `1/2^N` of new keys (soft cap).
+  * When `HotRingNodeCap = 0`, sampling is disabled.
 
 ### Dual-ring rotation
 
