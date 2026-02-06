@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/feichai0017/hotring"
+
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -136,6 +138,21 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		}
 	}
 	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.HotWriteLimited)
+	if snap.HotRing != nil {
+		hs := snap.HotRing
+		fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
+		fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
+		fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
+			hs.Touches, hs.Clamps, hs.Inserts, hs.Removes)
+		if hs.WindowSlots > 0 && hs.WindowSlotDuration > 0 {
+			fmt.Fprintf(w, "HotRing.Window         slots=%d dur=%s\n",
+				hs.WindowSlots, hs.WindowSlotDuration.String())
+		}
+		if hs.DecayInterval > 0 && hs.DecayShift > 0 {
+			fmt.Fprintf(w, "HotRing.Decay          every=%s shift=%d\n",
+				hs.DecayInterval.String(), hs.DecayShift)
+		}
+	}
 	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.CompactionValueWeight)
 	if snap.CompactionValueWeightSuggested > snap.CompactionValueWeight {
 		fmt.Fprintf(w, " (suggested %.2f)", snap.CompactionValueWeightSuggested)
@@ -693,6 +710,14 @@ func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 					}
 				}
 				snap.HotKeys = append(snap.HotKeys, NoKV.HotKeyStat{Key: key, Count: count})
+			}
+		}
+	}
+	if raw, ok := data["NoKV.Stats.HotRing"]; ok {
+		if blob, err := json.Marshal(raw); err == nil {
+			var hs hotring.Stats
+			if err := json.Unmarshal(blob, &hs); err == nil {
+				snap.HotRing = &hs
 			}
 		}
 	}
