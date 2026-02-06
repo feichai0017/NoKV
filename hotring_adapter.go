@@ -48,6 +48,7 @@ func newHotTrackerForVLog(opt *Options) hotTracker {
 }
 
 func newHotTrackerFromConfig(cfg hotRingConfig) hotTracker {
+	cfg = normalizeHotRingConfig(cfg)
 	if cfg.rotationInterval > 0 {
 		ring := hotring.NewRotatingHotRing(cfg.bits, nil)
 		applyHotRingConfig(ring, cfg)
@@ -72,6 +73,29 @@ func applyHotRingConfig(ring hotRingConfigurer, cfg hotRingConfig) {
 	if cfg.nodeCap > 0 {
 		ring.EnableNodeSampling(cfg.nodeCap, cfg.nodeSampleBits)
 	}
+}
+
+func normalizeHotRingConfig(cfg hotRingConfig) hotRingConfig {
+	if cfg.rotationInterval <= 0 {
+		cfg.rotationInterval = 0
+	}
+	if cfg.windowSlots <= 0 || cfg.windowSlotDur <= 0 {
+		cfg.windowSlots = 0
+		cfg.windowSlotDur = 0
+	}
+	if cfg.windowSlots > 0 {
+		// Sliding window already provides recency; disable decay to avoid wasted work.
+		cfg.decayInterval = 0
+		cfg.decayShift = 0
+	}
+	if cfg.decayInterval <= 0 || cfg.decayShift == 0 {
+		cfg.decayInterval = 0
+		cfg.decayShift = 0
+	}
+	if cfg.nodeCap == 0 {
+		cfg.nodeSampleBits = 0
+	}
+	return cfg
 }
 
 func hotRingConfigFromOptions(opt *Options) hotRingConfig {
