@@ -57,7 +57,8 @@ type (
 		headLogDelta     uint32
 		isClosed         uint32
 		orc              *oracle
-		hot              hotTracker
+		hotRead          hotTracker
+		hotWrite         hotTracker
 		writeMetrics     *metrics.WriteMetrics
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
@@ -214,8 +215,9 @@ func Open(opt *Options) *DB {
 	// Initialize stats tracking.
 	db.stats = newStats(db)
 
-	db.hot = newHotTracker(opt)
-	if db.hot != nil {
+	db.hotRead = newHotTracker(opt)
+	db.hotWrite = newHotTrackerForWrite(opt)
+	if db.hotRead != nil {
 		if opt.HotRingTopK <= 0 {
 			opt.HotRingTopK = 16
 		}
@@ -234,10 +236,10 @@ func Open(opt *Options) *DB {
 		db.prefetchWG.Add(1)
 		go db.prefetchLoop()
 		db.lsm.SetHotKeyProvider(func() [][]byte {
-			if db.hot == nil {
+			if db.hotRead == nil {
 				return nil
 			}
-			top := db.hot.TopN(opt.HotRingTopK)
+			top := db.hotRead.TopN(opt.HotRingTopK)
 			if len(top) == 0 {
 				return nil
 			}
@@ -348,8 +350,11 @@ func (db *DB) Close() error {
 		db.walWatchdog = nil
 	}
 
-	if db.hot != nil {
-		db.hot.Close()
+	if db.hotRead != nil {
+		db.hotRead.Close()
+	}
+	if db.hotWrite != nil {
+		db.hotWrite.Close()
 	}
 
 	if db.prefetchRing != nil {

@@ -233,6 +233,8 @@ type StatsSnapshot struct {
 	RegionOther                    int64                           `json:"region_other"`
 	HotKeys                        []HotKeyStat                    `json:"hot_keys,omitempty"`
 	HotRing                        *hotring.Stats                  `json:"hotring,omitempty"`
+	HotWriteKeys                   []HotKeyStat                    `json:"hot_write_keys,omitempty"`
+	HotWriteRing                   *hotring.Stats                  `json:"hot_write_ring,omitempty"`
 	HotWriteLimited                uint64                          `json:"hot_write_limited"`
 	BlockL0HitRate                 float64                         `json:"block_l0_hit_rate"`
 	BlockL1HitRate                 float64                         `json:"block_l1_hit_rate"`
@@ -362,14 +364,34 @@ func newStats(db *DB) *Stats {
 	}
 	if expvar.Get("NoKV.Stats.HotKeys") == nil {
 		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
-			if db == nil || db.hot == nil {
+			if db == nil || db.hotRead == nil {
 				return []map[string]any{}
 			}
 			topK := db.opt.HotRingTopK
 			if topK <= 0 {
 				topK = 16
 			}
-			items := db.hot.TopN(topK)
+			items := db.hotRead.TopN(topK)
+			out := make([]map[string]any, 0, len(items))
+			for _, item := range items {
+				out = append(out, map[string]any{
+					"key":   item.Key,
+					"count": item.Count,
+				})
+			}
+			return out
+		}))
+	}
+	if expvar.Get("NoKV.Stats.HotWriteKeys") == nil {
+		expvar.Publish("NoKV.Stats.HotWriteKeys", expvar.Func(func() any {
+			if db == nil || db.hotWrite == nil {
+				return []map[string]any{}
+			}
+			topK := db.opt.HotRingTopK
+			if topK <= 0 {
+				topK = 16
+			}
+			items := db.hotWrite.TopN(topK)
 			out := make([]map[string]any, 0, len(items))
 			for _, item := range items {
 				out = append(out, map[string]any{
@@ -382,10 +404,18 @@ func newStats(db *DB) *Stats {
 	}
 	if expvar.Get("NoKV.Stats.HotRing") == nil {
 		expvar.Publish("NoKV.Stats.HotRing", expvar.Func(func() any {
-			if db == nil || db.hot == nil {
+			if db == nil || db.hotRead == nil {
 				return map[string]any{}
 			}
-			return db.hot.Stats()
+			return db.hotRead.Stats()
+		}))
+	}
+	if expvar.Get("NoKV.Stats.HotWriteRing") == nil {
+		expvar.Publish("NoKV.Stats.HotWriteRing", expvar.Func(func() any {
+			if db == nil || db.hotWrite == nil {
+				return map[string]any{}
+			}
+			return db.hotWrite.Stats()
 		}))
 	}
 	return s
@@ -836,16 +866,27 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.TxnsCommitted = tm.Committed
 		snap.TxnsConflicts = tm.Conflicts
 	}
-	if s.db != nil && s.db.hot != nil {
+	if s.db != nil && s.db.hotRead != nil {
 		topK := s.db.opt.HotRingTopK
 		if topK <= 0 {
 			topK = 16
 		}
-		for _, item := range s.db.hot.TopN(topK) {
+		for _, item := range s.db.hotRead.TopN(topK) {
 			snap.HotKeys = append(snap.HotKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
-		hotStats := s.db.hot.Stats()
+		hotStats := s.db.hotRead.Stats()
 		snap.HotRing = &hotStats
+	}
+	if s.db != nil && s.db.hotWrite != nil {
+		topK := s.db.opt.HotRingTopK
+		if topK <= 0 {
+			topK = 16
+		}
+		for _, item := range s.db.hotWrite.TopN(topK) {
+			snap.HotWriteKeys = append(snap.HotWriteKeys, HotKeyStat{Key: item.Key, Count: item.Count})
+		}
+		hotStats := s.db.hotWrite.Stats()
+		snap.HotWriteRing = &hotStats
 	}
 	if s.db != nil && s.db.lsm != nil {
 		cm := s.db.lsm.CacheMetrics()

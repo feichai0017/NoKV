@@ -207,7 +207,7 @@ func NewDefaultOptions() *Options {
 		HotRingBits:                       12,
 		HotRingTopK:                       16,
 		HotRingRotationInterval:           30 * time.Minute,
-		HotRingNodeCap:                    500_000,
+		HotRingNodeCap:                    250_000,
 		HotRingNodeSampleBits:             0,
 		ValueLogHotRingOverride:           true,
 		ValueLogHotRingBits:               12,

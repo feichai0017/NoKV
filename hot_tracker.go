@@ -40,6 +40,16 @@ func newHotTracker(opt *Options) hotTracker {
 	return newHotTrackerFromConfig(hotRingConfigFromOptions(opt))
 }
 
+func newHotTrackerForWrite(opt *Options) hotTracker {
+	if opt == nil || !opt.HotRingEnabled {
+		return nil
+	}
+	if opt.WriteHotKeyLimit <= 0 && opt.HotWriteBurstThreshold <= 0 {
+		return nil
+	}
+	return newHotTrackerFromConfig(hotRingConfigFromOptions(opt))
+}
+
 func newHotTrackerForVLog(opt *Options) hotTracker {
 	if opt == nil || !opt.HotRingEnabled {
 		return nil
