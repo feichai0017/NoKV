@@ -20,6 +20,9 @@
     <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
       <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
     </a>
+    <a href="https://dbdb.io/db/nokv">
+      <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
+    </a>
   </p>
 
   <p>
