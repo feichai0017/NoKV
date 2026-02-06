@@ -149,3 +149,17 @@ Suggested starting points:
 | `HotRingNodeCap` | Hard cap per ring (0 disables). |
 | `HotRingNodeSampleBits` | Soft cap sampling rate. |
 | `HotRingRotationInterval` | Rotation period (0 disables). |
+
+---
+
+## 10. Value Log Overrides
+
+NoKV maintains a **second HotRing** dedicated to value-log hot/cold routing. If you
+want different tuning for that write-only ring, enable overrides:
+
+* `Options.ValueLogHotRingOverride = true`
+* Set `ValueLogHotRing*` fields explicitly.
+
+When override is enabled, **the value-log ring uses the override values verbatim**;
+zeros disable a feature (for example, rotation). If override is disabled, it
+inherits the global `HotRing*` configuration.

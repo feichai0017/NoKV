@@ -38,6 +38,7 @@ Key option groups (see `options.go` for the full list):
   - `WriteHotKeyLimit`, `HotWriteBurstThreshold`, `HotWriteBatchMultiplier`
   - `HotRingEnabled`, `HotRingTopK`, decay/window settings
   - `HotRingNodeCap`, `HotRingNodeSampleBits`, `HotRingRotationInterval`
+  - `ValueLogHotRingOverride` + `ValueLogHotRing*` overrides
 - **WAL watchdog**
   - `EnableWALWatchdog`, `WALAutoGCInterval`
   - `WALAutoGCMinRemovable`, `WALAutoGCMaxBatch`
