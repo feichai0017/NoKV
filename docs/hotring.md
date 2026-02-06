@@ -115,3 +115,37 @@ Disable either mechanism by setting the interval/durations to zero. Typical star
 | `HotRingWindowSlotDuration` | `250ms` | Roughly 2s window for throttling. |
 
 With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.
+
+---
+
+## 9. Bounding Growth (Node Cap & Rotation)
+
+HotRing does not automatically evict keys. To keep memory predictable in high-cardinality
+workloads, use a **node cap** (with optional sampling) and/or **ring rotation**.
+
+### Node cap + sampling
+
+* `Options.HotRingNodeCap` sets a per-ring upper bound on tracked keys.
+* `Options.HotRingNodeSampleBits` controls stable sampling once the cap is hit:
+  * `0` = strict cap (no new keys after the cap).
+  * `N` = allow roughly `1/2^N` of new keys (soft cap).
+
+### Dual-ring rotation
+
+* `Options.HotRingRotationInterval` enables dual-ring rotation:
+  * **active** ring receives new touches
+  * **warm** ring keeps the previous generation to avoid sudden drops
+* Merge semantics:
+  * `Frequency` / `TouchAndClamp` → `max(active, warm)`
+  * `TopN` / `KeysAbove` → `sum(active, warm)`
+
+**Memory note:** rotation keeps two rings, so the upper bound is roughly
+`2 × HotRingNodeCap`. If you have a fixed budget, halve the per-ring cap.
+
+Suggested starting points:
+
+| Option | Effect |
+| --- | --- |
+| `HotRingNodeCap` | Hard cap per ring (0 disables). |
+| `HotRingNodeSampleBits` | Soft cap sampling rate. |
+| `HotRingRotationInterval` | Rotation period (0 disables). |

@@ -21,7 +21,6 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
-	"github.com/feichai0017/hotring"
 )
 
 // nonTxnMaxVersion is the sentinel MVCC version used by non-transactional APIs.
@@ -58,7 +57,7 @@ type (
 		headLogDelta     uint32
 		isClosed         uint32
 		orc              *oracle
-		hot              *hotring.HotRing
+		hot              hotTracker
 		writeMetrics     *metrics.WriteMetrics
 		commitQueue      commitQueue
 		commitWG         sync.WaitGroup
@@ -215,14 +214,8 @@ func Open(opt *Options) *DB {
 	// Initialize stats tracking.
 	db.stats = newStats(db)
 
-	if opt.HotRingEnabled {
-		db.hot = hotring.NewHotRing(opt.HotRingBits, nil)
-		if opt.HotRingWindowSlots > 0 && opt.HotRingWindowSlotDuration > 0 {
-			db.hot.EnableSlidingWindow(opt.HotRingWindowSlots, opt.HotRingWindowSlotDuration)
-		}
-		if opt.HotRingDecayInterval > 0 && opt.HotRingDecayShift > 0 {
-			db.hot.EnableDecay(opt.HotRingDecayInterval, opt.HotRingDecayShift)
-		}
+	db.hot = newHotTracker(opt)
+	if db.hot != nil {
 		if opt.HotRingTopK <= 0 {
 			opt.HotRingTopK = 16
 		}

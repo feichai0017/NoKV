@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/hotring"
 	"github.com/pkg/errors"
 )
 
@@ -34,7 +33,7 @@ type valueLog struct {
 	numActiveIterators int32
 	db                 *DB
 	opt                Options
-	hot                *hotring.HotRing
+	hot                hotTracker
 	gcTokens           chan struct{}
 	gcParallelism      int
 	gcBucketBusy       []atomic.Uint32
@@ -473,17 +472,11 @@ func (db *DB) initVLog() {
 		gcParallelism = bucketCount
 	}
 
-	var hot *hotring.HotRing
+	var hot hotTracker
 	if db.opt.HotRingEnabled &&
 		db.opt.ValueLogHotBucketCount > 0 &&
 		db.opt.ValueLogHotKeyThreshold > 0 {
-		hot = hotring.NewHotRing(db.opt.HotRingBits, nil)
-		if db.opt.HotRingWindowSlots > 0 && db.opt.HotRingWindowSlotDuration > 0 {
-			hot.EnableSlidingWindow(db.opt.HotRingWindowSlots, db.opt.HotRingWindowSlotDuration)
-		}
-		if db.opt.HotRingDecayInterval > 0 && db.opt.HotRingDecayShift > 0 {
-			hot.EnableDecay(db.opt.HotRingDecayInterval, db.opt.HotRingDecayShift)
-		}
+		hot = newHotTracker(db.opt)
 	}
 
 	managers := make([]*vlogpkg.Manager, bucketCount)
