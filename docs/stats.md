@@ -47,6 +47,7 @@ flowchart TD
 | `WriteThrottleActive` | `db.blockWrites` | Indicates when writes are being throttled. |
 | `TxnsActive/Started/Committed/Conflicts` | `oracle.txnMetricsSnapshot()` | MVCC activity counters. |
 | `HotKeys` | `hotring.TopN()` | Top-K hot key counts. |
+| `HotWriteKeys` | `hotring.TopN()` | Top-K hot write key counts (write-only ring). |
 | `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
 | `IndexHitRate` | `lsm.CacheMetrics()` | SST 索引块缓存命中率。 |
 | `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |

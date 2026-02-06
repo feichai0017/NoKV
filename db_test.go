@@ -784,21 +784,20 @@ func TestHotWriteAndThrottle(t *testing.T) {
 			HotWriteBurstThreshold: 1,
 			WriteHotKeyLimit:       1,
 		},
-		hot: hotring.NewHotRing(8, nil),
+		hotWrite: hotring.NewHotRing(8, nil),
 	}
 
 	entry := kv.NewEntry([]byte("hot"), []byte("v"))
-	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
-
 	err := db.maybeThrottleWrite(kv.CFDefault, entry.Key)
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
+	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
 	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
 }
 
 func TestRecordReadEnqueuesPrefetch(t *testing.T) {
 	db := &DB{
 		opt:          &Options{},
-		hot:          hotring.NewHotRing(8, nil),
+		hotRead:      hotring.NewHotRing(8, nil),
 		prefetchRing: utils.NewRing[prefetchRequest](2),
 		prefetchHot:  1,
 	}
