@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/hotring"
+
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
@@ -230,6 +232,7 @@ type StatsSnapshot struct {
 	RegionTombstone                int64                           `json:"region_tombstone"`
 	RegionOther                    int64                           `json:"region_other"`
 	HotKeys                        []HotKeyStat                    `json:"hot_keys,omitempty"`
+	HotRing                        *hotring.Stats                  `json:"hotring,omitempty"`
 	HotWriteLimited                uint64                          `json:"hot_write_limited"`
 	BlockL0HitRate                 float64                         `json:"block_l0_hit_rate"`
 	BlockL1HitRate                 float64                         `json:"block_l1_hit_rate"`
@@ -375,6 +378,14 @@ func newStats(db *DB) *Stats {
 				})
 			}
 			return out
+		}))
+	}
+	if expvar.Get("NoKV.Stats.HotRing") == nil {
+		expvar.Publish("NoKV.Stats.HotRing", expvar.Func(func() any {
+			if db == nil || db.hot == nil {
+				return map[string]any{}
+			}
+			return db.hot.Stats()
 		}))
 	}
 	return s
@@ -833,6 +844,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		for _, item := range s.db.hot.TopN(topK) {
 			snap.HotKeys = append(snap.HotKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
+		hotStats := s.db.hot.Stats()
+		snap.HotRing = &hotStats
 	}
 	if s.db != nil && s.db.lsm != nil {
 		cm := s.db.lsm.CacheMetrics()
