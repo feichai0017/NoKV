@@ -83,6 +83,43 @@ For end-to-end examples see [`docs/stats.md`](stats.md#hot-key-export) and the C
 
 ---
 
+## 6.1 Default Configuration
+
+Global HotRing defaults (`NewDefaultOptions`):
+
+| Option | Default value | Notes |
+| --- | --- | --- |
+| `HotRingEnabled` | `true` | Master switch for DB hot tracking. |
+| `HotRingBits` | `12` | 4096 buckets. |
+| `HotRingTopK` | `16` | Top-K hot keys for stats/CLI. |
+| `HotRingDecayInterval` | `1s` | Periodic decay enabled. |
+| `HotRingDecayShift` | `1` | Halve counters each interval. |
+| `HotRingWindowSlots` | `8` | Sliding window enabled. |
+| `HotRingWindowSlotDuration` | `250ms` | ~2s window. |
+| `HotRingRotationInterval` | `0` | Rotation disabled. |
+| `HotRingNodeCap` | `0` | Node cap disabled. |
+| `HotRingNodeSampleBits` | `0` | No sampling (cap disabled anyway). |
+
+Value-log override defaults (`ValueLogHotRing*`):
+
+| Option | Default value | Notes |
+| --- | --- | --- |
+| `ValueLogHotRingOverride` | `false` | Inherit global HotRing config. |
+| `ValueLogHotRingBits` | `0` | Uses ring default when override enabled. |
+| `ValueLogHotRingRotationInterval` | `0` | Rotation disabled. |
+| `ValueLogHotRingNodeCap` | `0` | Node cap disabled. |
+| `ValueLogHotRingNodeSampleBits` | `0` | No sampling. |
+| `ValueLogHotRingDecayInterval` | `0` | Decay disabled. |
+| `ValueLogHotRingDecayShift` | `0` | Decay disabled. |
+| `ValueLogHotRingWindowSlots` | `0` | Sliding window disabled. |
+| `ValueLogHotRingWindowSlotDuration` | `0` | Sliding window disabled. |
+
+When `ValueLogHotRingOverride=false`, the value-log ring inherits the global HotRing
+settings. When override is enabled, **zeros disable features** (except `bits=0`,
+which falls back to the ring default).
+
+---
+
 ## 7. Write-Path Throttling
 
 `Options.WriteHotKeyLimit` wires HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
