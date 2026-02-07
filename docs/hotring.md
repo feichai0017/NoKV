@@ -54,8 +54,9 @@ Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket he
 
 ## 4. Integration Points
 
-* **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which in turn invokes `HotRing.Touch` for every successful lookup. Writes touch the ring only when `Options.WriteHotKeyLimit` is set, so throttling can clamp abusive keys.
-* **Stats** – [`StatsSnapshot`](../stats.go#L41-L87) copies `hot.TopN` into `HotKeys`. `expvar` publishes the same view under `NoKV.Stats.HotKeys` for automation.
+* **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which invokes `HotRing.Touch` on a **read-only ring** for every successful lookup.
+* **Write throttling & hot batching** – writes are tracked by a **write-only ring**. When `Options.WriteHotKeyLimit > 0`, writes use `TouchAndClamp` to enforce throttling; when throttling is disabled but `HotWriteBurstThreshold > 0`, writes still `Touch` so hot batching can trigger.
+* **Stats** – [`StatsSnapshot`](../stats.go#L41-L87) publishes read hot keys (`HotKeys`) and write hot keys (`HotWriteKeys`). `expvar` exposes both under `NoKV.Stats.HotKeys` and `NoKV.Stats.HotWriteKeys`.
 * **Caching** – `lsm/cache` can promote blocks referenced by frequently touched keys, keeping the hot tier warm.
 * **Value log routing** – a dedicated HotRing instance powers **vlog hot/cold bucket routing**. It tracks *write* hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (`ValueLogHotBucketCount`) once `ValueLogHotKeyThreshold` is reached; cold keys go to the cold range.
 
@@ -122,7 +123,7 @@ which falls back to the ring default).
 
 ## 7. Write-Path Throttling
 
-`Options.WriteHotKeyLimit` wires HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
+`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
 
 Operational hints:
 
@@ -196,7 +197,7 @@ Suggested starting points:
 
 ## 10. Value Log Overrides
 
-NoKV maintains a **second HotRing** dedicated to value-log hot/cold routing. By
+NoKV maintains a **value-log HotRing** dedicated to hot/cold routing. By
 default this override is enabled so the write-only ring can use faster rotation
 and a shorter window. You can disable it to inherit the global HotRing config:
 
