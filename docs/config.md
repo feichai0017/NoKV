@@ -58,6 +58,36 @@ db := NoKV.Open(opt)
 defer db.Close()
 ```
 
+### Load Options From TOML
+
+For convenience, you can load engine options from a JSON or TOML file. Unspecified
+fields keep their defaults from `NewDefaultOptions`.
+
+```go
+opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
+if err != nil {
+    log.Fatal(err)
+}
+db := NoKV.Open(opt)
+defer db.Close()
+```
+
+Example (TOML):
+
+```toml
+work_dir = "./data"
+mem_table_engine = "art"
+value_threshold = 1024
+write_hot_key_limit = 128
+value_log_gc_interval = "30s"
+```
+
+Notes:
+- Field names are case-insensitive; `_` / `-` / `.` are ignored.
+- Durations accept Go-style strings (e.g. `"30s"`, `"200ms"`). Numeric durations
+  are interpreted as nanoseconds.
+- Unknown fields return an error so typos do not silently pass.
+
 ---
 
 ## 2. Raft Topology File
