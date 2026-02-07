@@ -59,16 +59,22 @@ func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
 		return nil
 	}
 	limit := db.opt.WriteHotKeyLimit
-	if limit <= 0 {
-		return nil
-	}
 	skey := cfHotKey(cf, key)
-	_, limited := db.hotWrite.TouchAndClamp(skey, limit)
-	if !limited {
+	if skey == "" {
 		return nil
 	}
-	atomic.AddUint64(&db.hotWriteLimited, 1)
-	return utils.ErrHotKeyWriteThrottle
+	if limit > 0 {
+		_, limited := db.hotWrite.TouchAndClamp(skey, limit)
+		if !limited {
+			return nil
+		}
+		atomic.AddUint64(&db.hotWriteLimited, 1)
+		return utils.ErrHotKeyWriteThrottle
+	}
+	if db.opt.HotWriteBurstThreshold > 0 {
+		db.hotWrite.Touch(skey)
+	}
+	return nil
 }
 
 func cfHotKey(cf kv.ColumnFamily, key []byte) string {
