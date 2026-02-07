@@ -48,6 +48,7 @@ flowchart TD
 | `TxnsActive/Started/Committed/Conflicts` | `oracle.txnMetricsSnapshot()` | MVCC activity counters. |
 | `HotKeys` | `hotring.TopN()` | Top-K hot key counts. |
 | `HotWriteKeys` | `hotring.TopN()` | Top-K hot write key counts (write-only ring). |
+| `HotWriteRing` | `hotring.Stats()` | Write-only HotRing counters snapshot. |
 | `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
 | `IndexHitRate` | `lsm.CacheMetrics()` | SST 索引块缓存命中率。 |
 | `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |
