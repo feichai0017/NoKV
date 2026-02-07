@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-48f11393.js";
+            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -226,6 +226,7 @@
 <tr><td><code>TxnsActive/Started/Committed/Conflicts</code></td><td><code>oracle.txnMetricsSnapshot()</code></td><td>MVCC activity counters.</td></tr>
 <tr><td><code>HotKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot key counts.</td></tr>
 <tr><td><code>HotWriteKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot write key counts (write-only ring).</td></tr>
+<tr><td><code>HotWriteRing</code></td><td><code>hotring.Stats()</code></td><td>Write-only HotRing counters snapshot.</td></tr>
 <tr><td><code>BlockL0/L1/BloomHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>Block and bloom cache hit ratios.</td></tr>
 <tr><td><code>IndexHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>SST 索引块缓存命中率。</td></tr>
 <tr><td><code>IteratorReused</code></td><td><code>iteratorPool.reused()</code></td><td>Frequency of iterator pooling hits.</td></tr>

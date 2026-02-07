@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-48f11393.js";
+            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -697,6 +697,30 @@ opt.WriteBatchMaxCount = 128
 db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
+<h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
+<p>For convenience, you can load engine options from a JSON or TOML file. Unspecified
+fields keep their defaults from <code>NewDefaultOptions</code>.</p>
+<pre><code class="language-go">opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
+if err != nil {
+    log.Fatal(err)
+}
+db := NoKV.Open(opt)
+defer db.Close()
+</code></pre>
+<p>Example (TOML):</p>
+<pre><code class="language-toml">work_dir = "./data"
+mem_table_engine = "art"
+value_threshold = 1024
+write_hot_key_limit = 128
+value_log_gc_interval = "30s"
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>Field names are case-insensitive; <code>_</code> / <code>-</code> / <code>.</code> are ignored.</li>
+<li>Durations accept Go-style strings (e.g. <code>"30s"</code>, <code>"200ms"</code>). Numeric durations
+are interpreted as nanoseconds.</li>
+<li>Unknown fields return an error so typos do not silently pass.</li>
+</ul>
 <hr>
 <h2 id="2-raft-topology-file"><a class="header" href="#2-raft-topology-file">2. Raft Topology File</a></h2>
 <p><code>raft_config.example.json</code> is the single source of truth for distributed
@@ -1751,8 +1775,9 @@ Deeper levels rely on OS page cache + mmap readahead
 <hr>
 <h2 id="4-integration-points-1"><a class="header" href="#4-integration-points-1">4. Integration Points</a></h2>
 <ul>
-<li><strong>DB reads</strong> – <code>Txn.Get</code> and iterators call <code>db.recordRead</code>, which in turn invokes <code>HotRing.Touch</code> for every successful lookup. Writes touch the ring only when <code>Options.WriteHotKeyLimit</code> is set, so throttling can clamp abusive keys.</li>
-<li><strong>Stats</strong> – <a href="../stats.go#L41-L87"><code>StatsSnapshot</code></a> copies <code>hot.TopN</code> into <code>HotKeys</code>. <code>expvar</code> publishes the same view under <code>NoKV.Stats.HotKeys</code> for automation.</li>
+<li><strong>DB reads</strong> – <code>Txn.Get</code> and iterators call <code>db.recordRead</code>, which invokes <code>HotRing.Touch</code> on a <strong>read-only ring</strong> for every successful lookup.</li>
+<li><strong>Write throttling &amp; hot batching</strong> – writes are tracked by a <strong>write-only ring</strong>. When <code>Options.WriteHotKeyLimit &gt; 0</code>, writes use <code>TouchAndClamp</code> to enforce throttling; when throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, writes still <code>Touch</code> so hot batching can trigger.</li>
+<li><strong>Stats</strong> – <a href="../stats.go#L41-L87"><code>StatsSnapshot</code></a> publishes read hot keys (<code>HotKeys</code>) and write hot keys (<code>HotWriteKeys</code>). <code>expvar</code> exposes both under <code>NoKV.Stats.HotKeys</code> and <code>NoKV.Stats.HotWriteKeys</code>.</li>
 <li><strong>Caching</strong> – <code>lsm/cache</code> can promote blocks referenced by frequently touched keys, keeping the hot tier warm.</li>
 <li><strong>Value log routing</strong> – a dedicated HotRing instance powers <strong>vlog hot/cold bucket routing</strong>. It tracks <em>write</em> hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (<code>ValueLogHotBucketCount</code>) once <code>ValueLogHotKeyThreshold</code> is reached; cold keys go to the cold range.</li>
 </ul>
@@ -1825,7 +1850,7 @@ settings. When override is enabled, <strong>zeros disable features</strong> (exc
 which falls back to the ring default).</p>
 <hr>
 <h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
-<p><code>Options.WriteHotKeyLimit</code> wires HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code> or transactional <code>Txn.Set*</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
+<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code> or transactional <code>Txn.Set*</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
 <p>Operational hints:</p>
 <ul>
 <li><code>StatsSnapshot.HotWriteLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
@@ -1905,7 +1930,7 @@ workloads, use a <strong>node cap</strong> (with optional sampling) and/or <stro
 </div>
 <hr>
 <h2 id="10-value-log-overrides"><a class="header" href="#10-value-log-overrides">10. Value Log Overrides</a></h2>
-<p>NoKV maintains a <strong>second HotRing</strong> dedicated to value-log hot/cold routing. By
+<p>NoKV maintains a <strong>value-log HotRing</strong> dedicated to hot/cold routing. By
 default this override is enabled so the write-only ring can use faster rotation
 and a shorter window. You can disable it to inherit the global HotRing config:</p>
 <ul>
@@ -2379,6 +2404,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <tr><td><code>TxnsActive/Started/Committed/Conflicts</code></td><td><code>oracle.txnMetricsSnapshot()</code></td><td>MVCC activity counters.</td></tr>
 <tr><td><code>HotKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot key counts.</td></tr>
 <tr><td><code>HotWriteKeys</code></td><td><code>hotring.TopN()</code></td><td>Top-K hot write key counts (write-only ring).</td></tr>
+<tr><td><code>HotWriteRing</code></td><td><code>hotring.Stats()</code></td><td>Write-only HotRing counters snapshot.</td></tr>
 <tr><td><code>BlockL0/L1/BloomHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>Block and bloom cache hit ratios.</td></tr>
 <tr><td><code>IndexHitRate</code></td><td><code>lsm.CacheMetrics()</code></td><td>SST 索引块缓存命中率。</td></tr>
 <tr><td><code>IteratorReused</code></td><td><code>iteratorPool.reused()</code></td><td>Frequency of iterator pooling hits.</td></tr>

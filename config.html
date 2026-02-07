@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-48f11393.js";
+            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e01647bd.js"></script>
@@ -255,6 +255,30 @@ opt.WriteBatchMaxCount = 128
 db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
+<h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
+<p>For convenience, you can load engine options from a JSON or TOML file. Unspecified
+fields keep their defaults from <code>NewDefaultOptions</code>.</p>
+<pre><code class="language-go">opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
+if err != nil {
+    log.Fatal(err)
+}
+db := NoKV.Open(opt)
+defer db.Close()
+</code></pre>
+<p>Example (TOML):</p>
+<pre><code class="language-toml">work_dir = "./data"
+mem_table_engine = "art"
+value_threshold = 1024
+write_hot_key_limit = 128
+value_log_gc_interval = "30s"
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>Field names are case-insensitive; <code>_</code> / <code>-</code> / <code>.</code> are ignored.</li>
+<li>Durations accept Go-style strings (e.g. <code>"30s"</code>, <code>"200ms"</code>). Numeric durations
+are interpreted as nanoseconds.</li>
+<li>Unknown fields return an error so typos do not silently pass.</li>
+</ul>
 <hr>
 <h2 id="2-raft-topology-file"><a class="header" href="#2-raft-topology-file">2. Raft Topology File</a></h2>
 <p><code>raft_config.example.json</code> is the single source of truth for distributed
