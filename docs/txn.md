@@ -42,7 +42,7 @@ sequenceDiagram
         DB->>Commit: batch requests
         Commit->>Mgr: AppendEntries(entries, writeMask)
         Commit->>WAL: Append(entries with commitTs)
-        Commit->>Mem: apply to skiplist
+        Commit->>Mem: apply to active memtable index
         DB->>Oracle: doneCommit(commitTs)
     end
 ```

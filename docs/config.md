@@ -19,7 +19,6 @@ Key option groups (see `options.go` for the full list):
   - `WorkDir`, `SyncWrites`, `ManifestSync`, `ManifestRewriteThreshold`
 - **Write pipeline**
   - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `WriteBatchWait`
-  - `CommitPipelineDepth`, `CommitApplyConcurrency`
 - **Value log**
   - `ValueThreshold`, `ValueLogFileSize`, `ValueLogMaxEntries`
   - `ValueLogGCInterval`, `ValueLogGCDiscardRatio`
@@ -60,7 +59,7 @@ defer db.Close()
 
 ### Load Options From TOML
 
-For convenience, you can load engine options from a JSON or TOML file. Unspecified
+For convenience, you can load engine options from a TOML file. Unspecified
 fields keep their defaults from `NewDefaultOptions`.
 
 ```go
@@ -86,6 +85,8 @@ Notes:
 - Field names are case-insensitive; `_` / `-` / `.` are ignored.
 - Durations accept Go-style strings (e.g. `"30s"`, `"200ms"`). Numeric durations
   are interpreted as nanoseconds.
+- File extensions `.toml` and `.tml` are accepted.
+- JSON option files are rejected by design.
 - Unknown fields return an error so typos do not silently pass.
 
 ---
