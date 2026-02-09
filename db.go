@@ -65,6 +65,7 @@ type (
 		commitBatchPool  sync.Pool
 		iterPool         *iteratorPool
 		prefetchRing     *utils.Ring[prefetchRequest]
+		prefetchItems    chan struct{}
 		prefetchWG       sync.WaitGroup
 		prefetchState    atomic.Pointer[prefetchState]
 		prefetchClamp    int32
@@ -229,6 +230,7 @@ func Open(opt *Options) *DB {
 		}
 		db.prefetchCooldown = 15 * time.Second
 		db.prefetchRing = utils.NewRing[prefetchRequest](256)
+		db.prefetchItems = make(chan struct{}, db.prefetchRing.Cap())
 		db.prefetchState.Store(&prefetchState{
 			pend:       make(map[string]struct{}),
 			prefetched: make(map[string]time.Time),
@@ -359,8 +361,15 @@ func (db *DB) Close() error {
 
 	if db.prefetchRing != nil {
 		db.prefetchRing.Close()
+		if db.prefetchItems != nil {
+			select {
+			case db.prefetchItems <- struct{}{}:
+			default:
+			}
+		}
 		db.prefetchWG.Wait()
 		db.prefetchRing = nil
+		db.prefetchItems = nil
 	}
 
 	if err := db.lsm.Close(); err != nil {

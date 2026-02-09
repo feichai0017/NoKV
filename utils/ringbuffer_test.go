@@ -58,3 +58,24 @@ func TestRingConcurrent(t *testing.T) {
 		t.Fatalf("expected 1000, got %d", count)
 	}
 }
+
+func TestRingPopClearsSlotValue(t *testing.T) {
+	type payload struct {
+		v int
+	}
+	r := NewRing[*payload](2)
+	p := &payload{v: 42}
+	if !r.Push(p) {
+		t.Fatalf("push failed")
+	}
+	got, ok := r.Pop()
+	if !ok {
+		t.Fatalf("pop failed")
+	}
+	if got == nil || got.v != 42 {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+	if r.buf[0].val != nil {
+		t.Fatalf("expected slot value to be cleared after pop")
+	}
+}
