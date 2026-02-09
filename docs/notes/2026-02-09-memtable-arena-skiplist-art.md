@@ -358,35 +358,7 @@ sequenceDiagram
 
 ---
 
-## 8. 工程化评审（严格）
-
-优势：
-
-1. **边界清晰**：`memIndex` 抽象把 LSM 主流程和具体索引解耦，便于做引擎对比实验。  
-2. **恢复闭环完整**：WAL segment、flush 安装、manifest log pointer、GC 形成一致链路。  
-3. **读并发友好**：ART 的 lock-free 读取 + COW 写入在高读压场景更稳。  
-4. **GC 压力可控**：Arena 将热点对象从 Go heap 转移为偏移管理。  
-
-主要风险：
-
-1. **轮转指标偏置**：仅依赖 `walSize`，不能严格反映 ART/Skiplist 的真实内存曲线。  
-2. **写冲突重试成本**：ART 在高冲突 key 下 CAS 重试增多，尾延迟会抬高。  
-3. **回收粒度粗**：Arena 只能随 memtable 生命周期整体释放，无法按 key 细粒度回收。  
-4. **文档漂移风险**：设计文档若不跟代码同步，容易误导调参与容量预估。  
-
----
-
-## 9. 当前实现的两个改进点（建议）
-
-1. **文档与实现一致性（已修正）**  
-`docs/memtable.md` 中关于 `arenaSizeForART` 与 ART 并发模型的旧描述已更新为当前实现（统一 `arenaSizeFor` + COW/CAS）。后续新增优化时仍应同步文档，避免调参误导。  
-
-2. **轮转指标更精细化**  
-可考虑在 `walSize` 基础上引入 `index.MemSize()` 作为辅助阈值，减少 ART/Skiplist 在内存特征差异下的轮转偏差。  
-
----
-
-## 10. 小结
+## 8. 小结
 
 NoKV 的 MemTable 设计本质是：**WAL 语义优先 + 索引可插拔 + Arena 降 GC**。  
 
