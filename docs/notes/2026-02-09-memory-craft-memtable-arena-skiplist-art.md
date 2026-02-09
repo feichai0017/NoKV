@@ -1,443 +1,203 @@
-# 2026-02-09 从 0 到 1 理解 MemTable：Arena、Skiplist 与 ART
+# 2026-02-09-memory-craft-memtable-arena-skiplist-art
 
-这份笔记面向 **第一次阅读 NoKV 的同学**，同时记录我在实现过程中的工程化设计心得。内容聚焦 MemTable 层的核心设计：生命周期、WAL 绑定、Arena 内存分配策略，以及两种索引实现（Skiplist / ART）的工程取舍。目标是回答三个问题：
+本文档面向第一次读 NoKV 的同学，也记录我自己在这块实现里的工程化思路。主题是 MemTable 层的三件事：
 
-1. 为什么这样设计。  
-2. 两种实现到底差在哪。  
-3. 线上如何选型和调参。  
-
----
-
-## 一页摘要（TL;DR）
-
-**核心思路**：MemTable 不是“纯内存结构”，而是与 WAL segment 绑定的写入阶段单元。写入先追加 WAL，再更新内存索引；达到阈值后轮转为 immutable，后台 flush 为 SST，再通过 manifest checkpoint 释放旧 WAL。
-
-| 设计点 | NoKV 实现 | 直接收益 | 代价/约束 |
-| :-- | :-- | :-- | :-- |
-| MemTable 抽象 | `memIndex` 接口（`Add/Search/Iterator/MemSize/Ref`） | 索引可插拔 | 统一抽象会屏蔽部分实现细节优化 |
-| WAL 绑定 | `memTable.segmentID` + `walSize` | 恢复与回收路径清晰 | 轮转主要看 WAL 字节而非纯内存占用 |
-| Arena 分配 | chunk 化、无锁 bump 分配、对齐保障 | 低分配开销、低 GC 压力 | 内部碎片不可避免，释放粒度粗 |
-| Skiplist | 概率层高 + CAS 链接 | 实现成熟、语义直观 | 写放大与指针开销更高 |
-| ART | 前缀压缩 + Node4/16/48/256 + COW/CAS | 热点读写性能强、顺序扫描好 | 实现复杂，调试门槛高 |
+1. MemTable 作为“可恢复写入阶段”的设计意义。
+2. Arena 为什么是性能与可控性的关键。
+3. Skiplist / ART 两种索引在真实工程里的取舍。
 
 ---
 
-## 1. 设计目标（工程视角）
+## 1. 设计理念：MemTable 不是缓存，而是“写入阶段机”
 
-1) **写入路径可恢复**：任何时点 crash 后都能按 WAL + manifest 重建状态。  
-2) **索引实现可替换**：同一 LSM 流程下允许 skiplist/art 切换。  
-3) **内存分配可控**：减少小对象分配和 GC 抖动。  
-4) **flush 回收可证明**：SST 安装成功后才能推进 WAL checkpoint 并删除旧段。  
+很多人第一次看 LSM 会把 MemTable 理解成“内存缓存层”。在 NoKV 里，这个理解不够准确。
 
----
+更准确的说法是：
 
-## 2. MemTable 生命周期
+* MemTable 是 **WAL 之后、SST 之前** 的有序写入阶段。
+* 它必须同时满足“马上可读”和“崩溃可恢复”。
+* 它的生命周期由 flush 节奏驱动，而不是由 GC 自发回收。
 
-### 2.1 结构与抽象
-
-`memTable` 结构（`lsm/memtable.go`）：
-
-```go
-type memTable struct {
-    lsm        *LSM
-    segmentID  uint32
-    index      memIndex
-    maxVersion uint64
-    walSize    int64
-}
-```
-
-索引抽象：
-
-```go
-type memIndex interface {
-    Add(*kv.Entry)
-    Search([]byte) kv.ValueStruct
-    NewIterator(*utils.Options) utils.Iterator
-    MemSize() int64
-    IncrRef()
-    DecrRef()
-}
-```
-
-代码锚点（便于和实现逐行对照）：
-
-| 主题 | 代码位置 |
-| :-- | :-- |
-| MemTable 抽象与写入 | `lsm/memtable.go`（`memTable` / `setBatch` / `recovery`） |
-| 轮转与 flush worker | `lsm/lsm.go`（`Set` / `SetBatch` / `rotateLocked` / `submitFlush`） |
-| Flush 安装与 log pointer | `lsm/levels.go`（`flush` / `canRemoveWalSegment`） |
-| memtable engine 选择 | `lsm/memtable.go`（`newMemIndex`） |
-| ART 主实现 | `utils/art.go`（`tryInsert` / `lowerBound` / `artIterator`） |
-| Arena 分配器 | `utils/arena.go`（`allocate` / `allocAligned` / `ensureChunk`） |
+这决定了实现不能只追求单次操作快，还要追求状态转换可证明。
 
 ---
 
-### 2.2 写入路径（单条/批量）
-
-```mermaid
-sequenceDiagram
-  participant DB as commitWorker
-  participant LSM as lsm.Set/SetBatch
-  participant MT as memTable.setBatch
-  participant WAL as wal.Manager
-  participant IDX as memIndex
-
-  DB->>LSM: SetBatch(entries)
-  LSM->>MT: setBatch(entries)
-  MT->>WAL: Append(payloads...)
-  MT->>IDX: Add(entry...)
-  IDX-->>LSM: in-memory visible
-```
-
-关键点：
-
-* `setBatch` 先编码并 `wal.Append`，再 `index.Add`（`lsm/memtable.go`）。  
-* `walSize` 按 WAL 追加长度累加，用于轮转和 checkpoint。  
-* 批量路径在同一 memtable segment 内尽量合并写入，减少锁与系统调用开销。  
-
-线性化点与并发语义（实现视角）：
-
-* 线性化点在 `wal.Append` 成功后；索引更新发生在其后，因此“可见即可恢复”。  
-* `Set/SetBatch` 常态走 `RLock`；仅在容量触发时升级到 `Lock` 执行 `rotateLocked`。  
-* `rotateLocked` 将旧表放入 `immutables`，新表切换到新 WAL segment，旧表再异步 flush。  
-
-```mermaid
-flowchart LR
-  A["RLock: write to active memtable"] --> B{"walSize + estimate > limit"}
-  B -->|No| C["setBatch: Append WAL then index.Add"]
-  B -->|Yes| D["Unlock RLock and take Lock"]
-  D --> E["rotateLocked: active->immutable and NewMemtable"]
-  E --> F["submitFlush(old) async"]
-  F --> A
-```
-
----
-
-### 2.3 轮转、flush、恢复
+## 2. 核心结构：一张图看懂生命周期
 
 ```mermaid
 flowchart TD
-  W["Write to active memtable"] --> C{"walSize > MemTableSize ?"}
-  C -->|No| W
-  C -->|Yes| R["rotate: active -> immutable + new segment"]
-  R --> F["flush immutable -> SST(L0)"]
-  F --> M["manifest: AddFile + EditLogPointer"]
-  M --> G["remove eligible WAL segment"]
-  Crash["Crash/Restart"] --> Replay["replay WAL segments > log pointer"]
-  Replay --> Rebuild["rebuild memtables + restore active"]
+  W["Write Request"] --> A["active memtable"]
+  A --> B{"walSize over threshold?"}
+  B -->|No| A
+  B -->|Yes| R["rotate: active -> immutable"]
+  R --> F["flush immutable to L0 SST"]
+  F --> M["manifest: add file + advance log pointer"]
+  M --> G["remove eligible wal segments"]
 ```
 
-关键点：
-
-* 新建 memtable 时会 `SwitchSegment(newFid)`，将内存与 WAL 段一一对应。  
-* `flush` 成功后，manifest 同时记录 `AddFile` 与 `EditLogPointer`，再尝试删除可删 WAL 段。  
-* `recovery` 根据 manifest 的 log pointer 删除/跳过旧段，仅重放必要 WAL。  
-
-状态机视角：
-
-```mermaid
-stateDiagram-v2
-  [*] --> Active
-  Active --> Rotating: "walSize threshold"
-  Rotating --> ImmutableQueued
-  ImmutableQueued --> Flushing
-  Flushing --> Installed: "SST + manifest edits"
-  Installed --> WalGC: "eligible segment remove"
-  WalGC --> [*]
-```
+这条链路的工程重点是：**先有可恢复记录，再有内存可见状态，再有持久层安装。**
 
 ---
 
-### 2.4 一个重要设计取舍
+## 3. MemTable 与 WAL 的绑定关系
 
-当前轮转阈值主要由 `walSize` 判断（`lsm/lsm.go`），而不是严格由 `index.MemSize()` 驱动。  
+`lsm/memtable.go` 里的 `memTable` 结构包含 `segmentID` 和 `walSize`，这不是“顺手放进来”的字段，而是状态一致性的锚点。
 
-含义：
+* `segmentID`：把某一代 memtable 与 WAL segment 绑定。
+* `walSize`：驱动 rotate 的直接信号。
+* `maxVersion`：配合内部 key 版本序。
 
-* 优点：和恢复/checkpoint 语义一致，逻辑简单。  
-* 代价：对 ART 这类结构，索引真实内存占用与 WAL 字节不总是线性一致，可能出现“内存先紧张但未轮转”或“较早轮转”的偏差。  
+写入时序：
 
----
+1. `wal.Append` 成功。
+2. `index.Add` 更新内存索引。
 
-## 3. Arena 设计（两种索引共用）
-
-### 3.1 为什么要 Arena
-
-MemTable 高频写入会产生大量短生命周期对象。若完全走 Go heap，小对象分配/回收会明显放大 GC 成本。  
-
-Arena 目标：
-
-* 将 key/value/node 以“偏移量”组织在连续 chunk 中。  
-* 用原子 bump 指针分配，减少锁争用。  
-* 通过 refcount 在结构层统一释放整块资源。  
+这个顺序保证了：“能读到的数据，一定能从日志重放回来”。
 
 ---
 
-### 3.2 关键机制
+## 4. Arena：把分配成本从“每次写入”移到“阶段回收”
 
-* `Arena.allocate`：CAS 推进 `n`（偏移），按 chunk 边界切分。  
-* `ensureChunk`：按需创建 chunk，避免一次性大分配。  
-* `allocAligned`：保证对齐，满足原子读写需求。  
+### 4.1 为什么必须有 Arena
+
+如果 key/value/node 都直接走 Go heap，写高峰会带来两个明显问题：
+
+* 大量小对象分配导致 GC 频繁扫描。
+* 指针对象离散，CPU cache 命中率差。
+
+Arena 的核心思想是：
+
+* 用 offset 取代大多数指针。
+* 用 bump 分配替代通用分配器路径。
+* 用 memtable 生命周期回收，替代细粒度 free。
+
+### 4.2 对齐是正确性要求，不是优化选项
+
+在 skiplist 里 value 元数据是 `uint64` 原子读写。Arena 的对齐保障决定了这里是否存在未定义行为风险。
+
+简单说：没有对齐保障，这不是“慢一点”，而是“可能错”。
 
 ---
 
-### 3.3 对齐是硬约束
+## 5. Skiplist 设计（工程可维护基线）
 
-`skiplist` 的 value 走 `atomic.LoadUint64`，因此 node/value 对齐必须保证（`utils/arena.go` 中 `nodeAlign` 相关注释）。这属于“正确性前提”，不是性能微调。
+### 5.1 数据结构要点
 
----
-
-### 3.4 Arena 的工程权衡
-
-* 优点：低 GC、低碎片元数据开销、并发分配快。  
-* 缺点：对象不能细粒度释放，生命周期跟随整棵索引；长期运行下需要依赖 memtable 轮转做阶段性回收。  
-
----
-
-## 4. Skiplist 设计（和 ART 同粒度）
-
-### 4.1 数据结构与内存布局
-
-Skiplist 的节点定义（`utils/skiplist.go`）有三个关键点：
-
-* value 用一个 `uint64` 打包（低 32 位 value offset，高 32 位 value size），可原子读写。  
-* key/node/value 都放在 Arena，节点只保存 `offset + size`，减少 heap 对象。  
-* `tower` 是固定上限数组，但实际分配由 `height` 截断，避免为低层节点浪费空间。  
+* 随机层高 `randomHeight`，上限 `maxHeight`。
+* tower 每层用 CAS 链接。
+* key/value/node 存在 Arena，节点内部用 offset。
 
 ```mermaid
 flowchart LR
-  A["Entry(key,value)"] --> B["Arena.putKey / Arena.putVal"]
-  B --> C["new node(height=h)"]
-  C --> D["node.value = encodeValue(valOffset,valSize)"]
-  D --> E["node.tower[0..h-1] participates in links"]
+  E["Entry"] --> K["Arena.putKey"]
+  E --> V["Arena.putVal"]
+  K --> N["new node(height=h)"]
+  V --> N
+  N --> L["CAS link level 0..h-1"]
 ```
+
+### 5.2 写入模型（Add）
+
+`Add` 的逻辑不是“直接插入”，而是“先定位，再条件更新，再分层安装”：
+
+1. `findSpliceForLevel` 从高到低找到每层 `prev/next`。
+2. 如果发现同 key，直接原子覆盖 value。
+3. 不同 key 才创建新节点。
+4. 从 level0 开始 CAS 安装，失败重试。
+
+这种流程的价值是：并发冲突局部化，不需要全局大锁。
+
+### 5.3 读与迭代
+
+`Search` 通过 `findNear` 找 `>= key` 的候选，再用 `kv.SameKey` 校验。迭代器支持 `Seek/SeekForPrev/Next/Prev`，并通过 refcount 避免并发 flush 时提前释放。
+
+### 5.4 何时优先选 Skiplist
+
+* 优先稳定性与可排障性。
+* 团队希望降低认知负担。
+* 需要一个稳健默认实现做回归基线。
 
 ---
 
-### 4.2 并发写入模型（Add）
+## 6. ART 设计（性能上限路径）
 
-`Add` 的实际流程是：
+### 6.1 结构核心
 
-1. 从顶层到底层做 `findSpliceForLevel`，得到每层 `prev/next`。  
-2. 如果发现同 key（`prev[i] == next[i]`），直接 `setValue` 原子覆盖并返回。  
-3. 不存在同 key 时，新建节点并随机层高（`randomHeight`）。  
-4. 尝试 CAS 提升全局 `height`。  
-5. 按 **从底层到高层** 逐层 `casNextOffset` 安装节点；失败就重新计算 splice 并重试。  
-
-```mermaid
-flowchart TD
-  A["Add(entry)"] --> B["findSpliceForLevel top-down"]
-  B --> C{"same key found?"}
-  C -->|Yes| D["atomic setValue and return"]
-  C -->|No| E["newNode + randomHeight"]
-  E --> F["CAS update list height if needed"]
-  F --> G["insert level 0 by casNextOffset"]
-  G --> H["insert upper levels with CAS retry"]
-  H --> I["done"]
-```
-
-这里的工程价值是：不依赖全局大锁，冲突时局部重试，写入路径在高并发下仍保持可预测。
-
----
-
-### 4.3 查找语义（Search / findNear）
-
-`Search` 并不是直接哈希命中，而是：
-
-1. 调 `findNear(key, less=false, allowEqual=true)` 找第一条 `>= key`。  
-2. 再用 `kv.SameKey` 做 user key 级别校验。  
-3. 命中则返回 `ValueStruct`，否则 miss。  
+* Node4/16/48/256 自适应升级。
+* 前缀压缩减少重复路径。
+* leaf 保存完整 key + value。
 
 ```mermaid
 flowchart LR
-  A["Search(key)"] --> B["findNear(key, >=)"]
-  B --> C{"node found?"}
-  C -->|No| D["miss"]
-  C -->|Yes| E{"kv.SameKey ?"}
-  E -->|Yes| F["decode value and return"]
-  E -->|No| D
+  N4["Node4"] --> N16["Node16"]
+  N16 --> N48["Node48"]
+  N48 --> N256["Node256"]
 ```
 
-这套语义与内部 key（含版本）排序方式一致，便于和 MVCC 行为对齐。
+### 6.2 并发模型
+
+NoKV ART 的关键不是“树结构本身”，而是 COW + CAS 安装：
+
+* 读路径读不可变快照。
+* 写路径复制 payload 后 CAS 替换。
+* 冲突时重试 `tryInsert`。
+
+这让 ART 在高并发读写场景下通常能拿到更低延迟。
+
+### 6.3 查询与范围扫描
+
+`lowerBound` 统一了 `Search` 与 `Seek` 的行为语义，也让范围扫描路径更自然。
 
 ---
 
-### 4.4 迭代器与生命周期管理
+## 7. Skiplist vs ART：不是“谁更先进”，而是“谁更合身”
 
-Skiplist 迭代器（`SkipListIterator`）支持：
+| 维度 | Skiplist | ART |
+| :-- | :-- | :-- |
+| 复杂度 | 中等，结构直观 | 高，路径分叉多 |
+| 可维护性 | 强 | 中 |
+| 常见读延迟 | 中 | 低（常见负载） |
+| 范围扫描 | 好 | 很好 |
+| 并发写冲突行为 | CAS 重试、简单 | COW+CAS、实现复杂 |
+| 调试成本 | 低 | 高 |
 
-* `Seek`（>= target）  
-* `SeekForPrev`（<= target）  
-* `Next/Prev` 双向游标  
+工程建议：
 
-生命周期由引用计数兜底：
-
-* `NewIterator` -> `IncrRef`  
-* `Iterator.Close` -> `DecrRef`  
-
-这样可以保证 flush 和读并发时，底层 Arena 不会被过早释放。
-
-```mermaid
-sequenceDiagram
-  participant Q as Query
-  participant It as SkipListIterator
-  participant SL as Skiplist
-
-  Q->>SL: NewIterator
-  SL->>SL: IncrRef
-  Q->>It: Seek/Next/Prev
-  Q->>It: Close
-  It->>SL: DecrRef
-```
+* 默认以 Skiplist 起步，先把系统行为跑稳。
+* 明确读热点与范围扫描占比后，再切 ART 并做专项 benchmark。
 
 ---
 
-### 4.5 复杂度与工程取舍
+## 8. 常见误区（新人最容易踩的坑）
 
-* 期望复杂度：查找/写入 `O(logN)`，最坏退化 `O(N)`。  
-* 优点：实现稳定、行为可解释、易排障。  
-* 代价：塔式指针元数据开销较高；随机层高在某些负载下会带来波动。  
-* 对 NoKV 的意义：作为默认引擎时，Skiplist 提供“可维护性优先”的基线实现。  
+1. 误区：`MemTableSize` 直接等于实际内存占用。
+事实：当前 rotate 更贴近 WAL 字节，索引真实内存与 WAL 字节不严格线性。
 
----
+2. 误区：用了 Arena 就没有内存压力。
+事实：Arena 只是把释放粒度变粗，压力从“小对象 GC”变成“阶段峰值”。
 
-## 5. ART 设计
-
-### 5.1 结构
-
-* Node4/16/48/256 自适应节点。  
-* 前缀压缩减少重复 key 前缀开销。  
-* leaf 保存完整 key + value，支持 lower-bound 查找。  
-
-节点升级路径：
-
-```mermaid
-flowchart LR
-  N4["Node4"] -->|count >= 4| N16["Node16"]
-  N16 -->|count >= 16| N48["Node48"]
-  N48 -->|count >= 48| N256["Node256"]
-```
+3. 误区：ART 一定全面优于 Skiplist。
+事实：ART 的收益依赖负载形态与实现细节，不是无条件成立。
 
 ---
 
-### 5.2 并发模型（关键）
+## 9. 工程化检查清单（上线前）
 
-代码注释明确采用 **COW + CAS**：
-
-* 读路径 lock-free，读取不可变节点快照。  
-* 写路径复制 payload/节点后 CAS 安装。  
-* 插入冲突时重试（`tryInsert` 循环）。  
-
-这套模型让 ART 在高并发读写下保持较好吞吐与扫描顺序稳定性。
-
-插入流程（对应 `tryInsert`）：
-
-```mermaid
-flowchart TD
-  A["Set(key, value)"] --> B["tryInsert"]
-  B --> C{"root == nil"}
-  C -->|Yes| D["new leaf and CAS root"]
-  C -->|No| E["walk by prefix + child byte"]
-  E --> F{"node is leaf"}
-  F -->|same key| G["storeValue (atomic)"]
-  F -->|different key| H["splitLeaf then replaceChild CAS"]
-  F -->|No| I{"prefix mismatch"}
-  I -->|Yes| J["splitPrefix then replaceChild CAS"]
-  I -->|No| K{"child exists"}
-  K -->|Yes| E
-  K -->|No| L["clone payload insert child and CAS"]
-```
-
-写路径关键细节：
-
-* 非 root 替换通过 `parent.payloadOffset.CompareAndSwap` 完成，避免全局锁。  
-* `insertChild` 会在必要时进行 `Node4->16->48->256` 升级。  
-* CAS 失败后外层重试，保证并发写下的一致安装。  
+1. 观察 flush backlog 是否长期上升。
+2. 观察 rotate 频率是否异常（过快/过慢）。
+3. 对比 `mem_table_engine=skiplist/art` 的 P99 读写延迟。
+4. 检查重启恢复时间是否随参数变化异常放大。
 
 ---
 
-### 5.3 查找语义（Search/Seek）
+## 10. 总结
 
-`Search` 的语义不是“精确路径命中即返回”，而是：
+MemTable 这一层真正的价值，不只是“把写先放内存”，而是把“写入吞吐、崩溃恢复、后台整理”三件事收敛到一个可证明的状态机里。
 
-1. 先用 `lowerBound(target)` 找到第一条 `>= target` 的 leaf。  
-2. 再用 `kv.SameKey` 校验是否同一 user key。  
-3. 不同 key 则返回 miss。  
+在这个状态机中：
 
-```mermaid
-flowchart LR
-  A["Search(target)"] --> B["lowerBound(target)"]
-  B --> C{"leaf exists?"}
-  C -->|No| D["miss"]
-  C -->|Yes| E{"SameKey(target, leaf.key) ?"}
-  E -->|Yes| F["return leaf value"]
-  E -->|No| D
-```
+* Arena 决定上限性能是否稳定。
+* Skiplist 决定基线是否稳健可控。
+* ART 决定是否能进一步逼近延迟和吞吐上限。
 
-这种实现能直接复用范围查找逻辑，也让 `Seek` 与 `Search` 在行为上统一到 lower-bound。
-
----
-
-### 5.4 迭代器
-
-ART 迭代器维护栈帧（`iterFrame`），通过 `descendToMin/advance` 做中序遍历。Seek 使用 lower-bound，再回填路径栈，适合范围查询与 MVCC merge。
-
-```mermaid
-sequenceDiagram
-  participant It as artIterator
-  participant T as artTree
-  participant S as stack
-
-  It->>T: Seek(key)
-  T-->>It: lowerBound leaf
-  It->>S: buildStackToLeaf(leaf)
-  loop Next
-    It->>S: advance to next child/subtree
-    It->>It: descendToMin(child)
-  end
-```
-
----
-
-## 6. Skiplist vs ART：当前代码下的实测与解读
-
-本地微基准（`go test ./utils -bench ... -benchmem -benchtime=1s`）：
-
-| Benchmark | 结果（Apple M3 Pro / darwin arm64） |
-| :-- | :-- |
-| `BenchmarkARTInsert` | `~255 ns/op` |
-| `BenchmarkARTGet` | `~73 ns/op` |
-| `BenchmarkSkiplistInsert` | `~810 ns/op` |
-| `BenchmarkSkiplistGet` | `~316 ns/op` |
-
-解读：
-
-* 在当前实现与测试模型下，ART 插入/读取都明显更快。  
-* 但这不是“绝对结论”：两组 benchmark 负载模型并不完全对齐（key 空间与重置策略不同），更适合当趋势信号。  
-
----
-
-## 7. 选型与调参建议
-
-1. 默认稳态优先：`mem_table_engine = "skiplist"`  
-适合先追求可维护性和行为可预期。  
-
-2. 读密集/热点明显：`mem_table_engine = "art"`  
-适合低延迟、范围遍历较多的场景。  
-
-3. 配合 `MemTableSize` 一起调  
-增大 memtable 可降低 flush 频率，但会增加恢复重放成本。  
-
-4. 观察 flush/WAL 指标联动  
-如果 flush backlog 长期增长，先检查 compaction 和磁盘，而不是只调 memtable engine。  
-
----
-
-## 8. 小结
-
-NoKV 的 MemTable 设计本质是：**WAL 语义优先 + 索引可插拔 + Arena 降 GC**。  
-
-* Skiplist 提供稳定、清晰、低认知成本的默认路径。  
-* ART 提供更激进的性能上限，尤其在读与有序遍历上。  
-* 生命周期（rotate/flush/recovery）和 manifest checkpoint 的一致性，是整个设计最关键的工程价值。  
+NoKV 的这套实现是很典型的工程答案：先保语义，再做性能，再留插拔空间。
