@@ -336,7 +336,7 @@ func (db *DB) commitWorker() {
 		batch.batchStart = time.Now()
 		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.reqs, batch.batchStart)
 		if len(requests) == 0 {
-			db.finishCommitRequests(batch.reqs, nil)
+			db.finishCommitRequests(batch.reqs, nil, nil)
 			db.releaseCommitBatch(batch)
 			continue
 		}
@@ -348,7 +348,7 @@ func (db *DB) commitWorker() {
 		err := db.vlog.write(requests)
 
 		if err != nil {
-			db.finishCommitRequests(batch.reqs, err)
+			db.finishCommitRequests(batch.reqs, err, nil)
 			db.releaseCommitBatch(batch)
 			continue
 		}
@@ -359,7 +359,7 @@ func (db *DB) commitWorker() {
 			}
 		}
 
-		err = db.applyRequests(batch.requests)
+		failedAt, err := db.applyRequests(batch.requests)
 		if err == nil && db.opt.SyncWrites {
 			err = db.wal.Sync()
 		}
@@ -370,7 +370,18 @@ func (db *DB) commitWorker() {
 				db.writeMetrics.RecordApply(applyDur)
 			}
 		}
-		db.finishCommitRequests(batch.reqs, err)
+		if err != nil && failedAt >= 0 {
+			perReqErr := make(map[*request]error, len(batch.requests)-failedAt)
+			for i := failedAt; i < len(batch.requests); i++ {
+				if batch.requests[i] == nil {
+					continue
+				}
+				perReqErr[batch.requests[i]] = err
+			}
+			db.finishCommitRequests(batch.reqs, nil, perReqErr)
+		} else {
+			db.finishCommitRequests(batch.reqs, err, nil)
+		}
 		db.releaseCommitBatch(batch)
 	}
 }
@@ -418,27 +429,35 @@ func (db *DB) releaseCommitBatch(batch *commitBatch) {
 	db.commitBatchPool.Put(batch.pool)
 }
 
-func (db *DB) applyRequests(reqs []*request) error {
-	for _, r := range reqs {
+func (db *DB) applyRequests(reqs []*request) (int, error) {
+	for i, r := range reqs {
 		if r == nil || len(r.Entries) == 0 {
 			continue
 		}
 		if err := db.writeToLSM(r); err != nil {
-			return pkgerrors.Wrap(err, "writeRequests")
+			return i, pkgerrors.Wrap(err, "writeRequests")
 		}
 		db.Lock()
 		db.updateHead(r.Ptrs)
 		db.Unlock()
 	}
-	return nil
+	return -1, nil
 }
 
-func (db *DB) finishCommitRequests(reqs []*commitRequest, err error) {
+func (db *DB) finishCommitRequests(reqs []*commitRequest, defaultErr error, perReqErr map[*request]error) {
 	for _, cr := range reqs {
 		if cr == nil || cr.req == nil {
 			continue
 		}
-		cr.req.Err = err
+		if perReqErr != nil {
+			if reqErr, ok := perReqErr[cr.req]; ok {
+				cr.req.Err = reqErr
+			} else {
+				cr.req.Err = defaultErr
+			}
+		} else {
+			cr.req.Err = defaultErr
+		}
 		cr.req.wg.Done()
 		cr.req = nil
 		cr.entryCount = 0

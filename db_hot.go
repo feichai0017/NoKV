@@ -99,9 +99,22 @@ func (db *DB) isHotWrite(entries []*kv.Entry) bool {
 	if thr <= 0 {
 		return false
 	}
-	k := entries[0]
-	key := cfHotKey(k.CF, k.Key)
+	key := hotWriteKeyForEntry(entries[0])
+	if key == "" {
+		return false
+	}
 	return db.hotWrite.Frequency(key) >= thr
+}
+
+func hotWriteKeyForEntry(e *kv.Entry) string {
+	if e == nil || len(e.Key) == 0 {
+		return ""
+	}
+	base := kv.ParseKey(e.Key)
+	if cf, userKey, ok := kv.DecodeKeyCF(base); ok {
+		return cfHotKey(cf, userKey)
+	}
+	return cfHotKey(e.CF, e.Key)
 }
 
 func (db *DB) enqueuePrefetch(key string, hot bool) {
@@ -141,6 +154,11 @@ func (db *DB) enqueuePrefetch(key string, hot bool) {
 				return
 			}
 		}
+	} else if db.prefetchItems != nil {
+		select {
+		case db.prefetchItems <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -151,6 +169,10 @@ func (db *DB) prefetchLoop() {
 		if !ok {
 			if db.prefetchRing.Closed() {
 				return
+			}
+			if db.prefetchItems != nil {
+				<-db.prefetchItems
+				continue
 			}
 			runtime.Gosched()
 			continue
