@@ -30,10 +30,10 @@ type memIndex interface {
 ```
 
 * **Memtable engine** – `Options.MemTableEngine` selects `skiplist` (default) or `art` via `newMemIndex`. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.
-* **Arena sizing** – `utils.NewSkiplist` uses `arenaSizeFor`; `utils.NewART` uses `arenaSizeForART` to reserve more space for variable node payloads and prefix spills.
+* **Arena sizing** – both `utils.NewSkiplist` and `utils.NewART` use `arenaSizeFor` to derive arena capacity from `Options.MemTableSize`.
 * **WAL coupling** – every `Set` uses `kv.EncodeEntry` to materialise the payload to the active WAL segment before inserting into the chosen index. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – `LSM.NewMemtable` atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.
-* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.
+* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses copy-on-write payload/node clones with CAS installs for writes, and keeps reads lock-free on immutable snapshots.
 
 ---
 
@@ -46,13 +46,13 @@ sequenceDiagram
     participant Flush
     participant Manifest
     WAL->>MT: Append+Set(entry)
-    MT->>Flush: freeze (Size() >= limit)
+    MT->>Flush: freeze (walSize + incomingEstimate > limit)
     Flush->>Manifest: LogPointer + AddFile
     Manifest-->>Flush: ack
     Flush->>WAL: Release segments ≤ segmentID
 ```
 
-1. **Active → Immutable** – when `mt.Size()` crosses thresholds (`Options.MemTableSize`), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.
+1. **Active → Immutable** – when `mt.walSize + estimate` exceeds `Options.MemTableSize`, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.
 2. **Flush** – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in `memTable.segmentID` once the SST is durably installed.
 3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes, rebuilding `maxVersion` for the oracle.
 
@@ -86,7 +86,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 | Data structure | Skiplist + arena | Skiplist + arena | Skiplist or ART + arena |
 | WAL linkage | `logfile_number` per memtable | Segment ID stored in vlog entries | `segmentID` on `memTable`, logged via manifest |
 | Recovery | Memtable replays from WAL, referencing `MANIFEST` | Replays WAL segments | Replays WAL segments, prunes ≤ manifest log pointer |
-| Flush trigger | Size/entries/time | Size-based | Size-based with explicit queue metrics |
+| Flush trigger | Size/entries/time | Size-based | WAL-size budget (`walSize`) with explicit queue metrics |
 
 ---
 

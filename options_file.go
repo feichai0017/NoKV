@@ -12,7 +12,7 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-// LoadOptionsFile loads engine Options from a JSON or TOML file. Unspecified
+// LoadOptionsFile loads engine Options from a TOML file. Unspecified
 // fields keep their defaults from NewDefaultOptions.
 func LoadOptionsFile(path string) (*Options, error) {
 	opt := NewDefaultOptions()
@@ -22,7 +22,7 @@ func LoadOptionsFile(path string) (*Options, error) {
 	return opt, nil
 }
 
-// ApplyOptionsFile overlays JSON/TOML options on top of an existing Options struct.
+// ApplyOptionsFile overlays TOML options on top of an existing Options struct.
 func ApplyOptionsFile(opt *Options, path string) error {
 	if opt == nil {
 		return fmt.Errorf("options is nil")
