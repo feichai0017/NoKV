@@ -3,6 +3,7 @@ package NoKV
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -794,6 +795,83 @@ func TestHotWriteAndThrottle(t *testing.T) {
 	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
 }
 
+func TestIsHotWriteUsesUserKeyForInternalEntries(t *testing.T) {
+	db := &DB{
+		opt: &Options{
+			HotWriteBurstThreshold: 1,
+			WriteHotKeyLimit:       0,
+		},
+		hotWrite: hotring.NewHotRing(8, nil),
+	}
+
+	userKey := []byte("hot-user-key")
+	require.NoError(t, db.maybeThrottleWrite(kv.CFDefault, userKey))
+
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, userKey, nonTxnMaxVersion), []byte("v"))
+	defer entry.DecrRef()
+	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
+}
+
+func TestApplyRequestsFailureIndex(t *testing.T) {
+	local := NewDefaultOptions()
+	local.WorkDir = t.TempDir()
+	local.EnableWALWatchdog = false
+	local.ValueLogGCInterval = 0
+	local.WriteBatchWait = 0
+
+	db := Open(local)
+	defer func() { _ = db.Close() }()
+
+	good := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("good"), nonTxnMaxVersion), []byte("v1"))
+	bad := kv.NewEntryWithCF(kv.CFDefault, []byte{}, []byte("v2"))
+	defer good.DecrRef()
+	defer bad.DecrRef()
+
+	reqs := []*request{
+		{
+			Entries: []*kv.Entry{good},
+			Ptrs:    []kv.ValuePtr{{}},
+		},
+		{
+			Entries: []*kv.Entry{bad},
+			Ptrs:    []kv.ValuePtr{{}},
+		},
+	}
+
+	failedAt, err := db.applyRequests(reqs)
+	require.Equal(t, 1, failedAt)
+	require.Error(t, err)
+
+	got, getErr := db.lsm.Get(good.Key)
+	require.NoError(t, getErr)
+	require.Equal(t, []byte("v1"), got.Value)
+	got.DecrRef()
+}
+
+func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
+	db := &DB{}
+	req1 := &request{}
+	req2 := &request{}
+	req1.wg.Add(1)
+	req2.wg.Add(1)
+	reqErr := errors.New("request failed")
+
+	batch := []*commitRequest{
+		{req: req1},
+		{req: req2},
+	}
+	perReq := map[*request]error{
+		req2: reqErr,
+	}
+
+	db.finishCommitRequests(batch, nil, perReq)
+	req1.wg.Wait()
+	req2.wg.Wait()
+
+	require.NoError(t, req1.Err)
+	require.ErrorIs(t, req2.Err, reqErr)
+}
+
 func TestRecordReadEnqueuesPrefetch(t *testing.T) {
 	db := &DB{
 		opt:          &Options{},
@@ -864,20 +942,29 @@ func TestExecutePrefetchUpdatesState(t *testing.T) {
 
 func TestPrefetchLoopDrainsRing(t *testing.T) {
 	db := &DB{
-		opt:          &Options{},
-		prefetchRing: utils.NewRing[prefetchRequest](2),
+		opt:           &Options{},
+		prefetchRing:  utils.NewRing[prefetchRequest](2),
+		prefetchItems: make(chan struct{}, 2),
 	}
 	db.prefetchState.Store(&prefetchState{
-		pend:       map[string]struct{}{"k": {}},
+		pend:       make(map[string]struct{}),
 		prefetched: make(map[string]time.Time),
 	})
 
 	db.prefetchWG.Add(1)
 	go db.prefetchLoop()
 
-	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "k"}))
-	time.Sleep(5 * time.Millisecond)
+	db.enqueuePrefetch("k", true)
+	require.Eventually(t, func() bool {
+		state := db.prefetchState.Load()
+		_, pending := state.pend["k"]
+		return !pending
+	}, time.Second, 5*time.Millisecond)
 	db.prefetchRing.Close()
+	select {
+	case db.prefetchItems <- struct{}{}:
+	default:
+	}
 	db.prefetchWG.Wait()
 
 	state := db.prefetchState.Load()

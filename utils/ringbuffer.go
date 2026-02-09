@@ -74,6 +74,8 @@ func (r *Ring[T]) Pop() (val T, ok bool) {
 		if diff == 0 {
 			if atomic.CompareAndSwapUint64(&r.head, pos, pos+1) {
 				val = slot.val
+				var zero T
+				slot.val = zero
 				slot.seq.Store(pos + size)
 				return val, true
 			}
