@@ -4,7 +4,7 @@ go 1.24.4
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
-	github.com/dgraph-io/badger/v4 v4.9.0
+	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/dgraph-io/ristretto/v2 v2.4.0
 	github.com/feichai0017/hotring v0.5.1
 	github.com/panjf2000/ants/v2 v2.11.4
