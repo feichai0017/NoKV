@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
+            window.path_to_searchindex_js = "searchindex-098dbdc9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e01647bd.js"></script>
+        <script src="toc-6093a2c1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -261,7 +261,7 @@ _ = mgr.Remove(fid)  // close + delete file
     Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
     Mgr--&gt;&gt;Commit: ValuePtr list
     Commit-&gt;&gt;WAL: Append(entries+ptrs)
-    Commit-&gt;&gt;Mem: apply to skiplist
+    Commit-&gt;&gt;Mem: apply to active memtable index
 </pre>
 
 <ol>
@@ -274,7 +274,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <hr>
 <h2 id="6-discard-statistics--gc"><a class="header" href="#6-discard-statistics--gc">6. Discard Statistics &amp; GC</a></h2>
 <pre class="mermaid">flowchart LR
-  FlushMgr -- "obsolete ptrs" --&gt; DiscardStats
+  Compaction -- "obsolete ptrs" --&gt; DiscardStats
   DiscardStats --&gt;|"batch json"| writeCh
   valuePtr["valueLog.newValuePtr(lfDiscardStatsKey)"]
   writeCh --&gt; valuePtr
@@ -283,7 +283,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from <code>lsm.FlushTable</code> completion (<code>valueLog.lfDiscardStats.push</code> inside <code>lsm/flush</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
 <li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>

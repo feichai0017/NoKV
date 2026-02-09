@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
+            window.path_to_searchindex_js = "searchindex-098dbdc9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e01647bd.js"></script>
+        <script src="toc-6093a2c1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -199,7 +199,6 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><strong>Write pipeline</strong>
 <ul>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
-<li><code>CommitPipelineDepth</code>, <code>CommitApplyConcurrency</code></li>
 </ul>
 </li>
 <li><strong>Value log</strong>
@@ -256,7 +255,7 @@ db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
 <h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
-<p>For convenience, you can load engine options from a JSON or TOML file. Unspecified
+<p>For convenience, you can load engine options from a TOML file. Unspecified
 fields keep their defaults from <code>NewDefaultOptions</code>.</p>
 <pre><code class="language-go">opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
 if err != nil {
@@ -277,6 +276,8 @@ value_log_gc_interval = "30s"
 <li>Field names are case-insensitive; <code>_</code> / <code>-</code> / <code>.</code> are ignored.</li>
 <li>Durations accept Go-style strings (e.g. <code>"30s"</code>, <code>"200ms"</code>). Numeric durations
 are interpreted as nanoseconds.</li>
+<li>File extensions <code>.toml</code> and <code>.tml</code> are accepted.</li>
+<li>JSON option files are rejected by design.</li>
 <li>Unknown fields return an error so typos do not silently pass.</li>
 </ul>
 <hr>

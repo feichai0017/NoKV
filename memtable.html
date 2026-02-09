@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
+            window.path_to_searchindex_js = "searchindex-098dbdc9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e01647bd.js"></script>
+        <script src="toc-6093a2c1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -202,10 +202,10 @@
 </code></pre>
 <ul>
 <li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>skiplist</code> (default) or <code>art</code> via <code>newMemIndex</code>. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.</li>
-<li><strong>Arena sizing</strong> – <code>utils.NewSkiplist</code> uses <code>arenaSizeFor</code>; <code>utils.NewART</code> uses <code>arenaSizeForART</code> to reserve more space for variable node payloads and prefix spills.</li>
+<li><strong>Arena sizing</strong> – both <code>utils.NewSkiplist</code> and <code>utils.NewART</code> use <code>arenaSizeFor</code> to derive arena capacity from <code>Options.MemTableSize</code>.</li>
 <li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
 <li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB’s <code>logfile_number</code> field.</li>
-<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses copy-on-write payload/node clones with CAS installs for writes, and keeps reads lock-free on immutable snapshots.</li>
 </ul>
 <hr>
 <h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
@@ -215,14 +215,14 @@
     participant Flush
     participant Manifest
     WAL-&gt;&gt;MT: Append+Set(entry)
-    MT-&gt;&gt;Flush: freeze (Size() &gt;= limit)
+    MT-&gt;&gt;Flush: freeze (walSize + incomingEstimate &gt; limit)
     Flush-&gt;&gt;Manifest: LogPointer + AddFile
     Manifest--&gt;&gt;Flush: ack
     Flush-&gt;&gt;WAL: Release segments ≤ segmentID
 </pre>
 
 <ol>
-<li><strong>Active → Immutable</strong> – when <code>mt.Size()</code> crosses thresholds (<code>Options.MemTableSize</code>), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
+<li><strong>Active → Immutable</strong> – when <code>mt.walSize + estimate</code> exceeds <code>Options.MemTableSize</code>, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
 <li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
 <li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest’s log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes, rebuilding <code>maxVersion</code> for the oracle.</li>
 </ol>
@@ -260,7 +260,7 @@
 <tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena</td></tr>
 <tr><td>WAL linkage</td><td><code>logfile_number</code> per memtable</td><td>Segment ID stored in vlog entries</td><td><code>segmentID</code> on <code>memTable</code>, logged via manifest</td></tr>
 <tr><td>Recovery</td><td>Memtable replays from WAL, referencing <code>MANIFEST</code></td><td>Replays WAL segments</td><td>Replays WAL segments, prunes ≤ manifest log pointer</td></tr>
-<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>Size-based with explicit queue metrics</td></tr>
+<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>WAL-size budget (<code>walSize</code>) with explicit queue metrics</td></tr>
 </tbody>
 </table>
 </div>

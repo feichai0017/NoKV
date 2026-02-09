@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e90b7cf0.js";
+            window.path_to_searchindex_js = "searchindex-098dbdc9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e01647bd.js"></script>
+        <script src="toc-6093a2c1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -641,7 +641,6 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><strong>Write pipeline</strong>
 <ul>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
-<li><code>CommitPipelineDepth</code>, <code>CommitApplyConcurrency</code></li>
 </ul>
 </li>
 <li><strong>Value log</strong>
@@ -698,7 +697,7 @@ db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
 <h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
-<p>For convenience, you can load engine options from a JSON or TOML file. Unspecified
+<p>For convenience, you can load engine options from a TOML file. Unspecified
 fields keep their defaults from <code>NewDefaultOptions</code>.</p>
 <pre><code class="language-go">opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
 if err != nil {
@@ -719,6 +718,8 @@ value_log_gc_interval = "30s"
 <li>Field names are case-insensitive; <code>_</code> / <code>-</code> / <code>.</code> are ignored.</li>
 <li>Durations accept Go-style strings (e.g. <code>"30s"</code>, <code>"200ms"</code>). Numeric durations
 are interpreted as nanoseconds.</li>
+<li>File extensions <code>.toml</code> and <code>.tml</code> are accepted.</li>
+<li>JSON option files are rejected by design.</li>
 <li>Unknown fields return an error so typos do not silently pass.</li>
 </ul>
 <hr>
@@ -844,10 +845,10 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </code></pre>
 <ul>
 <li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>skiplist</code> (default) or <code>art</code> via <code>newMemIndex</code>. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.</li>
-<li><strong>Arena sizing</strong> – <code>utils.NewSkiplist</code> uses <code>arenaSizeFor</code>; <code>utils.NewART</code> uses <code>arenaSizeForART</code> to reserve more space for variable node payloads and prefix spills.</li>
+<li><strong>Arena sizing</strong> – both <code>utils.NewSkiplist</code> and <code>utils.NewART</code> use <code>arenaSizeFor</code> to derive arena capacity from <code>Options.MemTableSize</code>.</li>
 <li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
 <li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB’s <code>logfile_number</code> field.</li>
-<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses optimistic version checks for reads with localized locks for writes, and iterators walk the tree in key order.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses copy-on-write payload/node clones with CAS installs for writes, and keeps reads lock-free on immutable snapshots.</li>
 </ul>
 <hr>
 <h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
@@ -857,14 +858,14 @@ if err := cfg.Validate(); err != nil { /* handle */ }
     participant Flush
     participant Manifest
     WAL-&gt;&gt;MT: Append+Set(entry)
-    MT-&gt;&gt;Flush: freeze (Size() &gt;= limit)
+    MT-&gt;&gt;Flush: freeze (walSize + incomingEstimate &gt; limit)
     Flush-&gt;&gt;Manifest: LogPointer + AddFile
     Manifest--&gt;&gt;Flush: ack
     Flush-&gt;&gt;WAL: Release segments ≤ segmentID
 </pre>
 
 <ol>
-<li><strong>Active → Immutable</strong> – when <code>mt.Size()</code> crosses thresholds (<code>Options.MemTableSize</code>), the memtable is swapped out and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
+<li><strong>Active → Immutable</strong> – when <code>mt.walSize + estimate</code> exceeds <code>Options.MemTableSize</code>, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
 <li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
 <li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest’s log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes, rebuilding <code>maxVersion</code> for the oracle.</li>
 </ol>
@@ -902,7 +903,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena</td></tr>
 <tr><td>WAL linkage</td><td><code>logfile_number</code> per memtable</td><td>Segment ID stored in vlog entries</td><td><code>segmentID</code> on <code>memTable</code>, logged via manifest</td></tr>
 <tr><td>Recovery</td><td>Memtable replays from WAL, referencing <code>MANIFEST</code></td><td>Replays WAL segments</td><td>Replays WAL segments, prunes ≤ manifest log pointer</td></tr>
-<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>Size-based with explicit queue metrics</td></tr>
+<tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>WAL-size budget (<code>walSize</code>) with explicit queue metrics</td></tr>
 </tbody>
 </table>
 </div>
@@ -1345,7 +1346,7 @@ _ = mgr.Remove(fid)  // close + delete file
     Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
     Mgr--&gt;&gt;Commit: ValuePtr list
     Commit-&gt;&gt;WAL: Append(entries+ptrs)
-    Commit-&gt;&gt;Mem: apply to skiplist
+    Commit-&gt;&gt;Mem: apply to active memtable index
 </pre>
 
 <ol>
@@ -1358,7 +1359,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <hr>
 <h2 id="6-discard-statistics--gc"><a class="header" href="#6-discard-statistics--gc">6. Discard Statistics &amp; GC</a></h2>
 <pre class="mermaid">flowchart LR
-  FlushMgr -- "obsolete ptrs" --&gt; DiscardStats
+  Compaction -- "obsolete ptrs" --&gt; DiscardStats
   DiscardStats --&gt;|"batch json"| writeCh
   valuePtr["valueLog.newValuePtr(lfDiscardStatsKey)"]
   writeCh --&gt; valuePtr
@@ -1367,7 +1368,7 @@ _ = mgr.Remove(fid)  // close + delete file
 </pre>
 
 <ul>
-<li><code>lfDiscardStats</code> aggregates per-file discard counts from <code>lsm.FlushTable</code> completion (<code>valueLog.lfDiscardStats.push</code> inside <code>lsm/flush</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
+<li><code>lfDiscardStats</code> aggregates per-file discard counts from LSM compaction workers (<code>lsm/executor.go</code>, <code>subcompact</code> -&gt; <code>updateDiscardStats</code>). Once the in-memory counter crosses <a href="../vlog.go#L27"><code>discardStatsFlushThreshold</code></a>, it marshals the map into JSON and writes it back through the DB pipeline under the special key <code>!NoKV!discard</code>.</li>
 <li><code>valueLog.flushDiscardStats</code> consumes those stats, ensuring they are persisted even across crashes. During recovery <code>valueLog.populateDiscardStats</code> replays the JSON payload to repopulate the in-memory map.</li>
 <li>GC uses <code>discardRatio = discardedBytes/totalBytes</code> derived from <a href="../vlog/io.go"><code>Manager.Sample</code></a>, which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, <a href="../vlog_gc.go"><code>valueLog.doRunGC</code></a> rewrites live entries into the current head via <code>db.batchSet</code> (the normal commit pipeline) and then <a href="../vlog_gc.go"><code>valueLog.rewrite</code></a> triggers manifest delete edits through <code>removeValueLogFile</code>.
 <ul>
@@ -1821,7 +1822,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>
 <tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>~2s window.</td></tr>
 <tr><td><code>HotRingRotationInterval</code></td><td><code>30m</code></td><td>Dual-ring rotation enabled.</td></tr>
-<tr><td><code>HotRingNodeCap</code></td><td><code>500,000</code></td><td>Strict cap per ring.</td></tr>
+<tr><td><code>HotRingNodeCap</code></td><td><code>250,000</code></td><td>Strict cap per ring.</td></tr>
 <tr><td><code>HotRingNodeSampleBits</code></td><td><code>0</code></td><td>Strict cap (no sampling).</td></tr>
 </tbody>
 </table>
@@ -1983,7 +1984,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
         DB-&gt;&gt;Commit: batch requests
         Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
         Commit-&gt;&gt;WAL: Append(entries with commitTs)
-        Commit-&gt;&gt;Mem: apply to skiplist
+        Commit-&gt;&gt;Mem: apply to active memtable index
         DB-&gt;&gt;Oracle: doneCommit(commitTs)
     end
 </pre>
@@ -3467,6 +3468,353 @@ type ingestShard struct {
 <li><strong>并行 GC + 压力控制</strong> 把系统稳定性和吞吐平衡起来</li>
 </ul>
 <p>这使得 vlog 从“可用”走向“可运维 + 可扩展”。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-02-09-memtable--arena--indexskiplist--art设计心得"><a class="header" href="#2026-02-09-memtable--arena--indexskiplist--art设计心得">2026-02-09 MemTable + Arena + Index（Skiplist / ART）设计心得</a></h1>
+<p>这份笔记整理 NoKV 在 <strong>MemTable 层</strong> 的核心设计：生命周期、WAL 绑定、Arena 内存分配策略，以及两种索引实现（Skiplist / ART）的工程取舍。目标是回答三个问题：</p>
+<ol>
+<li>为什么这样设计。</li>
+<li>两种实现到底差在哪。</li>
+<li>线上如何选型和调参。</li>
+</ol>
+<hr>
+<h2 id="一页摘要tldr-1"><a class="header" href="#一页摘要tldr-1">一页摘要（TL;DR）</a></h2>
+<p><strong>核心思路</strong>：MemTable 不是“纯内存结构”，而是与 WAL segment 绑定的写入阶段单元。写入先追加 WAL，再更新内存索引；达到阈值后轮转为 immutable，后台 flush 为 SST，再通过 manifest checkpoint 释放旧 WAL。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">设计点</th><th style="text-align: left">NoKV 实现</th><th style="text-align: left">直接收益</th><th style="text-align: left">代价/约束</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">MemTable 抽象</td><td style="text-align: left"><code>memIndex</code> 接口（<code>Add/Search/Iterator/MemSize/Ref</code>）</td><td style="text-align: left">索引可插拔</td><td style="text-align: left">统一抽象会屏蔽部分实现细节优化</td></tr>
+<tr><td style="text-align: left">WAL 绑定</td><td style="text-align: left"><code>memTable.segmentID</code> + <code>walSize</code></td><td style="text-align: left">恢复与回收路径清晰</td><td style="text-align: left">轮转主要看 WAL 字节而非纯内存占用</td></tr>
+<tr><td style="text-align: left">Arena 分配</td><td style="text-align: left">chunk 化、无锁 bump 分配、对齐保障</td><td style="text-align: left">低分配开销、低 GC 压力</td><td style="text-align: left">内部碎片不可避免，释放粒度粗</td></tr>
+<tr><td style="text-align: left">Skiplist</td><td style="text-align: left">概率层高 + CAS 链接</td><td style="text-align: left">实现成熟、语义直观</td><td style="text-align: left">写放大与指针开销更高</td></tr>
+<tr><td style="text-align: left">ART</td><td style="text-align: left">前缀压缩 + Node4/16/48/256 + COW/CAS</td><td style="text-align: left">热点读写性能强、顺序扫描好</td><td style="text-align: left">实现复杂，调试门槛高</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="1-设计目标工程视角"><a class="header" href="#1-设计目标工程视角">1. 设计目标（工程视角）</a></h2>
+<ol>
+<li><strong>写入路径可恢复</strong>：任何时点 crash 后都能按 WAL + manifest 重建状态。</li>
+<li><strong>索引实现可替换</strong>：同一 LSM 流程下允许 skiplist/art 切换。</li>
+<li><strong>内存分配可控</strong>：减少小对象分配和 GC 抖动。</li>
+<li><strong>flush 回收可证明</strong>：SST 安装成功后才能推进 WAL checkpoint 并删除旧段。</li>
+</ol>
+<hr>
+<h2 id="2-memtable-生命周期"><a class="header" href="#2-memtable-生命周期">2. MemTable 生命周期</a></h2>
+<h3 id="21-结构与抽象"><a class="header" href="#21-结构与抽象">2.1 结构与抽象</a></h3>
+<p><code>memTable</code> 结构（<code>lsm/memtable.go</code>）：</p>
+<pre><code class="language-go">type memTable struct {
+    lsm        *LSM
+    segmentID  uint32
+    index      memIndex
+    maxVersion uint64
+    walSize    int64
+}
+</code></pre>
+<p>索引抽象：</p>
+<pre><code class="language-go">type memIndex interface {
+    Add(*kv.Entry)
+    Search([]byte) kv.ValueStruct
+    NewIterator(*utils.Options) utils.Iterator
+    MemSize() int64
+    IncrRef()
+    DecrRef()
+}
+</code></pre>
+<p>代码锚点（便于和实现逐行对照）：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">主题</th><th style="text-align: left">代码位置</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">MemTable 抽象与写入</td><td style="text-align: left"><code>lsm/memtable.go</code>（<code>memTable</code> / <code>setBatch</code> / <code>recovery</code>）</td></tr>
+<tr><td style="text-align: left">轮转与 flush worker</td><td style="text-align: left"><code>lsm/lsm.go</code>（<code>Set</code> / <code>SetBatch</code> / <code>rotateLocked</code> / <code>submitFlush</code>）</td></tr>
+<tr><td style="text-align: left">Flush 安装与 log pointer</td><td style="text-align: left"><code>lsm/levels.go</code>（<code>flush</code> / <code>canRemoveWalSegment</code>）</td></tr>
+<tr><td style="text-align: left">memtable engine 选择</td><td style="text-align: left"><code>lsm/memtable.go</code>（<code>newMemIndex</code>）</td></tr>
+<tr><td style="text-align: left">ART 主实现</td><td style="text-align: left"><code>utils/art.go</code>（<code>tryInsert</code> / <code>lowerBound</code> / <code>artIterator</code>）</td></tr>
+<tr><td style="text-align: left">Arena 分配器</td><td style="text-align: left"><code>utils/arena.go</code>（<code>allocate</code> / <code>allocAligned</code> / <code>ensureChunk</code>）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="22-写入路径单条批量"><a class="header" href="#22-写入路径单条批量">2.2 写入路径（单条/批量）</a></h3>
+<pre class="mermaid">sequenceDiagram
+  participant DB as commitWorker
+  participant LSM as lsm.Set/SetBatch
+  participant MT as memTable.setBatch
+  participant WAL as wal.Manager
+  participant IDX as memIndex
+
+  DB-&gt;&gt;LSM: SetBatch(entries)
+  LSM-&gt;&gt;MT: setBatch(entries)
+  MT-&gt;&gt;WAL: Append(payloads...)
+  MT-&gt;&gt;IDX: Add(entry...)
+  IDX--&gt;&gt;LSM: in-memory visible
+</pre>
+
+<p>关键点：</p>
+<ul>
+<li><code>setBatch</code> 先编码并 <code>wal.Append</code>，再 <code>index.Add</code>（<code>lsm/memtable.go</code>）。</li>
+<li><code>walSize</code> 按 WAL 追加长度累加，用于轮转和 checkpoint。</li>
+<li>批量路径在同一 memtable segment 内尽量合并写入，减少锁与系统调用开销。</li>
+</ul>
+<p>线性化点与并发语义（实现视角）：</p>
+<ul>
+<li>线性化点在 <code>wal.Append</code> 成功后；索引更新发生在其后，因此“可见即可恢复”。</li>
+<li><code>Set/SetBatch</code> 常态走 <code>RLock</code>；仅在容量触发时升级到 <code>Lock</code> 执行 <code>rotateLocked</code>。</li>
+<li><code>rotateLocked</code> 将旧表放入 <code>immutables</code>，新表切换到新 WAL segment，旧表再异步 flush。</li>
+</ul>
+<pre class="mermaid">flowchart LR
+  A["RLock: write to active memtable"] --&gt; B{"walSize + estimate &gt; limit"}
+  B --&gt;|No| C["setBatch: Append WAL then index.Add"]
+  B --&gt;|Yes| D["Unlock RLock and take Lock"]
+  D --&gt; E["rotateLocked: active-&gt;immutable and NewMemtable"]
+  E --&gt; F["submitFlush(old) async"]
+  F --&gt; A
+</pre>
+
+<hr>
+<h3 id="23-轮转flush恢复"><a class="header" href="#23-轮转flush恢复">2.3 轮转、flush、恢复</a></h3>
+<pre class="mermaid">flowchart TD
+  W["Write to active memtable"] --&gt; C{"walSize &gt; MemTableSize ?"}
+  C --&gt;|No| W
+  C --&gt;|Yes| R["rotate: active -&gt; immutable + new segment"]
+  R --&gt; F["flush immutable -&gt; SST(L0)"]
+  F --&gt; M["manifest: AddFile + EditLogPointer"]
+  M --&gt; G["remove eligible WAL segment"]
+  Crash["Crash/Restart"] --&gt; Replay["replay WAL segments &gt; log pointer"]
+  Replay --&gt; Rebuild["rebuild memtables + restore active"]
+</pre>
+
+<p>关键点：</p>
+<ul>
+<li>新建 memtable 时会 <code>SwitchSegment(newFid)</code>，将内存与 WAL 段一一对应。</li>
+<li><code>flush</code> 成功后，manifest 同时记录 <code>AddFile</code> 与 <code>EditLogPointer</code>，再尝试删除可删 WAL 段。</li>
+<li><code>recovery</code> 根据 manifest 的 log pointer 删除/跳过旧段，仅重放必要 WAL。</li>
+</ul>
+<p>状态机视角：</p>
+<pre class="mermaid">stateDiagram-v2
+  [*] --&gt; Active
+  Active --&gt; Rotating: "walSize threshold"
+  Rotating --&gt; ImmutableQueued
+  ImmutableQueued --&gt; Flushing
+  Flushing --&gt; Installed: "SST + manifest edits"
+  Installed --&gt; WalGC: "eligible segment remove"
+  WalGC --&gt; [*]
+</pre>
+
+<hr>
+<h3 id="24-一个重要设计取舍"><a class="header" href="#24-一个重要设计取舍">2.4 一个重要设计取舍</a></h3>
+<p>当前轮转阈值主要由 <code>walSize</code> 判断（<code>lsm/lsm.go</code>），而不是严格由 <code>index.MemSize()</code> 驱动。</p>
+<p>含义：</p>
+<ul>
+<li>优点：和恢复/checkpoint 语义一致，逻辑简单。</li>
+<li>代价：对 ART 这类结构，索引真实内存占用与 WAL 字节不总是线性一致，可能出现“内存先紧张但未轮转”或“较早轮转”的偏差。</li>
+</ul>
+<hr>
+<h2 id="3-arena-设计两种索引共用"><a class="header" href="#3-arena-设计两种索引共用">3. Arena 设计（两种索引共用）</a></h2>
+<h3 id="31-为什么要-arena"><a class="header" href="#31-为什么要-arena">3.1 为什么要 Arena</a></h3>
+<p>MemTable 高频写入会产生大量短生命周期对象。若完全走 Go heap，小对象分配/回收会明显放大 GC 成本。</p>
+<p>Arena 目标：</p>
+<ul>
+<li>将 key/value/node 以“偏移量”组织在连续 chunk 中。</li>
+<li>用原子 bump 指针分配，减少锁争用。</li>
+<li>通过 refcount 在结构层统一释放整块资源。</li>
+</ul>
+<hr>
+<h3 id="32-关键机制"><a class="header" href="#32-关键机制">3.2 关键机制</a></h3>
+<ul>
+<li><code>Arena.allocate</code>：CAS 推进 <code>n</code>（偏移），按 chunk 边界切分。</li>
+<li><code>ensureChunk</code>：按需创建 chunk，避免一次性大分配。</li>
+<li><code>allocAligned</code>：保证对齐，满足原子读写需求。</li>
+</ul>
+<hr>
+<h3 id="33-对齐是硬约束"><a class="header" href="#33-对齐是硬约束">3.3 对齐是硬约束</a></h3>
+<p><code>skiplist</code> 的 value 走 <code>atomic.LoadUint64</code>，因此 node/value 对齐必须保证（<code>utils/arena.go</code> 中 <code>nodeAlign</code> 相关注释）。这属于“正确性前提”，不是性能微调。</p>
+<hr>
+<h3 id="34-arena-的工程权衡"><a class="header" href="#34-arena-的工程权衡">3.4 Arena 的工程权衡</a></h3>
+<ul>
+<li>优点：低 GC、低碎片元数据开销、并发分配快。</li>
+<li>缺点：对象不能细粒度释放，生命周期跟随整棵索引；长期运行下需要依赖 memtable 轮转做阶段性回收。</li>
+</ul>
+<hr>
+<h2 id="4-skiplist-设计"><a class="header" href="#4-skiplist-设计">4. Skiplist 设计</a></h2>
+<h3 id="41-结构"><a class="header" href="#41-结构">4.1 结构</a></h3>
+<ul>
+<li>概率层高（<code>randomHeight</code>）</li>
+<li>每层前向指针 CAS 链接</li>
+<li>节点和 value 都在 Arena，节点里保存 offset</li>
+</ul>
+<hr>
+<h3 id="42-写入语义"><a class="header" href="#42-写入语义">4.2 写入语义</a></h3>
+<p><code>Add</code> 路径先做 splice，若 key 已存在直接覆盖 value；否则分层插入新节点。</p>
+<p>优势：</p>
+<ul>
+<li>逻辑直观、可维护性高。</li>
+<li>在 MVCC key（内部 key 已含 ts）场景天然有序。</li>
+</ul>
+<p>代价：</p>
+<ul>
+<li>指针塔结构 + 随机层高在高写入下有更多元数据开销。</li>
+</ul>
+<hr>
+<h3 id="43-迭代器与引用计数"><a class="header" href="#43-迭代器与引用计数">4.3 迭代器与引用计数</a></h3>
+<p><code>NewIterator</code> 会 <code>IncrRef</code>，<code>Close</code> 时 <code>DecrRef</code>。这保证 flush/读并发时索引不会提前释放。</p>
+<hr>
+<h2 id="5-art-设计"><a class="header" href="#5-art-设计">5. ART 设计</a></h2>
+<h3 id="51-结构"><a class="header" href="#51-结构">5.1 结构</a></h3>
+<ul>
+<li>Node4/16/48/256 自适应节点。</li>
+<li>前缀压缩减少重复 key 前缀开销。</li>
+<li>leaf 保存完整 key + value，支持 lower-bound 查找。</li>
+</ul>
+<p>节点升级路径：</p>
+<pre class="mermaid">flowchart LR
+  N4["Node4"] --&gt;|count &gt;= 4| N16["Node16"]
+  N16 --&gt;|count &gt;= 16| N48["Node48"]
+  N48 --&gt;|count &gt;= 48| N256["Node256"]
+</pre>
+
+<hr>
+<h3 id="52-并发模型关键"><a class="header" href="#52-并发模型关键">5.2 并发模型（关键）</a></h3>
+<p>代码注释明确采用 <strong>COW + CAS</strong>：</p>
+<ul>
+<li>读路径 lock-free，读取不可变节点快照。</li>
+<li>写路径复制 payload/节点后 CAS 安装。</li>
+<li>插入冲突时重试（<code>tryInsert</code> 循环）。</li>
+</ul>
+<p>这套模型让 ART 在高并发读写下保持较好吞吐与扫描顺序稳定性。</p>
+<p>插入流程（对应 <code>tryInsert</code>）：</p>
+<pre class="mermaid">flowchart TD
+  A["Set(key, value)"] --&gt; B["tryInsert"]
+  B --&gt; C{"root == nil"}
+  C --&gt;|Yes| D["new leaf and CAS root"]
+  C --&gt;|No| E["walk by prefix + child byte"]
+  E --&gt; F{"node is leaf"}
+  F --&gt;|same key| G["storeValue (atomic)"]
+  F --&gt;|different key| H["splitLeaf then replaceChild CAS"]
+  F --&gt;|No| I{"prefix mismatch"}
+  I --&gt;|Yes| J["splitPrefix then replaceChild CAS"]
+  I --&gt;|No| K{"child exists"}
+  K --&gt;|Yes| E
+  K --&gt;|No| L["clone payload insert child and CAS"]
+</pre>
+
+<p>写路径关键细节：</p>
+<ul>
+<li>非 root 替换通过 <code>parent.payloadOffset.CompareAndSwap</code> 完成，避免全局锁。</li>
+<li><code>insertChild</code> 会在必要时进行 <code>Node4-&gt;16-&gt;48-&gt;256</code> 升级。</li>
+<li>CAS 失败后外层重试，保证并发写下的一致安装。</li>
+</ul>
+<hr>
+<h3 id="53-查找语义searchseek"><a class="header" href="#53-查找语义searchseek">5.3 查找语义（Search/Seek）</a></h3>
+<p><code>Search</code> 的语义不是“精确路径命中即返回”，而是：</p>
+<ol>
+<li>先用 <code>lowerBound(target)</code> 找到第一条 <code>&gt;= target</code> 的 leaf。</li>
+<li>再用 <code>kv.SameKey</code> 校验是否同一 user key。</li>
+<li>不同 key 则返回 miss。</li>
+</ol>
+<pre class="mermaid">flowchart LR
+  A["Search(target)"] --&gt; B["lowerBound(target)"]
+  B --&gt; C{"leaf exists?"}
+  C --&gt;|No| D["miss"]
+  C --&gt;|Yes| E{"SameKey(target, leaf.key) ?"}
+  E --&gt;|Yes| F["return leaf value"]
+  E --&gt;|No| D
+</pre>
+
+<p>这种实现能直接复用范围查找逻辑，也让 <code>Seek</code> 与 <code>Search</code> 在行为上统一到 lower-bound。</p>
+<hr>
+<h3 id="54-迭代器"><a class="header" href="#54-迭代器">5.4 迭代器</a></h3>
+<p>ART 迭代器维护栈帧（<code>iterFrame</code>），通过 <code>descendToMin/advance</code> 做中序遍历。Seek 使用 lower-bound，再回填路径栈，适合范围查询与 MVCC merge。</p>
+<pre class="mermaid">sequenceDiagram
+  participant It as artIterator
+  participant T as artTree
+  participant S as stack
+
+  It-&gt;&gt;T: Seek(key)
+  T--&gt;&gt;It: lowerBound leaf
+  It-&gt;&gt;S: buildStackToLeaf(leaf)
+  loop Next
+    It-&gt;&gt;S: advance to next child/subtree
+    It-&gt;&gt;It: descendToMin(child)
+  end
+</pre>
+
+<hr>
+<h2 id="6-skiplist-vs-art当前代码下的实测与解读"><a class="header" href="#6-skiplist-vs-art当前代码下的实测与解读">6. Skiplist vs ART：当前代码下的实测与解读</a></h2>
+<p>本地微基准（<code>go test ./utils -bench ... -benchmem -benchtime=1s</code>）：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Benchmark</th><th style="text-align: left">结果（Apple M3 Pro / darwin arm64）</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>BenchmarkARTInsert</code></td><td style="text-align: left"><code>~255 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkARTGet</code></td><td style="text-align: left"><code>~73 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkSkiplistInsert</code></td><td style="text-align: left"><code>~810 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkSkiplistGet</code></td><td style="text-align: left"><code>~316 ns/op</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>解读：</p>
+<ul>
+<li>在当前实现与测试模型下，ART 插入/读取都明显更快。</li>
+<li>但这不是“绝对结论”：两组 benchmark 负载模型并不完全对齐（key 空间与重置策略不同），更适合当趋势信号。</li>
+</ul>
+<hr>
+<h2 id="7-选型与调参建议"><a class="header" href="#7-选型与调参建议">7. 选型与调参建议</a></h2>
+<ol>
+<li>
+<p>默认稳态优先：<code>mem_table_engine = "skiplist"</code><br>适合先追求可维护性和行为可预期。</p>
+</li>
+<li>
+<p>读密集/热点明显：<code>mem_table_engine = "art"</code><br>适合低延迟、范围遍历较多的场景。</p>
+</li>
+<li>
+<p>配合 <code>MemTableSize</code> 一起调<br>增大 memtable 可降低 flush 频率，但会增加恢复重放成本。</p>
+</li>
+<li>
+<p>观察 flush/WAL 指标联动<br>如果 flush backlog 长期增长，先检查 compaction 和磁盘，而不是只调 memtable engine。</p>
+</li>
+</ol>
+<hr>
+<h2 id="8-工程化评审严格"><a class="header" href="#8-工程化评审严格">8. 工程化评审（严格）</a></h2>
+<p>优势：</p>
+<ol>
+<li><strong>边界清晰</strong>：<code>memIndex</code> 抽象把 LSM 主流程和具体索引解耦，便于做引擎对比实验。</li>
+<li><strong>恢复闭环完整</strong>：WAL segment、flush 安装、manifest log pointer、GC 形成一致链路。</li>
+<li><strong>读并发友好</strong>：ART 的 lock-free 读取 + COW 写入在高读压场景更稳。</li>
+<li><strong>GC 压力可控</strong>：Arena 将热点对象从 Go heap 转移为偏移管理。</li>
+</ol>
+<p>主要风险：</p>
+<ol>
+<li><strong>轮转指标偏置</strong>：仅依赖 <code>walSize</code>，不能严格反映 ART/Skiplist 的真实内存曲线。</li>
+<li><strong>写冲突重试成本</strong>：ART 在高冲突 key 下 CAS 重试增多，尾延迟会抬高。</li>
+<li><strong>回收粒度粗</strong>：Arena 只能随 memtable 生命周期整体释放，无法按 key 细粒度回收。</li>
+<li><strong>文档漂移风险</strong>：设计文档若不跟代码同步，容易误导调参与容量预估。</li>
+</ol>
+<hr>
+<h2 id="9-当前实现的两个改进点建议"><a class="header" href="#9-当前实现的两个改进点建议">9. 当前实现的两个改进点（建议）</a></h2>
+<ol>
+<li>
+<p><strong>文档与实现一致性（已修正）</strong><br><code>docs/memtable.md</code> 中关于 <code>arenaSizeForART</code> 与 ART 并发模型的旧描述已更新为当前实现（统一 <code>arenaSizeFor</code> + COW/CAS）。后续新增优化时仍应同步文档，避免调参误导。</p>
+</li>
+<li>
+<p><strong>轮转指标更精细化</strong><br>可考虑在 <code>walSize</code> 基础上引入 <code>index.MemSize()</code> 作为辅助阈值，减少 ART/Skiplist 在内存特征差异下的轮转偏差。</p>
+</li>
+</ol>
+<hr>
+<h2 id="10-小结"><a class="header" href="#10-小结">10. 小结</a></h2>
+<p>NoKV 的 MemTable 设计本质是：<strong>WAL 语义优先 + 索引可插拔 + Arena 降 GC</strong>。</p>
+<ul>
+<li>Skiplist 提供稳定、清晰、低认知成本的默认路径。</li>
+<li>ART 提供更激进的性能上限，尤其在读与有序遍历上。</li>
+<li>生命周期（rotate/flush/recovery）和 manifest checkpoint 的一致性，是整个设计最关键的工程价值。</li>
+</ul>
 
                     </main>
 
