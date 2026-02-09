@@ -98,7 +98,7 @@ Global HotRing defaults (`NewDefaultOptions`):
 | `HotRingWindowSlots` | `8` | Sliding window enabled. |
 | `HotRingWindowSlotDuration` | `250ms` | ~2s window. |
 | `HotRingRotationInterval` | `30m` | Dual-ring rotation enabled. |
-| `HotRingNodeCap` | `500,000` | Strict cap per ring. |
+| `HotRingNodeCap` | `250,000` | Strict cap per ring. |
 | `HotRingNodeSampleBits` | `0` | Strict cap (no sampling). |
 
 Value-log override defaults (`ValueLogHotRing*`):
