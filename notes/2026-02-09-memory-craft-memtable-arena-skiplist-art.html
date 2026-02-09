@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-02-05 vlog design and gc - NoKV Docs</title>
+        <title>2026-02-09 memory craft: memtable arena index - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,281 +178,403 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化"><a class="header" href="#2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化">2026-02-05 vlog 设计与 GC（WiscKey + HashKV 工程化）</a></h1>
-<p>这份笔记把 NoKV 的 ValueLog（vlog）设计、GC 机制、以及最近的并行化与热冷分流优化整理成一份完整版本。内容融合 <strong>WiscKey</strong>（KV 分离）与 <strong>HashKV</strong>（哈希分区/热冷分离）两条主线，并结合当前实现细节与参数策略。</p>
-<hr>
-<h2 id="一页摘要tldr"><a class="header" href="#一页摘要tldr">一页摘要（TL;DR）</a></h2>
-<p><strong>核心思路</strong>：LSM 只保存 Key+ValuePtr，大 Value 顺序写入 vlog；再用 <strong>多桶 + 热冷分流</strong> 把热点更新局部化，并通过 <strong>并行 GC + 压力控制</strong> 把 GC 开销稳定在可控范围。</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">设计点</th><th style="text-align: left">借鉴</th><th style="text-align: left">NoKV 实现</th><th style="text-align: left">直接收益</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">KV 分离</td><td style="text-align: left">WiscKey</td><td style="text-align: left">vlog + ValuePtr</td><td style="text-align: left">LSM 更小、写入更顺序</td></tr>
-<tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
-<tr><td style="text-align: left">热冷分流</td><td style="text-align: left">HashKV</td><td style="text-align: left">HotRing 路由</td><td style="text-align: left">热点不污染冷数据</td></tr>
-<tr><td style="text-align: left">GC 并行</td><td style="text-align: left">工程化</td><td style="text-align: left"><code>ValueLogGCParallelism</code></td><td style="text-align: left">提升清理吞吐</td></tr>
-<tr><td style="text-align: left">压力控制</td><td style="text-align: left">工程化</td><td style="text-align: left">reduce/skip 阈值</td><td style="text-align: left">不与 compaction 抢资源</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="1-论文借鉴要点"><a class="header" href="#1-论文借鉴要点">1. 论文借鉴要点</a></h2>
-<h3 id="11-wisckey"><a class="header" href="#11-wisckey">1.1 WiscKey</a></h3>
-<ul>
-<li><strong>KV 分离</strong>：LSM 只存 Key + ValuePtr，大 Value 写入 vlog。</li>
-<li><strong>顺序写</strong>：写入走日志追加，延迟稳定。</li>
-<li><strong>GC 必要性</strong>：旧值只能通过搬运+删除回收。</li>
-</ul>
-<h3 id="12-hashkv"><a class="header" href="#12-hashkv">1.2 HashKV</a></h3>
-<ul>
-<li><strong>哈希分区</strong>：ValueLog 分桶，key 的历史版本集中。</li>
-<li><strong>热冷分离</strong>：热点更新影响局部桶，冷数据保持稳定。</li>
-<li><strong>轻 GC</strong>：热点桶高频回收，冷桶低频维护。</li>
-</ul>
-<h3 id="13-参考论文标题"><a class="header" href="#13-参考论文标题">1.3 参考论文（标题）</a></h3>
-<ul>
-<li><strong><a href="https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu">WiscKey: Separating Keys from Values in SSD-conscious Storage</a></strong></li>
-<li><strong><a href="https://www.usenix.org/conference/atc18/presentation/chan">HashKV: Enabling Efficient Updates in KV Storage via Hashing</a></strong></li>
-</ul>
-<hr>
-<h2 id="2-设计目标工程化视角"><a class="header" href="#2-设计目标工程化视角">2. 设计目标（工程化视角）</a></h2>
+                        <h1 id="2026-02-09-从-0-到-1-理解-memtablearenaskiplist-与-art"><a class="header" href="#2026-02-09-从-0-到-1-理解-memtablearenaskiplist-与-art">2026-02-09 从 0 到 1 理解 MemTable：Arena、Skiplist 与 ART</a></h1>
+<p>这份笔记面向 <strong>第一次阅读 NoKV 的同学</strong>，同时记录我在实现过程中的工程化设计心得。内容聚焦 MemTable 层的核心设计：生命周期、WAL 绑定、Arena 内存分配策略，以及两种索引实现（Skiplist / ART）的工程取舍。目标是回答三个问题：</p>
 <ol>
-<li><strong>写路径极简</strong>：顺序追加为主，不引入复杂索引结构。</li>
-<li><strong>GC 不扰动主路径</strong>：并行但受控，避免和 compaction 争 IO。</li>
-<li><strong>热点更新局部化</strong>：尽量把垃圾限制在热桶。</li>
-<li><strong>可观测 + 可调参</strong>：让调参是“看得见的系统工程”。</li>
+<li>为什么这样设计。</li>
+<li>两种实现到底差在哪。</li>
+<li>线上如何选型和调参。</li>
 </ol>
 <hr>
-<h2 id="21-设计约束与假设"><a class="header" href="#21-设计约束与假设">2.1 设计约束与假设</a></h2>
-<ul>
-<li><strong>Crash Recovery 必须可靠</strong>：vlog 的 head/删除状态必须可恢复。</li>
-<li><strong>写放大优先于读放大</strong>：更倾向把写成本压低，读路径可容忍一次额外跳转。</li>
-<li><strong>GC 可退让</strong>：GC 是“后台维护”，不能把 compaction 压死。</li>
-</ul>
-<hr>
-<h2 id="3-架构总览分层模型"><a class="header" href="#3-架构总览分层模型">3. 架构总览（分层模型）</a></h2>
-<pre class="mermaid">flowchart TD
-  subgraph DB["DB Policy 层"]
-    VlogGo["vlog.go / vlog_gc.go&lt;br/&gt;写入路由 + GC 调度"]
-  end
-  subgraph Mgr["ValueLog Manager"]
-    MgrGo["vlog/manager.go&lt;br/&gt;分段/轮转/读写"]
-  end
-  subgraph IO["IO Layer"]
-    File["file/ (mmap)&lt;br/&gt;LogFile"]
-  end
-
-  DB --&gt; Mgr --&gt; IO
-</pre>
-
-<hr>
-<h2 id="4-目录布局与分桶结构"><a class="header" href="#4-目录布局与分桶结构">4. 目录布局与分桶结构</a></h2>
-<pre><code class="language-text">&lt;workdir&gt;/
-  vlog/
-    bucket-000/
-      00000.vlog
-      00001.vlog
-    bucket-001/
-      00000.vlog
-      00001.vlog
-    ...
-</code></pre>
-<ul>
-<li><code>ValueLogBucketCount &gt; 1</code> 启用分桶。</li>
-<li>ValuePtr 现在包含 <code>Bucket/Fid/Offset/Len</code>，LSM 可以精确定位。</li>
-</ul>
-<hr>
-<h2 id="41-记录格式与-valueptr-布局"><a class="header" href="#41-记录格式与-valueptr-布局">4.1 记录格式与 ValuePtr 布局</a></h2>
-<p><strong>vlog 记录格式</strong>（与 WAL 一致）：</p>
-<pre><code>+--------+----------+------+-------------+-----------+-------+
-| KeyLen | ValueLen | Meta | ExpiresAt   | Key bytes | Value |
-+--------+----------+------+-------------+-----------+-------+
-                                             + CRC32 (4B)
-</code></pre>
-<p><strong>ValuePtr 布局</strong>：</p>
-<pre><code>+------+--------+-----+--------+
-| Len  | Offset | Fid | Bucket |
-+------+--------+-----+--------+
-| 4B   | 4B     | 4B  | 4B     |
-</code></pre>
-<p>这保证了：<strong>LSM 索引只需持有 ValuePtr 即可定位到具体桶 + 文件 + 偏移</strong>。</p>
-<hr>
-<h2 id="42-manifest-与恢复关系nokv-特有工程点"><a class="header" href="#42-manifest-与恢复关系nokv-特有工程点">4.2 Manifest 与恢复关系（NoKV 特有工程点）</a></h2>
-<p>与论文原型不同，NoKV <strong>把 vlog 的 head 与删除事件写入 manifest</strong>：</p>
-<pre class="mermaid">flowchart LR
-  A["vlog append"] --&gt; B["update head"]
-  B --&gt; C["manifest edit"]
-  C --&gt; D["crash recovery"]
-  D --&gt; E["rebuild vlog state"]
-</pre>
-
-<p>这样恢复时不依赖完整目录扫描，避免误删/误开段。</p>
-<hr>
-<h2 id="5-写入路径顺序追加"><a class="header" href="#5-写入路径顺序追加">5. 写入路径（顺序追加）</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant C as commitWorker
-  participant V as vlog.Manager
-  participant W as WAL
-  participant M as MemTable
-  C-&gt;&gt;V: AppendEntries(entries)
-  V--&gt;&gt;C: ValuePtr list
-  C-&gt;&gt;W: Append(entries+ptrs)
-  C-&gt;&gt;M: Apply to memtable
-</pre>
-
-<p>关键保证：<strong>vlog 写入在 WAL 之前</strong>，崩溃恢复时不会出现“指针悬空”。</p>
-<hr>
-<h2 id="6-读路径指针解引用"><a class="header" href="#6-读路径指针解引用">6. 读路径（指针解引用）</a></h2>
-<pre class="mermaid">flowchart LR
-  K["Get(key)"] --&gt; LSM["LSM 查索引"]
-  LSM --&gt;|inline value| V["直接返回"]
-  LSM --&gt;|ValuePtr| P["定位 bucket/fid/offset"]
-  P --&gt; R["vlog 读取 (mmap)"]
-  R --&gt; V
-</pre>
-
-<p>读路径的代价在于一次额外的 vlog 定位，但换来更小的 LSM 与更顺序的写入。</p>
-<hr>
-<h2 id="6-热冷分流hotring-驱动"><a class="header" href="#6-热冷分流hotring-驱动">6. 热冷分流（HotRing 驱动）</a></h2>
-<p>热度统计只看写路径（写热点），避免读热点污染：</p>
-<pre class="mermaid">flowchart TD
-  E["Entry 写入"] --&gt; H["HotRing Touch"]
-  H --&gt;|hot| B1["热桶 0..H-1"]
-  H --&gt;|cold| B2["冷桶 H..N-1"]
-  B1 --&gt; V["vlog append"]
-  B2 --&gt; V
-</pre>
-
-<p>默认配置（可调）：</p>
-<ul>
-<li><code>ValueLogBucketCount = 16</code></li>
-<li><code>ValueLogHotBucketCount = 4</code></li>
-<li><code>ValueLogHotKeyThreshold = 8</code></li>
-</ul>
-<hr>
-<h2 id="7-gc-机制采样--重写"><a class="header" href="#7-gc-机制采样--重写">7. GC 机制（采样 + 重写）</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant GC as GC Thread
-  participant Stats as Discard Stats
-  participant Old as Old Segment
-  participant LSM as LSM
-  participant New as Active Segment
-
-  GC-&gt;&gt;Stats: 选择候选文件
-  GC-&gt;&gt;Old: Sample 10%
-  GC-&gt;&gt;LSM: 校验指针是否仍指向旧值
-  alt discard 过阈值
-    loop 遍历旧文件
-      GC-&gt;&gt;Old: Read Entry
-      GC-&gt;&gt;LSM: Double Check
-      alt still live
-        GC-&gt;&gt;New: Rewrite
-      end
-    end
-    GC-&gt;&gt;Old: 删除旧文件
-  else discard不足
-    GC--&gt;&gt;Stats: 跳过
-  end
-</pre>
-
-<hr>
-<h2 id="8-并行-gc--压力控制核心工程化"><a class="header" href="#8-并行-gc--压力控制核心工程化">8. 并行 GC + 压力控制（核心工程化）</a></h2>
-<h3 id="81-并行调度"><a class="header" href="#81-并行调度">8.1 并行调度</a></h3>
-<ul>
-<li><code>ValueLogGCParallelism</code> 控制并发数（默认自动）。</li>
-<li><strong>同桶互斥</strong>：同一桶不会并发 GC（无锁 CAS）。</li>
-<li>全局 semaphore 限制同时 GC 数量。</li>
-</ul>
-<h3 id="82-压力控制"><a class="header" href="#82-压力控制">8.2 压力控制</a></h3>
-<p>当 compaction 压力过高时，GC 自动降级或跳过：</p>
-<pre class="mermaid">flowchart LR
-  A["Compaction Stats"] --&gt; B{"压力评估"}
-  B --&gt;|低| C["并行 GC"]
-  B --&gt;|中| D["并行度减半"]
-  B --&gt;|高| E["跳过本轮 GC"]
-</pre>
-
-<p>阈值参数：</p>
-<ul>
-<li><code>ValueLogGCReduceScore / ValueLogGCReduceBacklog</code></li>
-<li><code>ValueLogGCSkipScore / ValueLogGCSkipBacklog</code></li>
-</ul>
-<hr>
-<h2 id="83-与论文实现的关键差异重点对比"><a class="header" href="#83-与论文实现的关键差异重点对比">8.3 与论文实现的关键差异（重点对比）</a></h2>
-<h3 id="wisckey-vs-nokv"><a class="header" href="#wisckey-vs-nokv">WiscKey vs NoKV</a></h3>
+<h2 id="一页摘要tldr"><a class="header" href="#一页摘要tldr">一页摘要（TL;DR）</a></h2>
+<p><strong>核心思路</strong>：MemTable 不是“纯内存结构”，而是与 WAL segment 绑定的写入阶段单元。写入先追加 WAL，再更新内存索引；达到阈值后轮转为 immutable，后台 flush 为 SST，再通过 manifest checkpoint 释放旧 WAL。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th style="text-align: left">维度</th><th style="text-align: left">WiscKey</th><th style="text-align: left">NoKV</th></tr>
+<tr><th style="text-align: left">设计点</th><th style="text-align: left">NoKV 实现</th><th style="text-align: left">直接收益</th><th style="text-align: left">代价/约束</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">vlog 元数据</td><td style="text-align: left">论文原型不强调 manifest</td><td style="text-align: left"><strong>manifest 记录 head/删除</strong></td></tr>
-<tr><td style="text-align: left">GC 触发</td><td style="text-align: left">依赖扫描与 stale ratio</td><td style="text-align: left"><strong>来自 LSM discard stats</strong></td></tr>
-<tr><td style="text-align: left">GC 并行</td><td style="text-align: left">未强调</td><td style="text-align: left"><strong>多桶并行 + 压力控制</strong></td></tr>
-<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left"><strong>HotRing 驱动热/冷桶</strong></td></tr>
+<tr><td style="text-align: left">MemTable 抽象</td><td style="text-align: left"><code>memIndex</code> 接口（<code>Add/Search/Iterator/MemSize/Ref</code>）</td><td style="text-align: left">索引可插拔</td><td style="text-align: left">统一抽象会屏蔽部分实现细节优化</td></tr>
+<tr><td style="text-align: left">WAL 绑定</td><td style="text-align: left"><code>memTable.segmentID</code> + <code>walSize</code></td><td style="text-align: left">恢复与回收路径清晰</td><td style="text-align: left">轮转主要看 WAL 字节而非纯内存占用</td></tr>
+<tr><td style="text-align: left">Arena 分配</td><td style="text-align: left">chunk 化、无锁 bump 分配、对齐保障</td><td style="text-align: left">低分配开销、低 GC 压力</td><td style="text-align: left">内部碎片不可避免，释放粒度粗</td></tr>
+<tr><td style="text-align: left">Skiplist</td><td style="text-align: left">概率层高 + CAS 链接</td><td style="text-align: left">实现成熟、语义直观</td><td style="text-align: left">写放大与指针开销更高</td></tr>
+<tr><td style="text-align: left">ART</td><td style="text-align: left">前缀压缩 + Node4/16/48/256 + COW/CAS</td><td style="text-align: left">热点读写性能强、顺序扫描好</td><td style="text-align: left">实现复杂，调试门槛高</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="hashkv-vs-nokv"><a class="header" href="#hashkv-vs-nokv">HashKV vs NoKV</a></h3>
+<hr>
+<h2 id="1-设计目标工程视角"><a class="header" href="#1-设计目标工程视角">1. 设计目标（工程视角）</a></h2>
+<ol>
+<li><strong>写入路径可恢复</strong>：任何时点 crash 后都能按 WAL + manifest 重建状态。</li>
+<li><strong>索引实现可替换</strong>：同一 LSM 流程下允许 skiplist/art 切换。</li>
+<li><strong>内存分配可控</strong>：减少小对象分配和 GC 抖动。</li>
+<li><strong>flush 回收可证明</strong>：SST 安装成功后才能推进 WAL checkpoint 并删除旧段。</li>
+</ol>
+<hr>
+<h2 id="2-memtable-生命周期"><a class="header" href="#2-memtable-生命周期">2. MemTable 生命周期</a></h2>
+<h3 id="21-结构与抽象"><a class="header" href="#21-结构与抽象">2.1 结构与抽象</a></h3>
+<p><code>memTable</code> 结构（<code>lsm/memtable.go</code>）：</p>
+<pre><code class="language-go">type memTable struct {
+    lsm        *LSM
+    segmentID  uint32
+    index      memIndex
+    maxVersion uint64
+    walSize    int64
+}
+</code></pre>
+<p>索引抽象：</p>
+<pre><code class="language-go">type memIndex interface {
+    Add(*kv.Entry)
+    Search([]byte) kv.ValueStruct
+    NewIterator(*utils.Options) utils.Iterator
+    MemSize() int64
+    IncrRef()
+    DecrRef()
+}
+</code></pre>
+<p>代码锚点（便于和实现逐行对照）：</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th style="text-align: left">维度</th><th style="text-align: left">HashKV</th><th style="text-align: left">NoKV</th></tr>
+<tr><th style="text-align: left">主题</th><th style="text-align: left">代码位置</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">分区策略</td><td style="text-align: left">哈希分区</td><td style="text-align: left"><strong>哈希分桶 + 热/冷分流</strong></td></tr>
-<tr><td style="text-align: left">目标</td><td style="text-align: left">降低更新放大</td><td style="text-align: left"><strong>降低 GC 波动 + write amp</strong></td></tr>
-<tr><td style="text-align: left">GC 调度</td><td style="text-align: left">以分区为单位</td><td style="text-align: left"><strong>分桶并行 + compaction 压力控制</strong></td></tr>
+<tr><td style="text-align: left">MemTable 抽象与写入</td><td style="text-align: left"><code>lsm/memtable.go</code>（<code>memTable</code> / <code>setBatch</code> / <code>recovery</code>）</td></tr>
+<tr><td style="text-align: left">轮转与 flush worker</td><td style="text-align: left"><code>lsm/lsm.go</code>（<code>Set</code> / <code>SetBatch</code> / <code>rotateLocked</code> / <code>submitFlush</code>）</td></tr>
+<tr><td style="text-align: left">Flush 安装与 log pointer</td><td style="text-align: left"><code>lsm/levels.go</code>（<code>flush</code> / <code>canRemoveWalSegment</code>）</td></tr>
+<tr><td style="text-align: left">memtable engine 选择</td><td style="text-align: left"><code>lsm/memtable.go</code>（<code>newMemIndex</code>）</td></tr>
+<tr><td style="text-align: left">ART 主实现</td><td style="text-align: left"><code>utils/art.go</code>（<code>tryInsert</code> / <code>lowerBound</code> / <code>artIterator</code>）</td></tr>
+<tr><td style="text-align: left">Arena 分配器</td><td style="text-align: left"><code>utils/arena.go</code>（<code>allocate</code> / <code>allocAligned</code> / <code>ensureChunk</code>）</td></tr>
 </tbody>
 </table>
 </div>
-<blockquote>
-<p>结论：NoKV 保留论文的“核心思想”，但在<strong>恢复一致性、调度策略、观测性</strong>上做了工程化强化。</p>
-</blockquote>
 <hr>
-<h2 id="9-可观测性与调参抓手"><a class="header" href="#9-可观测性与调参抓手">9. 可观测性与调参抓手</a></h2>
-<p>关键指标（expvar）：</p>
+<h3 id="22-写入路径单条批量"><a class="header" href="#22-写入路径单条批量">2.2 写入路径（单条/批量）</a></h3>
+<pre class="mermaid">sequenceDiagram
+  participant DB as commitWorker
+  participant LSM as lsm.Set/SetBatch
+  participant MT as memTable.setBatch
+  participant WAL as wal.Manager
+  participant IDX as memIndex
+
+  DB-&gt;&gt;LSM: SetBatch(entries)
+  LSM-&gt;&gt;MT: setBatch(entries)
+  MT-&gt;&gt;WAL: Append(payloads...)
+  MT-&gt;&gt;IDX: Add(entry...)
+  IDX--&gt;&gt;LSM: in-memory visible
+</pre>
+
+<p>关键点：</p>
 <ul>
-<li><code>NoKV.ValueLog.GcParallelism</code></li>
-<li><code>NoKV.ValueLog.GcActive</code></li>
-<li><code>NoKV.ValueLog.GcScheduled</code></li>
-<li><code>NoKV.ValueLog.GcThrottled</code></li>
-<li><code>NoKV.ValueLog.GcSkipped</code></li>
-<li><code>NoKV.ValueLog.GcRejected</code></li>
+<li><code>setBatch</code> 先编码并 <code>wal.Append</code>，再 <code>index.Add</code>（<code>lsm/memtable.go</code>）。</li>
+<li><code>walSize</code> 按 WAL 追加长度累加，用于轮转和 checkpoint。</li>
+<li>批量路径在同一 memtable segment 内尽量合并写入，减少锁与系统调用开销。</li>
 </ul>
-<p>简单调参建议：</p>
+<p>线性化点与并发语义（实现视角）：</p>
 <ul>
-<li>低负载：调高 <code>ValueLogGCParallelism</code></li>
-<li>高负载：降低 <code>ReduceScore</code> 或 <code>ReduceBacklog</code>，更快降级</li>
+<li>线性化点在 <code>wal.Append</code> 成功后；索引更新发生在其后，因此“可见即可恢复”。</li>
+<li><code>Set/SetBatch</code> 常态走 <code>RLock</code>；仅在容量触发时升级到 <code>Lock</code> 执行 <code>rotateLocked</code>。</li>
+<li><code>rotateLocked</code> 将旧表放入 <code>immutables</code>，新表切换到新 WAL segment，旧表再异步 flush。</li>
+</ul>
+<pre class="mermaid">flowchart LR
+  A["RLock: write to active memtable"] --&gt; B{"walSize + estimate &gt; limit"}
+  B --&gt;|No| C["setBatch: Append WAL then index.Add"]
+  B --&gt;|Yes| D["Unlock RLock and take Lock"]
+  D --&gt; E["rotateLocked: active-&gt;immutable and NewMemtable"]
+  E --&gt; F["submitFlush(old) async"]
+  F --&gt; A
+</pre>
+
+<hr>
+<h3 id="23-轮转flush恢复"><a class="header" href="#23-轮转flush恢复">2.3 轮转、flush、恢复</a></h3>
+<pre class="mermaid">flowchart TD
+  W["Write to active memtable"] --&gt; C{"walSize &gt; MemTableSize ?"}
+  C --&gt;|No| W
+  C --&gt;|Yes| R["rotate: active -&gt; immutable + new segment"]
+  R --&gt; F["flush immutable -&gt; SST(L0)"]
+  F --&gt; M["manifest: AddFile + EditLogPointer"]
+  M --&gt; G["remove eligible WAL segment"]
+  Crash["Crash/Restart"] --&gt; Replay["replay WAL segments &gt; log pointer"]
+  Replay --&gt; Rebuild["rebuild memtables + restore active"]
+</pre>
+
+<p>关键点：</p>
+<ul>
+<li>新建 memtable 时会 <code>SwitchSegment(newFid)</code>，将内存与 WAL 段一一对应。</li>
+<li><code>flush</code> 成功后，manifest 同时记录 <code>AddFile</code> 与 <code>EditLogPointer</code>，再尝试删除可删 WAL 段。</li>
+<li><code>recovery</code> 根据 manifest 的 log pointer 删除/跳过旧段，仅重放必要 WAL。</li>
+</ul>
+<p>状态机视角：</p>
+<pre class="mermaid">stateDiagram-v2
+  [*] --&gt; Active
+  Active --&gt; Rotating: "walSize threshold"
+  Rotating --&gt; ImmutableQueued
+  ImmutableQueued --&gt; Flushing
+  Flushing --&gt; Installed: "SST + manifest edits"
+  Installed --&gt; WalGC: "eligible segment remove"
+  WalGC --&gt; [*]
+</pre>
+
+<hr>
+<h3 id="24-一个重要设计取舍"><a class="header" href="#24-一个重要设计取舍">2.4 一个重要设计取舍</a></h3>
+<p>当前轮转阈值主要由 <code>walSize</code> 判断（<code>lsm/lsm.go</code>），而不是严格由 <code>index.MemSize()</code> 驱动。</p>
+<p>含义：</p>
+<ul>
+<li>优点：和恢复/checkpoint 语义一致，逻辑简单。</li>
+<li>代价：对 ART 这类结构，索引真实内存占用与 WAL 字节不总是线性一致，可能出现“内存先紧张但未轮转”或“较早轮转”的偏差。</li>
 </ul>
 <hr>
-<h2 id="10-代价与边界"><a class="header" href="#10-代价与边界">10. 代价与边界</a></h2>
+<h2 id="3-arena-设计两种索引共用"><a class="header" href="#3-arena-设计两种索引共用">3. Arena 设计（两种索引共用）</a></h2>
+<h3 id="31-为什么要-arena"><a class="header" href="#31-为什么要-arena">3.1 为什么要 Arena</a></h3>
+<p>MemTable 高频写入会产生大量短生命周期对象。若完全走 Go heap，小对象分配/回收会明显放大 GC 成本。</p>
+<p>Arena 目标：</p>
 <ul>
-<li>桶数过多 → 文件碎片化、head 追踪成本上升</li>
-<li>热桶过小 → 轮转频繁、写放大升高</li>
-<li>并行 GC 过高 → 可能与 compaction 争抢 IO</li>
+<li>将 key/value/node 以“偏移量”组织在连续 chunk 中。</li>
+<li>用原子 bump 指针分配，减少锁争用。</li>
+<li>通过 refcount 在结构层统一释放整块资源。</li>
 </ul>
 <hr>
-<h2 id="11-小结"><a class="header" href="#11-小结">11. 小结</a></h2>
-<p>NoKV 的 vlog 设计是典型的 “<strong>WiscKey + HashKV + 工程化调度</strong>”：</p>
+<h3 id="32-关键机制"><a class="header" href="#32-关键机制">3.2 关键机制</a></h3>
 <ul>
-<li><strong>写路径保持顺序</strong>，延迟稳定</li>
-<li><strong>多桶 + 热冷分流</strong> 把垃圾局部化</li>
-<li><strong>并行 GC + 压力控制</strong> 把系统稳定性和吞吐平衡起来</li>
+<li><code>Arena.allocate</code>：CAS 推进 <code>n</code>（偏移），按 chunk 边界切分。</li>
+<li><code>ensureChunk</code>：按需创建 chunk，避免一次性大分配。</li>
+<li><code>allocAligned</code>：保证对齐，满足原子读写需求。</li>
 </ul>
-<p>这使得 vlog 从“可用”走向“可运维 + 可扩展”。</p>
+<hr>
+<h3 id="33-对齐是硬约束"><a class="header" href="#33-对齐是硬约束">3.3 对齐是硬约束</a></h3>
+<p><code>skiplist</code> 的 value 走 <code>atomic.LoadUint64</code>，因此 node/value 对齐必须保证（<code>utils/arena.go</code> 中 <code>nodeAlign</code> 相关注释）。这属于“正确性前提”，不是性能微调。</p>
+<hr>
+<h3 id="34-arena-的工程权衡"><a class="header" href="#34-arena-的工程权衡">3.4 Arena 的工程权衡</a></h3>
+<ul>
+<li>优点：低 GC、低碎片元数据开销、并发分配快。</li>
+<li>缺点：对象不能细粒度释放，生命周期跟随整棵索引；长期运行下需要依赖 memtable 轮转做阶段性回收。</li>
+</ul>
+<hr>
+<h2 id="4-skiplist-设计和-art-同粒度"><a class="header" href="#4-skiplist-设计和-art-同粒度">4. Skiplist 设计（和 ART 同粒度）</a></h2>
+<h3 id="41-数据结构与内存布局"><a class="header" href="#41-数据结构与内存布局">4.1 数据结构与内存布局</a></h3>
+<p>Skiplist 的节点定义（<code>utils/skiplist.go</code>）有三个关键点：</p>
+<ul>
+<li>value 用一个 <code>uint64</code> 打包（低 32 位 value offset，高 32 位 value size），可原子读写。</li>
+<li>key/node/value 都放在 Arena，节点只保存 <code>offset + size</code>，减少 heap 对象。</li>
+<li><code>tower</code> 是固定上限数组，但实际分配由 <code>height</code> 截断，避免为低层节点浪费空间。</li>
+</ul>
+<pre class="mermaid">flowchart LR
+  A["Entry(key,value)"] --&gt; B["Arena.putKey / Arena.putVal"]
+  B --&gt; C["new node(height=h)"]
+  C --&gt; D["node.value = encodeValue(valOffset,valSize)"]
+  D --&gt; E["node.tower[0..h-1] participates in links"]
+</pre>
+
+<hr>
+<h3 id="42-并发写入模型add"><a class="header" href="#42-并发写入模型add">4.2 并发写入模型（Add）</a></h3>
+<p><code>Add</code> 的实际流程是：</p>
+<ol>
+<li>从顶层到底层做 <code>findSpliceForLevel</code>，得到每层 <code>prev/next</code>。</li>
+<li>如果发现同 key（<code>prev[i] == next[i]</code>），直接 <code>setValue</code> 原子覆盖并返回。</li>
+<li>不存在同 key 时，新建节点并随机层高（<code>randomHeight</code>）。</li>
+<li>尝试 CAS 提升全局 <code>height</code>。</li>
+<li>按 <strong>从底层到高层</strong> 逐层 <code>casNextOffset</code> 安装节点；失败就重新计算 splice 并重试。</li>
+</ol>
+<pre class="mermaid">flowchart TD
+  A["Add(entry)"] --&gt; B["findSpliceForLevel top-down"]
+  B --&gt; C{"same key found?"}
+  C --&gt;|Yes| D["atomic setValue and return"]
+  C --&gt;|No| E["newNode + randomHeight"]
+  E --&gt; F["CAS update list height if needed"]
+  F --&gt; G["insert level 0 by casNextOffset"]
+  G --&gt; H["insert upper levels with CAS retry"]
+  H --&gt; I["done"]
+</pre>
+
+<p>这里的工程价值是：不依赖全局大锁，冲突时局部重试，写入路径在高并发下仍保持可预测。</p>
+<hr>
+<h3 id="43-查找语义search--findnear"><a class="header" href="#43-查找语义search--findnear">4.3 查找语义（Search / findNear）</a></h3>
+<p><code>Search</code> 并不是直接哈希命中，而是：</p>
+<ol>
+<li>调 <code>findNear(key, less=false, allowEqual=true)</code> 找第一条 <code>&gt;= key</code>。</li>
+<li>再用 <code>kv.SameKey</code> 做 user key 级别校验。</li>
+<li>命中则返回 <code>ValueStruct</code>，否则 miss。</li>
+</ol>
+<pre class="mermaid">flowchart LR
+  A["Search(key)"] --&gt; B["findNear(key, &gt;=)"]
+  B --&gt; C{"node found?"}
+  C --&gt;|No| D["miss"]
+  C --&gt;|Yes| E{"kv.SameKey ?"}
+  E --&gt;|Yes| F["decode value and return"]
+  E --&gt;|No| D
+</pre>
+
+<p>这套语义与内部 key（含版本）排序方式一致，便于和 MVCC 行为对齐。</p>
+<hr>
+<h3 id="44-迭代器与生命周期管理"><a class="header" href="#44-迭代器与生命周期管理">4.4 迭代器与生命周期管理</a></h3>
+<p>Skiplist 迭代器（<code>SkipListIterator</code>）支持：</p>
+<ul>
+<li><code>Seek</code>（&gt;= target）</li>
+<li><code>SeekForPrev</code>（&lt;= target）</li>
+<li><code>Next/Prev</code> 双向游标</li>
+</ul>
+<p>生命周期由引用计数兜底：</p>
+<ul>
+<li><code>NewIterator</code> -&gt; <code>IncrRef</code></li>
+<li><code>Iterator.Close</code> -&gt; <code>DecrRef</code></li>
+</ul>
+<p>这样可以保证 flush 和读并发时，底层 Arena 不会被过早释放。</p>
+<pre class="mermaid">sequenceDiagram
+  participant Q as Query
+  participant It as SkipListIterator
+  participant SL as Skiplist
+
+  Q-&gt;&gt;SL: NewIterator
+  SL-&gt;&gt;SL: IncrRef
+  Q-&gt;&gt;It: Seek/Next/Prev
+  Q-&gt;&gt;It: Close
+  It-&gt;&gt;SL: DecrRef
+</pre>
+
+<hr>
+<h3 id="45-复杂度与工程取舍"><a class="header" href="#45-复杂度与工程取舍">4.5 复杂度与工程取舍</a></h3>
+<ul>
+<li>期望复杂度：查找/写入 <code>O(logN)</code>，最坏退化 <code>O(N)</code>。</li>
+<li>优点：实现稳定、行为可解释、易排障。</li>
+<li>代价：塔式指针元数据开销较高；随机层高在某些负载下会带来波动。</li>
+<li>对 NoKV 的意义：作为默认引擎时，Skiplist 提供“可维护性优先”的基线实现。</li>
+</ul>
+<hr>
+<h2 id="5-art-设计"><a class="header" href="#5-art-设计">5. ART 设计</a></h2>
+<h3 id="51-结构"><a class="header" href="#51-结构">5.1 结构</a></h3>
+<ul>
+<li>Node4/16/48/256 自适应节点。</li>
+<li>前缀压缩减少重复 key 前缀开销。</li>
+<li>leaf 保存完整 key + value，支持 lower-bound 查找。</li>
+</ul>
+<p>节点升级路径：</p>
+<pre class="mermaid">flowchart LR
+  N4["Node4"] --&gt;|count &gt;= 4| N16["Node16"]
+  N16 --&gt;|count &gt;= 16| N48["Node48"]
+  N48 --&gt;|count &gt;= 48| N256["Node256"]
+</pre>
+
+<hr>
+<h3 id="52-并发模型关键"><a class="header" href="#52-并发模型关键">5.2 并发模型（关键）</a></h3>
+<p>代码注释明确采用 <strong>COW + CAS</strong>：</p>
+<ul>
+<li>读路径 lock-free，读取不可变节点快照。</li>
+<li>写路径复制 payload/节点后 CAS 安装。</li>
+<li>插入冲突时重试（<code>tryInsert</code> 循环）。</li>
+</ul>
+<p>这套模型让 ART 在高并发读写下保持较好吞吐与扫描顺序稳定性。</p>
+<p>插入流程（对应 <code>tryInsert</code>）：</p>
+<pre class="mermaid">flowchart TD
+  A["Set(key, value)"] --&gt; B["tryInsert"]
+  B --&gt; C{"root == nil"}
+  C --&gt;|Yes| D["new leaf and CAS root"]
+  C --&gt;|No| E["walk by prefix + child byte"]
+  E --&gt; F{"node is leaf"}
+  F --&gt;|same key| G["storeValue (atomic)"]
+  F --&gt;|different key| H["splitLeaf then replaceChild CAS"]
+  F --&gt;|No| I{"prefix mismatch"}
+  I --&gt;|Yes| J["splitPrefix then replaceChild CAS"]
+  I --&gt;|No| K{"child exists"}
+  K --&gt;|Yes| E
+  K --&gt;|No| L["clone payload insert child and CAS"]
+</pre>
+
+<p>写路径关键细节：</p>
+<ul>
+<li>非 root 替换通过 <code>parent.payloadOffset.CompareAndSwap</code> 完成，避免全局锁。</li>
+<li><code>insertChild</code> 会在必要时进行 <code>Node4-&gt;16-&gt;48-&gt;256</code> 升级。</li>
+<li>CAS 失败后外层重试，保证并发写下的一致安装。</li>
+</ul>
+<hr>
+<h3 id="53-查找语义searchseek"><a class="header" href="#53-查找语义searchseek">5.3 查找语义（Search/Seek）</a></h3>
+<p><code>Search</code> 的语义不是“精确路径命中即返回”，而是：</p>
+<ol>
+<li>先用 <code>lowerBound(target)</code> 找到第一条 <code>&gt;= target</code> 的 leaf。</li>
+<li>再用 <code>kv.SameKey</code> 校验是否同一 user key。</li>
+<li>不同 key 则返回 miss。</li>
+</ol>
+<pre class="mermaid">flowchart LR
+  A["Search(target)"] --&gt; B["lowerBound(target)"]
+  B --&gt; C{"leaf exists?"}
+  C --&gt;|No| D["miss"]
+  C --&gt;|Yes| E{"SameKey(target, leaf.key) ?"}
+  E --&gt;|Yes| F["return leaf value"]
+  E --&gt;|No| D
+</pre>
+
+<p>这种实现能直接复用范围查找逻辑，也让 <code>Seek</code> 与 <code>Search</code> 在行为上统一到 lower-bound。</p>
+<hr>
+<h3 id="54-迭代器"><a class="header" href="#54-迭代器">5.4 迭代器</a></h3>
+<p>ART 迭代器维护栈帧（<code>iterFrame</code>），通过 <code>descendToMin/advance</code> 做中序遍历。Seek 使用 lower-bound，再回填路径栈，适合范围查询与 MVCC merge。</p>
+<pre class="mermaid">sequenceDiagram
+  participant It as artIterator
+  participant T as artTree
+  participant S as stack
+
+  It-&gt;&gt;T: Seek(key)
+  T--&gt;&gt;It: lowerBound leaf
+  It-&gt;&gt;S: buildStackToLeaf(leaf)
+  loop Next
+    It-&gt;&gt;S: advance to next child/subtree
+    It-&gt;&gt;It: descendToMin(child)
+  end
+</pre>
+
+<hr>
+<h2 id="6-skiplist-vs-art当前代码下的实测与解读"><a class="header" href="#6-skiplist-vs-art当前代码下的实测与解读">6. Skiplist vs ART：当前代码下的实测与解读</a></h2>
+<p>本地微基准（<code>go test ./utils -bench ... -benchmem -benchtime=1s</code>）：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Benchmark</th><th style="text-align: left">结果（Apple M3 Pro / darwin arm64）</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>BenchmarkARTInsert</code></td><td style="text-align: left"><code>~255 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkARTGet</code></td><td style="text-align: left"><code>~73 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkSkiplistInsert</code></td><td style="text-align: left"><code>~810 ns/op</code></td></tr>
+<tr><td style="text-align: left"><code>BenchmarkSkiplistGet</code></td><td style="text-align: left"><code>~316 ns/op</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>解读：</p>
+<ul>
+<li>在当前实现与测试模型下，ART 插入/读取都明显更快。</li>
+<li>但这不是“绝对结论”：两组 benchmark 负载模型并不完全对齐（key 空间与重置策略不同），更适合当趋势信号。</li>
+</ul>
+<hr>
+<h2 id="7-选型与调参建议"><a class="header" href="#7-选型与调参建议">7. 选型与调参建议</a></h2>
+<ol>
+<li>
+<p>默认稳态优先：<code>mem_table_engine = "skiplist"</code><br>适合先追求可维护性和行为可预期。</p>
+</li>
+<li>
+<p>读密集/热点明显：<code>mem_table_engine = "art"</code><br>适合低延迟、范围遍历较多的场景。</p>
+</li>
+<li>
+<p>配合 <code>MemTableSize</code> 一起调<br>增大 memtable 可降低 flush 频率，但会增加恢复重放成本。</p>
+</li>
+<li>
+<p>观察 flush/WAL 指标联动<br>如果 flush backlog 长期增长，先检查 compaction 和磁盘，而不是只调 memtable engine。</p>
+</li>
+</ol>
+<hr>
+<h2 id="8-小结"><a class="header" href="#8-小结">8. 小结</a></h2>
+<p>NoKV 的 MemTable 设计本质是：<strong>WAL 语义优先 + 索引可插拔 + Arena 降 GC</strong>。</p>
+<ul>
+<li>Skiplist 提供稳定、清晰、低认知成本的默认路径。</li>
+<li>ART 提供更激进的性能上限，尤其在读与有序遍历上。</li>
+<li>生命周期（rotate/flush/recovery）和 manifest checkpoint 的一致性，是整个设计最关键的工程价值。</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -462,11 +584,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
