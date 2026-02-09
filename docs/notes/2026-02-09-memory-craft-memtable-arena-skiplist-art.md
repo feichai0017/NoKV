@@ -1,6 +1,6 @@
-# 2026-02-09 MemTable + Arena + Index（Skiplist / ART）设计心得
+# 2026-02-09 从 0 到 1 理解 MemTable：Arena、Skiplist 与 ART
 
-这份笔记整理 NoKV 在 **MemTable 层** 的核心设计：生命周期、WAL 绑定、Arena 内存分配策略，以及两种索引实现（Skiplist / ART）的工程取舍。目标是回答三个问题：
+这份笔记面向 **第一次阅读 NoKV 的同学**，同时记录我在实现过程中的工程化设计心得。内容聚焦 MemTable 层的核心设计：生命周期、WAL 绑定、Arena 内存分配策略，以及两种索引实现（Skiplist / ART）的工程取舍。目标是回答三个问题：
 
 1. 为什么这样设计。  
 2. 两种实现到底差在哪。  
@@ -195,34 +195,110 @@ Arena 目标：
 
 ---
 
-## 4. Skiplist 设计
+## 4. Skiplist 设计（和 ART 同粒度）
 
-### 4.1 结构
+### 4.1 数据结构与内存布局
 
-* 概率层高（`randomHeight`）  
-* 每层前向指针 CAS 链接  
-* 节点和 value 都在 Arena，节点里保存 offset
+Skiplist 的节点定义（`utils/skiplist.go`）有三个关键点：
 
----
+* value 用一个 `uint64` 打包（低 32 位 value offset，高 32 位 value size），可原子读写。  
+* key/node/value 都放在 Arena，节点只保存 `offset + size`，减少 heap 对象。  
+* `tower` 是固定上限数组，但实际分配由 `height` 截断，避免为低层节点浪费空间。  
 
-### 4.2 写入语义
-
-`Add` 路径先做 splice，若 key 已存在直接覆盖 value；否则分层插入新节点。  
-
-优势：
-
-* 逻辑直观、可维护性高。  
-* 在 MVCC key（内部 key 已含 ts）场景天然有序。  
-
-代价：
-
-* 指针塔结构 + 随机层高在高写入下有更多元数据开销。  
+```mermaid
+flowchart LR
+  A["Entry(key,value)"] --> B["Arena.putKey / Arena.putVal"]
+  B --> C["new node(height=h)"]
+  C --> D["node.value = encodeValue(valOffset,valSize)"]
+  D --> E["node.tower[0..h-1] participates in links"]
+```
 
 ---
 
-### 4.3 迭代器与引用计数
+### 4.2 并发写入模型（Add）
 
-`NewIterator` 会 `IncrRef`，`Close` 时 `DecrRef`。这保证 flush/读并发时索引不会提前释放。
+`Add` 的实际流程是：
+
+1. 从顶层到底层做 `findSpliceForLevel`，得到每层 `prev/next`。  
+2. 如果发现同 key（`prev[i] == next[i]`），直接 `setValue` 原子覆盖并返回。  
+3. 不存在同 key 时，新建节点并随机层高（`randomHeight`）。  
+4. 尝试 CAS 提升全局 `height`。  
+5. 按 **从底层到高层** 逐层 `casNextOffset` 安装节点；失败就重新计算 splice 并重试。  
+
+```mermaid
+flowchart TD
+  A["Add(entry)"] --> B["findSpliceForLevel top-down"]
+  B --> C{"same key found?"}
+  C -->|Yes| D["atomic setValue and return"]
+  C -->|No| E["newNode + randomHeight"]
+  E --> F["CAS update list height if needed"]
+  F --> G["insert level 0 by casNextOffset"]
+  G --> H["insert upper levels with CAS retry"]
+  H --> I["done"]
+```
+
+这里的工程价值是：不依赖全局大锁，冲突时局部重试，写入路径在高并发下仍保持可预测。
+
+---
+
+### 4.3 查找语义（Search / findNear）
+
+`Search` 并不是直接哈希命中，而是：
+
+1. 调 `findNear(key, less=false, allowEqual=true)` 找第一条 `>= key`。  
+2. 再用 `kv.SameKey` 做 user key 级别校验。  
+3. 命中则返回 `ValueStruct`，否则 miss。  
+
+```mermaid
+flowchart LR
+  A["Search(key)"] --> B["findNear(key, >=)"]
+  B --> C{"node found?"}
+  C -->|No| D["miss"]
+  C -->|Yes| E{"kv.SameKey ?"}
+  E -->|Yes| F["decode value and return"]
+  E -->|No| D
+```
+
+这套语义与内部 key（含版本）排序方式一致，便于和 MVCC 行为对齐。
+
+---
+
+### 4.4 迭代器与生命周期管理
+
+Skiplist 迭代器（`SkipListIterator`）支持：
+
+* `Seek`（>= target）  
+* `SeekForPrev`（<= target）  
+* `Next/Prev` 双向游标  
+
+生命周期由引用计数兜底：
+
+* `NewIterator` -> `IncrRef`  
+* `Iterator.Close` -> `DecrRef`  
+
+这样可以保证 flush 和读并发时，底层 Arena 不会被过早释放。
+
+```mermaid
+sequenceDiagram
+  participant Q as Query
+  participant It as SkipListIterator
+  participant SL as Skiplist
+
+  Q->>SL: NewIterator
+  SL->>SL: IncrRef
+  Q->>It: Seek/Next/Prev
+  Q->>It: Close
+  It->>SL: DecrRef
+```
+
+---
+
+### 4.5 复杂度与工程取舍
+
+* 期望复杂度：查找/写入 `O(logN)`，最坏退化 `O(N)`。  
+* 优点：实现稳定、行为可解释、易排障。  
+* 代价：塔式指针元数据开销较高；随机层高在某些负载下会带来波动。  
+* 对 NoKV 的意义：作为默认引擎时，Skiplist 提供“可维护性优先”的基线实现。  
 
 ---
 
