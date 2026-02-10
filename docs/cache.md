@@ -99,7 +99,7 @@ type CacheMetrics struct {
 | --- | --- | --- | --- |
 | Hot/cold tiers | Configurable multiple caches | Single cache | Ristretto (hot) + OS page cache (cold) |
 | Bloom cache | Enabled per table, no explicit cache | Optional | Dedicated LRU storing filters |
-| Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Stats.Cache.*` hit rates |
+| Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Stats.cache.*` hit rates |
 
 ---
 

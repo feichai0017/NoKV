@@ -342,11 +342,11 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 	require.True(t, hasSealed(), "expected sealed vlog segments in each bucket")
 
 	metrics.ResetValueLogGCMetricsForTesting()
-	before := metrics.ValueLogGCMetricsSnapshot().GCScheduled
+	before := metrics.DefaultValueLogGCCollector().Snapshot().GCScheduled
 
 	_ = db.RunValueLogGC(0.99)
 
-	after := metrics.ValueLogGCMetricsSnapshot().GCScheduled
+	after := metrics.DefaultValueLogGCCollector().Snapshot().GCScheduled
 	if after-before < 2 {
 		t.Fatalf("expected parallel GC scheduling, delta=%d", after-before)
 	}

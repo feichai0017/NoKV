@@ -209,11 +209,21 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
-			"NoKV.Stats.Entries":           float64(12),
-			"NoKV.Stats.ValueLog.Segments": map[string]any{"value": float64(2)},
-			"NoKV.Stats.HotKeys":           map[string]any{"k1": map[string]any{"value": float64(3)}},
-			"NoKV.Stats.LSM.Levels": []any{
-				map[string]any{"level": float64(0), "tables": float64(1)},
+			"NoKV.Stats": map[string]any{
+				"entries": float64(12),
+				"value_log": map[string]any{
+					"segments": float64(2),
+				},
+				"hot": map[string]any{
+					"read_keys": []any{
+						map[string]any{"key": "k1", "count": float64(3)},
+					},
+				},
+				"lsm": map[string]any{
+					"levels": []any{
+						map[string]any{"level": float64(0), "tables": float64(1)},
+					},
+				},
 			},
 		}
 		_ = json.NewEncoder(w).Encode(payload)
@@ -235,7 +245,9 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 func TestFetchExpvarSnapshotWithPath(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"NoKV.Stats.Entries": float64(2)})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"NoKV.Stats": map[string]any{"entries": float64(2)},
+		})
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -247,8 +259,10 @@ func TestFetchExpvarSnapshotWithPath(t *testing.T) {
 
 func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
-		"NoKV.Stats.HotKeys": []any{
-			map[string]any{"key": "k2", "count": float64(4)},
+		"hot": map[string]any{
+			"read_keys": []any{
+				map[string]any{"key": "k2", "count": float64(4)},
+			},
 		},
 	})
 	require.Len(t, snap.Hot.ReadKeys, 1)
@@ -258,8 +272,12 @@ func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 
 func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
-		"NoKV.Stats.HotKeys": map[string]any{
-			"k3": map[string]any{"value": float64(7)},
+		"NoKV.Stats": map[string]any{
+			"hot": map[string]any{
+				"read_keys": []any{
+					map[string]any{"key": "k3", "count": float64(7)},
+				},
+			},
 		},
 	})
 	require.Len(t, snap.Hot.ReadKeys, 1)
@@ -269,8 +287,12 @@ func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 
 func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
-		"NoKV.Stats.HotKeys": map[string]any{
-			"k4": float64(3),
+		"NoKV.Stats": map[string]any{
+			"hot": map[string]any{
+				"read_keys": []any{
+					map[string]any{"key": "k4", "count": float64(3)},
+				},
+			},
 		},
 	})
 	require.Len(t, snap.Hot.ReadKeys, 1)
@@ -494,7 +516,9 @@ func TestRunStatsCmdExpvarPlain(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
-			"NoKV.Stats.Entries": float64(9),
+			"NoKV.Stats": map[string]any{
+				"entries": float64(9),
+			},
 		}
 		_ = json.NewEncoder(w).Encode(payload)
 	})
@@ -534,7 +558,9 @@ func TestFetchExpvarSnapshotBadJSON(t *testing.T) {
 func TestFetchExpvarSnapshotTrailingSlash(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"NoKV.Stats.Entries": float64(1)})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"NoKV.Stats": map[string]any{"entries": float64(1)},
+		})
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -547,51 +573,72 @@ func TestFetchExpvarSnapshotTrailingSlash(t *testing.T) {
 
 func TestParseExpvarSnapshotFull(t *testing.T) {
 	data := map[string]any{
-		"NoKV.Stats.Entries":                 float64(11),
-		"NoKV.Stats.Flush.Pending":           map[string]any{"value": float64(2)},
-		"NoKV.Stats.Compaction.MaxScore":     map[string]any{"value": float64(1.5)},
-		"NoKV.Stats.Write.HotKeyLimited":     float64(-4),
-		"NoKV.Stats.ValueLog.Segments":       float64(3),
-		"NoKV.Stats.ValueLog.PendingDeletes": map[string]any{"value": float64(1)},
-		"NoKV.Stats.ValueLog.DiscardQueue":   map[string]any{"value": float64(2)},
-		"NoKV.Stats.Raft.Groups":             float64(2),
-		"NoKV.Stats.Raft.LaggingGroups":      float64(1),
-		"NoKV.Stats.Raft.MaxLagSegments":     float64(5),
-		"NoKV.Stats.Raft.MinSegment":         float64(1),
-		"NoKV.Stats.Raft.MaxSegment":         float64(9),
-		"NoKV.Stats.LSM.ValueBytes":          float64(10),
-		"NoKV.Stats.Compaction.ValueWeight":  map[string]any{"value": float64(2.0)},
-		"NoKV.Stats.LSM.ValueDensityMax":     map[string]any{"value": float64(3.5)},
-		"NoKV.Stats.LSM.ValueDensityAlert":   float64(1),
-		"NoKV.Stats.Region.Total":            float64(4),
-		"NoKV.Stats.Region.New":              float64(1),
-		"NoKV.Stats.Region.Running":          float64(1),
-		"NoKV.Stats.Region.Removing":         float64(1),
-		"NoKV.Stats.Region.Tombstone":        float64(1),
-		"NoKV.Stats.Region.Other":            float64(0),
-		"NoKV.Txns.Active":                   float64(2),
-		"NoKV.Txns.Started":                  float64(3),
-		"NoKV.Txns.Committed":                float64(4),
-		"NoKV.Txns.Conflicts":                float64(5),
-		"NoKV.Stats.HotKeys": []any{
-			map[string]any{"key": "hot", "count": map[string]any{"value": float64(9)}},
-		},
-		"NoKV.Stats.LSM.Levels": []any{
-			map[string]any{
-				"level":              float64(0),
-				"tables":             float64(1),
-				"size_bytes":         float64(10),
-				"value_bytes":        float64(5),
-				"stale_bytes":        float64(2),
-				"ingest_tables":      float64(1),
-				"ingest_size_bytes":  float64(3),
-				"ingest_value_bytes": float64(4),
+		"NoKV.Stats": map[string]any{
+			"entries": float64(11),
+			"flush": map[string]any{
+				"pending": float64(2),
+			},
+			"compaction": map[string]any{
+				"max_score":              float64(1.5),
+				"value_weight":           float64(2.0),
+				"value_weight_suggested": float64(2.4),
+			},
+			"write": map[string]any{
+				"hot_key_limited": float64(4),
+			},
+			"value_log": map[string]any{
+				"segments":        float64(3),
+				"pending_deletes": float64(1),
+				"discard_queue":   float64(2),
+			},
+			"raft": map[string]any{
+				"group_count":      float64(2),
+				"lagging_groups":   float64(1),
+				"max_lag_segments": float64(5),
+				"min_log_segment":  float64(1),
+				"max_log_segment":  float64(9),
+			},
+			"lsm": map[string]any{
+				"value_bytes_total":   float64(10),
+				"value_density_max":   float64(3.5),
+				"value_density_alert": true,
+				"levels": []any{
+					map[string]any{
+						"level":              float64(0),
+						"tables":             float64(1),
+						"size_bytes":         float64(10),
+						"value_bytes":        float64(5),
+						"stale_bytes":        float64(2),
+						"ingest_tables":      float64(1),
+						"ingest_size_bytes":  float64(3),
+						"ingest_value_bytes": float64(4),
+					},
+				},
+			},
+			"region": map[string]any{
+				"total":     float64(4),
+				"new":       float64(1),
+				"running":   float64(1),
+				"removing":  float64(1),
+				"tombstone": float64(1),
+				"other":     float64(0),
+			},
+			"txn": map[string]any{
+				"active":    float64(2),
+				"started":   float64(3),
+				"committed": float64(4),
+				"conflicts": float64(5),
+			},
+			"hot": map[string]any{
+				"read_keys": []any{
+					map[string]any{"key": "hot", "count": float64(9)},
+				},
 			},
 		},
 	}
 	snap := parseExpvarSnapshot(data)
 	require.Equal(t, int64(11), snap.Entries)
-	require.Equal(t, uint64(0), snap.Write.HotKeyLimited)
+	require.Equal(t, uint64(4), snap.Write.HotKeyLimited)
 	require.True(t, snap.LSM.ValueDensityAlert)
 	require.Len(t, snap.Hot.ReadKeys, 1)
 	require.Len(t, snap.LSM.Levels, 1)

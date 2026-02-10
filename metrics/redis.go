@@ -15,17 +15,6 @@ type RedisSnapshot struct {
 	CommandsPerOperation map[string]uint64 `json:"commands_per_operation"`
 }
 
-// ExpvarMap converts the snapshot into the legacy expvar-friendly shape.
-func (s RedisSnapshot) ExpvarMap() map[string]any {
-	return map[string]any{
-		"commands_total":         s.CommandsTotal,
-		"errors_total":           s.ErrorsTotal,
-		"connections_active":     s.ConnectionsActive,
-		"connections_accepted":   s.ConnectionsAccepted,
-		"commands_per_operation": s.CommandsPerOperation,
-	}
-}
-
 // RedisMetrics captures lightweight Redis gateway stats.
 type RedisMetrics struct {
 	commandsTotal       atomic.Uint64

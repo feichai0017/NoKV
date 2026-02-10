@@ -18,7 +18,7 @@ go run ./cmd/nokv-redis \
   --metrics-addr 127.0.0.1:9100  # optional expvar endpoint
 ```
 
-Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1:9100/debug/vars` under the `NoKV.Redis` key.
+Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1:9100/debug/vars` under `NoKV.Stats.redis`.
 
 ### Raft backend
 
@@ -66,21 +66,25 @@ For Go tooling, import `github.com/feichai0017/NoKV/config` and call `config.Loa
 
 ## Metrics
 
-With `--metrics-addr` enabled the gateway publishes `NoKV.Redis` on `/debug/vars`, for example:
+With `--metrics-addr` enabled the gateway publishes Redis metrics as part of `NoKV.Stats` on `/debug/vars`, for example:
 
 ```json
 {
-  "commands_total": 128,
-  "errors_total": 0,
-  "connections_active": 1,
-  "connections_accepted": 4,
-  "commands_per_operation": {
-    "PING": 4,
-    "SET": 32,
-    "GET": 64,
-    "MGET": 8,
-    "DEL": 10,
-    "INCR": 10
+  "NoKV.Stats": {
+    "redis": {
+      "commands_total": 128,
+      "errors_total": 0,
+      "connections_active": 1,
+      "connections_accepted": 4,
+      "commands_per_operation": {
+        "PING": 4,
+        "SET": 32,
+        "GET": 64,
+        "MGET": 8,
+        "DEL": 10,
+        "INCR": 10
+      }
+    }
   }
 }
 ```

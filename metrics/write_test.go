@@ -103,20 +103,21 @@ func TestRegionMetricsHooks(t *testing.T) {
 
 func TestValueLogCounters(t *testing.T) {
 	ResetValueLogGCMetricsForTesting()
-	before := ValueLogGCMetricsSnapshot()
+	collector := DefaultValueLogGCCollector()
+	before := collector.Snapshot()
 
-	IncValueLogGCRuns()
-	IncValueLogSegmentsRemoved()
-	IncValueLogHeadUpdates()
-	IncValueLogGCScheduled()
-	IncValueLogGCThrottled()
-	IncValueLogGCSkipped()
-	IncValueLogGCRejected()
-	IncValueLogGCActive()
-	DecValueLogGCActive()
-	SetValueLogGCParallelism(3)
+	collector.IncRuns()
+	collector.IncSegmentsRemoved()
+	collector.IncHeadUpdates()
+	collector.IncScheduled()
+	collector.IncThrottled()
+	collector.IncSkipped()
+	collector.IncRejected()
+	collector.IncActive()
+	collector.DecActive()
+	collector.SetParallelism(3)
 
-	after := ValueLogGCMetricsSnapshot()
+	after := collector.Snapshot()
 	if after.GCRuns != before.GCRuns+1 {
 		t.Fatalf("expected gc runs to increment")
 	}
