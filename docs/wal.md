@@ -71,9 +71,9 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 ## 5. Metrics & Observability
 
 `Stats.collect` reads the manager metrics and exposes them as:
-- `NoKV.WAL.ActiveSegment`
-- `NoKV.WAL.SegmentCount`
-- `NoKV.WAL.RemovedSegments`
+- `NoKV.Stats.wal.active_segment`
+- `NoKV.Stats.wal.segment_count`
+- `NoKV.Stats.wal.segments_removed`
 
 The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB's `LOG` number growth.
 
@@ -88,8 +88,8 @@ surface warnings when raft-typed records dominate the log. It:
   `manifest.RaftPointerSnapshot()` to compute removable segments.
 - Removes up to `WALAutoGCMaxBatch` segments when at least
   `WALAutoGCMinRemovable` are eligible.
-- Exposes counters (`WALAutoGCRuns/Removed/LastUnix`) and warning state
-  (`WALTypedRecordRatio/Warning/Reason`) through `StatsSnapshot`.
+- Exposes counters (`wal.auto_gc_runs/removed/last_unix`) and warning state
+  (`wal.typed_record_ratio/warning/reason`) through `StatsSnapshot.WAL`.
 
 Relevant options (see `options.go` for defaults):
 - `EnableWALWatchdog`

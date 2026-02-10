@@ -128,7 +128,7 @@ flowchart LR
 * `valueLog.flushDiscardStats` consumes those stats, ensuring they are persisted even across crashes. During recovery `valueLog.populateDiscardStats` replays the JSON payload to repopulate the in-memory map.
 * GC uses `discardRatio = discardedBytes/totalBytes` derived from [`Manager.Sample`](../vlog/io.go), which applies windowed iteration based on configurable ratios. If a file exceeds the configured threshold, [`valueLog.doRunGC`](../vlog_gc.go) rewrites live entries into the current head via `db.batchSet` (the normal commit pipeline) and then [`valueLog.rewrite`](../vlog_gc.go) triggers manifest delete edits through `removeValueLogFile`.
   * Sampling behaviour is controlled by `Options.ValueLogGCSampleSizeRatio` (default 0.10 of the file) and `Options.ValueLogGCSampleCountRatio` (default 1% of the configured entry limit). Setting either to `<=0` keeps the default heuristics. `Options.ValueLogGCSampleFromHead` starts sampling from the beginning instead of a random window.
-* Completed deletions are logged via `lsm.LogValueLogDelete` so the manifest can skip them during replay. When GC rotates to a new head, `valueLog.updateHead` records the pointer and bumps the `NoKV.ValueLog.HeadUpdates` counter.
+* Completed deletions are logged via `lsm.LogValueLogDelete` so the manifest can skip them during replay. When GC rotates to a new head, `valueLog.updateHead` records the pointer and increments `NoKV.Stats.value_log.gc.head_updates`.
 
 RocksDB's blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.
 
@@ -168,7 +168,7 @@ The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored 
 ## 9. Observability & CLI
 
 * Metrics in [`stats.go`](../stats.go) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
-* GC scheduling exposes `NoKV.ValueLog.GcParallelism`, `NoKV.ValueLog.GcActive`, `NoKV.ValueLog.GcScheduled`, `NoKV.ValueLog.GcThrottled`, `NoKV.ValueLog.GcSkipped`, and `NoKV.ValueLog.GcRejected` for diagnostics.
+* GC scheduling exposes `NoKV.Stats.value_log.gc` (including `gc_parallelism`, `gc_active`, `gc_scheduled`, `gc_throttled`, `gc_skipped`, `gc_rejected`) for diagnostics.
 * `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/io.go) before describing segments.
 * Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable `Options.ValueLogVerbose` to emit replay/GC messages to stdout.
 

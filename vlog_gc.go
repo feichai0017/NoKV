@@ -110,14 +110,14 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 
 		limit, throttled, skipped := vlog.effectiveGCParallelism()
 		if skipped {
-			metrics.IncValueLogGCSkipped()
+			metrics.DefaultValueLogGCCollector().IncSkipped()
 			return utils.ErrNoRewrite
 		}
 		if throttled {
-			metrics.IncValueLogGCThrottled()
+			metrics.DefaultValueLogGCCollector().IncThrottled()
 		}
 		if limit <= 0 {
-			metrics.IncValueLogGCSkipped()
+			metrics.DefaultValueLogGCCollector().IncSkipped()
 			return utils.ErrNoRewrite
 		}
 
@@ -137,12 +137,12 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 				continue
 			}
 			scheduled++
-			metrics.IncValueLogGCScheduled()
-			metrics.IncValueLogGCActive()
+			metrics.DefaultValueLogGCCollector().IncScheduled()
+			metrics.DefaultValueLogGCCollector().IncActive()
 			go func(job manifest.ValueLogID) {
 				defer vlog.releaseGCToken()
 				defer vlog.finishBucketGC(job.Bucket)
-				defer metrics.DecValueLogGCActive()
+				defer metrics.DefaultValueLogGCCollector().DecActive()
 				err := vlog.doRunGC(job.Bucket, job.FileID, discardRatio)
 				results <- err
 			}(id)
@@ -172,7 +172,7 @@ func (vlog *valueLog) runGC(discardRatio float64, heads map[uint32]kv.ValuePtr) 
 		}
 		return utils.ErrNoRewrite
 	default:
-		metrics.IncValueLogGCRejected()
+		metrics.DefaultValueLogGCCollector().IncRejected()
 		return utils.ErrRejected
 	}
 }
@@ -333,7 +333,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 	if err = vlog.rewrite(bucket, fid); err != nil {
 		return err
 	}
-	metrics.IncValueLogGCRuns()
+	metrics.DefaultValueLogGCCollector().IncRuns()
 	return nil
 }
 

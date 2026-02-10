@@ -8,11 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/feichai0017/hotring"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
@@ -107,29 +106,41 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 	}
 
 	fmt.Fprintf(w, "Entries               %d\n", snap.Entries)
-	fmt.Fprintf(w, "Flush.Pending          %d\n", snap.FlushPending)
-	fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.CompactionBacklog)
-	fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.CompactionMaxScore)
-	fmt.Fprintf(w, "Flush.Wait.LastMs      %.2f\n", snap.FlushLastWaitMs)
-	fmt.Fprintf(w, "Flush.Wait.MaxMs       %.2f\n", snap.FlushMaxWaitMs)
-	fmt.Fprintf(w, "Flush.Build.LastMs     %.2f\n", snap.FlushLastBuildMs)
-	fmt.Fprintf(w, "Flush.Build.MaxMs      %.2f\n", snap.FlushMaxBuildMs)
-	fmt.Fprintf(w, "Flush.Release.LastMs   %.2f\n", snap.FlushLastReleaseMs)
-	fmt.Fprintf(w, "Flush.Release.MaxMs    %.2f\n", snap.FlushMaxReleaseMs)
-	fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.CompactionLastDurationMs)
-	fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.CompactionMaxDurationMs)
-	fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.CompactionRuns)
-	fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLogSegments)
-	fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLogPendingDel)
-	fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLogDiscardQueue)
-	if len(snap.ValueLogHeads) > 0 {
-		buckets := make([]uint32, 0, len(snap.ValueLogHeads))
-		for bucket := range snap.ValueLogHeads {
+	fmt.Fprintf(w, "Flush.Pending          %d\n", snap.Flush.Pending)
+	fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.Compaction.Backlog)
+	fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.Compaction.MaxScore)
+	fmt.Fprintf(w, "Flush.Wait.LastMs      %.2f\n", snap.Flush.LastWaitMs)
+	fmt.Fprintf(w, "Flush.Wait.MaxMs       %.2f\n", snap.Flush.MaxWaitMs)
+	fmt.Fprintf(w, "Flush.Build.LastMs     %.2f\n", snap.Flush.LastBuildMs)
+	fmt.Fprintf(w, "Flush.Build.MaxMs      %.2f\n", snap.Flush.MaxBuildMs)
+	fmt.Fprintf(w, "Flush.Release.LastMs   %.2f\n", snap.Flush.LastReleaseMs)
+	fmt.Fprintf(w, "Flush.Release.MaxMs    %.2f\n", snap.Flush.MaxReleaseMs)
+	fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.Compaction.LastDurationMs)
+	fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.Compaction.MaxDurationMs)
+	fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.Compaction.Runs)
+	fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLog.Segments)
+	fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLog.PendingDeletes)
+	fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLog.DiscardQueue)
+	if snap.ValueLog.GC.GCRuns > 0 || snap.ValueLog.GC.GCScheduled > 0 {
+		fmt.Fprintf(w, "ValueLog.GC            runs=%d scheduled=%d active=%d removed=%d skipped=%d throttled=%d rejected=%d parallel=%d\n",
+			snap.ValueLog.GC.GCRuns,
+			snap.ValueLog.GC.GCScheduled,
+			snap.ValueLog.GC.GCActive,
+			snap.ValueLog.GC.SegmentsRemoved,
+			snap.ValueLog.GC.GCSkipped,
+			snap.ValueLog.GC.GCThrottled,
+			snap.ValueLog.GC.GCRejected,
+			snap.ValueLog.GC.GCParallelism,
+		)
+	}
+	if len(snap.ValueLog.Heads) > 0 {
+		buckets := make([]uint32, 0, len(snap.ValueLog.Heads))
+		for bucket := range snap.ValueLog.Heads {
 			buckets = append(buckets, bucket)
 		}
 		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
 		for _, bucket := range buckets {
-			head := snap.ValueLogHeads[bucket]
+			head := snap.ValueLog.Heads[bucket]
 			if head.IsZero() {
 				continue
 			}
@@ -137,9 +148,9 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 				bucket, head.Fid, head.Offset, head.Len)
 		}
 	}
-	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.HotWriteLimited)
-	if snap.HotRing != nil {
-		hs := snap.HotRing
+	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
+	if snap.Hot.ReadRing != nil {
+		hs := snap.Hot.ReadRing
 		fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
 		fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
 		fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
@@ -153,62 +164,62 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 				hs.DecayInterval.String(), hs.DecayShift)
 		}
 	}
-	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.CompactionValueWeight)
-	if snap.CompactionValueWeightSuggested > snap.CompactionValueWeight {
-		fmt.Fprintf(w, " (suggested %.2f)", snap.CompactionValueWeightSuggested)
+	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.Compaction.ValueWeight)
+	if snap.Compaction.ValueWeightSuggested > snap.Compaction.ValueWeight {
+		fmt.Fprintf(w, " (suggested %.2f)", snap.Compaction.ValueWeightSuggested)
 	}
 	fmt.Fprintln(w)
-	if snap.LSMValueDensityMax > 0 {
-		fmt.Fprintf(w, "LSM.ValueDensityMax    %.2f\n", snap.LSMValueDensityMax)
+	if snap.LSM.ValueDensityMax > 0 {
+		fmt.Fprintf(w, "LSM.ValueDensityMax    %.2f\n", snap.LSM.ValueDensityMax)
 	}
-	if snap.LSMValueDensityAlert {
+	if snap.LSM.ValueDensityAlert {
 		fmt.Fprintln(w, "LSM.ValueDensityAlert  true")
 	}
-	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WALActiveSegment, snap.WALSegmentCount, snap.WALSegmentsRemoved)
-	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WALActiveSize)
-	if snap.WALRecordCounts.Total() > 0 {
-		r := snap.WALRecordCounts
+	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WAL.ActiveSegment, snap.WAL.SegmentCount, snap.WAL.SegmentsRemoved)
+	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WAL.ActiveSize)
+	if snap.WAL.RecordCounts.Total() > 0 {
+		r := snap.WAL.RecordCounts
 		fmt.Fprintf(w, "WAL.Records            entries=%d raft_entries=%d raft_states=%d raft_snapshots=%d other=%d\n",
 			r.Entries, r.RaftEntries, r.RaftStates, r.RaftSnapshots, r.Other)
 	}
-	fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WALSegmentsWithRaftRecords, snap.WALRemovableRaftSegments)
-	if snap.WALTypedRecordRatio > 0 || snap.WALTypedRecordWarning {
-		fmt.Fprintf(w, "WAL.TypedRatio         %.2f\n", snap.WALTypedRecordRatio)
+	fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WAL.SegmentsWithRaftRecords, snap.WAL.RemovableRaftSegments)
+	if snap.WAL.TypedRecordRatio > 0 || snap.WAL.TypedRecordWarning {
+		fmt.Fprintf(w, "WAL.TypedRatio         %.2f\n", snap.WAL.TypedRecordRatio)
 	}
-	if snap.WALTypedRecordWarning && snap.WALTypedRecordReason != "" {
-		fmt.Fprintf(w, "WAL.Warning            %s\n", snap.WALTypedRecordReason)
+	if snap.WAL.TypedRecordWarning && snap.WAL.TypedRecordReason != "" {
+		fmt.Fprintf(w, "WAL.Warning            %s\n", snap.WAL.TypedRecordReason)
 	}
-	if snap.WALAutoGCRuns > 0 || snap.WALAutoGCRemoved > 0 || snap.WALAutoGCLastUnix > 0 {
+	if snap.WAL.AutoGCRuns > 0 || snap.WAL.AutoGCRemoved > 0 || snap.WAL.AutoGCLastUnix > 0 {
 		last := "never"
-		if snap.WALAutoGCLastUnix > 0 {
-			last = time.Unix(snap.WALAutoGCLastUnix, 0).Format(time.RFC3339)
+		if snap.WAL.AutoGCLastUnix > 0 {
+			last = time.Unix(snap.WAL.AutoGCLastUnix, 0).Format(time.RFC3339)
 		}
-		fmt.Fprintf(w, "WAL.AutoGC             runs=%d removed=%d last=%s\n", snap.WALAutoGCRuns, snap.WALAutoGCRemoved, last)
+		fmt.Fprintf(w, "WAL.AutoGC             runs=%d removed=%d last=%s\n", snap.WAL.AutoGCRuns, snap.WAL.AutoGCRemoved, last)
 	}
-	if snap.RaftGroupCount > 0 {
+	if snap.Raft.GroupCount > 0 {
 		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
-			snap.RaftGroupCount, snap.RaftLaggingGroups, snap.RaftMaxLagSegments)
-		fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.RaftMinLogSegment, snap.RaftMaxLogSegment)
-		if snap.RaftLagWarnThreshold > 0 {
-			fmt.Fprintf(w, "Raft.LagThreshold      %d segments\n", snap.RaftLagWarnThreshold)
+			snap.Raft.GroupCount, snap.Raft.LaggingGroups, snap.Raft.MaxLagSegments)
+		fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.Raft.MinLogSegment, snap.Raft.MaxLogSegment)
+		if snap.Raft.LagWarnThreshold > 0 {
+			fmt.Fprintf(w, "Raft.LagThreshold      %d segments\n", snap.Raft.LagWarnThreshold)
 		}
-		if snap.RaftLagWarning {
+		if snap.Raft.LagWarning {
 			fmt.Fprintf(w, "Raft.Warning           lagging=%d maxLag=%d (threshold=%d)\n",
-				snap.RaftLaggingGroups, snap.RaftMaxLagSegments, snap.RaftLagWarnThreshold)
+				snap.Raft.LaggingGroups, snap.Raft.MaxLagSegments, snap.Raft.LagWarnThreshold)
 		}
 	}
-	fmt.Fprintf(w, "Txns.Active            %d\n", snap.TxnsActive)
-	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.TxnsStarted)
-	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.TxnsCommitted)
-	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.TxnsConflicts)
+	fmt.Fprintf(w, "Txns.Active            %d\n", snap.Txn.Active)
+	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.Txn.Started)
+	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.Txn.Committed)
+	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.Txn.Conflicts)
 	fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
-		snap.RegionTotal, snap.RegionNew, snap.RegionRunning, snap.RegionRemoving, snap.RegionTombstone, snap.RegionOther)
-	if snap.LSMValueBytesTotal > 0 {
-		fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSMValueBytesTotal)
+		snap.Region.Total, snap.Region.New, snap.Region.Running, snap.Region.Removing, snap.Region.Tombstone, snap.Region.Other)
+	if snap.LSM.ValueBytesTotal > 0 {
+		fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSM.ValueBytesTotal)
 	}
-	if len(snap.LSMLevels) > 0 {
+	if len(snap.LSM.Levels) > 0 {
 		fmt.Fprintln(w, "LSM.Levels:")
-		for _, lvl := range snap.LSMLevels {
+		for _, lvl := range snap.LSM.Levels {
 			fmt.Fprintf(w, "  - L%d tables=%d size=%dB value=%dB stale=%dB",
 				lvl.Level, lvl.TableCount, lvl.SizeBytes, lvl.ValueBytes, lvl.StaleBytes)
 			if lvl.IngestTables > 0 {
@@ -218,23 +229,41 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 			fmt.Fprintln(w)
 		}
 	}
-	if len(snap.ColumnFamilies) > 0 {
+	if len(snap.LSM.ColumnFamilies) > 0 {
 		fmt.Fprintln(w, "ColumnFamilies:")
 		var names []string
-		for name := range snap.ColumnFamilies {
+		for name := range snap.LSM.ColumnFamilies {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			cf := snap.ColumnFamilies[name]
+			cf := snap.LSM.ColumnFamilies[name]
 			fmt.Fprintf(w, "  - %s: reads=%d writes=%d\n", name, cf.Reads, cf.Writes)
 		}
 	}
-	if len(snap.HotKeys) > 0 {
+	if len(snap.Hot.ReadKeys) > 0 {
 		fmt.Fprintln(w, "HotKeys:")
-		for _, hk := range snap.HotKeys {
+		for _, hk := range snap.Hot.ReadKeys {
 			fmt.Fprintf(w, "  - key=%q count=%d\n", hk.Key, hk.Count)
 		}
+	}
+	if snap.Transport.SendAttempts > 0 || snap.Transport.DialsTotal > 0 {
+		fmt.Fprintf(w, "Transport.GRPC         sends=%d success=%d fail=%d retries=%d blocked=%d watchdog=%v\n",
+			snap.Transport.SendAttempts,
+			snap.Transport.SendSuccesses,
+			snap.Transport.SendFailures,
+			snap.Transport.Retries,
+			snap.Transport.BlockedPeers,
+			snap.Transport.WatchdogActive,
+		)
+	}
+	if snap.Redis.CommandsTotal > 0 || snap.Redis.ConnectionsAccepted > 0 {
+		fmt.Fprintf(w, "Redis.Gateway          commands=%d errors=%d active_conn=%d accepted_conn=%d\n",
+			snap.Redis.CommandsTotal,
+			snap.Redis.ErrorsTotal,
+			snap.Redis.ConnectionsActive,
+			snap.Redis.ConnectionsAccepted,
+		)
 	}
 	return nil
 }
@@ -340,7 +369,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 		for bucket := range heads {
 			buckets = append(buckets, bucket)
 		}
-		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		slices.Sort(buckets)
 		for _, bucket := range buckets {
 			meta := heads[bucket]
 			fmt.Fprintf(w, "ValueLog Head[%d]     : fid=%d offset=%d valid=%v\n", bucket, meta.FileID, meta.Offset, meta.Valid)
@@ -591,170 +620,16 @@ func fetchExpvarSnapshot(url string) (NoKV.StatsSnapshot, error) {
 
 func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	var snap NoKV.StatsSnapshot
-	setInt := func(key string, dest *int64) {
-		if v, ok := data[key]; ok {
-			switch val := v.(type) {
-			case float64:
-				*dest = int64(val)
-			case map[string]any:
-				if inner, ok := val["value"]; ok {
-					switch n := inner.(type) {
-					case float64:
-						*dest = int64(n)
-					}
-				}
-			}
-		}
-	}
-	setFloat := func(key string, dest *float64) {
-		if v, ok := data[key]; ok {
-			switch val := v.(type) {
-			case float64:
-				*dest = val
-			case map[string]any:
-				if inner, ok := val["value"]; ok {
-					if n, ok := inner.(float64); ok {
-						*dest = n
-					}
-				}
-			}
-		}
-	}
-
-	setInt("NoKV.Stats.Entries", &snap.Entries)
-	setInt("NoKV.Stats.Flush.Pending", &snap.FlushPending)
-	setInt("NoKV.Stats.Compaction.Backlog", &snap.CompactionBacklog)
-	setFloat("NoKV.Stats.Compaction.MaxScore", &snap.CompactionMaxScore)
-	setFloat("NoKV.Stats.Cache.IndexHitRate", &snap.IndexHitRate)
-	var intVal int64
-	setInt("NoKV.Stats.Write.HotKeyLimited", &intVal)
-	if intVal < 0 {
-		intVal = 0
-	}
-	snap.HotWriteLimited = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.Segments", &intVal)
-	snap.ValueLogSegments = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.PendingDeletes", &intVal)
-	snap.ValueLogPendingDel = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.DiscardQueue", &intVal)
-	snap.ValueLogDiscardQueue = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.Groups", &intVal)
-	snap.RaftGroupCount = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.LaggingGroups", &intVal)
-	snap.RaftLaggingGroups = int(intVal)
-	setInt("NoKV.Stats.Raft.MaxLagSegments", &snap.RaftMaxLagSegments)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.MinSegment", &intVal)
-	snap.RaftMinLogSegment = uint32(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.MaxSegment", &intVal)
-	snap.RaftMaxLogSegment = uint32(intVal)
-	setInt("NoKV.Stats.LSM.ValueBytes", &snap.LSMValueBytesTotal)
-	setFloat("NoKV.Stats.Compaction.ValueWeight", &snap.CompactionValueWeight)
-	setFloat("NoKV.Stats.LSM.ValueDensityMax", &snap.LSMValueDensityMax)
-	intVal = 0
-	setInt("NoKV.Stats.LSM.ValueDensityAlert", &intVal)
-	if intVal != 0 {
-		snap.LSMValueDensityAlert = true
-	}
-	setInt("NoKV.Stats.Region.Total", &snap.RegionTotal)
-	setInt("NoKV.Stats.Region.New", &snap.RegionNew)
-	setInt("NoKV.Stats.Region.Running", &snap.RegionRunning)
-	setInt("NoKV.Stats.Region.Removing", &snap.RegionRemoving)
-	setInt("NoKV.Stats.Region.Tombstone", &snap.RegionTombstone)
-	setInt("NoKV.Stats.Region.Other", &snap.RegionOther)
-	setInt("NoKV.Txns.Active", &snap.TxnsActive)
-	intVal = 0
-	setInt("NoKV.Txns.Started", &intVal)
-	snap.TxnsStarted = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Txns.Committed", &intVal)
-	snap.TxnsCommitted = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Txns.Conflicts", &intVal)
-	snap.TxnsConflicts = uint64(intVal)
-	if raw, ok := data["NoKV.Stats.HotKeys"]; ok {
-		switch v := raw.(type) {
-		case []any:
-			for _, elem := range v {
-				if kv, ok := elem.(map[string]any); ok {
-					key, _ := kv["key"].(string)
-					var count int32
-					switch c := kv["count"].(type) {
-					case float64:
-						count = int32(c)
-					case int64:
-						count = int32(c)
-					case map[string]any:
-						if inner, ok := c["value"].(float64); ok {
-							count = int32(inner)
-						}
-					}
-					snap.HotKeys = append(snap.HotKeys, NoKV.HotKeyStat{Key: key, Count: count})
-				}
-			}
-		case map[string]any:
-			for key, val := range v {
-				var count int32
-				switch c := val.(type) {
-				case float64:
-					count = int32(c)
-				case map[string]any:
-					if inner, ok := c["value"].(float64); ok {
-						count = int32(inner)
-					}
-				}
-				snap.HotKeys = append(snap.HotKeys, NoKV.HotKeyStat{Key: key, Count: count})
-			}
-		}
-	}
-	if raw, ok := data["NoKV.Stats.HotRing"]; ok {
+	if raw, ok := data["NoKV.Stats"]; ok {
 		if blob, err := json.Marshal(raw); err == nil {
-			var hs hotring.Stats
-			if err := json.Unmarshal(blob, &hs); err == nil {
-				snap.HotRing = &hs
+			if err := json.Unmarshal(blob, &snap); err == nil {
+				return snap
 			}
 		}
 	}
-	if raw, ok := data["NoKV.Stats.LSM.Levels"]; ok {
-		switch levels := raw.(type) {
-		case []any:
-			for _, elem := range levels {
-				if m, ok := elem.(map[string]any); ok {
-					var lvl NoKV.LSMLevelStats
-					if v, ok := m["level"].(float64); ok {
-						lvl.Level = int(v)
-					}
-					if v, ok := m["tables"].(float64); ok {
-						lvl.TableCount = int(v)
-					}
-					if v, ok := m["size_bytes"].(float64); ok {
-						lvl.SizeBytes = int64(v)
-					}
-					if v, ok := m["value_bytes"].(float64); ok {
-						lvl.ValueBytes = int64(v)
-					}
-					if v, ok := m["stale_bytes"].(float64); ok {
-						lvl.StaleBytes = int64(v)
-					}
-					if v, ok := m["ingest_tables"].(float64); ok {
-						lvl.IngestTables = int(v)
-					}
-					if v, ok := m["ingest_size_bytes"].(float64); ok {
-						lvl.IngestSizeBytes = int64(v)
-					}
-					if v, ok := m["ingest_value_bytes"].(float64); ok {
-						lvl.IngestValueBytes = int64(v)
-					}
-					snap.LSMLevels = append(snap.LSMLevels, lvl)
-				}
-			}
-		}
+	// Allow callers to pass the stats payload directly.
+	if blob, err := json.Marshal(data); err == nil {
+		_ = json.Unmarshal(blob, &snap)
 	}
 	return snap
 }
