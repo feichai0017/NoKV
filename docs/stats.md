@@ -1,6 +1,12 @@
 # Stats & Observability Pipeline
 
-NoKV exposes internal health via the Go `expvar` package and the `nokv stats` CLI. The statistics subsystem is implemented in [`stats.go`](../stats.go) and runs continuously once the DB is open.
+NoKV exposes runtime health through:
+
+- `StatsSnapshot` (structured in-process snapshot)
+- `expvar` (`/debug/vars`)
+- `nokv stats` CLI (plain text or JSON)
+
+The implementation lives in [`stats.go`](../stats.go), and collection runs continuously once DB is open.
 
 ---
 
@@ -9,106 +15,140 @@ NoKV exposes internal health via the Go `expvar` package and the `nokv stats` CL
 ```mermaid
 flowchart TD
     subgraph Collectors
-        Flush[lsm.FlushMetrics]
-        Levels[lsm.CompactionStats]
-        VLog[valueLog.metrics]
-        WAL[wal.Manager.Metrics]
-        Txn[oracle.txnMetricsSnapshot]
-        Cache[lsm.CacheMetrics]
-        Hot[hotring.TopN]
+        LSM[lsm.* metrics]
+        WAL[wal metrics]
+        VLog[value log metrics]
+        TXN[oracle txn metrics]
+        HOT[hotring]
+        REGION[region metrics]
+        TRANSPORT[grpc transport metrics]
+        REDIS[redis gateway metrics]
     end
-    Collectors --> Stats
-    Stats -->|expvar publish| Runtime
-    Stats -->|Snapshot| CLI
+    Collectors --> SNAP[Stats.Snapshot()]
+    SNAP --> EXP[Stats.collect -> expvar]
+    SNAP --> CLI[nokv stats]
 ```
 
-* `newStats` wires together reusable `expvar.Int/Float` gauges (avoiding duplicates if the process restarts an embedded DB).
-* `Stats.StartStats` launches a goroutine that ticks every 5s (configurable via `Stats.interval`) to refresh values.
-* `Stats.Snapshot` can be called on-demand (e.g. CLI) without mutating expvar state.
+Two-layer design:
+
+- `metrics` layer: only collects counters/gauges/snapshots.
+- `stats` layer: aggregates cross-module data and exports.
 
 ---
 
-## 2. Snapshot Fields
+## 2. Snapshot Schema
 
-| Field | Source | Description |
-| --- | --- | --- |
-| `Entries` | `lsm.EntryCount()` | Total MVCC entries (L0-Ln + memtables). Mirrors `Stats.EntryNum` for backwards compat. |
-| `FlushPending/Queue/Active` | `lsm.FlushMetrics()` | Pending immutables, queue length, workers currently building SSTs. |
-| `FlushWait/Build/ReleaseMs` | Derived from `WaitNs/BuildNs/ReleaseNs` averages | End-to-end latency of flush pipeline stages. |
-| `CompactionBacklog/MaxScore` | `lsm.CompactionStats()` | How many level files await compaction and the hottest score. |
-| `ValueLogSegments/PendingDel/DiscardQueue/Head` | `valueLog.metrics()` | Tracks vlog utilisation and GC backlog. |
-| `WALActiveSegment/SegmentCount/Removed/ActiveSize` | `wal.Manager.Metrics()` | Observes WAL rotation cadence and current segment byte usage (pairs with raft lag metrics). |
-| `WALTypedRecordRatio/Warning/Reason` | WAL backlog watchdog (`Stats.Snapshot`) | Tracks ratio of raft typed records in the WAL and surfaces warnings with reasons when exceeding thresholds. |
-| `WALAutoGCRuns/Removed/LastUnix` | WAL backlog watchdog | Automated WAL GC passes, total segments removed, and the Unix timestamp of the last run. |
-| `WriteQueueDepth/Entries/Bytes` | `writeMetrics.snapshot()` | Size of the asynchronous write queue. |
-| `WriteAvg*` | `writeMetrics` averages | Request wait times, vlog latency, apply latency. |
-| `WriteBatchesTotal` | `writeMetrics` | Lifetime batches processed. |
-| `HotWriteLimited` | `db.hotWriteLimited` | Number of write attempts rejected by `Options.WriteHotKeyLimit` (HotRing write throttling). |
-| `WriteThrottleActive` | `db.blockWrites` | Indicates when writes are being throttled. |
-| `TxnsActive/Started/Committed/Conflicts` | `oracle.txnMetricsSnapshot()` | MVCC activity counters. |
-| `HotKeys` | `hotring.TopN()` | Top-K hot key counts. |
-| `HotWriteKeys` | `hotring.TopN()` | Top-K hot write key counts (write-only ring). |
-| `HotWriteRing` | `hotring.Stats()` | Write-only HotRing counters snapshot. |
-| `BlockL0/L1/BloomHitRate` | `lsm.CacheMetrics()` | Block and bloom cache hit ratios. |
-| `IndexHitRate` | `lsm.CacheMetrics()` | SST 索引块缓存命中率。 |
-| `IteratorReused` | `iteratorPool.reused()` | Frequency of iterator pooling hits. |
-| `RaftGroupCount/LaggingGroups/MaxLagSegments/LagWarnThreshold/RaftLagWarning` | `manifest.RaftPointerSnapshot()` | Tracks follower backlogs; `LagWarnThreshold` comes from `Options.RaftLagWarnSegments`, and `RaftLagWarning` toggles when any group exceeds it. |
-| `RegionTotal/New/Running/Removing/Tombstone/Other` | `store.RegionMetrics` | Multi-Raft region state distribution. CLI attaches the first available `RegionMetrics` by default; pass `--no-region-metrics` to disable. |
+`StatsSnapshot` is now domain-grouped (not flat):
 
-All values are exported under the `NoKV.*` namespace via expvar (see `newStats`).
+- `entries`
+- `flush.*`
+- `compaction.*`
+- `value_log.*` (includes `value_log.gc.*`)
+- `wal.*`
+- `raft.*`
+- `write.*`
+- `txn.*`
+- `region.*`
+- `hot.*`
+- `cache.*`
+- `lsm.*`
+- `transport.*`
+- `redis.*`
+
+Representative fields:
+
+- `flush.pending`, `flush.queue_length`, `flush.last_wait_ms`
+- `compaction.backlog`, `compaction.max_score`, `compaction.value_weight`
+- `value_log.segments`, `value_log.pending_deletes`, `value_log.gc.gc_runs`
+- `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
+- `raft.group_count`, `raft.lagging_groups`, `raft.max_lag_segments`
+- `write.queue_depth`, `write.avg_request_wait_ms`, `write.hot_key_limited`
+- `txn.active`, `txn.started`, `txn.conflicts`
+- `region.total`, `region.running`, `region.tombstone`
+- `hot.read_keys`, `hot.write_keys`, `hot.read_ring`, `hot.write_ring`
+- `cache.block_l0_hit_rate`, `cache.bloom_hit_rate`, `cache.iterator_reused`
+- `lsm.levels`, `lsm.value_bytes_total`, `lsm.column_families`
 
 ---
 
-## 3. CLI & JSON Output
+## 3. expvar Export
 
-* `nokv stats --workdir <dir>` prints a human-readable table (queue lengths, throughput, hot keys, region totals). It automatically attaches `RegionMetrics` when available; add `--no-region-metrics` to produce a manifest-only snapshot.
-* When `RaftLagWarning=true` the CLI emits an extra `Raft.Warning` line; it also surfaces `Regions.Total (...)` so operators can quickly gauge Region lifecycle health.
-* `nokv stats --json` emits the raw snapshot for automation. Example snippet:
+`Stats.collect` exports scalar compatibility keys under `NoKV.Stats.*`, e.g.:
+
+- `NoKV.Stats.Flush.Pending`
+- `NoKV.Stats.Compaction.Backlog`
+- `NoKV.Stats.WAL.ActiveSegment`
+- `NoKV.Stats.Write.QueueDepth`
+- `NoKV.Stats.Region.Total`
+
+It also exports structured objects:
+
+- `NoKV.Stats.ValueLogGC`
+- `NoKV.Stats.Transport`
+- `NoKV.Redis`
+
+Additional dynamic views:
+
+- `NoKV.Stats.HotKeys`
+- `NoKV.Stats.HotWriteKeys`
+- `NoKV.Stats.HotRing`
+- `NoKV.Stats.HotWriteRing`
+- `NoKV.Stats.LSM.Levels`
+
+---
+
+## 4. CLI & JSON
+
+- `nokv stats --workdir <dir>`: offline snapshot from local DB
+- `nokv stats --expvar <host:port>`: snapshot from running process `/debug/vars`
+- `nokv stats --json`: machine-readable nested JSON
+
+Example:
 
 ```json
 {
   "entries": 1048576,
-  "flush_queue_length": 2,
-  "vlog_head": {"fid": 5, "offset": 184320},
-  "hot_keys": [{"key": "user:123", "count": 42}]
+  "flush": {
+    "pending": 2,
+    "queue_length": 2
+  },
+  "value_log": {
+    "segments": 6,
+    "pending_deletes": 1,
+    "gc": {
+      "gc_runs": 12
+    }
+  },
+  "hot": {
+    "read_keys": [
+      {"key": "user:123", "count": 42}
+    ]
+  }
 }
 ```
 
-The CLI internally instantiates a read-only DB handle, calls `Stats.Snapshot`, and formats the response—no background goroutine is needed.
+---
+
+## 5. Operational Guidance
+
+- `flush.queue_length` + `compaction.backlog` both rising:
+  flush/compaction under-provisioned.
+- `value_log.discard_queue` high for long periods:
+  check `value_log.gc.*` and compaction pressure.
+- `write.throttle_active=true` frequently:
+  L0 pressure likely high; inspect `cache.block_l0_hit_rate` and compaction.
+- `write.hot_key_limited` increasing:
+  hot key write throttling is active.
+- `raft.lag_warning=true`:
+  at least one group exceeds lag threshold.
 
 ---
 
-## 4. Integration with Other Modules
+## 6. Comparison
 
-| Module | Contribution |
+| Engine | Built-in observability |
 | --- | --- |
-| WAL | `wal.Manager.Metrics()` counts active/removable segments, aiding post-recovery validation. |
-| Value Log | `valueLog.metrics()` exposes GC backlog, enabling alerting when discard queues stall. |
-| HotRing | Publishes hot key JSON via expvar so dashboards can visualise top offenders. |
-| Transactions | Oracle counters help gauge contention (high conflicts → tune workload). |
-| Cache | Hit rates clarify whether cache sizing (hot/cold tier) needs adjustment. |
+| RocksDB | Rich metrics/perf context, often needs additional tooling/parsing |
+| Badger | Optional metrics integrations |
+| NoKV | Native expvar + structured snapshot + CLI with offline/online modes |
 
----
-
-## 5. Comparisons
-
-| Engine | Observability |
-| --- | --- |
-| RocksDB | `iostats`, `perf_context`, `ldb` commands. Requires manual parsing. |
-| Badger | Prometheus metrics (optional). |
-| NoKV | Built-in expvar gauges + CLI + recovery trace toggles. |
-
-NoKV emphasises zero-dependency observability. Everything is consumable via HTTP `/debug/vars` or the CLI, making it easy to integrate with Go services.
-
----
-
-## 6. Operational Guidance
-
-* Watch `FlushQueueLength` and `CompactionBacklog` together—if both grow, increase flush workers or adjust level sizes.
-* `ValueLogDiscardQueue > 0` for extended periods indicates GC is blocked; inspect `NoKV.ValueLog.GcRuns` and consider tuning thresholds.
-* `WriteThrottleActive` toggling frequently suggests L0 is overwhelmed; cross-check `BlockL0HitRate` and compaction metrics.
-* `HotWriteLimited` climbing steadily means HotRing write throttling is firing—surface `utils.ErrHotKeyWriteThrottle` to clients and investigate abusive keys via the `HotKeys` list.
-* `RaftLagWarning` toggling to `true` means at least one follower lags the leader by more than `Options.RaftLagWarnSegments`; inspect `Raft.Warning` from the CLI and consider snapshot resend or throttling the offending node.
-* `Regions.Total` should match the expected cluster topology; sustained `Removing/Tombstone` counts indicate stalled cleanup—investigate split/merge logic or stuck replicas.
-
-Refer to [`docs/testing.md`](testing.md#4-observability-in-tests) for scripted checks that validate stats during CI runs.
