@@ -79,9 +79,9 @@ When `RECOVERY_TRACE_METRICS=1`:
 - `RECOVERY_METRIC phase="vlog_gc" fid=... action="delete"` – vlog cleanup status.
 
 `StatsSnapshot` also exposes:
-- `NoKV.Flush.Queue` – remaining flush tasks.
-- `NoKV.ValueLog.HeadFID` – head file after recovery.
-- `NoKV.Txns.Active` – should reset to zero post-recovery.
+- `flush.queue_length` – remaining flush tasks.
+- `value_log.heads` – current value log heads after recovery.
+- `txn.active` – should reset to zero post-recovery.
 
 ---
 

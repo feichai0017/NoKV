@@ -93,7 +93,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 ## 6. Operational Notes
 
 * Tuning `Options.MemTableSize` affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.
-* Monitor `NoKV.Stats.Flush.*` metrics to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.
+* Monitor `NoKV.Stats.flush.*` fields to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.
 * Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine's manifest-driven cleanup.
 
 See [`docs/flush.md`](flush.md) for the end-to-end flush scheduler and `[docs/architecture.md](architecture.md#3-end-to-end-write-flow)` for where memtables sit in the write pipeline.

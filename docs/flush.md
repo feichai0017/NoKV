@@ -34,7 +34,7 @@ flowchart LR
 - **StageInstall** – manifest edits (`EditAddFile`, `EditLogPointer`) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.
 - **StageRelease** – metrics record release duration, discard stats are flushed to `valueLog.lfDiscardStats`, and `wal.Manager.Remove` drops obsolete segments.
 
-`Manager.Update` transitions between stages and collects timing data (`WaitNs`, `BuildNs`, `ReleaseNs`). These appear as `NoKV.Flush.Queue`, `NoKV.Flush.BuildAvgMs`, etc., in CLI output.
+`Manager.Update` transitions between stages and collects timing data (`WaitNs`, `BuildNs`, `ReleaseNs`). These surface via `StatsSnapshot.Flush` fields (for example `QueueLength`, `BuildMs`) in `nokv stats` output.
 
 ---
 
@@ -85,7 +85,7 @@ RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visi
 
 ## 6. Observability & CLI
 
-- `StatsSnapshot.Flush.Queue` – number of pending tasks.
+- `StatsSnapshot.Flush.QueueLength` – number of pending tasks.
 - `StatsSnapshot.Flush.WaitMs` – average wait time before build.
 - `StatsSnapshot.Flush.BuildMs` – average build duration.
 - `StatsSnapshot.Flush.Completed` – cumulative tasks finished.

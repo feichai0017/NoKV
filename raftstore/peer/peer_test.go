@@ -708,7 +708,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	require.NoError(t, db.WAL().Rotate())
 	snapBeforeCrash := db.Info().Snapshot()
-	require.Equal(t, int64(1), snapBeforeCrash.RaftLagWarnThreshold)
+	require.Equal(t, int64(1), snapBeforeCrash.Raft.LagWarnThreshold)
 	payloadLag, err := proto.Marshal(&pb.KV{
 		Key:   []byte("ready-fail-key-lag"),
 		Value: []byte("ready-fail-value-lag"),
@@ -720,10 +720,10 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		net.Flush()
 	}
 	snapBeforeCrash = db.Info().Snapshot()
-	t.Logf("pre-crash snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d", snapBeforeCrash.RaftLagWarning, snapBeforeCrash.RaftMaxLagSegments, snapBeforeCrash.RaftLaggingGroups, snapBeforeCrash.WALActiveSegment, snapBeforeCrash.WALActiveSize)
-	require.True(t, snapBeforeCrash.RaftLagWarning, "stats snapshot should flag raft lag while manifest lags")
-	require.GreaterOrEqual(t, snapBeforeCrash.RaftMaxLagSegments, snapBeforeCrash.RaftLagWarnThreshold)
-	require.Greater(t, snapBeforeCrash.RaftLaggingGroups, 0)
+	t.Logf("pre-crash snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d", snapBeforeCrash.Raft.LagWarning, snapBeforeCrash.Raft.MaxLagSegments, snapBeforeCrash.Raft.LaggingGroups, snapBeforeCrash.WAL.ActiveSegment, snapBeforeCrash.WAL.ActiveSize)
+	require.True(t, snapBeforeCrash.Raft.LagWarning, "stats snapshot should flag raft lag while manifest lags")
+	require.GreaterOrEqual(t, snapBeforeCrash.Raft.MaxLagSegments, snapBeforeCrash.Raft.LagWarnThreshold)
+	require.Greater(t, snapBeforeCrash.Raft.LaggingGroups, 0)
 
 	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
 
@@ -768,8 +768,8 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	entry2.DecrRef()
 
 	recoveredSnap := dbRestart.Info().Snapshot()
-	t.Logf("recovered snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d ptr=%+v", recoveredSnap.RaftLagWarning, recoveredSnap.RaftMaxLagSegments, recoveredSnap.RaftLaggingGroups, recoveredSnap.WALActiveSegment, recoveredSnap.WALActiveSize, ptrRecovered)
-	require.False(t, recoveredSnap.RaftLagWarning, "lag warning should clear after manifest catches up")
+	t.Logf("recovered snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d ptr=%+v", recoveredSnap.Raft.LagWarning, recoveredSnap.Raft.MaxLagSegments, recoveredSnap.Raft.LaggingGroups, recoveredSnap.WAL.ActiveSegment, recoveredSnap.WAL.ActiveSize, ptrRecovered)
+	require.False(t, recoveredSnap.Raft.LagWarning, "lag warning should clear after manifest catches up")
 }
 
 func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {

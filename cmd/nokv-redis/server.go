@@ -32,6 +32,7 @@ func globalRedisMetrics() *metrics.RedisMetrics {
 			"INCR", "DECR", "INCRBY", "DECRBY", "EXISTS", "QUIT",
 		}
 		metricsInstance = metrics.NewRedisMetrics(commands)
+		metrics.SetDefaultRedisMetrics(metricsInstance)
 	})
 	return metricsInstance
 }

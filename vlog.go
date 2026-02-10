@@ -123,7 +123,7 @@ func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.
 						continue
 					}
 					delete(existing, fid)
-					metrics.IncValueLogSegmentsRemoved()
+					metrics.DefaultValueLogGCCollector().IncSegmentsRemoved()
 				}
 				continue
 			}
@@ -149,7 +149,7 @@ func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.
 				_ = utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d (bucket %d): %v", fid, bucket, err))
 				continue
 			}
-			metrics.IncValueLogSegmentsRemoved()
+			metrics.DefaultValueLogGCCollector().IncSegmentsRemoved()
 			_ = utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d (bucket %d)", fid, bucket))
 		}
 	}
@@ -241,7 +241,7 @@ func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
 		}
 		return errors.Wrapf(err, "remove value log fid %d (bucket %d)", fid, bucket)
 	}
-	metrics.IncValueLogSegmentsRemoved()
+	metrics.DefaultValueLogGCCollector().IncSegmentsRemoved()
 	return nil
 }
 
@@ -518,7 +518,7 @@ func (db *DB) initVLog() {
 		gcBucketBusy:  make([]atomic.Uint32, bucketCount),
 		garbageCh:     make(chan struct{}, 1),
 	}
-	metrics.SetValueLogGCParallelism(gcParallelism)
+	metrics.DefaultValueLogGCCollector().SetParallelism(gcParallelism)
 	vlog.setValueLogFileSize(db.opt.ValueLogFileSize)
 	vlog.reconcileManifest(status)
 	db.vheads = heads
@@ -582,7 +582,7 @@ func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 			_ = utils.Err(fmt.Errorf("log value log head: %w", err))
 			continue
 		}
-		metrics.IncValueLogHeadUpdates()
+		metrics.DefaultValueLogGCCollector().IncHeadUpdates()
 		db.lastLoggedHeads[bucket] = *next
 	}
 }

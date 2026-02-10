@@ -1,6 +1,6 @@
 # CLI (`cmd/nokv`) Reference
 
-The `nokv` command provides operational visibility similar to RocksDB's `ldb` and Badger's `badger` CLI, but emits JSON to integrate easily with scripts and CI pipelines.
+`nokv` provides operational visibility similar to RocksDB `ldb` / Badger CLI, with script-friendly JSON output.
 
 ---
 
@@ -10,16 +10,14 @@ The `nokv` command provides operational visibility similar to RocksDB's `ldb` an
 go install ./cmd/nokv
 ```
 
-Use `GOBIN` if you prefer a custom binary directory.
-
 ---
 
 ## Shared Flags
 
-- `--workdir <path>` – location of the NoKV database (must contain `CURRENT`).
-- `--json` – emit structured JSON (default is human-readable tables).
-- `--expvar <url>` – for `stats` command, pull metrics from a running process exposing `expvar`.
-- `--no-region-metrics` – for `stats` offline mode; skip attaching `RegionMetrics` and report manifest-only figures.
+- `--workdir <path>`: NoKV database directory (must contain `CURRENT` for manifest commands)
+- `--json`: JSON output (default is plain text)
+- `--expvar <url>`: for `stats`, fetch from `/debug/vars`
+- `--no-region-metrics`: for offline `stats`, skip attaching runtime region metrics
 
 ---
 
@@ -27,41 +25,53 @@ Use `GOBIN` if you prefer a custom binary directory.
 
 ### `nokv stats`
 
-- Reads `StatsSnapshot` either offline (`--workdir`) or via HTTP (`--expvar`).
-- Output fields include:
-  - `flush_queue_length`, `flush_wait_ms`, `flush_build_ms`
-  - `compaction_backlog`, `wal_active_segment`, `wal_segments_removed`
-  - `vlog_head`, `vlog_segments`, `vlog_pending_deletes`, `vlog_discard_queue`
-  - `txns_active`, `txns_committed`, `txns_conflicts`
-  - `region_total` (plus `region_new`, `region_running`, `region_removing`, `region_tombstone`, `region_other`)
-  - `hot_keys` (Top-N hits captured by `hotring`)
-- Example:
+- Reads `StatsSnapshot` either offline (`--workdir`) or online (`--expvar`)
+- JSON output is nested by domain (not flat)
+
+Common fields:
+
+- `entries`
+- `flush.pending`, `flush.queue_length`, `flush.last_wait_ms`
+- `compaction.backlog`, `compaction.max_score`
+- `value_log.segments`, `value_log.pending_deletes`, `value_log.gc.*`
+- `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
+- `write.queue_depth`, `write.queue_entries`, `write.hot_key_limited`
+- `txn.active`, `txn.committed`, `txn.conflicts`
+- `region.total`, `region.running`, `region.removing`
+- `hot.read_keys`, `hot.write_keys`
+- `lsm.levels`, `lsm.value_bytes_total`
+- `transport.*`, `redis.*`
+
+Example:
 
 ```bash
-nokv stats --workdir ./testdata/db --json | jq '.flush_queue_length'
+nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 ```
 
 ### `nokv manifest`
 
-- Parses the manifest using `manifest.Manager.Version()`.
-- Reports per-level file counts, smallest/largest keys, WAL checkpoint, and ValueLog metadata.
-- Helpful for verifying flush/compaction results and ensuring manifest rewrites succeeded.
+- Reads manifest version state
+- Shows log pointer, per-level file info, and value-log metadata
 
 ### `nokv vlog`
 
-- Lists vlog segments with status flags (`active`, `candidate_for_gc`, `deleted`).
-- Shows head file/offset and pending GC actions.
-- Use after running GC or recovery to confirm stale segments are purged.
+- Lists value-log segments and current head per bucket
+- Useful after GC/recovery checks
+
+### `nokv regions`
+
+- Dumps manifest-backed region catalog (state/range/epoch/peers)
+- Supports `--json`
+
+### `nokv scheduler`
+
+- Displays scheduler heartbeat snapshot (in-process usage)
 
 ---
 
 ## Integration Tips
 
-- Combine with `RECOVERY_TRACE_METRICS=1` to cross-check logs: run tests, then inspect CLI output to ensure metrics match expectations.
-- In CI, capture JSON output and diff against golden files to detect regressions (see `cmd/nokv/main_test.go`).
-- When comparing against RocksDB/Badger, treat `nokv manifest` + `nokv vlog` as equivalents to `ldb manifest_dump` and Badger's `badger` `inspect vlog` commands.
+- Combine with `RECOVERY_TRACE_METRICS=1` for recovery validation.
+- In CI, compare JSON snapshots to detect observability regressions.
+- Use `nokv stats --expvar` for online diagnostics and `--workdir` for offline forensics.
 
----
-
-For architecture context, see [architecture.md](architecture.md) and the module deep dives.
-- **`nokv regions`** – Dumps the manifest-backed Region catalog (ID/state/key range/peers). Supports `--json` for automation and complements the Region metrics shown in `nokv stats`.
