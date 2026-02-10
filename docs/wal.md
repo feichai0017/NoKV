@@ -71,9 +71,9 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 ## 5. Metrics & Observability
 
 `Stats.collect` reads the manager metrics and exposes them as:
-- `NoKV.Stats.WAL.ActiveSegment`
-- `NoKV.Stats.WAL.Segments`
-- `NoKV.Stats.WAL.Removed`
+- `NoKV.Stats.wal.active_segment`
+- `NoKV.Stats.wal.segment_count`
+- `NoKV.Stats.wal.segments_removed`
 
 The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB's `LOG` number growth.
 

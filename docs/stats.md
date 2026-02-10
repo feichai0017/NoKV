@@ -73,27 +73,13 @@ Representative fields:
 
 ## 3. expvar Export
 
-`Stats.collect` exports scalar compatibility keys under `NoKV.Stats.*`, e.g.:
+`Stats.collect` exports a single structured object:
 
-- `NoKV.Stats.Flush.Pending`
-- `NoKV.Stats.Compaction.Backlog`
-- `NoKV.Stats.WAL.ActiveSegment`
-- `NoKV.Stats.Write.QueueDepth`
-- `NoKV.Stats.Region.Total`
+- `NoKV.Stats`
 
-It also exports structured objects:
+All domains (`flush`, `compaction`, `value_log`, `wal`, `txn`, `region`, `hot`, `cache`, `lsm`, `transport`, `redis`) are nested under this object.
 
-- `NoKV.Stats.ValueLogGC`
-- `NoKV.Stats.Transport`
-- `NoKV.Redis`
-
-Additional dynamic views:
-
-- `NoKV.Stats.HotKeys`
-- `NoKV.Stats.HotWriteKeys`
-- `NoKV.Stats.HotRing`
-- `NoKV.Stats.HotWriteRing`
-- `NoKV.Stats.LSM.Levels`
+Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
 
 ---
 
@@ -151,4 +137,3 @@ Example:
 | RocksDB | Rich metrics/perf context, often needs additional tooling/parsing |
 | Badger | Optional metrics integrations |
 | NoKV | Native expvar + structured snapshot + CLI with offline/online modes |
-

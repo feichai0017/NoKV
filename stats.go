@@ -25,88 +25,13 @@ type Stats struct {
 	once     sync.Once
 	interval time.Duration
 
-	EntryNum int64 // Mirrors Entries for backwards compatibility.
-
-	entries                *expvar.Int
-	flushPending           *expvar.Int
-	flushQueueLen          *expvar.Int
-	flushActive            *expvar.Int
-	flushWaitMs            *expvar.Float
-	flushWaitLastMs        *expvar.Float
-	flushWaitMaxMs         *expvar.Float
-	flushBuildMs           *expvar.Float
-	flushBuildLastMs       *expvar.Float
-	flushBuildMaxMs        *expvar.Float
-	flushReleaseMs         *expvar.Float
-	flushReleaseLastMs     *expvar.Float
-	flushReleaseMaxMs      *expvar.Float
-	flushCompleted         *expvar.Int
-	compactionBacklog      *expvar.Int
-	compactionMaxScore     *expvar.Float
-	compactionLastMs       *expvar.Float
-	compactionMaxMs        *expvar.Float
-	compactionRuns         *expvar.Int
-	compactionIngestRuns   *expvar.Int
-	compactionMergeRuns    *expvar.Int
-	compactionIngestMs     *expvar.Float
-	compactionMergeMs      *expvar.Float
-	compactionIngestTables *expvar.Int
-	compactionMergeTables  *expvar.Int
-	valueLogSegments       *expvar.Int
-	valueLogPendingDel     *expvar.Int
-	valueLogDiscardQueue   *expvar.Int
-	walActiveSegment       *expvar.Int
-	walSegmentCount        *expvar.Int
-	walActiveSize          *expvar.Int
-	walSegmentsRemoved     *expvar.Int
-	raftGroupCount         *expvar.Int
-	raftLaggingGroups      *expvar.Int
-	raftMaxLagSegments     *expvar.Int
-	raftMinSegment         *expvar.Int
-	raftMaxSegment         *expvar.Int
-	raftLagWarning         *expvar.Int
-	writeQueueDepth        *expvar.Int
-	writeQueueEntries      *expvar.Int
-	writeQueueBytes        *expvar.Int
-	writeBatchAvgEntries   *expvar.Float
-	writeBatchAvgBytes     *expvar.Float
-	writeRequestWaitMs     *expvar.Float
-	writeValueLogMs        *expvar.Float
-	writeApplyMs           *expvar.Float
-	writeBatchesTotal      *expvar.Int
-	writeThrottle          *expvar.Int
-	writeHotKeyLimited     *expvar.Int
-	txnActive              *expvar.Int
-	txnStarted             *expvar.Int
-	txnCommitted           *expvar.Int
-	txnConflicts           *expvar.Int
-	blockL0HitRate         *expvar.Float
-	blockL1HitRate         *expvar.Float
-	bloomHitRate           *expvar.Float
-	indexHitRate           *expvar.Float
-	iteratorReuses         *expvar.Int
-	cfMap                  *expvar.Map
-	walRecordCounts        *expvar.Map
-	walSegmentsWithRaft    *expvar.Int
-	walSegmentsRemovable   *expvar.Int
-	walTypedRatio          *expvar.Float
-	walTypedWarning        *expvar.Int
-	walTypedReason         *expvar.String
-	walAutoRuns            *expvar.Int
-	walAutoRemoved         *expvar.Int
-	walAutoLastUnix        *expvar.Int
-	lsmValueBytes          *expvar.Int
-	compactionValueWeight  *expvar.Float
-	lsmValueDensityMax     *expvar.Float
-	lsmValueDensityAlert   *expvar.Int
-	regionMetrics          atomic.Pointer[storepkg.RegionMetrics]
-	regionTotal            *expvar.Int
-	regionNew              *expvar.Int
-	regionRunning          *expvar.Int
-	regionRemoving         *expvar.Int
-	regionTombstone        *expvar.Int
-	regionOther            *expvar.Int
+	regionMetrics atomic.Pointer[storepkg.RegionMetrics]
 }
+
+var (
+	statsExpvarOnce       sync.Once
+	exportedStatsSnapshot atomic.Pointer[StatsSnapshot]
+)
 
 type HotKeyStat struct {
 	Key   string `json:"key"`
@@ -298,232 +223,19 @@ type LSMStatsSnapshot struct {
 
 func newStats(db *DB) *Stats {
 	s := &Stats{
-		db:                     db,
-		closer:                 utils.NewCloser(),
-		interval:               5 * time.Second,
-		EntryNum:               0,
-		entries:                reuseInt("NoKV.Stats.Entries"),
-		flushPending:           reuseInt("NoKV.Stats.Flush.Pending"),
-		flushQueueLen:          reuseInt("NoKV.Stats.Flush.QueueLength"),
-		flushActive:            reuseInt("NoKV.Stats.Flush.Active"),
-		flushWaitMs:            reuseFloat("NoKV.Stats.Flush.WaitMs"),
-		flushWaitLastMs:        reuseFloat("NoKV.Stats.Flush.WaitLastMs"),
-		flushWaitMaxMs:         reuseFloat("NoKV.Stats.Flush.WaitMaxMs"),
-		flushBuildMs:           reuseFloat("NoKV.Stats.Flush.BuildMs"),
-		flushBuildLastMs:       reuseFloat("NoKV.Stats.Flush.BuildLastMs"),
-		flushBuildMaxMs:        reuseFloat("NoKV.Stats.Flush.BuildMaxMs"),
-		flushReleaseMs:         reuseFloat("NoKV.Stats.Flush.ReleaseMs"),
-		flushReleaseLastMs:     reuseFloat("NoKV.Stats.Flush.ReleaseLastMs"),
-		flushReleaseMaxMs:      reuseFloat("NoKV.Stats.Flush.ReleaseMaxMs"),
-		flushCompleted:         reuseInt("NoKV.Stats.Flush.Completed"),
-		compactionBacklog:      reuseInt("NoKV.Stats.Compaction.Backlog"),
-		compactionMaxScore:     reuseFloat("NoKV.Stats.Compaction.MaxScore"),
-		compactionLastMs:       reuseFloat("NoKV.Stats.Compaction.LastDurationMs"),
-		compactionMaxMs:        reuseFloat("NoKV.Stats.Compaction.MaxDurationMs"),
-		compactionRuns:         reuseInt("NoKV.Stats.Compaction.RunsTotal"),
-		compactionIngestRuns:   reuseInt("NoKV.Stats.Compaction.IngestRuns"),
-		compactionMergeRuns:    reuseInt("NoKV.Stats.Compaction.IngestMergeRuns"),
-		compactionIngestMs:     reuseFloat("NoKV.Stats.Compaction.IngestDurationMs"),
-		compactionMergeMs:      reuseFloat("NoKV.Stats.Compaction.IngestMergeDurationMs"),
-		compactionIngestTables: reuseInt("NoKV.Stats.Compaction.IngestTables"),
-		compactionMergeTables:  reuseInt("NoKV.Stats.Compaction.IngestMergeTables"),
-		valueLogSegments:       reuseInt("NoKV.Stats.ValueLog.Segments"),
-		valueLogPendingDel:     reuseInt("NoKV.Stats.ValueLog.PendingDeletes"),
-		valueLogDiscardQueue:   reuseInt("NoKV.Stats.ValueLog.DiscardQueue"),
-		walActiveSegment:       reuseInt("NoKV.Stats.WAL.ActiveSegment"),
-		walActiveSize:          reuseInt("NoKV.Stats.WAL.ActiveSize"),
-		walSegmentCount:        reuseInt("NoKV.Stats.WAL.Segments"),
-		walSegmentsRemoved:     reuseInt("NoKV.Stats.WAL.Removed"),
-		raftGroupCount:         reuseInt("NoKV.Stats.Raft.Groups"),
-		raftLaggingGroups:      reuseInt("NoKV.Stats.Raft.LaggingGroups"),
-		raftMaxLagSegments:     reuseInt("NoKV.Stats.Raft.MaxLagSegments"),
-		raftMinSegment:         reuseInt("NoKV.Stats.Raft.MinSegment"),
-		raftMaxSegment:         reuseInt("NoKV.Stats.Raft.MaxSegment"),
-		raftLagWarning:         reuseInt("NoKV.Stats.Raft.LagWarning"),
-		writeQueueDepth:        reuseInt("NoKV.Stats.Write.QueueDepth"),
-		writeQueueEntries:      reuseInt("NoKV.Stats.Write.QueueEntries"),
-		writeQueueBytes:        reuseInt("NoKV.Stats.Write.QueueBytes"),
-		writeBatchAvgEntries:   reuseFloat("NoKV.Stats.Write.BatchAvgEntries"),
-		writeBatchAvgBytes:     reuseFloat("NoKV.Stats.Write.BatchAvgBytes"),
-		writeRequestWaitMs:     reuseFloat("NoKV.Stats.Write.RequestWaitMs"),
-		writeValueLogMs:        reuseFloat("NoKV.Stats.Write.ValueLogMs"),
-		writeApplyMs:           reuseFloat("NoKV.Stats.Write.ApplyMs"),
-		writeBatchesTotal:      reuseInt("NoKV.Stats.Write.Batches"),
-		writeThrottle:          reuseInt("NoKV.Stats.Write.Throttle"),
-		writeHotKeyLimited:     reuseInt("NoKV.Stats.Write.HotKeyLimited"),
-		txnActive:              reuseInt("NoKV.Txns.Active"),
-		txnStarted:             reuseInt("NoKV.Txns.Started"),
-		txnCommitted:           reuseInt("NoKV.Txns.Committed"),
-		txnConflicts:           reuseInt("NoKV.Txns.Conflicts"),
-		blockL0HitRate:         reuseFloat("NoKV.Stats.Cache.L0HitRate"),
-		blockL1HitRate:         reuseFloat("NoKV.Stats.Cache.L1HitRate"),
-		bloomHitRate:           reuseFloat("NoKV.Stats.Cache.BloomHitRate"),
-		indexHitRate:           reuseFloat("NoKV.Stats.Cache.IndexHitRate"),
-		iteratorReuses:         reuseInt("NoKV.Stats.Iterator.Reused"),
-		walSegmentsWithRaft:    reuseInt("NoKV.Stats.WAL.RaftSegments"),
-		walSegmentsRemovable:   reuseInt("NoKV.Stats.WAL.RaftSegmentsRemovable"),
-		walTypedRatio:          reuseFloat("NoKV.Stats.WAL.TypedRatio"),
-		walTypedWarning:        reuseInt("NoKV.Stats.WAL.TypedWarning"),
-		walTypedReason:         reuseString("NoKV.Stats.WAL.TypedReason"),
-		walAutoRuns:            reuseInt("NoKV.Stats.WAL.AutoRuns"),
-		walAutoRemoved:         reuseInt("NoKV.Stats.WAL.AutoRemoved"),
-		walAutoLastUnix:        reuseInt("NoKV.Stats.WAL.AutoLastUnix"),
-		lsmValueBytes:          reuseInt("NoKV.Stats.LSM.ValueBytes"),
-		compactionValueWeight:  reuseFloat("NoKV.Stats.Compaction.ValueWeight"),
-		lsmValueDensityMax:     reuseFloat("NoKV.Stats.LSM.ValueDensityMax"),
-		lsmValueDensityAlert:   reuseInt("NoKV.Stats.LSM.ValueDensityAlert"),
-		regionTotal:            reuseInt("NoKV.Stats.Region.Total"),
-		regionNew:              reuseInt("NoKV.Stats.Region.New"),
-		regionRunning:          reuseInt("NoKV.Stats.Region.Running"),
-		regionRemoving:         reuseInt("NoKV.Stats.Region.Removing"),
-		regionTombstone:        reuseInt("NoKV.Stats.Region.Tombstone"),
-		regionOther:            reuseInt("NoKV.Stats.Region.Other"),
+		db:       db,
+		closer:   utils.NewCloser(),
+		interval: 5 * time.Second,
 	}
-	if v := expvar.Get("NoKV.Stats.ColumnFamilies"); v != nil {
-		if m, ok := v.(*expvar.Map); ok {
-			s.cfMap = m
-		}
-	}
-	if s.cfMap == nil {
-		s.cfMap = expvar.NewMap("NoKV.Stats.ColumnFamilies")
-	}
-	s.walRecordCounts = reuseMap("NoKV.Stats.WAL.RecordCounts")
-	if expvar.Get("NoKV.Stats.LSM.Levels") == nil {
-		expvar.Publish("NoKV.Stats.LSM.Levels", expvar.Func(func() any {
-			if s == nil || s.db == nil || s.db.lsm == nil {
-				return []map[string]any{}
+	statsExpvarOnce.Do(func() {
+		expvar.Publish("NoKV.Stats", expvar.Func(func() any {
+			if ptr := exportedStatsSnapshot.Load(); ptr != nil {
+				return *ptr
 			}
-			levels := s.db.lsm.LevelMetrics()
-			out := make([]map[string]any, 0, len(levels))
-			for _, lvl := range levels {
-				out = append(out, map[string]any{
-					"level":              lvl.Level,
-					"tables":             lvl.TableCount,
-					"size_bytes":         lvl.SizeBytes,
-					"value_bytes":        lvl.ValueBytes,
-					"stale_bytes":        lvl.StaleBytes,
-					"ingest_tables":      lvl.IngestTableCount,
-					"ingest_size_bytes":  lvl.IngestSizeBytes,
-					"ingest_value_bytes": lvl.IngestValueBytes,
-				})
-			}
-			return out
+			return StatsSnapshot{}
 		}))
-	}
-	if expvar.Get("NoKV.Stats.HotKeys") == nil {
-		expvar.Publish("NoKV.Stats.HotKeys", expvar.Func(func() any {
-			if db == nil || db.hotRead == nil {
-				return []map[string]any{}
-			}
-			topK := db.opt.HotRingTopK
-			if topK <= 0 {
-				topK = 16
-			}
-			items := db.hotRead.TopN(topK)
-			out := make([]map[string]any, 0, len(items))
-			for _, item := range items {
-				out = append(out, map[string]any{
-					"key":   item.Key,
-					"count": item.Count,
-				})
-			}
-			return out
-		}))
-	}
-	if expvar.Get("NoKV.Stats.HotWriteKeys") == nil {
-		expvar.Publish("NoKV.Stats.HotWriteKeys", expvar.Func(func() any {
-			if db == nil || db.hotWrite == nil {
-				return []map[string]any{}
-			}
-			topK := db.opt.HotRingTopK
-			if topK <= 0 {
-				topK = 16
-			}
-			items := db.hotWrite.TopN(topK)
-			out := make([]map[string]any, 0, len(items))
-			for _, item := range items {
-				out = append(out, map[string]any{
-					"key":   item.Key,
-					"count": item.Count,
-				})
-			}
-			return out
-		}))
-	}
-	if expvar.Get("NoKV.Stats.HotRing") == nil {
-		expvar.Publish("NoKV.Stats.HotRing", expvar.Func(func() any {
-			if db == nil || db.hotRead == nil {
-				return map[string]any{}
-			}
-			return db.hotRead.Stats()
-		}))
-	}
-	if expvar.Get("NoKV.Stats.HotWriteRing") == nil {
-		expvar.Publish("NoKV.Stats.HotWriteRing", expvar.Func(func() any {
-			if db == nil || db.hotWrite == nil {
-				return map[string]any{}
-			}
-			return db.hotWrite.Stats()
-		}))
-	}
-	if expvar.Get("NoKV.Stats.ValueLogGC") == nil {
-		expvar.Publish("NoKV.Stats.ValueLogGC", expvar.Func(func() any {
-			return metrics.ValueLogGCMetricsSnapshot()
-		}))
-	}
-	if expvar.Get("NoKV.Stats.Transport") == nil {
-		expvar.Publish("NoKV.Stats.Transport", expvar.Func(func() any {
-			return transportpkg.GRPCMetricsSnapshot()
-		}))
-	}
-	if expvar.Get("NoKV.Redis") == nil {
-		expvar.Publish("NoKV.Redis", expvar.Func(func() any {
-			return metrics.DefaultRedisSnapshot().ExpvarMap()
-		}))
-	}
+	})
 	return s
-}
-
-func reuseInt(name string) *expvar.Int {
-	if v := expvar.Get(name); v != nil {
-		if iv, ok := v.(*expvar.Int); ok {
-			return iv
-		}
-	}
-	return expvar.NewInt(name)
-}
-
-func reuseFloat(name string) *expvar.Float {
-	if v := expvar.Get(name); v != nil {
-		if fv, ok := v.(*expvar.Float); ok {
-			return fv
-		}
-	}
-	return expvar.NewFloat(name)
-}
-
-func reuseString(name string) *expvar.String {
-	if v := expvar.Get(name); v != nil {
-		if sv, ok := v.(*expvar.String); ok {
-			return sv
-		}
-	}
-	return expvar.NewString(name)
-}
-
-func reuseMap(name string) *expvar.Map {
-	if v := expvar.Get(name); v != nil {
-		if mv, ok := v.(*expvar.Map); ok {
-			return mv
-		}
-	}
-	return expvar.NewMap(name)
-}
-
-func newIntVar(val int64) *expvar.Int {
-	v := new(expvar.Int)
-	v.Set(val)
-	return v
 }
 
 // StartStats runs periodic collection of internal backlog metrics.
@@ -566,122 +278,11 @@ func (s *Stats) run() {
 
 // collect snapshots background queues and propagates them to expvar.
 func (s *Stats) collect() {
+	if s == nil {
+		return
+	}
 	snap := s.Snapshot()
-	s.entries.Set(snap.Entries)
-	s.flushPending.Set(snap.Flush.Pending)
-	s.flushQueueLen.Set(snap.Flush.QueueLength)
-	s.flushActive.Set(snap.Flush.Active)
-	s.flushWaitMs.Set(snap.Flush.WaitMs)
-	s.flushWaitLastMs.Set(snap.Flush.LastWaitMs)
-	s.flushWaitMaxMs.Set(snap.Flush.MaxWaitMs)
-	s.flushBuildMs.Set(snap.Flush.BuildMs)
-	s.flushBuildLastMs.Set(snap.Flush.LastBuildMs)
-	s.flushBuildMaxMs.Set(snap.Flush.MaxBuildMs)
-	s.flushReleaseMs.Set(snap.Flush.ReleaseMs)
-	s.flushReleaseLastMs.Set(snap.Flush.LastReleaseMs)
-	s.flushReleaseMaxMs.Set(snap.Flush.MaxReleaseMs)
-	s.flushCompleted.Set(snap.Flush.Completed)
-	s.compactionBacklog.Set(snap.Compaction.Backlog)
-	s.compactionMaxScore.Set(snap.Compaction.MaxScore)
-	s.compactionLastMs.Set(snap.Compaction.LastDurationMs)
-	s.compactionMaxMs.Set(snap.Compaction.MaxDurationMs)
-	s.compactionRuns.Set(int64(snap.Compaction.Runs))
-	s.compactionIngestRuns.Set(snap.Compaction.IngestRuns)
-	s.compactionIngestMs.Set(snap.Compaction.IngestMs)
-	s.compactionIngestTables.Set(snap.Compaction.IngestTables)
-	s.compactionMergeRuns.Set(snap.Compaction.MergeRuns)
-	s.compactionMergeMs.Set(snap.Compaction.MergeMs)
-	s.compactionMergeTables.Set(snap.Compaction.MergeTables)
-	s.valueLogSegments.Set(int64(snap.ValueLog.Segments))
-	s.valueLogPendingDel.Set(int64(snap.ValueLog.PendingDeletes))
-	s.valueLogDiscardQueue.Set(int64(snap.ValueLog.DiscardQueue))
-	s.walActiveSegment.Set(snap.WAL.ActiveSegment)
-	s.walSegmentCount.Set(snap.WAL.SegmentCount)
-	s.walActiveSize.Set(snap.WAL.ActiveSize)
-	s.walSegmentsRemoved.Set(int64(snap.WAL.SegmentsRemoved))
-	s.walSegmentsWithRaft.Set(int64(snap.WAL.SegmentsWithRaftRecords))
-	s.walSegmentsRemovable.Set(int64(snap.WAL.RemovableRaftSegments))
-	s.walTypedRatio.Set(snap.WAL.TypedRecordRatio)
-	if snap.WAL.TypedRecordWarning {
-		s.walTypedWarning.Set(1)
-	} else {
-		s.walTypedWarning.Set(0)
-	}
-	s.walTypedReason.Set(snap.WAL.TypedRecordReason)
-	s.walAutoRuns.Set(int64(snap.WAL.AutoGCRuns))
-	s.walAutoRemoved.Set(int64(snap.WAL.AutoGCRemoved))
-	s.walAutoLastUnix.Set(snap.WAL.AutoGCLastUnix)
-	s.writeQueueDepth.Set(snap.Write.QueueDepth)
-	s.writeQueueEntries.Set(snap.Write.QueueEntries)
-	s.writeQueueBytes.Set(snap.Write.QueueBytes)
-	s.writeBatchAvgEntries.Set(snap.Write.AvgBatchEntries)
-	s.writeBatchAvgBytes.Set(snap.Write.AvgBatchBytes)
-	s.writeRequestWaitMs.Set(snap.Write.AvgRequestWaitMs)
-	s.writeValueLogMs.Set(snap.Write.AvgValueLogMs)
-	s.writeApplyMs.Set(snap.Write.AvgApplyMs)
-	s.writeBatchesTotal.Set(snap.Write.BatchesTotal)
-	if s.writeHotKeyLimited != nil {
-		s.writeHotKeyLimited.Set(int64(snap.Write.HotKeyLimited))
-	}
-	s.raftGroupCount.Set(int64(snap.Raft.GroupCount))
-	s.raftLaggingGroups.Set(int64(snap.Raft.LaggingGroups))
-	s.raftMaxLagSegments.Set(snap.Raft.MaxLagSegments)
-	s.raftMinSegment.Set(int64(snap.Raft.MinLogSegment))
-	s.raftMaxSegment.Set(int64(snap.Raft.MaxLogSegment))
-	if snap.Raft.LagWarning {
-		s.raftLagWarning.Set(1)
-	} else {
-		s.raftLagWarning.Set(0)
-	}
-	if snap.Write.ThrottleActive {
-		s.writeThrottle.Set(1)
-	} else {
-		s.writeThrottle.Set(0)
-	}
-	s.txnActive.Set(snap.Txn.Active)
-	s.txnStarted.Set(int64(snap.Txn.Started))
-	s.txnCommitted.Set(int64(snap.Txn.Committed))
-	s.txnConflicts.Set(int64(snap.Txn.Conflicts))
-	s.blockL0HitRate.Set(snap.Cache.BlockL0HitRate)
-	s.blockL1HitRate.Set(snap.Cache.BlockL1HitRate)
-	s.bloomHitRate.Set(snap.Cache.BloomHitRate)
-	s.indexHitRate.Set(snap.Cache.IndexHitRate)
-	s.iteratorReuses.Set(int64(snap.Cache.IteratorReused))
-	if s.cfMap != nil {
-		s.cfMap.Init()
-		for cfName, cf := range snap.LSM.ColumnFamilies {
-			sub := &expvar.Map{}
-			sub.Init()
-			sub.Set("writes", newIntVar(int64(cf.Writes)))
-			sub.Set("reads", newIntVar(int64(cf.Reads)))
-			s.cfMap.Set(cfName, sub)
-		}
-	}
-	if s.walRecordCounts != nil {
-		s.walRecordCounts.Init()
-		s.walRecordCounts.Set("entries", newIntVar(int64(snap.WAL.RecordCounts.Entries)))
-		s.walRecordCounts.Set("raft_entries", newIntVar(int64(snap.WAL.RecordCounts.RaftEntries)))
-		s.walRecordCounts.Set("raft_states", newIntVar(int64(snap.WAL.RecordCounts.RaftStates)))
-		s.walRecordCounts.Set("raft_snapshots", newIntVar(int64(snap.WAL.RecordCounts.RaftSnapshots)))
-		s.walRecordCounts.Set("total", newIntVar(int64(snap.WAL.RecordCounts.Total())))
-	}
-	if s.regionTotal != nil {
-		s.regionTotal.Set(snap.Region.Total)
-		s.regionNew.Set(snap.Region.New)
-		s.regionRunning.Set(snap.Region.Running)
-		s.regionRemoving.Set(snap.Region.Removing)
-		s.regionTombstone.Set(snap.Region.Tombstone)
-		s.regionOther.Set(snap.Region.Other)
-	}
-	s.lsmValueBytes.Set(snap.LSM.ValueBytesTotal)
-	s.lsmValueDensityMax.Set(snap.LSM.ValueDensityMax)
-	if snap.LSM.ValueDensityAlert {
-		s.lsmValueDensityAlert.Set(1)
-	} else {
-		s.lsmValueDensityAlert.Set(0)
-	}
-	s.compactionValueWeight.Set(snap.Compaction.ValueWeight)
-	atomic.StoreInt64(&s.EntryNum, snap.Entries)
+	exportedStatsSnapshot.Store(&snap)
 }
 
 // Snapshot returns a point-in-time metrics snapshot without mutating state.
@@ -969,7 +570,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	if s.db != nil {
 		snap.LSM.ColumnFamilies = s.db.columnFamilyStats()
 	}
-	snap.ValueLog.GC = metrics.ValueLogGCMetricsSnapshot()
+	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
 	snap.Redis = metrics.DefaultRedisSnapshot()
 	return snap
