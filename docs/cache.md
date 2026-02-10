@@ -56,7 +56,7 @@ By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflec
 * `bloomCache` stores the raw filter bitset (`utils.Filter`) per table ID. Entries are deep-copied (`SafeCopy`) to avoid sharing memory with mmaps.
 * Main tier is LRU with a tiny CLOCK hot set to protect frequently hit filters from being washed out by scans.
 * Capacity is controlled by `Options.BloomCacheSize`; the hot CLOCK tier auto-scales from a few dozen up to a few hundred entries.
-* Bloom hits/misses are recorded via `cacheMetrics.recordBloom`, feeding into `StatsSnapshot.BloomHitRate`.
+* Bloom hits/misses are recorded via `cacheMetrics.recordBloom`, feeding into `StatsSnapshot.Cache.BloomHitRate`.
 
 ---
 
