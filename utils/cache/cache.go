@@ -9,6 +9,7 @@ import (
 	xxhash "github.com/cespare/xxhash/v2"
 )
 
+// Cache defines an exported API type.
 type Cache struct {
 	m         sync.RWMutex
 	lru       *windowLRU
@@ -46,6 +47,7 @@ func NewCache(size int) *Cache {
 
 }
 
+// Set is part of the exported receiver API.
 func (c *Cache) Set(key any, value any) bool {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -104,6 +106,7 @@ func (c *Cache) set(key, value any) bool {
 	return true
 }
 
+// Get is part of the exported receiver API.
 func (c *Cache) Get(key any) (any, bool) {
 	c.m.RLock()
 	defer c.m.RUnlock()
@@ -155,6 +158,7 @@ func (c *Cache) get(key any) (any, bool) {
 
 }
 
+// Del is part of the exported receiver API.
 func (c *Cache) Del(key any) (any, bool) {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -222,11 +226,13 @@ func MemHashString(str string) uint64 {
 	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
 }
 
+// MemHash is part of the exported package API.
 func MemHash(data []byte) uint64 {
 	ss := (*stringStruct)(unsafe.Pointer(&data))
 	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
 }
 
+// String is part of the exported receiver API.
 func (c *Cache) String() string {
 	var s string
 	s += c.lru.String() + " | " + c.slru.String()

@@ -17,6 +17,7 @@ import (
 	pkgerrors "github.com/pkg/errors"
 )
 
+// Config defines an exported API type.
 type Config struct {
 	Dir      string
 	FileMode os.FileMode
@@ -24,6 +25,7 @@ type Config struct {
 	Bucket   uint32
 }
 
+// Manager defines an exported API type.
 type Manager struct {
 	cfg       Config
 	bucket    uint32
@@ -58,6 +60,7 @@ func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
 	m.hooks = h
 }
 
+// SetMaxSize is part of the exported receiver API.
 func (m *Manager) SetMaxSize(maxSize int64) {
 	if maxSize <= 0 {
 		return
@@ -124,6 +127,7 @@ func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 	return m.active.store, m.activeID, nil
 }
 
+// Open is part of the exported package API.
 func Open(cfg Config) (*Manager, error) {
 	if cfg.Dir == "" {
 		return nil, fmt.Errorf("vlog manager: dir required")
@@ -245,6 +249,7 @@ func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 	return store, nil
 }
 
+// Rotate is part of the exported receiver API.
 func (m *Manager) Rotate() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
@@ -305,6 +310,7 @@ func (m *Manager) getFile(fid uint32) (*file.LogFile, error) {
 	return seg.store, nil
 }
 
+// Remove is part of the exported receiver API.
 func (m *Manager) Remove(fid uint32) error {
 	m.filesLock.Lock()
 	seg, ok := m.files[fid]
@@ -352,18 +358,21 @@ func (m *Manager) Remove(fid uint32) error {
 	return os.Remove(seg.store.FileName())
 }
 
+// MaxFID is part of the exported receiver API.
 func (m *Manager) MaxFID() uint32 {
 	m.filesLock.RLock()
 	defer m.filesLock.RUnlock()
 	return m.maxFid
 }
 
+// ActiveFID is part of the exported receiver API.
 func (m *Manager) ActiveFID() uint32 {
 	m.filesLock.RLock()
 	defer m.filesLock.RUnlock()
 	return m.activeID
 }
 
+// Head is part of the exported receiver API.
 func (m *Manager) Head() kv.ValuePtr {
 	m.filesLock.RLock()
 	defer m.filesLock.RUnlock()
@@ -547,6 +556,7 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 	return firstErr
 }
 
+// Close is part of the exported receiver API.
 func (m *Manager) Close() error {
 	m.filesLock.Lock()
 	defer m.filesLock.Unlock()
@@ -568,6 +578,7 @@ func (m *Manager) Close() error {
 	return firstErr
 }
 
+// ListFIDs is part of the exported receiver API.
 func (m *Manager) ListFIDs() []uint32 {
 	idx := m.loadIndex()
 	fids := make([]uint32, 0, len(idx.files))

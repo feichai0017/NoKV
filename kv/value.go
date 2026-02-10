@@ -86,6 +86,7 @@ type ValuePtr struct {
 	Bucket uint32
 }
 
+// Less is part of the exported receiver API.
 func (p ValuePtr) Less(o *ValuePtr) bool {
 	if o == nil {
 		return false
@@ -102,6 +103,7 @@ func (p ValuePtr) Less(o *ValuePtr) bool {
 	return p.Len < o.Len
 }
 
+// IsZero is part of the exported receiver API.
 func (p ValuePtr) IsZero() bool {
 	return p.Fid == 0 && p.Offset == 0 && p.Len == 0 && p.Bucket == 0
 }
@@ -128,6 +130,7 @@ func (p *ValuePtr) Decode(b []byte) {
 	p.Bucket = binary.BigEndian.Uint32(b[12:16])
 }
 
+// IsValuePtr is part of the exported package API.
 func IsValuePtr(e *Entry) bool {
 	return e.Meta&BitValuePointer > 0
 }
@@ -179,6 +182,7 @@ func RunCallback(cb func()) {
 	}
 }
 
+// IsDeletedOrExpired is part of the exported package API.
 func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	if meta&BitDelete > 0 {
 		return true
@@ -189,6 +193,7 @@ func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	return expiresAt <= uint64(time.Now().Unix())
 }
 
+// DiscardEntry is part of the exported package API.
 func DiscardEntry(e, vs *Entry) bool {
 	if IsDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
 		return true

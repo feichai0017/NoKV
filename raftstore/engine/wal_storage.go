@@ -332,22 +332,27 @@ func (ws *WALStorage) InitialState() (myraft.HardState, myraft.ConfState, error)
 	return ws.mem.InitialState()
 }
 
+// Entries is part of the exported receiver API.
 func (ws *WALStorage) Entries(lo, hi, maxSize uint64) ([]myraft.Entry, error) {
 	return ws.mem.Entries(lo, hi, maxSize)
 }
 
+// Term is part of the exported receiver API.
 func (ws *WALStorage) Term(i uint64) (uint64, error) {
 	return ws.mem.Term(i)
 }
 
+// LastIndex is part of the exported receiver API.
 func (ws *WALStorage) LastIndex() (uint64, error) {
 	return ws.mem.LastIndex()
 }
 
+// FirstIndex is part of the exported receiver API.
 func (ws *WALStorage) FirstIndex() (uint64, error) {
 	return ws.mem.FirstIndex()
 }
 
+// Snapshot is part of the exported receiver API.
 func (ws *WALStorage) Snapshot() (myraft.Snapshot, error) {
 	return ws.mem.Snapshot()
 }

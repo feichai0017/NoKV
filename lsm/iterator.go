@@ -9,13 +9,17 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+// Iterator defines an exported API type.
 type Iterator struct {
 	iters []utils.Iterator
 }
+
+// Item defines an exported API type.
 type Item struct {
 	e *kv.Entry
 }
 
+// Entry is part of the exported receiver API.
 func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
@@ -40,22 +44,33 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 	iter.iters = append(iter.iters, lsm.levels.iterators(opt)...)
 	return iter.iters
 }
+
+// Next is part of the exported receiver API.
 func (iter *Iterator) Next() {
 	iter.iters[0].Next()
 }
+
+// Valid is part of the exported receiver API.
 func (iter *Iterator) Valid() bool {
 	return iter.iters[0].Valid()
 }
+
+// Rewind is part of the exported receiver API.
 func (iter *Iterator) Rewind() {
 	iter.iters[0].Rewind()
 }
+
+// Item is part of the exported receiver API.
 func (iter *Iterator) Item() utils.Item {
 	return iter.iters[0].Item()
 }
+
+// Close is part of the exported receiver API.
 func (iter *Iterator) Close() error {
 	return nil
 }
 
+// Seek is part of the exported receiver API.
 func (iter *Iterator) Seek(key []byte) {
 }
 
@@ -64,6 +79,7 @@ type memIterator struct {
 	innerIter utils.Iterator
 }
 
+// NewIterator creates a new value for the API.
 func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
 	if m == nil || m.index == nil {
 		return nil
@@ -74,36 +90,48 @@ func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
 	}
 	return &memIterator{innerIter: inner}
 }
+
+// Next is part of the exported receiver API.
 func (iter *memIterator) Next() {
 	if iter.innerIter == nil {
 		return
 	}
 	iter.innerIter.Next()
 }
+
+// Valid is part of the exported receiver API.
 func (iter *memIterator) Valid() bool {
 	if iter.innerIter == nil {
 		return false
 	}
 	return iter.innerIter.Valid()
 }
+
+// Rewind is part of the exported receiver API.
 func (iter *memIterator) Rewind() {
 	if iter.innerIter == nil {
 		return
 	}
 	iter.innerIter.Rewind()
 }
+
+// Item is part of the exported receiver API.
 func (iter *memIterator) Item() utils.Item {
 	if iter.innerIter == nil {
 		return nil
 	}
 	return iter.innerIter.Item()
 }
+
+// Close is part of the exported receiver API.
 func (iter *memIterator) Close() error {
 	if iter.innerIter == nil {
 		return nil
 	}
 	return iter.innerIter.Close()
 }
+
+// Seek is part of the exported receiver API.
 func (iter *memIterator) Seek(key []byte) {
 	if iter.innerIter == nil {
 		return
@@ -111,6 +139,7 @@ func (iter *memIterator) Seek(key []byte) {
 	iter.innerIter.Seek(key)
 }
 
+// NewIterators creates a new value for the API.
 func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {
 	return lm.iterators(options)
 }

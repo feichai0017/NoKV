@@ -25,6 +25,7 @@ const (
 	raftStepFullMethod = "/" + raftServiceName + "/" + raftStepMethod
 )
 
+// GRPCOption defines an exported API type.
 type GRPCOption func(*grpcTransportConfig)
 
 type grpcTransportConfig struct {
@@ -47,18 +48,21 @@ func defaultGRPCConfig() grpcTransportConfig {
 	}
 }
 
+// WithServerCredentials is part of the exported package API.
 func WithServerCredentials(creds credentials.TransportCredentials) GRPCOption {
 	return func(cfg *grpcTransportConfig) {
 		cfg.serverCreds = creds
 	}
 }
 
+// WithClientCredentials is part of the exported package API.
 func WithClientCredentials(creds credentials.TransportCredentials) GRPCOption {
 	return func(cfg *grpcTransportConfig) {
 		cfg.clientCreds = creds
 	}
 }
 
+// WithDialTimeout is part of the exported package API.
 func WithDialTimeout(d time.Duration) GRPCOption {
 	return func(cfg *grpcTransportConfig) {
 		if d > 0 {
@@ -67,6 +71,7 @@ func WithDialTimeout(d time.Duration) GRPCOption {
 	}
 }
 
+// WithSendTimeout is part of the exported package API.
 func WithSendTimeout(d time.Duration) GRPCOption {
 	return func(cfg *grpcTransportConfig) {
 		if d >= 0 {
@@ -75,6 +80,7 @@ func WithSendTimeout(d time.Duration) GRPCOption {
 	}
 }
 
+// WithRetry is part of the exported package API.
 func WithRetry(maxRetries int, backoff time.Duration) GRPCOption {
 	return func(cfg *grpcTransportConfig) {
 		if maxRetries < 0 {
@@ -104,6 +110,7 @@ type raftService struct {
 	transport *GRPCTransport
 }
 
+// Step is part of the exported receiver API.
 func (s *raftService) Step(ctx context.Context, msg *raftpb.Message) (*emptypb.Empty, error) {
 	if s == nil || s.transport == nil {
 		return &emptypb.Empty{}, nil
@@ -162,6 +169,7 @@ type raftServiceClientImpl struct {
 	cc grpc.ClientConnInterface
 }
 
+// Step is part of the exported receiver API.
 func (c *raftServiceClientImpl) Step(ctx context.Context, in *raftpb.Message, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	out := new(emptypb.Empty)
 	if err := c.cc.Invoke(ctx, raftStepFullMethod, in, out, opts...); err != nil {

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Mmap is part of the exported package API.
 func Mmap(fd *os.File, writable bool, size int64) ([]byte, error) {
 	return mmap(fd, writable, size)
 }
