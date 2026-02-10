@@ -80,19 +80,19 @@ func TestRunStatsCmd(t *testing.T) {
 	if snap.Entries == 0 {
 		t.Fatalf("expected entry count > 0")
 	}
-	if snap.ValueLogSegments == 0 {
+	if snap.ValueLog.Segments == 0 {
 		t.Fatalf("expected value log segments > 0")
 	}
-	if len(snap.LSMLevels) == 0 {
+	if len(snap.LSM.Levels) == 0 {
 		t.Fatalf("expected LSM level metrics")
 	}
-	if snap.LSMValueBytesTotal < 0 {
+	if snap.LSM.ValueBytesTotal < 0 {
 		t.Fatalf("expected aggregated LSM value bytes to be non-negative")
 	}
-	if snap.CompactionValueWeight <= 0 {
+	if snap.Compaction.ValueWeight <= 0 {
 		t.Fatalf("expected compaction value weight > 0")
 	}
-	if snap.LSMValueDensityMax < 0 {
+	if snap.LSM.ValueDensityMax < 0 {
 		t.Fatalf("expected non-negative value density max")
 	}
 }
@@ -137,16 +137,20 @@ func TestRunVlogCmdPlain(t *testing.T) {
 func TestRenderStatsWarnLine(t *testing.T) {
 	var buf bytes.Buffer
 	snap := NoKV.StatsSnapshot{
-		Entries:              1,
-		WALActiveSegment:     7,
-		WALSegmentCount:      3,
-		WALSegmentsRemoved:   1,
-		WALActiveSize:        4096,
-		RaftGroupCount:       2,
-		RaftLaggingGroups:    1,
-		RaftMaxLagSegments:   5,
-		RaftLagWarnThreshold: 3,
-		RaftLagWarning:       true,
+		Entries: 1,
+		WAL: NoKV.WALStatsSnapshot{
+			ActiveSegment:   7,
+			SegmentCount:    3,
+			SegmentsRemoved: 1,
+			ActiveSize:      4096,
+		},
+		Raft: NoKV.RaftStatsSnapshot{
+			GroupCount:       2,
+			LaggingGroups:    1,
+			MaxLagSegments:   5,
+			LagWarnThreshold: 3,
+			LagWarning:       true,
+		},
 	}
 	if err := renderStats(&buf, snap, false); err != nil {
 		t.Fatalf("renderStats: %v", err)
@@ -221,11 +225,11 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	snap, err := fetchExpvarSnapshot(url)
 	require.NoError(t, err)
 	require.Equal(t, int64(12), snap.Entries)
-	require.Equal(t, 2, snap.ValueLogSegments)
-	require.Len(t, snap.HotKeys, 1)
-	require.Equal(t, "k1", snap.HotKeys[0].Key)
-	require.Len(t, snap.LSMLevels, 1)
-	require.Equal(t, 0, snap.LSMLevels[0].Level)
+	require.Equal(t, 2, snap.ValueLog.Segments)
+	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Equal(t, "k1", snap.Hot.ReadKeys[0].Key)
+	require.Len(t, snap.LSM.Levels, 1)
+	require.Equal(t, 0, snap.LSM.Levels[0].Level)
 }
 
 func TestFetchExpvarSnapshotWithPath(t *testing.T) {
@@ -247,9 +251,9 @@ func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 			map[string]any{"key": "k2", "count": float64(4)},
 		},
 	})
-	require.Len(t, snap.HotKeys, 1)
-	require.Equal(t, "k2", snap.HotKeys[0].Key)
-	require.Equal(t, int32(4), snap.HotKeys[0].Count)
+	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Equal(t, "k2", snap.Hot.ReadKeys[0].Key)
+	require.Equal(t, int32(4), snap.Hot.ReadKeys[0].Count)
 }
 
 func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
@@ -258,9 +262,9 @@ func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 			"k3": map[string]any{"value": float64(7)},
 		},
 	})
-	require.Len(t, snap.HotKeys, 1)
-	require.Equal(t, "k3", snap.HotKeys[0].Key)
-	require.Equal(t, int32(7), snap.HotKeys[0].Count)
+	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Equal(t, "k3", snap.Hot.ReadKeys[0].Key)
+	require.Equal(t, int32(7), snap.Hot.ReadKeys[0].Count)
 }
 
 func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
@@ -269,9 +273,9 @@ func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 			"k4": float64(3),
 		},
 	})
-	require.Len(t, snap.HotKeys, 1)
-	require.Equal(t, "k4", snap.HotKeys[0].Key)
-	require.Equal(t, int32(3), snap.HotKeys[0].Count)
+	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Equal(t, "k4", snap.Hot.ReadKeys[0].Key)
+	require.Equal(t, int32(3), snap.Hot.ReadKeys[0].Count)
 }
 
 func TestFormatHelpers(t *testing.T) {
@@ -587,82 +591,102 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 	}
 	snap := parseExpvarSnapshot(data)
 	require.Equal(t, int64(11), snap.Entries)
-	require.Equal(t, uint64(0), snap.HotWriteLimited)
-	require.True(t, snap.LSMValueDensityAlert)
-	require.Len(t, snap.HotKeys, 1)
-	require.Len(t, snap.LSMLevels, 1)
+	require.Equal(t, uint64(0), snap.Write.HotKeyLimited)
+	require.True(t, snap.LSM.ValueDensityAlert)
+	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Len(t, snap.LSM.Levels, 1)
 }
 
 func TestRenderStatsFull(t *testing.T) {
 	var buf bytes.Buffer
 	snap := NoKV.StatsSnapshot{
-		Entries:                        1,
-		FlushPending:                   2,
-		CompactionBacklog:              3,
-		CompactionMaxScore:             4.5,
-		FlushLastWaitMs:                1,
-		FlushMaxWaitMs:                 2,
-		FlushLastBuildMs:               3,
-		FlushMaxBuildMs:                4,
-		FlushLastReleaseMs:             5,
-		FlushMaxReleaseMs:              6,
-		CompactionLastDurationMs:       1.2,
-		CompactionMaxDurationMs:        2.3,
-		CompactionRuns:                 1,
-		ValueLogSegments:               1,
-		ValueLogPendingDel:             1,
-		ValueLogDiscardQueue:           1,
-		ValueLogHeads:                  map[uint32]kv.ValuePtr{0: {Bucket: 0, Fid: 1, Offset: 2, Len: 3}},
-		HotWriteLimited:                2,
-		CompactionValueWeight:          1.0,
-		CompactionValueWeightSuggested: 2.0,
-		LSMValueDensityMax:             1.5,
-		LSMValueDensityAlert:           true,
-		WALActiveSegment:               1,
-		WALSegmentCount:                2,
-		WALActiveSize:                  4096,
-		WALSegmentsRemoved:             1,
-		WALRecordCounts:                wal.RecordMetrics{Entries: 1},
-		WALSegmentsWithRaftRecords:     1,
-		WALRemovableRaftSegments:       1,
-		WALTypedRecordRatio:            0.5,
-		WALTypedRecordWarning:          true,
-		WALTypedRecordReason:           "ratio low",
-		WALAutoGCRuns:                  1,
-		WALAutoGCRemoved:               2,
-		WALAutoGCLastUnix:              time.Now().Unix(),
-		RaftGroupCount:                 1,
-		RaftLaggingGroups:              1,
-		RaftMaxLagSegments:             2,
-		RaftMinLogSegment:              1,
-		RaftMaxLogSegment:              2,
-		RaftLagWarnThreshold:           1,
-		RaftLagWarning:                 true,
-		TxnsActive:                     1,
-		TxnsStarted:                    2,
-		TxnsCommitted:                  3,
-		TxnsConflicts:                  4,
-		RegionTotal:                    5,
-		RegionNew:                      1,
-		RegionRunning:                  1,
-		RegionRemoving:                 1,
-		RegionTombstone:                1,
-		RegionOther:                    1,
-		LSMValueBytesTotal:             10,
-		LSMLevels: []NoKV.LSMLevelStats{{
-			Level:            0,
-			TableCount:       1,
-			SizeBytes:        2,
-			ValueBytes:       3,
-			StaleBytes:       4,
-			IngestTables:     1,
-			IngestSizeBytes:  2,
-			IngestValueBytes: 3,
-		}},
-		ColumnFamilies: map[string]NoKV.ColumnFamilySnapshot{
-			"default": {Reads: 1, Writes: 2},
+		Entries: 1,
+		Flush: NoKV.FlushStatsSnapshot{
+			Pending:       2,
+			LastWaitMs:    1,
+			MaxWaitMs:     2,
+			LastBuildMs:   3,
+			MaxBuildMs:    4,
+			LastReleaseMs: 5,
+			MaxReleaseMs:  6,
 		},
-		HotKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
+		Compaction: NoKV.CompactionStatsSnapshot{
+			Backlog:              3,
+			MaxScore:             4.5,
+			LastDurationMs:       1.2,
+			MaxDurationMs:        2.3,
+			Runs:                 1,
+			ValueWeight:          1.0,
+			ValueWeightSuggested: 2.0,
+		},
+		ValueLog: NoKV.ValueLogStatsSnapshot{
+			Segments:       1,
+			PendingDeletes: 1,
+			DiscardQueue:   1,
+			Heads:          map[uint32]kv.ValuePtr{0: {Bucket: 0, Fid: 1, Offset: 2, Len: 3}},
+		},
+		Write: NoKV.WriteStatsSnapshot{
+			HotKeyLimited: 2,
+		},
+		LSM: NoKV.LSMStatsSnapshot{
+			ValueDensityMax:   1.5,
+			ValueDensityAlert: true,
+			ValueBytesTotal:   10,
+			Levels: []NoKV.LSMLevelStats{{
+				Level:            0,
+				TableCount:       1,
+				SizeBytes:        2,
+				ValueBytes:       3,
+				StaleBytes:       4,
+				IngestTables:     1,
+				IngestSizeBytes:  2,
+				IngestValueBytes: 3,
+			}},
+			ColumnFamilies: map[string]NoKV.ColumnFamilySnapshot{
+				"default": {Reads: 1, Writes: 2},
+			},
+		},
+		WAL: NoKV.WALStatsSnapshot{
+			ActiveSegment:           1,
+			SegmentCount:            2,
+			ActiveSize:              4096,
+			SegmentsRemoved:         1,
+			RecordCounts:            wal.RecordMetrics{Entries: 1},
+			SegmentsWithRaftRecords: 1,
+			RemovableRaftSegments:   1,
+			TypedRecordRatio:        0.5,
+			TypedRecordWarning:      true,
+			TypedRecordReason:       "ratio low",
+			AutoGCRuns:              1,
+			AutoGCRemoved:           2,
+			AutoGCLastUnix:          time.Now().Unix(),
+		},
+		Raft: NoKV.RaftStatsSnapshot{
+			GroupCount:       1,
+			LaggingGroups:    1,
+			MaxLagSegments:   2,
+			MinLogSegment:    1,
+			MaxLogSegment:    2,
+			LagWarnThreshold: 1,
+			LagWarning:       true,
+		},
+		Txn: NoKV.TxnStatsSnapshot{
+			Active:    1,
+			Started:   2,
+			Committed: 3,
+			Conflicts: 4,
+		},
+		Region: NoKV.RegionStatsSnapshot{
+			Total:     5,
+			New:       1,
+			Running:   1,
+			Removing:  1,
+			Tombstone: 1,
+			Other:     1,
+		},
+		Hot: NoKV.HotStatsSnapshot{
+			ReadKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
+		},
 	}
 	require.NoError(t, renderStats(&buf, snap, false))
 	out := buf.String()
