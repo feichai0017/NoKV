@@ -40,7 +40,6 @@ func newCmSketch(numCounters int64) *cmSketch {
 	return sketch
 }
 
-// Increment is part of the exported receiver API.
 func (s *cmSketch) Increment(hashed uint64) {
 	// do the same operation for each row
 	for i := range s.rows {
@@ -48,7 +47,6 @@ func (s *cmSketch) Increment(hashed uint64) {
 	}
 }
 
-// Estimate is part of the exported receiver API.
 func (s *cmSketch) Estimate(hashed uint64) int64 {
 	min := byte(255)
 	for i := range s.rows {

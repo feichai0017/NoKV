@@ -19,7 +19,6 @@ type clockEntry[V any] struct {
 	ref bool
 }
 
-// NewClockProCache creates a new value for the API.
 func NewClockProCache[V any](capacity int) *ClockProCache[V] {
 	if capacity <= 0 {
 		return nil
@@ -30,7 +29,6 @@ func NewClockProCache[V any](capacity int) *ClockProCache[V] {
 	}
 }
 
-// Get is part of the exported receiver API.
 func (c *ClockProCache[V]) Get(key uint64) (V, bool) {
 	var zero V
 	if c == nil {
@@ -47,7 +45,6 @@ func (c *ClockProCache[V]) Get(key uint64) (V, bool) {
 	return e.val, true
 }
 
-// Promote is part of the exported receiver API.
 func (c *ClockProCache[V]) Promote(key uint64, val V) {
 	if c == nil {
 		return

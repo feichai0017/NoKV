@@ -6,7 +6,6 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// DBIterator defines an exported API type.
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
@@ -21,14 +20,12 @@ type DBIterator struct {
 	valid    bool
 }
 
-// Item defines an exported API type.
 type Item struct {
 	e        *kv.Entry
 	vlog     *valueLog
 	valueBuf []byte
 }
 
-// Entry is part of the exported receiver API.
 func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
@@ -65,8 +62,6 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 	dst = append(dst[:0], val...)
 	return dst, nil
 }
-
-// NewIterator creates a new value for the API.
 func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
@@ -96,7 +91,6 @@ func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
 	return lsm.NewMergeIterator(iters, !opt.IsAsc)
 }
 
-// Next is part of the exported receiver API.
 func (iter *DBIterator) Next() {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -105,7 +99,6 @@ func (iter *DBIterator) Next() {
 	iter.populate()
 }
 
-// Valid is part of the exported receiver API.
 func (iter *DBIterator) Valid() bool {
 	if iter == nil {
 		return false
@@ -113,7 +106,6 @@ func (iter *DBIterator) Valid() bool {
 	return iter.valid
 }
 
-// Rewind is part of the exported receiver API.
 func (iter *DBIterator) Rewind() {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -122,7 +114,6 @@ func (iter *DBIterator) Rewind() {
 	iter.populate()
 }
 
-// Seek is part of the exported receiver API.
 func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -135,7 +126,6 @@ func (iter *DBIterator) Seek(key []byte) {
 	iter.populate()
 }
 
-// Item is part of the exported receiver API.
 func (iter *DBIterator) Item() utils.Item {
 	if iter == nil || !iter.valid {
 		return nil
@@ -143,7 +133,6 @@ func (iter *DBIterator) Item() utils.Item {
 	return &iter.item
 }
 
-// Close is part of the exported receiver API.
 func (iter *DBIterator) Close() error {
 	if iter == nil {
 		return nil

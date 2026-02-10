@@ -12,12 +12,10 @@ const (
 	IngestKeep
 )
 
-// UsesIngest is part of the exported receiver API.
 func (m IngestMode) UsesIngest() bool {
 	return m != IngestNone
 }
 
-// KeepsIngest is part of the exported receiver API.
 func (m IngestMode) KeepsIngest() bool {
 	return m == IngestKeep
 }

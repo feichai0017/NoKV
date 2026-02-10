@@ -41,7 +41,6 @@ type Record struct {
 	Payload []byte
 }
 
-// DecodeRecord is part of the exported package API.
 func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
@@ -92,7 +91,6 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 	return recType, payload, length, nil
 }
 
-// EncodeRecord is part of the exported package API.
 func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) {
 	total := len(payload) + 1 // Type byte + payload length.
 	length := uint32(total)

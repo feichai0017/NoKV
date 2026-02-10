@@ -51,7 +51,6 @@ func (lru *windowLRU) get(v *list.Element) {
 	lru.list.MoveToFront(v)
 }
 
-// String is part of the exported receiver API.
 func (lru *windowLRU) String() string {
 	var s string
 	for e := lru.list.Front(); e != nil; e = e.Next() {

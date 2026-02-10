@@ -472,13 +472,10 @@ func (t *table) blockCacheKey(idx int) uint64 {
 	return (t.fid << 32) | uint64(uint32(idx))
 }
 
-// MinKey is part of the exported receiver API.
 func (t *table) MinKey() []byte { return t.minKey }
 
-// MaxKey is part of the exported receiver API.
 func (t *table) MaxKey() []byte { return t.maxKey }
 
-// KeyCount is part of the exported receiver API.
 func (t *table) KeyCount() uint32 {
 	if t.keyCount != 0 {
 		return t.keyCount
@@ -490,7 +487,6 @@ func (t *table) KeyCount() uint32 {
 	return 0
 }
 
-// MaxVersionVal is part of the exported receiver API.
 func (t *table) MaxVersionVal() uint64 {
 	if t.maxVersion != 0 {
 		return t.maxVersion
@@ -502,7 +498,6 @@ func (t *table) MaxVersionVal() uint64 {
 	return 0
 }
 
-// HasBloomFilter is part of the exported receiver API.
 func (t *table) HasBloomFilter() bool {
 	if t.hasBloom {
 		return true
@@ -560,7 +555,6 @@ func (it *tableIterator) prefetchNext(idx int) {
 	}
 }
 
-// NewIterator creates a new value for the API.
 func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	t.IncrRef()
 	if options == nil {
@@ -637,8 +631,6 @@ func (t *table) adviseIterator(options *utils.Options) {
 		release()
 	}
 }
-
-// Next is part of the exported receiver API.
 func (it *tableIterator) Next() {
 	it.err = nil
 
@@ -671,13 +663,9 @@ func (it *tableIterator) Next() {
 	}
 	it.it = it.bi.it
 }
-
-// Valid is part of the exported receiver API.
 func (it *tableIterator) Valid() bool {
 	return it.err == nil
 }
-
-// Rewind is part of the exported receiver API.
 func (it *tableIterator) Rewind() {
 	if it.opt.IsAsc {
 		it.seekToFirst()
@@ -685,13 +673,9 @@ func (it *tableIterator) Rewind() {
 		it.seekToLast()
 	}
 }
-
-// Item is part of the exported receiver API.
 func (it *tableIterator) Item() utils.Item {
 	return it.it
 }
-
-// Close is part of the exported receiver API.
 func (it *tableIterator) Close() error {
 	it.closeOnce.Do(func() {
 		if it.closeCh != nil {
@@ -827,8 +811,6 @@ func (t *table) GetCreatedAt() *time.Time {
 	created := t.createdAt
 	return &created
 }
-
-// Delete is part of the exported receiver API.
 func (t *table) Delete() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -865,7 +847,6 @@ func (t *table) DecrRef() error {
 	return nil
 }
 
-// IncrRef is part of the exported receiver API.
 func (t *table) IncrRef() {
 	atomic.AddInt32(&t.ref, 1)
 }

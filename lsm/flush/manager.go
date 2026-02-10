@@ -19,7 +19,6 @@ const (
 	StageRelease
 )
 
-// Task defines an exported API type.
 type Task struct {
 	ID         uint64
 	SegmentID  uint32
@@ -31,7 +30,6 @@ type Task struct {
 	installAt  time.Time
 }
 
-// Metrics defines an exported API type.
 type Metrics = metrics.FlushMetrics
 
 // Manager coordinates flush tasks.
@@ -61,7 +59,6 @@ type Manager struct {
 	completed     int64
 }
 
-// NewManager creates a new value for the API.
 func NewManager() *Manager {
 	m := &Manager{
 		queue:  make([]*Task, 0),
@@ -71,7 +68,6 @@ func NewManager() *Manager {
 	return m
 }
 
-// Submit is part of the exported receiver API.
 func (m *Manager) Submit(task *Task) (*Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -88,7 +84,6 @@ func (m *Manager) Submit(task *Task) (*Task, error) {
 	return task, nil
 }
 
-// Next is part of the exported receiver API.
 func (m *Manager) Next() (*Task, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -116,7 +111,6 @@ func (m *Manager) Next() (*Task, bool) {
 	return task, true
 }
 
-// Update is part of the exported receiver API.
 func (m *Manager) Update(taskID uint64, stage Stage, data any, err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -158,7 +152,6 @@ func (m *Manager) Update(taskID uint64, stage Stage, data any, err error) error 
 	return err
 }
 
-// Stats is part of the exported receiver API.
 func (m *Manager) Stats() Metrics {
 	return Metrics{
 		Pending:       atomic.LoadInt64(&m.pending),
@@ -180,7 +173,6 @@ func (m *Manager) Stats() Metrics {
 	}
 }
 
-// Close is part of the exported receiver API.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

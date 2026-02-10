@@ -7,45 +7,26 @@ import (
 
 type (
 	// Aliases to etcd/raft exposed types so callers don't import the dependency directly.
-	StateType = etcdraft.StateType
-	// Config defines an exported API type.
-	Config = etcdraft.Config
-	// RawNode defines an exported API type.
-	RawNode = etcdraft.RawNode
-	// Ready defines an exported API type.
-	Ready = etcdraft.Ready
-	// SoftState defines an exported API type.
-	SoftState = etcdraft.SoftState
-	// Status defines an exported API type.
-	Status = etcdraft.Status
-	// Peer defines an exported API type.
-	Peer = etcdraft.Peer
-	// ReadState defines an exported API type.
-	ReadState = etcdraft.ReadState
-	// MemoryStorage defines an exported API type.
-	MemoryStorage = etcdraft.MemoryStorage
-	// Storage defines an exported API type.
-	Storage = etcdraft.Storage
-	// HardState defines an exported API type.
-	HardState = pb.HardState
-	// Snapshot defines an exported API type.
-	Snapshot = pb.Snapshot
-	// SnapshotMetadata defines an exported API type.
+	StateType        = etcdraft.StateType
+	Config           = etcdraft.Config
+	RawNode          = etcdraft.RawNode
+	Ready            = etcdraft.Ready
+	SoftState        = etcdraft.SoftState
+	Status           = etcdraft.Status
+	Peer             = etcdraft.Peer
+	ReadState        = etcdraft.ReadState
+	MemoryStorage    = etcdraft.MemoryStorage
+	Storage          = etcdraft.Storage
+	HardState        = pb.HardState
+	Snapshot         = pb.Snapshot
 	SnapshotMetadata = pb.SnapshotMetadata
-	// Message defines an exported API type.
-	Message = pb.Message
-	// MessageType defines an exported API type.
-	MessageType = pb.MessageType
-	// Entry defines an exported API type.
-	Entry = pb.Entry
-	// EntryType defines an exported API type.
-	EntryType = pb.EntryType
-	// ConfState defines an exported API type.
-	ConfState = pb.ConfState
-	// Logger defines an exported API type.
-	Logger = etcdraft.Logger
-	// DefaultLogger defines an exported API type.
-	DefaultLogger = etcdraft.DefaultLogger
+	Message          = pb.Message
+	MessageType      = pb.MessageType
+	Entry            = pb.Entry
+	EntryType        = pb.EntryType
+	ConfState        = pb.ConfState
+	Logger           = etcdraft.Logger
+	DefaultLogger    = etcdraft.DefaultLogger
 )
 
 const (

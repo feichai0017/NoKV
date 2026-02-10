@@ -153,7 +153,6 @@ func CondPanicFunc(condition bool, errFn func() error) {
 	}
 }
 
-// Check is part of the exported package API.
 func Check(err error) {
 	if err != nil {
 		log.Fatalf("%+v", Wrap(err, ""))
@@ -162,7 +161,6 @@ func Check(err error) {
 
 var debugMode = false
 
-// Wrap is part of the exported package API.
 func Wrap(err error, msg string) error {
 	if !debugMode {
 		if err == nil {

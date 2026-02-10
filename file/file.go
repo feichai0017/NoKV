@@ -13,7 +13,6 @@ type Options struct {
 	MaxSz    int
 }
 
-// CoreFile defines an exported API type.
 type CoreFile interface {
 	Close() error
 	Truncature(n int64) error
