@@ -28,8 +28,9 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.NoError(t, db.Update(func(txn *Txn) error {
 		return txn.SetEntry(kv.NewEntry([]byte("stats-key"), []byte("stats-value")))
 	}))
-	_, err := db.Get([]byte("stats-key"))
+	entry, err := db.Get([]byte("stats-key"))
 	require.NoError(t, err)
+	entry.DecrRef()
 
 	snap := db.Info().Snapshot()
 	require.Greater(t, snap.Entries, int64(0))
