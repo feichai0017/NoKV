@@ -1,11 +1,30 @@
 package metrics
 
 import (
-	"expvar"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
+
+// RedisSnapshot captures a point-in-time view of Redis gateway counters.
+type RedisSnapshot struct {
+	CommandsTotal        uint64            `json:"commands_total"`
+	ErrorsTotal          uint64            `json:"errors_total"`
+	ConnectionsActive    int64             `json:"connections_active"`
+	ConnectionsAccepted  uint64            `json:"connections_accepted"`
+	CommandsPerOperation map[string]uint64 `json:"commands_per_operation"`
+}
+
+// ExpvarMap converts the snapshot into the legacy expvar-friendly shape.
+func (s RedisSnapshot) ExpvarMap() map[string]any {
+	return map[string]any{
+		"commands_total":         s.CommandsTotal,
+		"errors_total":           s.ErrorsTotal,
+		"connections_active":     s.ConnectionsActive,
+		"connections_accepted":   s.ConnectionsAccepted,
+		"commands_per_operation": s.CommandsPerOperation,
+	}
+}
 
 // RedisMetrics captures lightweight Redis gateway stats.
 type RedisMetrics struct {
@@ -17,6 +36,8 @@ type RedisMetrics struct {
 	commandCounts       map[string]*atomic.Uint64
 }
 
+var defaultRedisMetrics atomic.Pointer[RedisMetrics]
+
 func NewRedisMetrics(commandNames []string) *RedisMetrics {
 	rm := &RedisMetrics{
 		commandCounts: make(map[string]*atomic.Uint64, len(commandNames)),
@@ -24,14 +45,31 @@ func NewRedisMetrics(commandNames []string) *RedisMetrics {
 	for _, name := range commandNames {
 		rm.commandCounts[strings.ToUpper(name)] = &atomic.Uint64{}
 	}
-
-	expvar.Publish("NoKV.Redis", expvar.Func(func() any {
-		return rm.Snapshot()
-	}))
 	return rm
 }
 
-func (rm *RedisMetrics) Snapshot() map[string]any {
+// SetDefaultRedisMetrics overrides the process-wide Redis collector.
+func SetDefaultRedisMetrics(rm *RedisMetrics) {
+	defaultRedisMetrics.Store(rm)
+}
+
+// DefaultRedisMetrics returns the process-wide Redis collector.
+func DefaultRedisMetrics() *RedisMetrics {
+	return defaultRedisMetrics.Load()
+}
+
+// DefaultRedisSnapshot returns a snapshot from the process-wide collector.
+func DefaultRedisSnapshot() RedisSnapshot {
+	if rm := defaultRedisMetrics.Load(); rm != nil {
+		return rm.Snapshot()
+	}
+	return RedisSnapshot{}
+}
+
+func (rm *RedisMetrics) Snapshot() RedisSnapshot {
+	if rm == nil {
+		return RedisSnapshot{}
+	}
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -40,12 +78,12 @@ func (rm *RedisMetrics) Snapshot() map[string]any {
 		commands[name] = counter.Load()
 	}
 
-	return map[string]any{
-		"commands_total":         rm.commandsTotal.Load(),
-		"errors_total":           rm.errorsTotal.Load(),
-		"connections_active":     rm.connectionsCurrent.Load(),
-		"connections_accepted":   rm.connectionsAccepted.Load(),
-		"commands_per_operation": commands,
+	return RedisSnapshot{
+		CommandsTotal:        rm.commandsTotal.Load(),
+		ErrorsTotal:          rm.errorsTotal.Load(),
+		ConnectionsActive:    rm.connectionsCurrent.Load(),
+		ConnectionsAccepted:  rm.connectionsAccepted.Load(),
+		CommandsPerOperation: commands,
 	}
 }
 

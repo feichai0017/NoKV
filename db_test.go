@@ -698,8 +698,8 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 
 	snapBefore := db.Info().Snapshot()
 	logRecoveryMetric(t, "raft_wal_backlog_pre", map[string]any{
-		"wal_segments_with_raft": snapBefore.WALSegmentsWithRaftRecords,
-		"wal_removable_segments": snapBefore.WALRemovableRaftSegments,
+		"wal_segments_with_raft": snapBefore.WAL.SegmentsWithRaftRecords,
+		"wal_removable_segments": snapBefore.WAL.RemovableRaftSegments,
 	})
 
 	require.NoError(t, walMgr.SwitchSegment(2, true))
@@ -713,11 +713,11 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	require.NoError(t, manifestMgr.LogRaftTruncate(2, 28, 4, 3, 0))
 
 	snapAfter := db.Info().Snapshot()
-	require.Greater(t, snapAfter.WALSegmentsWithRaftRecords, 0, "expected raft segments to be tracked")
-	require.Greater(t, snapAfter.WALRemovableRaftSegments, 0, "expected removable raft backlog once followers catch up")
+	require.Greater(t, snapAfter.WAL.SegmentsWithRaftRecords, 0, "expected raft segments to be tracked")
+	require.Greater(t, snapAfter.WAL.RemovableRaftSegments, 0, "expected removable raft backlog once followers catch up")
 	logRecoveryMetric(t, "raft_wal_backlog_post", map[string]any{
-		"wal_segments_with_raft": snapAfter.WALSegmentsWithRaftRecords,
-		"wal_removable_segments": snapAfter.WALRemovableRaftSegments,
+		"wal_segments_with_raft": snapAfter.WAL.SegmentsWithRaftRecords,
+		"wal_removable_segments": snapAfter.WAL.RemovableRaftSegments,
 	})
 }
 
