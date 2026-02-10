@@ -58,7 +58,6 @@ type node struct {
 	tower [maxHeight]uint32
 }
 
-// Skiplist defines an exported API type.
 type Skiplist struct {
 	height     int32 // Current height. 1 <= height <= kMaxHeight. CAS.
 	headOffset uint32
@@ -476,12 +475,10 @@ type SkipListIterator struct {
 	e    kv.Entry
 }
 
-// Rewind is part of the exported receiver API.
 func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
 
-// Item is part of the exported receiver API.
 func (s *SkipListIterator) Item() Item {
 	vs := s.Value()
 	s.e.Key = s.Key()

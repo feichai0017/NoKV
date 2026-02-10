@@ -514,17 +514,14 @@ func (lsm *LSM) Prefetch(key []byte, hot bool) {
 	lsm.levels.prefetch(key, hot)
 }
 
-// MemSize is part of the exported receiver API.
 func (lsm *LSM) MemSize() int64 {
 	return lsm.memTable.Size()
 }
 
-// MemTableIsNil is part of the exported receiver API.
 func (lsm *LSM) MemTableIsNil() bool {
 	return lsm.memTable == nil
 }
 
-// GetSkipListFromMemTable is part of the exported receiver API.
 func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 	if lsm == nil || lsm.memTable == nil || lsm.memTable.index == nil {
 		return nil
@@ -535,7 +532,6 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 	return nil
 }
 
-// Rotate is part of the exported receiver API.
 func (lsm *LSM) Rotate() {
 	lsm.lock.Lock()
 	old := lsm.rotateLocked()
@@ -551,7 +547,6 @@ func (lsm *LSM) rotateLocked() *memTable {
 	return old
 }
 
-// GetMemTables is part of the exported receiver API.
 func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
 	lsm.lock.RLock()
 	defer lsm.lock.RUnlock()

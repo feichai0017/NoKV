@@ -22,7 +22,6 @@ type KeyConflictError struct {
 	Errors []*pb.KeyError
 }
 
-// Error is part of the exported receiver API.
 func (e *KeyConflictError) Error() string {
 	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
 }

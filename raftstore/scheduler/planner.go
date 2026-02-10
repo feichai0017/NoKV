@@ -46,7 +46,6 @@ type Operation struct {
 	Target uint64
 }
 
-// OperationType defines an exported API type.
 type OperationType uint8
 
 const (
@@ -57,7 +56,6 @@ const (
 // NoopPlanner returns no scheduling operations.
 type NoopPlanner struct{}
 
-// Plan is part of the exported receiver API.
 func (NoopPlanner) Plan(Snapshot) []Operation { return nil }
 
 // LeaderBalancePlanner suggests leader transfers away from stores whose leader
@@ -67,7 +65,6 @@ type LeaderBalancePlanner struct {
 	StaleThreshold time.Duration
 }
 
-// Plan is part of the exported receiver API.
 func (p LeaderBalancePlanner) Plan(snapshot Snapshot) []Operation {
 	if p.MaxLeaders == 0 {
 		return nil
