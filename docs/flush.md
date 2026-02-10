@@ -85,7 +85,7 @@ RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visi
 
 ## 6. Observability & CLI
 
-- `StatsSnapshot.Flush.Queue` – number of pending tasks.
+- `StatsSnapshot.Flush.QueueLength` – number of pending tasks.
 - `StatsSnapshot.Flush.WaitMs` – average wait time before build.
 - `StatsSnapshot.Flush.BuildMs` – average build duration.
 - `StatsSnapshot.Flush.Completed` – cumulative tasks finished.

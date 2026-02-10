@@ -168,7 +168,7 @@ The flow mirrors Badger's vlog scanning but keeps state reconstruction anchored 
 ## 9. Observability & CLI
 
 * Metrics in [`stats.go`](../stats.go) report segment counts, pending deletions, discard queue depth, and GC head pointer via `expvar`.
-* GC scheduling exposes `NoKV.ValueLog.GcParallelism`, `NoKV.ValueLog.GcActive`, `NoKV.ValueLog.GcScheduled`, `NoKV.ValueLog.GcThrottled`, `NoKV.ValueLog.GcSkipped`, and `NoKV.ValueLog.GcRejected` for diagnostics.
+* GC scheduling exposes `NoKV.Stats.ValueLogGC` (including `gc_parallelism`, `gc_active`, `gc_scheduled`, `gc_throttled`, `gc_skipped`, `gc_rejected`) for diagnostics.
 * `nokv vlog --workdir <dir>` loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes [`vlog.VerifyDir`](../vlog/io.go) before describing segments.
 * Recovery traces controlled by `RECOVERY_TRACE_METRICS` log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable `Options.ValueLogVerbose` to emit replay/GC messages to stdout.
 
