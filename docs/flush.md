@@ -34,7 +34,7 @@ flowchart LR
 - **StageInstall** – manifest edits (`EditAddFile`, `EditLogPointer`) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.
 - **StageRelease** – metrics record release duration, discard stats are flushed to `valueLog.lfDiscardStats`, and `wal.Manager.Remove` drops obsolete segments.
 
-`Manager.Update` transitions between stages and collects timing data (`WaitNs`, `BuildNs`, `ReleaseNs`). These appear as `NoKV.Flush.Queue`, `NoKV.Flush.BuildAvgMs`, etc., in CLI output.
+`Manager.Update` transitions between stages and collects timing data (`WaitNs`, `BuildNs`, `ReleaseNs`). These surface via `StatsSnapshot.Flush` fields (for example `QueueLength`, `BuildMs`) in `nokv stats` output.
 
 ---
 
