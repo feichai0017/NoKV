@@ -304,7 +304,6 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 	return t, nil
 }
 
-// Copy is part of the exported receiver API.
 func (bd *buildData) Copy(dst []byte) int {
 	var written int
 	for _, bl := range bd.blockList {
@@ -537,33 +536,24 @@ func (itr *blockIterator) setIdx(i int) {
 	itr.it = &itr.item
 }
 
-// Error is part of the exported receiver API.
 func (itr *blockIterator) Error() error {
 	return itr.err
 }
 
-// Next is part of the exported receiver API.
 func (itr *blockIterator) Next() {
 	itr.setIdx(itr.idx + 1)
 }
 
-// Valid is part of the exported receiver API.
 func (itr *blockIterator) Valid() bool {
 	return itr.err == nil
 }
-
-// Rewind is part of the exported receiver API.
 func (itr *blockIterator) Rewind() bool {
 	itr.setIdx(0)
 	return true
 }
-
-// Item is part of the exported receiver API.
 func (itr *blockIterator) Item() utils.Item {
 	return itr.it
 }
-
-// Close is part of the exported receiver API.
 func (itr *blockIterator) Close() error {
 	if itr.block != nil && itr.block.release != nil {
 		itr.block.release()

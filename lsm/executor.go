@@ -226,7 +226,6 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	return nil
 }
 
-// AdjustThrottle is part of the exported receiver API.
 func (lm *levelManager) AdjustThrottle() {
 	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
 		return
@@ -245,17 +244,14 @@ func (lm *levelManager) AdjustThrottle() {
 	}
 }
 
-// NeedsCompaction is part of the exported receiver API.
 func (lm *levelManager) NeedsCompaction() bool {
 	return len(lm.pickCompactLevels()) > 0
 }
 
-// PickCompactLevels is part of the exported receiver API.
 func (lm *levelManager) PickCompactLevels() []compact.Priority {
 	return lm.pickCompactLevels()
 }
 
-// DoCompact is part of the exported receiver API.
 func (lm *levelManager) DoCompact(id int, p compact.Priority) error {
 	return lm.doCompact(id, p)
 }

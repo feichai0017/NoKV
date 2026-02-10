@@ -205,7 +205,6 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 	return ptrs, nil
 }
 
-// Read is part of the exported receiver API.
 func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
 	store, unlock, err := m.getStoreForRead(ptr.Fid)
 	if err != nil {
@@ -222,7 +221,6 @@ func (m *Manager) Read(ptr *kv.ValuePtr) ([]byte, func(), error) {
 	return buf, unlock, nil
 }
 
-// ReadMode defines an exported API type.
 type ReadMode uint8
 
 const (

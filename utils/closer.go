@@ -25,7 +25,6 @@ func NewCloser() *Closer {
 	return closer
 }
 
-// NewCloserInitial creates a new value for the API.
 func NewCloserInitial(initial int) *Closer {
 	ret := &Closer{}
 	ret.ctx, ret.cancel = context.WithCancel(context.Background())
@@ -49,7 +48,6 @@ func (c *Closer) Add(n int) {
 	c.waiting.Add(n)
 }
 
-// HasBeenClosed is part of the exported receiver API.
 func (c *Closer) HasBeenClosed() <-chan struct{} {
 	if c == nil {
 		return dummyCloserChan
@@ -57,18 +55,15 @@ func (c *Closer) HasBeenClosed() <-chan struct{} {
 	return c.ctx.Done()
 }
 
-// SignalAndWait is part of the exported receiver API.
 func (c *Closer) SignalAndWait() {
 	c.Signal()
 	c.Wait()
 }
 
-// Signal is part of the exported receiver API.
 func (c *Closer) Signal() {
 	c.cancel()
 }
 
-// Wait is part of the exported receiver API.
 func (c *Closer) Wait() {
 	c.waiting.Wait()
 }

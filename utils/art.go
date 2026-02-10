@@ -173,7 +173,6 @@ func newARTree(arenaSize int64) *artTree {
 	return &artTree{arena: newArena(arenaSize)}
 }
 
-// MemSize is part of the exported receiver API.
 func (t *artTree) MemSize() int64 {
 	if t == nil || t.arena == nil {
 		return 0
@@ -189,7 +188,6 @@ func (t *artTree) release() {
 	t.arena = nil
 }
 
-// Get is part of the exported receiver API.
 func (t *artTree) Get(key []byte) kv.ValueStruct {
 	if t == nil || t.arena == nil {
 		return kv.ValueStruct{}
@@ -204,7 +202,6 @@ func (t *artTree) Get(key []byte) kv.ValueStruct {
 	return leaf.loadValue(t.arena)
 }
 
-// Set is part of the exported receiver API.
 func (t *artTree) Set(key []byte, value kv.ValueStruct) {
 	if t == nil || len(key) == 0 {
 		return
@@ -1010,7 +1007,6 @@ type iterFrame struct {
 	idx  int
 }
 
-// Next is part of the exported receiver API.
 func (it *artIterator) Next() {
 	if it.curr == nil {
 		return
@@ -1023,12 +1019,10 @@ func (it *artIterator) Next() {
 	it.advance()
 }
 
-// Valid is part of the exported receiver API.
 func (it *artIterator) Valid() bool {
 	return it != nil && it.curr != nil
 }
 
-// Rewind is part of the exported receiver API.
 func (it *artIterator) Rewind() {
 	if it == nil || it.tree == nil {
 		return
@@ -1038,7 +1032,6 @@ func (it *artIterator) Rewind() {
 	it.descendToMin(root)
 }
 
-// Item is part of the exported receiver API.
 func (it *artIterator) Item() Item {
 	if it == nil || it.curr == nil || it.tree == nil || it.tree.arena == nil {
 		return nil
@@ -1053,7 +1046,6 @@ func (it *artIterator) Item() Item {
 	return &it.entry
 }
 
-// Close is part of the exported receiver API.
 func (it *artIterator) Close() error {
 	if it == nil || it.owner == nil {
 		return nil
@@ -1062,7 +1054,6 @@ func (it *artIterator) Close() error {
 	return nil
 }
 
-// Seek is part of the exported receiver API.
 func (it *artIterator) Seek(key []byte) {
 	if it == nil || it.tree == nil {
 		return

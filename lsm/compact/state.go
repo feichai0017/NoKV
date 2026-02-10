@@ -19,24 +19,20 @@ type KeyRange struct {
 // InfRange matches all keys.
 var InfRange = KeyRange{Inf: true}
 
-// IsEmpty is part of the exported receiver API.
 func (r KeyRange) IsEmpty() bool {
 	return len(r.Left) == 0 && len(r.Right) == 0 && !r.Inf
 }
 
-// String is part of the exported receiver API.
 func (r KeyRange) String() string {
 	return fmt.Sprintf("[left=%x, right=%x, inf=%v]", r.Left, r.Right, r.Inf)
 }
 
-// Equals is part of the exported receiver API.
 func (r KeyRange) Equals(dst KeyRange) bool {
 	return bytes.Equal(r.Left, dst.Left) &&
 		bytes.Equal(r.Right, dst.Right) &&
 		r.Inf == dst.Inf
 }
 
-// Extend is part of the exported receiver API.
 func (r *KeyRange) Extend(kr KeyRange) {
 	if kr.IsEmpty() {
 		return
@@ -55,7 +51,6 @@ func (r *KeyRange) Extend(kr KeyRange) {
 	}
 }
 
-// OverlapsWith is part of the exported receiver API.
 func (r KeyRange) OverlapsWith(dst KeyRange) bool {
 	// Empty keyRange always overlaps.
 	if r.IsEmpty() {

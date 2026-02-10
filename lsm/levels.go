@@ -114,7 +114,6 @@ func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
 	return itrs
 }
 
-// Get is part of the exported receiver API.
 func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 	var (
 		entry *kv.Entry
@@ -256,7 +255,6 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	return nil
 }
 
-// LogValueLogHead is part of the exported receiver API.
 func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	if ptr == nil {
 		return nil
@@ -264,12 +262,10 @@ func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	return lm.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
 }
 
-// LogValueLogDelete is part of the exported receiver API.
 func (lm *levelManager) LogValueLogDelete(bucket uint32, fid uint32) error {
 	return lm.manifestMgr.LogValueLogDelete(bucket, fid)
 }
 
-// LogValueLogUpdate is part of the exported receiver API.
 func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	if meta == nil {
 		return nil
@@ -277,12 +273,10 @@ func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lm.manifestMgr.LogValueLogUpdate(*meta)
 }
 
-// ValueLogHead is part of the exported receiver API.
 func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
 }
 
-// ValueLogStatus is part of the exported receiver API.
 func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
 }
@@ -646,7 +640,6 @@ func (lh *levelHandler) numTables() int {
 	return len(lh.tables)
 }
 
-// Get is part of the exported receiver API.
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
@@ -711,7 +704,6 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 	return table.prefetchBlockForKey(key, hot)
 }
 
-// Sort is part of the exported receiver API.
 func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
