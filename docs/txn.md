@@ -120,7 +120,7 @@ The final call to `Txn.Discard` runs regardless of success, marking the read wat
 | Isolation | Optional (WritePrepared/2PC) | Snapshot isolation | Snapshot isolation with `WaterMark` barriers |
 | Conflict detection | External | Optional optimistic | Optional optimistic keyed by `utils.MemHash` |
 | Iterator view | Snapshot handles, manual merging | Built-in | Built-in with pending write iterator |
-| Metrics | `rocksdb.transactions.*` when enabled | Basic stats | `NoKV.Txns.*` expvar counters + CLI |
+| Metrics | `rocksdb.transactions.*` when enabled | Basic stats | `NoKV.Stats.txn.*` + CLI |
 
 NoKV inherits Badger's optimistic concurrency but strengthens durability ordering by coupling commits with the same write pipeline that non-transactional writes use. Compared with RocksDB's transactional library, the Go implementation remains lightweight and requires no external locks.
 
@@ -128,7 +128,7 @@ NoKV inherits Badger's optimistic concurrency but strengthens durability orderin
 
 ## 6. Operational Notes
 
-* **Long-running reads**: watch `NoKV.Txns.Active` and `oracle.readMark.DoneUntil()`—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.
+* **Long-running reads**: watch `NoKV.Stats.txn.active` and `oracle.readMark.DoneUntil()`—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.
 * **Non-transactional APIs**: `DB.Set/Get/Del` and `SetCF/GetCF/DelCF` use a MaxUint64 sentinel version for "latest". Do not mix these writes with MVCC/Txn writes in the same database.
 * **Managed mode**: exposing `Txn.SetEntry` with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.
 * **Throttling**: combine `HotRing.TouchAndClamp` with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.

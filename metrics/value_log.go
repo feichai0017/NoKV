@@ -142,23 +142,6 @@ func DefaultValueLogGCCollector() *ValueLogGCCollector {
 	return defaultValueLogGCCollector
 }
 
-func ValueLogGCMetricsSnapshot() ValueLogGCSnapshot {
-	return defaultValueLogGCCollector.Snapshot()
-}
-
 func ResetValueLogGCMetricsForTesting() {
 	defaultValueLogGCCollector.Reset()
-}
-
-func IncValueLogGCRuns()          { defaultValueLogGCCollector.IncRuns() }
-func IncValueLogSegmentsRemoved() { defaultValueLogGCCollector.IncSegmentsRemoved() }
-func IncValueLogHeadUpdates()     { defaultValueLogGCCollector.IncHeadUpdates() }
-func IncValueLogGCScheduled()     { defaultValueLogGCCollector.IncScheduled() }
-func IncValueLogGCThrottled()     { defaultValueLogGCCollector.IncThrottled() }
-func IncValueLogGCSkipped()       { defaultValueLogGCCollector.IncSkipped() }
-func IncValueLogGCRejected()      { defaultValueLogGCCollector.IncRejected() }
-func IncValueLogGCActive()        { defaultValueLogGCCollector.IncActive() }
-func DecValueLogGCActive()        { defaultValueLogGCCollector.DecActive() }
-func SetValueLogGCParallelism(v int) {
-	defaultValueLogGCCollector.SetParallelism(v)
 }

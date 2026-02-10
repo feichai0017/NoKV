@@ -10,17 +10,13 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/feichai0017/hotring"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 var exit = os.Exit
@@ -624,294 +620,17 @@ func fetchExpvarSnapshot(url string) (NoKV.StatsSnapshot, error) {
 
 func parseExpvarSnapshot(data map[string]any) NoKV.StatsSnapshot {
 	var snap NoKV.StatsSnapshot
-	setInt := func(key string, dest *int64) {
-		if v, ok := data[key]; ok {
-			switch val := v.(type) {
-			case float64:
-				*dest = int64(val)
-			case map[string]any:
-				if inner, ok := val["value"]; ok {
-					switch n := inner.(type) {
-					case float64:
-						*dest = int64(n)
-					}
-				}
-			}
-		}
-	}
-	setFloat := func(key string, dest *float64) {
-		if v, ok := data[key]; ok {
-			switch val := v.(type) {
-			case float64:
-				*dest = val
-			case map[string]any:
-				if inner, ok := val["value"]; ok {
-					if n, ok := inner.(float64); ok {
-						*dest = n
-					}
-				}
-			}
-		}
-	}
-
-	decodeInto := func(key string, dest any) {
-		raw, ok := data[key]
-		if !ok {
-			return
-		}
-		blob, err := json.Marshal(raw)
-		if err != nil {
-			return
-		}
-		_ = json.Unmarshal(blob, dest)
-	}
-
-	setInt("NoKV.Stats.Entries", &snap.Entries)
-	setInt("NoKV.Stats.Flush.Pending", &snap.Flush.Pending)
-	setInt("NoKV.Stats.Compaction.Backlog", &snap.Compaction.Backlog)
-	setFloat("NoKV.Stats.Compaction.MaxScore", &snap.Compaction.MaxScore)
-	setFloat("NoKV.Stats.Cache.IndexHitRate", &snap.Cache.IndexHitRate)
-	setFloat("NoKV.Stats.Cache.L0HitRate", &snap.Cache.BlockL0HitRate)
-	setFloat("NoKV.Stats.Cache.L1HitRate", &snap.Cache.BlockL1HitRate)
-	setFloat("NoKV.Stats.Cache.BloomHitRate", &snap.Cache.BloomHitRate)
-	var intVal int64
-	setInt("NoKV.Stats.Write.HotKeyLimited", &intVal)
-	if intVal < 0 {
-		intVal = 0
-	}
-	snap.Write.HotKeyLimited = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.Segments", &intVal)
-	snap.ValueLog.Segments = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.PendingDeletes", &intVal)
-	snap.ValueLog.PendingDeletes = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.ValueLog.DiscardQueue", &intVal)
-	snap.ValueLog.DiscardQueue = int(intVal)
-	setInt("NoKV.Stats.WAL.ActiveSegment", &snap.WAL.ActiveSegment)
-	setInt("NoKV.Stats.WAL.Segments", &snap.WAL.SegmentCount)
-	setInt("NoKV.Stats.WAL.ActiveSize", &snap.WAL.ActiveSize)
-	intVal = 0
-	setInt("NoKV.Stats.WAL.Removed", &intVal)
-	if intVal > 0 {
-		snap.WAL.SegmentsRemoved = uint64(intVal)
-	}
-	setFloat("NoKV.Stats.WAL.TypedRatio", &snap.WAL.TypedRecordRatio)
-	intVal = 0
-	setInt("NoKV.Stats.WAL.TypedWarning", &intVal)
-	if intVal != 0 {
-		snap.WAL.TypedRecordWarning = true
-	}
-	if v, ok := data["NoKV.Stats.WAL.TypedReason"]; ok {
-		if raw, ok := v.(string); ok && raw != "" {
-			if unq, err := strconv.Unquote(raw); err == nil {
-				snap.WAL.TypedRecordReason = unq
-			} else {
-				snap.WAL.TypedRecordReason = raw
-			}
-		}
-	}
-	intVal = 0
-	setInt("NoKV.Stats.WAL.AutoRuns", &intVal)
-	if intVal > 0 {
-		snap.WAL.AutoGCRuns = uint64(intVal)
-	}
-	intVal = 0
-	setInt("NoKV.Stats.WAL.AutoRemoved", &intVal)
-	if intVal > 0 {
-		snap.WAL.AutoGCRemoved = uint64(intVal)
-	}
-	setInt("NoKV.Stats.WAL.AutoLastUnix", &snap.WAL.AutoGCLastUnix)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.Groups", &intVal)
-	snap.Raft.GroupCount = int(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.LaggingGroups", &intVal)
-	snap.Raft.LaggingGroups = int(intVal)
-	setInt("NoKV.Stats.Raft.MaxLagSegments", &snap.Raft.MaxLagSegments)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.MinSegment", &intVal)
-	snap.Raft.MinLogSegment = uint32(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.MaxSegment", &intVal)
-	snap.Raft.MaxLogSegment = uint32(intVal)
-	intVal = 0
-	setInt("NoKV.Stats.Raft.LagWarning", &intVal)
-	if intVal != 0 {
-		snap.Raft.LagWarning = true
-	}
-	setInt("NoKV.Stats.Raft.LagThreshold", &snap.Raft.LagWarnThreshold)
-	setInt("NoKV.Stats.LSM.ValueBytes", &snap.LSM.ValueBytesTotal)
-	setFloat("NoKV.Stats.Compaction.ValueWeight", &snap.Compaction.ValueWeight)
-	setFloat("NoKV.Stats.LSM.ValueDensityMax", &snap.LSM.ValueDensityMax)
-	intVal = 0
-	setInt("NoKV.Stats.LSM.ValueDensityAlert", &intVal)
-	if intVal != 0 {
-		snap.LSM.ValueDensityAlert = true
-	}
-	setInt("NoKV.Stats.Region.Total", &snap.Region.Total)
-	setInt("NoKV.Stats.Region.New", &snap.Region.New)
-	setInt("NoKV.Stats.Region.Running", &snap.Region.Running)
-	setInt("NoKV.Stats.Region.Removing", &snap.Region.Removing)
-	setInt("NoKV.Stats.Region.Tombstone", &snap.Region.Tombstone)
-	setInt("NoKV.Stats.Region.Other", &snap.Region.Other)
-	setInt("NoKV.Txns.Active", &snap.Txn.Active)
-	intVal = 0
-	setInt("NoKV.Txns.Started", &intVal)
-	snap.Txn.Started = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Txns.Committed", &intVal)
-	snap.Txn.Committed = uint64(intVal)
-	intVal = 0
-	setInt("NoKV.Txns.Conflicts", &intVal)
-	snap.Txn.Conflicts = uint64(intVal)
-	setInt("NoKV.Stats.Write.QueueDepth", &snap.Write.QueueDepth)
-	setInt("NoKV.Stats.Write.QueueEntries", &snap.Write.QueueEntries)
-	setInt("NoKV.Stats.Write.QueueBytes", &snap.Write.QueueBytes)
-	setFloat("NoKV.Stats.Write.BatchAvgEntries", &snap.Write.AvgBatchEntries)
-	setFloat("NoKV.Stats.Write.BatchAvgBytes", &snap.Write.AvgBatchBytes)
-	setFloat("NoKV.Stats.Write.RequestWaitMs", &snap.Write.AvgRequestWaitMs)
-	setFloat("NoKV.Stats.Write.ValueLogMs", &snap.Write.AvgValueLogMs)
-	setFloat("NoKV.Stats.Write.ApplyMs", &snap.Write.AvgApplyMs)
-	setInt("NoKV.Stats.Write.Batches", &snap.Write.BatchesTotal)
-	intVal = 0
-	setInt("NoKV.Stats.Write.Throttle", &intVal)
-	if intVal != 0 {
-		snap.Write.ThrottleActive = true
-	}
-	if raw, ok := data["NoKV.Stats.HotKeys"]; ok {
-		switch v := raw.(type) {
-		case []any:
-			for _, elem := range v {
-				if kv, ok := elem.(map[string]any); ok {
-					key, _ := kv["key"].(string)
-					var count int32
-					switch c := kv["count"].(type) {
-					case float64:
-						count = int32(c)
-					case int64:
-						count = int32(c)
-					case map[string]any:
-						if inner, ok := c["value"].(float64); ok {
-							count = int32(inner)
-						}
-					}
-					snap.Hot.ReadKeys = append(snap.Hot.ReadKeys, NoKV.HotKeyStat{Key: key, Count: count})
-				}
-			}
-		case map[string]any:
-			for key, val := range v {
-				var count int32
-				switch c := val.(type) {
-				case float64:
-					count = int32(c)
-				case map[string]any:
-					if inner, ok := c["value"].(float64); ok {
-						count = int32(inner)
-					}
-				}
-				snap.Hot.ReadKeys = append(snap.Hot.ReadKeys, NoKV.HotKeyStat{Key: key, Count: count})
-			}
-		}
-	}
-	if raw, ok := data["NoKV.Stats.HotRing"]; ok {
+	if raw, ok := data["NoKV.Stats"]; ok {
 		if blob, err := json.Marshal(raw); err == nil {
-			var hs hotring.Stats
-			if err := json.Unmarshal(blob, &hs); err == nil {
-				snap.Hot.ReadRing = &hs
+			if err := json.Unmarshal(blob, &snap); err == nil {
+				return snap
 			}
 		}
 	}
-	if raw, ok := data["NoKV.Stats.HotWriteKeys"]; ok {
-		switch v := raw.(type) {
-		case []any:
-			for _, elem := range v {
-				if kv, ok := elem.(map[string]any); ok {
-					key, _ := kv["key"].(string)
-					var count int32
-					switch c := kv["count"].(type) {
-					case float64:
-						count = int32(c)
-					case int64:
-						count = int32(c)
-					case map[string]any:
-						if inner, ok := c["value"].(float64); ok {
-							count = int32(inner)
-						}
-					}
-					snap.Hot.WriteKeys = append(snap.Hot.WriteKeys, NoKV.HotKeyStat{Key: key, Count: count})
-				}
-			}
-		case map[string]any:
-			for key, val := range v {
-				var count int32
-				switch c := val.(type) {
-				case float64:
-					count = int32(c)
-				case map[string]any:
-					if inner, ok := c["value"].(float64); ok {
-						count = int32(inner)
-					}
-				}
-				snap.Hot.WriteKeys = append(snap.Hot.WriteKeys, NoKV.HotKeyStat{Key: key, Count: count})
-			}
-		}
+	// Allow callers to pass the stats payload directly.
+	if blob, err := json.Marshal(data); err == nil {
+		_ = json.Unmarshal(blob, &snap)
 	}
-	if raw, ok := data["NoKV.Stats.HotWriteRing"]; ok {
-		if blob, err := json.Marshal(raw); err == nil {
-			var hs hotring.Stats
-			if err := json.Unmarshal(blob, &hs); err == nil {
-				snap.Hot.WriteRing = &hs
-			}
-		}
-	}
-	if raw, ok := data["NoKV.Stats.LSM.Levels"]; ok {
-		switch levels := raw.(type) {
-		case []any:
-			for _, elem := range levels {
-				if m, ok := elem.(map[string]any); ok {
-					var lvl NoKV.LSMLevelStats
-					if v, ok := m["level"].(float64); ok {
-						lvl.Level = int(v)
-					}
-					if v, ok := m["tables"].(float64); ok {
-						lvl.TableCount = int(v)
-					}
-					if v, ok := m["size_bytes"].(float64); ok {
-						lvl.SizeBytes = int64(v)
-					}
-					if v, ok := m["value_bytes"].(float64); ok {
-						lvl.ValueBytes = int64(v)
-					}
-					if v, ok := m["stale_bytes"].(float64); ok {
-						lvl.StaleBytes = int64(v)
-					}
-					if v, ok := m["ingest_tables"].(float64); ok {
-						lvl.IngestTables = int(v)
-					}
-					if v, ok := m["ingest_size_bytes"].(float64); ok {
-						lvl.IngestSizeBytes = int64(v)
-					}
-					if v, ok := m["ingest_value_bytes"].(float64); ok {
-						lvl.IngestValueBytes = int64(v)
-					}
-					snap.LSM.Levels = append(snap.LSM.Levels, lvl)
-				}
-			}
-		}
-	}
-	if raw, ok := data["NoKV.Stats.WAL.RecordCounts"]; ok {
-		if blob, err := json.Marshal(raw); err == nil {
-			var counts wal.RecordMetrics
-			if err := json.Unmarshal(blob, &counts); err == nil {
-				snap.WAL.RecordCounts = counts
-			}
-		}
-	}
-	decodeInto("NoKV.Stats.ValueLogGC", &snap.ValueLog.GC)
-	decodeInto("NoKV.Stats.Transport", &snap.Transport)
-	decodeInto("NoKV.Redis", &snap.Redis)
 	return snap
 }
 
