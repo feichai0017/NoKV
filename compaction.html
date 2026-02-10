@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -264,8 +264,8 @@
 <ul>
 <li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
 <li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
-<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data依赖 OS page cache。</li>
-<li>Keep an eye on <code>NoKV.ValueLog.GcRuns</code> and <code>ValueLogHeadUpdates</code>; if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
+<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.</li>
+<li>Keep an eye on <code>NoKV.Stats.value_log.gc</code> (for example <code>gc_runs</code> and <code>head_updates</code>); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
 </ul>
 <p>With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.</p>
 

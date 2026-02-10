@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -297,7 +297,7 @@
 <tr><td>Isolation</td><td>Optional (WritePrepared/2PC)</td><td>Snapshot isolation</td><td>Snapshot isolation with <code>WaterMark</code> barriers</td></tr>
 <tr><td>Conflict detection</td><td>External</td><td>Optional optimistic</td><td>Optional optimistic keyed by <code>utils.MemHash</code></td></tr>
 <tr><td>Iterator view</td><td>Snapshot handles, manual merging</td><td>Built-in</td><td>Built-in with pending write iterator</td></tr>
-<tr><td>Metrics</td><td><code>rocksdb.transactions.*</code> when enabled</td><td>Basic stats</td><td><code>NoKV.Txns.*</code> expvar counters + CLI</td></tr>
+<tr><td>Metrics</td><td><code>rocksdb.transactions.*</code> when enabled</td><td>Basic stats</td><td><code>NoKV.Stats.txn.*</code> + CLI</td></tr>
 </tbody>
 </table>
 </div>
@@ -305,7 +305,7 @@
 <hr>
 <h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
 <ul>
-<li><strong>Long-running reads</strong>: watch <code>NoKV.Txns.Active</code> and <code>oracle.readMark.DoneUntil()</code>—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.</li>
+<li><strong>Long-running reads</strong>: watch <code>NoKV.Stats.txn.active</code> and <code>oracle.readMark.DoneUntil()</code>—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.</li>
 <li><strong>Non-transactional APIs</strong>: <code>DB.Set/Get/Del</code> and <code>SetCF/GetCF/DelCF</code> use a MaxUint64 sentinel version for “latest”. Do not mix these writes with MVCC/Txn writes in the same database.</li>
 <li><strong>Managed mode</strong>: exposing <code>Txn.SetEntry</code> with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.</li>
 <li><strong>Throttling</strong>: combine <code>HotRing.TouchAndClamp</code> with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.</li>

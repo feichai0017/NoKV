@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -179,62 +179,68 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="cli-cmdnokv-reference"><a class="header" href="#cli-cmdnokv-reference">CLI (<code>cmd/nokv</code>) Reference</a></h1>
-<p>The <code>nokv</code> command provides operational visibility similar to RocksDB’s <code>ldb</code> and Badger’s <code>badger</code> CLI, but emits JSON to integrate easily with scripts and CI pipelines.</p>
+<p><code>nokv</code> provides operational visibility similar to RocksDB <code>ldb</code> / Badger CLI, with script-friendly JSON output.</p>
 <hr>
 <h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
 <pre><code class="language-bash">go install ./cmd/nokv
 </code></pre>
-<p>Use <code>GOBIN</code> if you prefer a custom binary directory.</p>
 <hr>
 <h2 id="shared-flags"><a class="header" href="#shared-flags">Shared Flags</a></h2>
 <ul>
-<li><code>--workdir &lt;path&gt;</code> – location of the NoKV database (must contain <code>CURRENT</code>).</li>
-<li><code>--json</code> – emit structured JSON (default is human-readable tables).</li>
-<li><code>--expvar &lt;url&gt;</code> – for <code>stats</code> command, pull metrics from a running process exposing <code>expvar</code>.</li>
-<li><code>--no-region-metrics</code> – for <code>stats</code> offline mode; skip attaching <code>RegionMetrics</code> and report manifest-only figures.</li>
+<li><code>--workdir &lt;path&gt;</code>: NoKV database directory (must contain <code>CURRENT</code> for manifest commands)</li>
+<li><code>--json</code>: JSON output (default is plain text)</li>
+<li><code>--expvar &lt;url&gt;</code>: for <code>stats</code>, fetch from <code>/debug/vars</code></li>
+<li><code>--no-region-metrics</code>: for offline <code>stats</code>, skip attaching runtime region metrics</li>
 </ul>
 <hr>
 <h2 id="subcommands"><a class="header" href="#subcommands">Subcommands</a></h2>
 <h3 id="nokv-stats"><a class="header" href="#nokv-stats"><code>nokv stats</code></a></h3>
 <ul>
-<li>Reads <code>StatsSnapshot</code> either offline (<code>--workdir</code>) or via HTTP (<code>--expvar</code>).</li>
-<li>Output fields include:
+<li>Reads <code>StatsSnapshot</code> either offline (<code>--workdir</code>) or online (<code>--expvar</code>)</li>
+<li>JSON output is nested by domain (not flat)</li>
+</ul>
+<p>Common fields:</p>
 <ul>
-<li><code>flush_queue_length</code>, <code>flush_wait_ms</code>, <code>flush_build_ms</code></li>
-<li><code>compaction_backlog</code>, <code>wal_active_segment</code>, <code>wal_segments_removed</code></li>
-<li><code>vlog_head</code>, <code>vlog_segments</code>, <code>vlog_pending_deletes</code>, <code>vlog_discard_queue</code></li>
-<li><code>txns_active</code>, <code>txns_committed</code>, <code>txns_conflicts</code></li>
-<li><code>region_total</code> (plus <code>region_new</code>, <code>region_running</code>, <code>region_removing</code>, <code>region_tombstone</code>, <code>region_other</code>)</li>
-<li><code>hot_keys</code> (Top-N hits captured by <code>hotring</code>)</li>
+<li><code>entries</code></li>
+<li><code>flush.pending</code>, <code>flush.queue_length</code>, <code>flush.last_wait_ms</code></li>
+<li><code>compaction.backlog</code>, <code>compaction.max_score</code></li>
+<li><code>value_log.segments</code>, <code>value_log.pending_deletes</code>, <code>value_log.gc.*</code></li>
+<li><code>wal.active_segment</code>, <code>wal.segment_count</code>, <code>wal.typed_record_ratio</code></li>
+<li><code>write.queue_depth</code>, <code>write.queue_entries</code>, <code>write.hot_key_limited</code></li>
+<li><code>txn.active</code>, <code>txn.committed</code>, <code>txn.conflicts</code></li>
+<li><code>region.total</code>, <code>region.running</code>, <code>region.removing</code></li>
+<li><code>hot.read_keys</code>, <code>hot.write_keys</code></li>
+<li><code>lsm.levels</code>, <code>lsm.value_bytes_total</code></li>
+<li><code>transport.*</code>, <code>redis.*</code></li>
 </ul>
-</li>
-<li>Example:</li>
-</ul>
-<pre><code class="language-bash">nokv stats --workdir ./testdata/db --json | jq '.flush_queue_length'
+<p>Example:</p>
+<pre><code class="language-bash">nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 </code></pre>
 <h3 id="nokv-manifest"><a class="header" href="#nokv-manifest"><code>nokv manifest</code></a></h3>
 <ul>
-<li>Parses the manifest using <code>manifest.Manager.Version()</code>.</li>
-<li>Reports per-level file counts, smallest/largest keys, WAL checkpoint, and ValueLog metadata.</li>
-<li>Helpful for verifying flush/compaction results and ensuring manifest rewrites succeeded.</li>
+<li>Reads manifest version state</li>
+<li>Shows log pointer, per-level file info, and value-log metadata</li>
 </ul>
 <h3 id="nokv-vlog"><a class="header" href="#nokv-vlog"><code>nokv vlog</code></a></h3>
 <ul>
-<li>Lists vlog segments with status flags (<code>active</code>, <code>candidate_for_gc</code>, <code>deleted</code>).</li>
-<li>Shows head file/offset and pending GC actions.</li>
-<li>Use after running GC or recovery to confirm stale segments are purged.</li>
+<li>Lists value-log segments and current head per bucket</li>
+<li>Useful after GC/recovery checks</li>
+</ul>
+<h3 id="nokv-regions"><a class="header" href="#nokv-regions"><code>nokv regions</code></a></h3>
+<ul>
+<li>Dumps manifest-backed region catalog (state/range/epoch/peers)</li>
+<li>Supports <code>--json</code></li>
+</ul>
+<h3 id="nokv-scheduler"><a class="header" href="#nokv-scheduler"><code>nokv scheduler</code></a></h3>
+<ul>
+<li>Displays scheduler heartbeat snapshot (in-process usage)</li>
 </ul>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
 <ul>
-<li>Combine with <code>RECOVERY_TRACE_METRICS=1</code> to cross-check logs: run tests, then inspect CLI output to ensure metrics match expectations.</li>
-<li>In CI, capture JSON output and diff against golden files to detect regressions (see <code>cmd/nokv/main_test.go</code>).</li>
-<li>When comparing against RocksDB/Badger, treat <code>nokv manifest</code> + <code>nokv vlog</code> as equivalents to <code>ldb manifest_dump</code> and Badger’s <code>badger</code> <code>inspect vlog</code> commands.</li>
-</ul>
-<hr>
-<p>For architecture context, see <a href="architecture.html">architecture.md</a> and the module deep dives.</p>
-<ul>
-<li><strong><code>nokv regions</code></strong> – Dumps the manifest-backed Region catalog (ID/state/key range/peers). Supports <code>--json</code> for automation and complements the Region metrics shown in <code>nokv stats</code>.</li>
+<li>Combine with <code>RECOVERY_TRACE_METRICS=1</code> for recovery validation.</li>
+<li>In CI, compare JSON snapshots to detect observability regressions.</li>
+<li>Use <code>nokv stats --expvar</code> for online diagnostics and <code>--workdir</code> for offline forensics.</li>
 </ul>
 
                     </main>

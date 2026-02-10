@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -230,7 +230,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
 <li>Main tier is LRU with a tiny CLOCK hot set to protect frequently hit filters from being washed out by scans.</li>
 <li>Capacity is controlled by <code>Options.BloomCacheSize</code>; the hot CLOCK tier auto-scales from a few dozen up to a few hundred entries.</li>
-<li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.BloomHitRate</code>.</li>
+<li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
 <h2 id="4-metrics--observability"><a class="header" href="#4-metrics--observability">4. Metrics &amp; Observability</a></h2>
@@ -267,7 +267,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <tbody>
 <tr><td>Hot/cold tiers</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto (hot) + OS page cache (cold)</td></tr>
 <tr><td>Bloom cache</td><td>Enabled per table, no explicit cache</td><td>Optional</td><td>Dedicated LRU storing filters</td></tr>
-<tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.Cache.*</code> hit rates</td></tr>
+<tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.cache.*</code> hit rates</td></tr>
 </tbody>
 </table>
 </div>

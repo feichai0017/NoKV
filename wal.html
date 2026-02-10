@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -243,9 +243,9 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <h2 id="5-metrics--observability"><a class="header" href="#5-metrics--observability">5. Metrics &amp; Observability</a></h2>
 <p><code>Stats.collect</code> reads the manager metrics and exposes them as:</p>
 <ul>
-<li><code>NoKV.WAL.ActiveSegment</code></li>
-<li><code>NoKV.WAL.SegmentCount</code></li>
-<li><code>NoKV.WAL.RemovedSegments</code></li>
+<li><code>NoKV.Stats.wal.active_segment</code></li>
+<li><code>NoKV.Stats.wal.segment_count</code></li>
+<li><code>NoKV.Stats.wal.segments_removed</code></li>
 </ul>
 <p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB’s <code>LOG</code> number growth.</p>
 <hr>
@@ -257,8 +257,8 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <code>manifest.RaftPointerSnapshot()</code> to compute removable segments.</li>
 <li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
 <code>WALAutoGCMinRemovable</code> are eligible.</li>
-<li>Exposes counters (<code>WALAutoGCRuns/Removed/LastUnix</code>) and warning state
-(<code>WALTypedRecordRatio/Warning/Reason</code>) through <code>StatsSnapshot</code>.</li>
+<li>Exposes counters (<code>wal.auto_gc_runs/removed/last_unix</code>) and warning state
+(<code>wal.typed_record_ratio/warning/reason</code>) through <code>StatsSnapshot.WAL</code>.</li>
 </ul>
 <p>Relevant options (see <code>options.go</code> for defaults):</p>
 <ul>

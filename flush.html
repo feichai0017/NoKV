@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -208,7 +208,7 @@
 <li><strong>StageInstall</strong> – manifest edits (<code>EditAddFile</code>, <code>EditLogPointer</code>) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.</li>
 <li><strong>StageRelease</strong> – metrics record release duration, discard stats are flushed to <code>valueLog.lfDiscardStats</code>, and <code>wal.Manager.Remove</code> drops obsolete segments.</li>
 </ul>
-<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These appear as <code>NoKV.Flush.Queue</code>, <code>NoKV.Flush.BuildAvgMs</code>, etc., in CLI output.</p>
+<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These surface via <code>StatsSnapshot.Flush</code> fields (for example <code>QueueLength</code>, <code>BuildMs</code>) in <code>nokv stats</code> output.</p>
 <hr>
 <h2 id="3-key-types"><a class="header" href="#3-key-types">3. Key Types</a></h2>
 <pre><code class="language-go">type Task struct {
@@ -251,7 +251,7 @@ type Manager struct {
 <hr>
 <h2 id="6-observability--cli"><a class="header" href="#6-observability--cli">6. Observability &amp; CLI</a></h2>
 <ul>
-<li><code>StatsSnapshot.Flush.Queue</code> – number of pending tasks.</li>
+<li><code>StatsSnapshot.Flush.QueueLength</code> – number of pending tasks.</li>
 <li><code>StatsSnapshot.Flush.WaitMs</code> – average wait time before build.</li>
 <li><code>StatsSnapshot.Flush.BuildMs</code> – average build duration.</li>
 <li><code>StatsSnapshot.Flush.Completed</code> – cumulative tasks finished.</li>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -184,7 +184,7 @@
 <h2 id="1-motivation"><a class="header" href="#1-motivation">1. Motivation</a></h2>
 <ul>
 <li><strong>Cache hints</strong> – <code>DB.prefetchLoop</code> (see <a href="../db.go"><code>db.go</code></a>) consumes hot keys to schedule asynchronous reads into the block cache.</li>
-<li><strong>Operational insight</strong> – <code>StatsSnapshot.HotKeys</code> and <code>nokv stats --json</code> surface the hottest keys, aiding debugging of traffic hotspots.</li>
+<li><strong>Operational insight</strong> – <code>StatsSnapshot.Hot.ReadKeys</code> and <code>nokv stats --json</code> surface the hottest keys, aiding debugging of traffic hotspots.</li>
 <li><strong>Throttling</strong> – <code>HotRing.TouchAndClamp</code> enables simple rate caps: once a key crosses a threshold, callers can back off or log alerts.</li>
 </ul>
 <p>Compared with RocksDB (which exposes block access stats via <code>perf_context</code>) and Badger (which lacks built-in hot-key reporting), NoKV offers a lightweight but concurrent-friendly tracker out of the box.</p>
@@ -230,7 +230,7 @@
 <ul>
 <li><strong>DB reads</strong> – <code>Txn.Get</code> and iterators call <code>db.recordRead</code>, which invokes <code>HotRing.Touch</code> on a <strong>read-only ring</strong> for every successful lookup.</li>
 <li><strong>Write throttling &amp; hot batching</strong> – writes are tracked by a <strong>write-only ring</strong>. When <code>Options.WriteHotKeyLimit &gt; 0</code>, writes use <code>TouchAndClamp</code> to enforce throttling; when throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, writes still <code>Touch</code> so hot batching can trigger.</li>
-<li><strong>Stats</strong> – <a href="../stats.go#L41-L87"><code>StatsSnapshot</code></a> publishes read hot keys (<code>HotKeys</code>) and write hot keys (<code>HotWriteKeys</code>). <code>expvar</code> exposes both under <code>NoKV.Stats.HotKeys</code> and <code>NoKV.Stats.HotWriteKeys</code>.</li>
+<li><strong>Stats</strong> – <code>StatsSnapshot.Hot.ReadKeys</code> and <code>StatsSnapshot.Hot.WriteKeys</code> publish read/write hot keys. <code>expvar</code> exposes these under <code>NoKV.Stats.hot.read_keys</code> and <code>NoKV.Stats.hot.write_keys</code>.</li>
 <li><strong>Caching</strong> – <code>lsm/cache</code> can promote blocks referenced by frequently touched keys, keeping the hot tier warm.</li>
 <li><strong>Value log routing</strong> – a dedicated HotRing instance powers <strong>vlog hot/cold bucket routing</strong>. It tracks <em>write</em> hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (<code>ValueLogHotBucketCount</code>) once <code>ValueLogHotKeyThreshold</code> is reached; cold keys go to the cold range.</li>
 </ul>
@@ -306,7 +306,7 @@ which falls back to the ring default).</p>
 <p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code> or transactional <code>Txn.Set*</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
 <p>Operational hints:</p>
 <ul>
-<li><code>StatsSnapshot.HotWriteLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
+<li><code>StatsSnapshot.Write.HotKeyLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
 <li>Applications should surface <code>utils.ErrHotKeyWriteThrottle</code> to callers (e.g. HTTP 429) so clients can back off.</li>
 <li>Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.</li>
 <li>Set the limit conservatively (e.g. a few dozen) and pair it with richer <code>HotRing</code> analytics (top-K stats, expvar export) to identify outliers before tuning.</li>

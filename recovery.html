@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -253,9 +253,9 @@
 </ul>
 <p><code>StatsSnapshot</code> also exposes:</p>
 <ul>
-<li><code>NoKV.Flush.Queue</code> – remaining flush tasks.</li>
-<li><code>NoKV.ValueLog.HeadFID</code> – head file after recovery.</li>
-<li><code>NoKV.Txns.Active</code> – should reset to zero post-recovery.</li>
+<li><code>flush.queue_length</code> – remaining flush tasks.</li>
+<li><code>value_log.heads</code> – current value log heads after recovery.</li>
+<li><code>txn.active</code> – should reset to zero post-recovery.</li>
 </ul>
 <hr>
 <h2 id="5-comparison-with-rocksdb--badger"><a class="header" href="#5-comparison-with-rocksdb--badger">5. Comparison with RocksDB &amp; Badger</a></h2>

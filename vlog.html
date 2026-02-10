@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -290,7 +290,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <li>Sampling behaviour is controlled by <code>Options.ValueLogGCSampleSizeRatio</code> (default 0.10 of the file) and <code>Options.ValueLogGCSampleCountRatio</code> (default 1% of the configured entry limit). Setting either to <code>&lt;=0</code> keeps the default heuristics. <code>Options.ValueLogGCSampleFromHead</code> starts sampling from the beginning instead of a random window.</li>
 </ul>
 </li>
-<li>Completed deletions are logged via <code>lsm.LogValueLogDelete</code> so the manifest can skip them during replay. When GC rotates to a new head, <code>valueLog.updateHead</code> records the pointer and bumps the <code>NoKV.ValueLog.HeadUpdates</code> counter.</li>
+<li>Completed deletions are logged via <code>lsm.LogValueLogDelete</code> so the manifest can skip them during replay. When GC rotates to a new head, <code>valueLog.updateHead</code> records the pointer and increments <code>NoKV.Stats.value_log.gc.head_updates</code>.</li>
 </ul>
 <p>RocksDB’s blob GC leans on compaction iterators to discover obsolete blobs. NoKV, like Badger, leverages flush/compaction discard stats so GC does not need to rescan SSTs.</p>
 <hr>
@@ -322,7 +322,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <h2 id="9-observability--cli"><a class="header" href="#9-observability--cli">9. Observability &amp; CLI</a></h2>
 <ul>
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
-<li>GC scheduling exposes <code>NoKV.ValueLog.GcParallelism</code>, <code>NoKV.ValueLog.GcActive</code>, <code>NoKV.ValueLog.GcScheduled</code>, <code>NoKV.ValueLog.GcThrottled</code>, <code>NoKV.ValueLog.GcSkipped</code>, and <code>NoKV.ValueLog.GcRejected</code> for diagnostics.</li>
+<li>GC scheduling exposes <code>NoKV.Stats.value_log.gc</code> (including <code>gc_parallelism</code>, <code>gc_active</code>, <code>gc_scheduled</code>, <code>gc_throttled</code>, <code>gc_skipped</code>, <code>gc_rejected</code>) for diagnostics.</li>
 <li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
 <li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
 </ul>

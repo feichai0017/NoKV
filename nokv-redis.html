@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba57c12f.js";
+            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -198,7 +198,7 @@
   --workdir ./work_redis \
   --metrics-addr 127.0.0.1:9100  # optional expvar endpoint
 </code></pre>
-<p>Validate with <code>redis-cli -p 6380 ping</code>. Metrics are exposed at <code>http://127.0.0.1:9100/debug/vars</code> under the <code>NoKV.Redis</code> key.</p>
+<p>Validate with <code>redis-cli -p 6380 ping</code>. Metrics are exposed at <code>http://127.0.0.1:9100/debug/vars</code> under <code>NoKV.Stats.redis</code>.</p>
 <h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
 <ol>
 <li>
@@ -236,19 +236,23 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 </code></pre>
 <p>For Go tooling, import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to reuse the same schema and defaults across CLIs, scripts, and applications.</p>
 <h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
-<p>With <code>--metrics-addr</code> enabled the gateway publishes <code>NoKV.Redis</code> on <code>/debug/vars</code>, for example:</p>
+<p>With <code>--metrics-addr</code> enabled the gateway publishes Redis metrics as part of <code>NoKV.Stats</code> on <code>/debug/vars</code>, for example:</p>
 <pre><code class="language-json">{
-  "commands_total": 128,
-  "errors_total": 0,
-  "connections_active": 1,
-  "connections_accepted": 4,
-  "commands_per_operation": {
-    "PING": 4,
-    "SET": 32,
-    "GET": 64,
-    "MGET": 8,
-    "DEL": 10,
-    "INCR": 10
+  "NoKV.Stats": {
+    "redis": {
+      "commands_total": 128,
+      "errors_total": 0,
+      "connections_active": 1,
+      "connections_accepted": 4,
+      "commands_per_operation": {
+        "PING": 4,
+        "SET": 32,
+        "GET": 64,
+        "MGET": 8,
+        "DEL": 10,
+        "INCR": 10
+      }
+    }
   }
 }
 </code></pre>
