@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"bytes"
-	"expvar"
 	"fmt"
 	"math"
 	"math/rand"
@@ -14,6 +13,7 @@ import (
 
 	kvpkg "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
@@ -341,13 +341,12 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 	}
 	require.True(t, hasSealed(), "expected sealed vlog segments in each bucket")
 
-	scheduledVar := expvar.Get("NoKV.ValueLog.GcScheduled")
-	require.NotNil(t, scheduledVar)
-	before := scheduledVar.(*expvar.Int).Value()
+	metrics.ResetValueLogGCMetricsForTesting()
+	before := metrics.ValueLogGCMetricsSnapshot().GCScheduled
 
 	_ = db.RunValueLogGC(0.99)
 
-	after := scheduledVar.(*expvar.Int).Value()
+	after := metrics.ValueLogGCMetricsSnapshot().GCScheduled
 	if after-before < 2 {
 		t.Fatalf("expected parallel GC scheduling, delta=%d", after-before)
 	}

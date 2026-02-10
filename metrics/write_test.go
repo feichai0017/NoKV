@@ -61,19 +61,19 @@ func TestRedisMetricsCounters(t *testing.T) {
 	rm.ConnClosed()
 
 	snap := rm.Snapshot()
-	if snap["commands_total"].(uint64) != 2 {
-		t.Fatalf("expected commands_total=2, got %v", snap["commands_total"])
+	if snap.CommandsTotal != 2 {
+		t.Fatalf("expected commands_total=2, got %d", snap.CommandsTotal)
 	}
-	if snap["errors_total"].(uint64) != 1 {
-		t.Fatalf("expected errors_total=1, got %v", snap["errors_total"])
+	if snap.ErrorsTotal != 1 {
+		t.Fatalf("expected errors_total=1, got %d", snap.ErrorsTotal)
 	}
-	if snap["connections_accepted"].(uint64) != 1 {
-		t.Fatalf("expected connections_accepted=1, got %v", snap["connections_accepted"])
+	if snap.ConnectionsAccepted != 1 {
+		t.Fatalf("expected connections_accepted=1, got %d", snap.ConnectionsAccepted)
 	}
-	if snap["connections_active"].(int64) != 0 {
-		t.Fatalf("expected connections_active=0, got %v", snap["connections_active"])
+	if snap.ConnectionsActive != 0 {
+		t.Fatalf("expected connections_active=0, got %d", snap.ConnectionsActive)
 	}
-	cmds := snap["commands_per_operation"].(map[string]uint64)
+	cmds := snap.CommandsPerOperation
 	if cmds["GET"] != 1 || cmds["SET"] != 1 {
 		t.Fatalf("unexpected command counts: %+v", cmds)
 	}
@@ -102,21 +102,37 @@ func TestRegionMetricsHooks(t *testing.T) {
 }
 
 func TestValueLogCounters(t *testing.T) {
-	beforeGC := valueLogGCRuns.Value()
-	beforeRemoved := valueLogSegmentsRemoved.Value()
-	beforeHead := valueLogHeadUpdates.Value()
+	ResetValueLogGCMetricsForTesting()
+	before := ValueLogGCMetricsSnapshot()
 
 	IncValueLogGCRuns()
 	IncValueLogSegmentsRemoved()
 	IncValueLogHeadUpdates()
+	IncValueLogGCScheduled()
+	IncValueLogGCThrottled()
+	IncValueLogGCSkipped()
+	IncValueLogGCRejected()
+	IncValueLogGCActive()
+	DecValueLogGCActive()
+	SetValueLogGCParallelism(3)
 
-	if valueLogGCRuns.Value() != beforeGC+1 {
+	after := ValueLogGCMetricsSnapshot()
+	if after.GCRuns != before.GCRuns+1 {
 		t.Fatalf("expected gc runs to increment")
 	}
-	if valueLogSegmentsRemoved.Value() != beforeRemoved+1 {
+	if after.SegmentsRemoved != before.SegmentsRemoved+1 {
 		t.Fatalf("expected segments removed to increment")
 	}
-	if valueLogHeadUpdates.Value() != beforeHead+1 {
+	if after.HeadUpdates != before.HeadUpdates+1 {
 		t.Fatalf("expected head updates to increment")
+	}
+	if after.GCScheduled != 1 || after.GCThrottled != 1 || after.GCSkipped != 1 || after.GCRejected != 1 {
+		t.Fatalf("unexpected gc counters: %+v", after)
+	}
+	if after.GCActive != 0 {
+		t.Fatalf("expected gc active to return to zero, got %d", after.GCActive)
+	}
+	if after.GCParallelism != 3 {
+		t.Fatalf("expected gc parallelism=3, got %d", after.GCParallelism)
 	}
 }

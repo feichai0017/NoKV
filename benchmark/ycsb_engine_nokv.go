@@ -186,7 +186,7 @@ func (e *nokvEngine) printStats() {
 		l0Bytes  int64
 		l0Ingest int
 	)
-	for _, lvl := range snap.LSMLevels {
+	for _, lvl := range snap.LSM.Levels {
 		if lvl.Level == 0 {
 			l0Tables = lvl.TableCount
 			l0Bytes = lvl.SizeBytes
@@ -199,15 +199,15 @@ func (e *nokvEngine) printStats() {
 		l0Tables,
 		l0Bytes,
 		l0Ingest,
-		snap.FlushPending,
-		snap.CompactionBacklog,
-		snap.CompactionMaxScore,
-		snap.WriteQueueDepth,
-		snap.WriteQueueEntries,
-		snap.WriteQueueBytes,
-		snap.WriteThrottleActive,
-		snap.ValueLogSegments,
-		snap.ValueLogPendingDel,
-		snap.ValueLogDiscardQueue,
+		snap.Flush.Pending,
+		snap.Compaction.Backlog,
+		snap.Compaction.MaxScore,
+		snap.Write.QueueDepth,
+		snap.Write.QueueEntries,
+		snap.Write.QueueBytes,
+		snap.Write.ThrottleActive,
+		snap.ValueLog.Segments,
+		snap.ValueLog.PendingDeletes,
+		snap.ValueLog.DiscardQueue,
 	)
 }
