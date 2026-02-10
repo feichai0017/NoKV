@@ -304,6 +304,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 	return t, nil
 }
 
+// Copy serializes built table blocks, index, and trailer into dst.
 func (bd *buildData) Copy(dst []byte) int {
 	var written int
 	for _, bl := range bd.blockList {
@@ -536,24 +537,33 @@ func (itr *blockIterator) setIdx(i int) {
 	itr.it = &itr.item
 }
 
+// Error returns the iterator terminal error (usually io.EOF at the end).
 func (itr *blockIterator) Error() error {
 	return itr.err
 }
 
+// Next advances to the next entry inside the current block.
 func (itr *blockIterator) Next() {
 	itr.setIdx(itr.idx + 1)
 }
 
+// Valid reports whether the iterator currently points at a decoded entry.
 func (itr *blockIterator) Valid() bool {
 	return itr.err == nil
 }
+
+// Rewind resets the iterator to the first entry in the block.
 func (itr *blockIterator) Rewind() bool {
 	itr.setIdx(0)
 	return true
 }
+
+// Item returns the current block entry as a utils.Item.
 func (itr *blockIterator) Item() utils.Item {
 	return itr.it
 }
+
+// Close releases the pinned block reference held by this iterator.
 func (itr *blockIterator) Close() error {
 	if itr.block != nil && itr.block.release != nil {
 		itr.block.release()

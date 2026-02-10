@@ -114,6 +114,7 @@ func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
 	return itrs
 }
 
+// Get searches levels from L0 to Ln and returns the newest visible entry for key.
 func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 	var (
 		entry *kv.Entry
@@ -255,6 +256,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	return nil
 }
 
+// LogValueLogHead persists the latest value-log head pointer into manifest state.
 func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	if ptr == nil {
 		return nil
@@ -262,10 +264,12 @@ func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	return lm.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
 }
 
+// LogValueLogDelete records a value-log file deletion in the manifest.
 func (lm *levelManager) LogValueLogDelete(bucket uint32, fid uint32) error {
 	return lm.manifestMgr.LogValueLogDelete(bucket, fid)
 }
 
+// LogValueLogUpdate updates value-log metadata for an existing file.
 func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	if meta == nil {
 		return nil
@@ -273,10 +277,12 @@ func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lm.manifestMgr.LogValueLogUpdate(*meta)
 }
 
+// ValueLogHead returns manifest-tracked per-bucket active value-log heads.
 func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
 }
 
+// ValueLogStatus returns manifest metadata for all known value-log files.
 func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
 }
@@ -640,6 +646,7 @@ func (lh *levelHandler) numTables() int {
 	return len(lh.tables)
 }
 
+// Get finds key inside this level, considering ingest shards and level semantics.
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
@@ -704,6 +711,7 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 	return table.prefetchBlockForKey(key, hot)
 }
 
+// Sort orders tables for lookup/compaction; L0 by file id, Ln by key range.
 func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()

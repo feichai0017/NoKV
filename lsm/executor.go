@@ -226,6 +226,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	return nil
 }
 
+// AdjustThrottle enables or clears write throttling based on L0 table pressure.
 func (lm *levelManager) AdjustThrottle() {
 	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
 		return
@@ -244,14 +245,17 @@ func (lm *levelManager) AdjustThrottle() {
 	}
 }
 
+// NeedsCompaction reports whether any level currently exceeds compaction thresholds.
 func (lm *levelManager) NeedsCompaction() bool {
 	return len(lm.pickCompactLevels()) > 0
 }
 
+// PickCompactLevels returns current compaction candidates ordered by priority.
 func (lm *levelManager) PickCompactLevels() []compact.Priority {
 	return lm.pickCompactLevels()
 }
 
+// DoCompact executes one compaction job selected by the picker.
 func (lm *levelManager) DoCompact(id int, p compact.Priority) error {
 	return lm.doCompact(id, p)
 }
