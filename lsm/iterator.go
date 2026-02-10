@@ -9,18 +9,22 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+// Iterator is a thin adapter around a set of LSM iterators.
 type Iterator struct {
 	iters []utils.Iterator
 }
+
+// Item wraps a kv.Entry to satisfy utils.Item in this package.
 type Item struct {
 	e *kv.Entry
 }
 
+// Entry returns the underlying kv entry.
 func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
 
-// create iterators
+// NewIterators builds iterators over mutable/immutable memtables and SST levels.
 func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 	iter := &Iterator{}
 	iter.iters = make([]utils.Iterator, 0)
@@ -40,22 +44,33 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 	iter.iters = append(iter.iters, lsm.levels.iterators(opt)...)
 	return iter.iters
 }
+
+// Next advances the first wrapped iterator.
 func (iter *Iterator) Next() {
 	iter.iters[0].Next()
 }
+
+// Valid reports whether the first wrapped iterator is valid.
 func (iter *Iterator) Valid() bool {
 	return iter.iters[0].Valid()
 }
+
+// Rewind rewinds the first wrapped iterator.
 func (iter *Iterator) Rewind() {
 	iter.iters[0].Rewind()
 }
+
+// Item returns the current item from the first wrapped iterator.
 func (iter *Iterator) Item() utils.Item {
 	return iter.iters[0].Item()
 }
+
+// Close currently does nothing because child iterators are owned elsewhere.
 func (iter *Iterator) Close() error {
 	return nil
 }
 
+// Seek is currently a no-op on this adapter.
 func (iter *Iterator) Seek(key []byte) {
 }
 
@@ -64,6 +79,7 @@ type memIterator struct {
 	innerIter utils.Iterator
 }
 
+// NewIterator creates an iterator over entries stored in this memtable.
 func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
 	if m == nil || m.index == nil {
 		return nil
@@ -74,36 +90,48 @@ func (m *memTable) NewIterator(opt *utils.Options) utils.Iterator {
 	}
 	return &memIterator{innerIter: inner}
 }
+
+// Next advances the memtable iterator.
 func (iter *memIterator) Next() {
 	if iter.innerIter == nil {
 		return
 	}
 	iter.innerIter.Next()
 }
+
+// Valid reports whether the memtable iterator is valid.
 func (iter *memIterator) Valid() bool {
 	if iter.innerIter == nil {
 		return false
 	}
 	return iter.innerIter.Valid()
 }
+
+// Rewind resets the memtable iterator to the beginning.
 func (iter *memIterator) Rewind() {
 	if iter.innerIter == nil {
 		return
 	}
 	iter.innerIter.Rewind()
 }
+
+// Item returns the current memtable item.
 func (iter *memIterator) Item() utils.Item {
 	if iter.innerIter == nil {
 		return nil
 	}
 	return iter.innerIter.Item()
 }
+
+// Close releases resources held by the underlying index iterator.
 func (iter *memIterator) Close() error {
 	if iter.innerIter == nil {
 		return nil
 	}
 	return iter.innerIter.Close()
 }
+
+// Seek positions the memtable iterator at key.
 func (iter *memIterator) Seek(key []byte) {
 	if iter.innerIter == nil {
 		return
@@ -111,6 +139,7 @@ func (iter *memIterator) Seek(key []byte) {
 	iter.innerIter.Seek(key)
 }
 
+// NewIterators returns iterators for every level managed by levelManager.
 func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {
 	return lm.iterators(options)
 }

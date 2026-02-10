@@ -514,14 +514,17 @@ func (lsm *LSM) Prefetch(key []byte, hot bool) {
 	lsm.levels.prefetch(key, hot)
 }
 
+// MemSize returns the current active memtable memory usage.
 func (lsm *LSM) MemSize() int64 {
 	return lsm.memTable.Size()
 }
 
+// MemTableIsNil reports whether the active memtable pointer is unset.
 func (lsm *LSM) MemTableIsNil() bool {
 	return lsm.memTable == nil
 }
 
+// GetSkipListFromMemTable exposes the active memtable skiplist when that engine is used.
 func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 	if lsm == nil || lsm.memTable == nil || lsm.memTable.index == nil {
 		return nil
@@ -532,6 +535,7 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 	return nil
 }
 
+// Rotate seals the active memtable, creates a new one, and schedules flush.
 func (lsm *LSM) Rotate() {
 	lsm.lock.Lock()
 	old := lsm.rotateLocked()
@@ -547,6 +551,7 @@ func (lsm *LSM) rotateLocked() *memTable {
 	return old
 }
 
+// GetMemTables pins active+immutable memtables and returns an unlock callback.
 func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
 	lsm.lock.RLock()
 	defer lsm.lock.RUnlock()

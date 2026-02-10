@@ -19,6 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/wal"
 )
 
+// Stats owns periodic runtime metric collection and snapshot publication.
 type Stats struct {
 	db       *DB
 	closer   *utils.Closer
@@ -33,11 +34,13 @@ var (
 	exportedStatsSnapshot atomic.Pointer[StatsSnapshot]
 )
 
+// HotKeyStat represents one hot key and its observed touch count.
 type HotKeyStat struct {
 	Key   string `json:"key"`
 	Count int32  `json:"count"`
 }
 
+// ColumnFamilySnapshot aggregates read/write counters for a single column family.
 type ColumnFamilySnapshot struct {
 	Writes uint64 `json:"writes"`
 	Reads  uint64 `json:"reads"`
@@ -102,6 +105,7 @@ type StatsSnapshot struct {
 	Redis      metrics.RedisSnapshot             `json:"redis"`
 }
 
+// FlushStatsSnapshot summarizes flush queue depth and stage timing.
 type FlushStatsSnapshot struct {
 	Pending       int64   `json:"pending"`
 	QueueLength   int64   `json:"queue_length"`
@@ -118,6 +122,7 @@ type FlushStatsSnapshot struct {
 	Completed     int64   `json:"completed"`
 }
 
+// CompactionStatsSnapshot summarizes compaction backlog, runtime, and ingest behavior.
 type CompactionStatsSnapshot struct {
 	Backlog              int64   `json:"backlog"`
 	MaxScore             float64 `json:"max_score"`
@@ -134,6 +139,7 @@ type CompactionStatsSnapshot struct {
 	ValueWeightSuggested float64 `json:"value_weight_suggested,omitempty"`
 }
 
+// ValueLogStatsSnapshot reports value-log segment status and GC counters.
 type ValueLogStatsSnapshot struct {
 	Segments       int                        `json:"segments"`
 	PendingDeletes int                        `json:"pending_deletes"`
@@ -142,6 +148,7 @@ type ValueLogStatsSnapshot struct {
 	GC             metrics.ValueLogGCSnapshot `json:"gc"`
 }
 
+// WALStatsSnapshot captures WAL head position, record mix, and watchdog status.
 type WALStatsSnapshot struct {
 	ActiveSegment           int64             `json:"active_segment"`
 	SegmentCount            int64             `json:"segment_count"`
@@ -158,6 +165,7 @@ type WALStatsSnapshot struct {
 	AutoGCLastUnix          int64             `json:"auto_gc_last_unix"`
 }
 
+// RaftStatsSnapshot summarizes raft log lag across tracked groups.
 type RaftStatsSnapshot struct {
 	GroupCount       int    `json:"group_count"`
 	LaggingGroups    int    `json:"lagging_groups"`
@@ -168,6 +176,7 @@ type RaftStatsSnapshot struct {
 	LagWarning       bool   `json:"lag_warning"`
 }
 
+// WriteStatsSnapshot tracks write-path queue pressure, latency, and throttling.
 type WriteStatsSnapshot struct {
 	QueueDepth       int64   `json:"queue_depth"`
 	QueueEntries     int64   `json:"queue_entries"`
@@ -182,6 +191,7 @@ type WriteStatsSnapshot struct {
 	HotKeyLimited    uint64  `json:"hot_key_limited"`
 }
 
+// TxnStatsSnapshot provides transaction lifecycle counters from the oracle.
 type TxnStatsSnapshot struct {
 	Active    int64  `json:"active"`
 	Started   uint64 `json:"started"`
@@ -189,6 +199,7 @@ type TxnStatsSnapshot struct {
 	Conflicts uint64 `json:"conflicts"`
 }
 
+// RegionStatsSnapshot reports region counts grouped by region state.
 type RegionStatsSnapshot struct {
 	Total     int64 `json:"total"`
 	New       int64 `json:"new"`
@@ -198,6 +209,7 @@ type RegionStatsSnapshot struct {
 	Other     int64 `json:"other"`
 }
 
+// HotStatsSnapshot contains top read/write keys and optional ring internals.
 type HotStatsSnapshot struct {
 	ReadKeys  []HotKeyStat   `json:"read_keys,omitempty"`
 	ReadRing  *hotring.Stats `json:"read_ring,omitempty"`
@@ -205,6 +217,7 @@ type HotStatsSnapshot struct {
 	WriteRing *hotring.Stats `json:"write_ring,omitempty"`
 }
 
+// CacheStatsSnapshot captures block/index/bloom hit-rate indicators.
 type CacheStatsSnapshot struct {
 	BlockL0HitRate float64 `json:"block_l0_hit_rate"`
 	BlockL1HitRate float64 `json:"block_l1_hit_rate"`
@@ -213,6 +226,7 @@ type CacheStatsSnapshot struct {
 	IteratorReused uint64  `json:"iterator_reused"`
 }
 
+// LSMStatsSnapshot summarizes per-level storage shape and value-density signals.
 type LSMStatsSnapshot struct {
 	Levels            []LSMLevelStats                 `json:"levels,omitempty"`
 	ValueBytesTotal   int64                           `json:"value_bytes_total"`

@@ -31,6 +31,7 @@ type TxnIterator struct {
 	valid bool
 }
 
+// IteratorOptions controls scan direction, version visibility, and key filtering.
 type IteratorOptions struct {
 	Reverse        bool // Direction of iteration. False is forward, true is backward.
 	AllVersions    bool // Fetch all valid versions of the same key.
@@ -74,28 +75,34 @@ func (ri *readTsIterator) ensureVisible() {
 	}
 }
 
+// Next advances the wrapped iterator and skips entries newer than readTs.
 func (ri *readTsIterator) Next() {
 	ri.iter.Next()
 	ri.ensureVisible()
 }
 
+// Valid reports whether the wrapped iterator has a visible entry.
 func (ri *readTsIterator) Valid() bool {
 	return ri.iter.Valid()
 }
 
+// Rewind moves to the first wrapped entry visible at readTs.
 func (ri *readTsIterator) Rewind() {
 	ri.iter.Rewind()
 	ri.ensureVisible()
 }
 
+// Item returns the current wrapped item after visibility filtering.
 func (ri *readTsIterator) Item() utils.Item {
 	return ri.iter.Item()
 }
 
+// Close releases the wrapped iterator.
 func (ri *readTsIterator) Close() error {
 	return ri.iter.Close()
 }
 
+// Seek positions the wrapped iterator and then enforces readTs visibility.
 func (ri *readTsIterator) Seek(key []byte) {
 	ri.iter.Seek(key)
 	ri.ensureVisible()
