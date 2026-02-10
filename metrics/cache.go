@@ -26,10 +26,12 @@ type CacheCounters struct {
 	indexMisses uint64
 }
 
+// NewCacheCounters creates a new value for the API.
 func NewCacheCounters() *CacheCounters {
 	return &CacheCounters{}
 }
 
+// RecordBlock is part of the exported receiver API.
 func (m *CacheCounters) RecordBlock(level int, hit bool) {
 	switch level {
 	case 0:
@@ -47,6 +49,7 @@ func (m *CacheCounters) RecordBlock(level int, hit bool) {
 	}
 }
 
+// RecordBloom is part of the exported receiver API.
 func (m *CacheCounters) RecordBloom(hit bool) {
 	if hit {
 		atomic.AddUint64(&m.bloomHits, 1)
@@ -55,6 +58,7 @@ func (m *CacheCounters) RecordBloom(hit bool) {
 	atomic.AddUint64(&m.bloomMisses, 1)
 }
 
+// RecordIndex is part of the exported receiver API.
 func (m *CacheCounters) RecordIndex(hit bool) {
 	if hit {
 		atomic.AddUint64(&m.indexHits, 1)
@@ -63,6 +67,7 @@ func (m *CacheCounters) RecordIndex(hit bool) {
 	atomic.AddUint64(&m.indexMisses, 1)
 }
 
+// Snapshot is part of the exported receiver API.
 func (m *CacheCounters) Snapshot() CacheSnapshot {
 	if m == nil {
 		return CacheSnapshot{}

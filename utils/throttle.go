@@ -45,6 +45,7 @@ func (t *Throttle) Do() error {
 	return nil
 }
 
+// Done is part of the exported receiver API.
 func (t *Throttle) Done(err error) {
 	if err != nil {
 		t.errCh <- err

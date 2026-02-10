@@ -31,6 +31,7 @@ type TxnIterator struct {
 	valid bool
 }
 
+// IteratorOptions defines an exported API type.
 type IteratorOptions struct {
 	Reverse        bool // Direction of iteration. False is forward, true is backward.
 	AllVersions    bool // Fetch all valid versions of the same key.
@@ -74,28 +75,34 @@ func (ri *readTsIterator) ensureVisible() {
 	}
 }
 
+// Next is part of the exported receiver API.
 func (ri *readTsIterator) Next() {
 	ri.iter.Next()
 	ri.ensureVisible()
 }
 
+// Valid is part of the exported receiver API.
 func (ri *readTsIterator) Valid() bool {
 	return ri.iter.Valid()
 }
 
+// Rewind is part of the exported receiver API.
 func (ri *readTsIterator) Rewind() {
 	ri.iter.Rewind()
 	ri.ensureVisible()
 }
 
+// Item is part of the exported receiver API.
 func (ri *readTsIterator) Item() utils.Item {
 	return ri.iter.Item()
 }
 
+// Close is part of the exported receiver API.
 func (ri *readTsIterator) Close() error {
 	return ri.iter.Close()
 }
 
+// Seek is part of the exported receiver API.
 func (ri *readTsIterator) Seek(key []byte) {
 	ri.iter.Seek(key)
 	ri.ensureVisible()

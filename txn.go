@@ -96,6 +96,7 @@ func (o *oracle) initCommitState(committed uint64) {
 	o.txnMark.SetLastIndex(committed)
 }
 
+// Stop is part of the exported receiver API.
 func (o *oracle) Stop() {
 	o.closer.SignalAndWait()
 }
@@ -257,6 +258,7 @@ func (o *oracle) doneCommit(cts uint64) {
 	o.txnMark.Done(cts)
 }
 
+// Txn defines an exported API type.
 type Txn struct {
 	readTs   uint64
 	commitTs uint64
@@ -285,18 +287,22 @@ type pendingWritesIterator struct {
 	reversed bool
 }
 
+// Item is part of the exported receiver API.
 func (pi *pendingWritesIterator) Item() utils.Item {
 	return pi.entries[pi.nextIdx]
 }
 
+// Next is part of the exported receiver API.
 func (pi *pendingWritesIterator) Next() {
 	pi.nextIdx++
 }
 
+// Rewind is part of the exported receiver API.
 func (pi *pendingWritesIterator) Rewind() {
 	pi.nextIdx = 0
 }
 
+// Seek is part of the exported receiver API.
 func (pi *pendingWritesIterator) Seek(key []byte) {
 	pi.nextIdx = sort.Search(len(pi.entries), func(idx int) bool {
 		cmp := bytes.Compare(pi.entries[idx].Key, key)
@@ -307,12 +313,14 @@ func (pi *pendingWritesIterator) Seek(key []byte) {
 	})
 }
 
+// Key is part of the exported receiver API.
 func (pi *pendingWritesIterator) Key() []byte {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
 	return entry.Key
 }
 
+// Value is part of the exported receiver API.
 func (pi *pendingWritesIterator) Value() kv.ValueStruct {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
@@ -324,10 +332,12 @@ func (pi *pendingWritesIterator) Value() kv.ValueStruct {
 	}
 }
 
+// Valid is part of the exported receiver API.
 func (pi *pendingWritesIterator) Valid() bool {
 	return pi.nextIdx < len(pi.entries)
 }
 
+// Close is part of the exported receiver API.
 func (pi *pendingWritesIterator) Close() error {
 	return nil
 }
@@ -764,6 +774,7 @@ func (txn *Txn) ReadTs() uint64 {
 	return txn.readTs
 }
 
+// NewTransaction creates a new value for the API.
 func (db *DB) NewTransaction(update bool) *Txn {
 	return db.newTransaction(update)
 }

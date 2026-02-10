@@ -151,6 +151,7 @@ func (ds *DiskStorage) saveEntriesLocked(entries []myraft.Entry) error {
 	return ds.persistEntriesLocked()
 }
 
+// SaveReadyState is part of the exported receiver API.
 func (ds *DiskStorage) SaveReadyState(rd myraft.Ready) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -183,12 +184,14 @@ func (ds *DiskStorage) SaveReadyState(rd myraft.Ready) error {
 	return nil
 }
 
+// Append is part of the exported receiver API.
 func (ds *DiskStorage) Append(entries []myraft.Entry) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	return ds.saveEntriesLocked(entries)
 }
 
+// ApplySnapshot is part of the exported receiver API.
 func (ds *DiskStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	if myraft.IsEmptySnap(snap) {
 		return nil
@@ -208,6 +211,7 @@ func (ds *DiskStorage) ApplySnapshot(snap myraft.Snapshot) error {
 	return nil
 }
 
+// SetHardState is part of the exported receiver API.
 func (ds *DiskStorage) SetHardState(st myraft.HardState) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()

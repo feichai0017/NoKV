@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// LogFile defines an exported API type.
 type LogFile struct {
 	Lock sync.RWMutex
 	FID  uint32
@@ -21,6 +22,7 @@ type LogFile struct {
 	ro   bool
 }
 
+// Open is part of the exported receiver API.
 func (lf *LogFile) Open(opt *Options) error {
 	var err error
 	lf.FID = uint32(opt.FID)
@@ -66,6 +68,7 @@ func (lf *LogFile) Read(p *kv.ValuePtr) (buf []byte, err error) {
 	return buf, err
 }
 
+// DoneWriting is part of the exported receiver API.
 func (lf *LogFile) DoneWriting(offset uint32) error {
 	// Sync before acquiring lock. (We call this from write() and thus know we have shared access
 	// to the fd.)
@@ -98,6 +101,8 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	// We no longer open files in read-only mode. We keep all vlog files open in read-write mode.
 	return nil
 }
+
+// Write is part of the exported receiver API.
 func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	if lf.ro {
 		return fmt.Errorf("logfile %s is read-only", lf.FileName())
@@ -108,6 +113,8 @@ func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	}
 	return err
 }
+
+// Truncate is part of the exported receiver API.
 func (lf *LogFile) Truncate(offset int64) error {
 	if err := lf.f.Truncature(offset); err != nil {
 		return err
@@ -121,10 +128,13 @@ func (lf *LogFile) Truncate(offset int64) error {
 	atomic.StoreUint32(&lf.size, uint32(offset))
 	return nil
 }
+
+// Close is part of the exported receiver API.
 func (lf *LogFile) Close() error {
 	return lf.f.Close()
 }
 
+// Size is part of the exported receiver API.
 func (lf *LogFile) Size() int64 {
 	return int64(atomic.LoadUint32(&lf.size))
 }
@@ -147,6 +157,7 @@ func (lf *LogFile) Bootstrap() error {
 	return nil
 }
 
+// Init is part of the exported receiver API.
 func (lf *LogFile) Init() error {
 	fstat, err := lf.f.Fd.Stat()
 	if err != nil {
@@ -161,14 +172,18 @@ func (lf *LogFile) Init() error {
 	lf.size = uint32(sz)
 	return nil
 }
+
+// FileName is part of the exported receiver API.
 func (lf *LogFile) FileName() string {
 	return lf.f.Fd.Name()
 }
 
+// Seek is part of the exported receiver API.
 func (lf *LogFile) Seek(offset int64, whence int) (ret int64, err error) {
 	return lf.f.Fd.Seek(offset, whence)
 }
 
+// FD is part of the exported receiver API.
 func (lf *LogFile) FD() *os.File {
 	return lf.f.Fd
 }

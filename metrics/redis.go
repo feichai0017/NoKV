@@ -27,6 +27,7 @@ type RedisMetrics struct {
 
 var defaultRedisMetrics atomic.Pointer[RedisMetrics]
 
+// NewRedisMetrics creates a new value for the API.
 func NewRedisMetrics(commandNames []string) *RedisMetrics {
 	rm := &RedisMetrics{
 		commandCounts: make(map[string]*atomic.Uint64, len(commandNames)),
@@ -55,6 +56,7 @@ func DefaultRedisSnapshot() RedisSnapshot {
 	return RedisSnapshot{}
 }
 
+// Snapshot is part of the exported receiver API.
 func (rm *RedisMetrics) Snapshot() RedisSnapshot {
 	if rm == nil {
 		return RedisSnapshot{}
@@ -76,6 +78,7 @@ func (rm *RedisMetrics) Snapshot() RedisSnapshot {
 	}
 }
 
+// IncCommand is part of the exported receiver API.
 func (rm *RedisMetrics) IncCommand(name string) {
 	if rm == nil {
 		return
@@ -99,6 +102,7 @@ func (rm *RedisMetrics) IncCommand(name string) {
 	counter.Add(1)
 }
 
+// IncError is part of the exported receiver API.
 func (rm *RedisMetrics) IncError() {
 	if rm == nil {
 		return
@@ -106,6 +110,7 @@ func (rm *RedisMetrics) IncError() {
 	rm.errorsTotal.Add(1)
 }
 
+// ConnOpened is part of the exported receiver API.
 func (rm *RedisMetrics) ConnOpened() {
 	if rm == nil {
 		return
@@ -114,6 +119,7 @@ func (rm *RedisMetrics) ConnOpened() {
 	rm.connectionsCurrent.Add(1)
 }
 
+// ConnClosed is part of the exported receiver API.
 func (rm *RedisMetrics) ConnClosed() {
 	if rm == nil {
 		return

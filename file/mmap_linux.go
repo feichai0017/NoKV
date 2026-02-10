@@ -82,6 +82,7 @@ type mmapReader struct {
 	offset int
 }
 
+// Read is part of the exported receiver API.
 func (mr *mmapReader) Read(buf []byte) (int, error) {
 	if mr.offset > len(mr.Data) {
 		return 0, io.EOF
@@ -94,6 +95,7 @@ func (mr *mmapReader) Read(buf []byte) (int, error) {
 	return n, nil
 }
 
+// NewReader creates a new value for the API.
 func (m *MmapFile) NewReader(offset int) io.Reader {
 	return &mmapReader{
 		Data:   m.Data,
@@ -190,6 +192,7 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	return nil
 }
 
+// Sync is part of the exported receiver API.
 func (m *MmapFile) Sync() error {
 	if m == nil {
 		return nil
@@ -233,6 +236,7 @@ func (m *MmapFile) Remap(writable bool) error {
 	return nil
 }
 
+// Delete is part of the exported receiver API.
 func (m *MmapFile) Delete() error {
 	if m.Fd == nil {
 		return nil
@@ -265,6 +269,7 @@ func (m *MmapFile) Close() error {
 	return m.Fd.Close()
 }
 
+// SyncDir is part of the exported package API.
 func SyncDir(dir string) error {
 	df, err := os.Open(dir)
 	if err != nil {

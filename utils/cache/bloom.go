@@ -5,6 +5,7 @@ import "math"
 // Filter is an encoded set of []byte keys.
 type Filter []byte
 
+// BloomFilter defines an exported API type.
 type BloomFilter struct {
 	bitmap Filter
 	k      uint8
@@ -39,14 +40,17 @@ func (f *BloomFilter) MayContain(h uint32) bool {
 	return true
 }
 
+// Len is part of the exported receiver API.
 func (f *BloomFilter) Len() int32 {
 	return int32(len(f.bitmap))
 }
 
+// InsertKey is part of the exported receiver API.
 func (f *BloomFilter) InsertKey(k []byte) bool {
 	return f.Insert(Hash(k))
 }
 
+// Insert is part of the exported receiver API.
 func (f *BloomFilter) Insert(h uint32) bool {
 	k := f.k
 	if k > 30 {
@@ -64,6 +68,7 @@ func (f *BloomFilter) Insert(h uint32) bool {
 	return true
 }
 
+// AllowKey is part of the exported receiver API.
 func (f *BloomFilter) AllowKey(k []byte) bool {
 	if f == nil {
 		return true
@@ -75,6 +80,7 @@ func (f *BloomFilter) AllowKey(k []byte) bool {
 	return already
 }
 
+// Allow is part of the exported receiver API.
 func (f *BloomFilter) Allow(h uint32) bool {
 	if f == nil {
 		return true
