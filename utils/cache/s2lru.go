@@ -85,6 +85,7 @@ func (slru *segmentedLRU) get(v *list.Element) {
 	slru.stageTwo.MoveToFront(back)
 }
 
+// Len is part of the exported receiver API.
 func (slru *segmentedLRU) Len() int {
 	return slru.stageTwo.Len() + slru.stageOne.Len()
 }
@@ -101,6 +102,7 @@ func (slru *segmentedLRU) victim() *storeItem {
 	return v.Value.(*storeItem)
 }
 
+// String is part of the exported receiver API.
 func (slru *segmentedLRU) String() string {
 	var s string
 	for e := slru.stageTwo.Front(); e != nil; e = e.Next() {

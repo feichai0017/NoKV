@@ -30,6 +30,7 @@ func (req *request) reset() {
 	req.wg = sync.WaitGroup{}
 }
 
+// IncrRef is part of the exported receiver API.
 func (req *request) IncrRef() {
 	atomic.AddInt32(&req.ref, 1)
 }
@@ -43,6 +44,7 @@ func (req *request) loadEntries(entries []*kv.Entry) {
 	copy(req.Entries, entries)
 }
 
+// DecrRef is part of the exported receiver API.
 func (req *request) DecrRef() {
 	nRef := atomic.AddInt32(&req.ref, -1)
 	if nRef > 0 {
@@ -56,6 +58,7 @@ func (req *request) DecrRef() {
 	requestPool.Put(req)
 }
 
+// Wait is part of the exported receiver API.
 func (req *request) Wait() error {
 	req.wg.Wait()
 	err := req.Err

@@ -21,6 +21,7 @@ func NewService(st *store.Store) *Service {
 	return &Service{store: st}
 }
 
+// KvGet is part of the exported receiver API.
 func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -48,6 +49,7 @@ func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetRes
 	return resp, nil
 }
 
+// KvBatchGet is part of the exported receiver API.
 func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -103,6 +105,7 @@ func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*p
 	return resp, nil
 }
 
+// KvScan is part of the exported receiver API.
 func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScanResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -133,6 +136,7 @@ func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScan
 	return resp, nil
 }
 
+// KvPrewrite is part of the exported receiver API.
 func (s *Service) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -158,6 +162,7 @@ func (s *Service) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*p
 	return out, nil
 }
 
+// KvCommit is part of the exported receiver API.
 func (s *Service) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -183,6 +188,7 @@ func (s *Service) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.Kv
 	return out, nil
 }
 
+// KvBatchRollback is part of the exported receiver API.
 func (s *Service) KvBatchRollback(ctx context.Context, req *pb.KvBatchRollbackRequest) (*pb.KvBatchRollbackResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -208,6 +214,7 @@ func (s *Service) KvBatchRollback(ctx context.Context, req *pb.KvBatchRollbackRe
 	return out, nil
 }
 
+// KvResolveLock is part of the exported receiver API.
 func (s *Service) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
@@ -233,6 +240,7 @@ func (s *Service) KvResolveLock(ctx context.Context, req *pb.KvResolveLockReques
 	return out, nil
 }
 
+// KvCheckTxnStatus is part of the exported receiver API.
 func (s *Service) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {

@@ -11,6 +11,7 @@ const (
 	ReadyFailpointSkipManifest  = failpoints.SkipManifest
 )
 
+// SetReadyFailpoint is part of the exported package API.
 func SetReadyFailpoint(mode ReadyFailpointMode) {
 	failpoints.Set(mode)
 }

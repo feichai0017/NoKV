@@ -60,6 +60,7 @@ func (r *raftLogTracker) setInjected(flag bool) {
 	r.mu.Unlock()
 }
 
+// Info is part of the exported receiver API.
 func (r *raftLogTracker) Info() *RaftLogInfo {
 	if r == nil {
 		return nil
@@ -73,6 +74,7 @@ func (r *raftLogTracker) Info() *RaftLogInfo {
 	}
 }
 
+// RaftLogInfo defines an exported API type.
 type RaftLogInfo struct {
 	Pointer  manifest.RaftLogPointer
 	LastErr  error

@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// MemTable defines an exported API type.
 type MemTable = memTable
 
 type memIndex interface {
@@ -98,11 +99,13 @@ func (m *memTable) close() error {
 	return nil
 }
 
+// Set is part of the exported receiver API.
 func (m *memTable) Set(entry *kv.Entry) error {
 	entries := [1]*kv.Entry{entry}
 	return m.setBatch(entries[:])
 }
 
+// Get is part of the exported receiver API.
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	var vs kv.ValueStruct
 	if m.index != nil {
@@ -118,6 +121,7 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	return e, nil
 }
 
+// Size is part of the exported receiver API.
 func (m *memTable) Size() int64 {
 	if m == nil || m.index == nil {
 		return 0
@@ -269,6 +273,7 @@ func (mt *memTable) IncrRef() {
 	mt.index.IncrRef()
 }
 
+// DecrRef is part of the exported receiver API.
 func (mt *memTable) DecrRef() {
 	if mt == nil || mt.index == nil {
 		return

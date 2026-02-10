@@ -36,6 +36,7 @@ func FID(name string) uint64 {
 	return uint64(id)
 }
 
+// VlogFilePath is part of the exported package API.
 func VlogFilePath(dirPath string, fid uint32) string {
 	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
 }

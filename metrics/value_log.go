@@ -40,10 +40,12 @@ type ValueLogGCCollector struct {
 	gcParallelism   atomic.Int64
 }
 
+// NewValueLogGCCollector creates a new value for the API.
 func NewValueLogGCCollector() *ValueLogGCCollector {
 	return &ValueLogGCCollector{}
 }
 
+// Snapshot is part of the exported receiver API.
 func (c *ValueLogGCCollector) Snapshot() ValueLogGCSnapshot {
 	if c == nil {
 		return ValueLogGCSnapshot{}
@@ -61,6 +63,7 @@ func (c *ValueLogGCCollector) Snapshot() ValueLogGCSnapshot {
 	}
 }
 
+// Reset is part of the exported receiver API.
 func (c *ValueLogGCCollector) Reset() {
 	if c == nil {
 		return
@@ -76,60 +79,70 @@ func (c *ValueLogGCCollector) Reset() {
 	c.gcParallelism.Store(0)
 }
 
+// IncRuns is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncRuns() {
 	if c != nil {
 		c.gcRuns.Add(1)
 	}
 }
 
+// IncSegmentsRemoved is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncSegmentsRemoved() {
 	if c != nil {
 		c.segmentsRemoved.Add(1)
 	}
 }
 
+// IncHeadUpdates is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncHeadUpdates() {
 	if c != nil {
 		c.headUpdates.Add(1)
 	}
 }
 
+// IncScheduled is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncScheduled() {
 	if c != nil {
 		c.gcScheduled.Add(1)
 	}
 }
 
+// IncThrottled is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncThrottled() {
 	if c != nil {
 		c.gcThrottled.Add(1)
 	}
 }
 
+// IncSkipped is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncSkipped() {
 	if c != nil {
 		c.gcSkipped.Add(1)
 	}
 }
 
+// IncRejected is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncRejected() {
 	if c != nil {
 		c.gcRejected.Add(1)
 	}
 }
 
+// IncActive is part of the exported receiver API.
 func (c *ValueLogGCCollector) IncActive() {
 	if c != nil {
 		c.gcActive.Add(1)
 	}
 }
 
+// DecActive is part of the exported receiver API.
 func (c *ValueLogGCCollector) DecActive() {
 	if c != nil {
 		c.gcActive.Add(-1)
 	}
 }
 
+// SetParallelism is part of the exported receiver API.
 func (c *ValueLogGCCollector) SetParallelism(v int) {
 	if c != nil {
 		c.gcParallelism.Store(int64(v))
@@ -138,10 +151,12 @@ func (c *ValueLogGCCollector) SetParallelism(v int) {
 
 var defaultValueLogGCCollector = NewValueLogGCCollector()
 
+// DefaultValueLogGCCollector is part of the exported package API.
 func DefaultValueLogGCCollector() *ValueLogGCCollector {
 	return defaultValueLogGCCollector
 }
 
+// ResetValueLogGCMetricsForTesting is part of the exported package API.
 func ResetValueLogGCMetricsForTesting() {
 	defaultValueLogGCCollector.Reset()
 }

@@ -328,6 +328,7 @@ func (db *DB) runRecoveryChecks() error {
 	return nil
 }
 
+// Close is part of the exported receiver API.
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
@@ -392,6 +393,7 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// Del is part of the exported receiver API.
 func (db *DB) Del(key []byte) error {
 	return db.DelCF(kv.CFDefault, key)
 }
@@ -523,6 +525,8 @@ func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) 
 	entry.Version = ts
 	return entry, nil
 }
+
+// Get is part of the exported receiver API.
 func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	return db.GetCF(kv.CFDefault, key)
 }
@@ -585,6 +589,7 @@ func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	return expiresAt <= uint64(time.Now().Unix())
 }
 
+// Info is part of the exported receiver API.
 func (db *DB) Info() *Stats {
 	// Return the current stats snapshot.
 	return db.stats
@@ -684,6 +689,7 @@ func (db *DB) Manifest() *manifest.Manager {
 	return db.lsm.ManifestManager()
 }
 
+// IsClosed is part of the exported receiver API.
 func (db *DB) IsClosed() bool {
 	return atomic.LoadUint32(&db.isClosed) == 1
 }

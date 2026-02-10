@@ -14,6 +14,7 @@ var (
 	mu sync.Mutex
 )
 
+// Int63n is part of the exported package API.
 func Int63n(n int64) int64 {
 	mu.Lock()
 	res := r.Int63n(n)
@@ -21,6 +22,7 @@ func Int63n(n int64) int64 {
 	return res
 }
 
+// RandN is part of the exported package API.
 func RandN(n int) int {
 	mu.Lock()
 	res := r.Intn(n)
@@ -28,6 +30,7 @@ func RandN(n int) int {
 	return res
 }
 
+// Float64 is part of the exported package API.
 func Float64() float64 {
 	mu.Lock()
 	res := r.Float64()

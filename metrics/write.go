@@ -41,10 +41,12 @@ type WriteMetricsSnapshot struct {
 	ApplySamples     int64
 }
 
+// NewWriteMetrics creates a new value for the API.
 func NewWriteMetrics() *WriteMetrics {
 	return &WriteMetrics{}
 }
 
+// UpdateQueue is part of the exported receiver API.
 func (m *WriteMetrics) UpdateQueue(len int, entries int, bytes int64) {
 	if m == nil {
 		return
@@ -54,6 +56,7 @@ func (m *WriteMetrics) UpdateQueue(len int, entries int, bytes int64) {
 	m.queueBytes.Store(bytes)
 }
 
+// RecordBatch is part of the exported receiver API.
 func (m *WriteMetrics) RecordBatch(reqs int, entries int, size int64, waitSumNs int64) {
 	if m == nil {
 		return
@@ -65,6 +68,7 @@ func (m *WriteMetrics) RecordBatch(reqs int, entries int, size int64, waitSumNs 
 	m.waitSamples.Add(int64(reqs))
 }
 
+// RecordValueLog is part of the exported receiver API.
 func (m *WriteMetrics) RecordValueLog(d time.Duration) {
 	if m == nil {
 		return
@@ -73,6 +77,7 @@ func (m *WriteMetrics) RecordValueLog(d time.Duration) {
 	m.vlogSamples.Add(1)
 }
 
+// RecordApply is part of the exported receiver API.
 func (m *WriteMetrics) RecordApply(d time.Duration) {
 	if m == nil {
 		return
@@ -81,6 +86,7 @@ func (m *WriteMetrics) RecordApply(d time.Duration) {
 	m.applySamples.Add(1)
 }
 
+// Snapshot is part of the exported receiver API.
 func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	if m == nil {
 		return WriteMetricsSnapshot{}
