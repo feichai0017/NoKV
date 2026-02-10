@@ -328,6 +328,7 @@ func (db *DB) runRecoveryChecks() error {
 	return nil
 }
 
+// Close stops background workers and flushes in-memory state before releasing all resources.
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
@@ -392,6 +393,7 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// Del removes a key from the default column family by writing a tombstone.
 func (db *DB) Del(key []byte) error {
 	return db.DelCF(kv.CFDefault, key)
 }
@@ -523,6 +525,8 @@ func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) 
 	entry.Version = ts
 	return entry, nil
 }
+
+// Get reads the latest visible value for key from the default column family.
 func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	return db.GetCF(kv.CFDefault, key)
 }
@@ -585,6 +589,7 @@ func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	return expiresAt <= uint64(time.Now().Unix())
 }
 
+// Info returns the live stats collector for snapshot/diagnostic access.
 func (db *DB) Info() *Stats {
 	// Return the current stats snapshot.
 	return db.stats
@@ -684,6 +689,7 @@ func (db *DB) Manifest() *manifest.Manager {
 	return db.lsm.ManifestManager()
 }
 
+// IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
 	return atomic.LoadUint32(&db.isClosed) == 1
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+// DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
@@ -20,12 +21,14 @@ type DBIterator struct {
 	valid    bool
 }
 
+// Item is the user-facing iterator item backed by an entry and optional vlog reader.
 type Item struct {
 	e        *kv.Entry
 	vlog     *valueLog
 	valueBuf []byte
 }
 
+// Entry returns the current entry view for this iterator item.
 func (it *Item) Entry() *kv.Entry {
 	return it.e
 }
@@ -62,6 +65,8 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 	dst = append(dst[:0], val...)
 	return dst, nil
 }
+
+// NewIterator creates a DB-level iterator over user keys in the default column family.
 func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
@@ -91,6 +96,7 @@ func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
 	return lsm.NewMergeIterator(iters, !opt.IsAsc)
 }
 
+// Next advances to the next visible key/value pair.
 func (iter *DBIterator) Next() {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -99,6 +105,7 @@ func (iter *DBIterator) Next() {
 	iter.populate()
 }
 
+// Valid reports whether the iterator currently points at a valid item.
 func (iter *DBIterator) Valid() bool {
 	if iter == nil {
 		return false
@@ -106,6 +113,7 @@ func (iter *DBIterator) Valid() bool {
 	return iter.valid
 }
 
+// Rewind positions the iterator at the first or last key based on scan direction.
 func (iter *DBIterator) Rewind() {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -114,6 +122,7 @@ func (iter *DBIterator) Rewind() {
 	iter.populate()
 }
 
+// Seek positions the iterator at the first key >= key in default column family order.
 func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -126,6 +135,7 @@ func (iter *DBIterator) Seek(key []byte) {
 	iter.populate()
 }
 
+// Item returns the currently materialized item, or nil when iterator is invalid.
 func (iter *DBIterator) Item() utils.Item {
 	if iter == nil || !iter.valid {
 		return nil
@@ -133,6 +143,7 @@ func (iter *DBIterator) Item() utils.Item {
 	return &iter.item
 }
 
+// Close releases underlying iterators and returns pooled iterator context.
 func (iter *DBIterator) Close() error {
 	if iter == nil {
 		return nil

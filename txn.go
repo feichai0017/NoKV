@@ -96,6 +96,7 @@ func (o *oracle) initCommitState(committed uint64) {
 	o.txnMark.SetLastIndex(committed)
 }
 
+// Stop shuts down watermark workers used by the oracle timestamp tracker.
 func (o *oracle) Stop() {
 	o.closer.SignalAndWait()
 }
@@ -257,6 +258,7 @@ func (o *oracle) doneCommit(cts uint64) {
 	o.txnMark.Done(cts)
 }
 
+// Txn is an optimistic transaction view with buffered writes and conflict tracking.
 type Txn struct {
 	readTs   uint64
 	commitTs uint64
@@ -285,18 +287,22 @@ type pendingWritesIterator struct {
 	reversed bool
 }
 
+// Item returns the current buffered write as an iterator item.
 func (pi *pendingWritesIterator) Item() utils.Item {
 	return pi.entries[pi.nextIdx]
 }
 
+// Next advances to the next buffered write.
 func (pi *pendingWritesIterator) Next() {
 	pi.nextIdx++
 }
 
+// Rewind resets the buffered-write cursor to the first entry.
 func (pi *pendingWritesIterator) Rewind() {
 	pi.nextIdx = 0
 }
 
+// Seek positions the buffered-write iterator at the first entry matching key order.
 func (pi *pendingWritesIterator) Seek(key []byte) {
 	pi.nextIdx = sort.Search(len(pi.entries), func(idx int) bool {
 		cmp := bytes.Compare(pi.entries[idx].Key, key)
@@ -307,12 +313,14 @@ func (pi *pendingWritesIterator) Seek(key []byte) {
 	})
 }
 
+// Key returns the current internal key from the buffered write iterator.
 func (pi *pendingWritesIterator) Key() []byte {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
 	return entry.Key
 }
 
+// Value returns the current value struct from the buffered write iterator.
 func (pi *pendingWritesIterator) Value() kv.ValueStruct {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
@@ -324,10 +332,12 @@ func (pi *pendingWritesIterator) Value() kv.ValueStruct {
 	}
 }
 
+// Valid reports whether the buffered-write cursor is within bounds.
 func (pi *pendingWritesIterator) Valid() bool {
 	return pi.nextIdx < len(pi.entries)
 }
 
+// Close is a no-op because pending writes are owned by the transaction.
 func (pi *pendingWritesIterator) Close() error {
 	return nil
 }
@@ -764,6 +774,7 @@ func (txn *Txn) ReadTs() uint64 {
 	return txn.readTs
 }
 
+// NewTransaction creates a transaction bound to the current read timestamp.
 func (db *DB) NewTransaction(update bool) *Txn {
 	return db.newTransaction(update)
 }
