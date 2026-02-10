@@ -333,12 +333,6 @@ func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 }
 
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	compact.CompactionRunsTotal.Add(1)
-	lastMs := duration.Milliseconds()
-	compact.CompactionLastDurationMs.Set(lastMs)
-	if lastMs > compact.CompactionMaxDurationMs.Value() {
-		compact.CompactionMaxDurationMs.Set(lastMs)
-	}
 	atomic.AddUint64(&lm.compactionRuns, 1)
 	last := duration.Nanoseconds()
 	atomic.StoreInt64(&lm.compactionLastNs, last)

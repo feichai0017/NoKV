@@ -7,7 +7,7 @@
 ## 1. Motivation
 
 * **Cache hints** – `DB.prefetchLoop` (see [`db.go`](../db.go)) consumes hot keys to schedule asynchronous reads into the block cache.
-* **Operational insight** – `StatsSnapshot.HotKeys` and `nokv stats --json` surface the hottest keys, aiding debugging of traffic hotspots.
+* **Operational insight** – `StatsSnapshot.Hot.ReadKeys` and `nokv stats --json` surface the hottest keys, aiding debugging of traffic hotspots.
 * **Throttling** – `HotRing.TouchAndClamp` enables simple rate caps: once a key crosses a threshold, callers can back off or log alerts.
 
 Compared with RocksDB (which exposes block access stats via `perf_context`) and Badger (which lacks built-in hot-key reporting), NoKV offers a lightweight but concurrent-friendly tracker out of the box.
@@ -56,7 +56,7 @@ Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket he
 
 * **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which invokes `HotRing.Touch` on a **read-only ring** for every successful lookup.
 * **Write throttling & hot batching** – writes are tracked by a **write-only ring**. When `Options.WriteHotKeyLimit > 0`, writes use `TouchAndClamp` to enforce throttling; when throttling is disabled but `HotWriteBurstThreshold > 0`, writes still `Touch` so hot batching can trigger.
-* **Stats** – [`StatsSnapshot`](../stats.go#L41-L87) publishes read hot keys (`HotKeys`) and write hot keys (`HotWriteKeys`). `expvar` exposes both under `NoKV.Stats.HotKeys` and `NoKV.Stats.HotWriteKeys`.
+* **Stats** – `StatsSnapshot.Hot.ReadKeys` and `StatsSnapshot.Hot.WriteKeys` publish read/write hot keys. `expvar` exposes these under `NoKV.Stats.hot.read_keys` and `NoKV.Stats.hot.write_keys`.
 * **Caching** – `lsm/cache` can promote blocks referenced by frequently touched keys, keeping the hot tier warm.
 * **Value log routing** – a dedicated HotRing instance powers **vlog hot/cold bucket routing**. It tracks *write* hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (`ValueLogHotBucketCount`) once `ValueLogHotKeyThreshold` is reached; cold keys go to the cold range.
 
@@ -127,7 +127,7 @@ which falls back to the ring default).
 
 Operational hints:
 
-* `StatsSnapshot.HotWriteLimited` and the CLI line `Write.HotKeyThrottled` expose how many writes were rejected since the process started.
+* `StatsSnapshot.Write.HotKeyLimited` and the CLI line `Write.HotKeyThrottled` expose how many writes were rejected since the process started.
 * Applications should surface `utils.ErrHotKeyWriteThrottle` to callers (e.g. HTTP 429) so clients can back off.
 * Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.
 * Set the limit conservatively (e.g. a few dozen) and pair it with richer `HotRing` analytics (top-K stats, expvar export) to identify outliers before tuning.

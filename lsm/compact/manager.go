@@ -1,7 +1,6 @@
 package compact
 
 import (
-	"expvar"
 	"log"
 	"math"
 	"math/rand"
@@ -70,12 +69,6 @@ type Manager struct {
 	triggerCh chan string
 	maxRuns   int
 }
-
-var (
-	CompactionRunsTotal      = expvar.NewInt("NoKV.Compaction.RunsTotal")
-	CompactionLastDurationMs = expvar.NewInt("NoKV.Compaction.LastDurationMs")
-	CompactionMaxDurationMs  = expvar.NewInt("NoKV.Compaction.MaxDurationMs")
-)
 
 // NewManager creates a compaction manager for the supplied executor.
 func NewManager(exec Executor, maxRuns int) *Manager {
