@@ -10,7 +10,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/stretchr/testify/require"
-	proto "google.golang.org/protobuf/proto"
 )
 
 func TestNewEntryApplierAppliesEntries(t *testing.T) {
@@ -21,38 +20,42 @@ func TestNewEntryApplierAppliesEntries(t *testing.T) {
 
 	applier := NewEntryApplier(db)
 
-	legacySet := &pb.KV{Key: []byte("legacy"), Value: []byte("value")}
-	legacySetData, err := proto.Marshal(legacySet)
-	require.NoError(t, err)
-
 	raftReq := &pb.RaftCmdRequest{
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_GET,
-			Cmd:     &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("legacy"), Version: 1}},
+			Cmd:     &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("k1"), Version: 1}},
 		}},
 	}
 	raftData, err := command.Encode(raftReq)
 	require.NoError(t, err)
 
 	err = applier([]myraft.Entry{
-		{Type: myraft.EntryNormal, Data: legacySetData},
 		{Type: myraft.EntryNormal, Data: raftData},
 		{Type: myraft.EntryConfChange},
 	})
 	require.NoError(t, err)
+}
 
-	got, err := db.Get(legacySet.Key)
-	require.NoError(t, err)
-	require.Equal(t, legacySet.Value, got.Value)
+func TestNewEntryApplierRejectsLegacyPayload(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db := NoKV.Open(opt)
+	t.Cleanup(func() { _ = db.Close() })
 
-	legacyDel := &pb.KV{Key: legacySet.Key}
-	legacyDelData, err := proto.Marshal(legacyDel)
-	require.NoError(t, err)
+	applier := NewEntryApplier(db)
 
-	err = applier([]myraft.Entry{{Type: myraft.EntryNormal, Data: legacyDelData}})
+	cmdData, err := command.Encode(&pb.RaftCmdRequest{
+		Requests: []*pb.Request{{
+			CmdType: pb.CmdType_CMD_GET,
+			Cmd:     &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("k1"), Version: 1}},
+		}},
+	})
 	require.NoError(t, err)
-	_, err = db.Get(legacySet.Key)
+	require.NoError(t, applier([]myraft.Entry{{Type: myraft.EntryNormal, Data: cmdData}}))
+
+	err = applier([]myraft.Entry{{Type: myraft.EntryNormal, Data: []byte("legacy")}})
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported legacy raft payload")
 }
 
 func TestLockedErrorMapping(t *testing.T) {

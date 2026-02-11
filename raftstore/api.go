@@ -41,9 +41,7 @@ func NewStore(router *Router) *Store {
 }
 
 func NewStoreWithConfig(cfg StoreConfig) *Store {
-	st := store.NewStoreWithConfig(cfg)
-	store.RegisterStore(st)
-	return st
+	return store.NewStoreWithConfig(cfg)
 }
 
 func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {

@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -16,11 +15,9 @@ func TestAPIConstructorsAndOptions(t *testing.T) {
 
 	store1 := NewStore(router)
 	require.NotNil(t, store1)
-	store.UnregisterStore(store1)
 
 	store2 := NewStoreWithConfig(StoreConfig{})
 	require.NotNil(t, store2)
-	store.UnregisterStore(store2)
 
 	opts := []GRPCOption{
 		WithGRPCDialTimeout(2 * time.Second),

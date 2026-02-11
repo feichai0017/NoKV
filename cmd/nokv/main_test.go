@@ -321,13 +321,11 @@ func TestFormatHelpers(t *testing.T) {
 }
 
 func TestRunSchedulerCmdNoStore(t *testing.T) {
-	stores := storepkg.Stores()
-	for _, st := range stores {
-		storepkg.UnregisterStore(st)
-	}
-	var buf bytes.Buffer
-	err := runSchedulerCmd(&buf, []string{"-json"})
-	require.Error(t, err)
+	withStoreRegistry(t, func() {
+		var buf bytes.Buffer
+		err := runSchedulerCmd(&buf, []string{"-json"})
+		require.Error(t, err)
+	})
 }
 
 func TestPrintUsage(t *testing.T) {
@@ -359,7 +357,7 @@ func TestEnsureManifestExists(t *testing.T) {
 
 func TestRunSchedulerCmdWithStore(t *testing.T) {
 	withStoreRegistry(t, func() {
-		storepkg.RegisterStore(&storepkg.Store{})
+		registerRuntimeStore(&storepkg.Store{})
 		var buf bytes.Buffer
 		require.NoError(t, runSchedulerCmd(&buf, nil))
 		require.Contains(t, buf.String(), "Stores (0)")
@@ -463,7 +461,7 @@ func TestMainRegionsCommand(t *testing.T) {
 
 func TestMainSchedulerCommand(t *testing.T) {
 	withStoreRegistry(t, func() {
-		storepkg.RegisterStore(&storepkg.Store{})
+		registerRuntimeStore(&storepkg.Store{})
 		code := captureExitCode(t, func() {
 			oldArgs := os.Args
 			os.Args = []string{"nokv", "scheduler", "-json"}
@@ -812,6 +810,8 @@ func TestRunSchedulerCmdSnapshot(t *testing.T) {
 			Scheduler: coord,
 		})
 		defer store.Close()
+		registerRuntimeStore(store)
+		defer unregisterRuntimeStore(store)
 
 		coord.SubmitStoreHeartbeat(scheduler.StoreStats{
 			StoreID:   1,
@@ -841,6 +841,8 @@ func TestFirstRegionMetricsFound(t *testing.T) {
 	withStoreRegistry(t, func() {
 		store := storepkg.NewStoreWithConfig(storepkg.Config{})
 		defer store.Close()
+		registerRuntimeStore(store)
+		defer unregisterRuntimeStore(store)
 		require.NotNil(t, firstRegionMetrics())
 	})
 }
@@ -849,6 +851,8 @@ func TestLocalStatsSnapshotWithMetrics(t *testing.T) {
 	withStoreRegistry(t, func() {
 		store := storepkg.NewStoreWithConfig(storepkg.Config{})
 		defer store.Close()
+		registerRuntimeStore(store)
+		defer unregisterRuntimeStore(store)
 		dir := prepareDBWorkdir(t)
 		_, err := localStatsSnapshot(dir, true)
 		require.NoError(t, err)
@@ -886,16 +890,16 @@ func captureExitCode(t *testing.T, fn func()) (code int) {
 
 func withStoreRegistry(t *testing.T, fn func()) {
 	t.Helper()
-	original := storepkg.Stores()
+	original := runtimeStoreSnapshot()
 	for _, st := range original {
-		storepkg.UnregisterStore(st)
+		unregisterRuntimeStore(st)
 	}
 	defer func() {
-		for _, st := range storepkg.Stores() {
-			storepkg.UnregisterStore(st)
+		for _, st := range runtimeStoreSnapshot() {
+			unregisterRuntimeStore(st)
 		}
 		for _, st := range original {
-			storepkg.RegisterStore(st)
+			registerRuntimeStore(st)
 		}
 	}()
 	fn()

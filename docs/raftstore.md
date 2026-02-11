@@ -54,6 +54,7 @@
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
 2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `percolator` package.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.
+4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
 
 ---
 
@@ -125,12 +126,18 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 | Component | File | Responsibility |
 | --- | --- | --- |
-| Peer set | [`peer_set.go`](../raftstore/store/peer_set.go) | Tracks active peers, synchronises router registration, exposes thread-safe lookups/iteration. |
+| Store facade | [`store.go`](../raftstore/store/store.go) | Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime). |
+| Peer lifecycle | [`peer_lifecycle.go`](../raftstore/store/peer_lifecycle.go) | Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing. |
+| Command service | [`command_service.go`](../raftstore/store/command_service.go) | Region/epoch/key-range validation and read/propose request handling. |
+| Admin service | [`admin_service.go`](../raftstore/store/admin_service.go) | Split/merge proposal handling and applied admin command side effects. |
+| Membership service | [`membership_service.go`](../raftstore/store/membership_service.go) | Conf-change proposal helpers and manifest metadata updates after membership changes. |
+| Region catalog | [`region_catalog.go`](../raftstore/store/region_catalog.go) | Public region catalog accessors and region metadata lifecycle operations. |
+| Scheduler runtime | [`scheduler_runtime.go`](../raftstore/store/scheduler_runtime.go) | Scheduler snapshot generation, store stats, operation application, and apply-entry dispatch. |
+| Peer set | [`peer_set.go`](../raftstore/store/peer_set.go) | Tracks active peers and exposes thread-safe lookups/iteration snapshots. |
 | Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |
 | Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
 | Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
 | Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions. |
-| Global registry | [`global.go`](../raftstore/store/global.go) | Records live stores for CLI/scripting (`Store.Close()` automatically unregisters instances). |
 
 ---
 
