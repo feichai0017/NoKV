@@ -38,6 +38,9 @@ func randWithFloat(p float64) *rand.Rand {
 type fakeEngine struct {
 	mu      sync.Mutex
 	data    map[string][]byte
+	opens   int
+	closes  int
+	cleans  int
 	reads   int
 	inserts int
 	updates int
@@ -49,10 +52,22 @@ func newFakeEngine() *fakeEngine {
 }
 
 func (e *fakeEngine) Name() string { return "fake" }
-func (e *fakeEngine) Open(bool) error {
+func (e *fakeEngine) Open(clean bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.opens++
+	if clean {
+		e.cleans++
+		e.data = make(map[string][]byte)
+	}
 	return nil
 }
-func (e *fakeEngine) Close() error { return nil }
+func (e *fakeEngine) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.closes++
+	return nil
+}
 func (e *fakeEngine) Read(key []byte, dst []byte) ([]byte, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -66,6 +81,9 @@ func (e *fakeEngine) Read(key []byte, dst []byte) ([]byte, error) {
 func (e *fakeEngine) Insert(key, value []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.data == nil {
+		e.data = make(map[string][]byte)
+	}
 	e.inserts++
 	e.data[string(key)] = append([]byte(nil), value...)
 	return nil
@@ -272,6 +290,34 @@ func TestYCSBLoadAndRunWorkload(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(cfg.Operations), res.TotalOperations)
 	}
+}
+
+func TestRunYCSBWorkloadsOnEngineIsolated(t *testing.T) {
+	cfg := ycsbConfig{
+		Seed:        1,
+		RecordCount: 5,
+		Operations:  3,
+		ValueSize:   8,
+		ValueDist:   "fixed",
+		Concurrency: 1,
+		ScanLength:  2,
+		Workloads: []ycsbWorkload{
+			{Name: "C1", ReadRatio: 1, Distribution: "uniform", Description: "read-1"},
+			{Name: "C2", ReadRatio: 1, Distribution: "uniform", Description: "read-2"},
+		},
+	}
+	engine := newFakeEngine()
+
+	results, err := runYCSBWorkloadsOnEngine(engine, cfg)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	require.Equal(t, 2, engine.opens)
+	require.Equal(t, 2, engine.cleans)
+	require.Equal(t, 2, engine.closes)
+	require.Equal(t, cfg.RecordCount*len(cfg.Workloads), engine.inserts)
 }
 
 func TestKeyGenerators(t *testing.T) {
