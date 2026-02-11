@@ -534,7 +534,7 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	stores := storepkg.Stores()
+	stores := runtimeStoreSnapshot()
 	if len(stores) == 0 {
 		return fmt.Errorf("no registered store; run inside a process hosting raftstore")
 	}
@@ -669,7 +669,7 @@ func totalValue(files []manifest.FileMeta) uint64 {
 }
 
 func firstRegionMetrics() *storepkg.RegionMetrics {
-	for _, st := range storepkg.Stores() {
+	for _, st := range runtimeStoreSnapshot() {
 		if st == nil {
 			continue
 		}
