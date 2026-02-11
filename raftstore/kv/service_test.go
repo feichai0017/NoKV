@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	proto "google.golang.org/protobuf/proto"
 )
 
 type noopTransport struct{}
@@ -42,23 +41,10 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if err != nil {
 				return err
 			}
-			if ok {
-				if _, err := kv.Apply(db, req); err != nil {
-					return err
-				}
-				continue
+			if !ok {
+				return status.Error(codes.InvalidArgument, "unsupported legacy raft payload")
 			}
-			var legacy pb.KV
-			if err := proto.Unmarshal(entry.Data, &legacy); err != nil {
-				return err
-			}
-			if len(legacy.GetValue()) == 0 {
-				if err := db.DelCF(entrykv.CFDefault, legacy.GetKey()); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := db.SetCF(entrykv.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
+			if _, err := kv.Apply(db, req); err != nil {
 				return err
 			}
 		}

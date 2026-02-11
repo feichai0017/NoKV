@@ -15,7 +15,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/metrics"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
@@ -534,7 +534,7 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	stores := storepkg.Stores()
+	stores := runtimeStoreSnapshot()
 	if len(stores) == 0 {
 		return fmt.Errorf("no registered store; run inside a process hosting raftstore")
 	}
@@ -668,8 +668,8 @@ func totalValue(files []manifest.FileMeta) uint64 {
 	return total
 }
 
-func firstRegionMetrics() *storepkg.RegionMetrics {
-	for _, st := range storepkg.Stores() {
+func firstRegionMetrics() *metrics.RegionMetrics {
+	for _, st := range runtimeStoreSnapshot() {
 		if st == nil {
 			continue
 		}

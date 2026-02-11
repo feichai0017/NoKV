@@ -9,7 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +19,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	rm := storepkg.NewRegionMetrics()
+	rm := metrics.NewRegionMetrics()
 	db.SetRegionMetrics(rm)
 	hooks := rm.Hooks()
 	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})

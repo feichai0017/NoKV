@@ -7,7 +7,6 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
-	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type commandProposal struct {
@@ -43,15 +42,18 @@ func (cp *commandPipeline) nextProposalID() uint64 {
 	return cp.seq
 }
 
-func (cp *commandPipeline) registerProposal(id uint64) *commandProposal {
+func (cp *commandPipeline) registerProposal(id uint64) (*commandProposal, error) {
 	if cp == nil || id == 0 {
-		return nil
+		return nil, nil
 	}
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
+	if _, exists := cp.proposals[id]; exists {
+		return nil, fmt.Errorf("commandPipeline: duplicate proposal id %d", id)
+	}
 	prop := &commandProposal{ch: make(chan proposalResult, 1)}
 	cp.proposals[id] = prop
-	return prop
+	return prop, nil
 }
 
 func (cp *commandPipeline) removeProposal(id uint64) {
@@ -78,17 +80,12 @@ func (cp *commandPipeline) completeProposal(id uint64, resp *pb.RaftCmdResponse,
 	close(prop.ch)
 }
 
-func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.ApplyFunc) error {
+func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 	if cp == nil {
 		return fmt.Errorf("commandPipeline: pipeline is nil")
 	}
 	for _, entry := range entries {
 		if entry.Type != myraft.EntryNormal {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		if len(entry.Data) == 0 {
@@ -99,26 +96,16 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.Ap
 			return err
 		}
 		if !isCmd {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
-			continue
+			return fmt.Errorf("commandPipeline: unsupported legacy raft payload")
 		}
 		if cp.applier == nil {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-				continue
-			}
 			return fmt.Errorf("commandPipeline: apply without handler")
 		}
 		resp, applyErr := cp.applier(req)
 		if applyErr != nil {
-			cp.completeProposal(req.GetHeader().GetRequestId(), nil, applyErr)
-			continue
+			requestID := req.GetHeader().GetRequestId()
+			cp.completeProposal(requestID, nil, applyErr)
+			return fmt.Errorf("commandPipeline: apply request %d failed: %w", requestID, applyErr)
 		}
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}

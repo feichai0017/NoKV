@@ -1,19 +1,16 @@
 package kv
 
 import (
+	"fmt"
+
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	proto "google.golang.org/protobuf/proto"
 )
 
 // NewEntryApplier returns an ApplyFunc that decodes raft log entries and
-// applies them to the provided DB using the MVCC helpers. Legacy KV payloads
-// (without raft commands) are still honoured for compatibility with earlier
-// tests.
+// applies them to the provided DB using the MVCC helpers.
 func NewEntryApplier(db *NoKV.DB) peer.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
@@ -30,19 +27,7 @@ func NewEntryApplier(db *NoKV.DB) peer.ApplyFunc {
 				}
 				continue
 			}
-			var legacy pb.KV
-			if err := proto.Unmarshal(entry.Data, &legacy); err != nil {
-				return err
-			}
-			if len(legacy.GetValue()) == 0 {
-				if err := db.DelCF(kv.CFDefault, legacy.GetKey()); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := db.SetCF(kv.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
-				return err
-			}
+			return fmt.Errorf("raftstore/kv: unsupported legacy raft payload")
 		}
 		return nil
 	}
