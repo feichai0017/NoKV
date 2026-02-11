@@ -125,7 +125,14 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 | Component | File | Responsibility |
 | --- | --- | --- |
-| Peer set | [`peer_set.go`](../raftstore/store/peer_set.go) | Tracks active peers, synchronises router registration, exposes thread-safe lookups/iteration. |
+| Store facade | [`store.go`](../raftstore/store/store.go) | Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime). |
+| Peer lifecycle | [`peer_lifecycle.go`](../raftstore/store/peer_lifecycle.go) | Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing. |
+| Command service | [`command_service.go`](../raftstore/store/command_service.go) | Region/epoch/key-range validation and read/propose request handling. |
+| Admin service | [`admin_service.go`](../raftstore/store/admin_service.go) | Split/merge proposal handling and applied admin command side effects. |
+| Membership service | [`membership_service.go`](../raftstore/store/membership_service.go) | Conf-change proposal helpers and manifest metadata updates after membership changes. |
+| Region catalog | [`region_catalog.go`](../raftstore/store/region_catalog.go) | Public region catalog accessors and region metadata lifecycle operations. |
+| Scheduler runtime | [`scheduler_runtime.go`](../raftstore/store/scheduler_runtime.go) | Scheduler snapshot generation, store stats, operation application, and apply-entry dispatch. |
+| Peer set | [`peer_set.go`](../raftstore/store/peer_set.go) | Tracks active peers and exposes thread-safe lookups/iteration snapshots. |
 | Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |
 | Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
 | Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
