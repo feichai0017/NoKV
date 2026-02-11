@@ -68,7 +68,10 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		req.Header.RequestId = s.command.nextProposalID()
 	}
 	id := req.Header.RequestId
-	prop := s.command.registerProposal(id)
+	prop, err := s.command.registerProposal(id)
+	if err != nil {
+		return nil, err
+	}
 	if prop == nil {
 		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
 	}
