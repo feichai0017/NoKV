@@ -19,7 +19,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/store"
-	proto "google.golang.org/protobuf/proto"
 )
 
 type noopTransport struct{}
@@ -134,7 +133,7 @@ func TestStoreDuplicatePeer(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestStoreLegacyApplyFallbackEnabledByDefault(t *testing.T) {
+func TestStoreRejectsLegacyApplyPayload(t *testing.T) {
 	var wrapped peer.ApplyFunc
 	rs := store.NewStoreWithConfig(store.Config{
 		PeerFactory: func(cfg *peer.Config) (*peer.Peer, error) {
@@ -144,7 +143,6 @@ func TestStoreLegacyApplyFallbackEnabledByDefault(t *testing.T) {
 	})
 	defer rs.Close()
 
-	fallbackCalls := 0
 	cfg := &raftstore.Config{
 		RaftConfig: myraft.Config{
 			ID:              7,
@@ -154,10 +152,7 @@ func TestStoreLegacyApplyFallbackEnabledByDefault(t *testing.T) {
 			MaxInflightMsgs: 256,
 		},
 		Transport: noopTransport{},
-		Apply: func([]myraft.Entry) error {
-			fallbackCalls++
-			return nil
-		},
+		Apply:     func([]myraft.Entry) error { return nil },
 		Region: &manifest.RegionMeta{
 			ID:       700,
 			StartKey: []byte("a"),
@@ -170,57 +165,9 @@ func TestStoreLegacyApplyFallbackEnabledByDefault(t *testing.T) {
 	defer rs.StopPeer(p.ID())
 	require.NotNil(t, wrapped)
 
-	legacyData, err := proto.Marshal(&pb.KV{Key: []byte("legacy"), Value: []byte("value")})
-	require.NoError(t, err)
-	err = wrapped([]myraft.Entry{{Type: myraft.EntryNormal, Data: legacyData}})
-	require.NoError(t, err)
-	require.Equal(t, 1, fallbackCalls)
-	require.Equal(t, uint64(1), rs.LegacyApplyFallbackCount())
-}
-
-func TestStoreLegacyApplyFallbackCanBeDisabled(t *testing.T) {
-	var wrapped peer.ApplyFunc
-	rs := store.NewStoreWithConfig(store.Config{
-		DisableLegacyApplyFallback: true,
-		PeerFactory: func(cfg *peer.Config) (*peer.Peer, error) {
-			wrapped = cfg.Apply
-			return peer.NewPeer(cfg)
-		},
-	})
-	defer rs.Close()
-
-	fallbackCalls := 0
-	cfg := &raftstore.Config{
-		RaftConfig: myraft.Config{
-			ID:              8,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-		},
-		Transport: noopTransport{},
-		Apply: func([]myraft.Entry) error {
-			fallbackCalls++
-			return nil
-		},
-		Region: &manifest.RegionMeta{
-			ID:       800,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-		},
-	}
-
-	p, err := rs.StartPeer(cfg, nil)
-	require.NoError(t, err)
-	defer rs.StopPeer(p.ID())
-	require.NotNil(t, wrapped)
-
-	legacyData, err := proto.Marshal(&pb.KV{Key: []byte("legacy"), Value: []byte("value")})
-	require.NoError(t, err)
-	err = wrapped([]myraft.Entry{{Type: myraft.EntryNormal, Data: legacyData}})
-	require.NoError(t, err)
-	require.Equal(t, 0, fallbackCalls)
-	require.Equal(t, uint64(1), rs.LegacyApplyFallbackCount())
+	err = wrapped([]myraft.Entry{{Type: myraft.EntryNormal, Data: []byte("legacy-payload")}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported legacy raft payload")
 }
 
 func TestStoreCustomFactoryAndHooks(t *testing.T) {

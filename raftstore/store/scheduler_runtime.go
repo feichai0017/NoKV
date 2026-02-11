@@ -29,20 +29,14 @@ func (s *Store) applyOperation(op scheduler.Operation) bool {
 	return false
 }
 
-func (s *Store) applyEntries(entries []myraft.Entry, fallback peer.ApplyFunc) error {
+func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
-		if fallback != nil {
-			return fallback(entries)
-		}
-		return nil
+		return fmt.Errorf("raftstore: store is nil")
 	}
 	if s.command == nil {
-		if fallback != nil {
-			return fallback(entries)
-		}
 		return fmt.Errorf("raftstore: command apply without handler")
 	}
-	return s.command.applyEntries(entries, fallback)
+	return s.command.applyEntries(entries)
 }
 
 func (s *Store) enqueueOperation(op scheduler.Operation) {

@@ -16,25 +16,24 @@ import (
 // lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
 // ticks or proposals without needing to keep global peer maps themselves.
 type Store struct {
-	mu                       sync.RWMutex
-	router                   *Router
-	peers                    *peerSet
-	peerFactory              PeerFactory
-	peerBuilder              PeerBuilder
-	hooks                    LifecycleHooks
-	regionMetrics            *metrics.RegionMetrics
-	manifest                 *manifest.Manager
-	regions                  *regionManager
-	scheduler                scheduler.RegionSink
-	storeID                  uint64
-	planner                  scheduler.Planner
-	operationHook            func(scheduler.Operation)
-	commandApplier           func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	command                  *commandPipeline
-	commandTimeout           time.Duration
-	operations               *operationScheduler
-	heartbeat                *heartbeatLoop
-	allowLegacyApplyFallback bool
+	mu             sync.RWMutex
+	router         *Router
+	peers          *peerSet
+	peerFactory    PeerFactory
+	peerBuilder    PeerBuilder
+	hooks          LifecycleHooks
+	regionMetrics  *metrics.RegionMetrics
+	manifest       *manifest.Manager
+	regions        *regionManager
+	scheduler      scheduler.RegionSink
+	storeID        uint64
+	planner        scheduler.Planner
+	operationHook  func(scheduler.Operation)
+	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	command        *commandPipeline
+	commandTimeout time.Duration
+	operations     *operationScheduler
+	heartbeat      *heartbeatLoop
 }
 
 type operationKey struct {
@@ -120,20 +119,19 @@ func NewStoreWithConfig(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:                   router,
-		peers:                    newPeerSet(),
-		peerFactory:              factory,
-		peerBuilder:              cfg.PeerBuilder,
-		hooks:                    cfg.Hooks,
-		regionMetrics:            regionMetrics,
-		manifest:                 cfg.Manifest,
-		scheduler:                cfg.Scheduler,
-		storeID:                  cfg.StoreID,
-		planner:                  planner,
-		operationHook:            cfg.OperationObserver,
-		commandApplier:           cfg.CommandApplier,
-		commandTimeout:           commandTimeout,
-		allowLegacyApplyFallback: !cfg.DisableLegacyApplyFallback,
+		router:         router,
+		peers:          newPeerSet(),
+		peerFactory:    factory,
+		peerBuilder:    cfg.PeerBuilder,
+		hooks:          cfg.Hooks,
+		regionMetrics:  regionMetrics,
+		manifest:       cfg.Manifest,
+		scheduler:      cfg.Scheduler,
+		storeID:        cfg.StoreID,
+		planner:        planner,
+		operationHook:  cfg.OperationObserver,
+		commandApplier: cfg.CommandApplier,
+		commandTimeout: commandTimeout,
 	}
 	s.regions = newRegionManager(cfg.Manifest, combinedHooks)
 	s.command = newCommandPipeline(cfg.CommandApplier)

@@ -53,8 +53,4 @@ type Config struct {
 	OperationObserver  func(scheduler.Operation)
 	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
-	// DisableLegacyApplyFallback controls whether non-command raft payloads are
-	// forwarded to the peer-level Apply fallback. Defaults to false to preserve
-	// compatibility with legacy test payloads.
-	DisableLegacyApplyFallback bool
 }
