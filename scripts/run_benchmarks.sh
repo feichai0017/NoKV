@@ -19,7 +19,7 @@ die() {
   exit 1
 }
 
-default_workloads="A,B,C,D,F"
+default_workloads="A,B,C,D,E,F"
 default_engines="nokv"
 default_records=10000000
 default_ops=10000000
