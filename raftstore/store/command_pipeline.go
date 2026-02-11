@@ -100,8 +100,9 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 		}
 		resp, applyErr := cp.applier(req)
 		if applyErr != nil {
-			cp.completeProposal(req.GetHeader().GetRequestId(), nil, applyErr)
-			continue
+			requestID := req.GetHeader().GetRequestId()
+			cp.completeProposal(requestID, nil, applyErr)
+			return fmt.Errorf("commandPipeline: apply request %d failed: %w", requestID, applyErr)
 		}
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}
