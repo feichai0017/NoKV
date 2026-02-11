@@ -13,6 +13,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/regionutil"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"google.golang.org/grpc"
@@ -82,7 +83,7 @@ func New(cfg Config) (*Server, error) {
 			if transportRef == nil {
 				return nil, fmt.Errorf("raftstore/server: transport not initialised")
 			}
-			peerID := peerIDForStore(meta, storeCfg.StoreID)
+			peerID := regionutil.PeerIDForStore(meta, storeCfg.StoreID)
 			if peerID == 0 {
 				return nil, fmt.Errorf("raftstore/server: store %d missing peer in region %d", storeCfg.StoreID, meta.ID)
 			}
@@ -242,13 +243,4 @@ func (s *Server) startRaftTickLoop(interval time.Duration) {
 			}
 		}
 	}()
-}
-
-func peerIDForStore(meta manifest.RegionMeta, storeID uint64) uint64 {
-	for _, peer := range meta.Peers {
-		if peer.StoreID == storeID {
-			return peer.PeerID
-		}
-	}
-	return 0
 }
