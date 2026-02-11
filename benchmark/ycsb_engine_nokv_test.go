@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"testing"
@@ -74,4 +75,29 @@ func TestNoKVEnginePrintStats(t *testing.T) {
 	out, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Contains(t, string(out), "NoKV Stats")
+}
+
+func TestNoKVEngineScanWithValueLogEntries(t *testing.T) {
+	engine := newNoKVEngine(ycsbEngineOptions{
+		BaseDir:        t.TempDir(),
+		ValueSize:      256,
+		ValueThreshold: 1,
+		MemtableMB:     1,
+		SSTableMB:      4,
+		VlogFileMB:     4,
+	})
+	require.NoError(t, engine.Open(true))
+	defer func() {
+		require.NoError(t, engine.Close())
+	}()
+
+	val := bytes.Repeat([]byte("v"), 256)
+	for i := 0; i < 5; i++ {
+		key := formatYCSBKey(int64(i))
+		require.NoError(t, engine.Insert(key, val))
+	}
+
+	count, err := engine.Scan(formatYCSBKey(1), 3)
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
 }

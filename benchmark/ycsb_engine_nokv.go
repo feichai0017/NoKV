@@ -137,9 +137,13 @@ func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 		defer it.Close()
 		it.Seek(startKey)
 		for ; it.Valid() && read < count; it.Next() {
-			if _, err := it.Item().ValueCopy(nil); err != nil {
-				return err
+			item := it.Item()
+			if item == nil || item.Entry() == nil {
+				return fmt.Errorf("nokv: iterator returned nil item during scan")
 			}
+			// Values are already materialized for non-key-only iterators; touching
+			// the entry avoids an extra per-item copy/allocation in benchmark scans.
+			_ = len(item.Entry().Value)
 			read++
 		}
 		return nil
