@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d7c35ba6.js";
+            window.path_to_searchindex_js = "searchindex-e166c7e9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -2167,6 +2167,7 @@ curl -s "http://127.0.0.1:9494/tso?batch=16"
 <li>Write RPCs (Prewrite/Commit/…) call <code>Store.ProposeCommand</code>, encoding the command and routing to the leader peer.</li>
 <li>The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to <code>kv.Apply</code>, which maps Prewrite/Commit/ResolveLock to the <code>percolator</code> package.</li>
 <li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.</li>
+<li>Raft apply only accepts command-encoded payloads (<code>RaftCmdRequest</code>). Legacy raw KV payloads are rejected as unsupported.</li>
 </ol>
 <hr>
 <h2 id="4-transport"><a class="header" href="#4-transport">4. Transport</a></h2>
@@ -2240,12 +2241,18 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <tr><th>Component</th><th>File</th><th>Responsibility</th></tr>
 </thead>
 <tbody>
-<tr><td>Peer set</td><td><a href="../raftstore/store/peer_set.go"><code>peer_set.go</code></a></td><td>Tracks active peers, synchronises router registration, exposes thread-safe lookups/iteration.</td></tr>
+<tr><td>Store facade</td><td><a href="../raftstore/store/store.go"><code>store.go</code></a></td><td>Store construction/wiring and shared component ownership (router, region manager, command pipeline, scheduler runtime).</td></tr>
+<tr><td>Peer lifecycle</td><td><a href="../raftstore/store/peer_lifecycle.go"><code>peer_lifecycle.go</code></a></td><td>Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing.</td></tr>
+<tr><td>Command service</td><td><a href="../raftstore/store/command_service.go"><code>command_service.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
+<tr><td>Admin service</td><td><a href="../raftstore/store/admin_service.go"><code>admin_service.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
+<tr><td>Membership service</td><td><a href="../raftstore/store/membership_service.go"><code>membership_service.go</code></a></td><td>Conf-change proposal helpers and manifest metadata updates after membership changes.</td></tr>
+<tr><td>Region catalog</td><td><a href="../raftstore/store/region_catalog.go"><code>region_catalog.go</code></a></td><td>Public region catalog accessors and region metadata lifecycle operations.</td></tr>
+<tr><td>Scheduler runtime</td><td><a href="../raftstore/store/scheduler_runtime.go"><code>scheduler_runtime.go</code></a></td><td>Scheduler snapshot generation, store stats, operation application, and apply-entry dispatch.</td></tr>
+<tr><td>Peer set</td><td><a href="../raftstore/store/peer_set.go"><code>peer_set.go</code></a></td><td>Tracks active peers and exposes thread-safe lookups/iteration snapshots.</td></tr>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
 <tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks.</td></tr>
 <tr><td>Operation scheduler</td><td><a href="../raftstore/store/operation_scheduler.go"><code>operation_scheduler.go</code></a></td><td>Buffers planner output, enforces cooldown &amp; burst limits, dispatches leader transfers or other operations.</td></tr>
 <tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions.</td></tr>
-<tr><td>Global registry</td><td><a href="../raftstore/store/global.go"><code>global.go</code></a></td><td>Records live stores for CLI/scripting (<code>Store.Close()</code> automatically unregisters instances).</td></tr>
 </tbody>
 </table>
 </div>
