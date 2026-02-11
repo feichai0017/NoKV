@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"os"
@@ -19,18 +20,66 @@ import (
 	"github.com/stretchr/testify/require"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
+	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/kv"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
-	proto "google.golang.org/protobuf/proto"
 
 	"google.golang.org/grpc/credentials"
 
 	"github.com/feichai0017/NoKV/pb"
 )
+
+func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) []byte {
+	t.Helper()
+	req := &pb.RaftCmdRequest{
+		Requests: []*pb.Request{
+			{
+				CmdType: pb.CmdType_CMD_PREWRITE,
+				Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
+					Mutations: []*pb.Mutation{{
+						Op:    pb.Mutation_Put,
+						Key:   append([]byte(nil), key...),
+						Value: append([]byte(nil), value...),
+					}},
+					PrimaryLock:  append([]byte(nil), key...),
+					StartVersion: startVersion,
+					LockTtl:      3000,
+				}},
+			},
+			{
+				CmdType: pb.CmdType_CMD_COMMIT,
+				Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+					Keys:          [][]byte{append([]byte(nil), key...)},
+					StartVersion:  startVersion,
+					CommitVersion: startVersion + 1,
+				}},
+			},
+		},
+	}
+	payload, err := command.Encode(req)
+	require.NoError(t, err)
+	return payload
+}
+
+func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
+	t.Helper()
+	reader := percolator.NewReader(db)
+	val, err := reader.GetValue(key, math.MaxUint64)
+	require.NoError(t, err)
+	require.Equal(t, value, val)
+}
+
+func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
+	t.Helper()
+	reader := percolator.NewReader(db)
+	_, err := reader.GetValue(key, math.MaxUint64)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
 
 func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
@@ -42,20 +91,13 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	leader, ok := cluster.leader()
 	require.True(t, ok)
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("grpc-propose"),
-		Value: []byte("grpc-value"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("grpc-propose"), []byte("grpc-value"), 10)
 	require.NoError(t, cluster.propose(leader, payload))
 	cluster.tickMany(6)
 	cluster.flush()
 
 	for id := range cluster.nodes {
-		entry, err := cluster.db(id).GetCF(entrykv.CFDefault, []byte("grpc-propose"))
-		require.NoError(t, err, "db %d", id)
-		require.Equal(t, []byte("grpc-value"), entry.Value, "db %d", id)
-		entry.DecrRef()
+		requireVisibleValue(t, cluster.db(id), []byte("grpc-propose"), []byte("grpc-value"))
 	}
 }
 
@@ -101,20 +143,13 @@ func TestGRPCTransportSupportsTLS(t *testing.T) {
 	leader, ok := cluster.leader()
 	require.True(t, ok)
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("tls-propose"),
-		Value: []byte("secure-value"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("tls-propose"), []byte("secure-value"), 20)
 	require.NoError(t, cluster.propose(leader, payload))
 	cluster.tickMany(6)
 	cluster.flush()
 
 	for id := range cluster.nodes {
-		entry, err := cluster.db(id).GetCF(entrykv.CFDefault, []byte("tls-propose"))
-		require.NoError(t, err)
-		require.Equal(t, []byte("secure-value"), entry.Value, "db %d", id)
-		entry.DecrRef()
+		requireVisibleValue(t, cluster.db(id), []byte("tls-propose"), []byte("secure-value"))
 	}
 }
 
@@ -139,18 +174,13 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster.blockLink(leader, followerID)
 	cluster.blockLink(followerID, leader)
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("grpc-partition"),
-		Value: []byte("stale"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("grpc-partition"), []byte("stale"), 30)
 	require.NoError(t, cluster.propose(leader, payload))
 
 	cluster.tickMany(6)
 	cluster.flush()
 
-	_, err = cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-partition"))
-	require.ErrorIs(t, err, utils.ErrKeyNotFound, "follower should not have applied entry while partitioned")
+	requireMissingValue(t, cluster.db(followerID), []byte("grpc-partition"))
 
 	cluster.unblockLink(leader, followerID)
 	cluster.unblockLink(followerID, leader)
@@ -158,27 +188,17 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster.tickMany(10)
 	cluster.flush()
 
-	entry, err := cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-partition"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("stale"), entry.Value)
-	entry.DecrRef()
+	requireVisibleValue(t, cluster.db(followerID), []byte("grpc-partition"), []byte("stale"))
 
 	leader, ok = cluster.leader()
 	require.True(t, ok)
 
-	payload, err = proto.Marshal(&pb.KV{
-		Key:   []byte("grpc-reconnect"),
-		Value: []byte("recovered"),
-	})
-	require.NoError(t, err)
+	payload = mustEncodePutCommand(t, []byte("grpc-reconnect"), []byte("recovered"), 32)
 	require.NoError(t, cluster.propose(leader, payload))
 	cluster.tickMany(6)
 	cluster.flush()
 
-	entry, err = cluster.db(followerID).GetCF(entrykv.CFDefault, []byte("grpc-reconnect"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("recovered"), entry.Value)
-	entry.DecrRef()
+	requireVisibleValue(t, cluster.db(followerID), []byte("grpc-reconnect"), []byte("recovered"))
 
 	ptr, ok := cluster.manifest(followerID).RaftPointer(cluster.groupID)
 	require.True(t, ok)
@@ -495,17 +515,14 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
 				continue
 			}
-			var kv pb.KV
-			if err := proto.Unmarshal(entry.Data, &kv); err != nil {
+			req, ok, err := command.Decode(entry.Data)
+			if err != nil {
 				return err
 			}
-			if len(kv.GetValue()) == 0 {
-				if err := db.DelCF(entrykv.CFDefault, kv.GetKey()); err != nil {
-					return err
-				}
-				continue
+			if !ok {
+				return fmt.Errorf("raftstore transport test: unsupported legacy raft payload")
 			}
-			if err := db.SetCF(entrykv.CFDefault, kv.GetKey(), kv.GetValue()); err != nil {
+			if _, err := kv.Apply(db, req); err != nil {
 				return err
 			}
 		}

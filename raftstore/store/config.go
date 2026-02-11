@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
@@ -30,10 +31,7 @@ type LifecycleHooks struct {
 
 // RegionHooks exposes callbacks triggered when region metadata changes or is
 // removed from the store catalog.
-type RegionHooks struct {
-	OnRegionUpdate func(manifest.RegionMeta)
-	OnRegionRemove func(uint64)
-}
+type RegionHooks = metrics.RegionHooks
 
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.

@@ -17,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/feichai0017/NoKV/wal"
@@ -664,7 +663,7 @@ func (db *DB) valueThreshold() int64 {
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
 // include region state counts.
-func (db *DB) SetRegionMetrics(rm *storepkg.RegionMetrics) {
+func (db *DB) SetRegionMetrics(rm *metrics.RegionMetrics) {
 	if db == nil {
 		return
 	}

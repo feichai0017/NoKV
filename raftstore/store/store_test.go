@@ -133,6 +133,43 @@ func TestStoreDuplicatePeer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStoreRejectsLegacyApplyPayload(t *testing.T) {
+	var wrapped peer.ApplyFunc
+	rs := store.NewStoreWithConfig(store.Config{
+		PeerFactory: func(cfg *peer.Config) (*peer.Peer, error) {
+			wrapped = cfg.Apply
+			return peer.NewPeer(cfg)
+		},
+	})
+	defer rs.Close()
+
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              7,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &manifest.RegionMeta{
+			ID:       700,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+		},
+	}
+
+	p, err := rs.StartPeer(cfg, nil)
+	require.NoError(t, err)
+	defer rs.StopPeer(p.ID())
+	require.NotNil(t, wrapped)
+
+	err = wrapped([]myraft.Entry{{Type: myraft.EntryNormal, Data: []byte("legacy-payload")}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported legacy raft payload")
+}
+
 func TestStoreCustomFactoryAndHooks(t *testing.T) {
 	router := store.NewRouter()
 	factoryCalls := 0
@@ -631,6 +668,98 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	val, err := reader.GetValue([]byte("cmd-key"), 50)
 	require.NoError(t, err)
 	require.Equal(t, []byte("cmd-value"), val)
+}
+
+func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
+	db := openStoreDB(t)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	applier := func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return &pb.RaftCmdResponse{
+			Header: req.GetHeader(),
+		}, nil
+	}
+	st := store.NewStoreWithConfig(store.Config{
+		StoreID:        1,
+		CommandApplier: applier,
+		CommandTimeout: time.Second,
+	})
+	t.Cleanup(func() { st.Close() })
+
+	region := &manifest.RegionMeta{
+		ID:       777,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 17}},
+	}
+	cfg := &raftstore.Config{
+		RaftConfig: myraft.Config{
+			ID:              17,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		WAL:       db.WAL(),
+		Manifest:  db.Manifest(),
+		GroupID:   region.ID,
+		Region:    region,
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 17}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+	require.NoError(t, p.Campaign())
+
+	req := func() *pb.RaftCmdRequest {
+		return &pb.RaftCmdRequest{
+			Header: &pb.CmdHeader{
+				RegionId:    region.ID,
+				RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1},
+				RequestId:   9001,
+			},
+			Requests: []*pb.Request{{
+				CmdType: pb.CmdType_CMD_GET,
+				Cmd: &pb.Request_Get{Get: &pb.GetRequest{
+					Key: []byte("dup-key"),
+				}},
+			}},
+		}
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := st.ProposeCommand(req())
+		firstDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first proposal did not enter apply path in time")
+	}
+
+	start := time.Now()
+	_, err = st.ProposeCommand(req())
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate proposal id")
+	require.Less(t, elapsed, 300*time.Millisecond)
+
+	close(release)
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("first proposal did not finish in time")
+	}
 }
 
 func TestStoreProposeCommandNotLeader(t *testing.T) {
