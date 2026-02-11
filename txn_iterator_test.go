@@ -19,21 +19,40 @@ func (si stubItem) Entry() *kv.Entry {
 }
 
 type stubIterator struct {
-	entries []*kv.Entry
-	idx     int
+	entries     []*kv.Entry
+	idx         int
+	reverse     bool
+	nextCalls   int
+	rewindCalls int
+	seekCalls   int
 }
 
 func (it *stubIterator) Next() {
+	it.nextCalls++
+	if it.reverse {
+		if it.idx >= 0 {
+			it.idx--
+		}
+		return
+	}
 	if it.idx < len(it.entries) {
 		it.idx++
 	}
 }
 
 func (it *stubIterator) Valid() bool {
+	if it.reverse {
+		return it.idx >= 0 && it.idx < len(it.entries)
+	}
 	return it.idx < len(it.entries)
 }
 
 func (it *stubIterator) Rewind() {
+	it.rewindCalls++
+	if it.reverse {
+		it.idx = len(it.entries) - 1
+		return
+	}
 	it.idx = 0
 }
 
@@ -49,6 +68,17 @@ func (it *stubIterator) Close() error {
 }
 
 func (it *stubIterator) Seek(key []byte) {
+	it.seekCalls++
+	if it.reverse {
+		it.idx = -1
+		for i := len(it.entries) - 1; i >= 0; i-- {
+			if bytes.Compare(it.entries[i].Key, key) <= 0 {
+				it.idx = i
+				break
+			}
+		}
+		return
+	}
 	it.idx = sort.Search(len(it.entries), func(i int) bool {
 		return bytes.Compare(it.entries[i].Key, key) >= 0
 	})
@@ -83,6 +113,64 @@ func TestReadTsIteratorFiltersAndSeek(t *testing.T) {
 	require.Equal(t, uint64(6), kv.ParseTs(ri.Item().Entry().Key))
 
 	require.NoError(t, ri.Close())
+}
+
+func TestTxnIteratorSeekForwardUsesUnderlyingSeek(t *testing.T) {
+	entries := []*kv.Entry{
+		{Key: kv.InternalKey(kv.CFDefault, []byte("a"), 5), Value: []byte("va")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 5), Value: []byte("vb")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 5), Value: []byte("vc")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("d"), 5), Value: []byte("vd")},
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	})
+
+	base := &stubIterator{entries: entries}
+	it := &TxnIterator{
+		iitr:   base,
+		readTs: 10,
+		opt:    IteratorOptions{},
+	}
+	it.item.e = &it.entry
+
+	latestTs := it.Seek([]byte("c"))
+
+	require.True(t, it.Valid())
+	require.Equal(t, []byte("c"), it.Item().Entry().Key)
+	require.Equal(t, uint64(5), latestTs)
+	require.Equal(t, 1, base.seekCalls)
+	require.Equal(t, 0, base.rewindCalls)
+	require.Equal(t, 0, base.nextCalls)
+}
+
+func TestTxnIteratorSeekReverseUsesUnderlyingSeek(t *testing.T) {
+	entries := []*kv.Entry{
+		{Key: kv.InternalKey(kv.CFDefault, []byte("a"), 5), Value: []byte("va")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 5), Value: []byte("vb")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 5), Value: []byte("vc")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("d"), 5), Value: []byte("vd")},
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	})
+
+	base := &stubIterator{entries: entries, reverse: true}
+	it := &TxnIterator{
+		iitr:   base,
+		readTs: 10,
+		opt:    IteratorOptions{Reverse: true},
+	}
+	it.item.e = &it.entry
+
+	latestTs := it.Seek([]byte("c"))
+
+	require.True(t, it.Valid())
+	require.Equal(t, []byte("c"), it.Item().Entry().Key)
+	require.Equal(t, uint64(5), latestTs)
+	require.Equal(t, 1, base.seekCalls)
+	require.Equal(t, 0, base.rewindCalls)
+	require.Equal(t, 0, base.nextCalls)
 }
 
 func TestPendingWritesIterator(t *testing.T) {

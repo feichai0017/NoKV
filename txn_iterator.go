@@ -337,17 +337,34 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 		it.latestTs = 0
 		return it.latestTs
 	}
-	it.iitr.Rewind()
-	it.advance()
-	if !it.opt.Reverse {
-		for it.Valid() && bytes.Compare(it.item.Entry().Key, key) < 0 {
-			it.iitr.Next()
-			it.advance()
+	if len(key) == 0 {
+		it.iitr.Rewind()
+		it.advance()
+		if !it.Valid() {
+			it.latestTs = 0
 		}
+		return it.latestTs
+	}
+	if !it.opt.Reverse {
+		// Use internal-key seek to avoid O(N) rewind+scan on every point seek.
+		seekKey := kv.InternalKey(kv.CFDefault, key, it.readTs)
+		it.iitr.Seek(seekKey)
+		it.advance()
 	} else {
-		for it.Valid() && bytes.Compare(it.item.Entry().Key, key) > 0 {
-			it.iitr.Next()
+		// Fast path: for reverse iteration, seek to the largest internal key for
+		// this user key so backends with native reverse seek can land at <= key.
+		seekKey := kv.InternalKey(kv.CFDefault, key, 0)
+		it.iitr.Seek(seekKey)
+		it.advance()
+		if !it.Valid() || bytes.Compare(it.item.Entry().Key, key) > 0 {
+			// Fallback for iterator implementations that don't provide reverse seek
+			// semantics (or when seek lands past target).
+			it.iitr.Rewind()
 			it.advance()
+			for it.Valid() && bytes.Compare(it.item.Entry().Key, key) > 0 {
+				it.iitr.Next()
+				it.advance()
+			}
 		}
 	}
 	if !it.Valid() {
