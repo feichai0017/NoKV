@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -24,6 +25,7 @@ type commandPipeline struct {
 	seq       uint64
 	proposals map[uint64]*commandProposal
 	applier   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	legacy    atomic.Uint64
 }
 
 func newCommandPipeline(applier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)) *commandPipeline {
@@ -99,6 +101,7 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.Ap
 			return err
 		}
 		if !isCmd {
+			cp.legacy.Add(1)
 			if fallback != nil {
 				if err := fallback([]myraft.Entry{entry}); err != nil {
 					return err
@@ -123,4 +126,11 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.Ap
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}
 	return nil
+}
+
+func (cp *commandPipeline) legacyFallbackCount() uint64 {
+	if cp == nil {
+		return 0
+	}
+	return cp.legacy.Load()
 }

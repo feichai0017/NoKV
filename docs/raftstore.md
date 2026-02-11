@@ -54,6 +54,7 @@
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
 2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `percolator` package.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.
+4. Legacy raft payload compatibility is gated by `store.Config.DisableLegacyApplyFallback`. Keep it disabled for new clusters and use `Store.LegacyApplyFallbackCount()` to verify no legacy entries remain.
 
 ---
 

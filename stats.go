@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -26,7 +25,7 @@ type Stats struct {
 	once     sync.Once
 	interval time.Duration
 
-	regionMetrics atomic.Pointer[storepkg.RegionMetrics]
+	regionMetrics atomic.Pointer[metrics.RegionMetrics]
 }
 
 var (
@@ -264,7 +263,7 @@ func (s *Stats) StartStats() {
 }
 
 // SetRegionMetrics attaches region metrics recorder used in snapshots.
-func (s *Stats) SetRegionMetrics(rm *storepkg.RegionMetrics) {
+func (s *Stats) SetRegionMetrics(rm *metrics.RegionMetrics) {
 	if s == nil {
 		return
 	}

@@ -15,7 +15,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/metrics"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
@@ -668,7 +668,7 @@ func totalValue(files []manifest.FileMeta) uint64 {
 	return total
 }
 
-func firstRegionMetrics() *storepkg.RegionMetrics {
+func firstRegionMetrics() *metrics.RegionMetrics {
 	for _, st := range runtimeStoreSnapshot() {
 		if st == nil {
 			continue
