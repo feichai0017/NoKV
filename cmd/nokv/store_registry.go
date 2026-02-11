@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sync"
 
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -17,10 +18,8 @@ func registerRuntimeStore(st *storepkg.Store) {
 	}
 	runtimeStoresMu.Lock()
 	defer runtimeStoresMu.Unlock()
-	for _, existing := range runtimeStores {
-		if existing == st {
-			return
-		}
+	if slices.Contains(runtimeStores, st) {
+		return
 	}
 	runtimeStores = append(runtimeStores, st)
 }
