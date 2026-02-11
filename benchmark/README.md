@@ -5,7 +5,7 @@ benchmark script (`scripts/run_benchmarks.sh`).
 
 ## YCSB Framework Overview
 
-The benchmark harness uses the YCSB workloads (A/B/C/D/F) to exercise NoKV,
+The benchmark harness uses the YCSB workloads (A/B/C/D/E/F) to exercise NoKV,
 Badger, and RocksDB with a fixed total operation count and report both
 throughput and latency percentiles. For memtable comparisons, the NoKV engine
 can be split into `nokv-skiplist` and `nokv-art` variants. The default script
@@ -44,13 +44,15 @@ Key components:
 - Engine interface: `benchmark/ycsb_engine.go` defines `Read/Insert/Update/Scan`
   and per-engine implementations live in `benchmark/ycsb_engine_*` (including
   `nokv-skiplist` / `nokv-art` for memtable-only comparisons).
-- Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/F mixes,
+- Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/E/F mixes,
   request ratios, and key distributions (zipfian/uniform/latest).
 - Value generator: fixed/uniform/normal/percentile sizing with a shared buffer
   pool to reduce allocations (`valuePool`).
 - Concurrency model: each workload runs with `ycsb_conc` goroutines; each op
   records latency samples and operation counts; optional global throttling is
   available via `ycsb_target_ops`.
+- Workload isolation: each workload reopens and reloads the engine to avoid
+  cross-workload state pollution (compaction debt/history carry-over).
 - Results pipeline: summaries are printed to stdout, written as CSV under
   `benchmark_data/ycsb/results`, and a text report is saved under
   `benchmark_results/benchmark_results_*.txt`.
