@@ -137,7 +137,6 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 | Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
 | Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
 | Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions. |
-| Global registry | [`global.go`](../raftstore/store/global.go) | Records live stores for CLI/scripting (`Store.Close()` automatically unregisters instances). |
 
 ---
 

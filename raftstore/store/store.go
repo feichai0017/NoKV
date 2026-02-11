@@ -138,7 +138,6 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
-	RegisterStore(s)
 	if s.scheduler != nil {
 		heartbeatInterval := cfg.HeartbeatInterval
 		if heartbeatInterval <= 0 {
