@@ -3,12 +3,10 @@ package store
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
-	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type commandProposal struct {
@@ -25,7 +23,6 @@ type commandPipeline struct {
 	seq       uint64
 	proposals map[uint64]*commandProposal
 	applier   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	legacy    atomic.Uint64
 }
 
 func newCommandPipeline(applier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)) *commandPipeline {
@@ -80,17 +77,12 @@ func (cp *commandPipeline) completeProposal(id uint64, resp *pb.RaftCmdResponse,
 	close(prop.ch)
 }
 
-func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.ApplyFunc) error {
+func (cp *commandPipeline) applyEntries(entries []myraft.Entry) error {
 	if cp == nil {
 		return fmt.Errorf("commandPipeline: pipeline is nil")
 	}
 	for _, entry := range entries {
 		if entry.Type != myraft.EntryNormal {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		if len(entry.Data) == 0 {
@@ -101,21 +93,9 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.Ap
 			return err
 		}
 		if !isCmd {
-			cp.legacy.Add(1)
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-			}
-			continue
+			return fmt.Errorf("commandPipeline: unsupported legacy raft payload")
 		}
 		if cp.applier == nil {
-			if fallback != nil {
-				if err := fallback([]myraft.Entry{entry}); err != nil {
-					return err
-				}
-				continue
-			}
 			return fmt.Errorf("commandPipeline: apply without handler")
 		}
 		resp, applyErr := cp.applier(req)
@@ -126,11 +106,4 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, fallback peer.Ap
 		cp.completeProposal(req.GetHeader().GetRequestId(), resp, nil)
 	}
 	return nil
-}
-
-func (cp *commandPipeline) legacyFallbackCount() uint64 {
-	if cp == nil {
-		return 0
-	}
-	return cp.legacy.Load()
 }

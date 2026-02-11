@@ -309,13 +309,3 @@ func notLeaderError(meta manifest.RegionMeta, leaderPeerID uint64) *pb.RegionErr
 		},
 	}
 }
-
-// LegacyApplyFallbackCount reports how many committed raft entries were not
-// encoded as RaftCmdRequest and therefore routed through the legacy apply
-// fallback path.
-func (s *Store) LegacyApplyFallbackCount() uint64 {
-	if s == nil || s.command == nil {
-		return 0
-	}
-	return s.command.legacyFallbackCount()
-}
