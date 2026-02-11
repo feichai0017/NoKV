@@ -17,6 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/regionutil"
 )
 
 var notifyContext = signal.NotifyContext
@@ -156,7 +157,7 @@ func startStorePeers(server *raftstore.Server, db *NoKV.DB, storeID uint64, elec
 	transport := server.Transport()
 	var started []manifest.RegionMeta
 	for _, meta := range snapshot {
-		peerID := peerIDForStore(meta, storeID)
+		peerID := regionutil.PeerIDForStore(meta, storeID)
 		if peerID == 0 {
 			continue
 		}
@@ -196,15 +197,6 @@ func formatKey(key []byte, isStart bool) string {
 		return "+inf"
 	}
 	return fmt.Sprintf("%q", string(key))
-}
-
-func peerIDForStore(meta manifest.RegionMeta, storeID uint64) uint64 {
-	for _, p := range meta.Peers {
-		if p.StoreID == storeID {
-			return p.PeerID
-		}
-	}
-	return 0
 }
 
 func parseUint(value string) (uint64, error) {

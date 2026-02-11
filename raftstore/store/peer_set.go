@@ -7,18 +7,15 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
-// peerSet tracks the peers hosted by a store and keeps the router registration
-// in sync with the internal map.
+// peerSet tracks the peers hosted by a store.
 type peerSet struct {
-	mu     sync.RWMutex
-	router *Router
-	peers  map[uint64]*peer.Peer
+	mu    sync.RWMutex
+	peers map[uint64]*peer.Peer
 }
 
-func newPeerSet(router *Router) *peerSet {
+func newPeerSet() *peerSet {
 	return &peerSet{
-		router: router,
-		peers:  make(map[uint64]*peer.Peer),
+		peers: make(map[uint64]*peer.Peer),
 	}
 }
 
