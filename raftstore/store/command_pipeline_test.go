@@ -28,12 +28,14 @@ func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 		return nil, applyErr
 	})
 
-	prop1 := cp.registerProposal(11)
-	prop2 := cp.registerProposal(22)
+	prop1, err := cp.registerProposal(11)
+	require.NoError(t, err)
+	prop2, err := cp.registerProposal(22)
+	require.NoError(t, err)
 	require.NotNil(t, prop1)
 	require.NotNil(t, prop2)
 
-	err := cp.applyEntries([]myraft.Entry{
+	err = cp.applyEntries([]myraft.Entry{
 		mustCommandEntry(t, 11),
 		mustCommandEntry(t, 22),
 	})
@@ -51,3 +53,20 @@ func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 	}
 }
 
+func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
+	cp := newCommandPipeline(nil)
+
+	first, err := cp.registerProposal(7)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	second, err := cp.registerProposal(7)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate proposal id")
+	require.Nil(t, second)
+
+	cp.completeProposal(7, &pb.RaftCmdResponse{}, nil)
+	result := <-first.ch
+	require.NoError(t, result.err)
+	require.NotNil(t, result.resp)
+}
