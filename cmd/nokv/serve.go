@@ -83,6 +83,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	registerRuntimeStore(server.Store())
+	defer unregisterRuntimeStore(server.Store())
 	defer func() {
 		_ = server.Close()
 	}()

@@ -140,7 +140,6 @@ func (s *Store) Close() {
 	if s.operations != nil {
 		s.operations.stopLoop()
 	}
-	UnregisterStore(s)
 }
 
 // VisitPeers executes the provided callback for every peer registered with the
