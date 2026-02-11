@@ -20,9 +20,9 @@ die() {
 }
 
 default_workloads="A,B,C,D,E,F"
-default_engines="nokv"
-default_records=10000000
-default_ops=10000000
+default_engines="nokv,badger"
+default_records=1000000
+default_ops=1000000
 default_conc=16
 
 ycsb_engines="${YCSB_ENGINES:-$default_engines}"
