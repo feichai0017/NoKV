@@ -9,7 +9,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
@@ -19,7 +18,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
-	proto "google.golang.org/protobuf/proto"
 )
 
 type memoryNetwork struct {
@@ -104,30 +102,66 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
 				continue
 			}
-			if req, ok, err := command.Decode(entry.Data); err != nil {
-				return err
-			} else if ok {
-				if _, err := kv.Apply(db, req); err != nil {
-					return err
-				}
-				continue
-			}
-			var legacy pb.KV
-			if err := proto.Unmarshal(entry.Data, &legacy); err != nil {
+			req, ok, err := command.Decode(entry.Data)
+			if err != nil {
 				return err
 			}
-			if len(legacy.GetValue()) == 0 {
-				if err := db.DelCF(entrykv.CFDefault, legacy.GetKey()); err != nil {
-					return err
-				}
-				continue
+			if !ok {
+				return fmt.Errorf("raftstore peer test: unsupported legacy raft payload")
 			}
-			if err := db.SetCF(entrykv.CFDefault, legacy.GetKey(), legacy.GetValue()); err != nil {
+			if _, err := kv.Apply(db, req); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
+}
+
+func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) []byte {
+	t.Helper()
+	req := &pb.RaftCmdRequest{
+		Requests: []*pb.Request{
+			{
+				CmdType: pb.CmdType_CMD_PREWRITE,
+				Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
+					Mutations: []*pb.Mutation{{
+						Op:    pb.Mutation_Put,
+						Key:   append([]byte(nil), key...),
+						Value: append([]byte(nil), value...),
+					}},
+					PrimaryLock:  append([]byte(nil), key...),
+					StartVersion: startVersion,
+					LockTtl:      3000,
+				}},
+			},
+			{
+				CmdType: pb.CmdType_CMD_COMMIT,
+				Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+					Keys:          [][]byte{append([]byte(nil), key...)},
+					StartVersion:  startVersion,
+					CommitVersion: startVersion + 1,
+				}},
+			},
+		},
+	}
+	payload, err := command.Encode(req)
+	require.NoError(t, err)
+	return payload
+}
+
+func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
+	t.Helper()
+	reader := percolator.NewReader(db)
+	val, err := reader.GetValue(key, math.MaxUint64)
+	require.NoError(t, err)
+	require.Equal(t, value, val)
+}
+
+func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
+	t.Helper()
+	reader := percolator.NewReader(db)
+	_, err := reader.GetValue(key, math.MaxUint64)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestRaftStoreReplicatesProposals(t *testing.T) {
@@ -181,11 +215,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(1), leader)
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("raft-key"),
-		Value: []byte("raft-value"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("raft-key"), []byte("raft-value"), 10)
 
 	require.NoError(t, net.Propose(leader, payload))
 	for i := 0; i < 10; i++ {
@@ -194,10 +224,10 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 	net.Flush()
 
 	for idx, db := range dbs {
-		entry, err := db.GetCF(entrykv.CFDefault, []byte("raft-key"))
+		reader := percolator.NewReader(db)
+		val, err := reader.GetValue([]byte("raft-key"), math.MaxUint64)
 		require.NoError(t, err, "db %d", idx+1)
-		require.Equal(t, []byte("raft-value"), entry.Value, "db %d", idx+1)
-		entry.DecrRef()
+		require.Equal(t, []byte("raft-value"), val, "db %d", idx+1)
 	}
 }
 
@@ -321,11 +351,12 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 	net.Flush()
 
 	for i := 0; i < 6; i++ {
-		payload, perr := proto.Marshal(&pb.KV{
-			Key:   []byte(fmt.Sprintf("compact-key-%d", i)),
-			Value: []byte(fmt.Sprintf("val-%d", i)),
-		})
-		require.NoError(t, perr)
+		payload := mustEncodePutCommand(
+			t,
+			[]byte(fmt.Sprintf("compact-key-%d", i)),
+			[]byte(fmt.Sprintf("val-%d", i)),
+			uint64(20+i*2),
+		)
 		require.NoError(t, net.Propose(1, payload))
 		for tick := 0; tick < 3; tick++ {
 			net.Tick()
@@ -450,11 +481,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	require.NoError(t, net.Campaign(1))
 	net.Flush()
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("raft-persist-key"),
-		Value: []byte("persist-before"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("raft-persist-key"), []byte("persist-before"), 100)
 
 	leader, ok := net.Leader()
 	require.True(t, ok)
@@ -465,10 +492,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key"))
-		require.NoError(t, err)
-		require.Equal(t, []byte("persist-before"), entry.Value)
-		entry.DecrRef()
+		requireVisibleValue(t, n.db, []byte("raft-persist-key"), []byte("persist-before"))
 		require.NoError(t, n.db.Close())
 	}
 
@@ -503,10 +527,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net2.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key"))
-		require.NoError(t, err)
-		require.Equal(t, []byte("persist-before"), entry.Value)
-		entry.DecrRef()
+		requireVisibleValue(t, n.db, []byte("raft-persist-key"), []byte("persist-before"))
 	}
 
 	var (
@@ -530,11 +551,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	}
 	require.True(t, found)
 
-	payload2, err := proto.Marshal(&pb.KV{
-		Key:   []byte("raft-persist-key2"),
-		Value: []byte("persist-after"),
-	})
-	require.NoError(t, err)
+	payload2 := mustEncodePutCommand(t, []byte("raft-persist-key2"), []byte("persist-after"), 120)
 	require.NoError(t, net2.Propose(leader2, payload2))
 	for range 10 {
 		net2.Tick()
@@ -542,10 +559,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	net2.Flush()
 
 	for _, n := range nodes {
-		entry, err := n.db.GetCF(entrykv.CFDefault, []byte("raft-persist-key2"))
-		require.NoError(t, err)
-		require.Equal(t, []byte("persist-after"), entry.Value)
-		entry.DecrRef()
+		requireVisibleValue(t, n.db, []byte("raft-persist-key2"), []byte("persist-after"))
 		require.NoError(t, n.db.Close())
 	}
 }
@@ -600,11 +614,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(1), leader)
 
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("slow-follower-key"),
-		Value: []byte("slow-follower-value"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("slow-follower-key"), []byte("slow-follower-value"), 140)
 
 	followerDB := dbs[followerID]
 	ptrBaseline, ok := followerDB.Manifest().RaftPointer(raftGroupID)
@@ -621,8 +631,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		net.Flush()
 	}
 
-	_, err = followerDB.GetCF(entrykv.CFDefault, []byte("slow-follower-key"))
-	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	requireMissingValue(t, followerDB, []byte("slow-follower-key"))
 
 	ptrDuring, ok := followerDB.Manifest().RaftPointer(raftGroupID)
 	if ok {
@@ -636,10 +645,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		net.Flush()
 	}
 
-	entry, err := followerDB.GetCF(entrykv.CFDefault, []byte("slow-follower-key"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("slow-follower-value"), entry.Value)
-	entry.DecrRef()
+	requireVisibleValue(t, followerDB, []byte("slow-follower-key"), []byte("slow-follower-value"))
 
 	ptrAfter, ok := followerDB.Manifest().RaftPointer(raftGroupID)
 	require.True(t, ok)
@@ -686,11 +692,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	ptrBefore, ptrPresent := db.Manifest().RaftPointer(raftGroupID)
 
 	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointSkipManifest)
-	payload, err := proto.Marshal(&pb.KV{
-		Key:   []byte("ready-fail-key"),
-		Value: []byte("ready-fail-value"),
-	})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("ready-fail-key"), []byte("ready-fail-value"), 160)
 
 	require.NoError(t, net.Propose(leader, payload))
 	for i := 0; i < 8; i++ {
@@ -709,11 +711,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	require.NoError(t, db.WAL().Rotate())
 	snapBeforeCrash := db.Info().Snapshot()
 	require.Equal(t, int64(1), snapBeforeCrash.Raft.LagWarnThreshold)
-	payloadLag, err := proto.Marshal(&pb.KV{
-		Key:   []byte("ready-fail-key-lag"),
-		Value: []byte("ready-fail-value-lag"),
-	})
-	require.NoError(t, err)
+	payloadLag := mustEncodePutCommand(t, []byte("ready-fail-key-lag"), []byte("ready-fail-value-lag"), 162)
 	require.NoError(t, net.Propose(leader, payloadLag))
 	for i := 0; i < 6; i++ {
 		net.Tick()
@@ -727,10 +725,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
 
-	entry, err := db.GetCF(entrykv.CFDefault, []byte("ready-fail-key"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("ready-fail-value"), entry.Value)
-	entry.DecrRef()
+	requireVisibleValue(t, db, []byte("ready-fail-key"), []byte("ready-fail-value"))
 
 	require.NoError(t, db.Close())
 
@@ -762,10 +757,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	}
 	require.Greater(t, ptrRecovered.Segment, uint32(0))
 
-	entry2, err := dbRestart.GetCF(entrykv.CFDefault, []byte("ready-fail-key"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("ready-fail-value"), entry2.Value)
-	entry2.DecrRef()
+	requireVisibleValue(t, dbRestart, []byte("ready-fail-key"), []byte("ready-fail-value"))
 
 	recoveredSnap := dbRestart.Info().Snapshot()
 	t.Logf("recovered snapshot: warning=%v maxLag=%d lagging=%d activeSeg=%d activeSize=%d ptr=%+v", recoveredSnap.Raft.LagWarning, recoveredSnap.Raft.MaxLagSegments, recoveredSnap.Raft.LaggingGroups, recoveredSnap.WAL.ActiveSegment, recoveredSnap.WAL.ActiveSize, ptrRecovered)
@@ -817,8 +809,7 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(1), leader)
 
-	payload, err := proto.Marshal(&pb.KV{Key: []byte("wait-applied"), Value: []byte("value")})
-	require.NoError(t, err)
+	payload := mustEncodePutCommand(t, []byte("wait-applied"), []byte("value"), 180)
 	require.NoError(t, net.Propose(leader, payload))
 
 	for i := 0; i < 5; i++ {
