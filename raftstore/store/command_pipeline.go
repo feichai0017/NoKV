@@ -42,15 +42,18 @@ func (cp *commandPipeline) nextProposalID() uint64 {
 	return cp.seq
 }
 
-func (cp *commandPipeline) registerProposal(id uint64) *commandProposal {
+func (cp *commandPipeline) registerProposal(id uint64) (*commandProposal, error) {
 	if cp == nil || id == 0 {
-		return nil
+		return nil, nil
 	}
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
+	if _, exists := cp.proposals[id]; exists {
+		return nil, fmt.Errorf("commandPipeline: duplicate proposal id %d", id)
+	}
 	prop := &commandProposal{ch: make(chan proposalResult, 1)}
 	cp.proposals[id] = prop
-	return prop
+	return prop, nil
 }
 
 func (cp *commandPipeline) removeProposal(id uint64) {
