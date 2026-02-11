@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 )
 
 // UpdateRegion persists the region metadata (when a manifest manager is
@@ -69,7 +70,7 @@ func (s *Store) RegionSnapshot() RegionSnapshot {
 }
 
 // RegionMetrics returns the metrics recorder tracking region state counts.
-func (s *Store) RegionMetrics() *RegionMetrics {
+func (s *Store) RegionMetrics() *metrics.RegionMetrics {
 	if s == nil {
 		return nil
 	}

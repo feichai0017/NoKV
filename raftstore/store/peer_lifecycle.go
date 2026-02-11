@@ -59,6 +59,9 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		cfgCopy.AdminApply = s.handleAdminCommand
 	}
 	legacyApply := cfgCopy.Apply
+	if !s.allowLegacyApplyFallback {
+		legacyApply = nil
+	}
 	cfgCopy.Apply = func(entries []myraft.Entry) error {
 		return s.applyEntries(entries, legacyApply)
 	}

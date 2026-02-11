@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
@@ -30,10 +31,7 @@ type LifecycleHooks struct {
 
 // RegionHooks exposes callbacks triggered when region metadata changes or is
 // removed from the store catalog.
-type RegionHooks struct {
-	OnRegionUpdate func(manifest.RegionMeta)
-	OnRegionRemove func(uint64)
-}
+type RegionHooks = metrics.RegionHooks
 
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.
@@ -55,4 +53,8 @@ type Config struct {
 	OperationObserver  func(scheduler.Operation)
 	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
+	// DisableLegacyApplyFallback controls whether non-command raft payloads are
+	// forwarded to the peer-level Apply fallback. Defaults to false to preserve
+	// compatibility with legacy test payloads.
+	DisableLegacyApplyFallback bool
 }

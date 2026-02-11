@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
@@ -15,24 +16,25 @@ import (
 // lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
 // ticks or proposals without needing to keep global peer maps themselves.
 type Store struct {
-	mu             sync.RWMutex
-	router         *Router
-	peers          *peerSet
-	peerFactory    PeerFactory
-	peerBuilder    PeerBuilder
-	hooks          LifecycleHooks
-	regionMetrics  *RegionMetrics
-	manifest       *manifest.Manager
-	regions        *regionManager
-	scheduler      scheduler.RegionSink
-	storeID        uint64
-	planner        scheduler.Planner
-	operationHook  func(scheduler.Operation)
-	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	command        *commandPipeline
-	commandTimeout time.Duration
-	operations     *operationScheduler
-	heartbeat      *heartbeatLoop
+	mu                       sync.RWMutex
+	router                   *Router
+	peers                    *peerSet
+	peerFactory              PeerFactory
+	peerBuilder              PeerBuilder
+	hooks                    LifecycleHooks
+	regionMetrics            *metrics.RegionMetrics
+	manifest                 *manifest.Manager
+	regions                  *regionManager
+	scheduler                scheduler.RegionSink
+	storeID                  uint64
+	planner                  scheduler.Planner
+	operationHook            func(scheduler.Operation)
+	commandApplier           func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	command                  *commandPipeline
+	commandTimeout           time.Duration
+	operations               *operationScheduler
+	heartbeat                *heartbeatLoop
+	allowLegacyApplyFallback bool
 }
 
 type operationKey struct {
@@ -74,8 +76,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if factory == nil {
 		factory = peer.NewPeer
 	}
-	metrics := NewRegionMetrics()
-	hookChain := []RegionHooks{metrics.Hooks()}
+	regionMetrics := metrics.NewRegionMetrics()
+	hookChain := []RegionHooks{regionMetrics.Hooks()}
 	if cfg.Scheduler != nil {
 		hookChain = append(hookChain, RegionHooks{
 			OnRegionUpdate: cfg.Scheduler.SubmitRegionHeartbeat,
@@ -118,19 +120,20 @@ func NewStoreWithConfig(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:         router,
-		peers:          newPeerSet(),
-		peerFactory:    factory,
-		peerBuilder:    cfg.PeerBuilder,
-		hooks:          cfg.Hooks,
-		regionMetrics:  metrics,
-		manifest:       cfg.Manifest,
-		scheduler:      cfg.Scheduler,
-		storeID:        cfg.StoreID,
-		planner:        planner,
-		operationHook:  cfg.OperationObserver,
-		commandApplier: cfg.CommandApplier,
-		commandTimeout: commandTimeout,
+		router:                   router,
+		peers:                    newPeerSet(),
+		peerFactory:              factory,
+		peerBuilder:              cfg.PeerBuilder,
+		hooks:                    cfg.Hooks,
+		regionMetrics:            regionMetrics,
+		manifest:                 cfg.Manifest,
+		scheduler:                cfg.Scheduler,
+		storeID:                  cfg.StoreID,
+		planner:                  planner,
+		operationHook:            cfg.OperationObserver,
+		commandApplier:           cfg.CommandApplier,
+		commandTimeout:           commandTimeout,
+		allowLegacyApplyFallback: !cfg.DisableLegacyApplyFallback,
 	}
 	s.regions = newRegionManager(cfg.Manifest, combinedHooks)
 	s.command = newCommandPipeline(cfg.CommandApplier)
