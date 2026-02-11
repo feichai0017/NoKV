@@ -298,51 +298,77 @@ func runYCSBBenchmarks(cfg ycsbConfig, opts ycsbEngineOptions) ([]BenchmarkResul
 		if engineName == "" {
 			continue
 		}
-		var engine ycsbEngine
-		switch engineName {
-		case "nokv":
-			engine = newNoKVEngine(opts)
-		case "nokv-skiplist":
-			engine = newNoKVEngineWithMemtable(opts, "nokv-skiplist", "NoKV-skiplist", NoKV.MemTableEngineSkiplist)
-		case "nokv-art":
-			engine = newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", NoKV.MemTableEngineART)
-		case "badger":
-			engine = newBadgerEngine(opts)
-		case "rocksdb":
-			engine = newRocksDBEngine(opts)
-		default:
-			return nil, fmt.Errorf("unknown engine %q", engineName)
-		}
-		if err := engine.Open(true); err != nil {
-			return nil, fmt.Errorf("%s open: %w", engine.Name(), err)
-		}
-		state := &ycsbKeyspace{baseRecords: int64(cfg.RecordCount)}
-		if err := ycsbLoad(engine, cfg, state); err != nil {
-			_ = engine.Close()
-			return nil, fmt.Errorf("%s load: %w", engine.Name(), err)
-		}
-		for _, workload := range cfg.Workloads {
-			if cfg.WarmUpOps > 0 {
-				warmCfg := cfg
-				warmCfg.Operations = cfg.WarmUpOps
-				warmCfg.WarmUpOps = 0
-				if _, err := ycsbRunWorkload(engine, warmCfg, state, workload); err != nil {
-					_ = engine.Close()
-					return nil, fmt.Errorf("%s warmup %s: %w", engine.Name(), workload.Name, err)
-				}
-			}
-			res, err := ycsbRunWorkload(engine, cfg, state, workload)
-			if err != nil {
-				_ = engine.Close()
-				return nil, err
-			}
-			results = append(results, res)
-		}
-		if err := engine.Close(); err != nil {
+		engine, err := newYCSBEngine(engineName, opts)
+		if err != nil {
 			return nil, err
 		}
+		engineResults, err := runYCSBWorkloadsOnEngine(engine, cfg)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, engineResults...)
 	}
 	return results, nil
+}
+
+func newYCSBEngine(engineName string, opts ycsbEngineOptions) (ycsbEngine, error) {
+	switch engineName {
+	case "nokv":
+		return newNoKVEngine(opts), nil
+	case "nokv-skiplist":
+		return newNoKVEngineWithMemtable(opts, "nokv-skiplist", "NoKV-skiplist", NoKV.MemTableEngineSkiplist), nil
+	case "nokv-art":
+		return newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", NoKV.MemTableEngineART), nil
+	case "badger":
+		return newBadgerEngine(opts), nil
+	case "rocksdb":
+		return newRocksDBEngine(opts), nil
+	default:
+		return nil, fmt.Errorf("unknown engine %q", engineName)
+	}
+}
+
+func runYCSBWorkloadsOnEngine(engine ycsbEngine, cfg ycsbConfig) ([]BenchmarkResult, error) {
+	results := make([]BenchmarkResult, 0, len(cfg.Workloads))
+	for _, workload := range cfg.Workloads {
+		res, err := runIsolatedWorkload(engine, cfg, workload)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+func runIsolatedWorkload(engine ycsbEngine, cfg ycsbConfig, workload ycsbWorkload) (res BenchmarkResult, rerr error) {
+	if err := engine.Open(true); err != nil {
+		return BenchmarkResult{}, fmt.Errorf("%s open: %w", engine.Name(), err)
+	}
+	defer func() {
+		if err := engine.Close(); rerr == nil && err != nil {
+			rerr = err
+		}
+	}()
+
+	state := &ycsbKeyspace{baseRecords: int64(cfg.RecordCount)}
+	if err := ycsbLoad(engine, cfg, state); err != nil {
+		return BenchmarkResult{}, fmt.Errorf("%s load: %w", engine.Name(), err)
+	}
+
+	if cfg.WarmUpOps > 0 {
+		warmCfg := cfg
+		warmCfg.Operations = cfg.WarmUpOps
+		warmCfg.WarmUpOps = 0
+		if _, err := ycsbRunWorkload(engine, warmCfg, state, workload); err != nil {
+			return BenchmarkResult{}, fmt.Errorf("%s warmup %s: %w", engine.Name(), workload.Name, err)
+		}
+	}
+
+	res, err := ycsbRunWorkload(engine, cfg, state, workload)
+	if err != nil {
+		return BenchmarkResult{}, err
+	}
+	return res, nil
 }
 
 func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
