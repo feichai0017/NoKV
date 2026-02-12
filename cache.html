@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e166c7e9.js";
+            window.path_to_searchindex_js = "searchindex-b44dc242.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -188,9 +188,9 @@
 <tr><th>Component</th><th>Purpose</th><th>Source</th></tr>
 </thead>
 <tbody>
-<tr><td><code>cache.indexs</code> + <code>indexHot</code></td><td>Table index cache (<code>fid</code> → <code>*pb.TableIndex</code>) reused across reopen + small CLOCK hot tier fed by HotRing hits.</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
-<tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots; hot block tier (small CLOCK) keeps hotspot blocks resident.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>bloomCache</code> + <code>hot</code></td><td>LRU cache of bloom filter bitsets per SST plus small CLOCK hot tier to protect frequent filters.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>cache.indexs</code></td><td>Table index cache (<code>fid</code> → <code>*pb.TableIndex</code>) reused across reopen.</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
+<tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>bloomCache</code></td><td>LRU cache of bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
 <tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
@@ -205,22 +205,20 @@
 <hr>
 <h2 id="2-block-cache-strategy"><a class="header" href="#2-block-cache-strategy">2. Block Cache Strategy</a></h2>
 <pre><code class="language-text">User-space block cache (L0/L1, parsed blocks, Ristretto LFU-ish)
-Small hot tier (CLOCK) for hotspot blocks
 Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <ul>
 <li><code>Options.BlockCacheSize</code> sets capacity in <strong>blocks</strong> (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.</li>
-<li>Hot tier: requests marked <code>hot</code> (prefetch/hotspot reads) promote blocks into the small CLOCK hot set derived from the main capacity, making them harder to evict under long-tail traffic.</li>
 <li>Per-table direct slots (<code>table.cacheSlots[idx]</code>) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).</li>
 <li>Evictions clear the table slot via <code>OnEvict</code>; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.</li>
 <li>Access patterns: <code>getBlock</code> also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.</li>
 </ul>
 <pre class="mermaid">flowchart LR
-  Read --&gt; CheckHot
-  CheckHot --&gt;|hit| Return
-  CheckHot --&gt;|miss| LoadFromTable["LoadFromTable (mmap + OS page cache)"]
-  LoadFromTable --&gt; InsertHot
-  InsertHot --&gt; Return
+  Read --&gt; CheckCache
+  CheckCache --&gt;|hit| Return
+  CheckCache --&gt;|miss| LoadFromTable["LoadFromTable (mmap + OS page cache)"]
+  LoadFromTable --&gt; InsertCache
+  InsertCache --&gt; Return
 </pre>
 
 <p>By default only L0 and L1 blocks are cached (<code>level &gt; 1</code> short-circuits), reflecting the higher re-use for top levels.</p>
@@ -228,8 +226,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <h2 id="3-bloom-cache"><a class="header" href="#3-bloom-cache">3. Bloom Cache</a></h2>
 <ul>
 <li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
-<li>Main tier is LRU with a tiny CLOCK hot set to protect frequently hit filters from being washed out by scans.</li>
-<li>Capacity is controlled by <code>Options.BloomCacheSize</code>; the hot CLOCK tier auto-scales from a few dozen up to a few hundred entries.</li>
+<li>Cache policy is LRU.</li>
+<li>Capacity is controlled by <code>Options.BloomCacheSize</code>.</li>
 <li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
@@ -244,12 +242,12 @@ Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
 <hr>
-<h2 id="5-hot-integration-hotring"><a class="header" href="#5-hot-integration-hotring">5. Hot Integration (HotRing)</a></h2>
+<h2 id="5-hotring-integration"><a class="header" href="#5-hotring-integration">5. HotRing Integration</a></h2>
 <ul>
-<li>Hot detection: HotRing counts on read/write paths raise a <code>hot</code> flag once thresholds are met; only hot keys trigger prefetch.</li>
-<li>Cache promotion: hot hits/prefetch promote blocks into the CLOCK hot tier and promote indexes/Blooms into their CLOCK tiers; cold data stays in the main cache to avoid pollution.</li>
+<li>Hot detection: HotRing counts on read/write paths and triggers targeted prefetch for hot keys.</li>
+<li>Cache warmup: prefetch loads target blocks into the normal L0/L1 block cache path.</li>
 <li>Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.</li>
-<li>Tuning: Hot thresholds come from HotRing options (window/decay configurable); hot tier capacities are small and derived from existing cache sizes.</li>
+<li>Tuning: Hot thresholds come from HotRing options (window/decay configurable).</li>
 </ul>
 <hr>
 <h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
@@ -265,7 +263,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <tr><th>Feature</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr>
 </thead>
 <tbody>
-<tr><td>Hot/cold tiers</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto (hot) + OS page cache (cold)</td></tr>
+<tr><td>Block cache policy</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto for L0/L1 + OS page cache for deeper levels</td></tr>
 <tr><td>Bloom cache</td><td>Enabled per table, no explicit cache</td><td>Optional</td><td>Dedicated LRU storing filters</td></tr>
 <tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.cache.*</code> hit rates</td></tr>
 </tbody>

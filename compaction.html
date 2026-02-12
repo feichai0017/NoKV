@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e166c7e9.js";
+            window.path_to_searchindex_js = "searchindex-b44dc242.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -225,13 +225,13 @@
 <tr><th>Component</th><th>Purpose</th><th>Metrics hook</th></tr>
 </thead>
 <tbody>
-<tr><td>Block cache (hot)</td><td>LRU list capturing most recent hits (typically L0/L1).</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
-<tr><td>Block cache (cold)</td><td>CLOCK cache for deeper levels, keeping the memory footprint bounded.</td><td>Same as above</td></tr>
+<tr><td>Block cache</td><td>Ristretto cache for L0/L1 blocks.</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
+<tr><td>OS page cache path</td><td>Deeper levels bypass user-space cache and rely on mmap + kernel page cache.</td><td>Same as above</td></tr>
 <tr><td>Bloom cache</td><td>Stores decoded bloom filters to reduce disk touches.</td><td><code>recordBloom(hit)</code></td></tr>
 </tbody>
 </table>
 </div>
-<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster.  <code>TestCacheHotColdMetrics</code> verifies that the hot and cold tiers tick the counters as expected.</p>
+<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
 <hr>
 <h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
 <p>Compaction informs value‑log GC via discard statistics:</p>
@@ -258,7 +258,7 @@
 </ul>
 </li>
 </ul>
-<p>When adding new compaction heuristics or cache tiers, extend these tests (or introduce new ones) so the behaviour stays observable.</p>
+<p>When adding new compaction heuristics or cache behaviour, extend these tests (or introduce new ones) so the behaviour stays observable.</p>
 <hr>
 <h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
 <ul>
