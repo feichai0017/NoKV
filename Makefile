@@ -3,6 +3,11 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools
 
+GOLANGCI_LINT_VERSION ?= v1.64.8
+PROTOC_GEN_GO_VERSION ?= $(shell go list -m -f '{{.Version}}' google.golang.org/protobuf)
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
+PROTOC_VERSION ?= 33.4
+
 # Default target
 help:
 	@echo "NoKV Development Commands:"
@@ -73,8 +78,18 @@ bench:
 
 # Install development tools
 install-tools:
-	@echo "Installing development tools..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Installing development tools (pinned versions)..."
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+	@if ! command -v protoc >/dev/null 2>&1; then \
+		echo "WARN: protoc not found. Please install libprotoc $(PROTOC_VERSION)."; \
+	else \
+		installed="$$(protoc --version | awk '{print $$2}')"; \
+		if [ "$$installed" != "$(PROTOC_VERSION)" ]; then \
+			echo "WARN: expected libprotoc $(PROTOC_VERSION), got $$installed"; \
+		fi; \
+	fi
 	@echo "✓ Tools installed"
 
 # Start Docker Compose cluster
