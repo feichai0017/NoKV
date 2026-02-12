@@ -360,6 +360,7 @@ message KeyError {
   KeyAlreadyExists already_exists = 3;
   string retryable = 4;
   string abort = 5;
+  CommitTsExpired commit_ts_expired = 6;
 }
 
 message Locked {
@@ -381,6 +382,12 @@ message WriteConflict {
 
 message KeyAlreadyExists {
   bytes key = 1;
+}
+
+message CommitTsExpired {
+  bytes key = 1;
+  uint64 commit_ts = 2;
+  uint64 min_commit_ts = 3;
 }
 
 message RegionError {
