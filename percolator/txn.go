@@ -114,9 +114,6 @@ func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyE
 		if lock.Ts != req.StartVersion {
 			return keyErrorLocked(key, lock)
 		}
-		if lock.MinCommitTs > req.CommitVersion {
-			return keyErrorCommitTsExpired(key, req.CommitVersion, lock.MinCommitTs)
-		}
 		if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
 			return err
 		}
@@ -170,9 +167,6 @@ func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest
 				return resolved, err
 			}
 		} else {
-			if lock.MinCommitTs > req.CommitVersion {
-				return resolved, keyErrorCommitTsExpired(key, req.CommitVersion, lock.MinCommitTs)
-			}
 			if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
 				return resolved, err
 			}
@@ -293,6 +287,9 @@ func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *pb.KeyEr
 }
 
 func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
+	if lock.MinCommitTs > commitVersion {
+		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
+	}
 	write, commitTs, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
 		return keyErrorRetryable(err)
