@@ -170,6 +170,9 @@ func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest
 				return resolved, err
 			}
 		} else {
+			if lock.MinCommitTs > req.CommitVersion {
+				return resolved, keyErrorCommitTsExpired(key, req.CommitVersion, lock.MinCommitTs)
+			}
 			if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
 				return resolved, err
 			}
