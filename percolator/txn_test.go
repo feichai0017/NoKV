@@ -351,3 +351,46 @@ func TestIsLockExpired(t *testing.T) {
 	require.False(t, isLockExpired(&Lock{Ts: 5, TTL: 0}, 10))
 	require.True(t, isLockExpired(&Lock{Ts: 5, TTL: 5}, 10))
 }
+
+func TestCommitTsExpired(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("expired")
+
+	prewriteReq := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("v1"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      1000,
+		// TODO: Manually set a large MinCommitTs to simulate that a concurrent
+		// reader has pushed the lock's min_commit_ts.
+		// This hardcoded value should be removed once the Read
+		// path for pushing min_commit_ts is implemented.
+		MinCommitTs: 30,
+	}
+	require.Empty(t, Prewrite(db, latches, prewriteReq))
+
+	commitReq := &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  10,
+		CommitVersion: 20,
+	}
+	err := Commit(db, latches, commitReq)
+
+	require.NotNil(t, err)
+	require.NotNil(t, err.GetCommitTsExpired())
+	require.Equal(t, uint64(20), err.GetCommitTsExpired().CommitTs)
+	require.Equal(t, uint64(30), err.GetCommitTsExpired().MinCommitTs)
+
+	// Mock retry commit with new commit ts
+	commitReq = &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  10,
+		CommitVersion: 30,
+	}
+	require.Nil(t, Commit(db, latches, commitReq))
+}
