@@ -1,0 +1,24 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+message RegionPeer {
+  uint64 store_id = 1;
+  uint64 peer_id = 2;
+}
+
+message RegionMeta {
+  uint64 id = 1;
+  bytes start_key = 2;
+  bytes end_key = 3;
+  uint64 epoch_version = 4;
+  uint64 epoch_conf_version = 5;
+  repeated RegionPeer peers = 6;
+}
+
+message RegionEpoch {
+  uint64 conf_ver = 1;
+  uint64 version = 2;
+}
