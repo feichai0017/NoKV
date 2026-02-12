@@ -28,7 +28,7 @@
 
   <p>
     <!-- Meta -->
-    <img alt="Go Version" src="https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white" />
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white" />
     <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
     <a href="https://deepwiki.com/feichai0017/NoKV">
       <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
