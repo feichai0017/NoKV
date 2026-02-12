@@ -2,8 +2,6 @@ package pb
 
 import (
 	"context"
-	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 func TestKVMajorFieldsRoundTrip(t *testing.T) {
@@ -175,27 +175,35 @@ func (r *fakeRegistrar) RegisterService(desc *grpc.ServiceDesc, srv any) {
 	r.srv = srv
 }
 
-func TestAllMessageMethods(t *testing.T) {
-	for i := range file_pb_proto_msgTypes {
-		msg := file_pb_proto_msgTypes[i].New().Interface()
-		rv := reflect.ValueOf(msg)
-		for m := 0; m < rv.NumMethod(); m++ {
-			method := rv.Type().Method(m)
-			if method.Type.NumIn() != 1 {
-				continue
-			}
-			if strings.HasPrefix(method.Name, "XXX_") {
-				continue
-			}
-			method.Func.Call([]reflect.Value{rv})
+func TestAllMessagesRoundTrip(t *testing.T) {
+	total := 0
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		if string(fd.Package()) != "pb" {
+			return true
 		}
+		total += roundTripMessages(t, fd.Messages())
+		return true
+	})
+	require.Greater(t, total, 0, "expected to discover pb messages for round-trip checks")
+}
 
+func roundTripMessages(t *testing.T, messages protoreflect.MessageDescriptors) int {
+	t.Helper()
+	count := 0
+	for i := 0; i < messages.Len(); i++ {
+		md := messages.Get(i)
+		msg := dynamicpb.NewMessage(md)
 		data, err := proto.Marshal(msg)
 		require.NoError(t, err)
-		clone := file_pb_proto_msgTypes[i].New().Interface()
+
+		clone := dynamicpb.NewMessage(md)
 		require.NoError(t, proto.Unmarshal(data, clone))
 		require.True(t, proto.Equal(msg, clone))
+		count++
+
+		count += roundTripMessages(t, md.Messages())
 	}
+	return count
 }
 
 func TestEnumHelpers(t *testing.T) {
