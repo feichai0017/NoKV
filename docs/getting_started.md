@@ -3,7 +3,7 @@
 This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a few minutes.
 
 ## Prerequisites
-- Go 1.24+
+- Go 1.26+
 - Git
 - (Optional) Docker + Docker Compose for containerized runs
 
