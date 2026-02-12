@@ -242,7 +242,7 @@ func (buf ingestBuffer) shardViews() []compact.IngestShardView {
 	return views
 }
 
-func (buf ingestBuffer) prefetch(key []byte, hot bool) bool {
+func (buf ingestBuffer) prefetch(key []byte) bool {
 	for _, sh := range buf.shards {
 		for _, table := range sh.tables {
 			if table == nil {
@@ -252,7 +252,7 @@ func (buf ingestBuffer) prefetch(key []byte, hot bool) bool {
 				utils.CompareKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
-			if table.prefetchBlockForKey(key, hot) {
+			if table.prefetchBlockForKey(key) {
 				return true
 			}
 		}

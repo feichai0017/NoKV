@@ -20,64 +20,10 @@ const defaultCacheSize = 1024
 type CacheMetrics = metrics.CacheSnapshot
 
 type cache struct {
-	indexs   *coreCache.Cache // key: fid, value: *pb.TableIndex
-	indexHot *hotIndexCache
-	blocks   *blockCache
-	blooms   *bloomCache
-	metrics  *metrics.CacheCounters
-}
-
-type hotIndexCache struct {
-	cp *coreCache.ClockProCache[*pb.TableIndex]
-}
-
-func newHotIndexCache(cap int) *hotIndexCache {
-	if cap <= 0 {
-		return nil
-	}
-	return &hotIndexCache{cp: coreCache.NewClockProCache[*pb.TableIndex](cap)}
-}
-
-func (hc *hotIndexCache) get(fid uint64) (*pb.TableIndex, bool) {
-	if hc == nil || hc.cp == nil {
-		return nil, false
-	}
-	return hc.cp.Get(fid)
-}
-
-func (hc *hotIndexCache) promote(fid uint64, idx *pb.TableIndex) {
-	if hc == nil || hc.cp == nil || idx == nil {
-		return
-	}
-	hc.cp.Promote(fid, idx)
-}
-
-type hotBloomCache struct {
-	cp *coreCache.ClockProCache[utils.Filter]
-}
-
-func newHotBloomCache(cap int) *hotBloomCache {
-	if cap <= 0 {
-		return nil
-	}
-	return &hotBloomCache{
-		cp: coreCache.NewClockProCache[utils.Filter](cap),
-	}
-}
-
-func (hc *hotBloomCache) get(fid uint64) (utils.Filter, bool) {
-	if hc == nil || hc.cp == nil {
-		return nil, false
-	}
-	return hc.cp.Get(fid)
-}
-
-func (hc *hotBloomCache) promote(fid uint64, filter utils.Filter) {
-	if hc == nil || hc.cp == nil || len(filter) == 0 {
-		return
-	}
-	dup := kv.SafeCopy(nil, filter)
-	hc.cp.Promote(fid, dup)
+	indexs  *coreCache.Cache // key: fid, value: *pb.TableIndex
+	blocks  *blockCache
+	blooms  *bloomCache
+	metrics *metrics.CacheCounters
 }
 
 // close releases cache state.
@@ -108,16 +54,11 @@ func newCache(opt *Options) *cache {
 	hotCap := max(blockCacheSize, 0)
 	blocks := newBlockCache(hotCap)
 	blooms := newBloomCache(bloomCacheSize)
-	hotIdxCap := 64
-	if blockCacheSize > 0 {
-		hotIdxCap = min(max(blockCacheSize/64, 32), 256)
-	}
 	return &cache{
-		indexs:   coreCache.NewCache(defaultCacheSize),
-		indexHot: newHotIndexCache(hotIdxCap),
-		blocks:   blocks,
-		blooms:   blooms,
-		metrics:  counters,
+		indexs:  coreCache.NewCache(defaultCacheSize),
+		blocks:  blocks,
+		blooms:  blooms,
+		metrics: counters,
 	}
 }
 
@@ -129,20 +70,9 @@ func (c *cache) addIndex(fid uint64, idx *pb.TableIndex) {
 		return
 	}
 	c.indexs.Set(fid, idx)
-	if c.indexHot != nil {
-		c.indexHot.promote(fid, idx)
-	}
 }
 
 func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
-	if c != nil && c.indexHot != nil {
-		if idx, ok := c.indexHot.get(fid); ok && idx != nil {
-			if c.metrics != nil {
-				c.metrics.RecordIndex(true)
-			}
-			return idx, true
-		}
-	}
 	if c == nil || c.indexs == nil {
 		return nil, false
 	}
@@ -167,11 +97,11 @@ func (c *cache) delIndex(fid uint64) {
 	c.indexs.Del(fid)
 }
 
-func (c *cache) getBlock(level int, key uint64, hot bool) (*block, bool) {
+func (c *cache) getBlock(level int, key uint64) (*block, bool) {
 	if c == nil || c.blocks == nil {
 		return nil, false
 	}
-	blk, ok := c.blocks.get(level, key, hot)
+	blk, ok := c.blocks.get(key)
 	if ok {
 		c.metrics.RecordBlock(level, true)
 		return blk, true
@@ -180,11 +110,11 @@ func (c *cache) getBlock(level int, key uint64, hot bool) (*block, bool) {
 	return nil, false
 }
 
-func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block, hot bool) {
+func (c *cache) addBlock(level int, tbl *table, key uint64, blk *block) {
 	if c == nil || c.blocks == nil {
 		return
 	}
-	c.blocks.addWithTier(level, tbl, key, blk, hot)
+	c.blocks.add(level, tbl, key, blk)
 }
 
 func (c *cache) getBloom(fid uint64) (utils.Filter, bool) {
@@ -211,8 +141,7 @@ func (c *cache) metricsSnapshot() metrics.CacheSnapshot {
 }
 
 type blockCache struct {
-	rc  *ristretto.Cache[uint64, *blockEntry]
-	hot *coreCache.ClockProCache[*blockEntry]
+	rc *ristretto.Cache[uint64, *blockEntry]
 
 	closing atomic.Bool
 }
@@ -238,11 +167,7 @@ func newBlockCache(capacity int) *blockCache {
 	if capacity <= 0 {
 		return nil
 	}
-	hotCap := min(min(max(capacity/8, 16), capacity), 256)
 	bc := &blockCache{}
-	if hotCap > 0 {
-		bc.hot = coreCache.NewClockProCache[*blockEntry](hotCap)
-	}
 	rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
 		NumCounters: int64(capacity) * 8,
 		MaxCost:     int64(capacity),
@@ -258,7 +183,6 @@ func newBlockCache(capacity int) *blockCache {
 				return
 			}
 			item.Value.release()
-			bc.removeHotEntry(item.Value)
 		},
 	})
 	if err != nil {
@@ -268,44 +192,17 @@ func newBlockCache(capacity int) *blockCache {
 	return bc
 }
 
-func (c *blockCache) getHot(key uint64) (*blockEntry, bool) {
-	if c == nil || c.hot == nil {
-		return nil, false
-	}
-	return c.hot.Get(key)
-}
-
-func (c *blockCache) promoteHot(be *blockEntry) {
-	if c == nil || c.hot == nil || be == nil {
-		return
-	}
-	c.hot.Promote(be.key, be)
-}
-
-func (c *blockCache) removeHotEntry(be *blockEntry) {
-	if c == nil || c.hot == nil || be == nil {
-		return
-	}
-	c.hot.Delete(be.key)
-}
-
-func (c *blockCache) get(level int, key uint64, hotHint bool) (*block, bool) {
-	if be, ok := c.getHot(key); ok && be != nil && be.blk != nil {
-		return be.blk, true
-	}
+func (c *blockCache) get(key uint64) (*block, bool) {
 	if c == nil || c.rc == nil {
 		return nil, false
 	}
 	if be, ok := c.rc.Get(key); ok && be != nil && be.blk != nil {
-		if hotHint {
-			c.promoteHot(be)
-		}
 		return be.blk, true
 	}
 	return nil, false
 }
 
-func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, hot bool) {
+func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
 	if c == nil || c.rc == nil || blk == nil {
 		return
 	}
@@ -320,9 +217,6 @@ func (c *blockCache) addWithTier(level int, tbl *table, key uint64, blk *block, 
 	if entry.tbl != nil {
 		entry.tbl.IncrRef()
 	}
-	if hot && c.hot != nil {
-		c.promoteHot(entry)
-	}
 	_ = c.rc.Set(key, entry, 1)
 }
 
@@ -334,7 +228,6 @@ func (c *blockCache) close() {
 	if c.rc != nil {
 		c.rc.Close()
 	}
-	c.hot = nil
 }
 
 type bloomCache struct {
@@ -342,7 +235,6 @@ type bloomCache struct {
 	cap   int
 	items map[uint64]*list.Element
 	lru   *list.List
-	hot   *hotBloomCache
 }
 
 type bloomEntry struct {
@@ -359,18 +251,12 @@ func newBloomCache(capacity int) *bloomCache {
 		items: make(map[uint64]*list.Element, capacity),
 		lru:   list.New(),
 	}
-	bc.hot = newHotBloomCache(min(max(capacity/8, 8), 256))
 	return bc
 }
 
 func (bc *bloomCache) get(fid uint64) (utils.Filter, bool) {
 	if bc == nil {
 		return nil, false
-	}
-	if bc.hot != nil {
-		if f, ok := bc.hot.get(fid); ok {
-			return f, true
-		}
 	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
@@ -387,9 +273,6 @@ func (bc *bloomCache) add(fid uint64, filter utils.Filter) {
 		return
 	}
 	dup := kv.SafeCopy(nil, filter)
-	if bc.hot != nil {
-		bc.hot.promote(fid, dup)
-	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 	if elem, ok := bc.items[fid]; ok {

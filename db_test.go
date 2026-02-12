@@ -888,7 +888,6 @@ func TestRecordReadEnqueuesPrefetch(t *testing.T) {
 	req, ok := db.prefetchRing.Pop()
 	require.True(t, ok)
 	require.Equal(t, "k1", req.key)
-	require.True(t, req.hot)
 }
 
 func TestEnqueuePrefetchRingFull(t *testing.T) {
@@ -904,7 +903,7 @@ func TestEnqueuePrefetchRingFull(t *testing.T) {
 	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-1"}))
 	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-2"}))
 
-	db.enqueuePrefetch("blocked", true)
+	db.enqueuePrefetch("blocked")
 	state := db.prefetchState.Load()
 	_, pending := state.pend["blocked"]
 	require.False(t, pending)
@@ -954,7 +953,7 @@ func TestPrefetchLoopDrainsRing(t *testing.T) {
 	db.prefetchWG.Add(1)
 	go db.prefetchLoop()
 
-	db.enqueuePrefetch("k", true)
+	db.enqueuePrefetch("k")
 	require.Eventually(t, func() bool {
 		state := db.prefetchState.Load()
 		_, pending := state.pend["k"]

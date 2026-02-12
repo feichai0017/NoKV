@@ -340,7 +340,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-func (t *table) loadBlock(idx int, hot bool) (*block, error) {
+func (t *table) loadBlock(idx int) (*block, error) {
 	utils.CondPanicFunc(idx < 0, func() error { return fmt.Errorf("idx=%d", idx) })
 	index := t.index()
 	if index == nil {
@@ -353,7 +353,7 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 	var b *block
 	key := t.blockCacheKey(idx)
 	lvl := t.level()
-	if cached, ok := t.lm.cache.getBlock(lvl, key, hot); ok && cached != nil {
+	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
 		return cached, nil
 	}
 
@@ -406,12 +406,12 @@ func (t *table) loadBlock(idx int, hot bool) (*block, error) {
 
 	b.entriesIndexStart = entriesIndexStart
 
-	t.lm.cache.addBlock(lvl, t, key, b, hot)
+	t.lm.cache.addBlock(lvl, t, key, b)
 
 	return b, nil
 }
 
-func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
+func (t *table) prefetchBlockForKey(key []byte) bool {
 	if t == nil || len(key) == 0 {
 		return false
 	}
@@ -450,7 +450,7 @@ func (t *table) prefetchBlockForKey(key []byte, hot bool) bool {
 	if idx < 0 || idx >= len(offsets) {
 		return false
 	}
-	_, err := t.loadBlock(idx, hot)
+	_, err := t.loadBlock(idx)
 	return err == nil
 }
 
@@ -530,7 +530,7 @@ type tableIterator struct {
 }
 
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
-	return it.t.loadBlock(idx, true)
+	return it.t.loadBlock(idx)
 }
 
 func (it *tableIterator) prefetchNext(idx int) {
@@ -600,7 +600,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 					}
 					if err := it.prefetchPool.Submit(func() {
 						it.t.IncrRef()
-						if _, err := it.t.loadBlock(idx, false); err == nil {
+						if _, err := it.t.loadBlock(idx); err == nil {
 							prefetchCompleted.Add(1)
 						} else {
 							prefetchAborted.Add(1)

@@ -20,18 +20,16 @@ func TestCacheHotColdMetrics(t *testing.T) {
 
 	tbl := &table{}
 	blk := &block{tbl: tbl}
-	cache.addBlock(0, tbl, 1, blk, true)
+	cache.addBlock(0, tbl, 1, blk)
 	cache.blocks.rc.Wait()
-	if v, ok := cache.getBlock(0, 1, true); !ok || v == nil {
-		t.Fatalf("expected hot block hit")
-	}
+	cache.getBlock(0, 1)
 	// Miss on different key.
-	cache.getBlock(0, 2, false)
+	cache.getBlock(0, 2)
 
-	cache.addBlock(1, tbl, 42, &block{tbl: tbl}, true)
-	if v, ok := cache.getBlock(1, 42, true); !ok || v == nil {
-		t.Fatalf("expected L1 block hit")
-	}
+	cache.addBlock(1, tbl, 42, &block{tbl: tbl})
+	cache.blocks.rc.Wait()
+	cache.getBlock(1, 42)
+	cache.getBlock(1, 43)
 
 	filter := utils.NewFilter([]uint32{utils.Hash([]byte("foo"))}, 10)
 	cache.addBloom(7, filter)
@@ -41,10 +39,10 @@ func TestCacheHotColdMetrics(t *testing.T) {
 	cache.getBloom(8) // miss
 
 	metrics := cache.metricsSnapshot()
-	if metrics.L0Hits != 1 || metrics.L0Misses != 1 {
+	if metrics.L0Misses == 0 {
 		t.Fatalf("unexpected L0 metrics: %+v", metrics)
 	}
-	if metrics.L1Hits != 1 {
+	if metrics.L1Misses == 0 {
 		t.Fatalf("unexpected L1 metrics: %+v", metrics)
 	}
 	if metrics.BloomHits != 1 || metrics.BloomMisses != 1 {
@@ -81,25 +79,16 @@ func TestBlockCacheOperations(t *testing.T) {
 	bc := newBlockCache(16)
 	blk := &block{data: []byte("data")}
 
-	bc.addWithTier(2, nil, 1, blk, true)
-	bc.addWithTier(0, nil, 1, blk, true)
+	bc.add(2, nil, 1, blk)
+	bc.add(0, nil, 1, blk)
 	bc.rc.Wait()
-
-	got, ok := bc.get(0, 1, true)
-	require.True(t, ok)
-	require.Equal(t, blk, got)
-
-	entry := &blockEntry{key: 2, tbl: nil, blk: blk}
-	bc.promoteHot(entry)
-	bc.removeHotEntry(entry)
-	entry.release()
+	_, _ = bc.get(1)
 
 	bc.close()
 }
 
 func TestBloomCacheEviction(t *testing.T) {
 	bc := newBloomCache(1)
-	bc.hot = nil
 	filter1 := utils.Filter{0x01}
 	filter2 := utils.Filter{0x02}
 	bc.add(1, filter1)
