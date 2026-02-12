@@ -55,11 +55,11 @@ NoKV’s cache is split into three parts (`lsm/cache.go`):
 
 | Component | Purpose | Metrics hook |
 | --- | --- | --- |
-| Block cache (hot) | LRU list capturing most recent hits (typically L0/L1). | `cacheMetrics.recordBlock(level, hit)` |
-| Block cache (cold) | CLOCK cache for deeper levels, keeping the memory footprint bounded. | Same as above |
+| Block cache | Ristretto cache for L0/L1 blocks. | `cacheMetrics.recordBlock(level, hit)` |
+| OS page cache path | Deeper levels bypass user-space cache and rely on mmap + kernel page cache. | Same as above |
 | Bloom cache | Stores decoded bloom filters to reduce disk touches. | `recordBloom(hit)` |
 
-`CacheMetrics()` on `DB` surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster.  `TestCacheHotColdMetrics` verifies that the hot and cold tiers tick the counters as expected.
+`CacheMetrics()` on `DB` surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
 
 ---
 
@@ -86,7 +86,7 @@ Relevant tests to keep compaction healthy:
 - `lsm/lsm_test.go`
   - `TestCompact` / `TestHitStorage` – end‑to‑end verification that data remains queryable across memtable flushes and compactions.
 
-When adding new compaction heuristics or cache tiers, extend these tests (or introduce new ones) so the behaviour stays observable.
+When adding new compaction heuristics or cache behaviour, extend these tests (or introduce new ones) so the behaviour stays observable.
 
 ---
 

@@ -67,7 +67,6 @@ type (
 		prefetchItems    chan struct{}
 		prefetchWG       sync.WaitGroup
 		prefetchState    atomic.Pointer[prefetchState]
-		prefetchClamp    int32
 		prefetchWarm     int32
 		prefetchHot      int32
 		prefetchCooldown time.Duration
@@ -221,7 +220,6 @@ func Open(opt *Options) *DB {
 		if opt.HotRingTopK <= 0 {
 			opt.HotRingTopK = 16
 		}
-		db.prefetchClamp = 64
 		db.prefetchWarm = 4
 		db.prefetchHot = 16
 		if db.prefetchHot <= db.prefetchWarm {

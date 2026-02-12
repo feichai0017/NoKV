@@ -411,7 +411,7 @@ func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 	return true
 }
 
-func (lm *levelManager) prefetch(key []byte, hot bool) {
+func (lm *levelManager) prefetch(key []byte) {
 	if lm == nil || len(key) == 0 {
 		return
 	}
@@ -419,9 +419,9 @@ func (lm *levelManager) prefetch(key []byte, hot bool) {
 		return
 	}
 	// Always probe L0 because ranges may overlap.
-	_ = lm.levels[0].prefetch(key, hot)
+	_ = lm.levels[0].prefetch(key)
 	for level := 1; level < len(lm.levels); level++ {
-		if lm.levels[level].prefetch(key, hot) {
+		if lm.levels[level].prefetch(key) {
 			break
 		}
 	}
@@ -679,7 +679,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
+func (lh *levelHandler) prefetch(key []byte) bool {
 	if lh == nil || len(key) == 0 {
 		return false
 	}
@@ -695,20 +695,20 @@ func (lh *levelHandler) prefetch(key []byte, hot bool) bool {
 				utils.CompareUserKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
-			if table.prefetchBlockForKey(key, hot) {
+			if table.prefetchBlockForKey(key) {
 				hit = true
 			}
 		}
 		return hit
 	}
-	if lh.ingest.prefetch(key, hot) {
+	if lh.ingest.prefetch(key) {
 		return true
 	}
 	table := lh.getTableForKey(key)
 	if table == nil {
 		return false
 	}
-	return table.prefetchBlockForKey(key, hot)
+	return table.prefetchBlockForKey(key)
 }
 
 // Sort orders tables for lookup/compaction; L0 by file id, Ln by key range.

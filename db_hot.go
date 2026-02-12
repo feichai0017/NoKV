@@ -12,7 +12,6 @@ import (
 
 type prefetchRequest struct {
 	key string
-	hot bool
 }
 
 type prefetchState struct {
@@ -50,7 +49,7 @@ func (db *DB) recordRead(key []byte) {
 		clamp = max(db.prefetchWarm, 1)
 	}
 	if clamp > 0 && count >= clamp {
-		db.enqueuePrefetch(skey, true)
+		db.enqueuePrefetch(skey)
 	}
 }
 
@@ -117,7 +116,7 @@ func hotWriteKeyForEntry(e *kv.Entry) string {
 	return cfHotKey(e.CF, e.Key)
 }
 
-func (db *DB) enqueuePrefetch(key string, hot bool) {
+func (db *DB) enqueuePrefetch(key string) {
 	if db == nil || db.prefetchRing == nil || key == "" {
 		return
 	}
@@ -141,7 +140,7 @@ func (db *DB) enqueuePrefetch(key string, hot bool) {
 		}
 	}
 
-	req := prefetchRequest{key: key, hot: hot}
+	req := prefetchRequest{key: key}
 	if ok := db.prefetchRing.Push(req); !ok {
 		for {
 			state := db.prefetchState.Load()
@@ -188,7 +187,7 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 	key := req.key
 	if db.lsm != nil {
 		internal := kv.InternalKey(kv.CFDefault, []byte(key), nonTxnMaxVersion)
-		db.lsm.Prefetch(internal, req.hot)
+		db.lsm.Prefetch(internal)
 	}
 	for {
 		state := db.prefetchState.Load()

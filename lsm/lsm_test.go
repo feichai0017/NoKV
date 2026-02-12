@@ -304,7 +304,7 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	tbl.hasBloom = false
 
 	seekKey := kv.KeyWithTs([]byte("k10"), 1)
-	if !tbl.prefetchBlockForKey(seekKey, true) {
+	if !tbl.prefetchBlockForKey(seekKey) {
 		t.Fatalf("expected prefetch to load block")
 	}
 
@@ -506,7 +506,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	}
 	found.DecrRef()
 
-	if !buf.prefetch(key, true) {
+	if !buf.prefetch(key) {
 		t.Fatalf("expected prefetch hit")
 	}
 
@@ -674,7 +674,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 		t.Fatalf("level get err=%v entry=%v", err, ingestHit)
 	}
 	ingestHit.DecrRef()
-	if !lh.prefetch(key, true) {
+	if !lh.prefetch(key) {
 		t.Fatalf("expected level prefetch hit")
 	}
 
@@ -684,7 +684,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
 	}
 	l0Hit.DecrRef()
-	if !l0.prefetch(key, true) {
+	if !l0.prefetch(key) {
 		t.Fatalf("expected l0 prefetch hit")
 	}
 
@@ -782,8 +782,8 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		t.Fatalf("expected entry count > 0, got %d", count)
 	}
 
-	lsm.Prefetch(entries[0].Key, false)
-	lsm.Prefetch(nil, false)
+	lsm.Prefetch(entries[0].Key)
+	lsm.Prefetch(nil)
 }
 
 func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
