@@ -114,6 +114,9 @@ func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyE
 		if lock.Ts != req.StartVersion {
 			return keyErrorLocked(key, lock)
 		}
+		if lock.MinCommitTs > req.CommitVersion {
+			return keyErrorCommitTsExpired(key, req.CommitVersion, lock.MinCommitTs)
+		}
 		if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
 			return err
 		}
@@ -274,6 +277,16 @@ func keyErrorRetryable(err error) *pb.KeyError {
 
 func keyErrorAbort(msg string) *pb.KeyError {
 	return &pb.KeyError{Abort: msg}
+}
+
+func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *pb.KeyError {
+	return &pb.KeyError{
+		CommitTsExpired: &pb.CommitTsExpired{
+			Key:         kv.SafeCopy(nil, key),
+			CommitTs:    commitTs,
+			MinCommitTs: minCommitTs,
+		},
+	}
 }
 
 func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
