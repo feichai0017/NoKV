@@ -183,6 +183,47 @@ func TestResolveLockCommit(t *testing.T) {
 	require.Equal(t, []byte("val"), val)
 }
 
+func TestResolveLockCommitTsExpired(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("res-expired")
+	startTs := uint64(40)
+	minCommitTs := uint64(60)
+	commitTs := uint64(50)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("val"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+		MinCommitTs:  minCommitTs,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	count, keyErr := ResolveLock(db, latches, &pb.ResolveLockRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	require.Equal(t, uint64(0), count)
+	require.NotNil(t, keyErr)
+	require.NotNil(t, keyErr.GetCommitTsExpired())
+	require.Equal(t, commitTs, keyErr.GetCommitTsExpired().GetCommitTs())
+	require.Equal(t, minCommitTs, keyErr.GetCommitTsExpired().GetMinCommitTs())
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.Nil(t, write)
+}
+
 func TestCheckTxnStatusTTLExpire(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
