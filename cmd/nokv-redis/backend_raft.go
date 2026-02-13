@@ -557,7 +557,8 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
 		return false
 	}
 	if resp.GetCommitVersion() > 0 {
-		return false
+		_, err = b.client.ResolveLocks(ctx, lock.GetLockVersion(), resp.GetCommitVersion(), [][]byte{lock.GetKey()})
+		return err == nil
 	}
 	switch resp.GetAction() {
 	case pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,

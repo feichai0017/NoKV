@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -1133,4 +1134,57 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 	stub.resolveErr = nil
 	require.True(t, backend.resolveSingleLock(lock))
 	require.NotEmpty(t, stub.resolveKeys)
+}
+
+// TestConflictingTransactionWithCommittedPrimary simulates a complete scenario:
+// Two conflicting transactions where one has its primary committed but secondary not.
+func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	primaryKey := []byte("key1")
+	secondaryKey := []byte("key2")
+	lockVersion := uint64(100)
+	commitVersion := uint64(101)
+
+	mutateCallCount := 0
+
+	// Simulate the conflict scenario:
+	// First call: returns KeyConflictError with locked secondary
+	// Second call: should succeed if lock is resolved
+	stub.mutateFn = func() error {
+		mutateCallCount++
+		for _, key := range stub.resolveKeys {
+			if bytes.Equal(key, secondaryKey) {
+				// Simulate the secondary lock being resolved and committed with the same commit version as primary
+				return nil
+			}
+		}
+		return &client.KeyConflictError{
+			Errors: []*pb.KeyError{
+				{
+					Locked: &pb.Locked{
+						PrimaryLock: primaryKey,
+						Key:         secondaryKey,
+						LockVersion: lockVersion,
+						LockTtl:     3000,
+					},
+				},
+			},
+		}
+	}
+
+	// CheckTxnStatus returns: primary is already committed
+	stub.checkResp = &pb.CheckTxnStatusResponse{
+		CommitVersion: commitVersion,
+	}
+
+	// Execute mutate - this will encounter the lock and try to resolve
+	err := backend.mutate(primaryKey, &pb.Mutation{
+		Op:    pb.Mutation_Put,
+		Key:   primaryKey,
+		Value: []byte("value"),
+	})
+
+	require.Equal(t, 2, mutateCallCount, "mutate should be called twice due to conflict resolution")
+	require.NoError(t, err, "mutate should succeed after resolving conflict")
 }
