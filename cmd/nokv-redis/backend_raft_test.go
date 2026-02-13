@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -1121,7 +1122,8 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 
 	stub.checkErr = nil
 	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: 1}
-	require.False(t, backend.resolveSingleLock(lock))
+	// The primary is committed, the lock should be resolved successfully
+	require.True(t, backend.resolveSingleLock(lock))
 
 	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
 	require.False(t, backend.resolveSingleLock(lock))
@@ -1133,4 +1135,68 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 	stub.resolveErr = nil
 	require.True(t, backend.resolveSingleLock(lock))
 	require.NotEmpty(t, stub.resolveKeys)
+}
+
+// TestConflictingTransactionWithCommittedPrimary simulates a complete scenario:
+// Two conflicting transactions where one has its primary committed but secondary not.
+func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	primaryKey := []byte("key1")
+	secondaryKey := []byte("key2")
+	lockVersion := uint64(100)
+	commitVersion := uint64(101)
+
+	mutateCallCount := 0
+
+	// Simulate the conflict scenario:
+	// First call: returns KeyConflictError with locked secondary
+	// Second call: should succeed if lock is resolved
+	stub.mutateFn = func() error {
+		mutateCallCount++
+		for _, key := range stub.resolveKeys {
+			if bytes.Equal(key, secondaryKey) {
+				// Simulate the secondary lock being resolved and committed with the same commit version as primary
+				return nil
+			}
+		}
+		return &client.KeyConflictError{
+			Errors: []*pb.KeyError{
+				{
+					Locked: &pb.Locked{
+						PrimaryLock: primaryKey,
+						Key:         secondaryKey,
+						LockVersion: lockVersion,
+						LockTtl:     3000,
+					},
+				},
+			},
+		}
+	}
+
+	// CheckTxnStatus returns: primary is already committed
+	stub.checkResp = &pb.CheckTxnStatusResponse{
+		CommitVersion: commitVersion,
+	}
+
+	// Execute mutate - this will encounter the lock and try to resolve
+	err := backend.mutate(primaryKey, &pb.Mutation{
+		Op:    pb.Mutation_Put,
+		Key:   primaryKey,
+		Value: []byte("value"),
+	})
+
+	// Verify that ResolveLocks was called with the expected secondary key
+	require.NotEmpty(t, stub.resolveKeys, "ResolveLocks should be called to resolve the secondary lock")
+	foundSecondary := false
+	for _, k := range stub.resolveKeys {
+		if bytes.Equal(k, secondaryKey) {
+			foundSecondary = true
+			break
+		}
+	}
+	require.True(t, foundSecondary, "ResolveLocks should be called with the secondary key")
+
+	require.Equal(t, 2, mutateCallCount, "mutate should be called twice due to conflict resolution")
+	require.NoError(t, err, "mutate should succeed after resolving conflict")
 }

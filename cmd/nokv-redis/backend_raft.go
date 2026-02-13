@@ -557,30 +557,34 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
 		return false
 	}
 	if resp.GetCommitVersion() > 0 {
-		return false
+		return b.resolveLocksWithKey(lock.GetLockVersion(), resp.GetCommitVersion(), lock.GetKey())
 	}
 	switch resp.GetAction() {
 	case pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
 		pb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
-		keys := [][]byte{append([]byte(nil), lock.GetKey()...)}
-		if isTTLMetaKey(lock.GetKey()) {
-			base := append([]byte(nil), lock.GetKey()[len(ttlMetaPrefix):]...)
-			if len(base) > 0 {
-				keys = append(keys, base)
-			}
-		} else {
-			keys = append(keys, ttlMetaKey(lock.GetKey()))
-		}
-		ctx2, cancel2 := b.context()
-		_, err := b.client.ResolveLocks(ctx2, lock.GetLockVersion(), 0, uniqueKeys(keys))
-		cancel2()
-		return err == nil
+		return b.resolveLocksWithKey(lock.GetLockVersion(), 0, lock.GetKey())
 	case pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
 		pb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed:
 		return false
 	default:
 		return false
 	}
+}
+
+func (b *raftBackend) resolveLocksWithKey(lockVersion, commitVersion uint64, key []byte) bool {
+	keys := [][]byte{append([]byte(nil), key...)}
+	if isTTLMetaKey(key) {
+		base := append([]byte(nil), key[len(ttlMetaPrefix):]...)
+		if len(base) > 0 {
+			keys = append(keys, base)
+		}
+	} else {
+		keys = append(keys, ttlMetaKey(key))
+	}
+	ctx, cancel := b.context()
+	defer cancel()
+	_, err := b.client.ResolveLocks(ctx, lockVersion, commitVersion, uniqueKeys(keys))
+	return err == nil
 }
 
 func isTTLMetaKey(key []byte) bool {
