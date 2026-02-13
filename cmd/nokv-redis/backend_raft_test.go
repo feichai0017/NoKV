@@ -1122,7 +1122,8 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 
 	stub.checkErr = nil
 	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: 1}
-	require.False(t, backend.resolveSingleLock(lock))
+	// The primary is committed, the lock should be resolved successfully
+	require.True(t, backend.resolveSingleLock(lock))
 
 	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
 	require.False(t, backend.resolveSingleLock(lock))
