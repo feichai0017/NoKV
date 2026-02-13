@@ -1186,6 +1186,17 @@ func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
 		Value: []byte("value"),
 	})
 
+	// Verify that ResolveLocks was called with the expected secondary key
+	require.NotEmpty(t, stub.resolveKeys, "ResolveLocks should be called to resolve the secondary lock")
+	foundSecondary := false
+	for _, k := range stub.resolveKeys {
+		if bytes.Equal(k, secondaryKey) {
+			foundSecondary = true
+			break
+		}
+	}
+	require.True(t, foundSecondary, "ResolveLocks should be called with the secondary key")
+
 	require.Equal(t, 2, mutateCallCount, "mutate should be called twice due to conflict resolution")
 	require.NoError(t, err, "mutate should succeed after resolving conflict")
 }
