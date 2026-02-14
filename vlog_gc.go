@@ -366,6 +366,10 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			}
 		} else if entry != nil {
 			releaseEntry = entry.DecrRef
+		} else {
+			// Be defensive: if storage returns a nil entry without an error, treat it
+			// as not-found and fall back to the value-log copy.
+			entry = e
 		}
 		defer releaseEntry()
 		if kv.DiscardEntry(e, entry) {
