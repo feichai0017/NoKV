@@ -2,7 +2,7 @@ name: issue-labeler
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, reopened]
 
 permissions:
   contents: read
