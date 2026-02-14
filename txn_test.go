@@ -455,3 +455,28 @@ func TestTxnMetricsCounters(t *testing.T) {
 		require.GreaterOrEqual(t, snap.Started, uint64(2))
 	})
 }
+
+func TestTxnEmptyCommitLeak(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		txn := db.NewTransaction(true)
+		snap := db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(1), snap.Active)
+
+		err := txn.Commit()
+		require.NoError(t, err)
+
+		snap = db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(0), snap.Active, "Commit() on empty txn should decrement Active counter")
+
+		txn2 := db.NewTransaction(true)
+		done := make(chan struct{})
+		txn2.CommitWith(func(err error) {
+			require.NoError(t, err)
+			close(done)
+		})
+		<-done
+
+		snap = db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(0), snap.Active, "CommitWith() on empty txn should decrement Active counter")
+	})
+}
