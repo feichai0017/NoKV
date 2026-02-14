@@ -226,7 +226,7 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 		default:
 			var value []byte
 			if len(write.ShortValue) > 0 {
-				value = kv.SafeCopy(nil, write.ShortValue)
+				value = write.ShortValue
 			} else {
 				entryVal, err := db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
 				if err != nil {
@@ -236,8 +236,7 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 					}
 					return nil, false, err
 				}
-				value = kv.SafeCopy(nil, entryVal.Value)
-				entryVal.DecrRef()
+				value = entryVal.Value
 			}
 			advanceToNextUserKey(iter, key)
 			return value, true, nil
