@@ -1,5 +1,6 @@
 # Auto-label rules for issues.
 # Regex is matched against issue title + body (configured in workflow).
+# Only add default triage label automatically; other status labels are manual.
 
 status/needs-triage:
   - '(?s).*'
@@ -40,22 +41,6 @@ area/vlog:
   - '(?i)\bdiscard\b'
   - '(?i)\bgarbage collection\b'
 
-area/benchmark:
-  - '(?i)\bbenchmark\b'
-  - '(?i)\bycsb\b'
-  - '(?i)\bworkload\b'
-  - '(?i)\bops/s\b'
-  - '(?i)\blatency\b'
-  - '(?i)\bthroughput\b'
-
-area/proto:
-  - '(?i)\bproto\b'
-  - '(?i)\bprotobuf\b'
-  - '(?i)\bkvrpc\b'
-  - '(?i)\bstoragepb\b'
-  - '(?i)\braftcmd\b'
-  - '(?i)\bpb\.[A-Za-z0-9_]+\b'
-
 area/redis:
   - '(?i)\bredis\b'
   - '(?i)\bset nx\b'
@@ -71,13 +56,6 @@ type/performance:
   - '(?i)\blatency\b'
   - '(?i)\bbenchmark\b'
   - '(?i)\bops/s\b'
-
-type/regression:
-  - '(?i)\bregression\b'
-  - '(?i)\bused to\b'
-  - '(?i)\bafter upgrade\b'
-  - '(?i)\bno longer\b'
-  - '(?i)\bbroke\b'
 
 severity/crash:
   - '(?i)\bpanic\b'
