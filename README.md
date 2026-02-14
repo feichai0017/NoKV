@@ -108,9 +108,10 @@ func main() {
 		log.Fatalf("get failed: %v", err)
 	}
 	fmt.Printf("value=%s\n", entry.Value)
-	entry.DecrRef()
 }
 ```
+
+> Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`, `Txn.Get`) return detached entries and do not require `DecrRef`.
 
 > ℹ️ `run_local_cluster.sh` rebuilds `nokv`, `nokv-config`, `nokv-tso`, seeds manifests via `nokv-config manifest`, and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 

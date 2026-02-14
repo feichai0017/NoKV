@@ -184,6 +184,28 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	entry.DecrRef()
 }
 
+func TestGetEntryIsDetachedFromPool(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("detached-key")
+	require.NoError(t, db.Set(key, []byte("value-1")))
+
+	entry, err := db.Get(key)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-1"), entry.Value)
+
+	// Public read APIs now return detached entries; DecrRef should be a no-op.
+	entry.DecrRef()
+	require.Equal(t, []byte("value-1"), entry.Value)
+
+	entry.Value[0] = 'X'
+	again, err := db.Get(key)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-1"), again.Value)
+}
+
 func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	t.Run("inline", func(t *testing.T) {
 		opt := newTestOptions(t)

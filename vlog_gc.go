@@ -353,6 +353,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return nil
 		}
 		entry, err := vlog.db.lsm.Get(e.Key)
+		releaseEntry := func() {}
 		if err != nil {
 			// If LSM can't find it (e.g., concurrent compaction/move), fall back to the
 			// value log copy so we don't drop a live key.
@@ -363,7 +364,10 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			} else {
 				return err
 			}
+		} else if entry != nil {
+			releaseEntry = entry.DecrRef
 		}
+		defer releaseEntry()
 		if kv.DiscardEntry(e, entry) {
 			return nil
 		}
@@ -427,6 +431,10 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	if len(wb) > 0 {
 		testKey := wb[len(wb)-1].Key
 		if vs, err := vlog.db.lsm.Get(testKey); err == nil {
+			if vs == nil {
+				return utils.ErrKeyNotFound
+			}
+			defer vs.DecrRef()
 			var vp kv.ValuePtr
 			vp.Decode(vs.Value)
 		} else {

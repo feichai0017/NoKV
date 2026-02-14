@@ -479,8 +479,8 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 			}
 			// Fulfill from cache.
 			item.e.Meta = e.Meta
-			item.e.Value = e.Value
-			item.e.Key = key
+			item.e.Value = kv.SafeCopy(nil, e.Value)
+			item.e.Key = kv.SafeCopy(nil, key)
 			item.e.CF = e.CF
 			item.e.Version = txn.readTs
 			item.e.ExpiresAt = e.ExpiresAt
@@ -503,8 +503,12 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		}
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
+	if vs == nil {
+		return nil, utils.ErrKeyNotFound
+	}
+	defer vs.DecrRef()
 	// Resolve value pointers.
-	if vs != nil && kv.IsValuePtr(vs) {
+	if kv.IsValuePtr(vs) {
 		var vp kv.ValuePtr
 		vp.Decode(vs.Value)
 		result, cb, err := txn.db.vlog.read(&vp)
@@ -523,7 +527,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 		return nil, utils.ErrKeyNotFound
 	}
 
-	item.e.Key = key
+	item.e.Key = kv.SafeCopy(nil, key)
 	cf, _, _ := kv.SplitInternalKey(vs.Key)
 	if !cf.Valid() {
 		cf = kv.CFDefault
@@ -531,7 +535,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item.e.CF = cf
 	item.e.Version = vs.Version
 	item.e.Meta = vs.Meta
-	item.e.Value = vs.Value
+	item.e.Value = kv.SafeCopy(nil, vs.Value)
 	item.e.ExpiresAt = vs.ExpiresAt
 	txn.db.recordRead(key)
 	txn.db.recordCFRead(item.e.CF, 1)

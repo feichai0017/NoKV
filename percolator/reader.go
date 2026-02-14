@@ -31,7 +31,6 @@ func (r *Reader) GetLock(key []byte) (*Lock, error) {
 		}
 		return nil, err
 	}
-	defer entry.DecrRef()
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, nil
 	}
@@ -102,7 +101,6 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer entry.DecrRef()
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, utils.ErrKeyNotFound
 	}
