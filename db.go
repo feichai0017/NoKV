@@ -579,17 +579,17 @@ func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
 	if !cf.Valid() {
 		cf = kv.CFDefault
 	}
-	userKey := kv.SafeCopy(nil, src.Key)
+	userKeySrc := src.Key
 	version := src.Version
 	if storedCF, parsedUserKey, ts := kv.SplitInternalKey(src.Key); storedCF.Valid() {
 		cf = storedCF
-		userKey = kv.SafeCopy(nil, parsedUserKey)
+		userKeySrc = parsedUserKey
 		if ts != 0 {
 			version = ts
 		}
 	}
 	return &kv.Entry{
-		Key:          userKey,
+		Key:          kv.SafeCopy(nil, userKeySrc),
 		Value:        kv.SafeCopy(nil, src.Value),
 		ExpiresAt:    src.ExpiresAt,
 		CF:           cf,
