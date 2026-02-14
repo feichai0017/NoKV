@@ -83,6 +83,29 @@ func TestTxnSimple(t *testing.T) {
 	})
 }
 
+func TestTxnGetEntryIsDetached(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		require.NoError(t, db.Update(func(txn *Txn) error {
+			return txn.Set([]byte("detached-key"), []byte("detached-value"))
+		}))
+
+		require.NoError(t, db.View(func(txn *Txn) error {
+			item, err := txn.Get([]byte("detached-key"))
+			require.NoError(t, err)
+			require.Equal(t, []byte("detached-value"), item.Entry().Value)
+
+			// Txn.Get no longer returns pool-managed entries.
+			item.Entry().DecrRef()
+			require.Equal(t, []byte("detached-value"), item.Entry().Value)
+
+			val, err := item.ValueCopy(nil)
+			require.NoError(t, err)
+			require.Equal(t, []byte("detached-value"), val)
+			return nil
+		}))
+	})
+}
+
 func TestTxnReadAfterWrite(t *testing.T) {
 	test := func(t *testing.T, db *DB) {
 		var wg sync.WaitGroup

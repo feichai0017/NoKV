@@ -484,7 +484,7 @@ func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint6
 }
 
 // GetVersionedEntry retrieves the value stored at the provided MVCC version.
-// The caller is responsible for releasing the returned entry via DecrRef.
+// The returned entry is detached from internal pools and does not require DecrRef.
 func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
@@ -493,34 +493,12 @@ func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) 
 		return nil, utils.ErrEmptyKey
 	}
 	internalKey := kv.InternalKey(cf, key, version)
-	entry, err := db.lsm.Get(internalKey)
+	entry, err := db.loadBorrowedEntry(internalKey)
 	if err != nil {
 		return nil, err
 	}
-	if entry == nil {
-		return nil, utils.ErrKeyNotFound
-	}
-	if kv.IsValuePtr(entry) {
-		var vp kv.ValuePtr
-		vp.Decode(entry.Value)
-		result, cb, err := db.vlog.read(&vp)
-		if err != nil {
-			if cb != nil {
-				kv.RunCallback(cb)
-			}
-			entry.DecrRef()
-			return nil, err
-		}
-		entry.Value = kv.SafeCopy(nil, result)
-		if cb != nil {
-			kv.RunCallback(cb)
-		}
-	}
-	cfStored, userKey, ts := kv.SplitInternalKey(entry.Key)
-	entry.CF = cfStored
-	entry.Key = kv.SafeCopy(nil, userKey)
-	entry.Version = ts
-	return entry, nil
+	defer entry.DecrRef()
+	return cloneEntry(entry, cf), nil
 }
 
 // Get reads the latest visible value for key from the default column family.
@@ -529,51 +507,98 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 }
 
 // GetCF reads a key from the specified column family.
+// The returned entry is detached from internal pools and does not require DecrRef.
 func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
-
-	originKey := key
 	// Non-transactional API: use the max sentinel timestamp (not for MVCC).
 	internalKey := kv.InternalKey(cf, key, nonTxnMaxVersion)
-
-	var (
-		entry *kv.Entry
-		err   error
-	)
-	// Fetch entry from the LSM; it may still be a value pointer.
-	if entry, err = db.lsm.Get(internalKey); err != nil {
-		return entry, err
+	entry, err := db.loadBorrowedEntry(internalKey)
+	if err != nil {
+		return nil, err
 	}
-	// Resolve value pointers from the value log when needed.
-	if entry != nil && kv.IsValuePtr(entry) {
-		var vp kv.ValuePtr
-		vp.Decode(entry.Value)
-		result, cb, err := db.vlog.read(&vp)
-		defer kv.RunCallback(cb)
-		if err != nil {
-			return nil, err
-		}
-		entry.Value = kv.SafeCopy(nil, result)
-	}
-
+	defer entry.DecrRef()
 	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
 	}
-	storedCF, _, ts := kv.SplitInternalKey(entry.Key)
-	if storedCF.Valid() {
-		entry.CF = storedCF
-	} else {
-		entry.CF = cf
+	out := cloneEntry(entry, cf)
+	db.recordCFRead(out.CF, 1)
+	db.recordRead(out.Key)
+	return out, nil
+}
+
+// loadBorrowedEntry fetches one internal-key record from LSM and resolves value-log
+// indirection before returning it to the caller.
+//
+// Ownership contract:
+//   - The returned entry is a borrowed, pool-managed object.
+//   - The caller MUST call DecrRef exactly once when finished.
+//
+// Error behavior:
+//   - Returns ErrKeyNotFound when no record exists.
+//   - If vlog pointer resolution fails, this function releases the borrowed entry
+//     before returning the error to avoid leaking ref-counted entries.
+func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
+	entry, err := db.lsm.Get(internalKey)
+	if err != nil {
+		return nil, err
 	}
-	if ts != 0 {
-		entry.Version = ts
+	if entry == nil {
+		return nil, utils.ErrKeyNotFound
 	}
-	entry.Key = originKey
-	db.recordCFRead(entry.CF, 1)
-	db.recordRead(originKey)
+	if !kv.IsValuePtr(entry) {
+		return entry, nil
+	}
+	var vp kv.ValuePtr
+	vp.Decode(entry.Value)
+	result, cb, readErr := db.vlog.read(&vp)
+	if cb != nil {
+		defer kv.RunCallback(cb)
+	}
+	if readErr != nil {
+		entry.DecrRef()
+		return nil, readErr
+	}
+	entry.Value = kv.SafeCopy(nil, result)
+	entry.Meta &^= kv.BitValuePointer
 	return entry, nil
+}
+
+// cloneEntry converts an internal/buffered entry into a detached public value object.
+//
+// It deep-copies key/value bytes so the returned entry is independent from pooled
+// memory, parses internal key layout (CF/user-key/version), and fills external-facing
+// metadata. The returned entry does not participate in ref-count lifecycle and does
+// not require DecrRef from API callers.
+func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
+	if src == nil {
+		return nil
+	}
+	cf := fallbackCF
+	if !cf.Valid() {
+		cf = kv.CFDefault
+	}
+	userKey := kv.SafeCopy(nil, src.Key)
+	version := src.Version
+	if storedCF, parsedUserKey, ts := kv.SplitInternalKey(src.Key); storedCF.Valid() {
+		cf = storedCF
+		userKey = kv.SafeCopy(nil, parsedUserKey)
+		if ts != 0 {
+			version = ts
+		}
+	}
+	return &kv.Entry{
+		Key:          userKey,
+		Value:        kv.SafeCopy(nil, src.Value),
+		ExpiresAt:    src.ExpiresAt,
+		CF:           cf,
+		Meta:         src.Meta,
+		Version:      version,
+		Offset:       src.Offset,
+		Hlen:         src.Hlen,
+		ValThreshold: src.ValThreshold,
+	}
 }
 
 func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
