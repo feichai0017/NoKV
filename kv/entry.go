@@ -44,17 +44,32 @@ type Entry struct {
 
 // IncrRef increments the entry reference count.
 func (e *Entry) IncrRef() {
+	if e == nil {
+		return
+	}
 	atomic.AddInt32(&e.ref, 1)
 }
 
 // DecrRef decrements the entry reference count and releases it to the pool when it reaches zero.
 func (e *Entry) DecrRef() {
-	nRef := atomic.AddInt32(&e.ref, -1)
-	if nRef > 0 {
+	if e == nil {
 		return
 	}
-	e.reset()
-	EntryPool.Put(e)
+	for {
+		current := atomic.LoadInt32(&e.ref)
+		if current <= 0 {
+			// Detached entries are not pool-managed and should not be recycled.
+			return
+		}
+		if !atomic.CompareAndSwapInt32(&e.ref, current, current-1) {
+			continue
+		}
+		if current == 1 {
+			e.reset()
+			EntryPool.Put(e)
+		}
+		return
+	}
 }
 
 func (e *Entry) reset() {
@@ -67,6 +82,7 @@ func (e *Entry) reset() {
 	e.Offset = 0
 	e.Hlen = 0
 	e.ValThreshold = 0
+	e.ref = 0
 }
 
 // NewEntry creates a new entry in the default column family.

@@ -167,6 +167,14 @@ func TestEntryHelpers(t *testing.T) {
 	}
 }
 
+func TestEntryDecrRefDetachedNoop(t *testing.T) {
+	e := &Entry{Key: []byte("k"), Value: []byte("v")}
+	e.DecrRef()
+	require.Equal(t, []byte("k"), e.Key)
+	require.Equal(t, []byte("v"), e.Value)
+	require.Equal(t, int32(0), e.ref)
+}
+
 func TestValueHelpers(t *testing.T) {
 	ptr := ValuePtr{Len: 2, Offset: 3, Fid: 4}
 	if ptr.IsZero() {

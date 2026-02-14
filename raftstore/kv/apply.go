@@ -237,7 +237,6 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 					return nil, false, err
 				}
 				value = kv.SafeCopy(nil, entryVal.Value)
-				entryVal.DecrRef()
 			}
 			advanceToNextUserKey(iter, key)
 			return value, true, nil
