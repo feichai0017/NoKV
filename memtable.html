@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ffb3bcf5.js";
+            window.path_to_searchindex_js = "searchindex-e13d5ae5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -230,9 +230,10 @@
 <hr>
 <h2 id="3-read-semantics"><a class="header" href="#3-read-semantics">3. Read Semantics</a></h2>
 <ul>
-<li><code>memTable.Get</code> looks up the chosen index and returns a copy of the entry. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
+<li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. Internal callers must release it with <code>DecrRef</code> when done. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
 <li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB’s <code>MemTable::Ref/Unref</code> lifecycle.</li>
 <li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
+<li>Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries, so application callers do not need to call <code>DecrRef</code>.</li>
 </ul>
 <hr>
 <h2 id="4-integration-with-other-subsystems"><a class="header" href="#4-integration-with-other-subsystems">4. Integration with Other Subsystems</a></h2>

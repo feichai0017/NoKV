@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ffb3bcf5.js";
+            window.path_to_searchindex_js = "searchindex-e13d5ae5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-982873a5.js"></script>
@@ -234,9 +234,11 @@ func main() {
 		log.Fatalf("get failed: %v", err)
 	}
 	fmt.Printf("value=%s\n", entry.Value)
-	entry.DecrRef()
 }
 </code></pre>
+<blockquote>
+<p>Note: Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries and do not require <code>DecrRef</code>.</p>
+</blockquote>
 <h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
 <p>Micro benchmarks:</p>
 <pre><code class="language-bash">go test -bench=. -run=^$ ./...
