@@ -75,9 +75,10 @@ func main() {
 		log.Fatalf("get failed: %v", err)
 	}
 	fmt.Printf("value=%s\n", entry.Value)
-	entry.DecrRef()
 }
 ```
+
+> Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`, `Txn.Get`) return detached entries and do not require `DecrRef`.
 
 ## Benchmarks
 Micro benchmarks:
