@@ -496,29 +496,14 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 
 	// Query using the transaction's readTs.
 	seek := kv.InternalKey(kv.CFDefault, key, txn.readTs)
-	vs, err := txn.db.lsm.Get(seek)
+	vs, err := txn.db.loadBorrowedEntry(seek)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
 			return nil, err
 		}
 		return nil, utils.Wrapf(err, "DB::Get key: %q", key)
 	}
-	if vs == nil {
-		return nil, utils.ErrKeyNotFound
-	}
 	defer vs.DecrRef()
-	// Resolve value pointers.
-	if kv.IsValuePtr(vs) {
-		var vp kv.ValuePtr
-		vp.Decode(vs.Value)
-		result, cb, err := txn.db.vlog.read(&vp)
-		defer kv.RunCallback(cb)
-		if err != nil {
-			return nil, err
-		}
-		vs.Value = kv.SafeCopy(nil, result)
-		vs.Meta &^= kv.BitValuePointer
-	}
 
 	if vs.Value == nil && vs.Meta == 0 {
 		return nil, utils.ErrKeyNotFound
@@ -526,17 +511,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	if isDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
 	}
-
-	item.e.Key = kv.SafeCopy(nil, key)
-	cf, _, _ := kv.SplitInternalKey(vs.Key)
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	item.e.CF = cf
-	item.e.Version = vs.Version
-	item.e.Meta = vs.Meta
-	item.e.Value = kv.SafeCopy(nil, vs.Value)
-	item.e.ExpiresAt = vs.ExpiresAt
+	item.e = cloneEntry(vs, kv.CFDefault)
 	txn.db.recordRead(key)
 	txn.db.recordCFRead(item.e.CF, 1)
 	return item, nil
