@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/lsm/flush"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -32,6 +33,9 @@ type LSM struct {
 
 // Options _
 type Options struct {
+	// FS provides the filesystem implementation for manifest operations.
+	FS vfs.FS
+
 	WorkDir        string
 	MemTableSize   int64
 	MemTableEngine string

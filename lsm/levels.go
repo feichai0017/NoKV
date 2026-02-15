@@ -135,7 +135,7 @@ func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 }
 
 func (lm *levelManager) loadManifest() (err error) {
-	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir)
+	lm.manifestMgr, err = manifest.OpenWithFS(lm.opt.WorkDir, lm.opt.FS)
 	return err
 }
 func (lm *levelManager) build() error {
