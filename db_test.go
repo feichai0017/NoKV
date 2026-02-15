@@ -1014,7 +1014,9 @@ func TestCloseWithErrors(t *testing.T) {
 			return walErr
 		},
 		dirLockRelease: func() error {
-			db.dirLock.Release()
+			if db.dirLock != nil {
+				db.dirLock.Release()
+			}
 			return dirLockErr
 		},
 		calls: []string{},
