@@ -40,7 +40,11 @@ func AcquireDirLock(dir string, fs vfs.FS) (*DirLock, error) {
 			_ = f.Close()
 		}
 	}()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	fd, ok := vfs.FileFD(f)
+	if !ok {
+		return nil, fmt.Errorf("dirlock: file %q does not expose descriptor", lockPath)
+	}
+	if err := syscall.Flock(int(fd), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, fmt.Errorf("dirlock: directory %q already in use", dir)
 		}
@@ -65,8 +69,12 @@ func (l *DirLock) Release() error {
 		return nil
 	}
 	var firstErr error
-	if err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN); err != nil {
-		firstErr = err
+	if fd, ok := vfs.FileFD(l.file); ok {
+		if err := syscall.Flock(int(fd), syscall.LOCK_UN); err != nil {
+			firstErr = err
+		}
+	} else {
+		firstErr = fmt.Errorf("dirlock: file %q does not expose descriptor", l.path)
 	}
 	if err := l.file.Close(); err != nil && firstErr == nil {
 		firstErr = err
