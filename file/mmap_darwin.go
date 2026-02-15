@@ -19,10 +19,12 @@ import (
 type MmapFile struct {
 	Data []byte
 	Fd   *os.File
+	fs   vfs.FS
 }
 
-// OpenMmapFileUsing os
-func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
+// OpenMmapFileUsing maps a file descriptor using the provided filesystem.
+func OpenMmapFileUsing(fs vfs.FS, fd *os.File, sz int, writable bool) (*MmapFile, error) {
+	fs = vfs.Ensure(fs)
 	filename := fd.Name()
 	fi, err := fd.Stat()
 	if err != nil {
@@ -48,12 +50,13 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 	if fileSize == 0 {
 		dir, _ := filepath.Split(filename)
 		go func() {
-			_ = SyncDir(dir)
+			_ = SyncDirWithFS(fs, dir)
 		}()
 	}
 	return &MmapFile{
 		Data: buf,
 		Fd:   fd,
+		fs:   fs,
 	}, rerr
 }
 
@@ -74,7 +77,7 @@ func OpenMmapFileWithFS(fs vfs.FS, filename string, flag int, maxSz int) (*MmapF
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
 	}
 	writable := flag != os.O_RDONLY
-	return OpenMmapFileUsing(fd, maxSz, writable)
+	return OpenMmapFileUsing(fs, fd, maxSz, writable)
 }
 
 type mmapReader struct {
@@ -235,7 +238,7 @@ func (m *MmapFile) Delete() error {
 	if err := m.Fd.Close(); err != nil {
 		return fmt.Errorf("while close file: %s, error: %v", m.Fd.Name(), err)
 	}
-	return os.Remove(m.Fd.Name())
+	return vfs.Ensure(m.fs).Remove(m.Fd.Name())
 }
 
 // Close would close the file. It would also truncate the file if maxSz >= 0.
@@ -252,8 +255,15 @@ func (m *MmapFile) Close() error {
 	return m.Fd.Close()
 }
 
+// SyncDir fsyncs a directory using the default OS filesystem.
 func SyncDir(dir string) error {
-	df, err := os.Open(dir)
+	return SyncDirWithFS(nil, dir)
+}
+
+// SyncDirWithFS fsyncs a directory using the provided filesystem.
+func SyncDirWithFS(fs vfs.FS, dir string) error {
+	fs = vfs.Ensure(fs)
+	df, err := fs.Open(dir)
 	if err != nil {
 		return errors.Wrapf(err, "while opening %s", dir)
 	}
@@ -280,9 +290,4 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	var err error
 	m.Data, err = mmap.Mmap(m.Fd, true, maxSz) // Mmap up to max size.
 	return err
-}
-
-// ReName is a no-op placeholder for compatibility.
-func (m *MmapFile) ReName(name string) error {
-	return nil
 }
