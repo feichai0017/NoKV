@@ -12,6 +12,10 @@ type Op string
 const (
 	OpOpen      Op = "open"
 	OpOpenFile  Op = "open_file"
+	OpFileWrite Op = "file_write"
+	OpFileSync  Op = "file_sync"
+	OpFileClose Op = "file_close"
+	OpFileTrunc Op = "file_truncate"
 	OpMkdirAll  Op = "mkdir_all"
 	OpRemoveAll Op = "remove_all"
 	OpRemove    Op = "remove"
@@ -247,28 +251,16 @@ func (r *FaultRule) matches(op Op, path, renameSrc, renameDst string) bool {
 	return true
 }
 
-// Open opens an existing file for reading.
-func (f *FaultFS) Open(name string) (*os.File, error) {
-	if err := f.before(OpOpen, name); err != nil {
-		return nil, err
-	}
-	return f.base.Open(name)
-}
-
-// OpenFile opens or creates a file.
-func (f *FaultFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
-	if err := f.before(OpOpenFile, name); err != nil {
-		return nil, err
-	}
-	return f.base.OpenFile(name, flag, perm)
-}
-
 // OpenHandle opens an existing file for reading and returns a vfs.File.
 func (f *FaultFS) OpenHandle(name string) (File, error) {
 	if err := f.before(OpOpen, name); err != nil {
 		return nil, err
 	}
-	return f.base.OpenHandle(name)
+	file, err := f.base.OpenHandle(name)
+	if err != nil {
+		return nil, err
+	}
+	return &faultFile{base: file, parent: f, path: name}, nil
 }
 
 // OpenFileHandle opens or creates a file and returns a vfs.File.
@@ -276,7 +268,11 @@ func (f *FaultFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File,
 	if err := f.before(OpOpenFile, name); err != nil {
 		return nil, err
 	}
-	return f.base.OpenFileHandle(name, flag, perm)
+	file, err := f.base.OpenFileHandle(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &faultFile{base: file, parent: f, path: name}, nil
 }
 
 // MkdirAll creates a directory hierarchy.
@@ -365,4 +361,86 @@ func (f *FaultFS) Hostname() (string, error) {
 		return "", err
 	}
 	return f.base.Hostname()
+}
+
+type faultFile struct {
+	base   File
+	parent *FaultFS
+	path   string
+}
+
+func (f *faultFile) before(op Op) error {
+	if f == nil || f.parent == nil {
+		return nil
+	}
+	return f.parent.before(op, f.path)
+}
+
+func (f *faultFile) Read(p []byte) (int, error) {
+	return f.base.Read(p)
+}
+
+func (f *faultFile) ReadAt(p []byte, off int64) (int, error) {
+	return f.base.ReadAt(p, off)
+}
+
+func (f *faultFile) Write(p []byte) (int, error) {
+	if err := f.before(OpFileWrite); err != nil {
+		return 0, err
+	}
+	return f.base.Write(p)
+}
+
+func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
+	if err := f.before(OpFileWrite); err != nil {
+		return 0, err
+	}
+	return f.base.WriteAt(p, off)
+}
+
+func (f *faultFile) Seek(offset int64, whence int) (int64, error) {
+	return f.base.Seek(offset, whence)
+}
+
+func (f *faultFile) Close() error {
+	if err := f.before(OpFileClose); err != nil {
+		return err
+	}
+	return f.base.Close()
+}
+
+func (f *faultFile) Stat() (os.FileInfo, error) {
+	return f.base.Stat()
+}
+
+func (f *faultFile) Sync() error {
+	if err := f.before(OpFileSync); err != nil {
+		return err
+	}
+	return f.base.Sync()
+}
+
+func (f *faultFile) Truncate(size int64) error {
+	if err := f.before(OpFileTrunc); err != nil {
+		return err
+	}
+	return f.base.Truncate(size)
+}
+
+func (f *faultFile) Name() string {
+	if f.path != "" {
+		return f.path
+	}
+	return f.base.Name()
+}
+
+func (f *faultFile) Fd() uintptr {
+	return f.base.Fd()
+}
+
+func (f *faultFile) OSFile() *os.File {
+	if of, ok := UnwrapOSFile(f.base); ok {
+		return of
+	}
+	return nil
 }

@@ -129,7 +129,7 @@ func Open(opt *Options) *DB {
 		db.opt.BloomCacheSize = 0
 	}
 
-	lock, err := utils.AcquireDirLockWithFS(opt.WorkDir, db.fs)
+	lock, err := utils.AcquireDirLock(opt.WorkDir, db.fs)
 	utils.Panic(err)
 	db.dirLock = lock
 
@@ -303,12 +303,12 @@ func (db *DB) runRecoveryChecks() error {
 	if db == nil || db.opt == nil {
 		return fmt.Errorf("recovery checks: options not initialized")
 	}
-	if err := manifest.VerifyWithFS(db.opt.WorkDir, db.fs); err != nil {
+	if err := manifest.Verify(db.opt.WorkDir, db.fs); err != nil {
 		if !stderrors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
-	if err := wal.VerifyDirWithFS(db.opt.WorkDir, db.fs); err != nil {
+	if err := wal.VerifyDir(db.opt.WorkDir, db.fs); err != nil {
 		return err
 	}
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
@@ -322,8 +322,9 @@ func (db *DB) runRecoveryChecks() error {
 			FileMode: utils.DefaultFileMode,
 			MaxSize:  int64(db.opt.ValueLogFileSize),
 			Bucket:   uint32(bucket),
+			FS:       db.fs,
 		}
-		if err := vlogpkg.VerifyDirWithFS(cfg, db.fs); err != nil {
+		if err := vlogpkg.VerifyDir(cfg); err != nil {
 			if !stderrors.Is(err, os.ErrNotExist) {
 				return err
 			}

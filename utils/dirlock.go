@@ -13,7 +13,7 @@ import (
 
 // DirLock represents an exclusive filesystem lock on a directory.
 type DirLock struct {
-	file *os.File
+	file vfs.File
 	path string
 	fs   vfs.FS
 }
@@ -21,13 +21,7 @@ type DirLock struct {
 // AcquireDirLock attempts to obtain an exclusive lock on the provided directory.
 // The lock is implemented using a platform flock on a dedicated LOCK file. The
 // returned DirLock must be released via (*DirLock).Release.
-func AcquireDirLock(dir string) (*DirLock, error) {
-	return AcquireDirLockWithFS(dir, nil)
-}
-
-// AcquireDirLockWithFS attempts to obtain an exclusive lock using the provided
-// filesystem implementation. Nil fs defaults to vfs.OSFS.
-func AcquireDirLockWithFS(dir string, fs vfs.FS) (*DirLock, error) {
+func AcquireDirLock(dir string, fs vfs.FS) (*DirLock, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("dirlock: directory required")
 	}
@@ -36,7 +30,7 @@ func AcquireDirLockWithFS(dir string, fs vfs.FS) (*DirLock, error) {
 		return nil, err
 	}
 	lockPath := filepath.Join(dir, "LOCK")
-	f, err := fs.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := fs.OpenFileHandle(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

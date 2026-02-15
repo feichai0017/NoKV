@@ -373,15 +373,10 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 // records left behind due to crashes. It validates checksums to ensure future
 // replays operate on consistent data.
 func VerifyDir(cfg Config) error {
-	return VerifyDirWithFS(cfg, cfg.FS)
-}
-
-// VerifyDirWithFS scans value-log segments using the provided filesystem.
-func VerifyDirWithFS(cfg Config, fs vfs.FS) error {
 	if cfg.Dir == "" {
 		return fmt.Errorf("vlog verify: dir required")
 	}
-	fs = vfs.Ensure(fs)
+	fs := vfs.Ensure(cfg.FS)
 	if cfg.FileMode == 0 {
 		cfg.FileMode = utils.DefaultFileMode
 	}

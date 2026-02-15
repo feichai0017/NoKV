@@ -14,7 +14,7 @@ import (
 
 func TestDiskStorageAppendAndReload(t *testing.T) {
 	dir := t.TempDir()
-	ds, err := OpenDiskStorage(dir)
+	ds, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 
 	entries := []myraft.Entry{
@@ -26,7 +26,7 @@ func TestDiskStorageAppendAndReload(t *testing.T) {
 	hard := myraft.HardState{Term: 2, Vote: 3, Commit: 2}
 	require.NoError(t, ds.SetHardState(hard))
 
-	reloaded, err := OpenDiskStorage(dir)
+	reloaded, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 
 	last, err := reloaded.LastIndex()
@@ -54,7 +54,7 @@ func TestDiskStorageAppendAndReload(t *testing.T) {
 
 func TestDiskStorageSaveReadyState(t *testing.T) {
 	dir := t.TempDir()
-	ds, err := OpenDiskStorage(dir)
+	ds, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 
 	rd := myraft.Ready{
@@ -80,18 +80,18 @@ func TestDiskStorageSaveReadyState(t *testing.T) {
 
 func TestSnapshotExportImport(t *testing.T) {
 	dir := t.TempDir()
-	ds, err := OpenDiskStorage(dir)
+	ds, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 
 	snap := myraft.Snapshot{Metadata: myraft.SnapshotMetadata{Index: 10, Term: 3}}
 	require.NoError(t, ds.ApplySnapshot(snap))
 
 	path := filepath.Join(dir, "snap.out")
-	require.NoError(t, ExportSnapshot(ds, path))
+	require.NoError(t, ExportSnapshot(ds, path, nil))
 
-	ds2, err := OpenDiskStorage(t.TempDir())
+	ds2, err := OpenDiskStorage(t.TempDir(), nil)
 	require.NoError(t, err)
-	require.NoError(t, ImportSnapshot(ds2, path))
+	require.NoError(t, ImportSnapshot(ds2, path, nil))
 
 	loaded, err := ds2.Snapshot()
 	require.NoError(t, err)
@@ -100,19 +100,19 @@ func TestSnapshotExportImport(t *testing.T) {
 }
 
 func TestImportSnapshotErrors(t *testing.T) {
-	ds, err := OpenDiskStorage(t.TempDir())
+	ds, err := OpenDiskStorage(t.TempDir(), nil)
 	require.NoError(t, err)
 
-	require.NoError(t, ImportSnapshot(ds, filepath.Join(t.TempDir(), "missing.snap")))
+	require.NoError(t, ImportSnapshot(ds, filepath.Join(t.TempDir(), "missing.snap"), nil))
 
 	path := filepath.Join(t.TempDir(), "empty.snap")
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
-	require.Error(t, ImportSnapshot(ds, path))
+	require.Error(t, ImportSnapshot(ds, path, nil))
 }
 
 func TestDiskStorageRemovesEmptyHardState(t *testing.T) {
 	dir := t.TempDir()
-	ds, err := OpenDiskStorage(dir)
+	ds, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, ds.SetHardState(myraft.HardState{Term: 1, Vote: 1, Commit: 1}))
@@ -126,16 +126,16 @@ func TestDiskStorageRemovesEmptyHardState(t *testing.T) {
 }
 
 func TestOpenDiskStorageRequiresDir(t *testing.T) {
-	_, err := OpenDiskStorage("")
+	_, err := OpenDiskStorage("", nil)
 	require.Error(t, err)
 }
 
-func TestOpenDiskStorageWithFSInjectedFailure(t *testing.T) {
+func TestOpenDiskStorageInjectedFailure(t *testing.T) {
 	injected := errors.New("mkdir injected")
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpMkdirAll, "", injected),
 	))
-	_, err := OpenDiskStorageWithFS(t.TempDir(), fs)
+	_, err := OpenDiskStorage(t.TempDir(), fs)
 	require.ErrorIs(t, err, injected)
 }
 
@@ -145,7 +145,7 @@ func TestDiskStorageLoadSnapshotUnreadable(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("snap"), 0o600))
 	require.NoError(t, os.Chmod(path, 0))
 
-	_, err := OpenDiskStorage(dir)
+	_, err := OpenDiskStorage(dir, nil)
 	require.Error(t, err)
 }
 
@@ -159,13 +159,13 @@ func TestDiskStorageLoadEntriesCorrupt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, err = OpenDiskStorage(dir)
+	_, err = OpenDiskStorage(dir, nil)
 	require.Error(t, err)
 }
 
-func TestSnapshotExportImportWithFSInjection(t *testing.T) {
+func TestSnapshotExportImportInjectedFailure(t *testing.T) {
 	dir := t.TempDir()
-	ds, err := OpenDiskStorage(dir)
+	ds, err := OpenDiskStorage(dir, nil)
 	require.NoError(t, err)
 	require.NoError(t, ds.ApplySnapshot(myraft.Snapshot{Metadata: myraft.SnapshotMetadata{Index: 2, Term: 1}}))
 
@@ -174,15 +174,15 @@ func TestSnapshotExportImportWithFSInjection(t *testing.T) {
 	wfs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpWriteFile, path, writeErr),
 	))
-	err = ExportSnapshotWithFS(ds, path, wfs)
+	err = ExportSnapshot(ds, path, wfs)
 	require.ErrorIs(t, err, writeErr)
 
 	readErr := errors.New("read injected")
 	rfs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpReadFile, path, readErr),
 	))
-	ds2, err := OpenDiskStorage(t.TempDir())
+	ds2, err := OpenDiskStorage(t.TempDir(), nil)
 	require.NoError(t, err)
-	err = ImportSnapshotWithFS(ds2, path, rfs)
+	err = ImportSnapshot(ds2, path, rfs)
 	require.ErrorIs(t, err, readErr)
 }

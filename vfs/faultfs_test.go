@@ -16,7 +16,7 @@ func TestFaultFSInjectOpenFile(t *testing.T) {
 	policy := NewFaultPolicy(FailOnceRule(OpOpenFile, path, injected))
 	fs := NewFaultFSWithPolicy(OSFS{}, policy)
 
-	_, err := fs.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	_, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
 	require.ErrorIs(t, err, injected)
 }
 
@@ -29,6 +29,47 @@ func TestFaultFSInjectOpenFileHandle(t *testing.T) {
 
 	_, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
 	require.ErrorIs(t, err, injected)
+}
+
+func TestFaultFileFailOnNthWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.write")
+	injected := errors.New("file write injected")
+	policy := NewFaultPolicy(FailOnNthRule(OpFileWrite, path, 2, injected))
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+
+	f, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("ok"))
+	require.NoError(t, err)
+	_, err = f.Write([]byte("boom"))
+	require.ErrorIs(t, err, injected)
+	require.NoError(t, f.Close())
+}
+
+func TestFaultFileFailOnceSyncCloseAndTruncate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.sync")
+	syncErr := errors.New("file sync injected")
+	closeErr := errors.New("file close injected")
+	truncErr := errors.New("file truncate injected")
+	policy := NewFaultPolicy(
+		FailOnceRule(OpFileSync, path, syncErr),
+		FailOnceRule(OpFileClose, path, closeErr),
+		FailOnceRule(OpFileTrunc, path, truncErr),
+	)
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+
+	f, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("payload"))
+	require.NoError(t, err)
+	err = f.Sync()
+	require.ErrorIs(t, err, syncErr)
+	err = f.Truncate(0)
+	require.ErrorIs(t, err, truncErr)
+	err = f.Close()
+	require.ErrorIs(t, err, closeErr)
 }
 
 func TestFaultPolicyFailOnNth(t *testing.T) {

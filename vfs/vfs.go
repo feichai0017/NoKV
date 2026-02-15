@@ -20,12 +20,11 @@ type File interface {
 	Sync() error
 	Truncate(size int64) error
 	Name() string
+	Fd() uintptr
 }
 
 // FS defines filesystem operations used by storage/runtime components.
 type FS interface {
-	Open(name string) (*os.File, error)
-	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 	OpenHandle(name string) (File, error)
 	OpenFileHandle(name string, flag int, perm os.FileMode) (File, error)
 	MkdirAll(path string, perm os.FileMode) error
@@ -43,16 +42,6 @@ type FS interface {
 
 // OSFS is the production filesystem implementation backed by the os package.
 type OSFS struct{}
-
-// Open opens an existing file for reading.
-func (OSFS) Open(name string) (*os.File, error) {
-	return os.Open(name)
-}
-
-// OpenFile opens or creates a file.
-func (OSFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
-	return os.OpenFile(name, flag, perm)
-}
 
 // OpenHandle opens an existing file and returns a vfs.File.
 func (OSFS) OpenHandle(name string) (File, error) {
@@ -125,4 +114,20 @@ func Ensure(fs FS) FS {
 		return OSFS{}
 	}
 	return fs
+}
+
+// UnwrapOSFile extracts the underlying *os.File from a File implementation when available.
+func UnwrapOSFile(f File) (*os.File, bool) {
+	if f == nil {
+		return nil, false
+	}
+	if of, ok := f.(*os.File); ok {
+		return of, true
+	}
+	if wrapped, ok := f.(interface{ OSFile() *os.File }); ok {
+		if of := wrapped.OSFile(); of != nil {
+			return of, true
+		}
+	}
+	return nil, false
 }

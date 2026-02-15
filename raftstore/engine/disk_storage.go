@@ -32,13 +32,9 @@ type DiskStorage struct {
 	snapshot  myraft.Snapshot
 }
 
-// OpenDiskStorage loads or initialises raft storage in the provided directory.
-func OpenDiskStorage(dir string) (*DiskStorage, error) {
-	return OpenDiskStorageWithFS(dir, nil)
-}
-
-// OpenDiskStorageWithFS loads or initialises raft storage with the provided filesystem.
-func OpenDiskStorageWithFS(dir string, fs vfs.FS) (*DiskStorage, error) {
+// OpenDiskStorage loads or initialises raft storage with the provided filesystem.
+// Nil fs defaults to OSFS.
+func OpenDiskStorage(dir string, fs vfs.FS) (*DiskStorage, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("raftstore: storage dir required")
 	}
