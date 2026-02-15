@@ -61,8 +61,6 @@ func TestMmapFileBasics(t *testing.T) {
 	_, _, err = mf.AllocateSlice(len(mf.Data), len(mf.Data)-4)
 	require.NoError(t, err)
 
-	require.NoError(t, mf.ReName("ignored"))
-
 	require.NoError(t, mf.Remap(false))
 	require.NoError(t, mf.Remap(true))
 }

@@ -287,7 +287,8 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 		FileName: tableName,
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(bd.size)})
+		MaxSz:    int(bd.size),
+		FS:       lm.opt.FS})
 	dst, err := t.ss.View(0, bd.size)
 	if err != nil {
 		return nil, err
