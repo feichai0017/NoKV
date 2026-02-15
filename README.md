@@ -49,6 +49,7 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 - ⚡ **MVCC-native transactions** – snapshot isolation, conflict detection, TTL, and iterators built into the core (no external locks).
 - 🧠 **Multi-Raft regions** – `raftstore` manages per-region raft groups, WAL/manifest pointers, and tick-driven leader elections.
 - 🛰️ **Redis gateway** – `cmd/nokv-redis` exposes RESP commands (SET/GET/MGET/NX/XX/TTL/INCR...) on top of raft-backed storage.
+- 🧪 **Pebble-inspired VFS** – a unified `vfs` layer with deterministic fault injection (`FaultFS`) for sync/close/truncate rollback testing.
 - 🔍 **Observability first** – `nokv stats`, expvar endpoints, hot key tracking, RECOVERY/TRANSPORT metrics, and ready-to-use recovery scripts.
 - 🧰 **Single-source config** – `raft_config.json` feeds local scripts, Docker Compose, Redis gateway, and CI so there’s zero drift.
 
@@ -190,7 +191,7 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 | RaftStore | Multi-Raft Region management, hooks, metrics, transport. | [`raftstore/`](./raftstore) | [RaftStore overview](docs/raftstore.md) |
 | HotRing | Hot key tracking, throttling helpers. | [`github.com/feichai0017/hotring`](https://github.com/feichai0017/hotring) | [HotRing overview](docs/hotring.md) |
 | Observability | Periodic stats, hot key tracking, CLI integration. | [`stats.go`](./stats.go), [`cmd/nokv`](./cmd/nokv) | [Stats & observability](docs/stats.md)<br>[CLI reference](docs/cli.md) |
-| Filesystem | mmap-backed file helpers shared by SST/vlog. | [`file/`](./file) | [File abstractions](docs/file.md) |
+| Filesystem | Pebble-inspired `vfs` abstraction + mmap-backed file helpers shared by SST/vlog, WAL, and manifest. | [`vfs/`](./vfs), [`file/`](./file) | [VFS](docs/vfs.md)<br>[File abstractions](docs/file.md) |
 
 Each module has a dedicated document under `docs/` describing APIs, diagrams, and recovery notes.
 
