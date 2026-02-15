@@ -579,7 +579,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgr.Close() }()
 
-	manifestMgr, err := manifest.Open(manifestDir)
+	manifestMgr, err := manifest.Open(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = manifestMgr.Close() }()
 
@@ -601,7 +601,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, ws.ApplySnapshot(snapshot))
 
 	exportPath := filepath.Join(dir, "raft.snapshot")
-	require.NoError(t, engine.ExportSnapshot(ws, exportPath))
+	require.NoError(t, engine.ExportSnapshot(ws, exportPath, nil))
 	logRecoveryMetric(t, "raft_snapshot_export", map[string]any{
 		"group_id":        1,
 		"snapshot_index":  snapshot.Metadata.Index,
@@ -618,7 +618,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgrRestore.Close() }()
 
-	manifestMgrRestore, err := manifest.Open(restoreManifestDir)
+	manifestMgrRestore, err := manifest.Open(restoreManifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = manifestMgrRestore.Close() }()
 
@@ -629,7 +629,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath))
+	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath, nil))
 
 	ptr, ok := manifestMgrRestore.RaftPointer(1)
 	require.True(t, ok)

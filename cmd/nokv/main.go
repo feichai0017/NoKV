@@ -283,7 +283,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 		return err
 	}
 
-	mgr, err := manifest.Open(*workDir)
+	mgr, err := manifest.Open(*workDir, nil)
 	if err != nil {
 		return err
 	}
@@ -491,7 +491,7 @@ func runRegionsCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	mgr, err := manifest.Open(*workDir)
+	mgr, err := manifest.Open(*workDir, nil)
 	if err != nil {
 		return err
 	}

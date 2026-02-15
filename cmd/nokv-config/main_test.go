@@ -104,7 +104,7 @@ func TestRunManifestWritesRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output, "logged region 99")
 
-	mgr, err := manifest.Open(manifestDir)
+	mgr, err := manifest.Open(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() {
 		_ = mgr.Close()

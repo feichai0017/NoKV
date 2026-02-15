@@ -439,7 +439,7 @@ func TestMainVlogCommand(t *testing.T) {
 
 func TestMainRegionsCommand(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	require.NoError(t, err)
 	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
 		ID:       1,
@@ -771,7 +771,7 @@ func TestRunRegionsCmdMissingWorkdir(t *testing.T) {
 
 func TestRunRegionsCmdPlainWithRegion(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	require.NoError(t, err)
 	meta := manifest.RegionMeta{
 		ID:       10,

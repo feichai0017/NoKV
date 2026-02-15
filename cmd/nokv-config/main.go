@@ -254,7 +254,7 @@ func runManifest(args []string) error {
 		meta.Epoch.ConfVersion = uint64(len(meta.Peers))
 	}
 
-	mgr, err := manifest.Open(*workdir)
+	mgr, err := manifest.Open(*workdir, nil)
 	if err != nil {
 		return fmt.Errorf("open manifest at %s: %w", *workdir, err)
 	}

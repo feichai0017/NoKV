@@ -417,21 +417,33 @@ func (m *Manager) Close() error {
 	if m.closed {
 		return nil
 	}
-	m.closed = true
 	if m.active == nil {
+		m.closed = true
 		return nil
 	}
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
-			_ = m.active.Close()
-			return err
+			closeErr := m.active.Close()
+			m.active = nil
+			m.writer = nil
+			m.closed = true
+			return errors.Join(err, closeErr)
 		}
 	}
 	if err := m.active.Sync(); err != nil {
-		_ = m.active.Close()
+		closeErr := m.active.Close()
+		m.active = nil
+		m.writer = nil
+		m.closed = true
+		return errors.Join(err, closeErr)
+	}
+	if err := m.active.Close(); err != nil {
 		return err
 	}
-	return m.active.Close()
+	m.active = nil
+	m.writer = nil
+	m.closed = true
+	return nil
 }
 
 // SwitchSegment switches the active WAL segment to the provided ID. When truncate is true,
@@ -451,13 +463,8 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 
 // VerifyDir scans WAL segments in the provided directory, truncating any
 // partially written records left behind by crashes and validating their
-// checksums.
-func VerifyDir(dir string) error {
-	return VerifyDirWithFS(dir, nil)
-}
-
-// VerifyDirWithFS scans WAL segments using the provided filesystem.
-func VerifyDirWithFS(dir string, fs vfs.FS) error {
+// checksums. Nil fs defaults to OSFS.
+func VerifyDir(dir string, fs vfs.FS) error {
 	if dir == "" {
 		return fmt.Errorf("wal: directory required")
 	}
