@@ -72,6 +72,7 @@ type (
 		prefetchCooldown time.Duration
 		cfMetrics        []*cfCounters
 		hotWriteLimited  uint64
+		testCloseHooks   *testCloseHooks // For testing only
 	}
 
 	commitQueue struct {
@@ -105,6 +106,14 @@ type (
 type cfCounters struct {
 	writes uint64
 	reads  uint64
+}
+
+type testCloseHooks struct {
+	lsmClose       func() error
+	vlogClose      func() error
+	walClose       func() error
+	dirLockRelease func() error
+	calls          []string
 }
 
 // Open DB
@@ -370,23 +379,53 @@ func (db *DB) Close() error {
 		db.prefetchItems = nil
 	}
 
-	if err := db.lsm.Close(); err != nil {
-		return err
+	var errs []error
+
+	if db.testCloseHooks != nil && db.testCloseHooks.lsmClose != nil {
+		db.testCloseHooks.record("lsm close")
+		if err := db.testCloseHooks.lsmClose(); err != nil {
+			errs = append(errs, fmt.Errorf("lsm close: %w", err))
+		}
+	} else if err := db.lsm.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("lsm close: %w", err))
 	}
-	if err := db.vlog.close(); err != nil {
-		return err
+
+	if db.testCloseHooks != nil && db.testCloseHooks.vlogClose != nil {
+		db.testCloseHooks.record("vlog close")
+		if err := db.testCloseHooks.vlogClose(); err != nil {
+			errs = append(errs, fmt.Errorf("vlog close: %w", err))
+		}
+	} else if err := db.vlog.close(); err != nil {
+		errs = append(errs, fmt.Errorf("vlog close: %w", err))
 	}
-	if err := db.wal.Close(); err != nil {
-		return err
+
+	if db.testCloseHooks != nil && db.testCloseHooks.walClose != nil {
+		db.testCloseHooks.record("wal close")
+		if err := db.testCloseHooks.walClose(); err != nil {
+			errs = append(errs, fmt.Errorf("wal close: %w", err))
+		}
+	} else if err := db.wal.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("wal close: %w", err))
 	}
 
 	if db.dirLock != nil {
-		if err := db.dirLock.Release(); err != nil {
-			return err
+		if db.testCloseHooks != nil && db.testCloseHooks.dirLockRelease != nil {
+			db.testCloseHooks.record("dir lock release")
+			if err := db.testCloseHooks.dirLockRelease(); err != nil {
+				errs = append(errs, fmt.Errorf("dir lock release: %w", err))
+			}
+		} else if err := db.dirLock.Release(); err != nil {
+			errs = append(errs, fmt.Errorf("dir lock release: %w", err))
 		}
 		db.dirLock = nil
 	}
+
 	atomic.StoreUint32(&db.isClosed, 1)
+
+	if len(errs) > 0 {
+		return stderrors.Join(errs...)
+	}
+
 	return nil
 }
 
@@ -765,4 +804,8 @@ func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
 		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
 	}
 	return stats
+}
+
+func (h *testCloseHooks) record(name string) {
+	h.calls = append(h.calls, name)
 }

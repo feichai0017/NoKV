@@ -992,3 +992,48 @@ func TestPrefetchLoopDrainsRing(t *testing.T) {
 	_, pending := state.pend["k"]
 	require.False(t, pending)
 }
+
+func TestCloseWithErrors(t *testing.T) {
+	clearDir()
+	db := Open(opt)
+	lsmErr := errors.New("lsm close error")
+	vlogErr := errors.New("vlog close error")
+	walErr := errors.New("wal close error")
+	dirLockErr := errors.New("dir lock release error")
+	db.testCloseHooks = &testCloseHooks{
+		lsmClose: func() error {
+			db.lsm.Close()
+			return lsmErr
+		},
+		vlogClose: func() error {
+			db.vlog.close()
+			return vlogErr
+		},
+		walClose: func() error {
+			db.wal.Close()
+			return walErr
+		},
+		dirLockRelease: func() error {
+			if db.dirLock != nil {
+				db.dirLock.Release()
+			}
+			return dirLockErr
+		},
+		calls: []string{},
+	}
+	err := db.Close()
+
+	var gotErrs []error
+	if err != nil {
+		if multiErr, ok := err.(interface{ Unwrap() []error }); ok {
+			gotErrs = multiErr.Unwrap()
+		}
+	}
+	require.Len(t, gotErrs, 4)
+	require.True(t, errors.Is(gotErrs[0], lsmErr))
+	require.True(t, errors.Is(gotErrs[1], vlogErr))
+	require.True(t, errors.Is(gotErrs[2], walErr))
+	require.True(t, errors.Is(gotErrs[3], dirLockErr))
+	expectCalls := []string{"lsm close", "vlog close", "wal close", "dir lock release"}
+	require.Equal(t, expectCalls, db.testCloseHooks.calls)
+}
