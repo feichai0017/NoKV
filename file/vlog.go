@@ -29,8 +29,10 @@ func (lf *LogFile) Open(opt *Options) error {
 	if flag == 0 {
 		flag = os.O_CREATE | os.O_RDWR
 	}
-	lf.f, err = OpenMmapFile(opt.FileName, flag, opt.MaxSz)
-	utils.Panic2(nil, err)
+	lf.f, err = OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
+	if err != nil {
+		return utils.WarpErr("unable to open value log file", err)
+	}
 	fi, err := lf.f.Fd.Stat()
 	if err != nil {
 		return utils.WarpErr("Unable to run file.Stat", err)

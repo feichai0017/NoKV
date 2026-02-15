@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/feichai0017/NoKV/utils/mmap"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/pkg/errors"
 )
 
@@ -18,10 +19,12 @@ import (
 type MmapFile struct {
 	Data []byte
 	Fd   *os.File
+	fs   vfs.FS
 }
 
-// OpenMmapFileUsing os
-func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
+// OpenMmapFileUsing maps a file descriptor using the provided filesystem.
+func OpenMmapFileUsing(fs vfs.FS, fd *os.File, sz int, writable bool) (*MmapFile, error) {
+	fs = vfs.Ensure(fs)
 	filename := fd.Name()
 	fi, err := fd.Stat()
 	if err != nil {
@@ -47,12 +50,13 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 	if fileSize == 0 {
 		dir, _ := filepath.Split(filename)
 		go func() {
-			_ = SyncDir(dir)
+			_ = SyncDir(fs, dir)
 		}()
 	}
 	return &MmapFile{
 		Data: buf,
 		Fd:   fd,
+		fs:   fs,
 	}, rerr
 }
 
@@ -60,18 +64,24 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 // created, it would truncate the file to maxSz. In both cases, it would mmap
 // the file to maxSz and returned it. In case the file is created, z.NewFile is
 // returned.
-func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
+func OpenMmapFile(fs vfs.FS, filename string, flag int, maxSz int) (*MmapFile, error) {
 	// fmt.Printf("opening file %s with flag: %v\n", filename, flag)
-	fd, err := os.OpenFile(filename, flag, 0666)
+	fs = vfs.Ensure(fs)
+	handle, err := fs.OpenFileHandle(filename, flag, 0666)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
+	}
+	fd, ok := vfs.UnwrapOSFile(handle)
+	if !ok {
+		_ = handle.Close()
+		return nil, errors.Errorf("unable to mmap non-os file handle: %s", filename)
 	}
 	writable := flag != os.O_RDONLY
 	// if the sst file layer has been opened, use its original size
 	if fileInfo, err := fd.Stat(); err == nil && fileInfo != nil && fileInfo.Size() > 0 {
 		maxSz = int(fileInfo.Size())
 	}
-	return OpenMmapFileUsing(fd, maxSz, writable)
+	return OpenMmapFileUsing(fs, fd, maxSz, writable)
 }
 
 type mmapReader struct {
@@ -245,7 +255,7 @@ func (m *MmapFile) Delete() error {
 	if err := m.Fd.Close(); err != nil {
 		return fmt.Errorf("while close file: %s, error: %v", m.Fd.Name(), err)
 	}
-	return os.Remove(m.Fd.Name())
+	return vfs.Ensure(m.fs).Remove(m.Fd.Name())
 }
 
 // Close would close the file. It would also truncate the file if maxSz >= 0.
@@ -262,8 +272,10 @@ func (m *MmapFile) Close() error {
 	return m.Fd.Close()
 }
 
-func SyncDir(dir string) error {
-	df, err := os.Open(dir)
+// SyncDir fsyncs a directory using the provided filesystem. Nil fs defaults to OSFS.
+func SyncDir(fs vfs.FS, dir string) error {
+	fs = vfs.Ensure(fs)
+	df, err := fs.OpenHandle(dir)
 	if err != nil {
 		return errors.Wrapf(err, "while opening %s", dir)
 	}
@@ -288,9 +300,4 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	var err error
 	m.Data, err = mmap.Mremap(m.Data, int(maxSz)) // Mmap up to max size.
 	return err
-}
-
-// ReName compatible interface
-func (m *MmapFile) ReName(name string) error {
-	return nil
 }

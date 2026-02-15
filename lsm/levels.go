@@ -15,6 +15,7 @@ import (
 	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 // initLevelManager initialize the levelManager
@@ -135,10 +136,11 @@ func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 }
 
 func (lm *levelManager) loadManifest() (err error) {
-	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir)
+	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir, lm.opt.FS)
 	return err
 }
 func (lm *levelManager) build() error {
+	fs := vfs.Ensure(lm.opt.FS)
 	lm.levels = make([]*levelHandler, 0, lm.opt.MaxLevelNum)
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
 		lh := &levelHandler{
@@ -158,7 +160,7 @@ func (lm *levelManager) build() error {
 	for level, files := range version.Levels {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
-			if _, err := os.Stat(fileName); err != nil {
+			if _, err := fs.Stat(fileName); err != nil {
 				_ = utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
 				missing = append(missing, meta)
 				continue

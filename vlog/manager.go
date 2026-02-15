@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -22,6 +23,7 @@ type Config struct {
 	FileMode os.FileMode
 	MaxSize  int64
 	Bucket   uint32
+	FS       vfs.FS
 }
 
 type Manager struct {
@@ -34,28 +36,10 @@ type Manager struct {
 	active    *segment
 	activeID  uint32
 	offset    uint32
-	hooks     ManagerTestingHooks
 }
 
 type segmentIndex struct {
 	files map[uint32]*segment
-}
-
-// ManagerTestingHooks provides callbacks that are used only in tests to inject
-// failures in the value-log manager. They are no-ops in production code and are
-// guarded by the Manager's internal locking to avoid data races when set.
-type ManagerTestingHooks struct {
-	BeforeAppend func(*Manager, []byte) error
-	BeforeRotate func(*Manager) error
-	BeforeSync   func(*Manager, uint32) error
-}
-
-// SetTestingHooks installs testing callbacks on the manager. It is intended for
-// use in tests only and should not be used by production code.
-func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-	m.hooks = h
 }
 
 func (m *Manager) SetMaxSize(maxSize int64) {
@@ -83,28 +67,6 @@ func (m *Manager) refreshIndexLocked() {
 	m.index.Store(&segmentIndex{files: next})
 }
 
-// runBeforeAppendHook invokes the testing hook (if any) before an append.
-func (m *Manager) runBeforeAppendHook(data []byte) error {
-	m.filesLock.RLock()
-	hook := m.hooks.BeforeAppend
-	m.filesLock.RUnlock()
-	if hook == nil {
-		return nil
-	}
-	return hook(m, data)
-}
-
-// runBeforeSyncHook invokes the testing hook (if any) before syncing a segment.
-func (m *Manager) runBeforeSyncHook(fid uint32) error {
-	m.filesLock.RLock()
-	hook := m.hooks.BeforeSync
-	m.filesLock.RUnlock()
-	if hook == nil {
-		return nil
-	}
-	return hook(m, fid)
-}
-
 // ensureActiveLocked returns the active segment store; caller must hold m.filesLock.
 func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 	if m.active != nil {
@@ -128,7 +90,8 @@ func Open(cfg Config) (*Manager, error) {
 	if cfg.Dir == "" {
 		return nil, fmt.Errorf("vlog manager: dir required")
 	}
-	if err := os.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+	cfg.FS = vfs.Ensure(cfg.FS)
+	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
 		return nil, err
 	}
 	if cfg.FileMode == 0 {
@@ -170,7 +133,7 @@ func Open(cfg Config) (*Manager, error) {
 	return mgr, nil
 }
 
-func openLogFile(fid uint32, path string, dir string, maxSize int64, readOnly bool) (*file.LogFile, error) {
+func openLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64, readOnly bool) (*file.LogFile, error) {
 	flag := os.O_CREATE | os.O_RDWR
 	if readOnly {
 		flag = os.O_RDONLY
@@ -182,14 +145,15 @@ func openLogFile(fid uint32, path string, dir string, maxSize int64, readOnly bo
 		Dir:      dir,
 		Flag:     flag,
 		MaxSz:    int(maxSize),
+		FS:       fs,
 	}); err != nil {
 		return nil, err
 	}
 	return lf, nil
 }
 
-func createLogFile(fid uint32, path string, dir string, maxSize int64) (*file.LogFile, error) {
-	lf, err := openLogFile(fid, path, dir, maxSize, false)
+func createLogFile(fs vfs.FS, fid uint32, path string, dir string, maxSize int64) (*file.LogFile, error) {
+	lf, err := openLogFile(fs, fid, path, dir, maxSize, false)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +165,7 @@ func createLogFile(fid uint32, path string, dir string, maxSize int64) (*file.Lo
 }
 
 func (m *Manager) populate() error {
-	files, err := filepath.Glob(filepath.Join(m.cfg.Dir, "*.vlog"))
+	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.vlog"))
 	if err != nil {
 		return err
 	}
@@ -223,7 +187,7 @@ func (m *Manager) populate() error {
 			continue
 		}
 		readonly := fid != max
-		store, err := openLogFile(fid, path, m.cfg.Dir, m.cfg.MaxSize, readonly)
+		store, err := openLogFile(m.cfg.FS, fid, path, m.cfg.Dir, m.cfg.MaxSize, readonly)
 		if err != nil {
 			return err
 		}
@@ -234,7 +198,7 @@ func (m *Manager) populate() error {
 
 func (m *Manager) create(fid uint32) (*file.LogFile, error) {
 	path := filepath.Join(m.cfg.Dir, fmt.Sprintf("%05d.vlog", fid))
-	store, err := createLogFile(fid, path, m.cfg.Dir, m.cfg.MaxSize)
+	store, err := createLogFile(m.cfg.FS, fid, path, m.cfg.Dir, m.cfg.MaxSize)
 	if err != nil {
 		return nil, err
 	}
@@ -253,11 +217,6 @@ func (m *Manager) Rotate() error {
 
 // rotateLocked rotates the active segment; caller must hold m.filesLock.
 func (m *Manager) rotateLocked() error {
-	if hook := m.hooks.BeforeRotate; hook != nil {
-		if err := hook(m); err != nil {
-			return err
-		}
-	}
 	if m.active != nil {
 		if err := m.active.store.DoneWriting(m.offset); err != nil {
 			return err
@@ -349,7 +308,7 @@ func (m *Manager) Remove(fid uint32) error {
 	if err := seg.store.Close(); err != nil {
 		return err
 	}
-	return os.Remove(seg.store.FileName())
+	return m.cfg.FS.Remove(seg.store.FileName())
 }
 
 func (m *Manager) MaxFID() uint32 {
@@ -382,13 +341,9 @@ func (m *Manager) SyncActive() error {
 	}
 	m.filesLock.RLock()
 	seg := m.active
-	fid := m.activeID
 	m.filesLock.RUnlock()
 	if seg == nil || seg.store == nil {
 		return nil
-	}
-	if err := m.runBeforeSyncHook(fid); err != nil {
-		return err
 	}
 	seg.store.Lock.Lock()
 	defer seg.store.Lock.Unlock()
@@ -416,10 +371,6 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 
 		if seg == nil || seg.store == nil {
 			continue
-		}
-		if err := m.runBeforeSyncHook(fid); err != nil {
-			seg.store.Lock.Unlock()
-			return err
 		}
 		err := seg.store.Sync()
 		seg.store.Lock.Unlock()
@@ -530,7 +481,7 @@ func (m *Manager) Rewind(ptr kv.ValuePtr) error {
 			firstErr = err
 		}
 		item.seg.store.Lock.Unlock()
-		if err := os.Remove(item.name); err != nil && firstErr == nil {
+		if err := m.cfg.FS.Remove(item.name); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

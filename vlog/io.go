@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -60,10 +61,6 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 	buf := getEntryBuffer()
 	payload, err := kv.EncodeEntry(buf, e)
 	if err != nil {
-		putEntryBuffer(buf)
-		return nil, err
-	}
-	if err := m.runBeforeAppendHook(payload); err != nil {
 		putEntryBuffer(buf)
 		return nil, err
 	}
@@ -139,11 +136,6 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 		buf := getEntryBuffer()
 		payload, err := kv.EncodeEntry(buf, e)
 		if err != nil {
-			putEntryBuffer(buf)
-			releaseBuffers()
-			return nil, err
-		}
-		if err := m.runBeforeAppendHook(payload); err != nil {
 			putEntryBuffer(buf)
 			releaseBuffers()
 			return nil, err
@@ -384,20 +376,21 @@ func VerifyDir(cfg Config) error {
 	if cfg.Dir == "" {
 		return fmt.Errorf("vlog verify: dir required")
 	}
+	fs := vfs.Ensure(cfg.FS)
 	if cfg.FileMode == 0 {
 		cfg.FileMode = utils.DefaultFileMode
 	}
 	if cfg.MaxSize == 0 {
 		cfg.MaxSize = int64(1 << 29)
 	}
-	files, err := filepath.Glob(filepath.Join(cfg.Dir, "*.vlog"))
+	files, err := fs.Glob(filepath.Join(cfg.Dir, "*.vlog"))
 	if err != nil {
 		return err
 	}
 	sort.Strings(files)
 	for _, path := range files {
 		fid := uint32(extractFID(path))
-		store, err := openLogFile(fid, path, cfg.Dir, cfg.MaxSize, false)
+		store, err := openLogFile(fs, fid, path, cfg.Dir, cfg.MaxSize, false)
 		if err != nil {
 			if stderrors.Is(err, os.ErrNotExist) {
 				continue
@@ -412,12 +405,12 @@ func VerifyDir(cfg Config) error {
 		if closeErr != nil {
 			return closeErr
 		}
-		info, statErr := os.Stat(path)
+		info, statErr := fs.Stat(path)
 		if statErr != nil {
 			return statErr
 		}
 		if int64(valid) < info.Size() {
-			if err := os.Truncate(path, int64(valid)); err != nil {
+			if err := fs.Truncate(path, int64(valid)); err != nil {
 				_ = utils.Err(fmt.Errorf("value log verify truncate %s: %w", path, err))
 			}
 		}

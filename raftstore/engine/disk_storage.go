@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (
@@ -23,22 +25,26 @@ const (
 type DiskStorage struct {
 	mu        sync.Mutex
 	dir       string
+	fs        vfs.FS
 	mem       *myraft.MemoryStorage
 	entries   []myraft.Entry
 	hardState myraft.HardState
 	snapshot  myraft.Snapshot
 }
 
-// OpenDiskStorage loads or initialises raft storage in the provided directory.
-func OpenDiskStorage(dir string) (*DiskStorage, error) {
+// OpenDiskStorage loads or initialises raft storage with the provided filesystem.
+// Nil fs defaults to OSFS.
+func OpenDiskStorage(dir string, fs vfs.FS) (*DiskStorage, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("raftstore: storage dir required")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	fs = vfs.Ensure(fs)
+	if err := fs.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	ds := &DiskStorage{
 		dir: dir,
+		fs:  fs,
 		mem: myraft.NewMemoryStorage(),
 	}
 	if err := ds.load(); err != nil {
@@ -62,9 +68,9 @@ func (ds *DiskStorage) load() error {
 
 func (ds *DiskStorage) loadSnapshot() error {
 	path := filepath.Join(ds.dir, snapFileName)
-	data, err := os.ReadFile(path)
+	data, err := ds.fs.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -85,9 +91,9 @@ func (ds *DiskStorage) loadSnapshot() error {
 
 func (ds *DiskStorage) loadEntries() error {
 	path := filepath.Join(ds.dir, logFileName)
-	f, err := os.Open(path)
+	f, err := ds.fs.OpenHandle(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -124,9 +130,9 @@ func (ds *DiskStorage) loadEntries() error {
 
 func (ds *DiskStorage) loadHardState() error {
 	path := filepath.Join(ds.dir, hardFileName)
-	data, err := os.ReadFile(path)
+	data, err := ds.fs.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -275,10 +281,10 @@ func (ds *DiskStorage) refreshEntriesLocked() error {
 func (ds *DiskStorage) persistEntriesLocked() error {
 	path := filepath.Join(ds.dir, logFileName)
 	if len(ds.entries) == 0 {
-		return removeFile(path)
+		return ds.removeFile(path)
 	}
 	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := ds.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
@@ -300,46 +306,46 @@ func (ds *DiskStorage) persistEntriesLocked() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return ds.fs.Rename(tmp, path)
 }
 
 // persistHardStateLocked writes hard state to disk; caller must hold ds.mu.
 func (ds *DiskStorage) persistHardStateLocked() error {
 	path := filepath.Join(ds.dir, hardFileName)
 	if myraft.IsEmptyHardState(ds.hardState) {
-		return removeFile(path)
+		return ds.removeFile(path)
 	}
 	data, err := ds.hardState.Marshal()
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(path, data)
+	return ds.atomicWriteFile(path, data)
 }
 
 // persistSnapshotLocked writes snapshot metadata to disk; caller must hold ds.mu.
 func (ds *DiskStorage) persistSnapshotLocked() error {
 	path := filepath.Join(ds.dir, snapFileName)
 	if myraft.IsEmptySnap(ds.snapshot) {
-		return removeFile(path)
+		return ds.removeFile(path)
 	}
 	data, err := ds.snapshot.Marshal()
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(path, data)
+	return ds.atomicWriteFile(path, data)
 }
 
-func removeFile(path string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+func (ds *DiskStorage) removeFile(path string) error {
+	if err := ds.fs.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
-func atomicWriteFile(path string, data []byte) error {
+func (ds *DiskStorage) atomicWriteFile(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := ds.fs.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return ds.fs.Rename(tmp, path)
 }

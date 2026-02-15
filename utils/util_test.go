@@ -26,7 +26,7 @@ func TestRemoveDir(t *testing.T) {
 	path := filepath.Join(dir, "file.txt")
 	require.NoError(t, os.WriteFile(path, []byte("data"), 0o644))
 	require.NotPanics(t, func() {
-		RemoveDir(dir)
+		RemoveDir(nil, dir)
 	})
 	_, err := os.Stat(dir)
 	require.Error(t, err)
@@ -41,14 +41,14 @@ func TestFileHelpers(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, "00007.vlog"), VlogFilePath(dir, 7))
 
 	filePath := filepath.Join(dir, "fresh.txt")
-	f, err := CreateSyncedFile(filePath, false)
+	f, err := CreateSyncedFile(nil, filePath, false)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, err = CreateSyncedFile(filePath, false)
+	_, err = CreateSyncedFile(nil, filePath, false)
 	require.Error(t, err)
 
-	require.NoError(t, SyncDir(dir))
+	require.NoError(t, SyncDir(nil, dir))
 }
 
 func TestLoadIDMap(t *testing.T) {
@@ -57,7 +57,7 @@ func TestLoadIDMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "00002.sst"), []byte("b"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("c"), 0o644))
 
-	ids := LoadIDMap(dir)
+	ids := LoadIDMap(nil, dir)
 	require.Contains(t, ids, uint64(1))
 	require.Contains(t, ids, uint64(2))
 	require.NotContains(t, ids, uint64(3))
