@@ -2,12 +2,14 @@ package manifest_test
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -631,4 +633,32 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 	if cloned[1].Peers[0].PeerID != 10 {
 		t.Fatalf("expected cloned map to preserve peers")
 	}
+}
+
+func TestOpenWithFSInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("manifest mkdir injected")
+	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
+		if op == vfs.OpMkdirAll {
+			return injected
+		}
+		return nil
+	})
+
+	_, err := manifest.OpenWithFS(dir, fs)
+	require.ErrorIs(t, err, injected)
+}
+
+func TestVerifyWithFSInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("manifest read current injected")
+	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
+		if op == vfs.OpReadFile {
+			return injected
+		}
+		return nil
+	})
+
+	err := manifest.VerifyWithFS(dir, fs)
+	require.ErrorIs(t, err, injected)
 }
