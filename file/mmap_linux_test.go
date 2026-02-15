@@ -21,14 +21,14 @@ func TestOpenMmapFile(t *testing.T) {
 	filePath := filepath.Join(dir, "test.mmap")
 
 	// Create a new file.
-	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 1024)
+	mf, err := OpenMmapFile(nil, filePath, os.O_CREATE|os.O_RDWR, 1024)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 	require.Equal(t, 1024, len(mf.Data))
 	require.NoError(t, mf.Close())
 
 	// Open an existing file.
-	mf, err = OpenMmapFile(filePath, os.O_RDWR, 0)
+	mf, err = OpenMmapFile(nil, filePath, os.O_RDWR, 0)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 	require.Equal(t, 1024, len(mf.Data))
@@ -39,7 +39,7 @@ func TestOpenMmapFile(t *testing.T) {
 	require.NoError(t, mf.Close())
 
 	// Reopen as read-only and verify content.
-	mf, err = OpenMmapFile(filePath, os.O_RDONLY, 0)
+	mf, err = OpenMmapFile(nil, filePath, os.O_RDONLY, 0)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 	require.Equal(t, 1024, len(mf.Data))
@@ -56,7 +56,7 @@ func TestMmapFile_ReadWrite(t *testing.T) {
 
 	filePath := filepath.Join(dir, "test.mmap")
 
-	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 256)
+	mf, err := OpenMmapFile(nil, filePath, os.O_CREATE|os.O_RDWR, 256)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, mf.Close())
@@ -96,7 +96,7 @@ func TestMmapFile_Resize(t *testing.T) {
 
 	filePath := filepath.Join(dir, "test.mmap")
 
-	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 100)
+	mf, err := OpenMmapFile(nil, filePath, os.O_CREATE|os.O_RDWR, 100)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, mf.Close())
@@ -128,7 +128,7 @@ func TestMmapFile_Delete(t *testing.T) {
 
 	filePath := filepath.Join(dir, "test.mmap")
 
-	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 128)
+	mf, err := OpenMmapFile(nil, filePath, os.O_CREATE|os.O_RDWR, 128)
 	require.NoError(t, err)
 
 	err = mf.Delete()

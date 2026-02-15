@@ -12,6 +12,7 @@
 - [WAL](wal.md)
 - [Value Log](vlog.md)
 - [Manifest](manifest.md)
+- [VFS](vfs.md)
 - [File](file.md)
 - [Cache](cache.md)
 - [Hotring](hotring.md)

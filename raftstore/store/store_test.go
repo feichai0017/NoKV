@@ -225,7 +225,7 @@ func TestStoreCustomFactoryAndHooks(t *testing.T) {
 
 func TestStorePersistsRegionMetadata(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 

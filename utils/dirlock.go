@@ -7,26 +7,30 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 // DirLock represents an exclusive filesystem lock on a directory.
 type DirLock struct {
-	file *os.File
+	file vfs.File
 	path string
+	fs   vfs.FS
 }
 
 // AcquireDirLock attempts to obtain an exclusive lock on the provided directory.
 // The lock is implemented using a platform flock on a dedicated LOCK file. The
 // returned DirLock must be released via (*DirLock).Release.
-func AcquireDirLock(dir string) (*DirLock, error) {
+func AcquireDirLock(dir string, fs vfs.FS) (*DirLock, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("dirlock: directory required")
 	}
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+	fs = vfs.Ensure(fs)
+	if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 		return nil, err
 	}
 	lockPath := filepath.Join(dir, "LOCK")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := fs.OpenFileHandle(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -45,14 +49,14 @@ func AcquireDirLock(dir string) (*DirLock, error) {
 	if err := f.Truncate(0); err == nil {
 		pid := os.Getpid()
 		host := ""
-		if h, herr := os.Hostname(); herr == nil {
+		if h, herr := fs.Hostname(); herr == nil {
 			host = h
 		}
 		_, _ = fmt.Fprintf(f, "pid=%d host=%s goos=%s\n", pid, host, runtime.GOOS)
 		_ = f.Sync()
 	}
 	success = true
-	return &DirLock{file: f, path: lockPath}, nil
+	return &DirLock{file: f, path: lockPath, fs: fs}, nil
 }
 
 // Release unlocks the directory and removes the lock file.
@@ -67,7 +71,8 @@ func (l *DirLock) Release() error {
 	if err := l.file.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := os.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+	fs := vfs.Ensure(l.fs)
+	if err := fs.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
 		firstErr = err
 	}
 	l.file = nil

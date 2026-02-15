@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (
@@ -31,8 +33,9 @@ const (
 type Manager struct {
 	mu         sync.Mutex
 	dir        string
+	fs         vfs.FS
 	current    string
-	manifest   *os.File
+	manifest   vfs.File
 	version    Version
 	syncWrites bool
 
@@ -41,15 +44,18 @@ type Manager struct {
 }
 
 // Open loads manifest from CURRENT file or creates a new one.
-func Open(dir string) (*Manager, error) {
+// Nil fs defaults to OSFS.
+func Open(dir string, fs vfs.FS) (*Manager, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("manifest dir required")
 	}
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+	fs = vfs.Ensure(fs)
+	if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 		return nil, err
 	}
 	mgr := &Manager{
 		dir:              dir,
+		fs:               fs,
 		syncWrites:       true,
 		rewriteThreshold: defaultRewriteThreshold,
 	}
@@ -69,20 +75,20 @@ func Open(dir string) (*Manager, error) {
 
 func (m *Manager) loadCurrent() error {
 	path := filepath.Join(m.dir, currentFileName)
-	data, err := os.ReadFile(path)
+	data, err := m.fs.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	m.current = string(data)
 	manifestPath := filepath.Join(m.dir, m.current)
-	m.manifest, err = os.OpenFile(manifestPath, os.O_RDWR, manifestFilePermissions)
+	m.manifest, err = m.fs.OpenFileHandle(manifestPath, os.O_RDWR, manifestFilePermissions)
 	return err
 }
 
 func (m *Manager) createNew() error {
 	fileName := manifestFileName(1)
 	path := filepath.Join(m.dir, fileName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	f, err := m.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -104,11 +110,11 @@ func (m *Manager) createNew() error {
 
 func (m *Manager) writeCurrent() error {
 	tmp := filepath.Join(m.dir, manifestTempCurrentName)
-	if err := os.WriteFile(tmp, []byte(m.current), manifestFilePermissions); err != nil {
+	if err := m.fs.WriteFile(tmp, []byte(m.current), manifestFilePermissions); err != nil {
 		return err
 	}
 	dst := filepath.Join(m.dir, currentFileName)
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := m.fs.Rename(tmp, dst); err != nil {
 		return err
 	}
 	return nil
@@ -313,19 +319,19 @@ func (m *Manager) rewriteLocked() error {
 		return err
 	}
 	path := filepath.Join(m.dir, fileName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	f, err := m.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
 	buf := bufio.NewWriter(f)
 	if err := m.writeSnapshot(buf); err != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
+		_ = m.fs.Remove(path)
 		return err
 	}
 	if err := buf.Flush(); err != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
+		_ = m.fs.Remove(path)
 		return err
 	}
 	if m.syncWrites {
@@ -347,7 +353,7 @@ func (m *Manager) rewriteLocked() error {
 	if m.manifest != nil {
 		_ = m.manifest.Close()
 	}
-	m.manifest, err = os.OpenFile(path, os.O_RDWR, manifestFilePermissions)
+	m.manifest, err = m.fs.OpenFileHandle(path, os.O_RDWR, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -356,7 +362,7 @@ func (m *Manager) rewriteLocked() error {
 		return err
 	}
 	if oldName != "" && oldName != fileName {
-		_ = os.Remove(filepath.Join(m.dir, oldName))
+		_ = m.fs.Remove(filepath.Join(m.dir, oldName))
 	}
 	return nil
 }
@@ -470,7 +476,7 @@ func (m *Manager) nextManifestFileLocked() (string, error) {
 	}
 	for {
 		name := manifestFileName(id)
-		if _, err := os.Stat(filepath.Join(m.dir, name)); err != nil {
+		if _, err := m.fs.Stat(filepath.Join(m.dir, name)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				m.nextFileID = id + 1
 				return name, nil
@@ -544,9 +550,13 @@ func (m *Manager) Dir() string {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.manifest != nil {
-		return m.manifest.Close()
+	if m.manifest == nil {
+		return nil
 	}
+	if err := m.manifest.Close(); err != nil {
+		return err
+	}
+	m.manifest = nil
 	return nil
 }
 
@@ -694,18 +704,20 @@ func (m *Manager) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 
 // Internal encoding helpers
 // Verify ensures manifest and CURRENT pointer are well-formed. It truncates any
-// partially written edits left at the end of the manifest file.
-func Verify(dir string) error {
+// partially written edits left at the end of the manifest file. Nil fs defaults
+// to OSFS.
+func Verify(dir string, fs vfs.FS) error {
 	if dir == "" {
 		return fmt.Errorf("manifest: directory required")
 	}
+	fs = vfs.Ensure(fs)
 	tmp := filepath.Join(dir, manifestTempCurrentName)
-	if _, err := os.Stat(tmp); err == nil {
-		_ = os.Remove(tmp)
+	if _, err := fs.Stat(tmp); err == nil {
+		_ = fs.Remove(tmp)
 	}
 
 	currentPath := filepath.Join(dir, currentFileName)
-	data, err := os.ReadFile(currentPath)
+	data, err := fs.ReadFile(currentPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return err
@@ -717,7 +729,7 @@ func Verify(dir string) error {
 		return fmt.Errorf("manifest: CURRENT empty")
 	}
 	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := fs.OpenFileHandle(path, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("manifest: open %s: %w", name, err)
 	}

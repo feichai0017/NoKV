@@ -16,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 const (
@@ -31,6 +32,7 @@ type Config struct {
 	FileMode    os.FileMode
 	SyncOnWrite bool
 	BufferSize  int
+	FS          vfs.FS
 }
 
 // EntryInfo describes an entry written to WAL.
@@ -70,7 +72,7 @@ type Manager struct {
 	cfg Config
 
 	mu              sync.Mutex
-	active          *os.File
+	active          vfs.File
 	activeID        uint32
 	activeSize      int64
 	closed          bool
@@ -87,7 +89,8 @@ func Open(cfg Config) (*Manager, error) {
 	if cfg.Dir == "" {
 		return nil, fmt.Errorf("wal: directory required")
 	}
-	if err := os.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+	cfg.FS = vfs.Ensure(cfg.FS)
+	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
 		return nil, err
 	}
 	if cfg.FileMode == 0 {
@@ -122,7 +125,7 @@ func Open(cfg Config) (*Manager, error) {
 }
 
 func (m *Manager) openLatestSegment() error {
-	files, err := filepath.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
+	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
 	if err != nil {
 		return err
 	}
@@ -193,7 +196,7 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	if truncate {
 		flag |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, flag, m.cfg.FileMode)
+	f, err := m.cfg.FS.OpenFileHandle(path, flag, m.cfg.FileMode)
 	if err != nil {
 		return err
 	}
@@ -339,7 +342,7 @@ func (m *Manager) ActiveSegment() uint32 {
 func (m *Manager) ListSegments() ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	files, err := filepath.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
+	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +353,7 @@ func (m *Manager) ListSegments() ([]string, error) {
 // Replay traverses all WAL segments and feeds entries to callback.
 func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 	m.mu.Lock()
-	files, err := filepath.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
+	files, err := m.cfg.FS.Glob(filepath.Join(m.cfg.Dir, "*.wal"))
 	m.mu.Unlock()
 	if err != nil {
 		return err
@@ -369,7 +372,7 @@ func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 }
 
 func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, payload []byte) error) error {
-	f, err := os.Open(path)
+	f, err := m.cfg.FS.OpenHandle(path)
 	if err != nil {
 		return err
 	}
@@ -414,21 +417,34 @@ func (m *Manager) Close() error {
 	if m.closed {
 		return nil
 	}
-	m.closed = true
 	if m.active == nil {
+		m.closed = true
 		return nil
 	}
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
-			_ = m.active.Close()
-			return err
+			closeErr := m.active.Close()
+			m.active = nil
+			m.writer = nil
+			m.closed = true
+			return errors.Join(err, closeErr)
 		}
 	}
 	if err := m.active.Sync(); err != nil {
-		_ = m.active.Close()
+		closeErr := m.active.Close()
+		m.active = nil
+		m.writer = nil
+		m.closed = true
+		return errors.Join(err, closeErr)
+	}
+	if err := m.active.Close(); err != nil {
+		// Keep state intact so callers can retry Close() on transient close failures.
 		return err
 	}
-	return m.active.Close()
+	m.active = nil
+	m.writer = nil
+	m.closed = true
+	return nil
 }
 
 // SwitchSegment switches the active WAL segment to the provided ID. When truncate is true,
@@ -440,7 +456,7 @@ func (m *Manager) SwitchSegment(id uint32, truncate bool) error {
 // ReplaySegment replays entries from a single WAL segment.
 func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byte) error) error {
 	path := m.segmentPath(id)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := m.cfg.FS.Stat(path); err != nil {
 		return err
 	}
 	return m.replayFile(id, path, fn)
@@ -448,26 +464,27 @@ func (m *Manager) ReplaySegment(id uint32, fn func(info EntryInfo, payload []byt
 
 // VerifyDir scans WAL segments in the provided directory, truncating any
 // partially written records left behind by crashes and validating their
-// checksums.
-func VerifyDir(dir string) error {
+// checksums. Nil fs defaults to OSFS.
+func VerifyDir(dir string, fs vfs.FS) error {
 	if dir == "" {
 		return fmt.Errorf("wal: directory required")
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	fs = vfs.Ensure(fs)
+	files, err := fs.Glob(filepath.Join(dir, "*.wal"))
 	if err != nil {
 		return err
 	}
 	sort.Strings(files)
 	for _, path := range files {
-		if err := verifySegment(path); err != nil {
+		if err := verifySegment(fs, path); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func verifySegment(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+func verifySegment(fs vfs.FS, path string) error {
+	f, err := fs.OpenFileHandle(path, os.O_RDWR, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -499,7 +516,7 @@ func verifySegment(path string) error {
 // RemoveSegment deletes a WAL segment from disk.
 func (m *Manager) RemoveSegment(id uint32) error {
 	path := m.segmentPath(id)
-	if err := os.Remove(path); err != nil {
+	if err := m.cfg.FS.Remove(path); err != nil {
 		return err
 	}
 	atomic.AddUint64(&m.removedSegments, 1)

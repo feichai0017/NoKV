@@ -319,7 +319,7 @@ func TestWALSnapshotExportImport(t *testing.T) {
 	require.NoError(t, ws.ApplySnapshot(sourceSnap))
 
 	exportPath := filepath.Join(baseDir, "snapshot.bin")
-	require.NoError(t, ExportSnapshot(ws, exportPath))
+	require.NoError(t, ExportSnapshot(ws, exportPath, nil))
 
 	require.NoError(t, manifestMgr.Close())
 	require.NoError(t, walMgr.Close())
@@ -337,7 +337,7 @@ func TestWALSnapshotExportImport(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, ImportSnapshot(wsRestore, exportPath))
+	require.NoError(t, ImportSnapshot(wsRestore, exportPath, nil))
 
 	lastIdx, err := wsRestore.LastIndex()
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func openWalManager(t *testing.T, dir string) *wal.Manager {
 
 func openManifestManager(t *testing.T, dir string) *manifest.Manager {
 	t.Helper()
-	mgr, err := manifest.Open(filepath.Join(dir, "manifest"))
+	mgr, err := manifest.Open(filepath.Join(dir, "manifest"), nil)
 	require.NoError(t, err)
 	return mgr
 }
