@@ -66,10 +66,7 @@ func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
 	}
-	writable := true
-	if flag == os.O_RDONLY {
-		writable = false
-	}
+	writable := flag != os.O_RDONLY
 	// if the sst file layer has been opened, use its original size
 	if fileInfo, err := fd.Stat(); err == nil && fileInfo != nil && fileInfo.Size() > 0 {
 		maxSz = int(fileInfo.Size())

@@ -15,8 +15,16 @@ func TestMremapAndMunmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := os.Remove(f.Name()); err != nil {
+			t.Errorf("remove temp file: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close temp file: %v", err)
+		}
+	})
 
 	if err := f.Truncate(size); err != nil {
 		t.Fatalf("truncate: %v", err)

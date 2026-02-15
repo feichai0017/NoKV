@@ -14,14 +14,18 @@ import (
 func TestMmap_Basic(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-util-mmap-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
 	// Create a file.
 	fd, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0666)
 	require.NoError(t, err)
-	defer fd.Close()
+	t.Cleanup(func() {
+		require.NoError(t, fd.Close())
+	})
 
 	// Truncate it to a specific size.
 	require.NoError(t, fd.Truncate(1024))
@@ -47,13 +51,17 @@ func TestMmap_Basic(t *testing.T) {
 func TestMremap(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-util-mremap-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
 	fd, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0666)
 	require.NoError(t, err)
-	defer fd.Close()
+	t.Cleanup(func() {
+		require.NoError(t, fd.Close())
+	})
 
 	require.NoError(t, fd.Truncate(128))
 

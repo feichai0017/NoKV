@@ -14,7 +14,9 @@ import (
 func TestOpenMmapFile(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-mmap-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
@@ -48,13 +50,17 @@ func TestOpenMmapFile(t *testing.T) {
 func TestMmapFile_ReadWrite(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-mmap-rw-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
 	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 256)
 	require.NoError(t, err)
-	defer mf.Close()
+	t.Cleanup(func() {
+		require.NoError(t, mf.Close())
+	})
 
 	// Use AllocateSlice to write data.
 	slice, next, err := mf.AllocateSlice(10, 0)
@@ -84,13 +90,17 @@ func TestMmapFile_ReadWrite(t *testing.T) {
 func TestMmapFile_Resize(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-mmap-resize-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
 	mf, err := OpenMmapFile(filePath, os.O_CREATE|os.O_RDWR, 100)
 	require.NoError(t, err)
-	defer mf.Close()
+	t.Cleanup(func() {
+		require.NoError(t, mf.Close())
+	})
 	require.Equal(t, 100, len(mf.Data))
 
 	// Grow the file.
@@ -112,7 +122,9 @@ func TestMmapFile_Resize(t *testing.T) {
 func TestMmapFile_Delete(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-mmap-delete-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
 
 	filePath := filepath.Join(dir, "test.mmap")
 
