@@ -34,3 +34,10 @@ func TestCloserClose(t *testing.T) {
 	closer.Close()
 	require.True(t, true)
 }
+
+func TestCloserCloseIsIdempotent(t *testing.T) {
+	closer := NewCloser()
+	closer.Close()
+	closer.Close()
+	require.True(t, true)
+}

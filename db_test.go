@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -996,11 +997,16 @@ func TestPrefetchLoopDrainsRing(t *testing.T) {
 func TestCloseWithErrors(t *testing.T) {
 	clearDir()
 	db := Open(opt)
+	statsErr := errors.New("stats close error")
 	lsmErr := errors.New("lsm close error")
 	vlogErr := errors.New("vlog close error")
 	walErr := errors.New("wal close error")
 	dirLockErr := errors.New("dir lock release error")
 	db.testCloseHooks = &testCloseHooks{
+		statsClose: func() error {
+			_ = db.stats.close()
+			return statsErr
+		},
 		lsmClose: func() error {
 			_ = db.lsm.Close()
 			return lsmErr
@@ -1022,18 +1028,83 @@ func TestCloseWithErrors(t *testing.T) {
 		calls: []string{},
 	}
 	err := db.Close()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, statsErr))
+	require.True(t, errors.Is(err, lsmErr))
+	require.True(t, errors.Is(err, vlogErr))
+	require.True(t, errors.Is(err, walErr))
+	require.True(t, errors.Is(err, dirLockErr))
 
-	var gotErrs []error
-	if err != nil {
-		if multiErr, ok := err.(interface{ Unwrap() []error }); ok {
-			gotErrs = multiErr.Unwrap()
-		}
-	}
-	require.Len(t, gotErrs, 4)
-	require.True(t, errors.Is(gotErrs[0], lsmErr))
-	require.True(t, errors.Is(gotErrs[1], vlogErr))
-	require.True(t, errors.Is(gotErrs[2], walErr))
-	require.True(t, errors.Is(gotErrs[3], dirLockErr))
-	expectCalls := []string{"lsm close", "vlog close", "wal close", "dir lock release"}
+	expectCalls := []string{"stats close", "lsm close", "vlog close", "wal close", "dir lock release"}
 	require.Equal(t, expectCalls, db.testCloseHooks.calls)
+	require.True(t, db.IsClosed())
+
+	err2 := db.Close()
+	require.Error(t, err2)
+	require.True(t, errors.Is(err2, statsErr))
+	require.True(t, errors.Is(err2, lsmErr))
+	require.True(t, errors.Is(err2, vlogErr))
+	require.True(t, errors.Is(err2, walErr))
+	require.True(t, errors.Is(err2, dirLockErr))
+	require.Equal(t, expectCalls, db.testCloseHooks.calls)
+}
+
+func TestCloseConcurrent(t *testing.T) {
+	clearDir()
+	db := Open(opt)
+	var statsCalls atomic.Int32
+	var lsmCalls atomic.Int32
+	var vlogCalls atomic.Int32
+	var walCalls atomic.Int32
+	var dirCalls atomic.Int32
+	db.testCloseHooks = &testCloseHooks{
+		statsClose: func() error {
+			statsCalls.Add(1)
+			_ = db.stats.close()
+			return nil
+		},
+		lsmClose: func() error {
+			lsmCalls.Add(1)
+			return db.lsm.Close()
+		},
+		vlogClose: func() error {
+			vlogCalls.Add(1)
+			return db.vlog.close()
+		},
+		walClose: func() error {
+			walCalls.Add(1)
+			return db.wal.Close()
+		},
+		dirLockRelease: func() error {
+			dirCalls.Add(1)
+			if db.dirLock != nil {
+				return db.dirLock.Release()
+			}
+			return nil
+		},
+		calls: []string{},
+	}
+
+	var wg sync.WaitGroup
+	const workers = 16
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- db.Close()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.True(t, db.IsClosed())
+	require.Equal(t, int32(1), statsCalls.Load())
+	require.Equal(t, int32(1), lsmCalls.Load())
+	require.Equal(t, int32(1), vlogCalls.Load())
+	require.Equal(t, int32(1), walCalls.Load())
+	require.Equal(t, int32(1), dirCalls.Load())
 }
