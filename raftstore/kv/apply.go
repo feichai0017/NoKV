@@ -120,7 +120,7 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 		readTs = math.MaxUint64
 	}
 	iter := db.NewIterator(&utils.Options{IsAsc: true})
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 
 	startKey := append([]byte(nil), req.GetStartKey()...)
 	includeStart := req.GetIncludeStart()

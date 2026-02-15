@@ -66,10 +66,7 @@ func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
 	}
-	writable := true
-	if flag == os.O_RDONLY {
-		writable = false
-	}
+	writable := flag != os.O_RDONLY
 	return OpenMmapFileUsing(fd, maxSz, writable)
 }
 
@@ -222,14 +219,14 @@ func (m *MmapFile) Delete() error {
 	}
 
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	m.Data = nil
 	if err := m.Fd.Truncate(0); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := m.Fd.Close(); err != nil {
-		return fmt.Errorf("while close file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while close file: %s, error: %v", m.Fd.Name(), err)
 	}
 	return os.Remove(m.Fd.Name())
 }
@@ -240,10 +237,10 @@ func (m *MmapFile) Close() error {
 		return nil
 	}
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	return m.Fd.Close()
 }
@@ -265,13 +262,13 @@ func SyncDir(dir string) error {
 // Truncature truncates and remaps the file to the provided size.
 func (m *MmapFile) Truncature(maxSz int64) error {
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	if err := m.Fd.Truncate(maxSz); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v\n", m.Fd.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.Fd.Name(), err)
 	}
 	var err error
 	m.Data, err = mmap.Mmap(m.Fd, true, maxSz) // Mmap up to max size.

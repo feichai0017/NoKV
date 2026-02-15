@@ -64,9 +64,9 @@ func (r BenchmarkResult) opsPerSecond() float64 {
 
 // writeSummaryTable renders a table of benchmark results to the provided writer.
 func writeSummaryTable(w *tabwriter.Writer, results []BenchmarkResult) {
-	fmt.Fprintln(w, "ENGINE\tOPERATION\tMODE\tOPS/S\tAVG LATENCY\tP50\tP95\tP99\tTOTAL OPS\tREADS\tUPDATES\tINSERTS\tSCANS\tSCAN ITEMS\tRMW\tVAL AVG\tVAL P95\tDATA (MB)\tDURATION")
+	_, _ = fmt.Fprintln(w, "ENGINE\tOPERATION\tMODE\tOPS/S\tAVG LATENCY\tP50\tP95\tP99\tTOTAL OPS\tREADS\tUPDATES\tINSERTS\tSCANS\tSCAN ITEMS\tRMW\tVAL AVG\tVAL P95\tDATA (MB)\tDURATION")
 	for _, result := range results {
-		fmt.Fprintf(
+		_, _ = fmt.Fprintf(
 			w,
 			"%s\t%s\t%s\t%.0f\t%v\t%v\t%v\t%v\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.0f\t%.0f\t%.2f\t%v\n",
 			result.Engine,
@@ -90,7 +90,7 @@ func writeSummaryTable(w *tabwriter.Writer, results []BenchmarkResult) {
 			result.TotalDuration,
 		)
 	}
-	w.Flush()
+	_ = w.Flush()
 }
 
 func latencyFromNS(ns float64) time.Duration {
@@ -114,42 +114,42 @@ func WriteResults(results []BenchmarkResult) error {
 	if err != nil {
 		return fmt.Errorf("failed to create results file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
-	fmt.Fprintf(file, "=== Benchmark Results ===\n")
-	fmt.Fprintf(file, "Generated at: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(file, "=== Benchmark Results ===\n")
+	_, _ = fmt.Fprintf(file, "Generated at: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
 
-	fmt.Fprintf(file, "Summary:\n")
+	_, _ = fmt.Fprintf(file, "Summary:\n")
 	tw := tabwriter.NewWriter(file, 0, 4, 2, ' ', 0)
 	writeSummaryTable(tw, results)
-	fmt.Fprintln(file)
+	_, _ = fmt.Fprintln(file)
 
 	for _, result := range results {
-		fmt.Fprintf(file, "=== %s ===\n", result.Name)
-		fmt.Fprintf(file, "Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-		fmt.Fprintf(file, "End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-		fmt.Fprintf(file, "Total Duration: %v\n", result.TotalDuration)
-		fmt.Fprintf(file, "Average Time per Operation: %v\n", result.avgPerOp())
+		_, _ = fmt.Fprintf(file, "=== %s ===\n", result.Name)
+		_, _ = fmt.Fprintf(file, "Start Time: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
+		_, _ = fmt.Fprintf(file, "End Time: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
+		_, _ = fmt.Fprintf(file, "Total Duration: %v\n", result.TotalDuration)
+		_, _ = fmt.Fprintf(file, "Average Time per Operation: %v\n", result.avgPerOp())
 		if result.P50LatencyNS > 0 {
-			fmt.Fprintf(file, "P50 Latency: %v\n", latencyFromNS(result.P50LatencyNS))
+			_, _ = fmt.Fprintf(file, "P50 Latency: %v\n", latencyFromNS(result.P50LatencyNS))
 		}
 		if result.P95LatencyNS > 0 {
-			fmt.Fprintf(file, "P95 Latency: %v\n", latencyFromNS(result.P95LatencyNS))
+			_, _ = fmt.Fprintf(file, "P95 Latency: %v\n", latencyFromNS(result.P95LatencyNS))
 		}
 		if result.P99LatencyNS > 0 {
-			fmt.Fprintf(file, "P99 Latency: %v\n", latencyFromNS(result.P99LatencyNS))
+			_, _ = fmt.Fprintf(file, "P99 Latency: %v\n", latencyFromNS(result.P99LatencyNS))
 		}
 		if result.ValueAvg > 0 || result.ValueP95 > 0 {
-			fmt.Fprintf(file, "Value Size (bytes): avg=%.0f p50=%.0f p95=%.0f p99=%.0f\n",
+			_, _ = fmt.Fprintf(file, "Value Size (bytes): avg=%.0f p50=%.0f p95=%.0f p99=%.0f\n",
 				result.ValueAvg, result.ValueP50, result.ValueP95, result.ValueP99)
 		}
-		fmt.Fprintf(file, "Total Operations: %d\n", result.TotalOperations)
-		fmt.Fprintf(file, "Data Processed: %d bytes (%.2f MB)\n", result.DataBytes, result.DataSize)
-		fmt.Fprintf(file, "Operation Mix: reads=%d updates=%d inserts=%d scans=%d scan_items=%d rmw=%d\n",
+		_, _ = fmt.Fprintf(file, "Total Operations: %d\n", result.TotalOperations)
+		_, _ = fmt.Fprintf(file, "Data Processed: %d bytes (%.2f MB)\n", result.DataBytes, result.DataSize)
+		_, _ = fmt.Fprintf(file, "Operation Mix: reads=%d updates=%d inserts=%d scans=%d scan_items=%d rmw=%d\n",
 			result.ReadOps, result.UpdateOps, result.InsertOps, result.ScanOps, result.ScanItems, result.ReadModifyWriteOps)
-		fmt.Fprintf(file, "Throughput: %.0f ops/s\n", result.opsPerSecond())
-		fmt.Fprintf(file, "Average Latency: %.0f ns\n", result.AvgLatencyNS)
-		fmt.Fprintln(file)
+		_, _ = fmt.Fprintf(file, "Throughput: %.0f ops/s\n", result.opsPerSecond())
+		_, _ = fmt.Fprintf(file, "Average Latency: %.0f ns\n", result.AvgLatencyNS)
+		_, _ = fmt.Fprintln(file)
 	}
 
 	return nil

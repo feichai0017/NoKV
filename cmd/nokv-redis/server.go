@@ -107,7 +107,7 @@ func isRetryableAcceptError(err error) bool {
 }
 
 func (s *redisServer) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	defer s.metrics.ConnClosed()
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)

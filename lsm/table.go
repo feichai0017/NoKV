@@ -107,7 +107,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 
 	// get the max key of sst, need to use iterator
 	itr := t.NewIterator(&utils.Options{}) // default is descending
-	defer itr.Close()
+	defer func() { _ = itr.Close() }()
 	// locate to the initial position is the max key
 	itr.Rewind()
 	if !itr.Valid() {
@@ -313,7 +313,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 		}
 	}
 	iter := t.NewIterator(&utils.Options{})
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 
 	iter.Seek(key)
 	if !iter.Valid() {
@@ -705,7 +705,7 @@ func (it *tableIterator) Close() error {
 			it.prefetchPool.Release()
 		}
 	})
-	it.bi.Close()
+	_ = it.bi.Close()
 	putBlockIterator(it.bi)
 	it.bi = nil
 	return it.t.DecrRef()

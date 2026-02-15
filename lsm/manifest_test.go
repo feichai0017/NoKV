@@ -17,7 +17,7 @@ func TestBaseManifest(t *testing.T) {
 		lsm := buildLSM()
 		// Validate correctness after recovery.
 		baseTest(t, lsm, 128)
-		lsm.Close()
+		_ = lsm.Close()
 	}
 	// Run the closure multiple times to exercise recovery.
 	runTest(5, recovery)

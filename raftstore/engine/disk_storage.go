@@ -92,7 +92,7 @@ func (ds *DiskStorage) loadEntries() error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var entries []myraft.Entry
 	for {
@@ -285,15 +285,15 @@ func (ds *DiskStorage) persistEntriesLocked() error {
 	for _, entry := range ds.entries {
 		data, err := entry.Marshal()
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if err := binary.Write(f, binary.LittleEndian, uint32(len(data))); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if _, err := f.Write(data); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 	}

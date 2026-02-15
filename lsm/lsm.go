@@ -90,7 +90,9 @@ func (lsm *LSM) Close() error {
 	// wait for all api calls to finish
 	lsm.throttleWrites(false)
 	lsm.closer.Close()
-	lsm.flushMgr.Close()
+	if err := lsm.flushMgr.Close(); err != nil {
+		return err
+	}
 	lsm.flushWG.Wait()
 
 	lsm.lock.Lock()

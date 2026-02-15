@@ -61,7 +61,7 @@ func Open(dir string) (*Manager, error) {
 	}
 	mgr.initNextFileID()
 	if err := mgr.replay(); err != nil {
-		mgr.Close()
+		_ = mgr.Close()
 		return nil, err
 	}
 	return mgr, nil
@@ -721,7 +721,7 @@ func Verify(dir string) error {
 	if err != nil {
 		return fmt.Errorf("manifest: open %s: %w", name, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	reader := bufio.NewReader(f)
 	var offset int64

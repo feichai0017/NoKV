@@ -16,7 +16,7 @@ func TestManagerAppendRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	payload := []byte("record-data")
 	entry := kv.NewEntry([]byte("key"), payload)
@@ -45,7 +45,7 @@ func TestManagerReadValueAutoCopiesSmall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entry := kv.NewEntry([]byte("key"), []byte("v"))
 	vp, err := mgr.AppendEntry(entry)
@@ -75,7 +75,7 @@ func TestManagerRotate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	first := mgr.ActiveFID()
 	if err := mgr.Rotate(); err != nil {
@@ -93,7 +93,7 @@ func TestManagerRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entry := kv.NewEntry([]byte("key"), []byte("abc"))
 	vp, err := mgr.AppendEntry(entry)
@@ -124,13 +124,13 @@ func TestManagerPopulateExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	mgr.Close()
+	_ = mgr.Close()
 
 	mgr, err = Open(Config{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if mgr.ActiveFID() != mgr.MaxFID() {
 		t.Fatalf("active fid not equal max fid")
 	}
@@ -155,7 +155,7 @@ func TestManagerRewind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("key"), []byte("alpha"))); err != nil {
 		t.Fatalf("append: %v", err)
@@ -247,7 +247,7 @@ func TestManagerHooksAndSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	mgr.SetTestingHooks(ManagerTestingHooks{
 		BeforeAppend: func(_ *Manager, payload []byte) error {
@@ -286,7 +286,7 @@ func TestManagerSyncFIDsDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
 	if err != nil {
@@ -318,7 +318,7 @@ func TestManagerSegmentOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
 	if err != nil {

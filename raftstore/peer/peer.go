@@ -349,8 +349,8 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		if info := p.raftLog; info != nil {
 			info.capturePointer(manifest.RaftLogPointer{
 				GroupID:      info.groupID,
-				AppliedIndex: rd.HardState.Commit,
-				AppliedTerm:  rd.HardState.Term,
+				AppliedIndex: rd.Commit,
+				AppliedTerm:  rd.Term,
 			})
 		}
 	}

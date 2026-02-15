@@ -13,8 +13,8 @@ import (
 func TestMmapReadWriteCycle(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "mmap-positive-*")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = tmpFile.Close() }()
 
 	// Pre-size the file.
 	require.NoError(t, tmpFile.Truncate(4096))

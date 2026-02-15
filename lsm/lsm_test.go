@@ -38,7 +38,7 @@ var (
 func TestBase(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 	test := func() {
 		// Baseline test.
 		baseTest(t, lsm, 128)
@@ -59,7 +59,7 @@ func TestClose(t *testing.T) {
 		// A successful restart must still pass the base test.
 		reopened := buildLSM()
 		reopened.StartCompacter()
-		defer reopened.Close()
+		defer func() { _ = reopened.Close() }()
 		baseTest(t, reopened, 128)
 	}
 	// Run N times to exercise multiple SSTables.
@@ -70,7 +70,7 @@ func TestClose(t *testing.T) {
 func TestHitStorage(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 	e := utils.BuildEntry()
 	if err := lsm.Set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
@@ -111,7 +111,7 @@ func TestHitStorage(t *testing.T) {
 func TestLSMThrottleCallback(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	var (
 		mu     sync.Mutex
@@ -145,7 +145,7 @@ func TestLSMThrottleCallback(t *testing.T) {
 func TestPsarameter(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 	testNil := func() {
 		utils.CondPanic(lsm.Set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
 		_, err := lsm.Get(nil)
@@ -158,7 +158,7 @@ func TestPsarameter(t *testing.T) {
 func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	key := []byte("tombstone-key-00000000")
 	val := []byte("value")
@@ -271,7 +271,7 @@ func TestIngestBufferAccounting(t *testing.T) {
 func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
@@ -362,7 +362,7 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 func TestFillMaxLevelTables(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	maxLevel := lsm.option.MaxLevelNum - 1
 	if maxLevel < 1 {
@@ -484,7 +484,7 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 func TestIngestSearchAndPrefetch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	tbl := buildTestTable(t, lsm, 7)
 	defer func() { _ = tbl.DecrRef() }()
@@ -519,7 +519,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	tblOld := buildTableWithEntry(t, lsm, 11, "b", 1, "v1")
 	tblNew := buildTableWithEntry(t, lsm, 12, "b", 3, "v3")
@@ -544,7 +544,7 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 func TestLevelGetPrefersMainVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	ingestTbl := buildTableWithEntry(t, lsm, 21, "k", 1, "old")
 	mainTbl := buildTableWithEntry(t, lsm, 22, "k", 3, "new")
@@ -569,7 +569,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 func TestLevelGetMainWhenIngestEmpty(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	mainTbl := buildTableWithEntry(t, lsm, 23, "k", 2, "main")
 	defer func() { _ = mainTbl.DecrRef() }()
@@ -591,7 +591,7 @@ func TestLevelGetMainWhenIngestEmpty(t *testing.T) {
 func TestL0SearchPrefersLatestVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	tblOther := buildTableWithEntry(t, lsm, 31, "a", 2, "va")
 	tblOld := buildTableWithEntry(t, lsm, 32, "b", 1, "v1")
@@ -625,7 +625,7 @@ func TestL0SearchPrefersLatestVersion(t *testing.T) {
 func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	tbl := buildTableWithEntry(t, lsm, 41, "k", 2, "v2")
 	defer func() { _ = tbl.DecrRef() }()
@@ -643,7 +643,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 func TestLevelSearchIngestAndLN(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	tbl := buildTestTable(t, lsm, 9)
 	defer func() { _ = tbl.DecrRef() }()
@@ -699,7 +699,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 func TestLSMMetricsAPIs(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	lsm.SetHotKeyProvider(func() [][]byte {
 		return nil
@@ -743,7 +743,7 @@ func TestLSMMetricsAPIs(t *testing.T) {
 func TestLSMBatchAndMemHelpers(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	entries := []*kv.Entry{
 		kv.NewEntry(kv.KeyWithTs([]byte("b1"), 1), []byte("v1")),
@@ -789,7 +789,7 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	var events []bool
 	lsm.SetThrottleCallback(func(on bool) {
@@ -884,7 +884,7 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 func TestCompact(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 	ok := false
 	hasTable := func(lh *levelHandler, fid uint64) bool {
 		if lh == nil {
@@ -1051,7 +1051,7 @@ func TestCompact(t *testing.T) {
 func TestIngestMergeStaysInIngest(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	// Generate enough data to create multiple L0 tables.
 	baseTest(t, lsm, 256)
@@ -1103,7 +1103,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	opt.NumCompactors = 4
 	opt.IngestShardParallelism = 4
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	// Write enough data to spawn multiple L0 tables, then move to ingest.
 	for range 4 {
@@ -1141,7 +1141,7 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	// Simulate restart and ensure ingest state can be recovered (may be empty if fully drained).
 	_ = utils.Err(lsm.Close())
 	lsm = buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 	_ = lsm.levels.levels[6].numIngestTables()
 }
 

@@ -13,7 +13,7 @@ func TestAppendEntriesMaskAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entries := []*kv.Entry{
 		kv.NewEntry([]byte("k1"), []byte("v1")),
@@ -43,7 +43,7 @@ func TestAppendEntriesBatchAndIterate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entries := []*kv.Entry{
 		kv.NewEntry([]byte("k1"), []byte("v1")),
@@ -84,7 +84,7 @@ func TestReadAfterRotateSealsSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entry := kv.NewEntry([]byte("sealed-key"), []byte("sealed-val"))
 	ptrs, err := mgr.AppendEntries([]*kv.Entry{entry}, nil)
@@ -131,7 +131,7 @@ func TestIterateStopsEarly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	if _, err := mgr.AppendEntries([]*kv.Entry{
 		kv.NewEntry([]byte("k1"), []byte("v1")),
@@ -162,7 +162,7 @@ func TestAppendEntriesLargeBatchFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	payload := make([]byte, 64)
 	ptrs, err := mgr.AppendEntries([]*kv.Entry{
@@ -185,7 +185,7 @@ func TestSampleStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	entries := []*kv.Entry{
 		kv.NewEntry([]byte("keep"), []byte("v1")),
@@ -221,7 +221,7 @@ func TestSampleNilCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	if _, err := mgr.Sample(mgr.ActiveFID(), SampleOptions{}, nil); err == nil {
 		t.Fatalf("expected nil callback error")

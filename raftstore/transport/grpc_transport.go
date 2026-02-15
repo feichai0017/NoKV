@@ -290,7 +290,7 @@ func (t *GRPCTransport) SetPeer(id uint64, addr string) {
 	if addr == "" {
 		delete(t.peers, id)
 		if conn, ok := t.conns[id]; ok {
-			conn.Close()
+			_ = conn.Close()
 			delete(t.conns, id)
 			delete(t.clients, id)
 		}
@@ -305,7 +305,7 @@ func (t *GRPCTransport) SetPeer(id uint64, addr string) {
 		return
 	}
 	if conn, ok := t.conns[id]; ok {
-		conn.Close()
+		_ = conn.Close()
 		delete(t.conns, id)
 		delete(t.clients, id)
 	}
@@ -431,7 +431,7 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 	}
 	if err := t.waitForClientReady(ctx, conn); err != nil {
 		metrics.recordDialFailure(err)
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	metrics.recordDialSuccess()
@@ -446,7 +446,7 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 func (t *GRPCTransport) handleSendError(id uint64, err error) {
 	t.mu.Lock()
 	if conn, ok := t.conns[id]; ok {
-		conn.Close()
+		_ = conn.Close()
 		delete(t.conns, id)
 		delete(t.clients, id)
 	}
@@ -501,7 +501,7 @@ func (t *GRPCTransport) Close() error {
 	}
 	t.mu.Unlock()
 	for _, conn := range conns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	t.wg.Wait()
 	if blockedCount > 0 {

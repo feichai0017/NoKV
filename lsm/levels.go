@@ -201,7 +201,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	if iter == nil {
 		return nil
 	}
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 
 	iter.Rewind()
 	if !iter.Valid() {
