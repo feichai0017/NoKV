@@ -194,6 +194,7 @@ func Open(opt *Options) *DB {
 	}
 	// Initialize the LSM tree.
 	db.lsm = lsm.NewLSM(&lsm.Options{
+		FS:                       db.fs,
 		WorkDir:                  opt.WorkDir,
 		MemTableSize:             opt.MemTableSize,
 		MemTableEngine:           string(opt.MemTableEngine),
