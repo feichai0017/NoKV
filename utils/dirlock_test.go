@@ -1,9 +1,12 @@
 package utils
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 func TestDirLockExclusive(t *testing.T) {
@@ -41,5 +44,21 @@ func TestDirLockReleaseRemovesFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "LOCK")); !os.IsNotExist(err) {
 		t.Fatalf("lock file should be removed after release, err=%v", err)
+	}
+}
+
+func TestAcquireDirLockWithFSInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("mkdir injected")
+	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
+		if op == vfs.OpMkdirAll {
+			return injected
+		}
+		return nil
+	})
+
+	_, err := AcquireDirLockWithFS(dir, fs)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
 	}
 }

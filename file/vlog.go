@@ -29,7 +29,7 @@ func (lf *LogFile) Open(opt *Options) error {
 	if flag == 0 {
 		flag = os.O_CREATE | os.O_RDWR
 	}
-	lf.f, err = OpenMmapFile(opt.FileName, flag, opt.MaxSz)
+	lf.f, err = OpenMmapFileWithFS(opt.FS, opt.FileName, flag, opt.MaxSz)
 	utils.Panic2(nil, err)
 	fi, err := lf.f.Fd.Stat()
 	if err != nil {

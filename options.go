@@ -4,10 +4,15 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 // Options holds the top-level database configuration.
 type Options struct {
+	// FS provides the filesystem implementation used by DB runtime components.
+	// Nil defaults to vfs.OSFS.
+	FS vfs.FS
+
 	ValueThreshold     int64
 	WorkDir            string
 	MemTableSize       int64
