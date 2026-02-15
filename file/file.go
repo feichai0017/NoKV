@@ -3,6 +3,8 @@ package file
 
 import "io"
 
+import "github.com/feichai0017/NoKV/vfs"
+
 // Options
 type Options struct {
 	FID      uint64
@@ -11,6 +13,7 @@ type Options struct {
 	Path     string
 	Flag     int
 	MaxSz    int
+	FS       vfs.FS
 }
 
 type CoreFile interface {

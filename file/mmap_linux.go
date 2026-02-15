@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/feichai0017/NoKV/utils/mmap"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/pkg/errors"
 )
 
@@ -61,8 +62,14 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 // the file to maxSz and returned it. In case the file is created, z.NewFile is
 // returned.
 func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
+	return OpenMmapFileWithFS(nil, filename, flag, maxSz)
+}
+
+// OpenMmapFileWithFS opens an mmap-backed file using the provided filesystem.
+func OpenMmapFileWithFS(fs vfs.FS, filename string, flag int, maxSz int) (*MmapFile, error) {
 	// fmt.Printf("opening file %s with flag: %v\n", filename, flag)
-	fd, err := os.OpenFile(filename, flag, 0666)
+	fs = vfs.Ensure(fs)
+	fd, err := fs.OpenFile(filename, flag, 0666)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
 	}
