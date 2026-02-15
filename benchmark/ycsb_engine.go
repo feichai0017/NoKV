@@ -42,6 +42,7 @@ type ycsbEngineOptions struct {
 
 	// RocksDB installation prefix (contains include/ and lib/).
 	RocksDBCompression string
+	PebbleCompression  string
 }
 
 // engineDir derives an engine-specific work directory rooted at BaseDir.
