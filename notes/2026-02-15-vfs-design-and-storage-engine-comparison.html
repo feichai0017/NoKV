@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Notes - NoKV Docs</title>
+        <title>2026-02-15 vfs design and storage-engine comparison - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,34 +178,172 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="notes"><a class="header" href="#notes">Notes</a></h1>
-<p>Use this folder to capture per-debug or per-investigation notes. Keep entries short, factual, and easy to skim.</p>
-<h2 id="add-a-new-note"><a class="header" href="#add-a-new-note">Add a new note</a></h2>
+                        <h1 id="2026-02-15-vfs-设计与存储引擎对比对齐-pebble-的工程实践"><a class="header" href="#2026-02-15-vfs-设计与存储引擎对比对齐-pebble-的工程实践">2026-02-15 vfs 设计与存储引擎对比（对齐 Pebble 的工程实践）</a></h1>
+<p>这篇笔记聚焦三件事：</p>
 <ol>
-<li>Create a new file in <code>docs/notes/</code> named <code>YYYY-MM-DD-short-title.md</code>.</li>
-<li>Add it to <code>docs/SUMMARY.md</code> under Notes.</li>
-<li>Use the template below to keep entries consistent.</li>
+<li>NoKV 为什么要引入统一 <code>vfs</code> 抽象。</li>
+<li><code>vfs</code> 具体怎么实现、替代了哪些旧方法。</li>
+<li>调用流程在改造前后有什么变化，并与 Pebble / RocksDB / Badger 对比。</li>
 </ol>
-<h2 id="template"><a class="header" href="#template">Template</a></h2>
-<h3 id="context"><a class="header" href="#context">Context</a></h3>
-<h3 id="symptom"><a class="header" href="#symptom">Symptom</a></h3>
-<h3 id="repro"><a class="header" href="#repro">Repro</a></h3>
-<h3 id="investigation"><a class="header" href="#investigation">Investigation</a></h3>
-<h3 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h3>
-<h3 id="fix"><a class="header" href="#fix">Fix</a></h3>
-<h3 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h3>
+<hr>
+<h2 id="一页摘要tldr"><a class="header" href="#一页摘要tldr">一页摘要（TL;DR）</a></h2>
+<p>NoKV 的这轮 <code>vfs</code> 改造不是“换个包名”，而是把存储 IO 语义收敛为同一套契约：</p>
+<ul>
+<li>统一入口：<code>OpenHandle</code> / <code>OpenFileHandle</code>。</li>
+<li>统一注入：<code>FaultPolicy</code> 管理规则与 hook，<code>FaultFS</code> 包装所有路径与句柄操作。</li>
+<li>统一能力边界：<code>File</code> 不再强制 <code>Fd()</code>，改为可选能力接口 <code>FDProvider</code>。</li>
+</ul>
+<p>直接替代的旧设计：</p>
+<ul>
+<li>分散在 DB/VLog 的侵入式测试 hook。</li>
+<li>多套 <code>*WithFS</code> 导出 API 变体。</li>
+<li>依赖文件描述符的硬耦合接口约束。</li>
+</ul>
+<hr>
+<h2 id="1-改造前的问题与约束"><a class="header" href="#1-改造前的问题与约束">1. 改造前的问题与约束</a></h2>
+<p>在统一 VFS 之前，存储层虽然功能可用，但有几个典型工程问题：</p>
+<ul>
+<li>WAL / Manifest / VLog 的文件访问语义分散，失败路径覆盖不均。</li>
+<li>模块内测试 hook 不统一，新增故障场景要改多处代码。</li>
+<li><code>*WithFS</code> 与非 <code>WithFS</code> 双 API 并存，调用面冗余。</li>
+<li><code>File</code> 抽象对 <code>Fd()</code> 的硬要求，使未来非 OS-backed file 实现被接口卡住。</li>
+</ul>
+<p>这类问题不会马上造成功能错误，但会持续拉高维护成本和回归风险。</p>
+<hr>
+<h2 id="2-设计与实现nokv-当前版本"><a class="header" href="#2-设计与实现nokv-当前版本">2. 设计与实现（NoKV 当前版本）</a></h2>
+<h3 id="21-抽象层vfsfs--vfsfile"><a class="header" href="#21-抽象层vfsfs--vfsfile">2.1 抽象层：<code>vfs.FS</code> + <code>vfs.File</code></a></h3>
+<p><code>vfs.FS</code> 统一路径级操作：</p>
+<ul>
+<li><code>OpenHandle</code></li>
+<li><code>OpenFileHandle</code></li>
+<li><code>MkdirAll/Remove/Rename/Stat/ReadDir/ReadFile/WriteFile/Truncate/Glob/Hostname</code></li>
+</ul>
+<p><code>vfs.File</code> 统一句柄级操作：</p>
+<ul>
+<li><code>Read/ReadAt</code></li>
+<li><code>Write/WriteAt</code></li>
+<li><code>Seek</code></li>
+<li><code>Sync</code></li>
+<li><code>Truncate</code></li>
+<li><code>Close</code></li>
+<li><code>Name</code></li>
+</ul>
+<p>默认实现 <code>OSFS</code> 直接映射到 <code>os.*</code>。调用方通过 <code>Ensure(fs)</code> 处理 <code>nil</code>。</p>
+<h3 id="22-故障注入层faultfs--faultpolicy--faultfile"><a class="header" href="#22-故障注入层faultfs--faultpolicy--faultfile">2.2 故障注入层：<code>FaultFS</code> + <code>FaultPolicy</code> + <code>faultFile</code></a></h3>
+<p>核心思路：</p>
+<ul>
+<li><code>FaultFS</code> 包装 <code>FS</code>，所有路径级操作进入统一 <code>before(...)</code>。</li>
+<li><code>faultFile</code> 包装 <code>File</code>，句柄级 <code>Write/Sync/Close/Truncate</code> 也走统一注入。</li>
+<li><code>FaultPolicy</code> 提供规则匹配与计数触发：
+<ul>
+<li><code>FailOnceRule</code></li>
+<li><code>FailOnNthRule</code></li>
+<li><code>FailAfterNthRule</code></li>
+<li><code>FailOnceRenameRule</code></li>
+</ul>
+</li>
+</ul>
+<p>并且 hook 已并入 policy 执行路径，不再有分叉维护面。</p>
+<h3 id="23-fd-能力解耦"><a class="header" href="#23-fd-能力解耦">2.3 <code>Fd</code> 能力解耦</a></h3>
+<p><code>File</code> 接口移除 <code>Fd()</code> 硬要求，改为：</p>
+<ul>
+<li>可选能力接口 <code>FDProvider</code></li>
+<li>帮助函数 <code>FileFD(f)</code> 在需要 fd 的调用点提取能力</li>
+</ul>
+<p><code>utils/dirlock</code> 已切换到 <code>FileFD</code>，从“接口强制约束”转为“按需能力检查”。</p>
+<hr>
+<h2 id="3-替代了哪些旧方法与问题"><a class="header" href="#3-替代了哪些旧方法与问题">3. 替代了哪些旧方法与问题</a></h2>
+<h3 id="31-api-形态收敛"><a class="header" href="#31-api-形态收敛">3.1 API 形态收敛</a></h3>
+<p>旧形态：大量 <code>*WithFS</code> 与基础方法并存。<br>新形态：统一主 API 接受 <code>vfs.FS</code>（可 <code>nil</code>）。</p>
+<p>例如：</p>
+<ul>
+<li><code>manifest.OpenWithFS</code> / <code>manifest.Open</code> -&gt; <code>manifest.Open(dir, fs)</code></li>
+<li><code>manifest.VerifyWithFS</code> / <code>manifest.Verify</code> -&gt; <code>manifest.Verify(dir, fs)</code></li>
+<li><code>wal.VerifyDirWithFS</code> / <code>wal.VerifyDir</code> -&gt; <code>wal.VerifyDir(dir, fs)</code></li>
+</ul>
+<h3 id="32-测试注入收敛"><a class="header" href="#32-测试注入收敛">3.2 测试注入收敛</a></h3>
+<p>旧形态：模块内部 test hook 分散。<br>新形态：通过 <code>FaultFS</code> 在统一入口注入，覆盖 <code>open/sync/close/truncate</code> 失败路径。</p>
+<h3 id="33-句柄能力边界更清晰"><a class="header" href="#33-句柄能力边界更清晰">3.3 句柄能力边界更清晰</a></h3>
+<p>旧形态：所有 <code>File</code> 都必须暴露 <code>Fd()</code>。<br>新形态：只有确实需要 fd 的地方才要求 <code>FDProvider</code>，降低实现耦合。</p>
+<hr>
+<h2 id="4-调用流程前后变化"><a class="header" href="#4-调用流程前后变化">4. 调用流程前后变化</a></h2>
+<h3 id="41-改造前分散调用"><a class="header" href="#41-改造前分散调用">4.1 改造前（分散调用）</a></h3>
+<pre class="mermaid">flowchart TD
+  A["wal/manifest/vlog/file/utils"] --&gt; B["各自调用 os.* 或局部封装"]
+  B --&gt; C["局部错误处理"]
+  C --&gt; D["模块内各自测试 hook"]
+</pre>
+
+<p>特点：</p>
+<ul>
+<li>入口多，失败语义靠各模块自觉保持一致。</li>
+<li>故障注入粒度不统一，回归覆盖依赖局部实现细节。</li>
+</ul>
+<h3 id="42-改造后统一调用"><a class="header" href="#42-改造后统一调用">4.2 改造后（统一调用）</a></h3>
+<pre class="mermaid">flowchart TD
+  A["wal/manifest/vlog/file/utils/raftstore"] --&gt; B["vfs.FS"]
+  B --&gt; C{"OSFS / FaultFS"}
+  C --&gt; D["路径级 before()"]
+  C --&gt; E["faultFile 句柄级 before()"]
+  D --&gt; F["统一错误返回语义"]
+  E --&gt; F
+</pre>
+
+<p>特点：</p>
+<ul>
+<li>所有关键路径都经过统一注入层。</li>
+<li>sync/close/truncate 的失败路径能用同一模型测试。</li>
+<li>调用方 API 形态一致，迁移和维护成本更低。</li>
+</ul>
+<hr>
+<h2 id="5-与-pebble--rocksdb--badger-的对比结果"><a class="header" href="#5-与-pebble--rocksdb--badger-的对比结果">5. 与 Pebble / RocksDB / Badger 的对比结果</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">维度</th><th style="text-align: left">Pebble</th><th style="text-align: left">RocksDB</th><th style="text-align: left">Badger</th><th style="text-align: left">NoKV（当前）</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">统一 FS 抽象</td><td style="text-align: left">强（<code>vfs.FS</code>）</td><td style="text-align: left">强（<code>Env</code> / <code>FileSystem</code>）</td><td style="text-align: left">中（工具层主导）</td><td style="text-align: left">强（精简统一）</td></tr>
+<tr><td style="text-align: left">故障注入体系</td><td style="text-align: left">强（<code>errorfs</code>）</td><td style="text-align: left">可做（Env 注入）</td><td style="text-align: left">较弱（非核心）</td><td style="text-align: left">强（<code>FaultFS</code>）</td></tr>
+<tr><td style="text-align: left">句柄级注入</td><td style="text-align: left">有</td><td style="text-align: left">可实现</td><td style="text-align: left">有限</td><td style="text-align: left">有（Write/Sync/Close/Truncate）</td></tr>
+<tr><td style="text-align: left">API 收敛度</td><td style="text-align: left">高</td><td style="text-align: left">高</td><td style="text-align: left">中</td><td style="text-align: left">高（本轮显著提升）</td></tr>
+</tbody>
+</table>
+</div>
+<p>结论：</p>
+<ul>
+<li>设计思想上，NoKV 已对齐 Pebble 的“抽象层 + 注入层”方向。</li>
+<li>工程范围上，NoKV 目前是“围绕核心存储路径的精简实现”，不是通用大而全 VFS 工具箱。</li>
+</ul>
+<hr>
+<h2 id="6-简短总结"><a class="header" href="#6-简短总结">6. 简短总结</a></h2>
+<p>这轮 <code>vfs</code> 改造的价值在于：把存储 IO 从“模块自治”改为“契约统一”。</p>
+<p>核心不是“多了一个包”，而是把以下内容变成统一系统行为：</p>
+<ul>
+<li>文件操作入口</li>
+<li>故障注入方式</li>
+<li>失败语义测试覆盖</li>
+<li>句柄能力边界</li>
+</ul>
+<p>这使得 NoKV 在 WAL/Manifest/VLog/raftstore 的稳定性验证和后续维护上，工程成本显著下降。</p>
+<hr>
+<h2 id="参考资料"><a class="header" href="#参考资料">参考资料</a></h2>
+<ul>
+<li>Pebble VFS: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
+<li>Pebble errorfs: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
+<li>RocksDB <code>file_system.h</code>: <a href="https://raw.githubusercontent.com/facebook/rocksdb/main/include/rocksdb/file_system.h">https://raw.githubusercontent.com/facebook/rocksdb/main/include/rocksdb/file_system.h</a></li>
+<li>RocksDB <code>Env</code> 文档: <a href="https://github.com/facebook/rocksdb/wiki/Basic-Operations/7c243a62ceda1634fbda04fce76e87889b30ffda">https://github.com/facebook/rocksdb/wiki/Basic-Operations/7c243a62ceda1634fbda04fce76e87889b30ffda</a></li>
+<li>Badger 文档: <a href="https://pkg.go.dev/github.com/dgraph-io/badger/v4">https://pkg.go.dev/github.com/dgraph-io/badger/v4</a></li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../nokv-redis.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-01-16-mmap-choice.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -213,13 +351,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../nokv-redis.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-01-16-mmap-choice.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
