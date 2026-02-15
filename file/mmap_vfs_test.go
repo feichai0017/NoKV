@@ -17,7 +17,7 @@ func TestMmapFileDeleteUsesInjectedFS(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, path, injected))
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
-	mf, err := OpenMmapFileWithFS(fs, path, os.O_CREATE|os.O_RDWR, 64)
+	mf, err := OpenMmapFile(fs, path, os.O_CREATE|os.O_RDWR, 64)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 
@@ -25,12 +25,12 @@ func TestMmapFileDeleteUsesInjectedFS(t *testing.T) {
 	require.ErrorIs(t, err, injected)
 }
 
-func TestSyncDirWithFSInjectsOpenFailure(t *testing.T) {
+func TestSyncDirInjectsOpenFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("open dir injected")
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpen, dir, injected))
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
-	err := SyncDirWithFS(fs, dir)
+	err := SyncDir(fs, dir)
 	require.ErrorIs(t, err, injected)
 }

@@ -25,6 +25,51 @@ func TestManagerOpenWithFaultFS(t *testing.T) {
 	}
 }
 
+func TestManagerCloseReturnsSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	segmentPath := filepath.Join(dir, "00001.wal")
+	injected := errors.New("sync fail")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileSync, segmentPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	m, err := wal.Open(wal.Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	if _, err := m.Append([]byte("x")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	err = m.Close()
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected sync failure, got %v", err)
+	}
+}
+
+func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("close fail")
+	// The first close happens during Open() replay; fail the next close invoked by Manager.Close().
+	policy := vfs.NewFaultPolicy(vfs.FailOnNthRule(vfs.OpFileClose, "", 2, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	m, err := wal.Open(wal.Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	if _, err := m.Append([]byte("x")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	err = m.Close()
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected close failure, got %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("retry close: %v", err)
+	}
+}
+
 func TestManagerAppendAndReplay(t *testing.T) {
 	dir := t.TempDir()
 	m, err := wal.Open(wal.Config{Dir: dir})
@@ -292,7 +337,7 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 		t.Fatalf("close segment: %v", err)
 	}
 
-	if err := wal.VerifyDir(dir); err != nil {
+	if err := wal.VerifyDir(dir, nil); err != nil {
 		t.Fatalf("verify dir: %v", err)
 	}
 
@@ -311,6 +356,52 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 	}
 	if count != len(payloads) {
 		t.Fatalf("expected %d entries after verify, got %d", len(payloads), count)
+	}
+}
+
+func TestVerifyDirPropagatesTruncateFailure(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := m.Append([]byte("alpha")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list segments err=%v files=%v", err, files)
+	}
+	path := files[0]
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open segment: %v", err)
+	}
+	if err := binary.Write(f, binary.BigEndian, uint32(16)); err != nil {
+		t.Fatalf("write length: %v", err)
+	}
+	if _, err := f.Write([]byte("bad")); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close segment: %v", err)
+	}
+
+	injected := errors.New("truncate fail")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileTrunc, path, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	err = wal.VerifyDir(dir, fs)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected truncate failure, got %v", err)
 	}
 }
 

@@ -18,7 +18,7 @@ func TestMmapFileBasics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap.dat")
 
-	mf, err := OpenMmapFile(path, os.O_CREATE|os.O_RDWR, 64)
+	mf, err := OpenMmapFile(nil, path, os.O_CREATE|os.O_RDWR, 64)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 	defer func() { _ = mf.Close() }()
@@ -69,11 +69,11 @@ func TestMmapFileDeleteAndSyncDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap-delete.dat")
 
-	mf, err := OpenMmapFile(path, os.O_CREATE|os.O_RDWR, 32)
+	mf, err := OpenMmapFile(nil, path, os.O_CREATE|os.O_RDWR, 32)
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 
-	require.NoError(t, SyncDir(dir))
+	require.NoError(t, SyncDir(nil, dir))
 	require.NoError(t, mf.Delete())
 
 	_, err = os.Stat(path)
@@ -84,7 +84,7 @@ func TestMmapReaderEOF(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap-reader.dat")
 
-	mf, err := OpenMmapFile(path, os.O_CREATE|os.O_RDWR, 16)
+	mf, err := OpenMmapFile(nil, path, os.O_CREATE|os.O_RDWR, 16)
 	require.NoError(t, err)
 	defer func() { _ = mf.Close() }()
 

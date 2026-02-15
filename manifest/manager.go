@@ -44,12 +44,8 @@ type Manager struct {
 }
 
 // Open loads manifest from CURRENT file or creates a new one.
-func Open(dir string) (*Manager, error) {
-	return OpenWithFS(dir, nil)
-}
-
-// OpenWithFS loads manifest using the provided filesystem. Nil fs defaults to OSFS.
-func OpenWithFS(dir string, fs vfs.FS) (*Manager, error) {
+// Nil fs defaults to OSFS.
+func Open(dir string, fs vfs.FS) (*Manager, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("manifest dir required")
 	}
@@ -554,9 +550,13 @@ func (m *Manager) Dir() string {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.manifest != nil {
-		return m.manifest.Close()
+	if m.manifest == nil {
+		return nil
 	}
+	if err := m.manifest.Close(); err != nil {
+		return err
+	}
+	m.manifest = nil
 	return nil
 }
 
@@ -704,14 +704,9 @@ func (m *Manager) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 
 // Internal encoding helpers
 // Verify ensures manifest and CURRENT pointer are well-formed. It truncates any
-// partially written edits left at the end of the manifest file.
-func Verify(dir string) error {
-	return VerifyWithFS(dir, nil)
-}
-
-// VerifyWithFS ensures manifest and CURRENT pointer are well-formed using the
-// provided filesystem.
-func VerifyWithFS(dir string, fs vfs.FS) error {
+// partially written edits left at the end of the manifest file. Nil fs defaults
+// to OSFS.
+func Verify(dir string, fs vfs.FS) error {
 	if dir == "" {
 		return fmt.Errorf("manifest: directory required")
 	}

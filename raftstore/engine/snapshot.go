@@ -12,13 +12,7 @@ import (
 
 // ExportSnapshot persists the current raft snapshot from storage to the supplied file path.
 // If the snapshot is empty the file is removed (best-effort) and the function returns without error.
-func ExportSnapshot(storage PeerStorage, path string) error {
-	return ExportSnapshotWithFS(storage, path, nil)
-}
-
-// ExportSnapshotWithFS persists the current raft snapshot to the supplied file path
-// using the provided filesystem.
-func ExportSnapshotWithFS(storage PeerStorage, path string, fs vfs.FS) error {
+func ExportSnapshot(storage PeerStorage, path string, fs vfs.FS) error {
 	if storage == nil {
 		return fmt.Errorf("engine: snapshot export requires storage")
 	}
@@ -46,13 +40,7 @@ func ExportSnapshotWithFS(storage PeerStorage, path string, fs vfs.FS) error {
 
 // ImportSnapshot loads a raft snapshot from the provided file and applies it to storage.
 // Missing files are treated as no-op (no snapshot to import).
-func ImportSnapshot(storage PeerStorage, path string) error {
-	return ImportSnapshotWithFS(storage, path, nil)
-}
-
-// ImportSnapshotWithFS loads a raft snapshot from the provided file and applies
-// it to storage using the provided filesystem.
-func ImportSnapshotWithFS(storage PeerStorage, path string, fs vfs.FS) error {
+func ImportSnapshot(storage PeerStorage, path string, fs vfs.FS) error {
 	if storage == nil {
 		return fmt.Errorf("engine: snapshot import requires storage")
 	}

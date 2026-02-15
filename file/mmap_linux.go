@@ -50,7 +50,7 @@ func OpenMmapFileUsing(fs vfs.FS, fd *os.File, sz int, writable bool) (*MmapFile
 	if fileSize == 0 {
 		dir, _ := filepath.Split(filename)
 		go func() {
-			_ = SyncDirWithFS(fs, dir)
+			_ = SyncDir(fs, dir)
 		}()
 	}
 	return &MmapFile{
@@ -64,17 +64,17 @@ func OpenMmapFileUsing(fs vfs.FS, fd *os.File, sz int, writable bool) (*MmapFile
 // created, it would truncate the file to maxSz. In both cases, it would mmap
 // the file to maxSz and returned it. In case the file is created, z.NewFile is
 // returned.
-func OpenMmapFile(filename string, flag int, maxSz int) (*MmapFile, error) {
-	return OpenMmapFileWithFS(nil, filename, flag, maxSz)
-}
-
-// OpenMmapFileWithFS opens an mmap-backed file using the provided filesystem.
-func OpenMmapFileWithFS(fs vfs.FS, filename string, flag int, maxSz int) (*MmapFile, error) {
+func OpenMmapFile(fs vfs.FS, filename string, flag int, maxSz int) (*MmapFile, error) {
 	// fmt.Printf("opening file %s with flag: %v\n", filename, flag)
 	fs = vfs.Ensure(fs)
-	fd, err := fs.OpenFile(filename, flag, 0666)
+	handle, err := fs.OpenFileHandle(filename, flag, 0666)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
+	}
+	fd, ok := vfs.UnwrapOSFile(handle)
+	if !ok {
+		_ = handle.Close()
+		return nil, errors.Errorf("unable to mmap non-os file handle: %s", filename)
 	}
 	writable := flag != os.O_RDONLY
 	// if the sst file layer has been opened, use its original size
@@ -272,13 +272,8 @@ func (m *MmapFile) Close() error {
 	return m.Fd.Close()
 }
 
-// SyncDir fsyncs a directory using the default OS filesystem.
-func SyncDir(dir string) error {
-	return SyncDirWithFS(nil, dir)
-}
-
-// SyncDirWithFS fsyncs a directory using the provided filesystem.
-func SyncDirWithFS(fs vfs.FS, dir string) error {
+// SyncDir fsyncs a directory using the provided filesystem. Nil fs defaults to OSFS.
+func SyncDir(fs vfs.FS, dir string) error {
 	fs = vfs.Ensure(fs)
 	df, err := fs.OpenHandle(dir)
 	if err != nil {
