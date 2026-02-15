@@ -50,12 +50,8 @@ func TestDirLockReleaseRemovesFile(t *testing.T) {
 func TestAcquireDirLockWithFSInjectedFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("mkdir injected")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
-		if op == vfs.OpMkdirAll {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpMkdirAll, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	_, err := AcquireDirLockWithFS(dir, fs)
 	if !errors.Is(err, injected) {

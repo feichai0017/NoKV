@@ -36,28 +36,10 @@ type Manager struct {
 	active    *segment
 	activeID  uint32
 	offset    uint32
-	hooks     ManagerTestingHooks
 }
 
 type segmentIndex struct {
 	files map[uint32]*segment
-}
-
-// ManagerTestingHooks provides callbacks that are used only in tests to inject
-// failures in the value-log manager. They are no-ops in production code and are
-// guarded by the Manager's internal locking to avoid data races when set.
-type ManagerTestingHooks struct {
-	BeforeAppend func(*Manager, []byte) error
-	BeforeRotate func(*Manager) error
-	BeforeSync   func(*Manager, uint32) error
-}
-
-// SetTestingHooks installs testing callbacks on the manager. It is intended for
-// use in tests only and should not be used by production code.
-func (m *Manager) SetTestingHooks(h ManagerTestingHooks) {
-	m.filesLock.Lock()
-	defer m.filesLock.Unlock()
-	m.hooks = h
 }
 
 func (m *Manager) SetMaxSize(maxSize int64) {
@@ -83,28 +65,6 @@ func (m *Manager) refreshIndexLocked() {
 	next := make(map[uint32]*segment, len(m.files))
 	maps.Copy(next, m.files)
 	m.index.Store(&segmentIndex{files: next})
-}
-
-// runBeforeAppendHook invokes the testing hook (if any) before an append.
-func (m *Manager) runBeforeAppendHook(data []byte) error {
-	m.filesLock.RLock()
-	hook := m.hooks.BeforeAppend
-	m.filesLock.RUnlock()
-	if hook == nil {
-		return nil
-	}
-	return hook(m, data)
-}
-
-// runBeforeSyncHook invokes the testing hook (if any) before syncing a segment.
-func (m *Manager) runBeforeSyncHook(fid uint32) error {
-	m.filesLock.RLock()
-	hook := m.hooks.BeforeSync
-	m.filesLock.RUnlock()
-	if hook == nil {
-		return nil
-	}
-	return hook(m, fid)
 }
 
 // ensureActiveLocked returns the active segment store; caller must hold m.filesLock.
@@ -257,11 +217,6 @@ func (m *Manager) Rotate() error {
 
 // rotateLocked rotates the active segment; caller must hold m.filesLock.
 func (m *Manager) rotateLocked() error {
-	if hook := m.hooks.BeforeRotate; hook != nil {
-		if err := hook(m); err != nil {
-			return err
-		}
-	}
 	if m.active != nil {
 		if err := m.active.store.DoneWriting(m.offset); err != nil {
 			return err
@@ -386,13 +341,9 @@ func (m *Manager) SyncActive() error {
 	}
 	m.filesLock.RLock()
 	seg := m.active
-	fid := m.activeID
 	m.filesLock.RUnlock()
 	if seg == nil || seg.store == nil {
 		return nil
-	}
-	if err := m.runBeforeSyncHook(fid); err != nil {
-		return err
 	}
 	seg.store.Lock.Lock()
 	defer seg.store.Lock.Unlock()
@@ -420,10 +371,6 @@ func (m *Manager) SyncFIDs(fids []uint32) error {
 
 		if seg == nil || seg.store == nil {
 			continue
-		}
-		if err := m.runBeforeSyncHook(fid); err != nil {
-			seg.store.Lock.Unlock()
-			return err
 		}
 		err := seg.store.Sync()
 		seg.store.Lock.Unlock()

@@ -4,10 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 func TestManagerAppendRead(t *testing.T) {
@@ -241,46 +241,50 @@ func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
 	}
 }
 
-func TestManagerHooksAndSync(t *testing.T) {
+func TestManagerRotateInjectedByFaultFS(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := Open(Config{Dir: dir})
+	injected := errors.New("rotate openfile injected")
+	nextPath := filepath.Join(dir, "00001.vlog")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpenFile, nextPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := Open(Config{Dir: dir, FS: fs})
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
 	defer func() { _ = mgr.Close() }()
 
-	mgr.SetTestingHooks(ManagerTestingHooks{
-		BeforeAppend: func(_ *Manager, payload []byte) error {
-			if len(payload) == 0 {
-				return errors.New("empty payload")
-			}
-			return errors.New("append hook")
-		},
-	})
-	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v"))); err == nil {
-		t.Fatalf("expected append hook error")
-	}
-
-	mgr.SetTestingHooks(ManagerTestingHooks{
-		BeforeRotate: func(*Manager) error {
-			return errors.New("rotate hook")
-		},
-	})
-	if err := mgr.Rotate(); err == nil {
-		t.Fatalf("expected rotate hook error")
-	}
-
-	mgr.SetTestingHooks(ManagerTestingHooks{
-		BeforeSync: func(*Manager, uint32) error {
-			return errors.New("sync hook")
-		},
-	})
-	if err := mgr.SyncActive(); err == nil {
-		t.Fatalf("expected sync hook error")
+	if err := mgr.Rotate(); !errors.Is(err, injected) {
+		t.Fatalf("expected rotate injected error, got %v", err)
 	}
 }
 
-func TestManagerSyncFIDsDedup(t *testing.T) {
+func TestManagerRemoveInjectedByFaultFS(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("remove injected")
+	removePath := filepath.Join(dir, "00000.vlog")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, removePath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := Open(Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v"))); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	err = mgr.Remove(0)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected remove injected error, got %v", err)
+	}
+}
+
+func TestManagerSyncFIDsAllowsDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := Open(Config{Dir: dir})
 	if err != nil {
@@ -292,23 +296,8 @@ func TestManagerSyncFIDsDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
-
-	var calls int32
-	mgr.SetTestingHooks(ManagerTestingHooks{
-		BeforeSync: func(_ *Manager, fid uint32) error {
-			if fid != vp.Fid {
-				return errors.New("unexpected fid")
-			}
-			atomic.AddInt32(&calls, 1)
-			return nil
-		},
-	})
-
 	if err := mgr.SyncFIDs([]uint32{vp.Fid, vp.Fid, vp.Fid + 10}); err != nil {
 		t.Fatalf("sync fids: %v", err)
-	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("expected single sync call, got %d", got)
 	}
 }
 

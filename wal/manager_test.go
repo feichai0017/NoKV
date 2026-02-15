@@ -16,12 +16,8 @@ import (
 func TestManagerOpenWithFaultFS(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("mkdir fail")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
-		if op == vfs.OpMkdirAll {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpMkdirAll, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	_, err := wal.Open(wal.Config{Dir: dir, FS: fs})
 	if !errors.Is(err, injected) {
