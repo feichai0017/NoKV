@@ -2,11 +2,13 @@ package engine
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +130,15 @@ func TestOpenDiskStorageRequiresDir(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOpenDiskStorageWithFSInjectedFailure(t *testing.T) {
+	injected := errors.New("mkdir injected")
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpMkdirAll, "", injected),
+	))
+	_, err := OpenDiskStorageWithFS(t.TempDir(), fs)
+	require.ErrorIs(t, err, injected)
+}
+
 func TestDiskStorageLoadSnapshotUnreadable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, snapFileName)
@@ -150,4 +161,28 @@ func TestDiskStorageLoadEntriesCorrupt(t *testing.T) {
 
 	_, err = OpenDiskStorage(dir)
 	require.Error(t, err)
+}
+
+func TestSnapshotExportImportWithFSInjection(t *testing.T) {
+	dir := t.TempDir()
+	ds, err := OpenDiskStorage(dir)
+	require.NoError(t, err)
+	require.NoError(t, ds.ApplySnapshot(myraft.Snapshot{Metadata: myraft.SnapshotMetadata{Index: 2, Term: 1}}))
+
+	path := filepath.Join(dir, "snap.injected")
+	writeErr := errors.New("write injected")
+	wfs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpWriteFile, path, writeErr),
+	))
+	err = ExportSnapshotWithFS(ds, path, wfs)
+	require.ErrorIs(t, err, writeErr)
+
+	readErr := errors.New("read injected")
+	rfs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpReadFile, path, readErr),
+	))
+	ds2, err := OpenDiskStorage(t.TempDir())
+	require.NoError(t, err)
+	err = ImportSnapshotWithFS(ds2, path, rfs)
+	require.ErrorIs(t, err, readErr)
 }

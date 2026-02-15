@@ -11,9 +11,11 @@ type FS interface {
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 	MkdirAll(path string, perm os.FileMode) error
+	RemoveAll(path string) error
 	Remove(name string) error
 	Rename(oldPath, newPath string) error
 	Stat(name string) (os.FileInfo, error)
+	ReadDir(name string) ([]os.DirEntry, error)
 	ReadFile(name string) ([]byte, error)
 	WriteFile(name string, data []byte, perm os.FileMode) error
 	Truncate(name string, size int64) error
@@ -39,6 +41,11 @@ func (OSFS) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+// RemoveAll removes a path and all children.
+func (OSFS) RemoveAll(path string) error {
+	return os.RemoveAll(path)
+}
+
 // Remove removes a file or empty directory.
 func (OSFS) Remove(name string) error {
 	return os.Remove(name)
@@ -52,6 +59,11 @@ func (OSFS) Rename(oldPath, newPath string) error {
 // Stat returns file metadata.
 func (OSFS) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
+}
+
+// ReadDir lists directory entries.
+func (OSFS) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
 }
 
 // ReadFile reads an entire file.
