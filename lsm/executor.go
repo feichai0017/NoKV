@@ -715,7 +715,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 
 	if err == nil {
 		// Sync the workdir to ensure data is persisted.
-		err = utils.SyncDir(lm.opt.WorkDir)
+		err = utils.SyncDirWithFS(lm.opt.FS, lm.opt.WorkDir)
 	}
 
 	if err != nil {
