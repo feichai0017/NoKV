@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
@@ -476,5 +477,45 @@ func TestTxnMetricsCounters(t *testing.T) {
 
 		snap := db.orc.txnMetricsSnapshot()
 		require.GreaterOrEqual(t, snap.Started, uint64(2))
+	})
+}
+
+// TestTxnEmptyCommitLeak verifies that committing a transaction with no pending writes
+// correctly decrements the active transaction counter and cleans up resources.
+// It covers both synchronous Commit() and asynchronous CommitWith() paths.
+func TestTxnEmptyCommitLeak(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		// 1. Test synchronous Commit() path
+		txn := db.NewTransaction(true)
+		snap := db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(1), snap.Active, "Expected 1 active txn after creation")
+
+		err := txn.Commit()
+		require.NoError(t, err)
+
+		snap = db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(0), snap.Active, "Commit() on empty txn should decrement Active counter")
+
+		// 2. Test asynchronous CommitWith() path
+		txn2 := db.NewTransaction(true)
+		snap = db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(1), snap.Active, "Expected 1 active txn for second transaction")
+
+		done := make(chan struct{})
+		txn2.CommitWith(func(err error) {
+			require.NoError(t, err)
+			close(done)
+		})
+
+		// Use select with timeout to avoid hanging the test suite indefinitely.
+		select {
+		case <-done:
+			// Success
+		case <-time.After(5 * time.Second):
+			t.Fatal("Test timed out waiting for CommitWith callback")
+		}
+
+		snap = db.orc.txnMetricsSnapshot()
+		require.Equal(t, int64(0), snap.Active, "CommitWith() on empty txn should decrement Active counter")
 	})
 }
