@@ -858,19 +858,23 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {
-	newRef := atomic.AddInt32(&t.ref, -1)
+	for {
+		current := atomic.LoadInt32(&t.ref)
+		// 1. Guard check: Use the project's utility to panic if ref is already 0
+		utils.CondPanicFunc(current <= 0, func() error {
+			return fmt.Errorf("table refcount underflow: fid %d, current_ref %d", t.fid, current)
+		})
 
-	if newRef < 0 {
-		panic(fmt.Sprintf("table refcount underflow: table_id %d, current_ref %d", t.fid, newRef))
-	}
-
-	if newRef == 0 {
-		if err := t.Delete(); err != nil {
-			return err
+		newRef := current - 1
+		// 2. Atomic transition
+		if atomic.CompareAndSwapInt32(&t.ref, current, newRef) {
+			if newRef == 0 {
+				return t.Delete()
+			}
+			return nil
 		}
+		// 3. If CAS failed (concurrent change), the loop will retry
 	}
-
-	return nil
 }
 
 // IncrRef increments the table reference count.
