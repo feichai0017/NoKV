@@ -54,6 +54,7 @@ type FaultRule struct {
 // The first rule that injects an error stops evaluation for that operation.
 type FaultPolicy struct {
 	mu    sync.Mutex
+	hook  Hook
 	rules []FaultRule
 }
 
@@ -66,6 +67,17 @@ func NewFaultPolicy(rules ...FaultRule) *FaultPolicy {
 		p.AddRule(rule)
 	}
 	return p
+}
+
+// SetHook installs a hook callback into the policy. Nil disables hook-based
+// injection while retaining rule-based behavior.
+func (p *FaultPolicy) SetHook(hook Hook) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.hook = hook
+	p.mu.Unlock()
 }
 
 // AddRule appends a rule to the policy.
@@ -87,6 +99,18 @@ func (p *FaultPolicy) Hook(op Op, path string) error {
 func (p *FaultPolicy) inject(op Op, path, renameSrc, renameDst string) error {
 	if p == nil {
 		return nil
+	}
+	p.mu.Lock()
+	hook := p.hook
+	p.mu.Unlock()
+	if hook != nil {
+		hookPath := path
+		if op == OpRename {
+			hookPath = renameSrc + "->" + renameDst
+		}
+		if err := hook(op, hookPath); err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -165,15 +189,16 @@ func NewFaultFSWithPolicy(base FS, policy *FaultPolicy) *FaultFS {
 // FaultFS decorates an FS and injects failures via Hook.
 type FaultFS struct {
 	base   FS
-	hook   Hook
 	policy *FaultPolicy
 }
 
 // NewFaultFS returns an FS wrapper that can inject operation failures.
 func NewFaultFS(base FS, hook Hook) *FaultFS {
+	policy := NewFaultPolicy()
+	policy.SetHook(hook)
 	return &FaultFS{
-		base: Ensure(base),
-		hook: hook,
+		base:   Ensure(base),
+		policy: policy,
 	}
 }
 
@@ -181,26 +206,20 @@ func (f *FaultFS) before(op Op, path string) error {
 	if f == nil {
 		return nil
 	}
-	if f.policy != nil {
-		return f.policy.inject(op, path, "", "")
-	}
-	if f.hook == nil {
+	if f.policy == nil {
 		return nil
 	}
-	return f.hook(op, path)
+	return f.policy.inject(op, path, "", "")
 }
 
 func (f *FaultFS) beforeRename(oldPath, newPath string) error {
 	if f == nil {
 		return nil
 	}
-	if f.policy != nil {
-		return f.policy.inject(OpRename, oldPath, oldPath, newPath)
+	if f.policy == nil {
+		return nil
 	}
-	if f.hook != nil {
-		return f.hook(OpRename, oldPath+"->"+newPath)
-	}
-	return nil
+	return f.policy.inject(OpRename, oldPath, oldPath, newPath)
 }
 
 func normalizeFaultRule(rule FaultRule) FaultRule {
@@ -435,7 +454,10 @@ func (f *faultFile) Name() string {
 }
 
 func (f *faultFile) Fd() uintptr {
-	return f.base.Fd()
+	if fd, ok := FileFD(f.base); ok {
+		return fd
+	}
+	return 0
 }
 
 func (f *faultFile) OSFile() *os.File {

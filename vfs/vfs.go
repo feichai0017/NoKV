@@ -20,6 +20,11 @@ type File interface {
 	Sync() error
 	Truncate(size int64) error
 	Name() string
+}
+
+// FDProvider is an optional capability interface implemented by files that
+// expose an OS-level file descriptor.
+type FDProvider interface {
 	Fd() uintptr
 }
 
@@ -130,4 +135,18 @@ func UnwrapOSFile(f File) (*os.File, bool) {
 		}
 	}
 	return nil, false
+}
+
+// FileFD extracts a file descriptor when the file implementation supports it.
+func FileFD(f File) (uintptr, bool) {
+	if f == nil {
+		return 0, false
+	}
+	if withFD, ok := f.(FDProvider); ok {
+		return withFD.Fd(), true
+	}
+	if of, ok := UnwrapOSFile(f); ok {
+		return of.Fd(), true
+	}
+	return 0, false
 }

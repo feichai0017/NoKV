@@ -146,3 +146,18 @@ func TestFaultFSPassThrough(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", string(got))
 }
+
+func TestFaultFSInjectWithHookCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.hook")
+	injected := errors.New("hook injected")
+	fs := NewFaultFS(OSFS{}, func(op Op, p string) error {
+		if op == OpOpenFile && p == path {
+			return injected
+		}
+		return nil
+	})
+
+	_, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.ErrorIs(t, err, injected)
+}
