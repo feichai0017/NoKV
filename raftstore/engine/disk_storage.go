@@ -95,7 +95,7 @@ func (ds *DiskStorage) loadSnapshot() error {
 
 func (ds *DiskStorage) loadEntries() error {
 	path := filepath.Join(ds.dir, logFileName)
-	f, err := ds.fs.Open(path)
+	f, err := ds.fs.OpenHandle(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -288,7 +288,7 @@ func (ds *DiskStorage) persistEntriesLocked() error {
 		return ds.removeFile(path)
 	}
 	tmp := path + ".tmp"
-	f, err := ds.fs.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := ds.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}

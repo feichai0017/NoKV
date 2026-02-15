@@ -263,6 +263,22 @@ func (f *FaultFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, e
 	return f.base.OpenFile(name, flag, perm)
 }
 
+// OpenHandle opens an existing file for reading and returns a vfs.File.
+func (f *FaultFS) OpenHandle(name string) (File, error) {
+	if err := f.before(OpOpen, name); err != nil {
+		return nil, err
+	}
+	return f.base.OpenHandle(name)
+}
+
+// OpenFileHandle opens or creates a file and returns a vfs.File.
+func (f *FaultFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File, error) {
+	if err := f.before(OpOpenFile, name); err != nil {
+		return nil, err
+	}
+	return f.base.OpenFileHandle(name, flag, perm)
+}
+
 // MkdirAll creates a directory hierarchy.
 func (f *FaultFS) MkdirAll(path string, perm os.FileMode) error {
 	if err := f.before(OpMkdirAll, path); err != nil {

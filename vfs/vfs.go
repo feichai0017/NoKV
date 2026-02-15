@@ -2,14 +2,32 @@
 package vfs
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 )
+
+// File describes the file operations storage components rely on.
+// *os.File satisfies this interface.
+type File interface {
+	io.Reader
+	io.ReaderAt
+	io.Writer
+	io.WriterAt
+	io.Seeker
+	io.Closer
+	Stat() (os.FileInfo, error)
+	Sync() error
+	Truncate(size int64) error
+	Name() string
+}
 
 // FS defines filesystem operations used by storage/runtime components.
 type FS interface {
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
+	OpenHandle(name string) (File, error)
+	OpenFileHandle(name string, flag int, perm os.FileMode) (File, error)
 	MkdirAll(path string, perm os.FileMode) error
 	RemoveAll(path string) error
 	Remove(name string) error
@@ -33,6 +51,16 @@ func (OSFS) Open(name string) (*os.File, error) {
 
 // OpenFile opens or creates a file.
 func (OSFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+// OpenHandle opens an existing file and returns a vfs.File.
+func (OSFS) OpenHandle(name string) (File, error) {
+	return os.Open(name)
+}
+
+// OpenFileHandle opens or creates a file and returns a vfs.File.
+func (OSFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File, error) {
 	return os.OpenFile(name, flag, perm)
 }
 

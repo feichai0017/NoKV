@@ -35,7 +35,7 @@ type Manager struct {
 	dir        string
 	fs         vfs.FS
 	current    string
-	manifest   *os.File
+	manifest   vfs.File
 	version    Version
 	syncWrites bool
 
@@ -85,14 +85,14 @@ func (m *Manager) loadCurrent() error {
 	}
 	m.current = string(data)
 	manifestPath := filepath.Join(m.dir, m.current)
-	m.manifest, err = m.fs.OpenFile(manifestPath, os.O_RDWR, manifestFilePermissions)
+	m.manifest, err = m.fs.OpenFileHandle(manifestPath, os.O_RDWR, manifestFilePermissions)
 	return err
 }
 
 func (m *Manager) createNew() error {
 	fileName := manifestFileName(1)
 	path := filepath.Join(m.dir, fileName)
-	f, err := m.fs.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	f, err := m.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -323,7 +323,7 @@ func (m *Manager) rewriteLocked() error {
 		return err
 	}
 	path := filepath.Join(m.dir, fileName)
-	f, err := m.fs.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	f, err := m.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func (m *Manager) rewriteLocked() error {
 	if m.manifest != nil {
 		_ = m.manifest.Close()
 	}
-	m.manifest, err = m.fs.OpenFile(path, os.O_RDWR, manifestFilePermissions)
+	m.manifest, err = m.fs.OpenFileHandle(path, os.O_RDWR, manifestFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -734,7 +734,7 @@ func VerifyWithFS(dir string, fs vfs.FS) error {
 		return fmt.Errorf("manifest: CURRENT empty")
 	}
 	path := filepath.Join(dir, name)
-	f, err := fs.OpenFile(path, os.O_RDWR, 0)
+	f, err := fs.OpenFileHandle(path, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("manifest: open %s: %w", name, err)
 	}
