@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/pkg/errors"
 )
 
@@ -42,11 +43,17 @@ func VlogFilePath(dirPath string, fid uint32) string {
 
 // CreateSyncedFile creates a new file (using O_EXCL), errors if it already existed.
 func CreateSyncedFile(filename string, sync bool) (*os.File, error) {
+	return CreateSyncedFileWithFS(nil, filename, sync)
+}
+
+// CreateSyncedFileWithFS creates a new file using the provided filesystem.
+func CreateSyncedFileWithFS(fs vfs.FS, filename string, sync bool) (*os.File, error) {
+	fs = vfs.Ensure(fs)
 	flags := os.O_RDWR | os.O_CREATE | os.O_EXCL
 	if sync {
 		flags |= datasyncFileFlag
 	}
-	return os.OpenFile(filename, flags, 0600)
+	return fs.OpenFile(filename, flags, 0600)
 }
 
 // FileNameSSTable returns the SSTable filename for the given ID.
@@ -54,14 +61,17 @@ func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }
 
-// openDir opens a directory for syncing.
-func openDir(path string) (*os.File, error) { return os.Open(path) }
-
 // SyncDir When you create or delete a file, you have to ensure the directory entry for the file is synced
 // in order to guarantee the file is visible (if the system crashes). (See the man page for fsync,
 // or see https://github.com/coreos/etcd/issues/6368 for an example.)
 func SyncDir(dir string) error {
-	f, err := openDir(dir)
+	return SyncDirWithFS(nil, dir)
+}
+
+// SyncDirWithFS fsyncs a directory using the provided filesystem.
+func SyncDirWithFS(fs vfs.FS, dir string) error {
+	fs = vfs.Ensure(fs)
+	f, err := fs.Open(dir)
 	if err != nil {
 		return errors.Wrapf(err, "While opening directory: %s.", dir)
 	}
@@ -75,8 +85,14 @@ func SyncDir(dir string) error {
 
 // LoadIDMap Get the id of all sst files in the current folder
 func LoadIDMap(dir string) map[uint64]struct{} {
+	return LoadIDMapWithFS(nil, dir)
+}
+
+// LoadIDMapWithFS gets all SST IDs in the current folder using the given filesystem.
+func LoadIDMapWithFS(fs vfs.FS, dir string) map[uint64]struct{} {
+	fs = vfs.Ensure(fs)
 	idMap := make(map[uint64]struct{})
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		_ = Err(err)
 		return idMap
@@ -134,7 +150,13 @@ func CalculateChecksum(data []byte) uint64 {
 
 // RemoveDir _
 func RemoveDir(dir string) {
-	if err := os.RemoveAll(dir); err != nil {
+	RemoveDirWithFS(nil, dir)
+}
+
+// RemoveDirWithFS removes a directory recursively using the provided filesystem.
+func RemoveDirWithFS(fs vfs.FS, dir string) {
+	fs = vfs.Ensure(fs)
+	if err := fs.RemoveAll(dir); err != nil {
 		panic(err)
 	}
 }

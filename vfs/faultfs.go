@@ -13,9 +13,11 @@ const (
 	OpOpen      Op = "open"
 	OpOpenFile  Op = "open_file"
 	OpMkdirAll  Op = "mkdir_all"
+	OpRemoveAll Op = "remove_all"
 	OpRemove    Op = "remove"
 	OpRename    Op = "rename"
 	OpStat      Op = "stat"
+	OpReadDir   Op = "read_dir"
 	OpReadFile  Op = "read_file"
 	OpWriteFile Op = "write_file"
 	OpTruncate  Op = "truncate"
@@ -34,6 +36,8 @@ type Hook func(op Op, path string) error
 type FaultRule struct {
 	Op          Op
 	Path        string
+	SrcPath     string
+	DstPath     string
 	Err         error
 	TriggerAt   uint64
 	MaxFailures uint64
@@ -73,13 +77,17 @@ func (p *FaultPolicy) AddRule(rule FaultRule) {
 // Hook evaluates policy rules and returns an injected error when matched.
 // Hook satisfies the Hook function contract and can be passed to NewFaultFS.
 func (p *FaultPolicy) Hook(op Op, path string) error {
+	return p.inject(op, path, "", "")
+}
+
+func (p *FaultPolicy) inject(op Op, path, renameSrc, renameDst string) error {
 	if p == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i := range p.rules {
-		if err := p.rules[i].evaluate(op, path); err != nil {
+		if err := p.rules[i].evaluate(op, path, renameSrc, renameDst); err != nil {
 			return err
 		}
 	}
@@ -126,18 +134,35 @@ func FailAfterNthRule(op Op, path string, nth uint64, err error) FaultRule {
 	}
 }
 
+// FailOnceRenameRule creates a rename-specific rule that fails exactly once.
+// src or dst can be empty to match either side.
+func FailOnceRenameRule(src, dst string, err error) FaultRule {
+	return FaultRule{
+		Op:          OpRename,
+		SrcPath:     src,
+		DstPath:     dst,
+		Err:         err,
+		TriggerAt:   1,
+		MaxFailures: 1,
+	}
+}
+
 // NewFaultFSWithPolicy returns a FaultFS configured from a rule policy.
 func NewFaultFSWithPolicy(base FS, policy *FaultPolicy) *FaultFS {
 	if policy == nil {
 		return NewFaultFS(base, nil)
 	}
-	return NewFaultFS(base, policy.Hook)
+	return &FaultFS{
+		base:   Ensure(base),
+		policy: policy,
+	}
 }
 
 // FaultFS decorates an FS and injects failures via Hook.
 type FaultFS struct {
-	base FS
-	hook Hook
+	base   FS
+	hook   Hook
+	policy *FaultPolicy
 }
 
 // NewFaultFS returns an FS wrapper that can inject operation failures.
@@ -149,10 +174,29 @@ func NewFaultFS(base FS, hook Hook) *FaultFS {
 }
 
 func (f *FaultFS) before(op Op, path string) error {
+	if f == nil {
+		return nil
+	}
+	if f.policy != nil {
+		return f.policy.inject(op, path, "", "")
+	}
 	if f == nil || f.hook == nil {
 		return nil
 	}
 	return f.hook(op, path)
+}
+
+func (f *FaultFS) beforeRename(oldPath, newPath string) error {
+	if f == nil {
+		return nil
+	}
+	if f.policy != nil {
+		return f.policy.inject(OpRename, oldPath, oldPath, newPath)
+	}
+	if f.hook != nil {
+		return f.hook(OpRename, oldPath+"->"+newPath)
+	}
+	return nil
 }
 
 func normalizeFaultRule(rule FaultRule) FaultRule {
@@ -162,8 +206,8 @@ func normalizeFaultRule(rule FaultRule) FaultRule {
 	return rule
 }
 
-func (r *FaultRule) evaluate(op Op, path string) error {
-	if !r.matches(op, path) {
+func (r *FaultRule) evaluate(op Op, path, renameSrc, renameDst string) error {
+	if !r.matches(op, path, renameSrc, renameDst) {
 		return nil
 	}
 	r.matched++
@@ -180,9 +224,22 @@ func (r *FaultRule) evaluate(op Op, path string) error {
 	return fmt.Errorf("faultfs injected failure: op=%s path=%s", op, path)
 }
 
-func (r *FaultRule) matches(op Op, path string) bool {
+func (r *FaultRule) matches(op Op, path, renameSrc, renameDst string) bool {
 	if r.Op != "" && r.Op != op {
 		return false
+	}
+	if op == OpRename {
+		if r.SrcPath != "" && r.SrcPath != renameSrc {
+			return false
+		}
+		if r.DstPath != "" && r.DstPath != renameDst {
+			return false
+		}
+		// Backward compatibility: Path can still match either side.
+		if r.Path != "" && r.Path != renameSrc && r.Path != renameDst {
+			return false
+		}
+		return true
 	}
 	if r.Path != "" && r.Path != path {
 		return false
@@ -214,6 +271,14 @@ func (f *FaultFS) MkdirAll(path string, perm os.FileMode) error {
 	return f.base.MkdirAll(path, perm)
 }
 
+// RemoveAll removes a path recursively.
+func (f *FaultFS) RemoveAll(path string) error {
+	if err := f.before(OpRemoveAll, path); err != nil {
+		return err
+	}
+	return f.base.RemoveAll(path)
+}
+
 // Remove removes a file or empty directory.
 func (f *FaultFS) Remove(name string) error {
 	if err := f.before(OpRemove, name); err != nil {
@@ -224,7 +289,7 @@ func (f *FaultFS) Remove(name string) error {
 
 // Rename renames (moves) a file or directory.
 func (f *FaultFS) Rename(oldPath, newPath string) error {
-	if err := f.before(OpRename, oldPath+"->"+newPath); err != nil {
+	if err := f.beforeRename(oldPath, newPath); err != nil {
 		return err
 	}
 	return f.base.Rename(oldPath, newPath)
@@ -236,6 +301,14 @@ func (f *FaultFS) Stat(name string) (os.FileInfo, error) {
 		return nil, err
 	}
 	return f.base.Stat(name)
+}
+
+// ReadDir lists directory entries.
+func (f *FaultFS) ReadDir(name string) ([]os.DirEntry, error) {
+	if err := f.before(OpReadDir, name); err != nil {
+		return nil, err
+	}
+	return f.base.ReadDir(name)
 }
 
 // ReadFile reads an entire file.

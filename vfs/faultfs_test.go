@@ -52,6 +52,36 @@ func TestFaultPolicyFailAfterNth(t *testing.T) {
 	require.ErrorIs(t, err, injected)
 }
 
+func TestFaultPolicyRenameRule(t *testing.T) {
+	injected := errors.New("rename injected")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "from.data")
+	dst := filepath.Join(dir, "to.data")
+	policy := NewFaultPolicy(FailOnceRenameRule(src, dst, injected))
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+	require.NoError(t, fs.WriteFile(src, []byte("v"), 0o644))
+
+	err := fs.Rename(src, dst)
+	require.ErrorIs(t, err, injected)
+}
+
+func TestFaultFSInjectReadDirAndRemoveAll(t *testing.T) {
+	dir := t.TempDir()
+	readErr := errors.New("readdir injected")
+	removeErr := errors.New("removeall injected")
+	policy := NewFaultPolicy(
+		FailOnceRule(OpReadDir, dir, readErr),
+		FailOnceRule(OpRemoveAll, dir, removeErr),
+	)
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+	require.NoError(t, fs.MkdirAll(filepath.Join(dir, "nested"), 0o755))
+
+	_, err := fs.ReadDir(dir)
+	require.ErrorIs(t, err, readErr)
+	err = fs.RemoveAll(dir)
+	require.ErrorIs(t, err, removeErr)
+}
+
 func TestFaultFSPassThrough(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.data")
