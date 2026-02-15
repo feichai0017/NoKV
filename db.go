@@ -55,6 +55,8 @@ type (
 		lastLoggedHeads  map[uint32]kv.ValuePtr
 		headLogDelta     uint32
 		isClosed         uint32
+		closeOnce        sync.Once
+		closeErr         error
 		orc              *oracle
 		hotRead          hotTracker
 		hotWrite         hotTracker
@@ -109,6 +111,7 @@ type cfCounters struct {
 }
 
 type testCloseHooks struct {
+	statsClose     func() error
 	lsmClose       func() error
 	vlogClose      func() error
 	walClose       func() error
@@ -339,6 +342,18 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.closeOnce.Do(func() {
+		db.closeErr = db.closeInternal()
+	})
+	return db.closeErr
+}
+
+// closeInternal executes DB shutdown exactly once and aggregates non-fatal
+// close failures so callers can observe every resource teardown error.
+func (db *DB) closeInternal() error {
+	if db == nil {
+		return nil
+	}
 
 	if db.IsClosed() {
 		return nil
@@ -350,8 +365,14 @@ func (db *DB) Close() error {
 
 	db.stopCommitWorkers()
 
-	if err := db.stats.close(); err != nil {
-		return err
+	var errs []error
+	if db.testCloseHooks != nil && db.testCloseHooks.statsClose != nil {
+		db.testCloseHooks.record("stats close")
+		if err := db.testCloseHooks.statsClose(); err != nil {
+			errs = append(errs, fmt.Errorf("stats close: %w", err))
+		}
+	} else if err := db.stats.close(); err != nil {
+		errs = append(errs, fmt.Errorf("stats close: %w", err))
 	}
 
 	if db.walWatchdog != nil {
@@ -378,8 +399,6 @@ func (db *DB) Close() error {
 		db.prefetchRing = nil
 		db.prefetchItems = nil
 	}
-
-	var errs []error
 
 	if db.testCloseHooks != nil && db.testCloseHooks.lsmClose != nil {
 		db.testCloseHooks.record("lsm close")
