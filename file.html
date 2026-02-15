@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-68d4371c.js";
+            window.path_to_searchindex_js = "searchindex-89de2c05.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -189,7 +189,6 @@
 </thead>
 <tbody>
 <tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
-<tr><td><a href="../file/file.go#L18-L27"><code>CoreFile</code></a></td><td>Interface abstracting platform-specific operations.</td><td><code>NewReader</code>, <code>Bytes</code>, <code>Sync</code>, <code>Delete</code>.</td></tr>
 <tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
 <tr><td><a href="../file/vlog.go#L16-L130"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>EncodeEntry</code>.</td></tr>
 </tbody>
@@ -243,7 +242,7 @@ _ = lf.DoneWriting(nextOffset)
 <ul>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
 <li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
-<li><code>SyncDir</code> (see <code>mmap_linux.go</code>) is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
+<li><code>vfs.SyncDir</code> is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
 </ul>
 <p>For more on how these primitives plug into higher layers, see <a href="wal.html"><code>docs/wal.md</code></a> and <a href="vlog.html"><code>docs/vlog.md</code></a>.</p>
 

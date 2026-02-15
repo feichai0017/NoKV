@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-68d4371c.js";
+            window.path_to_searchindex_js = "searchindex-89de2c05.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -209,9 +209,13 @@
 <li><code>Sync</code></li>
 <li><code>Truncate</code></li>
 <li><code>Close</code></li>
-<li><code>Fd</code></li>
+<li><code>Stat</code></li>
+<li><code>Name</code></li>
 </ul>
-<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.</p>
+<p><code>Fd</code> is intentionally optional via <code>vfs.FDProvider</code>/<code>vfs.FileFD(...)</code> so non-OS
+file implementations can still satisfy <code>vfs.File</code>.</p>
+<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.
+<code>vfs.SyncDir(fs, dir)</code> centralizes directory fsync semantics for create/rename/remove durability.</p>
 <hr>
 <h2 id="3-fault-injection-model"><a class="header" href="#3-fault-injection-model">3. Fault Injection Model</a></h2>
 <p>NoKV provides <code>FaultFS</code> with rule-based injection:</p>
@@ -238,7 +242,7 @@
 <li><code>manifest</code>: edit logging, rewrite, verify, close.</li>
 <li><code>vlog</code>: verify/truncate and file open path.</li>
 <li><code>file</code>: mmap open/sync directory path via <code>vfs</code>.</li>
-<li><code>utils</code>: dir lock and directory sync helpers.</li>
+<li><code>utils</code>: dir lock and utility wrappers.</li>
 <li><code>raftstore/engine</code>: disk storage and snapshot import/export.</li>
 </ul>
 <hr>

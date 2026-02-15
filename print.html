@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-68d4371c.js";
+            window.path_to_searchindex_js = "searchindex-89de2c05.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -1596,9 +1596,13 @@ const (
 <li><code>Sync</code></li>
 <li><code>Truncate</code></li>
 <li><code>Close</code></li>
-<li><code>Fd</code></li>
+<li><code>Stat</code></li>
+<li><code>Name</code></li>
 </ul>
-<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.</p>
+<p><code>Fd</code> is intentionally optional via <code>vfs.FDProvider</code>/<code>vfs.FileFD(...)</code> so non-OS
+file implementations can still satisfy <code>vfs.File</code>.</p>
+<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.
+<code>vfs.SyncDir(fs, dir)</code> centralizes directory fsync semantics for create/rename/remove durability.</p>
 <hr>
 <h2 id="3-fault-injection-model"><a class="header" href="#3-fault-injection-model">3. Fault Injection Model</a></h2>
 <p>NoKV provides <code>FaultFS</code> with rule-based injection:</p>
@@ -1625,7 +1629,7 @@ const (
 <li><code>manifest</code>: edit logging, rewrite, verify, close.</li>
 <li><code>vlog</code>: verify/truncate and file open path.</li>
 <li><code>file</code>: mmap open/sync directory path via <code>vfs</code>.</li>
-<li><code>utils</code>: dir lock and directory sync helpers.</li>
+<li><code>utils</code>: dir lock and utility wrappers.</li>
 <li><code>raftstore/engine</code>: disk storage and snapshot import/export.</li>
 </ul>
 <hr>
@@ -1675,7 +1679,6 @@ const (
 </thead>
 <tbody>
 <tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
-<tr><td><a href="../file/file.go#L18-L27"><code>CoreFile</code></a></td><td>Interface abstracting platform-specific operations.</td><td><code>NewReader</code>, <code>Bytes</code>, <code>Sync</code>, <code>Delete</code>.</td></tr>
 <tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
 <tr><td><a href="../file/vlog.go#L16-L130"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>EncodeEntry</code>.</td></tr>
 </tbody>
@@ -1729,7 +1732,7 @@ _ = lf.DoneWriting(nextOffset)
 <ul>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
 <li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
-<li><code>SyncDir</code> (see <code>mmap_linux.go</code>) is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
+<li><code>vfs.SyncDir</code> is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
 </ul>
 <p>For more on how these primitives plug into higher layers, see <a href="#wal-subsystem"><code>docs/wal.md</code></a> and <a href="#value-log-vlog-design"><code>docs/vlog.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
