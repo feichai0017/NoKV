@@ -72,7 +72,7 @@ type Manager struct {
 	cfg Config
 
 	mu              sync.Mutex
-	active          *os.File
+	active          vfs.File
 	activeID        uint32
 	activeSize      int64
 	closed          bool
@@ -196,7 +196,7 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	if truncate {
 		flag |= os.O_TRUNC
 	}
-	f, err := m.cfg.FS.OpenFile(path, flag, m.cfg.FileMode)
+	f, err := m.cfg.FS.OpenFileHandle(path, flag, m.cfg.FileMode)
 	if err != nil {
 		return err
 	}
@@ -372,7 +372,7 @@ func (m *Manager) Replay(fn func(info EntryInfo, payload []byte) error) error {
 }
 
 func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, payload []byte) error) error {
-	f, err := m.cfg.FS.Open(path)
+	f, err := m.cfg.FS.OpenHandle(path)
 	if err != nil {
 		return err
 	}
@@ -476,7 +476,7 @@ func VerifyDirWithFS(dir string, fs vfs.FS) error {
 }
 
 func verifySegment(fs vfs.FS, path string) error {
-	f, err := fs.OpenFile(path, os.O_RDWR, 0)
+	f, err := fs.OpenFileHandle(path, os.O_RDWR, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
