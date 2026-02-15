@@ -373,7 +373,7 @@ func TestTxnCommitRollsBackOnValueLogError(t *testing.T) {
 	clearDir()
 	cfg := *opt
 	db := Open(&cfg)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
 	var calls int

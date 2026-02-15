@@ -202,12 +202,12 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	if !truncate {
 		info, err := f.Stat()
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		size = info.Size()
 		if _, err := f.Seek(0, io.SeekEnd); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 	}
@@ -373,10 +373,10 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	reIter := NewRecordIterator(f, m.bufferSize)
-	defer reIter.Close()
+	defer func() { _ = reIter.Close() }()
 
 	var offset int64
 	for reIter.Next() {
@@ -420,12 +420,12 @@ func (m *Manager) Close() error {
 	}
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
-			m.active.Close()
+			_ = m.active.Close()
 			return err
 		}
 	}
 	if err := m.active.Sync(); err != nil {
-		m.active.Close()
+		_ = m.active.Close()
 		return err
 	}
 	return m.active.Close()
@@ -474,10 +474,10 @@ func verifySegment(path string) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	reIter := NewRecordIterator(f, defaultBufferSize)
-	defer reIter.Close()
+	defer func() { _ = reIter.Close() }()
 
 	var offset int64
 	for reIter.Next() {

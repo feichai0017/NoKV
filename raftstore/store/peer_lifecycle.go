@@ -67,7 +67,7 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	}
 	id := p.ID()
 	if err := s.peers.add(p); err != nil {
-		p.Close()
+		_ = p.Close()
 		return nil, err
 	}
 	if regionMeta != nil && regionMeta.ID != 0 {
@@ -79,7 +79,7 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		if regionMeta != nil {
 			s.regions.setPeer(regionMeta.ID, nil)
 		}
-		p.Close()
+		_ = p.Close()
 		return nil, err
 	}
 	if regionMeta != nil {
@@ -87,7 +87,7 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 			s.router.Deregister(id)
 			s.peers.remove(id)
 			s.regions.setPeer(regionMeta.ID, nil)
-			p.Close()
+			_ = p.Close()
 			return nil, err
 		}
 	}
@@ -124,7 +124,7 @@ func (s *Store) StopPeer(id uint64) {
 		hook(p)
 	}
 	if p != nil {
-		p.Close()
+		_ = p.Close()
 	}
 }
 

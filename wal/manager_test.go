@@ -38,7 +38,7 @@ func TestManagerAppendAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	var got [][]byte
 	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
@@ -66,7 +66,7 @@ func TestManagerRotate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	payload := []byte("record")
 	if _, err := m.Append(payload); err != nil {
@@ -99,7 +99,7 @@ func TestManagerReplayHandlesTruncate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	if _, err := m.Append([]byte("alpha"), []byte("beta")); err != nil {
 		t.Fatalf("append: %v", err)
@@ -130,7 +130,7 @@ func TestManagerReplayHandlesTruncate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	var count int
 	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
@@ -150,7 +150,7 @@ func TestManagerReplayChecksumError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	if _, err := m.Append([]byte("gamma")); err != nil {
 		t.Fatalf("append: %v", err)
@@ -178,13 +178,15 @@ func TestManagerReplayChecksumError(t *testing.T) {
 	if _, err := f.Write([]byte{0x12, 0x34}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close segment: %v", err)
+	}
 
 	m, err = wal.Open(wal.Config{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	err = m.Replay(func(_ wal.EntryInfo, payload []byte) error { return nil })
 	if err == nil {
@@ -216,7 +218,7 @@ func TestManagerListSegmentsSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	for i := 0; i < 5; i++ {
 		payload := []byte("payload-" + string(rune('a'+i)))
@@ -272,7 +274,9 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 	if _, err := f.Write([]byte("bad")); err != nil {
 		t.Fatalf("write partial: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close segment: %v", err)
+	}
 
 	if err := wal.VerifyDir(dir); err != nil {
 		t.Fatalf("verify dir: %v", err)
@@ -282,7 +286,7 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after verify: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	count := 0
 	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
@@ -302,7 +306,7 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	rec := wal.Record{
 		Type:    wal.RecordTypeRaftEntry,
@@ -365,7 +369,7 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen wal: %v", err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	metrics = m.Metrics()
 	if metrics.RecordCounts.RaftEntries != 1 {

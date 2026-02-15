@@ -44,7 +44,7 @@ func TestVlogBase(t *testing.T) {
 	clearDir()
 	// Open DB.
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	log := db.vlog
 	var err error
 	// Create a simple key/value entry.
@@ -127,7 +127,7 @@ func TestValueLogHotBucketRouting(t *testing.T) {
 	}()
 
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	log := db.vlog
 
 	payload := bytes.Repeat([]byte("v"), 64)
@@ -164,7 +164,7 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 	}()
 
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-vlog")
 	version := uint64(7)
@@ -196,7 +196,7 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	}()
 
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	log := db.vlog
 
 	var mu sync.Mutex
@@ -273,7 +273,7 @@ func TestValueGC(t *testing.T) {
 	origCompactors := opt.NumCompactors
 	opt.NumCompactors = 0
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	defer func() { opt.NumCompactors = origCompactors }()
 	sz := 32 << 10
 	kvList := make([]*kvpkg.Entry, 0, 100)
@@ -318,7 +318,7 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 	cfg.NumCompactors = 2
 
 	db := Open(&cfg)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	key0 := keyForBucket(t, 0, cfg.ValueLogBucketCount)
 	key1 := keyForBucket(t, 1, cfg.ValueLogBucketCount)
@@ -355,7 +355,7 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 func TestValueLogIterateReleasesEntries(t *testing.T) {
 	clearDir()
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	txn := db.NewTransaction(true)
 	defer txn.Discard()
@@ -401,7 +401,7 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	clearDir()
 	cfg := *opt
 	db := Open(&cfg)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
 	var calls int
@@ -436,7 +436,7 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	clearDir()
 	cfg := *opt
 	db := Open(&cfg)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
 	db.vlog.setValueLogFileSize(256)
@@ -476,7 +476,7 @@ func TestValueLogReadCopiesSmallValue(t *testing.T) {
 	defer func() { opt.ValueThreshold = prevThreshold }()
 
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	entry := kvpkg.NewEntry([]byte("small-read"), []byte("v"))
 	entry.Key = kvpkg.InternalKey(kvpkg.CFDefault, entry.Key, nonTxnMaxVersion)
@@ -541,7 +541,7 @@ func TestValueLogReconcileManifestRemovesInvalid(t *testing.T) {
 	tmp := t.TempDir()
 	mgr, err := vlogpkg.Open(vlogpkg.Config{Dir: tmp, FileMode: utils.DefaultFileMode, MaxSize: 1 << 20, Bucket: 0})
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	require.NoError(t, mgr.Rotate())
 
@@ -565,7 +565,7 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	opt.ValueLogFileSize = 1 << 20
 	opt.NumCompactors = 0
 	db := Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	e := kvpkg.NewEntry([]byte("gc-skip"), []byte("v"))
 	require.NoError(t, db.Set(e.Key, e.Value))

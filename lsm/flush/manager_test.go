@@ -10,7 +10,7 @@ import (
 
 func TestManagerSubmitAndNext(t *testing.T) {
 	mgr := flush.NewManager()
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	task := &flush.Task{SegmentID: 1}
 	if _, err := mgr.Submit(task); err != nil {
@@ -39,7 +39,7 @@ func TestManagerSubmitAndNext(t *testing.T) {
 
 func TestManagerNextBlocksUntilSubmit(t *testing.T) {
 	mgr := flush.NewManager()
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -62,7 +62,7 @@ func TestManagerNextBlocksUntilSubmit(t *testing.T) {
 
 func TestManagerUpdateOnMissingTask(t *testing.T) {
 	mgr := flush.NewManager()
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	if err := mgr.Update(123, flush.StageInstall, nil, nil); err == nil {
 		t.Fatalf("expected error")

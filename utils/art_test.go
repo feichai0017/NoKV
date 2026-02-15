@@ -49,7 +49,7 @@ func TestARTIteratorOrder(t *testing.T) {
 	if it == nil {
 		t.Fatalf("expected iterator")
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 
 	it.Rewind()
 	var last []byte

@@ -52,13 +52,13 @@ func main() {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		exit(1)
 	}
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, `Usage: nokv <command> [flags]
+	_, _ = fmt.Fprintln(w, `Usage: nokv <command> [flags]
 
 Commands:
   stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
@@ -105,24 +105,24 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		return enc.Encode(snap)
 	}
 
-	fmt.Fprintf(w, "Entries               %d\n", snap.Entries)
-	fmt.Fprintf(w, "Flush.Pending          %d\n", snap.Flush.Pending)
-	fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.Compaction.Backlog)
-	fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.Compaction.MaxScore)
-	fmt.Fprintf(w, "Flush.Wait.LastMs      %.2f\n", snap.Flush.LastWaitMs)
-	fmt.Fprintf(w, "Flush.Wait.MaxMs       %.2f\n", snap.Flush.MaxWaitMs)
-	fmt.Fprintf(w, "Flush.Build.LastMs     %.2f\n", snap.Flush.LastBuildMs)
-	fmt.Fprintf(w, "Flush.Build.MaxMs      %.2f\n", snap.Flush.MaxBuildMs)
-	fmt.Fprintf(w, "Flush.Release.LastMs   %.2f\n", snap.Flush.LastReleaseMs)
-	fmt.Fprintf(w, "Flush.Release.MaxMs    %.2f\n", snap.Flush.MaxReleaseMs)
-	fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.Compaction.LastDurationMs)
-	fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.Compaction.MaxDurationMs)
-	fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.Compaction.Runs)
-	fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLog.Segments)
-	fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLog.PendingDeletes)
-	fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLog.DiscardQueue)
+	_, _ = fmt.Fprintf(w, "Entries               %d\n", snap.Entries)
+	_, _ = fmt.Fprintf(w, "Flush.Pending          %d\n", snap.Flush.Pending)
+	_, _ = fmt.Fprintf(w, "Compaction.Backlog     %d\n", snap.Compaction.Backlog)
+	_, _ = fmt.Fprintf(w, "Compaction.MaxScore    %.2f\n", snap.Compaction.MaxScore)
+	_, _ = fmt.Fprintf(w, "Flush.Wait.LastMs      %.2f\n", snap.Flush.LastWaitMs)
+	_, _ = fmt.Fprintf(w, "Flush.Wait.MaxMs       %.2f\n", snap.Flush.MaxWaitMs)
+	_, _ = fmt.Fprintf(w, "Flush.Build.LastMs     %.2f\n", snap.Flush.LastBuildMs)
+	_, _ = fmt.Fprintf(w, "Flush.Build.MaxMs      %.2f\n", snap.Flush.MaxBuildMs)
+	_, _ = fmt.Fprintf(w, "Flush.Release.LastMs   %.2f\n", snap.Flush.LastReleaseMs)
+	_, _ = fmt.Fprintf(w, "Flush.Release.MaxMs    %.2f\n", snap.Flush.MaxReleaseMs)
+	_, _ = fmt.Fprintf(w, "Compaction.LastMs      %.2f\n", snap.Compaction.LastDurationMs)
+	_, _ = fmt.Fprintf(w, "Compaction.MaxMs       %.2f\n", snap.Compaction.MaxDurationMs)
+	_, _ = fmt.Fprintf(w, "Compaction.Runs        %d\n", snap.Compaction.Runs)
+	_, _ = fmt.Fprintf(w, "ValueLog.Segments      %d\n", snap.ValueLog.Segments)
+	_, _ = fmt.Fprintf(w, "ValueLog.PendingDelete %d\n", snap.ValueLog.PendingDeletes)
+	_, _ = fmt.Fprintf(w, "ValueLog.DiscardQueue  %d\n", snap.ValueLog.DiscardQueue)
 	if snap.ValueLog.GC.GCRuns > 0 || snap.ValueLog.GC.GCScheduled > 0 {
-		fmt.Fprintf(w, "ValueLog.GC            runs=%d scheduled=%d active=%d removed=%d skipped=%d throttled=%d rejected=%d parallel=%d\n",
+		_, _ = fmt.Fprintf(w, "ValueLog.GC            runs=%d scheduled=%d active=%d removed=%d skipped=%d throttled=%d rejected=%d parallel=%d\n",
 			snap.ValueLog.GC.GCRuns,
 			snap.ValueLog.GC.GCScheduled,
 			snap.ValueLog.GC.GCActive,
@@ -144,93 +144,93 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 			if head.IsZero() {
 				continue
 			}
-			fmt.Fprintf(w, "ValueLog.Head[%d]       fid=%d offset=%d len=%d\n",
+			_, _ = fmt.Fprintf(w, "ValueLog.Head[%d]       fid=%d offset=%d len=%d\n",
 				bucket, head.Fid, head.Offset, head.Len)
 		}
 	}
-	fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
+	_, _ = fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
 	if snap.Hot.ReadRing != nil {
 		hs := snap.Hot.ReadRing
-		fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
-		fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
-		fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
+		_, _ = fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
+		_, _ = fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
+		_, _ = fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
 			hs.Touches, hs.Clamps, hs.Inserts, hs.Removes)
 		if hs.WindowSlots > 0 && hs.WindowSlotDuration > 0 {
-			fmt.Fprintf(w, "HotRing.Window         slots=%d dur=%s\n",
+			_, _ = fmt.Fprintf(w, "HotRing.Window         slots=%d dur=%s\n",
 				hs.WindowSlots, hs.WindowSlotDuration.String())
 		}
 		if hs.DecayInterval > 0 && hs.DecayShift > 0 {
-			fmt.Fprintf(w, "HotRing.Decay          every=%s shift=%d\n",
+			_, _ = fmt.Fprintf(w, "HotRing.Decay          every=%s shift=%d\n",
 				hs.DecayInterval.String(), hs.DecayShift)
 		}
 	}
-	fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.Compaction.ValueWeight)
+	_, _ = fmt.Fprintf(w, "Compaction.ValueWeight %.2f", snap.Compaction.ValueWeight)
 	if snap.Compaction.ValueWeightSuggested > snap.Compaction.ValueWeight {
-		fmt.Fprintf(w, " (suggested %.2f)", snap.Compaction.ValueWeightSuggested)
+		_, _ = fmt.Fprintf(w, " (suggested %.2f)", snap.Compaction.ValueWeightSuggested)
 	}
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	if snap.LSM.ValueDensityMax > 0 {
-		fmt.Fprintf(w, "LSM.ValueDensityMax    %.2f\n", snap.LSM.ValueDensityMax)
+		_, _ = fmt.Fprintf(w, "LSM.ValueDensityMax    %.2f\n", snap.LSM.ValueDensityMax)
 	}
 	if snap.LSM.ValueDensityAlert {
-		fmt.Fprintln(w, "LSM.ValueDensityAlert  true")
+		_, _ = fmt.Fprintln(w, "LSM.ValueDensityAlert  true")
 	}
-	fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WAL.ActiveSegment, snap.WAL.SegmentCount, snap.WAL.SegmentsRemoved)
-	fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WAL.ActiveSize)
+	_, _ = fmt.Fprintf(w, "WAL.ActiveSegment      %d (segments=%d removed=%d)\n", snap.WAL.ActiveSegment, snap.WAL.SegmentCount, snap.WAL.SegmentsRemoved)
+	_, _ = fmt.Fprintf(w, "WAL.ActiveSize         %d bytes\n", snap.WAL.ActiveSize)
 	if snap.WAL.RecordCounts.Total() > 0 {
 		r := snap.WAL.RecordCounts
-		fmt.Fprintf(w, "WAL.Records            entries=%d raft_entries=%d raft_states=%d raft_snapshots=%d other=%d\n",
+		_, _ = fmt.Fprintf(w, "WAL.Records            entries=%d raft_entries=%d raft_states=%d raft_snapshots=%d other=%d\n",
 			r.Entries, r.RaftEntries, r.RaftStates, r.RaftSnapshots, r.Other)
 	}
-	fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WAL.SegmentsWithRaftRecords, snap.WAL.RemovableRaftSegments)
+	_, _ = fmt.Fprintf(w, "WAL.RaftSegments       %d (removable=%d)\n", snap.WAL.SegmentsWithRaftRecords, snap.WAL.RemovableRaftSegments)
 	if snap.WAL.TypedRecordRatio > 0 || snap.WAL.TypedRecordWarning {
-		fmt.Fprintf(w, "WAL.TypedRatio         %.2f\n", snap.WAL.TypedRecordRatio)
+		_, _ = fmt.Fprintf(w, "WAL.TypedRatio         %.2f\n", snap.WAL.TypedRecordRatio)
 	}
 	if snap.WAL.TypedRecordWarning && snap.WAL.TypedRecordReason != "" {
-		fmt.Fprintf(w, "WAL.Warning            %s\n", snap.WAL.TypedRecordReason)
+		_, _ = fmt.Fprintf(w, "WAL.Warning            %s\n", snap.WAL.TypedRecordReason)
 	}
 	if snap.WAL.AutoGCRuns > 0 || snap.WAL.AutoGCRemoved > 0 || snap.WAL.AutoGCLastUnix > 0 {
 		last := "never"
 		if snap.WAL.AutoGCLastUnix > 0 {
 			last = time.Unix(snap.WAL.AutoGCLastUnix, 0).Format(time.RFC3339)
 		}
-		fmt.Fprintf(w, "WAL.AutoGC             runs=%d removed=%d last=%s\n", snap.WAL.AutoGCRuns, snap.WAL.AutoGCRemoved, last)
+		_, _ = fmt.Fprintf(w, "WAL.AutoGC             runs=%d removed=%d last=%s\n", snap.WAL.AutoGCRuns, snap.WAL.AutoGCRemoved, last)
 	}
 	if snap.Raft.GroupCount > 0 {
-		fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
+		_, _ = fmt.Fprintf(w, "Raft.Groups            %d lagging=%d maxLagSegments=%d\n",
 			snap.Raft.GroupCount, snap.Raft.LaggingGroups, snap.Raft.MaxLagSegments)
-		fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.Raft.MinLogSegment, snap.Raft.MaxLogSegment)
+		_, _ = fmt.Fprintf(w, "Raft.SegmentRange      min=%d max=%d\n", snap.Raft.MinLogSegment, snap.Raft.MaxLogSegment)
 		if snap.Raft.LagWarnThreshold > 0 {
-			fmt.Fprintf(w, "Raft.LagThreshold      %d segments\n", snap.Raft.LagWarnThreshold)
+			_, _ = fmt.Fprintf(w, "Raft.LagThreshold      %d segments\n", snap.Raft.LagWarnThreshold)
 		}
 		if snap.Raft.LagWarning {
-			fmt.Fprintf(w, "Raft.Warning           lagging=%d maxLag=%d (threshold=%d)\n",
+			_, _ = fmt.Fprintf(w, "Raft.Warning           lagging=%d maxLag=%d (threshold=%d)\n",
 				snap.Raft.LaggingGroups, snap.Raft.MaxLagSegments, snap.Raft.LagWarnThreshold)
 		}
 	}
-	fmt.Fprintf(w, "Txns.Active            %d\n", snap.Txn.Active)
-	fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.Txn.Started)
-	fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.Txn.Committed)
-	fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.Txn.Conflicts)
-	fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
+	_, _ = fmt.Fprintf(w, "Txns.Active            %d\n", snap.Txn.Active)
+	_, _ = fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.Txn.Started)
+	_, _ = fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.Txn.Committed)
+	_, _ = fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.Txn.Conflicts)
+	_, _ = fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
 		snap.Region.Total, snap.Region.New, snap.Region.Running, snap.Region.Removing, snap.Region.Tombstone, snap.Region.Other)
 	if snap.LSM.ValueBytesTotal > 0 {
-		fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSM.ValueBytesTotal)
+		_, _ = fmt.Fprintf(w, "LSM.ValueBytesTotal   %d\n", snap.LSM.ValueBytesTotal)
 	}
 	if len(snap.LSM.Levels) > 0 {
-		fmt.Fprintln(w, "LSM.Levels:")
+		_, _ = fmt.Fprintln(w, "LSM.Levels:")
 		for _, lvl := range snap.LSM.Levels {
-			fmt.Fprintf(w, "  - L%d tables=%d size=%dB value=%dB stale=%dB",
+			_, _ = fmt.Fprintf(w, "  - L%d tables=%d size=%dB value=%dB stale=%dB",
 				lvl.Level, lvl.TableCount, lvl.SizeBytes, lvl.ValueBytes, lvl.StaleBytes)
 			if lvl.IngestTables > 0 {
-				fmt.Fprintf(w, " ingestTables=%d ingestSize=%dB ingestValue=%dB",
+				_, _ = fmt.Fprintf(w, " ingestTables=%d ingestSize=%dB ingestValue=%dB",
 					lvl.IngestTables, lvl.IngestSizeBytes, lvl.IngestValueBytes)
 			}
-			fmt.Fprintln(w)
+			_, _ = fmt.Fprintln(w)
 		}
 	}
 	if len(snap.LSM.ColumnFamilies) > 0 {
-		fmt.Fprintln(w, "ColumnFamilies:")
+		_, _ = fmt.Fprintln(w, "ColumnFamilies:")
 		var names []string
 		for name := range snap.LSM.ColumnFamilies {
 			names = append(names, name)
@@ -238,17 +238,17 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		sort.Strings(names)
 		for _, name := range names {
 			cf := snap.LSM.ColumnFamilies[name]
-			fmt.Fprintf(w, "  - %s: reads=%d writes=%d\n", name, cf.Reads, cf.Writes)
+			_, _ = fmt.Fprintf(w, "  - %s: reads=%d writes=%d\n", name, cf.Reads, cf.Writes)
 		}
 	}
 	if len(snap.Hot.ReadKeys) > 0 {
-		fmt.Fprintln(w, "HotKeys:")
+		_, _ = fmt.Fprintln(w, "HotKeys:")
 		for _, hk := range snap.Hot.ReadKeys {
-			fmt.Fprintf(w, "  - key=%q count=%d\n", hk.Key, hk.Count)
+			_, _ = fmt.Fprintf(w, "  - key=%q count=%d\n", hk.Key, hk.Count)
 		}
 	}
 	if snap.Transport.SendAttempts > 0 || snap.Transport.DialsTotal > 0 {
-		fmt.Fprintf(w, "Transport.GRPC         sends=%d success=%d fail=%d retries=%d blocked=%d watchdog=%v\n",
+		_, _ = fmt.Fprintf(w, "Transport.GRPC         sends=%d success=%d fail=%d retries=%d blocked=%d watchdog=%v\n",
 			snap.Transport.SendAttempts,
 			snap.Transport.SendSuccesses,
 			snap.Transport.SendFailures,
@@ -258,7 +258,7 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		)
 	}
 	if snap.Redis.CommandsTotal > 0 || snap.Redis.ConnectionsAccepted > 0 {
-		fmt.Fprintf(w, "Redis.Gateway          commands=%d errors=%d active_conn=%d accepted_conn=%d\n",
+		_, _ = fmt.Fprintf(w, "Redis.Gateway          commands=%d errors=%d active_conn=%d accepted_conn=%d\n",
 			snap.Redis.CommandsTotal,
 			snap.Redis.ErrorsTotal,
 			snap.Redis.ConnectionsActive,
@@ -287,7 +287,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
 	out := map[string]any{
@@ -363,7 +363,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 		return enc.Encode(out)
 	}
 
-	fmt.Fprintf(w, "Manifest Log Pointer : segment=%d offset=%d\n", version.LogSegment, version.LogOffset)
+	_, _ = fmt.Fprintf(w, "Manifest Log Pointer : segment=%d offset=%d\n", version.LogSegment, version.LogOffset)
 	if heads != nil {
 		buckets := make([]uint32, 0, len(heads))
 		for bucket := range heads {
@@ -372,17 +372,17 @@ func runManifestCmd(w io.Writer, args []string) error {
 		slices.Sort(buckets)
 		for _, bucket := range buckets {
 			meta := heads[bucket]
-			fmt.Fprintf(w, "ValueLog Head[%d]     : fid=%d offset=%d valid=%v\n", bucket, meta.FileID, meta.Offset, meta.Valid)
+			_, _ = fmt.Fprintf(w, "ValueLog Head[%d]     : fid=%d offset=%d valid=%v\n", bucket, meta.FileID, meta.Offset, meta.Valid)
 		}
 	}
-	fmt.Fprintln(w, "Levels:")
+	_, _ = fmt.Fprintln(w, "Levels:")
 	for _, lvl := range levelInfo {
-		fmt.Fprintf(w, "  - L%d files=%d total=%d bytes value=%d bytes ids=%v\n",
+		_, _ = fmt.Fprintf(w, "  - L%d files=%d total=%d bytes value=%d bytes ids=%v\n",
 			lvl["level"], lvl["file_count"], lvl["total_bytes"], lvl["value_bytes"], lvl["file_ids"])
 	}
-	fmt.Fprintln(w, "ValueLog segments:")
+	_, _ = fmt.Fprintln(w, "ValueLog segments:")
 	for _, vl := range valueLogs {
-		fmt.Fprintf(w, "  - bucket=%d fid=%d offset=%d valid=%v\n", vl["bucket"], vl["fid"], vl["offset"], vl["valid"])
+		_, _ = fmt.Fprintf(w, "  - bucket=%d fid=%d offset=%d valid=%v\n", vl["bucket"], vl["fid"], vl["offset"], vl["valid"])
 	}
 	return nil
 }
@@ -410,7 +410,7 @@ func runVlogCmd(w io.Writer, args []string) error {
 		if err != nil {
 			return err
 		}
-		defer manager.Close()
+		defer func() { _ = manager.Close() }()
 
 		head := manager.Head()
 		fids := manager.ListFIDs()
@@ -431,9 +431,9 @@ func runVlogCmd(w io.Writer, args []string) error {
 			return enc.Encode(out)
 		}
 
-		fmt.Fprintf(w, "Active FID : %d\n", manager.ActiveFID())
-		fmt.Fprintf(w, "Head       : fid=%d offset=%d\n", head.Fid, head.Offset)
-		fmt.Fprintf(w, "Segments   : %v\n", fids)
+		_, _ = fmt.Fprintf(w, "Active FID : %d\n", manager.ActiveFID())
+		_, _ = fmt.Fprintf(w, "Head       : fid=%d offset=%d\n", head.Fid, head.Offset)
+		_, _ = fmt.Fprintf(w, "Segments   : %v\n", fids)
 		return nil
 	}
 
@@ -470,11 +470,11 @@ func runVlogCmd(w io.Writer, args []string) error {
 		return enc.Encode(map[string]any{"buckets": bucketInfo})
 	}
 	for _, info := range bucketInfo {
-		fmt.Fprintf(w, "Bucket %d\n", info["bucket"])
-		fmt.Fprintf(w, "  Active FID : %d\n", info["active_fid"])
+		_, _ = fmt.Fprintf(w, "Bucket %d\n", info["bucket"])
+		_, _ = fmt.Fprintf(w, "  Active FID : %d\n", info["active_fid"])
 		head := info["head"].(map[string]any)
-		fmt.Fprintf(w, "  Head       : fid=%d offset=%d\n", head["fid"], head["offset"])
-		fmt.Fprintf(w, "  Segments   : %v\n", info["segments"])
+		_, _ = fmt.Fprintf(w, "  Head       : fid=%d offset=%d\n", head["fid"], head["offset"])
+		_, _ = fmt.Fprintf(w, "  Segments   : %v\n", info["segments"])
 	}
 	return nil
 }
@@ -495,7 +495,7 @@ func runRegionsCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	snapshot := mgr.RegionSnapshot()
 	regions := make([]manifest.RegionMeta, 0, len(snapshot))
@@ -514,13 +514,13 @@ func runRegionsCmd(w io.Writer, args []string) error {
 	}
 
 	if len(regions) == 0 {
-		fmt.Fprintln(w, "Regions: (none)")
+		_, _ = fmt.Fprintln(w, "Regions: (none)")
 		return nil
 	}
 
-	fmt.Fprintln(w, "Regions:")
+	_, _ = fmt.Fprintln(w, "Regions:")
 	for _, meta := range regions {
-		fmt.Fprintf(w, "  - id=%d state=%s epoch={ver:%d conf:%d} range=[%q,%q) peers=%s\n",
+		_, _ = fmt.Fprintf(w, "  - id=%d state=%s epoch={ver:%d conf:%d} range=[%q,%q) peers=%s\n",
 			meta.ID, formatRegionState(meta.State), meta.Epoch.Version, meta.Epoch.ConfVersion,
 			meta.StartKey, meta.EndKey, formatPeers(meta.Peers))
 	}
@@ -544,32 +544,32 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(snap)
 	}
-	fmt.Fprintf(w, "Stores (%d)\n", len(snap.Stores))
+	_, _ = fmt.Fprintf(w, "Stores (%d)\n", len(snap.Stores))
 	for _, st := range snap.Stores {
 		updated := ""
 		if !st.UpdatedAt.IsZero() {
 			updated = st.UpdatedAt.Format(time.RFC3339)
 		}
-		fmt.Fprintf(w, "  - store=%d region_num=%d leader_num=%d capacity=%d available=%d updated=%s\n",
+		_, _ = fmt.Fprintf(w, "  - store=%d region_num=%d leader_num=%d capacity=%d available=%d updated=%s\n",
 			st.StoreID, st.RegionNum, st.LeaderNum, st.Capacity, st.Available, updated)
 	}
 	if len(snap.Stores) > 0 {
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
-	fmt.Fprintf(w, "Regions (%d)\n", len(snap.Regions))
+	_, _ = fmt.Fprintf(w, "Regions (%d)\n", len(snap.Regions))
 	for _, region := range snap.Regions {
-		fmt.Fprintf(w, "  - region=%d", region.ID)
+		_, _ = fmt.Fprintf(w, "  - region=%d", region.ID)
 		if !region.LastHeartbeat.IsZero() {
-			fmt.Fprintf(w, " last_heartbeat=%s lag=%s", region.LastHeartbeat.Format(time.RFC3339), region.Lag)
+			_, _ = fmt.Fprintf(w, " last_heartbeat=%s lag=%s", region.LastHeartbeat.Format(time.RFC3339), region.Lag)
 		}
-		fmt.Fprint(w, " peers=")
+		_, _ = fmt.Fprint(w, " peers=")
 		for i, peer := range region.Peers {
 			if i > 0 {
-				fmt.Fprint(w, ",")
+				_, _ = fmt.Fprint(w, ",")
 			}
-			fmt.Fprintf(w, "%d/%d", peer.StoreID, peer.PeerID)
+			_, _ = fmt.Fprintf(w, "%d/%d", peer.StoreID, peer.PeerID)
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 	return nil
 }
@@ -607,7 +607,7 @@ func fetchExpvarSnapshot(url string) (NoKV.StatsSnapshot, error) {
 	if err != nil {
 		return NoKV.StatsSnapshot{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("expvar request failed: %s", resp.Status)
 	}

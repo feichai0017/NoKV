@@ -11,7 +11,7 @@ func BenchmarkDBIteratorScan(b *testing.B) {
 	value := make([]byte, 128)
 	_ = loadBenchKeys(b, db, 20_000, value)
 	it := db.NewIterator(&utils.Options{IsAsc: true})
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -27,7 +27,7 @@ func BenchmarkDBIteratorSeek(b *testing.B) {
 	value := make([]byte, 128)
 	keys := loadBenchKeys(b, db, 20_000, value)
 	it := db.NewIterator(&utils.Options{IsAsc: true})
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

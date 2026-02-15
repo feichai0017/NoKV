@@ -36,7 +36,7 @@ func countMemIndexEntries(idx memIndex) int64 {
 	if itr == nil {
 		return 0
 	}
-	defer itr.Close()
+	defer func() { _ = itr.Close() }()
 	itr.Rewind()
 	var count int64
 	for ; itr.Valid(); itr.Next() {

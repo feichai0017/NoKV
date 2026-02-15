@@ -3,7 +3,8 @@
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools
 
-GOLANGCI_LINT_VERSION ?= v1.64.8
+GOLANGCI_LINT_VERSION ?= v2.9.0
+PROJECT_GO_VERSION ?= $(shell awk '/^go /{print $$2}' go.mod)
 PROTOC_GEN_GO_VERSION ?= $(shell go list -m -f '{{.Version}}' google.golang.org/protobuf)
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
 PROTOC_VERSION ?= 33.4
@@ -79,7 +80,7 @@ bench:
 # Install development tools
 install-tools:
 	@echo "Installing development tools (pinned versions)..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOTOOLCHAIN=go$(PROJECT_GO_VERSION).0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	@if ! command -v protoc >/dev/null 2>&1; then \

@@ -386,7 +386,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	db2 := Open(opt)
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	_, err := os.Stat(stalePath)
 	require.Error(t, err)
@@ -442,7 +442,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o666))
 
 	db2 := Open(opt)
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	headMeta, hasHead := db2.lsm.ValueLogHead()[0]
 	status := db2.lsm.ValueLogStatus()
@@ -499,7 +499,7 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	require.NoError(t, os.Remove(removed))
 
 	db2 := Open(opt)
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	version := db2.lsm.CurrentVersion()
 	levelFiles := version.Levels[0]
@@ -543,7 +543,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmp, []byte("MANIFEST-999999"), 0o666))
 
 	db2 := Open(opt)
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	name, err := os.ReadFile(current)
 	require.NoError(t, err)
@@ -575,11 +575,11 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 
 	walMgr, err := wal.Open(wal.Config{Dir: walDir})
 	require.NoError(t, err)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 
 	manifestMgr, err := manifest.Open(manifestDir)
 	require.NoError(t, err)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	ws, err := engine.OpenWALStorage(engine.WALStorageConfig{
 		GroupID:  1,
@@ -614,11 +614,11 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	restoreManifestDir := filepath.Join(dir, "restore", "manifest")
 	walMgrRestore, err := wal.Open(wal.Config{Dir: restoreWalDir})
 	require.NoError(t, err)
-	defer walMgrRestore.Close()
+	defer func() { _ = walMgrRestore.Close() }()
 
 	manifestMgrRestore, err := manifest.Open(restoreManifestDir)
 	require.NoError(t, err)
-	defer manifestMgrRestore.Close()
+	defer func() { _ = manifestMgrRestore.Close() }()
 
 	wsRestore, err := engine.OpenWALStorage(engine.WALStorageConfig{
 		GroupID:  1,
@@ -675,7 +675,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	}
 
 	db2 := Open(opt)
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	item, err := db2.Get(key)
 	require.NoError(t, err)
@@ -1002,20 +1002,20 @@ func TestCloseWithErrors(t *testing.T) {
 	dirLockErr := errors.New("dir lock release error")
 	db.testCloseHooks = &testCloseHooks{
 		lsmClose: func() error {
-			db.lsm.Close()
+			_ = db.lsm.Close()
 			return lsmErr
 		},
 		vlogClose: func() error {
-			db.vlog.close()
+			_ = db.vlog.close()
 			return vlogErr
 		},
 		walClose: func() error {
-			db.wal.Close()
+			_ = db.wal.Close()
 			return walErr
 		},
 		dirLockRelease: func() error {
 			if db.dirLock != nil {
-				db.dirLock.Release()
+				_ = db.dirLock.Release()
 			}
 			return dirLockErr
 		},

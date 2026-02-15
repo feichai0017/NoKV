@@ -113,7 +113,7 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
