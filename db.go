@@ -420,11 +420,12 @@ func (db *DB) Close() error {
 		db.dirLock = nil
 	}
 
+	atomic.StoreUint32(&db.isClosed, 1)
+
 	if len(errs) > 0 {
 		return stderrors.Join(errs...)
 	}
 
-	atomic.StoreUint32(&db.isClosed, 1)
 	return nil
 }
 
