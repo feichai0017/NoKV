@@ -669,26 +669,24 @@ func (txn *Txn) commitPrecheck() error {
 // If error is nil, the transaction is successfully committed. In case of a non-nil error, the LSM
 // tree won't be updated, so there's no need for any rollback.
 func (txn *Txn) Commit() error {
-	// txn.conflictKeys can be zero if conflict detection is turned off. So we
-	// should check txn.pendingWrites.
-	if len(txn.pendingWrites) == 0 {
-		return nil // Nothing to do.
-	}
 	// Precheck before discarding txn.
 	if err := txn.commitPrecheck(); err != nil {
 		return err
 	}
+	// Ensure Discard is called to finalize txn lifecycle and metrics even if returning early.
 	defer txn.Discard()
+
+	// txn.conflictKeys can be zero if conflict detection is turned off. So we
+	// should check txn.pendingWrites.
+	if len(txn.pendingWrites) == 0 {
+		return nil // Discard() will run via defer to decrement Active counter.
+	}
 
 	txnCb, err := txn.commitAndSend()
 	if err != nil {
 		return err
 	}
-	// If batchSet failed, LSM would not have been updated. So, no need to rollback anything.
 
-	// Value-log errors are surfaced via req.Wait(); the value-log manager rewinds
-	// partial batches before the error is returned so the LSM state remains
-	// unchanged on failure.
 	return txnCb()
 }
 
@@ -723,17 +721,16 @@ func (txn *Txn) CommitWith(cb func(error)) {
 		panic("Nil callback provided to CommitWith")
 	}
 
-	if len(txn.pendingWrites) == 0 {
-		// Do not run these callbacks from here, because the CommitWith and the
-		// callback might be acquiring the same locks. Instead run the callback
-		// from another goroutine.
-		go runTxnCallback(&txnCb{user: cb, err: nil})
+	// Dispatch precheck errors via goroutine to maintain the "non-blocking" API contract.
+	if err := txn.commitPrecheck(); err != nil {
+		go runTxnCallback(&txnCb{user: cb, err: err})
 		return
 	}
 
-	// Precheck before discarding txn.
-	if err := txn.commitPrecheck(); err != nil {
-		cb(err)
+	if len(txn.pendingWrites) == 0 {
+		// Clean up lifecycle accounting and trigger the callback asynchronously for empty commits.
+		txn.Discard()
+		go runTxnCallback(&txnCb{user: cb, err: nil})
 		return
 	}
 
