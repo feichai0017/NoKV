@@ -88,7 +88,7 @@ func (OSFS) ReadFile(name string) ([]byte, error) {
 	return os.ReadFile(name)
 }
 
-// WriteFile writes an entire file atomically with the provided permissions.
+// WriteFile writes an entire file with the provided permissions.
 func (OSFS) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(name, data, perm)
 }
