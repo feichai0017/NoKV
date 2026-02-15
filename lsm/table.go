@@ -859,11 +859,17 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {
 	newRef := atomic.AddInt32(&t.ref, -1)
+
+	if newRef < 0 {
+		panic(fmt.Sprintf("table refcount underflow: table_id %d, current_ref %d", t.fid, newRef))
+	}
+
 	if newRef == 0 {
 		if err := t.Delete(); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
