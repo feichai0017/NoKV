@@ -45,7 +45,7 @@ func TestServerStartsTinyKvService(t *testing.T) {
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := pb.NewTinyKvClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

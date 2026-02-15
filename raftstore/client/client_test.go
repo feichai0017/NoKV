@@ -390,7 +390,7 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 
 	cli, err := New(clientCfg)
 	require.NoError(t, err)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -466,7 +466,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 
 	cli, err := New(clientCfg)
 	require.NoError(t, err)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -555,7 +555,7 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	_, err = cli.Get(context.Background(), []byte("key"), 1)
 	require.Error(t, err)

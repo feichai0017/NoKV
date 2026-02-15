@@ -110,34 +110,34 @@ func runServeCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if totalRegions == 0 {
-		fmt.Fprintln(w, "Manifest contains no regions; waiting for bootstrap")
+		_, _ = fmt.Fprintln(w, "Manifest contains no regions; waiting for bootstrap")
 	} else {
-		fmt.Fprintf(w, "Manifest regions: %d, local peers started: %d\n", totalRegions, len(startedRegions))
+		_, _ = fmt.Fprintf(w, "Manifest regions: %d, local peers started: %d\n", totalRegions, len(startedRegions))
 		if missing := totalRegions - len(startedRegions); missing > 0 {
-			fmt.Fprintf(w, "Store %d not present in %d region(s)\n", *storeID, missing)
+			_, _ = fmt.Fprintf(w, "Store %d not present in %d region(s)\n", *storeID, missing)
 		}
 		if len(startedRegions) > 0 {
-			fmt.Fprintln(w, "Sample regions:")
+			_, _ = fmt.Fprintln(w, "Sample regions:")
 			for i, meta := range startedRegions {
 				if i >= 5 {
-					fmt.Fprintf(w, "  ... (%d more)\n", len(startedRegions)-i)
+					_, _ = fmt.Fprintf(w, "  ... (%d more)\n", len(startedRegions)-i)
 					break
 				}
-				fmt.Fprintf(w, "  - id=%d range=[%s,%s) peers=%s\n", meta.ID, formatKey(meta.StartKey, true), formatKey(meta.EndKey, false), formatPeers(meta.Peers))
+				_, _ = fmt.Fprintf(w, "  - id=%d range=[%s,%s) peers=%s\n", meta.ID, formatKey(meta.StartKey, true), formatKey(meta.EndKey, false), formatPeers(meta.Peers))
 			}
 		}
 	}
 
-	fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
 	if len(peerFlags) > 0 {
-		fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
+		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
 	}
-	fmt.Fprintln(w, "Press Ctrl+C to stop")
+	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop")
 
 	ctx, cancel := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	<-ctx.Done()
-	fmt.Fprintln(w, "\nShutting down...")
+	_, _ = fmt.Fprintln(w, "\nShutting down...")
 	return nil
 }
 

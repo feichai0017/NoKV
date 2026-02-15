@@ -25,7 +25,7 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	opt.MaxBatchSize = 16 << 20
 
 	db := NoKV.Open(opt)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -46,7 +46,7 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
 

@@ -103,10 +103,10 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 	} else {
 		diffKey = tb.keyDiff(key)
 	}
-	utils.CondPanicFunc(!(len(key)-len(diffKey) <= math.MaxUint16), func() error {
+	utils.CondPanicFunc(len(key)-len(diffKey) > math.MaxUint16, func() error {
 		return fmt.Errorf("tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16")
 	})
-	utils.CondPanicFunc(!(len(diffKey) <= math.MaxUint16), func() error {
+	utils.CondPanicFunc(len(diffKey) > math.MaxUint16, func() error {
 		return fmt.Errorf("tableBuilder.add: len(diffKey) <= math.MaxUint16")
 	})
 
@@ -161,7 +161,7 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	if len(tb.curBlock.entryOffsets) <= 0 {
 		return false
 	}
-	utils.CondPanic(!((uint32(len(tb.curBlock.entryOffsets))+1)*4+4+8+4 < math.MaxUint32), errors.New("Integer overflow"))
+	utils.CondPanic(uint64(len(tb.curBlock.entryOffsets)+1)*4+4+8+4 >= math.MaxUint32, errors.New("integer overflow"))
 	entriesOffsetsSize := int64((len(tb.curBlock.entryOffsets)+1)*4 +
 		4 + // size of list
 		8 + // Sum64 in checksum proto
@@ -170,7 +170,7 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 		int64(len(e.Key)) + int64(e.EncodedSize()) + entriesOffsetsSize
 
 	// Integer overflow check for table size.
-	utils.CondPanic(!(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) < math.MaxUint32), errors.New("Integer overflow"))
+	utils.CondPanic(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, errors.New("integer overflow"))
 
 	return tb.curBlock.estimateSz > int64(tb.opt.BlockSize)
 }

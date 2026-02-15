@@ -128,7 +128,7 @@ func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, err
 
 func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 	iter := r.db.NewInternalIterator(&utils.Options{IsAsc: true})
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 	if iter == nil {
 		return nil
 	}

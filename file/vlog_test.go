@@ -18,7 +18,7 @@ func TestLogFileBootstrapReadWrite(t *testing.T) {
 
 	var lf LogFile
 	require.NoError(t, lf.Open(opt))
-	defer lf.Close()
+	defer func() { _ = lf.Close() }()
 
 	require.NoError(t, lf.Bootstrap())
 
@@ -48,7 +48,7 @@ func TestLogFileLifecycleHelpers(t *testing.T) {
 
 	var lf LogFile
 	require.NoError(t, lf.Open(opt))
-	defer lf.Close()
+	defer func() { _ = lf.Close() }()
 
 	require.NoError(t, lf.Bootstrap())
 

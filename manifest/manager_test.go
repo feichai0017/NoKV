@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/stretchr/testify/require"
 )
 
 func TestManagerCreateAndRecover(t *testing.T) {
@@ -16,7 +17,7 @@ func TestManagerCreateAndRecover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	edit := manifest.Edit{
 		Type: manifest.EditAddFile,
@@ -40,7 +41,7 @@ func TestManagerCreateAndRecover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
 	files := version.Levels[0]
@@ -105,7 +106,7 @@ func TestManagerRegionEditRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	_, ok = mgr.RegionSnapshot()[meta.ID]
 	if ok {
 		t.Fatalf("expected region to remain deleted after reopen")
@@ -118,7 +119,7 @@ func TestManagerLogPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	edit := manifest.Edit{
 		Type:      manifest.EditLogPointer,
@@ -175,7 +176,7 @@ func TestManagerRaftPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	recovered, ok := mgr.RaftPointer(ptr.GroupID)
 	if !ok {
@@ -195,7 +196,7 @@ func TestManagerValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	if err := mgr.LogValueLogHead(0, 2, 4096); err != nil {
 		t.Fatalf("log value log head: %v", err)
@@ -260,7 +261,7 @@ func TestManagerValueLogUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	current = mgr.Current()
 	restored, ok = current.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 3}]
@@ -316,7 +317,7 @@ func TestManagerRegionMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	snap = mgr.RegionSnapshot()
 	if len(snap) != 1 {
@@ -377,7 +378,7 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	ptr, ok = mgr.RaftPointer(groupID)
 	if !ok {
@@ -405,7 +406,7 @@ func TestManagerCorruptManifest(t *testing.T) {
 		t.Fatalf("read current: %v", err)
 	}
 	path := filepath.Join(dir, string(name))
-	mgr.Close()
+	require.NoError(t, mgr.Close())
 
 	if err := os.WriteFile(path, []byte("corrupt"), 0o666); err != nil {
 		t.Fatalf("write corrupt: %v", err)
@@ -439,7 +440,7 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
 	if meta1, ok := version.ValueLogs[manifest.ValueLogID{Bucket: 0, FileID: 1}]; !ok {
@@ -497,7 +498,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	if _, err := f.Write([]byte("NoK")); err != nil {
 		t.Fatalf("write partial: %v", err)
 	}
-	f.Close()
+	require.NoError(t, f.Close())
 
 	if err := manifest.Verify(dir); err != nil {
 		t.Fatalf("verify: %v", err)
@@ -515,7 +516,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after verify: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 }
 
 func TestManagerRewrite(t *testing.T) {
@@ -524,7 +525,7 @@ func TestManagerRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	mgr.SetRewriteThreshold(1)
 
@@ -559,7 +560,7 @@ func TestManagerRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	version := mgr.Current()
 	if len(version.Levels[0]) != 1 || version.Levels[0][0].FileID != 10 {
@@ -576,7 +577,7 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	mgr.SetSync(true)
 	if got := mgr.Dir(); got != dir {

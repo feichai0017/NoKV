@@ -687,7 +687,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		kr := kr
 		if err := inflightBuilders.Go(func() error {
 			it := NewMergeIterator(newIterator(), false)
-			defer it.Close()
+			defer func() { _ = it.Close() }()
 			lm.subcompact(it, kr, cd, inflightBuilders, res)
 			return nil
 		}); err != nil {

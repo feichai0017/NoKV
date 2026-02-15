@@ -9,7 +9,7 @@ import (
 func TestCompactionMoveToIngest(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	// Generate enough data to force multiple L0 tables.
 	for range 3 {
@@ -62,7 +62,7 @@ func TestCompactionMoveToIngest(t *testing.T) {
 func TestCompactStatusGuards(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	baseTest(t, lsm, 256)
 

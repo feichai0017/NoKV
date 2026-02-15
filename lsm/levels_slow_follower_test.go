@@ -17,11 +17,11 @@ func TestLevelManagerSlowFollowerPreventsWalGC(t *testing.T) {
 
 	walMgr, err := wal.Open(wal.Config{Dir: walDir})
 	require.NoError(t, err)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 
 	manifestMgr, err := manifest.Open(manifestDir)
 	require.NoError(t, err)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	lm := &levelManager{manifestMgr: manifestMgr}
 
@@ -61,11 +61,11 @@ func TestLevelManagerMultiGroupTruncationBlocksWalGC(t *testing.T) {
 
 	walMgr, err := wal.Open(wal.Config{Dir: walDir})
 	require.NoError(t, err)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 
 	manifestMgr, err := manifest.Open(manifestDir)
 	require.NoError(t, err)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	lm := &levelManager{manifestMgr: manifestMgr}
 

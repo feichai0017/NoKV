@@ -735,7 +735,7 @@ func writeYCSBSummary(results []BenchmarkResult, dir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w := csv.NewWriter(f)
 	defer w.Flush()
 	header := []string{"name", "engine", "workload", "ops", "ops_per_sec", "avg_ns", "p50_ns", "p95_ns", "p99_ns", "duration_ns", "data_bytes", "data_mb", "reads", "updates", "inserts", "scans", "scan_items", "rmw", "val_avg", "val_p50", "val_p95", "val_p99"}

@@ -127,7 +127,7 @@ func TestMergeIteratorSeekAndClose(t *testing.T) {
 func TestLSMNewIterators(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	defer lsm.Close()
+	defer func() { _ = lsm.Close() }()
 
 	entry := utils.BuildEntry()
 	require.NoError(t, lsm.Set(entry))

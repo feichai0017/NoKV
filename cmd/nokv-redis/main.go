@@ -82,7 +82,7 @@ func main() {
 	if err != nil {
 		fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	server := newServer(backend)
 	errCh := make(chan error, 1)

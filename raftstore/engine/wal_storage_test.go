@@ -102,9 +102,9 @@ func TestWALStorageCompactUpdatesManifest(t *testing.T) {
 func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 	manifestMgr := openManifestManager(t, dir)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	infos, err := walMgr.Append([]byte("plain-entry"))
 	require.NoError(t, err)
@@ -161,9 +161,9 @@ func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
 	require.NoError(t, file.Close())
 
 	walMgr = openWalManager(t, dir)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 	manifestMgr = openManifestManager(t, dir)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	_, err = OpenWALStorage(WALStorageConfig{
 		GroupID:  1,
@@ -214,9 +214,9 @@ func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
 	require.NoError(t, walMgr.Close())
 
 	walMgr = openWalManager(t, dir)
-	defer walMgr.Close()
+	defer func() { _ = walMgr.Close() }()
 	manifestMgr = openManifestManager(t, dir)
-	defer manifestMgr.Close()
+	defer func() { _ = manifestMgr.Close() }()
 
 	ws1, err = OpenWALStorage(WALStorageConfig{
 		GroupID:  1,
@@ -326,9 +326,9 @@ func TestWALSnapshotExportImport(t *testing.T) {
 
 	restoreDir := filepath.Join(baseDir, "restore")
 	walMgrRestore := openWalManager(t, restoreDir)
-	defer walMgrRestore.Close()
+	defer func() { _ = walMgrRestore.Close() }()
 	manifestMgrRestore := openManifestManager(t, restoreDir)
-	defer manifestMgrRestore.Close()
+	defer func() { _ = manifestMgrRestore.Close() }()
 
 	wsRestore, err := OpenWALStorage(WALStorageConfig{
 		GroupID:  1,

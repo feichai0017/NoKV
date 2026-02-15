@@ -263,7 +263,9 @@ func runManifest(args []string) error {
 	if err := mgr.LogRegionUpdate(meta); err != nil {
 		return fmt.Errorf("log region: %w", err)
 	}
-	fmt.Fprintf(os.Stdout, "logged region %d to %s\n", meta.ID, *workdir)
+	if _, err := fmt.Fprintf(os.Stdout, "logged region %d to %s\n", meta.ID, *workdir); err != nil {
+		return err
+	}
 	return nil
 }
 

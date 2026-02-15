@@ -443,7 +443,7 @@ func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 		return 0, err
 	}
 	eIter := kv.NewEntryIterator(store.FD())
-	defer eIter.Close()
+	defer func() { _ = eIter.Close() }()
 
 	offset := start
 	validEnd := offset
@@ -508,7 +508,7 @@ func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint3
 	}
 
 	stream := kv.NewEntryIterator(store.FD())
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	validEndOffset := offset
 	currentOffset := offset
