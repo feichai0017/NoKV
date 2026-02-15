@@ -438,6 +438,7 @@ func (m *Manager) Close() error {
 		return errors.Join(err, closeErr)
 	}
 	if err := m.active.Close(); err != nil {
+		// Keep state intact so callers can retry Close() on transient close failures.
 		return err
 	}
 	m.active = nil

@@ -184,7 +184,7 @@ func (f *FaultFS) before(op Op, path string) error {
 	if f.policy != nil {
 		return f.policy.inject(op, path, "", "")
 	}
-	if f == nil || f.hook == nil {
+	if f.hook == nil {
 		return nil
 	}
 	return f.hook(op, path)
