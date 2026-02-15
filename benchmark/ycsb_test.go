@@ -55,6 +55,7 @@ func TestBenchmarkYCSB(t *testing.T) {
 		BadgerBlockCacheMB: *fBadgerBlockMB,
 		BadgerIndexCacheMB: *fBadgerIndexMB,
 		BadgerCompression:  strings.ToLower(*fBadgerCompression),
+		PebbleCompression:  strings.ToLower(*ycsbPebbleCompression),
 		RocksDBCompression: strings.ToLower(*ycsbRocksCompression),
 	}
 
