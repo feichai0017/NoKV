@@ -9,7 +9,6 @@ The `file` package encapsulates direct file-system interaction for WAL, SST, and
 | Type | Purpose | Key Methods |
 | --- | --- | --- |
 | [`Options`](../file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
-| [`CoreFile`](../file/file.go#L18-L27) | Interface abstracting platform-specific operations. | `NewReader`, `Bytes`, `Sync`, `Delete`. |
 | [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncature`, `Sync`. |
 | [`LogFile`](../file/vlog.go#L16-L130) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `EncodeEntry`. |
 
@@ -69,6 +68,6 @@ By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and
 
 * Value-log and WAL segments rely on `DoneWriting`/`Truncate` to seal files; avoid manipulating files externally or mmap metadata may desynchronise.
 * `LogFile.AddSize` updates the cached size used by reads—critical when rewinding or rewriting segments.
-* `SyncDir` (see `mmap_linux.go`) is invoked when new files are created to persist directory entries, similar to RocksDB's `Env::FsyncDir`.
+* `vfs.SyncDir` is invoked when new files are created to persist directory entries, similar to RocksDB's `Env::FsyncDir`.
 
 For more on how these primitives plug into higher layers, see [`docs/wal.md`](wal.md) and [`docs/vlog.md`](vlog.md).

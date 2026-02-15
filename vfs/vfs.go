@@ -2,6 +2,7 @@
 package vfs
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -149,4 +150,23 @@ func FileFD(f File) (uintptr, bool) {
 		return of.Fd(), true
 	}
 	return 0, false
+}
+
+// SyncDir fsyncs a directory to persist entry updates (create/rename/remove).
+// Nil fs defaults to OSFS.
+func SyncDir(fs FS, dir string) error {
+	fs = Ensure(fs)
+	f, err := fs.OpenHandle(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s: %w", dir, err)
+	}
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close dir %s: %w", dir, closeErr)
+	}
+	return nil
 }

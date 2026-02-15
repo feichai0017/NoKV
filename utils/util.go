@@ -60,17 +60,7 @@ func FileNameSSTable(dir string, id uint64) string {
 // in order to guarantee the file is visible (if the system crashes). (See the man page for fsync,
 // or see https://github.com/coreos/etcd/issues/6368 for an example.)
 func SyncDir(fs vfs.FS, dir string) error {
-	fs = vfs.Ensure(fs)
-	f, err := fs.OpenHandle(dir)
-	if err != nil {
-		return errors.Wrapf(err, "While opening directory: %s.", dir)
-	}
-	err = f.Sync()
-	closeErr := f.Close()
-	if err != nil {
-		return errors.Wrapf(err, "While syncing directory: %s.", dir)
-	}
-	return errors.Wrapf(closeErr, "While closing directory: %s.", dir)
+	return vfs.SyncDir(fs, dir)
 }
 
 // LoadIDMap Get the id of all sst files in the current folder
