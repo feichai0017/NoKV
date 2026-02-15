@@ -6,7 +6,7 @@ benchmark script (`scripts/run_benchmarks.sh`).
 ## YCSB Framework Overview
 
 The benchmark harness uses the YCSB workloads (A/B/C/D/E/F) to exercise NoKV,
-Badger, and RocksDB with a fixed total operation count and report both
+Badger, Pebble, and RocksDB with a fixed total operation count and report both
 throughput and latency percentiles. For memtable comparisons, the NoKV engine
 can be split into `nokv-skiplist` and `nokv-art` variants. The default script
 runs a load phase to seed data, then executes each workload and collects:
@@ -65,19 +65,23 @@ Generated at: 2026-01-05 13:30:38
 
 Summary:
 ENGINE   OPERATION  MODE                          OPS/S    AVG LATENCY  P50       P95        P99        TOTAL OPS  READS     UPDATES  INSERTS  SCANS  SCAN ITEMS  RMW      VAL AVG  VAL P95  DATA (MB)  DURATION
-NoKV     YCSB-A     50/50 read/update             447220   2.236µs      23.875µs  73.084µs   158.459µs  10000000   5001099   4998901  0        0      0           0        249      256      2373.56    22.360348458s
-NoKV     YCSB-B     95/5 read/update              960899   1.04µs       5.458µs   66.042µs   133.209µs  10000000   9499771   500229   0        0      0           0        246      256      2346.79    10.406915958s
-NoKV     YCSB-C     100% read                     1606419  622ns        3.5µs     21.625µs   115.916µs  10000000   10000000  0        0        0      0           0        246      256      2345.57    6.22502675s
-NoKV     YCSB-D     95% read, 5% insert (latest)  1264526  790ns        3.375µs   53.125µs   100.459µs  10000000   9500230   0        499770   0      0           0        236      256      2251.33    7.90809875s
-NoKV     YCSB-F     read-modify-write             516298   1.936µs      23.208µs  75.208µs   123.667µs  10000000   5002011   0        0        0      0           4997989  251      256      3593.88    19.3686775s
-Badger   YCSB-A     50/50 read/update             291703   3.428µs      47.5µs    115.25µs   166.041µs  10000000   5001099   4998901  0        0      0           0        256      256      2441.41    34.281447708s
-Badger   YCSB-B     95/5 read/update              327478   3.053µs      19.458µs  181.958µs  320.167µs  10000000   9499771   500229   0        0      0           0        256      256      2441.41    30.536414125s
-Badger   YCSB-C     100% read                     533953   1.872µs      5.958µs   164.875µs  411.666µs  10000000   10000000  0        0        0      0           0        256      256      2441.41    18.728238125s
-Badger   YCSB-D     95% read, 5% insert (latest)  749205   1.334µs      4.625µs   95.666µs   168.458µs  10000000   9500230   0        499770   0      0           0        244      256      2322.35    13.347484917s
-Badger   YCSB-F     read-modify-write             187017   5.347µs      70.333µs  198.709µs  281.541µs  10000000   5002011   0        0        0      0           4997989  256      256      3661.62    53.471144541s
-RocksDB  YCSB-A     50/50 read/update             151815   6.586µs      9.042µs   105.875µs  346.5µs    10000000   5001099   4998901  0        0      0           0        256      256      2441.41    1m5.869592875s
-RocksDB  YCSB-B     95/5 read/update              1060978  942ns        3.5µs     36.667µs   184.459µs  10000000   9499771   500229   0        0      0           0        256      256      2441.41    9.4252665s
-RocksDB  YCSB-C     100% read                     1519805  657ns        3.167µs   20.542µs   53.292µs   10000000   10000000  0        0        0      0           0        256      256      2441.41    6.579790708s
-RocksDB  YCSB-D     95% read, 5% insert (latest)  1555050  643ns        2.5µs     29.042µs   130.916µs  10000000   9500230   0        499770   0      0           0        232      256      2212.56    6.4306615s
-RocksDB  YCSB-F     read-modify-write             274121   3.648µs      39.25µs   131.375µs  177.083µs  10000000   5002011   0        0        0      0           4997989  256      256      3661.62    36.48025975s
+
+NoKV    YCSB-A     50/50 read/update             830602   1.203µs      16.834µs   38.084µs   58.25µs    1000000    500756   499244   0        0       0           0       255      256      243.19     1.203945709s
+NoKV    YCSB-B     95/5 read/update              1666600  600ns        3.292µs    42.708µs   72.25µs    1000000    950170   49830    0        0       0           0       253      256      241.23     600.023959ms
+NoKV    YCSB-C     100% read                     1931369  517ns        4.292µs    9.959µs    49.667µs   1000000    1000000  0        0        0       0           0       250      256      238.00     517.767417ms
+NoKV    YCSB-D     95% read, 5% insert (latest)  1845861  541ns        2.458µs    39.375µs   67.25µs    1000000    950080   0        49920    0       0           0       248      256      236.71     541.752583ms
+NoKV    YCSB-E     95% scan, 5% insert           185123   5.401µs      37.708µs   200.083µs  911.625µs  1000000    0        0        50085    949915  94991307    0       256      256      23203.46   5.401817s
+NoKV    YCSB-F     read-modify-write             674619   1.482µs      19µs       55.625µs   81.75µs    1000000    500756   0        0        0       0           499244  255      256      364.07     1.482318208s
+Badger  YCSB-A     50/50 read/update             456435   2.19µs       32.208µs   65.875µs   83.958µs   1000000    500756   499244   0        0       0           0       256      256      244.14     2.190894792s
+Badger  YCSB-B     95/5 read/update              688155   1.453µs      5.875µs    84.792µs   144.875µs  1000000    950170   49830    0        0       0           0       256      256      244.14     1.453160584s
+Badger  YCSB-C     100% read                     873820   1.144µs      3.75µs     98.667µs   276.125µs  1000000    1000000  0        0        0       0           0       256      256      244.14     1.144400583s
+Badger  YCSB-D     95% read, 5% insert (latest)  777686   1.285µs      4.916µs    74.916µs   129.5µs    1000000    950080   0        49920    0       0           0       244      256      233.09     1.285866583s
+Badger  YCSB-E     95% scan, 5% insert           42527    23.514µs     308.333µs  904.541µs  1.486ms    1000000    0        0        50085    949915  94991276    0       256      256      23203.46   23.514482084s
+Badger  YCSB-F     read-modify-write             344726   2.9µs        40.875µs   97.75µs    126.042µs  1000000    500756   0        0        0       0           499244  256      256      366.03     2.900853667s
+Pebble  YCSB-A     50/50 read/update             1269815  787ns        2.625µs    51.708µs   107.083µs  1000000    500756   499244   0        0       0           0       256      256      244.14     787.516541ms
+Pebble  YCSB-B     95/5 read/update              1943445  514ns        2.458µs    17.167µs   66.542µs   1000000    950170   49830    0        0       0           0       256      256      244.14     514.550166ms
+Pebble  YCSB-C     100% read                     889292   1.124µs      10.208µs   20.958µs   142.666µs  1000000    1000000  0        0        0       0           0       256      256      244.14     1.124489708s
+Pebble  YCSB-D     95% read, 5% insert (latest)  2530967  395ns        2.042µs    14.333µs   55.083µs   1000000    950080   0        49920    0       0           0       251      256      239.25     395.105917ms
+Pebble  YCSB-E     95% scan, 5% insert           565647   1.767µs      15.167µs   37.917µs   127.125µs  1000000    0        0        50108    949892  94988983    0       256      256      23202.90   1.767886792s
+Pebble  YCSB-F     read-modify-write             1128722  885ns        3.5µs      62.042µs   135.25µs   1000000    500756   0        0        0       0           499244  256      256      366.03     885.957542ms
 ```

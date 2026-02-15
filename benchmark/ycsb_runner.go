@@ -321,6 +321,8 @@ func newYCSBEngine(engineName string, opts ycsbEngineOptions) (ycsbEngine, error
 		return newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", NoKV.MemTableEngineART), nil
 	case "badger":
 		return newBadgerEngine(opts), nil
+	case "pebble":
+		return newPebbleEngine(opts), nil
 	case "rocksdb":
 		return newRocksDBEngine(opts), nil
 	default:
