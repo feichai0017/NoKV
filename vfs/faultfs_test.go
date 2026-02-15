@@ -12,11 +12,12 @@ import (
 func TestFaultFSInjectOpenFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.data")
-	injected := errors.New("openfile injected")
-	policy := NewFaultPolicy(FailOnceRule(OpOpenFile, path, injected))
+	injected := errors.New("open injected")
+	policy := NewFaultPolicy(FailOnceRule(OpOpen, path, injected))
 	fs := NewFaultFSWithPolicy(OSFS{}, policy)
 
-	_, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, fs.WriteFile(path, []byte("ok"), 0o644))
+	_, err := fs.OpenHandle(path)
 	require.ErrorIs(t, err, injected)
 }
 
