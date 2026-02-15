@@ -860,7 +860,7 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 func (t *table) DecrRef() error {
 	for {
 		current := atomic.LoadInt32(&t.ref)
-		// 1. Guard check: Use the project's utility to panic if ref is already 0
+		// 1. Guard check
 		utils.CondPanicFunc(current <= 0, func() error {
 			return fmt.Errorf("table refcount underflow: fid %d, current_ref %d", t.fid, current)
 		})
@@ -873,7 +873,7 @@ func (t *table) DecrRef() error {
 			}
 			return nil
 		}
-		// 3. If CAS failed (concurrent change), the loop will retry
+		// 3. If CAS failed , the loop will retry
 	}
 }
 
