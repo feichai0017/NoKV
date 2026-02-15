@@ -487,6 +487,7 @@ func (db *DB) initVLog() {
 			FileMode: utils.DefaultFileMode,
 			MaxSize:  int64(db.opt.ValueLogFileSize),
 			Bucket:   uint32(bucket),
+			FS:       db.fs,
 		})
 		utils.Panic(err)
 		managers[bucket] = manager

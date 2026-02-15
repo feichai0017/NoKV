@@ -2,14 +2,32 @@ package wal_test
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
+
+func TestManagerOpenWithFaultFS(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("mkdir fail")
+	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
+		if op == vfs.OpMkdirAll {
+			return injected
+		}
+		return nil
+	})
+
+	_, err := wal.Open(wal.Config{Dir: dir, FS: fs})
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+}
 
 func TestManagerAppendAndReplay(t *testing.T) {
 	dir := t.TempDir()
