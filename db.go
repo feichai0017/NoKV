@@ -76,7 +76,6 @@ type (
 		prefetchCooldown time.Duration
 		cfMetrics        []*cfCounters
 		hotWriteLimited  uint64
-		testCloseHooks   *testCloseHooks // For testing only
 	}
 
 	commitQueue struct {
@@ -110,15 +109,6 @@ type (
 type cfCounters struct {
 	writes uint64
 	reads  uint64
-}
-
-type testCloseHooks struct {
-	statsClose     func() error
-	lsmClose       func() error
-	vlogClose      func() error
-	walClose       func() error
-	dirLockRelease func() error
-	calls          []string
 }
 
 // Open DB
@@ -313,7 +303,7 @@ func (db *DB) runRecoveryChecks() error {
 	if db == nil || db.opt == nil {
 		return fmt.Errorf("recovery checks: options not initialized")
 	}
-	if err := manifest.Verify(db.opt.WorkDir); err != nil {
+	if err := manifest.VerifyWithFS(db.opt.WorkDir, db.fs); err != nil {
 		if !stderrors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -371,12 +361,7 @@ func (db *DB) closeInternal() error {
 	db.stopCommitWorkers()
 
 	var errs []error
-	if db.testCloseHooks != nil && db.testCloseHooks.statsClose != nil {
-		db.testCloseHooks.record("stats close")
-		if err := db.testCloseHooks.statsClose(); err != nil {
-			errs = append(errs, fmt.Errorf("stats close: %w", err))
-		}
-	} else if err := db.stats.close(); err != nil {
+	if err := db.stats.close(); err != nil {
 		errs = append(errs, fmt.Errorf("stats close: %w", err))
 	}
 
@@ -405,40 +390,20 @@ func (db *DB) closeInternal() error {
 		db.prefetchItems = nil
 	}
 
-	if db.testCloseHooks != nil && db.testCloseHooks.lsmClose != nil {
-		db.testCloseHooks.record("lsm close")
-		if err := db.testCloseHooks.lsmClose(); err != nil {
-			errs = append(errs, fmt.Errorf("lsm close: %w", err))
-		}
-	} else if err := db.lsm.Close(); err != nil {
+	if err := db.lsm.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("lsm close: %w", err))
 	}
 
-	if db.testCloseHooks != nil && db.testCloseHooks.vlogClose != nil {
-		db.testCloseHooks.record("vlog close")
-		if err := db.testCloseHooks.vlogClose(); err != nil {
-			errs = append(errs, fmt.Errorf("vlog close: %w", err))
-		}
-	} else if err := db.vlog.close(); err != nil {
+	if err := db.vlog.close(); err != nil {
 		errs = append(errs, fmt.Errorf("vlog close: %w", err))
 	}
 
-	if db.testCloseHooks != nil && db.testCloseHooks.walClose != nil {
-		db.testCloseHooks.record("wal close")
-		if err := db.testCloseHooks.walClose(); err != nil {
-			errs = append(errs, fmt.Errorf("wal close: %w", err))
-		}
-	} else if err := db.wal.Close(); err != nil {
+	if err := db.wal.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("wal close: %w", err))
 	}
 
 	if db.dirLock != nil {
-		if db.testCloseHooks != nil && db.testCloseHooks.dirLockRelease != nil {
-			db.testCloseHooks.record("dir lock release")
-			if err := db.testCloseHooks.dirLockRelease(); err != nil {
-				errs = append(errs, fmt.Errorf("dir lock release: %w", err))
-			}
-		} else if err := db.dirLock.Release(); err != nil {
+		if err := db.dirLock.Release(); err != nil {
 			errs = append(errs, fmt.Errorf("dir lock release: %w", err))
 		}
 		db.dirLock = nil
@@ -828,8 +793,4 @@ func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
 		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
 	}
 	return stats
-}
-
-func (h *testCloseHooks) record(name string) {
-	h.calls = append(h.calls, name)
 }
