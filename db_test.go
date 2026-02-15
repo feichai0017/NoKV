@@ -1001,11 +1001,23 @@ func TestCloseWithErrors(t *testing.T) {
 	walErr := errors.New("wal close error")
 	dirLockErr := errors.New("dir lock release error")
 	db.testCloseHooks = &testCloseHooks{
-		lsmClose:       func() error { return lsmErr },
-		vlogClose:      func() error { return vlogErr },
-		walClose:       func() error { return walErr },
-		dirLockRelease: func() error { return dirLockErr },
-		calls:          []string{},
+		lsmClose: func() error {
+			db.lsm.Close()
+			return lsmErr
+		},
+		vlogClose: func() error {
+			db.vlog.close()
+			return vlogErr
+		},
+		walClose: func() error {
+			db.wal.Close()
+			return walErr
+		},
+		dirLockRelease: func() error {
+			db.dirLock.Release()
+			return dirLockErr
+		},
+		calls: []string{},
 	}
 	err := db.Close()
 
