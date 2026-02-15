@@ -504,26 +504,36 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	if err := lm.manifestMgr.LogEdits(manifestEdits...); err != nil {
 		return err
 	}
+	// Handover point: once we reach here, the responsibility for managing
+	// table lifecycles begins to transition to the level handlers.
 	cleanupNeeded = false
 
+	// Defensively manage reference counts during the final replacement phase.
 	defer func() {
-		_ = decrRefs(cd.top)
+		if cleanupNeeded {
+			// If we fail during the following handler updates, we must ensure
+			// source tables are properly released to avoid leaks or inconsistent states.
+			_ = decrRefs(cd.top)
+			_ = decrRefs(cd.bot)
+		}
 	}()
+
 	if cd.plan.IngestMode == compact.IngestKeep {
 		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
+			cleanupNeeded = true // Re-enable cleanup if handover fails
 			return err
-		}
-		if thisLevel.levelNum > 0 {
-			thisLevel.Sort()
 		}
 	} else {
 		if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
+			cleanupNeeded = true
 			return err
 		}
 		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
+			cleanupNeeded = true
 			return err
 		}
 		if err := thisLevel.deleteTables(cd.top); err != nil {
+			cleanupNeeded = true
 			return err
 		}
 	}
