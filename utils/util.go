@@ -71,7 +71,7 @@ func SyncDir(dir string) error {
 // SyncDirWithFS fsyncs a directory using the provided filesystem.
 func SyncDirWithFS(fs vfs.FS, dir string) error {
 	fs = vfs.Ensure(fs)
-	f, err := fs.Open(dir)
+	f, err := fs.OpenHandle(dir)
 	if err != nil {
 		return errors.Wrapf(err, "While opening directory: %s.", dir)
 	}

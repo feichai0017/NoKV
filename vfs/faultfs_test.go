@@ -20,6 +20,17 @@ func TestFaultFSInjectOpenFile(t *testing.T) {
 	require.ErrorIs(t, err, injected)
 }
 
+func TestFaultFSInjectOpenFileHandle(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.handle")
+	injected := errors.New("openfile handle injected")
+	policy := NewFaultPolicy(FailOnceRule(OpOpenFile, path, injected))
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+
+	_, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.ErrorIs(t, err, injected)
+}
+
 func TestFaultPolicyFailOnNth(t *testing.T) {
 	injected := errors.New("stat injected")
 	policy := NewFaultPolicy(FailOnNthRule(OpStat, "", 3, injected))
