@@ -1,0 +1,73 @@
+# Auto-label rules for issues.
+# Regex is matched against issue title + body (configured in workflow).
+# Only add default triage label automatically; other status labels are manual.
+
+status/needs-triage:
+  - '(?s).*'
+
+area/raftstore:
+  - '(?i)\braft(store)?\b'
+  - '(?i)\bregion\b'
+  - '(?i)\bleader\b'
+  - '(?i)\bproposal\b'
+  - '(?i)\bpeer\b'
+  - '(?i)\bgrpc\b'
+  - '(?i)\btransport\b'
+
+area/txn:
+  - '(?i)\btxn\b'
+  - '(?i)\btransaction\b'
+  - '(?i)\bmvcc\b'
+  - '(?i)\bpercolator\b'
+  - '(?i)\b2pc\b'
+  - '(?i)\bprewrite\b'
+  - '(?i)\bcommit\b'
+  - '(?i)\brollback\b'
+  - '(?i)\bmin_commit_ts\b'
+
+area/lsm:
+  - '(?i)\blsm\b'
+  - '(?i)\bmemtable\b'
+  - '(?i)\bsstable\b'
+  - '(?i)\bcompaction\b'
+  - '(?i)\bmanifest\b'
+  - '(?i)\bskiplist\b'
+  - '(?i)\bart\b'
+
+area/vlog:
+  - '(?i)\bvlog\b'
+  - '(?i)\bvalue[ -]?log\b'
+  - '(?i)\bvalue pointer\b'
+  - '(?i)\bdiscard\b'
+  - '(?i)\bgarbage collection\b'
+
+area/redis:
+  - '(?i)\bredis\b'
+  - '(?i)\bset nx\b'
+  - '(?i)\bincrby\b'
+  - '(?i)\bexpire\b'
+  - '(?i)\bttl\b'
+  - '(?i)\bscan\b'
+
+type/performance:
+  - '(?i)\bperformance\b'
+  - '(?i)\bslow\b'
+  - '(?i)\bthroughput\b'
+  - '(?i)\blatency\b'
+  - '(?i)\bbenchmark\b'
+  - '(?i)\bops/s\b'
+
+severity/crash:
+  - '(?i)\bpanic\b'
+  - '(?i)\bcrash\b'
+  - '(?i)\bsegfault\b'
+  - '(?i)\bfatal\b'
+
+severity/incorrect-results:
+  - '(?i)\bincorrect\b'
+  - '(?i)\bwrong result\b'
+  - '(?i)\bdata loss\b'
+  - '(?i)\binconsistent\b'
+  - '(?i)\bstale lock\b'
+  - '(?i)\bcorrupt(ion)?\b'
+  - '(?i)\bmissing rows\b'

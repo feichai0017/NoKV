@@ -32,7 +32,6 @@ func (b *embeddedBackend) Get(key []byte) (*redisValue, error) {
 		}
 		return nil, err
 	}
-	defer entry.DecrRef()
 	if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return &redisValue{Found: false}, nil
 	}
@@ -57,7 +56,6 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 			switch {
 			case err == nil:
 				exists = true
-				defer item.Entry().DecrRef()
 				if kv.IsDeletedOrExpired(item.Entry().Meta, item.Entry().ExpiresAt) {
 					exists = false
 				}
@@ -110,7 +108,6 @@ func (b *embeddedBackend) Del(keys [][]byte) (int64, error) {
 			switch {
 			case err == nil:
 				entry := item.Entry()
-				defer entry.DecrRef()
 				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					if err := txn.Delete(key); err != nil {
 						return err
@@ -146,7 +143,6 @@ func (b *embeddedBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 			switch {
 			case err == nil:
 				entry := item.Entry()
-				defer entry.DecrRef()
 				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					out[i] = &redisValue{Found: false}
 					continue
@@ -201,7 +197,6 @@ func (b *embeddedBackend) Exists(keys [][]byte) (int64, error) {
 			switch {
 			case err == nil:
 				entry := item.Entry()
-				defer entry.DecrRef()
 				if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 					continue
 				}
@@ -233,7 +228,6 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 		switch {
 		case err == nil:
 			existing = true
-			defer item.Entry().DecrRef()
 			entry := item.Entry()
 			if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 				existing = false
