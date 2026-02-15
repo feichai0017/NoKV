@@ -14,12 +14,8 @@ func TestMmapFileDeleteUsesInjectedFS(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap-vfs-delete.dat")
 	injected := errors.New("remove injected")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, p string) error {
-		if op == vfs.OpRemove && p == path {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, path, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	mf, err := OpenMmapFileWithFS(fs, path, os.O_CREATE|os.O_RDWR, 64)
 	require.NoError(t, err)
@@ -32,12 +28,8 @@ func TestMmapFileDeleteUsesInjectedFS(t *testing.T) {
 func TestSyncDirWithFSInjectsOpenFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("open dir injected")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, p string) error {
-		if op == vfs.OpOpen && p == dir {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpen, dir, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	err := SyncDirWithFS(fs, dir)
 	require.ErrorIs(t, err, injected)

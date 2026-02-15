@@ -64,10 +64,6 @@ func (m *Manager) AppendEntry(e *kv.Entry) (*kv.ValuePtr, error) {
 		putEntryBuffer(buf)
 		return nil, err
 	}
-	if err := m.runBeforeAppendHook(payload); err != nil {
-		putEntryBuffer(buf)
-		return nil, err
-	}
 	ptr, err := m.appendPayload(payload)
 	putEntryBuffer(buf)
 	if err != nil {
@@ -140,11 +136,6 @@ func (m *Manager) AppendEntries(entries []*kv.Entry, writeMask []bool) ([]kv.Val
 		buf := getEntryBuffer()
 		payload, err := kv.EncodeEntry(buf, e)
 		if err != nil {
-			putEntryBuffer(buf)
-			releaseBuffers()
-			return nil, err
-		}
-		if err := m.runBeforeAppendHook(payload); err != nil {
 			putEntryBuffer(buf)
 			releaseBuffers()
 			return nil, err

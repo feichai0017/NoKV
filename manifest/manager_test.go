@@ -638,12 +638,8 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 func TestOpenWithFSInjectedFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("manifest mkdir injected")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
-		if op == vfs.OpMkdirAll {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpMkdirAll, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	_, err := manifest.OpenWithFS(dir, fs)
 	require.ErrorIs(t, err, injected)
@@ -652,12 +648,8 @@ func TestOpenWithFSInjectedFailure(t *testing.T) {
 func TestVerifyWithFSInjectedFailure(t *testing.T) {
 	dir := t.TempDir()
 	injected := errors.New("manifest read current injected")
-	fs := vfs.NewFaultFS(vfs.OSFS{}, func(op vfs.Op, _ string) error {
-		if op == vfs.OpReadFile {
-			return injected
-		}
-		return nil
-	})
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpReadFile, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	err := manifest.VerifyWithFS(dir, fs)
 	require.ErrorIs(t, err, injected)
