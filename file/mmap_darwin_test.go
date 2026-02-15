@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +74,7 @@ func TestMmapFileDeleteAndSyncDir(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, mf)
 
-	require.NoError(t, SyncDir(nil, dir))
+	require.NoError(t, vfs.SyncDir(nil, dir))
 	require.NoError(t, mf.Delete())
 
 	_, err = os.Stat(path)
