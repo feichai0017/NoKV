@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-02-05 vlog design and gc - NoKV Docs</title>
+        <title>VFS - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5b14b422.js";
+            window.path_to_searchindex_js = "searchindex-5b14b422.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e04efc1a.js"></script>
+        <script src="toc-e04efc1a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,281 +178,114 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化"><a class="header" href="#2026-02-05-vlog-设计与-gcwisckey--hashkv-工程化">2026-02-05 vlog 设计与 GC（WiscKey + HashKV 工程化）</a></h1>
-<p>这份笔记把 NoKV 的 ValueLog（vlog）设计、GC 机制、以及最近的并行化与热冷分流优化整理成一份完整版本。内容融合 <strong>WiscKey</strong>（KV 分离）与 <strong>HashKV</strong>（哈希分区/热冷分离）两条主线，并结合当前实现细节与参数策略。</p>
-<hr>
-<h2 id="一页摘要tldr"><a class="header" href="#一页摘要tldr">一页摘要（TL;DR）</a></h2>
-<p><strong>核心思路</strong>：LSM 只保存 Key+ValuePtr，大 Value 顺序写入 vlog；再用 <strong>多桶 + 热冷分流</strong> 把热点更新局部化，并通过 <strong>并行 GC + 压力控制</strong> 把 GC 开销稳定在可控范围。</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">设计点</th><th style="text-align: left">借鉴</th><th style="text-align: left">NoKV 实现</th><th style="text-align: left">直接收益</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">KV 分离</td><td style="text-align: left">WiscKey</td><td style="text-align: left">vlog + ValuePtr</td><td style="text-align: left">LSM 更小、写入更顺序</td></tr>
-<tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
-<tr><td style="text-align: left">热冷分流</td><td style="text-align: left">HashKV</td><td style="text-align: left">HotRing 路由</td><td style="text-align: left">热点不污染冷数据</td></tr>
-<tr><td style="text-align: left">GC 并行</td><td style="text-align: left">工程化</td><td style="text-align: left"><code>ValueLogGCParallelism</code></td><td style="text-align: left">提升清理吞吐</td></tr>
-<tr><td style="text-align: left">压力控制</td><td style="text-align: left">工程化</td><td style="text-align: left">reduce/skip 阈值</td><td style="text-align: left">不与 compaction 抢资源</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="1-论文借鉴要点"><a class="header" href="#1-论文借鉴要点">1. 论文借鉴要点</a></h2>
-<h3 id="11-wisckey"><a class="header" href="#11-wisckey">1.1 WiscKey</a></h3>
+                        <h1 id="vfs"><a class="header" href="#vfs">VFS</a></h1>
+<p>The <code>vfs</code> package defines a unified filesystem abstraction used by NoKV storage paths (<code>wal</code>, <code>manifest</code>, <code>vlog</code>, <code>file</code>, and parts of <code>raftstore</code>).</p>
+<p>It is intentionally small and focused:</p>
 <ul>
-<li><strong>KV 分离</strong>：LSM 只存 Key + ValuePtr，大 Value 写入 vlog。</li>
-<li><strong>顺序写</strong>：写入走日志追加，延迟稳定。</li>
-<li><strong>GC 必要性</strong>：旧值只能通过搬运+删除回收。</li>
-</ul>
-<h3 id="12-hashkv"><a class="header" href="#12-hashkv">1.2 HashKV</a></h3>
-<ul>
-<li><strong>哈希分区</strong>：ValueLog 分桶，key 的历史版本集中。</li>
-<li><strong>热冷分离</strong>：热点更新影响局部桶，冷数据保持稳定。</li>
-<li><strong>轻 GC</strong>：热点桶高频回收，冷桶低频维护。</li>
-</ul>
-<h3 id="13-参考论文标题"><a class="header" href="#13-参考论文标题">1.3 参考论文（标题）</a></h3>
-<ul>
-<li><strong><a href="https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu">WiscKey: Separating Keys from Values in SSD-conscious Storage</a></strong></li>
-<li><strong><a href="https://www.usenix.org/conference/atc18/presentation/chan">HashKV: Enabling Efficient Updates in KV Storage via Hashing</a></strong></li>
+<li>Keep production code independent from direct <code>os.*</code> calls.</li>
+<li>Make fault-path testing deterministic.</li>
+<li>Keep the same call shape in embedded and distributed modes.</li>
 </ul>
 <hr>
-<h2 id="2-设计目标工程化视角"><a class="header" href="#2-设计目标工程化视角">2. 设计目标（工程化视角）</a></h2>
+<h2 id="1-design-goals"><a class="header" href="#1-design-goals">1. Design Goals</a></h2>
 <ol>
-<li><strong>写路径极简</strong>：顺序追加为主，不引入复杂索引结构。</li>
-<li><strong>GC 不扰动主路径</strong>：并行但受控，避免和 compaction 争 IO。</li>
-<li><strong>热点更新局部化</strong>：尽量把垃圾限制在热桶。</li>
-<li><strong>可观测 + 可调参</strong>：让调参是“看得见的系统工程”。</li>
+<li>One filesystem API for all persistence-critical modules.</li>
+<li>Explicit file-handle operations (<code>OpenHandle</code> / <code>OpenFileHandle</code>) so injected failures can target both path-level and handle-level behavior.</li>
+<li>Test-first error injection without adding module-local test hooks.</li>
 </ol>
 <hr>
-<h2 id="21-设计约束与假设"><a class="header" href="#21-设计约束与假设">2.1 设计约束与假设</a></h2>
+<h2 id="2-core-interfaces"><a class="header" href="#2-core-interfaces">2. Core Interfaces</a></h2>
+<p><code>vfs.FS</code> (namespace-level operations):</p>
 <ul>
-<li><strong>Crash Recovery 必须可靠</strong>：vlog 的 head/删除状态必须可恢复。</li>
-<li><strong>写放大优先于读放大</strong>：更倾向把写成本压低，读路径可容忍一次额外跳转。</li>
-<li><strong>GC 可退让</strong>：GC 是“后台维护”，不能把 compaction 压死。</li>
+<li>open/create (<code>OpenHandle</code>, <code>OpenFileHandle</code>)</li>
+<li>path ops (<code>MkdirAll</code>, <code>Remove</code>, <code>RemoveAll</code>, <code>Rename</code>, <code>Stat</code>, <code>ReadDir</code>, <code>Glob</code>)</li>
+<li>whole-file helpers (<code>ReadFile</code>, <code>WriteFile</code>, <code>Truncate</code>)</li>
+</ul>
+<p><code>vfs.File</code> (handle-level operations):</p>
+<ul>
+<li><code>Read</code> / <code>ReadAt</code></li>
+<li><code>Write</code> / <code>WriteAt</code></li>
+<li><code>Seek</code></li>
+<li><code>Sync</code></li>
+<li><code>Truncate</code></li>
+<li><code>Close</code></li>
+<li><code>Fd</code></li>
+</ul>
+<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.</p>
+<hr>
+<h2 id="3-fault-injection-model"><a class="header" href="#3-fault-injection-model">3. Fault Injection Model</a></h2>
+<p>NoKV provides <code>FaultFS</code> with rule-based injection:</p>
+<ul>
+<li><code>FailOnceRule</code></li>
+<li><code>FailOnNthRule</code></li>
+<li><code>FailAfterNthRule</code></li>
+</ul>
+<p>Rules can match by operation + path, and for rename by src/dst path.</p>
+<h3 id="31-file-handle-level-injection-faultfile"><a class="header" href="#31-file-handle-level-injection-faultfile">3.1 File-Handle-Level Injection (<code>FaultFile</code>)</a></h3>
+<p>When <code>OpenHandle</code>/<code>OpenFileHandle</code> succeeds, the returned handle is wrapped as <code>faultFile</code>.
+<code>faultFile</code> supports deterministic failures on:</p>
+<ul>
+<li><code>Write</code> / <code>WriteAt</code> (<code>OpFileWrite</code>)</li>
+<li><code>Sync</code> (<code>OpFileSync</code>)</li>
+<li><code>Close</code> (<code>OpFileClose</code>)</li>
+<li><code>Truncate</code> (<code>OpFileTrunc</code>)</li>
+</ul>
+<p>This is used to validate rollback and retry behavior for close/sync/truncate paths in WAL/Manifest verification and shutdown flows.</p>
+<hr>
+<h2 id="4-where-it-is-used"><a class="header" href="#4-where-it-is-used">4. Where It Is Used</a></h2>
+<ul>
+<li><code>wal</code>: segment switch, close, verify/truncate.</li>
+<li><code>manifest</code>: edit logging, rewrite, verify, close.</li>
+<li><code>vlog</code>: verify/truncate and file open path.</li>
+<li><code>file</code>: mmap open/sync directory path via <code>vfs</code>.</li>
+<li><code>utils</code>: dir lock and directory sync helpers.</li>
+<li><code>raftstore/engine</code>: disk storage and snapshot import/export.</li>
 </ul>
 <hr>
-<h2 id="3-架构总览分层模型"><a class="header" href="#3-架构总览分层模型">3. 架构总览（分层模型）</a></h2>
-<pre class="mermaid">flowchart TD
-  subgraph DB["DB Policy 层"]
-    VlogGo["vlog.go / vlog_gc.go&lt;br/&gt;写入路由 + GC 调度"]
-  end
-  subgraph Mgr["ValueLog Manager"]
-    MgrGo["vlog/manager.go&lt;br/&gt;分段/轮转/读写"]
-  end
-  subgraph IO["IO Layer"]
-    File["file/ (mmap)&lt;br/&gt;LogFile"]
-  end
-
-  DB --&gt; Mgr --&gt; IO
-</pre>
-
-<hr>
-<h2 id="4-目录布局与分桶结构"><a class="header" href="#4-目录布局与分桶结构">4. 目录布局与分桶结构</a></h2>
-<pre><code class="language-text">&lt;workdir&gt;/
-  vlog/
-    bucket-000/
-      00000.vlog
-      00001.vlog
-    bucket-001/
-      00000.vlog
-      00001.vlog
-    ...
-</code></pre>
-<ul>
-<li><code>ValueLogBucketCount &gt; 1</code> 启用分桶。</li>
-<li>ValuePtr 现在包含 <code>Bucket/Fid/Offset/Len</code>，LSM 可以精确定位。</li>
-</ul>
-<hr>
-<h2 id="41-记录格式与-valueptr-布局"><a class="header" href="#41-记录格式与-valueptr-布局">4.1 记录格式与 ValuePtr 布局</a></h2>
-<p><strong>vlog 记录格式</strong>（与 WAL 一致）：</p>
-<pre><code>+--------+----------+------+-------------+-----------+-------+
-| KeyLen | ValueLen | Meta | ExpiresAt   | Key bytes | Value |
-+--------+----------+------+-------------+-----------+-------+
-                                             + CRC32 (4B)
-</code></pre>
-<p><strong>ValuePtr 布局</strong>：</p>
-<pre><code>+------+--------+-----+--------+
-| Len  | Offset | Fid | Bucket |
-+------+--------+-----+--------+
-| 4B   | 4B     | 4B  | 4B     |
-</code></pre>
-<p>这保证了：<strong>LSM 索引只需持有 ValuePtr 即可定位到具体桶 + 文件 + 偏移</strong>。</p>
-<hr>
-<h2 id="42-manifest-与恢复关系nokv-特有工程点"><a class="header" href="#42-manifest-与恢复关系nokv-特有工程点">4.2 Manifest 与恢复关系（NoKV 特有工程点）</a></h2>
-<p>与论文原型不同，NoKV <strong>把 vlog 的 head 与删除事件写入 manifest</strong>：</p>
-<pre class="mermaid">flowchart LR
-  A["vlog append"] --&gt; B["update head"]
-  B --&gt; C["manifest edit"]
-  C --&gt; D["crash recovery"]
-  D --&gt; E["rebuild vlog state"]
-</pre>
-
-<p>这样恢复时不依赖完整目录扫描，避免误删/误开段。</p>
-<hr>
-<h2 id="5-写入路径顺序追加"><a class="header" href="#5-写入路径顺序追加">5. 写入路径（顺序追加）</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant C as commitWorker
-  participant V as vlog.Manager
-  participant W as WAL
-  participant M as MemTable
-  C-&gt;&gt;V: AppendEntries(entries)
-  V--&gt;&gt;C: ValuePtr list
-  C-&gt;&gt;W: Append(entries+ptrs)
-  C-&gt;&gt;M: Apply to memtable
-</pre>
-
-<p>关键保证：<strong>vlog 写入在 WAL 之前</strong>，崩溃恢复时不会出现“指针悬空”。</p>
-<hr>
-<h2 id="6-读路径指针解引用"><a class="header" href="#6-读路径指针解引用">6. 读路径（指针解引用）</a></h2>
-<pre class="mermaid">flowchart LR
-  K["Get(key)"] --&gt; LSM["LSM 查索引"]
-  LSM --&gt;|inline value| V["直接返回"]
-  LSM --&gt;|ValuePtr| P["定位 bucket/fid/offset"]
-  P --&gt; R["vlog 读取 (mmap)"]
-  R --&gt; V
-</pre>
-
-<p>读路径的代价在于一次额外的 vlog 定位，但换来更小的 LSM 与更顺序的写入。</p>
-<hr>
-<h2 id="6-热冷分流hotring-驱动"><a class="header" href="#6-热冷分流hotring-驱动">6. 热冷分流（HotRing 驱动）</a></h2>
-<p>热度统计只看写路径（写热点），避免读热点污染：</p>
-<pre class="mermaid">flowchart TD
-  E["Entry 写入"] --&gt; H["HotRing Touch"]
-  H --&gt;|hot| B1["热桶 0..H-1"]
-  H --&gt;|cold| B2["冷桶 H..N-1"]
-  B1 --&gt; V["vlog append"]
-  B2 --&gt; V
-</pre>
-
-<p>默认配置（可调）：</p>
-<ul>
-<li><code>ValueLogBucketCount = 16</code></li>
-<li><code>ValueLogHotBucketCount = 4</code></li>
-<li><code>ValueLogHotKeyThreshold = 8</code></li>
-</ul>
-<hr>
-<h2 id="7-gc-机制采样--重写"><a class="header" href="#7-gc-机制采样--重写">7. GC 机制（采样 + 重写）</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant GC as GC Thread
-  participant Stats as Discard Stats
-  participant Old as Old Segment
-  participant LSM as LSM
-  participant New as Active Segment
-
-  GC-&gt;&gt;Stats: 选择候选文件
-  GC-&gt;&gt;Old: Sample 10%
-  GC-&gt;&gt;LSM: 校验指针是否仍指向旧值
-  alt discard 过阈值
-    loop 遍历旧文件
-      GC-&gt;&gt;Old: Read Entry
-      GC-&gt;&gt;LSM: Double Check
-      alt still live
-        GC-&gt;&gt;New: Rewrite
-      end
-    end
-    GC-&gt;&gt;Old: 删除旧文件
-  else discard不足
-    GC--&gt;&gt;Stats: 跳过
-  end
-</pre>
-
-<hr>
-<h2 id="8-并行-gc--压力控制核心工程化"><a class="header" href="#8-并行-gc--压力控制核心工程化">8. 并行 GC + 压力控制（核心工程化）</a></h2>
-<h3 id="81-并行调度"><a class="header" href="#81-并行调度">8.1 并行调度</a></h3>
-<ul>
-<li><code>ValueLogGCParallelism</code> 控制并发数（默认自动）。</li>
-<li><strong>同桶互斥</strong>：同一桶不会并发 GC（无锁 CAS）。</li>
-<li>全局 semaphore 限制同时 GC 数量。</li>
-</ul>
-<h3 id="82-压力控制"><a class="header" href="#82-压力控制">8.2 压力控制</a></h3>
-<p>当 compaction 压力过高时，GC 自动降级或跳过：</p>
-<pre class="mermaid">flowchart LR
-  A["Compaction Stats"] --&gt; B{"压力评估"}
-  B --&gt;|低| C["并行 GC"]
-  B --&gt;|中| D["并行度减半"]
-  B --&gt;|高| E["跳过本轮 GC"]
-</pre>
-
-<p>阈值参数：</p>
-<ul>
-<li><code>ValueLogGCReduceScore / ValueLogGCReduceBacklog</code></li>
-<li><code>ValueLogGCSkipScore / ValueLogGCSkipBacklog</code></li>
-</ul>
-<hr>
-<h2 id="83-与论文实现的关键差异重点对比"><a class="header" href="#83-与论文实现的关键差异重点对比">8.3 与论文实现的关键差异（重点对比）</a></h2>
-<h3 id="wisckey-vs-nokv"><a class="header" href="#wisckey-vs-nokv">WiscKey vs NoKV</a></h3>
+<h2 id="5-comparison-with-pebble-vfs"><a class="header" href="#5-comparison-with-pebble-vfs">5. Comparison with Pebble VFS</a></h2>
+<p>NoKV’s design is inspired by Pebble’s VFS layering and error-injection philosophy, while intentionally keeping a smaller surface area.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th style="text-align: left">维度</th><th style="text-align: left">WiscKey</th><th style="text-align: left">NoKV</th></tr>
+<tr><th>Aspect</th><th>Pebble VFS</th><th>NoKV VFS</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">vlog 元数据</td><td style="text-align: left">论文原型不强调 manifest</td><td style="text-align: left"><strong>manifest 记录 head/删除</strong></td></tr>
-<tr><td style="text-align: left">GC 触发</td><td style="text-align: left">依赖扫描与 stale ratio</td><td style="text-align: left"><strong>来自 LSM discard stats</strong></td></tr>
-<tr><td style="text-align: left">GC 并行</td><td style="text-align: left">未强调</td><td style="text-align: left"><strong>多桶并行 + 压力控制</strong></td></tr>
-<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left"><strong>HotRing 驱动热/冷桶</strong></td></tr>
+<tr><td>API scope</td><td>Broad FS API (create/open/open-dir/link/reuse/lock/list/path helpers/disk usage)</td><td>Minimal API required by NoKV storage paths</td></tr>
+<tr><td>Wrapping model</td><td>Rich wrappers (<code>WithDiskHealthChecks</code>, <code>OnDiskFull</code>, logging wrappers)</td><td><code>FaultFS</code> focused on deterministic fault tests</td></tr>
+<tr><td>In-memory FS</td><td>Built-in <code>MemFS</code> / <code>StrictMem</code> for advanced test semantics</td><td>Not yet built-in (currently wraps real FS with injected errors)</td></tr>
+<tr><td>Error injection</td><td>Dedicated <code>errorfs</code> package and injector model</td><td>Built-in policy/rule model in <code>FaultFS</code></td></tr>
+<tr><td>Handle-level faulting</td><td>Supports wrapped file behavior through wrappers</td><td><code>FaultFile</code> with count-based fail on <code>Write/Sync/Close/Truncate</code></td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="hashkv-vs-nokv"><a class="header" href="#hashkv-vs-nokv">HashKV vs NoKV</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">维度</th><th style="text-align: left">HashKV</th><th style="text-align: left">NoKV</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">分区策略</td><td style="text-align: left">哈希分区</td><td style="text-align: left"><strong>哈希分桶 + 热/冷分流</strong></td></tr>
-<tr><td style="text-align: left">目标</td><td style="text-align: left">降低更新放大</td><td style="text-align: left"><strong>降低 GC 波动 + write amp</strong></td></tr>
-<tr><td style="text-align: left">GC 调度</td><td style="text-align: left">以分区为单位</td><td style="text-align: left"><strong>分桶并行 + compaction 压力控制</strong></td></tr>
-</tbody>
-</table>
-</div>
-<blockquote>
-<p>结论：NoKV 保留论文的“核心思想”，但在<strong>恢复一致性、调度策略、观测性</strong>上做了工程化强化。</p>
-</blockquote>
-<hr>
-<h2 id="9-可观测性与调参抓手"><a class="header" href="#9-可观测性与调参抓手">9. 可观测性与调参抓手</a></h2>
-<p>关键指标（expvar）：</p>
+<p>Practical interpretation:</p>
 <ul>
-<li><code>NoKV.ValueLog.GcParallelism</code></li>
-<li><code>NoKV.ValueLog.GcActive</code></li>
-<li><code>NoKV.ValueLog.GcScheduled</code></li>
-<li><code>NoKV.ValueLog.GcThrottled</code></li>
-<li><code>NoKV.ValueLog.GcSkipped</code></li>
-<li><code>NoKV.ValueLog.GcRejected</code></li>
-</ul>
-<p>简单调参建议：</p>
-<ul>
-<li>低负载：调高 <code>ValueLogGCParallelism</code></li>
-<li>高负载：降低 <code>ReduceScore</code> 或 <code>ReduceBacklog</code>，更快降级</li>
+<li>Pebble is a general-purpose storage-engine VFS toolkit.</li>
+<li>NoKV currently implements the subset needed for its engine and recovery semantics, with strong testability on critical failure paths.</li>
 </ul>
 <hr>
-<h2 id="10-代价与边界"><a class="header" href="#10-代价与边界">10. 代价与边界</a></h2>
-<ul>
-<li>桶数过多 → 文件碎片化、head 追踪成本上升</li>
-<li>热桶过小 → 轮转频繁、写放大升高</li>
-<li>并行 GC 过高 → 可能与 compaction 争抢 IO</li>
-</ul>
+<h2 id="6-current-gaps-and-next-steps"><a class="header" href="#6-current-gaps-and-next-steps">6. Current Gaps and Next Steps</a></h2>
+<ol>
+<li>Add an in-memory <code>FS</code> implementation for fully isolated IO tests.</li>
+<li>Add optional disk-health and slow-IO instrumentation wrappers.</li>
+<li>Consider adding higher-level primitives where needed (<code>Lock</code>, <code>OpenDir</code>, hard-link/reuse helpers), but only when justified by real call sites.</li>
+</ol>
 <hr>
-<h2 id="11-小结"><a class="header" href="#11-小结">11. 小结</a></h2>
-<p>NoKV 的 vlog 设计是典型的 “<strong>WiscKey + HashKV + 工程化调度</strong>”：</p>
+<h2 id="7-references"><a class="header" href="#7-references">7. References</a></h2>
 <ul>
-<li><strong>写路径保持顺序</strong>，延迟稳定</li>
-<li><strong>多桶 + 热冷分流</strong> 把垃圾局部化</li>
-<li><strong>并行 GC + 压力控制</strong> 把系统稳定性和吞吐平衡起来</li>
+<li>Pebble <code>vfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
+<li>Pebble <code>errorfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
 </ul>
-<p>这使得 vlog 从“可用”走向“可运维 + 可扩展”。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="manifest.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="file.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -462,11 +295,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-01-compaction-and-ingest.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="manifest.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="file.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -486,16 +319,16 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

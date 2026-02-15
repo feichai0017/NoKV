@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e13d5ae5.js";
+            window.path_to_searchindex_js = "searchindex-5b14b422.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-982873a5.js"></script>
+        <script src="toc-e04efc1a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -1564,6 +1564,105 @@ const (
 <li><strong>Remote manifests</strong> – similar to RocksDB’s remote compaction, storing manifests in object storage is straightforward because edits are append-only.</li>
 </ul>
 <p>For end-to-end recovery context, see <a href="#crash-recovery-playbook">recovery.md</a> and the <a href="#nokv-architecture-overview">architecture overview</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="vfs"><a class="header" href="#vfs">VFS</a></h1>
+<p>The <code>vfs</code> package defines a unified filesystem abstraction used by NoKV storage paths (<code>wal</code>, <code>manifest</code>, <code>vlog</code>, <code>file</code>, and parts of <code>raftstore</code>).</p>
+<p>It is intentionally small and focused:</p>
+<ul>
+<li>Keep production code independent from direct <code>os.*</code> calls.</li>
+<li>Make fault-path testing deterministic.</li>
+<li>Keep the same call shape in embedded and distributed modes.</li>
+</ul>
+<hr>
+<h2 id="1-design-goals"><a class="header" href="#1-design-goals">1. Design Goals</a></h2>
+<ol>
+<li>One filesystem API for all persistence-critical modules.</li>
+<li>Explicit file-handle operations (<code>OpenHandle</code> / <code>OpenFileHandle</code>) so injected failures can target both path-level and handle-level behavior.</li>
+<li>Test-first error injection without adding module-local test hooks.</li>
+</ol>
+<hr>
+<h2 id="2-core-interfaces"><a class="header" href="#2-core-interfaces">2. Core Interfaces</a></h2>
+<p><code>vfs.FS</code> (namespace-level operations):</p>
+<ul>
+<li>open/create (<code>OpenHandle</code>, <code>OpenFileHandle</code>)</li>
+<li>path ops (<code>MkdirAll</code>, <code>Remove</code>, <code>RemoveAll</code>, <code>Rename</code>, <code>Stat</code>, <code>ReadDir</code>, <code>Glob</code>)</li>
+<li>whole-file helpers (<code>ReadFile</code>, <code>WriteFile</code>, <code>Truncate</code>)</li>
+</ul>
+<p><code>vfs.File</code> (handle-level operations):</p>
+<ul>
+<li><code>Read</code> / <code>ReadAt</code></li>
+<li><code>Write</code> / <code>WriteAt</code></li>
+<li><code>Seek</code></li>
+<li><code>Sync</code></li>
+<li><code>Truncate</code></li>
+<li><code>Close</code></li>
+<li><code>Fd</code></li>
+</ul>
+<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.</p>
+<hr>
+<h2 id="3-fault-injection-model"><a class="header" href="#3-fault-injection-model">3. Fault Injection Model</a></h2>
+<p>NoKV provides <code>FaultFS</code> with rule-based injection:</p>
+<ul>
+<li><code>FailOnceRule</code></li>
+<li><code>FailOnNthRule</code></li>
+<li><code>FailAfterNthRule</code></li>
+</ul>
+<p>Rules can match by operation + path, and for rename by src/dst path.</p>
+<h3 id="31-file-handle-level-injection-faultfile"><a class="header" href="#31-file-handle-level-injection-faultfile">3.1 File-Handle-Level Injection (<code>FaultFile</code>)</a></h3>
+<p>When <code>OpenHandle</code>/<code>OpenFileHandle</code> succeeds, the returned handle is wrapped as <code>faultFile</code>.
+<code>faultFile</code> supports deterministic failures on:</p>
+<ul>
+<li><code>Write</code> / <code>WriteAt</code> (<code>OpFileWrite</code>)</li>
+<li><code>Sync</code> (<code>OpFileSync</code>)</li>
+<li><code>Close</code> (<code>OpFileClose</code>)</li>
+<li><code>Truncate</code> (<code>OpFileTrunc</code>)</li>
+</ul>
+<p>This is used to validate rollback and retry behavior for close/sync/truncate paths in WAL/Manifest verification and shutdown flows.</p>
+<hr>
+<h2 id="4-where-it-is-used"><a class="header" href="#4-where-it-is-used">4. Where It Is Used</a></h2>
+<ul>
+<li><code>wal</code>: segment switch, close, verify/truncate.</li>
+<li><code>manifest</code>: edit logging, rewrite, verify, close.</li>
+<li><code>vlog</code>: verify/truncate and file open path.</li>
+<li><code>file</code>: mmap open/sync directory path via <code>vfs</code>.</li>
+<li><code>utils</code>: dir lock and directory sync helpers.</li>
+<li><code>raftstore/engine</code>: disk storage and snapshot import/export.</li>
+</ul>
+<hr>
+<h2 id="5-comparison-with-pebble-vfs"><a class="header" href="#5-comparison-with-pebble-vfs">5. Comparison with Pebble VFS</a></h2>
+<p>NoKV’s design is inspired by Pebble’s VFS layering and error-injection philosophy, while intentionally keeping a smaller surface area.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Aspect</th><th>Pebble VFS</th><th>NoKV VFS</th></tr>
+</thead>
+<tbody>
+<tr><td>API scope</td><td>Broad FS API (create/open/open-dir/link/reuse/lock/list/path helpers/disk usage)</td><td>Minimal API required by NoKV storage paths</td></tr>
+<tr><td>Wrapping model</td><td>Rich wrappers (<code>WithDiskHealthChecks</code>, <code>OnDiskFull</code>, logging wrappers)</td><td><code>FaultFS</code> focused on deterministic fault tests</td></tr>
+<tr><td>In-memory FS</td><td>Built-in <code>MemFS</code> / <code>StrictMem</code> for advanced test semantics</td><td>Not yet built-in (currently wraps real FS with injected errors)</td></tr>
+<tr><td>Error injection</td><td>Dedicated <code>errorfs</code> package and injector model</td><td>Built-in policy/rule model in <code>FaultFS</code></td></tr>
+<tr><td>Handle-level faulting</td><td>Supports wrapped file behavior through wrappers</td><td><code>FaultFile</code> with count-based fail on <code>Write/Sync/Close/Truncate</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Practical interpretation:</p>
+<ul>
+<li>Pebble is a general-purpose storage-engine VFS toolkit.</li>
+<li>NoKV currently implements the subset needed for its engine and recovery semantics, with strong testability on critical failure paths.</li>
+</ul>
+<hr>
+<h2 id="6-current-gaps-and-next-steps"><a class="header" href="#6-current-gaps-and-next-steps">6. Current Gaps and Next Steps</a></h2>
+<ol>
+<li>Add an in-memory <code>FS</code> implementation for fully isolated IO tests.</li>
+<li>Add optional disk-health and slow-IO instrumentation wrappers.</li>
+<li>Consider adding higher-level primitives where needed (<code>Lock</code>, <code>OpenDir</code>, hard-link/reuse helpers), but only when justified by real call sites.</li>
+</ol>
+<hr>
+<h2 id="7-references"><a class="header" href="#7-references">7. References</a></h2>
+<ul>
+<li>Pebble <code>vfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
+<li>Pebble <code>errorfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="file-abstractions"><a class="header" href="#file-abstractions">File Abstractions</a></h1>
 <p>The <code>file</code> package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.</p>
