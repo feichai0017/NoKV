@@ -30,3 +30,4 @@
   - [2026-02-05 vlog design and gc](notes/2026-02-05-vlog-design-and-gc.md)
   - [2026-02-09-memory-craft-memtable-arena-skiplist-art](notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.md)
   - [2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer](notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.md)
+  - [2026-02-15 vfs design and storage-engine comparison](notes/2026-02-15-vfs-design-and-storage-engine-comparison.md)
