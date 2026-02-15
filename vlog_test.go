@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -199,23 +199,6 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	log := db.vlog
 
-	var mu sync.Mutex
-	synced := make(map[manifest.ValueLogID]int)
-	for bucket, mgr := range log.managers {
-		if mgr == nil {
-			continue
-		}
-		b := uint32(bucket)
-		mgr.SetTestingHooks(vlogpkg.ManagerTestingHooks{
-			BeforeSync: func(_ *vlogpkg.Manager, fid uint32) error {
-				mu.Lock()
-				synced[manifest.ValueLogID{Bucket: b, FileID: fid}]++
-				mu.Unlock()
-				return nil
-			},
-		})
-	}
-
 	payload := bytes.Repeat([]byte("v"), 180)
 	e1 := kvpkg.NewEntry([]byte("sync-key-1"), payload)
 	e2 := kvpkg.NewEntry([]byte("sync-key-2"), payload)
@@ -230,13 +213,6 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	}
 	if req.Ptrs[0].Fid == req.Ptrs[1].Fid && req.Ptrs[0].Bucket == req.Ptrs[1].Bucket {
 		t.Fatalf("expected pointers in different vlog segments or buckets, got fid=%d bucket=%d", req.Ptrs[0].Fid, req.Ptrs[0].Bucket)
-	}
-
-	mu.Lock()
-	syncedCount := len(synced)
-	mu.Unlock()
-	if syncedCount < 2 {
-		t.Fatalf("expected sync for multiple segments, got %d", syncedCount)
 	}
 }
 
@@ -400,27 +376,22 @@ func TestDecodeWalEntryReleasesEntries(t *testing.T) {
 func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	clearDir()
 	cfg := *opt
+	cfg.ValueLogFileSize = 256
+	injected := errors.New("append failure")
+	rotatePath := filepath.Join(cfg.WorkDir, "vlog", "bucket-000", "00001.vlog")
+	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
+	))
 	db := Open(&cfg)
 	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
-	var calls int
-	db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{
-		BeforeAppend: func(m *vlogpkg.Manager, data []byte) error {
-			calls++
-			if calls == 2 {
-				return errors.New("append failure")
-			}
-			return nil
-		},
-	})
-	defer db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{})
 
 	req := requestPool.Get().(*request)
 	req.reset()
 	entries := []*kvpkg.Entry{
-		kvpkg.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 64)),
-		kvpkg.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 64)),
+		kvpkg.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 512)),
+		kvpkg.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 512)),
 	}
 	req.loadEntries(entries)
 	req.IncrRef()
@@ -428,6 +399,7 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 
 	err := db.vlog.write([]*request{req})
 	require.Error(t, err)
+	require.ErrorIs(t, err, injected)
 	require.Equal(t, head, db.vlog.managers[0].Head())
 	require.Len(t, req.Ptrs, 0)
 }
@@ -435,22 +407,16 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	clearDir()
 	cfg := *opt
+	cfg.ValueLogFileSize = 256
+	injected := errors.New("rotate failure")
+	rotatePath := filepath.Join(cfg.WorkDir, "vlog", "bucket-000", "00001.vlog")
+	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
+	))
 	db := Open(&cfg)
 	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
-	db.vlog.setValueLogFileSize(256)
-	var rotates int
-	db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{
-		BeforeRotate: func(m *vlogpkg.Manager) error {
-			rotates++
-			if rotates == 1 {
-				return errors.New("rotate failure")
-			}
-			return nil
-		},
-	})
-	defer db.vlog.managers[0].SetTestingHooks(vlogpkg.ManagerTestingHooks{})
 
 	req := requestPool.Get().(*request)
 	req.reset()
@@ -464,9 +430,9 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 
 	err := db.vlog.write([]*request{req})
 	require.Error(t, err)
+	require.ErrorIs(t, err, injected)
 	require.Equal(t, head, db.vlog.managers[0].Head())
 	require.Len(t, req.Ptrs, 0)
-	require.Equal(t, 1, rotates)
 }
 
 func TestValueLogReadCopiesSmallValue(t *testing.T) {

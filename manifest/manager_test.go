@@ -2,18 +2,20 @@ package manifest_test
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
 func TestManagerCreateAndRecover(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -37,7 +39,7 @@ func TestManagerCreateAndRecover(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -52,7 +54,7 @@ func TestManagerCreateAndRecover(t *testing.T) {
 
 func TestManagerRegionEditRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -102,7 +104,7 @@ func TestManagerRegionEditRoundTrip(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -115,7 +117,7 @@ func TestManagerRegionEditRoundTrip(t *testing.T) {
 
 func TestManagerLogPointer(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -137,7 +139,7 @@ func TestManagerLogPointer(t *testing.T) {
 
 func TestManagerRaftPointer(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestManagerRaftPointer(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -192,7 +194,7 @@ func TestManagerRaftPointer(t *testing.T) {
 
 func TestManagerValueLog(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -223,7 +225,7 @@ func TestManagerValueLog(t *testing.T) {
 
 func TestManagerValueLogUpdate(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -257,7 +259,7 @@ func TestManagerValueLogUpdate(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -275,7 +277,7 @@ func TestManagerValueLogUpdate(t *testing.T) {
 
 func TestManagerRegionMetadata(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -313,7 +315,7 @@ func TestManagerRegionMetadata(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -335,7 +337,7 @@ func TestManagerRegionMetadata(t *testing.T) {
 
 func TestManagerLogRaftTruncate(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -374,7 +376,7 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -397,7 +399,7 @@ func TestManagerLogRaftTruncate(t *testing.T) {
 
 func TestManagerCorruptManifest(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -411,14 +413,14 @@ func TestManagerCorruptManifest(t *testing.T) {
 	if err := os.WriteFile(path, []byte("corrupt"), 0o666); err != nil {
 		t.Fatalf("write corrupt: %v", err)
 	}
-	if _, err := manifest.Open(dir); err == nil {
+	if _, err := manifest.Open(dir, nil); err == nil {
 		t.Fatalf("expected error for corrupt manifest")
 	}
 }
 
 func TestManagerValueLogReplaySequence(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -436,7 +438,7 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -466,7 +468,7 @@ func TestManagerValueLogReplaySequence(t *testing.T) {
 
 func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -500,7 +502,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	}
 	require.NoError(t, f.Close())
 
-	if err := manifest.Verify(dir); err != nil {
+	if err := manifest.Verify(dir, nil); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 
@@ -512,7 +514,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 		t.Fatalf("expected manifest truncated to %d, got %d", before, info.Size())
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen after verify: %v", err)
 	}
@@ -521,7 +523,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 
 func TestManagerRewrite(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -556,7 +558,7 @@ func TestManagerRewrite(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	mgr, err = manifest.Open(dir)
+	mgr, err = manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -573,7 +575,7 @@ func TestManagerRewrite(t *testing.T) {
 
 func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir)
+	mgr, err := manifest.Open(dir, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -631,4 +633,107 @@ func TestManagerSnapshotsAndCloneHelpers(t *testing.T) {
 	if cloned[1].Peers[0].PeerID != 10 {
 		t.Fatalf("expected cloned map to preserve peers")
 	}
+}
+
+func TestManagerLogEditSyncFailureDoesNotApplyVersion(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "MANIFEST-000001")
+	injected := errors.New("sync fail")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileSync, manifestPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := manifest.Open(dir, fs)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	edit := manifest.Edit{
+		Type: manifest.EditAddFile,
+		File: &manifest.FileMeta{Level: 0, FileID: 99, Size: 1},
+	}
+	err = mgr.LogEdit(edit)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected sync failure, got %v", err)
+	}
+
+	files := mgr.Current().Levels[0]
+	if len(files) != 0 {
+		t.Fatalf("expected in-memory version rollback on sync failure, got %+v", files)
+	}
+}
+
+func TestManagerCloseRetriesAfterInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "MANIFEST-000001")
+	injected := errors.New("close fail")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileClose, manifestPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := manifest.Open(dir, fs)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = mgr.Close()
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected close failure, got %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("retry close: %v", err)
+	}
+}
+
+func TestOpenInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("manifest mkdir injected")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpMkdirAll, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	_, err := manifest.Open(dir, fs)
+	require.ErrorIs(t, err, injected)
+}
+
+func TestVerifyInjectedFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("manifest read current injected")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpReadFile, "", injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	err := manifest.Verify(dir, fs)
+	require.ErrorIs(t, err, injected)
+}
+
+func TestVerifyPropagatesTruncateFailure(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := mgr.LogEdit(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 7}}); err != nil {
+		t.Fatalf("log edit: %v", err)
+	}
+	require.NoError(t, mgr.Close())
+
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatalf("read current: %v", err)
+	}
+	path := filepath.Join(dir, strings.TrimSpace(string(current)))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open append: %v", err)
+	}
+	if err := binary.Write(f, binary.LittleEndian, uint32(24)); err != nil {
+		t.Fatalf("write length: %v", err)
+	}
+	if _, err := f.Write([]byte("NoK")); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	require.NoError(t, f.Close())
+
+	injected := errors.New("truncate fail")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileTrunc, path, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+	err = manifest.Verify(dir, fs)
+	require.ErrorIs(t, err, injected)
 }

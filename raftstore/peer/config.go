@@ -48,7 +48,7 @@ func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 		return nil, utils.ErrMissingManifestOrWAL
 	}
 	if cfg.StorageDir != "" {
-		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir))
+		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir), nil)
 	}
 	return myraft.NewMemoryStorage(), nil
 }

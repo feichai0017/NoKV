@@ -72,7 +72,8 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 			FileName: tableName,
 			Dir:      lm.opt.WorkDir,
 			Flag:     os.O_CREATE | os.O_RDWR,
-			MaxSz:    int(sstSize)})
+			MaxSz:    int(sstSize),
+			FS:       lm.opt.FS})
 	}
 	// first reference, otherwise the reference state will be incorrect
 	t.IncrRef()
@@ -198,6 +199,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 		Dir:      t.lm.opt.WorkDir,
 		Flag:     os.O_RDONLY,
 		MaxSz:    int(t.size),
+		FS:       t.lm.opt.FS,
 	}
 	if opt.MaxSz <= 0 {
 		opt.MaxSz = int(t.lm.opt.SSTableMaxSz)

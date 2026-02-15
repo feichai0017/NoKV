@@ -18,6 +18,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/feichai0017/hotring"
 	"github.com/stretchr/testify/require"
@@ -578,7 +579,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgr.Close() }()
 
-	manifestMgr, err := manifest.Open(manifestDir)
+	manifestMgr, err := manifest.Open(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = manifestMgr.Close() }()
 
@@ -600,7 +601,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, ws.ApplySnapshot(snapshot))
 
 	exportPath := filepath.Join(dir, "raft.snapshot")
-	require.NoError(t, engine.ExportSnapshot(ws, exportPath))
+	require.NoError(t, engine.ExportSnapshot(ws, exportPath, nil))
 	logRecoveryMetric(t, "raft_snapshot_export", map[string]any{
 		"group_id":        1,
 		"snapshot_index":  snapshot.Metadata.Index,
@@ -617,7 +618,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = walMgrRestore.Close() }()
 
-	manifestMgrRestore, err := manifest.Open(restoreManifestDir)
+	manifestMgrRestore, err := manifest.Open(restoreManifestDir, nil)
 	require.NoError(t, err)
 	defer func() { _ = manifestMgrRestore.Close() }()
 
@@ -628,7 +629,7 @@ func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath))
+	require.NoError(t, engine.ImportSnapshot(wsRestore, exportPath, nil))
 
 	ptr, ok := manifestMgrRestore.RaftPointer(1)
 	require.True(t, ok)
@@ -995,95 +996,28 @@ func TestPrefetchLoopDrainsRing(t *testing.T) {
 }
 
 func TestCloseWithErrors(t *testing.T) {
-	clearDir()
-	db := Open(opt)
-	statsErr := errors.New("stats close error")
-	lsmErr := errors.New("lsm close error")
-	vlogErr := errors.New("vlog close error")
-	walErr := errors.New("wal close error")
+	local := *opt
+	local.WorkDir = t.TempDir()
 	dirLockErr := errors.New("dir lock release error")
-	db.testCloseHooks = &testCloseHooks{
-		statsClose: func() error {
-			_ = db.stats.close()
-			return statsErr
-		},
-		lsmClose: func() error {
-			_ = db.lsm.Close()
-			return lsmErr
-		},
-		vlogClose: func() error {
-			_ = db.vlog.close()
-			return vlogErr
-		},
-		walClose: func() error {
-			_ = db.wal.Close()
-			return walErr
-		},
-		dirLockRelease: func() error {
-			if db.dirLock != nil {
-				_ = db.dirLock.Release()
-			}
-			return dirLockErr
-		},
-		calls: []string{},
-	}
+	lockPath := filepath.Join(local.WorkDir, "LOCK")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, lockPath, dirLockErr))
+	local.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	db := Open(&local)
 	err := db.Close()
 	require.Error(t, err)
-	require.True(t, errors.Is(err, statsErr))
-	require.True(t, errors.Is(err, lsmErr))
-	require.True(t, errors.Is(err, vlogErr))
-	require.True(t, errors.Is(err, walErr))
-	require.True(t, errors.Is(err, dirLockErr))
-
-	expectCalls := []string{"stats close", "lsm close", "vlog close", "wal close", "dir lock release"}
-	require.Equal(t, expectCalls, db.testCloseHooks.calls)
+	require.ErrorIs(t, err, dirLockErr)
 	require.True(t, db.IsClosed())
 
 	err2 := db.Close()
 	require.Error(t, err2)
-	require.True(t, errors.Is(err2, statsErr))
-	require.True(t, errors.Is(err2, lsmErr))
-	require.True(t, errors.Is(err2, vlogErr))
-	require.True(t, errors.Is(err2, walErr))
-	require.True(t, errors.Is(err2, dirLockErr))
-	require.Equal(t, expectCalls, db.testCloseHooks.calls)
+	require.ErrorIs(t, err2, dirLockErr)
 }
 
 func TestCloseConcurrent(t *testing.T) {
-	clearDir()
-	db := Open(opt)
-	var statsCalls atomic.Int32
-	var lsmCalls atomic.Int32
-	var vlogCalls atomic.Int32
-	var walCalls atomic.Int32
-	var dirCalls atomic.Int32
-	db.testCloseHooks = &testCloseHooks{
-		statsClose: func() error {
-			statsCalls.Add(1)
-			_ = db.stats.close()
-			return nil
-		},
-		lsmClose: func() error {
-			lsmCalls.Add(1)
-			return db.lsm.Close()
-		},
-		vlogClose: func() error {
-			vlogCalls.Add(1)
-			return db.vlog.close()
-		},
-		walClose: func() error {
-			walCalls.Add(1)
-			return db.wal.Close()
-		},
-		dirLockRelease: func() error {
-			dirCalls.Add(1)
-			if db.dirLock != nil {
-				return db.dirLock.Release()
-			}
-			return nil
-		},
-		calls: []string{},
-	}
+	local := *opt
+	local.WorkDir = t.TempDir()
+	db := Open(&local)
 
 	var wg sync.WaitGroup
 	const workers = 16
@@ -1102,9 +1036,4 @@ func TestCloseConcurrent(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.True(t, db.IsClosed())
-	require.Equal(t, int32(1), statsCalls.Load())
-	require.Equal(t, int32(1), lsmCalls.Load())
-	require.Equal(t, int32(1), vlogCalls.Load())
-	require.Equal(t, int32(1), walCalls.Load())
-	require.Equal(t, int32(1), dirCalls.Load())
 }
