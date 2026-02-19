@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89de2c05.js";
+            window.path_to_searchindex_js = "searchindex-38371168.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -243,12 +243,28 @@ func main() {
 <p>Micro benchmarks:</p>
 <pre><code class="language-bash">go test -bench=. -run=^$ ./...
 </code></pre>
-<p>YCSB (NoKV engine only by default):</p>
+<p>YCSB (default: NoKV + Badger + Pebble, workloads A-F):</p>
 <pre><code class="language-bash">make bench
 </code></pre>
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
+<p>Latest full baseline (2026-02-15):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">830,602</td><td style="text-align: right">456,435</td><td style="text-align: right">1,269,815</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,666,600</td><td style="text-align: right">688,155</td><td style="text-align: right">1,943,445</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">1,931,369</td><td style="text-align: right">873,820</td><td style="text-align: right">889,292</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,845,861</td><td style="text-align: right">777,686</td><td style="text-align: right">2,530,967</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">185,123</td><td style="text-align: right">42,527</td><td style="text-align: right">565,647</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">674,619</td><td style="text-align: right">344,726</td><td style="text-align: right">1,128,722</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
 <p>If a local run crashes or you want a clean slate:</p>
 <pre><code class="language-bash">make clean

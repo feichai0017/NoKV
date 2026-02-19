@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89de2c05.js";
+            window.path_to_searchindex_js = "searchindex-38371168.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -207,6 +207,9 @@
     <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
       <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
     </a>
+    <a href="https://dbdb.io/db/nokv">
+      <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
+    </a>
   </p>
 
   
@@ -281,30 +284,30 @@
 
 <br>
 <h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>NoKV outperforms BadgerDB significantly in read-heavy and mixed workloads.</p>
+<p>Latest full baseline (generated on 2026-02-15 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-F, engines NoKV/Badger/Pebble):</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th style="text-align: left">Workload</th><th style="text-align: left">Operation</th><th style="text-align: left">NoKV (OPS)</th><th style="text-align: left">Badger (OPS)</th><th style="text-align: left">Improvement</th></tr>
+<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left"><strong>YCSB-C</strong></td><td style="text-align: left">100% Read</td><td style="text-align: left"><strong>1,540,744</strong></td><td style="text-align: left">521,586</td><td style="text-align: left"><span style="color:green"><strong>+195%</strong></span> 🚀</td></tr>
-<tr><td style="text-align: left"><strong>YCSB-B</strong></td><td style="text-align: left">95% Read</td><td style="text-align: left"><strong>911,199</strong></td><td style="text-align: left">349,608</td><td style="text-align: left"><span style="color:green"><strong>+160%</strong></span></td></tr>
-<tr><td style="text-align: left"><strong>YCSB-A</strong></td><td style="text-align: left">50% Update</td><td style="text-align: left"><strong>410,578</strong></td><td style="text-align: left">262,153</td><td style="text-align: left"><span style="color:green"><strong>+56%</strong></span></td></tr>
-<tr><td style="text-align: left"><strong>YCSB-D</strong></td><td style="text-align: left">5% Insert</td><td style="text-align: left"><strong>1,270,717</strong></td><td style="text-align: left">707,607</td><td style="text-align: left"><span style="color:green"><strong>+79%</strong></span></td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">830,602</td><td style="text-align: right">456,435</td><td style="text-align: right">1,269,815</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,666,600</td><td style="text-align: right">688,155</td><td style="text-align: right">1,943,445</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">1,931,369</td><td style="text-align: right">873,820</td><td style="text-align: right">889,292</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,845,861</td><td style="text-align: right">777,686</td><td style="text-align: right">2,530,967</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">185,123</td><td style="text-align: right">42,527</td><td style="text-align: right">565,647</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">674,619</td><td style="text-align: right">344,726</td><td style="text-align: right">1,128,722</td></tr>
 </tbody>
 </table>
 </div>
 <details>
-<summary><em>Click to view detailed latency stats</em></summary>
-<pre><code class="language-text">Summary:
-ENGINE  OPERATION  MODE                          OPS/S    AVG LATENCY  P99
-NoKV    YCSB-C     100% read                     1540744  649ns        128µs
-NoKV    YCSB-A     50/50 read/update             410578   2.435µs      155µs
-Badger  YCSB-C     100% read                     521586   1.917µs      427µs
-Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
+<summary><em>Click to view full benchmark summary</em></summary>
+<pre><code class="language-text">NoKV    YCSB-A 830602   YCSB-B 1666600  YCSB-C 1931369  YCSB-D 1845861  YCSB-E 185123  YCSB-F 674619
+Badger  YCSB-A 456435   YCSB-B 688155   YCSB-C 873820   YCSB-D 777686   YCSB-E 42527   YCSB-F 344726
+Pebble  YCSB-A 1269815  YCSB-B 1943445  YCSB-C 889292   YCSB-D 2530967  YCSB-E 565647  YCSB-F 1128722
 </code></pre>
 </details>
+<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260215_201602.txt">benchmark_results_20260215_201602.txt</a></p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
@@ -330,16 +333,6 @@ Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
     end
 </pre>
 
-<h2 id="-roadmap"><a class="header" href="#-roadmap">🗺️ Roadmap</a></h2>
-<ul>
-<li><input disabled="" type="checkbox" checked=""> <strong>Core</strong>: LSM Tree, VLog, WAL</li>
-<li><input disabled="" type="checkbox" checked=""> <strong>Distributed</strong>: Multi-Raft, Split/Merge</li>
-<li><input disabled="" type="checkbox" checked=""> <strong>Transaction</strong>: Percolator (Snapshot Isolation)</li>
-<li><input disabled="" type="checkbox"> <strong>Optimization</strong>: Async Apply, SSTable-based Snapshot</li>
-<li><input disabled="" type="checkbox"> <strong>Redis</strong>: Hash/Set/ZSet support</li>
-</ul>
-<h2 id="-contributing"><a class="header" href="#-contributing">🤝 Contributing</a></h2>
-<p>We welcome contributions! Please see <a href="CONTRIBUTING.html">CONTRIBUTING.md</a> for details.</p>
 <div align="center">
   <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>
 </div>
