@@ -101,3 +101,70 @@ func TestNoKVEngineScanWithValueLogEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, count)
 }
+
+func TestNoKVBatchInsert(t *testing.T) {
+	engine := newNoKVEngine(ycsbEngineOptions{
+		BaseDir:        t.TempDir(),
+		ValueSize:      8,
+		ValueThreshold: 32,
+		MemtableMB:     1,
+		SSTableMB:      4,
+		VlogFileMB:     4,
+	})
+
+	require.Equal(t, "NoKV", engine.Name())
+	require.NoError(t, engine.Open(true))
+	defer func() {
+		require.NoError(t, engine.Close())
+	}()
+
+	nokv, ok := engine.(*nokvEngine)
+	require.True(t, ok)
+
+	batchWriter, ok := engine.(BatchWriter)
+	require.True(t, ok)
+
+	keys := [][]byte{
+		[]byte("user000000000001"),
+		[]byte("user000000000002"),
+		[]byte("user000000000003"),
+	}
+	values := [][]byte{
+		[]byte("value1"),
+		[]byte("value2"),
+		[]byte("value3"),
+	}
+
+	require.NoError(t, batchWriter.BatchInsert(keys, values))
+
+	for i := range keys {
+		out, err := nokv.db.Get(keys[i])
+		require.NoError(t, err)
+		require.Equal(t, values[i], out.Value)
+	}
+}
+
+func TestNoKVBatchInsertLengthMismatch(t *testing.T) {
+	engine := newNoKVEngine(ycsbEngineOptions{
+		BaseDir:        t.TempDir(),
+		ValueSize:      8,
+		ValueThreshold: 32,
+		MemtableMB:     1,
+		SSTableMB:      4,
+		VlogFileMB:     4,
+	})
+	require.NoError(t, engine.Open(true))
+	defer func() {
+		require.NoError(t, engine.Close())
+	}()
+
+	batchWriter, ok := engine.(BatchWriter)
+	require.True(t, ok)
+
+	err := batchWriter.BatchInsert(
+		[][]byte{[]byte("k1"), []byte("k2")},
+		[][]byte{[]byte("v1")},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "length mismatch")
+}
