@@ -487,6 +487,9 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 
 			batchWriter, supportBatch := engine.(BatchWriter)
 			batchSize := cfg.BatchSize
+			if batchSize <= 0 {
+				batchSize = 1
+			}
 			var batchKeys [][]byte
 			var batchVals [][]byte
 
@@ -494,16 +497,8 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 				if len(batchKeys) == 0 {
 					return nil
 				}
-				if cfg.BatchInsert && supportBatch {
-					if err := batchWriter.BatchInsert(batchKeys, batchVals); err != nil {
-						return err
-					}
-				} else {
-					for i := range batchKeys {
-						if err := engine.Insert(batchKeys[i], batchVals[i]); err != nil {
-							return err
-						}
-					}
+				if err := batchWriter.BatchInsert(batchKeys, batchVals); err != nil {
+					return err
 				}
 				for _, v := range batchVals {
 					valueBufPool.Put(v)
@@ -512,7 +507,11 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 				batchVals = batchVals[:0]
 				return nil
 			}
-			defer flushBatch()
+			defer func() {
+				if err := flushBatch(); err != nil {
+					errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
+				}
+			}()
 
 			for i := s; i < e; i++ {
 				opType := chooseOperation(rng, wl)
@@ -547,13 +546,21 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					key := formatYCSBKey(id)
 					sz := sizer.Next(rng)
 					val := randomValue(rng, sz)
-					batchKeys = append(batchKeys, key)
-					batchVals = append(batchVals, val)
-					if len(batchKeys) >= batchSize {
-						if err := flushBatch(); err != nil {
+					if cfg.BatchInsert && supportBatch {
+						batchKeys = append(batchKeys, key)
+						batchVals = append(batchVals, val)
+						if len(batchKeys) >= batchSize {
+							if err := flushBatch(); err != nil {
+								errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
+								return
+							}
+						}
+					} else {
+						if err := engine.Insert(key, val); err != nil {
 							errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
 							return
 						}
+						valueBufPool.Put(val)
 					}
 					insertOps.Add(1)
 					valRec.Record(sz)
