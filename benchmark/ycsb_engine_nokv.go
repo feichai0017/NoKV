@@ -154,6 +154,19 @@ func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 	return read, nil
 }
 
+func (e *nokvEngine) BatchInsert(keys, values [][]byte) error {
+	if len(keys) != len(values) {
+		return fmt.Errorf("nokv: in batch insert, keys and values length mismatch")
+	}
+	for i := range keys {
+		// Use the non-transactional API intentionally for pure-insert benchmarks.
+		if err := e.db.Set(keys[i], values[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *nokvEngine) startStatsTicker() {
 	interval := os.Getenv("NOKV_BENCH_STATS_INTERVAL")
 	if interval == "" || e.db == nil {
