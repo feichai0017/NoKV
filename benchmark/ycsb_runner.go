@@ -37,6 +37,7 @@ var defaultYCSBWorkloads = map[string]ycsbWorkload{
 	"D": {Name: "D", ReadRatio: 0.95, InsertRatio: 0.05, Distribution: "latest", Description: "95% read, 5% insert (latest)"},
 	"E": {Name: "E", ScanRatio: 0.95, InsertRatio: 0.05, Distribution: "zipfian", Description: "95% scan, 5% insert"},
 	"F": {Name: "F", ReadRatio: 0.5, ReadModifyWrite: 0.5, Distribution: "zipfian", Description: "read-modify-write"},
+	"G": {Name: "G", InsertRatio: 1.0, Distribution: "zipfian", Description: "100% insert"},
 }
 
 type ycsbConfig struct {
@@ -57,6 +58,8 @@ type ycsbConfig struct {
 	StatusEvery time.Duration
 	Workloads   []ycsbWorkload
 	Engines     []string
+	BatchInsert bool
+	BatchSize   int
 }
 
 type ycsbKeyspace struct {
@@ -481,6 +484,35 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(cfg.Seed + int64(idx) + 1))
 			readGen := newKeyGenerator(wl.Distribution, rng, keySpan, state)
+
+			batchWriter, supportBatch := engine.(BatchWriter)
+			batchSize := cfg.BatchSize
+			if batchSize <= 0 {
+				batchSize = 1
+			}
+			var batchKeys [][]byte
+			var batchVals [][]byte
+
+			flushBatch := func() error {
+				if len(batchKeys) == 0 {
+					return nil
+				}
+				if err := batchWriter.BatchInsert(batchKeys, batchVals); err != nil {
+					return err
+				}
+				for _, v := range batchVals {
+					valueBufPool.Put(v)
+				}
+				batchKeys = batchKeys[:0]
+				batchVals = batchVals[:0]
+				return nil
+			}
+			defer func() {
+				if err := flushBatch(); err != nil {
+					errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
+				}
+			}()
+
 			for i := s; i < e; i++ {
 				opType := chooseOperation(rng, wl)
 				startOp := time.Now()
@@ -514,11 +546,22 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					key := formatYCSBKey(id)
 					sz := sizer.Next(rng)
 					val := randomValue(rng, sz)
-					if err := engine.Insert(key, val); err != nil {
-						errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
-						return
+					if cfg.BatchInsert && supportBatch {
+						batchKeys = append(batchKeys, key)
+						batchVals = append(batchVals, val)
+						if len(batchKeys) >= batchSize {
+							if err := flushBatch(); err != nil {
+								errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
+								return
+							}
+						}
+					} else {
+						if err := engine.Insert(key, val); err != nil {
+							errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
+							return
+						}
+						valueBufPool.Put(val)
 					}
-					valueBufPool.Put(val)
 					insertOps.Add(1)
 					valRec.Record(sz)
 					dataBytes.Add(int64(sz))

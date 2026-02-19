@@ -123,3 +123,17 @@ func (e *badgerEngine) Scan(startKey []byte, count int) (int, error) {
 	}
 	return read, nil
 }
+
+func (e *badgerEngine) BatchInsert(keys, values [][]byte) error {
+	if len(keys) != len(values) {
+		return fmt.Errorf("badger: in batch insert, keys and values length mismatch")
+	}
+	wb := e.db.NewWriteBatch()
+	defer wb.Cancel()
+	for i := range keys {
+		if err := wb.Set(keys[i], values[i]); err != nil {
+			return err
+		}
+	}
+	return wb.Flush()
+}
