@@ -37,6 +37,8 @@ var (
 	ycsbValueMax          = flag.Int("ycsb_value_max", 0, "Max value size for uniform/normal distributions (bytes); 0 defaults to value_size")
 	ycsbValueStd          = flag.Int("ycsb_value_std", 0, "Stddev for normal distribution (bytes); 0 defaults to value_size/4")
 	ycsbValuePercentiles  = flag.String("ycsb_value_percentiles", "", "Percentile map for percentile dist, e.g. \"50:256,90:512,99:1024,100:2048\"")
+	ycsbBatchInsert       = flag.Bool("ycsb_batch_insert", false, "enable batch insert for Badger")
+	ycsbBatchSize         = flag.Int("ycsb_batch_size", 1000000, "batch size for batch insert")
 )
 
 const benchmarkEnvKey = "NOKV_RUN_BENCHMARKS"

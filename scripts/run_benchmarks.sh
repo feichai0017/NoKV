@@ -19,11 +19,13 @@ die() {
   exit 1
 }
 
-default_workloads="A,B,C,D,E,F"
+default_workloads="A,B,C,D,E,F,G"
 default_engines="nokv,badger,pebble"
 default_records=1000000
 default_ops=1000000
 default_conc=16
+default_batch_insert="false"
+default_batch_size=1000000
 
 ycsb_engines="${YCSB_ENGINES:-$default_engines}"
 ycsb_workloads="${YCSB_WORKLOADS:-$default_workloads}"
@@ -41,6 +43,8 @@ ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
 benchdir="${YCSB_BENCHDIR:-benchmark_data}"
 ycsb_warm_ops="${YCSB_WARM_OPS:-100000}"
 ycsb_timeout="${YCSB_GO_TEST_TIMEOUT:-}"
+ycsb_batch_insert="${YCSB_BATCH_INSERT:-$default_batch_insert}"
+ycsb_batch_size="${YCSB_BATCH_SIZE:-$default_batch_size}"
 
 export NOKV_RUN_BENCHMARKS=1
 
@@ -111,6 +115,8 @@ args=(
   -ycsb_rocks_compression "${ycsb_rocks_comp}"
   -ycsb_block_cache_mb "${ycsb_block_cache_mb}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
+  -ycsb_batch_insert="${ycsb_batch_insert}"
+  -ycsb_batch_size="${ycsb_batch_size}"
 )
 
 
