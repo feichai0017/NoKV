@@ -45,6 +45,10 @@ type ycsbEngineOptions struct {
 	PebbleCompression  string
 }
 
+type BatchWriter interface {
+	BatchInsert(key, value [][]byte) error
+}
+
 // engineDir derives an engine-specific work directory rooted at BaseDir.
 func (o ycsbEngineOptions) engineDir(engine string) string {
 	return filepath.Join(o.BaseDir, fmt.Sprintf("%s_ycsb", engine))
