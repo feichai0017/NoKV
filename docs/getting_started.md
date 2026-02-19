@@ -87,7 +87,7 @@ Micro benchmarks:
 go test -bench=. -run=^$ ./...
 ```
 
-YCSB (NoKV engine only by default):
+YCSB (default: NoKV + Badger + Pebble, workloads A-F):
 
 ```bash
 make bench
@@ -98,6 +98,18 @@ Override defaults with env vars:
 ```bash
 YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 ```
+
+Latest full baseline (2026-02-15):
+
+| Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
+| :--- | ---: | ---: | ---: |
+| YCSB-A | 830,602 | 456,435 | 1,269,815 |
+| YCSB-B | 1,666,600 | 688,155 | 1,943,445 |
+| YCSB-C | 1,931,369 | 873,820 | 889,292 |
+| YCSB-D | 1,845,861 | 777,686 | 2,530,967 |
+| YCSB-E | 185,123 | 42,527 | 565,647 |
+| YCSB-F | 674,619 | 344,726 | 1,128,722 |
+
 
 ## Cleanup
 If a local run crashes or you want a clean slate:
