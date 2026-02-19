@@ -10,7 +10,6 @@ import (
 	"github.com/feichai0017/hotring"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
@@ -65,7 +64,7 @@ type LSMLevelStats struct {
 	MergeTables        int64   `json:"ingest_merge_tables"`
 }
 
-func levelMetricsToStats(lvl lsm.LevelMetrics) LSMLevelStats {
+func levelMetricsToStats(lvl metrics.LevelMetrics) LSMLevelStats {
 	return LSMLevelStats{
 		Level:              lvl.Level,
 		TableCount:         lvl.TableCount,
