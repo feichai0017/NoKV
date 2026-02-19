@@ -16,7 +16,7 @@ var (
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", -1, "Badger index cache size (MB); <=0 falls back to block cache size")
 	fBadgerCompression = flag.String("badger_compression", "none", "Badger compression codec: none|snappy|zstd")
 
-	ycsbWorkloads         = flag.String("ycsb_workloads", "A,B,C,D,F", "comma-separated YCSB workloads (A-F)")
+	ycsbWorkloads         = flag.String("ycsb_workloads", "A,B,C,D,E,F,G", "comma-separated YCSB workloads (A-G)")
 	ycsbEngines           = flag.String("ycsb_engines", "nokv,badger", "comma-separated engines to benchmark (nokv,nokv-skiplist,nokv-art,badger,pebble,rocksdb)")
 	ycsbRecords           = flag.Int("ycsb_records", 1000000, "number of records to preload during YCSB load phase")
 	ycsbOperations        = flag.Int("ycsb_ops", 1000000, "number of transactional operations per workload")
@@ -37,7 +37,7 @@ var (
 	ycsbValueMax          = flag.Int("ycsb_value_max", 0, "Max value size for uniform/normal distributions (bytes); 0 defaults to value_size")
 	ycsbValueStd          = flag.Int("ycsb_value_std", 0, "Stddev for normal distribution (bytes); 0 defaults to value_size/4")
 	ycsbValuePercentiles  = flag.String("ycsb_value_percentiles", "", "Percentile map for percentile dist, e.g. \"50:256,90:512,99:1024,100:2048\"")
-	ycsbBatchInsert       = flag.Bool("ycsb_batch_insert", false, "enable batch insert for Badger")
+	ycsbBatchInsert       = flag.Bool("ycsb_batch_insert", false, "enable batch insert for engines implementing BatchWriter (Badger/NoKV)")
 	ycsbBatchSize         = flag.Int("ycsb_batch_size", 1000000, "batch size for batch insert")
 )
 
