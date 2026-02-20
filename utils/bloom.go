@@ -66,10 +66,7 @@ func BloomKForBitsPerKey(bitsPerKey int) uint8 {
 	if bitsPerKey < 0 {
 		bitsPerKey = 0
 	}
-	k := uint32(float64(bitsPerKey) * 0.69)
-	if k < 1 {
-		k = 1
-	}
+	k := max(uint32(float64(bitsPerKey)*0.69), 1)
 	if k > 30 {
 		k = 30
 	}
@@ -118,10 +115,7 @@ func BloomInsert(filter []byte, h uint32) {
 func buildBloomFilter(keys []uint32, bitsPerKey int) []byte {
 	k := BloomKForBitsPerKey(bitsPerKey)
 
-	nBits := len(keys) * bitsPerKey
-	if nBits < 64 {
-		nBits = 64
-	}
+	nBits := max(len(keys)*bitsPerKey, 64)
 	nBytes := (nBits + 7) / 8
 	nBits = nBytes * 8
 

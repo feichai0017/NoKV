@@ -1,5 +1,4 @@
 //go:build darwin
-// +build darwin
 
 package file
 
@@ -147,10 +146,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	// If the file is too small, double its size or increase it by 1GB, whichever is smaller.
 	if start+sz > len(m.Data) {
 		const oneGB = 1 << 30
-		growBy := len(m.Data)
-		if growBy > oneGB {
-			growBy = oneGB
-		}
+		growBy := min(len(m.Data), oneGB)
 		if growBy < sz+4 {
 			growBy = sz + 4
 		}

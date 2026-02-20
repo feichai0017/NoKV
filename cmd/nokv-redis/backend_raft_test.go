@@ -1034,13 +1034,13 @@ func TestRaftBackendIncrByErrors(t *testing.T) {
 	require.ErrorIs(t, err, errNotInteger)
 
 	stub.batchGet = map[string]*pb.GetResponse{
-		"k": {Value: []byte(fmt.Sprintf("%d", math.MaxInt64))},
+		"k": {Value: fmt.Appendf(nil, "%d", math.MaxInt64)},
 	}
 	_, err = backend.IncrBy([]byte("k"), 1)
 	require.ErrorIs(t, err, errOverflow)
 
 	stub.batchGet = map[string]*pb.GetResponse{
-		"k": {Value: []byte(fmt.Sprintf("%d", math.MinInt64))},
+		"k": {Value: fmt.Appendf(nil, "%d", math.MinInt64)},
 	}
 	_, err = backend.IncrBy([]byte("k"), -1)
 	require.ErrorIs(t, err, errOverflow)

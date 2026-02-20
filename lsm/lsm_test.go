@@ -278,8 +278,8 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	builderOpt.BloomFalsePositive = 0.01
 	builder := newTableBuiler(&builderOpt)
 
-	for i := 0; i < 20; i++ {
-		key := kv.KeyWithTs([]byte(fmt.Sprintf("k%02d", i)), 1)
+	for i := range 20 {
+		key := kv.KeyWithTs(fmt.Appendf(nil, "k%02d", i), 1)
 		value := bytes.Repeat([]byte{'v'}, 48)
 		builder.AddKey(kv.NewEntry(key, value))
 	}
@@ -1027,11 +1027,9 @@ func TestCompact(t *testing.T) {
 		// Execute two identical compaction plans to simulate contention.
 		errCh := make(chan error, 1)
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errCh <- lsm.levels.runCompactDef(0, 0, *cd)
-		}()
+		})
 		errMain := lsm.levels.runCompactDef(0, 0, *cd)
 		wg.Wait()
 		errBg := <-errCh

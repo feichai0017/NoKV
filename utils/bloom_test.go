@@ -9,7 +9,7 @@ import (
 func (f Filter) String() string {
 	s := make([]byte, 8*len(f))
 	for i, x := range f {
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			if x&(1<<uint(j)) != 0 {
 				s[8*i+j] = '1'
 			} else {

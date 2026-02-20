@@ -145,7 +145,7 @@ func TestTxnVersions(t *testing.T) {
 		for i := 1; i < 10; i++ {
 			txn := db.NewTransaction(true)
 
-			require.NoError(t, txn.SetEntry(kv.NewEntry(k, []byte(fmt.Sprintf("valversion=%d", i)))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry(k, fmt.Appendf(nil, "valversion=%d", i))))
 			require.NoError(t, txn.Commit())
 			require.Equal(t, uint64(i), db.orc.readTs())
 		}
@@ -192,7 +192,7 @@ func TestTxnVersions(t *testing.T) {
 			require.NoError(t, err)
 
 			val := item.Entry().Value
-			require.Equal(t, []byte(fmt.Sprintf("valversion=%d", i)), val,
+			require.Equal(t, fmt.Appendf(nil, "valversion=%d", i), val,
 				"Expected versions to match up at i=%d", i)
 
 			// Try retrieving the latest version forward and reverse.
