@@ -473,10 +473,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				maxSeg = ptr.Segment
 			}
 			if effectiveActive > 0 {
-				lag := effectiveActive - int64(ptr.Segment)
-				if lag < 0 {
-					lag = 0
-				}
+				lag := max(effectiveActive-int64(ptr.Segment), 0)
 				if lag > 0 {
 					lagging++
 				}
@@ -490,10 +487,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.MaxLagSegments = maxLag
 		snap.Raft.LaggingGroups = lagging
 	}
-	threshold := s.db.opt.RaftLagWarnSegments
-	if threshold < 0 {
-		threshold = 0
-	}
+	threshold := max(s.db.opt.RaftLagWarnSegments, 0)
 	snap.Raft.LagWarnThreshold = threshold
 	if threshold > 0 && snap.Raft.MaxLagSegments >= threshold && snap.Raft.LaggingGroups > 0 {
 		snap.Raft.LagWarning = true

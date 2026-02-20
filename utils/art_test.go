@@ -115,9 +115,7 @@ func TestARTConcurrentWriteIterate(t *testing.T) {
 	}
 
 	// Reader: iterate and validate ordering under concurrent writes.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		deadline := time.Now().Add(200 * time.Millisecond)
 		for time.Now().Before(deadline) {
 			it := art.NewIterator(nil)
@@ -141,7 +139,7 @@ func TestARTConcurrentWriteIterate(t *testing.T) {
 			_ = it.Close()
 			runtime.Gosched()
 		}
-	}()
+	})
 
 	time.Sleep(250 * time.Millisecond)
 	atomic.StoreInt32(&stop, 1)
@@ -180,7 +178,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	art48 := NewART(DefaultArenaSize)
 	defer art48.DecrRef()
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		k := []byte{byte(i + 1), 'x'}
 		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
 		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
@@ -211,7 +209,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	art256 := NewART(DefaultArenaSize)
 	defer art256.DecrRef()
 
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		k := []byte{byte(i), 'y'}
 		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
 		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)

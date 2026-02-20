@@ -136,7 +136,7 @@ var (
 	errPeerUnknown = errors.New("raftstore: peer address unknown")
 )
 
-func raftStepHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func raftStepHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(raftpb.Message)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func raftStepHandler(srv any, ctx context.Context, dec func(any) error, intercep
 		Server:     srv,
 		FullMethod: raftStepFullMethod,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(raftServiceServer).Step(ctx, req.(*raftpb.Message))
 	}
 	return interceptor(ctx, in, info, handler)

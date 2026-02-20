@@ -597,10 +597,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	if len(candidates) == 0 {
 		return files
 	}
-	start := int(atomic.AddUint64(&vlog.gcPickSeed, 1))
-	if start < 0 {
-		start = 0
-	}
+	start := max(int(atomic.AddUint64(&vlog.gcPickSeed, 1)), 0)
 	for i := 0; i < len(candidates); i++ {
 		id := candidates[(start+i)%len(candidates)]
 		if selectedBuckets[id.Bucket] {
