@@ -554,7 +554,7 @@ func (s *SkipListIterator) SeekToLast() {
 func FastRand() uint32
 
 // AssertTruef is AssertTrue with extra info.
-func AssertTruef(b bool, format string, args ...interface{}) {
+func AssertTruef(b bool, format string, args ...any) {
 	if !b {
 		log.Fatalf("%+v", errors.Errorf(format, args...))
 	}

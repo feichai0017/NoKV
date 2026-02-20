@@ -232,8 +232,8 @@ func clearDir() {
 
 func keyForBucket(t *testing.T, bucket int, buckets int) []byte {
 	t.Helper()
-	for i := 0; i < 10000; i++ {
-		userKey := []byte(fmt.Sprintf("gc-bucket-key-%d", i))
+	for i := range 10000 {
+		userKey := fmt.Appendf(nil, "gc-bucket-key-%d", i)
 		internal := kvpkg.InternalKey(kvpkg.CFDefault, userKey, 1)
 		if kvpkg.ValueLogBucket(internal, uint32(buckets)) == uint32(bucket) {
 			return userKey

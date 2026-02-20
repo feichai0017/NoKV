@@ -17,7 +17,7 @@ func TestWatchdogAutoGC(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	record := Record{Type: RecordTypeRaftEntry, Payload: []byte("raft-entry")}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		_, err := mgr.AppendRecords(record)
 		require.NoError(t, err)
 		if i < 3 {

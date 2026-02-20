@@ -138,7 +138,7 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		for bucket := range snap.ValueLog.Heads {
 			buckets = append(buckets, bucket)
 		}
-		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		slices.Sort(buckets)
 		for _, bucket := range buckets {
 			head := snap.ValueLog.Heads[bucket]
 			if head.IsZero() {
@@ -302,7 +302,7 @@ func runManifestCmd(w io.Writer, args []string) error {
 		for bucket := range heads {
 			buckets = append(buckets, bucket)
 		}
-		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		slices.Sort(buckets)
 		valueLogHeads := make([]map[string]any, 0, len(buckets))
 		for _, bucket := range buckets {
 			meta := heads[bucket]
@@ -414,7 +414,7 @@ func runVlogCmd(w io.Writer, args []string) error {
 
 		head := manager.Head()
 		fids := manager.ListFIDs()
-		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+		slices.Sort(fids)
 
 		out := map[string]any{
 			"active_fid": manager.ActiveFID(),
@@ -451,7 +451,7 @@ func runVlogCmd(w io.Writer, args []string) error {
 		}
 		head := manager.Head()
 		fids := manager.ListFIDs()
-		sort.Slice(fids, func(i, j int) bool { return fids[i] < fids[j] })
+		slices.Sort(fids)
 		bucketInfo = append(bucketInfo, map[string]any{
 			"bucket":     bucket,
 			"active_fid": manager.ActiveFID(),

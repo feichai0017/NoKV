@@ -234,9 +234,7 @@ func (s *Server) startRaftTickLoop(interval time.Duration) {
 	}
 	s.tickEvery = interval
 	s.tickStop = make(chan struct{})
-	s.tickWG.Add(1)
-	go func() {
-		defer s.tickWG.Done()
+	s.tickWG.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -247,5 +245,5 @@ func (s *Server) startRaftTickLoop(interval time.Duration) {
 				return
 			}
 		}
-	}()
+	})
 }

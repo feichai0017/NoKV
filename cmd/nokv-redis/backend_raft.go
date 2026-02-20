@@ -490,7 +490,7 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	}
 	const maxRetries = 5
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for range maxRetries {
 		start, err := b.reserveTimestamp(2)
 		if err != nil {
 			return err

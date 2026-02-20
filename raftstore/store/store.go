@@ -89,14 +89,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if planner == nil {
 		planner = scheduler.NoopPlanner{}
 	}
-	queueSize := cfg.OperationQueueSize
-	if queueSize < 0 {
-		queueSize = 0
-	}
-	operationCooldown := cfg.OperationCooldown
-	if operationCooldown < 0 {
-		operationCooldown = 0
-	}
+	queueSize := max(cfg.OperationQueueSize, 0)
+	operationCooldown := max(cfg.OperationCooldown, 0)
 	if operationCooldown == 0 {
 		operationCooldown = 5 * time.Second
 	}
@@ -107,10 +101,7 @@ func NewStoreWithConfig(cfg Config) *Store {
 	if operationInterval <= 0 {
 		operationInterval = 200 * time.Millisecond
 	}
-	operationBurst := cfg.OperationBurst
-	if operationBurst < 0 {
-		operationBurst = 0
-	}
+	operationBurst := max(cfg.OperationBurst, 0)
 	if operationBurst == 0 {
 		operationBurst = 4
 	}
