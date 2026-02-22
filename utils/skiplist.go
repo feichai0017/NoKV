@@ -68,7 +68,13 @@ type Skiplist struct {
 
 // IncrRef increases the refcount
 func (s *Skiplist) IncrRef() {
-	atomic.AddInt32(&s.ref, 1)
+	newRef := atomic.AddInt32(&s.ref, 1)
+	if newRef <= 1 {
+		// newRef == 1 means the previous ref was 0 (skiplist already closed)
+		// newRef <= 0 indicates a severe underflow (more DecrRef than IncrRef calls)
+		atomic.AddInt32(&s.ref, -1)
+		panic(fmt.Sprintf("Skiplist.IncrRef: skiplist is closed (newRef=%d)", newRef))
+	}
 }
 
 // DecrRef decrements the refcount, deallocating the Skiplist when done using it
@@ -77,6 +83,12 @@ func (s *Skiplist) DecrRef() {
 	if newRef > 0 {
 		return
 	}
+	if newRef < 0 {
+		// Refcount underflow: more DecrRef() calls than IncrRef() calls.
+		// This is a lifecycle bug that should fail fast.
+		panic(fmt.Sprintf("Skiplist.DecrRef: refcount underflow (newRef=%d)", newRef))
+	}
+	// newRef == 0: safe to release
 	if s.OnClose != nil {
 		s.OnClose()
 	}
