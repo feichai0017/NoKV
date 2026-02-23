@@ -45,11 +45,16 @@ func (req *request) loadEntries(entries []*kv.Entry) {
 }
 
 // DecrRef releases one lifecycle reference and returns the request to pool at zero.
+// It panics on refcount underflow to surface lifecycle bugs early.
 func (req *request) DecrRef() {
 	nRef := atomic.AddInt32(&req.ref, -1)
 	if nRef > 0 {
 		return
 	}
+	if nRef < 0 {
+		panic("request.DecrRef: refcount underflow")
+	}
+	// nRef == 0: last reference removed, release entries and return to pool.
 	for _, e := range req.Entries {
 		e.DecrRef()
 	}
