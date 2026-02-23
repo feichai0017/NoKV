@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -285,30 +285,31 @@
 
 <br>
 <h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>Latest full baseline (generated on 2026-02-15 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-F, engines NoKV/Badger/Pebble):</p>
+<p>Latest full baseline (generated on 2026-02-23 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">830,602</td><td style="text-align: right">456,435</td><td style="text-align: right">1,269,815</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,666,600</td><td style="text-align: right">688,155</td><td style="text-align: right">1,943,445</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">1,931,369</td><td style="text-align: right">873,820</td><td style="text-align: right">889,292</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,845,861</td><td style="text-align: right">777,686</td><td style="text-align: right">2,530,967</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">185,123</td><td style="text-align: right">42,527</td><td style="text-align: right">565,647</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">674,619</td><td style="text-align: right">344,726</td><td style="text-align: right">1,128,722</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
+<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
 </tbody>
 </table>
 </div>
 <details>
 <summary><em>Click to view full benchmark summary</em></summary>
-<pre><code class="language-text">NoKV    YCSB-A 830602   YCSB-B 1666600  YCSB-C 1931369  YCSB-D 1845861  YCSB-E 185123  YCSB-F 674619
-Badger  YCSB-A 456435   YCSB-B 688155   YCSB-C 873820   YCSB-D 777686   YCSB-E 42527   YCSB-F 344726
-Pebble  YCSB-A 1269815  YCSB-B 1943445  YCSB-C 889292   YCSB-D 2530967  YCSB-E 565647  YCSB-F 1128722
+<pre><code class="language-text">NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
+Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
+Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
 </code></pre>
 </details>
-<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260215_201602.txt">benchmark_results_20260215_201602.txt</a></p>
+<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt">benchmark_results_20260223_195951.txt</a></p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
@@ -404,25 +405,26 @@ func main() {
 <p>Micro benchmarks:</p>
 <pre><code class="language-bash">go test -bench=. -run=^$ ./...
 </code></pre>
-<p>YCSB (default: NoKV + Badger + Pebble, workloads A-F):</p>
+<p>YCSB (default: NoKV + Badger + Pebble, workloads A-G):</p>
 <pre><code class="language-bash">make bench
 </code></pre>
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
-<p>Latest full baseline (2026-02-15):</p>
+<p>Latest full baseline (2026-02-23):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">830,602</td><td style="text-align: right">456,435</td><td style="text-align: right">1,269,815</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,666,600</td><td style="text-align: right">688,155</td><td style="text-align: right">1,943,445</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">1,931,369</td><td style="text-align: right">873,820</td><td style="text-align: right">889,292</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,845,861</td><td style="text-align: right">777,686</td><td style="text-align: right">2,530,967</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">185,123</td><td style="text-align: right">42,527</td><td style="text-align: right">565,647</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">674,619</td><td style="text-align: right">344,726</td><td style="text-align: right">1,128,722</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
+<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
 </tbody>
 </table>
 </div>
@@ -830,6 +832,28 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <ul>
 <li>Displays scheduler heartbeat snapshot (in-process usage)</li>
 </ul>
+<h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
+<ul>
+<li>Starts TinyKv gRPC service backed by local <code>raftstore</code></li>
+<li>Requires <code>--workdir</code> and <code>--store-id</code></li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
+<li><code>--peer storeID=address</code> (repeatable)</li>
+<li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
+<li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
+<li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv serve \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-id 1 \
+  --addr 127.0.0.1:20170 \
+  --peer 2=127.0.0.1:20171 \
+  --peer 3=127.0.0.1:20172
+</code></pre>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
 <ul>
@@ -1020,7 +1044,7 @@ type Manager struct {
 <h2 id="8-testing-matrix"><a class="header" href="#8-testing-matrix">8. Testing Matrix</a></h2>
 <ul>
 <li><code>lsm/flush/manager_test.go</code> (implicit via <code>lsm/lsm_test.go</code>) validates stage transitions and metrics.</li>
-<li><code>db_recovery_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
+<li><code>db_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
 <li>Future additions: inject write failures during <code>StageBuild</code> to test retry logic, analogous to RocksDB’s simulated IO errors.</li>
 </ul>
 <p>See the <a href="#crash-recovery-playbook">recovery plan</a> and <a href="#testing--validation-matrix">testing matrix</a> for more context.</p>
@@ -1053,7 +1077,7 @@ type Manager struct {
 <li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
 </ol>
 <p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
-<p>Compaction tests (<code>lsm/compaction_cache_test.go</code>) now assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<p>Compaction tests (<code>lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
 <hr>
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
@@ -1092,11 +1116,15 @@ type Manager struct {
 <h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
 <p>Relevant tests to keep compaction healthy:</p>
 <ul>
-<li><code>lsm/compaction_cache_test.go</code>
+<li><code>lsm/compaction_test.go</code>
 <ul>
 <li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
-<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 <li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
+</ul>
+</li>
+<li><code>lsm/cache_test.go</code>
+<ul>
+<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 </ul>
 </li>
 <li><code>lsm/lsm_test.go</code>
@@ -1550,7 +1578,7 @@ const (
 <hr>
 <h2 id="6-recovery-scenarios"><a class="header" href="#6-recovery-scenarios">6. Recovery Scenarios</a></h2>
 <ol>
-<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
+<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
 <li><strong>ValueLog deletion</strong> – <code>TestRecoveryRemovesStaleValueLogSegment</code> ensures <code>EditDeleteValueLog</code> entries trigger file removal during recovery.</li>
 <li><strong>Manifest rewrite crash</strong> – <code>TestRecoveryManifestRewriteCrash</code> simulates a crash after writing the new manifest but before updating <code>CURRENT</code>; recovery still points to the old manifest and resumes safely, exactly like RocksDB’s two-phase rewrite.</li>
 <li><strong>Stale WAL pointer</strong> – WAL replay respects <code>LogSegment/Offset</code>; tests cover truncated WALs to confirm idempotency.</li>
@@ -1559,10 +1587,10 @@ const (
 <h2 id="7-cli-output"><a class="header" href="#7-cli-output">7. CLI Output</a></h2>
 <p><code>nokv manifest --workdir &lt;dir&gt; --json</code> prints:</p>
 <ul>
-<li>Level file counts and key ranges.</li>
-<li><code>wal_log_segment</code> / <code>wal_log_offset</code> checkpoint.</li>
-<li><code>value_log_head</code> metadata.</li>
-<li>List of vlog files with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
+<li><code>log_pointer.segment</code> / <code>log_pointer.offset</code> checkpoint.</li>
+<li>Per-level file counts, IDs, and byte totals (<code>levels[*]</code>).</li>
+<li><code>value_log_heads</code> metadata (bucketed heads).</li>
+<li><code>value_logs</code> list with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
 </ul>
 <p>This structured output enables automated validation in CI and ad-hoc audits.</p>
 <hr>
@@ -1735,7 +1763,7 @@ _ = lf.DoneWriting(nextOffset)
 </tbody>
 </table>
 </div>
-<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>mmap_linux_test.go</code>).</p>
+<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>file/mmap_linux_test.go</code>).</p>
 <hr>
 <h2 id="6-operational-notes-1"><a class="header" href="#6-operational-notes-1">6. Operational Notes</a></h2>
 <ul>
@@ -2411,10 +2439,10 @@ heuristics; a higher-level controller could call the same APIs.</li>
 </thead>
 <tbody>
 <tr><td>WAL tail truncation</td><td>truncate last 2 bytes of <code>000005.wal</code></td><td>Replay stops at truncated record, previously flushed SST remains intact</td><td><code>wal/manager_test.go::TestReplayTruncatedTail</code></td></tr>
-<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_recovery_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
-<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
-<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
-<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_recovery_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
+<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
+<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
+<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
+<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
 <tr><td>Transaction in-flight</td><td>crash between WAL append and memtable update</td><td>WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable</td><td><code>txn_test.go::TestTxnCommitPersists</code></td></tr>
 </tbody>
 </table>
@@ -2672,15 +2700,15 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compact_test.go</code>, <code>lsm/flush/*_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
-<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>manifest/levels_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
-<tr><td>ValueLog</td><td><code>vlog/vlog_test.go</code>, <code>vlog/gc_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite, concurrent iterator safety.</td><td>Long-running GC with transactions, discard ratio edge cases.</td></tr>
-<tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>txn_metrics_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
-<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_recovery_test.go</code>, <code>db_recovery_managed_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/compact/*_test.go</code>, <code>lsm/flush/manager_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
+<tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC with transactions, discard-ratio edge cases.</td></tr>
+<tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>stats_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
+<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring &amp; TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
-<tr><td>Scripts &amp; Tooling</td><td><code>scripts/scripts_test.go</code>, <code>cmd/nokv-config/main_test.go</code></td><td><code>serve_from_config.sh</code> address scoping (host/docker) and manifest skipping, <code>nokv-config</code> JSON/simple formats, manifest logging CLI.</td><td>Golden coverage for <code>run_local_cluster.sh</code>, failure-path diagnostics.</td></tr>
-<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments, add more workloads (D/E/F) and multi-GB datasets.</td></tr>
+<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, manifest logging CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-G) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2692,14 +2720,14 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><th>Scenario</th><th>Coverage</th><th>Focus</th></tr>
 </thead>
 <tbody>
-<tr><td>Crash recovery</td><td><code>db_recovery_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
+<tr><td>Crash recovery</td><td><code>db_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
 <tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Transaction contention</td><td><code>TestConflict</code>, <code>TestTxnReadAfterWrite</code>, <code>TestTxnDiscard</code></td><td>Oracle watermark handling, conflict errors, managed commit path.</td></tr>
-<tr><td>Value separation + GC</td><td><code>vlog/gc_test.go</code>, <code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
+<tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
 <tr><td>Iterator consistency</td><td><code>txn_iterator_test.go</code>, <code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
-<tr><td>Throttling / backpressure</td><td><code>lsm/compact_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
+<tr><td>Throttling / backpressure</td><td><code>lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
 <tr><td>Distributed TinyKv client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
-<tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/RocksDB, produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
+<tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2716,7 +2744,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <ol>
 <li><strong>Property-based testing</strong> – integrate <code>testing/quick</code> or third-party generators to randomise transaction sequences (Badger uses similar fuzz tests for transaction ordering).</li>
 <li><strong>Stress harness</strong> – add a Go-based stress driver to run mixed read/write workloads for hours, capturing metrics akin to RocksDB’s <code>db_stress</code> tool.</li>
-<li><strong>Distributed readiness</strong> – when Raft or replication is introduced, craft tests that validate WAL shipping combined with manifest updates.</li>
+<li><strong>Distributed readiness</strong> – strengthen raftstore fault-injection and long-run tests (leader transfer, transport chaos, snapshot catch-up) with reproducible CI artifacts.</li>
 <li><strong>CLI smoke tests</strong> – simulate corrupted directories to ensure CLI emits actionable errors.</li>
 </ol>
 <p>Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.</p>
@@ -2735,7 +2763,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </ul>
 <p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
 <blockquote>
-<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, always stop the script with <code>Ctrl+C</code> and wait for the <code>Shutting down...</code> message. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
+<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
 </blockquote>
 <h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
 <ul>
@@ -2767,8 +2795,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <tbody>
 <tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
 <tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes the comparison benchmarks (NoKV vs Badger/RocksDB).</td></tr>
-<tr><td><code>scripts/analyze_pprof.sh</code></td><td>Aggregates CPU/heap profiles from <code>pprof_output/</code> and renders SVG/PNG summaries.</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags).</td></tr>
 <tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
 <tr><td><code>scripts/gen.sh</code></td><td>Generates mock data or helper artefacts (see inline comments for details).</td></tr>
 </tbody>

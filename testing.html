@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -232,15 +232,15 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compact_test.go</code>, <code>lsm/flush/*_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
-<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>manifest/levels_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
-<tr><td>ValueLog</td><td><code>vlog/vlog_test.go</code>, <code>vlog/gc_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite, concurrent iterator safety.</td><td>Long-running GC with transactions, discard ratio edge cases.</td></tr>
-<tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>txn_metrics_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
-<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_recovery_test.go</code>, <code>db_recovery_managed_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/compact/*_test.go</code>, <code>lsm/flush/manager_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
+<tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC with transactions, discard-ratio edge cases.</td></tr>
+<tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>stats_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
+<tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring &amp; TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
-<tr><td>Scripts &amp; Tooling</td><td><code>scripts/scripts_test.go</code>, <code>cmd/nokv-config/main_test.go</code></td><td><code>serve_from_config.sh</code> address scoping (host/docker) and manifest skipping, <code>nokv-config</code> JSON/simple formats, manifest logging CLI.</td><td>Golden coverage for <code>run_local_cluster.sh</code>, failure-path diagnostics.</td></tr>
-<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments, add more workloads (D/E/F) and multi-GB datasets.</td></tr>
+<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, manifest logging CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-G) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
 </table>
 </div>
@@ -252,14 +252,14 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><th>Scenario</th><th>Coverage</th><th>Focus</th></tr>
 </thead>
 <tbody>
-<tr><td>Crash recovery</td><td><code>db_recovery_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
+<tr><td>Crash recovery</td><td><code>db_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
 <tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Transaction contention</td><td><code>TestConflict</code>, <code>TestTxnReadAfterWrite</code>, <code>TestTxnDiscard</code></td><td>Oracle watermark handling, conflict errors, managed commit path.</td></tr>
-<tr><td>Value separation + GC</td><td><code>vlog/gc_test.go</code>, <code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
+<tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
 <tr><td>Iterator consistency</td><td><code>txn_iterator_test.go</code>, <code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
-<tr><td>Throttling / backpressure</td><td><code>lsm/compact_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
+<tr><td>Throttling / backpressure</td><td><code>lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
 <tr><td>Distributed TinyKv client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
-<tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/RocksDB, produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
+<tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -276,7 +276,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <ol>
 <li><strong>Property-based testing</strong> – integrate <code>testing/quick</code> or third-party generators to randomise transaction sequences (Badger uses similar fuzz tests for transaction ordering).</li>
 <li><strong>Stress harness</strong> – add a Go-based stress driver to run mixed read/write workloads for hours, capturing metrics akin to RocksDB’s <code>db_stress</code> tool.</li>
-<li><strong>Distributed readiness</strong> – when Raft or replication is introduced, craft tests that validate WAL shipping combined with manifest updates.</li>
+<li><strong>Distributed readiness</strong> – strengthen raftstore fault-injection and long-run tests (leader transfer, transport chaos, snapshot catch-up) with reproducible CI artifacts.</li>
 <li><strong>CLI smoke tests</strong> – simulate corrupted directories to ensure CLI emits actionable errors.</li>
 </ol>
 <p>Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.</p>

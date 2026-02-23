@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -284,30 +284,31 @@
 
 <br>
 <h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>Latest full baseline (generated on 2026-02-15 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-F, engines NoKV/Badger/Pebble):</p>
+<p>Latest full baseline (generated on 2026-02-23 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">830,602</td><td style="text-align: right">456,435</td><td style="text-align: right">1,269,815</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,666,600</td><td style="text-align: right">688,155</td><td style="text-align: right">1,943,445</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">1,931,369</td><td style="text-align: right">873,820</td><td style="text-align: right">889,292</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,845,861</td><td style="text-align: right">777,686</td><td style="text-align: right">2,530,967</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">185,123</td><td style="text-align: right">42,527</td><td style="text-align: right">565,647</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">674,619</td><td style="text-align: right">344,726</td><td style="text-align: right">1,128,722</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
+<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
 </tbody>
 </table>
 </div>
 <details>
 <summary><em>Click to view full benchmark summary</em></summary>
-<pre><code class="language-text">NoKV    YCSB-A 830602   YCSB-B 1666600  YCSB-C 1931369  YCSB-D 1845861  YCSB-E 185123  YCSB-F 674619
-Badger  YCSB-A 456435   YCSB-B 688155   YCSB-C 873820   YCSB-D 777686   YCSB-E 42527   YCSB-F 344726
-Pebble  YCSB-A 1269815  YCSB-B 1943445  YCSB-C 889292   YCSB-D 2530967  YCSB-E 565647  YCSB-F 1128722
+<pre><code class="language-text">NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
+Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
+Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
 </code></pre>
 </details>
-<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260215_201602.txt">benchmark_results_20260215_201602.txt</a></p>
+<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt">benchmark_results_20260223_195951.txt</a></p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD

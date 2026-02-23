@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -206,7 +206,7 @@
 <li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
 </ol>
 <p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
-<p>Compaction tests (<code>lsm/compaction_cache_test.go</code>) now assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
+<p>Compaction tests (<code>lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
 <hr>
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
@@ -245,11 +245,15 @@
 <h2 id="6-testing-checklist"><a class="header" href="#6-testing-checklist">6. Testing Checklist</a></h2>
 <p>Relevant tests to keep compaction healthy:</p>
 <ul>
-<li><code>lsm/compaction_cache_test.go</code>
+<li><code>lsm/compaction_test.go</code>
 <ul>
 <li><code>TestCompactionMoveToIngest</code> – ensures metadata migration works and the ingest buffer grows.</li>
-<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 <li><code>TestCompactStatusGuards</code> – checks overlap detection.</li>
+</ul>
+</li>
+<li><code>lsm/cache_test.go</code>
+<ul>
+<li><code>TestCacheHotColdMetrics</code> – validates cache hit accounting.</li>
 </ul>
 </li>
 <li><code>lsm/lsm_test.go</code>

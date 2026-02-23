@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -235,6 +235,28 @@
 <ul>
 <li>Displays scheduler heartbeat snapshot (in-process usage)</li>
 </ul>
+<h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
+<ul>
+<li>Starts TinyKv gRPC service backed by local <code>raftstore</code></li>
+<li>Requires <code>--workdir</code> and <code>--store-id</code></li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
+<li><code>--peer storeID=address</code> (repeatable)</li>
+<li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
+<li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
+<li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv serve \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-id 1 \
+  --addr 127.0.0.1:20170 \
+  --peer 2=127.0.0.1:20171 \
+  --peer 3=127.0.0.1:20172
+</code></pre>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
 <ul>

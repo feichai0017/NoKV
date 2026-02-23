@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -212,10 +212,10 @@
 </thead>
 <tbody>
 <tr><td>WAL tail truncation</td><td>truncate last 2 bytes of <code>000005.wal</code></td><td>Replay stops at truncated record, previously flushed SST remains intact</td><td><code>wal/manager_test.go::TestReplayTruncatedTail</code></td></tr>
-<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_recovery_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
-<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
-<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
-<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_recovery_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
+<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
+<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
+<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
+<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
 <tr><td>Transaction in-flight</td><td>crash between WAL append and memtable update</td><td>WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable</td><td><code>txn_test.go::TestTxnCommitPersists</code></td></tr>
 </tbody>
 </table>

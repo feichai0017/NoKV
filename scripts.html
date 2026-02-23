@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -192,7 +192,7 @@
 </ul>
 <p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
 <blockquote>
-<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, always stop the script with <code>Ctrl+C</code> and wait for the <code>Shutting down...</code> message. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
+<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
 </blockquote>
 <h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
 <ul>
@@ -224,8 +224,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <tbody>
 <tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
 <tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes the comparison benchmarks (NoKV vs Badger/RocksDB).</td></tr>
-<tr><td><code>scripts/analyze_pprof.sh</code></td><td>Aggregates CPU/heap profiles from <code>pprof_output/</code> and renders SVG/PNG summaries.</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags).</td></tr>
 <tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
 <tr><td><code>scripts/gen.sh</code></td><td>Generates mock data or helper artefacts (see inline comments for details).</td></tr>
 </tbody>

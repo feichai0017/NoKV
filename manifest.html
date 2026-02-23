@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cdda912d.js";
+            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -275,7 +275,7 @@ const (
 <hr>
 <h2 id="6-recovery-scenarios"><a class="header" href="#6-recovery-scenarios">6. Recovery Scenarios</a></h2>
 <ol>
-<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
+<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
 <li><strong>ValueLog deletion</strong> – <code>TestRecoveryRemovesStaleValueLogSegment</code> ensures <code>EditDeleteValueLog</code> entries trigger file removal during recovery.</li>
 <li><strong>Manifest rewrite crash</strong> – <code>TestRecoveryManifestRewriteCrash</code> simulates a crash after writing the new manifest but before updating <code>CURRENT</code>; recovery still points to the old manifest and resumes safely, exactly like RocksDB’s two-phase rewrite.</li>
 <li><strong>Stale WAL pointer</strong> – WAL replay respects <code>LogSegment/Offset</code>; tests cover truncated WALs to confirm idempotency.</li>
@@ -284,10 +284,10 @@ const (
 <h2 id="7-cli-output"><a class="header" href="#7-cli-output">7. CLI Output</a></h2>
 <p><code>nokv manifest --workdir &lt;dir&gt; --json</code> prints:</p>
 <ul>
-<li>Level file counts and key ranges.</li>
-<li><code>wal_log_segment</code> / <code>wal_log_offset</code> checkpoint.</li>
-<li><code>value_log_head</code> metadata.</li>
-<li>List of vlog files with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
+<li><code>log_pointer.segment</code> / <code>log_pointer.offset</code> checkpoint.</li>
+<li>Per-level file counts, IDs, and byte totals (<code>levels[*]</code>).</li>
+<li><code>value_log_heads</code> metadata (bucketed heads).</li>
+<li><code>value_logs</code> list with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
 </ul>
 <p>This structured output enables automated validation in CI and ad-hoc audits.</p>
 <hr>
