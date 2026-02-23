@@ -77,6 +77,12 @@ func (s *Skiplist) DecrRef() {
 	if newRef > 0 {
 		return
 	}
+	if newRef < 0 {
+		// Refcount underflow: more DecrRef() calls than IncrRef() calls.
+		// This is a lifecycle bug that should fail fast.
+		panic(fmt.Sprintf("Skiplist.DecrRef: refcount underflow (newRef=%d)", newRef))
+	}
+	// newRef == 0: safe to release
 	if s.OnClose != nil {
 		s.OnClose()
 	}
