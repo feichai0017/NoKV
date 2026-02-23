@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -185,5 +186,5 @@ func TestSkiplistDecrRefConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	assert.Equal(t, int32(0), sl.ref)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&sl.ref))
 }
