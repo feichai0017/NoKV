@@ -85,28 +85,29 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
 ## 📊 Performance Benchmark
 
-Latest full baseline (generated on 2026-02-15 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-F, engines NoKV/Badger/Pebble):
+Latest full baseline (generated on 2026-02-23 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):
 
 | Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
 | :--- | ---: | ---: | ---: |
-| YCSB-A | 830,602 | 456,435 | 1,269,815 |
-| YCSB-B | 1,666,600 | 688,155 | 1,943,445 |
-| YCSB-C | 1,931,369 | 873,820 | 889,292 |
-| YCSB-D | 1,845,861 | 777,686 | 2,530,967 |
-| YCSB-E | 185,123 | 42,527 | 565,647 |
-| YCSB-F | 674,619 | 344,726 | 1,128,722 |
+| YCSB-A | 847,660 | 396,314 | 1,282,218 |
+| YCSB-B | 1,742,820 | 716,151 | 1,941,330 |
+| YCSB-C | 2,070,856 | 826,766 | 847,764 |
+| YCSB-D | 1,754,955 | 842,637 | 2,509,809 |
+| YCSB-E | 205,489 | 41,508 | 554,557 |
+| YCSB-F | 715,946 | 326,343 | 1,123,473 |
+| YCSB-G | 413,521 | 399,405 | 583,584 |
 
 <details>
 <summary><em>Click to view full benchmark summary</em></summary>
 
 ```text
-NoKV    YCSB-A 830602   YCSB-B 1666600  YCSB-C 1931369  YCSB-D 1845861  YCSB-E 185123  YCSB-F 674619
-Badger  YCSB-A 456435   YCSB-B 688155   YCSB-C 873820   YCSB-D 777686   YCSB-E 42527   YCSB-F 344726
-Pebble  YCSB-A 1269815  YCSB-B 1943445  YCSB-C 889292   YCSB-D 2530967  YCSB-E 565647  YCSB-F 1128722
+NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
+Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
+Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
 ```
 </details>
 
-Raw report: [benchmark_results_20260215_201602.txt](https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260215_201602.txt)
+Raw report: [benchmark_results_20260223_195951.txt](https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt)
 
 <br>
 

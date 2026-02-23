@@ -14,7 +14,7 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
   ```
 `--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>`, calls `nokv-config manifest`, and, if `tso.listen_addr` is set, launches `nokv-tso`. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
 
-> ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, always stop the script with `Ctrl+C` and wait for the `Shutting down...` message. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
+> ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, stop the script with `Ctrl+C` and wait for child processes to exit. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
 
 ### `scripts/bootstrap_from_config.sh`
 - **Purpose** – manifest-only bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a manifest are detected and skipped.
@@ -44,8 +44,7 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
 | --- | --- |
 | `scripts/recovery_scenarios.sh` | Runs crash-recovery scenarios across WAL/manifest/vlog. Set `RECOVERY_TRACE_METRICS=1` to collect metrics under `artifacts/recovery/`. |
 | `scripts/transport_chaos.sh` | Injects disconnects/blocks/delay into the `raftstore` transport to observe behaviour under faulty networks. |
-| `scripts/run_benchmarks.sh` | Executes the comparison benchmarks (NoKV vs Badger/RocksDB). |
-| `scripts/analyze_pprof.sh` | Aggregates CPU/heap profiles from `pprof_output/` and renders SVG/PNG summaries. |
+| `scripts/run_benchmarks.sh` | Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags). |
 | `scripts/debug.sh` | Convenience wrapper around `dlv test` for targeted debugging. |
 | `scripts/gen.sh` | Generates mock data or helper artefacts (see inline comments for details). |
 
