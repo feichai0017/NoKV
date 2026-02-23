@@ -67,6 +67,28 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 - Displays scheduler heartbeat snapshot (in-process usage)
 
+### `nokv serve`
+
+- Starts TinyKv gRPC service backed by local `raftstore`
+- Requires `--workdir` and `--store-id`
+- Common flags:
+  - `--addr` (default `127.0.0.1:20160`)
+  - `--peer storeID=address` (repeatable)
+  - `--election-tick`, `--heartbeat-tick`
+  - `--raft-max-msg-bytes`, `--raft-max-inflight`
+  - `--raft-tick-interval`, `--raft-debug-log`
+
+Example:
+
+```bash
+nokv serve \
+  --workdir ./artifacts/cluster/store-1 \
+  --store-id 1 \
+  --addr 127.0.0.1:20170 \
+  --peer 2=127.0.0.1:20171 \
+  --peer 3=127.0.0.1:20172
+```
+
 ---
 
 ## Integration Tips
@@ -74,4 +96,3 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Combine with `RECOVERY_TRACE_METRICS=1` for recovery validation.
 - In CI, compare JSON snapshots to detect observability regressions.
 - Use `nokv stats --expvar` for online diagnostics and `--workdir` for offline forensics.
-

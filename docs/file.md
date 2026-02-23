@@ -60,7 +60,7 @@ While SSTable builders/readers live under `lsm/table.go`, they rely on `file` he
 | Badger | `y.File` abstraction with mmap. |
 | NoKV | Go-native mmap wrappers with explicit log helpers. |
 
-By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (`mmap_linux_test.go`).
+By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (`file/mmap_linux_test.go`).
 
 ---
 
