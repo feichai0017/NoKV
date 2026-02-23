@@ -1,0 +1,56 @@
+{
+  "max_retries": 5,
+  "tso": {
+    "listen_addr": "0.0.0.0:9494",
+    "advertise_url": "http://127.0.0.1:9494"
+  },
+  "stores": [
+    {
+      "store_id": 1,
+      "listen_addr": "127.0.0.1:20170",
+      "addr": "127.0.0.1:20170",
+      "docker_listen_addr": "0.0.0.0:20160",
+      "docker_addr": "nokv-node1:20160"
+    },
+    {
+      "store_id": 2,
+      "listen_addr": "127.0.0.1:20171",
+      "addr": "127.0.0.1:20171",
+      "docker_listen_addr": "0.0.0.0:20160",
+      "docker_addr": "nokv-node2:20160"
+    },
+    {
+      "store_id": 3,
+      "listen_addr": "127.0.0.1:20172",
+      "addr": "127.0.0.1:20172",
+      "docker_listen_addr": "0.0.0.0:20160",
+      "docker_addr": "nokv-node3:20160"
+    }
+  ],
+  "regions": [
+    {
+      "id": 1,
+      "start_key": "",
+      "end_key": "m",
+      "epoch": { "version": 1, "conf_version": 1 },
+      "peers": [
+        { "store_id": 1, "peer_id": 101 },
+        { "store_id": 2, "peer_id": 201 },
+        { "store_id": 3, "peer_id": 301 }
+      ],
+      "leader_store_id": 1
+    },
+    {
+      "id": 2,
+      "start_key": "m",
+      "end_key": "",
+      "epoch": { "version": 1, "conf_version": 1 },
+      "peers": [
+        { "store_id": 1, "peer_id": 102 },
+        { "store_id": 2, "peer_id": 202 },
+        { "store_id": 3, "peer_id": 302 }
+      ],
+      "leader_store_id": 2
+    }
+  ]
+}

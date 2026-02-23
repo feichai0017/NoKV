@@ -1,0 +1,24 @@
+name: issue-labeler
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto label issues from title/body patterns
+        uses: github/issue-labeler@v3.4
+        with:
+          configuration-path: .github/issue-labeler.yml
+          include-title: 1
+          include-body: 1
+          enable-versioned-regex: 0
+          # Keep maintainer labels intact; only add labels on match.
+          sync-labels: 0
+          repo-token: ${{ github.token }}

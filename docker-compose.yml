@@ -1,0 +1,161 @@
+x-nokv-image: &nokv-image
+  build: .
+  image: nokv:latest
+
+services:
+  bootstrap:
+    <<: *nokv-image
+    container_name: nokv-bootstrap
+    entrypoint: ["/usr/local/bin/bootstrap_from_config.sh"]
+    command:
+      [
+        "--config",
+        "/etc/nokv/raft_config.json",
+        "--path-template",
+        "/volumes/store-{id}"
+      ]
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+      - node1-data:/volumes/store-1
+      - node2-data:/volumes/store-2
+      - node3-data:/volumes/store-3
+    restart: "no"
+
+  tso:
+    image: nokv:latest
+    container_name: nokv-tso
+    entrypoint: ["/usr/local/bin/nokv-tso"]
+    command:
+      [
+        "--addr",
+        "0.0.0.0:9494",
+        "--start",
+        "100"
+      ]
+    expose:
+      - "9494"
+    ports:
+      - "9494:9494"
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+  node1:
+    image: nokv:latest
+    container_name: nokv-node1
+    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    command:
+      [
+        "--config",
+        "/etc/nokv/raft_config.json",
+        "--store-id",
+        "1",
+        "--workdir",
+        "/var/lib/nokv",
+        "--scope",
+        "docker"
+      ]
+    volumes:
+      - node1-data:/var/lib/nokv
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    ports:
+      - "20160:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+  node2:
+    image: nokv:latest
+    container_name: nokv-node2
+    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    command:
+      [
+        "--config",
+        "/etc/nokv/raft_config.json",
+        "--store-id",
+        "2",
+        "--workdir",
+        "/var/lib/nokv",
+        "--scope",
+        "docker"
+      ]
+    volumes:
+      - node2-data:/var/lib/nokv
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    ports:
+      - "20161:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+  node3:
+    image: nokv:latest
+    container_name: nokv-node3
+    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    command:
+      [
+        "--config",
+        "/etc/nokv/raft_config.json",
+        "--store-id",
+        "3",
+        "--workdir",
+        "/var/lib/nokv",
+        "--scope",
+        "docker"
+      ]
+    volumes:
+      - node3-data:/var/lib/nokv
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    ports:
+      - "20162:20160"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+  redis:
+    image: nokv:latest
+    container_name: nokv-redis
+    entrypoint: ["/usr/local/bin/nokv-redis"]
+    command:
+      [
+        "--addr",
+        "0.0.0.0:6380",
+        "--raft-config",
+        "/etc/nokv/raft_config.json",
+        "--tso-url",
+        "http://nokv-tso:9494",
+        "--addr-scope",
+        "docker"
+      ]
+    ports:
+      - "6380:6380"
+    volumes:
+      - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+    depends_on:
+      node1:
+        condition: service_started
+      node2:
+        condition: service_started
+      node3:
+        condition: service_started
+      tso:
+        condition: service_started
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

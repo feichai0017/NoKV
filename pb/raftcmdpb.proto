@@ -1,0 +1,87 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+import "kvrpcpb.proto";
+import "metapb.proto";
+
+message SplitCommand {
+  uint64 parent_region_id = 1;
+  bytes split_key = 2;
+  RegionMeta child = 3;
+}
+
+message MergeCommand {
+  uint64 target_region_id = 1;
+  uint64 source_region_id = 2;
+}
+
+message AdminCommand {
+  enum Type {
+    UNKNOWN = 0;
+    SPLIT = 1;
+    MERGE = 2;
+  }
+
+  Type type = 1;
+  SplitCommand split = 2;
+  MergeCommand merge = 3;
+}
+
+message CmdHeader {
+  uint64 region_id = 1;
+  RegionEpoch region_epoch = 2;
+  uint64 peer_id = 3;
+  bool read_quorum = 4;
+  uint64 request_id = 5;
+}
+
+enum CmdType {
+  CMD_INVALID = 0;
+  CMD_GET = 1;
+  CMD_SCAN = 2;
+  CMD_PREWRITE = 3;
+  CMD_COMMIT = 4;
+  CMD_BATCH_ROLLBACK = 5;
+  CMD_RESOLVE_LOCK = 6;
+  CMD_CHECK_TXN_STATUS = 7;
+}
+
+message Request {
+  CmdType cmd_type = 1;
+
+  oneof cmd {
+    GetRequest get = 2;
+    ScanRequest scan = 3;
+    PrewriteRequest prewrite = 4;
+    CommitRequest commit = 5;
+    BatchRollbackRequest batch_rollback = 6;
+    ResolveLockRequest resolve_lock = 7;
+    CheckTxnStatusRequest check_txn_status = 8;
+  }
+}
+
+message Response {
+  oneof cmd {
+    GetResponse get = 1;
+    ScanResponse scan = 2;
+    PrewriteResponse prewrite = 3;
+    CommitResponse commit = 4;
+    BatchRollbackResponse batch_rollback = 5;
+    ResolveLockResponse resolve_lock = 6;
+    CheckTxnStatusResponse check_txn_status = 7;
+  }
+}
+
+message RaftCmdRequest {
+  CmdHeader header = 1;
+  repeated Request requests = 2;
+}
+
+message RaftCmdResponse {
+  CmdHeader header = 1;
+  repeated Response responses = 2;
+  RegionError region_error = 3;
+}

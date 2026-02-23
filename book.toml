@@ -1,0 +1,15 @@
+[book]
+title = "NoKV Docs"
+authors = ["NoKV Contributors"]
+language = "en"
+src = "docs"
+
+[output.html]
+site-url = "/NoKV/"
+git-repository-url = "https://github.com/feichai0017/NoKV"
+git-repository-icon = "fab-github"
+additional-css = ["docs/custom.css"]
+additional-js = ["docs/mermaid-init.js"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

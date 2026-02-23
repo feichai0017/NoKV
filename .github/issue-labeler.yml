@@ -1,0 +1,6 @@
+# Auto-label rules for issues.
+# Regex is matched against issue title + body (configured in workflow).
+# Keep auto-labeling minimal to avoid label sprawl.
+
+status/needs-triage:
+  - '(?s).*'

@@ -1,0 +1,350 @@
+package vlog
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/vfs"
+)
+
+func TestManagerAppendRead(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	payload := []byte("record-data")
+	entry := kv.NewEntry([]byte("key"), payload)
+	vp, err := mgr.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	raw, release, err := mgr.Read(vp)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	defer release()
+
+	got, _, err := kv.DecodeValueSlice(raw)
+	if err != nil {
+		t.Fatalf("decode value slice: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("payload mismatch: got %q want %q", got, payload)
+	}
+}
+
+func TestManagerReadValueAutoCopiesSmall(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	entry := kv.NewEntry([]byte("key"), []byte("v"))
+	vp, err := mgr.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	val, release, err := mgr.ReadValue(vp, ReadOptions{
+		Mode:                ReadModeAuto,
+		SmallValueThreshold: 16,
+	})
+	if err != nil {
+		t.Fatalf("read value: %v", err)
+	}
+	if release != nil {
+		release()
+		t.Fatalf("expected copied value to return nil release")
+	}
+	if string(val) != "v" {
+		t.Fatalf("value mismatch: got %q", val)
+	}
+}
+
+func TestManagerRotate(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	first := mgr.ActiveFID()
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	second := mgr.ActiveFID()
+	if second == first {
+		t.Fatalf("expected new active fid, got %d", second)
+	}
+}
+
+func TestManagerRemove(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	entry := kv.NewEntry([]byte("key"), []byte("abc"))
+	vp, err := mgr.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if err := mgr.Remove(vp.Fid); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	_, _, err = mgr.Read(&kv.ValuePtr{Fid: vp.Fid, Offset: vp.Offset, Len: vp.Len})
+	if err == nil {
+		t.Fatalf("expected error reading removed fid")
+	}
+}
+
+func TestManagerPopulateExisting(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	payload := []byte("hello")
+	entry := kv.NewEntry([]byte("key"), payload)
+	vp, err := mgr.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	_ = mgr.Close()
+
+	mgr, err = Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if mgr.ActiveFID() != mgr.MaxFID() {
+		t.Fatalf("active fid not equal max fid")
+	}
+	raw, release, err := mgr.Read(vp)
+	if err != nil {
+		t.Fatalf("read after reopen: %v", err)
+	}
+	defer release()
+
+	data, _, err := kv.DecodeValueSlice(raw)
+	if err != nil {
+		t.Fatalf("decode value slice: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("data mismatch after reopen")
+	}
+}
+
+func TestManagerRewind(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("key"), []byte("alpha"))); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	head := mgr.Head()
+
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if mgr.ActiveFID() == head.Fid {
+		t.Fatalf("expected active fid to change after rotate")
+	}
+
+	if err := mgr.Rewind(head); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+
+	if got := mgr.Head(); got != head {
+		t.Fatalf("head mismatch after rewind: got %+v want %+v", got, head)
+	}
+	if mgr.ActiveFID() != head.Fid {
+		t.Fatalf("active fid mismatch after rewind: got %d want %d", mgr.ActiveFID(), head.Fid)
+	}
+	if mgr.MaxFID() != head.Fid {
+		t.Fatalf("max fid mismatch after rewind: got %d want %d", mgr.MaxFID(), head.Fid)
+	}
+	if fids := mgr.ListFIDs(); len(fids) != 1 || fids[0] != head.Fid {
+		t.Fatalf("unexpected fid list after rewind: %v", fids)
+	}
+
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("key"), []byte("beta")))
+	if err != nil {
+		t.Fatalf("append after rewind: %v", err)
+	}
+	if vp.Fid != head.Fid || vp.Offset < head.Offset {
+		t.Fatalf("append after rewind produced unexpected pointer: %+v head=%+v", vp, head)
+	}
+}
+
+func TestVerifyDirTruncatesPartialRecord(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+
+	entry1 := kv.NewEntry([]byte("k1"), []byte("value-data"))
+	ptr1, err := mgr.AppendEntry(entry1)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	entry2 := kv.NewEntry([]byte("k2"), []byte("partial"))
+	ptr2, err := mgr.AppendEntry(entry2)
+	if err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.vlog"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("list files err=%v files=%v", err, files)
+	}
+	partialSize := int64(ptr1.Offset) + int64(ptr1.Len) + int64(ptr2.Len) - 5
+	if err := os.Truncate(files[0], partialSize); err != nil {
+		t.Fatalf("truncate vlog: %v", err)
+	}
+
+	if err := VerifyDir(Config{Dir: dir}); err != nil {
+		t.Fatalf("verify dir: %v", err)
+	}
+
+	infoAfter, err := os.Stat(files[0])
+	if err != nil {
+		t.Fatalf("stat after verify: %v", err)
+	}
+	wantSize := int64(ptr1.Offset + ptr1.Len)
+	if infoAfter.Size() != wantSize {
+		t.Fatalf("expected truncated size %d, got %d", wantSize, infoAfter.Size())
+	}
+}
+
+func TestManagerRotateInjectedByFaultFS(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("rotate openfile injected")
+	nextPath := filepath.Join(dir, "00001.vlog")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpenFile, nextPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := Open(Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.Rotate(); !errors.Is(err, injected) {
+		t.Fatalf("expected rotate injected error, got %v", err)
+	}
+}
+
+func TestManagerRemoveInjectedByFaultFS(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("remove injected")
+	removePath := filepath.Join(dir, "00000.vlog")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, removePath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	mgr, err := Open(Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if _, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v"))); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := mgr.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	err = mgr.Remove(0)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected remove injected error, got %v", err)
+	}
+}
+
+func TestManagerSyncFIDsAllowsDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := mgr.SyncFIDs([]uint32{vp.Fid, vp.Fid, vp.Fid + 10}); err != nil {
+		t.Fatalf("sync fids: %v", err)
+	}
+}
+
+func TestManagerSegmentOps(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := Open(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	vp, err := mgr.AppendEntry(kv.NewEntry([]byte("k"), []byte("v")))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	size, err := mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size: %v", err)
+	}
+	if size <= 0 {
+		t.Fatalf("expected size > 0, got %d", size)
+	}
+	if err := mgr.SegmentInit(vp.Fid); err != nil {
+		t.Fatalf("segment init: %v", err)
+	}
+	if err := mgr.SegmentTruncate(vp.Fid, uint32(kv.ValueLogHeaderSize)); err != nil {
+		t.Fatalf("segment truncate: %v", err)
+	}
+	size, err = mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size after truncate: %v", err)
+	}
+	if size != int64(kv.ValueLogHeaderSize) {
+		t.Fatalf("expected size %d after truncate, got %d", kv.ValueLogHeaderSize, size)
+	}
+	if err := mgr.SegmentBootstrap(vp.Fid); err != nil {
+		t.Fatalf("segment bootstrap: %v", err)
+	}
+	size, err = mgr.SegmentSize(vp.Fid)
+	if err != nil {
+		t.Fatalf("segment size after bootstrap: %v", err)
+	}
+	if size < int64(kv.ValueLogHeaderSize) {
+		t.Fatalf("expected size >= %d after bootstrap, got %d", kv.ValueLogHeaderSize, size)
+	}
+	if _, err := mgr.SegmentSize(vp.Fid + 10); err == nil {
+		t.Fatalf("expected error for missing fid")
+	}
+}

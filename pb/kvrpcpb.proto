@@ -1,0 +1,296 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+import "metapb.proto";
+
+// kvrpcpb carries distributed KV RPC and transaction protocol messages.
+
+// KV is the logical key/value tuple used in distributed RPC payloads
+// (for example Scan responses).
+message KV {
+  bytes key = 1;
+  bytes value = 2;
+  bytes user_meta = 3;
+  uint64 version = 4;
+  uint64 expires_at = 5;
+  bytes meta = 6;
+
+  // Stream id is used to identify which stream the KV came from.
+  uint32 stream_id = 10;
+}
+
+// KVList is a batched KV tuple container for RPC payload transport.
+message KVList {
+  repeated KV kv = 1;
+}
+
+message GetRequest {
+  bytes key = 1;
+  uint64 version = 2;
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool not_found = 2;
+  KeyError error = 3;
+}
+
+message BatchGetRequest {
+  repeated GetRequest requests = 1;
+}
+
+message BatchGetResponse {
+  repeated GetResponse responses = 1;
+}
+
+message ScanRequest {
+  bytes start_key = 1;
+  uint32 limit = 2;
+  uint64 version = 3;
+  bool include_start = 4;
+  bool reverse = 5;
+}
+
+message ScanResponse {
+  repeated KV kvs = 1;
+  KeyError error = 2;
+}
+
+message Mutation {
+  enum Op {
+    Put = 0;
+    Delete = 1;
+    Lock = 2;
+    Rollback = 3;
+  }
+
+  Op op = 1;
+  bytes key = 2;
+  bytes value = 3;
+  bool assertion_not_exist = 4;
+}
+
+message PrewriteRequest {
+  repeated Mutation mutations = 1;
+  bytes primary_lock = 2;
+  uint64 start_version = 3;
+  uint64 lock_ttl = 4;
+  uint64 txn_size = 5;
+  uint64 min_commit_ts = 6;
+}
+
+message PrewriteResponse {
+  repeated KeyError errors = 1;
+}
+
+message CommitRequest {
+  repeated bytes keys = 1;
+  uint64 start_version = 2;
+  uint64 commit_version = 3;
+}
+
+message CommitResponse {
+  KeyError error = 1;
+}
+
+message BatchRollbackRequest {
+  repeated bytes keys = 1;
+  uint64 start_version = 2;
+}
+
+message BatchRollbackResponse {
+  KeyError error = 1;
+}
+
+message ResolveLockRequest {
+  uint64 start_version = 1;
+  uint64 commit_version = 2;
+  repeated bytes keys = 3;
+}
+
+message ResolveLockResponse {
+  KeyError error = 1;
+  uint64 resolved_locks = 2;
+}
+
+enum CheckTxnStatusAction {
+  CheckTxnStatusNoAction = 0;
+  CheckTxnStatusTTLExpireRollback = 1;
+  CheckTxnStatusLockNotExistRollback = 2;
+  CheckTxnStatusMinCommitTsPushed = 3;
+}
+
+message CheckTxnStatusRequest {
+  bytes primary_key = 1;
+  uint64 lock_ts = 2;
+  uint64 current_ts = 3;
+  bool rollback_if_not_exist = 4;
+  uint64 caller_start_ts = 5;
+  uint64 current_time = 6;
+}
+
+message CheckTxnStatusResponse {
+  KeyError error = 1;
+  uint64 lock_ttl = 2;
+  uint64 commit_version = 3;
+  CheckTxnStatusAction action = 4;
+}
+
+message Context {
+  uint64 region_id = 1;
+  RegionEpoch region_epoch = 2;
+  RegionPeer peer = 3;
+}
+
+message KvGetRequest {
+  Context context = 1;
+  GetRequest request = 2;
+}
+
+message KvGetResponse {
+  GetResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvBatchGetRequest {
+  Context context = 1;
+  BatchGetRequest request = 2;
+}
+
+message KvBatchGetResponse {
+  BatchGetResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvScanRequest {
+  Context context = 1;
+  ScanRequest request = 2;
+}
+
+message KvScanResponse {
+  ScanResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvPrewriteRequest {
+  Context context = 1;
+  PrewriteRequest request = 2;
+}
+
+message KvPrewriteResponse {
+  PrewriteResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvCommitRequest {
+  Context context = 1;
+  CommitRequest request = 2;
+}
+
+message KvCommitResponse {
+  CommitResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvBatchRollbackRequest {
+  Context context = 1;
+  BatchRollbackRequest request = 2;
+}
+
+message KvBatchRollbackResponse {
+  BatchRollbackResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvResolveLockRequest {
+  Context context = 1;
+  ResolveLockRequest request = 2;
+}
+
+message KvResolveLockResponse {
+  ResolveLockResponse response = 1;
+  RegionError region_error = 2;
+}
+
+message KvCheckTxnStatusRequest {
+  Context context = 1;
+  CheckTxnStatusRequest request = 2;
+}
+
+message KvCheckTxnStatusResponse {
+  CheckTxnStatusResponse response = 1;
+  RegionError region_error = 2;
+}
+
+service TinyKv {
+  rpc KvGet(KvGetRequest) returns (KvGetResponse);
+  rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
+  rpc KvScan(KvScanRequest) returns (KvScanResponse);
+  rpc KvPrewrite(KvPrewriteRequest) returns (KvPrewriteResponse);
+  rpc KvCommit(KvCommitRequest) returns (KvCommitResponse);
+  rpc KvBatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
+  rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
+  rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
+}
+
+message KeyError {
+  Locked locked = 1;
+  WriteConflict write_conflict = 2;
+  KeyAlreadyExists already_exists = 3;
+  string retryable = 4;
+  string abort = 5;
+  CommitTsExpired commit_ts_expired = 6;
+}
+
+message Locked {
+  bytes primary_lock = 1;
+  bytes key = 2;
+  uint64 lock_version = 3;
+  uint64 lock_ttl = 4;
+  Mutation.Op lock_type = 5;
+  uint64 min_commit_ts = 6;
+}
+
+message WriteConflict {
+  bytes key = 1;
+  bytes primary = 2;
+  uint64 conflict_ts = 3;
+  uint64 commit_ts = 4;
+  uint64 start_ts = 5;
+}
+
+message KeyAlreadyExists {
+  bytes key = 1;
+}
+
+message CommitTsExpired {
+  bytes key = 1;
+  uint64 commit_ts = 2;
+  uint64 min_commit_ts = 3;
+}
+
+message RegionError {
+  NotLeader not_leader = 1;
+  EpochNotMatch epoch_not_match = 2;
+  StaleCommand stale_command = 3;
+  RaftEntryTooLarge entry_too_large = 4;
+}
+
+message NotLeader {
+  uint64 region_id = 1;
+  RegionPeer leader = 2;
+}
+
+message EpochNotMatch {
+  RegionEpoch current_epoch = 1;
+  repeated RegionMeta regions = 2;
+}
+
+message StaleCommand {}
+
+message RaftEntryTooLarge {
+  uint64 region_id = 1;
+}
