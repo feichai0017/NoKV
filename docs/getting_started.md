@@ -87,7 +87,7 @@ Micro benchmarks:
 go test -bench=. -run=^$ ./...
 ```
 
-YCSB (default: NoKV + Badger + Pebble, workloads A-F):
+YCSB (default: NoKV + Badger + Pebble, workloads A-G):
 
 ```bash
 make bench
@@ -99,16 +99,17 @@ Override defaults with env vars:
 YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 ```
 
-Latest full baseline (2026-02-15):
+Latest full baseline (2026-02-23):
 
 | Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
 | :--- | ---: | ---: | ---: |
-| YCSB-A | 830,602 | 456,435 | 1,269,815 |
-| YCSB-B | 1,666,600 | 688,155 | 1,943,445 |
-| YCSB-C | 1,931,369 | 873,820 | 889,292 |
-| YCSB-D | 1,845,861 | 777,686 | 2,530,967 |
-| YCSB-E | 185,123 | 42,527 | 565,647 |
-| YCSB-F | 674,619 | 344,726 | 1,128,722 |
+| YCSB-A | 847,660 | 396,314 | 1,282,218 |
+| YCSB-B | 1,742,820 | 716,151 | 1,941,330 |
+| YCSB-C | 2,070,856 | 826,766 | 847,764 |
+| YCSB-D | 1,754,955 | 842,637 | 2,509,809 |
+| YCSB-E | 205,489 | 41,508 | 554,557 |
+| YCSB-F | 715,946 | 326,343 | 1,123,473 |
+| YCSB-G | 413,521 | 399,405 | 583,584 |
 
 
 ## Cleanup

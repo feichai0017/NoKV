@@ -108,7 +108,7 @@ Badger keeps a separate `value.log` directory without manifest-level bookkeeping
 
 ## 6. Recovery Scenarios
 
-1. **Missing SST file** – if `MANIFEST` references `000123.sst` but the file is absent, `db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest` verifies that recovery removes the edit, mimicking RocksDB's lost table handling.
+1. **Missing SST file** – if `MANIFEST` references `000123.sst` but the file is absent, `db_test.go::TestRecoveryCleansMissingSSTFromManifest` verifies that recovery removes the edit, mimicking RocksDB's lost table handling.
 2. **ValueLog deletion** – `TestRecoveryRemovesStaleValueLogSegment` ensures `EditDeleteValueLog` entries trigger file removal during recovery.
 3. **Manifest rewrite crash** – `TestRecoveryManifestRewriteCrash` simulates a crash after writing the new manifest but before updating `CURRENT`; recovery still points to the old manifest and resumes safely, exactly like RocksDB's two-phase rewrite.
 4. **Stale WAL pointer** – WAL replay respects `LogSegment/Offset`; tests cover truncated WALs to confirm idempotency.
@@ -118,10 +118,10 @@ Badger keeps a separate `value.log` directory without manifest-level bookkeeping
 ## 7. CLI Output
 
 `nokv manifest --workdir <dir> --json` prints:
-- Level file counts and key ranges.
-- `wal_log_segment` / `wal_log_offset` checkpoint.
-- `value_log_head` metadata.
-- List of vlog files with `valid` status (mirroring RocksDB's blob file dump).
+- `log_pointer.segment` / `log_pointer.offset` checkpoint.
+- Per-level file counts, IDs, and byte totals (`levels[*]`).
+- `value_log_heads` metadata (bucketed heads).
+- `value_logs` list with `valid` status (mirroring RocksDB's blob file dump).
 
 This structured output enables automated validation in CI and ad-hoc audits.
 
