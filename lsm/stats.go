@@ -32,7 +32,7 @@ func countMemIndexEntries(idx memIndex) int64 {
 	if idx == nil {
 		return 0
 	}
-	itr := idx.NewIterator(&utils.Options{})
+	itr := idx.NewIterator(&utils.Options{IsAsc: true})
 	if itr == nil {
 		return 0
 	}

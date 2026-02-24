@@ -203,3 +203,145 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 		t.Fatalf("expected iterator to be exhausted")
 	}
 }
+
+func TestBlockIteratorReverse(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builder := newTableBuiler(&builderOpt)
+
+	// Add test data
+	for i := 0; i < 10; i++ {
+		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		value := []byte{byte('v'), byte('0' + i)}
+		builder.AddKey(kv.NewEntry(key, value))
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
+	tbl := openTable(lsm.levels, tableName, builder)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	// Test forward iteration
+	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
+	defer forwardIter.Close()
+
+	var forwardKeys []byte
+	forwardIter.Rewind()
+	for forwardIter.Valid() {
+		e := forwardIter.Item().Entry()
+		forwardKeys = append(forwardKeys, kv.ParseKey(e.Key)[0])
+		forwardIter.Next()
+	}
+	require.Equal(t, "abcdefghij", string(forwardKeys))
+
+	// Test reverse iteration
+	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	defer reverseIter.Close()
+
+	var reverseKeys []byte
+	reverseIter.Rewind()
+	for reverseIter.Valid() {
+		e := reverseIter.Item().Entry()
+		reverseKeys = append(reverseKeys, kv.ParseKey(e.Key)[0])
+		reverseIter.Next()
+	}
+	require.Equal(t, "jihgfedcba", string(reverseKeys))
+}
+
+func TestTableIteratorReverseSeek(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builder := newTableBuiler(&builderOpt)
+
+	// Add test data with multiple blocks
+	for i := 0; i < 20; i++ {
+		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		value := bytes.Repeat([]byte{byte('v'), byte('0' + i%10)}, 24)
+		builder.AddKey(kv.NewEntry(key, value))
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 2)
+	tbl := openTable(lsm.levels, tableName, builder)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	// Test forward seek
+	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
+	defer forwardIter.Close()
+
+	forwardIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
+	require.True(t, forwardIter.Valid())
+	e := forwardIter.Item().Entry()
+	require.Equal(t, byte('e'), kv.ParseKey(e.Key)[0])
+
+	// Test reverse seek
+	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	defer reverseIter.Close()
+
+	reverseIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
+	require.True(t, reverseIter.Valid())
+	e = reverseIter.Item().Entry()
+	require.Equal(t, byte('e'), kv.ParseKey(e.Key)[0])
+
+	// Continue reverse iteration
+	var keys []byte
+	for i := 0; i < 5 && reverseIter.Valid(); i++ {
+		e := reverseIter.Item().Entry()
+		keys = append(keys, kv.ParseKey(e.Key)[0])
+		reverseIter.Next()
+	}
+	require.Equal(t, "edcba", string(keys))
+}
+
+func TestTableIteratorReverseMultiBlock(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builder := newTableBuiler(&builderOpt)
+
+	// Add enough data to create multiple blocks
+	for i := 0; i < 30; i++ {
+		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		value := bytes.Repeat([]byte{byte('v')}, 48)
+		builder.AddKey(kv.NewEntry(key, value))
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 3)
+	tbl := openTable(lsm.levels, tableName, builder)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	// Test reverse iteration across multiple blocks
+	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
+	defer reverseIter.Close()
+
+	reverseIter.Rewind()
+	require.True(t, reverseIter.Valid())
+
+	var keys []byte
+	count := 0
+	for reverseIter.Valid() && count < 30 {
+		e := reverseIter.Item().Entry()
+		keys = append(keys, kv.ParseKey(e.Key)[0])
+		reverseIter.Next()
+		count++
+	}
+
+	// Verify we got all keys in reverse order
+	require.Equal(t, 30, len(keys))
+	for i := 0; i < 30; i++ {
+		expected := byte('a' + 29 - i)
+		require.Equal(t, expected, keys[i], "key at position %d should be %c, got %c", i, expected, keys[i])
+	}
+}
