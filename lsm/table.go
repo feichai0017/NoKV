@@ -314,7 +314,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}
-	iter := t.NewIterator(&utils.Options{})
+	iter := t.NewIterator(&utils.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 
 	iter.Seek(key)
@@ -566,7 +566,7 @@ func (it *tableIterator) prefetchNext(idx int) {
 func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	t.IncrRef()
 	if options == nil {
-		options = &utils.Options{}
+		options = &utils.Options{IsAsc: true}
 	}
 	if options.IsAsc && options.PrefetchBlocks > 0 {
 		// Best-effort advise for long forward scans; ignore errors.
@@ -642,7 +642,7 @@ func (t *table) adviseIterator(options *utils.Options) {
 func (it *tableIterator) Next() {
 	it.err = nil
 
-	if it.index == nil || it.blockPos >= len(it.index.GetOffsets()) {
+	if it.index == nil || (it.opt.IsAsc && it.blockPos >= len(it.index.GetOffsets())) || (!it.opt.IsAsc && it.blockPos < 0) {
 		it.err = io.EOF
 		return
 	}
@@ -656,15 +656,24 @@ func (it *tableIterator) Next() {
 		it.prefetchNext(it.blockPos)
 		it.bi.tableID = it.t.fid
 		it.bi.blockID = it.blockPos
+		it.bi.isAsc = it.opt.IsAsc
 		it.bi.setBlock(block)
-		it.bi.seekToFirst()
+		if it.opt.IsAsc {
+			it.bi.seekToFirst()
+		} else {
+			it.bi.seekToLast()
+		}
 		it.err = it.bi.Error()
 		return
 	}
 
 	it.bi.Next()
 	if !it.bi.Valid() {
-		it.blockPos++
+		if it.opt.IsAsc {
+			it.blockPos++
+		} else {
+			it.blockPos--
+		}
 		it.bi.data = nil
 		it.Next()
 		return
@@ -729,6 +738,7 @@ func (it *tableIterator) seekToFirst() {
 	it.prefetchNext(it.blockPos)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
+	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
 	it.bi.seekToFirst()
 	it.it = it.bi.Item()
@@ -754,6 +764,7 @@ func (it *tableIterator) seekToLast() {
 	it.prefetchNext(it.blockPos)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
+	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
 	it.bi.seekToLast()
 	it.it = it.bi.Item()
@@ -761,28 +772,50 @@ func (it *tableIterator) seekToLast() {
 }
 
 // Seek uses binary search over block offsets.
-// If idx == 0, the key can only be in the first block (block[0].MinKey <= key).
-// Otherwise block[0].MinKey > key and we probe idx-1 first, then idx if needed.
-// If neither block contains the key, it is not present in this table.
+// For forward (IsAsc=true): finds first block where block.MaxKey >= key
+// For reverse (IsAsc=false): finds last block where block.MinKey <= key
 func (it *tableIterator) Seek(key []byte) {
 	if it.index == nil {
 		it.err = io.EOF
 		return
 	}
 	offsets := it.index.GetOffsets()
-	idx := sort.Search(len(offsets), func(idx int) bool {
-		ko, ok := it.t.blockOffset(idx)
-		utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
-		if idx == len(offsets) {
-			return true
+
+	if it.opt.IsAsc {
+		// Forward: find first block where block.MaxKey >= key
+		idx := sort.Search(len(offsets), func(idx int) bool {
+			ko, ok := it.t.blockOffset(idx)
+			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
+			if idx == len(offsets) {
+				return true
+			}
+			return utils.CompareKeys(ko.GetKey(), key) > 0
+		})
+		if idx == 0 {
+			it.seekHelper(0, key)
+			return
 		}
-		return utils.CompareKeys(ko.GetKey(), key) > 0
-	})
-	if idx == 0 {
-		it.seekHelper(0, key)
-		return
+		it.seekHelper(idx-1, key)
+	} else {
+		// Reverse: find last block that could contain key <= target
+		// We need to check from the end and find the last block where baseKey <= key
+		idx := sort.Search(len(offsets), func(idx int) bool {
+			ko, ok := it.t.blockOffset(idx)
+			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
+			if idx == len(offsets) {
+				return true
+			}
+			return utils.CompareKeys(ko.GetKey(), key) > 0
+		})
+		// idx is the first block where baseKey > key
+		// So we want idx-1, which is the last block where baseKey <= key
+		if idx == 0 {
+			// All blocks have baseKey > key, so no valid entry
+			it.err = io.EOF
+			return
+		}
+		it.seekHelper(idx-1, key)
 	}
-	it.seekHelper(idx-1, key)
 }
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
@@ -795,6 +828,7 @@ func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 	it.prefetchNext(blockIdx)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
+	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
 	it.bi.seek(key)
 	it.err = it.bi.Error()
