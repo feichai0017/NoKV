@@ -188,3 +188,124 @@ func TestSkiplistDecrRefConcurrent(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, int32(0), atomic.LoadInt32(&sl.ref))
 }
+
+func TestSkipListReverseIteration(t *testing.T) {
+	list := NewSkiplist(1000)
+
+	// Insert keys in order: a, b, c, d, e
+	keys := []string{"a", "b", "c", "d", "e"}
+	for _, k := range keys {
+		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		list.Add(entry)
+	}
+
+	// Test reverse iteration with IsAsc: false
+	iter := list.NewIterator(&Options{IsAsc: false})
+	defer iter.Close()
+
+	// Rewind should position at the largest key (e)
+	iter.Rewind()
+	require.True(t, iter.Valid())
+	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Next should move to smaller keys: d, c, b, a
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "d", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "b", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "a", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Next should invalidate the iterator (no more elements)
+	iter.Next()
+	require.False(t, iter.Valid())
+}
+
+func TestSkipListReverseSeek(t *testing.T) {
+	list := NewSkiplist(1000)
+
+	// Insert keys: a, c, e, g, i
+	keys := []string{"a", "c", "e", "g", "i"}
+	for _, k := range keys {
+		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		list.Add(entry)
+	}
+
+	// Test Seek with IsAsc: false
+	iter := list.NewIterator(&Options{IsAsc: false})
+	defer iter.Close()
+
+	// Seek("f") should find "e" (largest key <= "f")
+	iter.Seek(kv.KeyWithTs([]byte("f"), 1))
+	require.True(t, iter.Valid())
+	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Next should move to "c"
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Seek("i") should find "i" (exact match)
+	iter.Seek(kv.KeyWithTs([]byte("i"), 1))
+	require.True(t, iter.Valid())
+	require.Equal(t, "i", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Seek("z") should find "i" (largest key <= "z")
+	iter.Seek(kv.KeyWithTs([]byte("z"), 1))
+	require.True(t, iter.Valid())
+	require.Equal(t, "i", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Seek("0") should invalidate (no key <= "0")
+	iter.Seek(kv.KeyWithTs([]byte("0"), 1))
+	require.False(t, iter.Valid())
+}
+
+func TestSkipListForwardIteration(t *testing.T) {
+	list := NewSkiplist(1000)
+
+	// Insert keys in order: a, b, c, d, e
+	keys := []string{"a", "b", "c", "d", "e"}
+	for _, k := range keys {
+		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		list.Add(entry)
+	}
+
+	// Test forward iteration with IsAsc: true (default)
+	iter := list.NewIterator(&Options{IsAsc: true})
+	defer iter.Close()
+
+	// Rewind should position at the smallest key (a)
+	iter.Rewind()
+	require.True(t, iter.Valid())
+	require.Equal(t, "a", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Next should move to larger keys: b, c, d, e
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "b", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "d", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	iter.Next()
+	require.True(t, iter.Valid())
+	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+
+	// Next should invalidate the iterator (no more elements)
+	iter.Next()
+	require.False(t, iter.Valid())
+}
