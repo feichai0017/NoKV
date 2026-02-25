@@ -45,8 +45,14 @@ func (ss *SSTable) Init() error {
 		return err
 	}
 	// get create time from file
-	stat, _ := ss.f.File.Stat()
-	statType := stat.Sys().(*syscall.Stat_t)
+	stat, statErr := ss.f.File.Stat()
+	if statErr != nil {
+		return errors.Wrapf(statErr, "failed to stat table file: %s", ss.f.File.Name())
+	}
+	statType, ok := stat.Sys().(*syscall.Stat_t)
+	if !ok || statType == nil {
+		return errors.Errorf("failed to decode stat type for table file: %s", ss.f.File.Name())
+	}
 	ss.createdAt = time.Unix(statType.Ctim.Sec, statType.Ctim.Nsec)
 	// init min key
 	keyBytes := ko.GetKey()
