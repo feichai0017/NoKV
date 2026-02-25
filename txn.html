@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
+            window.path_to_searchindex_js = "searchindex-057eecd9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -227,7 +227,8 @@
 
 <ol>
 <li><strong>Start</strong> – <code>DB.newTransaction</code> calls <a href="../txn.go#L80-L100"><code>oracle.readTs</code></a>, which waits for all prior commits to finish (<code>txnMark.WaitForMark</code>) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the <code>startVersion</code> themselves (see <a href="#timestamp-sources">Timestamp sources</a>).</li>
-<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.</li>
+<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.
+<code>Txn.Get</code> returns a detached entry view; callers must not call <code>DecrRef</code> on it.</li>
 <li><strong>Conflict detection</strong> – When <code>Options.DetectConflicts</code> is enabled, <code>oracle.newCommitTs</code> iterates <code>oracle.committedTxns</code> and compares read fingerprints against keys written by newer commits. This mirrors Badger’s optimistic strategy.</li>
 <li><strong>Commit timestamp</strong> – <code>newCommitTs</code> increments <code>nextTxnTs</code>, registers the commit in <code>txnMark</code>, and stores the conflict key set for future comparisons.</li>
 <li><strong>Apply</strong> – <code>Txn.commitAndSend</code> assigns the commit timestamp to each pending entry (<code>kv.KeyWithTs</code>), enqueues them through <code>sendToWriteCh</code>, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle’s <code>doneCommit</code> release the commit watermark.</li>

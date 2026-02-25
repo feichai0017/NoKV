@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
+            window.path_to_searchindex_js = "searchindex-057eecd9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -399,7 +399,7 @@ func main() {
 }
 </code></pre>
 <blockquote>
-<p>Note: Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries and do not require <code>DecrRef</code>.</p>
+<p>Note: Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries. Do not call <code>DecrRef</code> on them.</p>
 </blockquote>
 <h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
 <p>Micro benchmarks:</p>
@@ -529,6 +529,22 @@ func main() {
 <li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
+<h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>
+<p>NoKV uses fail-fast reference counting for internal pooled/owned objects. <code>DecrRef</code> underflow is treated as a lifecycle bug and panics.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Object</th><th>Owned by</th><th>Borrowed by</th><th>Release rule</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kv.Entry</code> (pooled)</td><td>internal write/read pipelines</td><td>codec iterator, memtable/lsm internal reads, request batches</td><td>Must call <code>DecrRef</code> exactly once per borrow.</td></tr>
+<tr><td><code>kv.Entry</code> (detached public result)</td><td>caller</td><td>none</td><td>Returned by <code>DB.Get/GetCF/GetVersionedEntry</code> and <code>Txn.Get</code>; <strong>must not</strong> call <code>DecrRef</code>.</td></tr>
+<tr><td><code>request</code></td><td>commit queue/worker</td><td>waiter path (<code>Wait</code>)</td><td><code>IncrRef</code> on enqueue; <code>Wait</code> does one <code>DecrRef</code>; zero returns request to pool and releases entries.</td></tr>
+<tr><td><code>table</code></td><td>level/main+ingest lists, block cache</td><td>table iterators, prefetch workers</td><td>Removed tables are decremented once after manifest+in-memory swap; zero deletes SST.</td></tr>
+<tr><td><code>Skiplist</code> / <code>ART</code> index</td><td>memtable</td><td>iterators</td><td>Iterator creation increments index ref; iterator <code>Close</code> decrements; double-close is idempotent.</td></tr>
+</tbody>
+</table>
+</div>
 <hr>
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
 <div class="table-wrapper">
@@ -917,7 +933,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. Internal callers must release it with <code>DecrRef</code> when done. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
 <li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB’s <code>MemTable::Ref/Unref</code> lifecycle.</li>
 <li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
-<li>Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries, so application callers do not need to call <code>DecrRef</code>.</li>
+<li>Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries. Callers must not call <code>DecrRef</code> on those entries.</li>
 </ul>
 <hr>
 <h2 id="4-integration-with-other-subsystems"><a class="header" href="#4-integration-with-other-subsystems">4. Integration with Other Subsystems</a></h2>
@@ -2137,7 +2153,8 @@ inherits the global <code>HotRing*</code> configuration.</p>
 
 <ol>
 <li><strong>Start</strong> – <code>DB.newTransaction</code> calls <a href="../txn.go#L80-L100"><code>oracle.readTs</code></a>, which waits for all prior commits to finish (<code>txnMark.WaitForMark</code>) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the <code>startVersion</code> themselves (see <a href="#timestamp-sources">Timestamp sources</a>).</li>
-<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.</li>
+<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.
+<code>Txn.Get</code> returns a detached entry view; callers must not call <code>DecrRef</code> on it.</li>
 <li><strong>Conflict detection</strong> – When <code>Options.DetectConflicts</code> is enabled, <code>oracle.newCommitTs</code> iterates <code>oracle.committedTxns</code> and compares read fingerprints against keys written by newer commits. This mirrors Badger’s optimistic strategy.</li>
 <li><strong>Commit timestamp</strong> – <code>newCommitTs</code> increments <code>nextTxnTs</code>, registers the commit in <code>txnMark</code>, and stores the conflict key set for future comparisons.</li>
 <li><strong>Apply</strong> – <code>Txn.commitAndSend</code> assigns the commit timestamp to each pending entry (<code>kv.KeyWithTs</code>), enqueues them through <code>sendToWriteCh</code>, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle’s <code>doneCommit</code> release the commit watermark.</li>

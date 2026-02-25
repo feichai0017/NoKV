@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6eabd8b4.js";
+            window.path_to_searchindex_js = "searchindex-057eecd9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -268,6 +268,22 @@
 <li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
+<h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>
+<p>NoKV uses fail-fast reference counting for internal pooled/owned objects. <code>DecrRef</code> underflow is treated as a lifecycle bug and panics.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Object</th><th>Owned by</th><th>Borrowed by</th><th>Release rule</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kv.Entry</code> (pooled)</td><td>internal write/read pipelines</td><td>codec iterator, memtable/lsm internal reads, request batches</td><td>Must call <code>DecrRef</code> exactly once per borrow.</td></tr>
+<tr><td><code>kv.Entry</code> (detached public result)</td><td>caller</td><td>none</td><td>Returned by <code>DB.Get/GetCF/GetVersionedEntry</code> and <code>Txn.Get</code>; <strong>must not</strong> call <code>DecrRef</code>.</td></tr>
+<tr><td><code>request</code></td><td>commit queue/worker</td><td>waiter path (<code>Wait</code>)</td><td><code>IncrRef</code> on enqueue; <code>Wait</code> does one <code>DecrRef</code>; zero returns request to pool and releases entries.</td></tr>
+<tr><td><code>table</code></td><td>level/main+ingest lists, block cache</td><td>table iterators, prefetch workers</td><td>Removed tables are decremented once after manifest+in-memory swap; zero deletes SST.</td></tr>
+<tr><td><code>Skiplist</code> / <code>ART</code> index</td><td>memtable</td><td>iterators</td><td>Iterator creation increments index ref; iterator <code>Close</code> decrements; double-close is idempotent.</td></tr>
+</tbody>
+</table>
+</div>
 <hr>
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
 <div class="table-wrapper">
