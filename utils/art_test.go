@@ -250,3 +250,13 @@ func TestARTDecrRefUnderflow(t *testing.T) {
 		art.DecrRef() // ref = -1, should panic
 	})
 }
+
+func TestARTIteratorCloseIdempotent(t *testing.T) {
+	art := NewART(DefaultArenaSize) // ref = 1
+	it := art.NewIterator(nil)      // ref = 2
+	require.NotNil(t, it)
+	require.NoError(t, it.Close()) // ref = 1
+	require.NoError(t, it.Close()) // still ref = 1
+	require.Equal(t, int32(1), art.ref.Load())
+	art.DecrRef() // ref = 0
+}

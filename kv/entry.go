@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +52,8 @@ func (e *Entry) IncrRef() {
 }
 
 // DecrRef decrements the entry reference count and releases it to the pool when it reaches zero.
+// It panics on refcount underflow (decrement past zero), which indicates a
+// lifecycle bug in the caller.
 func (e *Entry) DecrRef() {
 	if e == nil {
 		return
@@ -58,8 +61,7 @@ func (e *Entry) DecrRef() {
 	for {
 		current := atomic.LoadInt32(&e.ref)
 		if current <= 0 {
-			// Detached entries are not pool-managed and should not be recycled.
-			return
+			panic(fmt.Sprintf("kv.Entry.DecrRef: refcount underflow (current_ref=%d)", current))
 		}
 		if !atomic.CompareAndSwapInt32(&e.ref, current, current-1) {
 			continue

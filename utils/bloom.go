@@ -66,10 +66,7 @@ func BloomKForBitsPerKey(bitsPerKey int) uint8 {
 	if bitsPerKey < 0 {
 		bitsPerKey = 0
 	}
-	k := max(uint32(float64(bitsPerKey)*0.69), 1)
-	if k > 30 {
-		k = 30
-	}
+	k := min(max(uint32(float64(bitsPerKey)*0.69), 1), 30)
 	return uint8(k)
 }
 

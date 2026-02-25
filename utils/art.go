@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -1002,11 +1003,12 @@ func (n *artNode) minChild(arena *Arena) *artNode {
 }
 
 type artIterator struct {
-	tree  *artTree
-	owner *ART
-	curr  *artNode
-	stack []iterFrame
-	entry kv.Entry
+	tree      *artTree
+	owner     *ART
+	curr      *artNode
+	stack     []iterFrame
+	entry     kv.Entry
+	closeOnce sync.Once
 }
 
 type iterFrame struct {
@@ -1054,10 +1056,18 @@ func (it *artIterator) Item() Item {
 }
 
 func (it *artIterator) Close() error {
-	if it == nil || it.owner == nil {
+	if it == nil {
 		return nil
 	}
-	it.owner.DecrRef()
+	it.closeOnce.Do(func() {
+		if it.owner != nil {
+			it.owner.DecrRef()
+		}
+		it.owner = nil
+		it.tree = nil
+		it.curr = nil
+		it.stack = nil
+	})
 	return nil
 }
 
