@@ -435,7 +435,7 @@ func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 	if _, err := store.Seek(int64(start), io.SeekStart); err != nil {
 		return 0, err
 	}
-	eIter := kv.NewEntryIterator(store.FD())
+	eIter := kv.NewEntryIterator(store.File())
 	defer func() { _ = eIter.Close() }()
 
 	offset := start
@@ -463,7 +463,7 @@ func firstNonZeroOffset(store *file.LogFile) (uint32, error) {
 		return uint32(start), nil
 	}
 	buf := make([]byte, 1<<20)
-	fd := store.FD()
+	fd := store.File()
 	for offset := start; offset < size; {
 		toRead := len(buf)
 		if rem := size - offset; rem < int64(toRead) {
@@ -500,7 +500,7 @@ func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint3
 		return 0, pkgerrors.Wrapf(err, "value log iterate seek: %s", store.FileName())
 	}
 
-	stream := kv.NewEntryIterator(store.FD())
+	stream := kv.NewEntryIterator(store.File())
 	defer func() { _ = stream.Close() }()
 
 	validEndOffset := offset
