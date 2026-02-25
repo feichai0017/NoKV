@@ -854,13 +854,20 @@ func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
 // ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
 func (t *table) ValueSize() uint64 { return t.valueSize }
 
-// DecrRef decrements the refcount and possibly deletes the table
+// DecrRef decrements the refcount and deletes the table when it reaches zero.
+// It panics on refcount underflow (decrement past zero) which indicates a bug
+// in the caller's lifetime management.
 func (t *table) DecrRef() error {
 	newRef := atomic.AddInt32(&t.ref, -1)
-	if newRef == 0 {
-		if err := t.Delete(); err != nil {
-			return err
-		}
+	if newRef > 0 {
+		return nil
+	}
+	if newRef < 0 {
+		panic("table.DecrRef: refcount underflow (double release)")
+	}
+	// newRef == 0: last reference dropped — delete the table.
+	if err := t.Delete(); err != nil {
+		return err
 	}
 	return nil
 }
