@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-057eecd9.js";
+            window.path_to_searchindex_js = "searchindex-cfdfd619.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -216,7 +216,13 @@ _ = lf.DoneWriting(nextOffset)
 <li><code>Open</code> mmaps the file and records current size (guarded to <code>&lt; 4 GiB</code>).</li>
 <li><code>Read</code> validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.</li>
 <li><code>EncodeEntry</code> uses the shared <code>kv.EntryHeader</code> and CRC32 helpers to produce the exact on-disk layout consumed by <code>vlog.Manager</code> and <code>wal.Manager</code>.</li>
-<li><code>DoneWriting</code> syncs, truncates to the provided offset, reinitialises the mmap, and keeps the file open in read-write mode—supporting subsequent appends.</li>
+<li><code>DoneWriting</code> guarantees durability for both data bytes <code>[0, offset)</code> and the file metadata (size).
+<ul>
+<li>Sequence: It flushes dirty pages (<code>msync</code>), truncates the file to <code>offset</code>, and performs a file-descriptor level sync (<code>fsync</code>) to ensure the new file size is persisted on disk before returning.</li>
+<li>Contract: Success implies that after a crash, the file size will not exceed <code>offset</code>, and all data prior to <code>offset</code> is safe.</li>
+<li>After syncing, it reinitializes the mmap and keeps the file open in read-write mode for potential subsequent appends (if logic allows) or prepares it for read-only consumption.</li>
+</ul>
+</li>
 <li><code>Rewind</code> (via <code>vlog.Manager.Rewind</code>) leverages <code>LogFile.Truncate</code> and <code>Init</code> to roll back partial batches after errors.</li>
 </ul>
 <hr>
@@ -240,6 +246,7 @@ _ = lf.DoneWriting(nextOffset)
 <hr>
 <h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
 <ul>
+<li><code>DoneWriting</code> provides strong crash-consistency guarantees. Even on filesystems where <code>ftruncate</code> metadata persistence is asynchronous, the explicit post-truncate <code>fsync</code> ensures the file size is durable upon success.</li>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
 <li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
 <li><code>vfs.SyncDir</code> is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
