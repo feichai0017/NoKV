@@ -30,7 +30,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	}))
 	entry, err := db.Get([]byte("stats-key"))
 	require.NoError(t, err)
-	entry.DecrRef()
+	require.Equal(t, []byte("stats-value"), entry.Value)
 
 	snap := db.Info().Snapshot()
 	require.Greater(t, snap.Entries, int64(0))

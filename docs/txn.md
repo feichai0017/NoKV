@@ -49,6 +49,7 @@ sequenceDiagram
 
 1. **Start** – `DB.newTransaction` calls [`oracle.readTs`](../txn.go#L80-L100), which waits for all prior commits to finish (`txnMark.WaitForMark`) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the `startVersion` themselves (see [Timestamp sources](#timestamp-sources)).
 2. **Reads** – `Txn.Get` first checks `pendingWrites`; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in `Txn.reads` via [`addReadKey`](../txn.go#L511-L526).
+   `Txn.Get` returns a detached entry view; callers must not call `DecrRef` on it.
 3. **Conflict detection** – When `Options.DetectConflicts` is enabled, `oracle.newCommitTs` iterates `oracle.committedTxns` and compares read fingerprints against keys written by newer commits. This mirrors Badger's optimistic strategy.
 4. **Commit timestamp** – `newCommitTs` increments `nextTxnTs`, registers the commit in `txnMark`, and stores the conflict key set for future comparisons.
 5. **Apply** – `Txn.commitAndSend` assigns the commit timestamp to each pending entry (`kv.KeyWithTs`), enqueues them through `sendToWriteCh`, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle's `doneCommit` release the commit watermark.

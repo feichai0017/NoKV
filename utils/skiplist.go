@@ -21,6 +21,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	_ "unsafe"
 
@@ -476,9 +477,10 @@ func (s *Skiplist) Draw(align bool) {
 // Iterator is an iterator over skiplist object. For new objects, you just
 // need to initialize Iterator.list.
 type SkipListIterator struct {
-	list *Skiplist
-	n    *node
-	e    kv.Entry
+	list      *Skiplist
+	n         *node
+	e         kv.Entry
+	closeOnce sync.Once
 }
 
 func (s *SkipListIterator) Rewind() {
@@ -486,6 +488,9 @@ func (s *SkipListIterator) Rewind() {
 }
 
 func (s *SkipListIterator) Item() Item {
+	if s == nil || s.list == nil || s.n == nil {
+		return nil
+	}
 	vs := s.Value()
 	s.e.Key = s.Key()
 	s.e.Value = vs.Value
@@ -497,60 +502,100 @@ func (s *SkipListIterator) Item() Item {
 
 // Close frees the resources held by the iterator
 func (s *SkipListIterator) Close() error {
-	s.list.DecrRef()
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.list != nil {
+			s.list.DecrRef()
+		}
+		s.list = nil
+		s.n = nil
+	})
 	return nil
 }
 
 // Valid returns true iff the iterator is positioned at a valid node.
-func (s *SkipListIterator) Valid() bool { return s.n != nil }
+func (s *SkipListIterator) Valid() bool {
+	return s != nil && s.list != nil && s.n != nil
+}
 
 // Key returns the key at the current position.
 func (s *SkipListIterator) Key() []byte {
+	if s == nil || s.list == nil || s.n == nil {
+		return nil
+	}
 	return s.list.arena.getKey(s.n.keyOffset, s.n.keySize)
 }
 
 // Value returns value.
 func (s *SkipListIterator) Value() kv.ValueStruct {
+	if s == nil || s.list == nil || s.n == nil {
+		return kv.ValueStruct{}
+	}
 	valOffset, valSize := s.n.getValueOffset()
 	return s.list.arena.getVal(valOffset, valSize)
 }
 
 // ValueUint64 returns the uint64 value of the current node.
 func (s *SkipListIterator) ValueUint64() uint64 {
+	if s == nil || s.n == nil {
+		return 0
+	}
 	return s.n.value
 }
 
 // Next advances to the next position.
 func (s *SkipListIterator) Next() {
-	AssertTrue(s.Valid())
+	if s == nil || s.list == nil || s.n == nil {
+		return
+	}
 	s.n = s.list.getNext(s.n, 0)
 }
 
 // Prev advances to the previous position.
 func (s *SkipListIterator) Prev() {
-	AssertTrue(s.Valid())
+	if s == nil || s.list == nil || s.n == nil {
+		return
+	}
 	s.n, _ = s.list.findNear(s.Key(), true, false) // find <. No equality allowed.
 }
 
 // Seek advances to the first entry with a key >= target.
 func (s *SkipListIterator) Seek(target []byte) {
+	if s == nil || s.list == nil {
+		s.n = nil
+		return
+	}
 	s.n, _ = s.list.findNear(target, false, true) // find >=.
 }
 
 // SeekForPrev finds an entry with key <= target.
 func (s *SkipListIterator) SeekForPrev(target []byte) {
+	if s == nil || s.list == nil {
+		s.n = nil
+		return
+	}
 	s.n, _ = s.list.findNear(target, true, true) // find <=.
 }
 
 // SeekToFirst seeks position at the first entry in list.
 // Final state of iterator is Valid() iff list is not empty.
 func (s *SkipListIterator) SeekToFirst() {
+	if s == nil || s.list == nil {
+		s.n = nil
+		return
+	}
 	s.n = s.list.getNext(s.list.getHead(), 0)
 }
 
 // SeekToLast seeks position at the last entry in list.
 // Final state of iterator is Valid() iff list is not empty.
 func (s *SkipListIterator) SeekToLast() {
+	if s == nil || s.list == nil {
+		s.n = nil
+		return
+	}
 	s.n = s.list.findLast()
 }
 

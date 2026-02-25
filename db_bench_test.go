@@ -42,11 +42,9 @@ func BenchmarkDBGetSmall(b *testing.B) {
 	b.SetBytes(int64(len(value)))
 
 	for i := 0; b.Loop(); i++ {
-		entry, err := db.Get(keys[i%len(keys)])
-		if err != nil {
+		if _, err := db.Get(keys[i%len(keys)]); err != nil {
 			b.Fatalf("get: %v", err)
 		}
-		entry.DecrRef()
 	}
 }
 
@@ -60,10 +58,8 @@ func BenchmarkDBGetLarge(b *testing.B) {
 	b.SetBytes(int64(len(value)))
 
 	for i := 0; b.Loop(); i++ {
-		entry, err := db.Get(keys[i%len(keys)])
-		if err != nil {
+		if _, err := db.Get(keys[i%len(keys)]); err != nil {
 			b.Fatalf("get: %v", err)
 		}
-		entry.DecrRef()
 	}
 }
