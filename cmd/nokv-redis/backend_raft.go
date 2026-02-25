@@ -267,17 +267,17 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	ctx, cancel := b.context()
-	defer cancel()
-	resps, err := b.client.BatchGet(ctx, keys, version)
+
+	resps, err := b.batchGetWithRetry(keys, version)
 	if err != nil {
 		return 0, err
 	}
+
 	mutations := make([]*pb.Mutation, 0, len(keys)*2)
 	var removed int64
 	for _, key := range keys {
 		resp := resps[string(key)]
-		if resp != nil && !resp.GetNotFound() {
+		if resp != nil && !resp.GetNotFound() && resp.GetError() == nil {
 			removed++
 		}
 		valueKey := append([]byte(nil), key...)
@@ -304,8 +304,6 @@ func (b *raftBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := b.context()
-	defer cancel()
 	request := make([][]byte, 0, len(keys)*2)
 	valueKeys := make([][]byte, len(keys))
 	metaKeys := make([][]byte, len(keys))
@@ -316,7 +314,8 @@ func (b *raftBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 		metaKeys[i] = metaKey
 		request = append(request, valueKey, metaKey)
 	}
-	resps, err := b.client.BatchGet(ctx, request, version)
+
+	resps, err := b.batchGetWithRetry(request, version)
 	if err != nil {
 		return nil, err
 	}
@@ -418,19 +417,69 @@ func (b *raftBackend) reserveTimestamp(n uint64) (uint64, error) {
 }
 
 func (b *raftBackend) getAtVersion(key []byte, version uint64) (*redisValue, error) {
-	ctx, cancel := b.context()
-	defer cancel()
 	request := [][]byte{
 		append([]byte(nil), key...),
 		ttlMetaKey(key),
 	}
-	resps, err := b.client.BatchGet(ctx, request, version)
+	resps, err := b.batchGetWithRetry(request, version)
 	if err != nil {
 		return nil, err
 	}
 	valueResp := resps[string(request[0])]
 	ttlResp := resps[string(request[1])]
 	return b.buildValueAtVersion(key, valueResp, ttlResp)
+}
+
+// retryWithConflictResolution executes fn with automatic retry on KeyConflictError.
+// It attempts to resolve locks before retrying.
+const maxRetries = 5
+
+func (b *raftBackend) retryWithConflictResolution(fn func() error) error {
+	var lastErr error
+	for range maxRetries {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+
+		var conflicts *client.KeyConflictError
+		if errors.As(err, &conflicts) && b.resolveKeyConflicts(conflicts) {
+			continue // Retry after resolving locks
+		}
+		lastErr = err
+		// Non-conflict error or failed to resolve, stop retrying
+		break
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("raft backend: retries exhausted")
+}
+
+func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
+	var resps map[string]*pb.GetResponse
+	err := b.retryWithConflictResolution(func() error {
+		ctx, cancel := b.context()
+		defer cancel()
+		var err error
+		resps, err = b.client.BatchGet(ctx, keys, version)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("raft backend: read failed: %w", err)
+	}
+	return resps, nil
+}
+
+// resolveLocks attempts to resolve all given locks.
+// Returns true if all locks were resolved successfully.
+func (b *raftBackend) resolveLocks(locks []*pb.Locked) bool {
+	for _, lock := range locks {
+		if !b.resolveSingleLock(lock) {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *raftBackend) buildValueAtVersion(key []byte, valueResp, ttlResp *pb.GetResponse) (*redisValue, error) {
@@ -488,58 +537,47 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	if len(mutations) == 0 {
 		return nil
 	}
-	const maxRetries = 5
-	var lastErr error
-	for range maxRetries {
+	return b.retryWithConflictResolution(func() error {
 		start, err := b.reserveTimestamp(2)
 		if err != nil {
 			return err
 		}
 		commit := start + 1
 		ctx, cancel := b.context()
-		err = b.client.Mutate(ctx,
+		defer cancel()
+		return b.client.Mutate(ctx,
 			append([]byte(nil), primary...),
 			mutations,
 			start,
 			commit,
 			defaultLockTTL,
 		)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		var conflicts *client.KeyConflictError
-		if errors.As(err, &conflicts) {
-			if b.resolveKeyConflicts(conflicts) {
-				continue
-			}
-		}
-		lastErr = err
-		break
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("raft backend: mutate retries exhausted")
+	})
 }
 
 func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) bool {
 	if conflicts == nil || len(conflicts.Errors) == 0 {
 		return false
 	}
-	for _, keyErr := range conflicts.Errors {
+	locks := b.extractLocksFromKeyErrors(conflicts.Errors)
+	if len(locks) == 0 {
+		return true // No locks to resolve
+	}
+	return b.resolveLocks(locks)
+}
+
+// extractLocksFromKeyErrors extracts Locked entries from KeyError slice.
+func (b *raftBackend) extractLocksFromKeyErrors(keyErrors []*pb.KeyError) []*pb.Locked {
+	var locks []*pb.Locked
+	for _, keyErr := range keyErrors {
 		if keyErr == nil {
 			continue
 		}
-		lock := keyErr.GetLocked()
-		if lock == nil {
-			continue
-		}
-		if !b.resolveSingleLock(lock) {
-			return false
+		if lock := keyErr.GetLocked(); lock != nil {
+			locks = append(locks, lock)
 		}
 	}
-	return true
+	return locks
 }
 
 func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
