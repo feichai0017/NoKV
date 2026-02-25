@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -62,25 +63,8 @@ type levelManager struct {
 	hotProvider      atomic.Value // func() [][]byte
 }
 
-// LevelMetrics captures aggregated statistics for a single LSM level.
-type LevelMetrics struct {
-	Level                 int
-	TableCount            int
-	SizeBytes             int64
-	ValueBytes            int64
-	StaleBytes            int64
-	IngestTableCount      int
-	IngestSizeBytes       int64
-	IngestValueBytes      int64
-	ValueDensity          float64
-	IngestValueDensity    float64
-	IngestRuns            int64
-	IngestMs              float64
-	IngestTablesCompacted int64
-	IngestMergeRuns       int64
-	IngestMergeMs         float64
-	IngestMergeTables     int64
-}
+// LevelMetrics aliases the shared metrics package model to keep the lsm API stable.
+type LevelMetrics = metrics.LevelMetrics
 
 func (lm *levelManager) close() error {
 	if err := lm.cache.close(); err != nil {

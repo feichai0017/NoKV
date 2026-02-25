@@ -42,16 +42,14 @@ func TestManagerNextBlocksUntilSubmit(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		task, ok := mgr.Next()
 		if !ok {
 			t.Errorf("expected task")
 			return
 		}
 		_ = mgr.Update(task.ID, flush.StageRelease, nil, nil)
-	}()
+	})
 
 	time.Sleep(10 * time.Millisecond)
 	if _, err := mgr.Submit(&flush.Task{SegmentID: 2}); err != nil {

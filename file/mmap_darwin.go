@@ -1,5 +1,4 @@
 //go:build darwin
-// +build darwin
 
 package file
 
@@ -50,7 +49,7 @@ func OpenMmapFileUsing(fs vfs.FS, fd *os.File, sz int, writable bool) (*MmapFile
 	if fileSize == 0 {
 		dir, _ := filepath.Split(filename)
 		go func() {
-			_ = SyncDir(fs, dir)
+			_ = vfs.SyncDir(fs, dir)
 		}()
 	}
 	return &MmapFile{
@@ -147,10 +146,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	// If the file is too small, double its size or increase it by 1GB, whichever is smaller.
 	if start+sz > len(m.Data) {
 		const oneGB = 1 << 30
-		growBy := len(m.Data)
-		if growBy > oneGB {
-			growBy = oneGB
-		}
+		growBy := min(len(m.Data), oneGB)
 		if growBy < sz+4 {
 			growBy = sz + 4
 		}
@@ -253,22 +249,6 @@ func (m *MmapFile) Close() error {
 		return fmt.Errorf("while munmap file: %s, error: %v", m.Fd.Name(), err)
 	}
 	return m.Fd.Close()
-}
-
-// SyncDir fsyncs a directory using the provided filesystem. Nil fs defaults to OSFS.
-func SyncDir(fs vfs.FS, dir string) error {
-	fs = vfs.Ensure(fs)
-	df, err := fs.OpenHandle(dir)
-	if err != nil {
-		return errors.Wrapf(err, "while opening %s", dir)
-	}
-	if err := df.Sync(); err != nil {
-		return errors.Wrapf(err, "while syncing %s", dir)
-	}
-	if err := df.Close(); err != nil {
-		return errors.Wrapf(err, "while closing %s", dir)
-	}
-	return nil
 }
 
 // Truncature truncates and remaps the file to the provided size.

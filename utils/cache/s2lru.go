@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"fmt"
+	"strings"
 )
 
 type segmentedLRU struct {
@@ -102,13 +103,13 @@ func (slru *segmentedLRU) victim() *storeItem {
 }
 
 func (slru *segmentedLRU) String() string {
-	var s string
+	var s strings.Builder
 	for e := slru.stageTwo.Front(); e != nil; e = e.Next() {
-		s += fmt.Sprintf("%v,", e.Value.(*storeItem).value)
+		s.WriteString(fmt.Sprintf("%v,", e.Value.(*storeItem).value))
 	}
-	s += " | "
+	s.WriteString(" | ")
 	for e := slru.stageOne.Front(); e != nil; e = e.Next() {
-		s += fmt.Sprintf("%v,", e.Value.(*storeItem).value)
+		s.WriteString(fmt.Sprintf("%v,", e.Value.(*storeItem).value))
 	}
-	return s
+	return s.String()
 }

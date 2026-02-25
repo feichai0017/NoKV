@@ -24,6 +24,9 @@
     <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
       <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
     </a>
+    <a href="https://dbdb.io/db/nokv">
+      <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
+    </a>
   </p>
 
   <p>
@@ -82,27 +85,29 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
 ## 📊 Performance Benchmark
 
-NoKV outperforms BadgerDB significantly in read-heavy and mixed workloads.
+Latest full baseline (generated on 2026-02-23 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):
 
-| Workload | Operation | NoKV (OPS) | Badger (OPS) | Improvement |
-| :--- | :--- | :--- | :--- | :--- |
-| **YCSB-C** | 100% Read | **1,540,744** | 521,586 | <span style="color:green">**+195%**</span> 🚀 |
-| **YCSB-B** | 95% Read | **911,199** | 349,608 | <span style="color:green">**+160%**</span> |
-| **YCSB-A** | 50% Update | **410,578** | 262,153 | <span style="color:green">**+56%**</span> |
-| **YCSB-D** | 5% Insert | **1,270,717** | 707,607 | <span style="color:green">**+79%**</span> |
+| Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
+| :--- | ---: | ---: | ---: |
+| YCSB-A | 847,660 | 396,314 | 1,282,218 |
+| YCSB-B | 1,742,820 | 716,151 | 1,941,330 |
+| YCSB-C | 2,070,856 | 826,766 | 847,764 |
+| YCSB-D | 1,754,955 | 842,637 | 2,509,809 |
+| YCSB-E | 205,489 | 41,508 | 554,557 |
+| YCSB-F | 715,946 | 326,343 | 1,123,473 |
+| YCSB-G | 413,521 | 399,405 | 583,584 |
 
 <details>
-<summary><em>Click to view detailed latency stats</em></summary>
+<summary><em>Click to view full benchmark summary</em></summary>
 
 ```text
-Summary:
-ENGINE  OPERATION  MODE                          OPS/S    AVG LATENCY  P99
-NoKV    YCSB-C     100% read                     1540744  649ns        128µs
-NoKV    YCSB-A     50/50 read/update             410578   2.435µs      155µs
-Badger  YCSB-C     100% read                     521586   1.917µs      427µs
-Badger  YCSB-A     50/50 read/update             262153   3.814µs      160µs
+NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
+Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
+Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
 ```
 </details>
+
+Raw report: [benchmark_results_20260223_195951.txt](https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt)
 
 <br>
 
@@ -131,18 +136,6 @@ graph TD
         IndexCache["Index Cache (W-TinyLFU)"] -.-> SSTable
     end
 ```
-
-## 🗺️ Roadmap
-
-- [x] **Core**: LSM Tree, VLog, WAL
-- [x] **Distributed**: Multi-Raft, Split/Merge
-- [x] **Transaction**: Percolator (Snapshot Isolation)
-- [ ] **Optimization**: Async Apply, SSTable-based Snapshot
-- [ ] **Redis**: Hash/Set/ZSet support
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 <div align="center">
   <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>

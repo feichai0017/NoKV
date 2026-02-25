@@ -41,6 +41,8 @@ func TestBenchmarkYCSB(t *testing.T) {
 		StatusEvery: *ycsbStatusInterval,
 		Workloads:   workloads,
 		Engines:     engines,
+		BatchInsert: *ycsbBatchInsert,
+		BatchSize:   *ycsbBatchSize,
 	}
 
 	opts := ycsbEngineOptions{
@@ -55,6 +57,7 @@ func TestBenchmarkYCSB(t *testing.T) {
 		BadgerBlockCacheMB: *fBadgerBlockMB,
 		BadgerIndexCacheMB: *fBadgerIndexMB,
 		BadgerCompression:  strings.ToLower(*fBadgerCompression),
+		PebbleCompression:  strings.ToLower(*ycsbPebbleCompression),
 		RocksDBCompression: strings.ToLower(*ycsbRocksCompression),
 	}
 

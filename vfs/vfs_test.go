@@ -91,3 +91,21 @@ func TestFileFDReturnsFalseWhenDescriptorUnsupported(t *testing.T) {
 		t.Fatalf("seek nofd file: %v", err)
 	}
 }
+
+func TestSyncDirSuccess(t *testing.T) {
+	dir := t.TempDir()
+	if err := SyncDir(nil, dir); err != nil {
+		t.Fatalf("sync dir: %v", err)
+	}
+}
+
+func TestSyncDirOpenFailure(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("open dir injected")
+	fs := NewFaultFSWithPolicy(OSFS{}, NewFaultPolicy(FailOnceRule(OpOpen, dir, injected)))
+
+	err := SyncDir(fs, dir)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+}

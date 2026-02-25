@@ -505,6 +505,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		return err
 	}
 	cleanupNeeded = false
+
 	if cd.plan.IngestMode == compact.IngestKeep {
 		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
 			return err
@@ -685,7 +686,6 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Throttle inflight builders to bound memory and file handles.
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 	for _, kr := range cd.splits {
-		kr := kr
 		if err := inflightBuilders.Go(func() error {
 			it := NewMergeIterator(newIterator(), false)
 			defer func() { _ = it.Close() }()
@@ -699,13 +699,11 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Collect table handles via fan-in.
 	var newTables []*table
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for t := range res {
 			newTables = append(newTables, t)
 		}
-	}()
+	})
 
 	// Wait for all compaction tasks to finish.
 	err := inflightBuilders.Finish()

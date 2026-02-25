@@ -35,10 +35,10 @@ This mirrors RocksDB's `DBImpl::Recover` while extending to handle value log met
 | Failure Point | Example Simulation | Expected Recovery Behaviour | Tests |
 | --- | --- | --- | --- |
 | WAL tail truncation | truncate last 2 bytes of `000005.wal` | Replay stops at truncated record, previously flushed SST remains intact | `wal/manager_test.go::TestReplayTruncatedTail` |
-| Flush crash before install | crash after writing `.sst.tmp` | WAL replay rebuilds memtable; temp file removed; no manifest edit present | `db_recovery_test.go::TestRecoveryWALReplayRestoresData` |
-| Flush crash after install | crash after logging manifest edit but before WAL release | Manifest still lists SST; recovery verifies file exists and releases WAL on reopen | `db_recovery_test.go::TestRecoveryCleansMissingSSTFromManifest` |
-| ValueLog GC crash | delete edit written, file still on disk | Recovery removes stale `.vlog` file and keeps manifest consistent | `db_recovery_test.go::TestRecoveryRemovesStaleValueLogSegment` |
-| Manifest rewrite crash | new MANIFEST written, CURRENT not updated | Recovery keeps using old manifest; stale temp file cleaned | `db_recovery_test.go::TestRecoveryManifestRewriteCrash` |
+| Flush crash before install | crash after writing `.sst.tmp` | WAL replay rebuilds memtable; temp file removed; no manifest edit present | `db_test.go::TestRecoveryWALReplayRestoresData` |
+| Flush crash after install | crash after logging manifest edit but before WAL release | Manifest still lists SST; recovery verifies file exists and releases WAL on reopen | `db_test.go::TestRecoveryCleansMissingSSTFromManifest` |
+| ValueLog GC crash | delete edit written, file still on disk | Recovery removes stale `.vlog` file and keeps manifest consistent | `db_test.go::TestRecoveryRemovesStaleValueLogSegment` |
+| Manifest rewrite crash | new MANIFEST written, CURRENT not updated | Recovery keeps using old manifest; stale temp file cleaned | `db_test.go::TestRecoveryManifestRewriteCrash` |
 | Transaction in-flight | crash between WAL append and memtable update | WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable | `txn_test.go::TestTxnCommitPersists` |
 
 ---

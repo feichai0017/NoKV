@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -152,4 +153,38 @@ func TestSkipListIteratorSeekAndPrev(t *testing.T) {
 
 	_ = iter.ValueUint64()
 	require.NoError(t, iter.Close())
+}
+
+func TestSkiplistDecrRefUnderflow(t *testing.T) {
+	sl := NewSkiplist(1024)
+
+	sl.IncrRef() // ref = 2
+	sl.IncrRef() // ref = 3
+	sl.DecrRef() // ref = 2
+	sl.DecrRef() // ref = 1
+	sl.DecrRef() // ref = 0, normal close
+
+	// One more DecrRef should panic
+	assert.Panics(t, func() {
+		sl.DecrRef() // ref = -1, should panic
+	})
+}
+
+func TestSkiplistDecrRefConcurrent(t *testing.T) {
+	sl := NewSkiplist(1024)
+	sl.IncrRef()
+	sl.IncrRef() // ref = 3
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	for range 3 {
+		go func() {
+			defer wg.Done()
+			sl.DecrRef()
+		}()
+	}
+
+	wg.Wait()
+	assert.Equal(t, int32(0), atomic.LoadInt32(&sl.ref))
 }

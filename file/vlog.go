@@ -31,11 +31,11 @@ func (lf *LogFile) Open(opt *Options) error {
 	}
 	lf.f, err = OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
 	if err != nil {
-		return utils.WarpErr("unable to open value log file", err)
+		return utils.WrapErr("unable to open value log file", err)
 	}
 	fi, err := lf.f.Fd.Stat()
 	if err != nil {
-		return utils.WarpErr("Unable to run file.Stat", err)
+		return utils.WrapErr("Unable to run file.Stat", err)
 	}
 	// Load the current file size.
 	sz := fi.Size()

@@ -169,8 +169,8 @@ func TestWorkloadParsingAndHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, wls, 2)
 
-	engines := parseYCSBEngines("nokv, badger ,, rocksdb")
-	require.Equal(t, []string{"nokv", "badger", "rocksdb"}, engines)
+	engines := parseYCSBEngines("nokv, badger, pebble ,, rocksdb")
+	require.Equal(t, []string{"nokv", "badger", "pebble", "rocksdb"}, engines)
 
 	wl := ycsbWorkload{
 		ReadRatio:       0.2,

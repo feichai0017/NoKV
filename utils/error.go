@@ -116,12 +116,18 @@ func Err(err error) error {
 	return err
 }
 
-// WarpErr err
-func WarpErr(format string, err error) error {
+// WrapErr logs and returns err with caller location metadata.
+func WrapErr(format string, err error) error {
 	if err != nil {
 		fmt.Printf("%s %s %s", format, location(2, true), err)
 	}
 	return err
+}
+
+// WarpErr is kept for backward compatibility.
+// Deprecated: use WrapErr.
+func WarpErr(format string, err error) error {
+	return WrapErr(format, err)
 }
 func location(deep int, fullPath bool) string {
 	_, file, line, ok := runtime.Caller(deep)
