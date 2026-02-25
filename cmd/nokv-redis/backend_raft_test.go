@@ -715,17 +715,22 @@ func (s *stubTSO) Reserve(n uint64) (uint64, error) {
 type stubRaftClient struct {
 	batchGet    map[string]*pb.GetResponse
 	batchGetErr error
+	batchGetFn  func(keys [][]byte) (map[string]*pb.GetResponse, error) // Custom BatchGet logic
 	mutateErr   error
 	mutateFn    func() error
 	mutateCalls int
 	checkResp   *pb.CheckTxnStatusResponse
 	checkErr    error
+	checkCalls  int // Track CheckTxnStatus call count
 	resolveResp uint64
 	resolveErr  error
 	resolveKeys [][]byte
 }
 
 func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
+	if s.batchGetFn != nil {
+		return s.batchGetFn(keys)
+	}
 	if s.batchGetErr != nil {
 		return nil, s.batchGetErr
 	}
@@ -753,6 +758,7 @@ func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations [
 }
 
 func (s *stubRaftClient) CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*pb.CheckTxnStatusResponse, error) {
+	s.checkCalls++
 	return s.checkResp, s.checkErr
 }
 
@@ -772,6 +778,15 @@ func (s *stubRaftClient) ResolveLocks(ctx context.Context, startVersion, commitV
 
 func (s *stubRaftClient) Close() error {
 	return nil
+}
+
+func (s *stubRaftClient) keyResolved(key []byte) bool {
+	for _, resolvedKey := range s.resolveKeys {
+		if bytes.Equal(key, resolvedKey) {
+			return true
+		}
+	}
+	return false
 }
 
 func newStubBackend() (*raftBackend, *stubRaftClient, *stubTSO) {
@@ -1101,7 +1116,7 @@ func TestMutatePaths(t *testing.T) {
 	stub.resolveErr = nil
 	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "mutate retries exhausted")
+	require.Contains(t, err.Error(), "retries exhausted")
 }
 
 func TestResolveKeyConflictsAndLocks(t *testing.T) {
@@ -1154,11 +1169,9 @@ func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
 	// Second call: should succeed if lock is resolved
 	stub.mutateFn = func() error {
 		mutateCallCount++
-		for _, key := range stub.resolveKeys {
-			if bytes.Equal(key, secondaryKey) {
-				// Simulate the secondary lock being resolved and committed with the same commit version as primary
-				return nil
-			}
+		if stub.keyResolved(secondaryKey) {
+			// Simulate the secondary lock being resolved and committed with the same commit version as primary
+			return nil
 		}
 		return &client.KeyConflictError{
 			Errors: []*pb.KeyError{
@@ -1188,15 +1201,171 @@ func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
 
 	// Verify that ResolveLocks was called with the expected secondary key
 	require.NotEmpty(t, stub.resolveKeys, "ResolveLocks should be called to resolve the secondary lock")
-	foundSecondary := false
-	for _, k := range stub.resolveKeys {
-		if bytes.Equal(k, secondaryKey) {
-			foundSecondary = true
-			break
-		}
-	}
-	require.True(t, foundSecondary, "ResolveLocks should be called with the secondary key")
+	require.True(t, stub.keyResolved(secondaryKey), "ResolveLocks should be called with the secondary key")
 
 	require.Equal(t, 2, mutateCallCount, "mutate should be called twice due to conflict resolution")
 	require.NoError(t, err, "mutate should succeed after resolving conflict")
+}
+
+func TestReadResolveSecondaryLockAfterPrimaryCommit(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	key := []byte("secondary-key")
+	primaryKey := []byte("primary-key")
+	lockVersion := uint64(100)
+	commitVersion := uint64(101)
+
+	callCount := 0
+
+	// Setup batchGetFn: first call returns lock conflict, after resolution returns value
+	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+		callCount++
+		for _, k := range keys {
+			if bytes.Equal(k, key) && !stub.keyResolved(k) {
+				return nil, &client.KeyConflictError{
+					Errors: []*pb.KeyError{{
+						Locked: &pb.Locked{
+							PrimaryLock: primaryKey,
+							Key:         k,
+							LockVersion: lockVersion,
+							LockTtl:     3000,
+						},
+					}},
+				}
+			}
+		}
+		out := make(map[string]*pb.GetResponse)
+		for _, k := range keys {
+			if bytes.Equal(k, key) {
+				out[string(k)] = &pb.GetResponse{Value: []byte("committed-value")}
+			} else {
+				out[string(k)] = &pb.GetResponse{NotFound: true}
+			}
+		}
+		return out, nil
+	}
+
+	// CheckTxnStatus returns: primary is already committed
+	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: commitVersion}
+
+	val, err := backend.Get(key)
+	require.NoError(t, err)
+	require.True(t, val.Found, "value should be found after resolving lock")
+	require.Equal(t, []byte("committed-value"), val.Value)
+	require.True(t, stub.checkCalls > 0, "CheckTxnStatus should be called")
+	require.True(t, len(stub.resolveKeys) > 0, "ResolveLocks should be called")
+}
+
+func TestReadDoesNotResolveIfPrimaryAlive(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	key := []byte("locked-key")
+	primaryKey := []byte("primary-key")
+	lockVersion := uint64(100)
+
+	// Always return lock conflict
+	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+		return nil, &client.KeyConflictError{
+			Errors: []*pb.KeyError{{
+				Locked: &pb.Locked{
+					PrimaryLock: primaryKey,
+					Key:         key,
+					LockVersion: lockVersion,
+					LockTtl:     3000,
+				},
+			}},
+		}
+	}
+
+	// CheckTxnStatus returns: primary is still alive (no action needed)
+	stub.checkResp = &pb.CheckTxnStatusResponse{
+		Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
+	}
+
+	_, err := backend.Get(key)
+	require.Error(t, err, "should return error when primary is still alive")
+	require.True(t, stub.checkCalls > 0, "CheckTxnStatus should be called")
+	require.Empty(t, stub.resolveKeys, "ResolveLocks should NOT be called when primary is alive")
+}
+
+func TestReadResolveRollback(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	secondaryKey := []byte("rollback-key")
+	primaryKey := []byte("primary-key")
+	lockVersion := uint64(100)
+
+	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+		for _, k := range keys {
+			if bytes.Equal(k, secondaryKey) && !stub.keyResolved(k) {
+				return nil, &client.KeyConflictError{
+					Errors: []*pb.KeyError{{
+						Locked: &pb.Locked{
+							PrimaryLock: primaryKey,
+							Key:         k,
+							LockVersion: lockVersion,
+							LockTtl:     3000,
+						},
+					}},
+				}
+			}
+		}
+		out := make(map[string]*pb.GetResponse)
+		for _, k := range keys {
+			out[string(k)] = &pb.GetResponse{NotFound: true}
+		}
+		return out, nil
+	}
+
+	// CheckTxnStatus returns: primary lock does not exist (rolled back)
+	stub.checkResp = &pb.CheckTxnStatusResponse{
+		Action: pb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback,
+	}
+
+	val, err := backend.Get(secondaryKey)
+	require.NoError(t, err)
+	require.False(t, val.Found, "value should not be found after rollback")
+	require.True(t, stub.checkCalls > 0, "CheckTxnStatus should be called")
+	require.True(t, len(stub.resolveKeys) > 0, "ResolveLocks should be called for rollback")
+}
+
+func TestReadResolveLockWhenTTLExpired(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+
+	secondaryKey := []byte("ttl-expired-key")
+	primaryKey := []byte("primary-key")
+	lockVersion := uint64(100)
+
+	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+		for _, k := range keys {
+			if bytes.Equal(k, secondaryKey) && !stub.keyResolved(k) {
+				return nil, &client.KeyConflictError{
+					Errors: []*pb.KeyError{{
+						Locked: &pb.Locked{
+							PrimaryLock: primaryKey,
+							Key:         k,
+							LockVersion: lockVersion,
+							LockTtl:     1, // Very short TTL
+						},
+					}},
+				}
+			}
+		}
+		out := make(map[string]*pb.GetResponse)
+		for _, k := range keys {
+			out[string(k)] = &pb.GetResponse{NotFound: true}
+		}
+		return out, nil
+	}
+
+	// CheckTxnStatus returns: TTL expired, should rollback
+	stub.checkResp = &pb.CheckTxnStatusResponse{
+		Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+	}
+
+	val, err := backend.Get(secondaryKey)
+	require.NoError(t, err)
+	require.False(t, val.Found, "value should not be found after TTL-expired rollback")
+	require.True(t, stub.checkCalls > 0, "CheckTxnStatus should be called")
+	require.True(t, len(stub.resolveKeys) > 0, "ResolveLocks should be called when TTL expired")
 }
