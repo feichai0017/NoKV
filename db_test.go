@@ -42,7 +42,6 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		} else {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-			entry.DecrRef()
 		}
 	}
 
@@ -81,7 +80,6 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		} else {
 			t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-			entry.DecrRef()
 		}
 	}
 }
@@ -100,26 +98,22 @@ func TestColumnFamilies(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
-	e.DecrRef()
 
 	e, err = db.GetCF(kv.CFLock, key)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFLock, e.CF)
 	require.Equal(t, []byte("lock"), e.Value)
-	e.DecrRef()
 
 	e, err = db.GetCF(kv.CFWrite, key)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFWrite, e.CF)
 	require.Equal(t, []byte("write"), e.Value)
-	e.DecrRef()
 
 	// Default Get should read default CF.
 	e, err = db.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
-	e.DecrRef()
 
 	require.NoError(t, db.DelCF(kv.CFLock, key))
 	_, err = db.GetCF(kv.CFLock, key)
@@ -128,7 +122,6 @@ func TestColumnFamilies(t *testing.T) {
 	e, err = db.GetCF(kv.CFDefault, key)
 	require.NoError(t, err)
 	require.Equal(t, []byte("default"), e.Value)
-	e.DecrRef()
 }
 
 func newTestOptions(t *testing.T) *Options {
@@ -160,7 +153,6 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	require.Equal(t, key, entry.Key)
 	require.Equal(t, version, entry.Version)
 	require.Equal(t, value, entry.Value)
-	entry.DecrRef()
 }
 
 func TestVersionedEntryDeleteTombstone(t *testing.T) {
@@ -177,13 +169,11 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	require.Equal(t, key, entry.Key)
 	require.Equal(t, uint64(2), entry.Version)
 	require.True(t, entry.Meta&kv.BitDelete > 0)
-	entry.DecrRef()
 
 	entry, err = db.GetVersionedEntry(kv.CFDefault, key, 1)
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), entry.Value)
 	require.Equal(t, uint64(1), entry.Version)
-	entry.DecrRef()
 }
 
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
@@ -198,8 +188,10 @@ func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("value-1"), entry.Value)
 
-	// Public read APIs now return detached entries; DecrRef should be a no-op.
-	entry.DecrRef()
+	// Public read APIs return detached entries; DecrRef misuse should fail fast.
+	require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
+		entry.DecrRef()
+	})
 	require.Equal(t, []byte("value-1"), entry.Value)
 
 	entry.Value[0] = 'X'
@@ -554,7 +546,6 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	tmpExists := false
 	item, err := db2.Get([]byte("rewrite-key"))
 	require.NoError(t, err)
-	defer item.DecrRef()
 	require.Equal(t, []byte("rewrite-val"), item.Value)
 
 	_, err = os.Stat(tmp)
@@ -681,7 +672,6 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 
 	item, err := db2.Get(key)
 	require.NoError(t, err)
-	defer item.DecrRef()
 	require.Equal(t, val, item.Value)
 	logRecoveryMetric(t, "wal_replay", map[string]any{
 		"key":           string(key),

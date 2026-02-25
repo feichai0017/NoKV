@@ -96,7 +96,9 @@ func TestTxnGetEntryIsDetached(t *testing.T) {
 			require.Equal(t, []byte("detached-value"), item.Entry().Value)
 
 			// Txn.Get no longer returns pool-managed entries.
-			item.Entry().DecrRef()
+			require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
+				item.Entry().DecrRef()
+			})
 			require.Equal(t, []byte("detached-value"), item.Entry().Value)
 
 			val, err := item.ValueCopy(nil)
