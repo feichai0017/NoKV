@@ -41,7 +41,10 @@ _ = lf.DoneWriting(nextOffset)
 * `Open` mmaps the file and records current size (guarded to `< 4 GiB`).
 * `Read` validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.
 * `EncodeEntry` uses the shared `kv.EntryHeader` and CRC32 helpers to produce the exact on-disk layout consumed by `vlog.Manager` and `wal.Manager`.
-* `DoneWriting` syncs, truncates to the provided offset, reinitialises the mmap, and keeps the file open in read-write mode—supporting subsequent appends.
+* `DoneWriting` guarantees durability for both data bytes `[0, offset)` and the file metadata (size).
+    * Sequence: It flushes dirty pages (`msync`), truncates the file to `offset`, and performs a file-descriptor level sync (`fsync`) to ensure the new file size is persisted on disk before returning.
+    * Contract: Success implies that after a crash, the file size will not exceed `offset`, and all data prior to `offset` is safe.
+    * After syncing, it reinitializes the mmap and keeps the file open in read-write mode for potential subsequent appends (if logic allows) or prepares it for read-only consumption.
 * `Rewind` (via `vlog.Manager.Rewind`) leverages `LogFile.Truncate` and `Init` to roll back partial batches after errors.
 
 ---
@@ -66,6 +69,7 @@ By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and
 
 ## 6. Operational Notes
 
+* `DoneWriting` provides strong crash-consistency guarantees. Even on filesystems where `ftruncate` metadata persistence is asynchronous, the explicit post-truncate `fsync` ensures the file size is durable upon success.
 * Value-log and WAL segments rely on `DoneWriting`/`Truncate` to seal files; avoid manipulating files externally or mmap metadata may desynchronise.
 * `LogFile.AddSize` updates the cached size used by reads—critical when rewinding or rewriting segments.
 * `vfs.SyncDir` is invoked when new files are created to persist directory entries, similar to RocksDB's `Env::FsyncDir`.
