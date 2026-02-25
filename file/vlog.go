@@ -86,6 +86,7 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	if err := lf.f.Truncature(int64(offset)); err != nil {
 		return errors.Wrapf(err, "Unable to truncate file: %q", lf.FileName())
 	}
+	atomic.StoreUint32(&lf.size, offset)
 
 	// Run a file sync after truncation.
 	if err := lf.File().Sync(); err != nil {
