@@ -506,9 +506,6 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	cleanupNeeded = false
 
-	defer func() {
-		_ = decrRefs(cd.top)
-	}()
 	if cd.plan.IngestMode == compact.IngestKeep {
 		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
 			return err
@@ -520,11 +517,16 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {
 			return err
 		}
-		if err := thisLevel.deleteIngestTables(cd.top); err != nil {
-			return err
-		}
-		if err := thisLevel.deleteTables(cd.top); err != nil {
-			return err
+		switch cd.plan.IngestMode {
+		case compact.IngestDrain:
+			if err := thisLevel.deleteIngestTables(cd.top); err != nil {
+				return err
+			}
+		default:
+			// IngestNone (and unknown modes) own top tables in the main level list.
+			if err := thisLevel.deleteTables(cd.top); err != nil {
+				return err
+			}
 		}
 	}
 
