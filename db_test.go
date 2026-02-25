@@ -1022,12 +1022,10 @@ func TestCloseConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	const workers = 16
 	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			errs <- db.Close()
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

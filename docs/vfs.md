@@ -34,10 +34,15 @@ It is intentionally small and focused:
 - `Sync`
 - `Truncate`
 - `Close`
-- `Fd`
+- `Stat`
+- `Name`
+
+`Fd` is intentionally optional via `vfs.FDProvider`/`vfs.FileFD(...)` so non-OS
+file implementations can still satisfy `vfs.File`.
 
 `vfs.OSFS` is the production implementation backed by the Go `os` package.  
 `vfs.Ensure(fs)` normalizes `nil` to `OSFS`, so call sites can safely accept an optional `vfs.FS`.
+`vfs.SyncDir(fs, dir)` centralizes directory fsync semantics for create/rename/remove durability.
 
 ---
 
@@ -71,7 +76,7 @@ This is used to validate rollback and retry behavior for close/sync/truncate pat
 - `manifest`: edit logging, rewrite, verify, close.
 - `vlog`: verify/truncate and file open path.
 - `file`: mmap open/sync directory path via `vfs`.
-- `utils`: dir lock and directory sync helpers.
+- `utils`: dir lock and utility wrappers.
 - `raftstore/engine`: disk storage and snapshot import/export.
 
 ---

@@ -102,3 +102,11 @@ func TestBloomCacheEviction(t *testing.T) {
 
 	bc.close()
 }
+
+func TestBlockEntryReleaseNilAndNoTable(t *testing.T) {
+	var nilEntry *blockEntry
+	nilEntry.release()
+
+	entryWithoutTable := &blockEntry{}
+	entryWithoutTable.release()
+}

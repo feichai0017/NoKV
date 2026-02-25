@@ -107,10 +107,7 @@ func (s *Store) buildRegionDescriptor(info scheduler.RegionInfo) scheduler.Regio
 		}
 	}
 	if !info.LastHeartbeat.IsZero() {
-		lag := time.Since(info.LastHeartbeat)
-		if lag < 0 {
-			lag = 0
-		}
+		lag := max(time.Since(info.LastHeartbeat), 0)
 		desc.Lag = lag
 	}
 	for _, peerMeta := range meta.Peers {

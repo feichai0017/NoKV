@@ -48,7 +48,7 @@ func newBenchLSM(b *testing.B, memTableSize int64) *LSM {
 func makeLSMBatch(batchSize int, valueSize int) []*kv.Entry {
 	entries := make([]*kv.Entry, batchSize)
 	value := make([]byte, valueSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		key := make([]byte, 16)
 		copy(key, "benchkey")
 		binary.LittleEndian.PutUint64(key[8:], uint64(i))

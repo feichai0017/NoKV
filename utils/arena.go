@@ -43,10 +43,7 @@ func newArena(n int64) *Arena {
 	if n > int64(^uint32(0)) {
 		n = int64(^uint32(0))
 	}
-	chunkSize := n
-	if chunkSize > DefaultArenaSize {
-		chunkSize = DefaultArenaSize
-	}
+	chunkSize := min(n, DefaultArenaSize)
 	if chunkSize < minArenaChunkSize {
 		chunkSize = minArenaChunkSize
 	}

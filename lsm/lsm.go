@@ -596,9 +596,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 		n = 1
 	}
 	for i := 0; i < n; i++ {
-		lsm.flushWG.Add(1)
-		go func() {
-			defer lsm.flushWG.Done()
+		lsm.flushWG.Go(func() {
 			for {
 				task, ok := lsm.flushMgr.Next()
 				if !ok {
@@ -637,6 +635,6 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					}
 				}()
 			}
-		}()
+		})
 	}
 }

@@ -468,9 +468,9 @@ func (mi *MergeIterator) Close() error {
 	err1 := mi.left.iter.Close()
 	err2 := mi.right.iter.Close()
 	if err1 != nil {
-		return utils.WarpErr("MergeIterator", err1)
+		return utils.WrapErr("MergeIterator", err1)
 	}
-	return utils.WarpErr("MergeIterator", err2)
+	return utils.WrapErr("MergeIterator", err2)
 }
 
 // NewMergeIterator creates a merge iterator.

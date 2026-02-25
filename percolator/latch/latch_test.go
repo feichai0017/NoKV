@@ -15,12 +15,10 @@ func TestManagerSerializesConflicts(t *testing.T) {
 	guard := mgr.Acquire(keys)
 	blocked := make(chan struct{}, 1)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		mgr.Acquire([][]byte{[]byte("b")}).Release()
 		blocked <- struct{}{}
-	}()
+	})
 
 	select {
 	case <-blocked:

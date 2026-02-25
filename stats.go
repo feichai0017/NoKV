@@ -10,7 +10,6 @@ import (
 	"github.com/feichai0017/hotring"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
@@ -65,7 +64,7 @@ type LSMLevelStats struct {
 	MergeTables        int64   `json:"ingest_merge_tables"`
 }
 
-func levelMetricsToStats(lvl lsm.LevelMetrics) LSMLevelStats {
+func levelMetricsToStats(lvl metrics.LevelMetrics) LSMLevelStats {
 	return LSMLevelStats{
 		Level:              lvl.Level,
 		TableCount:         lvl.TableCount,
@@ -474,10 +473,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				maxSeg = ptr.Segment
 			}
 			if effectiveActive > 0 {
-				lag := effectiveActive - int64(ptr.Segment)
-				if lag < 0 {
-					lag = 0
-				}
+				lag := max(effectiveActive-int64(ptr.Segment), 0)
 				if lag > 0 {
 					lagging++
 				}
@@ -491,10 +487,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.MaxLagSegments = maxLag
 		snap.Raft.LaggingGroups = lagging
 	}
-	threshold := s.db.opt.RaftLagWarnSegments
-	if threshold < 0 {
-		threshold = 0
-	}
+	threshold := max(s.db.opt.RaftLagWarnSegments, 0)
 	snap.Raft.LagWarnThreshold = threshold
 	if threshold > 0 && snap.Raft.MaxLagSegments >= threshold && snap.Raft.LaggingGroups > 0 {
 		snap.Raft.LagWarning = true

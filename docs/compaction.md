@@ -33,7 +33,7 @@ Planning now happens via `compact.Plan`: LSM snapshots table metadata into `comp
 
 This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because `levelHandler.searchIngestSST` checks `ingest` before consulting `tables`.
 
-Compaction tests (`lsm/compaction_cache_test.go`) now assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
+Compaction tests (`lsm/compaction_test.go`) assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
 
 ---
 
@@ -79,10 +79,11 @@ This tight coupling keeps the value log from growing indefinitely after heavy ov
 
 Relevant tests to keep compaction healthy:
 
-- `lsm/compaction_cache_test.go`
+- `lsm/compaction_test.go`
   - `TestCompactionMoveToIngest` – ensures metadata migration works and the ingest buffer grows.
-  - `TestCacheHotColdMetrics` – validates cache hit accounting.
   - `TestCompactStatusGuards` – checks overlap detection.
+- `lsm/cache_test.go`
+  - `TestCacheHotColdMetrics` – validates cache hit accounting.
 - `lsm/lsm_test.go`
   - `TestCompact` / `TestHitStorage` – end‑to‑end verification that data remains queryable across memtable flushes and compactions.
 

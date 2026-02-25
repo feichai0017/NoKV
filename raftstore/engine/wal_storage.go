@@ -635,7 +635,7 @@ func decodeRaftEntries(data []byte) (uint64, []myraft.Entry, error) {
 	}
 	count := int(count64)
 	entries := make([]myraft.Entry, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		size, err := readUvarint(data, &idx)
 		if err != nil {
 			return 0, nil, err

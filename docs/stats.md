@@ -14,19 +14,26 @@ The implementation lives in [`stats.go`](../stats.go), and collection runs conti
 
 ```mermaid
 flowchart TD
-    subgraph Collectors
-        LSM[lsm.* metrics]
-        WAL[wal metrics]
-        VLog[value log metrics]
-        TXN[oracle txn metrics]
-        HOT[hotring]
-        REGION[region metrics]
-        TRANSPORT[grpc transport metrics]
-        REDIS[redis gateway metrics]
+    subgraph COLLECTORS["Collectors"]
+        LSM["lsm.* metrics"]
+        WAL["wal metrics"]
+        VLOG["value log metrics"]
+        TXN["oracle txn metrics"]
+        HOT["hotring"]
+        REGION["region metrics"]
+        TRANSPORT["grpc transport metrics"]
+        REDIS["redis gateway metrics"]
     end
-    Collectors --> SNAP[Stats.Snapshot()]
-    SNAP --> EXP[Stats.collect -> expvar]
-    SNAP --> CLI[nokv stats]
+    LSM --> SNAP["Stats.Snapshot()"]
+    WAL --> SNAP
+    VLOG --> SNAP
+    TXN --> SNAP
+    HOT --> SNAP
+    REGION --> SNAP
+    TRANSPORT --> SNAP
+    REDIS --> SNAP
+    SNAP --> EXP["Stats.collect -> expvar"]
+    SNAP --> CLI["nokv stats"]
 ```
 
 Two-layer design:

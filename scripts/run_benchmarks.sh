@@ -19,11 +19,13 @@ die() {
   exit 1
 }
 
-default_workloads="A,B,C,D,E,F"
-default_engines="nokv,badger"
+default_workloads="A,B,C,D,E,F,G"
+default_engines="nokv,badger,pebble"
 default_records=1000000
 default_ops=1000000
 default_conc=16
+default_batch_insert="false"
+default_batch_size=1000000
 
 ycsb_engines="${YCSB_ENGINES:-$default_engines}"
 ycsb_workloads="${YCSB_WORKLOADS:-$default_workloads}"
@@ -36,10 +38,13 @@ ycsb_scan_len="${YCSB_SCAN_LEN:-100}"
 ycsb_seed="${YCSB_SEED:-42}"
 ycsb_sync="${YCSB_SYNC_WRITES:-false}"
 ycsb_badger_comp="${YCSB_BADGER_COMPRESSION:-none}"
+ycsb_pebble_comp="${YCSB_PEBBLE_COMPRESSION:-none}"
 ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
 benchdir="${YCSB_BENCHDIR:-benchmark_data}"
 ycsb_warm_ops="${YCSB_WARM_OPS:-100000}"
 ycsb_timeout="${YCSB_GO_TEST_TIMEOUT:-}"
+ycsb_batch_insert="${YCSB_BATCH_INSERT:-$default_batch_insert}"
+ycsb_batch_size="${YCSB_BATCH_SIZE:-$default_batch_size}"
 
 export NOKV_RUN_BENCHMARKS=1
 
@@ -99,6 +104,7 @@ args=(
   -badger_block_cache_mb "${ycsb_block_cache_mb}"
   -badger_index_cache_mb "${ycsb_block_cache_mb}"
   -badger_compression "${ycsb_badger_comp}"
+  -ycsb_pebble_compression "${ycsb_pebble_comp}"
   -ycsb_workloads "${ycsb_workloads}"
   -ycsb_engines "${ycsb_engines}"
   -ycsb_records "${ycsb_records}"
@@ -109,6 +115,8 @@ args=(
   -ycsb_rocks_compression "${ycsb_rocks_comp}"
   -ycsb_block_cache_mb "${ycsb_block_cache_mb}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
+  -ycsb_batch_insert="${ycsb_batch_insert}"
+  -ycsb_batch_size="${ycsb_batch_size}"
 )
 
 
@@ -121,7 +129,7 @@ GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}"
 GOMODCACHE="${GOMODCACHE:-$REPO_ROOT/.gomodcache}"
 export GOCACHE GOMODCACHE
 
-cmd=(go test)
+cmd=(go -C benchmark test)
 if [[ -n "${build_tags}" ]]; then
   cmd+=(${build_tags})
 fi
@@ -129,7 +137,7 @@ cmd+=(-v)
 if [[ -n "${ycsb_timeout}" ]]; then
   cmd+=(-timeout "${ycsb_timeout}")
 fi
-cmd+=(./benchmark -run TestBenchmarkYCSB -count=1 -args)
+cmd+=(. -run TestBenchmarkYCSB -count=1 -args)
 cmd+=("${args[@]}")
 
 printf 'Running YCSB benchmark command: %s\n' "${cmd[*]}"

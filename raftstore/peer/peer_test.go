@@ -218,7 +218,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 	payload := mustEncodePutCommand(t, []byte("raft-key"), []byte("raft-value"), 10)
 
 	require.NoError(t, net.Propose(leader, payload))
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		net.Tick()
 	}
 	net.Flush()
@@ -288,7 +288,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 		}},
 	}
 	require.NoError(t, peers[0].ProposeCommand(prewrite))
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		net.Tick()
 	}
 	net.Flush()
@@ -350,21 +350,21 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 	require.NoError(t, net.Campaign(1))
 	net.Flush()
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		payload := mustEncodePutCommand(
 			t,
-			[]byte(fmt.Sprintf("compact-key-%d", i)),
-			[]byte(fmt.Sprintf("val-%d", i)),
+			fmt.Appendf(nil, "compact-key-%d", i),
+			fmt.Appendf(nil, "val-%d", i),
 			uint64(20+i*2),
 		)
 		require.NoError(t, net.Propose(1, payload))
-		for tick := 0; tick < 3; tick++ {
+		for range 3 {
 			net.Tick()
 		}
 		net.Flush()
 	}
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		net.Tick()
 		net.Flush()
 	}
@@ -424,7 +424,7 @@ func TestPeerTransferLeader(t *testing.T) {
 	require.NoError(t, net.peers[leader].TransferLeader(target))
 
 	require.Eventually(t, func() bool {
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			net.Tick()
 		}
 		net.Flush()
@@ -486,7 +486,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	leader, ok := net.Leader()
 	require.True(t, ok)
 	require.NoError(t, net.Propose(leader, payload))
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		net.Tick()
 	}
 	net.Flush()
@@ -626,7 +626,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 
 	require.NoError(t, net.Propose(leader, payload))
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		net.Tick()
 		net.Flush()
 	}
@@ -640,7 +640,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 
 	net.Unblock(followerID)
 
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		net.Tick()
 		net.Flush()
 	}
@@ -695,7 +695,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	payload := mustEncodePutCommand(t, []byte("ready-fail-key"), []byte("ready-fail-value"), 160)
 
 	require.NoError(t, net.Propose(leader, payload))
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		net.Tick()
 		net.Flush()
 	}
@@ -713,7 +713,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	require.Equal(t, int64(1), snapBeforeCrash.Raft.LagWarnThreshold)
 	payloadLag := mustEncodePutCommand(t, []byte("ready-fail-key-lag"), []byte("ready-fail-value-lag"), 162)
 	require.NoError(t, net.Propose(leader, payloadLag))
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		net.Tick()
 		net.Flush()
 	}
@@ -812,7 +812,7 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 	payload := mustEncodePutCommand(t, []byte("wait-applied"), []byte("value"), 180)
 	require.NoError(t, net.Propose(leader, payload))
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		net.Tick()
 	}
 	net.Flush()
