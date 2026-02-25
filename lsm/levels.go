@@ -815,6 +815,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	for _, t := range toDel {
 		toDelMap[t.fid] = struct{}{}
 	}
+	var removed []*table
 	var newTables []*table
 	for _, t := range lh.tables {
 		_, found := toDelMap[t.fid]
@@ -822,6 +823,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 			newTables = append(newTables, t)
 			continue
 		}
+		removed = append(removed, t)
 		lh.subtractSize(t)
 	}
 
@@ -838,7 +840,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 	})
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
-	return decrRefs(toDel)
+	return decrRefs(removed)
 }
 
 // deleteTables remove tables idx0, ..., idx1-1.
@@ -851,6 +853,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 	}
 
 	// Make a copy as iterators might be keeping a slice of tables.
+	var removed []*table
 	var newTables []*table
 	for _, t := range lh.tables {
 		_, found := toDelMap[t.fid]
@@ -858,6 +861,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 			newTables = append(newTables, t)
 			continue
 		}
+		removed = append(removed, t)
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
@@ -866,7 +870,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
-	return decrRefs(toDel)
+	return decrRefs(removed)
 }
 
 func (lh *levelHandler) deleteIngestTables(toDel []*table) error {
@@ -876,12 +880,13 @@ func (lh *levelHandler) deleteIngestTables(toDel []*table) error {
 	for _, t := range toDel {
 		toDelMap[t.fid] = struct{}{}
 	}
+	removed := lh.collectIngestTablesLocked(toDelMap)
 
 	lh.ingest.remove(toDelMap)
 
 	lh.Unlock()
 
-	return decrRefs(toDel)
+	return decrRefs(removed)
 }
 
 func (lh *levelHandler) replaceIngestTables(toDel, toAdd []*table) error {
@@ -894,6 +899,7 @@ func (lh *levelHandler) replaceIngestTables(toDel, toAdd []*table) error {
 		}
 		toDelMap[t.fid] = struct{}{}
 	}
+	removed := lh.collectIngestTablesLocked(toDelMap)
 	lh.ingest.remove(toDelMap)
 	if len(toAdd) > 0 {
 		lh.ingest.addBatch(toAdd)
@@ -901,7 +907,25 @@ func (lh *levelHandler) replaceIngestTables(toDel, toAdd []*table) error {
 
 	lh.Unlock()
 
-	return decrRefs(toDel)
+	return decrRefs(removed)
+}
+
+func (lh *levelHandler) collectIngestTablesLocked(fidSet map[uint64]struct{}) []*table {
+	if len(fidSet) == 0 {
+		return nil
+	}
+	var out []*table
+	for _, sh := range lh.ingest.shards {
+		for _, t := range sh.tables {
+			if t == nil {
+				continue
+			}
+			if _, ok := fidSet[t.fid]; ok {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }
 
 func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, tables int) {
