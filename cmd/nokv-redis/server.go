@@ -76,11 +76,9 @@ func (s *redisServer) Serve(ln net.Listener) error {
 		}
 		tempDelay = 0
 		s.metrics.ConnOpened()
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			s.handleConn(conn)
-		}()
+		})
 	}
 }
 

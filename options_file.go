@@ -89,7 +89,7 @@ func normalizeOptionKey(s string) string {
 	return s
 }
 
-var durationType = reflect.TypeOf(time.Duration(0))
+var durationType = reflect.TypeFor[time.Duration]()
 
 func convertOptionValue(val any, typ reflect.Type) (reflect.Value, error) {
 	if typ == durationType {

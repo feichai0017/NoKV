@@ -587,9 +587,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 			workers = min(options.PrefetchBlocks, 4)
 		}
 		it.prefetchPool = utils.NewPool(workers, "IteratorPrefetch")
-		it.wg.Add(1)
-		go func() {
-			defer it.wg.Done()
+		it.wg.Go(func() {
 			for {
 				select {
 				case <-it.closeCh:
@@ -613,7 +611,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 					}
 				}
 			}
-		}()
+		})
 	}
 	return it
 }

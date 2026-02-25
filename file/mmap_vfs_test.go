@@ -31,6 +31,6 @@ func TestSyncDirInjectsOpenFailure(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpen, dir, injected))
 	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
-	err := SyncDir(fs, dir)
+	err := vfs.SyncDir(fs, dir)
 	require.ErrorIs(t, err, injected)
 }

@@ -178,10 +178,7 @@ func Open(opt *Options) *DB {
 	if opt.SSTableMaxSz > 0 && baseTableSize > opt.SSTableMaxSz {
 		baseTableSize = opt.SSTableMaxSz
 	}
-	baseLevelSize := baseTableSize * 4
-	if baseLevelSize < 32<<20 {
-		baseLevelSize = 32 << 20
-	}
+	baseLevelSize := max(baseTableSize*4, 32<<20)
 	// Initialize the LSM tree.
 	db.lsm = lsm.NewLSM(&lsm.Options{
 		FS:                       db.fs,
@@ -312,10 +309,7 @@ func (db *DB) runRecoveryChecks() error {
 		return err
 	}
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
-	bucketCount := db.opt.ValueLogBucketCount
-	if bucketCount <= 1 {
-		bucketCount = 1
-	}
+	bucketCount := max(db.opt.ValueLogBucketCount, 1)
 	for bucket := 0; bucket < bucketCount; bucket++ {
 		cfg := vlogpkg.Config{
 			Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),

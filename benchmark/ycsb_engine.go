@@ -42,6 +42,11 @@ type ycsbEngineOptions struct {
 
 	// RocksDB installation prefix (contains include/ and lib/).
 	RocksDBCompression string
+	PebbleCompression  string
+}
+
+type BatchWriter interface {
+	BatchInsert(key, value [][]byte) error
 }
 
 // engineDir derives an engine-specific work directory rooted at BaseDir.

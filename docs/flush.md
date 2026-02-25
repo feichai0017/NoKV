@@ -103,7 +103,7 @@ Flush completion sends discard stats via `db.lsm.SetDiscardStatsCh(&(db.vlog.lfD
 ## 8. Testing Matrix
 
 - `lsm/flush/manager_test.go` (implicit via `lsm/lsm_test.go`) validates stage transitions and metrics.
-- `db_recovery_test.go` covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.
+- `db_test.go` covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.
 - Future additions: inject write failures during `StageBuild` to test retry logic, analogous to RocksDB's simulated IO errors.
 
 See the [recovery plan](recovery.md) and [testing matrix](testing.md) for more context.

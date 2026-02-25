@@ -220,7 +220,7 @@ func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 
 	transport.SetPeer(2, "127.0.0.1:65535")
 	msg := myraft.Message{To: 2}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		transport.Send(msg)
 	}
 
@@ -419,7 +419,7 @@ func (c *grpcTestCluster) propose(id uint64, data []byte) error {
 }
 
 func (c *grpcTestCluster) tickMany(n int) {
-	for i := 0; i < n; i++ {
+	for range n {
 		for _, node := range c.nodes {
 			_ = node.peer.Tick()
 		}

@@ -17,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/regionutil"
 )
 
 var notifyContext = signal.NotifyContext
@@ -159,7 +158,13 @@ func startStorePeers(server *raftstore.Server, db *NoKV.DB, storeID uint64, elec
 	transport := server.Transport()
 	var started []manifest.RegionMeta
 	for _, meta := range snapshot {
-		peerID := regionutil.PeerIDForStore(meta, storeID)
+		var peerID uint64
+		for _, p := range meta.Peers {
+			if p.StoreID == storeID {
+				peerID = p.PeerID
+				break
+			}
+		}
 		if peerID == 0 {
 			continue
 		}

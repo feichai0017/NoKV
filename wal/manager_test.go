@@ -279,7 +279,7 @@ func TestManagerListSegmentsSorted(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		payload := []byte("payload-" + string(rune('a'+i)))
 		if _, err := m.Append(payload); err != nil {
 			t.Fatalf("append: %v", err)

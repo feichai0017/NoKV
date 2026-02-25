@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"fmt"
+	"strings"
 )
 
 type windowLRU struct {
@@ -52,9 +53,9 @@ func (lru *windowLRU) get(v *list.Element) {
 }
 
 func (lru *windowLRU) String() string {
-	var s string
+	var s strings.Builder
 	for e := lru.list.Front(); e != nil; e = e.Next() {
-		s += fmt.Sprintf("%v,", e.Value.(*storeItem).value)
+		s.WriteString(fmt.Sprintf("%v,", e.Value.(*storeItem).value))
 	}
-	return s
+	return s.String()
 }
