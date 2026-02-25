@@ -146,14 +146,21 @@ func (a *ART) IncrRef() {
 	a.ref.Add(1)
 }
 
-// DecrRef decrements the reference counter.
+// DecrRef decrements the reference counter and releases the tree when it
+// reaches zero. It panics on refcount underflow (decrement past zero) which
+// indicates a bug in the caller's lifetime management.
 func (a *ART) DecrRef() {
 	if a == nil {
 		return
 	}
-	if a.ref.Add(-1) > 0 {
+	n := a.ref.Add(-1)
+	if n > 0 {
 		return
 	}
+	if n < 0 {
+		panic("ART.DecrRef: refcount underflow (double release)")
+	}
+	// n == 0: last reference dropped — release the tree.
 	if a.tree != nil {
 		a.tree.release()
 	}
