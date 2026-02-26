@@ -201,7 +201,7 @@ func TestSkipListReverseIteration(t *testing.T) {
 
 	// Test reverse iteration with IsAsc: false
 	iter := list.NewIterator(&Options{IsAsc: false})
-	defer iter.Close()
+	defer func() { require.NoError(t, iter.Close()) }()
 
 	// Rewind should position at the largest key (e)
 	iter.Rewind()
@@ -242,7 +242,7 @@ func TestSkipListReverseSeek(t *testing.T) {
 
 	// Test Seek with IsAsc: false
 	iter := list.NewIterator(&Options{IsAsc: false})
-	defer iter.Close()
+	defer func() { require.NoError(t, iter.Close()) }()
 
 	// Seek("f") should find "e" (largest key <= "f")
 	iter.Seek(kv.KeyWithTs([]byte("f"), 1))
@@ -281,7 +281,7 @@ func TestSkipListForwardIteration(t *testing.T) {
 
 	// Test forward iteration with IsAsc: true (default)
 	iter := list.NewIterator(&Options{IsAsc: true})
-	defer iter.Close()
+	defer func() { require.NoError(t, iter.Close()) }()
 
 	// Rewind should position at the smallest key (a)
 	iter.Rewind()

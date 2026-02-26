@@ -19,7 +19,6 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
 	lsm := NewLSM(opt, wlog)
-	lsm.SetDiscardStatsCh(&c)
 	return lsm
 }
 
@@ -27,7 +26,7 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 func TestTableReverseIteration(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
 	opt := &Options{
 		WorkDir:            dir,
@@ -115,7 +114,7 @@ func TestTableReverseIteration(t *testing.T) {
 func TestTableReverseIterationMultiBlock(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-multiblock")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
 	opt := &Options{
 		WorkDir:            dir,
