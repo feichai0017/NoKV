@@ -242,6 +242,26 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	})
 }
 
+func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.MemTableEngine = MemTableEngineART
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	for _, k := range []string{"a", "b", "c", "d"} {
+		require.NoError(t, db.Set([]byte(k), []byte("v_"+k)))
+	}
+
+	it := db.NewIterator(&utils.Options{IsAsc: false})
+	defer func() { require.NoError(t, it.Close()) }()
+
+	var keys []string
+	for it.Rewind(); it.Valid(); it.Next() {
+		keys = append(keys, string(it.Item().Entry().Key))
+	}
+	require.Equal(t, []string{"d", "c", "b", "a"}, keys)
+}
+
 func TestCFHotKeyEncoding(t *testing.T) {
 	key := []byte("hot-key")
 	require.Equal(t, string(key), cfHotKey(kv.CFDefault, key))

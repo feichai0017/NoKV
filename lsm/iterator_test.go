@@ -227,7 +227,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 
 	// Test forward iteration
 	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
-	defer forwardIter.Close()
+	defer func() { require.NoError(t, forwardIter.Close()) }()
 
 	var forwardKeys []byte
 	forwardIter.Rewind()
@@ -240,7 +240,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 
 	// Test reverse iteration
 	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
-	defer reverseIter.Close()
+	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	var reverseKeys []byte
 	reverseIter.Rewind()
@@ -275,7 +275,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 
 	// Test forward seek
 	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
-	defer forwardIter.Close()
+	defer func() { require.NoError(t, forwardIter.Close()) }()
 
 	forwardIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
 	require.True(t, forwardIter.Valid())
@@ -284,7 +284,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 
 	// Test reverse seek
 	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
-	defer reverseIter.Close()
+	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	reverseIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
 	require.True(t, reverseIter.Valid())
@@ -324,7 +324,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 
 	// Test reverse iteration across multiple blocks
 	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
-	defer reverseIter.Close()
+	defer func() { require.NoError(t, reverseIter.Close()) }()
 
 	reverseIter.Rewind()
 	require.True(t, reverseIter.Valid())

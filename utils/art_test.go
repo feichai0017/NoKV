@@ -76,6 +76,54 @@ func TestARTIteratorOrder(t *testing.T) {
 	}
 }
 
+func TestARTIteratorReverseIterationAndSeek(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	defer art.DecrRef()
+
+	keys := []string{"a", "c", "e", "g", "i"}
+	for _, k := range keys {
+		entry := kv.NewEntryWithCF(kv.CFDefault, []byte(k), []byte("v_"+k))
+		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		art.Add(entry)
+		entry.DecrRef()
+	}
+
+	userKey := func(entry *kv.Entry) string {
+		_, k, _ := kv.SplitInternalKey(entry.Key)
+		return string(k)
+	}
+
+	it := art.NewIterator(&Options{IsAsc: false})
+	require.NotNil(t, it)
+	defer func() { _ = it.Close() }()
+
+	it.Rewind()
+	require.True(t, it.Valid())
+	require.Equal(t, "i", userKey(it.Item().Entry()))
+
+	it.Next()
+	require.True(t, it.Valid())
+	require.Equal(t, "g", userKey(it.Item().Entry()))
+
+	it.Next()
+	require.True(t, it.Valid())
+	require.Equal(t, "e", userKey(it.Item().Entry()))
+
+	// Seek("f") should land on "e" for descending iteration.
+	it.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
+	require.True(t, it.Valid())
+	require.Equal(t, "e", userKey(it.Item().Entry()))
+
+	// Seek("z") should land on the largest key <= "z": "i".
+	it.Seek(kv.InternalKey(kv.CFDefault, []byte("z"), 1))
+	require.True(t, it.Valid())
+	require.Equal(t, "i", userKey(it.Item().Entry()))
+
+	// Seek("0") should invalidate (no key <= "0").
+	it.Seek(kv.InternalKey(kv.CFDefault, []byte("0"), 1))
+	require.False(t, it.Valid())
+}
+
 func TestARTConcurrentWriteIterate(t *testing.T) {
 	art := NewART(DefaultArenaSize)
 	defer art.DecrRef()

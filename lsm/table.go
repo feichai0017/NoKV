@@ -536,7 +536,7 @@ func (it *tableIterator) fetchBlock(idx int) (*block, error) {
 }
 
 func (it *tableIterator) prefetchNext(idx int) {
-	if it.opt == nil || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
+	if it.opt == nil || !it.opt.IsAsc || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
 		return
 	}
 	if it.index == nil {
@@ -770,7 +770,6 @@ func (it *tableIterator) seekToLast() {
 		it.err = err
 		return
 	}
-	it.prefetchNext(it.blockPos)
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
 	it.bi.isAsc = it.opt.IsAsc
