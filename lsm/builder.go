@@ -423,7 +423,8 @@ type blockIterator struct {
 	valStruct kv.ValueStruct
 	item      Item
 
-	it utils.Item
+	it    utils.Item
+	isAsc bool
 }
 
 var blockItrPool = sync.Pool{
@@ -469,15 +470,34 @@ func (itr *blockIterator) seek(key []byte) {
 	itr.err = nil
 	startIndex := 0 // This tells from which index we should start binary search.
 
-	foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-		// If idx is less than start index then just return false.
-		if idx < startIndex {
-			return false
+	if itr.isAsc {
+		// Forward: find first entry >= key using binary search
+		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
+			// If idx is less than start index then just return false.
+			if idx < startIndex {
+				return false
+			}
+			itr.setIdx(idx)
+			return utils.CompareKeys(itr.key, key) >= 0
+		})
+		itr.setIdx(foundEntryIdx)
+	} else {
+		// Reverse: find last entry <= key using binary search
+		// Strategy: find first entry > key, then use idx-1
+		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
+			if idx < startIndex {
+				return false
+			}
+			itr.setIdx(idx)
+			return utils.CompareKeys(itr.key, key) > 0
+		})
+		// foundEntryIdx is the first entry > key, so we want idx-1
+		if foundEntryIdx == 0 {
+			itr.setIdx(-1) // No entry <= key
+		} else {
+			itr.setIdx(foundEntryIdx - 1)
 		}
-		itr.setIdx(idx)
-		return utils.CompareKeys(itr.key, key) >= 0
-	})
-	itr.setIdx(foundEntryIdx)
+	}
 }
 
 func (itr *blockIterator) setIdx(i int) {
@@ -545,7 +565,11 @@ func (itr *blockIterator) Error() error {
 
 // Next advances to the next entry inside the current block.
 func (itr *blockIterator) Next() {
-	itr.setIdx(itr.idx + 1)
+	if itr.isAsc {
+		itr.setIdx(itr.idx + 1)
+	} else {
+		itr.setIdx(itr.idx - 1)
+	}
 }
 
 // Valid reports whether the iterator currently points at a decoded entry.
@@ -553,9 +577,13 @@ func (itr *blockIterator) Valid() bool {
 	return itr.err == nil
 }
 
-// Rewind resets the iterator to the first entry in the block.
+// Rewind resets the iterator to the first/last entry in the block based on direction.
 func (itr *blockIterator) Rewind() bool {
-	itr.setIdx(0)
+	if itr.isAsc {
+		itr.setIdx(0)
+	} else {
+		itr.setIdx(len(itr.entryOffsets) - 1)
+	}
 	return true
 }
 
@@ -593,4 +621,5 @@ func (itr *blockIterator) reset() {
 	itr.valStruct = kv.ValueStruct{}
 	itr.item = Item{}
 	itr.it = nil
+	itr.isAsc = true
 }
