@@ -122,13 +122,18 @@ func (a *ART) Search(key []byte) kv.ValueStruct {
 	return a.tree.Get(key)
 }
 
-// NewIterator returns a tree iterator. Options are ignored for now.
-func (a *ART) NewIterator(_ *Options) Iterator {
+// NewIterator returns a tree iterator with directional semantics from options.
+// Nil options default to ascending iteration.
+func (a *ART) NewIterator(opt *Options) Iterator {
 	if a == nil || a.tree == nil {
 		return nil
 	}
+	isAsc := true
+	if opt != nil {
+		isAsc = opt.IsAsc
+	}
 	a.IncrRef()
-	return &artIterator{tree: a.tree, owner: a}
+	return &artIterator{tree: a.tree, owner: a, isAsc: isAsc}
 }
 
 // MemSize returns an approximate memory footprint.
@@ -328,6 +333,17 @@ func (t *artTree) lowerBound(key []byte) *artNode {
 	return lowerBoundNode(t.arena, root, key, 0)
 }
 
+func (t *artTree) upperBound(key []byte) *artNode {
+	if t == nil || t.arena == nil {
+		return nil
+	}
+	root := t.root.Load()
+	if root == nil {
+		return nil
+	}
+	return upperBoundNode(t.arena, root, key, 0)
+}
+
 func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode {
 	if node == nil {
 		return nil
@@ -365,9 +381,53 @@ func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode
 	return nil
 }
 
+func upperBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode {
+	if node == nil {
+		return nil
+	}
+	if node.isLeaf() {
+		if CompareKeys(node.leafKey(arena), key) <= 0 {
+			return node
+		}
+		return nil
+	}
+	prefix, match, cmp := matchPrefix(arena, node, key, depth)
+	prefixLen := len(prefix)
+	if cmp < 0 {
+		return nil
+	}
+	if cmp > 0 {
+		child := node.maxChild(arena)
+		return maxLeafNode(arena, child)
+	}
+	depth += match
+	if match < prefixLen {
+		return nil
+	}
+	b := keyByte(key, depth)
+	eq, lt := node.findChildLE(arena, b)
+	if eq != nil {
+		res := upperBoundNode(arena, eq, key, depth+1)
+		if res != nil {
+			return res
+		}
+	}
+	if lt != nil {
+		return maxLeafNode(arena, lt)
+	}
+	return nil
+}
+
 func minLeafNode(arena *Arena, node *artNode) *artNode {
 	for node != nil && !node.isLeaf() {
 		node = node.minChild(arena)
+	}
+	return node
+}
+
+func maxLeafNode(arena *Arena, node *artNode) *artNode {
+	for node != nil && !node.isLeaf() {
+		node = node.maxChild(arena)
 	}
 	return node
 }
@@ -951,6 +1011,67 @@ func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 	return nil, nil
 }
 
+func (n *artNode) findChildLE(arena *Arena, key byte) (*artNode, *artNode) {
+	payload := n.payloadPtr(arena)
+	if payload == nil {
+		return nil, nil
+	}
+	// Return the exact child (if any) and the next smaller child for upperBound.
+	switch n.kind {
+	case artNode4Kind:
+		for i := payload.count - 1; i >= 0; i-- {
+			k := payload.keys[i]
+			if k == key {
+				var lt *artNode
+				if i > 0 {
+					lt = arenaNodeFromOffset(arena, payload.children[i-1])
+				}
+				return arenaNodeFromOffset(arena, payload.children[i]), lt
+			}
+			if k < key {
+				return nil, arenaNodeFromOffset(arena, payload.children[i])
+			}
+		}
+	case artNode16Kind:
+		if payload.count == 0 {
+			return nil, nil
+		}
+		for i := payload.count - 1; i >= 0; i-- {
+			k := payload.keys[i]
+			if k == key {
+				var lt *artNode
+				if i > 0 {
+					lt = arenaNodeFromOffset(arena, payload.children[i-1])
+				}
+				return arenaNodeFromOffset(arena, payload.children[i]), lt
+			}
+			if k < key {
+				return nil, arenaNodeFromOffset(arena, payload.children[i])
+			}
+		}
+	case artNode48Kind:
+		if int(key) < len(payload.idx) {
+			pos := payload.idx[key]
+			if pos > 0 {
+				idx := int(pos - 1)
+				if idx < len(payload.children) {
+					eq := arenaNodeFromOffset(arena, payload.children[idx])
+					lt := findLesserChild(arena, payload, int(key)-1, artNode48Kind)
+					return eq, lt
+				}
+			}
+		}
+		return nil, findLesserChild(arena, payload, int(key)-1, artNode48Kind)
+	case artNode256Kind:
+		if int(key) < len(payload.children) {
+			eq := arenaNodeFromOffset(arena, payload.children[key])
+			lt := findLesserChild(arena, payload, int(key)-1, artNode256Kind)
+			return eq, lt
+		}
+	}
+	return nil, nil
+}
+
 func findGreaterChild(arena *Arena, payload *nodePayload, start int, kind uint8) *artNode {
 	if start < 0 {
 		start = 0
@@ -983,6 +1104,35 @@ func findGreaterChild(arena *Arena, payload *nodePayload, start int, kind uint8)
 	return nil
 }
 
+func findLesserChild(arena *Arena, payload *nodePayload, start int, kind uint8) *artNode {
+	switch kind {
+	case artNode48Kind:
+		if start >= len(payload.idx) {
+			start = len(payload.idx) - 1
+		}
+		for i := start; i >= 0; i-- {
+			pos := payload.idx[i]
+			if pos == 0 {
+				continue
+			}
+			idx := int(pos - 1)
+			if idx < len(payload.children) {
+				return arenaNodeFromOffset(arena, payload.children[idx])
+			}
+		}
+	case artNode256Kind:
+		if start >= len(payload.children) {
+			start = len(payload.children) - 1
+		}
+		for i := start; i >= 0; i-- {
+			if payload.children[i] != 0 {
+				return arenaNodeFromOffset(arena, payload.children[i])
+			}
+		}
+	}
+	return nil
+}
+
 func (n *artNode) minChild(arena *Arena) *artNode {
 	payload := n.payloadPtr(arena)
 	if payload == nil {
@@ -1002,9 +1152,29 @@ func (n *artNode) minChild(arena *Arena) *artNode {
 	return nil
 }
 
+func (n *artNode) maxChild(arena *Arena) *artNode {
+	payload := n.payloadPtr(arena)
+	if payload == nil {
+		return nil
+	}
+	switch n.kind {
+	case artNode4Kind, artNode16Kind:
+		if payload.count == 0 {
+			return nil
+		}
+		return arenaNodeFromOffset(arena, payload.children[payload.count-1])
+	case artNode48Kind:
+		return findLesserChild(arena, payload, len(payload.idx)-1, artNode48Kind)
+	case artNode256Kind:
+		return findLesserChild(arena, payload, len(payload.children)-1, artNode256Kind)
+	}
+	return nil
+}
+
 type artIterator struct {
 	tree      *artTree
 	owner     *ART
+	isAsc     bool
 	curr      *artNode
 	stack     []iterFrame
 	entry     kv.Entry
@@ -1024,8 +1194,13 @@ func (it *artIterator) Next() {
 		it.curr = nil
 		return
 	}
-	// Walk to the next leaf by climbing until we find the next child.
-	it.advance()
+	if it.isAsc {
+		// Walk to the next leaf by climbing until we find the next child.
+		it.advance()
+		return
+	}
+	// Walk to the previous leaf by climbing until we find the previous child.
+	it.retreat()
 }
 
 func (it *artIterator) Valid() bool {
@@ -1038,7 +1213,11 @@ func (it *artIterator) Rewind() {
 	}
 	it.stack = it.stack[:0]
 	root := it.tree.root.Load()
-	it.descendToMin(root)
+	if it.isAsc {
+		it.descendToMin(root)
+		return
+	}
+	it.descendToMax(root)
 }
 
 func (it *artIterator) Item() Item {
@@ -1076,7 +1255,12 @@ func (it *artIterator) Seek(key []byte) {
 		return
 	}
 	it.stack = it.stack[:0]
-	leaf := it.tree.lowerBound(key)
+	var leaf *artNode
+	if it.isAsc {
+		leaf = it.tree.lowerBound(key)
+	} else {
+		leaf = it.tree.upperBound(key)
+	}
 	if leaf == nil {
 		it.curr = nil
 		return
@@ -1101,6 +1285,23 @@ func (it *artIterator) descendToMin(node *artNode) {
 	it.curr = node
 }
 
+func (it *artIterator) descendToMax(node *artNode) {
+	if it == nil || it.tree == nil || it.tree.arena == nil {
+		it.curr = nil
+		return
+	}
+	for node != nil && !node.isLeaf() {
+		child, nextIdx := it.lastChild(node)
+		if child == nil {
+			it.curr = nil
+			return
+		}
+		it.stack = append(it.stack, iterFrame{node: node, idx: nextIdx})
+		node = child
+	}
+	it.curr = node
+}
+
 func (it *artIterator) advance() {
 	for len(it.stack) > 0 {
 		top := &it.stack[len(it.stack)-1]
@@ -1111,6 +1312,21 @@ func (it *artIterator) advance() {
 		}
 		top.idx = nextIdx
 		it.descendToMin(child)
+		return
+	}
+	it.curr = nil
+}
+
+func (it *artIterator) retreat() {
+	for len(it.stack) > 0 {
+		top := &it.stack[len(it.stack)-1]
+		child, nextIdx := it.prevChild(top.node, top.idx)
+		if child == nil {
+			it.stack = it.stack[:len(it.stack)-1]
+			continue
+		}
+		top.idx = nextIdx
+		it.descendToMax(child)
 		return
 	}
 	it.curr = nil
@@ -1165,6 +1381,84 @@ func (it *artIterator) nextChild(node *artNode, idx int) (*artNode, int) {
 	return nil, 0
 }
 
+func (it *artIterator) prevChild(node *artNode, idx int) (*artNode, int) {
+	if node == nil || it.tree == nil || it.tree.arena == nil {
+		return nil, 0
+	}
+	arena := it.tree.arena
+	payload := node.payloadPtr(arena)
+	if payload == nil {
+		return nil, 0
+	}
+	switch node.kind {
+	case artNode4Kind, artNode16Kind:
+		if payload.count == 0 {
+			return nil, 0
+		}
+		if idx >= payload.count {
+			idx = payload.count - 1
+		}
+		for i := idx; i >= 0; i-- {
+			child := arenaNodeFromOffset(arena, payload.children[i])
+			if child != nil {
+				return child, i - 1
+			}
+		}
+	case artNode48Kind:
+		if idx >= len(payload.idx) {
+			idx = len(payload.idx) - 1
+		}
+		for i := idx; i >= 0; i-- {
+			pos := payload.idx[i]
+			if pos == 0 {
+				continue
+			}
+			childIdx := int(pos - 1)
+			if childIdx >= len(payload.children) {
+				continue
+			}
+			child := arenaNodeFromOffset(arena, payload.children[childIdx])
+			if child != nil {
+				return child, i - 1
+			}
+		}
+	case artNode256Kind:
+		if idx >= len(payload.children) {
+			idx = len(payload.children) - 1
+		}
+		for i := idx; i >= 0; i-- {
+			if payload.children[i] == 0 {
+				continue
+			}
+			child := arenaNodeFromOffset(arena, payload.children[i])
+			if child != nil {
+				return child, i - 1
+			}
+		}
+	}
+	return nil, 0
+}
+
+func (it *artIterator) lastChild(node *artNode) (*artNode, int) {
+	if node == nil || it.tree == nil || it.tree.arena == nil {
+		return nil, 0
+	}
+	arena := it.tree.arena
+	payload := node.payloadPtr(arena)
+	if payload == nil {
+		return nil, 0
+	}
+	switch node.kind {
+	case artNode4Kind, artNode16Kind:
+		return it.prevChild(node, payload.count-1)
+	case artNode48Kind:
+		return it.prevChild(node, len(payload.idx)-1)
+	case artNode256Kind:
+		return it.prevChild(node, len(payload.children)-1)
+	}
+	return nil, 0
+}
+
 func (it *artIterator) childForKey(node *artNode, key byte) (*artNode, int) {
 	if node == nil || it.tree == nil || it.tree.arena == nil {
 		return nil, 0
@@ -1212,6 +1506,53 @@ func (it *artIterator) childForKey(node *artNode, key byte) (*artNode, int) {
 	return nil, 0
 }
 
+func (it *artIterator) childForKeyDesc(node *artNode, key byte) (*artNode, int) {
+	if node == nil || it.tree == nil || it.tree.arena == nil {
+		return nil, 0
+	}
+	arena := it.tree.arena
+	payload := node.payloadPtr(arena)
+	if payload == nil {
+		return nil, 0
+	}
+	switch node.kind {
+	case artNode4Kind, artNode16Kind:
+		for i := 0; i < payload.count; i++ {
+			if payload.keys[i] == key {
+				child := arenaNodeFromOffset(arena, payload.children[i])
+				if child == nil {
+					return nil, 0
+				}
+				return child, i - 1
+			}
+		}
+	case artNode48Kind:
+		pos := payload.idx[key]
+		if pos == 0 {
+			return nil, 0
+		}
+		childIdx := int(pos - 1)
+		if childIdx >= len(payload.children) {
+			return nil, 0
+		}
+		child := arenaNodeFromOffset(arena, payload.children[childIdx])
+		if child == nil {
+			return nil, 0
+		}
+		return child, int(key) - 1
+	case artNode256Kind:
+		if payload.children[key] == 0 {
+			return nil, 0
+		}
+		child := arenaNodeFromOffset(arena, payload.children[key])
+		if child == nil {
+			return nil, 0
+		}
+		return child, int(key) - 1
+	}
+	return nil, 0
+}
+
 func (it *artIterator) buildStackToLeaf(leaf *artNode) {
 	if leaf == nil || it.tree == nil || it.tree.arena == nil {
 		it.curr = nil
@@ -1232,7 +1573,13 @@ func (it *artIterator) buildStackToLeaf(leaf *artNode) {
 		}
 		depth += len(prefix)
 		childKey := keyByte(key, depth)
-		child, nextIdx := it.childForKey(node, childKey)
+		var child *artNode
+		var nextIdx int
+		if it.isAsc {
+			child, nextIdx = it.childForKey(node, childKey)
+		} else {
+			child, nextIdx = it.childForKeyDesc(node, childKey)
+		}
 		if child == nil {
 			it.curr = nil
 			it.stack = it.stack[:0]
