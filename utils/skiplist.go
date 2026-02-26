@@ -409,12 +409,17 @@ func (s *Skiplist) Search(key []byte) kv.ValueStruct {
 // NewIterator returns a skiplist iterator.  You have to Close() the iterator.
 func (s *Skiplist) NewSkipListIterator() Iterator {
 	s.IncrRef()
-	return &SkipListIterator{list: s}
+	return &SkipListIterator{list: s, isAsc: true}
 }
 
-// NewIterator returns a skiplist iterator. Options are ignored.
-func (s *Skiplist) NewIterator(_ *Options) Iterator {
-	return s.NewSkipListIterator()
+// NewIterator returns a skiplist iterator with options.
+func (s *Skiplist) NewIterator(opt *Options) Iterator {
+	s.IncrRef()
+	isAsc := true
+	if opt != nil {
+		isAsc = opt.IsAsc
+	}
+	return &SkipListIterator{list: s, isAsc: isAsc}
 }
 
 // MemSize returns the size of the Skiplist in terms of how much memory is used within its internal
@@ -480,11 +485,16 @@ type SkipListIterator struct {
 	list      *Skiplist
 	n         *node
 	e         kv.Entry
+	isAsc     bool
 	closeOnce sync.Once
 }
 
 func (s *SkipListIterator) Rewind() {
-	s.SeekToFirst()
+	if s.isAsc {
+		s.SeekToFirst()
+	} else {
+		s.SeekToLast()
+	}
 }
 
 func (s *SkipListIterator) Item() Item {
@@ -550,7 +560,11 @@ func (s *SkipListIterator) Next() {
 	if s == nil || s.list == nil || s.n == nil {
 		return
 	}
-	s.n = s.list.getNext(s.n, 0)
+	if s.isAsc {
+		s.n = s.list.getNext(s.n, 0)
+	} else {
+		s.n, _ = s.list.findNear(s.Key(), true, false) // find <. No equality allowed.
+	}
 }
 
 // Prev advances to the previous position.
@@ -561,13 +575,17 @@ func (s *SkipListIterator) Prev() {
 	s.n, _ = s.list.findNear(s.Key(), true, false) // find <. No equality allowed.
 }
 
-// Seek advances to the first entry with a key >= target.
+// Seek advances to the first entry with a key >= target (if ascending) or <= target (if descending).
 func (s *SkipListIterator) Seek(target []byte) {
 	if s == nil || s.list == nil {
 		s.n = nil
 		return
 	}
-	s.n, _ = s.list.findNear(target, false, true) // find >=.
+	if s.isAsc {
+		s.n, _ = s.list.findNear(target, false, true) // find >=.
+	} else {
+		s.n, _ = s.list.findNear(target, true, true) // find <=.
+	}
 }
 
 // SeekForPrev finds an entry with key <= target.
