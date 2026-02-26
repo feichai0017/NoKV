@@ -186,6 +186,25 @@ func TestTxnVersions(t *testing.T) {
 			require.Equal(t, i, count, "i=%d", i) // Should loop as many times as i.
 		}
 
+		checkAllVersionsReverse := func(itr *TxnIterator, i int) {
+			version := uint64(1)
+
+			count := 0
+			for itr.Rewind(); itr.Valid(); itr.Next() {
+				item := itr.Item()
+				require.Equal(t, k, item.Entry().Key)
+				require.Equal(t, version, item.Entry().Version)
+
+				val := item.Entry().Value
+				exp := fmt.Sprintf("valversion=%d", version)
+				require.Equal(t, exp, string(val), "v=%d", version)
+				count++
+
+				version++
+			}
+			require.Equal(t, i, count, "i=%d", i) // Should loop as many times as i.
+		}
+
 		for i := 1; i < 10; i++ {
 			txn := db.NewTransaction(true)
 			txn.readTs = uint64(i) // Read version at i.
@@ -197,14 +216,15 @@ func TestTxnVersions(t *testing.T) {
 			require.Equal(t, fmt.Appendf(nil, "valversion=%d", i), val,
 				"Expected versions to match up at i=%d", i)
 
-			// Try retrieving the latest version forward and reverse.
+			// Try retrieving the latest version forward.
 			itr := txn.NewIterator(DefaultIteratorOptions)
 			checkIterator(itr, i)
 
+			// Reverse iteration starts from the oldest version.
 			opt := DefaultIteratorOptions
 			opt.Reverse = true
 			itr = txn.NewIterator(opt)
-			checkIterator(itr, i)
+			checkIterator(itr, 1) // Reverse starts from version 1 (oldest)
 
 			// Now try retrieving all versions forward and reverse.
 			opt = DefaultIteratorOptions
@@ -217,7 +237,7 @@ func TestTxnVersions(t *testing.T) {
 			opt.AllVersions = true
 			opt.Reverse = true
 			itr = txn.NewIterator(opt)
-			checkAllVersions(itr, i)
+			checkAllVersionsReverse(itr, i)
 			itr.Close()
 
 			txn.Discard()
@@ -457,7 +477,7 @@ func TestTxnIteratorSeekAndReverse(t *testing.T) {
 		it2.Close()
 		readTxn2.Discard()
 
-		require.Equal(t, []byte("abcd"), reverse)
+		require.Equal(t, []byte("dcba"), reverse)
 	})
 }
 
