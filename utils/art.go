@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -146,14 +147,21 @@ func (a *ART) IncrRef() {
 	a.ref.Add(1)
 }
 
-// DecrRef decrements the reference counter.
+// DecrRef decrements the reference counter and releases the tree when it
+// reaches zero. It panics on refcount underflow (decrement past zero) which
+// indicates a bug in the caller's lifetime management.
 func (a *ART) DecrRef() {
 	if a == nil {
 		return
 	}
-	if a.ref.Add(-1) > 0 {
+	n := a.ref.Add(-1)
+	if n > 0 {
 		return
 	}
+	if n < 0 {
+		panic("ART.DecrRef: refcount underflow (double release)")
+	}
+	// n == 0: last reference dropped — release the tree.
 	if a.tree != nil {
 		a.tree.release()
 	}
@@ -995,11 +1003,12 @@ func (n *artNode) minChild(arena *Arena) *artNode {
 }
 
 type artIterator struct {
-	tree  *artTree
-	owner *ART
-	curr  *artNode
-	stack []iterFrame
-	entry kv.Entry
+	tree      *artTree
+	owner     *ART
+	curr      *artNode
+	stack     []iterFrame
+	entry     kv.Entry
+	closeOnce sync.Once
 }
 
 type iterFrame struct {
@@ -1047,10 +1056,18 @@ func (it *artIterator) Item() Item {
 }
 
 func (it *artIterator) Close() error {
-	if it == nil || it.owner == nil {
+	if it == nil {
 		return nil
 	}
-	it.owner.DecrRef()
+	it.closeOnce.Do(func() {
+		if it.owner != nil {
+			it.owner.DecrRef()
+		}
+		it.owner = nil
+		it.tree = nil
+		it.curr = nil
+		it.stack = nil
+	})
 	return nil
 }
 

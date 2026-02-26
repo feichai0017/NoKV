@@ -167,12 +167,11 @@ func TestEntryHelpers(t *testing.T) {
 	}
 }
 
-func TestEntryDecrRefDetachedNoop(t *testing.T) {
+func TestEntryDecrRefUnderflowPanics(t *testing.T) {
 	e := &Entry{Key: []byte("k"), Value: []byte("v")}
-	e.DecrRef()
-	require.Equal(t, []byte("k"), e.Key)
-	require.Equal(t, []byte("v"), e.Value)
-	require.Equal(t, int32(0), e.ref)
+	require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
+		e.DecrRef()
+	})
 }
 
 func TestValueHelpers(t *testing.T) {

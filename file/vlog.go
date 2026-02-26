@@ -10,6 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/pkg/errors"
 )
 
@@ -33,7 +34,7 @@ func (lf *LogFile) Open(opt *Options) error {
 	if err != nil {
 		return utils.WrapErr("unable to open value log file", err)
 	}
-	fi, err := lf.f.Fd.Stat()
+	fi, err := lf.f.File.Stat()
 	if err != nil {
 		return utils.WrapErr("Unable to run file.Stat", err)
 	}
@@ -81,10 +82,15 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 
-	// TODO: Confirm if we need to run a file sync after truncation.
 	// Truncation must run after unmapping, otherwise Windows would crap itself.
 	if err := lf.f.Truncature(int64(offset)); err != nil {
 		return errors.Wrapf(err, "Unable to truncate file: %q", lf.FileName())
+	}
+	atomic.StoreUint32(&lf.size, offset)
+
+	// Run a file sync after truncation.
+	if err := lf.File().Sync(); err != nil {
+		return errors.Wrapf(err, "Unable to sync file descriptor (metadata) after truncate: %q", lf.FileName())
 	}
 
 	// Reinitialize the log file. This will mmap the entire file.
@@ -150,7 +156,7 @@ func (lf *LogFile) Bootstrap() error {
 }
 
 func (lf *LogFile) Init() error {
-	fstat, err := lf.f.Fd.Stat()
+	fstat, err := lf.f.File.Stat()
 	if err != nil {
 		return errors.Wrapf(err, "Unable to check stat for %q", lf.FileName())
 	}
@@ -164,15 +170,19 @@ func (lf *LogFile) Init() error {
 	return nil
 }
 func (lf *LogFile) FileName() string {
-	return lf.f.Fd.Name()
+	return lf.f.File.Name()
 }
 
 func (lf *LogFile) Seek(offset int64, whence int) (ret int64, err error) {
-	return lf.f.Fd.Seek(offset, whence)
+	return lf.f.File.Seek(offset, whence)
 }
 
 func (lf *LogFile) FD() *os.File {
 	return lf.f.Fd
+}
+
+func (lf *LogFile) File() vfs.File {
+	return lf.f.File
 }
 
 // You must hold lf.lock to sync()

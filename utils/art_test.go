@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/stretchr/testify/require"
 )
 
 func TestARTGetLatest(t *testing.T) {
@@ -236,4 +237,26 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 		t.Fatalf("expected child lookup in node256")
 	}
 	_ = artIt256.Close()
+}
+
+func TestARTDecrRefUnderflow(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	art.IncrRef() // ref = 2
+
+	art.DecrRef() // ref = 1
+	art.DecrRef() // ref = 0, normal release
+
+	require.PanicsWithValue(t, "ART.DecrRef: refcount underflow (double release)", func() {
+		art.DecrRef() // ref = -1, should panic
+	})
+}
+
+func TestARTIteratorCloseIdempotent(t *testing.T) {
+	art := NewART(DefaultArenaSize) // ref = 1
+	it := art.NewIterator(nil)      // ref = 2
+	require.NotNil(t, it)
+	require.NoError(t, it.Close()) // ref = 1
+	require.NoError(t, it.Close()) // still ref = 1
+	require.Equal(t, int32(1), art.ref.Load())
+	art.DecrRef() // ref = 0
 }
