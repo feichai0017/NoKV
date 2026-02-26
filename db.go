@@ -310,7 +310,7 @@ func (db *DB) runRecoveryChecks() error {
 	}
 	vlogDir := filepath.Join(db.opt.WorkDir, "vlog")
 	bucketCount := max(db.opt.ValueLogBucketCount, 1)
-	for bucket := 0; bucket < bucketCount; bucket++ {
+	for bucket := range bucketCount {
 		cfg := vlogpkg.Config{
 			Dir:      filepath.Join(vlogDir, fmt.Sprintf("bucket-%03d", bucket)),
 			FileMode: utils.DefaultFileMode,
@@ -507,7 +507,7 @@ func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint6
 }
 
 // GetVersionedEntry retrieves the value stored at the provided MVCC version.
-// The returned entry is detached from internal pools and does not require DecrRef.
+// The returned entry is detached from internal pools. Callers must not call DecrRef.
 func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
@@ -530,7 +530,7 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 }
 
 // GetCF reads a key from the specified column family.
-// The returned entry is detached from internal pools and does not require DecrRef.
+// The returned entry is detached from internal pools. Callers must not call DecrRef.
 func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
@@ -592,8 +592,8 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 //
 // It deep-copies key/value bytes so the returned entry is independent from pooled
 // memory, parses internal key layout (CF/user-key/version), and fills external-facing
-// metadata. The returned entry does not participate in ref-count lifecycle and does
-// not require DecrRef from API callers.
+// metadata. The returned entry does not participate in internal ref-count lifecycle;
+// API callers must not call DecrRef on it.
 func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
 	if src == nil {
 		return nil

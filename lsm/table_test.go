@@ -1,7 +1,9 @@
 package lsm
 
 import (
+	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -21,7 +23,7 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	return lsm
 }
 
-// TestTableReverseIteration tests the reverse iteration feature added in commit ae51fce
+// TestTableReverseIteration tests reverse iteration behavior on a single table.
 func TestTableReverseIteration(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-test")
 	require.NoError(t, err)
@@ -38,7 +40,6 @@ func TestTableReverseIteration(t *testing.T) {
 	lsm := buildTestLSM(t, opt)
 	defer func() { require.NoError(t, lsm.Close()) }()
 
-	// Create test data
 	builder := newTableBuiler(opt)
 	for i := 0; i < 10; i++ {
 		key := []byte{byte('a' + i)}
@@ -110,7 +111,7 @@ func TestTableReverseIteration(t *testing.T) {
 	})
 }
 
-// TestTableReverseIterationMultiBlock tests reverse iteration across multiple blocks
+// TestTableReverseIterationMultiBlock tests reverse iteration across multiple blocks.
 func TestTableReverseIterationMultiBlock(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-multiblock")
 	require.NoError(t, err)
@@ -120,14 +121,13 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		WorkDir:            dir,
 		MemTableSize:       1 << 20,
 		SSTableMaxSz:       1 << 20,
-		BlockSize:          128, // Small block to force multiple blocks
+		BlockSize:          128, // Force multiple blocks.
 		BloomFalsePositive: 0.01,
 	}
 
 	lsm := buildTestLSM(t, opt)
 	defer func() { require.NoError(t, lsm.Close()) }()
 
-	// Create enough data to span multiple blocks
 	builder := newTableBuiler(opt)
 	for i := 0; i < 20; i++ {
 		key := []byte{byte('a' + i)}
@@ -151,9 +151,11 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 			count++
 		}
 		require.Equal(t, 20, count)
-		// Verify reverse order: t, s, r, ..., b, a
 		require.Equal(t, byte('t'), keys[0])
 		require.Equal(t, byte('a'), keys[19])
+		for i := 0; i < 19; i++ {
+			require.Greater(t, keys[i], keys[i+1], "keys should be in descending order")
+		}
 	})
 
 	t.Run("forward across multiple blocks", func(t *testing.T) {
@@ -166,5 +168,17 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 			count++
 		}
 		require.Equal(t, 20, count)
+	})
+}
+
+func TestTableDecrRefUnderflow(t *testing.T) {
+	tbl := &table{fid: 1, ref: 2}
+	require.NoError(t, tbl.DecrRef())
+	require.Equal(t, int32(1), atomic.LoadInt32(&tbl.ref))
+
+	// Avoid the 1->0 path in this unit test (which requires a real table handle).
+	atomic.StoreInt32(&tbl.ref, 0)
+	require.PanicsWithError(t, fmt.Errorf("table refcount underflow: fid %d, current_ref %d", tbl.fid, int32(0)).Error(), func() {
+		_ = tbl.DecrRef()
 	})
 }

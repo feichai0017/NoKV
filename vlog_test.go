@@ -177,7 +177,6 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 	require.Equal(t, key, entry.Key)
 	require.Equal(t, version, entry.Version)
 	require.Equal(t, value, entry.Value)
-	entry.DecrRef()
 }
 
 func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
@@ -277,7 +276,6 @@ func TestValueGC(t *testing.T) {
 		require.NotNil(t, val)
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
 		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
-		item.DecrRef()
 	}
 }
 

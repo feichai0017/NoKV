@@ -45,8 +45,14 @@ func (ss *SSTable) Init() error {
 		return err
 	}
 	// get create time from file
-	stat, _ := ss.f.Fd.Stat()
-	statType := stat.Sys().(*syscall.Stat_t)
+	stat, statErr := ss.f.File.Stat()
+	if statErr != nil {
+		return errors.Wrapf(statErr, "failed to stat table file: %s", ss.f.File.Name())
+	}
+	statType, ok := stat.Sys().(*syscall.Stat_t)
+	if !ok || statType == nil {
+		return errors.Errorf("failed to decode stat type for table file: %s", ss.f.File.Name())
+	}
 	ss.createdAt = time.Unix(statType.Ctim.Sec, statType.Ctim.Nsec)
 	// init min key
 	keyBytes := ko.GetKey()
@@ -86,7 +92,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	ss.idxStart = readPos
 	data := ss.readCheckError(readPos, ss.idxLen)
 	if err := utils.VerifyChecksum(data, expectedChk); err != nil {
-		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.Fd.Name())
+		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.File.Name())
 	}
 	indexTable := &pb.TableIndex{}
 	if err := proto.Unmarshal(data, indexTable); err != nil {
@@ -148,7 +154,7 @@ func (ss *SSTable) read(off, sz int) ([]byte, error) {
 	}
 
 	res := make([]byte, sz)
-	_, err := ss.f.Fd.ReadAt(res, int64(off))
+	_, err := ss.f.File.ReadAt(res, int64(off))
 	return res, err
 }
 func (ss *SSTable) readCheckError(off, sz int) []byte {
@@ -170,7 +176,7 @@ func (ss *SSTable) View(off, sz int) ([]byte, error) {
 
 // Size return the size of the underlying file
 func (ss *SSTable) Size() int64 {
-	fileStats, err := ss.f.Fd.Stat()
+	fileStats, err := ss.f.File.Stat()
 	utils.Panic(err)
 	return fileStats.Size()
 }

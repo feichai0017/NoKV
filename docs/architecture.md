@@ -90,6 +90,18 @@ flowchart TD
 - Batch sizing adapts to backlog (`WriteBatchMaxCount/Size`, `WriteBatchWait`) and hot-key pressure can expand batch limits temporarily to drain spikes.
 - Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and HotRing can reject hot keys via `WriteHotKeyLimit`.
 
+### 2.7 Ref-Count Lifecycle Contracts
+
+NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrRef` underflow is treated as a lifecycle bug and panics.
+
+| Object | Owned by | Borrowed by | Release rule |
+| --- | --- | --- | --- |
+| `kv.Entry` (pooled) | internal write/read pipelines | codec iterator, memtable/lsm internal reads, request batches | Must call `DecrRef` exactly once per borrow. |
+| `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get/GetCF/GetVersionedEntry` and `Txn.Get`; **must not** call `DecrRef`. |
+| `request` | commit queue/worker | waiter path (`Wait`) | `IncrRef` on enqueue; `Wait` does one `DecrRef`; zero returns request to pool and releases entries. |
+| `table` | level/main+ingest lists, block cache | table iterators, prefetch workers | Removed tables are decremented once after manifest+in-memory swap; zero deletes SST. |
+| `Skiplist` / `ART` index | memtable | iterators | Iterator creation increments index ref; iterator `Close` decrements; double-close is idempotent. |
+
 ---
 
 ## 3. Replication Layer (raftstore)
