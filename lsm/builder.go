@@ -471,7 +471,7 @@ func (itr *blockIterator) seek(key []byte) {
 	startIndex := 0 // This tells from which index we should start binary search.
 
 	if itr.isAsc {
-		// Forward: find first entry >= key
+		// Forward: find first entry >= key using binary search
 		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
 			// If idx is less than start index then just return false.
 			if idx < startIndex {
@@ -482,19 +482,20 @@ func (itr *blockIterator) seek(key []byte) {
 		})
 		itr.setIdx(foundEntryIdx)
 	} else {
-		// Reverse: find last entry <= key
-		foundEntryIdx := -1
-		for idx := len(itr.entryOffsets) - 1; idx >= 0; idx-- {
-			itr.setIdx(idx)
-			if utils.CompareKeys(itr.key, key) <= 0 {
-				foundEntryIdx = idx
-				break
+		// Reverse: find last entry <= key using binary search
+		// Strategy: find first entry > key, then use idx-1
+		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
+			if idx < startIndex {
+				return false
 			}
-		}
-		if foundEntryIdx == -1 {
+			itr.setIdx(idx)
+			return utils.CompareKeys(itr.key, key) > 0
+		})
+		// foundEntryIdx is the first entry > key, so we want idx-1
+		if foundEntryIdx == 0 {
 			itr.setIdx(-1) // No entry <= key
 		} else {
-			itr.setIdx(foundEntryIdx)
+			itr.setIdx(foundEntryIdx - 1)
 		}
 	}
 }
