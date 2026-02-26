@@ -568,10 +568,6 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options == nil {
 		options = &utils.Options{IsAsc: true}
 	}
-	if options.IsAsc && options.PrefetchBlocks > 0 {
-		// Best-effort advise for long forward scans; ignore errors.
-		t.adviseIterator(options)
-	}
 
 	it := &tableIterator{
 		opt:     options,
@@ -580,39 +576,52 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		index:   t.index(),
 		closeCh: make(chan struct{}),
 	}
+
+	// Initialize prefetch optimization if requested
 	if options.PrefetchBlocks > 0 {
-		it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
-		workers := options.PrefetchWorkers
-		if workers <= 0 {
-			workers = min(options.PrefetchBlocks, 4)
-		}
-		it.prefetchPool = utils.NewPool(workers, "IteratorPrefetch")
-		it.wg.Go(func() {
-			for {
-				select {
-				case <-it.closeCh:
-					return
-				default:
-					idx, ok := it.prefetchRing.Pop()
-					if !ok {
-						runtime.Gosched()
-						continue
-					}
-					if err := it.prefetchPool.Submit(func() {
-						it.t.IncrRef()
-						if _, err := it.t.loadBlock(idx); err == nil {
-							prefetchCompleted.Add(1)
-						} else {
+		// Issue madvise hints for both forward and reverse iteration
+		// Forward uses Sequential pattern, reverse uses Random pattern
+		t.adviseIterator(options)
+
+		// Only initialize prefetch infrastructure for forward iteration
+		// Reverse iteration doesn't benefit from block prefetching because:
+		// 1. prefetchNext only prefetches forward (idx + n, not idx - n)
+		// 2. Reverse access patterns are already handled by madvise Random hint
+		if options.IsAsc {
+			it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
+			workers := options.PrefetchWorkers
+			if workers <= 0 {
+				workers = min(options.PrefetchBlocks, 4)
+			}
+			it.prefetchPool = utils.NewPool(workers, "IteratorPrefetch")
+			it.wg.Go(func() {
+				for {
+					select {
+					case <-it.closeCh:
+						return
+					default:
+						idx, ok := it.prefetchRing.Pop()
+						if !ok {
+							runtime.Gosched()
+							continue
+						}
+						if err := it.prefetchPool.Submit(func() {
+							it.t.IncrRef()
+							if _, err := it.t.loadBlock(idx); err == nil {
+								prefetchCompleted.Add(1)
+							} else {
+								prefetchAborted.Add(1)
+							}
+							_ = it.t.DecrRef()
+						}); err != nil {
 							prefetchAborted.Add(1)
 						}
-						_ = it.t.DecrRef()
-					}); err != nil {
-						prefetchAborted.Add(1)
 					}
 				}
-			}
-		})
+			})
+		}
 	}
+
 	return it
 }
 
@@ -771,9 +780,10 @@ func (it *tableIterator) seekToLast() {
 	it.err = it.bi.Error()
 }
 
-// Seek uses binary search over block offsets.
-// For forward (IsAsc=true): finds first block where block.MaxKey >= key
-// For reverse (IsAsc=false): finds last block where block.MinKey <= key
+// Seek positions the iterator at the appropriate entry for the given key using binary search.
+// Both modes first locate the block that could contain the key (last block where baseKey <= key).
+// Forward (IsAsc=true): within the block, seeks to the first entry >= key
+// Reverse (IsAsc=false): within the block, seeks to the last entry <= key
 func (it *tableIterator) Seek(key []byte) {
 	if it.index == nil {
 		it.err = io.EOF
@@ -782,7 +792,8 @@ func (it *tableIterator) Seek(key []byte) {
 	offsets := it.index.GetOffsets()
 
 	if it.opt.IsAsc {
-		// Forward: find first block where block.MaxKey >= key
+		// Forward: find the last block where baseKey <= key
+		// Search for the first block where baseKey > key, then use idx-1
 		idx := sort.Search(len(offsets), func(idx int) bool {
 			ko, ok := it.t.blockOffset(idx)
 			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
@@ -792,9 +803,12 @@ func (it *tableIterator) Seek(key []byte) {
 			return utils.CompareKeys(ko.GetKey(), key) > 0
 		})
 		if idx == 0 {
+			// All blocks have baseKey > key, start from first block
 			it.seekHelper(0, key)
 			return
 		}
+		// idx is the first block where baseKey > key
+		// So we want idx-1, which is the last block where baseKey <= key
 		it.seekHelper(idx-1, key)
 	} else {
 		// Reverse: find last block that could contain key <= target
