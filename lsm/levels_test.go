@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -103,4 +104,29 @@ func TestLevelManagerMultiGroupTruncationBlocksWalGC(t *testing.T) {
 	require.NoError(t, walMgr.SwitchSegment(4, true))
 	require.True(t, lm.canRemoveWalSegment(2))
 	require.NoError(t, walMgr.RemoveSegment(2))
+}
+
+func TestL0ReplaceTablesOrdering(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		_ = lsm.Close()
+		_ = os.RemoveAll(lsm.option.WorkDir)
+	}()
+
+	t1 := buildTableWithEntry(t, lsm, 1, "C", 1, "old")
+	t2 := buildTableWithEntry(t, lsm, 2, "A", 1, "old")
+	t3 := buildTableWithEntry(t, lsm, 3, "B", 1, "old")
+	t4 := buildTableWithEntry(t, lsm, 4, "A", 2, "new")
+
+	levelHandler := lsm.levels.levels[0]
+	levelHandler.tables = []*table{t1, t2, t3}
+	toDel := []*table{t2, t3}
+	toAdd := []*table{t4}
+	err := levelHandler.replaceTables(toDel, toAdd)
+	require.NoError(t, err)
+	require.Equal(t, []*table{t1, t4}, levelHandler.tables)
+
+	t1.DecrRef()
+	t4.DecrRef()
 }
