@@ -214,7 +214,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	builder := newTableBuiler(&builderOpt)
 
 	// Add test data
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
 		value := []byte{byte('v'), byte('0' + i)}
 		builder.AddKey(kv.NewEntry(key, value))
@@ -262,7 +262,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	builder := newTableBuiler(&builderOpt)
 
 	// Add test data with multiple blocks
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
 		value := bytes.Repeat([]byte{byte('v'), byte('0' + i%10)}, 24)
 		builder.AddKey(kv.NewEntry(key, value))
@@ -311,7 +311,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 	builder := newTableBuiler(&builderOpt)
 
 	// Add enough data to create multiple blocks
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
 		value := bytes.Repeat([]byte{byte('v')}, 48)
 		builder.AddKey(kv.NewEntry(key, value))
@@ -340,7 +340,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 
 	// Verify we got all keys in reverse order
 	require.Equal(t, 30, len(keys))
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		expected := byte('a' + 29 - i)
 		require.Equal(t, expected, keys[i], "key at position %d should be %c, got %c", i, expected, keys[i])
 	}
