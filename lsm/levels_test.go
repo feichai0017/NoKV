@@ -110,8 +110,8 @@ func TestL0ReplaceTablesOrdering(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() {
-		_ = lsm.Close()
-		_ = os.RemoveAll(lsm.option.WorkDir)
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
 	}()
 
 	t1 := buildTableWithEntry(t, lsm, 1, "C", 1, "old")
@@ -123,10 +123,9 @@ func TestL0ReplaceTablesOrdering(t *testing.T) {
 	levelHandler.tables = []*table{t1, t2, t3}
 	toDel := []*table{t2, t3}
 	toAdd := []*table{t4}
-	err := levelHandler.replaceTables(toDel, toAdd)
-	require.NoError(t, err)
+	require.NoError(t, levelHandler.replaceTables(toDel, toAdd))
 	require.Equal(t, []*table{t1, t4}, levelHandler.tables)
 
-	t1.DecrRef()
-	t4.DecrRef()
+	require.NoError(t, t1.DecrRef())
+	require.NoError(t, t4.DecrRef())
 }
