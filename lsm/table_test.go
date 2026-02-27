@@ -40,7 +40,7 @@ func TestTableReverseIteration(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	builder := newTableBuiler(opt)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := []byte{byte('a' + i)}
 		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value")))
 	}
@@ -128,7 +128,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	builder := newTableBuiler(opt)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		key := []byte{byte('a' + i)}
 		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value-with-more-data")))
 	}
@@ -152,7 +152,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		require.Equal(t, 20, count)
 		require.Equal(t, byte('t'), keys[0])
 		require.Equal(t, byte('a'), keys[19])
-		for i := 0; i < 19; i++ {
+		for i := range 19 {
 			require.Greater(t, keys[i], keys[i+1], "keys should be in descending order")
 		}
 	})
