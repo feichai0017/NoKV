@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cfdfd619.js";
+            window.path_to_searchindex_js = "searchindex-de60993c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cbc9e846.js"></script>
@@ -1896,7 +1896,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <p>More on SST layout lives in <a href="#manifest--version-management"><code>docs/manifest.md</code></a> and <a href="#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="hotring--hot-key-tracking"><a class="header" href="#hotring--hot-key-tracking">HotRing – Hot Key Tracking</a></h1>
-<p><code>hotring</code> is NoKV’s hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in the standalone module <a href="https://github.com/feichai0017/hotring"><code>github.com/feichai0017/hotring</code></a>.</p>
+<p><code>hotring</code> is NoKV’s hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in <a href="../hotring"><code>hotring/</code></a> inside this repository.</p>
 <hr>
 <h2 id="1-motivation"><a class="header" href="#1-motivation">1. Motivation</a></h2>
 <ul>
@@ -1913,7 +1913,7 @@ Deeper levels rely on OS page cache + mmap readahead
   hashMask -&gt; selects bucket (power of two size)
 </code></pre>
 <ul>
-<li>Each bucket stores a sorted linked list of <a href="https://github.com/feichai0017/hotring/blob/main/node.go"><code>Node</code></a> ordered by <code>(tag, key)</code>, where <code>tag</code> is derived from the upper bits of the hash. Head pointers are <code>atomic.Pointer[Node]</code>, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.</li>
+<li>Each bucket stores a sorted linked list of <a href="../hotring/node.go"><code>Node</code></a> ordered by <code>(tag, key)</code>, where <code>tag</code> is derived from the upper bits of the hash. Head pointers are <code>atomic.Pointer[Node]</code>, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.</li>
 <li><code>defaultTableBits = 12</code> → 4096 buckets by default (<code>NewHotRing</code>). The mask ensures cheap modulo operations.</li>
 <li>Nodes keep a <code>count</code> (int32) updated atomically and a <code>next</code> pointer stored via <code>unsafe.Pointer</code>. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.</li>
 </ul>
@@ -1933,11 +1933,11 @@ Deeper levels rely on OS page cache + mmap readahead
 <tr><th>Method</th><th>Behaviour</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="https://github.com/feichai0017/hotring/blob/main/hotring.go"><code>Touch</code></a></td><td>Insert or increment key’s counter.</td><td>CAS-splices a new node if missing, then increments (window-aware when enabled).</td></tr>
-<tr><td><a href="https://github.com/feichai0017/hotring/blob/main/hotring.go"><code>Frequency</code></a></td><td>Read-only counter lookup.</td><td>Lock-free lookup; uses sliding-window totals when configured.</td></tr>
-<tr><td><a href="https://github.com/feichai0017/hotring/blob/main/hotring.go"><code>TouchAndClamp</code></a></td><td>Increment unless <code>count &gt;= limit</code>, returning <code>(count, limited)</code>.</td><td>Throttling follows sliding-window totals so hot bursts clamp quickly.</td></tr>
-<tr><td><a href="https://github.com/feichai0017/hotring/blob/main/hotring.go"><code>TopN</code></a></td><td>Snapshot hottest keys sorted by count desc.</td><td>Walks buckets without locks, then sorts a copy.</td></tr>
-<tr><td><a href="https://github.com/feichai0017/hotring/blob/main/hotring.go"><code>KeysAbove</code></a></td><td>Return all keys with counters ≥ threshold.</td><td>Handy for targeted throttling or debugging hot shards.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>Touch</code></a></td><td>Insert or increment key’s counter.</td><td>CAS-splices a new node if missing, then increments (window-aware when enabled).</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>Frequency</code></a></td><td>Read-only counter lookup.</td><td>Lock-free lookup; uses sliding-window totals when configured.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>TouchAndClamp</code></a></td><td>Increment unless <code>count &gt;= limit</code>, returning <code>(count, limited)</code>.</td><td>Throttling follows sliding-window totals so hot bursts clamp quickly.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>TopN</code></a></td><td>Snapshot hottest keys sorted by count desc.</td><td>Walks buckets without locks, then sorts a copy.</td></tr>
+<tr><td><a href="../hotring/hotring.go"><code>KeysAbove</code></a></td><td>Return all keys with counters ≥ threshold.</td><td>Handy for targeted throttling or debugging hot shards.</td></tr>
 </tbody>
 </table>
 </div>
@@ -3049,7 +3049,7 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
 <p>本文档详细记录了 NoKV 中 <code>hotring</code> 模块的设计灵感、架构定位、核心实现以及未来展望。这是一个从学术论文汲取灵感，并转化为工业级“热点探测器”的典型案例。</p>
-<p>当前实现已抽离为独立仓库：<code>github.com/feichai0017/hotring</code>。</p>
+<p>当前实现已并入 NoKV 仓库，位于 <code>hotring/</code> 包。</p>
 <hr>
 <h2 id="1-设计灵感取其神而弃其形"><a class="header" href="#1-设计灵感取其神而弃其形">1. 设计灵感：取其神而弃其形</a></h2>
 <p><strong>来源</strong>：<a href="https://www.usenix.org/conference/fast20/presentation/chen-jiqiang">HotRing: A Hotspot-Aware In-Memory Key-Value Store (FAST ’20)</a></p>
