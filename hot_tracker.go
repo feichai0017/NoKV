@@ -3,7 +3,7 @@ package NoKV
 import (
 	"time"
 
-	"github.com/feichai0017/hotring"
+	"github.com/feichai0017/NoKV/hotring"
 )
 
 type hotTracker interface {
