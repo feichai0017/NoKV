@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -20,7 +21,6 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
-	"github.com/feichai0017/hotring"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
