@@ -193,4 +193,4 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 - **Distributed**: deploy `nokv serve` nodes, use `raftstore/client` (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.
 - **Observability-first**: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.
 
-See also [`docs/raftstore.md`](raftstore.md) for deeper internals and [`docs/testing.md`](testing.md) for coverage details.
+See also [`docs/raftstore.md`](raftstore.md) for deeper internals, [`docs/pd.md`](pd.md) for control-plane details, and [`docs/testing.md`](testing.md) for coverage details.

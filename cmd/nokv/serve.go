@@ -36,7 +36,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	maxInflight := fs.Int("raft-max-inflight", 256, "raft max inflight messages")
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
-	pdAddr := fs.String("pd-addr", "", "optional PD-lite gRPC endpoint for store/region heartbeat reporting")
+	pdAddr := fs.String("pd-addr", "", "optional PD-lite gRPC endpoint; when set, serve runs in cluster mode with PD control-plane heartbeats")
 	pdTimeout := fs.Duration("pd-timeout", 2*time.Second, "timeout for PD-lite heartbeat RPCs")
 	var peerFlags []string
 	fs.Func("peer", "remote store mapping in the form storeID=address (repeatable)", func(value string) error {
@@ -161,6 +161,21 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	mode := "dev-standalone"
+	if len(peerFlags) > 0 {
+		mode = "cluster-local"
+	}
+	if pdSink != nil {
+		mode = "cluster-pd"
+	}
+	switch mode {
+	case "cluster-pd":
+		_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
+	case "cluster-local":
+		_, _ = fmt.Fprintln(w, "Serve mode: cluster (PD disabled; local scheduler only)")
+	default:
+		_, _ = fmt.Fprintln(w, "Serve mode: dev-standalone (PD disabled)")
+	}
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
 	}
