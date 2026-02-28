@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +23,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type stubTinyKvServer struct {
@@ -139,6 +138,99 @@ func startStubTinyKv(t *testing.T) (addr string, srv *stubTinyKvServer, shutdown
 	}
 }
 
+type stubPDServer struct {
+	pb.UnimplementedPDServer
+
+	mu         sync.Mutex
+	region     *pb.RegionMeta
+	nextTS     uint64
+	tsoCalls   int
+	routeCalls int
+	tsoErr     error
+	routeErr   error
+}
+
+func (s *stubPDServer) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tsoCalls++
+	if s.tsoErr != nil {
+		return nil, s.tsoErr
+	}
+	count := req.GetCount()
+	if count == 0 {
+		count = 1
+	}
+	if s.nextTS == 0 {
+		s.nextTS = 1
+	}
+	first := s.nextTS
+	s.nextTS += count
+	return &pb.TsoResponse{
+		Timestamp: first,
+		Count:     count,
+	}, nil
+}
+
+func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routeCalls++
+	if s.routeErr != nil {
+		return nil, s.routeErr
+	}
+	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	return &pb.GetRegionByKeyResponse{
+		Region: proto.Clone(s.region).(*pb.RegionMeta),
+	}, nil
+}
+
+func startStubPD(t *testing.T, region *pb.RegionMeta) (addr string, srv *stubPDServer, shutdown func()) {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := grpc.NewServer()
+	stub := &stubPDServer{
+		region: region,
+		nextTS: 100,
+	}
+	pb.RegisterPDServer(server, stub)
+	go func() {
+		_ = server.Serve(l)
+	}()
+	return l.Addr().String(), stub, func() {
+		server.GracefulStop()
+		_ = l.Close()
+	}
+}
+
+func keyInRegion(key, start, end []byte) bool {
+	if len(start) > 0 && bytes.Compare(key, start) < 0 {
+		return false
+	}
+	if len(end) > 0 && bytes.Compare(key, end) >= 0 {
+		return false
+	}
+	return true
+}
+
+func defaultPDRegionMeta() *pb.RegionMeta {
+	return &pb.RegionMeta{
+		Id:               1,
+		StartKey:         nil,
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	}
+}
+
 func TestDecodeKeyVariants(t *testing.T) {
 	raw := []byte("hello")
 	hexVal := "hex:" + hex.EncodeToString(raw)
@@ -160,47 +252,36 @@ func TestDecodeKeyVariants(t *testing.T) {
 	}
 }
 
-func TestLocalOracleReserveMonotonic(t *testing.T) {
-	var oracle localOracle
-	first, err := oracle.Reserve(3)
-	if err != nil {
-		t.Fatalf("reserve first: %v", err)
-	}
-	second, err := oracle.Reserve(2)
-	if err != nil {
-		t.Fatalf("reserve second: %v", err)
-	}
-	if second <= first {
-		t.Fatalf("monotonicity violated: first=%d second=%d", first, second)
-	}
+func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
+	_, pd, stopPD := startStubPD(t, nil)
+	defer stopPD()
+
+	alloc := newPDTSOAllocator(pd, time.Second)
+	first, err := alloc.Reserve(3)
+	require.NoError(t, err)
+	second, err := alloc.Reserve(2)
+	require.NoError(t, err)
+	require.Greater(t, second, first)
+
+	pd.mu.Lock()
+	require.Equal(t, 2, pd.tsoCalls)
+	pd.mu.Unlock()
 }
 
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 	storeAddr, _, stopStore := startStubTinyKv(t)
 	defer stopStore()
-
-	tsoCalls := make(chan uint64, 2)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		batch := r.URL.Query().Get("batch")
-		if batch == "" {
-			http.Error(w, "missing batch", http.StatusBadRequest)
-			return
-		}
-		const baseTs = 100
-		payload := struct {
-			Timestamp uint64 `json:"timestamp"`
-			Count     uint64 `json:"count"`
-		}{
-			Timestamp: baseTs,
-			Count:     2,
-		}
-		_ = json.NewEncoder(w).Encode(&payload)
-		select {
-		case tsoCalls <- payload.Timestamp:
-		default:
-		}
-	}))
-	defer ts.Close()
+	pdAddr, pd, stopPD := startStubPD(t, &pb.RegionMeta{
+		Id:               1,
+		StartKey:         nil,
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	})
+	defer stopPD()
 
 	cfg := config.File{
 		MaxRetries: 3,
@@ -211,24 +292,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 				DockerAddr: storeAddr,
 			},
 		},
-		Regions: []config.Region{
-			{
-				ID:       1,
-				StartKey: "a",
-				EndKey:   "-",
-				Epoch: config.RegionEpoch{
-					Version:     1,
-					ConfVersion: 1,
-				},
-				Peers: []config.Peer{
-					{StoreID: 1, PeerID: 101},
-				},
-				LeaderStoreID: 1,
-			},
-		},
-		TSO: &config.TSO{
-			AdvertiseURL: ts.URL,
-		},
+		Regions: nil,
 	}
 
 	dir := t.TempDir()
@@ -241,7 +305,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	backend, err := newRaftBackend(cfgPath, "", "docker")
+	backend, err := newRaftBackend(cfgPath, pdAddr, "docker")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -251,75 +315,9 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 			_ = backend.client.Close()
 		}
 	}()
-
-	httpTSO, ok := backend.ts.(*httpTSO)
-	if !ok {
-		t.Fatalf("expected httpTSO allocator, got %T", backend.ts)
-	}
-	if httpTSO.url != ts.URL {
-		t.Fatalf("unexpected TSO url: %s", httpTSO.url)
-	}
 
 	if _, err := backend.reserveTimestamp(2); err != nil {
 		t.Fatalf("reserve timestamp: %v", err)
-	}
-
-	select {
-	case <-tsoCalls:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("http TSO not invoked")
-	}
-}
-
-func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
-	defer stopStore()
-
-	cfg := config.File{
-		Stores: []config.Store{
-			{
-				StoreID: 1,
-				Addr:    storeAddr,
-			},
-		},
-		Regions: []config.Region{
-			{
-				ID: 1,
-				Epoch: config.RegionEpoch{
-					Version:     1,
-					ConfVersion: 1,
-				},
-				Peers: []config.Peer{
-					{StoreID: 1, PeerID: 101},
-				},
-				LeaderStoreID: 1,
-			},
-		},
-	}
-
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "raft_config.json")
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
-	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	backend, err := newRaftBackend(cfgPath, "", "host")
-	if err != nil {
-		t.Fatalf("new raft backend: %v", err)
-	}
-	defer func() {
-		_ = backend.Close()
-		if backend.client != nil {
-			_ = backend.client.Close()
-		}
-	}()
-
-	if _, ok := backend.ts.(*localOracle); !ok {
-		t.Fatalf("expected localOracle allocator, got %T", backend.ts)
 	}
 
 	val, err := backend.Get([]byte("key"))
@@ -329,6 +327,21 @@ func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
 	if val == nil || val.Found {
 		t.Fatalf("expected missing value")
 	}
+
+	pd.mu.Lock()
+	require.GreaterOrEqual(t, pd.tsoCalls, 1)
+	require.GreaterOrEqual(t, pd.routeCalls, 1)
+	pd.mu.Unlock()
+}
+
+func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+
+	cfgPath := writeBackendConfig(t, storeAddr)
+	_, err := newRaftBackend(cfgPath, "", "host")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pd-addr is required")
 }
 
 func TestRaftBackendResolveLockConflict(t *testing.T) {
@@ -368,7 +381,10 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -404,7 +420,9 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -442,7 +460,9 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -484,7 +504,9 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -527,7 +549,9 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -590,7 +614,9 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -795,68 +821,25 @@ func newStubBackend() (*raftBackend, *stubRaftClient, *stubTSO) {
 	return &raftBackend{client: client, ts: ts}, client, ts
 }
 
-func TestLocalOracleReserveZero(t *testing.T) {
-	var oracle localOracle
-	_, err := oracle.Reserve(0)
-	require.Error(t, err)
-}
-
-func TestHTTPTSOReserveErrors(t *testing.T) {
-	tso := newHTTPTSO("http://example")
-	_, err := tso.Reserve(0)
+func TestPDTSOAllocatorErrors(t *testing.T) {
+	alloc := newPDTSOAllocator(nil, time.Second)
+	_, err := alloc.Reserve(1)
 	require.Error(t, err)
 
-	tso = &httpTSO{url: "http://bad host", client: &http.Client{}}
-	_, err = tso.Reserve(1)
+	_, pd, stopPD := startStubPD(t, nil)
+	defer stopPD()
+	pd.tsoErr = errors.New("boom")
+	alloc = newPDTSOAllocator(pd, time.Second)
+	_, err = alloc.Reserve(1)
 	require.Error(t, err)
 
-	tso = &httpTSO{
-		url: "http://example",
-		client: &http.Client{
-			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("boom")
-			}),
-		},
-	}
-	_, err = tso.Reserve(1)
+	pd.tsoErr = nil
+	_, err = alloc.Reserve(0)
 	require.Error(t, err)
-
-	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
-	}))
-	defer statusServer.Close()
-	tso = newHTTPTSO(statusServer.URL)
-	_, err = tso.Reserve(1)
-	require.Error(t, err)
-
-	badJSONServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("{bad-json"))
-	}))
-	defer badJSONServer.Close()
-	tso = newHTTPTSO(badJSONServer.URL)
-	_, err = tso.Reserve(1)
-	require.Error(t, err)
-
-	countServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"timestamp": uint64(1),
-			"count":     uint64(1),
-		})
-	}))
-	defer countServer.Close()
-	tso = newHTTPTSO(countServer.URL)
-	_, err = tso.Reserve(2)
-	require.Error(t, err)
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
 }
 
 func TestNewRaftBackendErrors(t *testing.T) {
-	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "", "host")
+	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "127.0.0.1:1", "host")
 	require.Error(t, err)
 
 	cfg := config.File{
@@ -882,7 +865,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
-	_, err = newRaftBackend(cfgPath, "", "host")
+	_, err = newRaftBackend(cfgPath, "127.0.0.1:1", "host")
 	require.Error(t, err)
 
 	storeAddr, _, stopStore := startStubTinyKv(t)
@@ -897,20 +880,35 @@ func TestNewRaftBackendErrors(t *testing.T) {
 			},
 			Peers: []config.Peer{{StoreID: 1, PeerID: 101}},
 		}},
-		TSO: &config.TSO{
-			ListenAddr: "127.0.0.1:9494",
-		},
 	}
 	raw, err = json.Marshal(cfg)
 	require.NoError(t, err)
 	cfgPath = filepath.Join(dir, "cfg2.json")
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
-	backend, err := newRaftBackend(cfgPath, "", "host")
+
+	_, err = newRaftBackend(cfgPath, "", "host")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pd-addr is required")
+
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
-	httpTSO, ok := backend.ts.(*httpTSO)
+	_, ok := backend.ts.(*pdTSOAllocator)
 	require.True(t, ok)
-	require.Equal(t, "http://127.0.0.1:9494", httpTSO.url)
+
+	_, err = backend.reserveTimestamp(2)
+	require.NoError(t, err)
+}
+
+func TestNewRaftBackendInvalidPDAddress(t *testing.T) {
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+	cfgPath := writeBackendConfig(t, storeAddr)
+	_, err := newRaftBackend(cfgPath, "127.0.0.1:0", "host")
+	require.Error(t, err)
 }
 
 func TestRaftBackendCloseNil(t *testing.T) {
