@@ -7,6 +7,7 @@ Usage: serve_from_config.sh --config <config> --store-id <id> --workdir <dir> [o
 
 Options:
   --scope <local|docker>   Select which addresses to use (default: local)
+  --pd-addr <addr>         Optional PD gRPC endpoint passed to "nokv serve"
   --raft-debug-log         Enable verbose etcd/raft debug logging
   --no-raft-debug-log      Disable verbose etcd/raft debug logging
   --extra <args...>        Additional arguments passed to "nokv serve"
@@ -17,6 +18,7 @@ CONFIG=""
 STORE_ID=""
 WORKDIR=""
 SCOPE="local"
+PD_ADDR=""
 RAFT_DEBUG=0
 EXTRA_ARGS=()
 
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --scope)
       SCOPE=$2
+      shift 2
+      ;;
+    --pd-addr)
+      PD_ADDR=$2
       shift 2
       ;;
     --raft-debug-log)
@@ -146,6 +152,10 @@ cmd=(nokv serve
 
 if [[ $RAFT_DEBUG -eq 1 ]]; then
   cmd+=(--raft-debug-log)
+fi
+
+if [[ -n "$PD_ADDR" ]]; then
+  cmd+=(--pd-addr "$PD_ADDR")
 fi
 
 cmd+=("${peer_args[@]}")
