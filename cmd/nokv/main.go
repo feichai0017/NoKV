@@ -45,6 +45,8 @@ func main() {
 		err = runSchedulerCmd(os.Stdout, args)
 	case "serve":
 		err = runServeCmd(os.Stdout, args)
+	case "pd":
+		err = runPDCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -67,6 +69,7 @@ Commands:
   regions   Show region metadata catalog from manifest/store
   scheduler Display scheduler heartbeat snapshot (in-process only)
   serve     Start TinyKv gRPC service backed by a local raftstore
+  pd        Start PD-lite gRPC service (control plane)
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
