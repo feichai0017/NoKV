@@ -58,9 +58,7 @@ services:
         "--workdir",
         "/var/lib/nokv",
         "--scope",
-        "docker",
-        "--pd-addr",
-        "nokv-pd:2379"
+        "docker"
       ]
     volumes:
       - node1-data:/var/lib/nokv
@@ -89,9 +87,7 @@ services:
         "--workdir",
         "/var/lib/nokv",
         "--scope",
-        "docker",
-        "--pd-addr",
-        "nokv-pd:2379"
+        "docker"
       ]
     volumes:
       - node2-data:/var/lib/nokv
@@ -120,9 +116,7 @@ services:
         "--workdir",
         "/var/lib/nokv",
         "--scope",
-        "docker",
-        "--pd-addr",
-        "nokv-pd:2379"
+        "docker"
       ]
     volumes:
       - node3-data:/var/lib/nokv
@@ -148,8 +142,6 @@ services:
         "0.0.0.0:6380",
         "--raft-config",
         "/etc/nokv/raft_config.json",
-        "--pd-addr",
-        "nokv-pd:2379",
         "--addr-scope",
         "docker"
       ]

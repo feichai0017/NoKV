@@ -344,6 +344,96 @@ func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
 	require.Contains(t, err.Error(), "pd-addr is required")
 }
 
+func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	cfg := config.File{
+		PD: &config.PD{
+			Addr: pdAddr,
+		},
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID: 1,
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.reserveTimestamp(1)
+	require.NoError(t, err)
+}
+
+func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+	validPDAddr, _, stopValidPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopValidPD()
+
+	cfg := config.File{
+		PD: &config.PD{
+			Addr: "127.0.0.1:0", // invalid on purpose; CLI override should win.
+		},
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID: 1,
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(cfgPath, validPDAddr, "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.reserveTimestamp(1)
+	require.NoError(t, err)
+}
+
 func TestRaftBackendResolveLockConflict(t *testing.T) {
 	storeAddr, stub, stopStore := startStubTinyKv(t)
 	defer stopStore()

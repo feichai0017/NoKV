@@ -63,7 +63,7 @@ Start an end-to-end playground with either the local script or Docker Compose. B
 # Option A: local processes
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
 # In another shell: launch the Redis gateway on top of the running cluster
-go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json --pd-addr 127.0.0.1:2379
+go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 
 # Option B: Docker Compose (cluster + gateway + PD)
 docker compose up --build
@@ -123,6 +123,7 @@ func main() {
 Everything hangs off a single file: [`raft_config.example.json`](./raft_config.example.json).
 
 ```jsonc
+"pd": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-pd:2379" },
 "stores": [
   { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
   { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
@@ -216,7 +217,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) every command runs inside local MVCC transactions; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit so NX/XX, TTL, arithmetic and multi-key writes match the single-node semantics.
 - TTL metadata is stored under `!redis:ttl!<key>` and is automatically cleaned up when reads detect expiration.
-- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar, and raft mode requires `--pd-addr` so routing and TSO allocation come from PD-lite.
+- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--pd-addr` can override `config.pd` when you need a non-default PD endpoint.
 - A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
 
 > For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).

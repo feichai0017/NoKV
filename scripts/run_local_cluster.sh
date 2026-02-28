@@ -8,7 +8,7 @@ Usage: scripts/run_local_cluster.sh [options]
 Options:
   --config PATH         Raft configuration file (default: ./raft_config.example.json)
   --workdir DIR         Base directory for cluster data (default: ./artifacts/cluster)
-  --pd-listen ADDR      PD gRPC listen address (default: 127.0.0.1:2379)
+  --pd-listen ADDR      PD gRPC listen address override (default: config.pd.addr or 127.0.0.1:2379)
   --raft-debug-log      Enable verbose raft debug logging (default: enabled)
   --no-raft-debug-log   Disable raft debug logging
 USAGE
@@ -17,7 +17,8 @@ USAGE
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
-PD_LISTEN="127.0.0.1:2379"
+PD_LISTEN=""
+PD_LISTEN_SET=0
 RAFT_DEBUG=1
 
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pd-listen)
       PD_LISTEN=$2
+      PD_LISTEN_SET=1
       shift 2
       ;;
     --raft-debug-log)
@@ -105,6 +107,15 @@ trap cleanup EXIT
 trap 'cleanup; exit 0' INT TERM
 
 PATH="$BUILD_DIR:$PATH"
+
+if [[ $PD_LISTEN_SET -eq 0 ]]; then
+  if pd_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple 2>/dev/null); then
+    PD_LISTEN=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
+  fi
+fi
+if [[ -z "$PD_LISTEN" ]]; then
+  PD_LISTEN="127.0.0.1:2379"
+fi
 
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
 if [ "${#STORE_LINES[@]}" -eq 0 ]; then

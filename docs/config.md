@@ -96,11 +96,15 @@ Notes:
 `raft_config.example.json` is the single source of truth for distributed
 topology. It is consumed by scripts, `cmd/nokv-redis`, and the `config` package.
 
+Precedence rule: when a value can be provided by both CLI flags and config
+file, CLI flags take precedence; config acts as startup defaults.
+
 Minimal shape:
 
 ```jsonc
 {
   "max_retries": 8,
+  "pd": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-pd:2379" },
   "stores": [
     { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
   ],
@@ -121,6 +125,8 @@ Notes:
 - `start_key` / `end_key` accept plain strings, `hex:<bytes>`, or base64. Use
   `"-"` or empty for unbounded ranges.
 - `stores` define both host and docker addresses for local runs vs containers.
+- `pd.addr` is the default PD endpoint for host scope; `pd.docker_addr` is used
+  when tools run in docker scope.
 - `leader_store_id` is optional; clients use it for initial routing hints.
 
 Programmatic loading:
@@ -132,4 +138,4 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 
 Related tools:
 - `scripts/run_local_cluster.sh --config raft_config.example.json`
-- `go run ./cmd/nokv-redis --raft-config raft_config.example.json --pd-addr 127.0.0.1:2379`
+- `go run ./cmd/nokv-redis --raft-config raft_config.example.json`
