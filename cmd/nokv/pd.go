@@ -9,7 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -18,6 +18,7 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
+	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
 	"google.golang.org/grpc"
 )
@@ -69,41 +70,35 @@ func runPDCmd(w io.Writer, args []string) error {
 
 	cluster := core.NewCluster()
 	var (
-		stateStore    *pdStateStore
-		regionCatalog *manifest.Manager
+		store         pdstorage.Store
 		workdirPath   string
 		loadedRegions int
 	)
 	if strings.TrimSpace(*workdir) != "" {
 		workdirPath = strings.TrimSpace(*workdir)
-		stateStore = newPDStateStore(workdirPath)
-		state, err := stateStore.Load()
+		localStore, err := pdstorage.OpenLocalStore(workdirPath, nil)
 		if err != nil {
-			return fmt.Errorf("pd load allocator state from %q: %w", workdirPath, err)
+			return fmt.Errorf("pd open storage workdir %q: %w", workdirPath, err)
 		}
-		*idStart, *tsStart = resolveAllocatorStarts(*idStart, *tsStart, state)
-
-		mgr, err := manifest.Open(workdirPath, nil)
+		defer func() { _ = localStore.Close() }()
+		snapshot, err := localStore.Load()
 		if err != nil {
-			return fmt.Errorf("pd open manifest workdir %q: %w", workdirPath, err)
+			return fmt.Errorf("pd load snapshot from %q: %w", workdirPath, err)
 		}
-		defer func() { _ = mgr.Close() }()
-		regionCatalog = mgr
+		*idStart, *tsStart = pdstorage.ResolveAllocatorStarts(*idStart, *tsStart, snapshot.Allocator)
 
-		loadedRegions, err = restorePDRegions(cluster, mgr.RegionSnapshot())
+		loadedRegions, err = restorePDRegions(cluster, snapshot.Regions)
 		if err != nil {
 			return fmt.Errorf("pd restore regions from %q: %w", workdirPath, err)
 		}
+		store = localStore
 	}
 
 	ids := core.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := pdserver.NewService(cluster, ids, tsAlloc)
-	if regionCatalog != nil {
-		svc.SetRegionCatalog(regionCatalog)
-	}
-	if stateStore != nil {
-		svc.SetAllocatorStateSink(stateStore)
+	if store != nil {
+		svc.SetStorage(store)
 	}
 
 	grpcServer := grpc.NewServer()
@@ -114,7 +109,7 @@ func runPDCmd(w io.Writer, args []string) error {
 		serveErrCh <- grpcServer.Serve(lis)
 	}()
 
-	if regionCatalog != nil {
+	if store != nil {
 		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loadedRegions, workdirPath)
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 	}
@@ -162,7 +157,7 @@ func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]manifest.Region
 		}
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 
 	loaded := 0
 	for _, id := range ids {
