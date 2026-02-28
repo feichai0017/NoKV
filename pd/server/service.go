@@ -83,6 +83,19 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
 }
 
+// RemoveRegion deletes region metadata from the PD in-memory catalog.
+func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (*pb.RemoveRegionResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
+	}
+	regionID := req.GetRegionId()
+	if regionID == 0 {
+		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
+	}
+	removed := s.cluster.RemoveRegion(regionID)
+	return &pb.RemoveRegionResponse{Removed: removed}, nil
+}
+
 // GetRegionByKey returns region metadata for the specified key.
 func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
 	if req == nil {

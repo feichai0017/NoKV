@@ -15,9 +15,11 @@ import (
 type fakePDClient struct {
 	storeReqs  []*pb.StoreHeartbeatRequest
 	regionReqs []*pb.RegionHeartbeatRequest
+	removeReqs []*pb.RemoveRegionRequest
 	storeResp  *pb.StoreHeartbeatResponse
 	storeErr   error
 	regionErr  error
+	removeErr  error
 	closed     bool
 }
 
@@ -38,6 +40,14 @@ func (f *fakePDClient) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbea
 		return nil, f.regionErr
 	}
 	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
+}
+
+func (f *fakePDClient) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (*pb.RemoveRegionResponse, error) {
+	f.removeReqs = append(f.removeReqs, req)
+	if f.removeErr != nil {
+		return nil, f.removeErr
+	}
+	return &pb.RemoveRegionResponse{Removed: true}, nil
 }
 
 func (f *fakePDClient) GetRegionByKey(context.Context, *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
@@ -149,6 +159,40 @@ func TestRegionSinkNoopOnZeroIDs(t *testing.T) {
 	sink.RemoveRegion(0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
+	require.Empty(t, pd.removeReqs)
+}
+
+func TestRegionSinkRemoveRegionForwardsAndReportsErrors(t *testing.T) {
+	removeErr := errors.New("remove region failed")
+	pd := &fakePDClient{removeErr: removeErr}
+	mirror := scheduler.NewCoordinator()
+	var got []string
+	sink := NewRegionSink(RegionSinkConfig{
+		PD:     pd,
+		Mirror: mirror,
+		OnError: func(op string, err error) {
+			got = append(got, op+": "+err.Error())
+		},
+	})
+
+	meta := manifest.RegionMeta{
+		ID:       100,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch: manifest.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+	}
+	sink.SubmitRegionHeartbeat(meta)
+	require.NotEmpty(t, sink.RegionSnapshot())
+
+	sink.RemoveRegion(100)
+	require.Len(t, pd.removeReqs, 1)
+	require.Equal(t, uint64(100), pd.removeReqs[0].GetRegionId())
+	require.Empty(t, sink.RegionSnapshot(), "mirror should be updated even when PD RPC fails")
+	require.Len(t, got, 1)
+	require.Contains(t, got[0], "RemoveRegion")
 }
 
 func TestFromPBOperationValidation(t *testing.T) {

@@ -43,10 +43,9 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, err := NewGRPCClient(ctx, "bufnet",
+	cli, err := NewGRPCClient(ctx, "passthrough:///bufnet",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(dialer),
-		grpc.WithBlock(),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cli.Close() })
@@ -76,6 +75,14 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
 	require.Equal(t, uint64(11), getResp.GetRegion().GetId())
+
+	removeResp, err := cli.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
+	require.NoError(t, err)
+	require.True(t, removeResp.GetRemoved())
+
+	getResp, err = cli.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("m")})
+	require.NoError(t, err)
+	require.True(t, getResp.GetNotFound())
 
 	idResp, err := cli.AllocID(context.Background(), &pb.AllocIDRequest{Count: 2})
 	require.NoError(t, err)
