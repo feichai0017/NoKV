@@ -14,6 +14,7 @@ Current scope in this branch:
 3. `pd/tso`: monotonic timestamp allocator primitive.
 4. `pd/server`: gRPC service implementation for heartbeat/route/ID/TSO RPCs.
 5. `pd/client`: gRPC client wrapper for store-side integration.
+6. `pd/adapter`: `scheduler.RegionSink` bridge that forwards raftstore heartbeats to PD.
 
 Planned next steps:
 
