@@ -114,3 +114,25 @@ func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 	require.Equal(t, uint64(7), meta.ID)
 	require.Equal(t, []byte("n"), meta.EndKey)
 }
+
+func TestClusterRemoveRegion(t *testing.T) {
+	c := NewCluster()
+	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+		ID:       1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+	}))
+
+	_, ok := c.GetRegionByKey([]byte("m"))
+	require.True(t, ok)
+
+	removed := c.RemoveRegion(1)
+	require.True(t, removed)
+
+	_, ok = c.GetRegionByKey([]byte("m"))
+	require.False(t, ok)
+
+	removed = c.RemoveRegion(1)
+	require.False(t, removed)
+}

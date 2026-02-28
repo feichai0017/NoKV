@@ -129,16 +129,19 @@ func (c *Cluster) UpsertRegionHeartbeat(meta manifest.RegionMeta) error {
 	return nil
 }
 
-// RemoveRegion removes a region from PD metadata.
-func (c *Cluster) RemoveRegion(regionID uint64) {
+// RemoveRegion removes a region from PD metadata and reports whether the region
+// existed before removal.
+func (c *Cluster) RemoveRegion(regionID uint64) bool {
 	if c == nil || regionID == 0 {
-		return
+		return false
 	}
 	c.mu.Lock()
+	_, existed := c.regions[regionID]
 	delete(c.regions, regionID)
 	delete(c.regionLastHB, regionID)
 	c.rebuildRegionIndexLocked()
 	c.mu.Unlock()
+	return existed
 }
 
 // RegionSnapshot returns a stable copy of tracked region metadata.
