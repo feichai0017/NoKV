@@ -43,14 +43,12 @@ func TestHotRingConcurrentTouch(t *testing.T) {
 	const perG = 500
 
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < perG; j++ {
+	for range goroutines {
+		wg.Go(func() {
+			for range perG {
 				r.Touch("shared")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -105,7 +103,7 @@ func TestHotRingSlidingWindow(t *testing.T) {
 	r.EnableSlidingWindow(4, 10*time.Millisecond)
 	defer r.Close()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		r.Touch("pulse")
 	}
 	if freq := r.Frequency("pulse"); freq != 3 {
@@ -122,7 +120,7 @@ func TestHotRingDecayLoop(t *testing.T) {
 	r.EnableDecay(10*time.Millisecond, 1)
 	defer r.Close()
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		r.Touch("decay-key")
 	}
 	time.Sleep(35 * time.Millisecond)

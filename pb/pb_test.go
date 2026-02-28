@@ -278,3 +278,46 @@ func TestTinyKvClientAndServerHelpers(t *testing.T) {
 	_, err = srv.KvCheckTxnStatus(context.Background(), &KvCheckTxnStatusRequest{})
 	require.Equal(t, codes.Unimplemented, status.Code(err))
 }
+
+func TestPDClientAndServerHelpers(t *testing.T) {
+	conn := &fakeConn{}
+	client := NewPDClient(conn)
+
+	_, err := client.StoreHeartbeat(context.Background(), &StoreHeartbeatRequest{})
+	require.NoError(t, err)
+	_, err = client.RegionHeartbeat(context.Background(), &RegionHeartbeatRequest{})
+	require.NoError(t, err)
+	_, err = client.GetRegionByKey(context.Background(), &GetRegionByKeyRequest{})
+	require.NoError(t, err)
+	_, err = client.RemoveRegion(context.Background(), &RemoveRegionRequest{})
+	require.NoError(t, err)
+	_, err = client.AllocID(context.Background(), &AllocIDRequest{})
+	require.NoError(t, err)
+	_, err = client.Tso(context.Background(), &TsoRequest{})
+	require.NoError(t, err)
+
+	require.Len(t, conn.methods, 6)
+	require.Equal(t, PD_StoreHeartbeat_FullMethodName, conn.methods[0])
+	require.Equal(t, PD_RemoveRegion_FullMethodName, conn.methods[3])
+	require.Equal(t, PD_Tso_FullMethodName, conn.methods[5])
+
+	reg := &fakeRegistrar{}
+	RegisterPDServer(reg, UnimplementedPDServer{})
+	require.NotNil(t, reg.desc)
+	require.Equal(t, "pb.PD", reg.desc.ServiceName)
+	require.NotNil(t, reg.srv)
+
+	srv := UnimplementedPDServer{}
+	_, err = srv.StoreHeartbeat(context.Background(), &StoreHeartbeatRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.RegionHeartbeat(context.Background(), &RegionHeartbeatRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.GetRegionByKey(context.Background(), &GetRegionByKeyRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.RemoveRegion(context.Background(), &RemoveRegionRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.AllocID(context.Background(), &AllocIDRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.Tso(context.Background(), &TsoRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+}

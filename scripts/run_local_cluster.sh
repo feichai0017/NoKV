@@ -8,6 +8,7 @@ Usage: scripts/run_local_cluster.sh [options]
 Options:
   --config PATH         Raft configuration file (default: ./raft_config.example.json)
   --workdir DIR         Base directory for cluster data (default: ./artifacts/cluster)
+  --pd-listen ADDR      PD gRPC listen address override (default: config.pd.addr or 127.0.0.1:2379)
   --raft-debug-log      Enable verbose raft debug logging (default: enabled)
   --no-raft-debug-log   Disable raft debug logging
 USAGE
@@ -16,6 +17,9 @@ USAGE
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
+WORKDIR_SET=0
+PD_LISTEN=""
+PD_LISTEN_SET=0
 RAFT_DEBUG=1
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +30,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workdir)
       WORKDIR=$2
+      WORKDIR_SET=1
+      shift 2
+      ;;
+    --pd-listen)
+      PD_LISTEN=$2
+      PD_LISTEN_SET=1
       shift 2
       ;;
     --raft-debug-log)
@@ -52,6 +62,7 @@ if ! [[ -f "$CONFIG_PATH" ]]; then
   echo "configuration file not found: $CONFIG_PATH" >&2
   exit 1
 fi
+CONFIG_DIR=$(cd "$(dirname "$CONFIG_PATH")" && pwd)
 
 if [ -z "$WORKDIR" ]; then
   WORKDIR="$ROOT_DIR/artifacts/cluster"
@@ -63,11 +74,10 @@ mkdir -p "$BUILD_DIR"
 
 go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
 go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
-go build -o "$BUILD_DIR/nokv-tso" "$ROOT_DIR/scripts/tso"
 
 cleaned=0
 STORE_PIDS=()
-TSO_PID=""
+PD_PID=""
 
 cleanup() {
   if [[ $cleaned -eq 1 ]]; then
@@ -81,8 +91,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${TSO_PID:-}" ]] && kill -0 "$TSO_PID" 2>/dev/null; then
-    kill -INT "$TSO_PID" 2>/dev/null || true
+  if [[ -n "${PD_PID:-}" ]] && kill -0 "$PD_PID" 2>/dev/null; then
+    kill -INT "$PD_PID" 2>/dev/null || true
   fi
 
   for pid in "${STORE_PIDS[@]:-}"; do
@@ -91,8 +101,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${TSO_PID:-}" ]]; then
-    wait "$TSO_PID" 2>/dev/null || true
+  if [[ -n "${PD_PID:-}" ]]; then
+    wait "$PD_PID" 2>/dev/null || true
   fi
 }
 
@@ -100,6 +110,26 @@ trap cleanup EXIT
 trap 'cleanup; exit 0' INT TERM
 
 PATH="$BUILD_DIR:$PATH"
+
+if [[ $PD_LISTEN_SET -eq 0 ]]; then
+  if pd_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple 2>/dev/null); then
+    PD_LISTEN=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
+  fi
+fi
+if [[ -z "$PD_LISTEN" ]]; then
+  PD_LISTEN="127.0.0.1:2379"
+fi
+
+PD_WORKDIR=""
+if pd_workdir_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple --field workdir 2>/dev/null); then
+  PD_WORKDIR=$(echo "$pd_workdir_from_config" | tr -d '\r' | sed -n '1p')
+fi
+if [[ -z "$PD_WORKDIR" ]]; then
+  PD_WORKDIR="$WORKDIR/pd"
+elif [[ "$PD_WORKDIR" != /* ]]; then
+  PD_WORKDIR="$CONFIG_DIR/$PD_WORKDIR"
+fi
+mkdir -p "$PD_WORKDIR"
 
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
 if [ "${#STORE_LINES[@]}" -eq 0 ]; then
@@ -109,10 +139,22 @@ fi
 
 declare -a STORE_IDS STORE_WORKDIRS
 for line in "${STORE_LINES[@]}"; do
-  read -r store_id listen_addr advertise_addr docker_listen docker_addr <<<"$line"
+  read -r store_id listen_addr advertise_addr docker_listen docker_addr store_workdir docker_workdir <<<"$line"
   STORE_IDS+=("$store_id")
-  STORE_WORKDIRS+=("$WORKDIR/store-$store_id")
-  store_dir="$WORKDIR/store-$store_id"
+  store_dir=""
+  if [[ $WORKDIR_SET -eq 1 ]]; then
+    store_dir="$WORKDIR/store-$store_id"
+  elif [[ -n "${store_workdir:-}" && "$store_workdir" != "-" ]]; then
+    if [[ "$store_workdir" == /* ]]; then
+      store_dir="$store_workdir"
+    else
+      store_dir="$CONFIG_DIR/$store_workdir"
+    fi
+  fi
+  if [[ -z "$store_dir" ]]; then
+    store_dir="$WORKDIR/store-$store_id"
+  fi
+  STORE_WORKDIRS+=("$store_dir")
   mkdir -p "$store_dir"
   lock_path="$store_dir/LOCK"
   if [[ -f "$lock_path" ]]; then
@@ -152,13 +194,9 @@ for idx in "${!STORE_IDS[@]}"; do
   done
 done
 
-read -r TSO_LISTEN TSO_URL < <(nokv-config tso --config "$CONFIG_PATH" --format simple 2>/dev/null || echo "- -")
-
-if [[ -n "${TSO_LISTEN:-}" && "$TSO_LISTEN" != "-" ]]; then
-  echo "Starting TSO allocator on ${TSO_LISTEN}"
-  nokv-tso --addr "$TSO_LISTEN" --start 100 >"$WORKDIR/tso.log" 2>&1 &
-  TSO_PID=$!
-fi
+echo "Starting PD service on ${PD_LISTEN}"
+nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR" >"$WORKDIR/pd.log" 2>&1 &
+PD_PID=$!
 
 serve_debug_args=()
 if [[ $RAFT_DEBUG -eq 1 ]]; then
@@ -169,17 +207,17 @@ for idx in "${!STORE_IDS[@]}"; do
   store_id="${STORE_IDS[$idx]}"
   store_dir="${STORE_WORKDIRS[$idx]}"
   echo "Starting store ${store_id} (workdir=${store_dir})"
+  serve_args=(
+    --config "$CONFIG_PATH"
+    --store-id "$store_id"
+    --workdir "$store_dir"
+    --pd-addr "$PD_LISTEN"
+    "${serve_debug_args[@]}"
+  )
   scripts/serve_from_config.sh \
-    --config "$CONFIG_PATH" \
-    --store-id "$store_id" \
-    --workdir "$store_dir" \
-    "${serve_debug_args[@]}" >"$store_dir/server.log" 2>&1 &
+    "${serve_args[@]}" >"$store_dir/server.log" 2>&1 &
   STORE_PIDS+=($!)
 done
 
-if [[ -n "${TSO_URL:-}" && "$TSO_URL" != "-" ]]; then
-  echo "Cluster running. TSO available at ${TSO_URL}/tso"
-else
-  echo "Cluster running (TSO disabled). Press Ctrl+C to stop."
-fi
+echo "Cluster running. PD available at ${PD_LISTEN}"
 wait
