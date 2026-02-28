@@ -71,12 +71,14 @@ func runStores(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(cfg.Stores)
 	case "simple":
 		for _, st := range cfg.Stores {
-			fmt.Printf("%d %s %s %s %s\n",
+			fmt.Printf("%d %s %s %s %s %s %s\n",
 				st.StoreID,
 				firstNonEmpty(st.ListenAddr, st.Addr),
 				st.Addr,
 				firstNonEmpty(st.DockerListenAddr, st.ListenAddr, st.Addr),
 				firstNonEmpty(st.DockerAddr, st.Addr),
+				firstNonEmpty(cfg.ResolveStoreWorkDir(st.StoreID, "host")),
+				firstNonEmpty(cfg.ResolveStoreWorkDir(st.StoreID, "docker")),
 			)
 		}
 		return nil

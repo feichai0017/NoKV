@@ -17,6 +17,7 @@ USAGE
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
+WORKDIR_SET=0
 PD_LISTEN=""
 PD_LISTEN_SET=0
 RAFT_DEBUG=1
@@ -29,6 +30,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workdir)
       WORKDIR=$2
+      WORKDIR_SET=1
       shift 2
       ;;
     --pd-listen)
@@ -137,10 +139,22 @@ fi
 
 declare -a STORE_IDS STORE_WORKDIRS
 for line in "${STORE_LINES[@]}"; do
-  read -r store_id listen_addr advertise_addr docker_listen docker_addr <<<"$line"
+  read -r store_id listen_addr advertise_addr docker_listen docker_addr store_workdir docker_workdir <<<"$line"
   STORE_IDS+=("$store_id")
-  STORE_WORKDIRS+=("$WORKDIR/store-$store_id")
-  store_dir="$WORKDIR/store-$store_id"
+  store_dir=""
+  if [[ $WORKDIR_SET -eq 1 ]]; then
+    store_dir="$WORKDIR/store-$store_id"
+  elif [[ -n "${store_workdir:-}" && "$store_workdir" != "-" ]]; then
+    if [[ "$store_workdir" == /* ]]; then
+      store_dir="$store_workdir"
+    else
+      store_dir="$CONFIG_DIR/$store_workdir"
+    fi
+  fi
+  if [[ -z "$store_dir" ]]; then
+    store_dir="$WORKDIR/store-$store_id"
+  fi
+  STORE_WORKDIRS+=("$store_dir")
   mkdir -p "$store_dir"
   lock_path="$store_dir/LOCK"
   if [[ -f "$lock_path" ]]; then

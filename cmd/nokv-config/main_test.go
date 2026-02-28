@@ -23,8 +23,8 @@ func TestRunStoresSimpleFormat(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	require.Len(t, lines, 2)
-	require.Equal(t, "1 127.0.0.1:10170 127.0.0.1:10170 10.0.0.1:20160 store1-docker", lines[0])
-	require.Equal(t, "2 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171", lines[1])
+	require.Equal(t, "1 127.0.0.1:10170 127.0.0.1:10170 10.0.0.1:20160 store1-docker ./artifacts/cluster/store-1 /var/lib/nokv/store-1", lines[0])
+	require.Equal(t, "2 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 ./custom/store-2 /var/lib/custom/store-2", lines[1])
 }
 
 func TestRunRegionsSimpleFormat(t *testing.T) {
@@ -496,6 +496,8 @@ func writeSampleConfig(t *testing.T) string {
 			WorkDir:       "./artifacts/cluster/pd",
 			DockerWorkDir: "/var/lib/nokv-pd",
 		},
+		StoreWorkDirTemplate:       "./artifacts/cluster/store-{id}",
+		StoreDockerWorkDirTemplate: "/var/lib/nokv/store-{id}",
 		Stores: []config.Store{
 			{
 				StoreID:          1,
@@ -505,9 +507,11 @@ func writeSampleConfig(t *testing.T) string {
 				DockerAddr:       "store1-docker",
 			},
 			{
-				StoreID:    2,
-				ListenAddr: "127.0.0.1:10171",
-				Addr:       "127.0.0.1:10171",
+				StoreID:       2,
+				ListenAddr:    "127.0.0.1:10171",
+				Addr:          "127.0.0.1:10171",
+				WorkDir:       "./custom/store-2",
+				DockerWorkDir: "/var/lib/custom/store-2",
 			},
 		},
 		Regions: []config.Region{
