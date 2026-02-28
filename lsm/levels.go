@@ -776,17 +776,27 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 	return nil, utils.ErrKeyNotFound
 }
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	if len(lh.tables) > 0 && (utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
-		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0) {
+	if len(lh.tables) == 0 {
 		return nil
 	}
-	for i := len(lh.tables) - 1; i >= 0; i-- {
-		if utils.CompareUserKeys(key, lh.tables[i].MinKey()) > -1 &&
-			utils.CompareUserKeys(key, lh.tables[i].MaxKey()) < 1 {
-			return lh.tables[i]
-		}
+	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
+		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0 {
+		return nil
 	}
-	return nil
+
+	// L1+ tables are sorted and non-overlapping by user-key range.
+	// Find the first table whose max key is >= target key.
+	idx := sort.Search(len(lh.tables), func(i int) bool {
+		return utils.CompareUserKeys(lh.tables[i].MaxKey(), key) >= 0
+	})
+	if idx >= len(lh.tables) {
+		return nil
+	}
+	candidate := lh.tables[idx]
+	if utils.CompareUserKeys(key, candidate.MinKey()) < 0 {
+		return nil
+	}
+	return candidate
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
