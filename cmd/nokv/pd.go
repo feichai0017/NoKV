@@ -42,22 +42,42 @@ func runPDCmd(w io.Writer, args []string) error {
 	defer func() { _ = lis.Close() }()
 
 	cluster := core.NewCluster()
+	var (
+		stateStore    *pdStateStore
+		regionCatalog *manifest.Manager
+		workdirPath   string
+		loadedRegions int
+	)
+	if strings.TrimSpace(*workdir) != "" {
+		workdirPath = strings.TrimSpace(*workdir)
+		stateStore = newPDStateStore(workdirPath)
+		state, err := stateStore.Load()
+		if err != nil {
+			return fmt.Errorf("pd load allocator state from %q: %w", workdirPath, err)
+		}
+		*idStart, *tsStart = resolveAllocatorStarts(*idStart, *tsStart, state)
+
+		mgr, err := manifest.Open(workdirPath, nil)
+		if err != nil {
+			return fmt.Errorf("pd open manifest workdir %q: %w", workdirPath, err)
+		}
+		defer func() { _ = mgr.Close() }()
+		regionCatalog = mgr
+
+		loadedRegions, err = restorePDRegions(cluster, mgr.RegionSnapshot())
+		if err != nil {
+			return fmt.Errorf("pd restore regions from %q: %w", workdirPath, err)
+		}
+	}
+
 	ids := core.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := pdserver.NewService(cluster, ids, tsAlloc)
-	if strings.TrimSpace(*workdir) != "" {
-		mgr, err := manifest.Open(strings.TrimSpace(*workdir), nil)
-		if err != nil {
-			return fmt.Errorf("pd open manifest workdir %q: %w", strings.TrimSpace(*workdir), err)
-		}
-		defer func() { _ = mgr.Close() }()
-
-		loaded, err := restorePDRegions(cluster, mgr.RegionSnapshot())
-		if err != nil {
-			return fmt.Errorf("pd restore regions from %q: %w", strings.TrimSpace(*workdir), err)
-		}
-		svc.SetRegionCatalog(mgr)
-		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loaded, strings.TrimSpace(*workdir))
+	if regionCatalog != nil {
+		svc.SetRegionCatalog(regionCatalog)
+	}
+	if stateStore != nil {
+		svc.SetAllocatorStateSink(stateStore)
 	}
 
 	grpcServer := grpc.NewServer()
@@ -68,6 +88,10 @@ func runPDCmd(w io.Writer, args []string) error {
 		serveErrCh <- grpcServer.Serve(lis)
 	}()
 
+	if regionCatalog != nil {
+		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loadedRegions, workdirPath)
+		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
+	}
 	_, _ = fmt.Fprintf(w, "PD-lite service listening on %s\n", lis.Addr().String())
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

@@ -87,3 +87,33 @@ func TestRestorePDRegionsFromManifestSnapshot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(20), meta.ID)
 }
+
+func TestPDStateStoreSaveAndLoad(t *testing.T) {
+	store := newPDStateStore(t.TempDir())
+	state, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), state.IDCurrent)
+	require.Equal(t, uint64(0), state.TSCurrent)
+
+	require.NoError(t, store.Save(123, 456))
+	state, err = store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), state.IDCurrent)
+	require.Equal(t, uint64(456), state.TSCurrent)
+}
+
+func TestResolveAllocatorStarts(t *testing.T) {
+	id, ts := resolveAllocatorStarts(1, 100, pdAllocatorState{
+		IDCurrent: 50,
+		TSCurrent: 20,
+	})
+	require.Equal(t, uint64(51), id)
+	require.Equal(t, uint64(100), ts)
+
+	id, ts = resolveAllocatorStarts(80, 30, pdAllocatorState{
+		IDCurrent: 50,
+		TSCurrent: 20,
+	})
+	require.Equal(t, uint64(80), id)
+	require.Equal(t, uint64(30), ts)
+}
