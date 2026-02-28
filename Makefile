@@ -34,6 +34,7 @@ build:
 	go build -o build/nokv ./cmd/nokv
 	go build -o build/nokv-redis ./cmd/nokv-redis
 	go build -o build/nokv-config ./cmd/nokv-config
+	go build -o build/nokv-pd ./cmd/nokv-pd
 	go build -o build/nokv-tso ./scripts/tso
 	@echo "✓ Build complete: binaries in build/"
 
