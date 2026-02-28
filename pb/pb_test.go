@@ -289,14 +289,17 @@ func TestPDClientAndServerHelpers(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.GetRegionByKey(context.Background(), &GetRegionByKeyRequest{})
 	require.NoError(t, err)
+	_, err = client.RemoveRegion(context.Background(), &RemoveRegionRequest{})
+	require.NoError(t, err)
 	_, err = client.AllocID(context.Background(), &AllocIDRequest{})
 	require.NoError(t, err)
 	_, err = client.Tso(context.Background(), &TsoRequest{})
 	require.NoError(t, err)
 
-	require.Len(t, conn.methods, 5)
+	require.Len(t, conn.methods, 6)
 	require.Equal(t, PD_StoreHeartbeat_FullMethodName, conn.methods[0])
-	require.Equal(t, PD_Tso_FullMethodName, conn.methods[4])
+	require.Equal(t, PD_RemoveRegion_FullMethodName, conn.methods[3])
+	require.Equal(t, PD_Tso_FullMethodName, conn.methods[5])
 
 	reg := &fakeRegistrar{}
 	RegisterPDServer(reg, UnimplementedPDServer{})
@@ -310,6 +313,8 @@ func TestPDClientAndServerHelpers(t *testing.T) {
 	_, err = srv.RegionHeartbeat(context.Background(), &RegionHeartbeatRequest{})
 	require.Equal(t, codes.Unimplemented, status.Code(err))
 	_, err = srv.GetRegionByKey(context.Background(), &GetRegionByKeyRequest{})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = srv.RemoveRegion(context.Background(), &RemoveRegionRequest{})
 	require.Equal(t, codes.Unimplemented, status.Code(err))
 	_, err = srv.AllocID(context.Background(), &AllocIDRequest{})
 	require.Equal(t, codes.Unimplemented, status.Code(err))

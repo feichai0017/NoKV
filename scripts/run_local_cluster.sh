@@ -60,6 +60,7 @@ if ! [[ -f "$CONFIG_PATH" ]]; then
   echo "configuration file not found: $CONFIG_PATH" >&2
   exit 1
 fi
+CONFIG_DIR=$(cd "$(dirname "$CONFIG_PATH")" && pwd)
 
 if [ -z "$WORKDIR" ]; then
   WORKDIR="$ROOT_DIR/artifacts/cluster"
@@ -124,7 +125,7 @@ fi
 if [[ -z "$PD_WORKDIR" ]]; then
   PD_WORKDIR="$WORKDIR/pd"
 elif [[ "$PD_WORKDIR" != /* ]]; then
-  PD_WORKDIR="$WORKDIR/$PD_WORKDIR"
+  PD_WORKDIR="$CONFIG_DIR/$PD_WORKDIR"
 fi
 mkdir -p "$PD_WORKDIR"
 
@@ -196,12 +197,9 @@ for idx in "${!STORE_IDS[@]}"; do
     --config "$CONFIG_PATH"
     --store-id "$store_id"
     --workdir "$store_dir"
+    --pd-addr "$PD_LISTEN"
     "${serve_debug_args[@]}"
   )
-  if [[ $PD_LISTEN_SET -eq 1 ]]; then
-    # Preserve CLI override semantics: explicit --pd-listen should propagate to serve.
-    serve_args+=(--pd-addr "$PD_LISTEN")
-  fi
   scripts/serve_from_config.sh \
     "${serve_args[@]}" >"$store_dir/server.log" 2>&1 &
   STORE_PIDS+=($!)

@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
-const defaultRPCtimeout = 2 * time.Second
+const defaultRPCTimeout = 2 * time.Second
 
 // RegionSinkConfig defines how a PD-backed scheduler sink behaves.
 type RegionSinkConfig struct {
@@ -37,7 +37,7 @@ type RegionSink struct {
 func NewRegionSink(cfg RegionSinkConfig) *RegionSink {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = defaultRPCtimeout
+		timeout = defaultRPCTimeout
 	}
 	onErr := cfg.OnError
 	if onErr == nil {
