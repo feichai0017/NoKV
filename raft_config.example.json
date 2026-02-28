@@ -1,5 +1,9 @@
 {
   "max_retries": 5,
+  "pd": {
+    "addr": "127.0.0.1:2379",
+    "docker_addr": "nokv-pd:2379"
+  },
   "stores": [
     {
       "store_id": 1,

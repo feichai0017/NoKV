@@ -5,7 +5,9 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run inside `db.Update` / `db.View`, providing atomic single-key updates and snapshot reads across multiple keys. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC. | `--raft-config <file>`<br>`--pd-addr host:port` (required) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC. | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
+
+When both CLI and config provide the same setting, CLI wins.
 
 ## Usage examples
 
@@ -34,8 +36,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
    ```bash
    go run ./cmd/nokv-redis \
      --addr 127.0.0.1:6380 \
-     --raft-config raft_config.example.json \
-     --pd-addr 127.0.0.1:2379
+     --raft-config raft_config.example.json
    ```
 
 ## Supported commands
@@ -53,6 +54,7 @@ In both modes write commands are atomic. The Raft backend batches multi-key upda
 - `stores` – store ID, gRPC address, and optional container listen/advertise addresses
 - `regions` – region ID, start/end keys (use `hex:<bytes>` for binary data), epoch, peer list, leader store ID
 - `max_retries` – maximum retries for region errors in the distributed client
+- `pd` – PD-lite endpoint(s). `addr` is used for host scope, `docker_addr` for container scope
 
 Use `nokv-config` to inspect or validate the configuration:
 

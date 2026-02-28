@@ -62,6 +62,34 @@ func TestRunRegionsJSONFormat(t *testing.T) {
 	require.Len(t, regions, 2)
 }
 
+func TestRunPDSimpleFormat(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+
+	output, err := captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:2379", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "nokv-pd:2379", strings.TrimSpace(output))
+}
+
+func TestRunPDJSONFormat(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	output, err := captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "json"})
+	})
+	require.NoError(t, err)
+	var endpoint config.PD
+	require.NoError(t, json.Unmarshal([]byte(output), &endpoint))
+	require.Equal(t, "127.0.0.1:2379", endpoint.Addr)
+	require.Equal(t, "nokv-pd:2379", endpoint.DockerAddr)
+}
+
 func TestRunManifestWritesRegion(t *testing.T) {
 	dir := t.TempDir()
 	manifestDir := filepath.Join(dir, "manifest")
@@ -151,6 +179,24 @@ func TestMainRegionsCommand(t *testing.T) {
 		cfgPath,
 		"--format",
 		"json",
+	}
+	code := captureExitCode(t, func() {
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestMainPDCommand(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = []string{
+		"nokv-config",
+		"pd",
+		"--config",
+		cfgPath,
+		"--format",
+		"simple",
 	}
 	code := captureExitCode(t, func() {
 		main()
@@ -277,6 +323,26 @@ func TestRunRegionsLoadConfigError(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	require.Error(t, runRegions([]string{"--config", path}))
+}
+
+func TestRunPDMissingBlock(t *testing.T) {
+	cfg := config.File{
+		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
+	}
+	dir := t.TempDir()
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+
+	err = runPD([]string{"--config", path})
+	require.Error(t, err)
+}
+
+func TestRunPDUnknownFormatAndScope(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	require.Error(t, runPD([]string{"--config", cfgPath, "--format", "bad"}))
+	require.Error(t, runPD([]string{"--config", cfgPath, "--scope", "oops"}))
 }
 
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -409,6 +475,10 @@ func writeSampleConfig(t *testing.T) string {
 	t.Helper()
 	cfg := config.File{
 		MaxRetries: 3,
+		PD: &config.PD{
+			Addr:       "127.0.0.1:2379",
+			DockerAddr: "nokv-pd:2379",
+		},
 		Stores: []config.Store{
 			{
 				StoreID:          1,
