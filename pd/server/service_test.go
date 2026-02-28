@@ -47,6 +47,32 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Equal(t, uint64(11), getResp.GetRegion().GetId())
 }
 
+func TestServiceRemoveRegion(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+		Region: &pb.RegionMeta{
+			Id:               11,
+			StartKey:         []byte("a"),
+			EndKey:           []byte("z"),
+			EpochVersion:     1,
+			EpochConfVersion: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
+	require.NoError(t, err)
+	require.True(t, resp.GetRemoved())
+
+	getResp, err := svc.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("m")})
+	require.NoError(t, err)
+	require.True(t, getResp.GetNotFound())
+
+	resp, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
+	require.NoError(t, err)
+	require.False(t, resp.GetRemoved())
+}
+
 func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
@@ -115,6 +141,14 @@ func TestServiceRequestValidation(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	_, err = svc.Tso(context.Background(), nil)
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = svc.RemoveRegion(context.Background(), nil)
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 0})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }

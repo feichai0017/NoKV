@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	PD_StoreHeartbeat_FullMethodName  = "/pb.PD/StoreHeartbeat"
 	PD_RegionHeartbeat_FullMethodName = "/pb.PD/RegionHeartbeat"
+	PD_RemoveRegion_FullMethodName    = "/pb.PD/RemoveRegion"
 	PD_GetRegionByKey_FullMethodName  = "/pb.PD/GetRegionByKey"
 	PD_AllocID_FullMethodName         = "/pb.PD/AllocID"
 	PD_Tso_FullMethodName             = "/pb.PD/Tso"
@@ -34,6 +35,7 @@ const (
 type PDClient interface {
 	StoreHeartbeat(ctx context.Context, in *StoreHeartbeatRequest, opts ...grpc.CallOption) (*StoreHeartbeatResponse, error)
 	RegionHeartbeat(ctx context.Context, in *RegionHeartbeatRequest, opts ...grpc.CallOption) (*RegionHeartbeatResponse, error)
+	RemoveRegion(ctx context.Context, in *RemoveRegionRequest, opts ...grpc.CallOption) (*RemoveRegionResponse, error)
 	GetRegionByKey(ctx context.Context, in *GetRegionByKeyRequest, opts ...grpc.CallOption) (*GetRegionByKeyResponse, error)
 	AllocID(ctx context.Context, in *AllocIDRequest, opts ...grpc.CallOption) (*AllocIDResponse, error)
 	Tso(ctx context.Context, in *TsoRequest, opts ...grpc.CallOption) (*TsoResponse, error)
@@ -61,6 +63,16 @@ func (c *pDClient) RegionHeartbeat(ctx context.Context, in *RegionHeartbeatReque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegionHeartbeatResponse)
 	err := c.cc.Invoke(ctx, PD_RegionHeartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pDClient) RemoveRegion(ctx context.Context, in *RemoveRegionRequest, opts ...grpc.CallOption) (*RemoveRegionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveRegionResponse)
+	err := c.cc.Invoke(ctx, PD_RemoveRegion_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +115,7 @@ func (c *pDClient) Tso(ctx context.Context, in *TsoRequest, opts ...grpc.CallOpt
 type PDServer interface {
 	StoreHeartbeat(context.Context, *StoreHeartbeatRequest) (*StoreHeartbeatResponse, error)
 	RegionHeartbeat(context.Context, *RegionHeartbeatRequest) (*RegionHeartbeatResponse, error)
+	RemoveRegion(context.Context, *RemoveRegionRequest) (*RemoveRegionResponse, error)
 	GetRegionByKey(context.Context, *GetRegionByKeyRequest) (*GetRegionByKeyResponse, error)
 	AllocID(context.Context, *AllocIDRequest) (*AllocIDResponse, error)
 	Tso(context.Context, *TsoRequest) (*TsoResponse, error)
@@ -120,6 +133,9 @@ func (UnimplementedPDServer) StoreHeartbeat(context.Context, *StoreHeartbeatRequ
 }
 func (UnimplementedPDServer) RegionHeartbeat(context.Context, *RegionHeartbeatRequest) (*RegionHeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionHeartbeat not implemented")
+}
+func (UnimplementedPDServer) RemoveRegion(context.Context, *RemoveRegionRequest) (*RemoveRegionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveRegion not implemented")
 }
 func (UnimplementedPDServer) GetRegionByKey(context.Context, *GetRegionByKeyRequest) (*GetRegionByKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRegionByKey not implemented")
@@ -182,6 +198,24 @@ func _PD_RegionHeartbeat_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PDServer).RegionHeartbeat(ctx, req.(*RegionHeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PD_RemoveRegion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveRegionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PDServer).RemoveRegion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PD_RemoveRegion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PDServer).RemoveRegion(ctx, req.(*RemoveRegionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -254,6 +288,10 @@ var PD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegionHeartbeat",
 			Handler:    _PD_RegionHeartbeat_Handler,
+		},
+		{
+			MethodName: "RemoveRegion",
+			Handler:    _PD_RemoveRegion_Handler,
 		},
 		{
 			MethodName: "GetRegionByKey",

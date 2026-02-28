@@ -72,13 +72,22 @@ func (s *RegionSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 	}
 }
 
-// RemoveRegion removes local mirror state. PD-side remove RPC is not added yet.
+// RemoveRegion removes region metadata from PD and local mirror state.
 func (s *RegionSink) RemoveRegion(regionID uint64) {
 	if s == nil || regionID == 0 {
 		return
 	}
 	if s.mirror != nil {
 		s.mirror.RemoveRegion(regionID)
+	}
+	if s.pd == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	_, err := s.pd.RemoveRegion(ctx, &pb.RemoveRegionRequest{RegionId: regionID})
+	if err != nil {
+		s.onError("RemoveRegion", err)
 	}
 }
 
