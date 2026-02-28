@@ -820,9 +820,15 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 
 	// Assign tables.
 	lh.tables = newTables
-	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
-	})
+	if lh.levelNum == 0 {
+		sort.Slice(lh.tables, func(i, j int) bool {
+			return lh.tables[i].fid < lh.tables[j].fid
+		})
+	} else {
+		sort.Slice(lh.tables, func(i, j int) bool {
+			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+		})
+	}
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
