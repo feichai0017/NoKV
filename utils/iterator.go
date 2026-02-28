@@ -40,6 +40,6 @@ type Options struct {
 	MetricTag string
 	// Inclusive lower bound
 	LowerBound []byte
-	// Excluse upper bound
+	// Exclusive upper bound
 	UpperBound []byte
 }
