@@ -23,6 +23,52 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type SchedulerOperationType int32
+
+const (
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE            SchedulerOperationType = 0
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER SchedulerOperationType = 1
+)
+
+// Enum value maps for SchedulerOperationType.
+var (
+	SchedulerOperationType_name = map[int32]string{
+		0: "SCHEDULER_OPERATION_TYPE_NONE",
+		1: "SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER",
+	}
+	SchedulerOperationType_value = map[string]int32{
+		"SCHEDULER_OPERATION_TYPE_NONE":            0,
+		"SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER": 1,
+	}
+)
+
+func (x SchedulerOperationType) Enum() *SchedulerOperationType {
+	p := new(SchedulerOperationType)
+	*p = x
+	return p
+}
+
+func (x SchedulerOperationType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SchedulerOperationType) Descriptor() protoreflect.EnumDescriptor {
+	return file_pdpb_proto_enumTypes[0].Descriptor()
+}
+
+func (SchedulerOperationType) Type() protoreflect.EnumType {
+	return &file_pdpb_proto_enumTypes[0]
+}
+
+func (x SchedulerOperationType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SchedulerOperationType.Descriptor instead.
+func (SchedulerOperationType) EnumDescriptor() ([]byte, []int) {
+	return file_pdpb_proto_rawDescGZIP(), []int{0}
+}
+
 type StoreHeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StoreId       uint64                 `protobuf:"varint,1,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
@@ -99,16 +145,85 @@ func (x *StoreHeartbeatRequest) GetAvailable() uint64 {
 	return 0
 }
 
+type SchedulerOperation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          SchedulerOperationType `protobuf:"varint,1,opt,name=type,proto3,enum=pb.SchedulerOperationType" json:"type,omitempty"`
+	RegionId      uint64                 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	SourcePeerId  uint64                 `protobuf:"varint,3,opt,name=source_peer_id,json=sourcePeerId,proto3" json:"source_peer_id,omitempty"`
+	TargetPeerId  uint64                 `protobuf:"varint,4,opt,name=target_peer_id,json=targetPeerId,proto3" json:"target_peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchedulerOperation) Reset() {
+	*x = SchedulerOperation{}
+	mi := &file_pdpb_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchedulerOperation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchedulerOperation) ProtoMessage() {}
+
+func (x *SchedulerOperation) ProtoReflect() protoreflect.Message {
+	mi := &file_pdpb_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchedulerOperation.ProtoReflect.Descriptor instead.
+func (*SchedulerOperation) Descriptor() ([]byte, []int) {
+	return file_pdpb_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SchedulerOperation) GetType() SchedulerOperationType {
+	if x != nil {
+		return x.Type
+	}
+	return SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE
+}
+
+func (x *SchedulerOperation) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *SchedulerOperation) GetSourcePeerId() uint64 {
+	if x != nil {
+		return x.SourcePeerId
+	}
+	return 0
+}
+
+func (x *SchedulerOperation) GetTargetPeerId() uint64 {
+	if x != nil {
+		return x.TargetPeerId
+	}
+	return 0
+}
+
 type StoreHeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Operations    []*SchedulerOperation  `protobuf:"bytes,2,rep,name=operations,proto3" json:"operations,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StoreHeartbeatResponse) Reset() {
 	*x = StoreHeartbeatResponse{}
-	mi := &file_pdpb_proto_msgTypes[1]
+	mi := &file_pdpb_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -120,7 +235,7 @@ func (x *StoreHeartbeatResponse) String() string {
 func (*StoreHeartbeatResponse) ProtoMessage() {}
 
 func (x *StoreHeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[1]
+	mi := &file_pdpb_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -133,7 +248,7 @@ func (x *StoreHeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoreHeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*StoreHeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{1}
+	return file_pdpb_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *StoreHeartbeatResponse) GetAccepted() bool {
@@ -141,6 +256,13 @@ func (x *StoreHeartbeatResponse) GetAccepted() bool {
 		return x.Accepted
 	}
 	return false
+}
+
+func (x *StoreHeartbeatResponse) GetOperations() []*SchedulerOperation {
+	if x != nil {
+		return x.Operations
+	}
+	return nil
 }
 
 type RegionHeartbeatRequest struct {
@@ -152,7 +274,7 @@ type RegionHeartbeatRequest struct {
 
 func (x *RegionHeartbeatRequest) Reset() {
 	*x = RegionHeartbeatRequest{}
-	mi := &file_pdpb_proto_msgTypes[2]
+	mi := &file_pdpb_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -164,7 +286,7 @@ func (x *RegionHeartbeatRequest) String() string {
 func (*RegionHeartbeatRequest) ProtoMessage() {}
 
 func (x *RegionHeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[2]
+	mi := &file_pdpb_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -177,7 +299,7 @@ func (x *RegionHeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionHeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*RegionHeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{2}
+	return file_pdpb_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RegionHeartbeatRequest) GetRegion() *RegionMeta {
@@ -196,7 +318,7 @@ type RegionHeartbeatResponse struct {
 
 func (x *RegionHeartbeatResponse) Reset() {
 	*x = RegionHeartbeatResponse{}
-	mi := &file_pdpb_proto_msgTypes[3]
+	mi := &file_pdpb_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +330,7 @@ func (x *RegionHeartbeatResponse) String() string {
 func (*RegionHeartbeatResponse) ProtoMessage() {}
 
 func (x *RegionHeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[3]
+	mi := &file_pdpb_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +343,7 @@ func (x *RegionHeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionHeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*RegionHeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{3}
+	return file_pdpb_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RegionHeartbeatResponse) GetAccepted() bool {
@@ -240,7 +362,7 @@ type GetRegionByKeyRequest struct {
 
 func (x *GetRegionByKeyRequest) Reset() {
 	*x = GetRegionByKeyRequest{}
-	mi := &file_pdpb_proto_msgTypes[4]
+	mi := &file_pdpb_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -252,7 +374,7 @@ func (x *GetRegionByKeyRequest) String() string {
 func (*GetRegionByKeyRequest) ProtoMessage() {}
 
 func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[4]
+	mi := &file_pdpb_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -265,7 +387,7 @@ func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyRequest) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{4}
+	return file_pdpb_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetRegionByKeyRequest) GetKey() []byte {
@@ -285,7 +407,7 @@ type GetRegionByKeyResponse struct {
 
 func (x *GetRegionByKeyResponse) Reset() {
 	*x = GetRegionByKeyResponse{}
-	mi := &file_pdpb_proto_msgTypes[5]
+	mi := &file_pdpb_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -297,7 +419,7 @@ func (x *GetRegionByKeyResponse) String() string {
 func (*GetRegionByKeyResponse) ProtoMessage() {}
 
 func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[5]
+	mi := &file_pdpb_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -310,7 +432,7 @@ func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyResponse.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyResponse) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{5}
+	return file_pdpb_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetRegionByKeyResponse) GetRegion() *RegionMeta {
@@ -336,7 +458,7 @@ type AllocIDRequest struct {
 
 func (x *AllocIDRequest) Reset() {
 	*x = AllocIDRequest{}
-	mi := &file_pdpb_proto_msgTypes[6]
+	mi := &file_pdpb_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +470,7 @@ func (x *AllocIDRequest) String() string {
 func (*AllocIDRequest) ProtoMessage() {}
 
 func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[6]
+	mi := &file_pdpb_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +483,7 @@ func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDRequest.ProtoReflect.Descriptor instead.
 func (*AllocIDRequest) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{6}
+	return file_pdpb_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AllocIDRequest) GetCount() uint64 {
@@ -381,7 +503,7 @@ type AllocIDResponse struct {
 
 func (x *AllocIDResponse) Reset() {
 	*x = AllocIDResponse{}
-	mi := &file_pdpb_proto_msgTypes[7]
+	mi := &file_pdpb_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -393,7 +515,7 @@ func (x *AllocIDResponse) String() string {
 func (*AllocIDResponse) ProtoMessage() {}
 
 func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[7]
+	mi := &file_pdpb_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -406,7 +528,7 @@ func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDResponse.ProtoReflect.Descriptor instead.
 func (*AllocIDResponse) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{7}
+	return file_pdpb_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AllocIDResponse) GetFirstId() uint64 {
@@ -432,7 +554,7 @@ type TsoRequest struct {
 
 func (x *TsoRequest) Reset() {
 	*x = TsoRequest{}
-	mi := &file_pdpb_proto_msgTypes[8]
+	mi := &file_pdpb_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -444,7 +566,7 @@ func (x *TsoRequest) String() string {
 func (*TsoRequest) ProtoMessage() {}
 
 func (x *TsoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[8]
+	mi := &file_pdpb_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -457,7 +579,7 @@ func (x *TsoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoRequest.ProtoReflect.Descriptor instead.
 func (*TsoRequest) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{8}
+	return file_pdpb_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TsoRequest) GetCount() uint64 {
@@ -477,7 +599,7 @@ type TsoResponse struct {
 
 func (x *TsoResponse) Reset() {
 	*x = TsoResponse{}
-	mi := &file_pdpb_proto_msgTypes[9]
+	mi := &file_pdpb_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +611,7 @@ func (x *TsoResponse) String() string {
 func (*TsoResponse) ProtoMessage() {}
 
 func (x *TsoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pdpb_proto_msgTypes[9]
+	mi := &file_pdpb_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +624,7 @@ func (x *TsoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoResponse.ProtoReflect.Descriptor instead.
 func (*TsoResponse) Descriptor() ([]byte, []int) {
-	return file_pdpb_proto_rawDescGZIP(), []int{9}
+	return file_pdpb_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TsoResponse) GetTimestamp() uint64 {
@@ -532,9 +654,17 @@ const file_pdpb_proto_rawDesc = "" +
 	"\n" +
 	"leader_num\x18\x03 \x01(\x04R\tleaderNum\x12\x1a\n" +
 	"\bcapacity\x18\x04 \x01(\x04R\bcapacity\x12\x1c\n" +
-	"\tavailable\x18\x05 \x01(\x04R\tavailable\"4\n" +
+	"\tavailable\x18\x05 \x01(\x04R\tavailable\"\xad\x01\n" +
+	"\x12SchedulerOperation\x12.\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x1a.pb.SchedulerOperationTypeR\x04type\x12\x1b\n" +
+	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
+	"\x0esource_peer_id\x18\x03 \x01(\x04R\fsourcePeerId\x12$\n" +
+	"\x0etarget_peer_id\x18\x04 \x01(\x04R\ftargetPeerId\"l\n" +
 	"\x16StoreHeartbeatResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"@\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x126\n" +
+	"\n" +
+	"operations\x18\x02 \x03(\v2\x16.pb.SchedulerOperationR\n" +
+	"operations\"@\n" +
 	"\x16RegionHeartbeatRequest\x12&\n" +
 	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"5\n" +
 	"\x17RegionHeartbeatResponse\x12\x1a\n" +
@@ -554,7 +684,10 @@ const file_pdpb_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\"A\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x04R\x05count2\xbe\x02\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count*i\n" +
+	"\x16SchedulerOperationType\x12!\n" +
+	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
+	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x012\xbe\x02\n" +
 	"\x02PD\x12G\n" +
 	"\x0eStoreHeartbeat\x12\x19.pb.StoreHeartbeatRequest\x1a\x1a.pb.StoreHeartbeatResponse\x12J\n" +
 	"\x0fRegionHeartbeat\x12\x1a.pb.RegionHeartbeatRequest\x1a\x1b.pb.RegionHeartbeatResponse\x12G\n" +
@@ -574,38 +707,43 @@ func file_pdpb_proto_rawDescGZIP() []byte {
 	return file_pdpb_proto_rawDescData
 }
 
-var file_pdpb_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_pdpb_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_pdpb_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_pdpb_proto_goTypes = []any{
-	(*StoreHeartbeatRequest)(nil),   // 0: pb.StoreHeartbeatRequest
-	(*StoreHeartbeatResponse)(nil),  // 1: pb.StoreHeartbeatResponse
-	(*RegionHeartbeatRequest)(nil),  // 2: pb.RegionHeartbeatRequest
-	(*RegionHeartbeatResponse)(nil), // 3: pb.RegionHeartbeatResponse
-	(*GetRegionByKeyRequest)(nil),   // 4: pb.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),  // 5: pb.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),          // 6: pb.AllocIDRequest
-	(*AllocIDResponse)(nil),         // 7: pb.AllocIDResponse
-	(*TsoRequest)(nil),              // 8: pb.TsoRequest
-	(*TsoResponse)(nil),             // 9: pb.TsoResponse
-	(*RegionMeta)(nil),              // 10: pb.RegionMeta
+	(SchedulerOperationType)(0),     // 0: pb.SchedulerOperationType
+	(*StoreHeartbeatRequest)(nil),   // 1: pb.StoreHeartbeatRequest
+	(*SchedulerOperation)(nil),      // 2: pb.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),  // 3: pb.StoreHeartbeatResponse
+	(*RegionHeartbeatRequest)(nil),  // 4: pb.RegionHeartbeatRequest
+	(*RegionHeartbeatResponse)(nil), // 5: pb.RegionHeartbeatResponse
+	(*GetRegionByKeyRequest)(nil),   // 6: pb.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),  // 7: pb.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),          // 8: pb.AllocIDRequest
+	(*AllocIDResponse)(nil),         // 9: pb.AllocIDResponse
+	(*TsoRequest)(nil),              // 10: pb.TsoRequest
+	(*TsoResponse)(nil),             // 11: pb.TsoResponse
+	(*RegionMeta)(nil),              // 12: pb.RegionMeta
 }
 var file_pdpb_proto_depIdxs = []int32{
-	10, // 0: pb.RegionHeartbeatRequest.region:type_name -> pb.RegionMeta
-	10, // 1: pb.GetRegionByKeyResponse.region:type_name -> pb.RegionMeta
-	0,  // 2: pb.PD.StoreHeartbeat:input_type -> pb.StoreHeartbeatRequest
-	2,  // 3: pb.PD.RegionHeartbeat:input_type -> pb.RegionHeartbeatRequest
-	4,  // 4: pb.PD.GetRegionByKey:input_type -> pb.GetRegionByKeyRequest
-	6,  // 5: pb.PD.AllocID:input_type -> pb.AllocIDRequest
-	8,  // 6: pb.PD.Tso:input_type -> pb.TsoRequest
-	1,  // 7: pb.PD.StoreHeartbeat:output_type -> pb.StoreHeartbeatResponse
-	3,  // 8: pb.PD.RegionHeartbeat:output_type -> pb.RegionHeartbeatResponse
-	5,  // 9: pb.PD.GetRegionByKey:output_type -> pb.GetRegionByKeyResponse
-	7,  // 10: pb.PD.AllocID:output_type -> pb.AllocIDResponse
-	9,  // 11: pb.PD.Tso:output_type -> pb.TsoResponse
-	7,  // [7:12] is the sub-list for method output_type
-	2,  // [2:7] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	0,  // 0: pb.SchedulerOperation.type:type_name -> pb.SchedulerOperationType
+	2,  // 1: pb.StoreHeartbeatResponse.operations:type_name -> pb.SchedulerOperation
+	12, // 2: pb.RegionHeartbeatRequest.region:type_name -> pb.RegionMeta
+	12, // 3: pb.GetRegionByKeyResponse.region:type_name -> pb.RegionMeta
+	1,  // 4: pb.PD.StoreHeartbeat:input_type -> pb.StoreHeartbeatRequest
+	4,  // 5: pb.PD.RegionHeartbeat:input_type -> pb.RegionHeartbeatRequest
+	6,  // 6: pb.PD.GetRegionByKey:input_type -> pb.GetRegionByKeyRequest
+	8,  // 7: pb.PD.AllocID:input_type -> pb.AllocIDRequest
+	10, // 8: pb.PD.Tso:input_type -> pb.TsoRequest
+	3,  // 9: pb.PD.StoreHeartbeat:output_type -> pb.StoreHeartbeatResponse
+	5,  // 10: pb.PD.RegionHeartbeat:output_type -> pb.RegionHeartbeatResponse
+	7,  // 11: pb.PD.GetRegionByKey:output_type -> pb.GetRegionByKeyResponse
+	9,  // 12: pb.PD.AllocID:output_type -> pb.AllocIDResponse
+	11, // 13: pb.PD.Tso:output_type -> pb.TsoResponse
+	9,  // [9:14] is the sub-list for method output_type
+	4,  // [4:9] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_pdpb_proto_init() }
@@ -619,13 +757,14 @@ func file_pdpb_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pdpb_proto_rawDesc), len(file_pdpb_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   10,
+			NumEnums:      1,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_pdpb_proto_goTypes,
 		DependencyIndexes: file_pdpb_proto_depIdxs,
+		EnumInfos:         file_pdpb_proto_enumTypes,
 		MessageInfos:      file_pdpb_proto_msgTypes,
 	}.Build()
 	File_pdpb_proto = out.File

@@ -16,8 +16,21 @@ message StoreHeartbeatRequest {
   uint64 available = 5;
 }
 
+enum SchedulerOperationType {
+  SCHEDULER_OPERATION_TYPE_NONE = 0;
+  SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
+}
+
+message SchedulerOperation {
+  SchedulerOperationType type = 1;
+  uint64 region_id = 2;
+  uint64 source_peer_id = 3;
+  uint64 target_peer_id = 4;
+}
+
 message StoreHeartbeatResponse {
   bool accepted = 1;
+  repeated SchedulerOperation operations = 2;
 }
 
 message RegionHeartbeatRequest {
@@ -62,4 +75,3 @@ service PD {
   rpc AllocID(AllocIDRequest) returns (AllocIDResponse);
   rpc Tso(TsoRequest) returns (TsoResponse);
 }
-

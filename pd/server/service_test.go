@@ -118,3 +118,42 @@ func TestServiceRequestValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
+
+func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
+	svc := NewService(core.NewCluster(), nil, nil)
+	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+		Region: &pb.RegionMeta{
+			Id:               100,
+			StartKey:         []byte(""),
+			EndKey:           []byte("z"),
+			EpochVersion:     1,
+			EpochConfVersion: 1,
+			Peers: []*pb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 201},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.StoreHeartbeat(context.Background(), &pb.StoreHeartbeatRequest{
+		StoreId:   2,
+		LeaderNum: 1,
+		RegionNum: 1,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.StoreHeartbeat(context.Background(), &pb.StoreHeartbeatRequest{
+		StoreId:   1,
+		LeaderNum: 10,
+		RegionNum: 1,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Len(t, resp.GetOperations(), 1)
+	op := resp.GetOperations()[0]
+	require.Equal(t, pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER, op.GetType())
+	require.Equal(t, uint64(100), op.GetRegionId())
+	require.Equal(t, uint64(101), op.GetSourcePeerId())
+	require.Equal(t, uint64(201), op.GetTargetPeerId())
+}

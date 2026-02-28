@@ -15,6 +15,7 @@ import (
 type fakePDClient struct {
 	storeReqs  []*pb.StoreHeartbeatRequest
 	regionReqs []*pb.RegionHeartbeatRequest
+	storeResp  *pb.StoreHeartbeatResponse
 	storeErr   error
 	regionErr  error
 	closed     bool
@@ -24,6 +25,9 @@ func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatR
 	f.storeReqs = append(f.storeReqs, req)
 	if f.storeErr != nil {
 		return nil, f.storeErr
+	}
+	if f.storeResp != nil {
+		return f.storeResp, nil
 	}
 	return &pb.StoreHeartbeatResponse{Accepted: true}, nil
 }
@@ -55,7 +59,19 @@ func (f *fakePDClient) Close() error {
 
 func TestRegionSinkMirrorsAndForwards(t *testing.T) {
 	mirror := scheduler.NewCoordinator()
-	pd := &fakePDClient{}
+	pd := &fakePDClient{
+		storeResp: &pb.StoreHeartbeatResponse{
+			Accepted: true,
+			Operations: []*pb.SchedulerOperation{
+				{
+					Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+					RegionId:     10,
+					SourcePeerId: 101,
+					TargetPeerId: 201,
+				},
+			},
+		},
+	}
 	sink := NewRegionSink(RegionSinkConfig{
 		PD:     pd,
 		Mirror: mirror,
@@ -91,6 +107,14 @@ func TestRegionSinkMirrorsAndForwards(t *testing.T) {
 	stores := sink.StoreSnapshot()
 	require.Len(t, stores, 1)
 	require.Equal(t, uint64(1), stores[0].StoreID)
+
+	ops := sink.Plan(scheduler.Snapshot{})
+	require.Len(t, ops, 1)
+	require.Equal(t, scheduler.OperationLeaderTransfer, ops[0].Type)
+	require.Equal(t, uint64(10), ops[0].Region)
+	require.Equal(t, uint64(101), ops[0].Source)
+	require.Equal(t, uint64(201), ops[0].Target)
+	require.Nil(t, sink.Plan(scheduler.Snapshot{}), "Plan should drain pending ops")
 }
 
 func TestRegionSinkErrorCallbackAndClose(t *testing.T) {
@@ -125,4 +149,22 @@ func TestRegionSinkNoopOnZeroIDs(t *testing.T) {
 	sink.RemoveRegion(0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
+}
+
+func TestFromPBOperationValidation(t *testing.T) {
+	_, ok := fromPBOperation(nil)
+	require.False(t, ok)
+	_, ok = fromPBOperation(&pb.SchedulerOperation{
+		Type: pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE,
+	})
+	require.False(t, ok)
+
+	op, ok := fromPBOperation(&pb.SchedulerOperation{
+		Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+		RegionId:     1,
+		SourcePeerId: 10,
+		TargetPeerId: 20,
+	})
+	require.True(t, ok)
+	require.Equal(t, scheduler.OperationLeaderTransfer, op.Type)
 }
