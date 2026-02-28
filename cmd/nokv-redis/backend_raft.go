@@ -6,18 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/pb"
+	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 )
 
@@ -30,6 +28,10 @@ type timestampAllocator interface {
 	Reserve(n uint64) (uint64, error)
 }
 
+type pdTSOClient interface {
+	Tso(ctx context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error)
+}
+
 type raftClient interface {
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error
@@ -38,73 +40,44 @@ type raftClient interface {
 	Close() error
 }
 
-type localOracle struct {
-	last atomic.Uint64
+type pdTSOAllocator struct {
+	client  pdTSOClient
+	timeout time.Duration
 }
 
-func (o *localOracle) Reserve(n uint64) (uint64, error) {
-	if n == 0 {
-		return 0, fmt.Errorf("oracle reserve: n must be >= 1")
+func newPDTSOAllocator(client pdTSOClient, timeout time.Duration) *pdTSOAllocator {
+	if timeout <= 0 {
+		timeout = 3 * time.Second
 	}
-	for {
-		prev := o.last.Load()
-		now := uint64(time.Now().UnixNano())
-		if now <= prev {
-			now = prev + n
-		} else {
-			now = now + (n - 1)
-		}
-		start := now - (n - 1)
-		if o.last.CompareAndSwap(prev, now) {
-			return start, nil
-		}
+	return &pdTSOAllocator{
+		client:  client,
+		timeout: timeout,
 	}
 }
 
-type httpTSO struct {
-	url    string
-	client *http.Client
-}
-
-func newHTTPTSO(url string) *httpTSO {
-	return &httpTSO{
-		url: strings.TrimRight(url, "/"),
-		client: &http.Client{
-			Timeout: 2 * time.Second,
-		},
-	}
-}
-
-func (t *httpTSO) Reserve(n uint64) (uint64, error) {
+func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	if n == 0 {
 		return 0, fmt.Errorf("tso reserve: n must be >= 1")
 	}
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/tso?batch=%d", t.url, n), nil)
+	if p == nil || p.client == nil {
+		return 0, fmt.Errorf("tso reserve: allocator not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	resp, err := p.client.Tso(ctx, &pb.TsoRequest{Count: n})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("tso reserve: rpc failed: %w", err)
 	}
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return 0, err
+	if resp == nil {
+		return 0, fmt.Errorf("tso reserve: empty response")
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("tso reserve: unexpected status %s", resp.Status)
+	if resp.GetCount() < n {
+		return 0, fmt.Errorf("tso reserve: requested %d timestamps, got %d", n, resp.GetCount())
 	}
-	var payload struct {
-		Timestamp uint64 `json:"timestamp"`
-		Count     uint64 `json:"count"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return 0, fmt.Errorf("tso reserve: decode response: %w", err)
-	}
-	if payload.Count < n {
-		return 0, fmt.Errorf("tso reserve: requested %d timestamps, got %d", n, payload.Count)
-	}
-	return payload.Timestamp, nil
+	return resp.GetTimestamp(), nil
 }
 
-func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
+func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	cfgFile, err := config.LoadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
@@ -144,32 +117,26 @@ func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 			LeaderStoreID: region.LeaderStoreID,
 		})
 	}
+	pdAddr = strings.TrimSpace(pdAddr)
+	if pdAddr == "" {
+		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode")
+	}
+	dialCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	pdCli, err := pdclient.NewGRPCClient(dialCtx, pdAddr)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("raft backend: init pd client: %w", err)
+	}
+	cfg.RegionResolver = pdCli
 	cl, err := client.New(cfg)
 	if err != nil {
+		_ = pdCli.Close()
 		return nil, fmt.Errorf("raft backend: init client: %w", err)
-	}
-
-	tsoURL = strings.TrimSpace(tsoURL)
-	if tsoURL == "" && cfgFile.TSO != nil {
-		tsoURL = strings.TrimSpace(cfgFile.TSO.AdvertiseURL)
-		if tsoURL == "" {
-			tsoURL = strings.TrimSpace(cfgFile.TSO.ListenAddr)
-			if tsoURL != "" && !strings.Contains(tsoURL, "://") {
-				tsoURL = "http://" + tsoURL
-			}
-		}
-	}
-
-	var allocator timestampAllocator
-	if tsoURL != "" {
-		allocator = newHTTPTSO(tsoURL)
-	} else {
-		allocator = &localOracle{}
 	}
 
 	return &raftBackend{
 		client: cl,
-		ts:     allocator,
+		ts:     newPDTSOAllocator(pdCli, 3*time.Second),
 	}, nil
 }
 
