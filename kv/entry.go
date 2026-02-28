@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -153,4 +154,19 @@ func (e *Entry) EstimateSize(threshold int) int {
 		return len(e.Key) + len(e.Value) + 1 // Meta
 	}
 	return len(e.Key) + 12 + 1 // 12 for ValuePointer, 1 for meta.
+}
+
+// IsRangeDelete reports whether the entry is a range tombstone.
+func (e *Entry) IsRangeDelete() bool {
+	return e.Meta&BitRangeDelete != 0
+}
+
+// RangeEnd returns the end key from the Value field for range tombstones.
+func (e *Entry) RangeEnd() []byte {
+	return e.Value
+}
+
+// KeyInRange checks if key falls within [start, end).
+func KeyInRange(key, start, end []byte) bool {
+	return bytes.Compare(key, start) >= 0 && bytes.Compare(key, end) < 0
 }
