@@ -160,3 +160,126 @@ func TestValidatePeerUnknownStore(t *testing.T) {
 		t.Fatalf("expected error for unknown peer store")
 	}
 }
+
+func TestValidateStoreWorkDirTemplateRequiresID(t *testing.T) {
+	cfg := &File{
+		StoreWorkDirTemplate: "/var/lib/nokv-store",
+		Stores:               []Store{{StoreID: 1, Addr: "x"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected template validation error")
+	}
+
+	cfg.StoreWorkDirTemplate = "/var/lib/nokv-store-{id}"
+	cfg.StoreDockerWorkDirTemplate = "/var/lib/nokv-docker-store"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected docker template validation error")
+	}
+}
+
+func TestResolvePDAddr(t *testing.T) {
+	cfg := &File{
+		PD: &PD{
+			Addr:       "127.0.0.1:2379",
+			DockerAddr: "nokv-pd:2379",
+		},
+	}
+	if got := cfg.ResolvePDAddr("host"); got != "127.0.0.1:2379" {
+		t.Fatalf("host pd addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolvePDAddr("docker"); got != "nokv-pd:2379" {
+		t.Fatalf("docker pd addr mismatch: got %q", got)
+	}
+}
+
+func TestResolvePDAddrFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolvePDAddr("host"); got != "" {
+		t.Fatalf("expected empty address for nil cfg, got %q", got)
+	}
+
+	cfg := &File{PD: &PD{Addr: "127.0.0.1:2379"}}
+	if got := cfg.ResolvePDAddr("docker"); got != "127.0.0.1:2379" {
+		t.Fatalf("expected docker fallback to host addr, got %q", got)
+	}
+}
+
+func TestResolvePDWorkDir(t *testing.T) {
+	cfg := &File{
+		PD: &PD{
+			WorkDir:       "/var/lib/nokv-pd",
+			DockerWorkDir: "/var/lib/nokv-pd-docker",
+		},
+	}
+	if got := cfg.ResolvePDWorkDir("host"); got != "/var/lib/nokv-pd" {
+		t.Fatalf("host pd work dir mismatch: got %q", got)
+	}
+	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd-docker" {
+		t.Fatalf("docker pd work dir mismatch: got %q", got)
+	}
+}
+
+func TestResolvePDWorkDirFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolvePDWorkDir("host"); got != "" {
+		t.Fatalf("expected empty work dir for nil cfg, got %q", got)
+	}
+
+	cfg := &File{PD: &PD{WorkDir: "/var/lib/nokv-pd"}}
+	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd" {
+		t.Fatalf("expected docker fallback to host work dir, got %q", got)
+	}
+}
+
+func TestResolveStoreWorkDir(t *testing.T) {
+	cfg := &File{
+		StoreWorkDirTemplate:       "./artifacts/cluster/store-{id}",
+		StoreDockerWorkDirTemplate: "/var/lib/nokv/store-{id}",
+		Stores: []Store{
+			{StoreID: 1, Addr: "a"},
+			{
+				StoreID:       2,
+				Addr:          "b",
+				WorkDir:       "/data/store2",
+				DockerWorkDir: "/docker/store2",
+			},
+			{
+				StoreID: 3,
+				Addr:    "c",
+				WorkDir: "/data/store3",
+			},
+		},
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "host"); got != "./artifacts/cluster/store-1" {
+		t.Fatalf("host template mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "docker"); got != "/var/lib/nokv/store-1" {
+		t.Fatalf("docker template mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "host"); got != "/data/store2" {
+		t.Fatalf("host override mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "docker"); got != "/docker/store2" {
+		t.Fatalf("docker override mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(3, "docker"); got != "/data/store3" {
+		t.Fatalf("docker fallback to host override mismatch: got %q", got)
+	}
+}
+
+func TestResolveStoreWorkDirFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolveStoreWorkDir(1, "host"); got != "" {
+		t.Fatalf("expected empty workdir for nil cfg, got %q", got)
+	}
+
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "a"}},
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "host"); got != "" {
+		t.Fatalf("expected empty workdir without template/override, got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "host"); got != "" {
+		t.Fatalf("expected empty workdir for unknown store, got %q", got)
+	}
+}

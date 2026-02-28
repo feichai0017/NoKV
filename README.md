@@ -57,7 +57,7 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 
 ## 🚦 Quick Start
 
-Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster (plus the optional TSO) and expose the Redis-compatible gateway.
+Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a PD-lite service and expose the Redis-compatible gateway.
 
 ```bash
 # Option A: local processes
@@ -65,7 +65,7 @@ Start an end-to-end playground with either the local script or Docker Compose. B
 # In another shell: launch the Redis gateway on top of the running cluster
 go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 
-# Option B: Docker Compose (cluster + gateway + TSO)
+# Option B: Docker Compose (cluster + gateway + PD)
 docker compose up --build
 # Tear down
 docker compose down -v
@@ -114,7 +114,7 @@ func main() {
 
 > Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`, `Txn.Get`) return detached entries. Do not call `DecrRef` on them.
 
-> ℹ️ `run_local_cluster.sh` rebuilds `nokv`, `nokv-config`, `nokv-tso`, seeds manifests via `nokv-config manifest`, and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
+> ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds manifests via `nokv-config manifest`, starts PD-lite (`nokv pd`), and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 
 ---
 
@@ -123,6 +123,7 @@ func main() {
 Everything hangs off a single file: [`raft_config.example.json`](./raft_config.example.json).
 
 ```jsonc
+"pd": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-pd:2379" },
 "stores": [
   { "store_id": 1, "listen_addr": "127.0.0.1:20170", ... },
   { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
@@ -216,7 +217,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) every command runs inside local MVCC transactions; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit so NX/XX, TTL, arithmetic and multi-key writes match the single-node semantics.
 - TTL metadata is stored under `!redis:ttl!<key>` and is automatically cleaned up when reads detect expiration.
-- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar, and `--tso-url` can point to an external TSO service (otherwise a local oracle is used).
+- `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--pd-addr` can override `config.pd` when you need a non-default PD endpoint.
 - A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
 
 > For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).

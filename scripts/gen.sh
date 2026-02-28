@@ -41,9 +41,11 @@ protoc \
   metapb.proto \
   storagepb.proto \
   kvrpcpb.proto \
+  pdpb.proto \
   raftcmdpb.proto
 
 protoc \
   --proto_path="${PROTO_DIR}" \
   --go-grpc_out=paths=source_relative,require_unimplemented_servers=false:"${PROTO_DIR}" \
-  kvrpcpb.proto
+  kvrpcpb.proto \
+  pdpb.proto
