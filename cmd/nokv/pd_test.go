@@ -156,3 +156,69 @@ func TestRunPDCmdResolvesWorkdirFromConfig(t *testing.T) {
 	require.Contains(t, buf.String(), "PD restored 0 region(s) from manifest")
 	require.FileExists(t, filepath.Join(cfg.PD.WorkDir, "CURRENT"))
 }
+
+func TestRunPDCmdResolvesAddrFromConfig(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "raft_config.json")
+	cfg := &config.File{
+		MaxRetries: 3,
+		PD: &config.PD{
+			Addr: "127.0.0.1:0",
+		},
+		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:20170", ListenAddr: "127.0.0.1:20170"}},
+		Regions: []config.Region{{
+			ID:            1,
+			LeaderStoreID: 1,
+			Epoch:         config.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:         []config.Peer{{StoreID: 1, PeerID: 101}},
+		}},
+	}
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	var buf bytes.Buffer
+	require.NoError(t, runPDCmd(&buf, []string{"-config", cfgPath}))
+	require.Contains(t, buf.String(), "PD-lite service listening on")
+}
+
+func TestRunPDCmdExplicitAddrOverridesConfig(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "raft_config.json")
+	cfg := &config.File{
+		MaxRetries: 3,
+		PD: &config.PD{
+			Addr: "127.0.0.1:1",
+		},
+		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:20170", ListenAddr: "127.0.0.1:20170"}},
+		Regions: []config.Region{{
+			ID:            1,
+			LeaderStoreID: 1,
+			Epoch:         config.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:         []config.Peer{{StoreID: 1, PeerID: 101}},
+		}},
+	}
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	var buf bytes.Buffer
+	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
+	require.Contains(t, buf.String(), "PD-lite service listening on")
+}
