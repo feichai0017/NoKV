@@ -701,19 +701,24 @@ func (lh *levelHandler) prefetch(key []byte) bool {
 func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
+	lh.sortTablesLocked()
+	lh.ingest.sortShards()
+}
+
+// sortTablesLocked sorts lh.tables using level-specific ordering semantics.
+// Caller must hold lh's mutex.
+func (lh *levelHandler) sortTablesLocked() {
 	if lh.levelNum == 0 {
-		// Key range will overlap. Just sort by fileID in ascending order
-		// because newer tables are at the end of level 0.
+		// L0 key ranges may overlap, so ordering follows file creation order.
 		sort.Slice(lh.tables, func(i, j int) bool {
 			return lh.tables[i].fid < lh.tables[j].fid
 		})
-	} else {
-		// Sort tables by keys.
-		sort.Slice(lh.tables, func(i, j int) bool {
-			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
-		})
+		return
 	}
-	lh.ingest.sortShards()
+	// L1+ tables are non-overlapping by key range.
+	sort.Slice(lh.tables, func(i, j int) bool {
+		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+	})
 }
 
 func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
@@ -820,15 +825,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 
 	// Assign tables.
 	lh.tables = newTables
-	if lh.levelNum == 0 {
-		sort.Slice(lh.tables, func(i, j int) bool {
-			return lh.tables[i].fid < lh.tables[j].fid
-		})
-	} else {
-		sort.Slice(lh.tables, func(i, j int) bool {
-			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
-		})
-	}
+	lh.sortTablesLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
