@@ -12,10 +12,11 @@ Current scope in this branch:
 1. `pd/core`: in-memory cluster metadata model and route lookup.
 2. `pd/core`: global ID allocator primitive.
 3. `pd/tso`: monotonic timestamp allocator primitive.
+4. `pd/server`: gRPC service implementation for heartbeat/route/ID/TSO RPCs.
+5. `pd/client`: gRPC client wrapper for store-side integration.
 
 Planned next steps:
 
-1. Add `pdpb` RPC definitions and server endpoints.
-2. Add persistent storage backend for PD metadata.
-3. Integrate raftstore heartbeat/reporting and client route refresh.
-
+1. Add persistent storage backend for PD metadata.
+2. Integrate raftstore heartbeat/reporting and client route refresh.
+3. Add membership/election model for high-availability PD deployment.
