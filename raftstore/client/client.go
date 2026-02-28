@@ -38,13 +38,22 @@ type RegionConfig struct {
 	LeaderStoreID uint64
 }
 
+// RegionResolver resolves Region metadata for an arbitrary key. A PD client
+// implementation should satisfy this interface.
+type RegionResolver interface {
+	GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error)
+	Close() error
+}
+
 // Config configures the TinyKv distributed client.
 type Config struct {
-	Stores      []StoreEndpoint
-	Regions     []RegionConfig
-	DialTimeout time.Duration
-	DialOptions []grpc.DialOption
-	MaxRetries  int
+	Stores             []StoreEndpoint
+	Regions            []RegionConfig
+	RegionResolver     RegionResolver
+	RouteLookupTimeout time.Duration
+	DialTimeout        time.Duration
+	DialOptions        []grpc.DialOption
+	MaxRetries         int
 }
 
 type storeConn struct {
@@ -65,10 +74,12 @@ type regionSnapshot struct {
 
 // Client provides Region-aware helpers for TinyKv RPCs, including 2PC.
 type Client struct {
-	mu         sync.RWMutex
-	stores     map[uint64]*storeConn
-	regions    map[uint64]*regionState
-	maxRetries int
+	mu                 sync.RWMutex
+	stores             map[uint64]*storeConn
+	regions            map[uint64]*regionState
+	regionResolver     RegionResolver
+	routeLookupTimeout time.Duration
+	maxRetries         int
 }
 
 // New constructs a Client using the provided configuration.
@@ -76,12 +87,16 @@ func New(cfg Config) (*Client, error) {
 	if len(cfg.Stores) == 0 {
 		return nil, errors.New("client: at least one store endpoint required")
 	}
-	if len(cfg.Regions) == 0 {
-		return nil, errors.New("client: at least one region required")
+	if len(cfg.Regions) == 0 && cfg.RegionResolver == nil {
+		return nil, errors.New("client: at least one region or region resolver required")
 	}
 	dialTimeout := cfg.DialTimeout
 	if dialTimeout <= 0 {
 		dialTimeout = 3 * time.Second
+	}
+	routeLookupTimeout := cfg.RouteLookupTimeout
+	if routeLookupTimeout <= 0 {
+		routeLookupTimeout = 2 * time.Second
 	}
 	dialOpts := cfg.DialOptions
 	if len(dialOpts) == 0 {
@@ -126,9 +141,11 @@ func New(cfg Config) (*Client, error) {
 		maxRetries = 5
 	}
 	return &Client{
-		stores:     stores,
-		regions:    regions,
-		maxRetries: maxRetries,
+		stores:             stores,
+		regions:            regions,
+		regionResolver:     cfg.RegionResolver,
+		routeLookupTimeout: routeLookupTimeout,
+		maxRetries:         maxRetries,
 	}, nil
 }
 
@@ -161,6 +178,11 @@ func (c *Client) Close() error {
 		}
 		if err := st.conn.Close(); err != nil && first == nil {
 			first = fmt.Errorf("client: close store %d: %w", id, err)
+		}
+	}
+	if c.regionResolver != nil {
+		if err := c.regionResolver.Close(); err != nil && first == nil {
+			first = fmt.Errorf("client: close region resolver: %w", err)
 		}
 	}
 	return first
@@ -726,6 +748,18 @@ func (c *Client) regionSnapshot(regionID uint64) (regionSnapshot, bool) {
 }
 
 func (c *Client) regionForKey(key []byte) (regionSnapshot, error) {
+	if region, ok := c.regionForKeyFromCache(key); ok {
+		return region, nil
+	}
+	if c.regionResolver == nil {
+		return regionSnapshot{}, fmt.Errorf("client: region not found for key %q", key)
+	}
+	return c.regionForKeyFromResolver(key)
+}
+
+// regionForKeyFromCache scans cached Region state and returns a snapshot when
+// the key is covered by an existing Region.
+func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, region := range c.regions {
@@ -736,10 +770,48 @@ func (c *Client) regionForKey(key []byte) (regionSnapshot, error) {
 			return regionSnapshot{
 				meta:   cloneRegionMeta(region.meta),
 				leader: region.leader,
-			}, nil
+			}, true
 		}
 	}
-	return regionSnapshot{}, fmt.Errorf("client: region not found for key %q", key)
+	return regionSnapshot{}, false
+}
+
+// regionForKeyFromResolver requests Region metadata from the external resolver,
+// then caches the result for subsequent lookups.
+func (c *Client) regionForKeyFromResolver(key []byte) (regionSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.routeLookupTimeout)
+	defer cancel()
+	resp, err := c.regionResolver.GetRegionByKey(ctx, &pb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
+	if err != nil {
+		return regionSnapshot{}, fmt.Errorf("client: resolve region for key %q: %w", key, normalizeRPCError(err))
+	}
+	if resp == nil || resp.GetNotFound() || resp.GetRegion() == nil {
+		return regionSnapshot{}, fmt.Errorf("client: region not found for key %q", key)
+	}
+	meta := cloneRegionMeta(resp.GetRegion())
+	if meta.GetId() == 0 {
+		return regionSnapshot{}, errors.New("client: resolved region id missing")
+	}
+	if len(meta.GetPeers()) == 0 {
+		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", meta.GetId())
+	}
+	leader := defaultLeaderStoreID(meta)
+	if old, ok := c.regionSnapshot(meta.GetId()); ok && old.leader != 0 {
+		leader = old.leader
+	}
+	c.mu.Lock()
+	c.regions[meta.GetId()] = &regionState{
+		meta:   cloneRegionMeta(meta),
+		leader: leader,
+	}
+	c.mu.Unlock()
+	if !containsKey(meta, key) {
+		return regionSnapshot{}, fmt.Errorf("client: resolved region %d does not contain key %q", meta.GetId(), key)
+	}
+	return regionSnapshot{
+		meta:   meta,
+		leader: leader,
+	}, nil
 }
 
 func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
@@ -765,7 +837,7 @@ func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
 			}
 			c.regions[meta.GetId()] = &regionState{
 				meta:   cloneRegionMeta(meta),
-				leader: 0,
+				leader: defaultLeaderStoreID(meta),
 			}
 		}
 		c.mu.Unlock()
@@ -778,18 +850,22 @@ func buildContext(region regionSnapshot) (*pb.Context, error) {
 	if region.meta == nil {
 		return nil, errors.New("client: region meta missing")
 	}
-	if region.leader == 0 {
+	leaderStoreID := region.leader
+	if leaderStoreID == 0 {
+		leaderStoreID = defaultLeaderStoreID(region.meta)
+	}
+	if leaderStoreID == 0 {
 		return nil, errors.New("client: leader unknown")
 	}
 	var peerMeta *pb.RegionPeer
 	for _, peer := range region.meta.GetPeers() {
-		if peer.GetStoreId() == region.leader {
+		if peer.GetStoreId() == leaderStoreID {
 			peerMeta = peer
 			break
 		}
 	}
 	if peerMeta == nil {
-		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", region.leader, region.meta.GetId())
+		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", leaderStoreID, region.meta.GetId())
 	}
 	return &pb.Context{
 		RegionId: region.meta.GetId(),
@@ -799,6 +875,20 @@ func buildContext(region regionSnapshot) (*pb.Context, error) {
 		},
 		Peer: peerMeta,
 	}, nil
+}
+
+// defaultLeaderStoreID derives a usable leader store from Region peers when no
+// explicit leader information is available.
+func defaultLeaderStoreID(meta *pb.RegionMeta) uint64 {
+	if meta == nil {
+		return 0
+	}
+	for _, peer := range meta.GetPeers() {
+		if peer != nil && peer.GetStoreId() != 0 {
+			return peer.GetStoreId()
+		}
+	}
+	return 0
 }
 
 func containsKey(meta *pb.RegionMeta, key []byte) bool {
