@@ -169,7 +169,9 @@ for idx in "${!STORE_IDS[@]}"; do
 done
 
 echo "Starting PD service on ${PD_LISTEN}"
-nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 >"$WORKDIR/pd.log" 2>&1 &
+PD_WORKDIR="$WORKDIR/pd"
+mkdir -p "$PD_WORKDIR"
+nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR" >"$WORKDIR/pd.log" 2>&1 &
 PD_PID=$!
 
 serve_debug_args=()
