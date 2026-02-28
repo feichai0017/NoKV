@@ -104,7 +104,12 @@ Minimal shape:
 ```jsonc
 {
   "max_retries": 8,
-  "pd": { "addr": "127.0.0.1:2379", "docker_addr": "nokv-pd:2379" },
+  "pd": {
+    "addr": "127.0.0.1:2379",
+    "docker_addr": "nokv-pd:2379",
+    "work_dir": "./artifacts/cluster/pd",
+    "docker_work_dir": "/var/lib/nokv-pd"
+  },
   "stores": [
     { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
   ],
@@ -127,6 +132,9 @@ Notes:
 - `stores` define both host and docker addresses for local runs vs containers.
 - `pd.addr` is the default PD endpoint for host scope; `pd.docker_addr` is used
   when tools run in docker scope.
+- `pd.work_dir` / `pd.docker_work_dir` are optional PD persistence directories
+  used by bootstrap tooling and `nokv pd --config ...` when `--workdir` is not
+  set explicitly.
 - `leader_store_id` is optional; clients use it for initial routing hints.
 
 Programmatic loading:

@@ -17,8 +17,10 @@ type File struct {
 
 // PD describes PD-lite endpoints for host and docker scopes.
 type PD struct {
-	Addr       string `json:"addr"`
-	DockerAddr string `json:"docker_addr,omitempty"`
+	Addr          string `json:"addr"`
+	DockerAddr    string `json:"docker_addr,omitempty"`
+	WorkDir       string `json:"work_dir,omitempty"`
+	DockerWorkDir string `json:"docker_work_dir,omitempty"`
 }
 
 // Store represents a single store endpoint.
@@ -115,4 +117,20 @@ func (f *File) ResolvePDAddr(scope string) string {
 		}
 	}
 	return strings.TrimSpace(f.PD.Addr)
+}
+
+// ResolvePDWorkDir resolves the PD work directory for the provided scope.
+//
+// Supported scopes are "host" (default) and "docker". Unknown scopes fallback
+// to host semantics.
+func (f *File) ResolvePDWorkDir(scope string) string {
+	if f == nil || f.PD == nil {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(scope), "docker") {
+		if v := strings.TrimSpace(f.PD.DockerWorkDir); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(f.PD.WorkDir)
 }

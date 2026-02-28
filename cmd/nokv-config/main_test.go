@@ -76,6 +76,18 @@ func TestRunPDSimpleFormat(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "nokv-pd:2379", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host", "--field", "workdir"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "./artifacts/cluster/pd", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker", "--field", "workdir"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/var/lib/nokv-pd", strings.TrimSpace(output))
 }
 
 func TestRunPDJSONFormat(t *testing.T) {
@@ -88,6 +100,8 @@ func TestRunPDJSONFormat(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(output), &endpoint))
 	require.Equal(t, "127.0.0.1:2379", endpoint.Addr)
 	require.Equal(t, "nokv-pd:2379", endpoint.DockerAddr)
+	require.Equal(t, "./artifacts/cluster/pd", endpoint.WorkDir)
+	require.Equal(t, "/var/lib/nokv-pd", endpoint.DockerWorkDir)
 }
 
 func TestRunManifestWritesRegion(t *testing.T) {
@@ -343,6 +357,7 @@ func TestRunPDUnknownFormatAndScope(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 	require.Error(t, runPD([]string{"--config", cfgPath, "--format", "bad"}))
 	require.Error(t, runPD([]string{"--config", cfgPath, "--scope", "oops"}))
+	require.Error(t, runPD([]string{"--config", cfgPath, "--field", "bad"}))
 }
 
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -476,8 +491,10 @@ func writeSampleConfig(t *testing.T) string {
 	cfg := config.File{
 		MaxRetries: 3,
 		PD: &config.PD{
-			Addr:       "127.0.0.1:2379",
-			DockerAddr: "nokv-pd:2379",
+			Addr:          "127.0.0.1:2379",
+			DockerAddr:    "nokv-pd:2379",
+			WorkDir:       "./artifacts/cluster/pd",
+			DockerWorkDir: "/var/lib/nokv-pd",
 		},
 		Stores: []config.Store{
 			{

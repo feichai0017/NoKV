@@ -2,7 +2,9 @@
   "max_retries": 5,
   "pd": {
     "addr": "127.0.0.1:2379",
-    "docker_addr": "nokv-pd:2379"
+    "docker_addr": "nokv-pd:2379",
+    "work_dir": "./artifacts/cluster/pd",
+    "docker_work_dir": "/var/lib/nokv-pd"
   },
   "stores": [
     {
