@@ -37,7 +37,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*workdir) == "" && strings.TrimSpace(*configPath) != "" {
+	if strings.TrimSpace(*configPath) != "" {
 		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
 		if scopeNorm != "host" && scopeNorm != "docker" {
 			return fmt.Errorf("invalid pd scope %q (expected host|docker)", *scope)
@@ -49,8 +49,15 @@ func runPDCmd(w io.Writer, args []string) error {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("pd validate config %q: %w", strings.TrimSpace(*configPath), err)
 		}
-		if resolved := cfg.ResolvePDWorkDir(scopeNorm); resolved != "" {
-			*workdir = resolved
+		if !flagPassed(fs, "addr") {
+			if resolved := cfg.ResolvePDAddr(scopeNorm); resolved != "" {
+				*addr = resolved
+			}
+		}
+		if !flagPassed(fs, "workdir") {
+			if resolved := cfg.ResolvePDWorkDir(scopeNorm); resolved != "" {
+				*workdir = resolved
+			}
 		}
 	}
 
@@ -129,6 +136,19 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	}
+}
+
+func flagPassed(fs *flag.FlagSet, name string) bool {
+	if fs == nil || name == "" {
+		return false
+	}
+	passed := false
+	fs.Visit(func(f *flag.Flag) {
+		if f != nil && f.Name == name {
+			passed = true
+		}
+	})
+	return passed
 }
 
 func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]manifest.RegionMeta) (int, error) {
