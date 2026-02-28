@@ -33,7 +33,9 @@ services:
         "--id-start",
         "1",
         "--ts-start",
-        "100"
+        "100",
+        "--workdir",
+        "/var/lib/nokv-pd"
       ]
     expose:
       - "2379"
@@ -41,6 +43,7 @@ services:
       - "2379:2379"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+      - pd-data:/var/lib/nokv-pd
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -166,3 +169,4 @@ volumes:
   node1-data:
   node2-data:
   node3-data:
+  pd-data:

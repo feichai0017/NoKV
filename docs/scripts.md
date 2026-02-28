@@ -12,7 +12,7 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
   ```bash
   ./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
   ```
-`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config manifest`, then launches `nokv pd` and the store processes. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
+`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config manifest`, then launches `nokv pd` and the store processes. PD state is persisted under `<workdir>/pd` so region routing metadata survives restarts. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
 When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls back to `127.0.0.1:2379`.
 
 > ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, stop the script with `Ctrl+C` and wait for child processes to exit. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
@@ -61,7 +61,7 @@ PD-lite service used by local scripts and compose for:
 
 Example:
 ```bash
-go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
+go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 ```
 
 ---

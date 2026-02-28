@@ -20,7 +20,7 @@ RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
 CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
 
 # Sample PD-lite service for shared TSO / routing in distributed tests
-go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
+go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 
 # Local three-node cluster (includes manifest bootstrap + PD-lite)
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
