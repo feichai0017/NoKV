@@ -8,6 +8,7 @@ Usage: scripts/run_local_cluster.sh [options]
 Options:
   --config PATH         Raft configuration file (default: ./raft_config.example.json)
   --workdir DIR         Base directory for cluster data (default: ./artifacts/cluster)
+  --pd-listen ADDR      PD gRPC listen address (default: 127.0.0.1:2379)
   --raft-debug-log      Enable verbose raft debug logging (default: enabled)
   --no-raft-debug-log   Disable raft debug logging
 USAGE
@@ -16,6 +17,7 @@ USAGE
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
+PD_LISTEN="127.0.0.1:2379"
 RAFT_DEBUG=1
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workdir)
       WORKDIR=$2
+      shift 2
+      ;;
+    --pd-listen)
+      PD_LISTEN=$2
       shift 2
       ;;
     --raft-debug-log)
@@ -63,11 +69,10 @@ mkdir -p "$BUILD_DIR"
 
 go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
 go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
-go build -o "$BUILD_DIR/nokv-tso" "$ROOT_DIR/scripts/tso"
 
 cleaned=0
 STORE_PIDS=()
-TSO_PID=""
+PD_PID=""
 
 cleanup() {
   if [[ $cleaned -eq 1 ]]; then
@@ -81,8 +86,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${TSO_PID:-}" ]] && kill -0 "$TSO_PID" 2>/dev/null; then
-    kill -INT "$TSO_PID" 2>/dev/null || true
+  if [[ -n "${PD_PID:-}" ]] && kill -0 "$PD_PID" 2>/dev/null; then
+    kill -INT "$PD_PID" 2>/dev/null || true
   fi
 
   for pid in "${STORE_PIDS[@]:-}"; do
@@ -91,8 +96,8 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${TSO_PID:-}" ]]; then
-    wait "$TSO_PID" 2>/dev/null || true
+  if [[ -n "${PD_PID:-}" ]]; then
+    wait "$PD_PID" 2>/dev/null || true
   fi
 }
 
@@ -152,13 +157,9 @@ for idx in "${!STORE_IDS[@]}"; do
   done
 done
 
-read -r TSO_LISTEN TSO_URL < <(nokv-config tso --config "$CONFIG_PATH" --format simple 2>/dev/null || echo "- -")
-
-if [[ -n "${TSO_LISTEN:-}" && "$TSO_LISTEN" != "-" ]]; then
-  echo "Starting TSO allocator on ${TSO_LISTEN}"
-  nokv-tso --addr "$TSO_LISTEN" --start 100 >"$WORKDIR/tso.log" 2>&1 &
-  TSO_PID=$!
-fi
+echo "Starting PD service on ${PD_LISTEN}"
+nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 >"$WORKDIR/pd.log" 2>&1 &
+PD_PID=$!
 
 serve_debug_args=()
 if [[ $RAFT_DEBUG -eq 1 ]]; then
@@ -173,13 +174,10 @@ for idx in "${!STORE_IDS[@]}"; do
     --config "$CONFIG_PATH" \
     --store-id "$store_id" \
     --workdir "$store_dir" \
+    --pd-addr "$PD_LISTEN" \
     "${serve_debug_args[@]}" >"$store_dir/server.log" 2>&1 &
   STORE_PIDS+=($!)
 done
 
-if [[ -n "${TSO_URL:-}" && "$TSO_URL" != "-" ]]; then
-  echo "Cluster running. TSO available at ${TSO_URL}/tso"
-else
-  echo "Cluster running (TSO disabled). Press Ctrl+C to stop."
-fi
+echo "Cluster running. PD available at ${PD_LISTEN}"
 wait
