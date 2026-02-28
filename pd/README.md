@@ -13,6 +13,7 @@ It provides:
 ## Package Layout
 
 - `pd/core`: in-memory cluster model and allocators.
+- `pd/storage`: persistence abstraction (`Store`) and local file-backed implementation.
 - `pd/server`: gRPC service implementation (`pb.PDServer`).
 - `pd/client`: gRPC client wrapper consumed by raftstore/redis gateway.
 - `pd/adapter`: bridge from `raftstore/scheduler.RegionSink` to PD RPCs.
@@ -22,11 +23,11 @@ It provides:
 
 PD-lite can run fully in-memory, or with `--workdir` persistence:
 
-- Region catalog persistence: manifest `EditRegion` records.
-- Allocator checkpoints: `PD_STATE.json` (`id_current`, `ts_current`).
+- Region catalog persistence: manifest `EditRegion` records (via `pd/storage`).
+- Allocator checkpoints: `PD_STATE.json` (`id_current`, `ts_current`, via `pd/storage`).
 
-On restart, `cmd/nokv pd` restores Region metadata from manifest and raises
-allocator starts from checkpoint (`current + 1`).
+On restart, `cmd/nokv pd` loads storage snapshot data and raises allocator
+starts from checkpoint (`current + 1`).
 
 ## Routing Semantics
 
