@@ -34,8 +34,9 @@ type regionIndexEntry struct {
 
 // Cluster stores in-memory PD metadata and provides route lookups.
 //
-// NOTE: This is an in-memory PD-lite model used to bootstrap control-plane
-// development. Persistence and RPC wiring are added in later milestones.
+// NOTE: Cluster intentionally keeps only the in-memory metadata/state model.
+// PD RPC wiring and persistence are handled by higher layers (pd/server and
+// pd/storage).
 type Cluster struct {
 	mu sync.RWMutex
 
