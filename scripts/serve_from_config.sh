@@ -105,7 +105,7 @@ declare -A STORE_PEER_ADDR
 declare -A REMOTE_PEERS
 
 for line in "${STORE_LINES[@]}"; do
-  read -r pid listen addr docker_listen docker_addr <<<"$line"
+  read -r pid listen addr docker_listen docker_addr _store_workdir _docker_workdir <<<"$line"
   if [[ -z "$pid" ]]; then
     continue
   fi

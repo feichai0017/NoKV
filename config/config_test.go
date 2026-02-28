@@ -161,6 +161,22 @@ func TestValidatePeerUnknownStore(t *testing.T) {
 	}
 }
 
+func TestValidateStoreWorkDirTemplateRequiresID(t *testing.T) {
+	cfg := &File{
+		StoreWorkDirTemplate: "/var/lib/nokv-store",
+		Stores:               []Store{{StoreID: 1, Addr: "x"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected template validation error")
+	}
+
+	cfg.StoreWorkDirTemplate = "/var/lib/nokv-store-{id}"
+	cfg.StoreDockerWorkDirTemplate = "/var/lib/nokv-docker-store"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected docker template validation error")
+	}
+}
+
 func TestResolvePDAddr(t *testing.T) {
 	cfg := &File{
 		PD: &PD{
@@ -212,5 +228,58 @@ func TestResolvePDWorkDirFallbackAndNil(t *testing.T) {
 	cfg := &File{PD: &PD{WorkDir: "/var/lib/nokv-pd"}}
 	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd" {
 		t.Fatalf("expected docker fallback to host work dir, got %q", got)
+	}
+}
+
+func TestResolveStoreWorkDir(t *testing.T) {
+	cfg := &File{
+		StoreWorkDirTemplate:       "./artifacts/cluster/store-{id}",
+		StoreDockerWorkDirTemplate: "/var/lib/nokv/store-{id}",
+		Stores: []Store{
+			{StoreID: 1, Addr: "a"},
+			{
+				StoreID:       2,
+				Addr:          "b",
+				WorkDir:       "/data/store2",
+				DockerWorkDir: "/docker/store2",
+			},
+			{
+				StoreID: 3,
+				Addr:    "c",
+				WorkDir: "/data/store3",
+			},
+		},
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "host"); got != "./artifacts/cluster/store-1" {
+		t.Fatalf("host template mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "docker"); got != "/var/lib/nokv/store-1" {
+		t.Fatalf("docker template mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "host"); got != "/data/store2" {
+		t.Fatalf("host override mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "docker"); got != "/docker/store2" {
+		t.Fatalf("docker override mismatch: got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(3, "docker"); got != "/data/store3" {
+		t.Fatalf("docker fallback to host override mismatch: got %q", got)
+	}
+}
+
+func TestResolveStoreWorkDirFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolveStoreWorkDir(1, "host"); got != "" {
+		t.Fatalf("expected empty workdir for nil cfg, got %q", got)
+	}
+
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "a"}},
+	}
+	if got := cfg.ResolveStoreWorkDir(1, "host"); got != "" {
+		t.Fatalf("expected empty workdir without template/override, got %q", got)
+	}
+	if got := cfg.ResolveStoreWorkDir(2, "host"); got != "" {
+		t.Fatalf("expected empty workdir for unknown store, got %q", got)
 	}
 }
