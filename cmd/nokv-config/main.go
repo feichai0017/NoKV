@@ -31,8 +31,8 @@ func main() {
 		err = runStores(args)
 	case "regions":
 		err = runRegions(args)
-	case "tso":
-		err = runTSO(args)
+	case "pd":
+		err = runPD(args)
 	case "manifest":
 		err = runManifest(args)
 	default:
@@ -71,12 +71,14 @@ func runStores(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(cfg.Stores)
 	case "simple":
 		for _, st := range cfg.Stores {
-			fmt.Printf("%d %s %s %s %s\n",
+			fmt.Printf("%d %s %s %s %s %s %s\n",
 				st.StoreID,
 				firstNonEmpty(st.ListenAddr, st.Addr),
 				st.Addr,
 				firstNonEmpty(st.DockerListenAddr, st.ListenAddr, st.Addr),
 				firstNonEmpty(st.DockerAddr, st.Addr),
+				firstNonEmpty(cfg.ResolveStoreWorkDir(st.StoreID, "host")),
+				firstNonEmpty(cfg.ResolveStoreWorkDir(st.StoreID, "docker")),
 			)
 		}
 		return nil
@@ -123,27 +125,49 @@ func runRegions(args []string) error {
 	}
 }
 
-func runTSO(args []string) error {
-	fs := flag.NewFlagSet("tso", flag.ExitOnError)
+func runPD(args []string) error {
+	fs := flag.NewFlagSet("pd", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
+	scope := fs.String("scope", "host", "address scope: host|docker")
+	field := fs.String("field", "addr", "simple output field: addr|workdir")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+	if scopeNorm != "host" && scopeNorm != "docker" {
+		return fmt.Errorf("unknown scope %q (expected host|docker)", *scope)
 	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	if cfg.TSO == nil {
-		return fmt.Errorf("tso block missing from configuration")
+	if cfg.PD == nil {
+		return fmt.Errorf("pd block missing from configuration")
 	}
 
 	switch strings.ToLower(*format) {
 	case "json":
-		return json.NewEncoder(os.Stdout).Encode(cfg.TSO)
+		return json.NewEncoder(os.Stdout).Encode(cfg.PD)
 	case "simple":
-		fmt.Printf("%s %s\n", cfg.TSO.ListenAddr, cfg.TSO.AdvertiseURL)
+		switch strings.ToLower(strings.TrimSpace(*field)) {
+		case "addr":
+			addr := cfg.ResolvePDAddr(scopeNorm)
+			if addr == "" {
+				return fmt.Errorf("pd address missing for scope %q", scopeNorm)
+			}
+			fmt.Println(addr)
+		case "workdir":
+			workdir := cfg.ResolvePDWorkDir(scopeNorm)
+			if workdir == "" {
+				return fmt.Errorf("pd workdir missing for scope %q", scopeNorm)
+			}
+			fmt.Println(workdir)
+		default:
+			return fmt.Errorf("unknown field %q (expected addr|workdir)", *field)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q", *format)
@@ -195,12 +219,13 @@ func printUsage() {
 Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
-  tso      Print TSO listen/advertise values
+  pd       Print PD-lite endpoint from the raft configuration
   manifest Write region metadata into a manifest
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
-  --format <fmt>    Output format (simple|json) depending on the command`)
+  --format <fmt>    Output format (simple|json) depending on the command
+  --field <name>    For "pd --format simple": addr|workdir`)
 }
 
 func runManifest(args []string) error {

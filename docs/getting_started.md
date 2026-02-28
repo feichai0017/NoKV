@@ -8,7 +8,7 @@ This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a
 - (Optional) Docker + Docker Compose for containerized runs
 
 ## Option A: Local Cluster (recommended for dev)
-This launches a 3-node Raft cluster plus the optional TSO helper.
+This launches a 3-node Raft cluster plus a PD-lite service.
 
 ```bash
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json

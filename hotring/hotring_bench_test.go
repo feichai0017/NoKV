@@ -43,7 +43,7 @@ func BenchmarkTouchAndClamp(b *testing.B) {
 
 func BenchmarkFrequency(b *testing.B) {
 	ring := NewHotRing(12, nil)
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 	}
 	b.ResetTimer()
@@ -54,7 +54,7 @@ func BenchmarkFrequency(b *testing.B) {
 
 func BenchmarkTopN(b *testing.B) {
 	ring := NewHotRing(12, nil)
-	for i := 0; i < 50000; i++ {
+	for i := range 50000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 		if i%7 == 0 {
 			ring.Touch("hot")
@@ -77,7 +77,7 @@ func BenchmarkSlidingWindow(b *testing.B) {
 
 func BenchmarkDecay(b *testing.B) {
 	ring := NewHotRing(12, nil)
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		ring.Touch(fmt.Sprintf("key-%d", i))
 	}
 	b.ResetTimer()

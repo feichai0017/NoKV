@@ -23,8 +23,8 @@ func TestRunStoresSimpleFormat(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	require.Len(t, lines, 2)
-	require.Equal(t, "1 127.0.0.1:10170 127.0.0.1:10170 10.0.0.1:20160 store1-docker", lines[0])
-	require.Equal(t, "2 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171", lines[1])
+	require.Equal(t, "1 127.0.0.1:10170 127.0.0.1:10170 10.0.0.1:20160 store1-docker ./artifacts/cluster/store-1 /var/lib/nokv/store-1", lines[0])
+	require.Equal(t, "2 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 127.0.0.1:10171 ./custom/store-2 /var/lib/custom/store-2", lines[1])
 }
 
 func TestRunRegionsSimpleFormat(t *testing.T) {
@@ -38,19 +38,6 @@ func TestRunRegionsSimpleFormat(t *testing.T) {
 	require.Len(t, lines, 2)
 	require.Equal(t, "1 - m 1 1 1:101,2:201 1", lines[0])
 	require.Equal(t, "2 m hex:0001 2 3 2:202 2", lines[1])
-}
-
-func TestRunTSOJsonFormat(t *testing.T) {
-	cfgPath := writeSampleConfig(t)
-
-	output, err := captureStdout(t, func() error {
-		return runTSO([]string{"--config", cfgPath, "--format", "json"})
-	})
-	require.NoError(t, err)
-	var tso config.TSO
-	require.NoError(t, json.Unmarshal([]byte(output), &tso))
-	require.Equal(t, "0.0.0.0:9494", strings.TrimSpace(tso.ListenAddr))
-	require.Equal(t, "http://127.0.0.1:9494", strings.TrimSpace(tso.AdvertiseURL))
 }
 
 func TestRunStoresJSONFormat(t *testing.T) {
@@ -75,13 +62,46 @@ func TestRunRegionsJSONFormat(t *testing.T) {
 	require.Len(t, regions, 2)
 }
 
-func TestRunTSOSimpleFormat(t *testing.T) {
+func TestRunPDSimpleFormat(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
+
 	output, err := captureStdout(t, func() error {
-		return runTSO([]string{"--config", cfgPath, "--format", "simple"})
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host"})
 	})
 	require.NoError(t, err)
-	require.Contains(t, output, "0.0.0.0:9494")
+	require.Equal(t, "127.0.0.1:2379", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "nokv-pd:2379", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "host", "--field", "workdir"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "./artifacts/cluster/pd", strings.TrimSpace(output))
+
+	output, err = captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "simple", "--scope", "docker", "--field", "workdir"})
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/var/lib/nokv-pd", strings.TrimSpace(output))
+}
+
+func TestRunPDJSONFormat(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	output, err := captureStdout(t, func() error {
+		return runPD([]string{"--config", cfgPath, "--format", "json"})
+	})
+	require.NoError(t, err)
+	var endpoint config.PD
+	require.NoError(t, json.Unmarshal([]byte(output), &endpoint))
+	require.Equal(t, "127.0.0.1:2379", endpoint.Addr)
+	require.Equal(t, "nokv-pd:2379", endpoint.DockerAddr)
+	require.Equal(t, "./artifacts/cluster/pd", endpoint.WorkDir)
+	require.Equal(t, "/var/lib/nokv-pd", endpoint.DockerWorkDir)
 }
 
 func TestRunManifestWritesRegion(t *testing.T) {
@@ -180,6 +200,24 @@ func TestMainRegionsCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
+func TestMainPDCommand(t *testing.T) {
+	cfgPath := writeSampleConfig(t)
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = []string{
+		"nokv-config",
+		"pd",
+		"--config",
+		cfgPath,
+		"--format",
+		"simple",
+	}
+	code := captureExitCode(t, func() {
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
 func TestMainMissingArgs(t *testing.T) {
 	code := captureExitCode(t, func() {
 		origArgs := os.Args
@@ -206,19 +244,19 @@ func TestMainCommandError(t *testing.T) {
 	defer func() { os.Args = origArgs }()
 	os.Args = []string{
 		"nokv-config",
-		"tso",
+		"stores",
 		"--config",
 		cfgPath,
 		"--format",
-		"simple",
+		"bad",
 	}
 	code := captureExitCode(t, func() {
 		main()
 	})
-	require.Equal(t, 0, code)
+	require.Equal(t, 1, code)
 
 	cfg := config.File{
-		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		Stores: []config.Store{{StoreID: 0, Addr: "127.0.0.1:1"}},
 	}
 	dir := t.TempDir()
 	raw, err := json.Marshal(cfg)
@@ -228,7 +266,7 @@ func TestMainCommandError(t *testing.T) {
 
 	os.Args = []string{
 		"nokv-config",
-		"tso",
+		"stores",
 		"--config",
 		path,
 	}
@@ -301,7 +339,7 @@ func TestRunRegionsLoadConfigError(t *testing.T) {
 	require.Error(t, runRegions([]string{"--config", path}))
 }
 
-func TestRunTSOMissingBlock(t *testing.T) {
+func TestRunPDMissingBlock(t *testing.T) {
 	cfg := config.File{
 		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
 	}
@@ -311,13 +349,15 @@ func TestRunTSOMissingBlock(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 
-	err = runTSO([]string{"--config", path})
+	err = runPD([]string{"--config", path})
 	require.Error(t, err)
 }
 
-func TestRunTSOUnknownFormat(t *testing.T) {
+func TestRunPDUnknownFormatAndScope(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
-	require.Error(t, runTSO([]string{"--config", cfgPath, "--format", "bad"}))
+	require.Error(t, runPD([]string{"--config", cfgPath, "--format", "bad"}))
+	require.Error(t, runPD([]string{"--config", cfgPath, "--scope", "oops"}))
+	require.Error(t, runPD([]string{"--config", cfgPath, "--field", "bad"}))
 }
 
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -450,10 +490,14 @@ func writeSampleConfig(t *testing.T) string {
 	t.Helper()
 	cfg := config.File{
 		MaxRetries: 3,
-		TSO: &config.TSO{
-			ListenAddr:   "0.0.0.0:9494",
-			AdvertiseURL: "http://127.0.0.1:9494",
+		PD: &config.PD{
+			Addr:          "127.0.0.1:2379",
+			DockerAddr:    "nokv-pd:2379",
+			WorkDir:       "./artifacts/cluster/pd",
+			DockerWorkDir: "/var/lib/nokv-pd",
 		},
+		StoreWorkDirTemplate:       "./artifacts/cluster/store-{id}",
+		StoreDockerWorkDirTemplate: "/var/lib/nokv/store-{id}",
 		Stores: []config.Store{
 			{
 				StoreID:          1,
@@ -463,9 +507,11 @@ func writeSampleConfig(t *testing.T) string {
 				DockerAddr:       "store1-docker",
 			},
 			{
-				StoreID:    2,
-				ListenAddr: "127.0.0.1:10171",
-				Addr:       "127.0.0.1:10171",
+				StoreID:       2,
+				ListenAddr:    "127.0.0.1:10171",
+				Addr:          "127.0.0.1:10171",
+				WorkDir:       "./custom/store-2",
+				DockerWorkDir: "/var/lib/custom/store-2",
 			},
 		},
 		Regions: []config.Region{

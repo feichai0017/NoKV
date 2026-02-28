@@ -7,6 +7,7 @@ Usage: serve_from_config.sh --config <config> --store-id <id> --workdir <dir> [o
 
 Options:
   --scope <local|docker>   Select which addresses to use (default: local)
+  --pd-addr <addr>         Optional PD gRPC endpoint override passed to "nokv serve"
   --raft-debug-log         Enable verbose etcd/raft debug logging
   --no-raft-debug-log      Disable verbose etcd/raft debug logging
   --extra <args...>        Additional arguments passed to "nokv serve"
@@ -17,6 +18,7 @@ CONFIG=""
 STORE_ID=""
 WORKDIR=""
 SCOPE="local"
+PD_ADDR=""
 RAFT_DEBUG=0
 EXTRA_ARGS=()
 
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --scope)
       SCOPE=$2
+      shift 2
+      ;;
+    --pd-addr)
+      PD_ADDR=$2
       shift 2
       ;;
     --raft-debug-log)
@@ -77,6 +83,16 @@ if [[ "$SCOPE" != "local" && "$SCOPE" != "docker" ]]; then
   exit 1
 fi
 
+if [[ -z "$PD_ADDR" ]]; then
+  pd_scope="host"
+  if [[ "$SCOPE" == "docker" ]]; then
+    pd_scope="docker"
+  fi
+  if pd_from_config=$(nokv-config pd --config "$CONFIG" --scope "$pd_scope" --format simple 2>/dev/null); then
+    PD_ADDR=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
+  fi
+fi
+
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG" --format simple)
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
   echo "serve_from_config: no stores defined in $CONFIG" >&2
@@ -89,7 +105,7 @@ declare -A STORE_PEER_ADDR
 declare -A REMOTE_PEERS
 
 for line in "${STORE_LINES[@]}"; do
-  read -r pid listen addr docker_listen docker_addr <<<"$line"
+  read -r pid listen addr docker_listen docker_addr _store_workdir _docker_workdir <<<"$line"
   if [[ -z "$pid" ]]; then
     continue
   fi
@@ -146,6 +162,10 @@ cmd=(nokv serve
 
 if [[ $RAFT_DEBUG -eq 1 ]]; then
   cmd+=(--raft-debug-log)
+fi
+
+if [[ -n "$PD_ADDR" ]]; then
+  cmd+=(--pd-addr "$PD_ADDR")
 fi
 
 cmd+=("${peer_args[@]}")
