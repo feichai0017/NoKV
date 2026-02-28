@@ -9,8 +9,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"syscall"
 
+	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
@@ -26,6 +29,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	addr := fs.String("addr", "127.0.0.1:2379", "listen address for PD-lite gRPC service")
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
+	workdir := fs.String("workdir", "", "optional manifest work directory for persisting/loading PD region catalog")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -41,6 +45,20 @@ func runPDCmd(w io.Writer, args []string) error {
 	ids := core.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := pdserver.NewService(cluster, ids, tsAlloc)
+	if strings.TrimSpace(*workdir) != "" {
+		mgr, err := manifest.Open(strings.TrimSpace(*workdir), nil)
+		if err != nil {
+			return fmt.Errorf("pd open manifest workdir %q: %w", strings.TrimSpace(*workdir), err)
+		}
+		defer func() { _ = mgr.Close() }()
+
+		loaded, err := restorePDRegions(cluster, mgr.RegionSnapshot())
+		if err != nil {
+			return fmt.Errorf("pd restore regions from %q: %w", strings.TrimSpace(*workdir), err)
+		}
+		svc.SetRegionCatalog(mgr)
+		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loaded, strings.TrimSpace(*workdir))
+	}
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterPDServer(grpcServer, svc)
@@ -68,4 +86,31 @@ func runPDCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	}
+}
+
+func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]manifest.RegionMeta) (int, error) {
+	if cluster == nil || len(snapshot) == 0 {
+		return 0, nil
+	}
+	ids := make([]uint64, 0, len(snapshot))
+	for id := range snapshot {
+		if id == 0 {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	loaded := 0
+	for _, id := range ids {
+		meta := snapshot[id]
+		if meta.ID == 0 {
+			continue
+		}
+		if err := cluster.UpsertRegionHeartbeat(meta); err != nil {
+			return loaded, err
+		}
+		loaded++
+	}
+	return loaded, nil
 }
