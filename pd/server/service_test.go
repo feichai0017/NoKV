@@ -283,6 +283,16 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 
 	store.updateErr = nil
+	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
+		Region: &pb.RegionMeta{
+			Id:               8,
+			StartKey:         []byte("a"),
+			EndKey:           []byte("m"),
+			EpochVersion:     2,
+			EpochConfVersion: 1,
+		},
+	})
+	require.NoError(t, err)
 	store.deleteErr = errors.New("persist delete failed")
 	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 8})
 	require.Error(t, err)
