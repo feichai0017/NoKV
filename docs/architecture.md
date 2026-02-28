@@ -156,8 +156,8 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 - **Initialization**: provide `[]StoreEndpoint` + `[]RegionConfig` describing region boundaries and known leaders.
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
-- **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, reuse the TSO sample under `scripts/tso` to obtain globally increasing values before calling `TwoPhaseCommit`.
-- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds manifests via `nokv-config manifest`, launches the stores declared in the config, and starts the HTTP TSO allocator when the `tso` block is present.
+- **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use PD-lite (`nokv pd`) to obtain globally increasing values before calling `TwoPhaseCommit`.
+- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds manifests via `nokv-config manifest`, launches PD-lite, and starts the stores declared in the config.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.

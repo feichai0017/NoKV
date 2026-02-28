@@ -1,9 +1,5 @@
 {
   "max_retries": 5,
-  "tso": {
-    "listen_addr": "0.0.0.0:9494",
-    "advertise_url": "http://127.0.0.1:9494"
-  },
   "stores": [
     {
       "store_id": 1,

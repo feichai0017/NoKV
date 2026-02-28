@@ -40,19 +40,6 @@ func TestRunRegionsSimpleFormat(t *testing.T) {
 	require.Equal(t, "2 m hex:0001 2 3 2:202 2", lines[1])
 }
 
-func TestRunTSOJsonFormat(t *testing.T) {
-	cfgPath := writeSampleConfig(t)
-
-	output, err := captureStdout(t, func() error {
-		return runTSO([]string{"--config", cfgPath, "--format", "json"})
-	})
-	require.NoError(t, err)
-	var tso config.TSO
-	require.NoError(t, json.Unmarshal([]byte(output), &tso))
-	require.Equal(t, "0.0.0.0:9494", strings.TrimSpace(tso.ListenAddr))
-	require.Equal(t, "http://127.0.0.1:9494", strings.TrimSpace(tso.AdvertiseURL))
-}
-
 func TestRunStoresJSONFormat(t *testing.T) {
 	cfgPath := writeSampleConfig(t)
 	output, err := captureStdout(t, func() error {
@@ -73,15 +60,6 @@ func TestRunRegionsJSONFormat(t *testing.T) {
 	var regions []config.Region
 	require.NoError(t, json.Unmarshal([]byte(output), &regions))
 	require.Len(t, regions, 2)
-}
-
-func TestRunTSOSimpleFormat(t *testing.T) {
-	cfgPath := writeSampleConfig(t)
-	output, err := captureStdout(t, func() error {
-		return runTSO([]string{"--config", cfgPath, "--format", "simple"})
-	})
-	require.NoError(t, err)
-	require.Contains(t, output, "0.0.0.0:9494")
 }
 
 func TestRunManifestWritesRegion(t *testing.T) {
@@ -206,19 +184,19 @@ func TestMainCommandError(t *testing.T) {
 	defer func() { os.Args = origArgs }()
 	os.Args = []string{
 		"nokv-config",
-		"tso",
+		"stores",
 		"--config",
 		cfgPath,
 		"--format",
-		"simple",
+		"bad",
 	}
 	code := captureExitCode(t, func() {
 		main()
 	})
-	require.Equal(t, 0, code)
+	require.Equal(t, 1, code)
 
 	cfg := config.File{
-		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		Stores: []config.Store{{StoreID: 0, Addr: "127.0.0.1:1"}},
 	}
 	dir := t.TempDir()
 	raw, err := json.Marshal(cfg)
@@ -228,7 +206,7 @@ func TestMainCommandError(t *testing.T) {
 
 	os.Args = []string{
 		"nokv-config",
-		"tso",
+		"stores",
 		"--config",
 		path,
 	}
@@ -299,25 +277,6 @@ func TestRunRegionsLoadConfigError(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	require.Error(t, runRegions([]string{"--config", path}))
-}
-
-func TestRunTSOMissingBlock(t *testing.T) {
-	cfg := config.File{
-		Stores: []config.Store{{StoreID: 1, Addr: "127.0.0.1:1"}},
-	}
-	dir := t.TempDir()
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	path := filepath.Join(dir, "config.json")
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
-
-	err = runTSO([]string{"--config", path})
-	require.Error(t, err)
-}
-
-func TestRunTSOUnknownFormat(t *testing.T) {
-	cfgPath := writeSampleConfig(t)
-	require.Error(t, runTSO([]string{"--config", cfgPath, "--format", "bad"}))
 }
 
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -450,10 +409,6 @@ func writeSampleConfig(t *testing.T) string {
 	t.Helper()
 	cfg := config.File{
 		MaxRetries: 3,
-		TSO: &config.TSO{
-			ListenAddr:   "0.0.0.0:9494",
-			AdvertiseURL: "http://127.0.0.1:9494",
-		},
 		Stores: []config.Store{
 			{
 				StoreID:          1,

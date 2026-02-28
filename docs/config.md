@@ -101,7 +101,6 @@ Minimal shape:
 ```jsonc
 {
   "max_retries": 8,
-  "tso": { "listen_addr": "127.0.0.1:9494", "advertise_url": "http://127.0.0.1:9494" },
   "stores": [
     { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
   ],
@@ -133,4 +132,4 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 
 Related tools:
 - `scripts/run_local_cluster.sh --config raft_config.example.json`
-- `go run ./cmd/nokv-redis --raft-config raft_config.example.json`
+- `go run ./cmd/nokv-redis --raft-config raft_config.example.json --pd-addr 127.0.0.1:2379`
