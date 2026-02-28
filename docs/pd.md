@@ -37,6 +37,7 @@ flowchart LR
 Core implementation units:
 
 - `pd/core`: in-memory cluster metadata model + allocators.
+- `pd/storage`: persistence abstraction (`Store`) with local manifest+state implementation.
 - `pd/server`: gRPC service + RPC validation/error mapping.
 - `pd/client`: client wrapper used by store/gateway.
 - `pd/adapter`: scheduler sink that forwards heartbeats into PD.
@@ -54,9 +55,10 @@ When `--workdir` is provided, PD-lite persists control-plane state:
 
 Startup flow:
 
-1. Load allocator checkpoint.
-2. Compute starts as `max(cli_start, checkpoint+1)`.
-3. Replay manifest region snapshot into `pd/core.Cluster`.
+1. Open `pd/storage` with `--workdir`.
+2. Load snapshot (`regions` + allocator counters).
+3. Compute starts as `max(cli_start, checkpoint+1)`.
+4. Replay region snapshot into `pd/core.Cluster`.
 
 This avoids allocator rollback after restart and keeps route metadata stable.
 

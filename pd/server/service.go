@@ -7,6 +7,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
+	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -16,20 +17,10 @@ import (
 type Service struct {
 	pb.UnimplementedPDServer
 
-	cluster            *core.Cluster
-	ids                *core.IDAllocator
-	tso                *tso.Allocator
-	regionCatalog      regionCatalog
-	allocatorStateSink allocatorStateSink
-}
-
-type regionCatalog interface {
-	LogRegionUpdate(meta manifest.RegionMeta) error
-	LogRegionDelete(regionID uint64) error
-}
-
-type allocatorStateSink interface {
-	Save(idCurrent, tsCurrent uint64) error
+	cluster *core.Cluster
+	ids     *core.IDAllocator
+	tso     *tso.Allocator
+	storage pdstorage.Store
 }
 
 // NewService constructs a PD-lite service.
@@ -50,22 +41,15 @@ func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Alloc
 	}
 }
 
-// SetRegionCatalog configures an optional manifest-backed region metadata sink.
-// When configured, region heartbeat/remove RPCs persist the region catalog.
-func (s *Service) SetRegionCatalog(catalog regionCatalog) {
+// SetStorage configures optional PD persistence.
+//
+// When configured, region metadata and allocator states are persisted through
+// the storage interface.
+func (s *Service) SetStorage(storage pdstorage.Store) {
 	if s == nil {
 		return
 	}
-	s.regionCatalog = catalog
-}
-
-// SetAllocatorStateSink configures an optional allocator checkpoint sink.
-// When configured, AllocID/Tso persist latest counters after every reserve.
-func (s *Service) SetAllocatorStateSink(sink allocatorStateSink) {
-	if s == nil {
-		return
-	}
-	s.allocatorStateSink = sink
+	s.storage = storage
 }
 
 // StoreHeartbeat records store-level stats.
@@ -109,8 +93,8 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
-	if s.regionCatalog != nil {
-		if err := s.regionCatalog.LogRegionUpdate(meta); err != nil {
+	if s.storage != nil {
+		if err := s.storage.SaveRegion(meta); err != nil {
 			return nil, status.Error(codes.Internal, "persist region metadata: "+err.Error())
 		}
 	}
@@ -127,8 +111,8 @@ func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
 	removed := s.cluster.RemoveRegion(regionID)
-	if removed && s.regionCatalog != nil {
-		if err := s.regionCatalog.LogRegionDelete(regionID); err != nil {
+	if removed && s.storage != nil {
+		if err := s.storage.DeleteRegion(regionID); err != nil {
 			return nil, status.Error(codes.Internal, "persist region delete: "+err.Error())
 		}
 	}
@@ -201,10 +185,10 @@ func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, e
 }
 
 func (s *Service) persistAllocatorState() error {
-	if s == nil || s.allocatorStateSink == nil {
+	if s == nil || s.storage == nil {
 		return nil
 	}
-	return s.allocatorStateSink.Save(s.ids.Current(), s.tso.Current())
+	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
 }
 
 func pbToManifestRegion(meta *pb.RegionMeta) manifest.RegionMeta {

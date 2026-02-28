@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pd/core"
+	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 
 	"github.com/stretchr/testify/require"
 )
@@ -91,29 +92,34 @@ func TestRestorePDRegionsFromManifestSnapshot(t *testing.T) {
 	require.Equal(t, uint64(20), meta.ID)
 }
 
-func TestPDStateStoreSaveAndLoad(t *testing.T) {
-	store := newPDStateStore(t.TempDir())
-	state, err := store.Load()
+func TestPDLocalStoreSaveAndLoadAllocatorState(t *testing.T) {
+	store, err := pdstorage.OpenLocalStore(t.TempDir(), nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), state.IDCurrent)
-	require.Equal(t, uint64(0), state.TSCurrent)
+	t.Cleanup(func() {
+		require.NoError(t, store.Close())
+	})
 
-	require.NoError(t, store.Save(123, 456))
-	state, err = store.Load()
+	snapshot, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, uint64(123), state.IDCurrent)
-	require.Equal(t, uint64(456), state.TSCurrent)
+	require.Equal(t, uint64(0), snapshot.Allocator.IDCurrent)
+	require.Equal(t, uint64(0), snapshot.Allocator.TSCurrent)
+
+	require.NoError(t, store.SaveAllocatorState(123, 456))
+	snapshot, err = store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), snapshot.Allocator.IDCurrent)
+	require.Equal(t, uint64(456), snapshot.Allocator.TSCurrent)
 }
 
 func TestResolveAllocatorStarts(t *testing.T) {
-	id, ts := resolveAllocatorStarts(1, 100, pdAllocatorState{
+	id, ts := pdstorage.ResolveAllocatorStarts(1, 100, pdstorage.AllocatorState{
 		IDCurrent: 50,
 		TSCurrent: 20,
 	})
 	require.Equal(t, uint64(51), id)
 	require.Equal(t, uint64(100), ts)
 
-	id, ts = resolveAllocatorStarts(80, 30, pdAllocatorState{
+	id, ts = pdstorage.ResolveAllocatorStarts(80, 30, pdstorage.AllocatorState{
 		IDCurrent: 50,
 		TSCurrent: 20,
 	})
