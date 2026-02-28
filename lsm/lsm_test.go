@@ -696,6 +696,50 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	lmHit.DecrRef()
 }
 
+func TestGetTableForKeyBinarySearchBoundariesAndGap(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	tblA := buildTableWithEntry(t, lsm, 51, "a", 1, "va")
+	tblD := buildTableWithEntry(t, lsm, 52, "d", 1, "vd")
+	tblG := buildTableWithEntry(t, lsm, 53, "g", 1, "vg")
+	defer func() { _ = tblA.DecrRef() }()
+	defer func() { _ = tblD.DecrRef() }()
+	defer func() { _ = tblG.DecrRef() }()
+
+	lh := &levelHandler{
+		levelNum: 2,
+		tables:   []*table{tblA, tblD, tblG},
+	}
+
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("a"), math.MaxUint64)); got != tblA {
+		t.Fatalf("expected table a, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("d"), 1)); got != tblD {
+		t.Fatalf("expected table d, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("g"), 7)); got != tblG {
+		t.Fatalf("expected table g, got %+v", got)
+	}
+
+	// Key gaps between single-key tables should return nil.
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("b"), 1)); got != nil {
+		t.Fatalf("expected nil for key gap b, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("f"), 1)); got != nil {
+		t.Fatalf("expected nil for key gap f, got %+v", got)
+	}
+
+	// Out-of-range keys should return nil quickly.
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("0"), 1)); got != nil {
+		t.Fatalf("expected nil for low key, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.KeyWithTs([]byte("z"), 1)); got != nil {
+		t.Fatalf("expected nil for high key, got %+v", got)
+	}
+}
+
 func TestLSMMetricsAPIs(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
