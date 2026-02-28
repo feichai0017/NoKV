@@ -389,6 +389,58 @@ func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
+	storeAddr, _, stopStore := startStubTinyKv(t)
+	defer stopStore()
+	pdAddr, pd, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	// Keep a region in config to ensure runtime routing still goes through PD.
+	cfg := config.File{
+		PD: &config.PD{
+			Addr: pdAddr,
+		},
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID:       1,
+				StartKey: "",
+				EndKey:   "",
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.Get([]byte("route-via-pd"))
+	require.NoError(t, err)
+
+	pd.mu.Lock()
+	require.GreaterOrEqual(t, pd.routeCalls, 1)
+	pd.mu.Unlock()
+}
+
 func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 	storeAddr, _, stopStore := startStubTinyKv(t)
 	defer stopStore()

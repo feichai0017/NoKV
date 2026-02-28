@@ -98,25 +98,9 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 			Addr:    addr,
 		})
 	}
-	for _, region := range cfgFile.Regions {
-		meta := &pb.RegionMeta{
-			Id:               region.ID,
-			StartKey:         decodeKey(region.StartKey),
-			EndKey:           decodeKey(region.EndKey),
-			EpochVersion:     region.Epoch.Version,
-			EpochConfVersion: region.Epoch.ConfVersion,
-		}
-		for _, peer := range region.Peers {
-			meta.Peers = append(meta.Peers, &pb.RegionPeer{
-				StoreId: peer.StoreID,
-				PeerId:  peer.PeerID,
-			})
-		}
-		cfg.Regions = append(cfg.Regions, client.RegionConfig{
-			Meta:          meta,
-			LeaderStoreID: region.LeaderStoreID,
-		})
-	}
+	// Route source is converged to PD resolver. raft_config regions are treated
+	// as bootstrap/deployment metadata and are not used as runtime routing truth.
+	cfg.Regions = nil
 	pdAddr = strings.TrimSpace(pdAddr)
 	if pdAddr == "" {
 		pdAddr = cfgFile.ResolvePDAddr(addrScope)
