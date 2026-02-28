@@ -187,3 +187,30 @@ func TestResolvePDAddrFallbackAndNil(t *testing.T) {
 		t.Fatalf("expected docker fallback to host addr, got %q", got)
 	}
 }
+
+func TestResolvePDWorkDir(t *testing.T) {
+	cfg := &File{
+		PD: &PD{
+			WorkDir:       "/var/lib/nokv-pd",
+			DockerWorkDir: "/var/lib/nokv-pd-docker",
+		},
+	}
+	if got := cfg.ResolvePDWorkDir("host"); got != "/var/lib/nokv-pd" {
+		t.Fatalf("host pd work dir mismatch: got %q", got)
+	}
+	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd-docker" {
+		t.Fatalf("docker pd work dir mismatch: got %q", got)
+	}
+}
+
+func TestResolvePDWorkDirFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolvePDWorkDir("host"); got != "" {
+		t.Fatalf("expected empty work dir for nil cfg, got %q", got)
+	}
+
+	cfg := &File{PD: &PD{WorkDir: "/var/lib/nokv-pd"}}
+	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd" {
+		t.Fatalf("expected docker fallback to host work dir, got %q", got)
+	}
+}

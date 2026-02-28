@@ -117,6 +117,17 @@ if [[ -z "$PD_LISTEN" ]]; then
   PD_LISTEN="127.0.0.1:2379"
 fi
 
+PD_WORKDIR=""
+if pd_workdir_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple --field workdir 2>/dev/null); then
+  PD_WORKDIR=$(echo "$pd_workdir_from_config" | tr -d '\r' | sed -n '1p')
+fi
+if [[ -z "$PD_WORKDIR" ]]; then
+  PD_WORKDIR="$WORKDIR/pd"
+elif [[ "$PD_WORKDIR" != /* ]]; then
+  PD_WORKDIR="$WORKDIR/$PD_WORKDIR"
+fi
+mkdir -p "$PD_WORKDIR"
+
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
 if [ "${#STORE_LINES[@]}" -eq 0 ]; then
   echo "no stores defined in $CONFIG_PATH" >&2
@@ -169,8 +180,6 @@ for idx in "${!STORE_IDS[@]}"; do
 done
 
 echo "Starting PD service on ${PD_LISTEN}"
-PD_WORKDIR="$WORKDIR/pd"
-mkdir -p "$PD_WORKDIR"
 nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR" >"$WORKDIR/pd.log" 2>&1 &
 PD_PID=$!
 
