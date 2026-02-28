@@ -57,7 +57,10 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatReques
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &pb.StoreHeartbeatResponse{Accepted: true}, nil
+	return &pb.StoreHeartbeatResponse{
+		Accepted:   true,
+		Operations: s.planStoreOperations(req.GetStoreId()),
+	}, nil
 }
 
 // RegionHeartbeat records region-level metadata.

@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
@@ -24,10 +25,12 @@ type RegionSinkConfig struct {
 // RegionSink forwards scheduler heartbeats to PD and optionally mirrors them to
 // another local sink (e.g. scheduler.Coordinator for debugging snapshots).
 type RegionSink struct {
+	mu      sync.Mutex
 	pd      pdclient.Client
 	mirror  scheduler.RegionSink
 	timeout time.Duration
 	onError func(op string, err error)
+	pending []scheduler.Operation
 }
 
 // NewRegionSink constructs a PD-backed RegionSink.
@@ -92,7 +95,7 @@ func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
-	_, err := s.pd.StoreHeartbeat(ctx, &pb.StoreHeartbeatRequest{
+	resp, err := s.pd.StoreHeartbeat(ctx, &pb.StoreHeartbeatRequest{
 		StoreId:   stats.StoreID,
 		RegionNum: stats.RegionNum,
 		LeaderNum: stats.LeaderNum,
@@ -101,6 +104,62 @@ func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	})
 	if err != nil {
 		s.onError("StoreHeartbeat", err)
+		return
+	}
+	s.enqueueOperations(resp.GetOperations())
+}
+
+// Plan returns and drains pending scheduling operations received from PD.
+func (s *RegionSink) Plan(_ scheduler.Snapshot) []scheduler.Operation {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return nil
+	}
+	out := make([]scheduler.Operation, len(s.pending))
+	copy(out, s.pending)
+	s.pending = s.pending[:0]
+	return out
+}
+
+func (s *RegionSink) enqueueOperations(ops []*pb.SchedulerOperation) {
+	if s == nil || len(ops) == 0 {
+		return
+	}
+	converted := make([]scheduler.Operation, 0, len(ops))
+	for _, op := range ops {
+		if next, ok := fromPBOperation(op); ok {
+			converted = append(converted, next)
+		}
+	}
+	if len(converted) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.pending = append(s.pending, converted...)
+	s.mu.Unlock()
+}
+
+func fromPBOperation(op *pb.SchedulerOperation) (scheduler.Operation, bool) {
+	if op == nil {
+		return scheduler.Operation{}, false
+	}
+	switch op.GetType() {
+	case pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
+		if op.GetRegionId() == 0 || op.GetSourcePeerId() == 0 || op.GetTargetPeerId() == 0 {
+			return scheduler.Operation{}, false
+		}
+		return scheduler.Operation{
+			Type:   scheduler.OperationLeaderTransfer,
+			Region: op.GetRegionId(),
+			Source: op.GetSourcePeerId(),
+			Target: op.GetTargetPeerId(),
+		}, true
+	default:
+		return scheduler.Operation{}, false
 	}
 }
 

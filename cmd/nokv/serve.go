@@ -71,6 +71,7 @@ func runServeCmd(w io.Writer, args []string) error {
 
 	localCoordinator := scheduler.NewCoordinator()
 	var schedulerSink scheduler.RegionSink = localCoordinator
+	var schedulerPlanner scheduler.Planner
 	var pdSink *pdadapter.RegionSink
 	if strings.TrimSpace(*pdAddr) != "" {
 		dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
@@ -85,6 +86,7 @@ func runServeCmd(w io.Writer, args []string) error {
 			Timeout: *pdTimeout,
 		})
 		schedulerSink = pdSink
+		schedulerPlanner = pdSink
 	}
 	if pdSink != nil {
 		defer func() {
@@ -97,6 +99,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		Store: raftstore.StoreConfig{
 			StoreID:   *storeID,
 			Scheduler: schedulerSink,
+			Planner:   schedulerPlanner,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
 		RaftTickInterval:   *raftTickInterval,
