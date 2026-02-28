@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,13 +184,14 @@
 <h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
 <h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code>, <code>nokv-config</code>, and <code>nokv-tso</code>, reads <code>raft_config.json</code>, seeds manifests, and starts the TinyKv nodes (plus TSO when configured). If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>
 </li>
 </ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. By default, store processes resolve PD from config; <code>--pd-listen</code> override is only forwarded when explicitly set. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
+When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
 <blockquote>
 <p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
 </blockquote>
@@ -212,7 +213,7 @@ The script iterates over every store in the config and writes Region metadata vi
     --workdir ./artifacts/cluster/store-1 \
     --scope local   # use --scope docker inside containers
 </code></pre>
-<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
+<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from <code>config.pd</code> unless <code>--pd-addr</code> explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
 </ul>
 <hr>
 <h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
@@ -232,17 +233,22 @@ The script iterates over every store in the config and writes Region metadata vi
 </div>
 <hr>
 <h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
-<h3 id="scriptstso"><a class="header" href="#scriptstso"><code>scripts/tso</code></a></h3>
-<p>A small Go program (not shell) that exposes an HTTP timestamp oracle:</p>
-<pre><code class="language-bash">go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
+<h3 id="cmdnokv-pd"><a class="header" href="#cmdnokv-pd"><code>cmd/nokv pd</code></a></h3>
+<p>PD-lite service used by local scripts and compose for:</p>
+<ul>
+<li>routing (<code>GetRegionByKey</code>)</li>
+<li>ID allocation (<code>AllocID</code>)</li>
+<li>timestamp allocation (<code>Tso</code>)</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 </code></pre>
-<p><code>run_local_cluster.sh</code> and Docker Compose invoke it automatically when <code>tso.listen_addr</code> is present in the shared config.</p>
 <hr>
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
-<li><code>nokv-config stores</code> / <code>regions</code> / <code>tso</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
+<li><code>nokv-config stores</code> / <code>regions</code> / <code>pd</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
 <li><code>nokv-config manifest</code> writes Region metadata into manifests and replaces the historical <code>manifestctl</code> binary.</li>
-<li><code>cmd/nokv-redis</code> reads the same config; when <code>--tso-url</code> is omitted it falls back to the <code>tso</code> section.</li>
+<li><code>cmd/nokv-redis</code> reads the same config and uses <code>config.pd</code> by default in raft mode (<code>--pd-addr</code> remains an override).</li>
 <li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
 </ul>
 <p>Maintaining a single <code>raft_config.json</code> keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.</p>

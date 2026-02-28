@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -320,15 +320,10 @@
 <p><strong>Single-client experiments</strong> – choose monotonically increasing integers in your client code (as shown in <code>raftstore/client/client_test.go</code>).</p>
 </li>
 <li>
-<p><strong>Shared allocator</strong> – run the sample TSO service under <code>scripts/tso</code> to hand out globally increasing timestamps:</p>
-<pre><code class="language-bash">go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
-
-# request one timestamp
-curl -s http://127.0.0.1:9494/tso
-# request a batch of 16
-curl -s "http://127.0.0.1:9494/tso?batch=16"
+<p><strong>Shared allocator</strong> – run PD-lite to hand out globally increasing timestamps:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
 </code></pre>
-<p>Each call returns JSON (<code>{"timestamp":123,"count":1}</code>), where <code>timestamp</code> is the first value in the allocated range. Clients can use the first value for <code>startVersion</code>, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.</p>
+<p>Clients can call PD <code>Tso</code> (gRPC) and use the returned <code>timestamp</code> as <code>startVersion</code>, or reserve a batch for multiple transactions. This keeps the learning focus on the Percolator flow while matching production-style timestamp allocation.</p>
 </li>
 </ul>
 

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,10 +187,11 @@
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run inside <code>db.Update</code> / <code>db.View</code>, providing atomic single-key updates and snapshot reads across multiple keys.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. When <code>--tso-url</code> is omitted, the gateway consults the <code>tso</code> block in <code>raft_config.json</code> and falls back to a local oracle if the block is absent.</td><td><code>--raft-config &lt;file&gt;</code><br><code>--tso-url http://host:port</code> (optional)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
 </div>
+<p>When both CLI and config provide the same setting, CLI wins.</p>
 <h2 id="usage-examples"><a class="header" href="#usage-examples">Usage examples</a></h2>
 <h3 id="embedded-backend"><a class="header" href="#embedded-backend">Embedded backend</a></h3>
 <pre><code class="language-bash">go run ./cmd/nokv-redis \
@@ -202,7 +203,7 @@
 <h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
 <ol>
 <li>
-<p>Start TinyKv and, if configured, the TSO using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv-tso</code> automatically when <code>tso.listen_addr</code> is present:</p>
+<p>Start TinyKv and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh
 # or: docker compose up --build
 </code></pre>
@@ -213,7 +214,6 @@
   --addr 127.0.0.1:6380 \
   --raft-config raft_config.example.json
 </code></pre>
-<p>Supply <code>--tso-url</code> only when you need to override the config file; otherwise the gateway uses <code>tso.advertise_url</code> (or <code>listen_addr</code>) from the same JSON. If the block is missing, it falls back to the embedded timestamp oracle.</p>
 </li>
 </ol>
 <h2 id="supported-commands"><a class="header" href="#supported-commands">Supported commands</a></h2>
@@ -229,6 +229,12 @@
 <li><code>stores</code> – store ID, gRPC address, and optional container listen/advertise addresses</li>
 <li><code>regions</code> – region ID, start/end keys (use <code>hex:&lt;bytes&gt;</code> for binary data), epoch, peer list, leader store ID</li>
 <li><code>max_retries</code> – maximum retries for region errors in the distributed client</li>
+<li><code>pd</code> – PD-lite endpoint(s) and optional persistence dirs:
+<ul>
+<li><code>addr</code> / <code>docker_addr</code> for endpoint resolution by scope</li>
+<li><code>work_dir</code> / <code>docker_work_dir</code> for PD state persistence defaults</li>
+</ul>
+</li>
 </ul>
 <p>Use <code>nokv-config</code> to inspect or validate the configuration:</p>
 <pre><code class="language-bash">nokv-config stores --config raft_config.json

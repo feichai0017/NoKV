@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -348,8 +348,8 @@
 <li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>[]RegionConfig</code> describing region boundaries and known leaders.</li>
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
-<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, reuse the TSO sample under <code>scripts/tso</code> to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches the stores declared in the config, and starts the HTTP TSO allocator when the <code>tso</code> block is present.</li>
+<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches PD-lite, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -386,7 +386,7 @@
 <li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
 <li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
 </ul>
-<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
+<p>See also <a href="raftstore.html"><code>docs/raftstore.md</code></a> for deeper internals, <a href="pd.html"><code>docs/pd.md</code></a> for control-plane details, and <a href="testing.html"><code>docs/testing.md</code></a> for coverage details.</p>
 
                     </main>
 

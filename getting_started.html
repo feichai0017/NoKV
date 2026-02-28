@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,7 +187,7 @@
 <li>(Optional) Docker + Docker Compose for containerized runs</li>
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus the optional TSO helper.</p>
+<p>This launches a 3-node Raft cluster plus a PD-lite service.</p>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
 </code></pre>
 <p>Start the Redis-compatible gateway in another shell:</p>

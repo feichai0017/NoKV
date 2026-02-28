@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -349,7 +349,7 @@ Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 5
 <li>(Optional) Docker + Docker Compose for containerized runs</li>
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
-<p>This launches a 3-node Raft cluster plus the optional TSO helper.</p>
+<p>This launches a 3-node Raft cluster plus a PD-lite service.</p>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
 </code></pre>
 <p>Start the Redis-compatible gateway in another shell:</p>
@@ -609,8 +609,8 @@ func main() {
 <li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>[]RegionConfig</code> describing region boundaries and known leaders.</li>
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
-<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, reuse the TSO sample under <code>scripts/tso</code> to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches the stores declared in the config, and starts the HTTP TSO allocator when the <code>tso</code> block is present.</li>
+<li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches PD-lite, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -647,7 +647,7 @@ func main() {
 <li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
 <li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
 </ul>
-<p>See also <a href="#raftstore-deep-dive"><code>docs/raftstore.md</code></a> for deeper internals and <a href="#testing--validation-matrix"><code>docs/testing.md</code></a> for coverage details.</p>
+<p>See also <a href="#raftstore-deep-dive"><code>docs/raftstore.md</code></a> for deeper internals, <a href="#pd-lite"><code>docs/pd.md</code></a> for control-plane details, and <a href="#testing--validation-matrix"><code>docs/testing.md</code></a> for coverage details.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="configuration--options"><a class="header" href="#configuration--options">Configuration &amp; Options</a></h1>
 <p>NoKV exposes two configuration surfaces:</p>
@@ -755,10 +755,17 @@ are interpreted as nanoseconds.</li>
 <h2 id="2-raft-topology-file"><a class="header" href="#2-raft-topology-file">2. Raft Topology File</a></h2>
 <p><code>raft_config.example.json</code> is the single source of truth for distributed
 topology. It is consumed by scripts, <code>cmd/nokv-redis</code>, and the <code>config</code> package.</p>
+<p>Precedence rule: when a value can be provided by both CLI flags and config
+file, CLI flags take precedence; config acts as startup defaults.</p>
 <p>Minimal shape:</p>
 <pre><code class="language-jsonc">{
   "max_retries": 8,
-  "tso": { "listen_addr": "127.0.0.1:9494", "advertise_url": "http://127.0.0.1:9494" },
+  "pd": {
+    "addr": "127.0.0.1:2379",
+    "docker_addr": "nokv-pd:2379",
+    "work_dir": "./artifacts/cluster/pd",
+    "docker_work_dir": "/var/lib/nokv-pd"
+  },
   "stores": [
     { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
   ],
@@ -779,6 +786,11 @@ topology. It is consumed by scripts, <code>cmd/nokv-redis</code>, and the <code>
 <li><code>start_key</code> / <code>end_key</code> accept plain strings, <code>hex:&lt;bytes&gt;</code>, or base64. Use
 <code>"-"</code> or empty for unbounded ranges.</li>
 <li><code>stores</code> define both host and docker addresses for local runs vs containers.</li>
+<li><code>pd.addr</code> is the default PD endpoint for host scope; <code>pd.docker_addr</code> is used
+when tools run in docker scope.</li>
+<li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
+used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
+set explicitly.</li>
 <li><code>leader_store_id</code> is optional; clients use it for initial routing hints.</li>
 </ul>
 <p>Programmatic loading:</p>
@@ -2253,15 +2265,10 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <p><strong>Single-client experiments</strong> – choose monotonically increasing integers in your client code (as shown in <code>raftstore/client/client_test.go</code>).</p>
 </li>
 <li>
-<p><strong>Shared allocator</strong> – run the sample TSO service under <code>scripts/tso</code> to hand out globally increasing timestamps:</p>
-<pre><code class="language-bash">go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
-
-# request one timestamp
-curl -s http://127.0.0.1:9494/tso
-# request a batch of 16
-curl -s "http://127.0.0.1:9494/tso?batch=16"
+<p><strong>Shared allocator</strong> – run PD-lite to hand out globally increasing timestamps:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
 </code></pre>
-<p>Each call returns JSON (<code>{"timestamp":123,"count":1}</code>), where <code>timestamp</code> is the first value in the allocated range. Clients can use the first value for <code>startVersion</code>, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.</p>
+<p>Clients can call PD <code>Tso</code> (gRPC) and use the returned <code>timestamp</code> as <code>startVersion</code>, or reserve a batch for multiple transactions. This keeps the learning focus on the Percolator flow while matching production-style timestamp allocation.</p>
 </li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2375,8 +2382,10 @@ curl -s "http://127.0.0.1:9494/tso?batch=16"
 <ul>
 <li>Topology is sourced from <code>raft_config.example.json</code> (via <code>config.LoadFile</code>) and
 reused by scripts, Docker Compose, and the Redis gateway.</li>
-<li>The client builds a static region map (<code>[]RegionConfig</code>) and store endpoints
-from the same file; there is no dynamic PD-style reconfiguration today.</li>
+<li>Runtime routing is PD-first: <code>raftstore/client</code> resolves Regions by key through
+<code>GetRegionByKey</code> and caches route entries for retries.</li>
+<li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
+the runtime source of truth once PD is available.</li>
 <li>The built-in scheduler currently emits leader-transfer operations only
 (see <code>raftstore/scheduler</code>), acting as a minimal control plane.</li>
 </ul>
@@ -2428,6 +2437,127 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <li><strong>Scheduler integration</strong>: pair <code>RegionSnapshot()</code> and <code>RegionMetrics()</code> with an external scheduler (PD-like) for dynamic balancing.</li>
 </ul>
 <p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="pd-lite"><a class="header" href="#pd-lite">PD-lite</a></h1>
+<p><code>PD-lite</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.PD</code>) and is started by:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379
+</code></pre>
+<hr>
+<h2 id="1-responsibilities-1"><a class="header" href="#1-responsibilities-1">1. Responsibilities</a></h2>
+<p>PD-lite currently owns:</p>
+<ul>
+<li><strong>Routing</strong>: <code>GetRegionByKey</code></li>
+<li><strong>Heartbeats</strong>: <code>StoreHeartbeat</code>, <code>RegionHeartbeat</code></li>
+<li><strong>Region removal</strong>: <code>RemoveRegion</code></li>
+<li><strong>ID service</strong>: <code>AllocID</code></li>
+<li><strong>TSO</strong>: <code>Tso</code></li>
+</ul>
+<p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use PD as the
+routing source of truth.</p>
+<hr>
+<h2 id="2-runtime-architecture"><a class="header" href="#2-runtime-architecture">2. Runtime Architecture</a></h2>
+<pre class="mermaid">flowchart LR
+    Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
+    Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| PD
+    PD --&gt; Cluster["pd/core.Cluster"]
+    Cluster --&gt; Scheduler["leader-transfer hint planner"]
+</pre>
+
+<p>Core implementation units:</p>
+<ul>
+<li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
+<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) with local manifest+state implementation.</li>
+<li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
+<li><code>pd/client</code>: client wrapper used by store/gateway.</li>
+<li><code>pd/adapter</code>: scheduler sink that forwards heartbeats into PD.</li>
+</ul>
+<hr>
+<h2 id="3-persistence---workdir"><a class="header" href="#3-persistence---workdir">3. Persistence (<code>--workdir</code>)</a></h2>
+<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state:</p>
+<ul>
+<li><strong>Region catalog</strong> via manifest edits.</li>
+<li><strong>Allocator checkpoints</strong> via <code>PD_STATE.json</code>:
+<ul>
+<li><code>id_current</code></li>
+<li><code>ts_current</code></li>
+</ul>
+</li>
+</ul>
+<p>Startup flow:</p>
+<ol>
+<li>Open <code>pd/storage</code> with <code>--workdir</code>.</li>
+<li>Load snapshot (<code>regions</code> + allocator counters).</li>
+<li>Compute starts as <code>max(cli_start, checkpoint+1)</code>.</li>
+<li>Replay region snapshot into <code>pd/core.Cluster</code>.</li>
+</ol>
+<p>This avoids allocator rollback after restart and keeps route metadata stable.</p>
+<hr>
+<h2 id="4-config-integration"><a class="header" href="#4-config-integration">4. Config Integration</a></h2>
+<p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
+<pre><code class="language-json">"pd": {
+  "addr": "127.0.0.1:2379",
+  "docker_addr": "nokv-pd:2379",
+  "work_dir": "./artifacts/cluster/pd",
+  "docker_work_dir": "/var/lib/nokv-pd"
+}
+</code></pre>
+<p>Resolution rules:</p>
+<ul>
+<li>CLI override wins.</li>
+<li>Otherwise read from config by scope (<code>host</code> / <code>docker</code>).</li>
+</ul>
+<p>Helpers:</p>
+<ul>
+<li><code>config.ResolvePDAddr(scope)</code></li>
+<li><code>config.ResolvePDWorkDir(scope)</code></li>
+<li><code>nokv-config pd --field addr|workdir --scope host|docker</code></li>
+</ul>
+<hr>
+<h2 id="5-routing-source-convergence"><a class="header" href="#5-routing-source-convergence">5. Routing Source Convergence</a></h2>
+<p>NoKV now uses <strong>PD-first routing</strong>:</p>
+<ul>
+<li><code>raftstore/client</code> resolves regions with <code>GetRegionByKey</code>.</li>
+<li><code>raft_config</code> regions are bootstrap/deployment metadata.</li>
+<li>Runtime route truth comes from PD heartbeats + PD region catalog.</li>
+</ul>
+<p>This avoids dual sources drifting over time (config vs PD).</p>
+<hr>
+<h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
+<p><code>nokv serve --pd-addr ...</code> remains optional by design:</p>
+<ul>
+<li>No PD address: local/dev mode (or cluster-local scheduler only).</li>
+<li>With PD address: cluster mode with PD control-plane heartbeats.</li>
+</ul>
+<p>Startup logs explicitly print the selected mode.</p>
+<hr>
+<h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
+<h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>
+<ul>
+<li>Uses a scheduler server (<code>tinyscheduler</code>) as separate process.</li>
+<li>Control plane integrates embedded etcd for metadata persistence.</li>
+<li>Educational architecture, minimal production hardening.</li>
+</ul>
+<h3 id="tikv-production-stack"><a class="header" href="#tikv-production-stack">TiKV (production stack)</a></h3>
+<ul>
+<li>PD is an independent, highly available cluster.</li>
+<li>PD internally uses etcd Raft for durable metadata + leader election.</li>
+<li>Rich scheduling and balancing policies, rolling updates, robust ops tooling.</li>
+</ul>
+<h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
+<ul>
+<li>Single PD-lite process with optional local persistence (<code>--workdir</code>).</li>
+<li>Sufficient for local clusters, testing, and architecture iteration.</li>
+<li>API shape intentionally aligned with a PD-style control plane so migration to
+stronger HA semantics is incremental.</li>
+</ul>
+<hr>
+<h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>
+<ul>
+<li>No multi-PD quorum and no automatic PD failover.</li>
+<li>Scheduler policy is intentionally small (leader transfer focused).</li>
+<li>No advanced placement constraints yet.</li>
+</ul>
+<p>These are deliberate scope limits for a fast-moving experimental platform.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crash-recovery-playbook"><a class="header" href="#crash-recovery-playbook">Crash Recovery Playbook</a></h1>
 <p>This playbook documents how NoKV rebuilds state after a crash and which automated checks ensure correctness. It ties together WAL replay, manifest reconciliation, ValueLog GC, and flush pipelines—mirroring RocksDB’s layered recovery while incorporating Badger-style value log hygiene.</p>
@@ -2686,14 +2816,14 @@ RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
 # gRPC transport chaos tests + watchdog metrics
 CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
 
-# Sample timestamp allocator (TSO) for multi-client transaction tests
-go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
+# Sample PD-lite service for shared TSO / routing in distributed tests
+go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 
-# Local three-node cluster (includes manifest bootstrap + optional TSO)
+# Local three-node cluster (includes manifest bootstrap + PD-lite)
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
 # Tear down with Ctrl+C
 
-# Docker-compose sandbox (3 nodes + TSO)
+# Docker-compose sandbox (3 nodes + PD-lite)
 docker compose up --build
 docker compose down -v
 
@@ -2730,7 +2860,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Transactions / Oracle</td><td><code>txn_test.go</code>, <code>txn_iterator_test.go</code>, <code>stats_test.go</code></td><td>MVCC timestamps, conflict detection, iterator snapshots, metrics accounting.</td><td>Mixed workload fuzzing, managed transactions with TTL.</td></tr>
 <tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, managed vs. unmanaged transactions, throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
-<tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring &amp; TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
+<tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
 <tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, manifest logging CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
 <tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-G) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
@@ -2779,13 +2909,14 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
 <h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code>, <code>nokv-config</code>, and <code>nokv-tso</code>, reads <code>raft_config.json</code>, seeds manifests, and starts the TinyKv nodes (plus TSO when configured). If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>
 </li>
 </ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code>, calls <code>nokv-config manifest</code>, and, if <code>tso.listen_addr</code> is set, launches <code>nokv-tso</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.</p>
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. By default, store processes resolve PD from config; <code>--pd-listen</code> override is only forwarded when explicitly set. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
+When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
 <blockquote>
 <p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
 </blockquote>
@@ -2807,7 +2938,7 @@ The script iterates over every store in the config and writes Region metadata vi
     --workdir ./artifacts/cluster/store-1 \
     --scope local   # use --scope docker inside containers
 </code></pre>
-<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
+<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from <code>config.pd</code> unless <code>--pd-addr</code> explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
 </ul>
 <hr>
 <h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
@@ -2827,17 +2958,22 @@ The script iterates over every store in the config and writes Region metadata vi
 </div>
 <hr>
 <h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
-<h3 id="scriptstso"><a class="header" href="#scriptstso"><code>scripts/tso</code></a></h3>
-<p>A small Go program (not shell) that exposes an HTTP timestamp oracle:</p>
-<pre><code class="language-bash">go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
+<h3 id="cmdnokv-pd"><a class="header" href="#cmdnokv-pd"><code>cmd/nokv pd</code></a></h3>
+<p>PD-lite service used by local scripts and compose for:</p>
+<ul>
+<li>routing (<code>GetRegionByKey</code>)</li>
+<li>ID allocation (<code>AllocID</code>)</li>
+<li>timestamp allocation (<code>Tso</code>)</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 </code></pre>
-<p><code>run_local_cluster.sh</code> and Docker Compose invoke it automatically when <code>tso.listen_addr</code> is present in the shared config.</p>
 <hr>
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
-<li><code>nokv-config stores</code> / <code>regions</code> / <code>tso</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
+<li><code>nokv-config stores</code> / <code>regions</code> / <code>pd</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
 <li><code>nokv-config manifest</code> writes Region metadata into manifests and replaces the historical <code>manifestctl</code> binary.</li>
-<li><code>cmd/nokv-redis</code> reads the same config; when <code>--tso-url</code> is omitted it falls back to the <code>tso</code> section.</li>
+<li><code>cmd/nokv-redis</code> reads the same config and uses <code>config.pd</code> by default in raft mode (<code>--pd-addr</code> remains an override).</li>
 <li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
 </ul>
 <p>Maintaining a single <code>raft_config.json</code> keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.</p>
@@ -2851,10 +2987,11 @@ The script iterates over every store in the config and writes Region metadata vi
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run inside <code>db.Update</code> / <code>db.View</code>, providing atomic single-key updates and snapshot reads across multiple keys.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. When <code>--tso-url</code> is omitted, the gateway consults the <code>tso</code> block in <code>raft_config.json</code> and falls back to a local oracle if the block is absent.</td><td><code>--raft-config &lt;file&gt;</code><br><code>--tso-url http://host:port</code> (optional)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
 </div>
+<p>When both CLI and config provide the same setting, CLI wins.</p>
 <h2 id="usage-examples"><a class="header" href="#usage-examples">Usage examples</a></h2>
 <h3 id="embedded-backend"><a class="header" href="#embedded-backend">Embedded backend</a></h3>
 <pre><code class="language-bash">go run ./cmd/nokv-redis \
@@ -2866,7 +3003,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
 <ol>
 <li>
-<p>Start TinyKv and, if configured, the TSO using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv-tso</code> automatically when <code>tso.listen_addr</code> is present:</p>
+<p>Start TinyKv and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh
 # or: docker compose up --build
 </code></pre>
@@ -2877,7 +3014,6 @@ The script iterates over every store in the config and writes Region metadata vi
   --addr 127.0.0.1:6380 \
   --raft-config raft_config.example.json
 </code></pre>
-<p>Supply <code>--tso-url</code> only when you need to override the config file; otherwise the gateway uses <code>tso.advertise_url</code> (or <code>listen_addr</code>) from the same JSON. If the block is missing, it falls back to the embedded timestamp oracle.</p>
 </li>
 </ol>
 <h2 id="supported-commands"><a class="header" href="#supported-commands">Supported commands</a></h2>
@@ -2893,6 +3029,12 @@ The script iterates over every store in the config and writes Region metadata vi
 <li><code>stores</code> – store ID, gRPC address, and optional container listen/advertise addresses</li>
 <li><code>regions</code> – region ID, start/end keys (use <code>hex:&lt;bytes&gt;</code> for binary data), epoch, peer list, leader store ID</li>
 <li><code>max_retries</code> – maximum retries for region errors in the distributed client</li>
+<li><code>pd</code> – PD-lite endpoint(s) and optional persistence dirs:
+<ul>
+<li><code>addr</code> / <code>docker_addr</code> for endpoint resolution by scope</li>
+<li><code>work_dir</code> / <code>docker_work_dir</code> for PD state persistence defaults</li>
+</ul>
+</li>
 </ul>
 <p>Use <code>nokv-config</code> to inspect or validate the configuration:</p>
 <pre><code class="language-bash">nokv-config stores --config raft_config.json

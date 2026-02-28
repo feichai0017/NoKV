@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-de60993c.js";
+            window.path_to_searchindex_js = "searchindex-fc977a47.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cbc9e846.js"></script>
+        <script src="toc-b9084f08.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -284,10 +284,17 @@ are interpreted as nanoseconds.</li>
 <h2 id="2-raft-topology-file"><a class="header" href="#2-raft-topology-file">2. Raft Topology File</a></h2>
 <p><code>raft_config.example.json</code> is the single source of truth for distributed
 topology. It is consumed by scripts, <code>cmd/nokv-redis</code>, and the <code>config</code> package.</p>
+<p>Precedence rule: when a value can be provided by both CLI flags and config
+file, CLI flags take precedence; config acts as startup defaults.</p>
 <p>Minimal shape:</p>
 <pre><code class="language-jsonc">{
   "max_retries": 8,
-  "tso": { "listen_addr": "127.0.0.1:9494", "advertise_url": "http://127.0.0.1:9494" },
+  "pd": {
+    "addr": "127.0.0.1:2379",
+    "docker_addr": "nokv-pd:2379",
+    "work_dir": "./artifacts/cluster/pd",
+    "docker_work_dir": "/var/lib/nokv-pd"
+  },
   "stores": [
     { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
   ],
@@ -308,6 +315,11 @@ topology. It is consumed by scripts, <code>cmd/nokv-redis</code>, and the <code>
 <li><code>start_key</code> / <code>end_key</code> accept plain strings, <code>hex:&lt;bytes&gt;</code>, or base64. Use
 <code>"-"</code> or empty for unbounded ranges.</li>
 <li><code>stores</code> define both host and docker addresses for local runs vs containers.</li>
+<li><code>pd.addr</code> is the default PD endpoint for host scope; <code>pd.docker_addr</code> is used
+when tools run in docker scope.</li>
+<li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
+used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
+set explicitly.</li>
 <li><code>leader_store_id</code> is optional; clients use it for initial routing hints.</li>
 </ul>
 <p>Programmatic loading:</p>
