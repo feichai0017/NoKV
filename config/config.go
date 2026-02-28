@@ -9,15 +9,8 @@ import (
 // File models the raft topology configuration shared by CLIs and gateways.
 type File struct {
 	MaxRetries int      `json:"max_retries"`
-	TSO        *TSO     `json:"tso"`
 	Stores     []Store  `json:"stores"`
 	Regions    []Region `json:"regions"`
-}
-
-// TSO describes the timestamp service endpoints.
-type TSO struct {
-	ListenAddr   string `json:"listen_addr"`
-	AdvertiseURL string `json:"advertise_url"`
 }
 
 // Store represents a single store endpoint.

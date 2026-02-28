@@ -31,8 +31,6 @@ func main() {
 		err = runStores(args)
 	case "regions":
 		err = runRegions(args)
-	case "tso":
-		err = runTSO(args)
 	case "manifest":
 		err = runManifest(args)
 	default:
@@ -123,33 +121,6 @@ func runRegions(args []string) error {
 	}
 }
 
-func runTSO(args []string) error {
-	fs := flag.NewFlagSet("tso", flag.ExitOnError)
-	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
-	format := fs.String("format", "simple", "output format: simple|json")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		return err
-	}
-	if cfg.TSO == nil {
-		return fmt.Errorf("tso block missing from configuration")
-	}
-
-	switch strings.ToLower(*format) {
-	case "json":
-		return json.NewEncoder(os.Stdout).Encode(cfg.TSO)
-	case "simple":
-		fmt.Printf("%s %s\n", cfg.TSO.ListenAddr, cfg.TSO.AdvertiseURL)
-		return nil
-	default:
-		return fmt.Errorf("unknown format %q", *format)
-	}
-}
-
 func loadConfig(path string) (*config.File, error) {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
@@ -195,7 +166,6 @@ func printUsage() {
 Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
-  tso      Print TSO listen/advertise values
   manifest Write region metadata into a manifest
 
 Flags:

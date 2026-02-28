@@ -143,15 +143,10 @@ See [`docs/testing.md`](testing.md#transactions) for the regression matrix cover
 Replica nodes do **not** generate timestamps during TinyKV RPC handling; the values sent in `KvPrewrite`/`KvCommit` are applied verbatim. For teaching and prototyping you can pick from two approaches:
 
 - **Single-client experiments** – choose monotonically increasing integers in your client code (as shown in `raftstore/client/client_test.go`).
-- **Shared allocator** – run the sample TSO service under `scripts/tso` to hand out globally increasing timestamps:
+- **Shared allocator** – run PD-lite to hand out globally increasing timestamps:
 
   ```bash
-  go run ./scripts/tso --addr 127.0.0.1:9494 --start 100
-
-  # request one timestamp
-  curl -s http://127.0.0.1:9494/tso
-  # request a batch of 16
-  curl -s "http://127.0.0.1:9494/tso?batch=16"
+  go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
   ```
 
-  Each call returns JSON (`{"timestamp":123,"count":1}`), where `timestamp` is the first value in the allocated range. Clients can use the first value for `startVersion`, or the entire range to provision multiple transactions. This keeps the learning focus on the Percolator flow while demonstrating how production systems would obtain globally ordered timestamps.
+  Clients can call PD `Tso` (gRPC) and use the returned `timestamp` as `startVersion`, or reserve a batch for multiple transactions. This keeps the learning focus on the Percolator flow while matching production-style timestamp allocation.
