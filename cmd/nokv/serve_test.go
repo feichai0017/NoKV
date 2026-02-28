@@ -109,6 +109,7 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Contains(t, buf.String(), "Manifest contains no regions")
+		require.Contains(t, buf.String(), "Serve mode: dev-standalone")
 	})
 }
 
@@ -148,6 +149,7 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Contains(t, out, "Store 1 not present in 1 region(s)")
 		require.Contains(t, out, "Sample regions:")
 		require.Contains(t, out, "Configured peers:")
+		require.Contains(t, out, "Serve mode: cluster (PD disabled; local scheduler only)")
 	})
 }
 

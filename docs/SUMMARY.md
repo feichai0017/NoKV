@@ -18,6 +18,7 @@
 - [Hotring](hotring.md)
 - [Transactions](txn.md)
 - [Raftstore](raftstore.md)
+- [PD-lite](pd.md)
 - [Recovery](recovery.md)
 - [Stats](stats.md)
 - [Testing](testing.md)

@@ -192,12 +192,18 @@ for idx in "${!STORE_IDS[@]}"; do
   store_id="${STORE_IDS[$idx]}"
   store_dir="${STORE_WORKDIRS[$idx]}"
   echo "Starting store ${store_id} (workdir=${store_dir})"
+  serve_args=(
+    --config "$CONFIG_PATH"
+    --store-id "$store_id"
+    --workdir "$store_dir"
+    "${serve_debug_args[@]}"
+  )
+  if [[ $PD_LISTEN_SET -eq 1 ]]; then
+    # Preserve CLI override semantics: explicit --pd-listen should propagate to serve.
+    serve_args+=(--pd-addr "$PD_LISTEN")
+  fi
   scripts/serve_from_config.sh \
-    --config "$CONFIG_PATH" \
-    --store-id "$store_id" \
-    --workdir "$store_dir" \
-    --pd-addr "$PD_LISTEN" \
-    "${serve_debug_args[@]}" >"$store_dir/server.log" 2>&1 &
+    "${serve_args[@]}" >"$store_dir/server.log" 2>&1 &
   STORE_PIDS+=($!)
 done
 

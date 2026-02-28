@@ -1,24 +1,49 @@
-# PD-Lite Design Notes
+# PD-lite Package
 
-This package bootstraps NoKV's control-plane work by following TinyKV/TiKV
-separation principles:
+`pd/` is NoKV's lightweight control-plane implementation.
 
-1. Data plane (`raftstore`) handles replication and apply.
-2. Control plane (`pd`) tracks cluster metadata, serves routing info, allocates
-   IDs, and provides a global timestamp service.
+It provides:
 
-Current scope in this branch:
+- Region routing (`GetRegionByKey`)
+- Store/Region heartbeats (`StoreHeartbeat`, `RegionHeartbeat`)
+- ID allocation (`AllocID`)
+- Timestamp allocation (`Tso`)
+- Region metadata removal (`RemoveRegion`)
 
-1. `pd/core`: in-memory cluster metadata model and route lookup.
-2. `pd/core`: global ID allocator primitive.
-3. `pd/tso`: monotonic timestamp allocator primitive.
-4. `pd/server`: gRPC service implementation for heartbeat/route/ID/TSO RPCs.
-5. `pd/client`: gRPC client wrapper for store-side integration.
-6. `pd/adapter`: `scheduler.RegionSink` + `scheduler.Planner` bridge that forwards
-   raftstore heartbeats to PD and feeds back PD scheduling hints.
+## Package Layout
 
-Planned next steps:
+- `pd/core`: in-memory cluster model and allocators.
+- `pd/server`: gRPC service implementation (`pb.PDServer`).
+- `pd/client`: gRPC client wrapper consumed by raftstore/redis gateway.
+- `pd/adapter`: bridge from `raftstore/scheduler.RegionSink` to PD RPCs.
+- `pd/tso`: monotonic timestamp allocator.
 
-1. Add persistent storage backend for PD metadata.
-2. Integrate raftstore heartbeat/reporting and client route refresh.
-3. Add membership/election model for high-availability PD deployment.
+## Persistence Model
+
+PD-lite can run fully in-memory, or with `--workdir` persistence:
+
+- Region catalog persistence: manifest `EditRegion` records.
+- Allocator checkpoints: `PD_STATE.json` (`id_current`, `ts_current`).
+
+On restart, `cmd/nokv pd` restores Region metadata from manifest and raises
+allocator starts from checkpoint (`current + 1`).
+
+## Routing Semantics
+
+Runtime route source is PD.
+
+- `raftstore/client` resolves regions by key through PD (`GetRegionByKey`) and
+  caches returned routes.
+- `raft_config.json` region entries are bootstrap/deployment metadata, not
+  runtime routing truth.
+
+## Scope and Limits
+
+PD-lite is intentionally minimal:
+
+- single-process control plane (no embedded etcd quorum)
+- best-effort scheduling hints (leader transfer only at this stage)
+- no production-grade multi-PD HA/failover yet
+
+It is designed for local clusters, integration tests, and architecture
+experiments while keeping the API close to a real PD control plane.

@@ -99,8 +99,10 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 ### 8.1 Topology & Routing
 - Topology is sourced from `raft_config.example.json` (via `config.LoadFile`) and
   reused by scripts, Docker Compose, and the Redis gateway.
-- The client builds a static region map (`[]RegionConfig`) and store endpoints
-  from the same file; there is no dynamic PD-style reconfiguration today.
+- Runtime routing is PD-first: `raftstore/client` resolves Regions by key through
+  `GetRegionByKey` and caches route entries for retries.
+- `raft_config` regions are treated as bootstrap/deployment metadata and are not
+  the runtime source of truth once PD is available.
 - The built-in scheduler currently emits leader-transfer operations only
   (see `raftstore/scheduler`), acting as a minimal control plane.
 
