@@ -16,9 +16,15 @@ import (
 type Service struct {
 	pb.UnimplementedPDServer
 
-	cluster *core.Cluster
-	ids     *core.IDAllocator
-	tso     *tso.Allocator
+	cluster       *core.Cluster
+	ids           *core.IDAllocator
+	tso           *tso.Allocator
+	regionCatalog regionCatalog
+}
+
+type regionCatalog interface {
+	LogRegionUpdate(meta manifest.RegionMeta) error
+	LogRegionDelete(regionID uint64) error
 }
 
 // NewService constructs a PD-lite service.
@@ -37,6 +43,15 @@ func NewService(cluster *core.Cluster, ids *core.IDAllocator, tsAlloc *tso.Alloc
 		ids:     ids,
 		tso:     tsAlloc,
 	}
+}
+
+// SetRegionCatalog configures an optional manifest-backed region metadata sink.
+// When configured, region heartbeat/remove RPCs persist the region catalog.
+func (s *Service) SetRegionCatalog(catalog regionCatalog) {
+	if s == nil {
+		return
+	}
+	s.regionCatalog = catalog
 }
 
 // StoreHeartbeat records store-level stats.
@@ -80,6 +95,11 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
+	if s.regionCatalog != nil {
+		if err := s.regionCatalog.LogRegionUpdate(meta); err != nil {
+			return nil, status.Error(codes.Internal, "persist region metadata: "+err.Error())
+		}
+	}
 	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
 }
 
@@ -93,6 +113,11 @@ func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
 	removed := s.cluster.RemoveRegion(regionID)
+	if removed && s.regionCatalog != nil {
+		if err := s.regionCatalog.LogRegionDelete(regionID); err != nil {
+			return nil, status.Error(codes.Internal, "persist region delete: "+err.Error())
+		}
+	}
 	return &pb.RemoveRegionResponse{Removed: removed}, nil
 }
 

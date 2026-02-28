@@ -6,6 +6,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pd/core"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,4 +48,42 @@ func TestMainPDCommand(t *testing.T) {
 		main()
 	})
 	require.Equal(t, 0, code)
+}
+
+func TestRestorePDRegionsFromManifestSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := manifest.Open(dir, nil)
+	require.NoError(t, err)
+	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+		ID:       10,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch: manifest.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+	}))
+	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+		ID:       20,
+		StartKey: []byte("m"),
+		EndKey:   nil,
+		Epoch: manifest.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+	}))
+	snapshot := mgr.RegionSnapshot()
+	require.NoError(t, mgr.Close())
+
+	cluster := core.NewCluster()
+	loaded, err := restorePDRegions(cluster, snapshot)
+	require.NoError(t, err)
+	require.Equal(t, 2, loaded)
+
+	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(10), meta.ID)
+	meta, ok = cluster.GetRegionByKey([]byte("z"))
+	require.True(t, ok)
+	require.Equal(t, uint64(20), meta.ID)
 }
