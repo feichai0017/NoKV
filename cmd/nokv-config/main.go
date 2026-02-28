@@ -128,6 +128,7 @@ func runPD(args []string) error {
 	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
 	format := fs.String("format", "simple", "output format: simple|json")
 	scope := fs.String("scope", "host", "address scope: host|docker")
+	field := fs.String("field", "addr", "simple output field: addr|workdir")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -149,11 +150,22 @@ func runPD(args []string) error {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(cfg.PD)
 	case "simple":
-		addr := cfg.ResolvePDAddr(scopeNorm)
-		if addr == "" {
-			return fmt.Errorf("pd address missing for scope %q", scopeNorm)
+		switch strings.ToLower(strings.TrimSpace(*field)) {
+		case "addr":
+			addr := cfg.ResolvePDAddr(scopeNorm)
+			if addr == "" {
+				return fmt.Errorf("pd address missing for scope %q", scopeNorm)
+			}
+			fmt.Println(addr)
+		case "workdir":
+			workdir := cfg.ResolvePDWorkDir(scopeNorm)
+			if workdir == "" {
+				return fmt.Errorf("pd workdir missing for scope %q", scopeNorm)
+			}
+			fmt.Println(workdir)
+		default:
+			return fmt.Errorf("unknown field %q (expected addr|workdir)", *field)
 		}
-		fmt.Println(addr)
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q", *format)
@@ -210,7 +222,8 @@ Commands:
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
-  --format <fmt>    Output format (simple|json) depending on the command`)
+  --format <fmt>    Output format (simple|json) depending on the command
+  --field <name>    For "pd --format simple": addr|workdir`)
 }
 
 func runManifest(args []string) error {

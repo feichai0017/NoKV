@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -30,9 +31,27 @@ func runPDCmd(w io.Writer, args []string) error {
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
 	workdir := fs.String("workdir", "", "optional manifest work directory for persisting/loading PD region catalog")
+	configPath := fs.String("config", "", "optional raft configuration file used to resolve pd workdir")
+	scope := fs.String("scope", "host", "scope for config-resolved pd workdir: host|docker")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if strings.TrimSpace(*workdir) == "" && strings.TrimSpace(*configPath) != "" {
+		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+		if scopeNorm != "host" && scopeNorm != "docker" {
+			return fmt.Errorf("invalid pd scope %q (expected host|docker)", *scope)
+		}
+		cfg, err := config.LoadFile(strings.TrimSpace(*configPath))
+		if err != nil {
+			return fmt.Errorf("pd load config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("pd validate config %q: %w", strings.TrimSpace(*configPath), err)
+		}
+		if resolved := cfg.ResolvePDWorkDir(scopeNorm); resolved != "" {
+			*workdir = resolved
+		}
 	}
 
 	lis, err := pdListen("tcp", *addr)
