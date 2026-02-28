@@ -192,15 +192,22 @@ func (it *TxnIterator) advance() {
 		entry := item.Entry()
 		baseKey := kv.ParseKey(entry.Key)
 		cf, userKey, _ := kv.DecodeKeyCF(baseKey)
-		if it.opt.Reverse {
-			if len(it.opt.LowerBound) > 0 && bytes.Compare(userKey, it.opt.LowerBound) < 0 {
+		if len(it.opt.LowerBound) > 0 && bytes.Compare(userKey, it.opt.LowerBound) < 0 {
+			if it.opt.Reverse {
 				return // No more valid keys, immediately return
 			}
-		} else {
-			// Currently UpperBound is exclusive, so if userKey >= UpperBound we should stop
-			if len(it.opt.UpperBound) > 0 && bytes.Compare(userKey, it.opt.UpperBound) >= 0 {
+			// Still before the bound, continue
+			it.iitr.Next()
+			continue
+		}
+		// Currently UpperBound is exclusive, so if userKey >= UpperBound we should stop
+		if len(it.opt.UpperBound) > 0 && bytes.Compare(userKey, it.opt.UpperBound) >= 0 {
+			if !it.opt.Reverse {
 				return // No more valid keys, immediately return
 			}
+			// Still before the bound, continue
+			it.iitr.Next()
+			continue
 		}
 		version := kv.ParseTs(entry.Key)
 		if version > it.readTs {
