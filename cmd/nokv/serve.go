@@ -10,13 +10,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
+	pdclient "github.com/feichai0017/NoKV/pd/client"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
 var notifyContext = signal.NotifyContext
@@ -32,6 +36,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	maxInflight := fs.Int("raft-max-inflight", 256, "raft max inflight messages")
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
+	pdAddr := fs.String("pd-addr", "", "optional PD-lite gRPC endpoint for store/region heartbeat reporting")
+	pdTimeout := fs.Duration("pd-timeout", 2*time.Second, "timeout for PD-lite heartbeat RPCs")
 	var peerFlags []string
 	fs.Func("peer", "remote store mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -63,10 +69,34 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
+	localCoordinator := scheduler.NewCoordinator()
+	var schedulerSink scheduler.RegionSink = localCoordinator
+	var pdSink *pdadapter.RegionSink
+	if strings.TrimSpace(*pdAddr) != "" {
+		dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
+		pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
+		cancelDial()
+		if err != nil {
+			return fmt.Errorf("dial pd %q: %w", *pdAddr, err)
+		}
+		pdSink = pdadapter.NewRegionSink(pdadapter.RegionSinkConfig{
+			PD:      pdCli,
+			Mirror:  localCoordinator,
+			Timeout: *pdTimeout,
+		})
+		schedulerSink = pdSink
+	}
+	if pdSink != nil {
+		defer func() {
+			_ = pdSink.Close()
+		}()
+	}
+
 	server, err := raftstore.NewServer(raftstore.ServerConfig{
 		DB: db,
 		Store: raftstore.StoreConfig{
-			StoreID: *storeID,
+			StoreID:   *storeID,
+			Scheduler: schedulerSink,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
 		RaftTickInterval:   *raftTickInterval,
@@ -130,6 +160,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
+	}
+	if pdSink != nil {
+		_, _ = fmt.Fprintf(w, "PD heartbeat sink enabled: %s\n", strings.TrimSpace(*pdAddr))
 	}
 	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop")
 
