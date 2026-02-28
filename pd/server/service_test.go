@@ -22,6 +22,13 @@ type fakeRegionCatalog struct {
 	deleteErr   error
 }
 
+type fakeAllocatorStateSink struct {
+	saveCalls int
+	saveErr   error
+	lastID    uint64
+	lastTS    uint64
+}
+
 func (f *fakeRegionCatalog) LogRegionUpdate(meta manifest.RegionMeta) error {
 	f.updateCalls++
 	if f.updateErr != nil {
@@ -42,6 +49,13 @@ func (f *fakeRegionCatalog) LogRegionDelete(regionID uint64) error {
 		return errors.New("invalid region id")
 	}
 	return nil
+}
+
+func (f *fakeAllocatorStateSink) Save(idCurrent, tsCurrent uint64) error {
+	f.saveCalls++
+	f.lastID = idCurrent
+	f.lastTS = tsCurrent
+	return f.saveErr
 }
 
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
@@ -265,6 +279,36 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	catalog.updateErr = nil
 	catalog.deleteErr = errors.New("persist delete failed")
 	_, err = svc.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 8})
+	require.Error(t, err)
+	require.Equal(t, codes.Internal, status.Code(err))
+}
+
+func TestServicePersistsAllocatorState(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(10), tso.NewAllocator(100))
+	sink := &fakeAllocatorStateSink{}
+	svc.SetAllocatorStateSink(sink)
+
+	idResp, err := svc.AllocID(context.Background(), &pb.AllocIDRequest{Count: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), idResp.GetFirstId())
+	require.Equal(t, 1, sink.saveCalls)
+	require.Equal(t, uint64(11), sink.lastID)
+	require.Equal(t, uint64(99), sink.lastTS)
+
+	tsResp, err := svc.Tso(context.Background(), &pb.TsoRequest{Count: 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), tsResp.GetTimestamp())
+	require.Equal(t, 2, sink.saveCalls)
+	require.Equal(t, uint64(11), sink.lastID)
+	require.Equal(t, uint64(102), sink.lastTS)
+}
+
+func TestServiceAllocatorStatePersistenceError(t *testing.T) {
+	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	sink := &fakeAllocatorStateSink{saveErr: errors.New("persist failed")}
+	svc.SetAllocatorStateSink(sink)
+
+	_, err := svc.AllocID(context.Background(), &pb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 }

@@ -16,15 +16,20 @@ import (
 type Service struct {
 	pb.UnimplementedPDServer
 
-	cluster       *core.Cluster
-	ids           *core.IDAllocator
-	tso           *tso.Allocator
-	regionCatalog regionCatalog
+	cluster            *core.Cluster
+	ids                *core.IDAllocator
+	tso                *tso.Allocator
+	regionCatalog      regionCatalog
+	allocatorStateSink allocatorStateSink
 }
 
 type regionCatalog interface {
 	LogRegionUpdate(meta manifest.RegionMeta) error
 	LogRegionDelete(regionID uint64) error
+}
+
+type allocatorStateSink interface {
+	Save(idCurrent, tsCurrent uint64) error
 }
 
 // NewService constructs a PD-lite service.
@@ -52,6 +57,15 @@ func (s *Service) SetRegionCatalog(catalog regionCatalog) {
 		return
 	}
 	s.regionCatalog = catalog
+}
+
+// SetAllocatorStateSink configures an optional allocator checkpoint sink.
+// When configured, AllocID/Tso persist latest counters after every reserve.
+func (s *Service) SetAllocatorStateSink(sink allocatorStateSink) {
+	if s == nil {
+		return
+	}
+	s.allocatorStateSink = sink
 }
 
 // StoreHeartbeat records store-level stats.
@@ -152,6 +166,9 @@ func (s *Service) AllocID(_ context.Context, req *pb.AllocIDRequest) (*pb.AllocI
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	if err := s.persistAllocatorState(); err != nil {
+		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
+	}
 	return &pb.AllocIDResponse{
 		FirstId: first,
 		Count:   count,
@@ -174,10 +191,20 @@ func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, e
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	if err := s.persistAllocatorState(); err != nil {
+		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
+	}
 	return &pb.TsoResponse{
 		Timestamp: first,
 		Count:     got,
 	}, nil
+}
+
+func (s *Service) persistAllocatorState() error {
+	if s == nil || s.allocatorStateSink == nil {
+		return nil
+	}
+	return s.allocatorStateSink.Save(s.ids.Current(), s.tso.Current())
 }
 
 func pbToManifestRegion(meta *pb.RegionMeta) manifest.RegionMeta {
