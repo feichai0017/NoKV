@@ -1,0 +1,65 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+import "metapb.proto";
+
+// pdpb carries control-plane RPCs for PD-lite.
+
+message StoreHeartbeatRequest {
+  uint64 store_id = 1;
+  uint64 region_num = 2;
+  uint64 leader_num = 3;
+  uint64 capacity = 4;
+  uint64 available = 5;
+}
+
+message StoreHeartbeatResponse {
+  bool accepted = 1;
+}
+
+message RegionHeartbeatRequest {
+  RegionMeta region = 1;
+}
+
+message RegionHeartbeatResponse {
+  bool accepted = 1;
+}
+
+message GetRegionByKeyRequest {
+  bytes key = 1;
+}
+
+message GetRegionByKeyResponse {
+  RegionMeta region = 1;
+  bool not_found = 2;
+}
+
+message AllocIDRequest {
+  uint64 count = 1;
+}
+
+message AllocIDResponse {
+  uint64 first_id = 1;
+  uint64 count = 2;
+}
+
+message TsoRequest {
+  uint64 count = 1;
+}
+
+message TsoResponse {
+  uint64 timestamp = 1;
+  uint64 count = 2;
+}
+
+service PD {
+  rpc StoreHeartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
+  rpc RegionHeartbeat(RegionHeartbeatRequest) returns (RegionHeartbeatResponse);
+  rpc GetRegionByKey(GetRegionByKeyRequest) returns (GetRegionByKeyResponse);
+  rpc AllocID(AllocIDRequest) returns (AllocIDResponse);
+  rpc Tso(TsoRequest) returns (TsoResponse);
+}
+
