@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/feichai0017/NoKV/manifest"
+import (
+	"math"
+
+	"github.com/feichai0017/NoKV/manifest"
+)
 
 // StateFileName is the allocator checkpoint file name used by local storage.
 const StateFileName = "PD_STATE.json"
@@ -41,7 +45,7 @@ func NewNoopStore() Store {
 
 // Load returns an empty snapshot.
 func (NoopStore) Load() (Snapshot, error) {
-	return Snapshot{}, nil
+	return Snapshot{Regions: make(map[uint64]manifest.RegionMeta)}, nil
 }
 
 // SaveRegion is a no-op.
@@ -66,11 +70,20 @@ func (NoopStore) Close() error {
 
 // ResolveAllocatorStarts raises starts to checkpoint+1 when needed.
 func ResolveAllocatorStarts(idStart, tsStart uint64, state AllocatorState) (uint64, uint64) {
-	if next := state.IDCurrent + 1; next > idStart {
-		idStart = next
+	nextID := state.IDCurrent
+	if nextID < math.MaxUint64 {
+		nextID++
 	}
-	if next := state.TSCurrent + 1; next > tsStart {
-		tsStart = next
+	if nextID > idStart {
+		idStart = nextID
+	}
+
+	nextTS := state.TSCurrent
+	if nextTS < math.MaxUint64 {
+		nextTS++
+	}
+	if nextTS > tsStart {
+		tsStart = nextTS
 	}
 	return idStart, tsStart
 }
