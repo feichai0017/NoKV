@@ -17,7 +17,7 @@ This launches a 3-node Raft cluster plus a PD-lite service.
 Start the Redis-compatible gateway in another shell:
 
 ```bash
-go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json --pd-addr 127.0.0.1:2379
+go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
 ```
 
 Quick smoke test:

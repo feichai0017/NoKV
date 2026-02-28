@@ -119,7 +119,10 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	}
 	pdAddr = strings.TrimSpace(pdAddr)
 	if pdAddr == "" {
-		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode")
+		pdAddr = cfgFile.ResolvePDAddr(addrScope)
+	}
+	if pdAddr == "" {
+		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode (flag or config.pd)")
 	}
 	dialCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	pdCli, err := pdclient.NewGRPCClient(dialCtx, pdAddr)

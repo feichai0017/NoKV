@@ -31,6 +31,8 @@ func main() {
 		err = runStores(args)
 	case "regions":
 		err = runRegions(args)
+	case "pd":
+		err = runPD(args)
 	case "manifest":
 		err = runManifest(args)
 	default:
@@ -121,6 +123,43 @@ func runRegions(args []string) error {
 	}
 }
 
+func runPD(args []string) error {
+	fs := flag.NewFlagSet("pd", flag.ExitOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to raft configuration file")
+	format := fs.String("format", "simple", "output format: simple|json")
+	scope := fs.String("scope", "host", "address scope: host|docker")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
+	if scopeNorm != "host" && scopeNorm != "docker" {
+		return fmt.Errorf("unknown scope %q (expected host|docker)", *scope)
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.PD == nil {
+		return fmt.Errorf("pd block missing from configuration")
+	}
+
+	switch strings.ToLower(*format) {
+	case "json":
+		return json.NewEncoder(os.Stdout).Encode(cfg.PD)
+	case "simple":
+		addr := cfg.ResolvePDAddr(scopeNorm)
+		if addr == "" {
+			return fmt.Errorf("pd address missing for scope %q", scopeNorm)
+		}
+		fmt.Println(addr)
+		return nil
+	default:
+		return fmt.Errorf("unknown format %q", *format)
+	}
+}
+
 func loadConfig(path string) (*config.File, error) {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
@@ -166,6 +205,7 @@ func printUsage() {
 Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
+  pd       Print PD-lite endpoint from the raft configuration
   manifest Write region metadata into a manifest
 
 Flags:

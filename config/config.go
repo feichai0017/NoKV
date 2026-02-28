@@ -4,13 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // File models the raft topology configuration shared by CLIs and gateways.
 type File struct {
 	MaxRetries int      `json:"max_retries"`
+	PD         *PD      `json:"pd,omitempty"`
 	Stores     []Store  `json:"stores"`
 	Regions    []Region `json:"regions"`
+}
+
+// PD describes PD-lite endpoints for host and docker scopes.
+type PD struct {
+	Addr       string `json:"addr"`
+	DockerAddr string `json:"docker_addr,omitempty"`
 }
 
 // Store represents a single store endpoint.
@@ -91,4 +99,20 @@ func (f *File) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ResolvePDAddr resolves the PD endpoint for the provided scope.
+//
+// Supported scopes are "host" (default) and "docker". Unknown scopes fallback
+// to host semantics.
+func (f *File) ResolvePDAddr(scope string) string {
+	if f == nil || f.PD == nil {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(scope), "docker") {
+		if v := strings.TrimSpace(f.PD.DockerAddr); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(f.PD.Addr)
 }

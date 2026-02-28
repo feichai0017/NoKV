@@ -32,7 +32,7 @@ func main() {
 		addr        = flag.String("addr", "127.0.0.1:6380", "listen address for RESP server")
 		metricsAddr = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 		raftConfig  = flag.String("raft-config", "", "optional JSON config describing raftstore cluster endpoints")
-		pdAddr      = flag.String("pd-addr", "", "PD-lite gRPC endpoint used for routing and TSO in raft mode (e.g. 127.0.0.1:2379)")
+		pdAddr      = flag.String("pd-addr", "", "optional PD-lite gRPC endpoint override in raft mode; defaults to config.pd (e.g. 127.0.0.1:2379)")
 		addrScope   = flag.String("addr-scope", "host", "store address scope to use (host|docker)")
 	)
 	flag.Parse()

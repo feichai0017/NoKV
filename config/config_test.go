@@ -160,3 +160,30 @@ func TestValidatePeerUnknownStore(t *testing.T) {
 		t.Fatalf("expected error for unknown peer store")
 	}
 }
+
+func TestResolvePDAddr(t *testing.T) {
+	cfg := &File{
+		PD: &PD{
+			Addr:       "127.0.0.1:2379",
+			DockerAddr: "nokv-pd:2379",
+		},
+	}
+	if got := cfg.ResolvePDAddr("host"); got != "127.0.0.1:2379" {
+		t.Fatalf("host pd addr mismatch: got %q", got)
+	}
+	if got := cfg.ResolvePDAddr("docker"); got != "nokv-pd:2379" {
+		t.Fatalf("docker pd addr mismatch: got %q", got)
+	}
+}
+
+func TestResolvePDAddrFallbackAndNil(t *testing.T) {
+	var nilCfg *File
+	if got := nilCfg.ResolvePDAddr("host"); got != "" {
+		t.Fatalf("expected empty address for nil cfg, got %q", got)
+	}
+
+	cfg := &File{PD: &PD{Addr: "127.0.0.1:2379"}}
+	if got := cfg.ResolvePDAddr("docker"); got != "127.0.0.1:2379" {
+		t.Fatalf("expected docker fallback to host addr, got %q", got)
+	}
+}

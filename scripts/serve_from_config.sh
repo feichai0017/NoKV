@@ -7,7 +7,7 @@ Usage: serve_from_config.sh --config <config> --store-id <id> --workdir <dir> [o
 
 Options:
   --scope <local|docker>   Select which addresses to use (default: local)
-  --pd-addr <addr>         Optional PD gRPC endpoint passed to "nokv serve"
+  --pd-addr <addr>         Optional PD gRPC endpoint override passed to "nokv serve"
   --raft-debug-log         Enable verbose etcd/raft debug logging
   --no-raft-debug-log      Disable verbose etcd/raft debug logging
   --extra <args...>        Additional arguments passed to "nokv serve"
@@ -81,6 +81,16 @@ fi
 if [[ "$SCOPE" != "local" && "$SCOPE" != "docker" ]]; then
   echo "serve_from_config: --scope must be local or docker" >&2
   exit 1
+fi
+
+if [[ -z "$PD_ADDR" ]]; then
+  pd_scope="host"
+  if [[ "$SCOPE" == "docker" ]]; then
+    pd_scope="docker"
+  fi
+  if pd_from_config=$(nokv-config pd --config "$CONFIG" --scope "$pd_scope" --format simple 2>/dev/null); then
+    PD_ADDR=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
+  fi
 fi
 
 mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG" --format simple)
