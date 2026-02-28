@@ -44,6 +44,9 @@ type IteratorOptions struct {
 	prefixIsKey bool   // If set, use the prefix for bloom filter lookup.
 	Prefix      []byte // Only iterate over this given prefix.
 	SinceTs     uint64 // Only read data that has version > SinceTs.
+
+	LowerBound []byte // Inclusive lower bound
+	UpperBound []byte // Exclusive upper bound
 }
 
 type readTsIterator struct {
@@ -189,6 +192,16 @@ func (it *TxnIterator) advance() {
 		entry := item.Entry()
 		baseKey := kv.ParseKey(entry.Key)
 		cf, userKey, _ := kv.DecodeKeyCF(baseKey)
+		if it.opt.Reverse {
+			if len(it.opt.LowerBound) > 0 && bytes.Compare(userKey, it.opt.LowerBound) < 0 {
+				return // No more valid keys, immediately return
+			}
+		} else {
+			// Currently UpperBound is exclusive, so if userKey >= UpperBound we should stop
+			if len(it.opt.UpperBound) > 0 && bytes.Compare(userKey, it.opt.UpperBound) >= 0 {
+				return // No more valid keys, immediately return
+			}
+		}
 		version := kv.ParseTs(entry.Key)
 		if version > it.readTs {
 			it.iitr.Next()
@@ -346,11 +359,36 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 		return it.latestTs
 	}
 	if !it.opt.Reverse {
+		// If already out of bound, immediately return
+		if len(it.opt.UpperBound) > 0 && bytes.Compare(key, it.opt.UpperBound) >= 0 {
+			it.valid = false
+			it.latestTs = 0
+			return it.latestTs
+		}
+		// Clamp the key to LowerBound prune the iteration
+		if len(it.opt.LowerBound) > 0 && bytes.Compare(key, it.opt.LowerBound) < 0 {
+			key = it.opt.LowerBound
+		}
+
 		// Use internal-key seek to avoid O(N) rewind+scan on every point seek.
 		seekKey := kv.InternalKey(kv.CFDefault, key, it.readTs)
 		it.iitr.Seek(seekKey)
 		it.advance()
 	} else {
+		// If already out of bound, immediately return
+		if len(it.opt.LowerBound) > 0 && bytes.Compare(key, it.opt.LowerBound) < 0 {
+			it.valid = false
+			it.latestTs = 0
+			return it.latestTs
+		}
+		// Clamp the key to UpperBound to prune the iteration
+		// Note: Another approach is to clamp it to slightly less than UpperBound, however
+		// it requires more time complexity to handle the decrement of the last bit
+		// especially if it has trailing zeroes
+		if len(it.opt.UpperBound) > 0 && bytes.Compare(key, it.opt.UpperBound) >= 0 {
+			key = it.opt.UpperBound
+		}
+
 		// Fast path: for reverse iteration, seek to the largest internal key for
 		// this user key so backends with native reverse seek can land at <= key.
 		seekKey := kv.InternalKey(kv.CFDefault, key, 0)

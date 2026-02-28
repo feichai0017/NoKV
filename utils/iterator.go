@@ -38,4 +38,8 @@ type Options struct {
 	PrefetchAdaptive bool
 	// Metrics tags for observability.
 	MetricTag string
+	// Inclusive lower bound
+	LowerBound []byte
+	// Excluse upper bound
+	UpperBound []byte
 }
