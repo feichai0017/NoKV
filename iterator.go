@@ -1,6 +1,8 @@
 package NoKV
 
 import (
+	"bytes"
+
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
@@ -14,6 +16,10 @@ type DBIterator struct {
 	ctx  *iteratorContext
 	// keyOnly avoids eager value log materialisation when true.
 	keyOnly bool
+
+	lowerBound []byte
+	upperBound []byte
+	isAsc      bool
 
 	entry    kv.Entry
 	item     Item
@@ -75,10 +81,13 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	ctx := db.iterPool.get()
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
-		vlog:    db.vlog,
-		pool:    db.iterPool,
-		ctx:     ctx,
-		keyOnly: keyOnly,
+		vlog:       db.vlog,
+		pool:       db.iterPool,
+		ctx:        ctx,
+		keyOnly:    keyOnly,
+		lowerBound: opt.LowerBound,
+		upperBound: opt.UpperBound,
+		isAsc:      opt.IsAsc,
 	}
 	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
@@ -127,6 +136,26 @@ func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+
+	// Clamping
+	if iter.isAsc {
+		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+			iter.valid = false
+			return
+		}
+		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+			key = iter.lowerBound
+		}
+	} else {
+		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+			iter.valid = false
+			return
+		}
+		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+			key = iter.upperBound
+		}
+	}
+
 	// Convert user key to internal key for seeking.
 	// We use MaxUint64 as version to seek to the latest version of the key.
 	// We default to CFDefault as DBIterator currently doesn't support specifying CF.
@@ -175,6 +204,18 @@ func (iter *DBIterator) populate() {
 			continue
 		}
 		if iter.materialize(item.Entry()) {
+			// Invalidates out of bound
+			if iter.isAsc {
+				if len(iter.upperBound) > 0 && bytes.Compare(iter.entry.Key, iter.upperBound) >= 0 {
+					iter.valid = false
+					return
+				}
+			} else {
+				if len(iter.lowerBound) > 0 && bytes.Compare(iter.entry.Key, iter.lowerBound) < 0 {
+					iter.valid = false
+					return
+				}
+			}
 			iter.valid = true
 			return
 		}
