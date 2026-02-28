@@ -5,7 +5,7 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run inside `db.Update` / `db.View`, providing atomic single-key updates and snapshot reads across multiple keys. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. When `--tso-url` is omitted, the gateway consults the `tso` block in `raft_config.json` and falls back to a local oracle if the block is absent. | `--raft-config <file>`<br>`--tso-url http://host:port` (optional) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC. | `--raft-config <file>`<br>`--pd-addr host:port` (required) |
 
 ## Usage examples
 
@@ -22,7 +22,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 
 ### Raft backend
 
-1. Start TinyKv and, if configured, the TSO using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv-tso` automatically when `tso.listen_addr` is present:
+1. Start TinyKv and PD-lite using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv pd` automatically:
 
    ```bash
    ./scripts/run_local_cluster.sh
@@ -34,10 +34,9 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
    ```bash
    go run ./cmd/nokv-redis \
      --addr 127.0.0.1:6380 \
-     --raft-config raft_config.example.json
+     --raft-config raft_config.example.json \
+     --pd-addr 127.0.0.1:2379
    ```
-
-   Supply `--tso-url` only when you need to override the config file; otherwise the gateway uses `tso.advertise_url` (or `listen_addr`) from the same JSON. If the block is missing, it falls back to the embedded timestamp oracle.
 
 ## Supported commands
 

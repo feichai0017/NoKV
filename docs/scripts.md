@@ -7,12 +7,12 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
 ## Cluster helpers
 
 ### `scripts/run_local_cluster.sh`
-- **Purpose** – builds `nokv`, `nokv-config`, and `nokv-tso`, reads `raft_config.json`, seeds manifests, and starts the TinyKv nodes (plus TSO when configured). If a store directory already contains a manifest (`CURRENT`), the seeding step is skipped so previously bootstrapped data is reused.
+- **Purpose** – builds `nokv` and `nokv-config`, reads `raft_config.json`, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (`CURRENT`), the seeding step is skipped so previously bootstrapped data is reused.
 - **Usage**
   ```bash
   ./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
   ```
-`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>`, calls `nokv-config manifest`, and, if `tso.listen_addr` is set, launches `nokv-tso`. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
+`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config manifest`, then launches `nokv pd` and the store processes. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
 
 > ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, stop the script with `Ctrl+C` and wait for child processes to exit. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
 
@@ -52,20 +52,24 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
 
 ## Other helpers
 
-### `scripts/tso`
-A small Go program (not shell) that exposes an HTTP timestamp oracle:
+### `cmd/nokv pd`
+PD-lite service used by local scripts and compose for:
+- routing (`GetRegionByKey`)
+- ID allocation (`AllocID`)
+- timestamp allocation (`Tso`)
+
+Example:
 ```bash
-go run ./scripts/tso --addr 0.0.0.0:9494 --start 100
+go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
 ```
-`run_local_cluster.sh` and Docker Compose invoke it automatically when `tso.listen_addr` is present in the shared config.
 
 ---
 
 ## Relationship with `nokv-config`
 
-- `nokv-config stores` / `regions` / `tso` provide structured views over `raft_config.json`, making it easy for scripts and CI to query the topology.
+- `nokv-config stores` / `regions` provide structured views over `raft_config.json`, making it easy for scripts and CI to query the topology.
 - `nokv-config manifest` writes Region metadata into manifests and replaces the historical `manifestctl` binary.
-- `cmd/nokv-redis` reads the same config; when `--tso-url` is omitted it falls back to the `tso` section.
+- `cmd/nokv-redis` reads the same config and requires `--pd-addr` in raft mode.
 - Go tools or custom scripts can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` to consume the same `raft_config.json`, avoiding divergent schemas.
 
 Maintaining a single `raft_config.json` keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.
