@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fc977a47.js";
+            window.path_to_searchindex_js = "searchindex-af9cd711.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -280,7 +280,7 @@
 <li>Region-aware routing with NotLeader/EpochNotMatch retry.</li>
 <li><code>Mutate</code> splits mutations by region and performs two-phase commit (primary first). <code>Put</code> / <code>Delete</code> are convenience wrappers.</li>
 <li><code>Scan</code> transparently walks region boundaries.</li>
-<li>End-to-end coverage lives in <code>raftstore/server/server_client_integration_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
+<li>End-to-end coverage lives in <code>raftstore/server/server_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
 </ul>
 <hr>
 <h2 id="8-control-plane--region-operations"><a class="header" href="#8-control-plane--region-operations">8. Control Plane &amp; Region Operations</a></h2>
@@ -292,8 +292,8 @@ reused by scripts, Docker Compose, and the Redis gateway.</li>
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
 the runtime source of truth once PD is available.</li>
-<li>The built-in scheduler currently emits leader-transfer operations only
-(see <code>raftstore/scheduler</code>), acting as a minimal control plane.</li>
+<li>In cluster mode, PD is the control-plane source of truth. The in-process
+scheduler/coordinator path is retained for standalone/debug visibility only.</li>
 </ul>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
@@ -331,7 +331,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
 <tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks.</td></tr>
 <tr><td>Operation scheduler</td><td><a href="../raftstore/store/operation_scheduler.go"><code>operation_scheduler.go</code></a></td><td>Buffers planner output, enforces cooldown &amp; burst limits, dispatches leader transfers or other operations.</td></tr>
-<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions.</td></tr>
+<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and, when the sink implements planner capability, drains scheduling actions.</td></tr>
 </tbody>
 </table>
 </div>
@@ -340,7 +340,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <ul>
 <li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
 <li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
-<li><strong>Scheduler integration</strong>: pair <code>RegionSnapshot()</code> and <code>RegionMetrics()</code> with an external scheduler (PD-like) for dynamic balancing.</li>
+<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.</li>
 </ul>
 <p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
 

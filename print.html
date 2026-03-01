@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fc977a47.js";
+            window.path_to_searchindex_js = "searchindex-af9cd711.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -476,6 +476,7 @@ func main() {
 <ul>
 <li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
 <li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve TinyKv RPCs.</li>
+<li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
 <hr>
@@ -571,7 +572,7 @@ func main() {
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
 </ul>
 </li>
-<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>, allowing dynamic updates from a scheduler.</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>. In cluster mode, runtime routing/control-plane decisions come from PD.</li>
 </ol>
 <h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
 <ul>
@@ -606,7 +607,7 @@ func main() {
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
 <p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
 <ul>
-<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>[]RegionConfig</code> describing region boundaries and known leaders.</li>
+<li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>RegionResolver</code> (<code>GetRegionByKey</code>) so runtime routing is PD-driven.</li>
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
@@ -617,7 +618,7 @@ func main() {
 <li>Regions <code>[a,m)</code> and <code>[m,+∞)</code>, each led by a different store.</li>
 <li><code>Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)</code> prewrites and commits across the relevant regions.</li>
 <li><code>Get/Scan</code> retries automatically if the leader changes.</li>
-<li>See <code>raftstore/server/server_client_integration_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
+<li>See <code>raftstore/server/server_test.go</code> for a full end-to-end example using real <code>raftstore.Server</code> instances.</li>
 </ol>
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
@@ -632,6 +633,7 @@ func main() {
 <li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
 <li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
+<li><code>nokv scheduler</code> is standalone/debug-only; cluster mode should use PD state APIs/metrics.</li>
 <li>Scripts:
 <ul>
 <li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>
@@ -791,7 +793,8 @@ when tools run in docker scope.</li>
 <li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
 used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
 set explicitly.</li>
-<li><code>leader_store_id</code> is optional; clients use it for initial routing hints.</li>
+<li><code>leader_store_id</code> is optional bootstrap metadata. Runtime routing in cluster
+mode is resolved through PD (<code>GetRegionByKey</code>), not static leader hints.</li>
 </ul>
 <p>Programmatic loading:</p>
 <pre><code class="language-go">cfg, _ := config.LoadFile("raft_config.example.json")
@@ -858,7 +861,8 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </ul>
 <h3 id="nokv-scheduler"><a class="header" href="#nokv-scheduler"><code>nokv scheduler</code></a></h3>
 <ul>
-<li>Displays scheduler heartbeat snapshot (in-process usage)</li>
+<li>Displays local scheduler heartbeat snapshot (standalone/in-process usage)</li>
+<li>In cluster mode (PD enabled), use PD state APIs/metrics instead</li>
 </ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
@@ -2374,7 +2378,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <li>Region-aware routing with NotLeader/EpochNotMatch retry.</li>
 <li><code>Mutate</code> splits mutations by region and performs two-phase commit (primary first). <code>Put</code> / <code>Delete</code> are convenience wrappers.</li>
 <li><code>Scan</code> transparently walks region boundaries.</li>
-<li>End-to-end coverage lives in <code>raftstore/server/server_client_integration_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
+<li>End-to-end coverage lives in <code>raftstore/server/server_test.go</code>, which launches real servers, uses the client to write and delete keys, and verifies the results.</li>
 </ul>
 <hr>
 <h2 id="8-control-plane--region-operations"><a class="header" href="#8-control-plane--region-operations">8. Control Plane &amp; Region Operations</a></h2>
@@ -2386,8 +2390,8 @@ reused by scripts, Docker Compose, and the Redis gateway.</li>
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
 the runtime source of truth once PD is available.</li>
-<li>The built-in scheduler currently emits leader-transfer operations only
-(see <code>raftstore/scheduler</code>), acting as a minimal control plane.</li>
+<li>In cluster mode, PD is the control-plane source of truth. The in-process
+scheduler/coordinator path is retained for standalone/debug visibility only.</li>
 </ul>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
@@ -2425,7 +2429,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
 <tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks.</td></tr>
 <tr><td>Operation scheduler</td><td><a href="../raftstore/store/operation_scheduler.go"><code>operation_scheduler.go</code></a></td><td>Buffers planner output, enforces cooldown &amp; burst limits, dispatches leader transfers or other operations.</td></tr>
-<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions.</td></tr>
+<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and, when the sink implements planner capability, drains scheduling actions.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2434,7 +2438,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <ul>
 <li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
 <li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
-<li><strong>Scheduler integration</strong>: pair <code>RegionSnapshot()</code> and <code>RegionMetrics()</code> with an external scheduler (PD-like) for dynamic balancing.</li>
+<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.</li>
 </ul>
 <p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2523,12 +2527,20 @@ routing source of truth.</p>
 <p>This avoids dual sources drifting over time (config vs PD).</p>
 <hr>
 <h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
-<p><code>nokv serve --pd-addr ...</code> remains optional by design:</p>
+<p><code>nokv serve</code> follows a strict split:</p>
 <ul>
-<li>No PD address: local/dev mode (or cluster-local scheduler only).</li>
-<li>With PD address: cluster mode with PD control-plane heartbeats.</li>
+<li><strong>Standalone/dev mode</strong> (no <code>--peer</code>): PD is optional.</li>
+<li><strong>Cluster mode</strong> (any <code>--peer</code> configured): <code>--pd-addr</code> is required.</li>
 </ul>
-<p>Startup logs explicitly print the selected mode.</p>
+<p>This keeps distributed control-plane behavior PD-centric and avoids fallback to
+a local scheduler path in cluster deployments. Startup logs explicitly print the
+selected mode.</p>
+<p>Related CLI behavior:</p>
+<ul>
+<li><code>nokv scheduler</code> is standalone/debug-only.</li>
+<li>In cluster mode (PD enabled), inspect control-plane state through PD APIs and
+PD-side metrics instead of local scheduler snapshots.</li>
+</ul>
 <hr>
 <h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
 <h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fc977a47.js";
+            window.path_to_searchindex_js = "searchindex-af9cd711.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -320,7 +320,8 @@ when tools run in docker scope.</li>
 <li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
 used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
 set explicitly.</li>
-<li><code>leader_store_id</code> is optional; clients use it for initial routing hints.</li>
+<li><code>leader_store_id</code> is optional bootstrap metadata. Runtime routing in cluster
+mode is resolved through PD (<code>GetRegionByKey</code>), not static leader hints.</li>
 </ul>
 <p>Programmatic loading:</p>
 <pre><code class="language-go">cfg, _ := config.LoadFile("raft_config.example.json")
