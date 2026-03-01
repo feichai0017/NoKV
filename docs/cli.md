@@ -65,7 +65,8 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 ### `nokv scheduler`
 
-- Displays scheduler heartbeat snapshot (in-process usage)
+- Displays local scheduler heartbeat snapshot (standalone/in-process usage)
+- In cluster mode (PD enabled), use PD state APIs/metrics instead
 
 ### `nokv serve`
 
