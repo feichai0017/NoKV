@@ -76,6 +76,7 @@ func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
 type mockRegionResolver struct {
 	mu       sync.Mutex
 	region   *pb.RegionMeta
+	regions  []*pb.RegionMeta
 	err      error
 	calls    int
 	closed   bool
@@ -89,7 +90,18 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegio
 	if mr.err != nil {
 		return nil, mr.err
 	}
-	if req == nil || mr.region == nil || !containsKey(mr.region, req.GetKey()) {
+	if req == nil {
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	if len(mr.regions) > 0 {
+		for _, meta := range mr.regions {
+			if meta != nil && containsKey(meta, req.GetKey()) {
+				return &pb.GetRegionByKeyResponse{Region: protoClone(meta)}, nil
+			}
+		}
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	if mr.region == nil || !containsKey(mr.region, req.GetKey()) {
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pb.GetRegionByKeyResponse{
@@ -102,6 +114,22 @@ func (mr *mockRegionResolver) Close() error {
 	defer mr.mu.Unlock()
 	mr.closed = true
 	return mr.closeErr
+}
+
+func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
+	cluster.mu.Lock()
+	defer cluster.mu.Unlock()
+	regions := make([]*pb.RegionMeta, 0, len(cluster.regions))
+	for _, region := range cluster.regions {
+		if region == nil || region.meta == nil {
+			continue
+		}
+		regions = append(regions, protoClone(region.meta))
+	}
+	sort.Slice(regions, func(i, j int) bool {
+		return regions[i].GetId() < regions[j].GetId()
+	})
+	return &mockRegionResolver{regions: regions}
 }
 
 func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.PrewriteRequest) (*pb.PrewriteResponse, *pb.RegionError) {
@@ -404,16 +432,23 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 			{StoreID: 2, Addr: addrFollower},
 			{StoreID: 1, Addr: addrLeader},
 		},
-		Regions: []RegionConfig{
-			{
-				Meta:          cluster.regions[1].meta,
-				LeaderStoreID: 2,
-			},
-			{
-				Meta:          cluster.regions[2].meta,
-				LeaderStoreID: 2,
-			},
-		},
+		RegionResolver: func() *mockRegionResolver {
+			resolver := resolverFromCluster(cluster)
+			// Force an initial stale leader guess so NotLeader retry path is
+			// exercised under PD-resolver mode as well.
+			for _, meta := range resolver.regions {
+				if meta == nil || len(meta.GetPeers()) < 2 {
+					continue
+				}
+				for i, p := range meta.GetPeers() {
+					if p != nil && p.GetStoreId() == 2 {
+						meta.Peers[0], meta.Peers[i] = meta.Peers[i], meta.Peers[0]
+						break
+					}
+				}
+			}
+			return resolver
+		}(),
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -486,10 +521,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []RegionConfig{
-			{Meta: cluster.regions[1].meta, LeaderStoreID: 1},
-			{Meta: cluster.regions[2].meta, LeaderStoreID: 1},
-		},
+		RegionResolver: resolverFromCluster(cluster),
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -537,14 +569,14 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.Contains(t, errStr, "client: prewrite key errors")
 }
 
-func TestNewRequiresRegionOrResolver(t *testing.T) {
+func TestNewRequiresRegionResolver(t *testing.T) {
 	_, err := New(Config{
 		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: "127.0.0.1:1"},
 		},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "at least one region or region resolver required")
+	require.Contains(t, err.Error(), "region resolver required")
 }
 
 func TestClientRegionResolverLookupAndCache(t *testing.T) {
@@ -640,9 +672,7 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []RegionConfig{
-			{Meta: meta, LeaderStoreID: 1},
-		},
+		RegionResolver: &mockRegionResolver{region: meta},
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},

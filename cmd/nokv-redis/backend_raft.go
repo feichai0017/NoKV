@@ -100,7 +100,6 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	}
 	// Route source is converged to PD resolver. raft_config regions are treated
 	// as bootstrap/deployment metadata and are not used as runtime routing truth.
-	cfg.Regions = nil
 	pdAddr = strings.TrimSpace(pdAddr)
 	if pdAddr == "" {
 		pdAddr = cfgFile.ResolvePDAddr(addrScope)
