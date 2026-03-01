@@ -84,6 +84,9 @@ func NewStoreWithConfig(cfg Config) *Store {
 	}
 	hookChain = append(hookChain, cfg.RegionHooks)
 	combinedHooks := mergeRegionHooks(hookChain...)
+	// Scheduler is the single injected control-plane object. When it also
+	// implements Planner, store will consume planner output from the same source.
+	// Otherwise planner is disabled (NoopPlanner).
 	planner := scheduler.Planner(scheduler.NoopPlanner{})
 	if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
 		planner = inferred
@@ -133,6 +136,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 		if heartbeatInterval <= 0 {
 			heartbeatInterval = 3 * time.Second
 		}
+		// Heartbeat loop bridges local region/store state to the injected
+		// scheduler sink and optionally drains scheduling operations.
 		s.heartbeat = newHeartbeatLoop(
 			heartbeatInterval,
 			s.scheduler,

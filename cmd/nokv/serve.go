@@ -75,6 +75,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	var schedulerSink scheduler.RegionSink
 	var pdSink *pdadapter.RegionSink
 	if strings.TrimSpace(*pdAddr) != "" {
+		// Cluster mode: route scheduler heartbeats and operations through PD.
+		// This is the only runtime control-plane path for distributed mode.
 		dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
 		pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
 		cancelDial()
@@ -87,8 +89,8 @@ func runServeCmd(w io.Writer, args []string) error {
 		})
 		schedulerSink = pdSink
 	} else {
-		// Keep an in-process sink in standalone mode for local scheduler
-		// observability (`nokv scheduler`), while cluster mode uses PD only.
+		// Standalone mode: keep an in-process coordinator strictly for local
+		// observability/testing (`nokv scheduler`).
 		schedulerSink = scheduler.NewCoordinator()
 	}
 	if pdSink != nil {

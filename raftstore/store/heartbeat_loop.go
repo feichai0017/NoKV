@@ -20,6 +20,8 @@ type heartbeatLoop struct {
 	done     chan struct{}
 }
 
+// newHeartbeatLoop creates the periodic scheduler bridge for a store instance.
+// It publishes region/store heartbeats and optionally consumes planner output.
 func newHeartbeatLoop(interval time.Duration, sink scheduler.RegionSink, planner scheduler.Planner, storeID uint64,
 	regions func() []manifest.RegionMeta, stats func() scheduler.StoreStats, snapshot func() scheduler.Snapshot,
 	enqueue func(scheduler.Operation)) *heartbeatLoop {
@@ -70,6 +72,8 @@ func (hl *heartbeatLoop) run() {
 	}
 }
 
+// sendHeartbeats pushes current region/store state to the scheduler sink, then
+// drains planner operations if planner capability is present.
 func (hl *heartbeatLoop) sendHeartbeats() {
 	if hl == nil || hl.sink == nil {
 		return

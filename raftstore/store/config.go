@@ -36,12 +36,17 @@ type RegionHooks = metrics.RegionHooks
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.
 type Config struct {
-	Router             *Router
-	PeerFactory        PeerFactory
-	PeerBuilder        PeerBuilder
-	Hooks              LifecycleHooks
-	RegionHooks        RegionHooks
-	Manifest           *manifest.Manager
+	Router      *Router
+	PeerFactory PeerFactory
+	PeerBuilder PeerBuilder
+	Hooks       LifecycleHooks
+	RegionHooks RegionHooks
+	Manifest    *manifest.Manager
+	// Scheduler is the single control-plane extension point for store runtime.
+	// - Standalone/debug mode: use scheduler.Coordinator.
+	// - Cluster mode: use a PD-backed sink (pd/adapter.RegionSink).
+	// If the sink also implements scheduler.Planner, heartbeat loop will consume
+	// its operations and enqueue them to operationScheduler.
 	Scheduler          scheduler.RegionSink
 	HeartbeatInterval  time.Duration
 	StoreID            uint64

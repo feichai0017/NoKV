@@ -16,7 +16,9 @@ const defaultRPCTimeout = 2 * time.Second
 
 // RegionSinkConfig defines how a PD-backed scheduler sink behaves.
 type RegionSinkConfig struct {
-	PD      pdclient.Client
+	PD pdclient.Client
+	// Mirror is optional and used for local/debug snapshots only. Runtime
+	// scheduling decisions still come from PD operations.
 	Mirror  scheduler.RegionSink
 	Timeout time.Duration
 	OnError func(op string, err error)
@@ -119,6 +121,8 @@ func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 }
 
 // Plan returns and drains pending scheduling operations received from PD.
+// Snapshot input is intentionally ignored because scheduling is centralized in
+// PD; this method only forwards already-decided operations into raftstore.
 func (s *RegionSink) Plan(_ scheduler.Snapshot) []scheduler.Operation {
 	if s == nil {
 		return nil
