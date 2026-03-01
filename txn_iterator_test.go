@@ -387,7 +387,7 @@ func TestDBIteratorBounds(t *testing.T) {
 				UpperBound: []byte("k7"),
 			}
 			iter := db.NewIterator(opt)
-			defer iter.Close()
+			defer func() { require.NoError(t, iter.Close()) }()
 
 			iter.Rewind()
 			require.True(t, iter.Valid())
@@ -408,7 +408,7 @@ func TestDBIteratorBounds(t *testing.T) {
 				UpperBound: []byte("k7"),
 			}
 			iter := db.NewIterator(opt)
-			defer iter.Close()
+			defer func() { require.NoError(t, iter.Close()) }()
 
 			iter.Rewind()
 			require.True(t, iter.Valid())
@@ -429,7 +429,7 @@ func TestDBIteratorBounds(t *testing.T) {
 				UpperBound: []byte("k7"),
 			}
 			iter := db.NewIterator(opt)
-			defer iter.Close()
+			defer func() { require.NoError(t, iter.Close()) }()
 
 			// Out of upper bound seek -> should invalidate
 			iter.Seek([]byte("k9"))
