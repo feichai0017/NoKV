@@ -370,6 +370,16 @@ func TestRunSchedulerCmdWithStore(t *testing.T) {
 	})
 }
 
+func TestRunSchedulerCmdClusterModeRejected(t *testing.T) {
+	withStoreRegistry(t, func() {
+		registerRuntimeStoreWithMode(&storepkg.Store{}, runtimeModeClusterPD)
+		var buf bytes.Buffer
+		err := runSchedulerCmd(&buf, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "standalone-only")
+	})
+}
+
 func TestFirstRegionMetricsNone(t *testing.T) {
 	withStoreRegistry(t, func() {
 		if got := firstRegionMetrics(); got != nil {

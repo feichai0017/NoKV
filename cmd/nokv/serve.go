@@ -96,6 +96,10 @@ func runServeCmd(w io.Writer, args []string) error {
 			_ = pdSink.Close()
 		}()
 	}
+	runtimeMode := runtimeModeDevStandalone
+	if pdSink != nil {
+		runtimeMode = runtimeModeClusterPD
+	}
 
 	server, err := raftstore.NewServer(raftstore.ServerConfig{
 		DB: db,
@@ -117,7 +121,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	registerRuntimeStore(server.Store())
+	registerRuntimeStoreWithMode(server.Store(), runtimeMode)
 	defer unregisterRuntimeStore(server.Store())
 	defer func() {
 		_ = server.Close()
@@ -163,12 +167,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
-	mode := "dev-standalone"
-	if pdSink != nil {
-		mode = "cluster-pd"
-	}
-	switch mode {
-	case "cluster-pd":
+	switch runtimeMode {
+	case runtimeModeClusterPD:
 		_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
 	default:
 		_, _ = fmt.Fprintln(w, "Serve mode: dev-standalone (PD disabled)")
