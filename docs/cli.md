@@ -63,11 +63,6 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Dumps manifest-backed region catalog (state/range/epoch/peers)
 - Supports `--json`
 
-### `nokv scheduler`
-
-- Deprecated. Local scheduler implementation has been removed.
-- Use PD state APIs/metrics instead.
-
 ### `nokv serve`
 
 - Starts TinyKv gRPC service backed by local `raftstore`

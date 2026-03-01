@@ -181,7 +181,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 - `StatsSnapshot` publishes flush/compaction/WAL/VLog/txn/region metrics. `nokv stats` and the expvar endpoint expose the same data.
 - `nokv regions` inspects Manifest-backed Region metadata.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
-- `nokv scheduler` is deprecated; use PD state APIs/metrics.
+- Inspect scheduler/control-plane state via PD APIs/metrics.
 - Scripts:
   - `scripts/run_local_cluster.sh` – launch a multi-node TinyKv cluster locally.
   - `scripts/recovery_scenarios.sh` – crash-recovery test harness.
