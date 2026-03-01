@@ -337,6 +337,8 @@ func TestTxnIteratorBounds(t *testing.T) {
 			// Out of upper bound seek -> should invalidate
 			iter.Seek([]byte("k9"))
 			require.False(t, iter.Valid())
+			iter.Next()
+			require.False(t, iter.Valid(), "Next should not resurrect iterator after out-of-range seek")
 
 			// Out of lower bound seek -> should clamp to lower bound
 			iter.Seek([]byte("k1"))
@@ -359,6 +361,8 @@ func TestTxnIteratorBounds(t *testing.T) {
 			// Out of lower bound seek -> should invalidate
 			iter.Seek([]byte("k1"))
 			require.False(t, iter.Valid())
+			iter.Next()
+			require.False(t, iter.Valid(), "Next should not resurrect iterator after out-of-range seek")
 
 			// Out of upper bound seek -> should clamp to upper bound
 			iter.Seek([]byte("k9"))
@@ -434,6 +438,8 @@ func TestDBIteratorBounds(t *testing.T) {
 			// Out of upper bound seek -> should invalidate
 			iter.Seek([]byte("k9"))
 			require.False(t, iter.Valid())
+			iter.Next()
+			require.False(t, iter.Valid(), "Next should not resurrect iterator after out-of-range seek")
 
 			// Out of lower bound seek -> should clamp to lower bound
 			iter.Seek([]byte("k1"))
@@ -453,6 +459,8 @@ func TestDBIteratorBounds(t *testing.T) {
 			// Out of lower bound seek -> should invalidate
 			iter.Seek([]byte("k1"))
 			require.False(t, iter.Valid())
+			iter.Next()
+			require.False(t, iter.Valid(), "Next should not resurrect iterator after out-of-range seek")
 
 			// Out of upper bound seek -> should clamp to upper bound
 			iter.Seek([]byte("k9"))
