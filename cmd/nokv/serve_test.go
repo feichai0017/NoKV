@@ -3,13 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/pd/core"
+	pdserver "github.com/feichai0017/NoKV/pd/server"
+	"github.com/feichai0017/NoKV/pd/tso"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestRunServeCmdErrors(t *testing.T) {
@@ -19,6 +25,7 @@ func TestRunServeCmdErrors(t *testing.T) {
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-election-tick", "0"}))
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "bad"}))
 	require.Error(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "x=addr"}))
+	require.ErrorContains(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "2=127.0.0.1:20160"}), "--pd-addr is required")
 }
 
 func TestStartStorePeersNil(t *testing.T) {
@@ -116,6 +123,8 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 func TestRunServeCmdWithRegions(t *testing.T) {
 	withNotifyContext(t, true, func() {
 		dir := t.TempDir()
+		pdAddr, stopPD := startTestPDServer(t)
+		defer stopPD()
 		db := newTestDBWithDir(t, dir)
 		mgr := db.Manifest()
 		require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
@@ -142,6 +151,7 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
 			"-peer", "2=127.0.0.1:20160",
+			"-pd-addr", pdAddr,
 		})
 		require.NoError(t, err)
 		out := buf.String()
@@ -149,7 +159,8 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Contains(t, out, "Store 1 not present in 1 region(s)")
 		require.Contains(t, out, "Sample regions:")
 		require.Contains(t, out, "Configured peers:")
-		require.Contains(t, out, "Serve mode: cluster (PD disabled; local scheduler only)")
+		require.Contains(t, out, "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
+		require.Contains(t, out, "PD heartbeat sink enabled: "+pdAddr)
 	})
 }
 
@@ -197,4 +208,22 @@ func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *raftstore.Server 
 	})
 	require.NoError(t, err)
 	return server
+}
+
+func startTestPDServer(t *testing.T) (addr string, stop func()) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	srv := grpc.NewServer()
+	pb.RegisterPDServer(srv, svc)
+
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	return lis.Addr().String(), func() {
+		srv.Stop()
+		_ = lis.Close()
+	}
 }

@@ -27,7 +27,6 @@ type Store struct {
 	regions        *regionManager
 	scheduler      scheduler.RegionSink
 	storeID        uint64
-	planner        scheduler.Planner
 	operationHook  func(scheduler.Operation)
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
@@ -87,7 +86,11 @@ func NewStoreWithConfig(cfg Config) *Store {
 	combinedHooks := mergeRegionHooks(hookChain...)
 	planner := cfg.Planner
 	if planner == nil {
-		planner = scheduler.NoopPlanner{}
+		if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
+			planner = inferred
+		} else {
+			planner = scheduler.NoopPlanner{}
+		}
 	}
 	queueSize := max(cfg.OperationQueueSize, 0)
 	operationCooldown := max(cfg.OperationCooldown, 0)
@@ -119,7 +122,6 @@ func NewStoreWithConfig(cfg Config) *Store {
 		manifest:       cfg.Manifest,
 		scheduler:      cfg.Scheduler,
 		storeID:        cfg.StoreID,
-		planner:        planner,
 		operationHook:  cfg.OperationObserver,
 		commandApplier: cfg.CommandApplier,
 		commandTimeout: commandTimeout,
