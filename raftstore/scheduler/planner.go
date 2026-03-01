@@ -6,14 +6,16 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 )
 
-// Planner defines the interface for schedulers that consume cluster snapshots
-// and produce scheduling operations (e.g. leader transfer, rebalance).
+// Planner consumes a scheduler Snapshot and produces scheduling operations.
+//
+// In NoKV cluster mode, scheduling decisions are expected to come from PD.
+// Local Planner implementations are mainly for standalone/dev/test experiments.
 type Planner interface {
 	Plan(snapshot Snapshot) []Operation
 }
 
-// Snapshot aggregates cluster state for planning. It captures regions, stores,
-// and can be extended with additional metadata.
+// Snapshot aggregates scheduler-visible state for planning. In standalone mode
+// it is typically built from Coordinator snapshots.
 type Snapshot struct {
 	Regions []RegionDescriptor
 	Stores  []StoreStats
@@ -38,7 +40,7 @@ type PeerDescriptor struct {
 	Leader  bool
 }
 
-// Operation represents a scheduling decision.
+// Operation represents a scheduling decision to be executed by store runtime.
 type Operation struct {
 	Type   OperationType
 	Region uint64
@@ -53,13 +55,17 @@ const (
 	OperationLeaderTransfer
 )
 
-// NoopPlanner returns no scheduling operations.
+// NoopPlanner disables local scheduling and always returns no operations.
+// This is the default when no planner capability is provided by the sink.
 type NoopPlanner struct{}
 
 func (NoopPlanner) Plan(Snapshot) []Operation { return nil }
 
 // LeaderBalancePlanner suggests leader transfers away from stores whose leader
-// count exceeds MaxLeaders. This is a naive heuristic for demonstration.
+// count exceeds MaxLeaders.
+//
+// This heuristic is intentionally simple and intended for local experiments and
+// tests. It is not a replacement for PD's centralized scheduling policy.
 type LeaderBalancePlanner struct {
 	MaxLeaders     uint64
 	StaleThreshold time.Duration

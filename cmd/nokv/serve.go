@@ -77,6 +77,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	if strings.TrimSpace(*pdAddr) != "" {
 		// Cluster mode: route scheduler heartbeats and operations through PD.
 		// This is the only runtime control-plane path for distributed mode.
+		// In this mode, local in-process coordinator state is not authoritative.
 		dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
 		pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
 		cancelDial()
@@ -91,6 +92,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	} else {
 		// Standalone mode: keep an in-process coordinator strictly for local
 		// observability/testing (`nokv scheduler`).
+		// This local coordinator is process-scoped and should not be treated as
+		// cluster-wide metadata truth.
 		schedulerSink = scheduler.NewCoordinator()
 	}
 	if pdSink != nil {
