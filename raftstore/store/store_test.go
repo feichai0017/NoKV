@@ -25,11 +25,12 @@ type noopTransport struct{}
 
 func (noopTransport) Send(myraft.Message) {}
 
-type repeatingPlanner struct {
+type plannerCoordinator struct {
+	*scheduler.Coordinator
 	op scheduler.Operation
 }
 
-func (p *repeatingPlanner) Plan(s scheduler.Snapshot) []scheduler.Operation {
+func (p *plannerCoordinator) Plan(s scheduler.Snapshot) []scheduler.Operation {
 	return []scheduler.Operation{p.op}
 }
 
@@ -520,17 +521,19 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 }
 
 func TestStorePlannerQueuesOperations(t *testing.T) {
-	coord := scheduler.NewCoordinator()
+	plannerSink := &plannerCoordinator{
+		Coordinator: scheduler.NewCoordinator(),
+	}
 	var mu sync.Mutex
 	var applied []time.Time
-	planner := &repeatingPlanner{op: scheduler.Operation{
+	plannerSink.op = scheduler.Operation{
 		Type:   scheduler.OperationLeaderTransfer,
 		Region: 200,
 		Source: 701,
 		Target: 702,
-	}}
+	}
 	rs := store.NewStoreWithConfig(store.Config{
-		Scheduler:          coord,
+		Scheduler:          plannerSink,
 		StoreID:            12,
 		PeerBuilder:        testPeerBuilder(12),
 		HeartbeatInterval:  25 * time.Millisecond,
@@ -538,7 +541,6 @@ func TestStorePlannerQueuesOperations(t *testing.T) {
 		OperationCooldown:  80 * time.Millisecond,
 		OperationInterval:  20 * time.Millisecond,
 		OperationBurst:     1,
-		Planner:            planner,
 		OperationObserver: func(op scheduler.Operation) {
 			mu.Lock()
 			applied = append(applied, time.Now())

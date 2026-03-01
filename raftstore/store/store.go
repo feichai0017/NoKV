@@ -84,13 +84,9 @@ func NewStoreWithConfig(cfg Config) *Store {
 	}
 	hookChain = append(hookChain, cfg.RegionHooks)
 	combinedHooks := mergeRegionHooks(hookChain...)
-	planner := cfg.Planner
-	if planner == nil {
-		if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
-			planner = inferred
-		} else {
-			planner = scheduler.NoopPlanner{}
-		}
+	planner := scheduler.Planner(scheduler.NoopPlanner{})
+	if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
+		planner = inferred
 	}
 	queueSize := max(cfg.OperationQueueSize, 0)
 	operationCooldown := max(cfg.OperationCooldown, 0)
