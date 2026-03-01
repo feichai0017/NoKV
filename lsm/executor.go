@@ -999,37 +999,58 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	}
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
+		var rangeTombstones []*kv.Entry
+		isMaxLevel := cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum
+
 		for ; it.Valid(); it.Next() {
-			key := it.Item().Entry().Key
-			//version := kv.ParseTs(key)
-			isExpired := IsDeletedOrExpired(it.Item().Entry())
+			entry := it.Item().Entry()
+			key := entry.Key
+			isExpired := IsDeletedOrExpired(entry)
+
+			if entry.IsRangeDelete() {
+				if isMaxLevel {
+					updateStats(entry)
+					continue
+				}
+				rangeTombstones = append(rangeTombstones, entry)
+			}
+
 			if !kv.SameKey(key, lastKey) {
-				// Stop when the iterator key is beyond the range.
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
-					// Stop when the SST size estimate is exceeded.
 					break
 				}
-				// Update lastKey with the current key.
 				lastKey = kv.SafeCopy(lastKey, key)
-				//umVersions = 0
-				// If the left bound is empty, set it to the current key.
 				if len(tableKr.Left) == 0 {
 					tableKr.Left = kv.SafeCopy(tableKr.Left, key)
 				}
-				// Update the right bound.
 				tableKr.Right = lastKey
 			}
-			// Drop expired entries.
-			valueLen := entryValueLen(it.Item().Entry())
-			switch {
-			case isExpired:
-				updateStats(it.Item().Entry())
-				builder.AddStaleEntryWithLen(it.Item().Entry(), valueLen)
-			default:
-				builder.AddKeyWithLen(it.Item().Entry(), valueLen)
+
+			if !entry.IsRangeDelete() {
+				covered := false
+				_, userKey, version := kv.SplitInternalKey(key)
+				for _, rt := range rangeTombstones {
+					_, rtStart, rtVersion := kv.SplitInternalKey(rt.Key)
+					if rtVersion >= version && kv.KeyInRange(userKey, rtStart, rt.RangeEnd()) {
+						covered = true
+						updateStats(entry)
+						break
+					}
+				}
+				if covered {
+					continue
+				}
+			}
+
+			valueLen := entryValueLen(entry)
+			if isExpired {
+				updateStats(entry)
+				builder.AddStaleEntryWithLen(entry, valueLen)
+			} else {
+				builder.AddKeyWithLen(entry, valueLen)
 			}
 		}
 	}

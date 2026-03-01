@@ -2,6 +2,7 @@
 package NoKV
 
 import (
+	"bytes"
 	stderrors "errors"
 	"fmt"
 	"maps"
@@ -429,6 +430,27 @@ func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
 	return db.setEntry(entry)
 }
 
+// DeleteRange removes all keys in [start, end) from the default column family.
+func (db *DB) DeleteRange(start, end []byte) error {
+	return db.DeleteRangeCF(kv.CFDefault, start, end)
+}
+
+// DeleteRangeCF removes all keys in [start, end) from the specified column family.
+// Range tombstones reuse Entry structure: Key=start, Value=end, Meta=BitRangeDelete.
+func (db *DB) DeleteRangeCF(cf kv.ColumnFamily, start, end []byte) error {
+	if len(start) == 0 || len(end) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if bytes.Compare(start, end) >= 0 {
+		return utils.ErrInvalidRequest
+	}
+	// Store range tombstone: Entry.Key=start, Entry.Value=end
+	entry := kv.NewEntryWithCF(cf, start, end)
+	entry.Meta = kv.BitRangeDelete
+	defer entry.DecrRef()
+	return db.setEntry(entry)
+}
+
 // Set writes a key/value pair into the default column family.
 func (db *DB) Set(key, value []byte) error {
 	return db.SetCF(kv.CFDefault, key, value)
@@ -570,6 +592,17 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	if entry == nil {
 		return nil, utils.ErrKeyNotFound
 	}
+	if entry.IsRangeDelete() {
+		entry.DecrRef()
+		return nil, utils.ErrKeyNotFound
+	}
+
+	cf, userKey, version := kv.SplitInternalKey(internalKey)
+	if db.isKeyCoveredByRangeTombstone(cf, userKey, version) {
+		entry.DecrRef()
+		return nil, utils.ErrKeyNotFound
+	}
+
 	if !kv.IsValuePtr(entry) {
 		return entry, nil
 	}
@@ -586,6 +619,41 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	entry.Value = kv.SafeCopy(nil, result)
 	entry.Meta &^= kv.BitValuePointer
 	return entry, nil
+}
+
+func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
+	opt := &utils.Options{IsAsc: true}
+	iters := db.lsm.NewIterators(opt)
+	for _, it := range iters {
+		if it == nil {
+			continue
+		}
+		it.Rewind()
+		for it.Valid() {
+			item := it.Item()
+			if item == nil {
+				it.Next()
+				continue
+			}
+			e := item.Entry()
+			if e == nil || !e.IsRangeDelete() {
+				it.Next()
+				continue
+			}
+			rangeCF, rangeStart, rangeVersion := kv.SplitInternalKey(e.Key)
+			if rangeCF != cf || rangeVersion < version {
+				it.Next()
+				continue
+			}
+			rangeEnd := e.RangeEnd()
+			if kv.KeyInRange(userKey, rangeStart, rangeEnd) {
+				return true
+			}
+			it.Next()
+		}
+		it.Close()
+	}
+	return false
 }
 
 // cloneEntry converts an internal/buffered entry into a detached public value object.
@@ -700,7 +768,7 @@ func (db *DB) runValueLogGCPeriodically() {
 }
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
-	return int64(len(e.Value)) < db.opt.ValueThreshold
+	return e.IsRangeDelete() || int64(len(e.Value)) < db.opt.ValueThreshold
 }
 
 func (db *DB) valueThreshold() int64 {
