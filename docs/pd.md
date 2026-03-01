@@ -111,7 +111,6 @@ This avoids dual sources drifting over time (config vs PD).
 
 Related CLI behavior:
 
-- `nokv scheduler` is deprecated and returns an error.
 - Inspect control-plane state through PD APIs/metrics.
 
 ---
