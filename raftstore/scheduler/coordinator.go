@@ -7,22 +7,35 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 )
 
-// RegionSink receives region heartbeat events from raftstore when metadata
-// changes occur or regions are removed.
+// RegionSink is the store-side publish interface for scheduling metadata.
+//
+// In cluster mode, implementations should forward to PD (the control-plane
+// source of truth). In standalone/dev mode, implementations may keep local
+// in-process state for diagnostics and tests.
 type RegionSink interface {
 	SubmitRegionHeartbeat(manifest.RegionMeta)
 	RemoveRegion(uint64)
 	SubmitStoreHeartbeat(StoreStats)
 }
 
-// SnapshotProvider exposes aggregated cluster state to schedulers or tooling.
+// SnapshotProvider exposes a read-only view of locally aggregated scheduling
+// state. It is primarily intended for standalone diagnostics/testing.
+//
+// In cluster mode, authoritative metadata should be read from PD APIs.
 type SnapshotProvider interface {
 	RegionSnapshot() []RegionInfo
 	StoreSnapshot() []StoreStats
 }
 
-// Coordinator captures region heartbeats and provides a snapshot for schedulers
-// to reason about cluster topology.
+// Coordinator is an in-process RegionSink/SnapshotProvider implementation.
+//
+// Project role:
+//   - standalone/dev: local heartbeat sink and snapshot source for
+//     `nokv scheduler` and tests.
+//   - cluster mode: optional mirror/debug helper only.
+//
+// Coordinator is intentionally memory-only and process-local; it is not a
+// distributed metadata authority.
 type Coordinator struct {
 	mu          sync.RWMutex
 	regions     map[uint64]manifest.RegionMeta
@@ -30,7 +43,7 @@ type Coordinator struct {
 	stores      map[uint64]StoreStats
 }
 
-// NewCoordinator constructs a Coordinator with in-memory storage.
+// NewCoordinator constructs an in-memory local coordinator.
 func NewCoordinator() *Coordinator {
 	return &Coordinator{
 		regions:     make(map[uint64]manifest.RegionMeta),
@@ -39,7 +52,7 @@ func NewCoordinator() *Coordinator {
 	}
 }
 
-// SubmitRegionHeartbeat records the provided region metadata.
+// SubmitRegionHeartbeat records region metadata into local in-process state.
 func (c *Coordinator) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 	if c == nil || meta.ID == 0 {
 		return
@@ -50,7 +63,7 @@ func (c *Coordinator) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 	c.mu.Unlock()
 }
 
-// RemoveRegion deletes the region from the coordinator's view.
+// RemoveRegion deletes region metadata from local in-process state.
 func (c *Coordinator) RemoveRegion(id uint64) {
 	if c == nil || id == 0 {
 		return
@@ -61,8 +74,8 @@ func (c *Coordinator) RemoveRegion(id uint64) {
 	c.mu.Unlock()
 }
 
-// RegionSnapshot returns a slice copy of the known regions. Callers receive
-// cloned metadata and may mutate the result freely.
+// RegionSnapshot returns a local snapshot copy of known regions.
+// Callers receive cloned metadata and may mutate the returned slice freely.
 func (c *Coordinator) RegionSnapshot() []RegionInfo {
 	if c == nil {
 		return nil
@@ -108,7 +121,7 @@ type RegionInfo struct {
 	LastHeartbeat time.Time           `json:"last_heartbeat"`
 }
 
-// SubmitStoreHeartbeat records store statistics.
+// SubmitStoreHeartbeat records store stats into local in-process state.
 func (c *Coordinator) SubmitStoreHeartbeat(stats StoreStats) {
 	if c == nil || stats.StoreID == 0 {
 		return
