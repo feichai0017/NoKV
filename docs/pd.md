@@ -104,20 +104,15 @@ This avoids dual sources drifting over time (config vs PD).
 
 ## 6. Serve Mode Semantics
 
-`nokv serve` follows a strict split:
+`nokv serve` is now PD-only:
 
-- **Standalone/dev mode** (no `--peer`): PD is optional.
-- **Cluster mode** (any `--peer` configured): `--pd-addr` is required.
-
-This keeps distributed control-plane behavior PD-centric and avoids fallback to
-a local scheduler path in cluster deployments. Startup logs explicitly print the
-selected mode.
+- `--pd-addr` is required.
+- Runtime routing/scheduling control-plane state is sourced from PD.
 
 Related CLI behavior:
 
-- `nokv scheduler` is standalone/debug-only.
-- In cluster mode (PD enabled), inspect control-plane state through PD APIs and
-  PD-side metrics instead of local scheduler snapshots.
+- `nokv scheduler` is deprecated and returns an error.
+- Inspect control-plane state through PD APIs/metrics.
 
 ---
 

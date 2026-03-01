@@ -65,13 +65,13 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 ### `nokv scheduler`
 
-- Displays local scheduler heartbeat snapshot (standalone/in-process usage)
-- In cluster mode (PD enabled), use PD state APIs/metrics instead
+- Deprecated. Local scheduler implementation has been removed.
+- Use PD state APIs/metrics instead.
 
 ### `nokv serve`
 
 - Starts TinyKv gRPC service backed by local `raftstore`
-- Requires `--workdir` and `--store-id`
+- Requires `--workdir`, `--store-id`, and `--pd-addr`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
   - `--peer storeID=address` (repeatable)
@@ -86,6 +86,7 @@ nokv serve \
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
+  --pd-addr 127.0.0.1:2379 \
   --peer 2=127.0.0.1:20171 \
   --peer 3=127.0.0.1:20172
 ```

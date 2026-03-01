@@ -3,7 +3,9 @@ package adapter
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -67,8 +69,81 @@ func (f *fakePDClient) Close() error {
 	return nil
 }
 
+type testMirrorSink struct {
+	mu      sync.RWMutex
+	regions map[uint64]scheduler.RegionInfo
+	stores  map[uint64]scheduler.StoreStats
+}
+
+func newTestMirrorSink() *testMirrorSink {
+	return &testMirrorSink{
+		regions: make(map[uint64]scheduler.RegionInfo),
+		stores:  make(map[uint64]scheduler.StoreStats),
+	}
+}
+
+func (m *testMirrorSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
+	if m == nil || meta.ID == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.regions[meta.ID] = scheduler.RegionInfo{
+		Meta:          manifest.CloneRegionMeta(meta),
+		LastHeartbeat: time.Now(),
+	}
+	m.mu.Unlock()
+}
+
+func (m *testMirrorSink) RemoveRegion(regionID uint64) {
+	if m == nil || regionID == 0 {
+		return
+	}
+	m.mu.Lock()
+	delete(m.regions, regionID)
+	m.mu.Unlock()
+}
+
+func (m *testMirrorSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
+	if m == nil || stats.StoreID == 0 {
+		return
+	}
+	stats.UpdatedAt = time.Now()
+	m.mu.Lock()
+	m.stores[stats.StoreID] = stats
+	m.mu.Unlock()
+}
+
+func (m *testMirrorSink) RegionSnapshot() []scheduler.RegionInfo {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	out := make([]scheduler.RegionInfo, 0, len(m.regions))
+	for _, info := range m.regions {
+		out = append(out, scheduler.RegionInfo{
+			Meta:          manifest.CloneRegionMeta(info.Meta),
+			LastHeartbeat: info.LastHeartbeat,
+		})
+	}
+	m.mu.RUnlock()
+	return out
+}
+
+func (m *testMirrorSink) StoreSnapshot() []scheduler.StoreStats {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	out := make([]scheduler.StoreStats, 0, len(m.stores))
+	for _, st := range m.stores {
+		out = append(out, st)
+	}
+	m.mu.RUnlock()
+	return out
+}
+
 func TestRegionSinkMirrorsAndForwards(t *testing.T) {
-	mirror := scheduler.NewCoordinator()
+	mirror := newTestMirrorSink()
 	pd := &fakePDClient{
 		storeResp: &pb.StoreHeartbeatResponse{
 			Accepted: true,
@@ -165,7 +240,7 @@ func TestRegionSinkNoopOnZeroIDs(t *testing.T) {
 func TestRegionSinkRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 	removeErr := errors.New("remove region failed")
 	pd := &fakePDClient{removeErr: removeErr}
-	mirror := scheduler.NewCoordinator()
+	mirror := newTestMirrorSink()
 	var got []string
 	sink := NewRegionSink(RegionSinkConfig{
 		PD:     pd,

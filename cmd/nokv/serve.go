@@ -61,8 +61,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *electionTick <= 0 || *heartbeatTick <= 0 {
 		return fmt.Errorf("heartbeat and election ticks must be > 0")
 	}
-	if len(peerFlags) > 0 && strings.TrimSpace(*pdAddr) == "" {
-		return fmt.Errorf("--pd-addr is required when --peer is configured")
+	if strings.TrimSpace(*pdAddr) == "" {
+		return fmt.Errorf("--pd-addr is required (PD is the only scheduler/control-plane source)")
 	}
 
 	opt := NoKV.NewDefaultOptions()
@@ -72,39 +72,22 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	var schedulerSink scheduler.RegionSink
-	var pdSink *pdadapter.RegionSink
-	if strings.TrimSpace(*pdAddr) != "" {
-		// Cluster mode: route scheduler heartbeats and operations through PD.
-		// This is the only runtime control-plane path for distributed mode.
-		// In this mode, local in-process coordinator state is not authoritative.
-		dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
-		pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
-		cancelDial()
-		if err != nil {
-			return fmt.Errorf("dial pd %q: %w", *pdAddr, err)
-		}
-		pdSink = pdadapter.NewRegionSink(pdadapter.RegionSinkConfig{
-			PD:      pdCli,
-			Timeout: *pdTimeout,
-		})
-		schedulerSink = pdSink
-	} else {
-		// Standalone mode: keep an in-process coordinator strictly for local
-		// observability/testing (`nokv scheduler`).
-		// This local coordinator is process-scoped and should not be treated as
-		// cluster-wide metadata truth.
-		schedulerSink = scheduler.NewCoordinator()
+	// Cluster mode only: route scheduler heartbeats and operations through PD.
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
+	pdCli, err := pdclient.NewGRPCClient(dialCtx, strings.TrimSpace(*pdAddr))
+	cancelDial()
+	if err != nil {
+		return fmt.Errorf("dial pd %q: %w", *pdAddr, err)
 	}
-	if pdSink != nil {
-		defer func() {
-			_ = pdSink.Close()
-		}()
-	}
-	runtimeMode := runtimeModeDevStandalone
-	if pdSink != nil {
-		runtimeMode = runtimeModeClusterPD
-	}
+	pdSink := pdadapter.NewRegionSink(pdadapter.RegionSinkConfig{
+		PD:      pdCli,
+		Timeout: *pdTimeout,
+	})
+	defer func() {
+		_ = pdSink.Close()
+	}()
+	var schedulerSink scheduler.RegionSink = pdSink
+	runtimeMode := runtimeModeClusterPD
 
 	server, err := raftstore.NewServer(raftstore.ServerConfig{
 		DB: db,
@@ -172,18 +155,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
-	switch runtimeMode {
-	case runtimeModeClusterPD:
-		_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
-	default:
-		_, _ = fmt.Fprintln(w, "Serve mode: dev-standalone (PD disabled)")
-	}
+	_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
 	}
-	if pdSink != nil {
-		_, _ = fmt.Fprintf(w, "PD heartbeat sink enabled: %s\n", strings.TrimSpace(*pdAddr))
-	}
+	_, _ = fmt.Fprintf(w, "PD heartbeat sink enabled: %s\n", strings.TrimSpace(*pdAddr))
 	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop")
 
 	ctx, cancel := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
