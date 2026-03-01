@@ -343,6 +343,30 @@ func TestTxnIteratorBounds(t *testing.T) {
 			require.True(t, iter.Valid())
 			require.Equal(t, []byte("k3"), iter.Item().Entry().Key)
 		})
+
+		t.Run("Reverse Seek bounds enforcement", func(t *testing.T) {
+			txn := db.NewTransaction(false)
+			defer txn.Discard()
+
+			opt := IteratorOptions{
+				Reverse:    true,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := txn.NewIterator(opt)
+			defer iter.Close()
+
+			// Out of lower bound seek -> should invalidate
+			iter.Seek([]byte("k1"))
+			require.False(t, iter.Valid())
+
+			// Out of upper bound seek -> should clamp to upper bound
+			iter.Seek([]byte("k9"))
+			require.True(t, iter.Valid())
+			// Reverse Seek to k9 clamps to k7. However, since UpperBound is exclusive, it should yield k5,
+			// or if the iterator is positioned at k7 (invalid), the .advance() will skip to k5!
+			require.Equal(t, []byte("k5"), iter.Item().Entry().Key)
+		})
 	})
 }
 
@@ -415,6 +439,25 @@ func TestDBIteratorBounds(t *testing.T) {
 			iter.Seek([]byte("k1"))
 			require.True(t, iter.Valid())
 			require.Equal(t, []byte("k3"), kv.ParseKey(iter.Item().Entry().Key))
+		})
+
+		t.Run("Reverse Seek bounds enforcement", func(t *testing.T) {
+			opt := &utils.Options{
+				IsAsc:      false,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := db.NewIterator(opt)
+			defer iter.Close()
+
+			// Out of lower bound seek -> should invalidate
+			iter.Seek([]byte("k1"))
+			require.False(t, iter.Valid())
+
+			// Out of upper bound seek -> should clamp to upper bound
+			iter.Seek([]byte("k9"))
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), kv.ParseKey(iter.Item().Entry().Key))
 		})
 	})
 }
