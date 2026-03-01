@@ -36,15 +36,18 @@ type RegionHooks = metrics.RegionHooks
 // Config configures Store construction. Only the Router field is mandatory;
 // factory and hooks default to sensible values when omitted.
 type Config struct {
-	Router             *Router
-	PeerFactory        PeerFactory
-	PeerBuilder        PeerBuilder
-	Hooks              LifecycleHooks
-	RegionHooks        RegionHooks
-	Manifest           *manifest.Manager
-	Scheduler          scheduler.RegionSink
-	HeartbeatInterval  time.Duration
-	StoreID            uint64
+	Router            *Router
+	PeerFactory       PeerFactory
+	PeerBuilder       PeerBuilder
+	Hooks             LifecycleHooks
+	RegionHooks       RegionHooks
+	Manifest          *manifest.Manager
+	Scheduler         scheduler.RegionSink
+	HeartbeatInterval time.Duration
+	StoreID           uint64
+	// Planner is a compatibility override for tests or custom deployments.
+	// When nil, Store infers planner capability from Scheduler if it also
+	// implements scheduler.Planner; otherwise NoopPlanner is used.
 	Planner            scheduler.Planner
 	OperationQueueSize int
 	OperationCooldown  time.Duration

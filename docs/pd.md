@@ -104,12 +104,14 @@ This avoids dual sources drifting over time (config vs PD).
 
 ## 6. Serve Mode Semantics
 
-`nokv serve --pd-addr ...` remains optional by design:
+`nokv serve` follows a strict split:
 
-- No PD address: local/dev mode (or cluster-local scheduler only).
-- With PD address: cluster mode with PD control-plane heartbeats.
+- **Standalone/dev mode** (no `--peer`): PD is optional.
+- **Cluster mode** (any `--peer` configured): `--pd-addr` is required.
 
-Startup logs explicitly print the selected mode.
+This keeps distributed control-plane behavior PD-centric and avoids fallback to
+a local scheduler path in cluster deployments. Startup logs explicitly print the
+selected mode.
 
 ---
 
