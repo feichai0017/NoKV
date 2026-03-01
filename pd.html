@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af9cd711.js";
+            window.path_to_searchindex_js = "searchindex-d8aced61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -263,19 +263,14 @@ routing source of truth.</p>
 <p>This avoids dual sources drifting over time (config vs PD).</p>
 <hr>
 <h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
-<p><code>nokv serve</code> follows a strict split:</p>
+<p><code>nokv serve</code> is now PD-only:</p>
 <ul>
-<li><strong>Standalone/dev mode</strong> (no <code>--peer</code>): PD is optional.</li>
-<li><strong>Cluster mode</strong> (any <code>--peer</code> configured): <code>--pd-addr</code> is required.</li>
+<li><code>--pd-addr</code> is required.</li>
+<li>Runtime routing/scheduling control-plane state is sourced from PD.</li>
 </ul>
-<p>This keeps distributed control-plane behavior PD-centric and avoids fallback to
-a local scheduler path in cluster deployments. Startup logs explicitly print the
-selected mode.</p>
 <p>Related CLI behavior:</p>
 <ul>
-<li><code>nokv scheduler</code> is standalone/debug-only.</li>
-<li>In cluster mode (PD enabled), inspect control-plane state through PD APIs and
-PD-side metrics instead of local scheduler snapshots.</li>
+<li>Inspect control-plane state through PD APIs/metrics.</li>
 </ul>
 <hr>
 <h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>

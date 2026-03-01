@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af9cd711.js";
+            window.path_to_searchindex_js = "searchindex-d8aced61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -292,8 +292,7 @@ reused by scripts, Docker Compose, and the Redis gateway.</li>
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
 the runtime source of truth once PD is available.</li>
-<li>In cluster mode, PD is the control-plane source of truth. The in-process
-scheduler/coordinator path is retained for standalone/debug visibility only.</li>
+<li>PD is the only control-plane source of truth for runtime scheduling/routing.</li>
 </ul>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
@@ -340,7 +339,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <ul>
 <li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
 <li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
-<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.</li>
+<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator and operation source.</li>
 </ul>
 <p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
 

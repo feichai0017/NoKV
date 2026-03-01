@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af9cd711.js";
+            window.path_to_searchindex_js = "searchindex-d8aced61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -633,7 +633,7 @@ func main() {
 <li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
 <li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
-<li><code>nokv scheduler</code> is standalone/debug-only; cluster mode should use PD state APIs/metrics.</li>
+<li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
 <ul>
 <li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>
@@ -859,15 +859,10 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <li>Dumps manifest-backed region catalog (state/range/epoch/peers)</li>
 <li>Supports <code>--json</code></li>
 </ul>
-<h3 id="nokv-scheduler"><a class="header" href="#nokv-scheduler"><code>nokv scheduler</code></a></h3>
-<ul>
-<li>Displays local scheduler heartbeat snapshot (standalone/in-process usage)</li>
-<li>In cluster mode (PD enabled), use PD state APIs/metrics instead</li>
-</ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
 <li>Starts TinyKv gRPC service backed by local <code>raftstore</code></li>
-<li>Requires <code>--workdir</code> and <code>--store-id</code></li>
+<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--pd-addr</code></li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
@@ -883,6 +878,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
+  --pd-addr 127.0.0.1:2379 \
   --peer 2=127.0.0.1:20171 \
   --peer 3=127.0.0.1:20172
 </code></pre>
@@ -2390,8 +2386,7 @@ reused by scripts, Docker Compose, and the Redis gateway.</li>
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
 the runtime source of truth once PD is available.</li>
-<li>In cluster mode, PD is the control-plane source of truth. The in-process
-scheduler/coordinator path is retained for standalone/debug visibility only.</li>
+<li>PD is the only control-plane source of truth for runtime scheduling/routing.</li>
 </ul>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
@@ -2438,7 +2433,7 @@ heuristics; a higher-level controller could call the same APIs.</li>
 <ul>
 <li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
 <li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
-<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.</li>
+<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator and operation source.</li>
 </ul>
 <p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2527,19 +2522,14 @@ routing source of truth.</p>
 <p>This avoids dual sources drifting over time (config vs PD).</p>
 <hr>
 <h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
-<p><code>nokv serve</code> follows a strict split:</p>
+<p><code>nokv serve</code> is now PD-only:</p>
 <ul>
-<li><strong>Standalone/dev mode</strong> (no <code>--peer</code>): PD is optional.</li>
-<li><strong>Cluster mode</strong> (any <code>--peer</code> configured): <code>--pd-addr</code> is required.</li>
+<li><code>--pd-addr</code> is required.</li>
+<li>Runtime routing/scheduling control-plane state is sourced from PD.</li>
 </ul>
-<p>This keeps distributed control-plane behavior PD-centric and avoids fallback to
-a local scheduler path in cluster deployments. Startup logs explicitly print the
-selected mode.</p>
 <p>Related CLI behavior:</p>
 <ul>
-<li><code>nokv scheduler</code> is standalone/debug-only.</li>
-<li>In cluster mode (PD enabled), inspect control-plane state through PD APIs and
-PD-side metrics instead of local scheduler snapshots.</li>
+<li>Inspect control-plane state through PD APIs/metrics.</li>
 </ul>
 <hr>
 <h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>

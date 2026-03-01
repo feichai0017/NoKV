@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af9cd711.js";
+            window.path_to_searchindex_js = "searchindex-d8aced61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -372,7 +372,7 @@
 <li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
 <li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
-<li><code>nokv scheduler</code> is standalone/debug-only; cluster mode should use PD state APIs/metrics.</li>
+<li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
 <ul>
 <li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>

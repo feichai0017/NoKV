@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af9cd711.js";
+            window.path_to_searchindex_js = "searchindex-d8aced61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -231,15 +231,10 @@
 <li>Dumps manifest-backed region catalog (state/range/epoch/peers)</li>
 <li>Supports <code>--json</code></li>
 </ul>
-<h3 id="nokv-scheduler"><a class="header" href="#nokv-scheduler"><code>nokv scheduler</code></a></h3>
-<ul>
-<li>Displays local scheduler heartbeat snapshot (standalone/in-process usage)</li>
-<li>In cluster mode (PD enabled), use PD state APIs/metrics instead</li>
-</ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
 <li>Starts TinyKv gRPC service backed by local <code>raftstore</code></li>
-<li>Requires <code>--workdir</code> and <code>--store-id</code></li>
+<li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--pd-addr</code></li>
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
@@ -255,6 +250,7 @@
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
+  --pd-addr 127.0.0.1:2379 \
   --peer 2=127.0.0.1:20171 \
   --peer 3=127.0.0.1:20172
 </code></pre>
