@@ -265,3 +265,199 @@ func TestExceedsSize(t *testing.T) {
 	key := bytes.Repeat([]byte("k"), maxKeySize+1)
 	require.Error(t, exceedsSize("Key", maxKeySize, key))
 }
+
+func TestTxnIteratorBounds(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		require.NoError(t, db.Update(func(txn *Txn) error {
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k1"), []byte("v1"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k3"), []byte("v3"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k5"), []byte("v5"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k7"), []byte("v7"))))
+			return nil
+		}))
+
+		t.Run("Forward with bounds", func(t *testing.T) {
+			txn := db.NewTransaction(false)
+			defer txn.Discard()
+
+			opt := IteratorOptions{
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := txn.NewIterator(opt)
+			defer iter.Close()
+
+			iter.Rewind()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), iter.Item().Entry().Key)
+
+			iter.Next()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), iter.Item().Entry().Key)
+
+			iter.Next()
+			require.False(t, iter.Valid(), "Should not encounter k7 due to exclusive UpperBound")
+		})
+
+		t.Run("Reverse with bounds", func(t *testing.T) {
+			txn := db.NewTransaction(false)
+			defer txn.Discard()
+
+			opt := IteratorOptions{
+				Reverse:    true,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := txn.NewIterator(opt)
+			defer iter.Close()
+
+			iter.Rewind()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), iter.Item().Entry().Key)
+
+			iter.Next()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), iter.Item().Entry().Key)
+
+			iter.Next()
+			require.False(t, iter.Valid(), "Should not encounter k1 due to inclusive LowerBound in reverse direction")
+		})
+
+		t.Run("Seek bounds enforcement", func(t *testing.T) {
+			txn := db.NewTransaction(false)
+			defer txn.Discard()
+
+			opt := IteratorOptions{
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := txn.NewIterator(opt)
+			defer iter.Close()
+
+			// Out of upper bound seek -> should invalidate
+			iter.Seek([]byte("k9"))
+			require.False(t, iter.Valid())
+
+			// Out of lower bound seek -> should clamp to lower bound
+			iter.Seek([]byte("k1"))
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), iter.Item().Entry().Key)
+		})
+
+		t.Run("Reverse Seek bounds enforcement", func(t *testing.T) {
+			txn := db.NewTransaction(false)
+			defer txn.Discard()
+
+			opt := IteratorOptions{
+				Reverse:    true,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := txn.NewIterator(opt)
+			defer iter.Close()
+
+			// Out of lower bound seek -> should invalidate
+			iter.Seek([]byte("k1"))
+			require.False(t, iter.Valid())
+
+			// Out of upper bound seek -> should clamp to upper bound
+			iter.Seek([]byte("k9"))
+			require.True(t, iter.Valid())
+			// Reverse Seek to k9 clamps to k7. However, since UpperBound is exclusive, it should yield k5,
+			// or if the iterator is positioned at k7 (invalid), the .advance() will skip to k5!
+			require.Equal(t, []byte("k5"), iter.Item().Entry().Key)
+		})
+	})
+}
+
+func TestDBIteratorBounds(t *testing.T) {
+	runNoKVTest(t, nil, func(t *testing.T, db *DB) {
+		require.NoError(t, db.Update(func(txn *Txn) error {
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k1"), []byte("v1"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k3"), []byte("v3"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k5"), []byte("v5"))))
+			require.NoError(t, txn.SetEntry(kv.NewEntry([]byte("k7"), []byte("v7"))))
+			return nil
+		}))
+
+		t.Run("Forward with bounds", func(t *testing.T) {
+			opt := &utils.Options{
+				IsAsc:      true,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := db.NewIterator(opt)
+			defer func() { require.NoError(t, iter.Close()) }()
+
+			iter.Rewind()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), kv.ParseKey(iter.Item().Entry().Key))
+
+			iter.Next()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), kv.ParseKey(iter.Item().Entry().Key))
+
+			iter.Next()
+			require.False(t, iter.Valid(), "Should not encounter k7 due to exclusive UpperBound")
+		})
+
+		t.Run("Reverse with bounds", func(t *testing.T) {
+			opt := &utils.Options{
+				IsAsc:      false,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := db.NewIterator(opt)
+			defer func() { require.NoError(t, iter.Close()) }()
+
+			iter.Rewind()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), kv.ParseKey(iter.Item().Entry().Key))
+
+			iter.Next()
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), kv.ParseKey(iter.Item().Entry().Key))
+
+			iter.Next()
+			require.False(t, iter.Valid(), "Should not encounter k1 due to inclusive LowerBound in reverse direction")
+		})
+
+		t.Run("Seek bounds enforcement", func(t *testing.T) {
+			opt := &utils.Options{
+				IsAsc:      true,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := db.NewIterator(opt)
+			defer func() { require.NoError(t, iter.Close()) }()
+
+			// Out of upper bound seek -> should invalidate
+			iter.Seek([]byte("k9"))
+			require.False(t, iter.Valid())
+
+			// Out of lower bound seek -> should clamp to lower bound
+			iter.Seek([]byte("k1"))
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k3"), kv.ParseKey(iter.Item().Entry().Key))
+		})
+
+		t.Run("Reverse Seek bounds enforcement", func(t *testing.T) {
+			opt := &utils.Options{
+				IsAsc:      false,
+				LowerBound: []byte("k3"),
+				UpperBound: []byte("k7"),
+			}
+			iter := db.NewIterator(opt)
+			defer iter.Close()
+
+			// Out of lower bound seek -> should invalidate
+			iter.Seek([]byte("k1"))
+			require.False(t, iter.Valid())
+
+			// Out of upper bound seek -> should clamp to upper bound
+			iter.Seek([]byte("k9"))
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte("k5"), kv.ParseKey(iter.Item().Entry().Key))
+		})
+	})
+}
