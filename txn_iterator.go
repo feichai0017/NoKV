@@ -29,6 +29,10 @@ type TxnIterator struct {
 	pool  *iteratorPool
 	ctx   *iteratorContext
 	valid bool
+	// seekOutOfRange marks that the last Seek was rejected by iterator bounds.
+	// While set, Next must keep returning invalid until caller repositions the
+	// iterator via Seek/Rewind.
+	seekOutOfRange bool
 }
 
 // IteratorOptions controls scan direction, version visibility, and key filtering.
@@ -324,6 +328,7 @@ func (it *TxnIterator) Close() {
 	it.valid = false
 	it.valueBuf = it.valueBuf[:0]
 	it.item.valueBuf = it.item.valueBuf[:0]
+	it.seekOutOfRange = false
 	if it.pool != nil && it.ctx != nil {
 		it.pool.put(it.ctx)
 	}
@@ -335,6 +340,11 @@ func (it *TxnIterator) Close() {
 // to ensure you have access to a valid it.Item().
 func (it *TxnIterator) Next() {
 	if it.iitr == nil {
+		it.valid = false
+		it.latestTs = 0
+		return
+	}
+	if it.seekOutOfRange {
 		it.valid = false
 		it.latestTs = 0
 		return
@@ -352,6 +362,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 		it.txn.addReadKey(encoded)
 	}
 	it.lastKey = it.lastKey[:0]
+	it.seekOutOfRange = false
 	if it.iitr == nil {
 		it.valid = false
 		it.latestTs = 0
@@ -370,6 +381,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 		if len(it.opt.UpperBound) > 0 && bytes.Compare(key, it.opt.UpperBound) >= 0 {
 			it.valid = false
 			it.latestTs = 0
+			it.seekOutOfRange = true
 			return it.latestTs
 		}
 		// Clamp the key to LowerBound prune the iteration
@@ -386,6 +398,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 		if len(it.opt.LowerBound) > 0 && bytes.Compare(key, it.opt.LowerBound) < 0 {
 			it.valid = false
 			it.latestTs = 0
+			it.seekOutOfRange = true
 			return it.latestTs
 		}
 		// Clamp the key to UpperBound to prune the iteration
@@ -423,6 +436,7 @@ func (it *TxnIterator) Seek(key []byte) uint64 {
 // whether the cursor started with a Seek().
 func (it *TxnIterator) Rewind() {
 	it.lastKey = it.lastKey[:0]
+	it.seekOutOfRange = false
 	if it.iitr == nil {
 		it.valid = false
 		it.latestTs = 0
