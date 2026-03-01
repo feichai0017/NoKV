@@ -79,7 +79,7 @@ bench:
 # Install development tools
 install-tools:
 	@echo "Installing development tools (pinned versions)..."
-	GOTOOLCHAIN=go$(PROJECT_GO_VERSION).0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	@if ! command -v protoc >/dev/null 2>&1; then \
