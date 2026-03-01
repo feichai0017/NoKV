@@ -541,6 +541,8 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 	if len(stores) == 0 {
 		return fmt.Errorf("no registered store; run inside a process hosting raftstore")
 	}
+	// `nokv scheduler` is a local/debug view only. In cluster mode, PD is the
+	// control-plane source of truth, so local snapshots must not be used.
 	for _, st := range stores {
 		if runtimeStoreMode(st) == runtimeModeClusterPD {
 			return fmt.Errorf("scheduler snapshot is standalone-only; use PD state APIs in cluster mode")
