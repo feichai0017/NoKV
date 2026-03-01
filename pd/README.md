@@ -1,50 +1,29 @@
-# PD-lite Package
+# PD-lite (`pd/`)
 
-`pd/` is NoKV's lightweight control-plane implementation.
+`pd/` is NoKV's distributed control-plane module.
 
-It provides:
+Current role:
+- runtime routing source (`GetRegionByKey`)
+- store/region heartbeat ingestion
+- global allocators (`AllocID`, `Tso`)
+- basic scheduling operation downlink (leader transfer)
 
-- Region routing (`GetRegionByKey`)
-- Store/Region heartbeats (`StoreHeartbeat`, `RegionHeartbeat`)
-- ID allocation (`AllocID`)
-- Timestamp allocation (`Tso`)
-- Region metadata removal (`RemoveRegion`)
+## Package map
 
-## Package Layout
+- `core/`: in-memory cluster model + allocator state
+- `server/`: gRPC PD service
+- `client/`: gRPC client wrapper
+- `adapter/`: store-side sink that forwards heartbeats to PD and drains operations
+- `storage/`: PD persistence abstraction + local file-backed implementation
+- `tso/`: monotonic timestamp allocator
 
-- `pd/core`: in-memory cluster model and allocators.
-- `pd/storage`: persistence abstraction (`Store`) and local file-backed implementation.
-- `pd/server`: gRPC service implementation (`pb.PDServer`).
-- `pd/client`: gRPC client wrapper consumed by raftstore/redis gateway.
-- `pd/adapter`: bridge from `raftstore/scheduler.RegionSink` to PD RPCs.
-- `pd/tso`: monotonic timestamp allocator.
+## Runtime note
 
-## Persistence Model
+`nokv serve` is PD-only in distributed mode. Control-plane truth comes from PD.
 
-PD-lite can run fully in-memory, or with `--workdir` persistence:
+## Detailed docs
 
-- Region catalog persistence: manifest `EditRegion` records (via `pd/storage`).
-- Allocator checkpoints: `PD_STATE.json` (`id_current`, `ts_current`, via `pd/storage`).
+Use the full design/ops doc:
 
-On restart, `cmd/nokv pd` loads storage snapshot data and raises allocator
-starts from checkpoint (`current + 1`).
+- [`docs/pd.md`](../docs/pd.md)
 
-## Routing Semantics
-
-Runtime route source is PD.
-
-- `raftstore/client` resolves regions by key through PD (`GetRegionByKey`) and
-  caches returned routes.
-- `raft_config.json` region entries are bootstrap/deployment metadata, not
-  runtime routing truth.
-
-## Scope and Limits
-
-PD-lite is intentionally minimal:
-
-- single-process control plane (no embedded etcd quorum)
-- best-effort scheduling hints (leader transfer only at this stage)
-- no production-grade multi-PD HA/failover yet
-
-It is designed for local clusters, integration tests, and architecture
-experiments while keeping the API close to a real PD control plane.
