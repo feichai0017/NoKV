@@ -25,7 +25,7 @@ type RegionSinkConfig struct {
 }
 
 // RegionSink forwards scheduler heartbeats to PD and optionally mirrors them to
-// another local sink (e.g. scheduler.Coordinator for debugging snapshots).
+// another local sink for debugging snapshots.
 type RegionSink struct {
 	mu      sync.Mutex
 	pd      pdclient.Client

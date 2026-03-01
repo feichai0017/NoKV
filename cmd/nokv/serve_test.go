@@ -108,15 +108,18 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 func TestRunServeCmdNoRegions(t *testing.T) {
 	withNotifyContext(t, true, func() {
 		dir := t.TempDir()
+		pdAddr, stopPD := startTestPDServer(t)
+		defer stopPD()
 		var buf bytes.Buffer
 		err := runServeCmd(&buf, []string{
 			"-workdir", dir,
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
+			"-pd-addr", pdAddr,
 		})
 		require.NoError(t, err)
 		require.Contains(t, buf.String(), "Manifest contains no regions")
-		require.Contains(t, buf.String(), "Serve mode: dev-standalone")
+		require.Contains(t, buf.String(), "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
 	})
 }
 

@@ -21,7 +21,7 @@ const (
 )
 
 // runtimeStoreRecord tracks a registered store plus its runtime mode so helper
-// commands (e.g. `nokv scheduler`) can enforce mode-specific behavior.
+// commands can enforce mode-specific behavior.
 type runtimeStoreRecord struct {
 	store *storepkg.Store
 	mode  string
