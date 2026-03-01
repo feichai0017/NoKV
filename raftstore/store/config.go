@@ -43,7 +43,6 @@ type Config struct {
 	RegionHooks RegionHooks
 	Manifest    *manifest.Manager
 	// Scheduler is the single control-plane extension point for store runtime.
-	// - Standalone/debug mode: use scheduler.Coordinator.
 	// - Cluster mode: use a PD-backed sink (pd/adapter.RegionSink).
 	// If the sink also implements scheduler.Planner, heartbeat loop will consume
 	// its operations and enqueue them to operationScheduler.

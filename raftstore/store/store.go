@@ -86,8 +86,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 	combinedHooks := mergeRegionHooks(hookChain...)
 	// Scheduler is the single injected control-plane object. When it also
 	// implements Planner, store will consume planner output from the same source.
-	// Otherwise planner is disabled (NoopPlanner).
-	planner := scheduler.Planner(scheduler.NoopPlanner{})
+	// Otherwise planner is disabled.
+	var planner scheduler.Planner
 	if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
 		planner = inferred
 	}

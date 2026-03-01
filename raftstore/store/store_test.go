@@ -25,13 +25,103 @@ type noopTransport struct{}
 
 func (noopTransport) Send(myraft.Message) {}
 
-type plannerCoordinator struct {
-	*scheduler.Coordinator
-	op scheduler.Operation
+type testSchedulerSink struct {
+	mu       sync.RWMutex
+	regions  map[uint64]scheduler.RegionInfo
+	stores   map[uint64]scheduler.StoreStats
+	op       scheduler.Operation
+	withPlan bool
 }
 
-func (p *plannerCoordinator) Plan(s scheduler.Snapshot) []scheduler.Operation {
-	return []scheduler.Operation{p.op}
+func newTestSchedulerSink() *testSchedulerSink {
+	return &testSchedulerSink{
+		regions: make(map[uint64]scheduler.RegionInfo),
+		stores:  make(map[uint64]scheduler.StoreStats),
+	}
+}
+
+func (s *testSchedulerSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
+	if s == nil || meta.ID == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.regions[meta.ID] = scheduler.RegionInfo{
+		Meta:          manifest.CloneRegionMeta(meta),
+		LastHeartbeat: time.Now(),
+	}
+	s.mu.Unlock()
+}
+
+func (s *testSchedulerSink) RemoveRegion(id uint64) {
+	if s == nil || id == 0 {
+		return
+	}
+	s.mu.Lock()
+	delete(s.regions, id)
+	s.mu.Unlock()
+}
+
+func (s *testSchedulerSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
+	if s == nil || stats.StoreID == 0 {
+		return
+	}
+	stats.UpdatedAt = time.Now()
+	s.mu.Lock()
+	s.stores[stats.StoreID] = stats
+	s.mu.Unlock()
+}
+
+func (s *testSchedulerSink) RegionSnapshot() []scheduler.RegionInfo {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	out := make([]scheduler.RegionInfo, 0, len(s.regions))
+	for _, info := range s.regions {
+		out = append(out, scheduler.RegionInfo{
+			Meta:          manifest.CloneRegionMeta(info.Meta),
+			LastHeartbeat: info.LastHeartbeat,
+		})
+	}
+	s.mu.RUnlock()
+	return out
+}
+
+func (s *testSchedulerSink) StoreSnapshot() []scheduler.StoreStats {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	out := make([]scheduler.StoreStats, 0, len(s.stores))
+	for _, st := range s.stores {
+		out = append(out, st)
+	}
+	s.mu.RUnlock()
+	return out
+}
+
+func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
+	if s == nil || regionID == 0 {
+		return time.Time{}, false
+	}
+	s.mu.RLock()
+	info, ok := s.regions[regionID]
+	s.mu.RUnlock()
+	if !ok {
+		return time.Time{}, false
+	}
+	return info.LastHeartbeat, true
+}
+
+func (s *testSchedulerSink) Plan(snap scheduler.Snapshot) []scheduler.Operation {
+	_ = snap
+	if s == nil || !s.withPlan {
+		return nil
+	}
+	if s.op.Type == scheduler.OperationNone || s.op.Region == 0 {
+		return nil
+	}
+	return []scheduler.Operation{s.op}
 }
 
 func testPeerBuilder(storeID uint64) store.PeerBuilder {
@@ -427,8 +517,8 @@ func TestStoreSplitRegionStartsChildPeer(t *testing.T) {
 }
 
 func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
-	coord := scheduler.NewCoordinator()
-	rs := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1})
+	sink := newTestSchedulerSink()
+	rs := store.NewStoreWithConfig(store.Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
 
 	cfg := &raftstore.Config{
@@ -452,18 +542,18 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
 
-	snapshot := coord.RegionSnapshot()
+	snapshot := sink.RegionSnapshot()
 	require.Len(t, snapshot, 1)
 	require.Equal(t, uint64(42), snapshot[0].Meta.ID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
 	require.NoError(t, rs.UpdateRegionState(42, manifest.RegionStateRemoving))
-	snapshot = coord.RegionSnapshot()
+	snapshot = sink.RegionSnapshot()
 	require.Len(t, snapshot, 1)
 	require.Equal(t, manifest.RegionStateRemoving, snapshot[0].Meta.State)
 
 	require.NoError(t, rs.RemoveRegion(42))
-	snapshot = coord.RegionSnapshot()
+	snapshot = sink.RegionSnapshot()
 	require.Empty(t, snapshot)
 
 	storeSnap := rs.SchedulerSnapshot()
@@ -471,7 +561,7 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 }
 
 func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
-	coord := scheduler.NewCoordinator()
+	coord := newTestSchedulerSink()
 	rs := store.NewStoreWithConfig(store.Config{
 		Scheduler:         coord,
 		StoreID:           9,
@@ -521,9 +611,8 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 }
 
 func TestStorePlannerQueuesOperations(t *testing.T) {
-	plannerSink := &plannerCoordinator{
-		Coordinator: scheduler.NewCoordinator(),
-	}
+	plannerSink := newTestSchedulerSink()
+	plannerSink.withPlan = true
 	var mu sync.Mutex
 	var applied []time.Time
 	plannerSink.op = scheduler.Operation{
@@ -590,7 +679,7 @@ func TestStorePlannerQueuesOperations(t *testing.T) {
 
 func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	db := openStoreDB(t)
-	coord := scheduler.NewCoordinator()
+	coord := newTestSchedulerSink()
 	applier := kv.NewApplier(db)
 	st := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })

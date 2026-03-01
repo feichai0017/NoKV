@@ -103,8 +103,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
   `GetRegionByKey` and caches route entries for retries.
 - `raft_config` regions are treated as bootstrap/deployment metadata and are not
   the runtime source of truth once PD is available.
-- In cluster mode, PD is the control-plane source of truth. The in-process
-  scheduler/coordinator path is retained for standalone/debug visibility only.
+- PD is the only control-plane source of truth for runtime scheduling/routing.
 
 ### 8.2 Split / Merge
 - **Split**: leaders call `Store.ProposeSplit`, which writes a split
@@ -147,6 +146,6 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 - **Adding peers**: update the manifest with new Region metadata, then call `Store.StartPeer` on the target node.
 - **Follower or lease reads**: extend `ReadCommand` to include ReadIndex or leader lease checks; current design only serves leader reads.
-- **Scheduler integration**: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.
+- **Scheduler integration**: use PD as the cluster coordinator and operation source.
 
 This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.
