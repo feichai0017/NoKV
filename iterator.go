@@ -20,6 +20,10 @@ type DBIterator struct {
 	lowerBound []byte
 	upperBound []byte
 	isAsc      bool
+	// seekOutOfRange marks Seek calls that intentionally invalidated the
+	// iterator due to bounds checks. While set, Next must not advance from a
+	// stale cursor position and resurrect validity.
+	seekOutOfRange bool
 
 	entry    kv.Entry
 	item     Item
@@ -110,6 +114,10 @@ func (iter *DBIterator) Next() {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	if iter.seekOutOfRange {
+		iter.valid = false
+		return
+	}
 	iter.iitr.Next()
 	iter.populate()
 }
@@ -127,6 +135,7 @@ func (iter *DBIterator) Rewind() {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.seekOutOfRange = false
 	iter.iitr.Rewind()
 	iter.populate()
 }
@@ -136,11 +145,13 @@ func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.seekOutOfRange = false
 
 	// Clamping
 	if iter.isAsc {
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
 			iter.valid = false
+			iter.seekOutOfRange = true
 			return
 		}
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
@@ -149,6 +160,7 @@ func (iter *DBIterator) Seek(key []byte) {
 	} else {
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
 			iter.valid = false
+			iter.seekOutOfRange = true
 			return
 		}
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
@@ -183,6 +195,7 @@ func (iter *DBIterator) Close() error {
 		iter.iitr = nil
 	}
 	iter.valid = false
+	iter.seekOutOfRange = false
 	iter.valueBuf = iter.valueBuf[:0]
 	if iter.pool != nil && iter.ctx != nil {
 		iter.pool.put(iter.ctx)
