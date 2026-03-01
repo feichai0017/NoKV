@@ -90,7 +90,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 - Region-aware routing with NotLeader/EpochNotMatch retry.
 - `Mutate` splits mutations by region and performs two-phase commit (primary first). `Put` / `Delete` are convenience wrappers.
 - `Scan` transparently walks region boundaries.
-- End-to-end coverage lives in `raftstore/server/server_client_integration_test.go`, which launches real servers, uses the client to write and delete keys, and verifies the results.
+- End-to-end coverage lives in `raftstore/server/server_test.go`, which launches real servers, uses the client to write and delete keys, and verifies the results.
 
 ---
 
@@ -103,8 +103,8 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
   `GetRegionByKey` and caches route entries for retries.
 - `raft_config` regions are treated as bootstrap/deployment metadata and are not
   the runtime source of truth once PD is available.
-- The built-in scheduler currently emits leader-transfer operations only
-  (see `raftstore/scheduler`), acting as a minimal control plane.
+- In cluster mode, PD is the control-plane source of truth. The in-process
+  scheduler/coordinator path is retained for standalone/debug visibility only.
 
 ### 8.2 Split / Merge
 - **Split**: leaders call `Store.ProposeSplit`, which writes a split
@@ -139,7 +139,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 | Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |
 | Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
 | Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
-| Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions. |
+| Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and, when the sink implements planner capability, drains scheduling actions. |
 
 ---
 
@@ -147,6 +147,6 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 - **Adding peers**: update the manifest with new Region metadata, then call `Store.StartPeer` on the target node.
 - **Follower or lease reads**: extend `ReadCommand` to include ReadIndex or leader lease checks; current design only serves leader reads.
-- **Scheduler integration**: pair `RegionSnapshot()` and `RegionMetrics()` with an external scheduler (PD-like) for dynamic balancing.
+- **Scheduler integration**: use PD as the cluster coordinator; keep in-process scheduler snapshots for local debug/test only.
 
 This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.

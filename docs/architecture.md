@@ -40,6 +40,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 
 - **Embedded mode** uses `NoKV.Open` directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.
 - **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve TinyKv RPCs.
+- **Control plane split**: `raft_config` provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
 ---
@@ -120,7 +121,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 2. CLI (`nokv serve`) or application enumerates `Manifest.RegionSnapshot()` and calls `Store.StartPeer` for every Region containing the local store:
    - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, WAL/Manifest handles, Region metadata.
    - Router registration, regionManager bookkeeping, optional `Peer.Bootstrap` with initial peer list, leader campaign.
-3. Peers from other stores can be configured through `transport.SetPeer(storeID, addr)`, allowing dynamic updates from a scheduler.
+3. Peers from other stores can be configured through `transport.SetPeer(storeID, addr)`. In cluster mode, runtime routing/control-plane decisions come from PD.
 
 ### 3.2 Command Paths
 - **ReadCommand** (`KvGet`/`KvScan`): validate Region & leader, flush pending Ready, then run `commandApplier` (i.e. `kv.Apply` in read mode) to fetch data directly from the DB. This yields leader-strong reads without a Raft round trip.
@@ -163,7 +164,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
 2. `Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)` prewrites and commits across the relevant regions.
 3. `Get/Scan` retries automatically if the leader changes.
-4. See `raftstore/server/server_client_integration_test.go` for a full end-to-end example using real `raftstore.Server` instances.
+4. See `raftstore/server/server_test.go` for a full end-to-end example using real `raftstore.Server` instances.
 
 ---
 
@@ -180,6 +181,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 - `StatsSnapshot` publishes flush/compaction/WAL/VLog/txn/region metrics. `nokv stats` and the expvar endpoint expose the same data.
 - `nokv regions` inspects Manifest-backed Region metadata.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
+- `nokv scheduler` is standalone/debug-only; cluster mode should use PD state APIs/metrics.
 - Scripts:
   - `scripts/run_local_cluster.sh` – launch a multi-node TinyKv cluster locally.
   - `scripts/recovery_scenarios.sh` – crash-recovery test harness.

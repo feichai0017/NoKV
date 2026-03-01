@@ -113,6 +113,12 @@ This keeps distributed control-plane behavior PD-centric and avoids fallback to
 a local scheduler path in cluster deployments. Startup logs explicitly print the
 selected mode.
 
+Related CLI behavior:
+
+- `nokv scheduler` is standalone/debug-only.
+- In cluster mode (PD enabled), inspect control-plane state through PD APIs and
+  PD-side metrics instead of local scheduler snapshots.
+
 ---
 
 ## 7. Comparison: TinyKV / TiKV

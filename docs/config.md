@@ -135,7 +135,8 @@ Notes:
 - `pd.work_dir` / `pd.docker_work_dir` are optional PD persistence directories
   used by bootstrap tooling and `nokv pd --config ...` when `--workdir` is not
   set explicitly.
-- `leader_store_id` is optional; clients use it for initial routing hints.
+- `leader_store_id` is optional bootstrap metadata. Runtime routing in cluster
+  mode is resolved through PD (`GetRegionByKey`), not static leader hints.
 
 Programmatic loading:
 
