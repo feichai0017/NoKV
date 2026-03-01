@@ -67,7 +67,7 @@ Commands:
   manifest  Inspect manifest state, levels, and value log metadata
   vlog      List value log segments and active head
   regions   Show region metadata catalog from manifest/store
-  scheduler Display scheduler heartbeat snapshot (in-process only)
+  scheduler Display scheduler heartbeat snapshot (standalone/in-process only)
   serve     Start TinyKv gRPC service backed by a local raftstore
   pd        Start PD-lite gRPC service (control plane)
 
@@ -540,6 +540,11 @@ func runSchedulerCmd(w io.Writer, args []string) error {
 	stores := runtimeStoreSnapshot()
 	if len(stores) == 0 {
 		return fmt.Errorf("no registered store; run inside a process hosting raftstore")
+	}
+	for _, st := range stores {
+		if runtimeStoreMode(st) == runtimeModeClusterPD {
+			return fmt.Errorf("scheduler snapshot is standalone-only; use PD state APIs in cluster mode")
+		}
 	}
 	snap := stores[0].SchedulerSnapshot()
 	if *asJSON {
