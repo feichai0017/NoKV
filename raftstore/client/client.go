@@ -32,12 +32,6 @@ type StoreEndpoint struct {
 	Addr    string
 }
 
-// RegionConfig seeds the client with Region metadata and the known leader.
-type RegionConfig struct {
-	Meta          *pb.RegionMeta
-	LeaderStoreID uint64
-}
-
 // RegionResolver resolves Region metadata for an arbitrary key. A PD client
 // implementation should satisfy this interface.
 type RegionResolver interface {
@@ -48,7 +42,6 @@ type RegionResolver interface {
 // Config configures the TinyKv distributed client.
 type Config struct {
 	Stores             []StoreEndpoint
-	Regions            []RegionConfig
 	RegionResolver     RegionResolver
 	RouteLookupTimeout time.Duration
 	DialTimeout        time.Duration
@@ -87,8 +80,8 @@ func New(cfg Config) (*Client, error) {
 	if len(cfg.Stores) == 0 {
 		return nil, errors.New("client: at least one store endpoint required")
 	}
-	if len(cfg.Regions) == 0 && cfg.RegionResolver == nil {
-		return nil, errors.New("client: at least one region or region resolver required")
+	if cfg.RegionResolver == nil {
+		return nil, errors.New("client: region resolver required")
 	}
 	dialTimeout := cfg.DialTimeout
 	if dialTimeout <= 0 {
@@ -119,30 +112,13 @@ func New(cfg Config) (*Client, error) {
 			client: pb.NewTinyKvClient(conn),
 		}
 	}
-	regions := make(map[uint64]*regionState, len(cfg.Regions))
-	for _, region := range cfg.Regions {
-		if region.Meta == nil {
-			return nil, errors.New("client: region meta missing")
-		}
-		id := region.Meta.GetId()
-		if id == 0 {
-			return nil, errors.New("client: region id missing")
-		}
-		if len(region.Meta.GetPeers()) == 0 {
-			return nil, fmt.Errorf("client: region %d missing peers", id)
-		}
-		regions[id] = &regionState{
-			meta:   cloneRegionMeta(region.Meta),
-			leader: region.LeaderStoreID,
-		}
-	}
 	maxRetries := cfg.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 5
 	}
 	return &Client{
 		stores:             stores,
-		regions:            regions,
+		regions:            make(map[uint64]*regionState),
 		regionResolver:     cfg.RegionResolver,
 		routeLookupTimeout: routeLookupTimeout,
 		maxRetries:         maxRetries,
@@ -750,9 +726,6 @@ func (c *Client) regionSnapshot(regionID uint64) (regionSnapshot, bool) {
 func (c *Client) regionForKey(key []byte) (regionSnapshot, error) {
 	if region, ok := c.regionForKeyFromCache(key); ok {
 		return region, nil
-	}
-	if c.regionResolver == nil {
-		return regionSnapshot{}, fmt.Errorf("client: region not found for key %q", key)
 	}
 	return c.regionForKeyFromResolver(key)
 }
