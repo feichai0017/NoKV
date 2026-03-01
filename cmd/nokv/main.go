@@ -41,8 +41,6 @@ func main() {
 		err = runVlogCmd(os.Stdout, args)
 	case "regions":
 		err = runRegionsCmd(os.Stdout, args)
-	case "scheduler":
-		err = runSchedulerCmd(os.Stdout, args)
 	case "serve":
 		err = runServeCmd(os.Stdout, args)
 	case "pd":
@@ -67,7 +65,6 @@ func printUsage(w io.Writer) {
 	  manifest  Inspect manifest state, levels, and value log metadata
 	  vlog      List value log segments and active head
 	  regions   Show region metadata catalog from manifest/store
-	  scheduler Deprecated (local scheduler removed; use PD APIs)
 	  serve     Start TinyKv gRPC service backed by a local raftstore
 	  pd        Start PD-lite gRPC service (control plane)
 
@@ -528,17 +525,6 @@ func runRegionsCmd(w io.Writer, args []string) error {
 			meta.StartKey, meta.EndKey, formatPeers(meta.Peers))
 	}
 	return nil
-}
-
-func runSchedulerCmd(w io.Writer, args []string) error {
-	fs := flag.NewFlagSet("scheduler", flag.ContinueOnError)
-	_ = fs.Bool("json", false, "output JSON instead of plain text")
-	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	_ = w
-	return fmt.Errorf("scheduler command removed: local scheduler implementation has been removed; use PD APIs")
 }
 
 func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot, error) {

@@ -319,15 +319,6 @@ func TestFormatHelpers(t *testing.T) {
 	require.Equal(t, uint64(12), totalValue(files))
 }
 
-func TestRunSchedulerCmdNoStore(t *testing.T) {
-	withStoreRegistry(t, func() {
-		var buf bytes.Buffer
-		err := runSchedulerCmd(&buf, []string{"-json"})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "scheduler command removed")
-	})
-}
-
 func TestPrintUsage(t *testing.T) {
 	var buf bytes.Buffer
 	printUsage(&buf)
@@ -353,31 +344,6 @@ func TestEnsureManifestExists(t *testing.T) {
 	if err := ensureManifestExists(dir); err != nil {
 		t.Fatalf("expected manifest to exist: %v", err)
 	}
-}
-
-func TestRunSchedulerCmdWithStore(t *testing.T) {
-	withStoreRegistry(t, func() {
-		registerRuntimeStore(&storepkg.Store{})
-		var buf bytes.Buffer
-		err := runSchedulerCmd(&buf, nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "scheduler command removed")
-
-		buf.Reset()
-		err = runSchedulerCmd(&buf, []string{"-json"})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "scheduler command removed")
-	})
-}
-
-func TestRunSchedulerCmdClusterModeRejected(t *testing.T) {
-	withStoreRegistry(t, func() {
-		registerRuntimeStoreWithMode(&storepkg.Store{}, runtimeModeClusterPD)
-		var buf bytes.Buffer
-		err := runSchedulerCmd(&buf, nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "scheduler command removed")
-	})
 }
 
 func TestFirstRegionMetricsNone(t *testing.T) {
@@ -467,19 +433,6 @@ func TestMainRegionsCommand(t *testing.T) {
 		main()
 	})
 	require.Equal(t, 0, code)
-}
-
-func TestMainSchedulerCommand(t *testing.T) {
-	withStoreRegistry(t, func() {
-		registerRuntimeStore(&storepkg.Store{})
-		code := captureExitCode(t, func() {
-			oldArgs := os.Args
-			os.Args = []string{"nokv", "scheduler", "-json"}
-			defer func() { os.Args = oldArgs }()
-			main()
-		})
-		require.Equal(t, 1, code)
-	})
 }
 
 func TestMainServeCommand(t *testing.T) {
@@ -812,15 +765,6 @@ func TestRunManifestCmdMissingManifest(t *testing.T) {
 	var buf bytes.Buffer
 	err := runManifestCmd(&buf, []string{"-workdir", t.TempDir()})
 	require.Error(t, err)
-}
-
-func TestRunSchedulerCmdSnapshot(t *testing.T) {
-	withStoreRegistry(t, func() {
-		var buf bytes.Buffer
-		err := runSchedulerCmd(&buf, nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "scheduler command removed")
-	})
 }
 
 func TestFirstRegionMetricsFound(t *testing.T) {

@@ -16,20 +16,15 @@ const defaultRPCTimeout = 2 * time.Second
 
 // RegionSinkConfig defines how a PD-backed scheduler sink behaves.
 type RegionSinkConfig struct {
-	PD pdclient.Client
-	// Mirror is optional and used for local/debug snapshots only. Runtime
-	// scheduling decisions still come from PD operations.
-	Mirror  scheduler.RegionSink
+	PD      pdclient.Client
 	Timeout time.Duration
 	OnError func(op string, err error)
 }
 
-// RegionSink forwards scheduler heartbeats to PD and optionally mirrors them to
-// another local sink for debugging snapshots.
+// RegionSink forwards scheduler heartbeats to PD.
 type RegionSink struct {
 	mu      sync.Mutex
 	pd      pdclient.Client
-	mirror  scheduler.RegionSink
 	timeout time.Duration
 	onError func(op string, err error)
 	pending []scheduler.Operation
@@ -49,19 +44,15 @@ func NewRegionSink(cfg RegionSinkConfig) *RegionSink {
 	}
 	return &RegionSink{
 		pd:      cfg.PD,
-		mirror:  cfg.Mirror,
 		timeout: timeout,
 		onError: onErr,
 	}
 }
 
-// SubmitRegionHeartbeat publishes region metadata to PD and mirror sink.
+// SubmitRegionHeartbeat publishes region metadata to PD.
 func (s *RegionSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 	if s == nil || meta.ID == 0 {
 		return
-	}
-	if s.mirror != nil {
-		s.mirror.SubmitRegionHeartbeat(meta)
 	}
 	if s.pd == nil {
 		return
@@ -74,13 +65,10 @@ func (s *RegionSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 	}
 }
 
-// RemoveRegion removes region metadata from PD and local mirror state.
+// RemoveRegion removes region metadata from PD.
 func (s *RegionSink) RemoveRegion(regionID uint64) {
 	if s == nil || regionID == 0 {
 		return
-	}
-	if s.mirror != nil {
-		s.mirror.RemoveRegion(regionID)
 	}
 	if s.pd == nil {
 		return
@@ -93,13 +81,10 @@ func (s *RegionSink) RemoveRegion(regionID uint64) {
 	}
 }
 
-// SubmitStoreHeartbeat publishes store stats to PD and mirror sink.
+// SubmitStoreHeartbeat publishes store stats to PD.
 func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	if s == nil || stats.StoreID == 0 {
 		return
-	}
-	if s.mirror != nil {
-		s.mirror.SubmitStoreHeartbeat(stats)
 	}
 	if s.pd == nil {
 		return
@@ -174,30 +159,6 @@ func fromPBOperation(op *pb.SchedulerOperation) (scheduler.Operation, bool) {
 	default:
 		return scheduler.Operation{}, false
 	}
-}
-
-// RegionSnapshot exposes mirror snapshots when mirror implements SnapshotProvider.
-func (s *RegionSink) RegionSnapshot() []scheduler.RegionInfo {
-	if s == nil {
-		return nil
-	}
-	provider, ok := s.mirror.(scheduler.SnapshotProvider)
-	if !ok {
-		return nil
-	}
-	return provider.RegionSnapshot()
-}
-
-// StoreSnapshot exposes mirror snapshots when mirror implements SnapshotProvider.
-func (s *RegionSink) StoreSnapshot() []scheduler.StoreStats {
-	if s == nil {
-		return nil
-	}
-	provider, ok := s.mirror.(scheduler.SnapshotProvider)
-	if !ok {
-		return nil
-	}
-	return provider.StoreSnapshot()
 }
 
 // Close closes the PD client if present.
