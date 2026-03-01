@@ -2,12 +2,15 @@ package server_test
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
@@ -27,6 +30,26 @@ type testNode struct {
 	srv     *raftstore.Server
 	addr    string
 }
+
+type staticRegionResolver struct {
+	regions []*pb.RegionMeta
+}
+
+func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("resolver: nil request")
+	}
+	for _, region := range r.regions {
+		if regionContainsKey(region, req.GetKey()) {
+			return &pb.GetRegionByKeyResponse{
+				Region: cloneRegionMetaPB(region),
+			}, nil
+		}
+	}
+	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+}
+
+func (r *staticRegionResolver) Close() error { return nil }
 
 func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 	nodes := []testNode{
@@ -96,18 +119,16 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 	}
 
 	stores := make([]client.StoreEndpoint, 0, len(nodes))
-	regions := make([]client.RegionConfig, 0, len(nodes))
+	regions := make([]*pb.RegionMeta, 0, len(nodes))
 	for _, n := range nodes {
 		stores = append(stores, client.StoreEndpoint{StoreID: n.storeID, Addr: n.addr})
-		regions = append(regions, client.RegionConfig{
-			Meta:          regionMetaToPB(n.region),
-			LeaderStoreID: n.storeID,
-		})
+		regions = append(regions, regionMetaToPB(n.region))
 	}
+	sort.Slice(regions, func(i, j int) bool { return regions[i].GetId() < regions[j].GetId() })
 
 	cli, err := client.New(client.Config{
-		Stores:  stores,
-		Regions: regions,
+		Stores:         stores,
+		RegionResolver: &staticRegionResolver{regions: regions},
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -186,4 +207,46 @@ func regionMetaToPB(meta manifest.RegionMeta) *pb.RegionMeta {
 		EpochConfVersion: meta.Epoch.ConfVersion,
 		Peers:            peers,
 	}
+}
+
+func cloneRegionMetaPB(meta *pb.RegionMeta) *pb.RegionMeta {
+	if meta == nil {
+		return nil
+	}
+	return proto.Clone(meta).(*pb.RegionMeta)
+}
+
+func regionContainsKey(meta *pb.RegionMeta, key []byte) bool {
+	if meta == nil {
+		return false
+	}
+	start := meta.GetStartKey()
+	end := meta.GetEndKey()
+	if len(start) > 0 && bytesCompare(start, key) > 0 {
+		return false
+	}
+	return len(end) == 0 || bytesCompare(end, key) > 0
+}
+
+func bytesCompare(a, b []byte) int {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] == b[i] {
+			continue
+		}
+		if a[i] < b[i] {
+			return -1
+		}
+		return 1
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }
