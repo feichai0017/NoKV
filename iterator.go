@@ -203,25 +203,29 @@ func (iter *DBIterator) populate() {
 			iter.iitr.Next()
 			continue
 		}
-		if iter.materialize(item.Entry()) {
-			// Skip entries below lower bound in forward mode, or invalidate in reverse
-			if len(iter.lowerBound) > 0 && bytes.Compare(iter.entry.Key, iter.lowerBound) < 0 {
-				if !iter.isAsc {
-					iter.valid = false
-					return
-				}
-				iter.iitr.Next()
-				continue
+		entry := item.Entry()
+		_, userKey, _ := kv.SplitInternalKey(entry.Key)
+
+		// Skip entries below lower bound in forward mode, or invalidate in reverse
+		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+			if !iter.isAsc {
+				iter.valid = false
+				return
 			}
-			// Skip entries above upper bound in reverse mode, or invalidate in forward
-			if len(iter.upperBound) > 0 && bytes.Compare(iter.entry.Key, iter.upperBound) >= 0 {
-				if iter.isAsc {
-					iter.valid = false
-					return
-				}
-				iter.iitr.Next()
-				continue
+			iter.iitr.Next()
+			continue
+		}
+		// Skip entries above upper bound in reverse mode, or invalidate in forward
+		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+			if iter.isAsc {
+				iter.valid = false
+				return
 			}
+			iter.iitr.Next()
+			continue
+		}
+
+		if iter.materialize(entry) {
 			iter.valid = true
 			return
 		}
