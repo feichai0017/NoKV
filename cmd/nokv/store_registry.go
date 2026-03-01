@@ -80,21 +80,6 @@ func runtimeStoreSnapshot() []*storepkg.Store {
 	return out
 }
 
-// runtimeStoreMode returns the registered runtime mode for a store.
-func runtimeStoreMode(st *storepkg.Store) string {
-	if st == nil {
-		return runtimeModeDevStandalone
-	}
-	runtimeStoresMu.RLock()
-	defer runtimeStoresMu.RUnlock()
-	for i := range runtimeStores {
-		if runtimeStores[i].store == st {
-			return runtimeStores[i].mode
-		}
-	}
-	return runtimeModeDevStandalone
-}
-
 // normalizeRuntimeMode constrains mode values to known constants.
 func normalizeRuntimeMode(mode string) string {
 	switch mode {
