@@ -46,7 +46,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 }
 
 type levelManager struct {
-	maxFID           uint64
+	maxFID           atomic.Uint64
 	opt              *Options
 	cache            *cache
 	manifestMgr      *manifest.Manager
@@ -165,7 +165,7 @@ func (lm *levelManager) build() error {
 		lm.levels[i].Sort()
 	}
 	// get the maximum fid value
-	atomic.AddUint64(&lm.maxFID, maxFID)
+	lm.maxFID.Store(maxFID)
 
 	for _, meta := range missing {
 		metaCopy := meta
@@ -224,12 +224,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	pointerEdit := manifest.Edit{
 		Type:      manifest.EditLogPointer,
 		LogSeg:    immutable.segmentID,
-		LogOffset: uint64(atomic.LoadInt64(&immutable.walSize)),
+		LogOffset: uint64(immutable.walSize.Load()),
 	}
 	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
 		return err
 	}
-	lm.setLogPointer(immutable.segmentID, uint64(atomic.LoadInt64(&immutable.walSize)))
+	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
 	lm.levels[0].add(table)
 	if lm.canRemoveWalSegment(uint32(fid)) {
 		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
