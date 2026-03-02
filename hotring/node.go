@@ -9,13 +9,13 @@ type Node struct {
 	key   string
 	tag   uint32
 	next  atomic.Pointer[Node]
-	count int32
+	count atomic.Int32
 
 	window       []uint16
 	windowTotal  int32
 	windowPos    int
 	windowSlotID int64
-	windowLock   uint32
+	windowLock   atomic.Uint32
 }
 
 const windowSlotMax = ^uint16(0)
@@ -56,7 +56,7 @@ func (n *Node) Equal(c *Node) bool {
 }
 
 func (n *Node) GetCounter() int32 {
-	return atomic.LoadInt32(&n.count)
+	return n.count.Load()
 }
 
 func (n *Node) ResetCounter() {
@@ -72,17 +72,17 @@ func (n *Node) CompareAndSwapNext(old, next *Node) bool {
 }
 
 func (n *Node) Increment() int32 {
-	return atomic.AddInt32(&n.count, 1)
+	return n.count.Add(1)
 }
 
 func (n *Node) lockWindow() {
-	for !atomic.CompareAndSwapUint32(&n.windowLock, 0, 1) {
+	for !n.windowLock.CompareAndSwap(0, 1) {
 		runtime.Gosched()
 	}
 }
 
 func (n *Node) unlockWindow() {
-	atomic.StoreUint32(&n.windowLock, 0)
+	n.windowLock.Store(0)
 }
 
 func (n *Node) resetWindowLocked(slots int, slotID int64) {
@@ -169,7 +169,7 @@ func (n *Node) windowTotalAt(slots int, slotID int64) int32 {
 }
 
 func (n *Node) ResetCounterWithWindow(slots int, slotID int64) {
-	atomic.StoreInt32(&n.count, 0)
+	n.count.Store(0)
 	n.lockWindow()
 	n.resetWindowLocked(slots, slotID)
 	n.unlockWindow()
@@ -180,12 +180,12 @@ func (n *Node) decay(shift uint32) {
 		return
 	}
 	for {
-		cur := atomic.LoadInt32(&n.count)
+		cur := n.count.Load()
 		if cur == 0 {
 			return
 		}
 		decayed := int32(int64(cur) >> shift)
-		if atomic.CompareAndSwapInt32(&n.count, cur, decayed) {
+		if n.count.CompareAndSwap(cur, decayed) {
 			return
 		}
 	}

@@ -16,11 +16,11 @@ const defaultWatermarkWindow = 1 << 16
 // An index may also become "done" by calling SetDoneUntil at a time such that it is not
 // inter-mingled with Begin/Done calls.
 //
-// Since doneUntil and lastIndex addresses are passed to sync/atomic packages, we ensure that they
-// are 64-bit aligned by putting them at the beginning of the structure.
+// doneUntil and lastIndex are represented with typed atomics for monotonic,
+// lock-free progress tracking.
 type WaterMark struct {
-	doneUntil uint64
-	lastIndex uint64
+	doneUntil atomic.Uint64
+	lastIndex atomic.Uint64
 	Name      string
 
 	mu      sync.Mutex
@@ -81,13 +81,13 @@ func (w *WaterMark) DoneMany(indices []uint64) {
 // DoneUntil returns the maximum index that has the property that all indices
 // less than or equal to it are done.
 func (w *WaterMark) DoneUntil() uint64 {
-	return atomic.LoadUint64(&w.doneUntil)
+	return w.doneUntil.Load()
 }
 
 // SetDoneUntil sets the maximum index that has the property that all indices
 // less than or equal to it are done.
 func (w *WaterMark) SetDoneUntil(val uint64) {
-	prev := atomic.SwapUint64(&w.doneUntil, val)
+	prev := w.doneUntil.Swap(val)
 	w.mu.Lock()
 	w.notifyWaitersLocked(prev, val)
 	w.mu.Unlock()
@@ -95,7 +95,7 @@ func (w *WaterMark) SetDoneUntil(val uint64) {
 
 // LastIndex returns the last index for which Begin has been called.
 func (w *WaterMark) LastIndex() uint64 {
-	return atomic.LoadUint64(&w.lastIndex)
+	return w.lastIndex.Load()
 }
 
 // SetLastIndex advances the last index without changing the watermark counts.
@@ -143,11 +143,11 @@ func (w *WaterMark) addIndex(index uint64, delta int32) {
 
 func (w *WaterMark) setLastIndex(index uint64) {
 	for {
-		cur := atomic.LoadUint64(&w.lastIndex)
+		cur := w.lastIndex.Load()
 		if index <= cur {
 			return
 		}
-		if atomic.CompareAndSwapUint64(&w.lastIndex, cur, index) {
+		if w.lastIndex.CompareAndSwap(cur, index) {
 			return
 		}
 	}
@@ -170,7 +170,7 @@ func (w *WaterMark) tryAdvance() {
 		if win.slots[offset].Load() > 0 {
 			return
 		}
-		if atomic.CompareAndSwapUint64(&w.doneUntil, doneUntil, next) {
+		if w.doneUntil.CompareAndSwap(doneUntil, next) {
 			w.notifyWaiters(doneUntil, next)
 			continue
 		}
