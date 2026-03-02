@@ -23,7 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	_ "unsafe"
+	"unsafe"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/pkg/errors"
@@ -32,7 +32,38 @@ import (
 const (
 	maxHeight      = 20
 	heightIncrease = math.MaxUint32 / 3
+
+	offsetSize = int(unsafe.Sizeof(uint32(0)))
+
+	// nodeAlign ensures that the node.value field is 64-bit aligned.
+	nodeAlign = int(unsafe.Sizeof(uint64(0))) - 1
+
+	MaxNodeSize = int(unsafe.Sizeof(node{}))
 )
+
+// arenaPutNode allocates a node in the arena for the skiplist.
+func arenaPutNode(s *Arena, height int) uint32 {
+	unusedSize := (maxHeight - height) * offsetSize
+	l := uint32(MaxNodeSize - unusedSize + nodeAlign)
+	n := s.Allocate(l)
+	return (n + uint32(nodeAlign)) & ^uint32(nodeAlign)
+}
+
+// slGetNode returns a pointer to a skiplist node at the given offset.
+func arenaGetNode(s *Arena, offset uint32) *node {
+	if offset == 0 {
+		return nil
+	}
+	return (*node)(s.addr(offset))
+}
+
+// arenaGetNodeOffset returns the arena offset of a skiplist node.
+func arenaGetNodeOffset(s *Arena, nd *node) uint32 {
+	if nd == nil {
+		return 0
+	}
+	return nd.self
+}
 
 type node struct {
 	// Multiple parts of the value are encoded as a single uint64 so that it
@@ -95,11 +126,11 @@ func (s *Skiplist) DecrRef() {
 
 func newNode(arena *Arena, key []byte, v kv.ValueStruct, height int) *node {
 	// The base level is already allocated in the node struct.
-	nodeOffset := arena.putNode(height)
-	keyOffset := arena.putKey(key)
-	val := encodeValue(arena.putVal(v), v.EncodedSize())
+	nodeOffset := arenaPutNode(arena, height)
+	keyOffset := arenaPutKey(arena, key)
+	val := encodeValue(arenaPutVal(arena, v), v.EncodedSize())
 
-	node := arena.getNode(nodeOffset)
+	node := arenaGetNode(arena, nodeOffset)
 	node.self = nodeOffset
 	node.keyOffset = keyOffset
 	node.keySize = uint16(len(key))
@@ -120,9 +151,9 @@ func decodeValue(value uint64) (valOffset uint32, valSize uint32) {
 
 // NewSkiplist makes a new empty skiplist, with a given arena size
 func NewSkiplist(arenaSize int64) *Skiplist {
-	arena := newArena(arenaSize)
+	arena := NewArena(arenaSize)
 	head := newNode(arena, nil, kv.ValueStruct{}, maxHeight)
-	ho := arena.getNodeOffset(head)
+	ho := arenaGetNodeOffset(arena, head)
 	list := &Skiplist{
 		height:     1,
 		headOffset: ho,
@@ -138,7 +169,7 @@ func (n *node) getValueOffset() (uint32, uint32) {
 }
 
 func (n *node) key(arena *Arena) []byte {
-	return arena.getKey(n.keyOffset, n.keySize)
+	return arenaGetKey(arena, n.keyOffset, n.keySize)
 }
 
 func (n *node) setValue(arena *Arena, vo uint64) {
@@ -156,7 +187,7 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 // getVs return kv.ValueStruct stored in node
 func (n *node) getVs(arena *Arena) kv.ValueStruct {
 	valOffset, valSize := n.getValueOffset()
-	return arena.getVal(valOffset, valSize)
+	return arenaGetVal(arena, valOffset, valSize)
 }
 
 // Returns true if key is strictly > n.key.
@@ -175,11 +206,11 @@ func (s *Skiplist) randomHeight() int {
 }
 
 func (s *Skiplist) getNext(nd *node, height int) *node {
-	return s.arena.getNode(nd.getNextOffset(height))
+	return arenaGetNode(s.arena, nd.getNextOffset(height))
 }
 
 func (s *Skiplist) getHead() *node {
-	return s.arena.getNode(s.headOffset)
+	return arenaGetNode(s.arena, s.headOffset)
 }
 
 // findNear finds the node near to key.
@@ -263,9 +294,9 @@ func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 func (s *Skiplist) findSpliceForLevel(key []byte, before uint32, level int) (uint32, uint32) {
 	for {
 		// Assume before.key < key.
-		beforeNode := s.arena.getNode(before)
+		beforeNode := arenaGetNode(s.arena, before)
 		next := beforeNode.getNextOffset(level)
-		nextNode := s.arena.getNode(next)
+		nextNode := arenaGetNode(s.arena, next)
 		if nextNode == nil {
 			return before, next
 		}
@@ -306,9 +337,9 @@ func (s *Skiplist) Add(e *kv.Entry) {
 		// Use higher level to speed up for current level.
 		prev[i], next[i] = s.findSpliceForLevel(key, prev[i+1], i)
 		if prev[i] == next[i] {
-			vo := s.arena.putVal(v)
+			vo := arenaPutVal(s.arena, v)
 			encValue := encodeValue(vo, v.EncodedSize())
-			prevNode := s.arena.getNode(prev[i])
+			prevNode := arenaGetNode(s.arena, prev[i])
 			prevNode.setValue(s.arena, encValue)
 			return
 		}
@@ -332,7 +363,7 @@ func (s *Skiplist) Add(e *kv.Entry) {
 	// create a node in the level above because it would have discovered the node in the base level.
 	for i := range height {
 		for {
-			if s.arena.getNode(prev[i]) == nil {
+			if arenaGetNode(s.arena, prev[i]) == nil {
 				AssertTrue(i > 1) // This cannot happen in base level.
 				// We haven't computed prev, next for this level because height exceeds old listHeight.
 				// For these levels, we expect the lists to be sparse, so we can just search from head.
@@ -342,8 +373,8 @@ func (s *Skiplist) Add(e *kv.Entry) {
 				AssertTrue(prev[i] != next[i])
 			}
 			x.tower[i] = next[i]
-			pnode := s.arena.getNode(prev[i])
-			if pnode.casNextOffset(i, next[i], s.arena.getNodeOffset(x)) {
+			pnode := arenaGetNode(s.arena, prev[i])
+			if pnode.casNextOffset(i, next[i], arenaGetNodeOffset(s.arena, x)) {
 				// Managed to insert x between prev[i] and next[i]. Go to the next level.
 				break
 			}
@@ -353,9 +384,9 @@ func (s *Skiplist) Add(e *kv.Entry) {
 			prev[i], next[i] = s.findSpliceForLevel(key, prev[i], i)
 			if prev[i] == next[i] {
 				AssertTruef(i == 0, "Equality can happen only on base level: %d", i)
-				vo := s.arena.putVal(v)
+				vo := arenaPutVal(s.arena, v)
 				encValue := encodeValue(vo, v.EncodedSize())
-				prevNode := s.arena.getNode(prev[i])
+				prevNode := arenaGetNode(s.arena, prev[i])
 				prevNode.setValue(s.arena, encValue)
 				return
 			}
@@ -397,13 +428,13 @@ func (s *Skiplist) Search(key []byte) kv.ValueStruct {
 		return kv.ValueStruct{}
 	}
 
-	nextKey := s.arena.getKey(n.keyOffset, n.keySize)
+	nextKey := arenaGetKey(s.arena, n.keyOffset, n.keySize)
 	if !kv.SameKey(key, nextKey) {
 		return kv.ValueStruct{}
 	}
 
 	valOffset, valSize := n.getValueOffset()
-	vs := s.arena.getVal(valOffset, valSize)
+	vs := arenaGetVal(s.arena, valOffset, valSize)
 	return vs
 }
 
@@ -536,7 +567,7 @@ func (s *SkipListIterator) Key() []byte {
 	if s == nil || s.list == nil || s.n == nil {
 		return nil
 	}
-	return s.list.arena.getKey(s.n.keyOffset, s.n.keySize)
+	return arenaGetKey(s.list.arena, s.n.keyOffset, s.n.keySize)
 }
 
 // Value returns value.
@@ -545,7 +576,7 @@ func (s *SkipListIterator) Value() kv.ValueStruct {
 		return kv.ValueStruct{}
 	}
 	valOffset, valSize := s.n.getValueOffset()
-	return s.list.arena.getVal(valOffset, valSize)
+	return arenaGetVal(s.list.arena, valOffset, valSize)
 }
 
 // ValueUint64 returns the uint64 value of the current node.

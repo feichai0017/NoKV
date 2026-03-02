@@ -152,13 +152,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	// If the file is too small, double its size or increase it by 1GB, whichever is smaller.
 	if start+sz > len(m.Data) {
 		const oneGB = 1 << 30
-		growBy := len(m.Data)
-		if growBy > oneGB {
-			growBy = oneGB
-		}
-		if growBy < sz+4 {
-			growBy = sz + 4
-		}
+		growBy := max(min(len(m.Data), oneGB), sz+4)
 		if err := m.Truncature(int64(len(m.Data) + growBy)); err != nil {
 			return nil, 0, err
 		}
@@ -176,17 +170,8 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	needSize := len(buf)
 	end := int(offset) + needSize
 	if end > size {
-		growBy := size
-		if growBy > oneGB {
-			growBy = oneGB
-		}
-		if growBy < needSize {
-			growBy = needSize
-		}
-		newSize := size + growBy
-		if newSize < end {
-			newSize = end
-		}
+		growBy := max(min(size, oneGB), needSize)
+		newSize := max(size+growBy, end)
 		if err := m.Truncature(int64(newSize)); err != nil {
 			return err
 		}

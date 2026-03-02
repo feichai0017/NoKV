@@ -272,11 +272,8 @@ func regionContainsKey(meta *pb.RegionMeta, key []byte) bool {
 }
 
 func bytesCompare(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
+	minLen := min(len(b), len(a))
+	for i := range minLen {
 		if a[i] == b[i] {
 			continue
 		}
