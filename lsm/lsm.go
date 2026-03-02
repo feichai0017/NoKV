@@ -26,7 +26,7 @@ type LSM struct {
 	flushWG    sync.WaitGroup
 
 	throttleFn func(bool)
-	throttled  int32
+	throttled  atomic.Int32
 
 	closed atomic.Bool
 }
@@ -156,12 +156,12 @@ func (lsm *LSM) throttleWrites(on bool) {
 		return
 	}
 	if on {
-		if atomic.CompareAndSwapInt32(&lsm.throttled, 0, 1) {
+		if lsm.throttled.CompareAndSwap(0, 1) {
 			fn(true)
 		}
 		return
 	}
-	if atomic.CompareAndSwapInt32(&lsm.throttled, 1, 0) {
+	if lsm.throttled.CompareAndSwap(1, 0) {
 		fn(false)
 	}
 }

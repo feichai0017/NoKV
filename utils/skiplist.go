@@ -62,19 +62,19 @@ type node struct {
 type Skiplist struct {
 	height     int32 // Current height. 1 <= height <= kMaxHeight. CAS.
 	headOffset uint32
-	ref        int32
+	ref        atomic.Int32
 	arena      *Arena
 	OnClose    func()
 }
 
 // IncrRef increases the refcount
 func (s *Skiplist) IncrRef() {
-	atomic.AddInt32(&s.ref, 1)
+	s.ref.Add(1)
 }
 
 // DecrRef decrements the refcount, deallocating the Skiplist when done using it
 func (s *Skiplist) DecrRef() {
-	newRef := atomic.AddInt32(&s.ref, -1)
+	newRef := s.ref.Add(-1)
 	if newRef > 0 {
 		return
 	}
@@ -123,12 +123,13 @@ func NewSkiplist(arenaSize int64) *Skiplist {
 	arena := newArena(arenaSize)
 	head := newNode(arena, nil, kv.ValueStruct{}, maxHeight)
 	ho := arena.getNodeOffset(head)
-	return &Skiplist{
+	list := &Skiplist{
 		height:     1,
 		headOffset: ho,
 		arena:      arena,
-		ref:        1,
 	}
+	list.ref.Store(1)
+	return list
 }
 
 func (n *node) getValueOffset() (uint32, uint32) {

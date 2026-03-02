@@ -28,7 +28,7 @@ var (
 type table struct {
 	lm  *levelManager
 	fid uint64
-	ref int32 // For file garbage collection. Atomic.
+	ref atomic.Int32 // For file garbage collection. Atomic.
 	lvl atomic.Int32
 
 	minKey []byte
@@ -904,7 +904,7 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {
 	for {
-		current := atomic.LoadInt32(&t.ref)
+		current := t.ref.Load()
 		// 1. Guard check
 		utils.CondPanicFunc(current <= 0, func() error {
 			return fmt.Errorf("table refcount underflow: fid %d, current_ref %d", t.fid, current)
@@ -912,7 +912,7 @@ func (t *table) DecrRef() error {
 
 		newRef := current - 1
 		// 2. Atomic transition
-		if atomic.CompareAndSwapInt32(&t.ref, current, newRef) {
+		if t.ref.CompareAndSwap(current, newRef) {
 			if newRef == 0 {
 				return t.Delete()
 			}
@@ -924,7 +924,7 @@ func (t *table) DecrRef() error {
 
 // IncrRef increments the table reference count.
 func (t *table) IncrRef() {
-	atomic.AddInt32(&t.ref, 1)
+	t.ref.Add(1)
 }
 func decrRefs(tables []*table) error {
 	for _, table := range tables {

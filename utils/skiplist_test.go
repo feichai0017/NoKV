@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -186,7 +185,7 @@ func TestSkiplistDecrRefConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	assert.Equal(t, int32(0), atomic.LoadInt32(&sl.ref))
+	assert.Equal(t, int32(0), sl.ref.Load())
 }
 
 func TestSkipListReverseIteration(t *testing.T) {
@@ -315,6 +314,6 @@ func TestSkiplistIteratorCloseIdempotent(t *testing.T) {
 	it := sl.NewIterator(nil)      // ref = 2
 	require.NoError(t, it.Close()) // ref = 1
 	require.NoError(t, it.Close()) // still ref = 1
-	assert.Equal(t, int32(1), atomic.LoadInt32(&sl.ref))
+	assert.Equal(t, int32(1), sl.ref.Load())
 	sl.DecrRef() // ref = 0
 }

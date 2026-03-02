@@ -12,7 +12,7 @@ type request struct {
 	Entries   []*kv.Entry
 	Ptrs      []kv.ValuePtr
 	Err       error
-	ref       int32
+	ref       atomic.Int32
 	enqueueAt time.Time
 	wg        sync.WaitGroup
 }
@@ -25,14 +25,14 @@ func (req *request) reset() {
 	req.Entries = req.Entries[:0]
 	req.Ptrs = req.Ptrs[:0]
 	req.Err = nil
-	req.ref = 0
+	req.ref.Store(0)
 	req.enqueueAt = time.Time{}
 	req.wg = sync.WaitGroup{}
 }
 
 // IncrRef increments the lifecycle reference count for this batched write request.
 func (req *request) IncrRef() {
-	atomic.AddInt32(&req.ref, 1)
+	req.ref.Add(1)
 }
 
 func (req *request) loadEntries(entries []*kv.Entry) {
@@ -47,7 +47,7 @@ func (req *request) loadEntries(entries []*kv.Entry) {
 // DecrRef releases one lifecycle reference and returns the request to pool at zero.
 // It panics on refcount underflow to surface lifecycle bugs early.
 func (req *request) DecrRef() {
-	nRef := atomic.AddInt32(&req.ref, -1)
+	nRef := req.ref.Add(-1)
 	if nRef > 0 {
 		return
 	}

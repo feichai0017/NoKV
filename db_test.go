@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -347,7 +346,7 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v2")))
 	err := db.SetCF(kv.CFDefault, key, []byte("v3"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 // -------------------------------------------------------------------------- //
@@ -801,7 +800,7 @@ func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
 	err := txn.Set(key, []byte("c"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	txn.Discard()
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 func TestCFHotKey(t *testing.T) {
@@ -826,7 +825,7 @@ func TestHotWriteAndThrottle(t *testing.T) {
 	err := db.maybeThrottleWrite(kv.CFDefault, entry.Key)
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 func TestIsHotWriteUsesUserKeyForInternalEntries(t *testing.T) {

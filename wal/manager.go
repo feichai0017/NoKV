@@ -77,7 +77,7 @@ type Manager struct {
 	activeSize      int64
 	closed          bool
 	segmentSize     int64
-	removedSegments uint64
+	removedSegments atomic.Uint64
 	bufferSize      int
 	writer          *bufio.Writer
 	recordTotals    RecordMetrics
@@ -519,7 +519,7 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	if err := m.cfg.FS.Remove(path); err != nil {
 		return err
 	}
-	atomic.AddUint64(&m.removedSegments, 1)
+	m.removedSegments.Add(1)
 	m.mu.Lock()
 	if metrics, ok := m.segmentTotals[id]; ok {
 		m.recordTotals.Entries -= metrics.Entries
@@ -566,7 +566,7 @@ func (m *Manager) Metrics() *Metrics {
 		ActiveSegment:           m.ActiveSegment(),
 		ActiveSize:              m.ActiveSize(),
 		SegmentCount:            count,
-		RemovedSegments:         atomic.LoadUint64(&m.removedSegments),
+		RemovedSegments:         m.removedSegments.Load(),
 		RecordCounts:            recordTotals,
 		SegmentsWithRaftRecords: segmentRaft,
 	}

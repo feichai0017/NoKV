@@ -2,7 +2,6 @@ package NoKV
 
 import (
 	"bytes"
-	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
@@ -125,7 +124,7 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *TxnIterator {
 		panic(utils.ErrDBClosed.Error())
 	}
 
-	atomic.AddInt32(&txn.numIterators, 1)
+	txn.numIterators.Add(1)
 
 	var (
 		ctx   *iteratorContext
@@ -333,7 +332,7 @@ func (it *TxnIterator) Close() {
 		it.pool.put(it.ctx)
 	}
 	it.ctx = nil
-	atomic.AddInt32(&it.txn.numIterators, -1)
+	it.txn.numIterators.Add(-1)
 }
 
 // Next would advance the iterator by one. Always check it.Valid() after a Next()
