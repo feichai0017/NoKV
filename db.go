@@ -107,8 +107,8 @@ type (
 )
 
 type cfCounters struct {
-	writes uint64
-	reads  uint64
+	writes atomic.Uint64
+	reads  atomic.Uint64
 }
 
 // Open DB
@@ -758,13 +758,13 @@ func (db *DB) cfCounter(cf kv.ColumnFamily) *cfCounters {
 
 func (db *DB) recordCFWrite(cf kv.ColumnFamily, delta uint64) {
 	if cnt := db.cfCounter(cf); cnt != nil {
-		atomic.AddUint64(&cnt.writes, delta)
+		cnt.writes.Add(delta)
 	}
 }
 
 func (db *DB) recordCFRead(cf kv.ColumnFamily, delta uint64) {
 	if cnt := db.cfCounter(cf); cnt != nil {
-		atomic.AddUint64(&cnt.reads, delta)
+		cnt.reads.Add(delta)
 	}
 }
 
@@ -779,8 +779,8 @@ func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
 		if cnt == nil {
 			continue
 		}
-		writes := atomic.LoadUint64(&cnt.writes)
-		reads := atomic.LoadUint64(&cnt.reads)
+		writes := cnt.writes.Load()
+		reads := cnt.reads.Load()
 		if writes == 0 && reads == 0 {
 			continue
 		}

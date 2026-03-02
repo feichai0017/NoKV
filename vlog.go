@@ -30,14 +30,14 @@ type valueLog struct {
 	managers           []*vlogpkg.Manager
 	filesToDeleteLock  sync.Mutex
 	filesToBeDeleted   []manifest.ValueLogID
-	numActiveIterators int32
+	numActiveIterators atomic.Int32
 	db                 *DB
 	opt                Options
 	hot                hotTracker
 	gcTokens           chan struct{}
 	gcParallelism      int
 	gcBucketBusy       []atomic.Uint32
-	gcPickSeed         uint64
+	gcPickSeed         atomic.Uint64
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
 }

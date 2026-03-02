@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -464,7 +463,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 }
 
 func (vlog *valueLog) iteratorCount() int {
-	return int(atomic.LoadInt32(&vlog.numActiveIterators))
+	return int(vlog.numActiveIterators.Load())
 }
 
 func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifest.ValueLogID {
@@ -597,7 +596,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	if len(candidates) == 0 {
 		return files
 	}
-	start := max(int(atomic.AddUint64(&vlog.gcPickSeed, 1)), 0)
+	start := max(int(vlog.gcPickSeed.Add(1)), 0)
 	for i := 0; i < len(candidates); i++ {
 		id := candidates[(start+i)%len(candidates)]
 		if selectedBuckets[id.Bucket] {
