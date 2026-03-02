@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/lsm/compact"
@@ -107,7 +106,7 @@ func tableRefSnapshot(tables []*table) map[*table]int32 {
 		if tbl == nil {
 			continue
 		}
-		out[tbl] = atomic.LoadInt32(&tbl.ref)
+		out[tbl] = tbl.ref.Load()
 	}
 	return out
 }
@@ -115,7 +114,7 @@ func tableRefSnapshot(tables []*table) map[*table]int32 {
 func requireDecrOnce(t *testing.T, before map[*table]int32) {
 	t.Helper()
 	for tbl, ref := range before {
-		after := atomic.LoadInt32(&tbl.ref)
+		after := tbl.ref.Load()
 		if after != ref-1 {
 			t.Fatalf("table %d ref mismatch: before=%d after=%d expected=%d", tbl.fid, ref, after, ref-1)
 		}

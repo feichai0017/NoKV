@@ -52,11 +52,11 @@ type (
 		walWatchdog      *wal.Watchdog
 		vlog             *valueLog
 		stats            *Stats
-		blockWrites      int32
+		blockWrites      atomic.Int32
 		vheads           map[uint32]kv.ValuePtr
 		lastLoggedHeads  map[uint32]kv.ValuePtr
 		headLogDelta     uint32
-		isClosed         uint32
+		isClosed         atomic.Uint32
 		closeOnce        sync.Once
 		closeErr         error
 		orc              *oracle
@@ -75,7 +75,7 @@ type (
 		prefetchHot      int32
 		prefetchCooldown time.Duration
 		cfMetrics        []*cfCounters
-		hotWriteLimited  uint64
+		hotWriteLimited  atomic.Uint64
 	}
 
 	commitQueue struct {
@@ -87,7 +87,7 @@ type (
 		inflight       int64
 		pendingBytes   int64
 		pendingEntries int64
-		closed         uint32
+		closed         atomic.Uint32
 	}
 
 	commitRequest struct {
@@ -404,7 +404,7 @@ func (db *DB) closeInternal() error {
 		db.dirLock = nil
 	}
 
-	atomic.StoreUint32(&db.isClosed, 1)
+	db.isClosed.Store(1)
 
 	if len(errs) > 0 {
 		return stderrors.Join(errs...)
@@ -736,7 +736,7 @@ func (db *DB) Manifest() *manifest.Manager {
 
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
-	return atomic.LoadUint32(&db.isClosed) == 1
+	return db.isClosed.Load() == 1
 }
 
 func (db *DB) cfCounter(cf kv.ColumnFamily) *cfCounters {

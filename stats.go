@@ -410,8 +410,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.AvgApplyMs = wsnap.AvgApplyMs
 		snap.Write.BatchesTotal = wsnap.Batches
 	}
-	snap.Write.ThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
-	snap.Write.HotKeyLimited = atomic.LoadUint64(&s.db.hotWriteLimited)
+	snap.Write.ThrottleActive = s.db.blockWrites.Load() == 1
+	snap.Write.HotKeyLimited = s.db.hotWriteLimited.Load()
 
 	if rm := s.regionMetrics.Load(); rm != nil {
 		rms := rm.Snapshot()

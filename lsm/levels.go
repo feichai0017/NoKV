@@ -57,9 +57,9 @@ type levelManager struct {
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
-	compactionLastNs int64
-	compactionMaxNs  int64
-	compactionRuns   uint64
+	compactionLastNs atomic.Int64
+	compactionMaxNs  atomic.Int64
+	compactionRuns   atomic.Uint64
 	hotProvider      atomic.Value // func() [][]byte
 }
 
@@ -318,22 +318,22 @@ func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 	if lm == nil {
 		return 0, 0, 0
 	}
-	lastNs := atomic.LoadInt64(&lm.compactionLastNs)
-	maxNs := atomic.LoadInt64(&lm.compactionMaxNs)
-	runs := atomic.LoadUint64(&lm.compactionRuns)
+	lastNs := lm.compactionLastNs.Load()
+	maxNs := lm.compactionMaxNs.Load()
+	runs := lm.compactionRuns.Load()
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	atomic.AddUint64(&lm.compactionRuns, 1)
+	lm.compactionRuns.Add(1)
 	last := duration.Nanoseconds()
-	atomic.StoreInt64(&lm.compactionLastNs, last)
+	lm.compactionLastNs.Store(last)
 	for {
-		prev := atomic.LoadInt64(&lm.compactionMaxNs)
+		prev := lm.compactionMaxNs.Load()
 		if last <= prev {
 			break
 		}
-		if atomic.CompareAndSwapInt64(&lm.compactionMaxNs, prev, last) {
+		if lm.compactionMaxNs.CompareAndSwap(prev, last) {
 			break
 		}
 	}
@@ -423,12 +423,12 @@ type levelHandler struct {
 	totalStaleSize        int64
 	totalValueSize        int64
 	lm                    *levelManager
-	ingestRuns            uint64
-	ingestMergeRuns       uint64
-	ingestDurationNs      int64
-	ingestMergeDurationNs int64
-	ingestTablesCompacted uint64
-	ingestMergeTables     uint64
+	ingestRuns            atomic.Uint64
+	ingestMergeRuns       atomic.Uint64
+	ingestDurationNs      atomic.Int64
+	ingestMergeDurationNs atomic.Int64
+	ingestTablesCompacted atomic.Uint64
+	ingestMergeTables     atomic.Uint64
 }
 
 type tableRange struct {
@@ -545,12 +545,12 @@ func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 		IngestValueBytes:      lh.ingest.totalValueSize(),
 		ValueDensity:          lh.densityLocked(),
 		IngestValueDensity:    lh.ingestDensityLocked(),
-		IngestRuns:            int64(atomic.LoadUint64(&lh.ingestRuns)),
-		IngestMs:              float64(atomic.LoadInt64(&lh.ingestDurationNs)) / 1e6,
-		IngestTablesCompacted: int64(atomic.LoadUint64(&lh.ingestTablesCompacted)),
-		IngestMergeRuns:       int64(atomic.LoadUint64(&lh.ingestMergeRuns)),
-		IngestMergeMs:         float64(atomic.LoadInt64(&lh.ingestMergeDurationNs)) / 1e6,
-		IngestMergeTables:     int64(atomic.LoadUint64(&lh.ingestMergeTables)),
+		IngestRuns:            int64(lh.ingestRuns.Load()),
+		IngestMs:              float64(lh.ingestDurationNs.Load()) / 1e6,
+		IngestTablesCompacted: int64(lh.ingestTablesCompacted.Load()),
+		IngestMergeRuns:       int64(lh.ingestMergeRuns.Load()),
+		IngestMergeMs:         float64(lh.ingestMergeDurationNs.Load()) / 1e6,
+		IngestMergeTables:     int64(lh.ingestMergeTables.Load()),
 	}
 }
 
@@ -930,17 +930,17 @@ func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, 
 		tables = 0
 	}
 	if merge {
-		atomic.AddUint64(&lh.ingestMergeRuns, 1)
-		atomic.AddInt64(&lh.ingestMergeDurationNs, duration.Nanoseconds())
+		lh.ingestMergeRuns.Add(1)
+		lh.ingestMergeDurationNs.Add(duration.Nanoseconds())
 		if tables > 0 {
-			atomic.AddUint64(&lh.ingestMergeTables, uint64(tables))
+			lh.ingestMergeTables.Add(uint64(tables))
 		}
 		return
 	}
-	atomic.AddUint64(&lh.ingestRuns, 1)
-	atomic.AddInt64(&lh.ingestDurationNs, duration.Nanoseconds())
+	lh.ingestRuns.Add(1)
+	lh.ingestDurationNs.Add(duration.Nanoseconds())
 	if tables > 0 {
-		atomic.AddUint64(&lh.ingestTablesCompacted, uint64(tables))
+		lh.ingestTablesCompacted.Add(uint64(tables))
 	}
 }
 
