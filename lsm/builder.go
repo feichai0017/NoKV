@@ -50,30 +50,6 @@ type block struct {
 	release           func()
 }
 
-const maxPooledBuilderBufCap = 1 << 20 // Keep at most 1MiB buffers in pool.
-
-var builderBufPool = sync.Pool{
-	New: func() any { return make([]byte, 0) },
-}
-
-func getBuilderBuf(size int) []byte {
-	buf := builderBufPool.Get().([]byte)
-	if cap(buf) < size {
-		return make([]byte, size)
-	}
-	return buf[:size]
-}
-
-func putBuilderBuf(buf []byte) {
-	if buf == nil {
-		return
-	}
-	if cap(buf) > maxPooledBuilderBufCap {
-		return
-	}
-	builderBufPool.Put(buf[:0])
-}
-
 type header struct {
 	overlap uint16 // Overlap with base key.
 	diff    uint16 // Length of the diff.
@@ -108,7 +84,7 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		tb.finishBlock()
 		// Create a new block and start writing.
 		tb.curBlock = &block{
-			data: getBuilderBuf(tb.opt.BlockSize),
+			data: make([]byte, tb.opt.BlockSize), // TODO encrypt the block, the size of the block will increase, need to reserve some padding position
 		}
 	}
 	// record the hash value of the key
@@ -175,7 +151,6 @@ func (tb *tableBuilder) finish() []byte {
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
 	utils.CondPanic(written == len(buf), nil)
-	tb.releaseBlocks()
 	return buf
 }
 func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
@@ -224,14 +199,7 @@ func (tb *tableBuilder) AddKeyWithLen(e *kv.Entry, valueLen uint32) {
 
 // Close closes the TableBuilder.
 func (tb *tableBuilder) Close() {
-	if tb == nil {
-		return
-	}
-	if tb.curBlock != nil {
-		tb.releaseBlock(tb.curBlock)
-		tb.curBlock = nil
-	}
-	tb.releaseBlocks()
+	// combine the memory allocator
 }
 
 func entryValueLen(e *kv.Entry) uint32 {
@@ -288,9 +256,8 @@ func (tb *tableBuilder) allocate(need int) []byte {
 	if len(bb.data[bb.end:]) < need {
 		// We need to reallocate.
 		sz := max(bb.end+need, 2*len(bb.data))
-		tmp := getBuilderBuf(sz)
+		tmp := make([]byte, sz) // todo use memory allocator to improve performance
 		copy(tmp, bb.data)
-		putBuilderBuf(bb.data)
 		bb.data = tmp
 	}
 	bb.end += need
@@ -330,8 +297,8 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 	utils.CondPanicFunc(written != len(dst), func() error {
 		return fmt.Errorf("tableBuilder.flush written != len(dst)")
 	})
-	// Return intermediate block buffers to the pool after persistence.
-	tb.releaseBlocks()
+	// Allow GC to reclaim the intermediate blocks once the data is persisted.
+	tb.blockList = nil
 
 	// Hint the OS that freshly written pages can be dropped; block cache holds hot copies.
 	_ = t.ss.Advise(utils.AccessPatternDontNeed)
@@ -382,26 +349,6 @@ func (tb *tableBuilder) done() buildData {
 	bd.size = total
 	tb.estimateSz = int64(total)
 	return bd
-}
-
-func (tb *tableBuilder) releaseBlock(bl *block) {
-	if bl == nil {
-		return
-	}
-	putBuilderBuf(bl.data)
-	bl.data = nil
-	bl.baseKey = nil
-	bl.entryOffsets = nil
-	bl.end = 0
-	bl.entriesIndexStart = 0
-}
-
-func (tb *tableBuilder) releaseBlocks() {
-	for i := range tb.blockList {
-		tb.releaseBlock(tb.blockList[i])
-		tb.blockList[i] = nil
-	}
-	tb.blockList = nil
 }
 
 func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
