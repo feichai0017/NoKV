@@ -3,7 +3,6 @@ package lsm
 import (
 	"fmt"
 	"os"
-	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -171,12 +170,13 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 }
 
 func TestTableDecrRefUnderflow(t *testing.T) {
-	tbl := &table{fid: 1, ref: 2}
+	tbl := &table{fid: 1}
+	tbl.ref.Store(2)
 	require.NoError(t, tbl.DecrRef())
-	require.Equal(t, int32(1), atomic.LoadInt32(&tbl.ref))
+	require.Equal(t, int32(1), tbl.ref.Load())
 
 	// Avoid the 1->0 path in this unit test (which requires a real table handle).
-	atomic.StoreInt32(&tbl.ref, 0)
+	tbl.ref.Store(0)
 	require.PanicsWithError(t, fmt.Errorf("table refcount underflow: fid %d, current_ref %d", tbl.fid, int32(0)).Error(), func() {
 		_ = tbl.DecrRef()
 	})

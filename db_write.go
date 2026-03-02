@@ -44,7 +44,7 @@ func (cq *commitQueue) close() bool {
 	if cq == nil {
 		return false
 	}
-	if !atomic.CompareAndSwapUint32(&cq.closed, 0, 1) {
+	if !cq.closed.CompareAndSwap(0, 1) {
 		return false
 	}
 	if cq.ring != nil {
@@ -89,7 +89,7 @@ func (cq *commitQueue) acquireItem() bool {
 		if cq.tryAcquireItem() {
 			return true
 		}
-		if atomic.LoadUint32(&cq.closed) == 1 {
+		if cq.closed.Load() == 1 {
 			if atomic.LoadInt64(&cq.queueLen) == 0 && atomic.LoadInt64(&cq.inflight) == 0 {
 				return false
 			}
@@ -111,7 +111,7 @@ func (cq *commitQueue) pop() *commitRequest {
 			cq.releaseSpace()
 			return cr
 		}
-		if atomic.LoadUint32(&cq.closed) == 1 && atomic.LoadInt64(&cq.queueLen) == 0 {
+		if cq.closed.Load() == 1 && atomic.LoadInt64(&cq.queueLen) == 0 {
 			return nil
 		}
 		runtime.Gosched()
@@ -141,7 +141,7 @@ func (db *DB) applyThrottle(enable bool) {
 	if enable {
 		val = 1
 	}
-	prev := atomic.SwapInt32(&db.blockWrites, val)
+	prev := db.blockWrites.Swap(val)
 	if prev == val {
 		return
 	}
@@ -153,11 +153,11 @@ func (db *DB) applyThrottle(enable bool) {
 }
 
 func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request, error) {
-	for atomic.LoadInt32(&db.blockWrites) == 1 {
+	for db.blockWrites.Load() == 1 {
 		if !waitOnThrottle {
 			return nil, utils.ErrBlockedWrites
 		}
-		if atomic.LoadUint32(&db.isClosed) == 1 || atomic.LoadUint32(&db.commitQueue.closed) == 1 {
+		if db.isClosed.Load() == 1 || db.commitQueue.closed.Load() == 1 {
 			return nil, utils.ErrBlockedWrites
 		}
 		time.Sleep(200 * time.Microsecond)
@@ -218,7 +218,7 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 
 	atomic.AddInt64(&cq.inflight, 1)
 	defer atomic.AddInt64(&cq.inflight, -1)
-	if atomic.LoadUint32(&cq.closed) == 1 {
+	if cq.closed.Load() == 1 {
 		return utils.ErrBlockedWrites
 	}
 
@@ -235,7 +235,7 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	if !cq.acquireSpace() {
 		return utils.ErrBlockedWrites
 	}
-	if atomic.LoadUint32(&cq.closed) == 1 {
+	if cq.closed.Load() == 1 {
 		cq.releaseSpace()
 		return utils.ErrBlockedWrites
 	}

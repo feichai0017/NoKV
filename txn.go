@@ -36,10 +36,10 @@ type oracle struct {
 	// closer is used to stop watermarks.
 	closer *utils.Closer
 
-	txnStarted   uint64
-	txnCommitted uint64
-	txnConflicts uint64
-	txnActive    int64
+	txnStarted   atomic.Uint64
+	txnCommitted atomic.Uint64
+	txnConflicts atomic.Uint64
+	txnActive    atomic.Int64
 }
 
 type committedTxn struct {
@@ -102,28 +102,28 @@ func (o *oracle) Stop() {
 }
 
 func (o *oracle) trackTxnStart() {
-	atomic.AddUint64(&o.txnStarted, 1)
-	atomic.AddInt64(&o.txnActive, 1)
+	o.txnStarted.Add(1)
+	o.txnActive.Add(1)
 }
 
 func (o *oracle) trackTxnCommit() {
-	atomic.AddUint64(&o.txnCommitted, 1)
+	o.txnCommitted.Add(1)
 }
 
 func (o *oracle) trackTxnConflict() {
-	atomic.AddUint64(&o.txnConflicts, 1)
+	o.txnConflicts.Add(1)
 }
 
 func (o *oracle) trackTxnFinish() {
-	atomic.AddInt64(&o.txnActive, -1)
+	o.txnActive.Add(-1)
 }
 
 func (o *oracle) txnMetricsSnapshot() metrics.TxnMetrics {
 	return metrics.TxnMetrics{
-		Started:   atomic.LoadUint64(&o.txnStarted),
-		Committed: atomic.LoadUint64(&o.txnCommitted),
-		Conflicts: atomic.LoadUint64(&o.txnConflicts),
-		Active:    atomic.LoadInt64(&o.txnActive),
+		Started:   o.txnStarted.Load(),
+		Committed: o.txnCommitted.Load(),
+		Conflicts: o.txnConflicts.Load(),
+		Active:    o.txnActive.Load(),
 	}
 }
 
@@ -273,7 +273,7 @@ type Txn struct {
 
 	pendingWrites map[string]*kv.Entry // cache stores any writes done by txn.
 
-	numIterators int32
+	numIterators atomic.Int32
 	discarded    bool
 	returned     bool
 	doneRead     bool
@@ -540,7 +540,7 @@ func (txn *Txn) Discard() {
 	if txn.discarded { // Avoid a re-run.
 		return
 	}
-	if atomic.LoadInt32(&txn.numIterators) > 0 {
+	if txn.numIterators.Load() > 0 {
 		panic("Unclosed iterator at time of Txn.Discard.")
 	}
 	txn.discarded = true
@@ -581,7 +581,7 @@ func (txn *Txn) recycle() {
 	txn.count = 0
 	txn.doneRead = false
 	txn.update = false
-	atomic.StoreInt32(&txn.numIterators, 0)
+	txn.numIterators.Store(0)
 	txn.clearPendingWrites()
 	if txn.conflictKeys != nil {
 		for k := range txn.conflictKeys {
@@ -767,7 +767,7 @@ func (db *DB) newTransaction(update bool) *Txn {
 	txn.returned = false
 	txn.doneRead = false
 	txn.reads = txn.reads[:0]
-	atomic.StoreInt32(&txn.numIterators, 0)
+	txn.numIterators.Store(0)
 	if update {
 		if db.opt.DetectConflicts {
 			if txn.conflictKeys == nil {

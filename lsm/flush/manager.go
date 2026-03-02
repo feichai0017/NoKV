@@ -37,26 +37,26 @@ type Manager struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	closed  bool
-	counter uint64
+	counter atomic.Uint64
 
 	queue         []*Task
 	active        map[uint64]*Task
-	pending       int64
-	queueLen      int64
-	activeCt      int64
-	waitSumNs     int64
-	waitCount     int64
-	waitLastNs    int64
-	waitMaxNs     int64
-	buildSumNs    int64
-	buildCount    int64
-	buildLastNs   int64
-	buildMaxNs    int64
-	releaseSumNs  int64
-	releaseCount  int64
-	releaseLastNs int64
-	releaseMaxNs  int64
-	completed     int64
+	pending       atomic.Int64
+	queueLen      atomic.Int64
+	activeCt      atomic.Int64
+	waitSumNs     atomic.Int64
+	waitCount     atomic.Int64
+	waitLastNs    atomic.Int64
+	waitMaxNs     atomic.Int64
+	buildSumNs    atomic.Int64
+	buildCount    atomic.Int64
+	buildLastNs   atomic.Int64
+	buildMaxNs    atomic.Int64
+	releaseSumNs  atomic.Int64
+	releaseCount  atomic.Int64
+	releaseLastNs atomic.Int64
+	releaseMaxNs  atomic.Int64
+	completed     atomic.Int64
 }
 
 func NewManager() *Manager {
@@ -74,12 +74,12 @@ func (m *Manager) Submit(task *Task) (*Task, error) {
 	if m.closed {
 		return nil, errors.New("flush manager closed")
 	}
-	task.ID = atomic.AddUint64(&m.counter, 1)
+	task.ID = m.counter.Add(1)
 	task.Stage = StagePrepare
 	task.queuedAt = time.Now()
 	m.queue = append(m.queue, task)
-	atomic.AddInt64(&m.pending, 1)
-	atomic.StoreInt64(&m.queueLen, int64(len(m.queue)))
+	m.pending.Add(1)
+	m.queueLen.Store(int64(len(m.queue)))
 	m.cond.Signal()
 	return task, nil
 }
@@ -96,18 +96,18 @@ func (m *Manager) Next() (*Task, bool) {
 	}
 	task := m.queue[0]
 	m.queue = m.queue[1:]
-	atomic.StoreInt64(&m.queueLen, int64(len(m.queue)))
+	m.queueLen.Store(int64(len(m.queue)))
 	task.Stage = StageBuild
 	task.buildStart = time.Now()
 	if !task.queuedAt.IsZero() {
 		waitNs := time.Since(task.queuedAt).Nanoseconds()
-		atomic.AddInt64(&m.waitSumNs, waitNs)
-		atomic.AddInt64(&m.waitCount, 1)
-		atomic.StoreInt64(&m.waitLastNs, waitNs)
+		m.waitSumNs.Add(waitNs)
+		m.waitCount.Add(1)
+		m.waitLastNs.Store(waitNs)
 		updateMaxInt64(&m.waitMaxNs, waitNs)
 	}
 	m.active[task.ID] = task
-	atomic.AddInt64(&m.activeCt, 1)
+	m.activeCt.Add(1)
 	return task, true
 }
 
@@ -126,9 +126,9 @@ func (m *Manager) Update(taskID uint64, stage Stage, data any, err error) error 
 	if stage == StageInstall && err == nil {
 		if !task.buildStart.IsZero() {
 			buildNs := time.Since(task.buildStart).Nanoseconds()
-			atomic.AddInt64(&m.buildSumNs, buildNs)
-			atomic.AddInt64(&m.buildCount, 1)
-			atomic.StoreInt64(&m.buildLastNs, buildNs)
+			m.buildSumNs.Add(buildNs)
+			m.buildCount.Add(1)
+			m.buildLastNs.Store(buildNs)
 			updateMaxInt64(&m.buildMaxNs, buildNs)
 		}
 		task.installAt = time.Now()
@@ -138,15 +138,15 @@ func (m *Manager) Update(taskID uint64, stage Stage, data any, err error) error 
 	if released {
 		if !task.installAt.IsZero() {
 			releaseNs := time.Since(task.installAt).Nanoseconds()
-			atomic.AddInt64(&m.releaseSumNs, releaseNs)
-			atomic.AddInt64(&m.releaseCount, 1)
-			atomic.StoreInt64(&m.releaseLastNs, releaseNs)
+			m.releaseSumNs.Add(releaseNs)
+			m.releaseCount.Add(1)
+			m.releaseLastNs.Store(releaseNs)
 			updateMaxInt64(&m.releaseMaxNs, releaseNs)
 		}
 		delete(m.active, taskID)
-		atomic.AddInt64(&m.activeCt, -1)
-		atomic.AddInt64(&m.pending, -1)
-		atomic.AddInt64(&m.completed, 1)
+		m.activeCt.Add(-1)
+		m.pending.Add(-1)
+		m.completed.Add(1)
 		task.Stage = StageRelease
 	}
 	return err
@@ -154,22 +154,22 @@ func (m *Manager) Update(taskID uint64, stage Stage, data any, err error) error 
 
 func (m *Manager) Stats() Metrics {
 	return Metrics{
-		Pending:       atomic.LoadInt64(&m.pending),
-		Queue:         atomic.LoadInt64(&m.queueLen),
-		Active:        atomic.LoadInt64(&m.activeCt),
-		WaitNs:        atomic.LoadInt64(&m.waitSumNs),
-		WaitCount:     atomic.LoadInt64(&m.waitCount),
-		WaitLastNs:    atomic.LoadInt64(&m.waitLastNs),
-		WaitMaxNs:     atomic.LoadInt64(&m.waitMaxNs),
-		BuildNs:       atomic.LoadInt64(&m.buildSumNs),
-		BuildCount:    atomic.LoadInt64(&m.buildCount),
-		BuildLastNs:   atomic.LoadInt64(&m.buildLastNs),
-		BuildMaxNs:    atomic.LoadInt64(&m.buildMaxNs),
-		ReleaseNs:     atomic.LoadInt64(&m.releaseSumNs),
-		ReleaseCount:  atomic.LoadInt64(&m.releaseCount),
-		ReleaseLastNs: atomic.LoadInt64(&m.releaseLastNs),
-		ReleaseMaxNs:  atomic.LoadInt64(&m.releaseMaxNs),
-		Completed:     atomic.LoadInt64(&m.completed),
+		Pending:       m.pending.Load(),
+		Queue:         m.queueLen.Load(),
+		Active:        m.activeCt.Load(),
+		WaitNs:        m.waitSumNs.Load(),
+		WaitCount:     m.waitCount.Load(),
+		WaitLastNs:    m.waitLastNs.Load(),
+		WaitMaxNs:     m.waitMaxNs.Load(),
+		BuildNs:       m.buildSumNs.Load(),
+		BuildCount:    m.buildCount.Load(),
+		BuildLastNs:   m.buildLastNs.Load(),
+		BuildMaxNs:    m.buildMaxNs.Load(),
+		ReleaseNs:     m.releaseSumNs.Load(),
+		ReleaseCount:  m.releaseCount.Load(),
+		ReleaseLastNs: m.releaseLastNs.Load(),
+		ReleaseMaxNs:  m.releaseMaxNs.Load(),
+		Completed:     m.completed.Load(),
 	}
 }
 
@@ -181,13 +181,13 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func updateMaxInt64(target *int64, val int64) {
+func updateMaxInt64(target *atomic.Int64, val int64) {
 	for {
-		current := atomic.LoadInt64(target)
+		current := target.Load()
 		if val <= current {
 			return
 		}
-		if atomic.CompareAndSwapInt64(target, current, val) {
+		if target.CompareAndSwap(current, val) {
 			return
 		}
 	}

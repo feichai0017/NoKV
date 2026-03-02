@@ -16,14 +16,14 @@ type CacheSnapshot struct {
 
 // CacheCounters records cache hits/misses for blocks, blooms, and indexes.
 type CacheCounters struct {
-	l0Hits      uint64
-	l0Misses    uint64
-	l1Hits      uint64
-	l1Misses    uint64
-	bloomHits   uint64
-	bloomMisses uint64
-	indexHits   uint64
-	indexMisses uint64
+	l0Hits      atomic.Uint64
+	l0Misses    atomic.Uint64
+	l1Hits      atomic.Uint64
+	l1Misses    atomic.Uint64
+	bloomHits   atomic.Uint64
+	bloomMisses atomic.Uint64
+	indexHits   atomic.Uint64
+	indexMisses atomic.Uint64
 }
 
 func NewCacheCounters() *CacheCounters {
@@ -34,33 +34,33 @@ func (m *CacheCounters) RecordBlock(level int, hit bool) {
 	switch level {
 	case 0:
 		if hit {
-			atomic.AddUint64(&m.l0Hits, 1)
+			m.l0Hits.Add(1)
 		} else {
-			atomic.AddUint64(&m.l0Misses, 1)
+			m.l0Misses.Add(1)
 		}
 	case 1:
 		if hit {
-			atomic.AddUint64(&m.l1Hits, 1)
+			m.l1Hits.Add(1)
 		} else {
-			atomic.AddUint64(&m.l1Misses, 1)
+			m.l1Misses.Add(1)
 		}
 	}
 }
 
 func (m *CacheCounters) RecordBloom(hit bool) {
 	if hit {
-		atomic.AddUint64(&m.bloomHits, 1)
+		m.bloomHits.Add(1)
 		return
 	}
-	atomic.AddUint64(&m.bloomMisses, 1)
+	m.bloomMisses.Add(1)
 }
 
 func (m *CacheCounters) RecordIndex(hit bool) {
 	if hit {
-		atomic.AddUint64(&m.indexHits, 1)
+		m.indexHits.Add(1)
 		return
 	}
-	atomic.AddUint64(&m.indexMisses, 1)
+	m.indexMisses.Add(1)
 }
 
 func (m *CacheCounters) Snapshot() CacheSnapshot {
@@ -68,13 +68,13 @@ func (m *CacheCounters) Snapshot() CacheSnapshot {
 		return CacheSnapshot{}
 	}
 	return CacheSnapshot{
-		L0Hits:      atomic.LoadUint64(&m.l0Hits),
-		L0Misses:    atomic.LoadUint64(&m.l0Misses),
-		L1Hits:      atomic.LoadUint64(&m.l1Hits),
-		L1Misses:    atomic.LoadUint64(&m.l1Misses),
-		BloomHits:   atomic.LoadUint64(&m.bloomHits),
-		BloomMisses: atomic.LoadUint64(&m.bloomMisses),
-		IndexHits:   atomic.LoadUint64(&m.indexHits),
-		IndexMisses: atomic.LoadUint64(&m.indexMisses),
+		L0Hits:      m.l0Hits.Load(),
+		L0Misses:    m.l0Misses.Load(),
+		L1Hits:      m.l1Hits.Load(),
+		L1Misses:    m.l1Misses.Load(),
+		BloomHits:   m.bloomHits.Load(),
+		BloomMisses: m.bloomMisses.Load(),
+		IndexHits:   m.indexHits.Load(),
+		IndexMisses: m.indexMisses.Load(),
 	}
 }
