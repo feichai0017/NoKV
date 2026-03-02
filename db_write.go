@@ -4,7 +4,6 @@ import (
 	"errors"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -90,7 +89,7 @@ func (cq *commitQueue) acquireItem() bool {
 			return true
 		}
 		if cq.closed.Load() == 1 {
-			if atomic.LoadInt64(&cq.queueLen) == 0 && atomic.LoadInt64(&cq.inflight) == 0 {
+			if cq.queueLen.Load() == 0 && cq.inflight.Load() == 0 {
 				return false
 			}
 			time.Sleep(100 * time.Microsecond)
@@ -107,11 +106,11 @@ func (cq *commitQueue) acquireItem() bool {
 func (cq *commitQueue) pop() *commitRequest {
 	for {
 		if cr, ok := cq.ring.Pop(); ok {
-			atomic.AddInt64(&cq.queueLen, -1)
+			cq.queueLen.Add(-1)
 			cq.releaseSpace()
 			return cr
 		}
-		if cq.closed.Load() == 1 && atomic.LoadInt64(&cq.queueLen) == 0 {
+		if cq.closed.Load() == 1 && cq.queueLen.Load() == 0 {
 			return nil
 		}
 		runtime.Gosched()
@@ -216,19 +215,19 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 		return utils.ErrBlockedWrites
 	}
 
-	atomic.AddInt64(&cq.inflight, 1)
-	defer atomic.AddInt64(&cq.inflight, -1)
+	cq.inflight.Add(1)
+	defer cq.inflight.Add(-1)
 	if cq.closed.Load() == 1 {
 		return utils.ErrBlockedWrites
 	}
 
-	atomic.AddInt64(&cq.pendingEntries, int64(cr.entryCount))
-	atomic.AddInt64(&cq.pendingBytes, cr.size)
+	cq.pendingEntries.Add(int64(cr.entryCount))
+	cq.pendingBytes.Add(cr.size)
 	queued := false
 	defer func() {
 		if !queued {
-			atomic.AddInt64(&cq.pendingEntries, -int64(cr.entryCount))
-			atomic.AddInt64(&cq.pendingBytes, -cr.size)
+			cq.pendingEntries.Add(-int64(cr.entryCount))
+			cq.pendingBytes.Add(-cr.size)
 		}
 	}()
 
@@ -243,13 +242,13 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 		cq.releaseSpace()
 		return utils.ErrBlockedWrites
 	}
-	atomic.AddInt64(&cq.queueLen, 1)
+	cq.queueLen.Add(1)
 	cq.releaseItem()
 	queued = true
 
-	qLen := int(atomic.LoadInt64(&cq.queueLen))
-	qEntries := atomic.LoadInt64(&cq.pendingEntries)
-	qBytes := atomic.LoadInt64(&cq.pendingBytes)
+	qLen := int(cq.queueLen.Load())
+	qEntries := cq.pendingEntries.Load()
+	qBytes := cq.pendingBytes.Load()
 	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
 	return nil
 }
@@ -271,7 +270,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 	// from growing without bound to avoid long pauses.
 	limitCount := db.opt.WriteBatchMaxCount
 	limitSize := db.opt.WriteBatchMaxSize
-	backlog := int(atomic.LoadInt64(&cq.queueLen))
+	backlog := int(cq.queueLen.Load())
 	if backlog > limitCount && limitCount > 0 {
 		factor := min(max(backlog/limitCount, 1), 4)
 		if scaled := limitCount * factor; scaled > 0 {
@@ -304,7 +303,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 	if cr := cq.pop(); cr != nil {
 		addToBatch(cr)
 	}
-	if coalesceWait > 0 && atomic.LoadInt64(&cq.queueLen) == 0 && len(batch) < limitCount && pendingBytes < limitSize {
+	if coalesceWait > 0 && cq.queueLen.Load() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
 		// Allow a brief coalescing window when the queue is momentarily empty.
 		time.Sleep(coalesceWait)
 	}
@@ -317,11 +316,11 @@ func (db *DB) nextCommitBatch() *commitBatch {
 		}
 	}
 
-	atomic.AddInt64(&cq.pendingEntries, -pendingEntries)
-	atomic.AddInt64(&cq.pendingBytes, -pendingBytes)
-	qLen := int(atomic.LoadInt64(&cq.queueLen))
-	qEntries := atomic.LoadInt64(&cq.pendingEntries)
-	qBytes := atomic.LoadInt64(&cq.pendingBytes)
+	cq.pendingEntries.Add(-pendingEntries)
+	cq.pendingBytes.Add(-pendingBytes)
+	qLen := int(cq.queueLen.Load())
+	qEntries := cq.pendingEntries.Load()
+	qBytes := cq.pendingBytes.Load()
 	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
 	return &commitBatch{reqs: batch, pool: batchPtr}
 }

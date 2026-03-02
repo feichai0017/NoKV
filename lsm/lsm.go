@@ -379,11 +379,11 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 			lsm.lock.RUnlock()
 			return errors.New("lsm: memtable not initialized")
 		}
-		if atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+		if mt.walSize.Load()+estimate > lsm.option.MemTableSize {
 			lsm.lock.RUnlock()
 			var old *memTable
 			lsm.lock.Lock()
-			if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+			if lsm.memTable == mt && mt.walSize.Load()+estimate > lsm.option.MemTableSize {
 				old = lsm.rotateLocked()
 			}
 			lsm.lock.Unlock()
@@ -421,12 +421,12 @@ outer:
 				lsm.lock.RUnlock()
 				return errors.New("lsm: memtable not initialized")
 			}
-			avail := lsm.option.MemTableSize - atomic.LoadInt64(&mt.walSize)
+			avail := lsm.option.MemTableSize - mt.walSize.Load()
 			if avail <= 0 {
 				lsm.lock.RUnlock()
 				var old *memTable
 				lsm.lock.Lock()
-				if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+estimate > lsm.option.MemTableSize {
+				if lsm.memTable == mt && mt.walSize.Load()+estimate > lsm.option.MemTableSize {
 					old = lsm.rotateLocked()
 				}
 				lsm.lock.Unlock()
@@ -450,7 +450,7 @@ outer:
 						lsm.lock.RUnlock()
 						var old *memTable
 						lsm.lock.Lock()
-						if lsm.memTable == mt && atomic.LoadInt64(&mt.walSize)+est > lsm.option.MemTableSize {
+						if lsm.memTable == mt && mt.walSize.Load()+est > lsm.option.MemTableSize {
 							old = lsm.rotateLocked()
 						}
 						lsm.lock.Unlock()
