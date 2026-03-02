@@ -1,386 +1,100 @@
 # Contributing to NoKV
 
-Thank you for your interest in contributing to NoKV! This document provides guidelines and instructions for contributing.
+Thanks for contributing. This file is the authoritative contribution guide for this repository.
 
-## Table of Contents
+## Scope
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Making Changes](#making-changes)
-- [Testing](#testing)
-- [Code Style](#code-style)
-- [Submitting Changes](#submitting-changes)
-- [Reporting Bugs](#reporting-bugs)
-- [Suggesting Enhancements](#suggesting-enhancements)
-
-## Code of Conduct
-
-We expect all contributors to be respectful and professional. Please:
-
-- Be welcoming to newcomers
-- Be respectful of differing viewpoints and experiences
-- Accept constructive criticism gracefully
-- Focus on what's best for the community
-- Show empathy towards other community members
-
-## Getting Started
-
-1. Fork the repository on GitHub
-2. Clone your fork locally
-3. Set up the development environment
-4. Create a feature branch
-5. Make your changes
-6. Test your changes
-7. Submit a pull request
+- Repository: `github.com/feichai0017/NoKV`
+- Main branch: `main`
+- Go version: `1.26.x` (see `go.mod`)
 
 ## Development Setup
 
-### Prerequisites
-
-- Go 1.23 or higher
-- Git
-- Docker and Docker Compose (for integration tests)
-- Make (optional, but recommended)
-
-### Clone and Build
+1. Fork on GitHub and clone your fork.
+2. Add the upstream remote to keep your fork up to date.
+3. Install toolchain and dependencies.
 
 ```bash
-# Clone your fork
-git clone https://github.com/YOUR-USERNAME/NoKV.git
+git clone https://github.com/feichai0017/NoKV.git
 cd NoKV
-
-# Add upstream remote
-git remote add upstream https://github.com/feichai0017/NoKV.git
-
-# Install dependencies
+git remote rename origin upstream
 go mod download
-
-# Build the project
-make build
-# or
-go build -v ./...
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-make test
-
-# Run tests with race detector
-make test-race
-
-# Run tests with coverage
-make test-coverage
-
-# Run short tests (faster)
-make test-short
-```
-
-### Running the Local Cluster
-
-```bash
-# Option 1: Using Make
-make local-cluster
-
-# Option 2: Using script directly
-./scripts/run_local_cluster.sh --config ./raft_config.example.json
-
-# Option 3: Using Docker Compose
-make docker-up
-```
-
-## Making Changes
-
-### Branch Naming
-
-Use descriptive branch names:
-
-- `feature/your-feature-name` - for new features
-- `fix/issue-description` - for bug fixes
-- `docs/what-you-document` - for documentation updates
-- `refactor/what-you-refactor` - for code refactoring
-
-### Commit Messages
-
-Follow these guidelines for commit messages:
-
-```
-<type>: <subject>
-<body>
-<footer>
-```
-
-**Types:**
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
-
-**Example:**
-```
-feat: add TTL support for Redis SET command
-Implement TTL (Time To Live) support for the Redis SET command
-to enable automatic key expiration. This includes:
-- TTL metadata storage
-- Background expiration cleanup
-- Integration with MVCC transactions
-Fixes #123
-```
-
-### Code Organization
-
-- Keep changes focused and atomic
-- One logical change per commit
-- Break large features into smaller, reviewable PRs
-- Update documentation alongside code changes
-
-## Testing
-
-### Test Requirements
-
-All contributions must include appropriate tests:
-
-- **Unit tests**: Test individual functions/methods
-- **Integration tests**: Test component interactions
-- **Benchmarks**: For performance-critical code
-
-### Writing Tests
-
-```go
-func TestYourFeature(t *testing.T) {
-    // Setup
-    db := setupTestDB(t)
-    defer db.Close()
-
-    // Execute
-    result, err := db.YourFeature()
-
-    // Assert
-    assert.NoError(t, err)
-    assert.Equal(t, expected, result)
-}
-```
-
-### Running Specific Tests
-
-```bash
-# Run tests in a specific package
-go test ./lsm/...
-
-# Run a specific test
-go test -run TestYourFeature ./pkg/...
-
-# Run with verbose output
-go test -v ./...
-```
-
-## Code Style
-
-### Go Code Style
-
-Follow standard Go conventions:
-
-- Use `gofmt` for formatting (enforced in CI)
-- Follow [Effective Go](https://golang.org/doc/effective_go.html)
-- Use meaningful variable and function names
-- Add comments for exported functions and types
-- Keep functions focused and small (prefer < 50 lines)
-- Handle errors explicitly, don't ignore them
-
-### Format Your Code
-
-```bash
-# Format all Go files
-make fmt
-
-# or manually
-gofmt -w -s .
-go mod tidy
-```
-
-### Linting
-
-```bash
-# Install golangci-lint
 make install-tools
+```
 
-# Run linter
+If you use a fork-based workflow, add your fork as `origin`.
+
+## Branch and Commit Conventions
+
+Use these branch prefixes:
+
+- `feature/...` for new features
+- `fix/...` for bug fixes
+- `refactor/...` for non-functional refactors
+- `docs/...` for documentation updates
+- Commit format: `<type>: <subject>`
+- Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+- Keep each commit focused on one logical change.
+
+## Local Validation
+
+Run these before opening a PR:
+
+```bash
+make fmt
 make lint
+make test
 ```
 
-### Code Comments
+Recommended when changing concurrency-sensitive code:
 
-- Add godoc comments for all exported types and functions
-- Use `//` for single-line comments
-- Use `/* */` for multi-line comments or package documentation
-- Explain "why" not "what" in comments
-
-**Example:**
-```go
-// CompactLevel performs a compaction on the specified level to reduce
-// read amplification and reclaim space from deleted entries.
-// It merges overlapping SSTables and writes the result to the next level.
-func (lsm *LSM) CompactLevel(level int) error {
-    // ...
-}
+```bash
+make test-race
 ```
 
-## Submitting Changes
+For benchmark-related changes:
 
-### Before Submitting
-
-Ensure your changes:
-
-1. ✅ Build successfully (`make build`)
-2. ✅ Pass all tests (`make test`)
-3. ✅ Pass linting (`make lint`)
-4. ✅ Include appropriate tests
-5. ✅ Update relevant documentation
-6. ✅ Follow code style guidelines
-7. ✅ Have clear commit messages
-
-### Pull Request Process
-
-1. **Update your fork**
-   ```bash
-   git fetch upstream
-   git rebase upstream/main
-   ```
-
-2. **Push to your fork**
-   ```bash
-   git push origin your-branch-name
-   ```
-
-3. **Create Pull Request**
-   - Go to the NoKV repository on GitHub
-   - Click "New Pull Request"
-   - Select your fork and branch
-   - Fill out the PR template
-   - Link related issues
-
-4. **PR Description**
-   Include:
-   - What changes were made
-   - Why the changes are needed
-   - How to test the changes
-   - Any breaking changes
-   - Related issue numbers
-
-5. **Review Process**
-   - Maintainers will review your PR
-   - Address feedback and questions
-   - Make requested changes
-   - Once approved, maintainers will merge
-
-### PR Title Format
-
-```
-<type>: <description>
+```bash
+make bench
 ```
 
-Examples:
-- `feat: add support for range queries`
-- `fix: resolve memory leak in value log GC`
-- `docs: update installation instructions`
+## Pull Request Rules
 
-## Reporting Bugs
+- Rebase on latest `upstream/main` before opening or updating a PR.
+- PR description must include: what changed, why it changed, and how you validated it (commands + key results).
+- Link related issue(s).
+- Include docs updates when behavior/config/CLI changes.
+- Keep PRs small enough for focused review.
 
-### Before Reporting
+## Code Guidelines
 
-- Check existing issues to avoid duplicates
-- Test with the latest version
-- Gather relevant information
+- Use `gofmt` formatting and pass `golangci-lint`.
+- Add/maintain GoDoc comments for exported symbols.
+- Keep package boundaries clear; avoid cross-package coupling without need.
+- Do not mix unrelated refactors with behavior changes in one PR.
+- Add tests for every bug fix or behavior change.
 
-### Bug Report Template
+## Testing Expectations
 
-```markdown
-**Description**
-Clear description of the bug
+- Unit test for local logic changes.
+- Integration test for cross-module behavior changes.
+- Bench evidence for performance-sensitive modifications.
+- If a test cannot be added, explain why in the PR.
 
-**To Reproduce**
-Steps to reproduce:
-1. Step 1
-2. Step 2
-3. ...
+## Issues and Proposals
 
-**Expected Behavior**
-What you expected to happen
+- Use GitHub Issues for bugs/features.
+- Use the repository issue template when opening a new issue.
+- For broad design topics, use GitHub Discussions first, then split into implementable issues.
 
-**Actual Behavior**
-What actually happened
+## Documentation Policy
 
-**Environment**
-- NoKV version:
-- Go version:
-- OS:
-- Architecture:
+When you change behavior, update related docs in the same PR:
 
-**Additional Context**
-- Logs
-- Configuration
-- Stack traces
-```
+- `README.md`
+- `docs/`
+- config examples and scripts if flags/config fields changed
 
-## Suggesting Enhancements
+## License
 
-### Enhancement Proposal Template
-
-```markdown
-**Feature Description**
-Clear description of the proposed feature
-
-**Motivation**
-Why this feature is needed
-
-**Proposed Implementation**
-How you propose to implement it
-
-**Alternatives Considered**
-Other approaches you've considered
-
-**Additional Context**
-- Use cases
-- Examples
-- References
-```
-
-## Documentation
-
-### Documentation Updates
-
-When making changes that affect:
-
-- **API**: Update godoc comments
-- **Features**: Update relevant docs in `docs/`
-- **Configuration**: Update configuration examples
-- **CLI**: Update `docs/cli.md`
-- **Architecture**: Update `docs/architecture.md`
-
-### Writing Documentation
-
-- Use clear, concise language
-- Include code examples
-- Add diagrams where helpful (Mermaid syntax supported)
-- Update the table of contents
-
-## Getting Help
-
-- **Questions**: Open a discussion on GitHub Discussions
-- **Issues**: Open an issue with the bug or feature template
-- **Chat**: (Add chat link if available)
-
-## Recognition
-
-Contributors will be recognized in:
-
-- Release notes
-- CONTRIBUTORS file (if created)
-- GitHub contributors page
-
-Thank you for contributing to NoKV! 🚀
+By contributing, you agree your contribution is licensed under Apache License 2.0, consistent with this repository.
