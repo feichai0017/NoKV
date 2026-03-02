@@ -989,6 +989,14 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 	}
 }
 
+// rangeTombstone represents a copied range tombstone for compaction.
+type rangeTombstone struct {
+	cf      kv.ColumnFamily
+	start   []byte
+	end     []byte
+	version uint64
+}
+
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
@@ -1013,23 +1021,37 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			discardStats[manifest.ValueLogID{Bucket: vp.Bucket, FileID: vp.Fid}] += int64(math.Round(weighted))
 		}
 	}
+
+	// Keep tombstone state across builder splits.
+	var rangeTombstones []rangeTombstone
+	isMaxLevel := cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum
+
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
-		var rangeTombstones []*kv.Entry
-		isMaxLevel := cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum
 
 		for ; it.Valid(); it.Next() {
 			entry := it.Item().Entry()
 			key := entry.Key
 			isExpired := IsDeletedOrExpired(entry)
 
-			if entry.IsRangeDelete() {
-				if isMaxLevel {
-					updateStats(entry)
-					continue
+				if entry.IsRangeDelete() {
+					if isMaxLevel {
+						updateStats(entry)
+						continue
+					}
+					// Copy range tombstone data to avoid iterator reuse issues.
+					cf, rtStart, rtVersion, ok := kv.SplitInternalKey(entry.Key)
+					if !ok {
+						continue
+					}
+					rt := rangeTombstone{
+						cf:      cf,
+						start:   kv.SafeCopy(nil, rtStart),
+						end:     kv.SafeCopy(nil, entry.RangeEnd()),
+						version: rtVersion,
+					}
+					rangeTombstones = append(rangeTombstones, rt)
 				}
-				rangeTombstones = append(rangeTombstones, entry)
-			}
 			if !kv.SameKey(key, lastKey) {
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 					break
@@ -1044,27 +1066,24 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				tableKr.Right = lastKey
 			}
 
-			if !entry.IsRangeDelete() {
-				covered := false
-				_, userKey, version, ok := kv.SplitInternalKey(key)
-				if !ok {
-					continue
-				}
-				for _, rt := range rangeTombstones {
-					_, rtStart, rtVersion, ok := kv.SplitInternalKey(rt.Key)
+				if !entry.IsRangeDelete() {
+					covered := false
+					cf, userKey, version, ok := kv.SplitInternalKey(key)
 					if !ok {
 						continue
 					}
-					if rtVersion >= version && kv.KeyInRange(userKey, rtStart, rt.RangeEnd()) {
-						covered = true
-						updateStats(entry)
-						break
+					for _, rt := range rangeTombstones {
+						// Check CF match and version/range coverage.
+						if rt.cf == cf && rt.version >= version && kv.KeyInRange(userKey, rt.start, rt.end) {
+							covered = true
+							updateStats(entry)
+							break
+						}
+					}
+					if covered {
+						continue
 					}
 				}
-				if covered {
-					continue
-				}
-			}
 
 			valueLen := entryValueLen(entry)
 			if isExpired {

@@ -606,9 +606,30 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	return entry, nil
 }
 
+// isKeyCoveredByRangeTombstone checks if a key is covered by any range tombstone.
+//
+// PERFORMANCE WARNING: This implementation creates new iterators and performs a full
+// scan of all LSM levels for every check. This is O(n) per read operation and causes
+// significant overhead when range tombstones are present.
+//
+// TODO: Integrate range tombstone checking into the merge iterator logic to avoid
+// creating new iterators and scanning all levels for every read. Proper implementation
+// should:
+//  1. Track range tombstones during merge iteration
+//  2. Use a fragmented range tombstone structure (similar to RocksDB/Pebble)
+//  3. Check coverage during normal LSM traversal without separate scans
 func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
 	opt := &utils.Options{IsAsc: true}
 	iters := db.lsm.NewIterators(opt)
+	// Ensure all iterators are closed even on early return.
+	defer func() {
+		for _, it := range iters {
+			if it != nil {
+				_ = it.Close()
+			}
+		}
+	}()
+
 	for _, it := range iters {
 		if it == nil {
 			continue
@@ -626,6 +647,7 @@ func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, v
 				continue
 			}
 			rangeCF, rangeStart, rangeVersion := kv.SplitInternalKey(e.Key)
+			// Check CF match and version coverage.
 			if rangeCF != cf || rangeVersion < version {
 				it.Next()
 				continue
@@ -636,7 +658,6 @@ func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, v
 			}
 			it.Next()
 		}
-		it.Close()
 	}
 	return false
 }
