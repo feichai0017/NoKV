@@ -6,7 +6,6 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -14,16 +13,6 @@ const (
 	DefaultArenaSize = int64(64 << 20)
 
 	minArenaChunkSize = int64(1 << 20)
-
-	offsetSize = int(unsafe.Sizeof(uint32(0)))
-
-	// Always align nodes on 64-bit boundaries, even on 32-bit architectures,
-	// so that the node.value field is 64-bit aligned. This is necessary because
-	// node.getValueOffset uses atomic.LoadUint64, which expects its input
-	// pointer to be 64-bit aligned.
-	nodeAlign = int(unsafe.Sizeof(uint64(0))) - 1
-
-	MaxNodeSize = int(unsafe.Sizeof(node{}))
 )
 
 // Arena should be lock-free.
@@ -33,8 +22,8 @@ type Arena struct {
 	chunks    []atomic.Pointer[byte]
 }
 
-// newArena returns a new arena.
-func newArena(n int64) *Arena {
+// NewArena returns a new arena.
+func NewArena(n int64) *Arena {
 	// Don't store data at position 0 in order to reserve offset=0 as a kind
 	// of nil pointer.
 	if n <= 0 {
@@ -55,7 +44,7 @@ func newArena(n int64) *Arena {
 	return out
 }
 
-func (s *Arena) allocate(sz uint32) uint32 {
+func (s *Arena) Allocate(sz uint32) uint32 {
 	AssertTrue(s != nil)
 	AssertTrue(sz > 0)
 	AssertTrue(sz <= s.chunkSize)
@@ -76,7 +65,7 @@ func (s *Arena) allocate(sz uint32) uint32 {
 	}
 }
 
-func (s *Arena) allocAligned(size, align int) uint32 {
+func (s *Arena) AllocAligned(size, align int) uint32 {
 	if s == nil || size <= 0 {
 		return 0
 	}
@@ -85,20 +74,20 @@ func (s *Arena) allocAligned(size, align int) uint32 {
 	}
 	pad := align - 1
 	AssertTrue(uint32(size+pad) <= s.chunkSize)
-	offset := s.allocate(uint32(size + pad))
+	offset := s.Allocate(uint32(size + pad))
 	return (offset + uint32(pad)) & ^uint32(pad)
 }
 
-func (s *Arena) allocBytes(length int) []byte {
+func (s *Arena) AllocBytes(length int) []byte {
 	if s == nil || length <= 0 {
 		return nil
 	}
 	AssertTrue(uint32(length) <= s.chunkSize)
-	offset := s.allocate(uint32(length))
+	offset := s.Allocate(uint32(length))
 	return s.bytesAt(offset, length)
 }
 
-func (s *Arena) allocByteSlice(length, capacity int) []byte {
+func (s *Arena) AllocByteSlice(length, capacity int) []byte {
 	if capacity <= 0 {
 		return nil
 	}
@@ -108,11 +97,11 @@ func (s *Arena) allocByteSlice(length, capacity int) []byte {
 	if length > capacity {
 		length = capacity
 	}
-	buf := s.allocBytes(capacity)
+	buf := s.AllocBytes(capacity)
 	return buf[:length:capacity]
 }
 
-func (s *Arena) allocUint32Slice(length, capacity int) []uint32 {
+func (s *Arena) AllocUint32Slice(length, capacity int) []uint32 {
 	if s == nil || capacity <= 0 {
 		return nil
 	}
@@ -125,7 +114,7 @@ func (s *Arena) allocUint32Slice(length, capacity int) []uint32 {
 	elemSize := int(unsafe.Sizeof(uint32(0)))
 	align := int(unsafe.Alignof(uint32(0)))
 	AssertTrue(uint32(elemSize*capacity) <= s.chunkSize)
-	offset := s.allocAligned(elemSize*capacity, align)
+	offset := s.AllocAligned(elemSize*capacity, align)
 	ptr := (*uint32)(s.addr(offset))
 	if ptr == nil {
 		return nil
@@ -136,75 +125,6 @@ func (s *Arena) allocUint32Slice(length, capacity int) []uint32 {
 
 func (s *Arena) size() int64 {
 	return int64(atomic.LoadUint32(&s.n))
-}
-
-// putNode allocates a node in the arena. The node is aligned on a pointer-sized
-// boundary. The arena offset of the node is returned.
-func (s *Arena) putNode(height int) uint32 {
-	// Compute the amount of the tower that will never be used, since the height
-	// is less than maxHeight.
-	unusedSize := (maxHeight - height) * offsetSize
-
-	// Pad the allocation with enough bytes to ensure pointer alignment.
-	l := uint32(MaxNodeSize - unusedSize + nodeAlign)
-	n := s.allocate(l)
-
-	// Return the aligned offset.
-	m := (n + uint32(nodeAlign)) & ^uint32(nodeAlign)
-	return m
-}
-
-// Put will *copy* val into arena. To make better use of this, reuse your input
-// val buffer. Returns an offset into buf. User is responsible for remembering
-// size of val. We could also store this size inside arena but the encoding and
-// decoding will incur some overhead.
-func (s *Arena) putVal(v kv.ValueStruct) uint32 {
-	l := uint32(v.EncodedSize())
-	offset := s.allocate(l)
-	buf := s.bytesAt(offset, int(l))
-	v.EncodeValue(buf)
-	return offset
-}
-
-func (s *Arena) putKey(key []byte) uint32 {
-	keySz := uint32(len(key))
-	if keySz == 0 {
-		return 0
-	}
-	offset := s.allocate(keySz)
-	buf := s.bytesAt(offset, int(keySz))
-	AssertTrue(len(key) == copy(buf, key))
-	return offset
-}
-
-// getNode returns a pointer to the node located at offset. If the offset is
-// zero, then the nil node pointer is returned.
-func (s *Arena) getNode(offset uint32) *node {
-	if offset == 0 {
-		return nil
-	}
-	return (*node)(s.addr(offset))
-}
-
-// getKey returns byte slice at offset.
-func (s *Arena) getKey(offset uint32, size uint16) []byte {
-	return s.bytesAt(offset, int(size))
-}
-
-// getVal returns byte slice at offset. The given size should be just the value
-// size and should NOT include the meta bytes.
-func (s *Arena) getVal(offset uint32, size uint32) (ret kv.ValueStruct) {
-	ret.DecodeValue(s.bytesAt(offset, int(size)))
-	return
-}
-
-// getNodeOffset returns the offset of node in the arena. If the node pointer is
-// nil, then the zero offset is returned.
-func (s *Arena) getNodeOffset(nd *node) uint32 {
-	if nd == nil {
-		return 0 //return nil pointer
-	}
-	return nd.self
 }
 
 func (s *Arena) bytesAt(offset uint32, length int) []byte {
@@ -264,6 +184,53 @@ func (s *Arena) ensureChunk(idx uint32) {
 	}
 }
 
+// arenaPutKey copies key bytes into arena and returns the start offset.
+func arenaPutKey(arena *Arena, key []byte) uint32 {
+	if arena == nil {
+		return 0
+	}
+	keySz := uint32(len(key))
+	if keySz == 0 {
+		return 0
+	}
+	offset := arena.Allocate(keySz)
+	buf := arena.bytesAt(offset, int(keySz))
+	copy(buf, key)
+	return offset
+}
+
+// arenaGetKey returns key bytes from arena at offset with given size.
+func arenaGetKey(arena *Arena, offset uint32, size uint16) []byte {
+	if arena == nil {
+		return nil
+	}
+	return arena.bytesAt(offset, int(size))
+}
+
+// arenaPutVal encodes and stores value bytes into arena, returning the start offset.
+func arenaPutVal(arena *Arena, v kv.ValueStruct) uint32 {
+	if arena == nil {
+		return 0
+	}
+	l := uint32(v.EncodedSize())
+	if l == 0 {
+		return 0
+	}
+	offset := arena.Allocate(l)
+	buf := arena.bytesAt(offset, int(l))
+	v.EncodeValue(buf)
+	return offset
+}
+
+// arenaGetVal decodes a value struct from arena at offset and size.
+func arenaGetVal(arena *Arena, offset uint32, size uint32) (ret kv.ValueStruct) {
+	if arena == nil {
+		return kv.ValueStruct{}
+	}
+	ret.DecodeValue(arena.bytesAt(offset, int(size)))
+	return
+}
+
 func maxChunks(chunkSize uint32) int {
 	if chunkSize == 0 {
 		return 0
@@ -275,6 +242,6 @@ func maxChunks(chunkSize uint32) int {
 // AssertTrue asserts that b is true. Otherwise, it would log fatal.
 func AssertTrue(b bool) {
 	if !b {
-		log.Fatalf("%+v", errors.Errorf("Assert failed"))
+		log.Fatalf("Assert failed")
 	}
 }
