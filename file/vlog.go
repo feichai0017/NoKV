@@ -17,7 +17,7 @@ import (
 type LogFile struct {
 	Lock sync.RWMutex
 	FID  uint32
-	size uint32
+	size atomic.Uint32
 	f    *MmapFile
 	ro   bool
 }
@@ -42,7 +42,7 @@ func (lf *LogFile) Open(opt *Options) error {
 	sz := fi.Size()
 	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
 		uint32(sz), uint32(math.MaxUint32)))
-	lf.size = uint32(sz)
+	lf.size.Store(uint32(sz))
 	lf.ro = flag == os.O_RDONLY
 	// TODO: consider reserving a header region for metadata.
 	return nil
@@ -56,7 +56,7 @@ func (lf *LogFile) Read(p *kv.ValuePtr) (buf []byte, err error) {
 	// causing the read to fail with ErrEOF. See issue #585.
 	size := int64(len(lf.f.Data))
 	valsz := p.Len
-	lfsz := atomic.LoadUint32(&lf.size)
+	lfsz := lf.size.Load()
 	if int64(offset) >= size || int64(offset+valsz) > size ||
 		// Ensure that the read is within the file's actual size. It might be possible that
 		// the offset+valsz length is beyond the file's actual size. This could happen when
@@ -86,7 +86,7 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	if err := lf.f.Truncature(int64(offset)); err != nil {
 		return errors.Wrapf(err, "Unable to truncate file: %q", lf.FileName())
 	}
-	atomic.StoreUint32(&lf.size, offset)
+	lf.size.Store(offset)
 
 	// Run a file sync after truncation.
 	if err := lf.File().Sync(); err != nil {
@@ -112,7 +112,7 @@ func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	}
 	err = lf.f.AppendBuffer(offset, buf)
 	if err == nil {
-		atomic.StoreUint32(&lf.size, offset+uint32(len(buf)))
+		lf.size.Store(offset + uint32(len(buf)))
 	}
 	return err
 }
@@ -126,7 +126,7 @@ func (lf *LogFile) Truncate(offset int64) error {
 	if offset > math.MaxUint32 {
 		offset = math.MaxUint32
 	}
-	atomic.StoreUint32(&lf.size, uint32(offset))
+	lf.size.Store(uint32(offset))
 	return nil
 }
 func (lf *LogFile) Close() error {
@@ -134,7 +134,7 @@ func (lf *LogFile) Close() error {
 }
 
 func (lf *LogFile) Size() int64 {
-	return int64(atomic.LoadUint32(&lf.size))
+	return int64(lf.size.Load())
 }
 
 // Bootstrap initializes a new log file.
@@ -166,7 +166,7 @@ func (lf *LogFile) Init() error {
 		return nil
 	}
 	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("[LogFile.Init] sz > math.MaxUint32"))
-	lf.size = uint32(sz)
+	lf.size.Store(uint32(sz))
 	return nil
 }
 func (lf *LogFile) FileName() string {
