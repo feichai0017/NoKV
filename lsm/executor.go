@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -1070,7 +1069,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			defer inflightBuilders.Done(nil)
 			defer builder.Close()
 			var tbl *table
-			newFID := atomic.AddUint64(&lm.maxFID, 1) // Compaction does not allocate memtables; advance maxFID.
+			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
 			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
 			tbl = openTable(lm, sstName, builder)
 			if tbl == nil {

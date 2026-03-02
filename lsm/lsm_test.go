@@ -979,7 +979,7 @@ func TestCompact(t *testing.T) {
 	l0ToL0 := func() {
 		// Seed some data first.
 		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID + 1
+		fid := lsm.levels.maxFID.Load() + 1
 		cd := buildCompactDef(lsm, 0, 0, 0)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
@@ -994,7 +994,7 @@ func TestCompact(t *testing.T) {
 	}
 	nextCompact := func() {
 		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID + 1
+		fid := lsm.levels.maxFID.Load() + 1
 		cd := buildCompactDef(lsm, 0, 0, 1)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
@@ -1010,7 +1010,7 @@ func TestCompact(t *testing.T) {
 
 	maxToMax := func() {
 		baseTest(t, lsm, 128)
-		prevMax := lsm.levels.maxFID
+		prevMax := lsm.levels.maxFID.Load()
 		cd := buildCompactDef(lsm, 6, 6, 6)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())

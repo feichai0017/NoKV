@@ -35,7 +35,7 @@ type memTable struct {
 	segmentID  uint32
 	index      memIndex
 	maxVersion uint64
-	walSize    int64
+	walSize    atomic.Int64
 }
 
 var walBufferPool = sync.Pool{
@@ -82,13 +82,12 @@ func arenaSizeFor(memTableSize int64) int64 {
 
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
 func (lsm *LSM) NewMemtable() *memTable {
-	newFid := atomic.AddUint64(&(lsm.levels.maxFID), 1)
+	newFid := lsm.levels.maxFID.Add(1)
 	utils.Panic(lsm.wal.SwitchSegment(uint32(newFid), true))
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		index:     newMemIndex(lsm.option),
-		walSize:   0,
 	}
 }
 
@@ -157,7 +156,7 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 		return err
 	}
 	for _, info := range infos {
-		atomic.AddInt64(&m.walSize, int64(info.Length)+8)
+		m.walSize.Add(int64(info.Length) + 8)
 	}
 	if m.index != nil {
 		for _, entry := range entries {
@@ -174,7 +173,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		utils.Panic(err)
 	}
 	var fids []uint64
-	maxFid := lsm.levels.maxFID
+	maxFid := lsm.levels.maxFID.Load()
 	for _, path := range files {
 		base := filepath.Base(path)
 		if !strings.HasSuffix(base, ".wal") {
@@ -210,7 +209,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	}
 
 	if len(fids) == 0 {
-		lsm.levels.maxFID = maxFid
+		lsm.levels.maxFID.Store(maxFid)
 		return lsm.NewMemtable(), nil
 	}
 
@@ -224,11 +223,11 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		tables = append(tables, mt)
 	}
 	if len(tables) == 0 {
-		lsm.levels.maxFID = maxFid
+		lsm.levels.maxFID.Store(maxFid)
 		return lsm.NewMemtable(), nil
 	}
 
-	lsm.levels.maxFID = maxFid
+	lsm.levels.maxFID.Store(maxFid)
 	active := tables[len(tables)-1]
 	tables = tables[:len(tables)-1]
 	utils.Panic(lsm.wal.SwitchSegment(active.segmentID, false))
@@ -256,7 +255,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 			mt.index.Add(entry)
 		}
 		entry.DecrRef()
-		atomic.AddInt64(&mt.walSize, int64(info.Length)+8)
+		mt.walSize.Add(int64(info.Length) + 8)
 		return nil
 	})
 	if err != nil {

@@ -83,10 +83,10 @@ type (
 		items          chan struct{}
 		spaces         chan struct{}
 		closeCh        chan struct{}
-		queueLen       int64
-		inflight       int64
-		pendingBytes   int64
-		pendingEntries int64
+		queueLen       atomic.Int64
+		inflight       atomic.Int64
+		pendingBytes   atomic.Int64
+		pendingEntries atomic.Int64
 		closed         atomic.Uint32
 	}
 
