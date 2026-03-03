@@ -418,7 +418,7 @@ func (db *DB) Del(key []byte) error {
 
 // DelCF deletes a key from the specified column family.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
-	return db.applyEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
+	return db.applySingleEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
 }
 
 // Set writes a key/value pair into the default column family.
@@ -433,7 +433,7 @@ func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
 		meta = kv.BitDelete
 		expiresAt = 0
 	}
-	return db.applyEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
+	return db.applySingleEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
 }
 
 // SetCF writes a key/value pair into the specified column family.
@@ -443,11 +443,11 @@ func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
 	if value == nil {
 		meta = kv.BitDelete
 	}
-	return db.applyEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
+	return db.applySingleEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
 }
 
-// applyEntry persists an entry through the regular write pipeline.
-func (db *DB) applyEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
+// applySingleEntry persists one entry through the regular write pipeline.
+func (db *DB) applySingleEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
@@ -494,10 +494,6 @@ func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 			return err
 		}
 	}
-	return db.submitEntries(entries)
-}
-
-func (db *DB) submitEntries(entries []*kv.Entry) error {
 	for _, entry := range entries {
 		entry.IncrRef()
 	}
@@ -517,7 +513,7 @@ func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, 
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
-	return db.applyEntry(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value), meta, 0, version)
+	return db.applySingleEntry(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value), meta, 0, version)
 }
 
 // DeleteVersionedEntry marks the specified version as deleted by writing a
