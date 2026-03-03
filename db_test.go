@@ -173,6 +173,46 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	require.Equal(t, uint64(1), entry.Version)
 }
 
+func TestApplyEntriesWritesBatch(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("batch-key")
+	entries := []*kv.Entry{
+		kv.NewEntryWithCF(kv.CFDefault, kv.SafeCopy(nil, key), []byte("value")),
+		kv.NewEntryWithCF(kv.CFLock, kv.SafeCopy(nil, key), []byte("lock")),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	entries[0].Key = kv.InternalKey(kv.CFDefault, key, 11)
+	entries[1].Key = kv.InternalKey(kv.CFLock, key, math.MaxUint64)
+
+	require.NoError(t, db.ApplyEntries(entries))
+
+	valueEntry, err := db.GetVersionedEntry(kv.CFDefault, key, 11)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), valueEntry.Value)
+
+	lockEntry, err := db.GetVersionedEntry(kv.CFLock, key, math.MaxUint64)
+	require.NoError(t, err)
+	require.Equal(t, []byte("lock"), lockEntry.Value)
+}
+
+func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, nil, []byte("value"))
+	defer entry.DecrRef()
+	entry.Key = nil
+
+	err := db.ApplyEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrEmptyKey)
+}
+
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)

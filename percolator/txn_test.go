@@ -2,7 +2,9 @@ package percolator
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,16 +16,38 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-func openTestDB(t *testing.T) *NoKV.DB {
+func testOptionsForDir(dir string) *NoKV.Options {
 	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = filepath.Join(t.TempDir(), "db")
+	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
+	return opt
+}
+
+func openTestDB(t *testing.T) *NoKV.DB {
+	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
 	db := NoKV.Open(opt)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func latestWALPath(t *testing.T, dir string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	sort.Strings(files)
+	return files[len(files)-1]
+}
+
+func truncateTail(t *testing.T, path string, trim int64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), trim)
+	require.NoError(t, os.Truncate(path, info.Size()-trim))
 }
 
 func TestPrewriteAndCommitPut(t *testing.T) {
@@ -222,6 +246,92 @@ func TestResolveLockCommitTsExpired(t *testing.T) {
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	require.NoError(t, err)
 	require.Nil(t, write)
+}
+
+func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "db")
+	db := NoKV.Open(testOptionsForDir(workDir))
+	latches := latch.NewManager(16)
+	key := []byte("prewrite-corrupt")
+	startTs := uint64(101)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.Close())
+
+	walPath := latestWALPath(t, workDir)
+	truncateTail(t, walPath, 2)
+
+	db2 := NoKV.Open(testOptionsForDir(workDir))
+	defer func() { _ = db2.Close() }()
+	reader := NewReader(db2)
+
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	_, err = db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "db")
+	db := NoKV.Open(testOptionsForDir(workDir))
+	latches := latch.NewManager(16)
+	key := []byte("commit-corrupt")
+	startTs := uint64(201)
+	commitTs := uint64(301)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+	require.NoError(t, db.WAL().Sync())
+
+	require.Nil(t, Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.Close())
+
+	walPath := latestWALPath(t, workDir)
+	truncateTail(t, walPath, 2)
+
+	db2 := NoKV.Open(testOptionsForDir(workDir))
+	defer func() { _ = db2.Close() }()
+	reader := NewReader(db2)
+
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, startTs, lock.Ts)
+
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.Nil(t, write)
+
+	entry, err := db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), entry.Value)
 }
 
 func TestCheckTxnStatusTTLExpire(t *testing.T) {
