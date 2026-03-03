@@ -438,6 +438,7 @@ func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
 
 // SetEntry writes a user-provided entry through the regular write pipeline.
 // The caller can set Meta/ExpiresAt on the entry before calling this method.
+// entry.Version is ignored here; use SetVersionedEntry for explicit MVCC versions.
 func (db *DB) SetEntry(entry *kv.Entry) error {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
