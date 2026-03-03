@@ -418,7 +418,12 @@ func (db *DB) Del(key []byte) error {
 
 // DelCF deletes a key from the specified column family.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
-	return db.applyUserEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	defer entry.DecrRef()
+	return db.ApplyEntries([]*kv.Entry{entry})
 }
 
 // Set writes a key/value pair into the default column family.
@@ -428,39 +433,35 @@ func (db *DB) Set(key, value []byte) error {
 
 // SetWithTTL writes a key/value pair into the default column family with an explicit expiry timestamp.
 func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
 	var meta byte
 	if value == nil {
 		meta = kv.BitDelete
 		expiresAt = 0
 	}
-	return db.applyUserEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, meta, expiresAt)
+	defer entry.DecrRef()
+	return db.ApplyEntries([]*kv.Entry{entry})
 }
 
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
 	var meta byte
 	if value == nil {
 		meta = kv.BitDelete
 	}
-	return db.applyUserEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
-}
-
-// applyUserEntry persists one user-level entry by encoding it as an internal key
-// and forwarding to ApplyEntries.
-func (db *DB) applyUserEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
-	if len(key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	entry := kv.NewInternalEntry(cf, key, version, value, meta, expiresAt)
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, value, meta, 0)
 	defer entry.DecrRef()
 	return db.ApplyEntries([]*kv.Entry{entry})
 }
 
 // ApplyEntries writes pre-built internal-key entries through the regular write
-// pipeline. Use applyUserEntry for user-key APIs.
+// pipeline.
 //
 // The caller must provide entries with internal keys. The entry slices must not
 // be mutated until this call returns.
