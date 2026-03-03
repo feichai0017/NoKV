@@ -9,12 +9,14 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -279,29 +281,86 @@ func (tb *tableBuilder) keyDiff(newKey []byte) []byte {
 	return newKey[i:]
 }
 
-func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
-	bd := tb.done()
-	t = &table{lm: lm, fid: utils.FID(tableName)}
-	// if builder is nil, open an existing sst file
-	t.ss = file.OpenSStable(&file.Options{
-		FileName: tableName,
-		Dir:      lm.opt.WorkDir,
-		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(bd.size),
-		FS:       lm.opt.FS})
-	dst, err := t.ss.View(0, bd.size)
+func writeBuildDataToSST(ss *file.SSTable, bd buildData) error {
+	dst, err := ss.View(0, bd.size)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	written := bd.Copy(dst)
 	utils.CondPanicFunc(written != len(dst), func() error {
 		return fmt.Errorf("tableBuilder.flush written != len(dst)")
 	})
+	// Hint the OS that freshly written pages can be dropped; block cache holds hot copies.
+	_ = ss.Advise(utils.AccessPatternDontNeed)
+	return nil
+}
+
+func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
+	bd := tb.done()
+	t = &table{lm: lm, fid: utils.FID(tableName)}
+	// Throughput-first mode: write directly to final SST when manifest sync is disabled.
+	if lm != nil && lm.opt != nil && !lm.opt.ManifestSync {
+		t.ss = file.OpenSStable(&file.Options{
+			FileName: tableName,
+			Dir:      lm.opt.WorkDir,
+			Flag:     os.O_CREATE | os.O_EXCL | os.O_RDWR,
+			MaxSz:    int(bd.size),
+			FS:       lm.opt.FS,
+		})
+		if t.ss == nil {
+			return nil, fmt.Errorf("failed to open sstable %s", tableName)
+		}
+		if writeErr := writeBuildDataToSST(t.ss, bd); writeErr != nil {
+			_ = t.ss.Close()
+			return nil, writeErr
+		}
+		tb.blockList = nil
+		return t, nil
+	}
+
+	fs := vfs.Ensure(lm.opt.FS)
+	tmpName := fmt.Sprintf("%s.tmp.%d.%d", tableName, os.Getpid(), time.Now().UnixNano())
+	tmp := file.OpenSStable(&file.Options{
+		FileName: tmpName,
+		Dir:      lm.opt.WorkDir,
+		Flag:     os.O_CREATE | os.O_RDWR,
+		MaxSz:    int(bd.size),
+		FS:       lm.opt.FS,
+	})
+	if tmp == nil {
+		return nil, fmt.Errorf("failed to open temp sstable %s", tmpName)
+	}
+	renamed := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = tmp.Close()
+		if !renamed {
+			_ = fs.Remove(tmpName)
+		}
+	}()
+
+	if err := writeBuildDataToSST(tmp, bd); err != nil {
+		return nil, err
+	}
+	// Ensure table bytes are persisted before exposing file through manifest.
+	if err := tmp.Sync(); err != nil {
+		return nil, err
+	}
+
+	if err := fs.RenameNoReplace(tmpName, tableName); errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("sst already exists: %s", tableName)
+	} else if err != nil {
+		return nil, err
+	}
+	renamed = true
+
+	// Reuse the renamed tmp handle to avoid an extra open/mmap round trip.
+	tmp.SetFileName(tableName)
+	t.ss = tmp
 	// Allow GC to reclaim the intermediate blocks once the data is persisted.
 	tb.blockList = nil
-
-	// Hint the OS that freshly written pages can be dropped; block cache holds hot copies.
-	_ = t.ss.Advise(utils.AccessPatternDontNeed)
 	return t, nil
 }
 

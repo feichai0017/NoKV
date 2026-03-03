@@ -45,7 +45,8 @@ func TestTableReverseIteration(t *testing.T) {
 	}
 
 	tableName := utils.FileNameSSTable(dir, 1)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
@@ -133,7 +134,8 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	}
 
 	tableName := utils.FileNameSSTable(dir, 2)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 

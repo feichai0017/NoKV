@@ -32,7 +32,11 @@ type SSTable struct {
 
 // OpenSStable opens or creates an SSTable file.
 func OpenSStable(opt *Options) *SSTable {
-	omf, err := OpenMmapFile(opt.FS, opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	flag := opt.Flag
+	if flag == 0 {
+		flag = os.O_CREATE | os.O_RDWR
+	}
+	omf, err := OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
 	_ = utils.Err(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
@@ -137,6 +141,22 @@ func (ss *SSTable) Advise(pattern utils.AccessPattern) error {
 		return nil
 	}
 	return ss.f.Advise(pattern)
+}
+
+// Sync flushes pending dirty pages for the table mapping.
+func (ss *SSTable) Sync() error {
+	if ss == nil || ss.f == nil {
+		return nil
+	}
+	return ss.f.Sync()
+}
+
+// SetFileName updates the logical path used by the underlying mmap handle.
+func (ss *SSTable) SetFileName(name string) {
+	if ss == nil || ss.f == nil {
+		return
+	}
+	ss.f.SetFileName(name)
 }
 
 func (ss *SSTable) read(off, sz int) ([]byte, error) {

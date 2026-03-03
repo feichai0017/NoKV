@@ -49,21 +49,27 @@ type table struct {
 	pins int32
 }
 
-func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
+func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *table, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if out != nil && out.ss != nil {
+				_ = out.ss.Close()
+			}
+			out = nil
+			err = fmt.Errorf("open table %s panic: %v", tableName, r)
+		}
+	}()
+
 	sstSize := int(lm.opt.SSTableMaxSz)
-	if builder != nil {
-		sstSize = int(builder.done().size)
-	}
 	var (
-		t   *table
-		err error
+		t       *table
+		openErr error
 	)
 	fid := utils.FID(tableName)
 	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
-		if t, err = builder.flush(lm, tableName); err != nil {
-			_ = utils.Err(err)
-			return nil
+		if t, openErr = builder.flush(lm, tableName); openErr != nil {
+			return nil, openErr
 		}
 	} else {
 		t = &table{lm: lm, fid: fid}
@@ -75,8 +81,9 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 			MaxSz:    int(sstSize),
 			FS:       lm.opt.FS})
 	}
-	// first reference, otherwise the reference state will be incorrect
-	t.IncrRef()
+	if t == nil || t.ss == nil {
+		return nil, fmt.Errorf("open table %s: nil sstable handle", tableName)
+	}
 	// initialize the sst file, load the index
 	// The Index Block is stored as a Protobuf message (pb.TableIndex).
 	// The overall SSTable structure is:
@@ -86,9 +93,11 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
 	// +-------------------------+-----------------------+------------------------------+
 	if err := t.ss.Init(); err != nil {
-		_ = utils.Err(err)
-		return nil
+		_ = t.ss.Close()
+		return nil, err
 	}
+	// first reference, otherwise the reference state will be incorrect
+	t.IncrRef()
 
 	idx := t.ss.Indexs()
 	if idx != nil {
@@ -114,18 +123,19 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	if !itr.Valid() {
 		// Empty table should not happen, but keep minKey as maxKey fallback.
 		t.maxKey = kv.SafeCopy(nil, t.minKey)
-		return t
+		return t, nil
 	}
 	item := itr.Item()
 	if item == nil || item.Entry() == nil {
 		t.maxKey = kv.SafeCopy(nil, t.minKey)
-		return t
+		return t, nil
 	}
 	maxKey := append([]byte(nil), item.Entry().Key...)
 	t.maxKey = kv.SafeCopy(nil, maxKey)
 	t.ss.SetMaxKey(maxKey)
 
-	return t
+	out = t
+	return out, nil
 }
 
 func (t *table) index() *pb.TableIndex {

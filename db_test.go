@@ -531,6 +531,59 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	})
 }
 
+func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
+	dir := t.TempDir()
+	opt := &Options{
+		WorkDir:          dir,
+		ValueThreshold:   1 << 20,
+		MemTableSize:     1 << 10,
+		SSTableMaxSz:     1 << 20,
+		ValueLogFileSize: 1 << 20,
+		MaxBatchCount:    100,
+		MaxBatchSize:     1 << 20,
+	}
+
+	db := Open(opt)
+	for i := range 256 {
+		key := fmt.Appendf(nil, "sst-corrupt-%03d", i)
+		val := make([]byte, 128)
+		require.NoError(t, db.Set(key, val))
+	}
+	require.NoError(t, db.Close())
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.sst"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+
+	corruptPath := files[0]
+	corruptFID := utils.FID(corruptPath)
+	require.NoError(t, os.WriteFile(corruptPath, []byte("bad-sst"), 0o666))
+
+	db2 := Open(opt)
+	defer func() { _ = db2.Close() }()
+
+	version := db2.lsm.CurrentVersion()
+	var found bool
+	for _, metas := range version.Levels {
+		for _, meta := range metas {
+			if meta.FileID == corruptFID {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	require.False(t, found, "expected corrupt sstable to be removed from manifest view")
+
+	logRecoveryMetric(t, "sst_manifest_corrupt_cleanup", map[string]any{
+		"corrupt_path": corruptPath,
+		"corrupt_fid":  corruptFID,
+		"levels":       len(version.Levels),
+	})
+}
+
 func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
