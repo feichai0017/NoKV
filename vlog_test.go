@@ -265,7 +265,7 @@ func TestValueGC(t *testing.T) {
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, db.SetEntry(e))
+		require.NoError(t, db.SetWithTTL(e.Key, e.Value, e.ExpiresAt))
 		e.DecrRef()
 	}
 	require.NoError(t, db.RunValueLogGC(0.9))
@@ -333,7 +333,7 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 
 	val := bytes.Repeat([]byte("x"), 128)
 	entry := kvpkg.NewEntry([]byte("iter-key"), val)
-	require.NoError(t, db.SetEntry(entry))
+	require.NoError(t, db.Set(entry.Key, entry.Value))
 	entry.DecrRef()
 
 	vlog := db.vlog

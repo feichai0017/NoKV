@@ -31,11 +31,10 @@ func TestAPI(t *testing.T) {
 	// Write entries.
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.SetEntry(e); err != nil {
+		expiresAt := uint64(time.Now().Add(1000 * time.Second).Unix())
+		if err := db.SetWithTTL([]byte(key), []byte(val), expiresAt); err != nil {
 			t.Fatal(err)
 		}
-		e.DecrRef()
 		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
@@ -69,11 +68,10 @@ func TestAPI(t *testing.T) {
 
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.SetEntry(e); err != nil {
+		expiresAt := uint64(time.Now().Add(1000 * time.Second).Unix())
+		if err := db.SetWithTTL([]byte(key), []byte(val), expiresAt); err != nil {
 			t.Fatal(err)
 		}
-		e.DecrRef()
 		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
