@@ -31,6 +31,14 @@ func openTestDB(t *testing.T) *NoKV.DB {
 	return db
 }
 
+func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := entrykv.NewEntryWithCF(cf, entrykv.InternalKey(cf, key, version), entrykv.SafeCopy(nil, value))
+	entry.Meta = meta
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyEntries([]*entrykv.Entry{entry}))
+}
+
 func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
@@ -510,9 +518,9 @@ func TestServiceKvScanRespectsRegionEnd(t *testing.T) {
 
 	startTs := uint64(10)
 	commitTs := uint64(20)
-	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0))
+	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0)
 	write := percolator.EncodeWrite(percolator.Write{Kind: pb.Mutation_Put, StartTs: startTs})
-	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFWrite, []byte("mz"), commitTs, write, 0))
+	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFWrite, []byte("mz"), commitTs, write, 0)
 
 	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
 		Context: env.ctx,

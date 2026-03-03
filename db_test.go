@@ -133,6 +133,14 @@ func newTestOptions(t *testing.T) *Options {
 	return opt
 }
 
+func applyVersionedEntryForTest(t *testing.T, db *DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
+	entry.Meta = meta
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyEntries([]*kv.Entry{entry}))
+}
+
 func TestVersionedEntryRoundTrip(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)
@@ -142,7 +150,7 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	version := uint64(42)
 	value := []byte("value-42")
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, version, value, 0))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, version, value, 0)
 
 	entry, err := db.GetVersionedEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
@@ -158,8 +166,8 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-delete")
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, 1, []byte("v1"), 0))
-	require.NoError(t, db.DeleteVersionedEntry(kv.CFDefault, key, 2))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, nil, kv.BitDelete)
 
 	entry, err := db.GetVersionedEntry(kv.CFDefault, key, 2)
 	require.NoError(t, err)
@@ -171,6 +179,99 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), entry.Value)
 	require.Equal(t, uint64(1), entry.Version)
+}
+
+func TestApplyEntriesWritesBatch(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("batch-key")
+	entries := []*kv.Entry{
+		kv.NewEntryWithCF(kv.CFDefault, kv.SafeCopy(nil, key), []byte("value")),
+		kv.NewEntryWithCF(kv.CFLock, kv.SafeCopy(nil, key), []byte("lock")),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	entries[0].Key = kv.InternalKey(kv.CFDefault, key, 11)
+	entries[1].Key = kv.InternalKey(kv.CFLock, key, math.MaxUint64)
+
+	require.NoError(t, db.ApplyEntries(entries))
+
+	valueEntry, err := db.GetVersionedEntry(kv.CFDefault, key, 11)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), valueEntry.Value)
+
+	lockEntry, err := db.GetVersionedEntry(kv.CFLock, key, math.MaxUint64)
+	require.NoError(t, err)
+	require.Equal(t, []byte("lock"), lockEntry.Value)
+}
+
+func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, nil, []byte("value"))
+	defer entry.DecrRef()
+	entry.Key = nil
+
+	err := db.ApplyEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrEmptyKey)
+}
+
+func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, []byte("plain-user-key"), []byte("value"))
+	defer entry.DecrRef()
+
+	err := db.ApplyEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrInvalidRequest)
+}
+
+func TestSetAfterCloseDoesNotPanic(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	var err error
+	require.NotPanics(t, func() {
+		err = db.Set([]byte("k"), []byte("v"))
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.MaxBatchCount = 1
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrTxnTooBig)
 }
 
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
