@@ -9,6 +9,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -483,5 +484,62 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	}
 	if metrics.SegmentsWithRaftRecords != 1 {
 		t.Fatalf("expected segment count with raft records to persist after reopen, got %d", metrics.SegmentsWithRaftRecords)
+	}
+}
+
+func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	e1 := kv.NewEntry(kv.KeyWithTs([]byte("k1"), 10), []byte("v1"))
+	e2 := kv.NewEntry(kv.KeyWithTs([]byte("k2"), 11), []byte("v2"))
+	defer e1.DecrRef()
+	defer e2.DecrRef()
+
+	info, err := m.AppendEntryBatch([]*kv.Entry{e1, e2})
+	if err != nil {
+		t.Fatalf("append entry batch: %v", err)
+	}
+	if info.Type != wal.RecordTypeEntryBatch {
+		t.Fatalf("expected entry batch type, got %v", info.Type)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	replayed := 0
+	if err := m.Replay(func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		replayed++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			t.Fatalf("decode entry batch: %v", err)
+		}
+		defer func() {
+			for _, e := range entries {
+				e.DecrRef()
+			}
+		}()
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(entries))
+		}
+		if string(kv.ParseKey(entries[0].Key)) != "k1" || string(entries[0].Value) != "v1" {
+			t.Fatalf("unexpected first entry: key=%q value=%q", kv.ParseKey(entries[0].Key), entries[0].Value)
+		}
+		if string(kv.ParseKey(entries[1].Key)) != "k2" || string(entries[1].Value) != "v2" {
+			t.Fatalf("unexpected second entry: key=%q value=%q", kv.ParseKey(entries[1].Key), entries[1].Value)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replayed != 1 {
+		t.Fatalf("expected exactly 1 batch record, got %d", replayed)
 	}
 }

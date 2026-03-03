@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -36,34 +35,6 @@ type memTable struct {
 	index      memIndex
 	maxVersion uint64
 	walSize    atomic.Int64
-}
-
-var walBufferPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-const walBufferMaxReuse = 1 << 22 // 4 MiB guard to avoid retaining huge buffers unnecessarily.
-
-func getWalBuffer() *bytes.Buffer {
-	if bufAny := walBufferPool.Get(); bufAny != nil {
-		buf := bufAny.(*bytes.Buffer)
-		buf.Reset()
-		return buf
-	}
-	return &bytes.Buffer{}
-}
-
-func putWalBuffer(buf *bytes.Buffer) {
-	if buf == nil {
-		return
-	}
-	if buf.Cap() > walBufferMaxReuse {
-		return
-	}
-	buf.Reset()
-	walBufferPool.Put(buf)
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -100,8 +71,26 @@ func (m *memTable) close() error {
 
 // Set inserts one entry into the memtable and appends it to WAL.
 func (m *memTable) Set(entry *kv.Entry) error {
-	entries := [1]*kv.Entry{entry}
-	return m.setBatch(entries[:])
+	if m == nil || entry == nil || len(entry.Key) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	payload, err := kv.EncodeEntry(&buf, entry)
+	if err != nil {
+		return err
+	}
+	infos, err := m.lsm.wal.Append(payload)
+	if err != nil {
+		return err
+	}
+	if len(infos) != 1 {
+		return errors.New("lsm: expected one wal info for single set")
+	}
+	m.walSize.Add(int64(infos[0].Length) + 8)
+	if m.index != nil {
+		m.index.Add(entry)
+	}
+	return nil
 }
 
 // Get reads key from the memtable index and returns a pooled entry wrapper.
@@ -132,32 +121,14 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if m == nil || len(entries) == 0 {
 		return nil
 	}
-	payloads := make([][]byte, 0, len(entries))
-	buffers := make([]*bytes.Buffer, 0, len(entries))
-	releaseBuffers := func() {
-		for _, buf := range buffers {
-			putWalBuffer(buf)
-		}
+	if len(entries) == 1 {
+		return m.Set(entries[0])
 	}
-	for _, entry := range entries {
-		buf := getWalBuffer()
-		payload, err := kv.EncodeEntry(buf, entry)
-		if err != nil {
-			putWalBuffer(buf)
-			releaseBuffers()
-			return err
-		}
-		payloads = append(payloads, payload)
-		buffers = append(buffers, buf)
-	}
-	infos, err := m.lsm.wal.Append(payloads...)
-	releaseBuffers()
+	info, err := m.lsm.wal.AppendEntryBatch(entries)
 	if err != nil {
 		return err
 	}
-	for _, info := range infos {
-		m.walSize.Add(int64(info.Length) + 8)
-	}
+	m.walSize.Add(int64(info.Length) + 8)
 	if m.index != nil {
 		for _, entry := range entries {
 			m.index.Add(entry)
@@ -241,20 +212,33 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		index:     newMemIndex(lsm.option),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
-		if info.Type != wal.RecordTypeEntry {
+		applyEntry := func(entry *kv.Entry) {
+			if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
+				mt.maxVersion = ts
+			}
+			if mt.index != nil {
+				mt.index.Add(entry)
+			}
+			entry.DecrRef()
+		}
+		switch info.Type {
+		case wal.RecordTypeEntry:
+			entry, err := kv.DecodeEntry(payload)
+			if err != nil {
+				return err
+			}
+			applyEntry(entry)
+		case wal.RecordTypeEntryBatch:
+			entries, err := wal.DecodeEntryBatch(payload)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				applyEntry(entry)
+			}
+		default:
 			return nil
 		}
-		entry, err := kv.DecodeEntry(payload)
-		if err != nil {
-			return err
-		}
-		if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
-			mt.maxVersion = ts
-		}
-		if mt.index != nil {
-			mt.index.Add(entry)
-		}
-		entry.DecrRef()
 		mt.walSize.Add(int64(info.Length) + 8)
 		return nil
 	})

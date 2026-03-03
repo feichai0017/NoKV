@@ -54,7 +54,7 @@ func addRecordMetric(m *RecordMetrics, recType RecordType) {
 		return
 	}
 	switch recType {
-	case RecordTypeEntry:
+	case RecordTypeEntry, RecordTypeEntryBatch:
 		m.Entries++
 	case RecordTypeRaftEntry:
 		m.RaftEntries++
@@ -247,6 +247,25 @@ func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
 		}
 	}
 	return m.AppendRecords(records...)
+}
+
+// AppendEntryBatch appends a batch of kv entries as one WAL record.
+func (m *Manager) AppendEntryBatch(entries []*kv.Entry) (EntryInfo, error) {
+	payload, err := EncodeEntryBatch(entries)
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	infos, err := m.AppendRecords(Record{
+		Type:    RecordTypeEntryBatch,
+		Payload: payload,
+	})
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	if len(infos) != 1 {
+		return EntryInfo{}, fmt.Errorf("wal: expected one info for entry batch, got %d", len(infos))
+	}
+	return infos[0], nil
 }
 
 // AppendRecords appends typed records to WAL and returns their locations.
