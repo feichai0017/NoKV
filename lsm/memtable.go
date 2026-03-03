@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"math"
 	"os"
 	"path/filepath"
@@ -35,6 +34,9 @@ type memTable struct {
 	index      memIndex
 	maxVersion uint64
 	walSize    atomic.Int64
+	// reservedSize tracks in-flight write reservations to avoid overcommitting
+	// a memtable when multiple writers proceed under read locks.
+	reservedSize atomic.Int64
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -77,19 +79,11 @@ func (m *memTable) Set(entry *kv.Entry) error {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	var buf bytes.Buffer
-	payload, err := kv.EncodeEntry(&buf, entry)
+	info, err := m.lsm.wal.AppendEntry(entry)
 	if err != nil {
 		return err
 	}
-	infos, err := m.lsm.wal.Append(payload)
-	if err != nil {
-		return err
-	}
-	if len(infos) != 1 {
-		return errors.New("lsm: expected one wal info for single set")
-	}
-	m.walSize.Add(int64(infos[0].Length) + 8)
+	m.walSize.Add(int64(info.Length) + 8)
 	if m.index != nil {
 		m.index.Add(entry)
 	}
@@ -249,6 +243,62 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		return nil, errors.WithMessage(err, "while updating skiplist")
 	}
 	return mt, nil
+}
+
+func (mt *memTable) canReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	used := mt.walSize.Load()
+	reserved := mt.reservedSize.Load()
+	if used < 0 || reserved < 0 || used > limit {
+		return false
+	}
+	remaining := limit - used
+	if reserved > remaining {
+		return false
+	}
+	remaining -= reserved
+	return need <= remaining
+}
+
+func (mt *memTable) tryReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	for {
+		used := mt.walSize.Load()
+		reserved := mt.reservedSize.Load()
+		if used < 0 || reserved < 0 || used > limit {
+			return false
+		}
+		remaining := limit - used
+		if reserved > remaining {
+			return false
+		}
+		remaining -= reserved
+		if need > remaining {
+			return false
+		}
+		if mt.reservedSize.CompareAndSwap(reserved, reserved+need) {
+			return true
+		}
+	}
+}
+
+func (mt *memTable) releaseReserve(need int64) {
+	if mt == nil || need <= 0 {
+		return
+	}
+	if n := mt.reservedSize.Add(-need); n < 0 {
+		panic("lsm: memtable reservation underflow")
+	}
 }
 
 // reference counting helpers, delegate to the backing index.
