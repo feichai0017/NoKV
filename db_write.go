@@ -187,6 +187,9 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 
 	if err := db.enqueueCommitRequest(cr); err != nil {
 		req.wg.Done()
+		// Keep entry ownership with batchSet error handling; request cleanup here
+		// should not release caller-provided entries.
+		req.Entries = nil
 		req.DecrRef()
 		commitReqPool.Put(cr)
 		return nil, err
@@ -199,6 +202,12 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 func (db *DB) batchSet(entries []*kv.Entry) error {
 	req, err := db.sendToWriteCh(entries, true)
 	if err != nil {
+		// batchSet consumes one entry reference regardless of queueing outcome.
+		for _, entry := range entries {
+			if entry != nil {
+				entry.DecrRef()
+			}
+		}
 		return err
 	}
 

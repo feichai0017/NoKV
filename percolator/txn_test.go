@@ -2,7 +2,9 @@ package percolator
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,16 +16,46 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-func openTestDB(t *testing.T) *NoKV.DB {
+func testOptionsForDir(dir string) *NoKV.Options {
 	opt := NoKV.NewDefaultOptions()
-	opt.WorkDir = filepath.Join(t.TempDir(), "db")
+	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
+	return opt
+}
+
+func openTestDB(t *testing.T) *NoKV.DB {
+	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
 	db := NoKV.Open(opt)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
+	entry.Meta = meta
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyEntries([]*kv.Entry{entry}))
+}
+
+func latestWALPath(t *testing.T, dir string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	sort.Strings(files)
+	return files[len(files)-1]
+}
+
+func truncateTail(t *testing.T, path string, trim int64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), trim)
+	require.NoError(t, os.Truncate(path, info.Size()-trim))
 }
 
 func TestPrewriteAndCommitPut(t *testing.T) {
@@ -117,7 +149,7 @@ func TestReaderMostRecentWriteSkipsOtherCF(t *testing.T) {
 	require.NoError(t, db.Set([]byte("b"), []byte("vb")))
 
 	entry := EncodeWrite(Write{Kind: pb.Mutation_Put, StartTs: 1})
-	require.NoError(t, db.SetVersionedEntry(kv.CFWrite, []byte("a"), 10, entry, 0))
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, []byte("a"), 10, entry, 0)
 
 	reader := NewReader(db)
 	write, commitTs, err := reader.MostRecentWrite([]byte("a"))
@@ -224,6 +256,92 @@ func TestResolveLockCommitTsExpired(t *testing.T) {
 	require.Nil(t, write)
 }
 
+func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "db")
+	db := NoKV.Open(testOptionsForDir(workDir))
+	latches := latch.NewManager(16)
+	key := []byte("prewrite-corrupt")
+	startTs := uint64(101)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.Close())
+
+	walPath := latestWALPath(t, workDir)
+	truncateTail(t, walPath, 2)
+
+	db2 := NoKV.Open(testOptionsForDir(workDir))
+	defer func() { _ = db2.Close() }()
+	reader := NewReader(db2)
+
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	_, err = db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "db")
+	db := NoKV.Open(testOptionsForDir(workDir))
+	latches := latch.NewManager(16)
+	key := []byte("commit-corrupt")
+	startTs := uint64(201)
+	commitTs := uint64(301)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+	require.NoError(t, db.WAL().Sync())
+
+	require.Nil(t, Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+	require.NoError(t, db.WAL().Sync())
+	require.NoError(t, db.Close())
+
+	walPath := latestWALPath(t, workDir)
+	truncateTail(t, walPath, 2)
+
+	db2 := NoKV.Open(testOptionsForDir(workDir))
+	defer func() { _ = db2.Close() }()
+	reader := NewReader(db2)
+
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, startTs, lock.Ts)
+
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.Nil(t, write)
+
+	entry, err := db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), entry.Value)
+}
+
 func TestCheckTxnStatusTTLExpire(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
@@ -328,7 +446,7 @@ func TestCommitKeyAlreadyRolledBack(t *testing.T) {
 	lock := &Lock{Primary: key, Ts: 10, Kind: pb.Mutation_Put}
 
 	rollback := EncodeWrite(Write{Kind: pb.Mutation_Rollback, StartTs: lock.Ts})
-	require.NoError(t, db.SetVersionedEntry(kv.CFWrite, key, 15, rollback, 0))
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 15, rollback, 0)
 
 	err := commitKey(db, reader, key, lock, 20)
 	require.NotNil(t, err)
@@ -341,7 +459,7 @@ func TestCommitKeyWritesAndCleansLock(t *testing.T) {
 	key := []byte("commit")
 	lock := &Lock{Primary: key, Ts: 11, Kind: pb.Mutation_Put}
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0))
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0)
 	commitErr := commitKey(db, reader, key, lock, 22)
 	require.Nil(t, commitErr)
 
@@ -357,8 +475,8 @@ func TestCommitKeyAlreadyCommittedDifferentVersion(t *testing.T) {
 	key := []byte("dup")
 	lock := &Lock{Primary: key, Ts: 12, Kind: pb.Mutation_Put}
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFWrite, key, 30, EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts}), 0))
-	require.NoError(t, db.SetVersionedEntry(kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0))
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 30, EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts}), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(*lock), 0)
 
 	commitErr := commitKey(db, reader, key, lock, 40)
 	require.Nil(t, commitErr)
@@ -370,12 +488,12 @@ func TestRollbackKeyCreatesRollbackWrite(t *testing.T) {
 	key := []byte("rb2")
 	startTs := uint64(17)
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
 		Primary: key,
 		Ts:      startTs,
 		Kind:    pb.Mutation_Put,
-	}), 0))
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, startTs, []byte("val"), 0))
+	}), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFDefault, key, startTs, []byte("val"), 0)
 
 	rollbackErr := rollbackKey(db, reader, key, startTs)
 	require.Nil(t, rollbackErr)

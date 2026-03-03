@@ -418,7 +418,7 @@ func (db *DB) Del(key []byte) error {
 
 // DelCF deletes a key from the specified column family.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
-	return db.applyEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
+	return db.applyUserEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
 }
 
 // Set writes a key/value pair into the default column family.
@@ -433,59 +433,71 @@ func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
 		meta = kv.BitDelete
 		expiresAt = 0
 	}
-	return db.applyEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
+	return db.applyUserEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
 }
 
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
-	// Non-transactional API: do not mix with MVCC/Txn writes.
 	var meta byte
 	if value == nil {
 		meta = kv.BitDelete
 	}
-	return db.applyEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
+	return db.applyUserEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
 }
 
-// applyEntry persists an entry through the regular write pipeline.
-func (db *DB) applyEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
+// applyUserEntry persists one user-level entry by encoding it as an internal key
+// and forwarding to ApplyEntries.
+func (db *DB) applyUserEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
 	if !cf.Valid() {
 		cf = kv.CFDefault
 	}
-	if err := db.maybeThrottleWrite(cf, key); err != nil {
-		return err
-	}
-	entry := kv.NewEntryWithCF(cf, key, value)
-	entry.Meta = meta
-	entry.ExpiresAt = expiresAt
+	entry := kv.NewInternalEntry(cf, key, version, value, meta, expiresAt)
 	defer entry.DecrRef()
-	entry.Key = kv.InternalKey(cf, key, version)
-
-	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	entry.IncrRef()
-	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
-		entry.DecrRef()
-		return err
-	}
-	return nil
+	return db.ApplyEntries([]*kv.Entry{entry})
 }
 
-// SetVersionedEntry writes a value to the specified column family using the
-// provided version. It mirrors SetCF but allows callers to control the MVCC
-// timestamp embedded in the internal key.
-func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
+// ApplyEntries writes pre-built internal-key entries through the regular write
+// pipeline. Use applyUserEntry for user-key APIs.
+//
+// The caller must provide entries with internal keys. The entry slices must not
+// be mutated until this call returns.
+func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
-	return db.applyEntry(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value), meta, 0, version)
-}
-
-// DeleteVersionedEntry marks the specified version as deleted by writing a
-// tombstone record.
-func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) error {
-	return db.SetVersionedEntry(cf, key, version, nil, kv.BitDelete)
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
+		// ApplyEntries is for pre-built internal keys only.
+		if len(entry.Key) <= 8 {
+			return utils.ErrInvalidRequest
+		}
+		parsedCF, userKey, ok := kv.DecodeKeyCF(entry.Key[:len(entry.Key)-8])
+		if !ok || len(userKey) == 0 {
+			return utils.ErrInvalidRequest
+		}
+		cf := parsedCF
+		keyForThrottle := userKey
+		entry.CF = parsedCF
+		if !cf.Valid() {
+			cf = kv.CFDefault
+			entry.CF = cf
+		}
+		if err := db.maybeThrottleWrite(cf, keyForThrottle); err != nil {
+			return err
+		}
+	}
+	for _, entry := range entries {
+		entry.IncrRef()
+	}
+	return db.batchSet(entries)
 }
 
 // GetVersionedEntry retrieves the value stored at the provided MVCC version.

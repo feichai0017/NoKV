@@ -9,9 +9,21 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
+
+func appendEntryValue(t *testing.T, m *wal.Manager, key, value string) wal.EntryInfo {
+	t.Helper()
+	entry := kv.NewEntry(kv.KeyWithTs([]byte(key), 1), []byte(value))
+	defer entry.DecrRef()
+	info, err := m.AppendEntry(entry)
+	if err != nil {
+		t.Fatalf("append entry: %v", err)
+	}
+	return info
+}
 
 func TestManagerOpenWithFaultFS(t *testing.T) {
 	dir := t.TempDir()
@@ -36,9 +48,7 @@ func TestManagerCloseReturnsSyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	if _, err := m.Append([]byte("x")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "x")
 
 	err = m.Close()
 	if !errors.Is(err, injected) {
@@ -57,9 +67,7 @@ func TestManagerCloseRetriesAfterCloseFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	if _, err := m.Append([]byte("x")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "x")
 
 	err = m.Close()
 	if !errors.Is(err, injected) {
@@ -77,13 +85,13 @@ func TestManagerAppendAndReplay(t *testing.T) {
 		t.Fatalf("open wal: %v", err)
 	}
 
-	entries := [][]byte{
-		[]byte("hello"),
-		[]byte("world"),
-		[]byte("zoom"),
+	entries := []string{
+		"hello",
+		"world",
+		"zoom",
 	}
-	if _, err := m.Append(entries...); err != nil {
-		t.Fatalf("append: %v", err)
+	for _, value := range entries {
+		appendEntryValue(t, m, "k", value)
 	}
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
@@ -99,11 +107,14 @@ func TestManagerAppendAndReplay(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	var got [][]byte
+	var got []string
 	if err := m.Replay(func(_ wal.EntryInfo, payload []byte) error {
-		cp := make([]byte, len(payload))
-		copy(cp, payload)
-		got = append(got, cp)
+		entry, err := kv.DecodeEntry(payload)
+		if err != nil {
+			return err
+		}
+		got = append(got, string(entry.Value))
+		entry.DecrRef()
 		return nil
 	}); err != nil {
 		t.Fatalf("replay: %v", err)
@@ -113,7 +124,7 @@ func TestManagerAppendAndReplay(t *testing.T) {
 		t.Fatalf("entries mismatch: want %d got %d", len(entries), len(got))
 	}
 	for i := range entries {
-		if string(entries[i]) != string(got[i]) {
+		if entries[i] != got[i] {
 			t.Fatalf("entry %d mismatch: want %q got %q", i, entries[i], got[i])
 		}
 	}
@@ -127,19 +138,14 @@ func TestManagerRotate(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	payload := []byte("record")
-	if _, err := m.Append(payload); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "record")
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if err := m.Rotate(); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, err := m.Append(payload); err != nil {
-		t.Fatalf("append after rotate: %v", err)
-	}
+	appendEntryValue(t, m, "k", "record")
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync after rotate: %v", err)
 	}
@@ -160,9 +166,8 @@ func TestManagerReplayHandlesTruncate(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	if _, err := m.Append([]byte("alpha"), []byte("beta")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k1", "alpha")
+	appendEntryValue(t, m, "k2", "beta")
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -211,9 +216,7 @@ func TestManagerReplayChecksumError(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	if _, err := m.Append([]byte("gamma")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "gamma")
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -259,9 +262,7 @@ func TestManagerCloseIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open wal: %v", err)
 	}
-	if _, err := m.Append([]byte("x")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "x")
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -281,9 +282,7 @@ func TestManagerListSegmentsSorted(t *testing.T) {
 
 	for i := range 5 {
 		payload := []byte("payload-" + string(rune('a'+i)))
-		if _, err := m.Append(payload); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		appendEntryValue(t, m, "k", string(payload))
 		if i%2 == 1 {
 			if err := m.Rotate(); err != nil {
 				t.Fatalf("rotate: %v", err)
@@ -308,9 +307,9 @@ func TestVerifyDirTruncatesPartialSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	payloads := [][]byte{[]byte("alpha"), []byte("beta")}
-	if _, err := m.Append(payloads...); err != nil {
-		t.Fatalf("append: %v", err)
+	payloads := []string{"alpha", "beta"}
+	for i, payload := range payloads {
+		appendEntryValue(t, m, string(rune('a'+i)), payload)
 	}
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
@@ -365,9 +364,7 @@ func TestVerifyDirPropagatesTruncateFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := m.Append([]byte("alpha")); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendEntryValue(t, m, "k", "alpha")
 	if err := m.Sync(); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -484,4 +481,99 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	if metrics.SegmentsWithRaftRecords != 1 {
 		t.Fatalf("expected segment count with raft records to persist after reopen, got %d", metrics.SegmentsWithRaftRecords)
 	}
+}
+
+func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	e1 := kv.NewEntry(kv.KeyWithTs([]byte("k1"), 10), []byte("v1"))
+	e2 := kv.NewEntry(kv.KeyWithTs([]byte("k2"), 11), []byte("v2"))
+	defer e1.DecrRef()
+	defer e2.DecrRef()
+
+	info, err := m.AppendEntryBatch([]*kv.Entry{e1, e2})
+	if err != nil {
+		t.Fatalf("append entry batch: %v", err)
+	}
+	if info.Type != wal.RecordTypeEntryBatch {
+		t.Fatalf("expected entry batch type, got %v", info.Type)
+	}
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	replayed := 0
+	if err := m.Replay(func(info wal.EntryInfo, payload []byte) error {
+		if info.Type != wal.RecordTypeEntryBatch {
+			return nil
+		}
+		replayed++
+		entries, err := wal.DecodeEntryBatch(payload)
+		if err != nil {
+			t.Fatalf("decode entry batch: %v", err)
+		}
+		defer func() {
+			for _, e := range entries {
+				e.DecrRef()
+			}
+		}()
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(entries))
+		}
+		if string(kv.ParseKey(entries[0].Key)) != "k1" || string(entries[0].Value) != "v1" {
+			t.Fatalf("unexpected first entry: key=%q value=%q", kv.ParseKey(entries[0].Key), entries[0].Value)
+		}
+		if string(kv.ParseKey(entries[1].Key)) != "k2" || string(entries[1].Value) != "v2" {
+			t.Fatalf("unexpected second entry: key=%q value=%q", kv.ParseKey(entries[1].Key), entries[1].Value)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replayed != 1 {
+		t.Fatalf("expected exactly 1 batch record, got %d", replayed)
+	}
+}
+
+func TestManagerAppendEntryRejectsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	if _, err := m.AppendEntry(nil); err == nil {
+		t.Fatalf("expected error for nil entry")
+	}
+
+	e := kv.NewEntry(nil, []byte("v"))
+	defer e.DecrRef()
+	if _, err := m.AppendEntry(e); err == nil {
+		t.Fatalf("expected error for empty key entry")
+	}
+}
+
+func TestDecodeEntryBatchRejectsMalformedCount(t *testing.T) {
+	t.Run("zero count", func(t *testing.T) {
+		payload := make([]byte, 4)
+		if _, err := wal.DecodeEntryBatch(payload); err == nil {
+			t.Fatalf("expected malformed entry batch error")
+		}
+	})
+
+	t.Run("count exceeds payload minimum footprint", func(t *testing.T) {
+		payload := make([]byte, 9)
+		binary.BigEndian.PutUint32(payload[:4], ^uint32(0))
+		binary.BigEndian.PutUint32(payload[4:8], 1)
+		payload[8] = 0
+		if _, err := wal.DecodeEntryBatch(payload); err == nil {
+			t.Fatalf("expected malformed entry batch error")
+		}
+	})
 }

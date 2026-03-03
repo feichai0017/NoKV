@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/wal"
@@ -106,15 +107,16 @@ func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 	manifestMgr := openManifestManager(t, dir)
 	defer func() { _ = manifestMgr.Close() }()
 
-	infos, err := walMgr.Append([]byte("plain-entry"))
+	plain := kv.NewEntry(kv.KeyWithTs([]byte("plain"), 1), []byte("entry"))
+	info, err := walMgr.AppendEntry(plain)
 	require.NoError(t, err)
-	require.Len(t, infos, 1)
+	plain.DecrRef()
 	require.NoError(t, walMgr.Sync())
 
 	ptr := manifest.RaftLogPointer{
 		GroupID: 1,
-		Segment: infos[0].SegmentID,
-		Offset:  recordEnd(infos[0]),
+		Segment: info.SegmentID,
+		Offset:  recordEnd(info),
 	}
 	require.NoError(t, manifestMgr.LogRaftPointer(ptr))
 

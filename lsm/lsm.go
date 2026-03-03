@@ -361,6 +361,30 @@ func (lsm *LSM) StartCompacter() {
 	}
 }
 
+const (
+	walRecordOverhead     int64 = 9 // length(4) + type(1) + crc(4)
+	walBatchCountOverhead int64 = 4 // uint32 entry count
+	walBatchLenOverhead   int64 = 4 // uint32 per-entry encoded length
+)
+
+func estimateSingleEntryWALSize(entry *kv.Entry) int64 {
+	return int64(kv.EstimateEncodeSize(entry)) + walRecordOverhead
+}
+
+func estimateBatchWALSize(entries []*kv.Entry) int64 {
+	if len(entries) <= 1 {
+		if len(entries) == 0 {
+			return 0
+		}
+		return estimateSingleEntryWALSize(entries[0])
+	}
+	size := walRecordOverhead + walBatchCountOverhead
+	for _, entry := range entries {
+		size += int64(kv.EstimateEncodeSize(entry)) + walBatchLenOverhead
+	}
+	return size
+}
+
 // Set _
 func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
@@ -369,9 +393,9 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	// graceful shutdown
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-	// If the current memtable is full, rotate it under write lock; otherwise
-	// hold the read lock while writing to prevent concurrent rotation.
-	estimate := int64(kv.EstimateEncodeSize(entry))
+	// Reserve capacity under read lock so concurrent writers can proceed without
+	// serialising on lsm.lock unless a rotation is required.
+	estimate := estimateSingleEntryWALSize(entry)
 	for {
 		lsm.lock.RLock()
 		mt := lsm.memTable
@@ -379,100 +403,71 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 			lsm.lock.RUnlock()
 			return errors.New("lsm: memtable not initialized")
 		}
-		if mt.walSize.Load()+estimate > lsm.option.MemTableSize {
+		if mt.tryReserve(estimate, lsm.option.MemTableSize) {
+			err = mt.Set(entry)
+			mt.releaseReserve(estimate)
 			lsm.lock.RUnlock()
-			var old *memTable
-			lsm.lock.Lock()
-			if lsm.memTable == mt && mt.walSize.Load()+estimate > lsm.option.MemTableSize {
-				old = lsm.rotateLocked()
-			}
-			lsm.lock.Unlock()
-			if old != nil {
-				lsm.submitFlush(old)
-			}
-			continue
+			return err
 		}
-		err = mt.Set(entry)
 		lsm.lock.RUnlock()
-		return err
+
+		var old *memTable
+		lsm.lock.Lock()
+		if lsm.memTable == mt && !mt.canReserve(estimate, lsm.option.MemTableSize) {
+			old = lsm.rotateLocked()
+		}
+		lsm.lock.Unlock()
+		if old != nil {
+			lsm.submitFlush(old)
+		}
 	}
 }
 
-// SetBatch writes a batch of entries to the active memtable, batching WAL appends
-// per memtable segment while keeping the same rotation semantics as Set.
+// SetBatch atomically writes a batch of entries into one memtable WAL record.
+//
+// The batch is treated as an indivisible unit: either the entire batch is
+// accepted by the active memtable (after at most one rotation), or the call
+// fails. Batches larger than MemTableSize are rejected with ErrTxnTooBig.
 func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-
-outer:
-	for i := 0; i < len(entries); {
-		entry := entries[i]
+	for _, entry := range entries {
 		if entry == nil || len(entry.Key) == 0 {
 			return utils.ErrEmptyKey
 		}
-		estimate := int64(kv.EstimateEncodeSize(entry))
-		for {
-			lsm.lock.RLock()
-			mt := lsm.memTable
-			if mt == nil {
-				lsm.lock.RUnlock()
-				return errors.New("lsm: memtable not initialized")
-			}
-			avail := lsm.option.MemTableSize - mt.walSize.Load()
-			if avail <= 0 {
-				lsm.lock.RUnlock()
-				var old *memTable
-				lsm.lock.Lock()
-				if lsm.memTable == mt && mt.walSize.Load()+estimate > lsm.option.MemTableSize {
-					old = lsm.rotateLocked()
-				}
-				lsm.lock.Unlock()
-				if old != nil {
-					lsm.submitFlush(old)
-				}
-				continue
-			}
-
-			start := i
-			used := int64(0)
-			for i < len(entries) {
-				entry = entries[i]
-				if entry == nil || len(entry.Key) == 0 {
-					lsm.lock.RUnlock()
-					return utils.ErrEmptyKey
-				}
-				est := int64(kv.EstimateEncodeSize(entry))
-				if used+est > avail {
-					if i == start {
-						lsm.lock.RUnlock()
-						var old *memTable
-						lsm.lock.Lock()
-						if lsm.memTable == mt && mt.walSize.Load()+est > lsm.option.MemTableSize {
-							old = lsm.rotateLocked()
-						}
-						lsm.lock.Unlock()
-						if old != nil {
-							lsm.submitFlush(old)
-						}
-						continue outer
-					}
-					break
-				}
-				used += est
-				i++
-			}
-			err := mt.setBatch(entries[start:i])
+	}
+	totalEstimate := estimateBatchWALSize(entries)
+	if totalEstimate > lsm.option.MemTableSize {
+		return utils.ErrTxnTooBig
+	}
+	for {
+		lsm.lock.RLock()
+		mt := lsm.memTable
+		if mt == nil {
 			lsm.lock.RUnlock()
-			if err != nil {
-				return err
-			}
-			break
+			return errors.New("lsm: memtable not initialized")
+		}
+		if mt.tryReserve(totalEstimate, lsm.option.MemTableSize) {
+			err := mt.setBatch(entries)
+			mt.releaseReserve(totalEstimate)
+			lsm.lock.RUnlock()
+			return err
+		}
+		lsm.lock.RUnlock()
+
+		var old *memTable
+		lsm.lock.Lock()
+		if lsm.memTable == mt && !mt.canReserve(totalEstimate, lsm.option.MemTableSize) {
+			old = lsm.rotateLocked()
+		}
+		lsm.lock.Unlock()
+		if old != nil {
+			lsm.submitFlush(old)
 		}
 	}
-	return nil
 }
 
 // Get _
