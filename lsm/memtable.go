@@ -1,14 +1,12 @@
 package lsm
 
 import (
-	"bytes"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -36,34 +34,9 @@ type memTable struct {
 	index      memIndex
 	maxVersion uint64
 	walSize    atomic.Int64
-}
-
-var walBufferPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-const walBufferMaxReuse = 1 << 22 // 4 MiB guard to avoid retaining huge buffers unnecessarily.
-
-func getWalBuffer() *bytes.Buffer {
-	if bufAny := walBufferPool.Get(); bufAny != nil {
-		buf := bufAny.(*bytes.Buffer)
-		buf.Reset()
-		return buf
-	}
-	return &bytes.Buffer{}
-}
-
-func putWalBuffer(buf *bytes.Buffer) {
-	if buf == nil {
-		return
-	}
-	if buf.Cap() > walBufferMaxReuse {
-		return
-	}
-	buf.Reset()
-	walBufferPool.Put(buf)
+	// reservedSize tracks in-flight write reservations to avoid overcommitting
+	// a memtable when multiple writers proceed under read locks.
+	reservedSize atomic.Int64
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -100,8 +73,21 @@ func (m *memTable) close() error {
 
 // Set inserts one entry into the memtable and appends it to WAL.
 func (m *memTable) Set(entry *kv.Entry) error {
-	entries := [1]*kv.Entry{entry}
-	return m.setBatch(entries[:])
+	if m == nil {
+		return errors.New("lsm: memtable not initialized")
+	}
+	if entry == nil || len(entry.Key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	info, err := m.lsm.wal.AppendEntry(entry)
+	if err != nil {
+		return err
+	}
+	m.walSize.Add(int64(info.Length) + 8)
+	if m.index != nil {
+		m.index.Add(entry)
+	}
+	return nil
 }
 
 // Get reads key from the memtable index and returns a pooled entry wrapper.
@@ -132,32 +118,14 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if m == nil || len(entries) == 0 {
 		return nil
 	}
-	payloads := make([][]byte, 0, len(entries))
-	buffers := make([]*bytes.Buffer, 0, len(entries))
-	releaseBuffers := func() {
-		for _, buf := range buffers {
-			putWalBuffer(buf)
-		}
+	if len(entries) == 1 {
+		return m.Set(entries[0])
 	}
-	for _, entry := range entries {
-		buf := getWalBuffer()
-		payload, err := kv.EncodeEntry(buf, entry)
-		if err != nil {
-			putWalBuffer(buf)
-			releaseBuffers()
-			return err
-		}
-		payloads = append(payloads, payload)
-		buffers = append(buffers, buf)
-	}
-	infos, err := m.lsm.wal.Append(payloads...)
-	releaseBuffers()
+	info, err := m.lsm.wal.AppendEntryBatch(entries)
 	if err != nil {
 		return err
 	}
-	for _, info := range infos {
-		m.walSize.Add(int64(info.Length) + 8)
-	}
+	m.walSize.Add(int64(info.Length) + 8)
 	if m.index != nil {
 		for _, entry := range entries {
 			m.index.Add(entry)
@@ -241,20 +209,33 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		index:     newMemIndex(lsm.option),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
-		if info.Type != wal.RecordTypeEntry {
+		applyEntry := func(entry *kv.Entry) {
+			if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
+				mt.maxVersion = ts
+			}
+			if mt.index != nil {
+				mt.index.Add(entry)
+			}
+			entry.DecrRef()
+		}
+		switch info.Type {
+		case wal.RecordTypeEntry:
+			entry, err := kv.DecodeEntry(payload)
+			if err != nil {
+				return err
+			}
+			applyEntry(entry)
+		case wal.RecordTypeEntryBatch:
+			entries, err := wal.DecodeEntryBatch(payload)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				applyEntry(entry)
+			}
+		default:
 			return nil
 		}
-		entry, err := kv.DecodeEntry(payload)
-		if err != nil {
-			return err
-		}
-		if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
-			mt.maxVersion = ts
-		}
-		if mt.index != nil {
-			mt.index.Add(entry)
-		}
-		entry.DecrRef()
 		mt.walSize.Add(int64(info.Length) + 8)
 		return nil
 	})
@@ -262,6 +243,62 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		return nil, errors.WithMessage(err, "while updating skiplist")
 	}
 	return mt, nil
+}
+
+func (mt *memTable) canReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	used := mt.walSize.Load()
+	reserved := mt.reservedSize.Load()
+	if used < 0 || reserved < 0 || used > limit {
+		return false
+	}
+	remaining := limit - used
+	if reserved > remaining {
+		return false
+	}
+	remaining -= reserved
+	return need <= remaining
+}
+
+func (mt *memTable) tryReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	for {
+		used := mt.walSize.Load()
+		reserved := mt.reservedSize.Load()
+		if used < 0 || reserved < 0 || used > limit {
+			return false
+		}
+		remaining := limit - used
+		if reserved > remaining {
+			return false
+		}
+		remaining -= reserved
+		if need > remaining {
+			return false
+		}
+		if mt.reservedSize.CompareAndSwap(reserved, reserved+need) {
+			return true
+		}
+	}
+}
+
+func (mt *memTable) releaseReserve(need int64) {
+	if mt == nil || need <= 0 {
+		return
+	}
+	if n := mt.reservedSize.Add(-need); n < 0 {
+		panic("lsm: memtable reservation underflow")
+	}
 }
 
 // reference counting helpers, delegate to the backing index.

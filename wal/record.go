@@ -1,8 +1,10 @@
 package wal
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -21,6 +23,8 @@ const (
 	RecordTypeRaftState
 	// RecordTypeRaftSnapshot encodes a raft snapshot payload.
 	RecordTypeRaftSnapshot
+	// RecordTypeEntryBatch encodes a batch of LSM mutations in one WAL record.
+	RecordTypeEntryBatch
 )
 
 // Record describes a typed WAL payload.
@@ -128,4 +132,98 @@ func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) 
 	}
 
 	return int(length) + 8, nil // length + 4 bytes for header + 4 bytes for CRC.
+}
+
+// EncodeEntryBatch encodes entries into a single payload suitable for RecordTypeEntryBatch.
+//
+// Payload layout:
+//
+//	+--------------+------------------------------+
+//	| entry_count  | repeated(entry_len + entry) |
+//	| uint32 (BE)  | uint32 (BE) + raw bytes     |
+//	+--------------+------------------------------+
+func EncodeEntryBatch(entries []*kv.Entry) ([]byte, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("wal: empty entry batch")
+	}
+	var out bytes.Buffer
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(entries)))
+	if _, err := out.Write(header[:]); err != nil {
+		return nil, err
+	}
+	var entryBuf bytes.Buffer
+	for _, e := range entries {
+		if e == nil || len(e.Key) == 0 {
+			return nil, fmt.Errorf("wal: invalid entry in batch")
+		}
+		payload, err := kv.EncodeEntry(&entryBuf, e)
+		if err != nil {
+			return nil, err
+		}
+		binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
+		if _, err := out.Write(header[:]); err != nil {
+			return nil, err
+		}
+		if _, err := out.Write(payload); err != nil {
+			return nil, err
+		}
+	}
+	return out.Bytes(), nil
+}
+
+// DecodeEntryBatch decodes a RecordTypeEntryBatch payload.
+// Returned entries are pooled objects with refcount 1; caller must DecrRef().
+func DecodeEntryBatch(payload []byte) ([]*kv.Entry, error) {
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	count := binary.BigEndian.Uint32(payload[:4])
+	rest := payload[4:]
+	if count == 0 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	// Each batch element must at least contain a 4-byte length field and
+	// a non-empty encoded entry payload.
+	if uint64(count) > uint64(len(rest))/5 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if uint64(count) > uint64(maxInt) {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	prealloc := int(count)
+	if prealloc > 1024 {
+		prealloc = 1024
+	}
+	entries := make([]*kv.Entry, 0, prealloc)
+	defer func() {
+		if rest != nil {
+			for _, e := range entries {
+				e.DecrRef()
+			}
+		}
+	}()
+	for i := uint32(0); i < count; i++ {
+		if len(rest) < 4 {
+			return nil, fmt.Errorf("wal: malformed entry batch payload")
+		}
+		ln := binary.BigEndian.Uint32(rest[:4])
+		rest = rest[4:]
+		if ln == 0 || uint32(len(rest)) < ln {
+			return nil, fmt.Errorf("wal: malformed entry batch payload")
+		}
+		entry, err := kv.DecodeEntry(rest[:ln])
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+		rest = rest[ln:]
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	decoded := entries
+	rest = nil
+	return decoded, nil
 }
