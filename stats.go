@@ -94,7 +94,6 @@ type StatsSnapshot struct {
 	WAL        WALStatsSnapshot                  `json:"wal"`
 	Raft       RaftStatsSnapshot                 `json:"raft"`
 	Write      WriteStatsSnapshot                `json:"write"`
-	Txn        TxnStatsSnapshot                  `json:"txn"`
 	Region     RegionStatsSnapshot               `json:"region"`
 	Hot        HotStatsSnapshot                  `json:"hot"`
 	Cache      CacheStatsSnapshot                `json:"cache"`
@@ -187,14 +186,6 @@ type WriteStatsSnapshot struct {
 	BatchesTotal     int64   `json:"batches_total"`
 	ThrottleActive   bool    `json:"throttle_active"`
 	HotKeyLimited    uint64  `json:"hot_key_limited"`
-}
-
-// TxnStatsSnapshot provides transaction lifecycle counters from the oracle.
-type TxnStatsSnapshot struct {
-	Active    int64  `json:"active"`
-	Started   uint64 `json:"started"`
-	Committed uint64 `json:"committed"`
-	Conflicts uint64 `json:"conflicts"`
 }
 
 // RegionStatsSnapshot reports region counts grouped by region state.
@@ -518,13 +509,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.PendingDeletes = stats.PendingDeletes
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue
 		snap.ValueLog.Heads = stats.Heads
-	}
-	if s.db.orc != nil {
-		tm := s.db.orc.txnMetricsSnapshot()
-		snap.Txn.Active = tm.Active
-		snap.Txn.Started = tm.Started
-		snap.Txn.Committed = tm.Committed
-		snap.Txn.Conflicts = tm.Conflicts
 	}
 	if s.db != nil && s.db.hotRead != nil {
 		topK := s.db.opt.HotRingTopK

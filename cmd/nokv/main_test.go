@@ -680,12 +680,6 @@ func TestRenderStatsFull(t *testing.T) {
 			LagWarnThreshold: 1,
 			LagWarning:       true,
 		},
-		Txn: NoKV.TxnStatsSnapshot{
-			Active:    1,
-			Started:   2,
-			Committed: 3,
-			Conflicts: 4,
-		},
 		Region: NoKV.RegionStatsSnapshot{
 			Total:     5,
 			New:       1,
