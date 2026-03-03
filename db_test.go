@@ -133,6 +133,14 @@ func newTestOptions(t *testing.T) *Options {
 	return opt
 }
 
+func applyVersionedEntryForTest(t *testing.T, db *DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
+	entry.Meta = meta
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyEntries([]*kv.Entry{entry}))
+}
+
 func TestVersionedEntryRoundTrip(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)
@@ -142,7 +150,7 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	version := uint64(42)
 	value := []byte("value-42")
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, version, value, 0))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, version, value, 0)
 
 	entry, err := db.GetVersionedEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
@@ -158,8 +166,8 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-delete")
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, 1, []byte("v1"), 0))
-	require.NoError(t, db.DeleteVersionedEntry(kv.CFDefault, key, 2))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, nil, kv.BitDelete)
 
 	entry, err := db.GetVersionedEntry(kv.CFDefault, key, 2)
 	require.NoError(t, err)
