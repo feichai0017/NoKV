@@ -1,10 +1,10 @@
 # Redis Gateway
 
-`cmd/nokv-redis` exposes NoKV through a RESP-compatible endpoint. The gateway reuses the engine’s MVCC/transaction semantics and can operate in two modes:
+`cmd/nokv-redis` exposes NoKV through a RESP-compatible endpoint and can operate in two modes:
 
 | Mode | Description | Key flags |
 | --- | --- | --- |
-| Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run inside `db.Update` / `db.View`, providing atomic single-key updates and snapshot reads across multiple keys. | `--workdir <dir>` |
+| Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/SetEntry/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
 | Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
 
 When both CLI and config provide the same setting, CLI wins.
@@ -45,7 +45,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 - Integer operations: `INCR`, `DECR`, `INCRBY`, `DECRBY`
 - Utility: `PING`, `ECHO`, `QUIT`
 
-In both modes write commands are atomic. The Raft backend batches multi-key updates (`MSET`, `DEL`, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use snapshot transactions locally (`db.View`) and leader reads with TTL checks remotely.
+In both modes write commands are atomic. The Raft backend batches multi-key updates (`MSET`, `DEL`, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use direct `DB.Get` locally and leader reads with TTL checks remotely.
 
 ## Configuration file
 

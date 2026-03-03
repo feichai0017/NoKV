@@ -18,7 +18,6 @@ flowchart TD
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
         VLOG["value log metrics"]
-        TXN["oracle txn metrics"]
         HOT["hotring"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
@@ -27,7 +26,6 @@ flowchart TD
     LSM --> SNAP["Stats.Snapshot()"]
     WAL --> SNAP
     VLOG --> SNAP
-    TXN --> SNAP
     HOT --> SNAP
     REGION --> SNAP
     TRANSPORT --> SNAP
@@ -54,7 +52,6 @@ Two-layer design:
 - `wal.*`
 - `raft.*`
 - `write.*`
-- `txn.*`
 - `region.*`
 - `hot.*`
 - `cache.*`
@@ -70,7 +67,6 @@ Representative fields:
 - `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
 - `raft.group_count`, `raft.lagging_groups`, `raft.max_lag_segments`
 - `write.queue_depth`, `write.avg_request_wait_ms`, `write.hot_key_limited`
-- `txn.active`, `txn.started`, `txn.conflicts`
 - `region.total`, `region.running`, `region.removing`, `region.tombstone`
 - `hot.read_keys`, `hot.write_keys`, `hot.read_ring`, `hot.write_ring`
 - `cache.block_l0_hit_rate`, `cache.bloom_hit_rate`, `cache.iterator_reused`
@@ -84,7 +80,7 @@ Representative fields:
 
 - `NoKV.Stats`
 
-All domains (`flush`, `compaction`, `value_log`, `wal`, `txn`, `region`, `hot`, `cache`, `lsm`, `transport`, `redis`) are nested under this object.
+All domains (`flush`, `compaction`, `value_log`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`, `redis`) are nested under this object.
 
 Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
 

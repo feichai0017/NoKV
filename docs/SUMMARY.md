@@ -16,7 +16,7 @@
 - [File](file.md)
 - [Cache](cache.md)
 - [Hotring](hotring.md)
-- [Transactions](txn.md)
+- [Percolator](percolator.md)
 - [Raftstore](raftstore.md)
 - [PD-lite](pd.md)
 - [Recovery](recovery.md)
