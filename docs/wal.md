@@ -27,7 +27,7 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 - Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in `wal/record.go`.
 - The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.
 - Appends are buffered by `bufio.Writer` so batches become single system calls.
-- Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestReplayTruncatedTail`).
+- Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestManagerReplayHandlesTruncate`).
 
 ---
 
@@ -62,8 +62,8 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 | `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the skiplist. |
 | `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which flows into `lsm.Set` and thus WAL. |
 | `DB.Set` | Direct write path: calls `lsm.Set`, which appends to WAL and updates the memtable. |
-| `manifest.Manager.LogEdit` | Uses `EntryInfo.SegmentID` to persist the WAL checkpoint (`EditLogPointer`). This acts as the `log number` seen in RocksDB manifest entries. |
-| `lsm/flush.Manager.Update` | Once an SST is installed, WAL segments older than the checkpoint are released (`wal.Manager.Remove`). |
+| `lsm/levels.go::flush` | Persists WAL checkpoint via `manifest.LogEdits(EditAddFile, EditLogPointer)` during flush install. |
+| `lsm/levels.go::flush` + `lsm/levelManager.canRemoveWalSegment` | Removes obsolete WAL segments after checkpoint/raft constraints are satisfied. |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |
 
 ---

@@ -72,6 +72,6 @@ By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and
 * `DoneWriting` provides strong crash-consistency guarantees. Even on filesystems where `ftruncate` metadata persistence is asynchronous, the explicit post-truncate `fsync` ensures the file size is durable upon success.
 * Value-log and WAL segments rely on `DoneWriting`/`Truncate` to seal files; avoid manipulating files externally or mmap metadata may desynchronise.
 * `LogFile.AddSize` updates the cached size used by reads—critical when rewinding or rewriting segments.
-* `vfs.SyncDir` is invoked when new files are created to persist directory entries, similar to RocksDB's `Env::FsyncDir`.
+* `vfs.SyncDir` is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls `SyncDir(workdir)` before manifest publication.
 
 For more on how these primitives plug into higher layers, see [`docs/wal.md`](wal.md) and [`docs/vlog.md`](vlog.md).
