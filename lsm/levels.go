@@ -140,24 +140,34 @@ func (lm *levelManager) build() error {
 	lm.setLogPointer(version.LogSegment, version.LogOffset)
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
-	var missing []manifest.FileMeta
+	var stale []manifest.FileMeta
 	for level, files := range version.Levels {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 			if _, err := fs.Stat(fileName); err != nil {
 				_ = utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
-				missing = append(missing, meta)
+				stale = append(stale, meta)
 				continue
 			}
 			if meta.FileID > maxFID {
 				maxFID = meta.FileID
 			}
-			t := openTable(lm, fileName, nil)
+			t, err := openTable(lm, fileName, nil)
+			if err != nil {
+				_ = utils.Err(fmt.Errorf("failed to open sstable %s: %v", fileName, err))
+				stale = append(stale, meta)
+				continue
+			}
+			if t == nil {
+				_ = utils.Err(fmt.Errorf("failed to open sstable %s: nil table", fileName))
+				stale = append(stale, meta)
+				continue
+			}
 			if meta.Ingest {
 				lm.levels[level].addIngest(t)
-			} else {
-				lm.levels[level].add(t)
+				continue
 			}
+			lm.levels[level].add(t)
 		}
 	}
 	// sort each level
@@ -167,7 +177,7 @@ func (lm *levelManager) build() error {
 	// get the maximum fid value
 	lm.maxFID.Store(maxFID)
 
-	for _, meta := range missing {
+	for _, meta := range stale {
 		metaCopy := meta
 		_ = lm.manifestMgr.LogEdit(manifest.Edit{
 			Type: manifest.EditDeleteFile,
@@ -203,9 +213,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		entry := iter.Item().Entry()
 		builder.AddKey(entry)
 	}
-	table := openTable(lm, sstName, builder)
+	table, err := openTable(lm, sstName, builder)
+	if err != nil {
+		return fmt.Errorf("failed to build sstable %s: %w", sstName, err)
+	}
 	if table == nil {
-		return fmt.Errorf("failed to build sstable %s", sstName)
+		return fmt.Errorf("failed to build sstable %s: nil table", sstName)
 	}
 	meta := &manifest.FileMeta{
 		Level:     0,
@@ -225,6 +238,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		Type:      manifest.EditLogPointer,
 		LogSeg:    immutable.segmentID,
 		LogOffset: uint64(immutable.walSize.Load()),
+	}
+	// Strict durability mode: persist SST directory entries before manifest references.
+	if lm.opt.ManifestSync {
+		if err := utils.SyncDir(lm.opt.FS, lm.opt.WorkDir); err != nil {
+			return err
+		}
 	}
 	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
 		return err
@@ -462,6 +481,9 @@ func (lh *levelHandler) close() error {
 	return nil
 }
 func (lh *levelHandler) add(t *table) {
+	if t == nil {
+		return
+	}
 	lh.Lock()
 	defer lh.Unlock()
 	t.setLevel(lh.levelNum)

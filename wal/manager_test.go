@@ -448,6 +448,7 @@ func TestManagerAppendRecordsTyped(t *testing.T) {
 	metrics := m.Metrics()
 	if metrics == nil {
 		t.Fatalf("expected wal metrics to be available")
+		return
 	}
 	if metrics.RecordCounts.RaftEntries != 1 {
 		t.Fatalf("expected raft entry count to be 1, got %+v", metrics.RecordCounts)

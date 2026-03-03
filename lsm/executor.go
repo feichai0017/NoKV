@@ -711,8 +711,8 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Wait for all builders to flush to disk.
 	wg.Wait()
 
-	if err == nil {
-		// Sync the workdir to ensure data is persisted.
+	if err == nil && lm.opt.ManifestSync {
+		// Strict durability mode: persist new SST directory entries before manifest edits.
 		err = utils.SyncDir(lm.opt.FS, lm.opt.WorkDir)
 	}
 
@@ -1071,8 +1071,10 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			var tbl *table
 			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
 			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
-			tbl = openTable(lm, sstName, builder)
-			if tbl == nil {
+			var err error
+			tbl, err = openTable(lm, sstName, builder)
+			if err != nil || tbl == nil {
+				_ = utils.Err(err)
 				return
 			}
 			res <- tbl

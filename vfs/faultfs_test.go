@@ -118,6 +118,19 @@ func TestFaultPolicyRenameRule(t *testing.T) {
 	require.ErrorIs(t, err, injected)
 }
 
+func TestFaultPolicyRenameRuleOnRenameNoReplace(t *testing.T) {
+	injected := errors.New("rename no replace injected")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "from.data")
+	dst := filepath.Join(dir, "to.data")
+	policy := NewFaultPolicy(FailOnceRenameRule(src, dst, injected))
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+	require.NoError(t, fs.WriteFile(src, []byte("v"), 0o644))
+
+	err := fs.RenameNoReplace(src, dst)
+	require.ErrorIs(t, err, injected)
+}
+
 func TestFaultFSInjectReadDirAndRemoveAll(t *testing.T) {
 	dir := t.TempDir()
 	readErr := errors.New("readdir injected")

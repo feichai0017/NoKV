@@ -326,6 +326,14 @@ func (f *FaultFS) Rename(oldPath, newPath string) error {
 	return f.base.Rename(oldPath, newPath)
 }
 
+// RenameNoReplace renames oldPath to newPath without replacing an existing target.
+func (f *FaultFS) RenameNoReplace(oldPath, newPath string) error {
+	if err := f.beforeRename(oldPath, newPath); err != nil {
+		return err
+	}
+	return f.base.RenameNoReplace(oldPath, newPath)
+}
+
 // Stat returns file metadata.
 func (f *FaultFS) Stat(name string) (os.FileInfo, error) {
 	if err := f.before(OpStat, name); err != nil {

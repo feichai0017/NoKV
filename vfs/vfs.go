@@ -2,6 +2,7 @@
 package vfs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ type FS interface {
 	RemoveAll(path string) error
 	Remove(name string) error
 	Rename(oldPath, newPath string) error
+	RenameNoReplace(oldPath, newPath string) error
 	Stat(name string) (os.FileInfo, error)
 	ReadDir(name string) ([]os.DirEntry, error)
 	ReadFile(name string) ([]byte, error)
@@ -77,6 +79,11 @@ func (OSFS) Remove(name string) error {
 // Rename renames (moves) a file or directory.
 func (OSFS) Rename(oldPath, newPath string) error {
 	return os.Rename(oldPath, newPath)
+}
+
+// RenameNoReplace renames oldPath to newPath without overwriting an existing target.
+func (OSFS) RenameNoReplace(oldPath, newPath string) error {
+	return renameNoReplaceOS(oldPath, newPath)
 }
 
 // Stat returns file metadata.
@@ -120,6 +127,19 @@ func Ensure(fs FS) FS {
 		return OSFS{}
 	}
 	return fs
+}
+
+// renameNoReplaceFallback is a compatibility path when atomic no-replace rename
+// is unavailable. It is NOT atomic and has a TOCTOU window between Stat and Rename.
+// Callers that require strict atomic no-overwrite semantics should treat fallback
+// activation as an error instead of relying on this path.
+func renameNoReplaceFallback(fs FS, oldPath, newPath string) error {
+	if _, err := fs.Stat(newPath); err == nil {
+		return os.ErrExist
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return fs.Rename(oldPath, newPath)
 }
 
 // UnwrapOSFile extracts the underlying *os.File from a File implementation when available.

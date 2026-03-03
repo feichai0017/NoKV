@@ -16,6 +16,11 @@ func TestCacheHotColdMetrics(t *testing.T) {
 	cache := newCache(opt)
 	if cache == nil {
 		t.Fatalf("expected cache to initialize")
+		return
+	}
+	if cache.blocks == nil || cache.blocks.rc == nil {
+		t.Fatalf("expected block cache to initialize")
+		return
 	}
 
 	tbl := &table{}

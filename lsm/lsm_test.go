@@ -285,9 +285,12 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	}
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	defer func() {
 		_ = tbl.DecrRef()
@@ -456,9 +459,12 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 	}
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	return tbl
 }
@@ -474,9 +480,12 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 	builder.AddKey(kv.NewEntry(ikey, []byte(val)))
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	return tbl
 }
@@ -500,6 +509,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatalf("expected entry")
+		return
 	}
 	if string(found.Key) != string(key) {
 		t.Fatalf("expected key %q, got %q", key, found.Key)
