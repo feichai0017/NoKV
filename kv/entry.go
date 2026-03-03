@@ -105,6 +105,17 @@ func NewEntryWithCF(cf ColumnFamily, key, value []byte) *Entry {
 	return e
 }
 
+// NewInternalEntry creates an Entry whose key is encoded as an internal key.
+func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
+	if !cf.Valid() {
+		cf = CFDefault
+	}
+	e := NewEntryWithCF(cf, InternalKey(cf, userKey, version), value)
+	e.Meta = meta
+	e.ExpiresAt = expiresAt
+	return e
+}
+
 // Entry returns itself. It is kept for compatibility with iterator interfaces.
 func (e *Entry) Entry() *Entry {
 	return e
