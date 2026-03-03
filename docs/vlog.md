@@ -106,7 +106,7 @@ sequenceDiagram
 1. [`valueLog.write`](../vlog.go) builds a write mask for each batch, then delegates to [`Manager.AppendEntries`](../vlog/io.go). Entries staying in LSM (`shouldWriteValueToLSM`) receive zero-value pointers.
 2. Rotation is handled inside the manager when the reserved bytes would exceed `MaxSize`. The WAL append happens **after** the value log append so crash replay observes consistent pointers.
 3. Any error triggers `Manager.Rewind` back to the saved head pointer, removing new files and truncating partial bytes. [`vlog_test.go`](../vlog_test.go) exercises both append- and rotate-failure paths.
-4. `Txn.Commit` and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.
+4. All batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping ordering and durability consistent.
 
 Badger follows the same ordering (value log first, then write batch). RocksDB's blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.
 
