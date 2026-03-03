@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,7 +193,6 @@
         LSM["lsm.* metrics"]
         WAL["wal metrics"]
         VLOG["value log metrics"]
-        TXN["oracle txn metrics"]
         HOT["hotring"]
         REGION["region metrics"]
         TRANSPORT["grpc transport metrics"]
@@ -202,7 +201,6 @@
     LSM --&gt; SNAP["Stats.Snapshot()"]
     WAL --&gt; SNAP
     VLOG --&gt; SNAP
-    TXN --&gt; SNAP
     HOT --&gt; SNAP
     REGION --&gt; SNAP
     TRANSPORT --&gt; SNAP
@@ -227,7 +225,6 @@
 <li><code>wal.*</code></li>
 <li><code>raft.*</code></li>
 <li><code>write.*</code></li>
-<li><code>txn.*</code></li>
 <li><code>region.*</code></li>
 <li><code>hot.*</code></li>
 <li><code>cache.*</code></li>
@@ -243,7 +240,6 @@
 <li><code>wal.active_segment</code>, <code>wal.segment_count</code>, <code>wal.typed_record_ratio</code></li>
 <li><code>raft.group_count</code>, <code>raft.lagging_groups</code>, <code>raft.max_lag_segments</code></li>
 <li><code>write.queue_depth</code>, <code>write.avg_request_wait_ms</code>, <code>write.hot_key_limited</code></li>
-<li><code>txn.active</code>, <code>txn.started</code>, <code>txn.conflicts</code></li>
 <li><code>region.total</code>, <code>region.running</code>, <code>region.removing</code>, <code>region.tombstone</code></li>
 <li><code>hot.read_keys</code>, <code>hot.write_keys</code>, <code>hot.read_ring</code>, <code>hot.write_ring</code></li>
 <li><code>cache.block_l0_hit_rate</code>, <code>cache.bloom_hit_rate</code>, <code>cache.iterator_reused</code></li>
@@ -255,7 +251,7 @@
 <ul>
 <li><code>NoKV.Stats</code></li>
 </ul>
-<p>All domains (<code>flush</code>, <code>compaction</code>, <code>value_log</code>, <code>wal</code>, <code>txn</code>, <code>region</code>, <code>hot</code>, <code>cache</code>, <code>lsm</code>, <code>transport</code>, <code>redis</code>) are nested under this object.</p>
+<p>All domains (<code>flush</code>, <code>compaction</code>, <code>value_log</code>, <code>wal</code>, <code>raft</code>, <code>write</code>, <code>region</code>, <code>hot</code>, <code>cache</code>, <code>lsm</code>, <code>transport</code>, <code>redis</code>) are nested under this object.</p>
 <p>Legacy scalar compatibility keys are removed. Consumers should read fields from <code>NoKV.Stats</code> directly.</p>
 <hr>
 <h2 id="4-cli--json"><a class="header" href="#4-cli--json">4. CLI &amp; JSON</a></h2>

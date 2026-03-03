@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Transactions - NoKV Docs</title>
+        <title>Percolator - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,154 +178,269 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="transaction--mvcc-design"><a class="header" href="#transaction--mvcc-design">Transaction &amp; MVCC Design</a></h1>
-<p>NoKV provides snapshot-isolated transactions backed by a lightweight <strong>oracle</strong> that hands out timestamps, tracks conflicts, and coordinates with the write pipeline. The implementation lives entirely in <a href="../txn.go"><code>txn.go</code></a> with metrics surfaced via <a href="../stats.go"><code>stats.go</code></a>.</p>
+                        <h1 id="percolator-distributed-transaction-design"><a class="header" href="#percolator-distributed-transaction-design">Percolator Distributed Transaction Design</a></h1>
+<p>This document explains NoKV’s distributed transaction path implemented by <code>percolator/</code> and executed through <code>raftstore</code>.</p>
+<p>The scope here is the current code path:</p>
+<ul>
+<li><code>Prewrite</code></li>
+<li><code>Commit</code></li>
+<li><code>BatchRollback</code></li>
+<li><code>ResolveLock</code></li>
+<li><code>CheckTxnStatus</code></li>
+<li>MVCC read visibility (<code>KvGet</code>/<code>KvScan</code> through <code>percolator.Reader</code>)</li>
+</ul>
+<p>It does not describe the removed standalone transaction API.</p>
 <hr>
-<h2 id="1-components-at-a-glance"><a class="header" href="#1-components-at-a-glance">1. Components at a Glance</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Component</th><th>Purpose</th><th>Key Functions</th></tr>
-</thead>
-<tbody>
-<tr><td><code>oracle</code></td><td>Issues read/commit timestamps, performs conflict checks, persists watermark progress.</td><td><a href="../txn.go#L80-L100"><code>readTs</code></a>, <a href="../txn.go#L142-L190"><code>newCommitTs</code></a>, <a href="../txn.go#L206-L208"><code>doneCommit</code></a></td></tr>
-<tr><td><code>Txn</code></td><td>User-facing transaction state: pending writes, read-set fingerprints, MVCC metadata.</td><td><a href="../txn.go#L412-L425"><code>SetEntry</code></a>, <a href="../txn.go#L428-L502"><code>Get</code></a>, <a href="../txn.go#L618-L671"><code>Commit</code></a></td></tr>
-<tr><td><code>pendingWritesIterator</code></td><td>Allows iterator merge to see unflushed txn writes.</td><td><a href="../txn.go#L324-L347"><code>newPendingWritesIterator</code></a></td></tr>
-<tr><td>Metrics</td><td>Tracks counts of started/committed/conflicted txns.</td><td><a href="../txn.go#L58-L66"><code>trackTxnStart</code></a>, <a href="../txn.go#L72-L78"><code>txnMetricsSnapshot</code></a></td></tr>
-</tbody>
-</table>
-</div>
-<p>The oracle is initialised during <code>DB.Open</code>, sharing lineage with BadgerDB’s MVCC model. Unlike RocksDB—which relies on WriteBatch/TwoPhaseCommit extensions—transactions are first-class citizens, and the core engine enforces ordering.</p>
-<hr>
-<h2 id="2-timestamp--conflict-flow"><a class="header" href="#2-timestamp--conflict-flow">2. Timestamp &amp; Conflict Flow</a></h2>
+<h2 id="1-where-it-runs"><a class="header" href="#1-where-it-runs">1. Where It Runs</a></h2>
+<p>Percolator logic is executed on the Raft apply path:</p>
+<ol>
+<li>Client sends TinyKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
+<li><code>raftstore/kv/service.go</code> wraps it into a <code>RaftCmdRequest</code>.</li>
+<li>Store proposes command through Raft.</li>
+<li>On apply, <code>raftstore/kv/apply.go</code> dispatches to <code>percolator.*</code>.</li>
+</ol>
 <pre class="mermaid">sequenceDiagram
-    participant Client
-    participant DB
-    participant Oracle
-    participant Commit as commitWorker
-    participant Mgr as vlog.Manager
-    participant WAL
-    participant Mem as MemTable
-    Client-&gt;&gt;DB: NewTransaction(update)
-    DB-&gt;&gt;Oracle: readTs()
-    Oracle--&gt;&gt;DB: snapshot ts (nextTxnTs-1)
-    Client-&gt;&gt;DB: Set/Delete/Get
-    DB-&gt;&gt;Txn: stage pendingWrites, record read hashes
-    Client-&gt;&gt;DB: Commit
-    DB-&gt;&gt;Oracle: newCommitTs(txn)
-    alt conflict
-        Oracle--&gt;&gt;DB: ErrConflict
-    else success
-        Oracle--&gt;&gt;DB: commitTs
-        DB-&gt;&gt;Commit: batch requests
-        Commit-&gt;&gt;Mgr: AppendEntries(entries, writeMask)
-        Commit-&gt;&gt;WAL: Append(entries with commitTs)
-        Commit-&gt;&gt;Mem: apply to active memtable index
-        DB-&gt;&gt;Oracle: doneCommit(commitTs)
-    end
+    participant C as raftstore/client
+    participant S as kv.Service
+    participant R as Raft (leader-&gt;followers)
+    participant A as kv.Apply
+    participant P as percolator
+    participant DB as NoKV DB
+    C-&gt;&gt;S: KvPrewrite/KvCommit...
+    S-&gt;&gt;R: ProposeCommand(RaftCmdRequest)
+    R-&gt;&gt;A: Apply committed log
+    A-&gt;&gt;P: percolator.Prewrite/Commit...
+    P-&gt;&gt;DB: CFDefault/CFLock/CFWrite reads+writes
+    A--&gt;&gt;S: RaftCmdResponse
+    S--&gt;&gt;C: TinyKV RPC response
 </pre>
 
+<p>Key files:</p>
+<ul>
+<li><a href="../percolator/txn.go"><code>percolator/txn.go</code></a></li>
+<li><a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
+<li><a href="../percolator/codec.go"><code>percolator/codec.go</code></a></li>
+<li><a href="../percolator/latch/latch.go"><code>percolator/latch/latch.go</code></a></li>
+<li><a href="../raftstore/kv/apply.go"><code>raftstore/kv/apply.go</code></a></li>
+<li><a href="../raftstore/client/client.go"><code>raftstore/client/client.go</code></a></li>
+</ul>
+<hr>
+<h2 id="2-mvcc-data-model"><a class="header" href="#2-mvcc-data-model">2. MVCC Data Model</a></h2>
+<p>NoKV uses three MVCC column families:</p>
+<ul>
+<li><code>CFDefault</code>: stores user values at <code>start_ts</code></li>
+<li><code>CFLock</code>: stores lock metadata at fixed <code>lockColumnTs = MaxUint64</code></li>
+<li><code>CFWrite</code>: stores commit records at <code>commit_ts</code></li>
+</ul>
+<h3 id="21-lock-record"><a class="header" href="#21-lock-record">2.1 Lock Record</a></h3>
+<p><code>percolator.Lock</code> (encoded by <code>EncodeLock</code>):</p>
+<ul>
+<li><code>Primary</code></li>
+<li><code>Ts</code> (start timestamp)</li>
+<li><code>TTL</code></li>
+<li><code>Kind</code> (<code>Put/Delete/Lock</code>)</li>
+<li><code>MinCommitTs</code></li>
+</ul>
+<h3 id="22-write-record"><a class="header" href="#22-write-record">2.2 Write Record</a></h3>
+<p><code>percolator.Write</code> (encoded by <code>EncodeWrite</code>):</p>
+<ul>
+<li><code>Kind</code></li>
+<li><code>StartTs</code></li>
+<li><code>ShortValue</code> (codec supports it; current commit path does not populate it)</li>
+</ul>
+<hr>
+<h2 id="3-concurrency-control-latches"><a class="header" href="#3-concurrency-control-latches">3. Concurrency Control: Latches</a></h2>
+<p>Before mutating keys, percolator acquires striped latches:</p>
+<ul>
+<li><code>latch.Manager</code> hashes keys to stripe mutexes.</li>
+<li>Stripes are deduplicated and acquired in sorted order to avoid deadlocks.</li>
+<li>Guard releases in reverse order.</li>
+</ul>
+<p>In <code>kv/apply.go</code>, one process-wide manager is used:</p>
+<ul>
+<li><code>defaultLatches = latch.NewManager(512)</code></li>
+</ul>
+<p>This serializes conflicting apply operations on overlapping keys in one node.</p>
+<hr>
+<h2 id="4-two-phase-commit-flow"><a class="header" href="#4-two-phase-commit-flow">4. Two-Phase Commit Flow</a></h2>
+<p>Client side (<code>raftstore/client.Client.TwoPhaseCommit</code>):</p>
 <ol>
-<li><strong>Start</strong> – <code>DB.newTransaction</code> calls <a href="../txn.go#L80-L100"><code>oracle.readTs</code></a>, which waits for all prior commits to finish (<code>txnMark.WaitForMark</code>) so new readers see a consistent snapshot. In distributed deployments, clients must obtain the <code>startVersion</code> themselves (see <a href="#timestamp-sources">Timestamp sources</a>).</li>
-<li><strong>Reads</strong> – <code>Txn.Get</code> first checks <code>pendingWrites</code>; otherwise it merges LSM iterators and value-log pointers under the read timestamp. For update transactions the read key fingerprint is recorded in <code>Txn.reads</code> via <a href="../txn.go#L511-L526"><code>addReadKey</code></a>.
-<code>Txn.Get</code> returns a detached entry view; callers must not call <code>DecrRef</code> on it.</li>
-<li><strong>Conflict detection</strong> – When <code>Options.DetectConflicts</code> is enabled, <code>oracle.newCommitTs</code> iterates <code>oracle.committedTxns</code> and compares read fingerprints against keys written by newer commits. This mirrors Badger’s optimistic strategy.</li>
-<li><strong>Commit timestamp</strong> – <code>newCommitTs</code> increments <code>nextTxnTs</code>, registers the commit in <code>txnMark</code>, and stores the conflict key set for future comparisons.</li>
-<li><strong>Apply</strong> – <code>Txn.commitAndSend</code> assigns the commit timestamp to each pending entry (<code>kv.KeyWithTs</code>), enqueues them through <code>sendToWriteCh</code>, and returns a callback that waits for the batch completion. Only after the callback runs does the oracle’s <code>doneCommit</code> release the commit watermark.</li>
-<li><strong>Value log ordering</strong> – As with non-transactional writes, the commit worker runs <code>valueLog.write</code> (which calls <code>Manager.AppendEntries</code>) before the WAL append. On failure <code>vlog.manager.Rewind</code> ensures partial writes do not leak.</li>
+<li>Group mutations by region.</li>
+<li>Prewrite primary region.</li>
+<li>Prewrite secondary regions.</li>
+<li>Commit primary region.</li>
+<li>Commit secondary regions.</li>
 </ol>
-<p>RocksDB’s default WriteBatch lacks conflict detection, relying on application-level locking; NoKV ships with snapshot isolation and optional detection, similar to Badger’s <code>Txn</code> but with integrated metrics and iterator pooling.</p>
+<pre class="mermaid">sequenceDiagram
+    participant Cli as Client
+    participant R1 as Region(primary)
+    participant R2 as Region(secondary)
+    Cli-&gt;&gt;R1: Prewrite(primary + local muts)
+    Cli-&gt;&gt;R2: Prewrite(secondary muts)
+    Cli-&gt;&gt;R1: Commit(keys,startTs,commitTs)
+    Cli-&gt;&gt;R2: Commit(keys,startTs,commitTs)
+</pre>
+
 <hr>
-<h2 id="3-data-structures"><a class="header" href="#3-data-structures">3. Data Structures</a></h2>
-<h3 id="oracle-watermarks"><a class="header" href="#oracle-watermarks">Oracle Watermarks</a></h3>
-<pre><code class="language-text">oracle{
-  nextTxnTs       // next commit timestamp to assign
-  txnMark         // watermark waiting for WAL/vlog durability
-  readMark        // tracks oldest active read timestamp
-  committedTxns[] // sliding window of conflict key sets
-}
-</code></pre>
+<h2 id="5-write-side-operations"><a class="header" href="#5-write-side-operations">5. Write-Side Operations</a></h2>
+<h2 id="51-prewrite"><a class="header" href="#51-prewrite">5.1 Prewrite</a></h2>
+<p><code>Prewrite</code> runs mutation-by-mutation:</p>
+<ol>
+<li>Check existing lock on key:
 <ul>
-<li><code>txnMark</code> / <code>readMark</code> are <code>utils.WaterMark</code> instances. They guarantee all writes with timestamp ≤ <code>readTs</code> are durable before a new read snapshot begins, mirroring Badger’s approach to avoid reading half-committed data.</li>
-<li><code>cleanupCommittedTransactions</code> prunes conflict history based on the oldest outstanding read, preventing unbounded memory use.</li>
+<li>if lock exists with different <code>Ts</code> -&gt; <code>KeyError.Locked</code></li>
 </ul>
-<h3 id="txn-state"><a class="header" href="#txn-state">Txn State</a></h3>
-<pre><code class="language-go">type Txn struct {
-    readTs   uint64
-    commitTs uint64
-    pendingWrites map[string]*kv.Entry
-    conflictKeys  map[uint64]struct{}
-    reads         []uint64
-    numIterators  int32
-    discarded     bool
-    update        bool
-}
-</code></pre>
+</li>
+<li>Check latest committed write:
 <ul>
-<li>Pending writes retain the caller’s entry pointers until commit; NoKV copies values only when moving them into the write batch.</li>
-<li>Read fingerprints use <code>kv.MemHash</code>, so conflict detection is order-independent and compact.</li>
-<li>MVCC versions are encoded in the key suffix (<code>KeyWithTs</code>), matching the LSM’s descending version order.</li>
+<li>if <code>commit_ts &gt;= req.start_version</code> -&gt; <code>WriteConflict</code></li>
 </ul>
-<h3 id="iterator-integration"><a class="header" href="#iterator-integration">Iterator Integration</a></h3>
+</li>
+<li>Apply data intent:
 <ul>
-<li><code>Txn.newPendingWritesIterator</code> materialises staged entries as a sorted slice, allowing transaction iterators to merge them with memtables/SST tables. This ensures <code>Txn.NewIterator</code> sees writes immediately without affecting other snapshots.</li>
-<li><code>Txn.numIterators</code> enforces that all iterators close before commit/discard—helpful for catching resource leaks in tests (<code>txn_iterator_test.go</code>).</li>
+<li><code>Put</code>: write value into <code>CFDefault</code> at <code>start_ts</code></li>
+<li><code>Delete</code>/<code>Lock</code>: delete default value at <code>start_ts</code> (if exists)</li>
+</ul>
+</li>
+<li>Write lock into <code>CFLock</code> at <code>lockColumnTs</code></li>
+</ol>
+<h3 id="52-commit"><a class="header" href="#52-commit">5.2 Commit</a></h3>
+<p>For each key:</p>
+<ol>
+<li>Read lock</li>
+<li>If no lock:
+<ul>
+<li>if write with same <code>start_ts</code> exists -&gt; idempotent success</li>
+<li>else -&gt; abort (<code>lock not found</code>)</li>
+</ul>
+</li>
+<li>If lock <code>Ts != start_version</code> -&gt; <code>KeyError.Locked</code></li>
+<li><code>commitKey</code>:
+<ul>
+<li>if <code>min_commit_ts &gt; commit_version</code> -&gt; <code>CommitTsExpired</code></li>
+<li>if write with same <code>start_ts</code> already exists:
+<ul>
+<li>rollback write -&gt; abort</li>
+<li>write with different commit ts -&gt; treat success, clean lock</li>
+<li>same commit ts -&gt; success</li>
+</ul>
+</li>
+<li>else write <code>CFWrite[key@commit_ts] = {kind,start_ts}</code></li>
+<li>remove lock from <code>CFLock</code></li>
+</ul>
+</li>
+</ol>
+<h3 id="53-batchrollback"><a class="header" href="#53-batchrollback">5.3 BatchRollback</a></h3>
+<p>For each key:</p>
+<ol>
+<li>If already has write at <code>start_ts</code>:
+<ul>
+<li>rollback marker already exists -&gt; success</li>
+<li>non-rollback write exists -&gt; success (already committed)</li>
+</ul>
+</li>
+<li>Remove lock (if any)</li>
+<li>Remove default value at <code>start_ts</code> (if any)</li>
+<li>Write rollback marker to <code>CFWrite</code> at <code>start_ts</code></li>
+</ol>
+<h3 id="54-resolvelock"><a class="header" href="#54-resolvelock">5.4 ResolveLock</a></h3>
+<ul>
+<li><code>commit_version == 0</code> -&gt; rollback matching locks</li>
+<li><code>commit_version &gt; 0</code> -&gt; commit matching locks</li>
+<li>Returns number of resolved keys</li>
 </ul>
 <hr>
-<h2 id="4-commit--error-handling"><a class="header" href="#4-commit--error-handling">4. Commit &amp; Error Handling</a></h2>
+<h2 id="6-transaction-status-check"><a class="header" href="#6-transaction-status-check">6. Transaction Status Check</a></h2>
+<p><code>CheckTxnStatus</code> targets the primary key and decides whether txn is alive, committed, or should be rolled back.</p>
+<p>Decision order:</p>
+<ol>
+<li>Read lock on primary</li>
+<li>If lock exists but <code>lock.ts != req.lock_ts</code> -&gt; <code>KeyError.Locked</code></li>
+<li>If lock exists and TTL expired (<code>current_ts &gt;= lock.ts + ttl</code>):
+<ul>
+<li>rollback primary</li>
+<li>action = <code>TTLExpireRollback</code></li>
+</ul>
+</li>
+<li>If lock exists and caller pushes timestamp:
+<ul>
+<li><code>min_commit_ts = max(min_commit_ts, caller_start_ts+1)</code></li>
+<li>action = <code>MinCommitTsPushed</code></li>
+</ul>
+</li>
+<li>If no lock, check write by <code>start_ts</code>:
+<ul>
+<li>committed write -&gt; return <code>commit_version</code></li>
+<li>rollback write -&gt; action <code>LockNotExistRollback</code></li>
+</ul>
+</li>
+<li>If no lock and no write, and <code>rollback_if_not_exist</code> is true:
+<ul>
+<li>write rollback marker</li>
+<li>action <code>LockNotExistRollback</code></li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="7-read-path-semantics-mvcc-visibility"><a class="header" href="#7-read-path-semantics-mvcc-visibility">7. Read Path Semantics (MVCC Visibility)</a></h2>
+<p><code>KvGet</code> and <code>KvScan</code> read through <code>percolator.Reader</code>:</p>
+<ol>
+<li>Check lock first:
+<ul>
+<li>if lock exists and <code>read_ts &gt;= lock.ts</code>, return locked error</li>
+</ul>
+</li>
+<li>Find visible write in <code>CFWrite</code>:
+<ul>
+<li>latest <code>commit_ts &lt;= read_ts</code></li>
+</ul>
+</li>
+<li>Interpret write kind:
+<ul>
+<li><code>Delete</code>/<code>Rollback</code> =&gt; not found</li>
+<li><code>Put</code> =&gt; read value from <code>CFDefault</code> at <code>start_ts</code></li>
+</ul>
+</li>
+</ol>
+<p>Notes:</p>
+<ul>
+<li><code>KvScan</code> currently rejects reverse scan.</li>
+<li><code>scanWrites</code> uses internal iterator over <code>CFWrite</code>.</li>
+</ul>
+<hr>
+<h2 id="8-error-and-idempotency-behavior"><a class="header" href="#8-error-and-idempotency-behavior">8. Error and Idempotency Behavior</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Stage</th><th>Failure Handling</th></tr>
+<tr><th>Operation</th><th>Idempotency/Conflict behavior</th></tr>
 </thead>
 <tbody>
-<tr><td>Conflict</td><td><code>oracle.newCommitTs</code> returns <code>(0, true)</code>; <code>Txn.Commit</code> surfaces <code>utils.ErrConflict</code> and leaves state untouched.</td></tr>
-<tr><td>Value log append</td><td><code>valueLog.write</code> rewinds via <code>Manager.Rewind</code>; <code>req.Wait</code> returns the error so callers can retry safely.</td></tr>
-<tr><td>WAL append</td><td><code>sendToWriteCh</code> propagates WAL errors; commit watermark is cleared immediately in that case.</td></tr>
-<tr><td>Callback mode</td><td><code>Txn.CommitWith</code> schedules <code>runTxnCallback</code> on a goroutine; user callbacks always execute (success or error).</td></tr>
+<tr><td>Prewrite</td><td>Rejects lock conflicts and write conflicts; returns per-key <code>KeyError</code> list.</td></tr>
+<tr><td>Commit</td><td>Idempotent for already committed keys with same <code>start_ts</code>; stale/missing lock may abort.</td></tr>
+<tr><td>BatchRollback</td><td>Safe to repeat; rollback marker prevents duplicate side effects.</td></tr>
+<tr><td>ResolveLock</td><td>Safe to retry per key set; resolves only matching <code>start_ts</code> locks.</td></tr>
+<tr><td>CheckTxnStatus</td><td>May push <code>min_commit_ts</code>, rollback expired primary lock, or return committed version.</td></tr>
 </tbody>
 </table>
 </div>
-<p>The final call to <code>Txn.Discard</code> runs regardless of success, marking the read watermark done and decrementing the oracle’s active counter.</p>
 <hr>
-<h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr>
-</thead>
-<tbody>
-<tr><td>Isolation</td><td>Optional (WritePrepared/2PC)</td><td>Snapshot isolation</td><td>Snapshot isolation with <code>WaterMark</code> barriers</td></tr>
-<tr><td>Conflict detection</td><td>External</td><td>Optional optimistic</td><td>Optional optimistic keyed by <code>utils.MemHash</code></td></tr>
-<tr><td>Iterator view</td><td>Snapshot handles, manual merging</td><td>Built-in</td><td>Built-in with pending write iterator</td></tr>
-<tr><td>Metrics</td><td><code>rocksdb.transactions.*</code> when enabled</td><td>Basic stats</td><td><code>NoKV.Stats.txn.*</code> + CLI</td></tr>
-</tbody>
-</table>
-</div>
-<p>NoKV inherits Badger’s optimistic concurrency but strengthens durability ordering by coupling commits with the same write pipeline that non-transactional writes use. Compared with RocksDB’s transactional library, the Go implementation remains lightweight and requires no external locks.</p>
-<hr>
-<h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
+<h2 id="9-current-constraints"><a class="header" href="#9-current-constraints">9. Current Constraints</a></h2>
 <ul>
-<li><strong>Long-running reads</strong>: watch <code>NoKV.Stats.txn.active</code> and <code>oracle.readMark.DoneUntil()</code>—slow consumers keep old versions alive, delaying vlog GC and compaction reclamation.</li>
-<li><strong>Non-transactional APIs</strong>: <code>DB.Set/Get/Del</code> and <code>SetCF/GetCF/DelCF</code> use a MaxUint64 sentinel version for “latest”. Do not mix these writes with MVCC/Txn writes in the same database.</li>
-<li><strong>Managed mode</strong>: exposing <code>Txn.SetEntry</code> with pre-set versions allows replication/replay flows. Because commit timestamps may diverge, transaction markers are only set when all entries share a single commitTs.</li>
-<li><strong>Throttling</strong>: combine <code>HotRing.TouchAndClamp</code> with per-transaction analytics to detect hot-key write storms that lead to frequent conflicts.</li>
+<li>This path is distributed-only and tied to TinyKV RPC + Raft apply.</li>
+<li>Standalone/local transaction APIs are intentionally removed.</li>
+<li>Latch scope is per-node process (<code>defaultLatches</code>), with region-level correctness coming from Raft sequencing.</li>
+<li><code>Write.ShortValue</code> is encoded/decoded but not used by current commit writer.</li>
 </ul>
-<p>See <a href="testing.html#transactions"><code>docs/testing.md</code></a> for the regression matrix covering conflict detection, iterator semantics, and managed timestamps.</p>
 <hr>
-<h2 id="7-timestamp-sources"><a class="header" href="#7-timestamp-sources">7. Timestamp Sources</a></h2>
-<p>Replica nodes do <strong>not</strong> generate timestamps during TinyKV RPC handling; the values sent in <code>KvPrewrite</code>/<code>KvCommit</code> are applied verbatim. For teaching and prototyping you can pick from two approaches:</p>
+<h2 id="10-validation-and-tests"><a class="header" href="#10-validation-and-tests">10. Validation and Tests</a></h2>
+<p>Primary coverage:</p>
 <ul>
-<li>
-<p><strong>Single-client experiments</strong> – choose monotonically increasing integers in your client code (as shown in <code>raftstore/client/client_test.go</code>).</p>
-</li>
-<li>
-<p><strong>Shared allocator</strong> – run PD-lite to hand out globally increasing timestamps:</p>
-<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100
-</code></pre>
-<p>Clients can call PD <code>Tso</code> (gRPC) and use the returned <code>timestamp</code> as <code>startVersion</code>, or reserve a batch for multiple transactions. This keeps the learning focus on the Percolator flow while matching production-style timestamp allocation.</p>
-</li>
+<li><a href="../percolator/txn_test.go"><code>percolator/txn_test.go</code></a></li>
+<li><a href="../raftstore/kv/service_test.go"><code>raftstore/kv/service_test.go</code></a></li>
+<li><a href="../raftstore/client/client_test.go"><code>raftstore/client/client_test.go</code></a></li>
+<li><a href="../raftstore/server/server_test.go"><code>raftstore/server/server_test.go</code></a></li>
 </ul>
+<p>These tests cover 2PC happy path, lock conflicts, status checks, resolve/rollback behavior, and client region-aware retries.</p>
 
                     </main>
 

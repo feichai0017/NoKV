@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -224,7 +224,7 @@
 <ol>
 <li><strong>Active → Immutable</strong> – when <code>mt.walSize + estimate</code> exceeds <code>Options.MemTableSize</code>, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
 <li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
-<li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest’s log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes, rebuilding <code>maxVersion</code> for the oracle.</li>
+<li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest’s log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes and the active in-memory state is rebuilt.</li>
 </ol>
 <p>Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger’s arena allocator for simplicity.</p>
 <hr>
@@ -233,7 +233,7 @@
 <li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. Internal callers must release it with <code>DecrRef</code> when done. MVCC versions stay encoded in the key suffix (<code>KeyWithTs</code>), so iterators naturally merge across memtables and SSTables.</li>
 <li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB’s <code>MemTable::Ref/Unref</code> lifecycle.</li>
 <li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
-<li>Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>, <code>Txn.Get</code>) return detached entries. Callers must not call <code>DecrRef</code> on those entries.</li>
+<li>Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>) return detached entries. Callers must not call <code>DecrRef</code> on those entries.</li>
 </ul>
 <hr>
 <h2 id="4-integration-with-other-subsystems"><a class="header" href="#4-integration-with-other-subsystems">4. Integration with Other Subsystems</a></h2>
@@ -243,7 +243,7 @@
 <tr><th>Subsystem</th><th>Interaction</th></tr>
 </thead>
 <tbody>
-<tr><td>Transactions</td><td><code>Txn.commitAndSend</code> writes entries into the active memtable after WAL append; pending writes bypass the memtable until commit so per-txn isolation is preserved.</td></tr>
+<tr><td>Distributed 2PC</td><td><code>kv.Apply</code> + <code>percolator</code> write committed MVCC versions through the same WAL/memtable pipeline in raft mode.</td></tr>
 <tr><td>Manifest</td><td>Flush completion logs <code>EditLogPointer(segmentID)</code> so restart can discard WAL files already persisted into SSTs.</td></tr>
 <tr><td>Stats</td><td><code>Stats.Snapshot</code> pulls <code>FlushPending/Active/Queue</code> counters via <a href="../lsm/lsm.go#L120-L128"><code>lsm.FlushMetrics</code></a>, exposing how many immutables are waiting.</td></tr>
 <tr><td>Value Log</td><td><code>lsm.flush</code> emits discard stats keyed by <code>segmentID</code>, letting the value log GC know when entries become obsolete.</td></tr>

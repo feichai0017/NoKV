@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -256,11 +256,11 @@
   Ingest --&gt;|IngestKeep: ingest-merge| Ingest
 </pre>
 
-<h3 id="25-mvcc"><a class="header" href="#25-mvcc">2.5 MVCC</a></h3>
+<h3 id="25-distributed-transaction-path"><a class="header" href="#25-distributed-transaction-path">2.5 Distributed Transaction Path</a></h3>
 <ul>
-<li><code>txn.go</code> exposes MVCC transactions with timestamps from <code>oracle</code>.</li>
-<li><code>percolator</code> package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> simply dispatches Raft commands to these helpers.</li>
-<li>Watermarks (<code>utils.WaterMark</code>) gate read snapshots and commit visibility. They have no background goroutine; waiters block on per-index channels while advancement uses a mutex + atomics.</li>
+<li><code>percolator</code> implements Prewrite/Commit/ResolveLock/CheckTxnStatus; <code>kv.Apply</code> dispatches raft commands to these helpers.</li>
+<li>MVCC timestamps come from the distributed client/PD TSO flow, not from an embedded standalone transaction API.</li>
+<li>Watermarks (<code>utils.WaterMark</code>) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.</li>
 </ul>
 <h3 id="26-write-pipeline--backpressure"><a class="header" href="#26-write-pipeline--backpressure">2.6 Write Pipeline &amp; Backpressure</a></h3>
 <ul>
@@ -278,7 +278,7 @@
 </thead>
 <tbody>
 <tr><td><code>kv.Entry</code> (pooled)</td><td>internal write/read pipelines</td><td>codec iterator, memtable/lsm internal reads, request batches</td><td>Must call <code>DecrRef</code> exactly once per borrow.</td></tr>
-<tr><td><code>kv.Entry</code> (detached public result)</td><td>caller</td><td>none</td><td>Returned by <code>DB.Get/GetCF/GetVersionedEntry</code> and <code>Txn.Get</code>; <strong>must not</strong> call <code>DecrRef</code>.</td></tr>
+<tr><td><code>kv.Entry</code> (detached public result)</td><td>caller</td><td>none</td><td>Returned by <code>DB.Get/GetCF/GetVersionedEntry</code>; <strong>must not</strong> call <code>DecrRef</code>.</td></tr>
 <tr><td><code>request</code></td><td>commit queue/worker</td><td>waiter path (<code>Wait</code>)</td><td><code>IncrRef</code> on enqueue; <code>Wait</code> does one <code>DecrRef</code>; zero returns request to pool and releases entries.</td></tr>
 <tr><td><code>table</code></td><td>level/main+ingest lists, block cache</td><td>table iterators, prefetch workers</td><td>Removed tables are decremented once after manifest+in-memory swap; zero deletes SST.</td></tr>
 <tr><td><code>Skiplist</code> / <code>ART</code> index</td><td>memtable</td><td>iterators</td><td>Iterator creation increments index ref; iterator <code>Close</code> decrements; double-close is idempotent.</td></tr>
@@ -369,7 +369,7 @@
 <hr>
 <h2 id="7-observability--tooling"><a class="header" href="#7-observability--tooling">7. Observability &amp; Tooling</a></h2>
 <ul>
-<li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/txn/region metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
+<li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
 <li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
 <li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
@@ -384,7 +384,7 @@
 <hr>
 <h2 id="8-when-to-use-nokv"><a class="header" href="#8-when-to-use-nokv">8. When to Use NoKV</a></h2>
 <ul>
-<li><strong>Embedded</strong>: call <code>NoKV.Open</code>, use the MVCC store locally.</li>
+<li><strong>Embedded</strong>: call <code>NoKV.Open</code>, use the local non-transactional DB APIs.</li>
 <li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
 <li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
 </ul>

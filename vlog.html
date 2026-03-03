@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -268,7 +268,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <li><a href="../vlog.go"><code>valueLog.write</code></a> builds a write mask for each batch, then delegates to <a href="../vlog/io.go"><code>Manager.AppendEntries</code></a>. Entries staying in LSM (<code>shouldWriteValueToLSM</code>) receive zero-value pointers.</li>
 <li>Rotation is handled inside the manager when the reserved bytes would exceed <code>MaxSize</code>. The WAL append happens <strong>after</strong> the value log append so crash replay observes consistent pointers.</li>
 <li>Any error triggers <code>Manager.Rewind</code> back to the saved head pointer, removing new files and truncating partial bytes. <a href="../vlog_test.go"><code>vlog_test.go</code></a> exercises both append- and rotate-failure paths.</li>
-<li><code>Txn.Commit</code> and batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping MVCC and durability ordering consistent.</li>
+<li>All batched writes share the same pipeline: the commit worker always writes the value log first, then applies to WAL/memtable, keeping ordering and durability consistent.</li>
 </ol>
 <p>Badger follows the same ordering (value log first, then write batch). RocksDB’s blob DB instead embeds blob references into the WAL entry before the blob file write, relying on two-phase commit between WAL and blob; NoKV avoids the extra coordination by reusing a single batching loop.</p>
 <hr>

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
+            window.path_to_searchindex_js = "searchindex-28583911.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b9084f08.js"></script>
+        <script src="toc-56d2c64c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,14 +179,14 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="redis-gateway"><a class="header" href="#redis-gateway">Redis Gateway</a></h1>
-<p><code>cmd/nokv-redis</code> exposes NoKV through a RESP-compatible endpoint. The gateway reuses the engine’s MVCC/transaction semantics and can operate in two modes:</p>
+<p><code>cmd/nokv-redis</code> exposes NoKV through a RESP-compatible endpoint and can operate in two modes:</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Mode</th><th>Description</th><th>Key flags</th></tr>
 </thead>
 <tbody>
-<tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run inside <code>db.Update</code> / <code>db.View</code>, providing atomic single-key updates and snapshot reads across multiple keys.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
+<tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/SetEntry/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
 <tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
@@ -222,7 +222,7 @@
 <li>Integer operations: <code>INCR</code>, <code>DECR</code>, <code>INCRBY</code>, <code>DECRBY</code></li>
 <li>Utility: <code>PING</code>, <code>ECHO</code>, <code>QUIT</code></li>
 </ul>
-<p>In both modes write commands are atomic. The Raft backend batches multi-key updates (<code>MSET</code>, <code>DEL</code>, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use snapshot transactions locally (<code>db.View</code>) and leader reads with TTL checks remotely.</p>
+<p>In both modes write commands are atomic. The Raft backend batches multi-key updates (<code>MSET</code>, <code>DEL</code>, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use direct <code>DB.Get</code> locally and leader reads with TTL checks remotely.</p>
 <h2 id="configuration-file"><a class="header" href="#configuration-file">Configuration file</a></h2>
 <p><code>raft_config.example.json</code> is shared by <code>scripts/run_local_cluster.sh</code>, Docker Compose, and the Redis gateway. Important fields:</p>
 <ul>
