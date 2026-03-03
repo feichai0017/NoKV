@@ -180,7 +180,23 @@ func DecodeEntryBatch(payload []byte) ([]*kv.Entry, error) {
 	}
 	count := binary.BigEndian.Uint32(payload[:4])
 	rest := payload[4:]
-	entries := make([]*kv.Entry, 0, count)
+	if count == 0 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	// Each batch element must at least contain a 4-byte length field and
+	// a non-empty encoded entry payload.
+	if uint64(count) > uint64(len(rest))/5 {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if uint64(count) > uint64(maxInt) {
+		return nil, fmt.Errorf("wal: malformed entry batch payload")
+	}
+	prealloc := int(count)
+	if prealloc > 1024 {
+		prealloc = 1024
+	}
+	entries := make([]*kv.Entry, 0, prealloc)
 	defer func() {
 		if rest != nil {
 			for _, e := range entries {

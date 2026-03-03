@@ -543,3 +543,22 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 		t.Fatalf("expected exactly 1 batch record, got %d", replayed)
 	}
 }
+
+func TestDecodeEntryBatchRejectsMalformedCount(t *testing.T) {
+	t.Run("zero count", func(t *testing.T) {
+		payload := make([]byte, 4)
+		if _, err := wal.DecodeEntryBatch(payload); err == nil {
+			t.Fatalf("expected malformed entry batch error")
+		}
+	})
+
+	t.Run("count exceeds payload minimum footprint", func(t *testing.T) {
+		payload := make([]byte, 9)
+		binary.BigEndian.PutUint32(payload[:4], ^uint32(0))
+		binary.BigEndian.PutUint32(payload[4:8], 1)
+		payload[8] = 0
+		if _, err := wal.DecodeEntryBatch(payload); err == nil {
+			t.Fatalf("expected malformed entry batch error")
+		}
+	})
+}
