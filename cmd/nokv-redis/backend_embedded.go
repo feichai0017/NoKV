@@ -72,6 +72,7 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 	}
 
 	entry := kv.NewEntry(args.Key, append([]byte(nil), args.Value...))
+	defer entry.DecrRef()
 	if args.ExpireAt > 0 {
 		entry.ExpiresAt = args.ExpireAt
 	}
@@ -127,7 +128,9 @@ func (b *embeddedBackend) MSet(pairs [][2][]byte) error {
 			return utils.ErrEmptyKey
 		}
 		entry := kv.NewEntry(pair[0], append([]byte(nil), pair[1]...))
-		if err := b.db.SetEntry(entry); err != nil {
+		err := b.db.SetEntry(entry)
+		entry.DecrRef()
+		if err != nil {
 			return err
 		}
 	}
@@ -185,6 +188,7 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 
 	result = current + delta
 	entry := kv.NewEntry(key, []byte(strconv.FormatInt(result, 10)))
+	defer entry.DecrRef()
 	if existing {
 		entry.ExpiresAt = expires
 	}
