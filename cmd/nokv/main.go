@@ -208,10 +208,6 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 				snap.Raft.LaggingGroups, snap.Raft.MaxLagSegments, snap.Raft.LagWarnThreshold)
 		}
 	}
-	_, _ = fmt.Fprintf(w, "Txns.Active            %d\n", snap.Txn.Active)
-	_, _ = fmt.Fprintf(w, "Txns.StartedTotal      %d\n", snap.Txn.Started)
-	_, _ = fmt.Fprintf(w, "Txns.CommittedTotal    %d\n", snap.Txn.Committed)
-	_, _ = fmt.Fprintf(w, "Txns.ConflictsTotal    %d\n", snap.Txn.Conflicts)
 	_, _ = fmt.Fprintf(w, "Regions.Total          %d (new=%d running=%d removing=%d tombstone=%d other=%d)\n",
 		snap.Region.Total, snap.Region.New, snap.Region.Running, snap.Region.Removing, snap.Region.Tombstone, snap.Region.Other)
 	if snap.LSM.ValueBytesTotal > 0 {

@@ -54,7 +54,7 @@ sequenceDiagram
 
 1. **Active → Immutable** – when `mt.walSize + estimate` exceeds `Options.MemTableSize`, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.
 2. **Flush** – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in `memTable.segmentID` once the SST is durably installed.
-3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes, rebuilding `maxVersion` for the oracle.
+3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes and the active in-memory state is rebuilt.
 
 Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger's arena allocator for simplicity.
 
@@ -65,7 +65,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 * `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. Internal callers must release it with `DecrRef` when done. MVCC versions stay encoded in the key suffix (`KeyWithTs`), so iterators naturally merge across memtables and SSTables.
 * `MemTable.IncrRef/DecrRef` delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's `MemTable::Ref/Unref` lifecycle.
 * WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.
-* Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`, `Txn.Get`) return detached entries. Callers must not call `DecrRef` on those entries.
+* Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`) return detached entries. Callers must not call `DecrRef` on those entries.
 
 ---
 
@@ -73,7 +73,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 | Subsystem | Interaction |
 | --- | --- |
-| Transactions | `Txn.commitAndSend` writes entries into the active memtable after WAL append; pending writes bypass the memtable until commit so per-txn isolation is preserved. |
+| Distributed 2PC | `kv.Apply` + `percolator` write committed MVCC versions through the same WAL/memtable pipeline in raft mode. |
 | Manifest | Flush completion logs `EditLogPointer(segmentID)` so restart can discard WAL files already persisted into SSTs. |
 | Stats | `Stats.Snapshot` pulls `FlushPending/Active/Queue` counters via [`lsm.FlushMetrics`](../lsm/lsm.go#L120-L128), exposing how many immutables are waiting. |
 | Value Log | `lsm.flush` emits discard stats keyed by `segmentID`, letting the value log GC know when entries become obsolete. |

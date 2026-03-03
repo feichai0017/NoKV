@@ -32,7 +32,7 @@ func TestAPI(t *testing.T) {
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.setEntry(e); err != nil {
+		if err := db.SetEntry(e); err != nil {
 			t.Fatal(err)
 		}
 		e.DecrRef()
@@ -70,7 +70,7 @@ func TestAPI(t *testing.T) {
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
 		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.setEntry(e); err != nil {
+		if err := db.SetEntry(e); err != nil {
 			t.Fatal(err)
 		}
 		e.DecrRef()
@@ -835,7 +835,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
+func TestWriteHotKeyThrottleBlocksSet(t *testing.T) {
 	clearDir()
 	prev := opt.WriteHotKeyLimit
 	opt.WriteHotKeyLimit = 3
@@ -846,13 +846,11 @@ func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	txn := db.NewTransaction(true)
 	key := []byte("txn-hot-key")
-	require.NoError(t, txn.Set(key, []byte("a")))
-	require.NoError(t, txn.Set(key, []byte("b")))
-	err := txn.Set(key, []byte("c"))
+	require.NoError(t, db.Set(key, []byte("a")))
+	require.NoError(t, db.Set(key, []byte("b")))
+	err := db.Set(key, []byte("c"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
-	txn.Discard()
 	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
