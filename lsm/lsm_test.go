@@ -896,6 +896,65 @@ func TestLSMSetBatchRejectsOversizedAtomicBatch(t *testing.T) {
 	}
 }
 
+func TestLSMSetBatchConcurrentReservations(t *testing.T) {
+	clearDir()
+	prevSize := opt.MemTableSize
+	opt.MemTableSize = 8 << 10
+	defer func() { opt.MemTableSize = prevSize }()
+
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	const (
+		workers = 4
+		rounds  = 30
+	)
+	value := bytes.Repeat([]byte("v"), 64)
+
+	errCh := make(chan error, workers*rounds)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		workerID := w
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				entries := []*kv.Entry{
+					kv.NewEntry(kv.KeyWithTs([]byte(fmt.Sprintf("w%d-r%d-a", workerID, i)), 1), value),
+					kv.NewEntry(kv.KeyWithTs([]byte(fmt.Sprintf("w%d-r%d-b", workerID, i)), 1), value),
+				}
+				err := lsm.SetBatch(entries)
+				for _, entry := range entries {
+					entry.DecrRef()
+				}
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for concurrent SetBatch writers")
+	}
+
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("set batch failed: %v", err)
+		}
+	}
+}
+
 func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

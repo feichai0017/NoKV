@@ -3,6 +3,7 @@ package wal
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -234,19 +235,27 @@ func (m *Manager) switchSegment(id uint32, truncate bool) error {
 	return m.switchSegmentLocked(id, truncate)
 }
 
-// Append appends one or more payloads to WAL and returns their locations.
-func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
-	if len(payloads) == 0 {
-		return nil, nil
+// AppendEntry appends a single encoded kv entry record to WAL.
+func (m *Manager) AppendEntry(entry *kv.Entry) (EntryInfo, error) {
+	if entry == nil || len(entry.Key) == 0 {
+		return EntryInfo{}, fmt.Errorf("wal: invalid entry")
 	}
-	records := make([]Record, len(payloads))
-	for i, p := range payloads {
-		records[i] = Record{
-			Type:    RecordTypeEntry,
-			Payload: p,
-		}
+	var buf bytes.Buffer
+	payload, err := kv.EncodeEntry(&buf, entry)
+	if err != nil {
+		return EntryInfo{}, err
 	}
-	return m.AppendRecords(records...)
+	infos, err := m.AppendRecords(Record{
+		Type:    RecordTypeEntry,
+		Payload: payload,
+	})
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	if len(infos) != 1 {
+		return EntryInfo{}, fmt.Errorf("wal: expected one info for entry, got %d", len(infos))
+	}
+	return infos[0], nil
 }
 
 // AppendEntryBatch appends a batch of kv entries as one WAL record.
