@@ -508,22 +508,6 @@ func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 	return nil
 }
 
-// SetVersionedEntry writes a value to the specified column family using the
-// provided version. It mirrors SetCF but allows callers to control the MVCC
-// timestamp embedded in the internal key.
-func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
-	if db == nil {
-		return fmt.Errorf("db is nil")
-	}
-	return db.applySingleEntry(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value), meta, 0, version)
-}
-
-// DeleteVersionedEntry marks the specified version as deleted by writing a
-// tombstone record.
-func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) error {
-	return db.SetVersionedEntry(cf, key, version, nil, kv.BitDelete)
-}
-
 // GetVersionedEntry retrieves the value stored at the provided MVCC version.
 // The returned entry is detached from internal pools. Callers must not call DecrRef.
 func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {

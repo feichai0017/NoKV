@@ -170,7 +170,7 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 	version := uint64(7)
 	value := bytes.Repeat([]byte("v"), 64)
 
-	require.NoError(t, db.SetVersionedEntry(kvpkg.CFDefault, key, version, value, 0))
+	applyVersionedEntryForTest(t, db, kvpkg.CFDefault, key, version, value, 0)
 	entry, err := db.GetVersionedEntry(kvpkg.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kvpkg.CFDefault, entry.CF)
