@@ -31,7 +31,7 @@ type (
 	// CoreAPI describes the externally exposed NoKV operations.
 	CoreAPI interface {
 		Set(key, value []byte) error
-		SetEntry(entry *kv.Entry) error
+		SetWithTTL(key, value []byte, expiresAt uint64) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
 		SetCF(cf kv.ColumnFamily, key, value []byte) error
@@ -426,6 +426,16 @@ func (db *DB) Set(key, value []byte) error {
 	return db.SetCF(kv.CFDefault, key, value)
 }
 
+// SetWithTTL writes a key/value pair into the default column family with an explicit expiry timestamp.
+func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
+	var meta byte
+	if value == nil {
+		meta = kv.BitDelete
+		expiresAt = 0
+	}
+	return db.applyEntry(kv.CFDefault, key, value, meta, expiresAt, nonTxnMaxVersion)
+}
+
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
 	// Non-transactional API: do not mix with MVCC/Txn writes.
@@ -434,23 +444,6 @@ func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
 		meta = kv.BitDelete
 	}
 	return db.applyEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
-}
-
-// SetEntry writes a user-provided entry through the regular write pipeline.
-// The caller can set Meta/ExpiresAt on the entry before calling this method.
-// entry.Version is ignored here; use SetVersionedEntry for explicit MVCC versions.
-func (db *DB) SetEntry(entry *kv.Entry) error {
-	if entry == nil || len(entry.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	return db.applyEntry(
-		entry.CF,
-		kv.SafeCopy(nil, entry.Key),
-		kv.SafeCopy(nil, entry.Value),
-		entry.Meta,
-		entry.ExpiresAt,
-		nonTxnMaxVersion,
-	)
 }
 
 // applyEntry persists an entry through the regular write pipeline.

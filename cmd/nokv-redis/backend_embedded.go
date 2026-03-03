@@ -71,12 +71,14 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 		}
 	}
 
-	entry := kv.NewEntry(args.Key, append([]byte(nil), args.Value...))
-	defer entry.DecrRef()
+	value := append([]byte(nil), args.Value...)
+	var err error
 	if args.ExpireAt > 0 {
-		entry.ExpiresAt = args.ExpireAt
+		err = b.db.SetWithTTL(args.Key, value, args.ExpireAt)
+	} else {
+		err = b.db.Set(args.Key, value)
 	}
-	if err := b.db.SetEntry(entry); err != nil {
+	if err != nil {
 		return false, err
 	}
 	return true, nil
@@ -127,9 +129,7 @@ func (b *embeddedBackend) MSet(pairs [][2][]byte) error {
 		if len(pair[0]) == 0 {
 			return utils.ErrEmptyKey
 		}
-		entry := kv.NewEntry(pair[0], append([]byte(nil), pair[1]...))
-		err := b.db.SetEntry(entry)
-		entry.DecrRef()
+		err := b.db.Set(pair[0], append([]byte(nil), pair[1]...))
 		if err != nil {
 			return err
 		}
@@ -187,12 +187,14 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 	}
 
 	result = current + delta
-	entry := kv.NewEntry(key, []byte(strconv.FormatInt(result, 10)))
-	defer entry.DecrRef()
+	value := []byte(strconv.FormatInt(result, 10))
 	if existing {
-		entry.ExpiresAt = expires
+		if err := b.db.SetWithTTL(key, value, expires); err != nil {
+			return 0, err
+		}
+		return result, nil
 	}
-	if err := b.db.SetEntry(entry); err != nil {
+	if err := b.db.Set(key, value); err != nil {
 		return 0, err
 	}
 	return result, nil
