@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -19,13 +18,12 @@ func TestOpenMemTableReplayWithTypedRecords(t *testing.T) {
 
 	entry := kv.NewEntry(kv.KeyWithTs([]byte("replay-key"), 9), []byte("replay-value"))
 	defer entry.DecrRef()
-	var buf bytes.Buffer
-	payload, err := kv.EncodeEntry(&buf, entry)
+	payload, err := wal.EncodeEntryBatch([]*kv.Entry{entry})
 	require.NoError(t, err)
 
 	infos, err := lsm.wal.AppendRecords(
 		wal.Record{Type: wal.RecordTypeRaftState, Payload: []byte("ignored")},
-		wal.Record{Type: wal.RecordTypeEntry, Payload: payload},
+		wal.Record{Type: wal.RecordTypeEntryBatch, Payload: payload},
 	)
 	require.NoError(t, err)
 	require.Len(t, infos, 2)
@@ -52,7 +50,7 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 	const segID = uint32(78)
 	require.NoError(t, lsm.wal.SwitchSegment(segID, true))
 	_, err := lsm.wal.AppendRecords(wal.Record{
-		Type:    wal.RecordTypeEntry,
+		Type:    wal.RecordTypeEntryBatch,
 		Payload: []byte("bad-entry-payload"),
 	})
 	require.NoError(t, err)
