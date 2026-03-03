@@ -20,6 +20,7 @@ type MmapFile struct {
 	Fd   *os.File // for mmap
 	File vfs.File // for file ops
 	fs   vfs.FS
+	path string
 }
 
 // OpenMmapFileUsing maps a file descriptor using the provided filesystem.
@@ -58,7 +59,29 @@ func OpenMmapFileUsing(fs vfs.FS, file vfs.File, fd *os.File, sz int, writable b
 		Fd:   fd,
 		File: file,
 		fs:   fs,
+		path: filename,
 	}, rerr
+}
+
+func (m *MmapFile) fileName() string {
+	if m == nil {
+		return ""
+	}
+	if m.path != "" {
+		return m.path
+	}
+	if m.File != nil {
+		return m.File.Name()
+	}
+	return ""
+}
+
+// SetFileName updates the logical file path associated with this mmap handle.
+func (m *MmapFile) SetFileName(name string) {
+	if m == nil || name == "" {
+		return
+	}
+	m.path = name
 }
 
 // OpenMmapFile opens an existing file or creates a new file. If the file is
@@ -232,16 +255,16 @@ func (m *MmapFile) Delete() error {
 	}
 
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	m.Data = nil
 	if err := m.File.Truncate(0); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
 	}
 	if err := m.File.Close(); err != nil {
-		return fmt.Errorf("while close file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while close file: %s, error: %v", m.fileName(), err)
 	}
-	return vfs.Ensure(m.fs).Remove(m.File.Name())
+	return vfs.Ensure(m.fs).Remove(m.fileName())
 }
 
 // Close would close the file. It would also truncate the file if maxSz >= 0.
@@ -250,10 +273,10 @@ func (m *MmapFile) Close() error {
 		return nil
 	}
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.fileName(), err)
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	return m.File.Close()
 }
@@ -261,7 +284,7 @@ func (m *MmapFile) Close() error {
 // Truncature compatible interface
 func (m *MmapFile) Truncature(maxSz int64) error {
 	if err := m.File.Truncate(maxSz); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
 	}
 
 	var err error
