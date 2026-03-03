@@ -265,7 +265,7 @@ func TestValueGC(t *testing.T) {
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, db.setEntry(e))
+		require.NoError(t, db.SetEntry(e))
 		e.DecrRef()
 	}
 	require.NoError(t, db.RunValueLogGC(0.9))
@@ -331,11 +331,10 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	txn := db.NewTransaction(true)
-	defer txn.Discard()
 	val := bytes.Repeat([]byte("x"), 128)
-	require.NoError(t, txn.SetEntry(kvpkg.NewEntry([]byte("iter-key"), val)))
-	require.NoError(t, txn.Commit())
+	entry := kvpkg.NewEntry([]byte("iter-key"), val)
+	require.NoError(t, db.SetEntry(entry))
+	entry.DecrRef()
 
 	vlog := db.vlog
 	active := vlog.managers[0].ActiveFID()

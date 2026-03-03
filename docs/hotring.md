@@ -54,7 +54,7 @@ Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket he
 
 ## 4. Integration Points
 
-* **DB reads** – `Txn.Get` and iterators call `db.recordRead`, which invokes `HotRing.Touch` on a **read-only ring** for every successful lookup.
+* **DB reads** – `DB.Get*` and iterators call `db.recordRead`, which invokes `HotRing.Touch` on a **read-only ring** for every successful lookup.
 * **Write throttling & hot batching** – writes are tracked by a **write-only ring**. When `Options.WriteHotKeyLimit > 0`, writes use `TouchAndClamp` to enforce throttling; when throttling is disabled but `HotWriteBurstThreshold > 0`, writes still `Touch` so hot batching can trigger.
 * **Stats** – `StatsSnapshot.Hot.ReadKeys` and `StatsSnapshot.Hot.WriteKeys` publish read/write hot keys. `expvar` exposes these under `NoKV.Stats.hot.read_keys` and `NoKV.Stats.hot.write_keys`.
 * **Caching** – hot reads trigger asynchronous prefetch into the normal L0/L1 block cache path.
@@ -123,7 +123,7 @@ which falls back to the ring default).
 
 ## 7. Write-Path Throttling
 
-`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, every call to `DB.Set*` or transactional `Txn.Set*` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
+`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, every call to `DB.Set*`/`DB.SetEntry` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
 
 Operational hints:
 

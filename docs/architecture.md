@@ -80,10 +80,10 @@ flowchart TD
   Ingest -->|IngestKeep: ingest-merge| Ingest
 ```
 
-### 2.5 MVCC
-- `txn.go` exposes MVCC transactions with timestamps from `oracle`.
-- `percolator` package implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` simply dispatches Raft commands to these helpers.
-- Watermarks (`utils.WaterMark`) gate read snapshots and commit visibility. They have no background goroutine; waiters block on per-index channels while advancement uses a mutex + atomics.
+### 2.5 Distributed Transaction Path
+- `percolator` implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` dispatches raft commands to these helpers.
+- MVCC timestamps come from the distributed client/PD TSO flow, not from an embedded standalone transaction API.
+- Watermarks (`utils.WaterMark`) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.
 
 ### 2.6 Write Pipeline & Backpressure
 - Writes enqueue into a commit queue (`db_write.go`) where requests are coalesced into batches before a commit worker drains them.
@@ -98,7 +98,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | Object | Owned by | Borrowed by | Release rule |
 | --- | --- | --- | --- |
 | `kv.Entry` (pooled) | internal write/read pipelines | codec iterator, memtable/lsm internal reads, request batches | Must call `DecrRef` exactly once per borrow. |
-| `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get/GetCF/GetVersionedEntry` and `Txn.Get`; **must not** call `DecrRef`. |
+| `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get/GetCF/GetVersionedEntry`; **must not** call `DecrRef`. |
 | `request` | commit queue/worker | waiter path (`Wait`) | `IncrRef` on enqueue; `Wait` does one `DecrRef`; zero returns request to pool and releases entries. |
 | `table` | level/main+ingest lists, block cache | table iterators, prefetch workers | Removed tables are decremented once after manifest+in-memory swap; zero deletes SST. |
 | `Skiplist` / `ART` index | memtable | iterators | Iterator creation increments index ref; iterator `Close` decrements; double-close is idempotent. |
@@ -178,7 +178,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 
 ## 7. Observability & Tooling
 
-- `StatsSnapshot` publishes flush/compaction/WAL/VLog/txn/region metrics. `nokv stats` and the expvar endpoint expose the same data.
+- `StatsSnapshot` publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. `nokv stats` and the expvar endpoint expose the same data.
 - `nokv regions` inspects Manifest-backed Region metadata.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
 - Inspect scheduler/control-plane state via PD APIs/metrics.
@@ -191,7 +191,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 
 ## 8. When to Use NoKV
 
-- **Embedded**: call `NoKV.Open`, use the MVCC store locally.
+- **Embedded**: call `NoKV.Open`, use the local non-transactional DB APIs.
 - **Distributed**: deploy `nokv serve` nodes, use `raftstore/client` (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.
 - **Observability-first**: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.
 
