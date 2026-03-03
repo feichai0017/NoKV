@@ -103,53 +103,39 @@ func (e *nokvEngine) Close() error {
 }
 
 func (e *nokvEngine) Read(key []byte, dst []byte) ([]byte, error) {
-	var out []byte
-	err := e.db.View(func(txn *NoKV.Txn) error {
-		item, err := txn.Get(key)
-		if err != nil {
-			if errors.Is(err, utils.ErrKeyNotFound) {
-				return nil
-			}
-			return err
+	entry, err := e.db.Get(key)
+	if err != nil {
+		if errors.Is(err, utils.ErrKeyNotFound) {
+			return nil, nil
 		}
-		out, err = item.ValueCopy(dst)
-		return err
-	})
-	return out, err
+		return nil, err
+	}
+	out := append(dst[:0], entry.Value...)
+	return out, nil
 }
 
 func (e *nokvEngine) Insert(key, value []byte) error {
-	return e.db.Update(func(txn *NoKV.Txn) error {
-		return txn.Set(key, value)
-	})
+	return e.db.Set(key, value)
 }
 
 func (e *nokvEngine) Update(key, value []byte) error {
-	return e.db.Update(func(txn *NoKV.Txn) error {
-		return txn.Set(key, value)
-	})
+	return e.db.Set(key, value)
 }
 
 func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 	var read int
-	err := e.db.View(func(txn *NoKV.Txn) error {
-		it := txn.NewIterator(NoKV.IteratorOptions{})
-		defer it.Close()
-		it.Seek(startKey)
-		for ; it.Valid() && read < count; it.Next() {
-			item := it.Item()
-			if item == nil || item.Entry() == nil {
-				return fmt.Errorf("nokv: iterator returned nil item during scan")
-			}
-			// Values are already materialized for non-key-only iterators; touching
-			// the entry avoids an extra per-item copy/allocation in benchmark scans.
-			_ = len(item.Entry().Value)
-			read++
+	it := e.db.NewIterator(&utils.Options{IsAsc: true})
+	defer func() { _ = it.Close() }()
+	it.Seek(startKey)
+	for ; it.Valid() && read < count; it.Next() {
+		item := it.Item()
+		if item == nil || item.Entry() == nil {
+			return 0, fmt.Errorf("nokv: iterator returned nil item during scan")
 		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
+		// Values are already materialized for non-key-only iterators; touching
+		// the entry avoids an extra per-item copy/allocation in benchmark scans.
+		_ = len(item.Entry().Value)
+		read++
 	}
 	return read, nil
 }

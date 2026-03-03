@@ -31,6 +31,7 @@ type (
 	// CoreAPI describes the externally exposed NoKV operations.
 	CoreAPI interface {
 		Set(key, value []byte) error
+		SetEntry(entry *kv.Entry) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
 		SetCF(cf kv.ColumnFamily, key, value []byte) error
@@ -59,7 +60,6 @@ type (
 		isClosed         atomic.Uint32
 		closeOnce        sync.Once
 		closeErr         error
-		orc              *oracle
 		hotRead          hotTracker
 		hotWrite         hotTracker
 		writeMetrics     *metrics.WriteMetrics
@@ -205,7 +205,7 @@ func Open(opt *Options) *DB {
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
-	recoveredVersion := db.lsm.MaxVersion()
+	_ = db.lsm.MaxVersion()
 	db.iterPool = newIteratorPool()
 	cfCount := int(kv.CFWrite) + 1
 	db.cfMetrics = make([]*cfCounters, cfCount)
@@ -257,8 +257,6 @@ func Open(opt *Options) *DB {
 		})
 	}
 
-	db.orc = newOracle(*opt)
-	db.orc.initCommitState(recoveredVersion)
 	// Start the SSTable compaction loop.
 	db.lsm.StartCompacter()
 	// Initialize the commit queue and GC plumbing.
@@ -420,13 +418,7 @@ func (db *DB) Del(key []byte) error {
 
 // DelCF deletes a key from the specified column family.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
-	if len(key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	entry := kv.NewEntryWithCF(cf, key, nil)
-	entry.Meta = kv.BitDelete
-	defer entry.DecrRef()
-	return db.setEntry(entry)
+	return db.applyEntry(cf, key, nil, kv.BitDelete, 0, nonTxnMaxVersion)
 }
 
 // Set writes a key/value pair into the default column family.
@@ -437,35 +429,50 @@ func (db *DB) Set(key, value []byte) error {
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
 	// Non-transactional API: do not mix with MVCC/Txn writes.
+	var meta byte
+	if value == nil {
+		meta = kv.BitDelete
+	}
+	return db.applyEntry(cf, key, value, meta, 0, nonTxnMaxVersion)
+}
+
+// SetEntry writes a user-provided entry through the regular write pipeline.
+// The caller can set Meta/ExpiresAt on the entry before calling this method.
+func (db *DB) SetEntry(entry *kv.Entry) error {
+	if entry == nil || len(entry.Key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	return db.applyEntry(
+		entry.CF,
+		kv.SafeCopy(nil, entry.Key),
+		kv.SafeCopy(nil, entry.Value),
+		entry.Meta,
+		entry.ExpiresAt,
+		nonTxnMaxVersion,
+	)
+}
+
+// applyEntry persists an entry through the regular write pipeline.
+func (db *DB) applyEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expiresAt, version uint64) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	data := kv.NewEntryWithCF(cf, key, value)
-	if value == nil {
-		data.Meta = kv.BitDelete
+	if !cf.Valid() {
+		cf = kv.CFDefault
 	}
-	defer data.DecrRef()
-	return db.setEntry(data)
-}
-
-// setEntry persists an entry using the non-transactional write path.
-func (db *DB) setEntry(data *kv.Entry) error {
-	if data == nil || len(data.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	if !data.CF.Valid() {
-		data.CF = kv.CFDefault
-	}
-	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
+	if err := db.maybeThrottleWrite(cf, key); err != nil {
 		return err
 	}
-	// Internal keys include CF and version; non-transactional writes use max version.
-	data.Key = kv.InternalKey(data.CF, data.Key, nonTxnMaxVersion)
+	entry := kv.NewEntryWithCF(cf, key, value)
+	entry.Meta = meta
+	entry.ExpiresAt = expiresAt
+	defer entry.DecrRef()
+	entry.Key = kv.InternalKey(cf, key, version)
 
 	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	data.IncrRef()
-	if err := db.batchSet([]*kv.Entry{data}); err != nil {
-		data.DecrRef()
+	entry.IncrRef()
+	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
+		entry.DecrRef()
 		return err
 	}
 	return nil
@@ -478,26 +485,7 @@ func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, 
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
-	if len(key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	entry := kv.NewEntryWithCF(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value))
-	entry.Meta = meta
-	defer entry.DecrRef()
-
-	if err := db.maybeThrottleWrite(entry.CF, entry.Key); err != nil {
-		return err
-	}
-
-	entry.Key = kv.InternalKey(entry.CF, entry.Key, version)
-
-	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	entry.IncrRef()
-	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
-		entry.DecrRef()
-		return err
-	}
-	return nil
+	return db.applyEntry(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value), meta, 0, version)
 }
 
 // DeleteVersionedEntry marks the specified version as deleted by writing a
@@ -701,10 +689,6 @@ func (db *DB) runValueLogGCPeriodically() {
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
 	return int64(len(e.Value)) < db.opt.ValueThreshold
-}
-
-func (db *DB) valueThreshold() int64 {
-	return atomic.LoadInt64(&db.opt.ValueThreshold)
 }
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
