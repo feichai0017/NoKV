@@ -477,15 +477,17 @@ func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 		if entry == nil || len(entry.Key) == 0 {
 			return utils.ErrEmptyKey
 		}
-		cf := entry.CF
-		keyForThrottle := entry.Key
-		if len(entry.Key) > 8 {
-			if parsedCF, userKey, ok := kv.DecodeKeyCF(entry.Key[:len(entry.Key)-8]); ok {
-				cf = parsedCF
-				keyForThrottle = userKey
-				entry.CF = parsedCF
-			}
+		// ApplyEntries is for pre-built internal keys only.
+		if len(entry.Key) <= 8 {
+			return utils.ErrInvalidRequest
 		}
+		parsedCF, userKey, ok := kv.DecodeKeyCF(entry.Key[:len(entry.Key)-8])
+		if !ok || len(userKey) == 0 {
+			return utils.ErrInvalidRequest
+		}
+		cf := parsedCF
+		keyForThrottle := userKey
+		entry.CF = parsedCF
 		if !cf.Valid() {
 			cf = kv.CFDefault
 			entry.CF = cf

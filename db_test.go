@@ -213,6 +213,18 @@ func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrEmptyKey)
 }
 
+func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, []byte("plain-user-key"), []byte("value"))
+	defer entry.DecrRef()
+
+	err := db.ApplyEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrInvalidRequest)
+}
+
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)
