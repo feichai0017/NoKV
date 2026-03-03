@@ -454,19 +454,57 @@ func (db *DB) applyEntry(cf kv.ColumnFamily, key, value []byte, meta byte, expir
 	if !cf.Valid() {
 		cf = kv.CFDefault
 	}
-	if err := db.maybeThrottleWrite(cf, key); err != nil {
-		return err
-	}
 	entry := kv.NewEntryWithCF(cf, key, value)
 	entry.Meta = meta
 	entry.ExpiresAt = expiresAt
 	defer entry.DecrRef()
 	entry.Key = kv.InternalKey(cf, key, version)
+	return db.ApplyEntries([]*kv.Entry{entry})
+}
 
-	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	entry.IncrRef()
-	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
-		entry.DecrRef()
+// ApplyEntries writes pre-built entries through the regular write pipeline.
+//
+// The caller must provide entries with internal keys. The entry slices must not
+// be mutated until this call returns.
+func (db *DB) ApplyEntries(entries []*kv.Entry) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
+		cf := entry.CF
+		keyForThrottle := entry.Key
+		if len(entry.Key) > 8 {
+			if parsedCF, userKey, ok := kv.DecodeKeyCF(entry.Key[:len(entry.Key)-8]); ok {
+				cf = parsedCF
+				keyForThrottle = userKey
+				entry.CF = parsedCF
+			}
+		}
+		if !cf.Valid() {
+			cf = kv.CFDefault
+			entry.CF = cf
+		}
+		if err := db.maybeThrottleWrite(cf, keyForThrottle); err != nil {
+			return err
+		}
+	}
+	return db.submitEntries(entries)
+}
+
+func (db *DB) submitEntries(entries []*kv.Entry) error {
+	for _, entry := range entries {
+		entry.IncrRef()
+	}
+	if err := db.batchSet(entries); err != nil {
+		for _, entry := range entries {
+			entry.DecrRef()
+		}
 		return err
 	}
 	return nil

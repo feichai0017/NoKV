@@ -7,7 +7,6 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator/latch"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
@@ -54,18 +53,17 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 	} else if write != nil && commitTs >= req.StartVersion {
 		return keyErrorWriteConflict(key, req.PrimaryLock, commitTs, write.StartTs, req.StartVersion)
 	}
+	entries := make([]*kv.Entry, 0, 3)
 	switch mut.Op {
 	case pb.Mutation_Put:
-		if err := db.DeleteVersionedEntry(kv.CFDefault, key, req.StartVersion); err != nil && err != utils.ErrKeyNotFound {
-			return keyErrorRetryable(err)
-		}
-		if err := db.SetVersionedEntry(kv.CFDefault, key, req.StartVersion, mut.Value, 0); err != nil {
-			return keyErrorRetryable(err)
-		}
+		entries = append(entries,
+			newVersionedEntry(kv.CFDefault, key, req.StartVersion, nil, kv.BitDelete),
+			newVersionedEntry(kv.CFDefault, key, req.StartVersion, mut.Value, 0),
+		)
 	case pb.Mutation_Delete, pb.Mutation_Lock:
-		if err := db.DeleteVersionedEntry(kv.CFDefault, key, req.StartVersion); err != nil && err != utils.ErrKeyNotFound {
-			return keyErrorRetryable(err)
-		}
+		entries = append(entries,
+			newVersionedEntry(kv.CFDefault, key, req.StartVersion, nil, kv.BitDelete),
+		)
 	default:
 		return keyErrorAbort(fmt.Sprintf("unsupported mutation op %v", mut.Op))
 	}
@@ -77,7 +75,8 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 		MinCommitTs: req.MinCommitTs,
 	}
 	encoded := EncodeLock(newLock)
-	if err := db.SetVersionedEntry(kv.CFLock, key, lockColumnTs, encoded, 0); err != nil {
+	entries = append(entries, newVersionedEntry(kv.CFLock, key, lockColumnTs, encoded, 0))
+	if err := submitAndReleaseEntries(db, entries); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
@@ -208,7 +207,10 @@ func CheckTxnStatus(db *NoKV.DB, latches *latch.Manager, req *pb.CheckTxnStatusR
 		}
 		if req.CallerStartTs > 0 && lock.MinCommitTs < req.CallerStartTs+1 {
 			lock.MinCommitTs = req.CallerStartTs + 1
-			if err := db.SetVersionedEntry(kv.CFLock, req.PrimaryKey, lockColumnTs, EncodeLock(*lock), 0); err != nil {
+			entries := []*kv.Entry{
+				newVersionedEntry(kv.CFLock, req.PrimaryKey, lockColumnTs, EncodeLock(*lock), 0),
+			}
+			if err := submitAndReleaseEntries(db, entries); err != nil {
 				resp.Error = keyErrorRetryable(err)
 				return resp
 			}
@@ -300,7 +302,9 @@ func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersio
 		}
 		if commitTs != commitVersion {
 			// Already committed with a different commit version; treat as success.
-			if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
+			if err := submitAndReleaseEntries(db, []*kv.Entry{
+				newVersionedEntry(kv.CFLock, key, lockColumnTs, nil, kv.BitDelete),
+			}); err != nil {
 				return keyErrorRetryable(err)
 			}
 			return nil
@@ -309,10 +313,11 @@ func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersio
 	}
 
 	entry := EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts})
-	if err := db.SetVersionedEntry(kv.CFWrite, key, commitVersion, entry, 0); err != nil {
-		return keyErrorRetryable(err)
+	entries := []*kv.Entry{
+		newVersionedEntry(kv.CFWrite, key, commitVersion, entry, 0),
+		newVersionedEntry(kv.CFLock, key, lockColumnTs, nil, kv.BitDelete),
 	}
-	if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
+	if err := submitAndReleaseEntries(db, entries); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
@@ -324,22 +329,34 @@ func rollbackKey(db *NoKV.DB, reader *Reader, key []byte, startTs uint64) *pb.Ke
 		return keyErrorRetryable(err)
 	}
 	if write != nil {
-		if write.Kind == pb.Mutation_Rollback {
-			return nil
-		}
 		return nil
 	}
-	if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
-		return keyErrorRetryable(err)
-	}
-	if err := db.DeleteVersionedEntry(kv.CFDefault, key, startTs); err != nil && err != utils.ErrKeyNotFound {
-		return keyErrorRetryable(err)
-	}
 	rollback := EncodeWrite(Write{Kind: pb.Mutation_Rollback, StartTs: startTs})
-	if err := db.SetVersionedEntry(kv.CFWrite, key, startTs, rollback, 0); err != nil {
+	entries := []*kv.Entry{
+		newVersionedEntry(kv.CFLock, key, lockColumnTs, nil, kv.BitDelete),
+		newVersionedEntry(kv.CFDefault, key, startTs, nil, kv.BitDelete),
+		newVersionedEntry(kv.CFWrite, key, startTs, rollback, 0),
+	}
+	if err := submitAndReleaseEntries(db, entries); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
+}
+
+func newVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) *kv.Entry {
+	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
+	entry.Meta = meta
+	return entry
+}
+
+func submitAndReleaseEntries(db *NoKV.DB, entries []*kv.Entry) error {
+	err := db.ApplyEntries(entries)
+	for _, entry := range entries {
+		if entry != nil {
+			entry.DecrRef()
+		}
+	}
+	return err
 }
 
 func isLockExpired(lock *Lock, currentTs uint64) bool {
