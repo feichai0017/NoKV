@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d8aced61.js";
+            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -200,7 +200,7 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 <li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>wal/record.go</code>.</li>
 <li>The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.</li>
 <li>Appends are buffered by <code>bufio.Writer</code> so batches become single system calls.</li>
-<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestReplayTruncatedTail</code>).</li>
+<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code>).</li>
 </ul>
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
@@ -233,8 +233,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
 <tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
-<tr><td><code>manifest.Manager.LogEdit</code></td><td>Uses <code>EntryInfo.SegmentID</code> to persist the WAL checkpoint (<code>EditLogPointer</code>). This acts as the <code>log number</code> seen in RocksDB manifest entries.</td></tr>
-<tr><td><code>lsm/flush.Manager.Update</code></td><td>Once an SST is installed, WAL segments older than the checkpoint are released (<code>wal.Manager.Remove</code>).</td></tr>
+<tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d8aced61.js";
+            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -179,15 +179,15 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush subsystem translates immutable memtables into persisted SSTables while coordinating WAL checkpoints and ValueLog discard statistics. The code lives in <a href="../lsm/flush"><code>lsm/flush</code></a> and is tightly integrated with <code>DB.doWrites</code> and <code>manifest.Manager</code>.</p>
+<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The task scheduler is in <a href="../lsm/flush"><code>lsm/flush</code></a>; SST persistence and manifest install are in <a href="../lsm/builder.go"><code>lsm/builder.go</code></a> and <a href="../lsm/levels.go"><code>lsm/levels.go</code></a>.</p>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
 <ol>
-<li><strong>Reliability</strong> – ensure immutables become SSTables atomically, and failures are recoverable.</li>
-<li><strong>Coordination</strong> – release WAL segments only after manifest commits, and feed discard stats to ValueLog GC.</li>
-<li><strong>Observability</strong> – expose queue depth, stage durations, and task counts through <code>Stats.collect</code> and the CLI.</li>
+<li><strong>Persistence</strong>: materialize immutable memtables into SST files.</li>
+<li><strong>Ordering</strong>: publish SST metadata to manifest only after the SST is durably installed (strict mode).</li>
+<li><strong>Cleanup</strong>: remove WAL segments once checkpoint and raft constraints allow removal.</li>
+<li><strong>Observability</strong>: export queue/build/release timing through flush metrics.</li>
 </ol>
-<p>Compared with RocksDB: the stage transitions mirror RocksDB’s flush job lifecycle (<code>PickMemTable</code>, <code>WriteLevel0Table</code>, <code>InstallMemTable</code>), while the discard stats channel is inspired by Badger’s integration with vlog GC.</p>
 <hr>
 <h2 id="2-stage-machine"><a class="header" href="#2-stage-machine">2. Stage Machine</a></h2>
 <pre class="mermaid">flowchart LR
@@ -203,71 +203,76 @@
 </pre>
 
 <ul>
-<li><strong>StagePrepare</strong> – <code>Manager.Submit</code> assigns a task ID, records enqueue time, and bumps queue metrics.</li>
-<li><strong>StageBuild</strong> – <code>Manager.Next</code> hands tasks to background workers. <code>buildTable</code> serialises data into a temporary <code>.sst.tmp</code> using <code>lsm/builder.go</code>.</li>
-<li><strong>StageInstall</strong> – manifest edits (<code>EditAddFile</code>, <code>EditLogPointer</code>) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.</li>
-<li><strong>StageRelease</strong> – metrics record release duration, discard stats are flushed to <code>valueLog.lfDiscardStats</code>, and <code>wal.Manager.Remove</code> drops obsolete segments.</li>
+<li><strong>StagePrepare</strong>: <code>flush.Manager.Submit</code> enqueues task and records wait-start time.</li>
+<li><strong>StageBuild</strong>: worker pulls task via <code>flush.Manager.Next</code>, builds SST (<code>levelManager.flush</code> -&gt; <code>openTable</code> -&gt; <code>tableBuilder.flush</code>).</li>
+<li><strong>StageInstall</strong>: after SST + manifest edits succeed, worker marks install complete (<code>flush.Manager.Update(..., StageInstall, ...)</code>).</li>
+<li><strong>StageRelease</strong>: worker removes immutable from in-memory list, closes memtable, records release metrics, and completes task.</li>
 </ul>
-<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These surface via <code>StatsSnapshot.Flush</code> fields (for example <code>QueueLength</code>, <code>BuildMs</code>) in <code>nokv stats</code> output.</p>
 <hr>
-<h2 id="3-key-types"><a class="header" href="#3-key-types">3. Key Types</a></h2>
-<pre><code class="language-go">type Task struct {
-    ID        uint64
-    SegmentID uint32
-    Stage     Stage
-    Data      any      // memtable pointer, temp file info, etc.
-    Err       error
-}
-
-type Manager struct {
-    queue []*Task
-    active map[uint64]*Task
-    cond  *sync.Cond
-    // atomic metrics fields (pending, queueLen, waitNs...)
-}
-</code></pre>
+<h2 id="3-sst-persistence-modes"><a class="header" href="#3-sst-persistence-modes">3. SST Persistence Modes</a></h2>
+<p>Flush uses two write modes controlled by <code>Options.ManifestSync</code>:</p>
+<ol>
+<li>
+<p><strong>Fast path (<code>ManifestSync=false</code>)</strong></p>
 <ul>
-<li><code>Stage</code> enumerates <code>StagePrepare</code>, <code>StageBuild</code>, <code>StageInstall</code>, <code>StageRelease</code>.</li>
-<li><code>Metrics</code> aggregates pending/active counts and nanosecond accumulators; the CLI converts them to human-friendly durations.</li>
-<li>The queue uses condition variables to coordinate between background workers and producers; the design avoids busy waiting, unlike some RocksDB flush queues.</li>
+<li>Writes SST directly to final filename with <code>O_CREATE|O_EXCL</code>.</li>
+<li>No temp file/rename step.</li>
+<li>Highest throughput, weaker crash-consistency guarantees.</li>
 </ul>
+</li>
+<li>
+<p><strong>Strict path (<code>ManifestSync=true</code>)</strong></p>
+<ul>
+<li>Writes to <code>"&lt;table&gt;.tmp.&lt;pid&gt;.&lt;ns&gt;"</code>.</li>
+<li><code>tmp.Sync()</code> to persist SST bytes.</li>
+<li><code>RenameNoReplace(tmp, final)</code> installs file atomically (or fallback semantics on unsupported platforms).</li>
+<li><code>SyncDir(workdir)</code> is called before manifest edit so directory entry is durable.</li>
+</ul>
+</li>
+</ol>
+<p>This is the durability ordering used by current code.</p>
 <hr>
 <h2 id="4-execution-path-in-code"><a class="header" href="#4-execution-path-in-code">4. Execution Path in Code</a></h2>
 <ol>
-<li><code>DB.applyBatches</code> detects when the active memtable is full and hands it to <code>lsm.LSM.scheduleFlush</code>, which calls <code>flush.Manager.Submit</code>.</li>
-<li>Background goroutines call <code>Next</code> to retrieve tasks; <code>lsm.(*LSM).runFlushMemTable</code> performs the build and install phases.</li>
-<li><code>lsm.(*LSM).installLevel0Table</code> writes the manifest edit and renames the SST (atomic <code>os.Rename</code>, same as RocksDB’s flush job).</li>
-<li>After install, <code>valueLog.updateDiscardStats</code> is called so GC can reclaim vlog entries belonging to dropped keys.</li>
-<li>Once release completes, <code>wal.Manager.Remove</code> evicts segments whose entries are fully represented in SSTs, matching RocksDB’s <code>LogFileManager::PurgeObsoleteLogs</code>.</li>
+<li><code>lsm.Set</code>/<code>lsm.SetBatch</code> detects <code>walSize + estimate &gt; MemTableSize</code> and rotates memtable.</li>
+<li>Rotated memtable is submitted to <code>flush.Manager</code> (<code>lsm.submitFlush</code>).</li>
+<li>Worker executes <code>levelManager.flush(mt)</code>:
+<ul>
+<li>iterates memtable entries,</li>
+<li>builds SST via <code>tableBuilder</code>,</li>
+<li>prepares manifest edits: <code>EditAddFile</code> + <code>EditLogPointer</code>.</li>
+</ul>
+</li>
+<li>In strict mode, <code>SyncDir</code> runs before <code>manifest.LogEdits(...)</code>.</li>
+<li>On successful manifest commit, table is added to L0 and <code>wal.RemoveSegment</code> runs when allowed.</li>
 </ol>
 <hr>
-<h2 id="5-recovery-considerations"><a class="header" href="#5-recovery-considerations">5. Recovery Considerations</a></h2>
+<h2 id="5-recovery-notes"><a class="header" href="#5-recovery-notes">5. Recovery Notes</a></h2>
 <ul>
-<li><strong>Before Install</strong> – temp files remain in <code>tmp/</code>. On restart, no manifest entry exists, so <code>lsm.LSM.replayManifest</code> ignores them and the memtable is rebuilt from WAL.</li>
-<li><strong>After Install but before Release</strong> – manifest records the SST while WAL segments may still exist. Recovery sees the edit, ensures the file exists, and release metrics resume from StageRelease.</li>
-<li><strong>Metrics</strong> – because timing data is stored atomically in the manager, recovery resets counters but does not prevent the CLI from reporting backlog immediately after restart.</li>
+<li>Startup rebuild (<code>levelManager.build</code>) validates manifest SST entries against disk.</li>
+<li>Missing or unreadable SSTs are treated as stale and removed from manifest via <code>EditDeleteFile</code>, allowing startup to continue.</li>
+<li>Temp SST names are only used in strict mode and are created in <code>WorkDir</code> with suffix <code>.tmp.&lt;pid&gt;.&lt;ns&gt;</code> (not a dedicated <code>tmp/</code> directory).</li>
 </ul>
-<p>RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visibility.</p>
 <hr>
-<h2 id="6-observability--cli"><a class="header" href="#6-observability--cli">6. Observability &amp; CLI</a></h2>
+<h2 id="6-metrics--cli"><a class="header" href="#6-metrics--cli">6. Metrics &amp; CLI</a></h2>
+<p><code>flush.Manager.Stats()</code> feeds <code>StatsSnapshot.Flush</code>:</p>
 <ul>
-<li><code>StatsSnapshot.Flush.QueueLength</code> – number of pending tasks.</li>
-<li><code>StatsSnapshot.Flush.WaitMs</code> – average wait time before build.</li>
-<li><code>StatsSnapshot.Flush.BuildMs</code> – average build duration.</li>
-<li><code>StatsSnapshot.Flush.Completed</code> – cumulative tasks finished.</li>
+<li><code>pending</code>, <code>queue</code>, <code>active</code></li>
+<li>wait/build/release totals, counts, last, max</li>
+<li><code>completed</code></li>
 </ul>
-<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these metrics alongside compaction and transaction statistics, enabling operators to detect stalled flush workers or WAL backlog quickly.</p>
+<p>Use:</p>
+<pre><code class="language-bash">nokv stats --workdir &lt;dir&gt;
+</code></pre>
+<p>to inspect flush backlog and latency.</p>
 <hr>
-<h2 id="7-interplay-with-valuelog-gc"><a class="header" href="#7-interplay-with-valuelog-gc">7. Interplay with ValueLog GC</a></h2>
-<p>Flush completion sends discard stats via <code>db.lsm.SetDiscardStatsCh(&amp;(db.vlog.lfDiscardStats.flushChan))</code>. ValueLog GC uses this feed to determine how much of each vlog segment is obsolete, similar to Badger’s discard ratio heuristic. Without flush-driven stats, vlog GC would have to rescan SSTables, so this channel is crucial for keeping GC cheap.</p>
-<hr>
-<h2 id="8-testing-matrix"><a class="header" href="#8-testing-matrix">8. Testing Matrix</a></h2>
+<h2 id="7-related-tests"><a class="header" href="#7-related-tests">7. Related Tests</a></h2>
 <ul>
-<li><code>lsm/flush/manager_test.go</code> (implicit via <code>lsm/lsm_test.go</code>) validates stage transitions and metrics.</li>
-<li><code>db_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
-<li>Future additions: inject write failures during <code>StageBuild</code> to test retry logic, analogous to RocksDB’s simulated IO errors.</li>
+<li><code>lsm/flush/manager_test.go</code>: queue/stage transitions and timing counters.</li>
+<li><code>db_test.go::TestRecoveryWALReplayRestoresData</code>: replay still restores data after crash before flush completion.</li>
+<li><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> and <code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code>: stale manifest SST cleanup on startup.</li>
 </ul>
-<p>See the <a href="recovery.html">recovery plan</a> and <a href="testing.html">testing matrix</a> for more context.</p>
+<p>See also <a href="recovery.html">recovery.md</a>, <a href="memtable.html">memtable.md</a>, and <a href="wal.html">wal.md</a>.</p>
 
                     </main>
 

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d8aced61.js";
+            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -987,15 +987,15 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <p>See <a href="#memtable-flush-pipeline"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush subsystem translates immutable memtables into persisted SSTables while coordinating WAL checkpoints and ValueLog discard statistics. The code lives in <a href="../lsm/flush"><code>lsm/flush</code></a> and is tightly integrated with <code>DB.doWrites</code> and <code>manifest.Manager</code>.</p>
+<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The task scheduler is in <a href="../lsm/flush"><code>lsm/flush</code></a>; SST persistence and manifest install are in <a href="../lsm/builder.go"><code>lsm/builder.go</code></a> and <a href="../lsm/levels.go"><code>lsm/levels.go</code></a>.</p>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
 <ol>
-<li><strong>Reliability</strong> – ensure immutables become SSTables atomically, and failures are recoverable.</li>
-<li><strong>Coordination</strong> – release WAL segments only after manifest commits, and feed discard stats to ValueLog GC.</li>
-<li><strong>Observability</strong> – expose queue depth, stage durations, and task counts through <code>Stats.collect</code> and the CLI.</li>
+<li><strong>Persistence</strong>: materialize immutable memtables into SST files.</li>
+<li><strong>Ordering</strong>: publish SST metadata to manifest only after the SST is durably installed (strict mode).</li>
+<li><strong>Cleanup</strong>: remove WAL segments once checkpoint and raft constraints allow removal.</li>
+<li><strong>Observability</strong>: export queue/build/release timing through flush metrics.</li>
 </ol>
-<p>Compared with RocksDB: the stage transitions mirror RocksDB’s flush job lifecycle (<code>PickMemTable</code>, <code>WriteLevel0Table</code>, <code>InstallMemTable</code>), while the discard stats channel is inspired by Badger’s integration with vlog GC.</p>
 <hr>
 <h2 id="2-stage-machine"><a class="header" href="#2-stage-machine">2. Stage Machine</a></h2>
 <pre class="mermaid">flowchart LR
@@ -1011,71 +1011,76 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </pre>
 
 <ul>
-<li><strong>StagePrepare</strong> – <code>Manager.Submit</code> assigns a task ID, records enqueue time, and bumps queue metrics.</li>
-<li><strong>StageBuild</strong> – <code>Manager.Next</code> hands tasks to background workers. <code>buildTable</code> serialises data into a temporary <code>.sst.tmp</code> using <code>lsm/builder.go</code>.</li>
-<li><strong>StageInstall</strong> – manifest edits (<code>EditAddFile</code>, <code>EditLogPointer</code>) are logged. Only on success is the temp file renamed and the WAL checkpoint advanced.</li>
-<li><strong>StageRelease</strong> – metrics record release duration, discard stats are flushed to <code>valueLog.lfDiscardStats</code>, and <code>wal.Manager.Remove</code> drops obsolete segments.</li>
+<li><strong>StagePrepare</strong>: <code>flush.Manager.Submit</code> enqueues task and records wait-start time.</li>
+<li><strong>StageBuild</strong>: worker pulls task via <code>flush.Manager.Next</code>, builds SST (<code>levelManager.flush</code> -&gt; <code>openTable</code> -&gt; <code>tableBuilder.flush</code>).</li>
+<li><strong>StageInstall</strong>: after SST + manifest edits succeed, worker marks install complete (<code>flush.Manager.Update(..., StageInstall, ...)</code>).</li>
+<li><strong>StageRelease</strong>: worker removes immutable from in-memory list, closes memtable, records release metrics, and completes task.</li>
 </ul>
-<p><code>Manager.Update</code> transitions between stages and collects timing data (<code>WaitNs</code>, <code>BuildNs</code>, <code>ReleaseNs</code>). These surface via <code>StatsSnapshot.Flush</code> fields (for example <code>QueueLength</code>, <code>BuildMs</code>) in <code>nokv stats</code> output.</p>
 <hr>
-<h2 id="3-key-types"><a class="header" href="#3-key-types">3. Key Types</a></h2>
-<pre><code class="language-go">type Task struct {
-    ID        uint64
-    SegmentID uint32
-    Stage     Stage
-    Data      any      // memtable pointer, temp file info, etc.
-    Err       error
-}
-
-type Manager struct {
-    queue []*Task
-    active map[uint64]*Task
-    cond  *sync.Cond
-    // atomic metrics fields (pending, queueLen, waitNs...)
-}
-</code></pre>
+<h2 id="3-sst-persistence-modes"><a class="header" href="#3-sst-persistence-modes">3. SST Persistence Modes</a></h2>
+<p>Flush uses two write modes controlled by <code>Options.ManifestSync</code>:</p>
+<ol>
+<li>
+<p><strong>Fast path (<code>ManifestSync=false</code>)</strong></p>
 <ul>
-<li><code>Stage</code> enumerates <code>StagePrepare</code>, <code>StageBuild</code>, <code>StageInstall</code>, <code>StageRelease</code>.</li>
-<li><code>Metrics</code> aggregates pending/active counts and nanosecond accumulators; the CLI converts them to human-friendly durations.</li>
-<li>The queue uses condition variables to coordinate between background workers and producers; the design avoids busy waiting, unlike some RocksDB flush queues.</li>
+<li>Writes SST directly to final filename with <code>O_CREATE|O_EXCL</code>.</li>
+<li>No temp file/rename step.</li>
+<li>Highest throughput, weaker crash-consistency guarantees.</li>
 </ul>
+</li>
+<li>
+<p><strong>Strict path (<code>ManifestSync=true</code>)</strong></p>
+<ul>
+<li>Writes to <code>"&lt;table&gt;.tmp.&lt;pid&gt;.&lt;ns&gt;"</code>.</li>
+<li><code>tmp.Sync()</code> to persist SST bytes.</li>
+<li><code>RenameNoReplace(tmp, final)</code> installs file atomically (or fallback semantics on unsupported platforms).</li>
+<li><code>SyncDir(workdir)</code> is called before manifest edit so directory entry is durable.</li>
+</ul>
+</li>
+</ol>
+<p>This is the durability ordering used by current code.</p>
 <hr>
 <h2 id="4-execution-path-in-code"><a class="header" href="#4-execution-path-in-code">4. Execution Path in Code</a></h2>
 <ol>
-<li><code>DB.applyBatches</code> detects when the active memtable is full and hands it to <code>lsm.LSM.scheduleFlush</code>, which calls <code>flush.Manager.Submit</code>.</li>
-<li>Background goroutines call <code>Next</code> to retrieve tasks; <code>lsm.(*LSM).runFlushMemTable</code> performs the build and install phases.</li>
-<li><code>lsm.(*LSM).installLevel0Table</code> writes the manifest edit and renames the SST (atomic <code>os.Rename</code>, same as RocksDB’s flush job).</li>
-<li>After install, <code>valueLog.updateDiscardStats</code> is called so GC can reclaim vlog entries belonging to dropped keys.</li>
-<li>Once release completes, <code>wal.Manager.Remove</code> evicts segments whose entries are fully represented in SSTs, matching RocksDB’s <code>LogFileManager::PurgeObsoleteLogs</code>.</li>
+<li><code>lsm.Set</code>/<code>lsm.SetBatch</code> detects <code>walSize + estimate &gt; MemTableSize</code> and rotates memtable.</li>
+<li>Rotated memtable is submitted to <code>flush.Manager</code> (<code>lsm.submitFlush</code>).</li>
+<li>Worker executes <code>levelManager.flush(mt)</code>:
+<ul>
+<li>iterates memtable entries,</li>
+<li>builds SST via <code>tableBuilder</code>,</li>
+<li>prepares manifest edits: <code>EditAddFile</code> + <code>EditLogPointer</code>.</li>
+</ul>
+</li>
+<li>In strict mode, <code>SyncDir</code> runs before <code>manifest.LogEdits(...)</code>.</li>
+<li>On successful manifest commit, table is added to L0 and <code>wal.RemoveSegment</code> runs when allowed.</li>
 </ol>
 <hr>
-<h2 id="5-recovery-considerations"><a class="header" href="#5-recovery-considerations">5. Recovery Considerations</a></h2>
+<h2 id="5-recovery-notes"><a class="header" href="#5-recovery-notes">5. Recovery Notes</a></h2>
 <ul>
-<li><strong>Before Install</strong> – temp files remain in <code>tmp/</code>. On restart, no manifest entry exists, so <code>lsm.LSM.replayManifest</code> ignores them and the memtable is rebuilt from WAL.</li>
-<li><strong>After Install but before Release</strong> – manifest records the SST while WAL segments may still exist. Recovery sees the edit, ensures the file exists, and release metrics resume from StageRelease.</li>
-<li><strong>Metrics</strong> – because timing data is stored atomically in the manager, recovery resets counters but does not prevent the CLI from reporting backlog immediately after restart.</li>
+<li>Startup rebuild (<code>levelManager.build</code>) validates manifest SST entries against disk.</li>
+<li>Missing or unreadable SSTs are treated as stale and removed from manifest via <code>EditDeleteFile</code>, allowing startup to continue.</li>
+<li>Temp SST names are only used in strict mode and are created in <code>WorkDir</code> with suffix <code>.tmp.&lt;pid&gt;.&lt;ns&gt;</code> (not a dedicated <code>tmp/</code> directory).</li>
 </ul>
-<p>RocksDB uses flush job logs; NoKV reuses metrics and CLI output for similar visibility.</p>
 <hr>
-<h2 id="6-observability--cli"><a class="header" href="#6-observability--cli">6. Observability &amp; CLI</a></h2>
+<h2 id="6-metrics--cli"><a class="header" href="#6-metrics--cli">6. Metrics &amp; CLI</a></h2>
+<p><code>flush.Manager.Stats()</code> feeds <code>StatsSnapshot.Flush</code>:</p>
 <ul>
-<li><code>StatsSnapshot.Flush.QueueLength</code> – number of pending tasks.</li>
-<li><code>StatsSnapshot.Flush.WaitMs</code> – average wait time before build.</li>
-<li><code>StatsSnapshot.Flush.BuildMs</code> – average build duration.</li>
-<li><code>StatsSnapshot.Flush.Completed</code> – cumulative tasks finished.</li>
+<li><code>pending</code>, <code>queue</code>, <code>active</code></li>
+<li>wait/build/release totals, counts, last, max</li>
+<li><code>completed</code></li>
 </ul>
-<p>The CLI command <code>nokv stats --workdir &lt;dir&gt;</code> prints these metrics alongside compaction and transaction statistics, enabling operators to detect stalled flush workers or WAL backlog quickly.</p>
+<p>Use:</p>
+<pre><code class="language-bash">nokv stats --workdir &lt;dir&gt;
+</code></pre>
+<p>to inspect flush backlog and latency.</p>
 <hr>
-<h2 id="7-interplay-with-valuelog-gc"><a class="header" href="#7-interplay-with-valuelog-gc">7. Interplay with ValueLog GC</a></h2>
-<p>Flush completion sends discard stats via <code>db.lsm.SetDiscardStatsCh(&amp;(db.vlog.lfDiscardStats.flushChan))</code>. ValueLog GC uses this feed to determine how much of each vlog segment is obsolete, similar to Badger’s discard ratio heuristic. Without flush-driven stats, vlog GC would have to rescan SSTables, so this channel is crucial for keeping GC cheap.</p>
-<hr>
-<h2 id="8-testing-matrix"><a class="header" href="#8-testing-matrix">8. Testing Matrix</a></h2>
+<h2 id="7-related-tests"><a class="header" href="#7-related-tests">7. Related Tests</a></h2>
 <ul>
-<li><code>lsm/flush/manager_test.go</code> (implicit via <code>lsm/lsm_test.go</code>) validates stage transitions and metrics.</li>
-<li><code>db_test.go</code> covers crash scenarios before/after install, ensuring WAL replay plus manifest reconciliation recovers gracefully.</li>
-<li>Future additions: inject write failures during <code>StageBuild</code> to test retry logic, analogous to RocksDB’s simulated IO errors.</li>
+<li><code>lsm/flush/manager_test.go</code>: queue/stage transitions and timing counters.</li>
+<li><code>db_test.go::TestRecoveryWALReplayRestoresData</code>: replay still restores data after crash before flush completion.</li>
+<li><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> and <code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code>: stale manifest SST cleanup on startup.</li>
 </ul>
-<p>See the <a href="#crash-recovery-playbook">recovery plan</a> and <a href="#testing--validation-matrix">testing matrix</a> for more context.</p>
+<p>See also <a href="#crash-recovery-playbook">recovery.md</a>, <a href="#memtable-design--lifecycle">memtable.md</a>, and <a href="#wal-subsystem">wal.md</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="compaction--cache-strategy"><a class="header" href="#compaction--cache-strategy">Compaction &amp; Cache Strategy</a></h1>
 <blockquote>
@@ -1244,7 +1249,7 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 <li>Checksums use <code>kv.CastagnoliCrcTable</code>, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in <code>wal/record.go</code>.</li>
 <li>The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.</li>
 <li>Appends are buffered by <code>bufio.Writer</code> so batches become single system calls.</li>
-<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestReplayTruncatedTail</code>).</li>
+<li>Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (<code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code>).</li>
 </ul>
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
@@ -1277,8 +1282,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
 <tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
-<tr><td><code>manifest.Manager.LogEdit</code></td><td>Uses <code>EntryInfo.SegmentID</code> to persist the WAL checkpoint (<code>EditLogPointer</code>). This acts as the <code>log number</code> seen in RocksDB manifest entries.</td></tr>
-<tr><td><code>lsm/flush.Manager.Update</code></td><td>Once an SST is installed, WAL segments older than the checkpoint are released (<code>wal.Manager.Remove</code>).</td></tr>
+<tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -1510,83 +1515,71 @@ _ = mgr.Remove(fid)  // close + delete file
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="manifest--version-management"><a class="header" href="#manifest--version-management">Manifest &amp; Version Management</a></h1>
-<p>The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV’s implementation (<code>manifest/manager.go</code>, <code>manifest/codec.go</code>, <code>manifest/types.go</code>) borrows RocksDB’s <code>VersionEdit + CURRENT</code> pattern while adding metadata required for value separation.</p>
+<p>The manifest is NoKV’s metadata log for:</p>
+<ul>
+<li>SST files (<code>EditAddFile</code> / <code>EditDeleteFile</code>)</li>
+<li>WAL checkpoint (<code>EditLogPointer</code>)</li>
+<li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
+<li>raft and region metadata (<code>EditRaftPointer</code>, <code>EditRegion</code>)</li>
+</ul>
+<p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
 <hr>
-<h2 id="1-file-layout"><a class="header" href="#1-file-layout">1. File Layout</a></h2>
+<h2 id="1-files-on-disk"><a class="header" href="#1-files-on-disk">1. Files on Disk</a></h2>
 <pre><code class="language-text">WorkDir/
-  CURRENT             # stores the active MANIFEST file name
-  MANIFEST-000001     # log of manifest edits
-  MANIFEST-000002     # newer file after rewrite
+  CURRENT
+  MANIFEST-000001
+  MANIFEST-000002
 </code></pre>
 <ul>
-<li><code>CURRENT</code> is atomically swapped via <code>CURRENT.tmp</code> → <code>CURRENT</code> rename.</li>
-<li>Each <code>MANIFEST-*</code> contains a series of binary edits prefixed by the magic string <code>"NoKV"</code> (encoding lives in <code>manifest/codec.go</code>).</li>
-<li>During <code>manifest.Open</code>, <code>loadCurrent</code> opens the file referenced by CURRENT; if missing, <code>createNew</code> bootstraps an empty manifest.</li>
+<li><code>CURRENT</code> stores the active manifest filename.</li>
+<li><code>CURRENT</code> is updated via <code>CURRENT.tmp -&gt; CURRENT</code> rename.</li>
+<li><code>MANIFEST-*</code> stores append-only encoded edits.</li>
 </ul>
 <hr>
-<h2 id="2-edit-types"><a class="header" href="#2-edit-types">2. Edit Types</a></h2>
-<pre><code class="language-go">type EditType uint8
-const (
-    EditAddFile EditType = iota
-    EditDeleteFile
-    EditLogPointer
-    EditValueLogHead
-    EditDeleteValueLog
-    EditUpdateValueLog
-    EditRaftPointer
-    EditRegion
-)
-</code></pre>
-<p>Each edit serialises one logical action:</p>
-<ul>
-<li><code>EditAddFile</code> / <code>EditDeleteFile</code> – manage SST metadata (<code>FileMeta</code>: level, fileID, size, key bounds, timestamps).</li>
-<li><code>EditLogPointer</code> – persists the latest WAL segment + offset checkpoint, analogous to RocksDB’s <code>log_number</code> and <code>prev_log_number</code> fields.</li>
-<li><code>EditValueLogHead</code> – records the head pointer for vlog append, ensuring recovery resumes from the correct file/offset.</li>
-<li><code>EditDeleteValueLog</code> – marks a vlog segment logically deleted (GC has reclaimed it).</li>
-<li><code>EditUpdateValueLog</code> – updates metadata for an existing vlog file (used when GC rewrites a segment).</li>
-<li><code>EditRaftPointer</code> – persists raft-group WAL progress (segment, offset, applied/truncated index &amp; term, etc.).</li>
-<li><code>EditRegion</code> – persists Region metadata (key range, epoch, peers, lifecycle state).</li>
-</ul>
-<p><code>manifest.Manager.apply</code> interprets each edit and updates the in-memory <code>Version</code> structure, which is consumed by LSM initialisation and value log recovery.</p>
-<hr>
-<h2 id="3-version-structure"><a class="header" href="#3-version-structure">3. Version Structure</a></h2>
+<h2 id="2-in-memory-version-model"><a class="header" href="#2-in-memory-version-model">2. In-Memory Version Model</a></h2>
 <pre><code class="language-go">type Version struct {
     Levels       map[int][]FileMeta
     LogSegment   uint32
     LogOffset    uint64
-    ValueLogs    map[uint32]ValueLogMeta
-    ValueLogHead ValueLogMeta
+    ValueLogs    map[ValueLogID]ValueLogMeta
+    ValueLogHead map[uint32]ValueLogMeta
     RaftPointers map[uint64]RaftLogPointer
     Regions      map[uint64]RegionMeta
 }
 </code></pre>
 <ul>
-<li><code>Levels</code> mirrors the LSM tree levels; during recovery <code>lsm.LSM</code> loads files per level.</li>
-<li><code>LogSegment</code>/<code>LogOffset</code> ensure WAL replay starts exactly where persistent state ended.</li>
-<li><code>ValueLogs</code> holds metadata for every known vlog file; <code>ValueLogHead</code> caches the active head for quick access.</li>
+<li><code>Levels</code>: per-level SST metadata.</li>
+<li><code>LogSegment/LogOffset</code>: WAL replay checkpoint.</li>
+<li><code>ValueLogs</code> + <code>ValueLogHead</code>: all known vlog segments and per-bucket active heads.</li>
+<li><code>RaftPointers/Regions</code>: raftstore progress + region metadata.</li>
 </ul>
-<p>Compared with RocksDB: RocksDB’s manifest stores blob file metadata when <code>BlobDB</code> is enabled. NoKV integrates vlog metadata natively to avoid a separate blob manifest.</p>
 <hr>
-<h2 id="4-lifecycle"><a class="header" href="#4-lifecycle">4. Lifecycle</a></h2>
-<pre class="mermaid">sequenceDiagram
-    participant DB
-    participant Manifest
-    participant CURRENT
-    DB-&gt;&gt;Manifest: Open(dir)
-    Manifest-&gt;&gt;CURRENT: read file name
-    Manifest-&gt;&gt;Manifest: replay edits → Version
-    DB-&gt;&gt;Manifest: LogEdit(EditAddFile+LogPointer)
-    Manifest-&gt;&gt;Manifest: append edit
-    Manifest--&gt;&gt;DB: updated Version
-    Note over Manifest,CURRENT: On rewrite -&gt; write tmp -&gt; rename CURRENT
-</pre>
-
+<h2 id="3-edit-append-semantics"><a class="header" href="#3-edit-append-semantics">3. Edit Append Semantics</a></h2>
+<p><code>Manager.LogEdits(edits...)</code> does:</p>
+<ol>
+<li>Encode edits to a buffer.</li>
+<li>Write encoded bytes to current manifest file.</li>
+<li>Conditionally call <code>manifest.Sync()</code> when:
 <ul>
-<li><strong>Open/Rebuild</strong> – <code>replay</code> reads all edits, applying them sequentially (<code>bufio.Reader</code> ensures streaming). If any edit fails to decode, recovery aborts so operators can inspect the manifest, similar to RocksDB’s strictness.</li>
-<li><strong>LogEdit</strong> – obtains the mutex, appends the encoded edit, flushes, and updates the in-memory <code>Version</code> before returning.</li>
-<li><strong>Rewrite</strong> – when the manifest grows beyond <code>Options.ManifestRewriteThreshold</code>, the manager writes a new <code>MANIFEST-xxxxxx</code> containing a full snapshot of the current <code>Version</code>, fsyncs it, updates <code>CURRENT</code>, and removes the old file. This mirrors RocksDB’s <code>max_manifest_file_size</code> behavior while keeping recovery simple.</li>
-<li><strong>Close</strong> – flushes and closes the underlying file handle; the version stays available for introspection via <code>Manager.Version()</code> (used by CLI).</li>
+<li><code>Manager.syncWrites == true</code>, and</li>
+<li>at least one edit type requires sync (<code>Add/DeleteFile</code>, <code>LogPointer</code>, value-log edits).</li>
 </ul>
+</li>
+<li>Apply edits to in-memory <code>Version</code>.</li>
+<li>Trigger manifest rewrite if size crosses threshold.</li>
+</ol>
+<p><code>SetSync(bool)</code> and <code>SetRewriteThreshold(int64)</code> are configured by LSM options.</p>
+<hr>
+<h2 id="4-rewrite-flow"><a class="header" href="#4-rewrite-flow">4. Rewrite Flow</a></h2>
+<p>When rewrite threshold is exceeded (or <code>Rewrite()</code> is called):</p>
+<ol>
+<li>Create next <code>MANIFEST-xxxxxx</code>.</li>
+<li>Write a full snapshot of current <code>Version</code>.</li>
+<li>Flush writer, and <code>Sync()</code> the new manifest when <code>syncWrites</code> is enabled.</li>
+<li>Update <code>CURRENT</code> to point to new file.</li>
+<li>Reopen the new manifest for appends and remove old manifest file.</li>
+</ol>
+<p>If rewrite fails before <code>CURRENT</code> update, restart continues using previous manifest.</p>
 <hr>
 <h2 id="5-interaction-with-other-modules"><a class="header" href="#5-interaction-with-other-modules">5. Interaction with Other Modules</a></h2>
 <div class="table-wrapper">
@@ -1595,142 +1588,96 @@ const (
 <tr><th>Module</th><th>Manifest usage</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm</code></td><td><code>installLevel0Table</code> logs <code>EditAddFile</code> + <code>EditLogPointer</code> to checkpoint WAL progress. Compaction deletes old files via <code>EditDeleteFile</code>.</td></tr>
-<tr><td><code>wal</code></td><td>Manifest’s log pointer tells WAL replay where to resume.</td></tr>
-<tr><td><code>vlog</code></td><td><code>valueLog.rewrite</code> writes <code>EditUpdateValueLog</code> / <code>EditDeleteValueLog</code> after GC, ensuring stale segments are not reopened.</td></tr>
-<tr><td><code>CLI</code></td><td><code>nokv manifest</code> reads <code>manifest.Manager.Version()</code> and prints levels, vlog head, and deletion status.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
+<tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
+<tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
+<tr><td><code>raftstore</code></td><td>Persists raft pointers and region metadata through manifest edits.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger keeps a separate <code>value.log</code> directory without manifest-level bookkeeping; NoKV’s integrated manifest avoids scanning the filesystem during recovery.</p>
 <hr>
-<h2 id="6-recovery-scenarios"><a class="header" href="#6-recovery-scenarios">6. Recovery Scenarios</a></h2>
+<h2 id="6-recovery-relevant-guarantees"><a class="header" href="#6-recovery-relevant-guarantees">6. Recovery-Relevant Guarantees</a></h2>
 <ol>
-<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
-<li><strong>ValueLog deletion</strong> – <code>TestRecoveryRemovesStaleValueLogSegment</code> ensures <code>EditDeleteValueLog</code> entries trigger file removal during recovery.</li>
-<li><strong>Manifest rewrite crash</strong> – <code>TestRecoveryManifestRewriteCrash</code> simulates a crash after writing the new manifest but before updating <code>CURRENT</code>; recovery still points to the old manifest and resumes safely, exactly like RocksDB’s two-phase rewrite.</li>
-<li><strong>Stale WAL pointer</strong> – WAL replay respects <code>LogSegment/Offset</code>; tests cover truncated WALs to confirm idempotency.</li>
+<li>Manifest append is ordered by single manager mutex.</li>
+<li>WAL replay starts from manifest checkpoint.</li>
+<li>Stale manifest SST entries are self-healed on startup (delete edit appended).</li>
+<li><code>CURRENT</code> indirection protects against partial manifest rewrite publication.</li>
 </ol>
 <hr>
-<h2 id="7-cli-output"><a class="header" href="#7-cli-output">7. CLI Output</a></h2>
-<p><code>nokv manifest --workdir &lt;dir&gt; --json</code> prints:</p>
+<h2 id="7-operational-commands"><a class="header" href="#7-operational-commands">7. Operational Commands</a></h2>
+<pre><code class="language-bash">nokv manifest --workdir &lt;dir&gt;
+</code></pre>
+<p>Useful fields:</p>
 <ul>
-<li><code>log_pointer.segment</code> / <code>log_pointer.offset</code> checkpoint.</li>
-<li>Per-level file counts, IDs, and byte totals (<code>levels[*]</code>).</li>
-<li><code>value_log_heads</code> metadata (bucketed heads).</li>
-<li><code>value_logs</code> list with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
+<li><code>log_pointer.segment</code>, <code>log_pointer.offset</code></li>
+<li><code>levels[*].files</code></li>
+<li><code>value_log_heads</code></li>
+<li><code>value_logs[*].valid</code></li>
 </ul>
-<p>This structured output enables automated validation in CI and ad-hoc audits.</p>
-<hr>
-<h2 id="8-extensibility"><a class="header" href="#8-extensibility">8. Extensibility</a></h2>
-<ul>
-<li><strong>Column families</strong> – add a column family identifier to <code>FileMeta</code> and extend edits accordingly, as RocksDB does.</li>
-<li><strong>Snapshots</strong> – persistent snapshots can be derived from manifest versions (keep a copy of the current Version and WAL pointer).</li>
-<li><strong>Remote manifests</strong> – similar to RocksDB’s remote compaction, storing manifests in object storage is straightforward because edits are append-only.</li>
-</ul>
-<p>For end-to-end recovery context, see <a href="#crash-recovery-playbook">recovery.md</a> and the <a href="#nokv-architecture-overview">architecture overview</a>.</p>
+<p>See <a href="#crash-recovery-playbook">recovery.md</a> and <a href="#memtable-flush-pipeline">flush.md</a> for startup and flush ordering details.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="vfs"><a class="header" href="#vfs">VFS</a></h1>
-<p>The <code>vfs</code> package defines a unified filesystem abstraction used by NoKV storage paths (<code>wal</code>, <code>manifest</code>, <code>vlog</code>, <code>file</code>, and parts of <code>raftstore</code>).</p>
-<p>It is intentionally small and focused:</p>
-<ul>
-<li>Keep production code independent from direct <code>os.*</code> calls.</li>
-<li>Make fault-path testing deterministic.</li>
-<li>Keep the same call shape in embedded and distributed modes.</li>
-</ul>
+<p>The <code>vfs</code> package provides a small filesystem abstraction used by WAL, manifest, SST, value-log, and raftstore paths.</p>
 <hr>
-<h2 id="1-design-goals"><a class="header" href="#1-design-goals">1. Design Goals</a></h2>
-<ol>
-<li>One filesystem API for all persistence-critical modules.</li>
-<li>Explicit file-handle operations (<code>OpenHandle</code> / <code>OpenFileHandle</code>) so injected failures can target both path-level and handle-level behavior.</li>
-<li>Test-first error injection without adding module-local test hooks.</li>
-</ol>
-<hr>
-<h2 id="2-core-interfaces"><a class="header" href="#2-core-interfaces">2. Core Interfaces</a></h2>
-<p><code>vfs.FS</code> (namespace-level operations):</p>
+<h2 id="1-core-interfaces"><a class="header" href="#1-core-interfaces">1. Core Interfaces</a></h2>
+<p><code>vfs.FS</code> includes:</p>
 <ul>
-<li>open/create (<code>OpenHandle</code>, <code>OpenFileHandle</code>)</li>
-<li>path ops (<code>MkdirAll</code>, <code>Remove</code>, <code>RemoveAll</code>, <code>Rename</code>, <code>Stat</code>, <code>ReadDir</code>, <code>Glob</code>)</li>
-<li>whole-file helpers (<code>ReadFile</code>, <code>WriteFile</code>, <code>Truncate</code>)</li>
+<li>file open/create: <code>OpenHandle</code>, <code>OpenFileHandle</code></li>
+<li>path ops: <code>MkdirAll</code>, <code>Remove</code>, <code>RemoveAll</code>, <code>Rename</code>, <code>RenameNoReplace</code>, <code>Stat</code>, <code>ReadDir</code>, <code>Glob</code></li>
+<li>helpers: <code>ReadFile</code>, <code>WriteFile</code>, <code>Truncate</code>, <code>Hostname</code></li>
 </ul>
-<p><code>vfs.File</code> (handle-level operations):</p>
+<p><code>vfs.File</code> includes:</p>
 <ul>
-<li><code>Read</code> / <code>ReadAt</code></li>
-<li><code>Write</code> / <code>WriteAt</code></li>
-<li><code>Seek</code></li>
-<li><code>Sync</code></li>
-<li><code>Truncate</code></li>
-<li><code>Close</code></li>
-<li><code>Stat</code></li>
-<li><code>Name</code></li>
+<li>read/write/seek APIs</li>
+<li><code>Sync</code>, <code>Truncate</code>, <code>Close</code>, <code>Stat</code>, <code>Name</code></li>
 </ul>
-<p><code>Fd</code> is intentionally optional via <code>vfs.FDProvider</code>/<code>vfs.FileFD(...)</code> so non-OS
-file implementations can still satisfy <code>vfs.File</code>.</p>
-<p><code>vfs.OSFS</code> is the production implementation backed by the Go <code>os</code> package.<br><code>vfs.Ensure(fs)</code> normalizes <code>nil</code> to <code>OSFS</code>, so call sites can safely accept an optional <code>vfs.FS</code>.
-<code>vfs.SyncDir(fs, dir)</code> centralizes directory fsync semantics for create/rename/remove durability.</p>
+<p><code>vfs.Ensure(fs)</code> maps nil to <code>OSFS</code>.</p>
 <hr>
-<h2 id="3-fault-injection-model"><a class="header" href="#3-fault-injection-model">3. Fault Injection Model</a></h2>
-<p>NoKV provides <code>FaultFS</code> with rule-based injection:</p>
+<h2 id="2-rename-semantics"><a class="header" href="#2-rename-semantics">2. Rename Semantics</a></h2>
+<p><code>Rename</code>:</p>
 <ul>
-<li><code>FailOnceRule</code></li>
-<li><code>FailOnNthRule</code></li>
-<li><code>FailAfterNthRule</code></li>
+<li>normal rename/move semantics.</li>
+<li>target replacement behavior is platform-dependent (<code>os.Rename</code> behavior).</li>
 </ul>
-<p>Rules can match by operation + path, and for rename by src/dst path.</p>
-<h3 id="31-file-handle-level-injection-faultfile"><a class="header" href="#31-file-handle-level-injection-faultfile">3.1 File-Handle-Level Injection (<code>FaultFile</code>)</a></h3>
-<p>When <code>OpenHandle</code>/<code>OpenFileHandle</code> succeeds, the returned handle is wrapped as <code>faultFile</code>.
-<code>faultFile</code> supports deterministic failures on:</p>
+<p><code>RenameNoReplace</code>:</p>
 <ul>
-<li><code>Write</code> / <code>WriteAt</code> (<code>OpFileWrite</code>)</li>
-<li><code>Sync</code> (<code>OpFileSync</code>)</li>
-<li><code>Close</code> (<code>OpFileClose</code>)</li>
-<li><code>Truncate</code> (<code>OpFileTrunc</code>)</li>
+<li>contract: fail with <code>os.ErrExist</code> when destination already exists.</li>
+<li>on Linux, uses <code>renameat2(..., RENAME_NOREPLACE)</code> when supported.</li>
+<li>fallback path (<code>renameNoReplaceFallback</code>) checks destination existence then calls <code>Rename</code>.</li>
 </ul>
-<p>This is used to validate rollback and retry behavior for close/sync/truncate paths in WAL/Manifest verification and shutdown flows.</p>
+<p>Important: fallback is <strong>not atomic</strong> and has TOCTOU risk. Callers needing strict no-overwrite atomicity should avoid relying on fallback behavior.</p>
 <hr>
-<h2 id="4-where-it-is-used"><a class="header" href="#4-where-it-is-used">4. Where It Is Used</a></h2>
+<h2 id="3-directory-sync-helper"><a class="header" href="#3-directory-sync-helper">3. Directory Sync Helper</a></h2>
+<p><code>vfs.SyncDir(fs, dir)</code> fsyncs directory metadata to persist entry updates (create/rename/remove).</p>
+<p>This is used in strict durability paths (for example SST install before manifest publication) to guarantee directory entry persistence.</p>
+<hr>
+<h2 id="4-fault-injection-faultfs"><a class="header" href="#4-fault-injection-faultfs">4. Fault Injection (<code>FaultFS</code>)</a></h2>
+<p><code>FaultFS</code> wraps an underlying <code>FS</code> and can inject failures by operation/path.</p>
 <ul>
-<li><code>wal</code>: segment switch, close, verify/truncate.</li>
-<li><code>manifest</code>: edit logging, rewrite, verify, close.</li>
-<li><code>vlog</code>: verify/truncate and file open path.</li>
-<li><code>file</code>: mmap open/sync directory path via <code>vfs</code>.</li>
-<li><code>utils</code>: dir lock and utility wrappers.</li>
-<li><code>raftstore/engine</code>: disk storage and snapshot import/export.</li>
+<li>Rule helpers: <code>FailOnceRule</code>, <code>FailOnNthRule</code>, <code>FailAfterNthRule</code>, <code>FailOnceRenameRule</code></li>
+<li>File-handle faults: write/sync/close/truncate</li>
+<li>Rename fault matching supports <code>src</code>/<code>dst</code> targeting</li>
 </ul>
+<p>Used to test manifest/WAL/recovery failure paths deterministically.</p>
 <hr>
-<h2 id="5-comparison-with-pebble-vfs"><a class="header" href="#5-comparison-with-pebble-vfs">5. Comparison with Pebble VFS</a></h2>
-<p>NoKV’s design is inspired by Pebble’s VFS layering and error-injection philosophy, while intentionally keeping a smaller surface area.</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Aspect</th><th>Pebble VFS</th><th>NoKV VFS</th></tr>
-</thead>
-<tbody>
-<tr><td>API scope</td><td>Broad FS API (create/open/open-dir/link/reuse/lock/list/path helpers/disk usage)</td><td>Minimal API required by NoKV storage paths</td></tr>
-<tr><td>Wrapping model</td><td>Rich wrappers (<code>WithDiskHealthChecks</code>, <code>OnDiskFull</code>, logging wrappers)</td><td><code>FaultFS</code> focused on deterministic fault tests</td></tr>
-<tr><td>In-memory FS</td><td>Built-in <code>MemFS</code> / <code>StrictMem</code> for advanced test semantics</td><td>Not yet built-in (currently wraps real FS with injected errors)</td></tr>
-<tr><td>Error injection</td><td>Dedicated <code>errorfs</code> package and injector model</td><td>Built-in policy/rule model in <code>FaultFS</code></td></tr>
-<tr><td>Handle-level faulting</td><td>Supports wrapped file behavior through wrappers</td><td><code>FaultFile</code> with count-based fail on <code>Write/Sync/Close/Truncate</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>Practical interpretation:</p>
+<h2 id="5-current-implementation-set"><a class="header" href="#5-current-implementation-set">5. Current Implementation Set</a></h2>
 <ul>
-<li>Pebble is a general-purpose storage-engine VFS toolkit.</li>
-<li>NoKV currently implements the subset needed for its engine and recovery semantics, with strong testability on critical failure paths.</li>
+<li><code>OSFS</code>: production implementation (Go <code>os</code> package).</li>
+<li><code>FaultFS</code>: failure-injection wrapper over any <code>FS</code>.</li>
 </ul>
+<p>No in-memory FS is included yet.</p>
 <hr>
-<h2 id="6-current-gaps-and-next-steps"><a class="header" href="#6-current-gaps-and-next-steps">6. Current Gaps and Next Steps</a></h2>
-<ol>
-<li>Add an in-memory <code>FS</code> implementation for fully isolated IO tests.</li>
-<li>Add optional disk-health and slow-IO instrumentation wrappers.</li>
-<li>Consider adding higher-level primitives where needed (<code>Lock</code>, <code>OpenDir</code>, hard-link/reuse helpers), but only when justified by real call sites.</li>
-</ol>
-<hr>
-<h2 id="7-references"><a class="header" href="#7-references">7. References</a></h2>
+<h2 id="6-design-notes"><a class="header" href="#6-design-notes">6. Design Notes</a></h2>
 <ul>
-<li>Pebble <code>vfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
-<li>Pebble <code>errorfs</code>: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
+<li>Keep storage code decoupled from direct <code>os.*</code> calls.</li>
+<li>Make crash/failure tests reproducible.</li>
+<li>Keep API minimal and only add operations required by real storage call sites.</li>
+</ul>
+<p>References:</p>
+<ul>
+<li>Pebble VFS: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
+<li>Pebble errorfs: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="file-abstractions"><a class="header" href="#file-abstractions">File Abstractions</a></h1>
@@ -1804,7 +1751,7 @@ _ = lf.DoneWriting(nextOffset)
 <li><code>DoneWriting</code> provides strong crash-consistency guarantees. Even on filesystems where <code>ftruncate</code> metadata persistence is asynchronous, the explicit post-truncate <code>fsync</code> ensures the file size is durable upon success.</li>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
 <li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
-<li><code>vfs.SyncDir</code> is invoked when new files are created to persist directory entries, similar to RocksDB’s <code>Env::FsyncDir</code>.</li>
+<li><code>vfs.SyncDir</code> is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls <code>SyncDir(workdir)</code> before manifest publication.</li>
 </ul>
 <p>For more on how these primitives plug into higher layers, see <a href="#wal-subsystem"><code>docs/wal.md</code></a> and <a href="#value-log-vlog-design"><code>docs/vlog.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2562,109 +2509,86 @@ stronger HA semantics is incremental.</li>
 <p>These are deliberate scope limits for a fast-moving experimental platform.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crash-recovery-playbook"><a class="header" href="#crash-recovery-playbook">Crash Recovery Playbook</a></h1>
-<p>This playbook documents how NoKV rebuilds state after a crash and which automated checks ensure correctness. It ties together WAL replay, manifest reconciliation, ValueLog GC, and flush pipelines—mirroring RocksDB’s layered recovery while incorporating Badger-style value log hygiene.</p>
+<p>This document describes how NoKV restores state after abnormal exit, and which tests validate each recovery contract.</p>
 <hr>
 <h2 id="1-recovery-phases"><a class="header" href="#1-recovery-phases">1. Recovery Phases</a></h2>
 <pre class="mermaid">flowchart TD
     Start[DB.Open]
     Verify[runRecoveryChecks]
-    Manifest[manifest.Open → replay]
-    WAL[wal.Manager.Replay]
-    VLog[valueLog.recover]
-    Flush[Recreate memtables]
-    Stats[Stats.StartStats]
+    WalOpen[wal.Open]
+    LSM[lsm.NewLSM]
+    Manifest[manifest replay + table load]
+    WALReplay[WAL replay to memtables]
+    VLog[valueLog recover]
+    Flush[submit immutable flush backlog]
+    Stats[stats/start background loops]
 
-    Start --&gt; Verify --&gt; Manifest --&gt; WAL --&gt; VLog --&gt; Flush --&gt; Stats
+    Start --&gt; Verify --&gt; WalOpen --&gt; LSM --&gt; Manifest --&gt; WALReplay --&gt; VLog --&gt; Flush --&gt; Stats
 </pre>
 
 <ol>
-<li><strong>Directory verification</strong> – <code>DB.runRecoveryChecks</code> calls <code>manifest.Verify</code>, <code>wal.VerifyDir</code>, and initialises the vlog directory. Missing directories fail fast.</li>
-<li><strong>Manifest replay</strong> – <code>manifest.Open</code> reads <code>CURRENT</code>, replays <code>EditAddFile/DeleteFile</code>, <code>EditLogPointer</code>, and vlog edits into an in-memory <code>Version</code>.</li>
-<li><strong>WAL replay</strong> – <code>wal.Manager.Replay</code> processes segments newer than the manifest checkpoint, rebuilding memtables from committed entries.</li>
-<li><strong>ValueLog reconciliation</strong> – <code>valueLog.recover</code> scans existing <code>.vlog</code> files, drops segments marked invalid, and trims torn tails to the last valid entry.</li>
-<li><strong>Flush backlog</strong> – Immutable memtables recreated from WAL are resubmitted to <code>flush.Manager</code>; temporary <code>.sst.tmp</code> files are either reinstalled or cleaned up.</li>
-<li><strong>Stats bootstrap</strong> – the metrics goroutine restarts so CLI commands immediately reflect queue backlogs and GC status.</li>
+<li><strong>Pre-flight verification</strong>: <code>DB.runRecoveryChecks</code> runs <code>manifest.Verify</code>, <code>wal.VerifyDir</code>, and per-bucket <code>vlog.VerifyDir</code>.</li>
+<li><strong>WAL manager reopen</strong>: <code>wal.Open</code> reopens latest segment and rebuilds counters.</li>
+<li><strong>Manifest replay + SST load</strong>: <code>levelManager.build</code> replays manifest version and opens SST files.</li>
+<li><strong>Stale SST cleanup</strong>: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (<code>EditDeleteFile</code>) so startup can continue.</li>
+<li><strong>WAL replay</strong>: <code>lsm.recovery</code> replays post-checkpoint WAL records into memtables.</li>
+<li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to <code>flush.Manager</code>.</li>
+<li><strong>ValueLog recovery</strong>: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.</li>
+<li><strong>Runtime restart</strong>: metrics and periodic workers start again.</li>
 </ol>
-<p>This mirrors RocksDB’s <code>DBImpl::Recover</code> while extending to handle value log metadata automatically.</p>
 <hr>
-<h2 id="2-failure-scenarios--expected-outcomes"><a class="header" href="#2-failure-scenarios--expected-outcomes">2. Failure Scenarios &amp; Expected Outcomes</a></h2>
+<h2 id="2-failure-scenarios--tests"><a class="header" href="#2-failure-scenarios--tests">2. Failure Scenarios &amp; Tests</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Failure Point</th><th>Example Simulation</th><th>Expected Recovery Behaviour</th><th>Tests</th></tr>
+<tr><th>Failure Point</th><th>Expected Recovery Behaviour</th><th>Tests</th></tr>
 </thead>
 <tbody>
-<tr><td>WAL tail truncation</td><td>truncate last 2 bytes of <code>000005.wal</code></td><td>Replay stops at truncated record, previously flushed SST remains intact</td><td><code>wal/manager_test.go::TestReplayTruncatedTail</code></td></tr>
-<tr><td>Flush crash before install</td><td>crash after writing <code>.sst.tmp</code></td><td>WAL replay rebuilds memtable; temp file removed; no manifest edit present</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
-<tr><td>Flush crash after install</td><td>crash after logging manifest edit but before WAL release</td><td>Manifest still lists SST; recovery verifies file exists and releases WAL on reopen</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
-<tr><td>ValueLog GC crash</td><td>delete edit written, file still on disk</td><td>Recovery removes stale <code>.vlog</code> file and keeps manifest consistent</td><td><code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
-<tr><td>Manifest rewrite crash</td><td>new MANIFEST written, CURRENT not updated</td><td>Recovery keeps using old manifest; stale temp file cleaned</td><td><code>db_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
-<tr><td>Transaction in-flight</td><td>crash between WAL append and memtable update</td><td>WAL replay reapplies entry; transactions remain atomic because commit order is vlog → WAL → memtable</td><td><code>txn_test.go::TestTxnCommitPersists</code></td></tr>
+<tr><td>WAL tail truncated</td><td>Replay stops safely at truncated tail, preserving valid prefix records</td><td><code>wal/manager_test.go::TestManagerReplayHandlesTruncate</code></td></tr>
+<tr><td>Crash before memtable flush install</td><td>WAL replay restores user data not yet flushed to SST</td><td><code>db_test.go::TestRecoveryWALReplayRestoresData</code></td></tr>
+<tr><td>Manifest references missing SST</td><td>Startup removes stale manifest entry and continues</td><td><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code></td></tr>
+<tr><td>Manifest references corrupt/unreadable SST</td><td>Startup removes stale entry and continues</td><td><code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code></td></tr>
+<tr><td>ValueLog stale segment (manifest marked invalid)</td><td>Recovery deletes stale file from disk</td><td><code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td></tr>
+<tr><td>ValueLog orphan segment (disk only)</td><td>Recovery deletes orphan file not tracked by manifest</td><td><code>db_test.go::TestRecoveryRemovesOrphanValueLogSegment</code></td></tr>
+<tr><td>Manifest rewrite interrupted</td><td>Recovery keeps using CURRENT-selected manifest and data remains readable</td><td><code>db_test.go::TestRecoveryManifestRewriteCrash</code></td></tr>
+<tr><td>ValueLog contains records absent from LSM/WAL</td><td>Recovery does not replay vlog as source-of-truth</td><td><code>db_test.go::TestRecoverySkipsValueLogReplay</code></td></tr>
 </tbody>
 </table>
 </div>
 <hr>
-<h2 id="3-automation--tooling"><a class="header" href="#3-automation--tooling">3. Automation &amp; Tooling</a></h2>
-<h3 id="31-go-test-matrix"><a class="header" href="#31-go-test-matrix">3.1 Go Test Matrix</a></h3>
-<pre><code class="language-bash">GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./... -run 'Recovery'
+<h2 id="3-recovery-tooling"><a class="header" href="#3-recovery-tooling">3. Recovery Tooling</a></h2>
+<h3 id="31-targeted-tests"><a class="header" href="#31-targeted-tests">3.1 Targeted tests</a></h3>
+<pre><code class="language-bash">go test ./... -run 'Recovery|ReplayHandlesTruncate'
 </code></pre>
+<p>Set <code>RECOVERY_TRACE_METRICS=1</code> to emit <code>RECOVERY_METRIC ...</code> lines in tests.</p>
+<h3 id="32-script-harness"><a class="header" href="#32-script-harness">3.2 Script harness</a></h3>
+<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+</code></pre>
+<p>Outputs are saved under <code>artifacts/recovery/</code>.</p>
+<h3 id="33-cli-checks"><a class="header" href="#33-cli-checks">3.3 CLI checks</a></h3>
 <ul>
-<li>Exercises WAL replay, manifest cleanup, vlog GC, and managed transaction recovery.</li>
-<li>Set <code>RECOVERY_TRACE_METRICS=1</code> to emit structured logs (key/value pairs) for each scenario.</li>
-</ul>
-<h3 id="32-shell-script-harness"><a class="header" href="#32-shell-script-harness">3.2 Shell Script Harness</a></h3>
-<p><code>scripts/recovery_scenarios.sh</code> orchestrates the matrix end-to-end:</p>
-<ol>
-<li>Spins up a temporary database, injects writes, and crashes at chosen checkpoints.</li>
-<li>Reopens the database and validates via CLI (<code>nokv stats</code>, <code>nokv manifest</code>, <code>nokv vlog</code>).</li>
-<li>Archives logs under <code>artifacts/recovery/&lt;scenario&gt;.log</code> for CI inspection.</li>
-</ol>
-<h3 id="33-cli-validation"><a class="header" href="#33-cli-validation">3.3 CLI Validation</a></h3>
-<ul>
-<li><code>nokv manifest --workdir &lt;dir&gt;</code>: confirm WAL checkpoint, level files, vlog head.</li>
-<li><code>nokv stats --workdir &lt;dir&gt;</code>: observe flush backlog drop to zero after replay.</li>
-<li><code>nokv vlog --workdir &lt;dir&gt;</code>: ensure stale segments disappear after GC recovery.</li>
-</ul>
-<p>These commands give the same insight as RocksDB’s <code>ldb manifest_dump</code> or Badger’s CLI but with JSON output for automation.</p>
-<hr>
-<h2 id="4-metrics-emitted-during-recovery"><a class="header" href="#4-metrics-emitted-during-recovery">4. Metrics Emitted During Recovery</a></h2>
-<p>When <code>RECOVERY_TRACE_METRICS=1</code>:</p>
-<ul>
-<li><code>RECOVERY_METRIC phase="manifest" ...</code> – manifest replay progress.</li>
-<li><code>RECOVERY_METRIC phase="wal" segment=... offset=...</code> – WAL records applied.</li>
-<li><code>RECOVERY_METRIC phase="vlog_gc" fid=... action="delete"</code> – vlog cleanup status.</li>
-</ul>
-<p><code>StatsSnapshot</code> also exposes:</p>
-<ul>
-<li><code>flush.queue_length</code> – remaining flush tasks.</li>
-<li><code>value_log.heads</code> – current value log heads after recovery.</li>
-<li><code>txn.active</code> – should reset to zero post-recovery.</li>
+<li><code>nokv manifest --workdir &lt;dir&gt;</code>: verify level files, WAL pointer, vlog metadata.</li>
+<li><code>nokv stats --workdir &lt;dir&gt;</code>: confirm flush backlog converges.</li>
+<li><code>nokv vlog --workdir &lt;dir&gt;</code>: inspect vlog segment state.</li>
 </ul>
 <hr>
-<h2 id="5-comparison-with-rocksdb--badger"><a class="header" href="#5-comparison-with-rocksdb--badger">5. Comparison with RocksDB &amp; Badger</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Aspect</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr>
-</thead>
-<tbody>
-<tr><td>WAL replay</td><td><code>DBImpl::RecoverLogFiles</code> replays per log number</td><td>Journal (value log) is replayed into LSM</td><td>Dedicated WAL manager with manifest checkpoint, plus vlog trim</td></tr>
-<tr><td>Manifest reconciliation</td><td>Removes missing files, handles CURRENT rewrite</td><td>Minimal manifest (mainly tables)</td><td>Tracks SST + vlog metadata; auto-cleans missing SST/vlog</td></tr>
-<tr><td>Value log recovery</td><td>Optional (BlobDB) requires external blob manifest</td><td>Primary log, re-scanned on start</td><td>Manifest-backed head + discard stats to avoid rescan</td></tr>
-<tr><td>Tooling</td><td><code>ldb</code> for manifest dump</td><td><code>badger</code> CLI</td><td><code>nokv</code> CLI with JSON output</td></tr>
-</tbody>
-</table>
-</div>
-<p>NoKV inherits RocksDB’s strict manifest semantics and Badger’s value log durability, yielding deterministic restart behaviour even under mixed workloads.</p>
-<hr>
-<h2 id="6-extending-the-matrix"><a class="header" href="#6-extending-the-matrix">6. Extending the Matrix</a></h2>
-<p>Future enhancements to cover:</p>
+<h2 id="4-operational-signals"><a class="header" href="#4-operational-signals">4. Operational Signals</a></h2>
+<p>Watch these fields during restart:</p>
 <ul>
-<li><strong>Compaction crash</strong> – simulate partial compaction output and verify manifest rollback.</li>
-<li><strong>Prefetch queue state</strong> – ensure hot-key prefetch map resets cleanly.</li>
-<li><strong>Raft integration</strong> – once replication is added, validate raft log catch-up interacts correctly with WAL replay.</li>
+<li><code>flush.queue_length</code></li>
+<li><code>wal.segment_count</code></li>
+<li><code>value_log.heads</code></li>
+<li><code>value_log.files</code></li>
 </ul>
-<p>Contributions adding new recovery scenarios should update this document and the shell harness to keep observability aligned.</p>
+<p>If <code>flush.queue_length</code> remains high after replay, inspect flush worker throughput and manifest sync settings.</p>
+<hr>
+<h2 id="5-notes-on-consistency-model"><a class="header" href="#5-notes-on-consistency-model">5. Notes on Consistency Model</a></h2>
+<ul>
+<li>WAL + manifest remain the authoritative recovery chain for LSM state.</li>
+<li>ValueLog is reconciled/validated but is not replayed as a mutation source.</li>
+<li>In strict flush mode (<code>ManifestSync=true</code>), SST install ordering is <code>SST Sync -&gt; RenameNoReplace -&gt; SyncDir -&gt; manifest edit</code>.</li>
+</ul>
+<p>For deeper internals, see <a href="#memtable-flush-pipeline">flush.md</a>, <a href="#manifest--version-management">manifest.md</a>, and <a href="#wal-subsystem">wal.md</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="stats--observability-pipeline"><a class="header" href="#stats--observability-pipeline">Stats &amp; Observability Pipeline</a></h1>
 <p>NoKV exposes runtime health through:</p>

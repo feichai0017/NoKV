@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d8aced61.js";
+            window.path_to_searchindex_js = "searchindex-17e7d2db.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b9084f08.js"></script>
@@ -179,83 +179,71 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="manifest--version-management"><a class="header" href="#manifest--version-management">Manifest &amp; Version Management</a></h1>
-<p>The manifest keeps the source of truth for SST files, WAL checkpoints, and ValueLog heads. NoKV’s implementation (<code>manifest/manager.go</code>, <code>manifest/codec.go</code>, <code>manifest/types.go</code>) borrows RocksDB’s <code>VersionEdit + CURRENT</code> pattern while adding metadata required for value separation.</p>
+<p>The manifest is NoKV’s metadata log for:</p>
+<ul>
+<li>SST files (<code>EditAddFile</code> / <code>EditDeleteFile</code>)</li>
+<li>WAL checkpoint (<code>EditLogPointer</code>)</li>
+<li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
+<li>raft and region metadata (<code>EditRaftPointer</code>, <code>EditRegion</code>)</li>
+</ul>
+<p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
 <hr>
-<h2 id="1-file-layout"><a class="header" href="#1-file-layout">1. File Layout</a></h2>
+<h2 id="1-files-on-disk"><a class="header" href="#1-files-on-disk">1. Files on Disk</a></h2>
 <pre><code class="language-text">WorkDir/
-  CURRENT             # stores the active MANIFEST file name
-  MANIFEST-000001     # log of manifest edits
-  MANIFEST-000002     # newer file after rewrite
+  CURRENT
+  MANIFEST-000001
+  MANIFEST-000002
 </code></pre>
 <ul>
-<li><code>CURRENT</code> is atomically swapped via <code>CURRENT.tmp</code> → <code>CURRENT</code> rename.</li>
-<li>Each <code>MANIFEST-*</code> contains a series of binary edits prefixed by the magic string <code>"NoKV"</code> (encoding lives in <code>manifest/codec.go</code>).</li>
-<li>During <code>manifest.Open</code>, <code>loadCurrent</code> opens the file referenced by CURRENT; if missing, <code>createNew</code> bootstraps an empty manifest.</li>
+<li><code>CURRENT</code> stores the active manifest filename.</li>
+<li><code>CURRENT</code> is updated via <code>CURRENT.tmp -&gt; CURRENT</code> rename.</li>
+<li><code>MANIFEST-*</code> stores append-only encoded edits.</li>
 </ul>
 <hr>
-<h2 id="2-edit-types"><a class="header" href="#2-edit-types">2. Edit Types</a></h2>
-<pre><code class="language-go">type EditType uint8
-const (
-    EditAddFile EditType = iota
-    EditDeleteFile
-    EditLogPointer
-    EditValueLogHead
-    EditDeleteValueLog
-    EditUpdateValueLog
-    EditRaftPointer
-    EditRegion
-)
-</code></pre>
-<p>Each edit serialises one logical action:</p>
-<ul>
-<li><code>EditAddFile</code> / <code>EditDeleteFile</code> – manage SST metadata (<code>FileMeta</code>: level, fileID, size, key bounds, timestamps).</li>
-<li><code>EditLogPointer</code> – persists the latest WAL segment + offset checkpoint, analogous to RocksDB’s <code>log_number</code> and <code>prev_log_number</code> fields.</li>
-<li><code>EditValueLogHead</code> – records the head pointer for vlog append, ensuring recovery resumes from the correct file/offset.</li>
-<li><code>EditDeleteValueLog</code> – marks a vlog segment logically deleted (GC has reclaimed it).</li>
-<li><code>EditUpdateValueLog</code> – updates metadata for an existing vlog file (used when GC rewrites a segment).</li>
-<li><code>EditRaftPointer</code> – persists raft-group WAL progress (segment, offset, applied/truncated index &amp; term, etc.).</li>
-<li><code>EditRegion</code> – persists Region metadata (key range, epoch, peers, lifecycle state).</li>
-</ul>
-<p><code>manifest.Manager.apply</code> interprets each edit and updates the in-memory <code>Version</code> structure, which is consumed by LSM initialisation and value log recovery.</p>
-<hr>
-<h2 id="3-version-structure"><a class="header" href="#3-version-structure">3. Version Structure</a></h2>
+<h2 id="2-in-memory-version-model"><a class="header" href="#2-in-memory-version-model">2. In-Memory Version Model</a></h2>
 <pre><code class="language-go">type Version struct {
     Levels       map[int][]FileMeta
     LogSegment   uint32
     LogOffset    uint64
-    ValueLogs    map[uint32]ValueLogMeta
-    ValueLogHead ValueLogMeta
+    ValueLogs    map[ValueLogID]ValueLogMeta
+    ValueLogHead map[uint32]ValueLogMeta
     RaftPointers map[uint64]RaftLogPointer
     Regions      map[uint64]RegionMeta
 }
 </code></pre>
 <ul>
-<li><code>Levels</code> mirrors the LSM tree levels; during recovery <code>lsm.LSM</code> loads files per level.</li>
-<li><code>LogSegment</code>/<code>LogOffset</code> ensure WAL replay starts exactly where persistent state ended.</li>
-<li><code>ValueLogs</code> holds metadata for every known vlog file; <code>ValueLogHead</code> caches the active head for quick access.</li>
+<li><code>Levels</code>: per-level SST metadata.</li>
+<li><code>LogSegment/LogOffset</code>: WAL replay checkpoint.</li>
+<li><code>ValueLogs</code> + <code>ValueLogHead</code>: all known vlog segments and per-bucket active heads.</li>
+<li><code>RaftPointers/Regions</code>: raftstore progress + region metadata.</li>
 </ul>
-<p>Compared with RocksDB: RocksDB’s manifest stores blob file metadata when <code>BlobDB</code> is enabled. NoKV integrates vlog metadata natively to avoid a separate blob manifest.</p>
 <hr>
-<h2 id="4-lifecycle"><a class="header" href="#4-lifecycle">4. Lifecycle</a></h2>
-<pre class="mermaid">sequenceDiagram
-    participant DB
-    participant Manifest
-    participant CURRENT
-    DB-&gt;&gt;Manifest: Open(dir)
-    Manifest-&gt;&gt;CURRENT: read file name
-    Manifest-&gt;&gt;Manifest: replay edits → Version
-    DB-&gt;&gt;Manifest: LogEdit(EditAddFile+LogPointer)
-    Manifest-&gt;&gt;Manifest: append edit
-    Manifest--&gt;&gt;DB: updated Version
-    Note over Manifest,CURRENT: On rewrite -&gt; write tmp -&gt; rename CURRENT
-</pre>
-
+<h2 id="3-edit-append-semantics"><a class="header" href="#3-edit-append-semantics">3. Edit Append Semantics</a></h2>
+<p><code>Manager.LogEdits(edits...)</code> does:</p>
+<ol>
+<li>Encode edits to a buffer.</li>
+<li>Write encoded bytes to current manifest file.</li>
+<li>Conditionally call <code>manifest.Sync()</code> when:
 <ul>
-<li><strong>Open/Rebuild</strong> – <code>replay</code> reads all edits, applying them sequentially (<code>bufio.Reader</code> ensures streaming). If any edit fails to decode, recovery aborts so operators can inspect the manifest, similar to RocksDB’s strictness.</li>
-<li><strong>LogEdit</strong> – obtains the mutex, appends the encoded edit, flushes, and updates the in-memory <code>Version</code> before returning.</li>
-<li><strong>Rewrite</strong> – when the manifest grows beyond <code>Options.ManifestRewriteThreshold</code>, the manager writes a new <code>MANIFEST-xxxxxx</code> containing a full snapshot of the current <code>Version</code>, fsyncs it, updates <code>CURRENT</code>, and removes the old file. This mirrors RocksDB’s <code>max_manifest_file_size</code> behavior while keeping recovery simple.</li>
-<li><strong>Close</strong> – flushes and closes the underlying file handle; the version stays available for introspection via <code>Manager.Version()</code> (used by CLI).</li>
+<li><code>Manager.syncWrites == true</code>, and</li>
+<li>at least one edit type requires sync (<code>Add/DeleteFile</code>, <code>LogPointer</code>, value-log edits).</li>
 </ul>
+</li>
+<li>Apply edits to in-memory <code>Version</code>.</li>
+<li>Trigger manifest rewrite if size crosses threshold.</li>
+</ol>
+<p><code>SetSync(bool)</code> and <code>SetRewriteThreshold(int64)</code> are configured by LSM options.</p>
+<hr>
+<h2 id="4-rewrite-flow"><a class="header" href="#4-rewrite-flow">4. Rewrite Flow</a></h2>
+<p>When rewrite threshold is exceeded (or <code>Rewrite()</code> is called):</p>
+<ol>
+<li>Create next <code>MANIFEST-xxxxxx</code>.</li>
+<li>Write a full snapshot of current <code>Version</code>.</li>
+<li>Flush writer, and <code>Sync()</code> the new manifest when <code>syncWrites</code> is enabled.</li>
+<li>Update <code>CURRENT</code> to point to new file.</li>
+<li>Reopen the new manifest for appends and remove old manifest file.</li>
+</ol>
+<p>If rewrite fails before <code>CURRENT</code> update, restart continues using previous manifest.</p>
 <hr>
 <h2 id="5-interaction-with-other-modules"><a class="header" href="#5-interaction-with-other-modules">5. Interaction with Other Modules</a></h2>
 <div class="table-wrapper">
@@ -264,40 +252,34 @@ const (
 <tr><th>Module</th><th>Manifest usage</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm</code></td><td><code>installLevel0Table</code> logs <code>EditAddFile</code> + <code>EditLogPointer</code> to checkpoint WAL progress. Compaction deletes old files via <code>EditDeleteFile</code>.</td></tr>
-<tr><td><code>wal</code></td><td>Manifest’s log pointer tells WAL replay where to resume.</td></tr>
-<tr><td><code>vlog</code></td><td><code>valueLog.rewrite</code> writes <code>EditUpdateValueLog</code> / <code>EditDeleteValueLog</code> after GC, ensuring stale segments are not reopened.</td></tr>
-<tr><td><code>CLI</code></td><td><code>nokv manifest</code> reads <code>manifest.Manager.Version()</code> and prints levels, vlog head, and deletion status.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code></td><td>Logs <code>EditAddFile</code> + <code>EditLogPointer</code> after SST install; compaction logs add/delete edits.</td></tr>
+<tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
+<tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
+<tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
+<tr><td><code>raftstore</code></td><td>Persists raft pointers and region metadata through manifest edits.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger keeps a separate <code>value.log</code> directory without manifest-level bookkeeping; NoKV’s integrated manifest avoids scanning the filesystem during recovery.</p>
 <hr>
-<h2 id="6-recovery-scenarios"><a class="header" href="#6-recovery-scenarios">6. Recovery Scenarios</a></h2>
+<h2 id="6-recovery-relevant-guarantees"><a class="header" href="#6-recovery-relevant-guarantees">6. Recovery-Relevant Guarantees</a></h2>
 <ol>
-<li><strong>Missing SST file</strong> – if <code>MANIFEST</code> references <code>000123.sst</code> but the file is absent, <code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> verifies that recovery removes the edit, mimicking RocksDB’s lost table handling.</li>
-<li><strong>ValueLog deletion</strong> – <code>TestRecoveryRemovesStaleValueLogSegment</code> ensures <code>EditDeleteValueLog</code> entries trigger file removal during recovery.</li>
-<li><strong>Manifest rewrite crash</strong> – <code>TestRecoveryManifestRewriteCrash</code> simulates a crash after writing the new manifest but before updating <code>CURRENT</code>; recovery still points to the old manifest and resumes safely, exactly like RocksDB’s two-phase rewrite.</li>
-<li><strong>Stale WAL pointer</strong> – WAL replay respects <code>LogSegment/Offset</code>; tests cover truncated WALs to confirm idempotency.</li>
+<li>Manifest append is ordered by single manager mutex.</li>
+<li>WAL replay starts from manifest checkpoint.</li>
+<li>Stale manifest SST entries are self-healed on startup (delete edit appended).</li>
+<li><code>CURRENT</code> indirection protects against partial manifest rewrite publication.</li>
 </ol>
 <hr>
-<h2 id="7-cli-output"><a class="header" href="#7-cli-output">7. CLI Output</a></h2>
-<p><code>nokv manifest --workdir &lt;dir&gt; --json</code> prints:</p>
+<h2 id="7-operational-commands"><a class="header" href="#7-operational-commands">7. Operational Commands</a></h2>
+<pre><code class="language-bash">nokv manifest --workdir &lt;dir&gt;
+</code></pre>
+<p>Useful fields:</p>
 <ul>
-<li><code>log_pointer.segment</code> / <code>log_pointer.offset</code> checkpoint.</li>
-<li>Per-level file counts, IDs, and byte totals (<code>levels[*]</code>).</li>
-<li><code>value_log_heads</code> metadata (bucketed heads).</li>
-<li><code>value_logs</code> list with <code>valid</code> status (mirroring RocksDB’s blob file dump).</li>
+<li><code>log_pointer.segment</code>, <code>log_pointer.offset</code></li>
+<li><code>levels[*].files</code></li>
+<li><code>value_log_heads</code></li>
+<li><code>value_logs[*].valid</code></li>
 </ul>
-<p>This structured output enables automated validation in CI and ad-hoc audits.</p>
-<hr>
-<h2 id="8-extensibility"><a class="header" href="#8-extensibility">8. Extensibility</a></h2>
-<ul>
-<li><strong>Column families</strong> – add a column family identifier to <code>FileMeta</code> and extend edits accordingly, as RocksDB does.</li>
-<li><strong>Snapshots</strong> – persistent snapshots can be derived from manifest versions (keep a copy of the current Version and WAL pointer).</li>
-<li><strong>Remote manifests</strong> – similar to RocksDB’s remote compaction, storing manifests in object storage is straightforward because edits are append-only.</li>
-</ul>
-<p>For end-to-end recovery context, see <a href="recovery.html">recovery.md</a> and the <a href="architecture.html">architecture overview</a>.</p>
+<p>See <a href="recovery.html">recovery.md</a> and <a href="flush.html">flush.md</a> for startup and flush ordering details.</p>
 
                     </main>
 
