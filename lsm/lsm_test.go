@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -838,6 +839,61 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 
 	lsm.Prefetch(entries[0].Key)
 	lsm.Prefetch(nil)
+}
+
+func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.KeyWithTs([]byte("ab1"), 1), []byte("v1")),
+		kv.NewEntry(kv.KeyWithTs([]byte("ab2"), 1), []byte("v2")),
+	}
+	if err := lsm.SetBatch(entries); err != nil {
+		t.Fatalf("set batch: %v", err)
+	}
+	if err := lsm.wal.Sync(); err != nil {
+		t.Fatalf("wal sync: %v", err)
+	}
+
+	var (
+		entryRecords uint64
+		batchRecords uint64
+	)
+	if err := lsm.wal.Replay(func(info wal.EntryInfo, _ []byte) error {
+		switch info.Type {
+		case wal.RecordTypeEntry:
+			entryRecords++
+		case wal.RecordTypeEntryBatch:
+			batchRecords++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if entryRecords != 0 {
+		t.Fatalf("expected zero single entry records, got %d", entryRecords)
+	}
+	if batchRecords != 1 {
+		t.Fatalf("expected one batch record, got %d", batchRecords)
+	}
+}
+
+func TestLSMSetBatchRejectsOversizedAtomicBatch(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	large := bytes.Repeat([]byte("x"), 700)
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.KeyWithTs([]byte("big1"), 1), large),
+		kv.NewEntry(kv.KeyWithTs([]byte("big2"), 1), large),
+	}
+	err := lsm.SetBatch(entries)
+	if !errors.Is(err, utils.ErrTxnTooBig) {
+		t.Fatalf("expected ErrTxnTooBig, got %v", err)
+	}
 }
 
 func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
