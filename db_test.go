@@ -233,6 +233,47 @@ func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrInvalidRequest)
 }
 
+func TestSetAfterCloseDoesNotPanic(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	var err error
+	require.NotPanics(t, func() {
+		err = db.Set([]byte("k"), []byte("v"))
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.MaxBatchCount = 1
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrTxnTooBig)
+}
+
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)

@@ -167,6 +167,19 @@ func TestEntryHelpers(t *testing.T) {
 	}
 }
 
+func TestNewInternalEntry(t *testing.T) {
+	e := NewInternalEntry(CFWrite, []byte("uk"), 42, []byte("val"), BitDelete, 99)
+	defer e.DecrRef()
+
+	cf, userKey, ts := SplitInternalKey(e.Key)
+	require.Equal(t, CFWrite, cf)
+	require.Equal(t, []byte("uk"), userKey)
+	require.Equal(t, uint64(42), ts)
+	require.Equal(t, []byte("val"), e.Value)
+	require.Equal(t, byte(BitDelete), e.Meta)
+	require.Equal(t, uint64(99), e.ExpiresAt)
+}
+
 func TestEntryDecrRefUnderflowPanics(t *testing.T) {
 	e := &Entry{Key: []byte("k"), Value: []byte("v")}
 	require.PanicsWithValue(t, "kv.Entry.DecrRef: refcount underflow (current_ref=0)", func() {
