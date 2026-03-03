@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 )
@@ -59,4 +60,21 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 	_, err = lsm.openMemTable(uint64(segID))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "while updating skiplist")
+}
+
+func TestMemTableSetRejectsInvalidInput(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	mt := lsm.memTable
+	require.NotNil(t, mt)
+
+	require.ErrorIs(t, mt.Set(nil), utils.ErrEmptyKey)
+	require.ErrorIs(t, mt.Set(&kv.Entry{}), utils.ErrEmptyKey)
+
+	var nilMem *memTable
+	entry := kv.NewEntry(kv.KeyWithTs([]byte("k"), 1), []byte("v"))
+	defer entry.DecrRef()
+	require.Error(t, nilMem.Set(entry))
 }

@@ -71,8 +71,11 @@ func (m *memTable) close() error {
 
 // Set inserts one entry into the memtable and appends it to WAL.
 func (m *memTable) Set(entry *kv.Entry) error {
-	if m == nil || entry == nil || len(entry.Key) == 0 {
-		return nil
+	if m == nil {
+		return errors.New("lsm: memtable not initialized")
+	}
+	if entry == nil || len(entry.Key) == 0 {
+		return utils.ErrEmptyKey
 	}
 	var buf bytes.Buffer
 	payload, err := kv.EncodeEntry(&buf, entry)
