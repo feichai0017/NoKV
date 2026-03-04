@@ -126,11 +126,6 @@ func WrapErr(format string, err error) error {
 	return err
 }
 
-// WarpErr is kept for backward compatibility.
-// Deprecated: use WrapErr.
-func WarpErr(format string, err error) error {
-	return WrapErr(format, err)
-}
 func location(deep int, fullPath bool) string {
 	_, file, line, ok := runtime.Caller(deep)
 	if !ok {
@@ -146,15 +141,33 @@ func location(deep int, fullPath bool) string {
 	return file + ":" + strconv.Itoa(line)
 }
 
-// CondPanic e
+// CondPanic panics with err when condition is true.
+//
+// Usage guidance:
+//   - Prefer this helper when the error object already exists (for example, an
+//     `err` returned from another call).
+//   - If the panic message needs dynamic formatting (fmt.Errorf / string
+//     concatenation), prefer CondPanicFunc to avoid constructing that error on
+//     the non-panic path.
+//
+// Note:
+//   - Passing err=nil is valid and mirrors Panic(nil) behavior (i.e. no panic).
 func CondPanic(condition bool, err error) {
 	if condition {
 		Panic(err)
 	}
 }
 
-// CondPanicFunc defers error construction until the condition is true, avoiding
-// allocations on the hot path.
+// CondPanicFunc panics when condition is true, creating the error lazily via errFn.
+//
+// This is the preferred helper for hot paths where panic diagnostics require
+// dynamic formatting. errFn is only invoked when condition is true, so normal
+// execution avoids fmt/error allocations.
+//
+// Usage guidance:
+//   - Use CondPanic when you already have an error value.
+//   - Use CondPanicFunc when the error would otherwise be built eagerly (for
+//     example fmt.Errorf with runtime values).
 func CondPanicFunc(condition bool, errFn func() error) {
 	if condition {
 		Panic(errFn())

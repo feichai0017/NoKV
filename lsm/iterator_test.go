@@ -24,6 +24,13 @@ type sliceIterator struct {
 	reverse bool
 }
 
+func splitIterUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
+}
+
 func (it *sliceIterator) Next() {
 	if it.reverse {
 		it.idx--
@@ -90,7 +97,7 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 	var keys []string
 	mi.Rewind()
 	for mi.Valid() {
-		keys = append(keys, string(kv.UserKey(mi.Item().Entry().Key)))
+		keys = append(keys, string(splitIterUserKey(t, mi.Item().Entry().Key)))
 		mi.Next()
 	}
 	require.Equal(t, []string{"a", "b", "c"}, keys)
@@ -101,7 +108,7 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 	keys = keys[:0]
 	rev.Rewind()
 	for rev.Valid() {
-		keys = append(keys, string(kv.UserKey(rev.Item().Entry().Key)))
+		keys = append(keys, string(splitIterUserKey(t, rev.Item().Entry().Key)))
 		rev.Next()
 	}
 	require.Equal(t, []string{"c", "b", "a"}, keys)
@@ -120,7 +127,7 @@ func TestMergeIteratorSeekAndClose(t *testing.T) {
 	mi := NewMergeIterator([]utils.Iterator{left, right}, false)
 	mi.Seek(kv.InternalKey(kv.CFDefault, []byte("c"), 1))
 	require.True(t, mi.Valid())
-	require.Equal(t, "c", string(kv.UserKey(mi.Item().Entry().Key)))
+	require.Equal(t, "c", string(splitIterUserKey(t, mi.Item().Entry().Key)))
 	require.NoError(t, mi.Close())
 }
 
@@ -193,7 +200,7 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 	if !ci.Valid() {
 		t.Fatalf("expected concat iterator valid after seek")
 	}
-	got := kv.UserKey(ci.Item().Entry().Key)
+	got := splitIterUserKey(t, ci.Item().Entry().Key)
 	if string(got) != "d" {
 		t.Fatalf("expected seek to land on d, got %q", string(got))
 	}
@@ -234,7 +241,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	forwardIter.Rewind()
 	for forwardIter.Valid() {
 		e := forwardIter.Item().Entry()
-		forwardKeys = append(forwardKeys, kv.UserKey(e.Key)[0])
+		forwardKeys = append(forwardKeys, splitIterUserKey(t, e.Key)[0])
 		forwardIter.Next()
 	}
 	require.Equal(t, "abcdefghij", string(forwardKeys))
@@ -247,7 +254,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	reverseIter.Rewind()
 	for reverseIter.Valid() {
 		e := reverseIter.Item().Entry()
-		reverseKeys = append(reverseKeys, kv.UserKey(e.Key)[0])
+		reverseKeys = append(reverseKeys, splitIterUserKey(t, e.Key)[0])
 		reverseIter.Next()
 	}
 	require.Equal(t, "jihgfedcba", string(reverseKeys))
@@ -282,7 +289,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	forwardIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
 	require.True(t, forwardIter.Valid())
 	e := forwardIter.Item().Entry()
-	require.Equal(t, byte('e'), kv.UserKey(e.Key)[0])
+	require.Equal(t, byte('e'), splitIterUserKey(t, e.Key)[0])
 
 	// Test reverse seek
 	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
@@ -291,13 +298,13 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	reverseIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
 	require.True(t, reverseIter.Valid())
 	e = reverseIter.Item().Entry()
-	require.Equal(t, byte('e'), kv.UserKey(e.Key)[0])
+	require.Equal(t, byte('e'), splitIterUserKey(t, e.Key)[0])
 
 	// Continue reverse iteration
 	var keys []byte
 	for i := 0; i < 5 && reverseIter.Valid(); i++ {
 		e := reverseIter.Item().Entry()
-		keys = append(keys, kv.UserKey(e.Key)[0])
+		keys = append(keys, splitIterUserKey(t, e.Key)[0])
 		reverseIter.Next()
 	}
 	require.Equal(t, "edcba", string(keys))
@@ -336,7 +343,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 	count := 0
 	for reverseIter.Valid() && count < 30 {
 		e := reverseIter.Item().Entry()
-		keys = append(keys, kv.UserKey(e.Key)[0])
+		keys = append(keys, splitIterUserKey(t, e.Key)[0])
 		reverseIter.Next()
 		count++
 	}

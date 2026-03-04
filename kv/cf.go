@@ -1,9 +1,6 @@
 package kv
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // ColumnFamily identifies a logical column family.
 type ColumnFamily uint8
@@ -30,14 +27,6 @@ var cfNames = map[ColumnFamily]string{
 	CFWrite:   "write",
 }
 
-var cfByName = func() map[string]ColumnFamily {
-	out := make(map[string]ColumnFamily, len(cfNames))
-	for cf, name := range cfNames {
-		out[name] = cf
-	}
-	return out
-}()
-
 // String implements fmt.Stringer.
 func (cf ColumnFamily) String() string {
 	if name, ok := cfNames[cf]; ok {
@@ -49,28 +38,6 @@ func (cf ColumnFamily) String() string {
 // Valid reports whether the column family is defined.
 func (cf ColumnFamily) Valid() bool {
 	return cf <= maxColumnFamily
-}
-
-// ParseColumnFamily returns the column family for the provided name.
-func ParseColumnFamily(name string) (ColumnFamily, error) {
-	if cf, ok := cfByName[strings.ToLower(name)]; ok {
-		return cf, nil
-	}
-	return ColumnFamily(0), fmt.Errorf("unknown column family %q", name)
-}
-
-// EncodeKeyWithCF prefixes userKey with the column family marker.
-func EncodeKeyWithCF(cf ColumnFamily, userKey []byte) []byte {
-	if !cf.Valid() {
-		cf = CFDefault
-	}
-	out := make([]byte, len(userKey)+cfHeaderSize)
-	out[0] = cfMarker0
-	out[1] = cfMarker1
-	out[2] = cfMarker2
-	out[3] = byte(cf)
-	copy(out[cfHeaderSize:], userKey)
-	return out
 }
 
 // DecodeKeyCF returns the column family and user key for an encoded key without timestamp.

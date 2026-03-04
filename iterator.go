@@ -100,7 +100,7 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 }
 
 // NewInternalIterator returns an iterator over internal keys (CF marker + user key + timestamp).
-// Callers must interpret kv.Entry.Key using kv.SplitInternalKey.
+// Callers should decode kv.Entry.Key via kv.SplitInternalKey and handle ok=false.
 func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
@@ -218,7 +218,11 @@ func (iter *DBIterator) populate() {
 		}
 		entry := item.Entry()
 		if len(iter.lowerBound) > 0 || len(iter.upperBound) > 0 {
-			_, userKey, _ := kv.SplitInternalKey(entry.Key)
+			_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				iter.iitr.Next()
+				continue
+			}
 			// Skip entries below lower bound in forward mode, or invalidate in reverse.
 			if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
 				if !iter.isAsc {
@@ -255,7 +259,10 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	iter.entry = *src
-	cf, userKey, ts := kv.SplitInternalKey(iter.entry.Key)
+	cf, userKey, ts, ok := kv.SplitInternalKey(iter.entry.Key)
+	if !ok {
+		return false
+	}
 	iter.entry.Key = userKey
 	iter.entry.CF = cf
 	if ts != 0 {

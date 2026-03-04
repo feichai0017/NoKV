@@ -261,7 +261,7 @@ func Open(opt *Options) *DB {
 				if item.Key == "" {
 					continue
 				}
-				keys = append(keys, []byte(item.Key))
+				keys = append(keys, kv.InternalKey(kv.CFDefault, []byte(item.Key), nonTxnMaxVersion))
 			}
 			return keys
 		})
@@ -448,8 +448,9 @@ func (db *DB) Set(key, value []byte) error {
 // SetWithTTL writes a key/value pair into the default column family with TTL.
 // Use Del for explicit deletion; nil values are rejected.
 //
-// Ownership note: key/value are not deep-copied on entry. Callers must keep
-// the provided buffers immutable until this method returns.
+// Ownership note: key is encoded into a new internal-key buffer, while value is
+// referenced directly (no deep copy). Callers must keep value immutable until
+// this method returns.
 func (db *DB) SetWithTTL(key, value []byte, ttl time.Duration) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
@@ -480,21 +481,12 @@ func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 			return utils.ErrEmptyKey
 		}
 		// ApplyInternalEntries is for pre-built internal keys only.
-		if len(entry.Key) <= 8 {
-			return utils.ErrInvalidRequest
-		}
-		parsedCF, userKey, ok := kv.DecodeKeyCF(entry.Key[:len(entry.Key)-8])
+		parsedCF, userKey, _, ok := kv.SplitInternalKey(entry.Key)
 		if !ok || len(userKey) == 0 {
 			return utils.ErrInvalidRequest
 		}
-		cf := parsedCF
-		keyForThrottle := userKey
 		entry.CF = parsedCF
-		if !cf.Valid() {
-			cf = kv.CFDefault
-			entry.CF = cf
-		}
-		if err := db.maybeThrottleWrite(cf, keyForThrottle); err != nil {
+		if err := db.maybeThrottleWrite(parsedCF, userKey); err != nil {
 			return err
 		}
 	}
@@ -536,10 +528,10 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 		return nil, err
 	}
 	defer entry.DecrRef()
-	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+	if entry.IsDeletedOrExpired() {
 		return nil, utils.ErrKeyNotFound
 	}
-	out := cloneEntry(entry, kv.CFDefault)
+	out := cloneEntry(entry)
 	db.recordCFRead(out.CF, 1)
 	db.recordRead(out.Key)
 	return out, nil
@@ -588,22 +580,17 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 // memory, parses internal key layout (CF/user-key/version), and fills external-facing
 // metadata. The returned entry does not participate in internal ref-count lifecycle;
 // API callers must not call DecrRef on it.
-func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
+func cloneEntry(src *kv.Entry) *kv.Entry {
 	if src == nil {
 		return nil
 	}
-	cf := fallbackCF
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	userKeySrc := src.Key
+	cf, userKeySrc, ts, ok := kv.SplitInternalKey(src.Key)
+	utils.CondPanicFunc(!ok, func() error {
+		return fmt.Errorf("cloneEntry expects internal key: %x", src.Key)
+	})
 	version := src.Version
-	if storedCF, parsedUserKey, ts := kv.SplitInternalKey(src.Key); storedCF.Valid() {
-		cf = storedCF
-		userKeySrc = parsedUserKey
-		if ts != 0 {
-			version = ts
-		}
+	if ts != 0 {
+		version = ts
 	}
 	return &kv.Entry{
 		Key:          kv.SafeCopy(nil, userKeySrc),
@@ -616,16 +603,6 @@ func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
 		Hlen:         src.Hlen,
 		ValThreshold: src.ValThreshold,
 	}
-}
-
-func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
-	if meta&kv.BitDelete > 0 {
-		return true
-	}
-	if expiresAt == 0 {
-		return false
-	}
-	return expiresAt <= uint64(time.Now().Unix())
 }
 
 // Info returns the live stats collector for snapshot/diagnostic access.

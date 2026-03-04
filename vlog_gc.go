@@ -279,7 +279,10 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		if e == nil || len(e.Key) == 0 {
 			return false, nil
 		}
-		cf, userKey, version := kv.SplitInternalKey(e.Key)
+		cf, userKey, version, ok := kv.SplitInternalKey(e.Key)
+		if !ok {
+			return false, nil
+		}
 		if len(userKey) == 0 {
 			return false, nil
 		}
@@ -294,7 +297,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 			return false, err
 		}
 		defer entry.DecrRef()
-		if kv.DiscardEntry(e, entry) {
+		if kv.DiscardEntry(entry) {
 			return true, nil
 		}
 
@@ -349,7 +352,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		return err
 	}
 	activeFID := mgr.ActiveFID()
-	utils.CondPanic(fid >= activeFID, fmt.Errorf("fid to move: %d. Current active fid: %d (bucket %d)", fid, activeFID, bucket))
+	utils.CondPanicFunc(fid >= activeFID, func() error {
+		return fmt.Errorf("fid to move: %d. Current active fid: %d (bucket %d)", fid, activeFID, bucket)
+	})
 
 	wb := make([]*kv.Entry, 0, 1000)
 	var size int64
@@ -375,7 +380,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return utils.ErrNoRewrite
 		}
 		defer entry.DecrRef()
-		if kv.DiscardEntry(e, entry) {
+		if kv.DiscardEntry(entry) {
 			return nil
 		}
 

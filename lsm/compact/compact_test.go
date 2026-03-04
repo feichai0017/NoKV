@@ -13,6 +13,13 @@ func ikey(s string, ts uint64) []byte {
 	return kv.InternalKey(kv.CFDefault, []byte(s), ts)
 }
 
+func splitUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
+}
+
 func TestIngestModeFlags(t *testing.T) {
 	require.False(t, IngestNone.UsesIngest())
 	require.True(t, IngestDrain.UsesIngest())
@@ -113,8 +120,8 @@ func TestPlanBuilderSelections(t *testing.T) {
 	tables := []TableMeta{t1, t2, t3}
 
 	kr := RangeForTables([]TableMeta{t1, t2})
-	require.True(t, bytes.HasPrefix(kv.UserKey(kr.Left), []byte("a")))
-	require.True(t, bytes.HasPrefix(kv.UserKey(kr.Right), []byte("c")))
+	require.True(t, bytes.HasPrefix(splitUserKey(t, kr.Left), []byte("a")))
+	require.True(t, bytes.HasPrefix(splitUserKey(t, kr.Right), []byte("c")))
 
 	left, right := OverlappingTables([]TableMeta{t1, t2, t3}, RangeForTables([]TableMeta{t2}))
 	require.Equal(t, 0, left)

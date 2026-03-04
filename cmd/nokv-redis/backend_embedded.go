@@ -9,7 +9,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -41,7 +40,7 @@ func (b *embeddedBackend) getUnlocked(key []byte) (*redisValue, error) {
 		}
 		return nil, err
 	}
-	if kv.IsDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+	if entry.IsDeletedOrExpired() {
 		return &redisValue{Found: false}, nil
 	}
 	val := append([]byte(nil), entry.Value...)

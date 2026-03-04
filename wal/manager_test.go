@@ -525,11 +525,13 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 		if len(entries) != 2 {
 			t.Fatalf("expected 2 entries, got %d", len(entries))
 		}
-		if string(kv.UserKey(entries[0].Key)) != "k1" || string(entries[0].Value) != "v1" {
-			t.Fatalf("unexpected first entry: key=%q value=%q", kv.UserKey(entries[0].Key), entries[0].Value)
+		_, key0, _, ok0 := kv.SplitInternalKey(entries[0].Key)
+		if !ok0 || string(key0) != "k1" || string(entries[0].Value) != "v1" {
+			t.Fatalf("unexpected first entry: key=%q value=%q", key0, entries[0].Value)
 		}
-		if string(kv.UserKey(entries[1].Key)) != "k2" || string(entries[1].Value) != "v2" {
-			t.Fatalf("unexpected second entry: key=%q value=%q", kv.UserKey(entries[1].Key), entries[1].Value)
+		_, key1, _, ok1 := kv.SplitInternalKey(entries[1].Key)
+		if !ok1 || string(key1) != "k2" || string(entries[1].Value) != "v2" {
+			t.Fatalf("unexpected second entry: key=%q value=%q", key1, entries[1].Value)
 		}
 		return nil
 	}); err != nil {

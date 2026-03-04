@@ -21,6 +21,13 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	return lsm
 }
 
+func splitTableUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
+}
+
 // TestTableReverseIteration tests reverse iteration behavior on a single table.
 func TestTableReverseIteration(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-test")
@@ -57,7 +64,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "jihgfedcba", string(keys))
 	})
@@ -68,11 +75,11 @@ func TestTableReverseIteration(t *testing.T) {
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("f"), kv.UserKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("f"), splitTableUserKey(t, it.Item().Entry().Key))
 
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "fedcba", string(keys))
 	})
@@ -84,7 +91,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "abcdefghij", string(keys))
 	})
@@ -95,7 +102,7 @@ func TestTableReverseIteration(t *testing.T) {
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("a"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("a"), kv.UserKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("a"), splitTableUserKey(t, it.Item().Entry().Key))
 		it.Next()
 		require.False(t, it.Valid())
 	})
@@ -106,7 +113,7 @@ func TestTableReverseIteration(t *testing.T) {
 
 		it.Seek(kv.InternalKey(kv.CFDefault, []byte("j"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("j"), kv.UserKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("j"), splitTableUserKey(t, it.Item().Entry().Key))
 	})
 }
 
@@ -147,7 +154,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		count := 0
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 			count++
 		}
 		require.Equal(t, 20, count)

@@ -13,7 +13,10 @@ func TestCompareUserKeysAndChecksum(t *testing.T) {
 	k1 := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
 	k2 := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 	require.Less(t, CompareUserKeys(k1, k2), 0)
-	require.Equal(t, 0, CompareUserKeys([]byte("c"), []byte("c")))
+	require.Equal(t, 0, CompareUserKeys(
+		kv.InternalKey(kv.CFDefault, []byte("c"), 10),
+		kv.InternalKey(kv.CFDefault, []byte("c"), 1),
+	))
 
 	data := []byte("checksum")
 	sum := CalculateChecksum(data)

@@ -40,8 +40,9 @@ func (lf *LogFile) Open(opt *Options) error {
 	}
 	// Load the current file size.
 	sz := fi.Size()
-	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
-		uint32(sz), uint32(math.MaxUint32)))
+	utils.CondPanicFunc(sz > math.MaxUint32, func() error {
+		return fmt.Errorf("file size: %d greater than %d", uint32(sz), uint32(math.MaxUint32))
+	})
 	lf.size.Store(uint32(sz))
 	lf.ro = flag == os.O_RDONLY
 	// TODO: consider reserving a header region for metadata.
@@ -165,7 +166,9 @@ func (lf *LogFile) Init() error {
 		// File is empty. We don't need to mmap it. Return.
 		return nil
 	}
-	utils.CondPanic(sz > math.MaxUint32, fmt.Errorf("[LogFile.Init] sz > math.MaxUint32"))
+	utils.CondPanicFunc(sz > math.MaxUint32, func() error {
+		return fmt.Errorf("[LogFile.Init] sz > math.MaxUint32")
+	})
 	lf.size.Store(uint32(sz))
 	return nil
 }

@@ -86,7 +86,8 @@ func TestARTIteratorReverseIterationAndSeek(t *testing.T) {
 	}
 
 	userKey := func(entry *kv.Entry) string {
-		_, k, _ := kv.SplitInternalKey(entry.Key)
+		_, k, _, ok := kv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
 		return string(k)
 	}
 

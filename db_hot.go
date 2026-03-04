@@ -108,11 +108,11 @@ func hotWriteKeyForEntry(e *kv.Entry) string {
 	if e == nil || len(e.Key) == 0 {
 		return ""
 	}
-	base := kv.ParseKey(e.Key)
-	if cf, userKey, ok := kv.DecodeKeyCF(base); ok {
-		return cfHotKey(cf, userKey)
+	cf, userKey, _, ok := kv.SplitInternalKey(e.Key)
+	if !ok {
+		return ""
 	}
-	return cfHotKey(e.CF, e.Key)
+	return cfHotKey(cf, userKey)
 }
 
 func (db *DB) enqueuePrefetch(key string) {

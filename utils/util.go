@@ -90,7 +90,9 @@ func LoadIDMap(fs vfs.FS, dir string) map[uint64]struct{} {
 // All keys should have timestamp.
 func CompareKeys(key1, key2 []byte) int {
 	if len(key1) <= 8 || len(key2) <= 8 {
-		CondPanic(true, fmt.Errorf("%s,%s < 8", string(key1), string(key2)))
+		CondPanicFunc(true, func() error {
+			return fmt.Errorf("%s,%s < 8", string(key1), string(key2))
+		})
 	}
 	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
 		return cmp
@@ -98,10 +100,20 @@ func CompareKeys(key1, key2 []byte) int {
 	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
 }
 
-// CompareUserKeys compares keys ignoring any internal timestamp suffix.
-// It accepts either internal keys or raw user keys.
+// CompareUserKeys compares user-key portions of two internal keys.
+// Both inputs must use the InternalKey layout.
 func CompareUserKeys(key1, key2 []byte) int {
-	return bytes.Compare(kv.ParseKey(key1), kv.ParseKey(key2))
+	if len(key1) == 0 || len(key2) == 0 {
+		return bytes.Compare(key1, key2)
+	}
+	_, uk1, _, ok1 := kv.SplitInternalKey(key1)
+	_, uk2, _, ok2 := kv.SplitInternalKey(key2)
+	if !ok1 || !ok2 {
+		CondPanicFunc(true, func() error {
+			return fmt.Errorf("CompareUserKeys requires internal keys (ok1=%t ok2=%t)", ok1, ok2)
+		})
+	}
+	return bytes.Compare(uk1, uk2)
 }
 
 // VerifyChecksum crc32

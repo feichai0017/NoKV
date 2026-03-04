@@ -139,7 +139,10 @@ func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error
 			iter.Next()
 			continue
 		}
-		cf, userKey, _ := kv.SplitInternalKey(entry.Key)
+		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return nil, fmt.Errorf("kv: scan iterator expects internal key, got %x", entry.Key)
+		}
 		if cf != kv.CFWrite {
 			// Since iterator is seeked into CFWrite range, encountering any non-write CF
 			// means there are no more write records for subsequent keys.
@@ -195,7 +198,13 @@ func advanceToNextUserKey(iter utils.Iterator, current []byte) {
 		if entry == nil {
 			continue
 		}
-		_, userKey, _ := kv.SplitInternalKey(entry.Key)
+		_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			utils.CondPanicFunc(true, func() error {
+				return fmt.Errorf("kv: advanceToNextUserKey expects internal key, got %x", entry.Key)
+			})
+			return
+		}
 		if !bytes.Equal(userKey, current) {
 			return
 		}
@@ -214,7 +223,10 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 			iter.Next()
 			continue
 		}
-		cf, userKey, ts := kv.SplitInternalKey(entry.Key)
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return nil, false, fmt.Errorf("kv: collectVisibleValue expects internal key, got %x", entry.Key)
+		}
 		if cf != kv.CFWrite || !bytes.Equal(userKey, key) {
 			return nil, false, nil
 		}

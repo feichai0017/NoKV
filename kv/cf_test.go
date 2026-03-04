@@ -6,7 +6,7 @@ import (
 
 func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
 	key := []byte("alpha")
-	encoded := EncodeKeyWithCF(CFWrite, key)
+	encoded := append([]byte{cfMarker0, cfMarker1, cfMarker2, byte(CFWrite)}, key...)
 	cf, userKey, ok := DecodeKeyCF(encoded)
 	if !ok {
 		t.Fatalf("expected encoded key to carry marker")
@@ -18,7 +18,10 @@ func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
 		t.Fatalf("expected user key %q, got %q", key, userKey)
 	}
 
-	cf2, userKey2, ts := SplitInternalKey(InternalKey(CFLock, key, 42))
+	cf2, userKey2, ts, ok := SplitInternalKey(InternalKey(CFLock, key, 42))
+	if !ok {
+		t.Fatalf("expected strict split success")
+	}
 	if cf2 != CFLock {
 		t.Fatalf("expected CFLock, got %v", cf2)
 	}
@@ -30,7 +33,7 @@ func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
 	}
 }
 
-func TestColumnFamilyStringAndParse(t *testing.T) {
+func TestColumnFamilyStringAndValid(t *testing.T) {
 	if CFDefault.String() != "default" {
 		t.Fatalf("expected default, got %s", CFDefault.String())
 	}
@@ -43,13 +46,10 @@ func TestColumnFamilyStringAndParse(t *testing.T) {
 	if ColumnFamily(99).String() == "" {
 		t.Fatalf("expected unknown CF string to be non-empty")
 	}
-
-	cf, err := ParseColumnFamily("DEFAULT")
-	if err != nil || cf != CFDefault {
-		t.Fatalf("expected parse default, got %v err=%v", cf, err)
+	if !CFDefault.Valid() || !CFLock.Valid() || !CFWrite.Valid() {
+		t.Fatalf("expected built-in column families to be valid")
 	}
-	_, err = ParseColumnFamily("unknown")
-	if err == nil {
-		t.Fatalf("expected error for unknown CF")
+	if ColumnFamily(99).Valid() {
+		t.Fatalf("unexpected valid status for unknown column family")
 	}
 }

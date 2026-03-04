@@ -2,7 +2,6 @@ package kv
 
 import (
 	"encoding/binary"
-	"time"
 	"unsafe"
 )
 
@@ -179,18 +178,8 @@ func RunCallback(cb func()) {
 	}
 }
 
-func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
-	if meta&BitDelete > 0 {
-		return true
-	}
-	if expiresAt == 0 {
-		return false
-	}
-	return expiresAt <= uint64(time.Now().Unix())
-}
-
-func DiscardEntry(e, vs *Entry) bool {
-	if IsDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
+func DiscardEntry(vs *Entry) bool {
+	if vs.IsDeletedOrExpired() {
 		return true
 	}
 	if (vs.Meta & BitValuePointer) == 0 {

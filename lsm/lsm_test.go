@@ -35,6 +35,13 @@ var (
 	}
 )
 
+func buildInternalTestEntry() *kv.Entry {
+	e := utils.BuildEntry()
+	internal := kv.NewInternalEntry(kv.CFDefault, e.Key, kv.MaxVersion, e.Value, e.Meta, e.ExpiresAt)
+	e.DecrRef()
+	return internal
+}
+
 // TestBase is a basic correctness test.
 func TestBase(t *testing.T) {
 	clearDir()
@@ -72,7 +79,8 @@ func TestHitStorage(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
-	e := utils.BuildEntry()
+	e := buildInternalTestEntry()
+	defer e.DecrRef()
 	if err := lsm.Set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
@@ -95,7 +103,8 @@ func TestHitStorage(t *testing.T) {
 	}
 	// Exercise the bloom-filter miss path.
 	hitBloom := func() {
-		ee := utils.BuildEntry()
+		ee := buildInternalTestEntry()
+		defer ee.DecrRef()
 		// Query a missing key; a bloom-filter miss confirms absence.
 		tables := lsm.levels.levels[0].tablesSnapshot()
 		if len(tables) == 0 {
@@ -760,7 +769,8 @@ func TestLSMMetricsAPIs(t *testing.T) {
 		return nil
 	})
 
-	entry := utils.BuildEntry()
+	entry := buildInternalTestEntry()
+	defer entry.DecrRef()
 	requireNoError := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -1003,10 +1013,10 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	if keyInRange(min, max, nil) {
 		t.Fatalf("expected nil key to be out of range")
 	}
-	if !keyInRange(min, max, []byte("m")) {
+	if !keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("m"), 1)) {
 		t.Fatalf("expected key to be in range")
 	}
-	if keyInRange(min, max, []byte("0")) {
+	if keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("0"), 1)) {
 		t.Fatalf("expected key to be out of range")
 	}
 
@@ -1022,7 +1032,11 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 		valueSize: 20,
 	})
 
-	hotKeys := [][]byte{[]byte("b"), []byte("k"), []byte("x")}
+	hotKeys := [][]byte{
+		kv.InternalKey(kv.CFDefault, []byte("b"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("k"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("x"), 1),
+	}
 	score := lh.hotOverlapScore(hotKeys, false)
 	expected := float64(3) / float64(len(hotKeys))
 	if math.Abs(score-expected) > 1e-9 {
@@ -1313,18 +1327,16 @@ func TestIngestShardParallelSafety(t *testing.T) {
 // baseTest performs correctness checks.
 func baseTest(_ *testing.T, lsm *LSM, n int) {
 	// Tracking entry for debugging.
-	e := &kv.Entry{
-		Key:       []byte("CRTS😁NoKVMrGSBtL12345678"),
-		Value:     []byte("我草了"),
-		ExpiresAt: 123,
-	}
+	e := kv.NewInternalEntry(kv.CFDefault, []byte("CRTS😁NoKVMrGSBtL"), kv.MaxVersion, []byte("我草了"), 0, 123)
+	defer e.DecrRef()
 	//caseList := make([]*kv.Entry, 0)
 	//caseList = append(caseList, e)
 
 	// Randomized data to exercise write paths.
 	_ = utils.Err(lsm.Set(e))
 	for i := 1; i < n; i++ {
-		ee := utils.BuildEntry()
+		ee := buildInternalTestEntry()
+		defer ee.DecrRef()
 		_ = utils.Err(lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}

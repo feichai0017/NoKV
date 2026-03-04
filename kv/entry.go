@@ -99,8 +99,9 @@ func NewEntry(key, value []byte) *Entry {
 
 // NewInternalEntry creates an Entry whose key is encoded as an internal key.
 //
-// Ownership note: userKey/value are referenced directly (no deep copy). Callers
-// must keep those buffers immutable until the entry is no longer used.
+// Ownership note: userKey is encoded into a newly allocated internal-key buffer,
+// while value is referenced directly (no deep copy). Callers must keep value
+// immutable until the entry is no longer used.
 func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
 	if !cf.Valid() {
 		cf = CFDefault
@@ -122,7 +123,10 @@ func (e *Entry) Entry() *Entry {
 
 // IsDeletedOrExpired reports whether the entry is a tombstone or has passed its expiry.
 func (e *Entry) IsDeletedOrExpired() bool {
-	if e.Value == nil {
+	if e == nil || e.Value == nil {
+		return true
+	}
+	if e.Meta&BitDelete > 0 {
 		return true
 	}
 	if e.ExpiresAt == 0 {
