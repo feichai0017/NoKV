@@ -21,6 +21,13 @@ func RandString(len int) string {
 	return string(bytes)
 }
 
+func splitUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
+}
+
 func TestSkipListBasicCRUD(t *testing.T) {
 	list := NewSkiplist(1000)
 
@@ -136,19 +143,19 @@ func TestSkipListIteratorSeekAndPrev(t *testing.T) {
 	require.True(t, ok)
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.UserKey(iter.Key())))
+	require.Equal(t, "b", string(splitUserKey(t, iter.Key())))
 
 	iter.Prev()
-	require.Equal(t, "a", string(kv.UserKey(iter.Key())))
+	require.Equal(t, "a", string(splitUserKey(t, iter.Key())))
 
 	iter.SeekForPrev(kv.InternalKey(kv.CFDefault, []byte("bb"), 1))
-	require.Equal(t, "b", string(kv.UserKey(iter.Key())))
+	require.Equal(t, "b", string(splitUserKey(t, iter.Key())))
 
 	iter.SeekToLast()
-	require.Equal(t, "c", string(kv.UserKey(iter.Key())))
+	require.Equal(t, "c", string(splitUserKey(t, iter.Key())))
 
 	iter.SeekToFirst()
-	require.Equal(t, "a", string(kv.UserKey(iter.Key())))
+	require.Equal(t, "a", string(splitUserKey(t, iter.Key())))
 
 	_ = iter.ValueUint64()
 	require.NoError(t, iter.Close())
@@ -205,24 +212,24 @@ func TestSkipListReverseIteration(t *testing.T) {
 	// Rewind should position at the largest key (e)
 	iter.Rewind()
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Next should move to smaller keys: d, c, b, a
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "d", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "d", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "b", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "a", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "a", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Next should invalidate the iterator (no more elements)
 	iter.Next()
@@ -246,22 +253,22 @@ func TestSkipListReverseSeek(t *testing.T) {
 	// Seek("f") should find "e" (largest key <= "f")
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Next should move to "c"
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Seek("i") should find "i" (exact match)
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("i"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "i", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "i", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Seek("z") should find "i" (largest key <= "z")
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("z"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "i", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "i", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Seek("0") should invalidate (no key <= "0")
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("0"), 1))
@@ -285,24 +292,24 @@ func TestSkipListForwardIteration(t *testing.T) {
 	// Rewind should position at the smallest key (a)
 	iter.Rewind()
 	require.True(t, iter.Valid())
-	require.Equal(t, "a", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "a", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Next should move to larger keys: b, c, d, e
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "b", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "d", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "d", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(splitUserKey(t, iter.Item().Entry().Key)))
 
 	// Next should invalidate the iterator (no more elements)
 	iter.Next()

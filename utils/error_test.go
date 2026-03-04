@@ -10,9 +10,9 @@ import (
 func TestErrorHelpers(t *testing.T) {
 	err := errors.New("boom")
 	require.NotNil(t, Err(err))
-	require.NotNil(t, WarpErr("wrap", err))
+	require.NotNil(t, WrapErr("wrap", err))
 	require.Nil(t, Err(nil))
-	require.Nil(t, WarpErr("wrap", nil))
+	require.Nil(t, WrapErr("wrap", nil))
 
 	require.PanicsWithValue(t, err, func() { Panic(err) })
 	require.NotPanics(t, func() { Panic(nil) })

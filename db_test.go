@@ -99,21 +99,21 @@ func TestColumnFamilies(t *testing.T) {
 
 	e, err := db.GetInternalEntry(kv.CFDefault, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	gotCF, _, _ := kv.SplitInternalKey(e.Key)
+	gotCF, _, _, _ := kv.SplitInternalKey(e.Key)
 	require.Equal(t, kv.CFDefault, gotCF)
 	require.Equal(t, []byte("default"), e.Value)
 	e.DecrRef()
 
 	e, err = db.GetInternalEntry(kv.CFLock, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	gotCF, _, _ = kv.SplitInternalKey(e.Key)
+	gotCF, _, _, _ = kv.SplitInternalKey(e.Key)
 	require.Equal(t, kv.CFLock, gotCF)
 	require.Equal(t, []byte("lock"), e.Value)
 	e.DecrRef()
 
 	e, err = db.GetInternalEntry(kv.CFWrite, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	gotCF, _, _ = kv.SplitInternalKey(e.Key)
+	gotCF, _, _, _ = kv.SplitInternalKey(e.Key)
 	require.Equal(t, kv.CFWrite, gotCF)
 	require.Equal(t, []byte("write"), e.Value)
 	e.DecrRef()
@@ -171,8 +171,10 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	entry, err := db.GetInternalEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, entry.CF)
-	require.Equal(t, key, kv.UserKey(entry.Key))
-	require.Equal(t, version, kv.ParseTs(entry.Key))
+	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, key, userKey)
+	require.Equal(t, version, kv.Timestamp(entry.Key))
 	require.Equal(t, value, entry.Value)
 	entry.DecrRef()
 }
@@ -188,15 +190,17 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 
 	entry, err := db.GetInternalEntry(kv.CFDefault, key, 2)
 	require.NoError(t, err)
-	require.Equal(t, key, kv.UserKey(entry.Key))
-	require.Equal(t, uint64(2), kv.ParseTs(entry.Key))
+	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, key, userKey)
+	require.Equal(t, uint64(2), kv.Timestamp(entry.Key))
 	require.True(t, entry.Meta&kv.BitDelete > 0)
 	entry.DecrRef()
 
 	entry, err = db.GetInternalEntry(kv.CFDefault, key, 1)
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), entry.Value)
-	require.Equal(t, uint64(1), kv.ParseTs(entry.Key))
+	require.Equal(t, uint64(1), kv.Timestamp(entry.Key))
 	entry.DecrRef()
 }
 
@@ -1022,8 +1026,10 @@ func TestHotWriteAndThrottle(t *testing.T) {
 		hotWrite: hotring.NewHotRing(8, nil),
 	}
 
-	entry := kv.NewEntry([]byte("hot"), []byte("v"))
-	err := db.maybeThrottleWrite(kv.CFDefault, entry.Key)
+	userKey := []byte("hot")
+	entry := kv.NewInternalEntry(kv.CFDefault, userKey, nonTxnMaxVersion, []byte("v"), 0, 0)
+	defer entry.DecrRef()
+	err := db.maybeThrottleWrite(kv.CFDefault, userKey)
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
 	require.Equal(t, uint64(1), db.hotWriteLimited.Load())

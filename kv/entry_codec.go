@@ -66,6 +66,36 @@ type EntryHeader struct {
 	ExpiresAt uint64
 }
 
+func (h *EntryHeader) decode(readVarint func() (uint64, error)) error {
+	klen, err := readVarint()
+	if err != nil {
+		return err
+	}
+	h.KeyLen = uint32(klen)
+
+	vlen, err := readVarint()
+	if err != nil {
+		return err
+	}
+	h.ValueLen = uint32(vlen)
+
+	meta, err := readVarint()
+	if err != nil {
+		return err
+	}
+	if meta > math.MaxUint8 {
+		return fmt.Errorf("entry header meta overflow: %d", meta)
+	}
+	h.Meta = byte(meta)
+
+	expiresAt, err := readVarint()
+	if err != nil {
+		return err
+	}
+	h.ExpiresAt = expiresAt
+	return nil
+}
+
 // Encode serializes the header using uvarint encoding for each field.
 func (h EntryHeader) Encode(out []byte) int {
 	idx := 0
@@ -82,33 +112,9 @@ func (h *EntryHeader) DecodeFrom(reader *HashReader) (int, error) {
 	readVarint := func() (uint64, error) {
 		return binary.ReadUvarint(reader)
 	}
-
-	klen, err := readVarint()
-	if err != nil {
+	if err := h.decode(readVarint); err != nil {
 		return reader.BytesRead - start, err
 	}
-	h.KeyLen = uint32(klen)
-
-	vlen, err := readVarint()
-	if err != nil {
-		return reader.BytesRead - start, err
-	}
-	h.ValueLen = uint32(vlen)
-
-	meta, err := readVarint()
-	if err != nil {
-		return reader.BytesRead - start, err
-	}
-	if meta > math.MaxUint8 {
-		return reader.BytesRead - start, fmt.Errorf("entry header meta overflow: %d", meta)
-	}
-	h.Meta = byte(meta)
-
-	expiresAt, err := readVarint()
-	if err != nil {
-		return reader.BytesRead - start, err
-	}
-	h.ExpiresAt = expiresAt
 	return reader.BytesRead - start, nil
 }
 
@@ -126,33 +132,9 @@ func (h *EntryHeader) Decode(buf []byte) (int, error) {
 		idx += n
 		return val, nil
 	}
-
-	klen, err := readVarint()
-	if err != nil {
+	if err := h.decode(readVarint); err != nil {
 		return 0, err
 	}
-	h.KeyLen = uint32(klen)
-
-	vlen, err := readVarint()
-	if err != nil {
-		return 0, err
-	}
-	h.ValueLen = uint32(vlen)
-
-	meta, err := readVarint()
-	if err != nil {
-		return 0, err
-	}
-	if meta > math.MaxUint8 {
-		return 0, fmt.Errorf("entry header meta overflow: %d", meta)
-	}
-	h.Meta = byte(meta)
-
-	expiresAt, err := readVarint()
-	if err != nil {
-		return 0, err
-	}
-	h.ExpiresAt = expiresAt
 	return idx, nil
 }
 

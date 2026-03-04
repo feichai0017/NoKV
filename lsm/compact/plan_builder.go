@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -35,8 +36,14 @@ func RangeForTables(tables []TableMeta) KeyRange {
 			maxKey = tables[i].MaxKey
 		}
 	}
-	leftCF, leftUserKey, _ := kv.SplitInternalKey(minKey)
-	rightCF, rightUserKey, _ := kv.SplitInternalKey(maxKey)
+	leftCF, leftUserKey, _, leftOK := kv.SplitInternalKey(minKey)
+	utils.CondPanicFunc(!leftOK, func() error {
+		return fmt.Errorf("RangeForTables expects internal min key: %x", minKey)
+	})
+	rightCF, rightUserKey, _, rightOK := kv.SplitInternalKey(maxKey)
+	utils.CondPanicFunc(!rightOK, func() error {
+		return fmt.Errorf("RangeForTables expects internal max key: %x", maxKey)
+	})
 	return KeyRange{
 		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
 		Right: kv.InternalKey(rightCF, rightUserKey, 0),

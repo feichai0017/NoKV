@@ -210,7 +210,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
 		applyEntry := func(entry *kv.Entry) {
-			if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
+			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion {
 				mt.maxVersion = ts
 			}
 			if mt.index != nil {

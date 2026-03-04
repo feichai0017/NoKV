@@ -316,10 +316,10 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 				t.lm.cache.addBloom(t.fid, bloomFilter)
 			}
 		}
-		probe := key
-		if len(key) > 8 {
-			probe = kv.ParseKey(key)
-		}
+		utils.CondPanicFunc(len(key) <= 8, func() error {
+			return fmt.Errorf("table.Search expects internal key: %x", key)
+		})
+		probe := kv.StripTimestamp(key)
 		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
@@ -337,7 +337,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	}
 
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
-		if version := kv.ParseTs(e.Key); *maxVs < version {
+		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
 			clone := kv.NewEntry(kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
 			clone.CF = e.CF
@@ -446,7 +446,9 @@ func (t *table) prefetchBlockForKey(key []byte) bool {
 	idx = sort.Search(len(offsets), func(i int) bool {
 		var ok bool
 		ko, ok = t.blockOffset(i)
-		utils.CondPanic(!ok, fmt.Errorf("table.prefetch idx=%d", i))
+		utils.CondPanicFunc(!ok, func() error {
+			return fmt.Errorf("table.prefetch idx=%d", i)
+		})
 		if i == len(offsets) {
 			return true
 		}

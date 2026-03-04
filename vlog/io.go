@@ -525,7 +525,7 @@ func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint3
 			if callErr == utils.ErrStop {
 				return validEndOffset, nil
 			}
-			return 0, utils.WarpErr(fmt.Sprintf("Iteration function %s", store.FileName()), callErr)
+			return 0, utils.WrapErr(fmt.Sprintf("Iteration function %s", store.FileName()), callErr)
 		}
 	}
 

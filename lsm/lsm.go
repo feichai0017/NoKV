@@ -72,8 +72,8 @@ type Options struct {
 
 	DiscardStatsCh *chan map[manifest.ValueLogID]int64
 
-	// HotKeyProvider optionally surfaces the hottest keys so compaction can
-	// prioritise ranges with heavy access.
+	// HotKeyProvider optionally surfaces hottest keys as InternalKey values so
+	// compaction can prioritise ranges with heavy access.
 	HotKeyProvider func() [][]byte
 
 	// ManifestSync controls whether manifest edits are fsynced immediately.
@@ -133,8 +133,8 @@ func (lsm *LSM) SetDiscardStatsCh(ch *chan map[manifest.ValueLogID]int64) {
 	}
 }
 
-// SetHotKeyProvider wires a callback that returns currently hot keys so
-// compaction can prioritise hot ranges.
+// SetHotKeyProvider wires a callback that returns currently hot keys as
+// InternalKey values so compaction can prioritise hot ranges.
 func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
 	if fn == nil {
 		return
@@ -385,7 +385,8 @@ func estimateBatchWALSize(entries []*kv.Entry) int64 {
 	return size
 }
 
-// Set _
+// Set writes one entry into the active memtable/WAL.
+// entry.Key must be an InternalKey (CF + user key + timestamp suffix).
 func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
@@ -428,6 +429,7 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 // The batch is treated as an indivisible unit: either the entire batch is
 // accepted by the active memtable (after at most one rotation), or the call
 // fails. Batches larger than MemTableSize are rejected with ErrTxnTooBig.
+// Every entry key in the batch must be an InternalKey.
 func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -470,7 +472,8 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 	}
 }
 
-// Get _
+// Get returns the newest visible entry for key.
+// key must be an InternalKey.
 func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
@@ -505,6 +508,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 }
 
 // Prefetch warms cache layers for the key by issuing targeted block loads.
+// key must be an InternalKey.
 func (lsm *LSM) Prefetch(key []byte) {
 	if len(key) == 0 {
 		return

@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -63,7 +64,10 @@ func (buf *ingestBuffer) ensureInit() {
 }
 
 func shardIndexForRange(min []byte) int {
-	userKey := kv.UserKey(min)
+	_, userKey, _, ok := kv.SplitInternalKey(min)
+	utils.CondPanicFunc(!ok, func() error {
+		return fmt.Errorf("ingest shardIndexForRange expects internal key: %x", min)
+	})
 	if len(userKey) == 0 {
 		return 0
 	}
