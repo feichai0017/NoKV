@@ -192,10 +192,7 @@ func DecodeEntryBatch(payload []byte) ([]*kv.Entry, error) {
 	if uint64(count) > uint64(maxInt) {
 		return nil, fmt.Errorf("wal: malformed entry batch payload")
 	}
-	prealloc := int(count)
-	if prealloc > 1024 {
-		prealloc = 1024
-	}
+	prealloc := min(int(count), 1024)
 	entries := make([]*kv.Entry, 0, prealloc)
 	defer func() {
 		if rest != nil {
@@ -204,7 +201,7 @@ func DecodeEntryBatch(payload []byte) ([]*kv.Entry, error) {
 			}
 		}
 	}()
-	for i := uint32(0); i < count; i++ {
+	for range count {
 		if len(rest) < 4 {
 			return nil, fmt.Errorf("wal: malformed entry batch payload")
 		}
