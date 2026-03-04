@@ -756,7 +756,8 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 		}
 		if i%width == width-1 {
 			// Set the right bound to the max key.
-			right := kv.KeyWithTs(kv.ParseKey(t.MaxKey()), math.MaxUint64)
+			cf, userKey, _ := kv.SplitInternalKey(t.MaxKey())
+			right := kv.InternalKey(cf, userKey, math.MaxUint64)
 			addRange(right)
 		}
 	}
@@ -951,9 +952,11 @@ func getKeyRange(tables ...*table) compact.KeyRange {
 
 	// We pick all the versions of the smallest and the biggest key. Note that version zero would
 	// be the rightmost key, considering versions are default sorted in descending order.
+	leftCF, leftUserKey, _ := kv.SplitInternalKey(minKey)
+	rightCF, rightUserKey, _ := kv.SplitInternalKey(maxKey)
 	return compact.KeyRange{
-		Left:  kv.KeyWithTs(kv.ParseKey(minKey), math.MaxUint64),
-		Right: kv.KeyWithTs(kv.ParseKey(maxKey), 0),
+		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
+		Right: kv.InternalKey(rightCF, rightUserKey, 0),
 	}
 }
 

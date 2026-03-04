@@ -43,8 +43,8 @@ func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
 	}
 
 	builder := newTableBuiler(opt)
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("a"), 1), []byte("value-a")))
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("b"), 1), []byte("value-b")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("value-b")))
 
 	buf := builder.finish()
 	require.NotEmpty(t, buf)
@@ -75,7 +75,7 @@ func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {
 		ManifestSync:       true,
 	}
 	builder := newTableBuiler(opt)
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("a"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
 	lm := &levelManager{opt: opt}
 	_, err := builder.flush(lm, tableName)
@@ -102,7 +102,7 @@ func TestTableBuilderFlushStrictPathDoesNotReopenFinalSST(t *testing.T) {
 		ManifestSync:       true,
 	}
 	builder := newTableBuiler(opt)
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("a"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
 	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)
@@ -128,7 +128,7 @@ func TestTableBuilderFlushFastPathSkipsPreStat(t *testing.T) {
 		ManifestSync:       false,
 	}
 	builder := newTableBuiler(opt)
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("a"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
 	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)
@@ -156,7 +156,7 @@ func TestTableBuilderFlushStrictPathSkipsPreStat(t *testing.T) {
 		ManifestSync:       true,
 	}
 	builder := newTableBuiler(opt)
-	builder.AddKey(kv.NewEntry(kv.KeyWithTs([]byte("a"), 1), []byte("value-a")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
 	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)

@@ -62,10 +62,11 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 ## 3. Read Semantics
 
-* `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. Internal callers must release it with `DecrRef` when done. MVCC versions stay encoded in the key suffix (`KeyWithTs`), so iterators naturally merge across memtables and SSTables.
+* `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. Internal callers must release it with `DecrRef` when done. MVCC versions stay encoded in internal keys (`InternalKey(CFDefault, userKey, ts)` for default-CF paths), so iterators naturally merge across memtables and SSTables.
 * `MemTable.IncrRef/DecrRef` delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's `MemTable::Ref/Unref` lifecycle.
 * WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.
-* Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`) return detached entries. Callers must not call `DecrRef` on those entries.
+* `DB.Get` returns detached entries; callers must not call `DecrRef` on them.
+* `DB.GetInternalEntry` returns borrowed entries; callers must call `DecrRef` exactly once.
 
 ---
 

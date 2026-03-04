@@ -131,14 +131,16 @@ func TestEntryHelpers(t *testing.T) {
 		t.Fatalf("expected default CF, got %v", e.CF)
 	}
 
-	e2 := NewEntryWithCF(CFLock, []byte("lk"), []byte("lv"))
+	e2 := NewEntry([]byte("lk"), []byte("lv"))
+	e2.CF = CFLock
 	defer e2.DecrRef()
 	if e2.CF != CFLock {
 		t.Fatalf("expected CFLock, got %v", e2.CF)
 	}
 
-	if !e2.WithColumnFamily(CFWrite).CF.Valid() {
-		t.Fatalf("expected valid CF after WithColumnFamily")
+	e2.CF = CFWrite
+	if !e2.CF.Valid() {
+		t.Fatalf("expected valid CF after setting column family")
 	}
 
 	if e2.IsDeletedOrExpired() {

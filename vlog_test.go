@@ -171,12 +171,13 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 	value := bytes.Repeat([]byte("v"), 64)
 
 	applyVersionedEntryForTest(t, db, kvpkg.CFDefault, key, version, value, 0)
-	entry, err := db.GetVersionedEntry(kvpkg.CFDefault, key, version)
+	entry, err := db.GetInternalEntry(kvpkg.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kvpkg.CFDefault, entry.CF)
-	require.Equal(t, key, entry.Key)
-	require.Equal(t, version, entry.Version)
+	require.Equal(t, key, kvpkg.UserKey(entry.Key))
+	require.Equal(t, version, kvpkg.ParseTs(entry.Key))
 	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
 }
 
 func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
@@ -271,7 +272,7 @@ func TestValueGC(t *testing.T) {
 	require.NoError(t, db.RunValueLogGC(0.9))
 	for _, e := range kvList {
 		item, err := db.Get(e.Key)
-		require.NoError(t, err)
+		require.NoErrorf(t, err, "missing key after gc user_key=%q raw=%x", string(e.Key), e.Key)
 		val := getItemValue(t, item)
 		require.NotNil(t, val)
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
@@ -481,7 +482,7 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	entry := kvpkg.NewEntry([]byte("manifest-head"), []byte("value"))
-	entry.Key = kvpkg.KeyWithTs(entry.Key, math.MaxUint32)
+	entry.Key = kvpkg.InternalKey(kvpkg.CFDefault, entry.Key, math.MaxUint32)
 	if err := db.batchSet([]*kvpkg.Entry{entry}); err != nil {
 		t.Fatalf("batchSet: %v", err)
 	}

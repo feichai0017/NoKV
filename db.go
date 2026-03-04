@@ -38,8 +38,11 @@ type (
 
 	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
 	MVCCStore interface {
-		ApplyEntries(entries []*kv.Entry) error
-		GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
+		ApplyInternalEntries(entries []*kv.Entry) error
+		// GetInternalEntry returns a borrowed internal entry without cloning/copying.
+		// entry.Key remains in internal encoding (cf+user_key+ts). Callers must
+		// DecrRef exactly once.
+		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
 		NewInternalIterator(opt *utils.Options) utils.Iterator
 	}
 
@@ -420,22 +423,17 @@ func (db *DB) closeInternal() error {
 
 // Del removes a key from the default column family by writing a tombstone.
 func (db *DB) Del(key []byte) error {
-	return db.DelCF(kv.CFDefault, key)
-}
-
-// DelCF deletes a key from the specified column family.
-func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
 	defer entry.DecrRef()
-	return db.ApplyEntries([]*kv.Entry{entry})
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
 // Set writes a key/value pair into the default column family.
 func (db *DB) Set(key, value []byte) error {
-	return db.SetCF(kv.CFDefault, key, value)
+	return db.SetWithTTL(key, value, 0)
 }
 
 // SetWithTTL writes a key/value pair into the default column family with an explicit expiry timestamp.
@@ -450,29 +448,15 @@ func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
 	}
 	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, meta, expiresAt)
 	defer entry.DecrRef()
-	return db.ApplyEntries([]*kv.Entry{entry})
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
-// SetCF writes a key/value pair into the specified column family.
-func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
-	if len(key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	var meta byte
-	if value == nil {
-		meta = kv.BitDelete
-	}
-	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, value, meta, 0)
-	defer entry.DecrRef()
-	return db.ApplyEntries([]*kv.Entry{entry})
-}
-
-// ApplyEntries writes pre-built internal-key entries through the regular write
+// ApplyInternalEntries writes pre-built internal-key entries through the regular write
 // pipeline.
 //
 // The caller must provide entries with internal keys. The entry slices must not
 // be mutated until this call returns.
-func (db *DB) ApplyEntries(entries []*kv.Entry) error {
+func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
@@ -483,7 +467,7 @@ func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 		if entry == nil || len(entry.Key) == 0 {
 			return utils.ErrEmptyKey
 		}
-		// ApplyEntries is for pre-built internal keys only.
+		// ApplyInternalEntries is for pre-built internal keys only.
 		if len(entry.Key) <= 8 {
 			return utils.ErrInvalidRequest
 		}
@@ -508,9 +492,12 @@ func (db *DB) ApplyEntries(entries []*kv.Entry) error {
 	return db.batchSet(entries)
 }
 
-// GetVersionedEntry retrieves the value stored at the provided MVCC version.
-// The returned entry is detached from internal pools. Callers must not call DecrRef.
-func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+// GetInternalEntry retrieves one internal-key record for the provided version.
+//
+// The returned entry is borrowed from internal pools and returned as-is
+// (no clone/no copy). entry.Key remains in internal encoding
+// (cf+user_key+ts). Callers MUST call DecrRef exactly once when finished.
+func (db *DB) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
@@ -522,23 +509,16 @@ func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) 
 	if err != nil {
 		return nil, err
 	}
-	defer entry.DecrRef()
-	return cloneEntry(entry, cf), nil
+	return entry, nil
 }
 
 // Get reads the latest visible value for key from the default column family.
 func (db *DB) Get(key []byte) (*kv.Entry, error) {
-	return db.GetCF(kv.CFDefault, key)
-}
-
-// GetCF reads a key from the specified column family.
-// The returned entry is detached from internal pools. Callers must not call DecrRef.
-func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
 	// Non-transactional API: use the max sentinel timestamp (not for MVCC).
-	internalKey := kv.InternalKey(cf, key, nonTxnMaxVersion)
+	internalKey := kv.InternalKey(kv.CFDefault, key, nonTxnMaxVersion)
 	entry, err := db.loadBorrowedEntry(internalKey)
 	if err != nil {
 		return nil, err
@@ -547,7 +527,7 @@ func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
 		return nil, utils.ErrKeyNotFound
 	}
-	out := cloneEntry(entry, cf)
+	out := cloneEntry(entry, kv.CFDefault)
 	db.recordCFRead(out.CF, 1)
 	db.recordRead(out.Key)
 	return out, nil

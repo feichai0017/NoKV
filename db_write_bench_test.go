@@ -19,8 +19,7 @@ func BenchmarkDBBatchSet(b *testing.B) {
 	for i := 0; b.Loop(); i++ {
 		for j := range batchSize {
 			key := makeBenchKey(i*batchSize + j)
-			entry := kv.NewEntryWithCF(kv.CFDefault, key, value)
-			entry.Key = kv.InternalKey(entry.CF, entry.Key, nonTxnMaxVersion)
+			entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
 			entries[j] = entry
 		}
 		if err := db.batchSet(entries); err != nil {
