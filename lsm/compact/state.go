@@ -199,7 +199,9 @@ func (cs *State) Delete(entry StateEntry) {
 
 	for _, fid := range entry.TableIDs {
 		_, ok := cs.tables[fid]
-		utils.CondPanic(!ok, fmt.Errorf("cs.tables is nil"))
+		utils.CondPanicFunc(!ok, func() error {
+			return fmt.Errorf("cs.tables is nil")
+		})
 		delete(cs.tables, fid)
 	}
 }

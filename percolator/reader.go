@@ -2,6 +2,7 @@ package percolator
 
 import (
 	"bytes"
+	"fmt"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -145,7 +146,10 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			iter.Next()
 			continue
 		}
-		cf, userKey, ts := kv.SplitInternalKey(entry.Key)
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return fmt.Errorf("percolator: scanWrites expects internal key, got %x", entry.Key)
+		}
 		if cf != kv.CFWrite {
 			break
 		}

@@ -14,8 +14,8 @@ func TestKeyHelpers(t *testing.T) {
 		t.Fatalf("unexpected SameKey for different user keys")
 	}
 
-	if ParseTs(k1) != 1 {
-		t.Fatalf("expected ts=1, got %d", ParseTs(k1))
+	if Timestamp(k1) != 1 {
+		t.Fatalf("expected ts=1, got %d", Timestamp(k1))
 	}
 
 	h1 := MemHash(k1)
@@ -23,21 +23,42 @@ func TestKeyHelpers(t *testing.T) {
 	if h1 != h2 {
 		t.Fatalf("expected stable MemHash for same data")
 	}
+}
 
-	hs1 := MemHashString("alpha")
-	hs2 := MemHashString("alpha")
-	if hs1 != hs2 {
-		t.Fatalf("expected stable MemHashString for same input")
+func TestSplitInternalKeyStrict(t *testing.T) {
+	internal := InternalKey(CFWrite, []byte("alpha"), 42)
+	cf, userKey, ts, ok := SplitInternalKey(internal)
+	if !ok {
+		t.Fatalf("expected strict decode success")
+	}
+	if cf != CFWrite {
+		t.Fatalf("expected CFWrite, got %v", cf)
+	}
+	if string(userKey) != "alpha" {
+		t.Fatalf("expected user key alpha, got %q", userKey)
+	}
+	if ts != 42 {
+		t.Fatalf("expected ts=42, got %d", ts)
+	}
+
+	if _, _, _, ok := SplitInternalKey([]byte("raw-key")); ok {
+		t.Fatalf("expected strict decode failure for raw key")
+	}
+
+	nonCanonical := append([]byte("plain"), make([]byte, 8)...)
+	if _, _, _, ok := SplitInternalKey(nonCanonical); ok {
+		t.Fatalf("expected strict decode failure without CF marker")
 	}
 }
 
-func TestBytesToStringAndSafeCopy(t *testing.T) {
-	if got := BytesToString(nil); got != "" {
-		t.Fatalf("expected empty string for nil, got %q", got)
+func TestStripTimestampSplitInternalKeyAndSafeCopy(t *testing.T) {
+	if got := StripTimestamp([]byte("raw")); string(got) != "raw" {
+		t.Fatalf("expected raw key unchanged, got %q", got)
 	}
-	input := []byte("hello")
-	if got := BytesToString(input); got != "hello" {
-		t.Fatalf("expected hello, got %q", got)
+	internal := InternalKey(CFLock, []byte("hello"), 5)
+	_, userKey, _, ok := SplitInternalKey(internal)
+	if !ok || string(userKey) != "hello" {
+		t.Fatalf("expected split user key hello, got ok=%v key=%q", ok, userKey)
 	}
 	orig := []byte("copy")
 	out := SafeCopy(nil, orig)

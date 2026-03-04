@@ -88,10 +88,10 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		}
 	}
 	// record the hash value of the key
-	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.ParseKey(key)))
+	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.StripTimestamp(key)))
 
 	// update the maxVersion
-	if version := kv.ParseTs(key); version > tb.maxVersion {
+	if version := kv.Timestamp(key); version > tb.maxVersion {
 		tb.maxVersion = version
 	}
 
@@ -150,7 +150,9 @@ func (tb *tableBuilder) finish() []byte {
 	bd := tb.done()
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
-	utils.CondPanic(written == len(buf), nil)
+	utils.CondPanicFunc(written != len(buf), func() error {
+		return fmt.Errorf("tableBuilder.finish: written=%d buf=%d", written, len(buf))
+	})
 	return buf
 }
 func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
@@ -161,7 +163,9 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	if len(tb.curBlock.entryOffsets) <= 0 {
 		return false
 	}
-	utils.CondPanic(uint64(len(tb.curBlock.entryOffsets)+1)*4+4+8+4 >= math.MaxUint32, errors.New("integer overflow"))
+	utils.CondPanicFunc(uint64(len(tb.curBlock.entryOffsets)+1)*4+4+8+4 >= math.MaxUint32, func() error {
+		return errors.New("integer overflow")
+	})
 	entriesOffsetsSize := int64((len(tb.curBlock.entryOffsets)+1)*4 +
 		4 + // size of list
 		8 + // Sum64 in checksum proto
@@ -170,7 +174,9 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 		int64(len(e.Key)) + int64(e.EncodedSize()) + entriesOffsetsSize
 
 	// Integer overflow check for table size.
-	utils.CondPanic(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, errors.New("integer overflow"))
+	utils.CondPanicFunc(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, func() error {
+		return errors.New("integer overflow")
+	})
 
 	return tb.curBlock.estimateSz > int64(tb.opt.BlockSize)
 }
@@ -248,7 +254,9 @@ func (tb *tableBuilder) finishBlock() {
 // append appends to curBlock.data
 func (tb *tableBuilder) append(data []byte) {
 	dst := tb.allocate(len(data))
-	utils.CondPanic(len(data) != copy(dst, data), errors.New("tableBuilder.append data"))
+	utils.CondPanicFunc(len(data) != copy(dst, data), func() error {
+		return errors.New("tableBuilder.append data")
+	})
 }
 
 func (tb *tableBuilder) allocate(need int) []byte {
