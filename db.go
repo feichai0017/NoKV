@@ -5,7 +5,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"maps"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,21 +24,29 @@ import (
 
 // nonTxnMaxVersion is the sentinel MVCC version used by non-transactional APIs.
 // Non-transactional reads/writes must not be mixed with MVCC/Txn writes.
-const nonTxnMaxVersion = math.MaxUint64
+const nonTxnMaxVersion = kv.MaxVersion
 
 type (
-	// CoreAPI describes the externally exposed NoKV operations.
-	CoreAPI interface {
+	// UserKV defines user-facing single-node key-value operations.
+	UserKV interface {
 		Set(key, value []byte) error
 		SetWithTTL(key, value []byte, expiresAt uint64) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
-		SetCF(cf kv.ColumnFamily, key, value []byte) error
-		GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error)
-		DelCF(cf kv.ColumnFamily, key []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
-		Info() *Stats
-		Close() error
+	}
+
+	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
+	MVCCStore interface {
+		ApplyEntries(entries []*kv.Entry) error
+		GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
+		NewInternalIterator(opt *utils.Options) utils.Iterator
+	}
+
+	// EngineMeta exposes durability/metadata managers for distributed components.
+	EngineMeta interface {
+		WAL() *wal.Manager
+		Manifest() *manifest.Manager
 	}
 
 	// DB is the global handle for the engine and owns shared resources.
