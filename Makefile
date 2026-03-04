@@ -67,7 +67,7 @@ lint:
 # Format code and tidy dependencies
 fmt:
 	@echo "Formatting code..."
-	gofmt -w -s .
+	@gofmt -w -s $$(git ls-files '*.go')
 	go mod tidy
 	@echo "✓ Code formatted"
 

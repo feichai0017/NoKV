@@ -98,6 +98,9 @@ func NewEntry(key, value []byte) *Entry {
 }
 
 // NewInternalEntry creates an Entry whose key is encoded as an internal key.
+//
+// Ownership note: userKey/value are referenced directly (no deep copy). Callers
+// must keep those buffers immutable until the entry is no longer used.
 func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
 	if !cf.Valid() {
 		cf = CFDefault
