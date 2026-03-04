@@ -89,18 +89,10 @@ func (e *Entry) reset() {
 
 // NewEntry creates a new entry in the default column family.
 func NewEntry(key, value []byte) *Entry {
-	return NewEntryWithCF(CFDefault, key, value)
-}
-
-// NewEntryWithCF creates an Entry for the specified column family.
-func NewEntryWithCF(cf ColumnFamily, key, value []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key = key
 	e.Value = value
-	if !cf.Valid() {
-		cf = CFDefault
-	}
-	e.CF = cf
+	e.CF = CFDefault
 	e.IncrRef()
 	return e
 }
@@ -110,9 +102,13 @@ func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []b
 	if !cf.Valid() {
 		cf = CFDefault
 	}
-	e := NewEntryWithCF(cf, InternalKey(cf, userKey, version), value)
+	e := EntryPool.Get().(*Entry)
+	e.Key = InternalKey(cf, userKey, version)
+	e.Value = value
+	e.CF = cf
 	e.Meta = meta
 	e.ExpiresAt = expiresAt
+	e.IncrRef()
 	return e
 }
 
@@ -135,18 +131,6 @@ func (e *Entry) IsDeletedOrExpired() bool {
 // WithTTL sets the TTL for the entry.
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
-	return e
-}
-
-// WithColumnFamily sets the column family for the entry.
-func (e *Entry) WithColumnFamily(cf ColumnFamily) *Entry {
-	if e == nil {
-		return e
-	}
-	if !cf.Valid() {
-		cf = CFDefault
-	}
-	e.CF = cf
 	return e
 }
 

@@ -364,7 +364,7 @@ func applyVersionedOps(db NoKV.MVCCStore, ops ...versionedOp) error {
 		entry := kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires)
 		entries = append(entries, entry)
 	}
-	err := db.ApplyEntries(entries)
+	err := db.ApplyInternalEntries(entries)
 	for _, entry := range entries {
 		if entry != nil {
 			entry.DecrRef()

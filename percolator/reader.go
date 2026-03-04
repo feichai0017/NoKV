@@ -23,13 +23,14 @@ func NewReader(db NoKV.MVCCStore) *Reader {
 
 // GetLock returns the lock stored for the provided key, if any.
 func (r *Reader) GetLock(key []byte) (*Lock, error) {
-	entry, err := r.db.GetVersionedEntry(kv.CFLock, key, lockColumnTs)
+	entry, err := r.db.GetInternalEntry(kv.CFLock, key, lockColumnTs)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
 			return nil, nil
 		}
 		return nil, err
 	}
+	defer entry.DecrRef()
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, nil
 	}
@@ -96,10 +97,11 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, error) {
 	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
 		return nil, utils.ErrKeyNotFound
 	}
-	entry, err := r.db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
+	entry, err := r.db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 	if err != nil {
 		return nil, err
 	}
+	defer entry.DecrRef()
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, utils.ErrKeyNotFound
 	}

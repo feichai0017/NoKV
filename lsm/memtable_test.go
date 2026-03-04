@@ -17,7 +17,7 @@ func TestOpenMemTableReplayWithTypedRecords(t *testing.T) {
 	const segID = uint32(77)
 	require.NoError(t, lsm.wal.SwitchSegment(segID, true))
 
-	entry := kv.NewEntry(kv.KeyWithTs([]byte("replay-key"), 9), []byte("replay-value"))
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("replay-key"), 9), []byte("replay-value"))
 	defer entry.DecrRef()
 	payload, err := wal.EncodeEntryBatch([]*kv.Entry{entry})
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestMemTableSetRejectsInvalidInput(t *testing.T) {
 	require.ErrorIs(t, mt.Set(&kv.Entry{}), utils.ErrEmptyKey)
 
 	var nilMem *memTable
-	entry := kv.NewEntry(kv.KeyWithTs([]byte("k"), 1), []byte("v"))
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
 	defer entry.DecrRef()
 	require.Error(t, nilMem.Set(entry))
 }

@@ -112,7 +112,7 @@ func main() {
 }
 ```
 
-> Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`) return detached entries. Do not call `DecrRef` on them.
+> Note: `DB.Get` returns detached entries (do not call `DecrRef`). `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
 
 > ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds manifests via `nokv-config manifest`, starts PD-lite (`nokv pd`), and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 

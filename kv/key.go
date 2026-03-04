@@ -44,12 +44,16 @@ func SameKey(src, dst []byte) bool {
 	return bytes.Equal(ParseKey(src), ParseKey(dst))
 }
 
-// KeyWithTs generates a new key by appending ts to key.
-func KeyWithTs(key []byte, ts uint64) []byte {
-	out := make([]byte, len(key)+8)
-	copy(out, key)
-	binary.BigEndian.PutUint64(out[len(key):], math.MaxUint64-ts)
-	return out
+// UserKey returns the logical user key portion from an internal key.
+//
+// It strips the trailing MVCC timestamp and, when present, the CF marker header.
+func UserKey(key []byte) []byte {
+	base := ParseKey(key)
+	_, userKey, ok := DecodeKeyCF(base)
+	if ok {
+		return userKey
+	}
+	return base
 }
 
 // InternalKey encodes (column family, user key, timestamp) into the canonical

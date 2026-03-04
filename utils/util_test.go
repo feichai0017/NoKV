@@ -10,8 +10,8 @@ import (
 )
 
 func TestCompareUserKeysAndChecksum(t *testing.T) {
-	k1 := kv.KeyWithTs([]byte("a"), 1)
-	k2 := kv.KeyWithTs([]byte("b"), 1)
+	k1 := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
+	k2 := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 	require.Less(t, CompareUserKeys(k1, k2), 0)
 	require.Equal(t, 0, CompareUserKeys([]byte("c"), []byte("c")))
 

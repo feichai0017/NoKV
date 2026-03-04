@@ -78,19 +78,19 @@ func (it *sliceIterator) Seek(key []byte) {
 
 func TestMergeIteratorForwardAndReverse(t *testing.T) {
 	left := &sliceIterator{entries: []*kv.Entry{
-		{Key: kv.KeyWithTs([]byte("a"), 1)},
-		{Key: kv.KeyWithTs([]byte("c"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("a"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 1)},
 	}}
 	right := &sliceIterator{entries: []*kv.Entry{
-		{Key: kv.KeyWithTs([]byte("b"), 1)},
-		{Key: kv.KeyWithTs([]byte("c"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 1)},
 	}}
 
 	mi := NewMergeIterator([]utils.Iterator{left, right}, false)
 	var keys []string
 	mi.Rewind()
 	for mi.Valid() {
-		keys = append(keys, string(kv.ParseKey(mi.Item().Entry().Key)))
+		keys = append(keys, string(kv.UserKey(mi.Item().Entry().Key)))
 		mi.Next()
 	}
 	require.Equal(t, []string{"a", "b", "c"}, keys)
@@ -101,7 +101,7 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 	keys = keys[:0]
 	rev.Rewind()
 	for rev.Valid() {
-		keys = append(keys, string(kv.ParseKey(rev.Item().Entry().Key)))
+		keys = append(keys, string(kv.UserKey(rev.Item().Entry().Key)))
 		rev.Next()
 	}
 	require.Equal(t, []string{"c", "b", "a"}, keys)
@@ -109,18 +109,18 @@ func TestMergeIteratorForwardAndReverse(t *testing.T) {
 
 func TestMergeIteratorSeekAndClose(t *testing.T) {
 	left := &sliceIterator{entries: []*kv.Entry{
-		{Key: kv.KeyWithTs([]byte("a"), 1)},
-		{Key: kv.KeyWithTs([]byte("b"), 1)},
-		{Key: kv.KeyWithTs([]byte("d"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("a"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("d"), 1)},
 	}}
 	right := &sliceIterator{entries: []*kv.Entry{
-		{Key: kv.KeyWithTs([]byte("c"), 1)},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("c"), 1)},
 	}}
 
 	mi := NewMergeIterator([]utils.Iterator{left, right}, false)
-	mi.Seek(kv.KeyWithTs([]byte("c"), 1))
+	mi.Seek(kv.InternalKey(kv.CFDefault, []byte("c"), 1))
 	require.True(t, mi.Valid())
-	require.Equal(t, "c", string(kv.ParseKey(mi.Item().Entry().Key)))
+	require.Equal(t, "c", string(kv.UserKey(mi.Item().Entry().Key)))
 	require.NoError(t, mi.Close())
 }
 
@@ -168,12 +168,12 @@ func TestLSMNewIterators(t *testing.T) {
 
 func TestConcatIteratorSeekAndNext(t *testing.T) {
 	tbl := &table{
-		minKey: kv.KeyWithTs([]byte("a"), 1),
-		maxKey: kv.KeyWithTs([]byte("z"), 1),
+		minKey: kv.InternalKey(kv.CFDefault, []byte("a"), 1),
+		maxKey: kv.InternalKey(kv.CFDefault, []byte("z"), 1),
 	}
 	entries := []*kv.Entry{
-		{Key: kv.KeyWithTs([]byte("b"), 1), Value: []byte("vb")},
-		{Key: kv.KeyWithTs([]byte("d"), 1), Value: []byte("vd")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 1), Value: []byte("vb")},
+		{Key: kv.InternalKey(kv.CFDefault, []byte("d"), 1), Value: []byte("vd")},
 	}
 	iter := &sliceIterator{entries: entries}
 
@@ -189,11 +189,11 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 		t.Fatalf("expected non-nil item")
 	}
 
-	ci.Seek(kv.KeyWithTs([]byte("c"), 1))
+	ci.Seek(kv.InternalKey(kv.CFDefault, []byte("c"), 1))
 	if !ci.Valid() {
 		t.Fatalf("expected concat iterator valid after seek")
 	}
-	got := kv.ParseKey(ci.Item().Entry().Key)
+	got := kv.UserKey(ci.Item().Entry().Key)
 	if string(got) != "d" {
 		t.Fatalf("expected seek to land on d, got %q", string(got))
 	}
@@ -215,7 +215,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 
 	// Add test data
 	for i := range 10 {
-		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		key := kv.InternalKey(kv.CFDefault, []byte{byte('a' + i)}, 1)
 		value := []byte{byte('v'), byte('0' + i)}
 		builder.AddKey(kv.NewEntry(key, value))
 	}
@@ -234,7 +234,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	forwardIter.Rewind()
 	for forwardIter.Valid() {
 		e := forwardIter.Item().Entry()
-		forwardKeys = append(forwardKeys, kv.ParseKey(e.Key)[0])
+		forwardKeys = append(forwardKeys, kv.UserKey(e.Key)[0])
 		forwardIter.Next()
 	}
 	require.Equal(t, "abcdefghij", string(forwardKeys))
@@ -247,7 +247,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	reverseIter.Rewind()
 	for reverseIter.Valid() {
 		e := reverseIter.Item().Entry()
-		reverseKeys = append(reverseKeys, kv.ParseKey(e.Key)[0])
+		reverseKeys = append(reverseKeys, kv.UserKey(e.Key)[0])
 		reverseIter.Next()
 	}
 	require.Equal(t, "jihgfedcba", string(reverseKeys))
@@ -264,7 +264,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 
 	// Add test data with multiple blocks
 	for i := range 20 {
-		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		key := kv.InternalKey(kv.CFDefault, []byte{byte('a' + i)}, 1)
 		value := bytes.Repeat([]byte{byte('v'), byte('0' + i%10)}, 24)
 		builder.AddKey(kv.NewEntry(key, value))
 	}
@@ -279,25 +279,25 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	forwardIter := tbl.NewIterator(&utils.Options{IsAsc: true})
 	defer func() { require.NoError(t, forwardIter.Close()) }()
 
-	forwardIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
+	forwardIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
 	require.True(t, forwardIter.Valid())
 	e := forwardIter.Item().Entry()
-	require.Equal(t, byte('e'), kv.ParseKey(e.Key)[0])
+	require.Equal(t, byte('e'), kv.UserKey(e.Key)[0])
 
 	// Test reverse seek
 	reverseIter := tbl.NewIterator(&utils.Options{IsAsc: false})
 	defer func() { require.NoError(t, reverseIter.Close()) }()
 
-	reverseIter.Seek(kv.KeyWithTs([]byte{'e'}, 1))
+	reverseIter.Seek(kv.InternalKey(kv.CFDefault, []byte{'e'}, 1))
 	require.True(t, reverseIter.Valid())
 	e = reverseIter.Item().Entry()
-	require.Equal(t, byte('e'), kv.ParseKey(e.Key)[0])
+	require.Equal(t, byte('e'), kv.UserKey(e.Key)[0])
 
 	// Continue reverse iteration
 	var keys []byte
 	for i := 0; i < 5 && reverseIter.Valid(); i++ {
 		e := reverseIter.Item().Entry()
-		keys = append(keys, kv.ParseKey(e.Key)[0])
+		keys = append(keys, kv.UserKey(e.Key)[0])
 		reverseIter.Next()
 	}
 	require.Equal(t, "edcba", string(keys))
@@ -314,7 +314,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 
 	// Add enough data to create multiple blocks
 	for i := range 30 {
-		key := kv.KeyWithTs([]byte{byte('a' + i)}, 1)
+		key := kv.InternalKey(kv.CFDefault, []byte{byte('a' + i)}, 1)
 		value := bytes.Repeat([]byte{byte('v')}, 48)
 		builder.AddKey(kv.NewEntry(key, value))
 	}
@@ -336,7 +336,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 	count := 0
 	for reverseIter.Valid() && count < 30 {
 		e := reverseIter.Item().Entry()
-		keys = append(keys, kv.ParseKey(e.Key)[0])
+		keys = append(keys, kv.UserKey(e.Key)[0])
 		reverseIter.Next()
 		count++
 	}

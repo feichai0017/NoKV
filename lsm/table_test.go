@@ -41,7 +41,7 @@ func TestTableReverseIteration(t *testing.T) {
 	builder := newTableBuiler(opt)
 	for i := range 10 {
 		key := []byte{byte('a' + i)}
-		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value")))
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value")))
 	}
 
 	tableName := utils.FileNameSSTable(dir, 1)
@@ -57,7 +57,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "jihgfedcba", string(keys))
 	})
@@ -66,13 +66,13 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("f"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("f"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("f"), kv.UserKey(it.Item().Entry().Key))
 
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "fedcba", string(keys))
 	})
@@ -84,7 +84,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "abcdefghij", string(keys))
 	})
@@ -93,9 +93,9 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("a"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("a"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("a"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("a"), kv.UserKey(it.Item().Entry().Key))
 		it.Next()
 		require.False(t, it.Valid())
 	})
@@ -104,9 +104,9 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("j"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("j"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("j"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("j"), kv.UserKey(it.Item().Entry().Key))
 	})
 }
 
@@ -130,7 +130,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	builder := newTableBuiler(opt)
 	for i := range 20 {
 		key := []byte{byte('a' + i)}
-		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value-with-more-data")))
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value-with-more-data")))
 	}
 
 	tableName := utils.FileNameSSTable(dir, 2)
@@ -147,7 +147,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		count := 0
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, kv.UserKey(it.Item().Entry().Key)...)
 			count++
 		}
 		require.Equal(t, 20, count)

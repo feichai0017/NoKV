@@ -87,24 +87,36 @@ func TestColumnFamilies(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("default")))
-	require.NoError(t, db.SetCF(kv.CFLock, key, []byte("lock")))
-	require.NoError(t, db.SetCF(kv.CFWrite, key, []byte("write")))
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, []byte("default"), 0, 0),
+		kv.NewInternalEntry(kv.CFLock, key, nonTxnMaxVersion, []byte("lock"), 0, 0),
+		kv.NewInternalEntry(kv.CFWrite, key, nonTxnMaxVersion, []byte("write"), 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	require.NoError(t, db.ApplyInternalEntries(entries))
 
-	e, err := db.GetCF(kv.CFDefault, key)
+	e, err := db.GetInternalEntry(kv.CFDefault, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFDefault, e.CF)
+	gotCF, _, _ := kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFDefault, gotCF)
 	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
 
-	e, err = db.GetCF(kv.CFLock, key)
+	e, err = db.GetInternalEntry(kv.CFLock, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFLock, e.CF)
+	gotCF, _, _ = kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFLock, gotCF)
 	require.Equal(t, []byte("lock"), e.Value)
+	e.DecrRef()
 
-	e, err = db.GetCF(kv.CFWrite, key)
+	e, err = db.GetInternalEntry(kv.CFWrite, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFWrite, e.CF)
+	gotCF, _, _ = kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFWrite, gotCF)
 	require.Equal(t, []byte("write"), e.Value)
+	e.DecrRef()
 
 	// Default Get should read default CF.
 	e, err = db.Get(key)
@@ -112,13 +124,18 @@ func TestColumnFamilies(t *testing.T) {
 	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
 
-	require.NoError(t, db.DelCF(kv.CFLock, key))
-	_, err = db.GetCF(kv.CFLock, key)
-	require.Error(t, err)
+	lockDelete := kv.NewInternalEntry(kv.CFLock, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	defer lockDelete.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{lockDelete}))
+	lock, err := db.GetInternalEntry(kv.CFLock, key, nonTxnMaxVersion)
+	require.NoError(t, err)
+	require.True(t, lock.Meta&kv.BitDelete > 0)
+	lock.DecrRef()
 	// Default CF should remain untouched.
-	e, err = db.GetCF(kv.CFDefault, key)
+	e, err = db.GetInternalEntry(kv.CFDefault, key, nonTxnMaxVersion)
 	require.NoError(t, err)
 	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
 }
 
 func newTestOptions(t *testing.T) *Options {
@@ -135,10 +152,9 @@ func newTestOptions(t *testing.T) *Options {
 
 func applyVersionedEntryForTest(t *testing.T, db *DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
 	t.Helper()
-	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
-	entry.Meta = meta
+	entry := kv.NewInternalEntry(cf, key, version, kv.SafeCopy(nil, value), meta, 0)
 	defer entry.DecrRef()
-	require.NoError(t, db.ApplyEntries([]*kv.Entry{entry}))
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
 }
 
 func TestVersionedEntryRoundTrip(t *testing.T) {
@@ -152,12 +168,13 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 
 	applyVersionedEntryForTest(t, db, kv.CFDefault, key, version, value, 0)
 
-	entry, err := db.GetVersionedEntry(kv.CFDefault, key, version)
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, entry.CF)
-	require.Equal(t, key, entry.Key)
-	require.Equal(t, version, entry.Version)
+	require.Equal(t, key, kv.UserKey(entry.Key))
+	require.Equal(t, version, kv.ParseTs(entry.Key))
 	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
 }
 
 func TestVersionedEntryDeleteTombstone(t *testing.T) {
@@ -169,16 +186,18 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
 	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, nil, kv.BitDelete)
 
-	entry, err := db.GetVersionedEntry(kv.CFDefault, key, 2)
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, 2)
 	require.NoError(t, err)
-	require.Equal(t, key, entry.Key)
-	require.Equal(t, uint64(2), entry.Version)
+	require.Equal(t, key, kv.UserKey(entry.Key))
+	require.Equal(t, uint64(2), kv.ParseTs(entry.Key))
 	require.True(t, entry.Meta&kv.BitDelete > 0)
+	entry.DecrRef()
 
-	entry, err = db.GetVersionedEntry(kv.CFDefault, key, 1)
+	entry, err = db.GetInternalEntry(kv.CFDefault, key, 1)
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), entry.Value)
-	require.Equal(t, uint64(1), entry.Version)
+	require.Equal(t, uint64(1), kv.ParseTs(entry.Key))
+	entry.DecrRef()
 }
 
 func TestApplyEntriesWritesBatch(t *testing.T) {
@@ -188,24 +207,24 @@ func TestApplyEntriesWritesBatch(t *testing.T) {
 
 	key := []byte("batch-key")
 	entries := []*kv.Entry{
-		kv.NewEntryWithCF(kv.CFDefault, kv.SafeCopy(nil, key), []byte("value")),
-		kv.NewEntryWithCF(kv.CFLock, kv.SafeCopy(nil, key), []byte("lock")),
+		kv.NewInternalEntry(kv.CFDefault, kv.SafeCopy(nil, key), 11, []byte("value"), 0, 0),
+		kv.NewInternalEntry(kv.CFLock, kv.SafeCopy(nil, key), kv.MaxVersion, []byte("lock"), 0, 0),
 	}
 	for _, entry := range entries {
 		defer entry.DecrRef()
 	}
-	entries[0].Key = kv.InternalKey(kv.CFDefault, key, 11)
-	entries[1].Key = kv.InternalKey(kv.CFLock, key, math.MaxUint64)
 
-	require.NoError(t, db.ApplyEntries(entries))
+	require.NoError(t, db.ApplyInternalEntries(entries))
 
-	valueEntry, err := db.GetVersionedEntry(kv.CFDefault, key, 11)
+	valueEntry, err := db.GetInternalEntry(kv.CFDefault, key, 11)
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), valueEntry.Value)
+	valueEntry.DecrRef()
 
-	lockEntry, err := db.GetVersionedEntry(kv.CFLock, key, math.MaxUint64)
+	lockEntry, err := db.GetInternalEntry(kv.CFLock, key, kv.MaxVersion)
 	require.NoError(t, err)
 	require.Equal(t, []byte("lock"), lockEntry.Value)
+	lockEntry.DecrRef()
 }
 
 func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
@@ -213,11 +232,11 @@ func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := kv.NewEntryWithCF(kv.CFDefault, nil, []byte("value"))
+	entry := kv.NewEntry(nil, []byte("value"))
 	defer entry.DecrRef()
 	entry.Key = nil
 
-	err := db.ApplyEntries([]*kv.Entry{entry})
+	err := db.ApplyInternalEntries([]*kv.Entry{entry})
 	require.ErrorIs(t, err, utils.ErrEmptyKey)
 }
 
@@ -226,10 +245,10 @@ func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := kv.NewEntryWithCF(kv.CFDefault, []byte("plain-user-key"), []byte("value"))
+	entry := kv.NewEntry([]byte("plain-user-key"), []byte("value"))
 	defer entry.DecrRef()
 
-	err := db.ApplyEntries([]*kv.Entry{entry})
+	err := db.ApplyInternalEntries([]*kv.Entry{entry})
 	require.ErrorIs(t, err, utils.ErrInvalidRequest)
 }
 
@@ -250,10 +269,10 @@ func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
 	db := Open(opt)
 	require.NoError(t, db.Close())
 
-	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
 	var err error
 	require.NotPanics(t, func() {
-		err = db.ApplyEntries([]*kv.Entry{entry})
+		err = db.ApplyInternalEntries([]*kv.Entry{entry})
 		entry.DecrRef()
 	})
 	require.ErrorIs(t, err, utils.ErrBlockedWrites)
@@ -265,10 +284,10 @@ func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
 	var err error
 	require.NotPanics(t, func() {
-		err = db.ApplyEntries([]*kv.Entry{entry})
+		err = db.ApplyInternalEntries([]*kv.Entry{entry})
 		entry.DecrRef()
 	})
 	require.ErrorIs(t, err, utils.ErrTxnTooBig)
@@ -441,9 +460,9 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("throttle-key")
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v1")))
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v2")))
-	err := db.SetCF(kv.CFDefault, key, []byte("v3"))
+	require.NoError(t, db.Set(key, []byte("v1")))
+	require.NoError(t, db.Set(key, []byte("v2")))
+	err := db.Set(key, []byte("v3"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
@@ -1005,8 +1024,8 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	db := Open(local)
 	defer func() { _ = db.Close() }()
 
-	good := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("good"), nonTxnMaxVersion), []byte("v1"))
-	bad := kv.NewEntryWithCF(kv.CFDefault, []byte{}, []byte("v2"))
+	good := kv.NewInternalEntry(kv.CFDefault, []byte("good"), nonTxnMaxVersion, []byte("v1"), 0, 0)
+	bad := kv.NewEntry([]byte{}, []byte("v2"))
 	defer good.DecrRef()
 	defer bad.DecrRef()
 

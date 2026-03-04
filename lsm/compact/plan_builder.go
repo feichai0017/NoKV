@@ -35,9 +35,11 @@ func RangeForTables(tables []TableMeta) KeyRange {
 			maxKey = tables[i].MaxKey
 		}
 	}
+	leftCF, leftUserKey, _ := kv.SplitInternalKey(minKey)
+	rightCF, rightUserKey, _ := kv.SplitInternalKey(maxKey)
 	return KeyRange{
-		Left:  kv.KeyWithTs(kv.ParseKey(minKey), math.MaxUint64),
-		Right: kv.KeyWithTs(kv.ParseKey(maxKey), 0),
+		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
+		Right: kv.InternalKey(rightCF, rightUserKey, 0),
 	}
 }
 

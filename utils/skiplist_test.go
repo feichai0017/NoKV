@@ -121,9 +121,9 @@ func TestSkipListIteratorSeekAndPrev(t *testing.T) {
 	require.True(t, list.Empty())
 
 	keys := [][]byte{
-		kv.KeyWithTs([]byte("a"), 1),
-		kv.KeyWithTs([]byte("b"), 1),
-		kv.KeyWithTs([]byte("c"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("a"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("b"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("c"), 1),
 	}
 	for _, k := range keys {
 		list.Add(kv.NewEntry(k, []byte("val")))
@@ -134,21 +134,21 @@ func TestSkipListIteratorSeekAndPrev(t *testing.T) {
 	iterIface := list.NewSkipListIterator()
 	iter, ok := iterIface.(*SkipListIterator)
 	require.True(t, ok)
-	iter.Seek(kv.KeyWithTs([]byte("b"), 1))
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.ParseKey(iter.Key())))
+	require.Equal(t, "b", string(kv.UserKey(iter.Key())))
 
 	iter.Prev()
-	require.Equal(t, "a", string(kv.ParseKey(iter.Key())))
+	require.Equal(t, "a", string(kv.UserKey(iter.Key())))
 
-	iter.SeekForPrev(kv.KeyWithTs([]byte("bb"), 1))
-	require.Equal(t, "b", string(kv.ParseKey(iter.Key())))
+	iter.SeekForPrev(kv.InternalKey(kv.CFDefault, []byte("bb"), 1))
+	require.Equal(t, "b", string(kv.UserKey(iter.Key())))
 
 	iter.SeekToLast()
-	require.Equal(t, "c", string(kv.ParseKey(iter.Key())))
+	require.Equal(t, "c", string(kv.UserKey(iter.Key())))
 
 	iter.SeekToFirst()
-	require.Equal(t, "a", string(kv.ParseKey(iter.Key())))
+	require.Equal(t, "a", string(kv.UserKey(iter.Key())))
 
 	_ = iter.ValueUint64()
 	require.NoError(t, iter.Close())
@@ -194,7 +194,7 @@ func TestSkipListReverseIteration(t *testing.T) {
 	// Insert keys in order: a, b, c, d, e
 	keys := []string{"a", "b", "c", "d", "e"}
 	for _, k := range keys {
-		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(k), 1), []byte("val_"+k))
 		list.Add(entry)
 	}
 
@@ -205,24 +205,24 @@ func TestSkipListReverseIteration(t *testing.T) {
 	// Rewind should position at the largest key (e)
 	iter.Rewind()
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Next should move to smaller keys: d, c, b, a
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "d", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "d", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "b", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "a", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "a", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Next should invalidate the iterator (no more elements)
 	iter.Next()
@@ -235,7 +235,7 @@ func TestSkipListReverseSeek(t *testing.T) {
 	// Insert keys: a, c, e, g, i
 	keys := []string{"a", "c", "e", "g", "i"}
 	for _, k := range keys {
-		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(k), 1), []byte("val_"+k))
 		list.Add(entry)
 	}
 
@@ -244,27 +244,27 @@ func TestSkipListReverseSeek(t *testing.T) {
 	defer func() { require.NoError(t, iter.Close()) }()
 
 	// Seek("f") should find "e" (largest key <= "f")
-	iter.Seek(kv.KeyWithTs([]byte("f"), 1))
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Next should move to "c"
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Seek("i") should find "i" (exact match)
-	iter.Seek(kv.KeyWithTs([]byte("i"), 1))
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("i"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "i", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "i", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Seek("z") should find "i" (largest key <= "z")
-	iter.Seek(kv.KeyWithTs([]byte("z"), 1))
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("z"), 1))
 	require.True(t, iter.Valid())
-	require.Equal(t, "i", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "i", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Seek("0") should invalidate (no key <= "0")
-	iter.Seek(kv.KeyWithTs([]byte("0"), 1))
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("0"), 1))
 	require.False(t, iter.Valid())
 }
 
@@ -274,7 +274,7 @@ func TestSkipListForwardIteration(t *testing.T) {
 	// Insert keys in order: a, b, c, d, e
 	keys := []string{"a", "b", "c", "d", "e"}
 	for _, k := range keys {
-		entry := kv.NewEntry(kv.KeyWithTs([]byte(k), 1), []byte("val_"+k))
+		entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(k), 1), []byte("val_"+k))
 		list.Add(entry)
 	}
 
@@ -285,24 +285,24 @@ func TestSkipListForwardIteration(t *testing.T) {
 	// Rewind should position at the smallest key (a)
 	iter.Rewind()
 	require.True(t, iter.Valid())
-	require.Equal(t, "a", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "a", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Next should move to larger keys: b, c, d, e
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "b", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "b", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "c", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "c", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "d", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "d", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	iter.Next()
 	require.True(t, iter.Valid())
-	require.Equal(t, "e", string(kv.ParseKey(iter.Item().Entry().Key)))
+	require.Equal(t, "e", string(kv.UserKey(iter.Item().Entry().Key)))
 
 	// Next should invalidate the iterator (no more elements)
 	iter.Next()

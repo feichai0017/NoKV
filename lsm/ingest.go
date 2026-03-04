@@ -63,11 +63,12 @@ func (buf *ingestBuffer) ensureInit() {
 }
 
 func shardIndexForRange(min []byte) int {
-	if len(min) == 0 {
+	userKey := kv.UserKey(min)
+	if len(userKey) == 0 {
 		return 0
 	}
 	// Use the top bits of the first byte to partition into fixed shards.
-	return int(min[0] >> (8 - ingestShardBits))
+	return int(userKey[0] >> (8 - ingestShardBits))
 }
 
 func (buf *ingestBuffer) add(t *table) {
