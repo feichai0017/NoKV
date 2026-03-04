@@ -279,11 +279,11 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		if e == nil || len(e.Key) == 0 {
 			return false, nil
 		}
-		cf, userKey, _ := kv.SplitInternalKey(e.Key)
+		cf, userKey, version := kv.SplitInternalKey(e.Key)
 		if len(userKey) == 0 {
 			return false, nil
 		}
-		entry, err := vlog.db.GetInternalEntry(cf, userKey, nonTxnMaxVersion)
+		entry, err := vlog.db.GetInternalEntry(cf, userKey, version)
 		if err != nil {
 			if errors.Is(err, utils.ErrEmptyKey) {
 				return false, nil
@@ -322,6 +322,9 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 	if stats == nil {
 		return utils.ErrNoRewrite
 	}
+	if stats.Count == 0 || stats.TotalMiB == 0 {
+		return utils.ErrNoRewrite
+	}
 
 	vlog.logf("Fid: %d bucket: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, bucket, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
 
@@ -356,25 +359,22 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return nil
 		}
 		entry, err := vlog.db.lsm.Get(e.Key)
-		releaseEntry := func() {}
 		if err != nil {
-			// If LSM can't find it (e.g., concurrent compaction/move), fall back to the
-			// value log copy so we don't drop a live key.
-			if errors.Is(err, utils.ErrKeyNotFound) {
-				entry = e
-			} else if errors.Is(err, utils.ErrEmptyKey) {
+			if errors.Is(err, utils.ErrEmptyKey) {
 				return nil
-			} else {
-				return err
 			}
-		} else if entry != nil {
-			releaseEntry = entry.DecrRef
-		} else {
-			// Be defensive: if storage returns a nil entry without an error, treat it
-			// as not-found and fall back to the value-log copy.
-			entry = e
+			if errors.Is(err, utils.ErrKeyNotFound) {
+				// Compromise policy: treat missing index entries as obsolete and skip
+				// this record, so rewrite can still make progress under churn.
+				return nil
+			}
+			return err
 		}
-		defer releaseEntry()
+		if entry == nil {
+			// Fail closed on ambiguous storage results.
+			return utils.ErrNoRewrite
+		}
+		defer entry.DecrRef()
 		if kv.DiscardEntry(e, entry) {
 			return nil
 		}
@@ -384,6 +384,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		}
 
 		var diskVP kv.ValuePtr
+		if !kv.IsValuePtr(entry) {
+			return nil
+		}
 		diskVP.Decode(entry.Value)
 
 		if diskVP.Bucket != bucket {
@@ -417,6 +420,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	if _, err := mgr.Iterate(fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		return process(e, vp)
 	}); err != nil && err != utils.ErrStop {
+		if errors.Is(err, utils.ErrNoRewrite) {
+			return utils.ErrNoRewrite
+		}
 		return err
 	}
 

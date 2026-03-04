@@ -437,6 +437,9 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 // SetWithTTL writes a key/value pair into the default column family with an explicit expiry timestamp.
+//
+// Ownership note: key/value are not deep-copied on entry. Callers must keep
+// the provided buffers immutable until this method returns.
 func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
