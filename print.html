@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f5b0fed8.js";
+            window.path_to_searchindex_js = "searchindex-9a9267e6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-56d2c64c.js"></script>
@@ -399,7 +399,13 @@ func main() {
 }
 </code></pre>
 <blockquote>
-<p>Note: <code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>). <code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</p>
+<p>Note:</p>
+<ul>
+<li><code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>).</li>
+<li><code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</li>
+<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> for deletes.</li>
+<li><code>DB.NewIterator</code> exposes user-facing entries, while <code>DB.NewInternalIterator</code> scans raw internal keys (<code>cf+user_key+ts</code>).</li>
+</ul>
 </blockquote>
 <h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
 <p>Micro benchmarks:</p>
@@ -1980,7 +1986,7 @@ settings. When override is enabled, <strong>zeros disable features</strong> (exc
 which falls back to the ring default).</p>
 <hr>
 <h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
-<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, every call to <code>DB.Set*</code>/<code>DB.SetEntry</code> invokes <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
+<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, user writes (<code>DB.Set</code>, <code>DB.SetWithTTL</code>) and internal writes (<code>DB.ApplyInternalEntries</code>) invoke <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
 <p>Operational hints:</p>
 <ul>
 <li><code>StatsSnapshot.Write.HotKeyLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
@@ -3024,7 +3030,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <tr><th>Mode</th><th>Description</th><th>Key flags</th></tr>
 </thead>
 <tbody>
-<tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/SetEntry/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
+<tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/Set/SetWithTTL/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
 <tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
@@ -3059,6 +3065,12 @@ The script iterates over every store in the config and writes Region metadata vi
 <li>String operations: <code>GET</code>, <code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>DEL</code>, <code>MGET</code>, <code>MSET</code>, <code>EXISTS</code></li>
 <li>Integer operations: <code>INCR</code>, <code>DECR</code>, <code>INCRBY</code>, <code>DECRBY</code></li>
 <li>Utility: <code>PING</code>, <code>ECHO</code>, <code>QUIT</code></li>
+</ul>
+<p>TTL option semantics:</p>
+<ul>
+<li><code>EX</code> / <code>PX</code> are relative TTLs.</li>
+<li><code>EXAT</code> / <code>PXAT</code> are absolute expire timestamps.</li>
+<li>The current engine expiry resolution is seconds, so sub-second TTL intent is rounded/coarsened to second granularity.</li>
 </ul>
 <p>In both modes write commands are atomic. The Raft backend batches multi-key updates (<code>MSET</code>, <code>DEL</code>, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use direct <code>DB.Get</code> locally and leader reads with TTL checks remotely.</p>
 <h2 id="configuration-file"><a class="header" href="#configuration-file">Configuration file</a></h2>

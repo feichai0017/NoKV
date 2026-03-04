@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f5b0fed8.js";
+            window.path_to_searchindex_js = "searchindex-9a9267e6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-56d2c64c.js"></script>
@@ -237,7 +237,13 @@ func main() {
 }
 </code></pre>
 <blockquote>
-<p>Note: <code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>). <code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</p>
+<p>Note:</p>
+<ul>
+<li><code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>).</li>
+<li><code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</li>
+<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> for deletes.</li>
+<li><code>DB.NewIterator</code> exposes user-facing entries, while <code>DB.NewInternalIterator</code> scans raw internal keys (<code>cf+user_key+ts</code>).</li>
+</ul>
 </blockquote>
 <h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
 <p>Micro benchmarks:</p>
