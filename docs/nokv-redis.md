@@ -4,7 +4,7 @@
 
 | Mode | Description | Key flags |
 | --- | --- | --- |
-| Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/SetEntry/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
+| Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/Set/SetWithTTL/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
 | Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
 
 When both CLI and config provide the same setting, CLI wins.
@@ -44,6 +44,12 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 - String operations: `GET`, `SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `DEL`, `MGET`, `MSET`, `EXISTS`
 - Integer operations: `INCR`, `DECR`, `INCRBY`, `DECRBY`
 - Utility: `PING`, `ECHO`, `QUIT`
+
+TTL option semantics:
+
+- `EX` / `PX` are relative TTLs.
+- `EXAT` / `PXAT` are absolute expire timestamps.
+- The current engine expiry resolution is seconds, so sub-second TTL intent is rounded/coarsened to second granularity.
 
 In both modes write commands are atomic. The Raft backend batches multi-key updates (`MSET`, `DEL`, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use direct `DB.Get` locally and leader reads with TTL checks remotely.
 

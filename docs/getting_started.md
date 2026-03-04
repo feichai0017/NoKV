@@ -78,7 +78,11 @@ func main() {
 }
 ```
 
-> Note: `DB.Get` returns detached entries (do not call `DecrRef`). `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
+> Note:
+> - `DB.Get` returns detached entries (do not call `DecrRef`).
+> - `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
+> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` for deletes.
+> - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
 ## Benchmarks
 Micro benchmarks:

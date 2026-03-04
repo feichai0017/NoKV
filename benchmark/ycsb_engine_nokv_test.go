@@ -13,7 +13,7 @@ func TestNoKVEngineCRUD(t *testing.T) {
 	engine := newNoKVEngine(ycsbEngineOptions{
 		BaseDir:        t.TempDir(),
 		ValueSize:      8,
-		ValueThreshold: 32,
+		ValueThreshold: 1024,
 		MemtableMB:     1,
 		SSTableMB:      4,
 		VlogFileMB:     4,
@@ -48,7 +48,7 @@ func TestNoKVEnginePrintStats(t *testing.T) {
 	eng := newNoKVEngine(ycsbEngineOptions{
 		BaseDir:        t.TempDir(),
 		ValueSize:      8,
-		ValueThreshold: 32,
+		ValueThreshold: 1024,
 		MemtableMB:     1,
 		SSTableMB:      4,
 		VlogFileMB:     4,
@@ -106,7 +106,7 @@ func TestNoKVBatchInsert(t *testing.T) {
 	engine := newNoKVEngine(ycsbEngineOptions{
 		BaseDir:        t.TempDir(),
 		ValueSize:      8,
-		ValueThreshold: 32,
+		ValueThreshold: 1024,
 		MemtableMB:     1,
 		SSTableMB:      4,
 		VlogFileMB:     4,
@@ -148,7 +148,7 @@ func TestNoKVBatchInsertLengthMismatch(t *testing.T) {
 	engine := newNoKVEngine(ycsbEngineOptions{
 		BaseDir:        t.TempDir(),
 		ValueSize:      8,
-		ValueThreshold: 32,
+		ValueThreshold: 1024,
 		MemtableMB:     1,
 		SSTableMB:      4,
 		VlogFileMB:     4,

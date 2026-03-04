@@ -31,8 +31,8 @@ func TestAPI(t *testing.T) {
 	// Write entries.
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		expiresAt := uint64(time.Now().Add(1000 * time.Second).Unix())
-		if err := db.SetWithTTL([]byte(key), []byte(val), expiresAt); err != nil {
+		ttl := 1000 * time.Second
+		if err := db.SetWithTTL([]byte(key), []byte(val), ttl); err != nil {
 			t.Fatal(err)
 		}
 		// Read back.
@@ -68,8 +68,8 @@ func TestAPI(t *testing.T) {
 
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		expiresAt := uint64(time.Now().Add(1000 * time.Second).Unix())
-		if err := db.SetWithTTL([]byte(key), []byte(val), expiresAt); err != nil {
+		ttl := 1000 * time.Second
+		if err := db.SetWithTTL([]byte(key), []byte(val), ttl); err != nil {
 			t.Fatal(err)
 		}
 		// Read back.
@@ -250,6 +250,38 @@ func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
 
 	err := db.ApplyInternalEntries([]*kv.Entry{entry})
 	require.ErrorIs(t, err, utils.ErrInvalidRequest)
+}
+
+func TestSetRejectsNilValueAndAllowsEmptyValue(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	nilKey := []byte("nil-value")
+	err := db.Set(nilKey, nil)
+	require.ErrorIs(t, err, utils.ErrNilValue)
+	_, err = db.Get(nilKey)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	nilTTLKey := []byte("nil-value-ttl")
+	err = db.SetWithTTL(nilTTLKey, nil, time.Second)
+	require.ErrorIs(t, err, utils.ErrNilValue)
+	_, err = db.Get(nilTTLKey)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	emptyKey := []byte("empty-value")
+	require.NoError(t, db.Set(emptyKey, []byte{}))
+	entry, err := db.Get(emptyKey)
+	require.NoError(t, err)
+	require.Len(t, entry.Value, 0)
+	require.Equal(t, byte(0), entry.Meta&kv.BitDelete)
+
+	emptyTTLKey := []byte("empty-value-ttl")
+	require.NoError(t, db.SetWithTTL(emptyTTLKey, []byte{}, time.Second))
+	entry, err = db.Get(emptyTTLKey)
+	require.NoError(t, err)
+	require.Len(t, entry.Value, 0)
+	require.Equal(t, byte(0), entry.Meta&kv.BitDelete)
 }
 
 func TestSetAfterCloseDoesNotPanic(t *testing.T) {

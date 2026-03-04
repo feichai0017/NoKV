@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"sync"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -73,8 +74,10 @@ func (b *embeddedBackend) Set(args setArgs) (bool, error) {
 
 	value := append([]byte(nil), args.Value...)
 	var err error
-	if args.ExpireAt > 0 {
-		err = b.db.SetWithTTL(args.Key, value, args.ExpireAt)
+	if args.TTL > 0 {
+		err = b.db.SetWithTTL(args.Key, value, args.TTL)
+	} else if args.ExpireAt > 0 {
+		err = b.db.SetWithTTL(args.Key, value, ttlFromExpireAt(args.ExpireAt))
 	} else {
 		err = b.db.Set(args.Key, value)
 	}
@@ -189,7 +192,13 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 	result = current + delta
 	value := []byte(strconv.FormatInt(result, 10))
 	if existing {
-		if err := b.db.SetWithTTL(key, value, expires); err != nil {
+		if expires > 0 {
+			if err := b.db.SetWithTTL(key, value, ttlFromExpireAt(expires)); err != nil {
+				return 0, err
+			}
+			return result, nil
+		}
+		if err := b.db.Set(key, value); err != nil {
 			return 0, err
 		}
 		return result, nil
@@ -198,6 +207,13 @@ func (b *embeddedBackend) IncrBy(key []byte, delta int64) (int64, error) {
 		return 0, err
 	}
 	return result, nil
+}
+
+func ttlFromExpireAt(expiresAt uint64) time.Duration {
+	if expiresAt == 0 {
+		return 0
+	}
+	return time.Until(time.Unix(int64(expiresAt), 0))
 }
 
 func strconvParseIntSafe(data []byte) (int64, error) {

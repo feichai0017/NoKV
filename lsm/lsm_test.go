@@ -913,15 +913,13 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 
 	errCh := make(chan error, workers*rounds)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		workerID := w
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < rounds; i++ {
+		wg.Go(func() {
+			for i := range rounds {
 				entries := []*kv.Entry{
-					kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(fmt.Sprintf("w%d-r%d-a", workerID, i)), 1), value),
-					kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(fmt.Sprintf("w%d-r%d-b", workerID, i)), 1), value),
+					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-a", workerID, i), 1), value),
+					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-b", workerID, i), 1), value),
 				}
 				err := lsm.SetBatch(entries)
 				for _, entry := range entries {
@@ -932,7 +930,7 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	done := make(chan struct{})

@@ -123,7 +123,7 @@ which falls back to the ring default).
 
 ## 7. Write-Path Throttling
 
-`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, every call to `DB.Set*`/`DB.SetEntry` invokes `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
+`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, user writes (`DB.Set`, `DB.SetWithTTL`) and internal writes (`DB.ApplyInternalEntries`) invoke `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
 
 Operational hints:
 

@@ -10,7 +10,7 @@ var (
 	fSeed       = flag.Int64("seed", 42, "random seed for data generation")
 	fSyncWrites = flag.Bool("sync", false, "force fsync on every write")
 
-	fValueThreshold = flag.Int("value_threshold", 32, "value size threshold (bytes) before spilling to the value log")
+	fValueThreshold = flag.Int("value_threshold", 1024, "value size threshold (bytes) before spilling to the value log")
 
 	fBadgerBlockMB     = flag.Int("badger_block_cache_mb", -1, "Badger block cache size (MB); <=0 falls back to ycsb_block_cache_mb")
 	fBadgerIndexMB     = flag.Int("badger_index_cache_mb", -1, "Badger index cache size (MB); <=0 falls back to block cache size")

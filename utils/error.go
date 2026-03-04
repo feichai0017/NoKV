@@ -53,6 +53,8 @@ var (
 
 	// ErrEmptyKey is returned if an empty key is passed on an update function.
 	ErrEmptyKey = errors.New("Key cannot be empty")
+	// ErrNilValue is returned when a write API receives a nil value payload.
+	ErrNilValue = errors.New("Value cannot be nil")
 
 	// ErrNoRewrite is returned if a call for value log GC doesn't result in a log file rewrite.
 	ErrNoRewrite = errors.New(

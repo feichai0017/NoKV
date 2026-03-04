@@ -259,6 +259,7 @@ func (s *redisServer) execSet(w *bufio.Writer, args [][]byte) error {
 	var (
 		nx        bool
 		xx        bool
+		ttl       time.Duration
 		expireAt  uint64
 		hasExpire bool
 	)
@@ -294,16 +295,13 @@ func (s *redisServer) execSet(w *bufio.Writer, args [][]byte) error {
 			}
 			switch opt {
 			case "EX":
-				now := time.Now()
-				expireAt = uint64(now.Add(time.Duration(num) * time.Second).Unix())
-				if expireAt <= uint64(now.Unix()) {
-					expireAt = uint64(now.Add(time.Second).Unix())
-				}
+				ttl = time.Duration(num) * time.Second
 			case "PX":
-				now := time.Now()
-				expireAt = uint64(now.Add(time.Duration(num) * time.Millisecond).Unix())
-				if expireAt <= uint64(now.Unix()) {
-					expireAt = uint64(now.Add(time.Second).Unix())
+				ttl = time.Duration(num) * time.Millisecond
+				// Engine expiry precision is seconds; keep PX semantics non-immediate
+				// by rounding sub-second TTLs up to one second.
+				if ttl > 0 && ttl < time.Second {
+					ttl = time.Second
 				}
 			case "EXAT":
 				expireAt = uint64(num)
@@ -312,7 +310,7 @@ func (s *redisServer) execSet(w *bufio.Writer, args [][]byte) error {
 				nsec := (num % 1000) * int64(time.Millisecond)
 				expireAt = uint64(time.Unix(sec, nsec).Unix())
 			}
-			if expireAt == 0 {
+			if ttl <= 0 && expireAt == 0 {
 				return s.respondError(w, "invalid expire time in set")
 			}
 			hasExpire = true
@@ -330,6 +328,7 @@ func (s *redisServer) execSet(w *bufio.Writer, args [][]byte) error {
 		Value:    value,
 		NX:       nx,
 		XX:       xx,
+		TTL:      ttl,
 		ExpireAt: expireAt,
 	})
 	if err != nil {

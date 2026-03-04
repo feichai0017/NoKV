@@ -274,7 +274,12 @@ func TestValueGC(t *testing.T) {
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, db.SetWithTTL(e.Key, e.Value, e.ExpiresAt))
+		if e.ExpiresAt > 0 {
+			ttl := time.Until(time.Unix(int64(e.ExpiresAt), 0))
+			require.NoError(t, db.SetWithTTL(e.Key, e.Value, ttl))
+		} else {
+			require.NoError(t, db.Set(e.Key, e.Value))
+		}
 		e.DecrRef()
 	}
 	if err := db.RunValueLogGC(0.9); err != nil && !errors.Is(err, utils.ErrNoRewrite) {

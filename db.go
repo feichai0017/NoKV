@@ -30,7 +30,7 @@ type (
 	// UserKV defines user-facing single-node key-value operations.
 	UserKV interface {
 		Set(key, value []byte) error
-		SetWithTTL(key, value []byte, expiresAt uint64) error
+		SetWithTTL(key, value []byte, ttl time.Duration) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
@@ -432,24 +432,33 @@ func (db *DB) Del(key []byte) error {
 }
 
 // Set writes a key/value pair into the default column family.
+// Use Del for explicit deletion; nil values are rejected.
 func (db *DB) Set(key, value []byte) error {
-	return db.SetWithTTL(key, value, 0)
-}
-
-// SetWithTTL writes a key/value pair into the default column family with an explicit expiry timestamp.
-//
-// Ownership note: key/value are not deep-copied on entry. Callers must keep
-// the provided buffers immutable until this method returns.
-func (db *DB) SetWithTTL(key, value []byte, expiresAt uint64) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	var meta byte
 	if value == nil {
-		meta = kv.BitDelete
-		expiresAt = 0
+		return utils.ErrNilValue
 	}
-	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, meta, expiresAt)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// SetWithTTL writes a key/value pair into the default column family with TTL.
+// Use Del for explicit deletion; nil values are rejected.
+//
+// Ownership note: key/value are not deep-copied on entry. Callers must keep
+// the provided buffers immutable until this method returns.
+func (db *DB) SetWithTTL(key, value []byte, ttl time.Duration) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if value == nil {
+		return utils.ErrNilValue
+	}
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	entry.WithTTL(ttl)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
