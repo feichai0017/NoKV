@@ -191,9 +191,17 @@ func (b *raftBackend) Set(args setArgs) (bool, error) {
 	})
 
 	metaKey := ttlMetaKey(args.Key)
-	if args.ExpireAt > 0 {
+	expireAt := args.ExpireAt
+	if expireAt == 0 && args.TTL > 0 {
+		now := time.Now()
+		expireAt = uint64(now.Add(args.TTL).Unix())
+		if expireAt <= uint64(now.Unix()) {
+			expireAt = uint64(now.Add(time.Second).Unix())
+		}
+	}
+	if expireAt > 0 {
 		buf := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf, args.ExpireAt)
+		binary.BigEndian.PutUint64(buf, expireAt)
 		mutations = append(mutations, &pb.Mutation{
 			Op:    pb.Mutation_Put,
 			Key:   metaKey,
