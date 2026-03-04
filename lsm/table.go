@@ -790,56 +790,53 @@ func (it *tableIterator) seekToLast() {
 	it.err = it.bi.Error()
 }
 
-// Seek positions the iterator at the appropriate entry for the given key using binary search.
+// searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
+// If none exists it returns len(offsets).
+func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
+	lo, hi := 0, len(offsets)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if utils.CompareKeys(offsets[mid].GetKey(), key) > 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo
+}
+
+// Seek positions the iterator at the appropriate entry for the given key.
 // Both modes first locate the block that could contain the key (last block where baseKey <= key).
-// Forward (IsAsc=true): within the block, seeks to the first entry >= key
-// Reverse (IsAsc=false): within the block, seeks to the last entry <= key
+// Forward (IsAsc=true): within the block, seeks to the first entry >= key.
+// Reverse (IsAsc=false): within the block, seeks to the last entry <= key.
 func (it *tableIterator) Seek(key []byte) {
 	if it.index == nil {
 		it.err = io.EOF
 		return
 	}
 	offsets := it.index.GetOffsets()
+	if len(offsets) == 0 {
+		it.err = io.EOF
+		return
+	}
+	// idx is the first block where baseKey > key. Candidate block is idx-1.
+	idx := searchFirstBlockWithBaseKeyGT(offsets, key)
 
 	if it.opt.IsAsc {
-		// Forward: find the last block where baseKey <= key
-		// Search for the first block where baseKey > key, then use idx-1
-		idx := sort.Search(len(offsets), func(idx int) bool {
-			ko, ok := it.t.blockOffset(idx)
-			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
-			if idx == len(offsets) {
-				return true
-			}
-			return utils.CompareKeys(ko.GetKey(), key) > 0
-		})
 		if idx == 0 {
 			// All blocks have baseKey > key, start from first block
 			it.seekHelper(0, key)
 			return
 		}
-		// idx is the first block where baseKey > key
-		// So we want idx-1, which is the last block where baseKey <= key
 		it.seekHelper(idx-1, key)
-	} else {
-		// Reverse: find last block that could contain key <= target
-		// We need to check from the end and find the last block where baseKey <= key
-		idx := sort.Search(len(offsets), func(idx int) bool {
-			ko, ok := it.t.blockOffset(idx)
-			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
-			if idx == len(offsets) {
-				return true
-			}
-			return utils.CompareKeys(ko.GetKey(), key) > 0
-		})
-		// idx is the first block where baseKey > key
-		// So we want idx-1, which is the last block where baseKey <= key
-		if idx == 0 {
-			// All blocks have baseKey > key, so no valid entry
-			it.err = io.EOF
-			return
-		}
-		it.seekHelper(idx-1, key)
+		return
 	}
+	// Reverse mode: if every base key is > target, there is no <= target entry.
+	if idx == 0 {
+		it.err = io.EOF
+		return
+	}
+	it.seekHelper(idx-1, key)
 }
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {

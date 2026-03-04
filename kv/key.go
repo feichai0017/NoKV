@@ -84,10 +84,22 @@ func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
 // SplitInternalKey decodes (column family, user key, timestamp) from an internal
 // key created by InternalKey.
 func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64) {
-	ts := ParseTs(internal)
-	base := ParseKey(internal)
-	cf, userKey, _ := DecodeKeyCF(base)
-	return cf, userKey, ts
+	if len(internal) <= 8 {
+		return CFDefault, internal, 0
+	}
+
+	base := internal[:len(internal)-8]
+	ts := math.MaxUint64 - binary.BigEndian.Uint64(internal[len(internal)-8:])
+	if len(base) >= cfHeaderSize &&
+		base[0] == cfMarker0 &&
+		base[1] == cfMarker1 &&
+		base[2] == cfMarker2 {
+		cf := ColumnFamily(base[3])
+		if cf.Valid() {
+			return cf, base[cfHeaderSize:], ts
+		}
+	}
+	return CFDefault, base, ts
 }
 
 // MemHash is the hash function used by go map, it utilizes available hardware instructions.

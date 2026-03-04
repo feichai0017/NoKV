@@ -217,25 +217,26 @@ func (iter *DBIterator) populate() {
 			continue
 		}
 		entry := item.Entry()
-		_, userKey, _ := kv.SplitInternalKey(entry.Key)
-
-		// Skip entries below lower bound in forward mode, or invalidate in reverse
-		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
-			if !iter.isAsc {
-				iter.valid = false
-				return
+		if len(iter.lowerBound) > 0 || len(iter.upperBound) > 0 {
+			_, userKey, _ := kv.SplitInternalKey(entry.Key)
+			// Skip entries below lower bound in forward mode, or invalidate in reverse.
+			if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+				if !iter.isAsc {
+					iter.valid = false
+					return
+				}
+				iter.iitr.Next()
+				continue
 			}
-			iter.iitr.Next()
-			continue
-		}
-		// Skip entries above upper bound in reverse mode, or invalidate in forward
-		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
-			if iter.isAsc {
-				iter.valid = false
-				return
+			// Skip entries above upper bound in reverse mode, or invalidate in forward.
+			if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+				if iter.isAsc {
+					iter.valid = false
+					return
+				}
+				iter.iitr.Next()
+				continue
 			}
-			iter.iitr.Next()
-			continue
 		}
 
 		if iter.materialize(entry) {
@@ -281,7 +282,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 			iter.item.valueBuf = iter.entry.Value
 		}
 	} else {
-		if src.Value == nil || src.IsDeletedOrExpired() {
+		if src.Value == nil {
 			return false
 		}
 		iter.entry.Value = src.Value
