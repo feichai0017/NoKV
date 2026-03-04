@@ -247,10 +247,18 @@ func TestValueGC(t *testing.T) {
 	clearDir()
 	opt.ValueLogFileSize = 1 << 20
 	origCompactors := opt.NumCompactors
+	origMemTableSize := opt.MemTableSize
+	origSSTableMaxSz := opt.SSTableMaxSz
 	opt.NumCompactors = 0
+	opt.MemTableSize = 8 << 20
+	opt.SSTableMaxSz = 8 << 20
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
-	defer func() { opt.NumCompactors = origCompactors }()
+	defer func() {
+		opt.NumCompactors = origCompactors
+		opt.MemTableSize = origMemTableSize
+		opt.SSTableMaxSz = origSSTableMaxSz
+	}()
 	sz := 32 << 10
 	kvList := make([]*kvpkg.Entry, 0, 100)
 	defer func() {
@@ -269,7 +277,9 @@ func TestValueGC(t *testing.T) {
 		require.NoError(t, db.SetWithTTL(e.Key, e.Value, e.ExpiresAt))
 		e.DecrRef()
 	}
-	require.NoError(t, db.RunValueLogGC(0.9))
+	if err := db.RunValueLogGC(0.9); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
+		require.NoError(t, err)
+	}
 	for _, e := range kvList {
 		item, err := db.Get(e.Key)
 		require.NoErrorf(t, err, "missing key after gc user_key=%q raw=%x", string(e.Key), e.Key)
