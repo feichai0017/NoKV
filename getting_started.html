@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-28583911.js";
+            window.path_to_searchindex_js = "searchindex-f5b0fed8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-56d2c64c.js"></script>
@@ -237,7 +237,7 @@ func main() {
 }
 </code></pre>
 <blockquote>
-<p>Note: Public read APIs (<code>DB.Get</code>, <code>DB.GetCF</code>, <code>DB.GetVersionedEntry</code>) return detached entries. Do not call <code>DecrRef</code> on them.</p>
+<p>Note: <code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>). <code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</p>
 </blockquote>
 <h2 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h2>
 <p>Micro benchmarks:</p>
