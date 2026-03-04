@@ -11,7 +11,7 @@ import (
 
 // NewEntryApplier returns an ApplyFunc that decodes raft log entries and
 // applies them to the provided DB using the MVCC helpers.
-func NewEntryApplier(db *NoKV.DB) peer.ApplyFunc {
+func NewEntryApplier(db NoKV.MVCCStore) peer.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {

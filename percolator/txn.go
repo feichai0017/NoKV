@@ -10,7 +10,7 @@ import (
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
-func Prewrite(db *NoKV.DB, latches *latch.Manager, req *pb.PrewriteRequest) []*pb.KeyError {
+func Prewrite(db NoKV.MVCCStore, latches *latch.Manager, req *pb.PrewriteRequest) []*pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -36,7 +36,7 @@ func Prewrite(db *NoKV.DB, latches *latch.Manager, req *pb.PrewriteRequest) []*p
 	return errs
 }
 
-func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut *pb.Mutation) *pb.KeyError {
+func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *pb.PrewriteRequest, mut *pb.Mutation) *pb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
 		return keyErrorAbort("empty key in mutation")
@@ -84,7 +84,7 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
-func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyError {
+func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -121,7 +121,7 @@ func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyE
 }
 
 // BatchRollback rolls back the provided keys for the given start version.
-func BatchRollback(db *NoKV.DB, latches *latch.Manager, req *pb.BatchRollbackRequest) *pb.KeyError {
+func BatchRollback(db NoKV.MVCCStore, latches *latch.Manager, req *pb.BatchRollbackRequest) *pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -141,7 +141,7 @@ func BatchRollback(db *NoKV.DB, latches *latch.Manager, req *pb.BatchRollbackReq
 
 // ResolveLock resolves locks for the given transaction. commitVersion == 0
 // performs a rollback; otherwise the keys are committed.
-func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest) (uint64, *pb.KeyError) {
+func ResolveLock(db NoKV.MVCCStore, latches *latch.Manager, req *pb.ResolveLockRequest) (uint64, *pb.KeyError) {
 	if req == nil {
 		return 0, nil
 	}
@@ -177,7 +177,7 @@ func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest
 
 // CheckTxnStatus inspects the primary lock state and optionally rolls back
 // expired transactions.
-func CheckTxnStatus(db *NoKV.DB, latches *latch.Manager, req *pb.CheckTxnStatusRequest) *pb.CheckTxnStatusResponse {
+func CheckTxnStatus(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CheckTxnStatusRequest) *pb.CheckTxnStatusResponse {
 	resp := &pb.CheckTxnStatusResponse{}
 	if req == nil {
 		return resp
@@ -290,7 +290,7 @@ func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *pb.KeyEr
 	}
 }
 
-func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
+func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
 	if lock.MinCommitTs > commitVersion {
 		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
@@ -327,7 +327,7 @@ func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersio
 	return nil
 }
 
-func rollbackKey(db *NoKV.DB, reader *Reader, key []byte, startTs uint64) *pb.KeyError {
+func rollbackKey(db NoKV.MVCCStore, reader *Reader, key []byte, startTs uint64) *pb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	if err != nil {
 		return keyErrorRetryable(err)
@@ -355,7 +355,7 @@ type versionedOp struct {
 	expires uint64
 }
 
-func applyVersionedOps(db *NoKV.DB, ops ...versionedOp) error {
+func applyVersionedOps(db NoKV.MVCCStore, ops ...versionedOp) error {
 	if len(ops) == 0 {
 		return nil
 	}

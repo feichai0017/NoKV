@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -19,7 +18,7 @@ var defaultLatches = latch.NewManager(512)
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Only MVCC prewrite/commit operations
 // are supported at the moment.
-func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func Apply(db NoKV.MVCCStore, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
 	}
@@ -68,13 +67,13 @@ func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db *NoKV.DB) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func NewApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 		return Apply(db, req)
 	}
 }
 
-func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, error) {
+func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, error) {
 	if req == nil {
 		return &pb.GetResponse{NotFound: true}, nil, nil
 	}
@@ -104,7 +103,7 @@ func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, 
 	return &pb.GetResponse{Value: val}, nil, nil
 }
 
-func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
+func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	if req == nil {
 		return &pb.ScanResponse{}, nil
 	}
@@ -117,9 +116,9 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	}
 	readTs := req.GetVersion()
 	if readTs == 0 {
-		readTs = math.MaxUint64
+		readTs = kv.MaxVersion
 	}
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewInternalIterator(&utils.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 
 	startKey := append([]byte(nil), req.GetStartKey()...)
@@ -127,7 +126,7 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	started := len(startKey) == 0
 
 	resp := &pb.ScanResponse{}
-	iter.Rewind()
+	iter.Seek(kv.InternalKey(kv.CFWrite, startKey, kv.MaxVersion))
 	reader := percolator.NewReader(db)
 	for iter.Valid() && len(resp.Kvs) < limit {
 		item := iter.Item()
@@ -140,11 +139,17 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 			iter.Next()
 			continue
 		}
-		if entry.CF != kv.CFWrite {
+		cf, userKey, _ := kv.SplitInternalKey(entry.Key)
+		if cf != kv.CFWrite {
+			// Since iterator is seeked into CFWrite range, encountering any non-write CF
+			// means there are no more write records for subsequent keys.
+			break
+		}
+		key := kv.SafeCopy(nil, userKey)
+		if len(key) == 0 {
 			iter.Next()
 			continue
 		}
-		key := kv.SafeCopy(nil, entry.Key)
 		if !started {
 			cmp := bytes.Compare(key, startKey)
 			if cmp < 0 || (cmp == 0 && !includeStart) {
@@ -190,13 +195,14 @@ func advanceToNextUserKey(iter utils.Iterator, current []byte) {
 		if entry == nil {
 			continue
 		}
-		if !bytes.Equal(entry.Key, current) {
+		_, userKey, _ := kv.SplitInternalKey(entry.Key)
+		if !bytes.Equal(userKey, current) {
 			return
 		}
 	}
 }
 
-func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs uint64) ([]byte, bool, error) {
+func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, readTs uint64) ([]byte, bool, error) {
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
@@ -208,10 +214,11 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 			iter.Next()
 			continue
 		}
-		if !bytes.Equal(entry.Key, key) {
+		cf, userKey, ts := kv.SplitInternalKey(entry.Key)
+		if cf != kv.CFWrite || !bytes.Equal(userKey, key) {
 			return nil, false, nil
 		}
-		if entry.Version > readTs {
+		if ts > readTs {
 			iter.Next()
 			continue
 		}

@@ -13,6 +13,9 @@ type stringStruct struct {
 	len int
 }
 
+// MaxVersion is the canonical upper-bound MVCC version sentinel.
+const MaxVersion uint64 = math.MaxUint64
+
 //go:noescape
 //go:linkname memhash runtime.memhash
 func memhash(p unsafe.Pointer, h, s uintptr) uintptr
