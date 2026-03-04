@@ -2,7 +2,6 @@ package percolator
 
 import (
 	"bytes"
-	"math"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -10,15 +9,15 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-const lockColumnTs = math.MaxUint64
+const lockColumnTs = kv.MaxVersion
 
 // Reader provides helper methods to inspect MVCC state within a DB instance.
 type Reader struct {
-	db *NoKV.DB
+	db NoKV.MVCCStore
 }
 
 // NewReader constructs a Reader.
-func NewReader(db *NoKV.DB) *Reader {
+func NewReader(db NoKV.MVCCStore) *Reader {
 	return &Reader{db: db}
 }
 
@@ -132,7 +131,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 	if iter == nil {
 		return nil
 	}
-	iter.Seek(kv.InternalKey(kv.CFWrite, key, math.MaxUint64))
+	iter.Seek(kv.InternalKey(kv.CFWrite, key, kv.MaxVersion))
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
