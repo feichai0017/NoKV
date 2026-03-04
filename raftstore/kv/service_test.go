@@ -33,10 +33,9 @@ func openTestDB(t *testing.T) *NoKV.DB {
 
 func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
 	t.Helper()
-	entry := entrykv.NewEntryWithCF(cf, entrykv.InternalKey(cf, key, version), entrykv.SafeCopy(nil, value))
-	entry.Meta = meta
+	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, 0)
 	defer entry.DecrRef()
-	require.NoError(t, db.ApplyEntries([]*entrykv.Entry{entry}))
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {

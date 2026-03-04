@@ -4,13 +4,13 @@ import "testing"
 
 func TestKeyHelpers(t *testing.T) {
 	key := []byte("alpha")
-	k1 := KeyWithTs(key, 1)
-	k2 := KeyWithTs(key, 2)
+	k1 := InternalKey(CFDefault, key, 1)
+	k2 := InternalKey(CFDefault, key, 2)
 
 	if !SameKey(k1, k2) {
 		t.Fatalf("expected SameKey for different versions")
 	}
-	if SameKey(k1, KeyWithTs([]byte("beta"), 1)) {
+	if SameKey(k1, InternalKey(CFDefault, []byte("beta"), 1)) {
 		t.Fatalf("unexpected SameKey for different user keys")
 	}
 

@@ -35,10 +35,9 @@ func openTestDB(t *testing.T) *NoKV.DB {
 
 func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
 	t.Helper()
-	entry := kv.NewEntryWithCF(cf, kv.InternalKey(cf, key, version), kv.SafeCopy(nil, value))
-	entry.Meta = meta
+	entry := kv.NewInternalEntry(cf, key, version, kv.SafeCopy(nil, value), meta, 0)
 	defer entry.DecrRef()
-	require.NoError(t, db.ApplyEntries([]*kv.Entry{entry}))
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
 }
 
 func latestWALPath(t *testing.T, dir string) string {
@@ -288,7 +287,7 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, lock)
 
-	_, err = db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	_, err = db2.GetInternalEntry(kv.CFDefault, key, startTs)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
@@ -337,9 +336,10 @@ func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, write)
 
-	entry, err := db2.GetVersionedEntry(kv.CFDefault, key, startTs)
+	entry, err := db2.GetInternalEntry(kv.CFDefault, key, startTs)
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
 }
 
 func TestCheckTxnStatusTTLExpire(t *testing.T) {

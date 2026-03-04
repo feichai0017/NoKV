@@ -21,7 +21,7 @@ func newBenchManager(b *testing.B) *Manager {
 func BenchmarkWALAppend(b *testing.B) {
 	mgr := newBenchManager(b)
 	payload := make([]byte, 256)
-	entry := kv.NewEntry(kv.KeyWithTs([]byte("bench-key"), 1), payload)
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
 	defer entry.DecrRef()
 	b.ReportAllocs()
 	b.SetBytes(int64(len(payload)))
@@ -36,7 +36,7 @@ func BenchmarkWALAppend(b *testing.B) {
 func BenchmarkWALReplay(b *testing.B) {
 	mgr := newBenchManager(b)
 	payload := make([]byte, 128)
-	entry := kv.NewEntry(kv.KeyWithTs([]byte("bench-key"), 1), payload)
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
 	defer entry.DecrRef()
 	for range 10_000 {
 		if _, err := mgr.AppendEntry(entry); err != nil {

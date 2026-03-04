@@ -16,7 +16,7 @@ import (
 
 func appendEntryValue(t *testing.T, m *wal.Manager, key, value string) wal.EntryInfo {
 	t.Helper()
-	entry := kv.NewEntry(kv.KeyWithTs([]byte(key), 1), []byte(value))
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(key), 1), []byte(value))
 	defer entry.DecrRef()
 	info, err := m.AppendEntry(entry)
 	if err != nil {
@@ -491,8 +491,8 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 	}
 	defer func() { _ = m.Close() }()
 
-	e1 := kv.NewEntry(kv.KeyWithTs([]byte("k1"), 10), []byte("v1"))
-	e2 := kv.NewEntry(kv.KeyWithTs([]byte("k2"), 11), []byte("v2"))
+	e1 := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("k1"), 10), []byte("v1"))
+	e2 := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("k2"), 11), []byte("v2"))
 	defer e1.DecrRef()
 	defer e2.DecrRef()
 
@@ -525,11 +525,11 @@ func TestManagerAppendEntryBatchAndReplay(t *testing.T) {
 		if len(entries) != 2 {
 			t.Fatalf("expected 2 entries, got %d", len(entries))
 		}
-		if string(kv.ParseKey(entries[0].Key)) != "k1" || string(entries[0].Value) != "v1" {
-			t.Fatalf("unexpected first entry: key=%q value=%q", kv.ParseKey(entries[0].Key), entries[0].Value)
+		if string(kv.UserKey(entries[0].Key)) != "k1" || string(entries[0].Value) != "v1" {
+			t.Fatalf("unexpected first entry: key=%q value=%q", kv.UserKey(entries[0].Key), entries[0].Value)
 		}
-		if string(kv.ParseKey(entries[1].Key)) != "k2" || string(entries[1].Value) != "v2" {
-			t.Fatalf("unexpected second entry: key=%q value=%q", kv.ParseKey(entries[1].Key), entries[1].Value)
+		if string(kv.UserKey(entries[1].Key)) != "k2" || string(entries[1].Value) != "v2" {
+			t.Fatalf("unexpected second entry: key=%q value=%q", kv.UserKey(entries[1].Key), entries[1].Value)
 		}
 		return nil
 	}); err != nil {

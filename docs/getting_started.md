@@ -78,7 +78,7 @@ func main() {
 }
 ```
 
-> Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`) return detached entries. Do not call `DecrRef` on them.
+> Note: `DB.Get` returns detached entries (do not call `DecrRef`). `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
 
 ## Benchmarks
 Micro benchmarks:

@@ -107,7 +107,7 @@ func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 	manifestMgr := openManifestManager(t, dir)
 	defer func() { _ = manifestMgr.Close() }()
 
-	plain := kv.NewEntry(kv.KeyWithTs([]byte("plain"), 1), []byte("entry"))
+	plain := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("plain"), 1), []byte("entry"))
 	info, err := walMgr.AppendEntry(plain)
 	require.NoError(t, err)
 	plain.DecrRef()

@@ -20,8 +20,7 @@ func TestARTGetLatest(t *testing.T) {
 	versions := []uint64{3, 1, 2}
 	values := [][]byte{[]byte("v3"), []byte("v1"), []byte("v2")}
 	for i, ver := range versions {
-		entry := kv.NewEntryWithCF(kv.CFDefault, []byte("k"), values[i])
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, ver)
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), ver, values[i], 0, 0)
 		art.Add(entry)
 		entry.DecrRef()
 	}
@@ -40,8 +39,7 @@ func TestARTIteratorOrder(t *testing.T) {
 	keys := [][]byte{[]byte("b"), []byte("a"), []byte("c"), []byte("a")}
 	vers := []uint64{2, 3, 1, 1}
 	for i, k := range keys {
-		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, vers[i])
+		entry := kv.NewInternalEntry(kv.CFDefault, k, vers[i], []byte("v"), 0, 0)
 		art.Add(entry)
 		entry.DecrRef()
 	}
@@ -82,8 +80,7 @@ func TestARTIteratorReverseIterationAndSeek(t *testing.T) {
 
 	keys := []string{"a", "c", "e", "g", "i"}
 	for _, k := range keys {
-		entry := kv.NewEntryWithCF(kv.CFDefault, []byte(k), []byte("v_"+k))
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte(k), 1, []byte("v_"+k), 0, 0)
 		art.Add(entry)
 		entry.DecrRef()
 	}
@@ -154,8 +151,7 @@ func TestARTConcurrentWriteIterate(t *testing.T) {
 			defer wg.Done()
 			for atomic.LoadInt32(&stop) == 0 {
 				for j, k := range keys {
-					entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
-					entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, vers[(worker+j)%len(vers)])
+					entry := kv.NewInternalEntry(kv.CFDefault, k, vers[(worker+j)%len(vers)], []byte("v"), 0, 0)
 					art.Add(entry)
 					entry.DecrRef()
 				}
@@ -206,8 +202,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 
 	keys := [][]byte{[]byte("aa"), []byte("ab"), []byte("ba")}
 	for i, k := range keys {
-		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, uint64(i+1))
+		entry := kv.NewInternalEntry(kv.CFDefault, k, uint64(i+1), []byte("v"), 0, 0)
 		art.Add(entry)
 		entry.DecrRef()
 	}
@@ -229,8 +224,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 
 	for i := range 20 {
 		k := []byte{byte(i + 1), 'x'}
-		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		entry := kv.NewInternalEntry(kv.CFDefault, k, 1, []byte("v"), 0, 0)
 		art48.Add(entry)
 		entry.DecrRef()
 	}
@@ -260,8 +254,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 
 	for i := range 60 {
 		k := []byte{byte(i), 'y'}
-		entry := kv.NewEntryWithCF(kv.CFDefault, k, []byte("v"))
-		entry.Key = kv.InternalKey(kv.CFDefault, entry.Key, 1)
+		entry := kv.NewInternalEntry(kv.CFDefault, k, 1, []byte("v"), 0, 0)
 		art256.Add(entry)
 		entry.DecrRef()
 	}

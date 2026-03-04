@@ -63,7 +63,7 @@ func (vlog *valueLog) flushDiscardStats() {
 			return err
 		}
 
-		entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, lfDiscardStatsKey, 1), encodedDS)
+		entry := kv.NewInternalEntry(kv.CFDefault, lfDiscardStatsKey, 1, encodedDS, 0, 0)
 		entries := []*kv.Entry{entry}
 		req, err := vlog.db.sendToWriteCh(entries, false)
 		if err != nil {
@@ -283,13 +283,17 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		if len(userKey) == 0 {
 			return false, nil
 		}
-		entry, err := vlog.db.GetCF(cf, userKey)
+		entry, err := vlog.db.GetInternalEntry(cf, userKey, nonTxnMaxVersion)
 		if err != nil {
 			if errors.Is(err, utils.ErrEmptyKey) {
 				return false, nil
 			}
+			if errors.Is(err, utils.ErrKeyNotFound) {
+				return true, nil
+			}
 			return false, err
 		}
+		defer entry.DecrRef()
 		if kv.DiscardEntry(e, entry) {
 			return true, nil
 		}
@@ -613,10 +617,11 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 
 func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[manifest.ValueLogID]int64
-	vs, err := vlog.db.GetCF(kv.CFDefault, lfDiscardStatsKey)
+	vs, err := vlog.db.GetInternalEntry(kv.CFDefault, lfDiscardStatsKey, nonTxnMaxVersion)
 	if err != nil {
 		return err
 	}
+	defer vs.DecrRef()
 	if vs.Meta == 0 && len(vs.Value) == 0 {
 		return nil
 	}

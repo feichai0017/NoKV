@@ -98,7 +98,8 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | Object | Owned by | Borrowed by | Release rule |
 | --- | --- | --- | --- |
 | `kv.Entry` (pooled) | internal write/read pipelines | codec iterator, memtable/lsm internal reads, request batches | Must call `DecrRef` exactly once per borrow. |
-| `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get/GetCF/GetVersionedEntry`; **must not** call `DecrRef`. |
+| `kv.Entry` (detached public result) | caller | none | Returned by `DB.Get`; **must not** call `DecrRef`. |
+| `kv.Entry` (borrowed internal result) | caller | yes (`DecrRef`) | Returned by `DB.GetInternalEntry`; caller must release exactly once. |
 | `request` | commit queue/worker | waiter path (`Wait`) | `IncrRef` on enqueue; `Wait` does one `DecrRef`; zero returns request to pool and releases entries. |
 | `table` | level/main+ingest lists, block cache | table iterators, prefetch workers | Removed tables are decremented once after manifest+in-memory swap; zero deletes SST. |
 | `Skiplist` / `ART` index | memtable | iterators | Iterator creation increments index ref; iterator `Close` decrements; double-close is idempotent. |
