@@ -1,13 +1,11 @@
 package lsm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"sort"
 	"sync"
 	"time"
 	"unsafe"
@@ -527,36 +525,42 @@ func (itr *blockIterator) seekToLast() {
 }
 func (itr *blockIterator) seek(key []byte) {
 	itr.err = nil
-	startIndex := 0 // This tells from which index we should start binary search.
-
+	n := len(itr.entryOffsets)
+	if n == 0 {
+		itr.setIdx(0)
+		return
+	}
 	if itr.isAsc {
-		// Forward: find first entry >= key using binary search
-		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-			// If idx is less than start index then just return false.
-			if idx < startIndex {
-				return false
+		// Forward: first entry >= key.
+		lo, hi := 0, n
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			itr.setIdx(mid)
+			if utils.CompareKeys(itr.key, key) >= 0 {
+				hi = mid
+			} else {
+				lo = mid + 1
 			}
-			itr.setIdx(idx)
-			return utils.CompareKeys(itr.key, key) >= 0
-		})
-		itr.setIdx(foundEntryIdx)
-	} else {
-		// Reverse: find last entry <= key using binary search
-		// Strategy: find first entry > key, then use idx-1
-		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-			if idx < startIndex {
-				return false
-			}
-			itr.setIdx(idx)
-			return utils.CompareKeys(itr.key, key) > 0
-		})
-		// foundEntryIdx is the first entry > key, so we want idx-1
-		if foundEntryIdx == 0 {
-			itr.setIdx(-1) // No entry <= key
+		}
+		itr.setIdx(lo)
+		return
+	}
+	// Reverse: last entry <= key.
+	lo, hi := 0, n
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		itr.setIdx(mid)
+		if utils.CompareKeys(itr.key, key) > 0 {
+			hi = mid
 		} else {
-			itr.setIdx(foundEntryIdx - 1)
+			lo = mid + 1
 		}
 	}
+	if lo == 0 {
+		itr.setIdx(-1)
+		return
+	}
+	itr.setIdx(lo - 1)
 }
 
 func (itr *blockIterator) setIdx(i int) {
@@ -584,18 +588,6 @@ func (itr *blockIterator) setIdx(i int) {
 		// EndOffset of the current entry is the start offset of the next entry.
 		endOffset = int(itr.entryOffsets[itr.idx+1])
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			var debugBuf bytes.Buffer
-			fmt.Fprintf(&debugBuf, "==== Recovered====\n")
-			fmt.Fprintf(&debugBuf, "Table ID: %d\nBlock ID: %d\nEntry Idx: %d\nData len: %d\n"+
-				"StartOffset: %d\nEndOffset: %d\nEntryOffsets len: %d\nEntryOffsets: %v\n",
-				itr.tableID, itr.blockID, itr.idx, len(itr.data), startOffset, endOffset,
-				len(itr.entryOffsets), itr.entryOffsets)
-			panic(debugBuf.String())
-		}
-	}()
-
 	entryData := itr.data[startOffset:endOffset]
 	var h header
 	h.decode(entryData)
