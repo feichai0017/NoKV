@@ -88,9 +88,10 @@ Before mutating keys, percolator acquires striped latches:
 - Stripes are deduplicated and acquired in sorted order to avoid deadlocks.
 - Guard releases in reverse order.
 
-In `kv/apply.go`, one process-wide manager is used:
+In `raftstore/kv`, latches are passed explicitly:
 
-- `defaultLatches = latch.NewManager(512)`
+- `NewEntryApplier` creates one `latch.NewManager(512)` and reuses it.
+- `Apply` / `NewApplier` accept an injected manager; `nil` falls back to `latch.NewManager(512)`.
 
 This serializes conflicting apply operations on overlapping keys in one node.
 
@@ -229,7 +230,7 @@ Notes:
 
 - This path is distributed-only and tied to TinyKV RPC + Raft apply.
 - Standalone/local transaction APIs are intentionally removed.
-- Latch scope is per-node process (`defaultLatches`), with region-level correctness coming from Raft sequencing.
+- Latch scope is per-node process when a store reuses one shared `latch.Manager`; region-level correctness still comes from Raft sequencing.
 - `Write.ShortValue` is encoded/decoded but not used by current commit writer.
 
 ---

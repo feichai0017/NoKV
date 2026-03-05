@@ -68,7 +68,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	storeCfg := cfg.Store
 	if storeCfg.CommandApplier == nil {
-		storeCfg.CommandApplier = kv.NewApplier(cfg.DB)
+		storeCfg.CommandApplier = kv.NewApplier(cfg.DB, nil)
 	}
 	router := storeCfg.Router
 	if router == nil {

@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -105,11 +104,6 @@ func Panic(err error) {
 	}
 }
 
-// Panic2 _
-func Panic2(_ any, err error) {
-	Panic(err)
-}
-
 // Err err
 func Err(err error) error {
 	if err != nil {
@@ -172,33 +166,4 @@ func CondPanicFunc(condition bool, errFn func() error) {
 	if condition {
 		Panic(errFn())
 	}
-}
-
-func Check(err error) {
-	if err != nil {
-		log.Fatalf("%+v", Wrap(err, ""))
-	}
-}
-
-var debugMode = false
-
-func Wrap(err error, msg string) error {
-	if !debugMode {
-		if err == nil {
-			return nil
-		}
-		return fmt.Errorf("%s err: %+v", msg, err)
-	}
-	return errors.Wrap(err, msg)
-}
-
-// Wrapf is Wrap with extra info.
-func Wrapf(err error, format string, args ...any) error {
-	if !debugMode {
-		if err == nil {
-			return nil
-		}
-		return fmt.Errorf(format+" error: %+v", append(args, err)...)
-	}
-	return errors.Wrapf(err, format, args...)
 }

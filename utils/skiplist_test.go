@@ -122,7 +122,7 @@ func TestSkipListIterator(t *testing.T) {
 	iterAlt.Rewind()
 	require.NoError(t, iterAlt.Close())
 
-	iter := list.NewSkipListIterator()
+	iter := list.NewIterator(nil)
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		fmt.Printf("iter key %s, value %s", iter.Item().Entry().Key, iter.Item().Entry().Value)
 	}
@@ -143,7 +143,7 @@ func TestSkipListIteratorSeekAndPrev(t *testing.T) {
 	require.False(t, list.Empty())
 	require.Greater(t, list.MemSize(), int64(0))
 
-	iterIface := list.NewSkipListIterator()
+	iterIface := list.NewIterator(nil)
 	iter, ok := iterIface.(*SkipListIterator)
 	require.True(t, ok)
 	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
