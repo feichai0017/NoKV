@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2718007a.js";
+            window.path_to_searchindex_js = "searchindex-f8381e67.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -256,9 +256,10 @@
 <li>Stripes are deduplicated and acquired in sorted order to avoid deadlocks.</li>
 <li>Guard releases in reverse order.</li>
 </ul>
-<p>In <code>kv/apply.go</code>, one process-wide manager is used:</p>
+<p>In <code>raftstore/kv</code>, latches are passed explicitly:</p>
 <ul>
-<li><code>defaultLatches = latch.NewManager(512)</code></li>
+<li><code>NewEntryApplier</code> creates one <code>latch.NewManager(512)</code> and reuses it.</li>
+<li><code>Apply</code> / <code>NewApplier</code> accept an injected manager; <code>nil</code> falls back to <code>latch.NewManager(512)</code>.</li>
 </ul>
 <p>This serializes conflicting apply operations on overlapping keys in one node.</p>
 <hr>
@@ -428,7 +429,7 @@
 <ul>
 <li>This path is distributed-only and tied to TinyKV RPC + Raft apply.</li>
 <li>Standalone/local transaction APIs are intentionally removed.</li>
-<li>Latch scope is per-node process (<code>defaultLatches</code>), with region-level correctness coming from Raft sequencing.</li>
+<li>Latch scope is per-node process when a store reuses one shared <code>latch.Manager</code>; region-level correctness still comes from Raft sequencing.</li>
 <li><code>Write.ShortValue</code> is encoded/decoded but not used by current commit writer.</li>
 </ul>
 <hr>

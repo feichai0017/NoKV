@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2718007a.js";
+            window.path_to_searchindex_js = "searchindex-f8381e67.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -316,7 +316,7 @@
 </ol>
 <h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
 <ul>
-<li><strong>ReadCommand</strong> (<code>KvGet</code>/<code>KvScan</code>): validate Region &amp; leader, flush pending Ready, then run <code>commandApplier</code> (i.e. <code>kv.Apply</code> in read mode) to fetch data directly from the DB. This yields leader-strong reads without a Raft round trip.</li>
+<li><strong>ReadCommand</strong> (<code>KvGet</code>/<code>KvScan</code>): validate Region &amp; leader, execute Raft ReadIndex (<code>LinearizableRead</code>) and <code>WaitApplied</code>, then run <code>commandApplier</code> (i.e. <code>kv.Apply</code> in read mode) to fetch data from the DB. This yields leader-strong reads with an explicit Raft linearizability barrier.</li>
 <li><strong>ProposeCommand</strong> (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in <code>kv.Apply</code> which maps to MVCC operations.</li>
 </ul>
 <h3 id="33-transport"><a class="header" href="#33-transport">3.3 Transport</a></h3>
