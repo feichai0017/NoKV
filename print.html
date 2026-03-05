@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-8fecdb72.js";
+            window.path_to_searchindex_js = "searchindex-2718007a.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-56d2c64c.js"></script>
+        <script src="toc-b3c1044a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -658,6 +658,231 @@ func main() {
 </ul>
 <p>See also <a href="#raftstore-deep-dive"><code>docs/raftstore.md</code></a> for deeper internals, <a href="#pd-lite"><code>docs/pd.md</code></a> for control-plane details, and <a href="#testing--validation-matrix"><code>docs/testing.md</code></a> for coverage details.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="entry-lifecycle-encoding-and-field-semantics"><a class="header" href="#entry-lifecycle-encoding-and-field-semantics">Entry Lifecycle, Encoding, and Field Semantics</a></h1>
+<p><code>kv.Entry</code> is the core record container that flows through user APIs, commit batching,
+WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
+<p>This document explains:</p>
+<ol>
+<li>How key/value bytes are encoded.</li>
+<li>What <code>Entry.Key</code> / <code>Entry.Value</code> mean at each stage.</li>
+<li>Which fields are authoritative vs derived.</li>
+<li>How <code>PopulateInternalMeta</code> keeps internal fields consistent.</li>
+<li>Borrowed-vs-detached ownership rules.</li>
+</ol>
+<hr>
+<h2 id="1-structure-overview"><a class="header" href="#1-structure-overview">1. Structure Overview</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="../kv/key.go"><code>kv/key.go</code></a>, <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<pre><code class="language-go">type Entry struct {
+    Key       []byte
+    Value     []byte
+    ExpiresAt uint64
+    CF        ColumnFamily
+    Meta      byte
+    Version   uint64
+    Offset    uint32
+    Hlen      int
+    ValThreshold int64
+    ref int32
+}
+</code></pre>
+<p>Important interpretation:</p>
+<ul>
+<li><code>Key</code> is the canonical source of truth for internal records.</li>
+<li><code>CF</code> and <code>Version</code> are cached/derived fields for convenience.</li>
+<li><code>Value</code> can represent either:
+<ul>
+<li>inline value bytes, or</li>
+<li>encoded <code>ValuePtr</code> bytes (<code>Meta</code> has <code>BitValuePointer</code>).</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="2-encoding-layers"><a class="header" href="#2-encoding-layers">2. Encoding Layers</a></h2>
+<h3 id="21-internal-key-encoding"><a class="header" href="#21-internal-key-encoding">2.1 Internal Key Encoding</a></h3>
+<p>Source: <a href="../kv/key.go"><code>kv/key.go</code></a></p>
+<p><code>InternalKey(cf, userKey, ts)</code> layout:</p>
+<ul>
+<li>4-byte CF header: <code>0xFF 'C' 'F' &lt;cf-byte&gt;</code></li>
+<li>raw user key bytes</li>
+<li>8-byte big-endian descending timestamp (<code>MaxUint64 - ts</code>)</li>
+</ul>
+<p>Helpers:</p>
+<ul>
+<li><code>SplitInternalKey(internal) -&gt; (cf, userKey, ts, ok)</code></li>
+<li><code>Timestamp(key)</code> / <code>StripTimestamp(key)</code> / <code>SameKey(a, b)</code></li>
+</ul>
+<h3 id="22-valuestruct-encoding"><a class="header" href="#22-valuestruct-encoding">2.2 ValueStruct Encoding</a></h3>
+<p>Source: <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p><code>ValueStruct</code> layout:</p>
+<ul>
+<li><code>Meta</code> (1B)</li>
+<li><code>ExpiresAt</code> (uvarint)</li>
+<li><code>Value</code> (raw bytes)</li>
+</ul>
+<p><code>ValueStruct</code> no longer stores <code>Version</code>; version is always taken from internal key.</p>
+<h3 id="23-entry-record-encoding-wal--vlog-record-payload"><a class="header" href="#23-entry-record-encoding-wal--vlog-record-payload">2.3 Entry Record Encoding (WAL / Vlog record payload)</a></h3>
+<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a></p>
+<p>Entry codec layout:</p>
+<ul>
+<li>header (uvarints: keyLen/valueLen/meta/expiresAt)</li>
+<li>key bytes</li>
+<li>value bytes</li>
+<li>crc32</li>
+</ul>
+<p><code>DecodeEntryFrom</code> now calls <code>PopulateInternalMeta()</code> after key decode so internal
+records get consistent <code>CF/Version</code> immediately.</p>
+<hr>
+<h2 id="3-stage-by-stage-meaning-of-key-and-value"><a class="header" href="#3-stage-by-stage-meaning-of-key-and-value">3. Stage-by-Stage Meaning of <code>Key</code> and <code>Value</code></a></h2>
+<h3 id="31-user-write-dbset-dbsetwithttl-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetwithttl-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetWithTTL</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a></p>
+<ul>
+<li><code>Set</code>/<code>SetWithTTL</code> use <code>NewInternalEntry(...)</code>:
+<ul>
+<li><code>Key</code>: encoded internal key.</li>
+<li><code>Value</code>: user value bytes.</li>
+</ul>
+</li>
+<li><code>ApplyInternalEntries</code> validates internal key, then writes back parsed <code>CF/Version</code>
+from key before entering write pipeline.</li>
+</ul>
+<h3 id="32-commit-worker-vlog-then-lsm-apply"><a class="header" href="#32-commit-worker-vlog-then-lsm-apply">3.2 Commit worker: vlog then LSM apply</a></h3>
+<p>Source: <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
+<ul>
+<li>Before <code>LSM.SetBatch</code>, large values are replaced by <code>ValuePtr.Encode()</code> bytes and
+<code>BitValuePointer</code> is set.</li>
+<li>Small values stay inline.</li>
+<li><code>Key</code> remains internal key throughout.</li>
+</ul>
+<h3 id="33-wal-replay--vlog-iteration-decode"><a class="header" href="#33-wal-replay--vlog-iteration-decode">3.3 WAL replay / vlog iteration decode</a></h3>
+<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a>, <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a></p>
+<ul>
+<li>Decoded records carry internal key bytes in <code>Key</code>.</li>
+<li><code>Value</code> is record payload bytes (inline value or pointer bytes).</li>
+<li><code>CF/Version</code> are derived from key via <code>PopulateInternalMeta</code>.</li>
+</ul>
+<h3 id="34-memtable-index-lookup"><a class="header" href="#34-memtable-index-lookup">3.4 Memtable index lookup</a></h3>
+<p>Source: <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a>, <a href="../utils/skiplist.go"><code>utils/skiplist.go</code></a>, <a href="../utils/art.go"><code>utils/art.go</code></a></p>
+<ul>
+<li><code>memIndex.Search(...)</code> returns <code>(matchedInternalKey, ValueStruct)</code>.</li>
+<li><code>memTable.Get</code> assembles pooled <code>Entry</code> from this and calls <code>PopulateInternalMeta</code>.</li>
+<li>For miss, <code>Key=nil</code> and zero value struct (sentinel, not a valid record).</li>
+</ul>
+<h3 id="35-sst--iterator-decode"><a class="header" href="#35-sst--iterator-decode">3.5 SST / iterator decode</a></h3>
+<p>Source: <a href="../lsm/builder.go"><code>lsm/builder.go</code></a>, <a href="../lsm/table.go"><code>lsm/table.go</code></a></p>
+<ul>
+<li>Block iterator reconstructs internal key + value struct.</li>
+<li>It calls <code>PopulateInternalMeta</code> before exposing item entry.</li>
+<li><code>table.Search</code> clones key/value and re-populates internal metadata.</li>
+</ul>
+<h3 id="36-internal-read-api-getinternalentry"><a class="header" href="#36-internal-read-api-getinternalentry">3.6 Internal read API (<code>GetInternalEntry</code>)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a></p>
+<ul>
+<li><code>loadBorrowedEntry</code> fetches from LSM.</li>
+<li>If <code>BitValuePointer</code> is set:
+<ul>
+<li>decode pointer from <code>Value</code></li>
+<li>read real bytes from vlog</li>
+<li>replace <code>Value</code> with actual value bytes</li>
+<li>clear <code>BitValuePointer</code></li>
+</ul>
+</li>
+<li>Return entry with internal key still in <code>Key</code>, and <code>CF/Version</code> re-populated.</li>
+</ul>
+<h3 id="37-public-read-api-get-public-iterator"><a class="header" href="#37-public-read-api-get-public-iterator">3.7 Public read API (<code>Get</code>, public iterator)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></p>
+<ul>
+<li>Public APIs convert internal key to user key for external consumers.</li>
+<li>Returned entry is detached copy (<code>DB.Get</code>) or iterator materialized object.</li>
+</ul>
+<hr>
+<h2 id="4-field-validity-matrix"><a class="header" href="#4-field-validity-matrix">4. Field Validity Matrix</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Context</th><th><code>Key</code></th><th><code>Value</code></th><th><code>CF/Version</code></th><th>Ownership</th></tr>
+</thead>
+<tbody>
+<tr><td>Internal write path</td><td>Internal key</td><td>Inline value or ptr-bytes (large values)</td><td>Valid (set at build/validate time)</td><td>Borrowed/pooled</td></tr>
+<tr><td>Decoded WAL/vlog record</td><td>Internal key</td><td>Encoded record payload value bytes</td><td>Valid after <code>PopulateInternalMeta</code></td><td>Borrowed/pooled</td></tr>
+<tr><td><code>GetInternalEntry</code> return</td><td>Internal key</td><td>Real value bytes (pointer resolved)</td><td>Valid (re-populated before return)</td><td>Borrowed/pooled</td></tr>
+<tr><td><code>DB.Get</code> return</td><td>User key</td><td>Real value bytes</td><td>Valid for external semantics</td><td>Detached copy</td></tr>
+<tr><td>Memtable miss sentinel</td><td><code>nil</code></td><td><code>nil</code></td><td><code>CFDefault/0</code></td><td>Borrowed/pooled sentinel</td></tr>
+</tbody>
+</table>
+</div>
+<p>Rule of thumb:</p>
+<ul>
+<li>Internal code should treat <code>Key</code> as authoritative.</li>
+<li><code>CF/Version</code> should be expected to match <code>SplitInternalKey(Key)</code> after
+<code>PopulateInternalMeta</code>.</li>
+</ul>
+<hr>
+<h2 id="5-populateinternalmeta-semantics"><a class="header" href="#5-populateinternalmeta-semantics">5. <code>PopulateInternalMeta</code> Semantics</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a></p>
+<pre><code class="language-go">func (e *Entry) PopulateInternalMeta() bool
+</code></pre>
+<p>Behavior:</p>
+<ol>
+<li>Parse <code>e.Key</code> as internal key.</li>
+<li>If parse succeeds:
+<ul>
+<li><code>e.CF = parsedCF</code></li>
+<li><code>e.Version = parsedTS</code></li>
+<li>return <code>true</code></li>
+</ul>
+</li>
+<li>If parse fails:
+<ul>
+<li>reset cache fields to safe defaults (<code>CFDefault</code>, <code>Version=0</code>)</li>
+<li>return <code>false</code></li>
+</ul>
+</li>
+</ol>
+<p>Why it exists:</p>
+<ul>
+<li>pooled entries can carry stale cached fields if not reset carefully;</li>
+<li>parse-once helper gives a single normalization point at codec/index/read boundaries;</li>
+<li>avoids relying on deprecated non-authoritative value-side version caches.</li>
+</ul>
+<hr>
+<h2 id="6-ownership-and-refcount-states"><a class="header" href="#6-ownership-and-refcount-states">6. Ownership and Refcount States</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="#nokv-architecture-overview"><code>docs/architecture.md</code></a></p>
+<h3 id="borrowed-entry-internal"><a class="header" href="#borrowed-entry-internal">Borrowed entry (internal)</a></h3>
+<p>Returned by:</p>
+<ul>
+<li><code>DecodeEntryFrom</code></li>
+<li><code>memTable.Get</code></li>
+<li><code>LSM.Get</code> internals</li>
+<li><code>DB.GetInternalEntry</code></li>
+</ul>
+<p>Contract:</p>
+<ul>
+<li>caller must call <code>DecrRef()</code> exactly once.</li>
+<li>double release panics (underflow guard).</li>
+</ul>
+<h3 id="detached-entry-public"><a class="header" href="#detached-entry-public">Detached entry (public)</a></h3>
+<p>Returned by:</p>
+<ul>
+<li><code>DB.Get</code> (via clone)</li>
+</ul>
+<p>Contract:</p>
+<ul>
+<li>do <strong>not</strong> call <code>DecrRef()</code>.</li>
+</ul>
+<hr>
+<h2 id="7-contributor-rules"><a class="header" href="#7-contributor-rules">7. Contributor Rules</a></h2>
+<ol>
+<li>Any new internal decode boundary should either:
+<ul>
+<li>call <code>PopulateInternalMeta</code>, or</li>
+<li>immediately parse key with <code>SplitInternalKey</code> and set fields consistently.</li>
+</ul>
+</li>
+<li>Do not reintroduce value-side version caches.</li>
+<li>Keep internal APIs internal-key-first; only external APIs should expose user keys.</li>
+<li>Preserve borrowed/detached ownership contracts in comments and tests.</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="configuration--options"><a class="header" href="#configuration--options">Configuration &amp; Options</a></h1>
 <p>NoKV exposes two configuration surfaces:</p>
 <ol>
@@ -911,7 +1136,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <p>The memtable index is an interface that can be backed by either a skiplist or ART:</p>
 <pre><code class="language-go">type memIndex interface {
     Add(*kv.Entry)
-    Search([]byte) kv.ValueStruct
+    Search([]byte) ([]byte, kv.ValueStruct)
     NewIterator(*utils.Options) utils.Iterator
     MemSize() int64
     IncrRef()
@@ -948,7 +1173,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <hr>
 <h2 id="3-read-semantics"><a class="header" href="#3-read-semantics">3. Read Semantics</a></h2>
 <ul>
-<li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. Internal callers must release it with <code>DecrRef</code> when done. MVCC versions stay encoded in internal keys (<code>InternalKey(CFDefault, userKey, ts)</code> for default-CF paths), so iterators naturally merge across memtables and SSTables.</li>
+<li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. The index search returns the <strong>matched internal key</strong> plus value struct, so memtable hit entries carry the concrete version key instead of the query sentinel key. Internal callers must release borrowed entries with <code>DecrRef</code> when done.</li>
 <li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB’s <code>MemTable::Ref/Unref</code> lifecycle.</li>
 <li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
 <li><code>DB.Get</code> returns detached entries; callers must not call <code>DecrRef</code> on them.</li>
@@ -3031,7 +3256,7 @@ The script iterates over every store in the config and writes Region metadata vi
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/Set/SetWithTTL/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under <code>!redis:ttl!&lt;key&gt;</code>. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
 </div>

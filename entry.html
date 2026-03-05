@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>PD-lite - NoKV Docs</title>
+        <title>Entry - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,139 +178,240 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pd-lite"><a class="header" href="#pd-lite">PD-lite</a></h1>
-<p><code>PD-lite</code> is NoKV’s control-plane service for distributed mode.<br>It exposes a gRPC API (<code>pb.PD</code>) and is started by:</p>
-<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379
+                        <h1 id="entry-lifecycle-encoding-and-field-semantics"><a class="header" href="#entry-lifecycle-encoding-and-field-semantics">Entry Lifecycle, Encoding, and Field Semantics</a></h1>
+<p><code>kv.Entry</code> is the core record container that flows through user APIs, commit batching,
+WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
+<p>This document explains:</p>
+<ol>
+<li>How key/value bytes are encoded.</li>
+<li>What <code>Entry.Key</code> / <code>Entry.Value</code> mean at each stage.</li>
+<li>Which fields are authoritative vs derived.</li>
+<li>How <code>PopulateInternalMeta</code> keeps internal fields consistent.</li>
+<li>Borrowed-vs-detached ownership rules.</li>
+</ol>
+<hr>
+<h2 id="1-structure-overview"><a class="header" href="#1-structure-overview">1. Structure Overview</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="../kv/key.go"><code>kv/key.go</code></a>, <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<pre><code class="language-go">type Entry struct {
+    Key       []byte
+    Value     []byte
+    ExpiresAt uint64
+    CF        ColumnFamily
+    Meta      byte
+    Version   uint64
+    Offset    uint32
+    Hlen      int
+    ValThreshold int64
+    ref int32
+}
 </code></pre>
-<hr>
-<h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
-<p>PD-lite currently owns:</p>
+<p>Important interpretation:</p>
 <ul>
-<li><strong>Routing</strong>: <code>GetRegionByKey</code></li>
-<li><strong>Heartbeats</strong>: <code>StoreHeartbeat</code>, <code>RegionHeartbeat</code></li>
-<li><strong>Region removal</strong>: <code>RemoveRegion</code></li>
-<li><strong>ID service</strong>: <code>AllocID</code></li>
-<li><strong>TSO</strong>: <code>Tso</code></li>
-</ul>
-<p>Runtime clients (for example <code>cmd/nokv-redis</code> raft backend) use PD as the
-routing source of truth.</p>
-<hr>
-<h2 id="2-runtime-architecture"><a class="header" href="#2-runtime-architecture">2. Runtime Architecture</a></h2>
-<pre class="mermaid">flowchart LR
-    Store["nokv serve"] --&gt;|"StoreHeartbeat / RegionHeartbeat"| PD["PD-lite (gRPC)"]
-    Gateway["nokv-redis (raft mode)"] --&gt;|"GetRegionByKey / Tso"| PD
-    PD --&gt; Cluster["pd/core.Cluster"]
-    Cluster --&gt; Scheduler["leader-transfer hint planner"]
-</pre>
-
-<p>Core implementation units:</p>
+<li><code>Key</code> is the canonical source of truth for internal records.</li>
+<li><code>CF</code> and <code>Version</code> are cached/derived fields for convenience.</li>
+<li><code>Value</code> can represent either:
 <ul>
-<li><code>pd/core</code>: in-memory cluster metadata model + allocators.</li>
-<li><code>pd/storage</code>: persistence abstraction (<code>Store</code>) with local manifest+state implementation.</li>
-<li><code>pd/server</code>: gRPC service + RPC validation/error mapping.</li>
-<li><code>pd/client</code>: client wrapper used by store/gateway.</li>
-<li><code>pd/adapter</code>: scheduler sink that forwards heartbeats into PD.</li>
-</ul>
-<hr>
-<h2 id="3-persistence---workdir"><a class="header" href="#3-persistence---workdir">3. Persistence (<code>--workdir</code>)</a></h2>
-<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state:</p>
-<ul>
-<li><strong>Region catalog</strong> via manifest edits.</li>
-<li><strong>Allocator checkpoints</strong> via <code>PD_STATE.json</code>:
-<ul>
-<li><code>id_current</code></li>
-<li><code>ts_current</code></li>
+<li>inline value bytes, or</li>
+<li>encoded <code>ValuePtr</code> bytes (<code>Meta</code> has <code>BitValuePointer</code>).</li>
 </ul>
 </li>
 </ul>
-<p>Startup flow:</p>
-<ol>
-<li>Open <code>pd/storage</code> with <code>--workdir</code>.</li>
-<li>Load snapshot (<code>regions</code> + allocator counters).</li>
-<li>Compute starts as <code>max(cli_start, checkpoint+1)</code>.</li>
-<li>Replay region snapshot into <code>pd/core.Cluster</code>.</li>
-</ol>
-<p>This avoids allocator rollback after restart and keeps route metadata stable.</p>
 <hr>
-<h2 id="4-config-integration"><a class="header" href="#4-config-integration">4. Config Integration</a></h2>
-<p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
-<pre><code class="language-json">"pd": {
-  "addr": "127.0.0.1:2379",
-  "docker_addr": "nokv-pd:2379",
-  "work_dir": "./artifacts/cluster/pd",
-  "docker_work_dir": "/var/lib/nokv-pd"
-}
-</code></pre>
-<p>Resolution rules:</p>
+<h2 id="2-encoding-layers"><a class="header" href="#2-encoding-layers">2. Encoding Layers</a></h2>
+<h3 id="21-internal-key-encoding"><a class="header" href="#21-internal-key-encoding">2.1 Internal Key Encoding</a></h3>
+<p>Source: <a href="../kv/key.go"><code>kv/key.go</code></a></p>
+<p><code>InternalKey(cf, userKey, ts)</code> layout:</p>
 <ul>
-<li>CLI override wins.</li>
-<li>Otherwise read from config by scope (<code>host</code> / <code>docker</code>).</li>
+<li>4-byte CF header: <code>0xFF 'C' 'F' &lt;cf-byte&gt;</code></li>
+<li>raw user key bytes</li>
+<li>8-byte big-endian descending timestamp (<code>MaxUint64 - ts</code>)</li>
 </ul>
 <p>Helpers:</p>
 <ul>
-<li><code>config.ResolvePDAddr(scope)</code></li>
-<li><code>config.ResolvePDWorkDir(scope)</code></li>
-<li><code>nokv-config pd --field addr|workdir --scope host|docker</code></li>
+<li><code>SplitInternalKey(internal) -&gt; (cf, userKey, ts, ok)</code></li>
+<li><code>Timestamp(key)</code> / <code>StripTimestamp(key)</code> / <code>SameKey(a, b)</code></li>
+</ul>
+<h3 id="22-valuestruct-encoding"><a class="header" href="#22-valuestruct-encoding">2.2 ValueStruct Encoding</a></h3>
+<p>Source: <a href="../kv/value.go"><code>kv/value.go</code></a></p>
+<p><code>ValueStruct</code> layout:</p>
+<ul>
+<li><code>Meta</code> (1B)</li>
+<li><code>ExpiresAt</code> (uvarint)</li>
+<li><code>Value</code> (raw bytes)</li>
+</ul>
+<p><code>ValueStruct</code> no longer stores <code>Version</code>; version is always taken from internal key.</p>
+<h3 id="23-entry-record-encoding-wal--vlog-record-payload"><a class="header" href="#23-entry-record-encoding-wal--vlog-record-payload">2.3 Entry Record Encoding (WAL / Vlog record payload)</a></h3>
+<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a></p>
+<p>Entry codec layout:</p>
+<ul>
+<li>header (uvarints: keyLen/valueLen/meta/expiresAt)</li>
+<li>key bytes</li>
+<li>value bytes</li>
+<li>crc32</li>
+</ul>
+<p><code>DecodeEntryFrom</code> now calls <code>PopulateInternalMeta()</code> after key decode so internal
+records get consistent <code>CF/Version</code> immediately.</p>
+<hr>
+<h2 id="3-stage-by-stage-meaning-of-key-and-value"><a class="header" href="#3-stage-by-stage-meaning-of-key-and-value">3. Stage-by-Stage Meaning of <code>Key</code> and <code>Value</code></a></h2>
+<h3 id="31-user-write-dbset-dbsetwithttl-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetwithttl-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetWithTTL</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a></p>
+<ul>
+<li><code>Set</code>/<code>SetWithTTL</code> use <code>NewInternalEntry(...)</code>:
+<ul>
+<li><code>Key</code>: encoded internal key.</li>
+<li><code>Value</code>: user value bytes.</li>
+</ul>
+</li>
+<li><code>ApplyInternalEntries</code> validates internal key, then writes back parsed <code>CF/Version</code>
+from key before entering write pipeline.</li>
+</ul>
+<h3 id="32-commit-worker-vlog-then-lsm-apply"><a class="header" href="#32-commit-worker-vlog-then-lsm-apply">3.2 Commit worker: vlog then LSM apply</a></h3>
+<p>Source: <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../vlog.go"><code>vlog.go</code></a></p>
+<ul>
+<li>Before <code>LSM.SetBatch</code>, large values are replaced by <code>ValuePtr.Encode()</code> bytes and
+<code>BitValuePointer</code> is set.</li>
+<li>Small values stay inline.</li>
+<li><code>Key</code> remains internal key throughout.</li>
+</ul>
+<h3 id="33-wal-replay--vlog-iteration-decode"><a class="header" href="#33-wal-replay--vlog-iteration-decode">3.3 WAL replay / vlog iteration decode</a></h3>
+<p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a>, <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a></p>
+<ul>
+<li>Decoded records carry internal key bytes in <code>Key</code>.</li>
+<li><code>Value</code> is record payload bytes (inline value or pointer bytes).</li>
+<li><code>CF/Version</code> are derived from key via <code>PopulateInternalMeta</code>.</li>
+</ul>
+<h3 id="34-memtable-index-lookup"><a class="header" href="#34-memtable-index-lookup">3.4 Memtable index lookup</a></h3>
+<p>Source: <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a>, <a href="../utils/skiplist.go"><code>utils/skiplist.go</code></a>, <a href="../utils/art.go"><code>utils/art.go</code></a></p>
+<ul>
+<li><code>memIndex.Search(...)</code> returns <code>(matchedInternalKey, ValueStruct)</code>.</li>
+<li><code>memTable.Get</code> assembles pooled <code>Entry</code> from this and calls <code>PopulateInternalMeta</code>.</li>
+<li>For miss, <code>Key=nil</code> and zero value struct (sentinel, not a valid record).</li>
+</ul>
+<h3 id="35-sst--iterator-decode"><a class="header" href="#35-sst--iterator-decode">3.5 SST / iterator decode</a></h3>
+<p>Source: <a href="../lsm/builder.go"><code>lsm/builder.go</code></a>, <a href="../lsm/table.go"><code>lsm/table.go</code></a></p>
+<ul>
+<li>Block iterator reconstructs internal key + value struct.</li>
+<li>It calls <code>PopulateInternalMeta</code> before exposing item entry.</li>
+<li><code>table.Search</code> clones key/value and re-populates internal metadata.</li>
+</ul>
+<h3 id="36-internal-read-api-getinternalentry"><a class="header" href="#36-internal-read-api-getinternalentry">3.6 Internal read API (<code>GetInternalEntry</code>)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a></p>
+<ul>
+<li><code>loadBorrowedEntry</code> fetches from LSM.</li>
+<li>If <code>BitValuePointer</code> is set:
+<ul>
+<li>decode pointer from <code>Value</code></li>
+<li>read real bytes from vlog</li>
+<li>replace <code>Value</code> with actual value bytes</li>
+<li>clear <code>BitValuePointer</code></li>
+</ul>
+</li>
+<li>Return entry with internal key still in <code>Key</code>, and <code>CF/Version</code> re-populated.</li>
+</ul>
+<h3 id="37-public-read-api-get-public-iterator"><a class="header" href="#37-public-read-api-get-public-iterator">3.7 Public read API (<code>Get</code>, public iterator)</a></h3>
+<p>Source: <a href="../db.go"><code>db.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></p>
+<ul>
+<li>Public APIs convert internal key to user key for external consumers.</li>
+<li>Returned entry is detached copy (<code>DB.Get</code>) or iterator materialized object.</li>
 </ul>
 <hr>
-<h2 id="5-routing-source-convergence"><a class="header" href="#5-routing-source-convergence">5. Routing Source Convergence</a></h2>
-<p>NoKV now uses <strong>PD-first routing</strong>:</p>
+<h2 id="4-field-validity-matrix"><a class="header" href="#4-field-validity-matrix">4. Field Validity Matrix</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Context</th><th><code>Key</code></th><th><code>Value</code></th><th><code>CF/Version</code></th><th>Ownership</th></tr>
+</thead>
+<tbody>
+<tr><td>Internal write path</td><td>Internal key</td><td>Inline value or ptr-bytes (large values)</td><td>Valid (set at build/validate time)</td><td>Borrowed/pooled</td></tr>
+<tr><td>Decoded WAL/vlog record</td><td>Internal key</td><td>Encoded record payload value bytes</td><td>Valid after <code>PopulateInternalMeta</code></td><td>Borrowed/pooled</td></tr>
+<tr><td><code>GetInternalEntry</code> return</td><td>Internal key</td><td>Real value bytes (pointer resolved)</td><td>Valid (re-populated before return)</td><td>Borrowed/pooled</td></tr>
+<tr><td><code>DB.Get</code> return</td><td>User key</td><td>Real value bytes</td><td>Valid for external semantics</td><td>Detached copy</td></tr>
+<tr><td>Memtable miss sentinel</td><td><code>nil</code></td><td><code>nil</code></td><td><code>CFDefault/0</code></td><td>Borrowed/pooled sentinel</td></tr>
+</tbody>
+</table>
+</div>
+<p>Rule of thumb:</p>
 <ul>
-<li><code>raftstore/client</code> resolves regions with <code>GetRegionByKey</code>.</li>
-<li><code>raft_config</code> regions are bootstrap/deployment metadata.</li>
-<li>Runtime route truth comes from PD heartbeats + PD region catalog.</li>
-</ul>
-<p>This avoids dual sources drifting over time (config vs PD).</p>
-<hr>
-<h2 id="6-serve-mode-semantics"><a class="header" href="#6-serve-mode-semantics">6. Serve Mode Semantics</a></h2>
-<p><code>nokv serve</code> is now PD-only:</p>
-<ul>
-<li><code>--pd-addr</code> is required.</li>
-<li>Runtime routing/scheduling control-plane state is sourced from PD.</li>
-</ul>
-<p>Related CLI behavior:</p>
-<ul>
-<li>Inspect control-plane state through PD APIs/metrics.</li>
-</ul>
-<hr>
-<h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
-<h3 id="tinykv-teaching-stack"><a class="header" href="#tinykv-teaching-stack">TinyKV (teaching stack)</a></h3>
-<ul>
-<li>Uses a scheduler server (<code>tinyscheduler</code>) as separate process.</li>
-<li>Control plane integrates embedded etcd for metadata persistence.</li>
-<li>Educational architecture, minimal production hardening.</li>
-</ul>
-<h3 id="tikv-production-stack"><a class="header" href="#tikv-production-stack">TiKV (production stack)</a></h3>
-<ul>
-<li>PD is an independent, highly available cluster.</li>
-<li>PD internally uses etcd Raft for durable metadata + leader election.</li>
-<li>Rich scheduling and balancing policies, rolling updates, robust ops tooling.</li>
-</ul>
-<h3 id="nokv-pd-lite-current"><a class="header" href="#nokv-pd-lite-current">NoKV PD-lite (current)</a></h3>
-<ul>
-<li>Single PD-lite process with optional local persistence (<code>--workdir</code>).</li>
-<li>Sufficient for local clusters, testing, and architecture iteration.</li>
-<li>API shape intentionally aligned with a PD-style control plane so migration to
-stronger HA semantics is incremental.</li>
+<li>Internal code should treat <code>Key</code> as authoritative.</li>
+<li><code>CF/Version</code> should be expected to match <code>SplitInternalKey(Key)</code> after
+<code>PopulateInternalMeta</code>.</li>
 </ul>
 <hr>
-<h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>
+<h2 id="5-populateinternalmeta-semantics"><a class="header" href="#5-populateinternalmeta-semantics">5. <code>PopulateInternalMeta</code> Semantics</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a></p>
+<pre><code class="language-go">func (e *Entry) PopulateInternalMeta() bool
+</code></pre>
+<p>Behavior:</p>
+<ol>
+<li>Parse <code>e.Key</code> as internal key.</li>
+<li>If parse succeeds:
 <ul>
-<li>No multi-PD quorum and no automatic PD failover.</li>
-<li>Scheduler policy is intentionally small (leader transfer focused).</li>
-<li>No advanced placement constraints yet.</li>
+<li><code>e.CF = parsedCF</code></li>
+<li><code>e.Version = parsedTS</code></li>
+<li>return <code>true</code></li>
 </ul>
-<p>These are deliberate scope limits for a fast-moving experimental platform.</p>
+</li>
+<li>If parse fails:
+<ul>
+<li>reset cache fields to safe defaults (<code>CFDefault</code>, <code>Version=0</code>)</li>
+<li>return <code>false</code></li>
+</ul>
+</li>
+</ol>
+<p>Why it exists:</p>
+<ul>
+<li>pooled entries can carry stale cached fields if not reset carefully;</li>
+<li>parse-once helper gives a single normalization point at codec/index/read boundaries;</li>
+<li>avoids relying on deprecated non-authoritative value-side version caches.</li>
+</ul>
+<hr>
+<h2 id="6-ownership-and-refcount-states"><a class="header" href="#6-ownership-and-refcount-states">6. Ownership and Refcount States</a></h2>
+<p>Source: <a href="../kv/entry.go"><code>kv/entry.go</code></a>, <a href="architecture.html"><code>docs/architecture.md</code></a></p>
+<h3 id="borrowed-entry-internal"><a class="header" href="#borrowed-entry-internal">Borrowed entry (internal)</a></h3>
+<p>Returned by:</p>
+<ul>
+<li><code>DecodeEntryFrom</code></li>
+<li><code>memTable.Get</code></li>
+<li><code>LSM.Get</code> internals</li>
+<li><code>DB.GetInternalEntry</code></li>
+</ul>
+<p>Contract:</p>
+<ul>
+<li>caller must call <code>DecrRef()</code> exactly once.</li>
+<li>double release panics (underflow guard).</li>
+</ul>
+<h3 id="detached-entry-public"><a class="header" href="#detached-entry-public">Detached entry (public)</a></h3>
+<p>Returned by:</p>
+<ul>
+<li><code>DB.Get</code> (via clone)</li>
+</ul>
+<p>Contract:</p>
+<ul>
+<li>do <strong>not</strong> call <code>DecrRef()</code>.</li>
+</ul>
+<hr>
+<h2 id="7-contributor-rules"><a class="header" href="#7-contributor-rules">7. Contributor Rules</a></h2>
+<ol>
+<li>Any new internal decode boundary should either:
+<ul>
+<li>call <code>PopulateInternalMeta</code>, or</li>
+<li>immediately parse key with <code>SplitInternalKey</code> and set fields consistently.</li>
+</ul>
+</li>
+<li>Do not reintroduce value-side version caches.</li>
+<li>Keep internal APIs internal-key-first; only external APIs should expose user keys.</li>
+<li>Preserve borrowed/detached ownership contracts in comments and tests.</li>
+</ol>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="raftstore.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="recovery.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="config.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -320,11 +421,11 @@ stronger HA semantics is incremental.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="raftstore.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="recovery.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="config.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

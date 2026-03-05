@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-8fecdb72.js";
+            window.path_to_searchindex_js = "searchindex-2718007a.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-56d2c64c.js"></script>
+        <script src="toc-b3c1044a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,7 +193,7 @@
 <p>The memtable index is an interface that can be backed by either a skiplist or ART:</p>
 <pre><code class="language-go">type memIndex interface {
     Add(*kv.Entry)
-    Search([]byte) kv.ValueStruct
+    Search([]byte) ([]byte, kv.ValueStruct)
     NewIterator(*utils.Options) utils.Iterator
     MemSize() int64
     IncrRef()
@@ -230,7 +230,7 @@
 <hr>
 <h2 id="3-read-semantics"><a class="header" href="#3-read-semantics">3. Read Semantics</a></h2>
 <ul>
-<li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. Internal callers must release it with <code>DecrRef</code> when done. MVCC versions stay encoded in internal keys (<code>InternalKey(CFDefault, userKey, ts)</code> for default-CF paths), so iterators naturally merge across memtables and SSTables.</li>
+<li><code>memTable.Get</code> looks up the chosen index and returns a borrowed, ref-counted <code>*kv.Entry</code> from the internal pool. The index search returns the <strong>matched internal key</strong> plus value struct, so memtable hit entries carry the concrete version key instead of the query sentinel key. Internal callers must release borrowed entries with <code>DecrRef</code> when done.</li>
 <li><code>MemTable.IncrRef/DecrRef</code> delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB’s <code>MemTable::Ref/Unref</code> lifecycle.</li>
 <li>WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.</li>
 <li><code>DB.Get</code> returns detached entries; callers must not call <code>DecrRef</code> on them.</li>
