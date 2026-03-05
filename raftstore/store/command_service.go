@@ -122,7 +122,11 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if s.command != nil && req.Header.GetRequestId() == 0 {
 		req.Header.RequestId = s.command.nextProposalID()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	timeout := s.commandTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	index, err := peer.LinearizableRead(ctx)
 	if err != nil {

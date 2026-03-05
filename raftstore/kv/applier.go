@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -12,6 +13,7 @@ import (
 // NewEntryApplier returns an ApplyFunc that decodes raft log entries and
 // applies them to the provided DB using the MVCC helpers.
 func NewEntryApplier(db NoKV.MVCCStore) peer.ApplyFunc {
+	latches := latch.NewManager(defaultLatchSlots)
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
@@ -22,7 +24,7 @@ func NewEntryApplier(db NoKV.MVCCStore) peer.ApplyFunc {
 				return err
 			}
 			if ok {
-				if _, err := Apply(db, req); err != nil {
+				if _, err := Apply(db, latches, req); err != nil {
 					return err
 				}
 				continue

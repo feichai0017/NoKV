@@ -680,7 +680,7 @@ func TestStorePlannerQueuesOperations(t *testing.T) {
 func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	db := openStoreDB(t)
 	coord := newTestSchedulerSink()
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
@@ -855,7 +855,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 
 func TestStoreProposeCommandNotLeader(t *testing.T) {
 	db := openStoreDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &manifest.RegionMeta{
@@ -898,7 +898,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 
 func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	db := openStoreDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 3, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &manifest.RegionMeta{

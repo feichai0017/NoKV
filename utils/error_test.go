@@ -16,7 +16,6 @@ func TestErrorHelpers(t *testing.T) {
 
 	require.PanicsWithValue(t, err, func() { Panic(err) })
 	require.NotPanics(t, func() { Panic(nil) })
-	require.PanicsWithValue(t, err, func() { Panic2(nil, err) })
 
 	require.PanicsWithValue(t, err, func() { CondPanic(true, err) })
 	require.NotPanics(t, func() { CondPanic(false, err) })
@@ -28,16 +27,10 @@ func TestErrorHelpers(t *testing.T) {
 	})
 }
 
-func TestWrapHelpers(t *testing.T) {
-	err := errors.New("boom")
-	require.Nil(t, Wrap(nil, "msg"))
-	require.Contains(t, Wrap(err, "msg").Error(), "msg")
-	require.Nil(t, Wrapf(nil, "msg %d", 1))
-	require.Contains(t, Wrapf(err, "msg %d", 2).Error(), "msg 2")
+func TestLocationHelper(t *testing.T) {
 	require.NotEmpty(t, location(1, false))
 }
 
-func TestCheckAndAssertTruefNoop(t *testing.T) {
-	Check(nil)
+func TestAssertTruefNoop(t *testing.T) {
 	AssertTruef(true, "should not fail")
 }

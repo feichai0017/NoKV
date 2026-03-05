@@ -122,7 +122,7 @@ func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []b
 	return e
 }
 
-// Entry returns itself. It is kept for compatibility with iterator interfaces.
+// Entry returns itself to satisfy iterator item interfaces.
 func (e *Entry) Entry() *Entry {
 	return e
 }

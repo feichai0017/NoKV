@@ -281,7 +281,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		}
 		cf, userKey, version, ok := kv.SplitInternalKey(e.Key)
 		if !ok {
-			return false, nil
+			return false, fmt.Errorf("value log GC sample expects internal key: %x", e.Key)
 		}
 		if len(userKey) == 0 {
 			return false, nil

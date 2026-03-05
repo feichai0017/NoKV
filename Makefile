@@ -67,7 +67,10 @@ lint:
 # Format code and tidy dependencies
 fmt:
 	@echo "Formatting code..."
-	@gofmt -w -s $$(git ls-files '*.go')
+	@files=$$(git ls-files '*.go'); \
+	for f in $$files; do \
+		[ -f "$$f" ] && printf '%s\n' "$$f"; \
+	done | xargs -r gofmt -w -s
 	go mod tidy
 	@echo "✓ Code formatted"
 
