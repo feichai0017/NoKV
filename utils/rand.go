@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -50,10 +49,8 @@ func randStr(length int) string {
 
 // BuildEntry constructs a random entry for tests.
 func BuildEntry() *kv.Entry {
-	key := fmt.Appendf(nil, "%s%s", randStr(16), "12345678")
+	key := []byte(randStr(16))
 	value := []byte(randStr(128))
-	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
-	e := kv.NewEntry(key, value)
-	e.ExpiresAt = expiresAt
-	return e
+	expiresAt := uint64(time.Now().Add(12 * time.Hour).Unix())
+	return kv.NewInternalEntry(kv.CFDefault, key, kv.MaxVersion, value, 0, expiresAt)
 }

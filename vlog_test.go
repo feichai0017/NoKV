@@ -479,8 +479,9 @@ func newRandEntry(sz int) *kvpkg.Entry {
 	v := make([]byte, sz)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	_, _ = rng.Read(v[:rng.Intn(sz)])
-	e := utils.BuildEntry()
-	e.Value = v
+	key := fmt.Appendf(nil, "vlog-rand-%d-%d", time.Now().UnixNano(), rng.Uint64())
+	e := kvpkg.NewEntry(key, v)
+	e.ExpiresAt = uint64(time.Now().Add(12 * time.Hour).Unix())
 	return e
 }
 func getItemValue(t *testing.T, item *kvpkg.Entry) (val []byte) {

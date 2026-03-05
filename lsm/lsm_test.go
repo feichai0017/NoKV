@@ -36,10 +36,7 @@ var (
 )
 
 func buildInternalTestEntry() *kv.Entry {
-	e := utils.BuildEntry()
-	internal := kv.NewInternalEntry(kv.CFDefault, e.Key, kv.MaxVersion, e.Value, e.Meta, e.ExpiresAt)
-	e.DecrRef()
-	return internal
+	return utils.BuildEntry()
 }
 
 // TestBase is a basic correctness test.
