@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -248,6 +249,11 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 			var expiresAt uint64
 			if len(write.ShortValue) > 0 {
 				value = write.ShortValue
+				expiresAt = write.ExpiresAt
+				if expiresAt > 0 && expiresAt <= uint64(time.Now().Unix()) {
+					advanceToNextUserKey(iter, key)
+					return nil, 0, false, nil
+				}
 			} else {
 				entryVal, err := db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 				if err != nil {
