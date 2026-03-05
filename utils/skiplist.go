@@ -437,12 +437,6 @@ func (s *Skiplist) Search(key []byte) ([]byte, kv.ValueStruct) {
 	return nextKey, vs
 }
 
-// NewIterator returns a skiplist iterator.  You have to Close() the iterator.
-func (s *Skiplist) NewSkipListIterator() Iterator {
-	s.IncrRef()
-	return &SkipListIterator{list: s, isAsc: true}
-}
-
 // NewIterator returns a skiplist iterator with options.
 func (s *Skiplist) NewIterator(opt *Options) Iterator {
 	s.IncrRef()

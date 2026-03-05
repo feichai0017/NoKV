@@ -522,7 +522,7 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if !ok {
 				return fmt.Errorf("raftstore transport test: unsupported legacy raft payload")
 			}
-			if _, err := kv.Apply(db, req); err != nil {
+			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err
 			}
 		}

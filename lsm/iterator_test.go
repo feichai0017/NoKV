@@ -131,6 +131,17 @@ func TestMergeIteratorSeekAndClose(t *testing.T) {
 	require.NoError(t, mi.Close())
 }
 
+func TestMergeIteratorEmptyInputIsSafe(t *testing.T) {
+	mi := NewMergeIterator(nil, false)
+	require.NotNil(t, mi)
+	require.NotPanics(t, func() { mi.Rewind() })
+	require.NotPanics(t, func() { mi.Seek([]byte("k")) })
+	require.NotPanics(t, func() { mi.Next() })
+	require.False(t, mi.Valid())
+	require.Nil(t, mi.Item())
+	require.NoError(t, mi.Close())
+}
+
 func TestLSMNewIterators(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

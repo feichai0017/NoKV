@@ -198,7 +198,6 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 	return req, nil
 }
 
-// Check(kv.BatchSet(entries))
 func (db *DB) batchSet(entries []*kv.Entry) error {
 	req, err := db.sendToWriteCh(entries, true)
 	if err != nil {

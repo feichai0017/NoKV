@@ -14,14 +14,17 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-var defaultLatches = latch.NewManager(512)
+const defaultLatchSlots = 512
 
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Only MVCC prewrite/commit operations
 // are supported at the moment.
-func Apply(db NoKV.MVCCStore, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
+	}
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
 	}
 	resp := &pb.RaftCmdResponse{Header: req.Header}
 	for _, r := range req.Requests {
@@ -39,19 +42,19 @@ func Apply(db NoKV.MVCCStore, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, erro
 			}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Get{Get: result}})
 		case pb.CmdType_CMD_PREWRITE:
-			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, defaultLatches, r.GetPrewrite())}
+			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
 		case pb.CmdType_CMD_COMMIT:
-			err := percolator.Commit(db, defaultLatches, r.GetCommit())
+			err := percolator.Commit(db, latches, r.GetCommit())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
 		case pb.CmdType_CMD_BATCH_ROLLBACK:
-			err := percolator.BatchRollback(db, defaultLatches, r.GetBatchRollback())
+			err := percolator.BatchRollback(db, latches, r.GetBatchRollback())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_BatchRollback{BatchRollback: &pb.BatchRollbackResponse{Error: err}}})
 		case pb.CmdType_CMD_RESOLVE_LOCK:
-			count, err := percolator.ResolveLock(db, defaultLatches, r.GetResolveLock())
+			count, err := percolator.ResolveLock(db, latches, r.GetResolveLock())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_ResolveLock{ResolveLock: &pb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
 		case pb.CmdType_CMD_CHECK_TXN_STATUS:
-			result := percolator.CheckTxnStatus(db, defaultLatches, r.GetCheckTxnStatus())
+			result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_CheckTxnStatus{CheckTxnStatus: result}})
 		case pb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
@@ -68,9 +71,12 @@ func Apply(db NoKV.MVCCStore, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, erro
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
+	}
 	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
-		return Apply(db, req)
+		return Apply(db, latches, req)
 	}
 }
 

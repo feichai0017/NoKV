@@ -46,21 +46,33 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 
 // Next advances the first wrapped iterator.
 func (iter *Iterator) Next() {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
 	iter.iters[0].Next()
 }
 
 // Valid reports whether the first wrapped iterator is valid.
 func (iter *Iterator) Valid() bool {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return false
+	}
 	return iter.iters[0].Valid()
 }
 
 // Rewind rewinds the first wrapped iterator.
 func (iter *Iterator) Rewind() {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
 	iter.iters[0].Rewind()
 }
 
 // Item returns the current item from the first wrapped iterator.
 func (iter *Iterator) Item() utils.Item {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return nil
+	}
 	return iter.iters[0].Item()
 }
 
@@ -71,6 +83,10 @@ func (iter *Iterator) Close() error {
 
 // Seek is currently a no-op on this adapter.
 func (iter *Iterator) Seek(key []byte) {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
+	iter.iters[0].Seek(key)
 }
 
 // memtable iterator

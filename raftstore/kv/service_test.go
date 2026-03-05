@@ -52,7 +52,7 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if !ok {
 				return status.Error(codes.InvalidArgument, "unsupported legacy raft payload")
 			}
-			if _, err := kv.Apply(db, req); err != nil {
+			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err
 			}
 		}
@@ -104,7 +104,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	}
 
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
@@ -195,7 +195,7 @@ func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, s
 
 func TestServicePrewriteCommit(t *testing.T) {
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
@@ -323,7 +323,7 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 
 func TestServiceRegionEpochMismatch(t *testing.T) {
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &manifest.RegionMeta{

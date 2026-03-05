@@ -125,7 +125,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 3. Peers from other stores can be configured through `transport.SetPeer(storeID, addr)`. In cluster mode, runtime routing/control-plane decisions come from PD.
 
 ### 3.2 Command Paths
-- **ReadCommand** (`KvGet`/`KvScan`): validate Region & leader, flush pending Ready, then run `commandApplier` (i.e. `kv.Apply` in read mode) to fetch data directly from the DB. This yields leader-strong reads without a Raft round trip.
+- **ReadCommand** (`KvGet`/`KvScan`): validate Region & leader, execute Raft ReadIndex (`LinearizableRead`) and `WaitApplied`, then run `commandApplier` (i.e. `kv.Apply` in read mode) to fetch data from the DB. This yields leader-strong reads with an explicit Raft linearizability barrier.
 - **ProposeCommand** (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in `kv.Apply` which maps to MVCC operations.
 
 ### 3.3 Transport

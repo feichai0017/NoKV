@@ -220,6 +220,8 @@ func (iter *DBIterator) populate() {
 		if len(iter.lowerBound) > 0 || len(iter.upperBound) > 0 {
 			_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
 			if !ok {
+				// User-facing iterator remains fail-open: skip malformed internal
+				// keys instead of aborting scans.
 				iter.iitr.Next()
 				continue
 			}
@@ -261,6 +263,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 	iter.entry = *src
 	cf, userKey, ts, ok := kv.SplitInternalKey(iter.entry.Key)
 	if !ok {
+		// User-facing iterator remains fail-open: skip malformed internal keys.
 		return false
 	}
 	iter.entry.Key = userKey
