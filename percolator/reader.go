@@ -3,6 +3,7 @@ package percolator
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -98,6 +99,12 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, uint64, error) {
 	}
 	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
 		return nil, 0, utils.ErrKeyNotFound
+	}
+	if len(write.ShortValue) > 0 {
+		if write.ExpiresAt > 0 && write.ExpiresAt <= uint64(time.Now().Unix()) {
+			return nil, 0, utils.ErrKeyNotFound
+		}
+		return kv.SafeCopy(nil, write.ShortValue), write.ExpiresAt, nil
 	}
 	entry, err := r.db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 	if err != nil {

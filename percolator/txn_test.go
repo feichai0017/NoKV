@@ -1,6 +1,7 @@
 package percolator
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -407,6 +408,7 @@ func TestEncodeDecodeWriteRoundTrip(t *testing.T) {
 		Kind:       pb.Mutation_Put,
 		StartTs:    42,
 		ShortValue: []byte("short"),
+		ExpiresAt:  12345,
 	}
 	encoded := EncodeWrite(write)
 	got, err := DecodeWrite(encoded)
@@ -414,6 +416,24 @@ func TestEncodeDecodeWriteRoundTrip(t *testing.T) {
 	require.Equal(t, write.Kind, got.Kind)
 	require.Equal(t, write.StartTs, got.StartTs)
 	require.Equal(t, write.ShortValue, got.ShortValue)
+	require.Equal(t, write.ExpiresAt, got.ExpiresAt)
+}
+
+func TestDecodeWriteBackwardCompatibleWithoutExpiresAt(t *testing.T) {
+	// Old format: version, kind, startTs, hasShort, shortLen, shortValue.
+	raw := make([]byte, 0, 32)
+	raw = append(raw, writeCodecVersion, byte(pb.Mutation_Put))
+	raw = binary.AppendUvarint(raw, 7)
+	raw = append(raw, 1)
+	raw = binary.AppendUvarint(raw, 5)
+	raw = append(raw, []byte("short")...)
+
+	got, err := DecodeWrite(raw)
+	require.NoError(t, err)
+	require.Equal(t, pb.Mutation_Put, got.Kind)
+	require.Equal(t, uint64(7), got.StartTs)
+	require.Equal(t, []byte("short"), got.ShortValue)
+	require.Equal(t, uint64(0), got.ExpiresAt)
 }
 
 func TestDecodeWriteErrors(t *testing.T) {
@@ -428,6 +448,44 @@ func TestDecodeWriteErrors(t *testing.T) {
 
 	_, err = DecodeWrite([]byte{writeCodecVersion, byte(pb.Mutation_Put), 0x01, 0x01, 0x05})
 	require.Error(t, err)
+
+	// hasShort=0 with trailing truncated expires_at varint.
+	_, err = DecodeWrite([]byte{writeCodecVersion, byte(pb.Mutation_Put), 0x01, 0x00, 0x80})
+	require.Error(t, err)
+}
+
+func TestReaderGetValueFromShortValueWithExpiresAt(t *testing.T) {
+	db := openTestDB(t)
+	reader := NewReader(db)
+	key := []byte("short-value")
+	write := Write{
+		Kind:       pb.Mutation_Put,
+		StartTs:    11,
+		ShortValue: []byte("v-short"),
+		ExpiresAt:  ^uint64(0),
+	}
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, EncodeWrite(write), 0)
+
+	val, expiresAt, err := reader.GetValue(key, 30)
+	require.NoError(t, err)
+	require.Equal(t, []byte("v-short"), val)
+	require.Equal(t, write.ExpiresAt, expiresAt)
+}
+
+func TestReaderGetValueFromExpiredShortValue(t *testing.T) {
+	db := openTestDB(t)
+	reader := NewReader(db)
+	key := []byte("short-expired")
+	write := Write{
+		Kind:       pb.Mutation_Put,
+		StartTs:    11,
+		ShortValue: []byte("v-short"),
+		ExpiresAt:  1, // definitely expired
+	}
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, EncodeWrite(write), 0)
+
+	_, _, err := reader.GetValue(key, 30)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestKeyErrorHelpers(t *testing.T) {

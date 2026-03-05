@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
+	t.Helper()
+	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, expiresAt)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
+}
+
 func TestNewEntryApplierAppliesEntries(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
@@ -78,4 +85,62 @@ func TestLockedErrorMapping(t *testing.T) {
 	require.Equal(t, lock.TTL, keyErr.GetLocked().GetLockTtl())
 	require.Equal(t, lock.Kind, keyErr.GetLocked().GetLockType())
 	require.Equal(t, lock.MinCommitTs, keyErr.GetLocked().GetMinCommitTs())
+}
+
+func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db := NoKV.Open(opt)
+	t.Cleanup(func() { _ = db.Close() })
+
+	key := []byte("short-ttl")
+	startTs := uint64(11)
+	commitTs := uint64(22)
+	expiresAt := ^uint64(0)
+	write := percolator.EncodeWrite(percolator.Write{
+		Kind:       pb.Mutation_Put,
+		StartTs:    startTs,
+		ShortValue: []byte("short-v"),
+		ExpiresAt:  expiresAt,
+	})
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, commitTs, write, 0, 0)
+
+	resp, err := handleScan(db, &pb.ScanRequest{
+		StartKey:     key,
+		Limit:        1,
+		Version:      30,
+		IncludeStart: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.GetKvs(), 1)
+	require.Equal(t, key, resp.GetKvs()[0].GetKey())
+	require.Equal(t, []byte("short-v"), resp.GetKvs()[0].GetValue())
+	require.Equal(t, expiresAt, resp.GetKvs()[0].GetExpiresAt())
+}
+
+func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db := NoKV.Open(opt)
+	t.Cleanup(func() { _ = db.Close() })
+
+	key := []byte("short-expired")
+	write := percolator.EncodeWrite(percolator.Write{
+		Kind:       pb.Mutation_Put,
+		StartTs:    11,
+		ShortValue: []byte("short-v"),
+		ExpiresAt:  1, // definitely expired
+	})
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 22, write, 0, 0)
+
+	resp, err := handleScan(db, &pb.ScanRequest{
+		StartKey:     key,
+		Limit:        1,
+		Version:      30,
+		IncludeStart: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Empty(t, resp.GetKvs())
 }
