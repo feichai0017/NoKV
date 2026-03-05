@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/stretchr/testify/require"
@@ -41,11 +40,6 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Greater(t, snap.Write.BatchesTotal, int64(0))
 	require.False(t, snap.Write.ThrottleActive)
 	require.Equal(t, db.iterPool.reused(), snap.Cache.IteratorReused)
-
-	cfStats, ok := snap.LSM.ColumnFamilies[kv.CFDefault.String()]
-	require.True(t, ok)
-	require.Greater(t, cfStats.Writes, uint64(0))
-	require.Greater(t, cfStats.Reads, uint64(0))
 
 	require.Equal(t, db.lsm.FlushPending(), snap.Flush.Pending)
 	require.Equal(t, int64(2), snap.Region.Total)

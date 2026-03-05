@@ -70,7 +70,7 @@ Representative fields:
 - `region.total`, `region.running`, `region.removing`, `region.tombstone`
 - `hot.read_keys`, `hot.write_keys`, `hot.read_ring`, `hot.write_ring`
 - `cache.block_l0_hit_rate`, `cache.bloom_hit_rate`, `cache.iterator_reused`
-- `lsm.levels`, `lsm.value_bytes_total`, `lsm.column_families`
+- `lsm.levels`, `lsm.value_bytes_total`
 
 ---
 

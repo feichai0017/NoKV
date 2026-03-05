@@ -84,7 +84,6 @@ type (
 		prefetchWarm     int32
 		prefetchHot      int32
 		prefetchCooldown time.Duration
-		cfMetrics        []*cfCounters
 		hotWriteLimited  atomic.Uint64
 	}
 
@@ -115,11 +114,6 @@ type (
 		valueLogDur time.Duration
 	}
 )
-
-type cfCounters struct {
-	writes atomic.Uint64
-	reads  atomic.Uint64
-}
 
 // Open DB
 func Open(opt *Options) *DB {
@@ -217,11 +211,6 @@ func Open(opt *Options) *DB {
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	_ = db.lsm.MaxVersion()
 	db.iterPool = newIteratorPool()
-	cfCount := int(kv.CFWrite) + 1
-	db.cfMetrics = make([]*cfCounters, cfCount)
-	for i := range db.cfMetrics {
-		db.cfMetrics[i] = &cfCounters{}
-	}
 	// Initialize the value log.
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
@@ -532,7 +521,6 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	out := cloneEntry(entry)
-	db.recordCFRead(out.CF, 1)
 	db.recordRead(out.Key)
 	return out, nil
 }
@@ -704,55 +692,4 @@ func (db *DB) Manifest() *manifest.Manager {
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
 	return db.isClosed.Load() == 1
-}
-
-func (db *DB) cfCounter(cf kv.ColumnFamily) *cfCounters {
-	if db == nil {
-		return nil
-	}
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	idx := int(cf)
-	if idx < 0 || idx >= len(db.cfMetrics) {
-		idx = int(kv.CFDefault)
-	}
-	if db.cfMetrics[idx] == nil {
-		db.cfMetrics[idx] = &cfCounters{}
-	}
-	return db.cfMetrics[idx]
-}
-
-func (db *DB) recordCFWrite(cf kv.ColumnFamily, delta uint64) {
-	if cnt := db.cfCounter(cf); cnt != nil {
-		cnt.writes.Add(delta)
-	}
-}
-
-func (db *DB) recordCFRead(cf kv.ColumnFamily, delta uint64) {
-	if cnt := db.cfCounter(cf); cnt != nil {
-		cnt.reads.Add(delta)
-	}
-}
-
-func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
-	stats := make(map[string]ColumnFamilySnapshot)
-	if db == nil {
-		return stats
-	}
-	limit := int(kv.CFWrite) + 1
-	for idx := 0; idx < limit && idx < len(db.cfMetrics); idx++ {
-		cnt := db.cfMetrics[idx]
-		if cnt == nil {
-			continue
-		}
-		writes := cnt.writes.Load()
-		reads := cnt.reads.Load()
-		if writes == 0 && reads == 0 {
-			continue
-		}
-		cfName := kv.ColumnFamily(idx).String()
-		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
-	}
-	return stats
 }

@@ -225,18 +225,6 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 			_, _ = fmt.Fprintln(w)
 		}
 	}
-	if len(snap.LSM.ColumnFamilies) > 0 {
-		_, _ = fmt.Fprintln(w, "ColumnFamilies:")
-		var names []string
-		for name := range snap.LSM.ColumnFamilies {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			cf := snap.LSM.ColumnFamilies[name]
-			_, _ = fmt.Fprintf(w, "  - %s: reads=%d writes=%d\n", name, cf.Reads, cf.Writes)
-		}
-	}
 	if len(snap.Hot.ReadKeys) > 0 {
 		_, _ = fmt.Fprintln(w, "HotKeys:")
 		for _, hk := range snap.Hot.ReadKeys {
