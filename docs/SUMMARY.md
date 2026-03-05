@@ -3,6 +3,7 @@
 - [Overview](README.md)
 - [Getting Started](getting_started.md)
 - [Architecture](architecture.md)
+- [Entry](entry.md)
 - [Configuration](config.md)
 - [CLI](cli.md)
 - [Memtable](memtable.md)

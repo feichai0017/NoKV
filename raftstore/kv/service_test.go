@@ -3,6 +3,7 @@ package kv_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
@@ -370,13 +371,15 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 
 	key := []byte("alpha")
 	value := []byte("value")
+	expiresAt := uint64(time.Now().Add(time.Hour).Unix())
 	prewriteReq := &pb.KvPrewriteRequest{
 		Context: env.ctx,
 		Request: &pb.PrewriteRequest{
 			Mutations: []*pb.Mutation{{
-				Op:    pb.Mutation_Put,
-				Key:   key,
-				Value: value,
+				Op:        pb.Mutation_Put,
+				Key:       key,
+				Value:     value,
+				ExpiresAt: expiresAt,
 			}},
 			PrimaryLock:  key,
 			StartVersion: 42,
@@ -420,6 +423,62 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 	require.False(t, readResp.GetResponse().GetNotFound())
 	require.Nil(t, readResp.GetResponse().GetError())
 	require.Equal(t, value, readResp.GetResponse().GetValue())
+	require.Equal(t, expiresAt, readResp.GetResponse().GetExpiresAt())
+}
+
+func TestServiceKvGetLeaderReadExpiredValue(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        3,
+		peerID:         33,
+		regionID:       702,
+		campaignLeader: true,
+	})
+
+	key := []byte("expired")
+	value := []byte("value")
+	expiredAt := uint64(time.Now().Add(-time.Second).Unix())
+	prewriteReq := &pb.KvPrewriteRequest{
+		Context: env.ctx,
+		Request: &pb.PrewriteRequest{
+			Mutations: []*pb.Mutation{{
+				Op:        pb.Mutation_Put,
+				Key:       key,
+				Value:     value,
+				ExpiresAt: expiredAt,
+			}},
+			PrimaryLock:  key,
+			StartVersion: 52,
+			LockTtl:      3000,
+		},
+	}
+	preResp, err := env.service.KvPrewrite(context.Background(), prewriteReq)
+	require.NoError(t, err)
+	require.Nil(t, preResp.GetRegionError())
+	require.Empty(t, preResp.GetResponse().GetErrors())
+
+	commitResp, err := env.service.KvCommit(context.Background(), &pb.KvCommitRequest{
+		Context: env.ctx,
+		Request: &pb.CommitRequest{
+			Keys:          [][]byte{key},
+			StartVersion:  52,
+			CommitVersion: 56,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, commitResp.GetRegionError())
+	require.Nil(t, commitResp.GetResponse().GetError())
+
+	readResp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: env.ctx,
+		Request: &pb.GetRequest{
+			Key:     key,
+			Version: 60,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, readResp.GetRegionError())
+	require.NotNil(t, readResp.GetResponse())
+	require.True(t, readResp.GetResponse().GetNotFound())
 }
 
 func TestServiceKvGetNotLeader(t *testing.T) {

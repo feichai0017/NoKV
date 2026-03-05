@@ -21,7 +21,7 @@ The memtable index is an interface that can be backed by either a skiplist or AR
 ```go
 type memIndex interface {
     Add(*kv.Entry)
-    Search([]byte) kv.ValueStruct
+    Search([]byte) ([]byte, kv.ValueStruct)
     NewIterator(*utils.Options) utils.Iterator
     MemSize() int64
     IncrRef()
@@ -62,7 +62,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 ## 3. Read Semantics
 
-* `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. Internal callers must release it with `DecrRef` when done. MVCC versions stay encoded in internal keys (`InternalKey(CFDefault, userKey, ts)` for default-CF paths), so iterators naturally merge across memtables and SSTables.
+* `memTable.Get` looks up the chosen index and returns a borrowed, ref-counted `*kv.Entry` from the internal pool. The index search returns the **matched internal key** plus value struct, so memtable hit entries carry the concrete version key instead of the query sentinel key. Internal callers must release borrowed entries with `DecrRef` when done.
 * `MemTable.IncrRef/DecrRef` delegate to the index, allowing iterators to hold references while the flush manager processes immutable tables—mirroring RocksDB's `MemTable::Ref/Unref` lifecycle.
 * WAL-backed values that exceed the value threshold are stored as pointers; the memtable stores the encoded pointer, and the transaction/iterator logic reads from the vlog on demand.
 * `DB.Get` returns detached entries; callers must not call `DecrRef` on them.

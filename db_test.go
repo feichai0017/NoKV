@@ -171,12 +171,36 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	entry, err := db.GetInternalEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, entry.CF)
+	require.Equal(t, version, entry.Version)
 	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
 	require.True(t, ok)
 	require.Equal(t, key, userKey)
 	require.Equal(t, version, kv.Timestamp(entry.Key))
 	require.Equal(t, value, entry.Value)
 	entry.DecrRef()
+}
+
+func TestGetInternalEntryPopulatesInternalFieldsFromHitVersion(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("versioned-hit")
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 3, []byte("v3"), 0)
+
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, 2)
+	require.NoError(t, err)
+	defer entry.DecrRef()
+
+	cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, kv.CFDefault, cf)
+	require.Equal(t, key, userKey)
+	require.Equal(t, uint64(1), ts)
+	require.Equal(t, cf, entry.CF)
+	require.Equal(t, ts, entry.Version)
+	require.Equal(t, []byte("v1"), entry.Value)
 }
 
 func TestVersionedEntryDeleteTombstone(t *testing.T) {

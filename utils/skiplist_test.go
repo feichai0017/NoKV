@@ -34,21 +34,23 @@ func TestSkipListBasicCRUD(t *testing.T) {
 	//Put & Get
 	entry1 := kv.NewEntry([]byte(RandString(10)), []byte("Val1"))
 	list.Add(entry1)
-	vs := list.Search(entry1.Key)
+	_, vs := list.Search(entry1.Key)
 	assert.Equal(t, entry1.Value, vs.Value)
 
 	entry2 := kv.NewEntry([]byte(RandString(10)), []byte("Val2"))
 	list.Add(entry2)
-	vs = list.Search(entry2.Key)
+	_, vs = list.Search(entry2.Key)
 	assert.Equal(t, entry2.Value, vs.Value)
 
 	//Get a not exist entry
-	assert.Nil(t, list.Search([]byte(RandString(10))).Value)
+	_, miss := list.Search([]byte(RandString(10)))
+	assert.Nil(t, miss.Value)
 
 	//Update a entry
 	entry2_new := kv.NewEntry(entry1.Key, []byte("Val1+1"))
 	list.Add(entry2_new)
-	assert.Equal(t, entry2_new.Value, list.Search(entry2_new.Key).Value)
+	_, updated := list.Search(entry2_new.Key)
+	assert.Equal(t, entry2_new.Value, updated.Value)
 }
 
 func TestDrawList(t *testing.T) {
@@ -86,7 +88,7 @@ func TestConcurrentBasic(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v := l.Search(key(i))
+			_, v := l.Search(key(i))
 			require.EqualValues(t, key(i), v.Value)
 
 		}(i)
@@ -100,16 +102,19 @@ func TestSkipListIterator(t *testing.T) {
 	//Put & Get
 	entry1 := kv.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Add(entry1)
-	assert.Equal(t, entry1.Value, list.Search(entry1.Key).Value)
+	_, vs1 := list.Search(entry1.Key)
+	assert.Equal(t, entry1.Value, vs1.Value)
 
 	entry2 := kv.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Add(entry2)
-	assert.Equal(t, entry2.Value, list.Search(entry2.Key).Value)
+	_, vs2 := list.Search(entry2.Key)
+	assert.Equal(t, entry2.Value, vs2.Value)
 
 	//Update a entry
 	entry2_new := kv.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Add(entry2_new)
-	assert.Equal(t, entry2_new.Value, list.Search(entry2_new.Key).Value)
+	_, vs3 := list.Search(entry2_new.Key)
+	assert.Equal(t, entry2_new.Value, vs3.Value)
 
 	iterIface := list.NewIterator(nil)
 	iterAlt, ok := iterIface.(*SkipListIterator)
