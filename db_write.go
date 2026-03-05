@@ -486,7 +486,6 @@ func (db *DB) writeToLSM(b *request) error {
 			entry.Meta = entry.Meta | kv.BitValuePointer
 			entry.Value = b.Ptrs[i].Encode()
 		}
-		db.recordCFWrite(entry.CF, 1)
 	}
 	if err := db.lsm.SetBatch(b.Entries); err != nil {
 		return err
