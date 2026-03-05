@@ -220,7 +220,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 ## 🔌 Redis Gateway
 
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through regular DB APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit.
-- TTL metadata is stored under `!redis:ttl!<key>` and is automatically cleaned up when reads detect expiration.
+- In raft mode, TTL is persisted directly in each value entry (`expires_at`) through the same 2PC write path as the value payload.
 - `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--pd-addr` can override `config.pd` when you need a non-default PD endpoint.
 - A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
 

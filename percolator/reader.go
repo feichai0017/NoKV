@@ -86,27 +86,28 @@ func (r *Reader) GetWriteByStartTs(key []byte, startTs uint64) (*Write, uint64, 
 	return result, commitTs, nil
 }
 
-// GetValue reads the value visible at the provided read timestamp.
-func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, error) {
+// GetValue reads the value visible at readTs and returns its expiry metadata
+// from the default CF record.
+func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, uint64, error) {
 	write, _, err := r.getWriteForRead(key, readTs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if write == nil {
-		return nil, utils.ErrKeyNotFound
+		return nil, 0, utils.ErrKeyNotFound
 	}
 	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
-		return nil, utils.ErrKeyNotFound
+		return nil, 0, utils.ErrKeyNotFound
 	}
 	entry, err := r.db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer entry.DecrRef()
-	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
-		return nil, utils.ErrKeyNotFound
+	if entry.IsDeletedOrExpired() {
+		return nil, 0, utils.ErrKeyNotFound
 	}
-	return kv.SafeCopy(nil, entry.Value), nil
+	return kv.SafeCopy(nil, entry.Value), entry.ExpiresAt, nil
 }
 
 func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, error) {

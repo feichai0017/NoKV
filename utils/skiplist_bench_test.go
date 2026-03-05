@@ -41,7 +41,7 @@ func BenchmarkSkiplistGet(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		vs := list.Search(keys[i%len(keys)])
+		_, vs := list.Search(keys[i%len(keys)])
 		if len(vs.Value) == 0 {
 			b.Fatalf("missing value")
 		}

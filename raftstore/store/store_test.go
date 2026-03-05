@@ -756,7 +756,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	require.Nil(t, resp.GetResponses()[0].GetCommit().GetError())
 
 	reader := percolator.NewReader(db)
-	val, err := reader.GetValue([]byte("cmd-key"), 50)
+	val, _, err := reader.GetValue([]byte("cmd-key"), 50)
 	require.NoError(t, err)
 	require.Equal(t, []byte("cmd-value"), val)
 }

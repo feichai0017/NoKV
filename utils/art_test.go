@@ -26,7 +26,7 @@ func TestARTGetLatest(t *testing.T) {
 	}
 
 	seekKey := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
-	vs := art.Search(seekKey)
+	_, vs := art.Search(seekKey)
 	if string(vs.Value) != "v3" {
 		t.Fatalf("expected latest value v3, got %q", string(vs.Value))
 	}
@@ -214,7 +214,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 
 	for _, k := range keys {
 		seek := kv.InternalKey(kv.CFDefault, k, math.MaxUint64)
-		vs := art.Search(seek)
+		_, vs := art.Search(seek)
 		if len(vs.Value) == 0 {
 			t.Fatalf("expected value for key %q", k)
 		}

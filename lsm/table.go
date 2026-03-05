@@ -340,10 +340,9 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
 			clone := kv.NewEntry(kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
-			clone.CF = e.CF
 			clone.ExpiresAt = e.ExpiresAt
 			clone.Meta = e.Meta
-			clone.Version = version
+			_ = clone.PopulateInternalMeta()
 			clone.Offset = e.Offset
 			clone.Hlen = e.Hlen
 			clone.ValThreshold = e.ValThreshold

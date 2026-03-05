@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -60,15 +59,7 @@ func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteReq
 			LockVersion: s.lockVersion,
 			LockTtl:     1,
 		}}
-		metaKey := ttlMetaKey(key)
-		lockedMeta := &pb.KeyError{Locked: &pb.Locked{
-			PrimaryLock: append([]byte(nil), primary...),
-			Key:         metaKey,
-			LockVersion: s.lockVersion,
-			LockTtl:     1,
-			LockType:    pb.Mutation_Delete,
-		}}
-		return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{Errors: []*pb.KeyError{lockedPrimary, lockedMeta}}}, nil
+		return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{Errors: []*pb.KeyError{lockedPrimary}}}, nil
 	}
 	return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{}}, nil
 }
@@ -575,13 +566,10 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	key := []byte("ttl-key")
 	valueKey := string(key)
 	expireAt := uint64(time.Now().Add(time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		valueKey:                {Value: []byte("value")},
-		string(ttlMetaKey(key)): {Value: ttlBuf},
+		valueKey: {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	stub.mu.Unlock()
 
@@ -614,13 +602,10 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 
 	key := []byte("expired-key")
 	expireAt := uint64(time.Now().Add(-time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		string(key):             {Value: []byte("value")},
-		string(ttlMetaKey(key)): {Value: ttlBuf},
+		string(key): {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	before := stub.commitCalls
 	stub.mu.Unlock()
@@ -704,17 +689,14 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	key1 := []byte("k1")
 	key2 := []byte("k2")
 	key3 := []byte("k3")
-	expireAt := uint64(time.Now().Add(time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
+	futureExpireAt := uint64(time.Now().Add(time.Hour).Unix())
+	pastExpireAt := uint64(time.Now().Add(-time.Hour).Unix())
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		string(key1):                      {Value: []byte("v1")},
-		string(key2):                      {Value: []byte("v2")},
-		string(ttlMetaKey(key2)):          {Value: ttlBuf},
-		string(ttlMetaKey(key3)):          {Value: ttlBuf},
-		string(append([]byte{}, key3...)): {NotFound: true},
+		string(key1): {Value: []byte("v1")},
+		string(key2): {Value: []byte("v2"), ExpiresAt: futureExpireAt},
+		string(key3): {Value: []byte("v3"), ExpiresAt: pastExpireAt},
 	}
 	stub.mu.Unlock()
 
@@ -728,8 +710,8 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	if !vals[0].Found || string(vals[0].Value) != "v1" {
 		t.Fatalf("expected k1 to be found")
 	}
-	if !vals[1].Found || vals[1].ExpiresAt != expireAt {
-		t.Fatalf("expected k2 ttl %d, got %+v", expireAt, vals[1])
+	if !vals[1].Found || vals[1].ExpiresAt != futureExpireAt {
+		t.Fatalf("expected k2 ttl %d, got %+v", futureExpireAt, vals[1])
 	}
 	if vals[2].Found {
 		t.Fatalf("expected k3 to be missing")
@@ -795,36 +777,6 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 	}
 }
 
-func TestDecodeTTLFromResponse(t *testing.T) {
-	if got := decodeTTLFromResponse(nil); got != 0 {
-		t.Fatalf("expected 0 for nil response")
-	}
-	if got := decodeTTLFromResponse(&pb.GetResponse{NotFound: true}); got != 0 {
-		t.Fatalf("expected 0 for not found")
-	}
-	if got := decodeTTLFromResponse(&pb.GetResponse{Value: []byte("short")}); got != 0 {
-		t.Fatalf("expected 0 for short ttl")
-	}
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, 123)
-	if got := decodeTTLFromResponse(&pb.GetResponse{Value: buf}); got != 123 {
-		t.Fatalf("expected 123, got %d", got)
-	}
-}
-
-func TestUniqueKeys(t *testing.T) {
-	keys := uniqueKeys([][]byte{
-		[]byte("a"),
-		[]byte("a"),
-		nil,
-		[]byte("b"),
-		[]byte(""),
-	})
-	if len(keys) != 2 {
-		t.Fatalf("expected 2 unique keys, got %d", len(keys))
-	}
-}
-
 func writeBackendConfig(t *testing.T, storeAddr string) string {
 	t.Helper()
 	cfg := config.File{
@@ -887,6 +839,7 @@ type stubRaftClient struct {
 	mutateErr   error
 	mutateFn    func() error
 	mutateCalls int
+	lastMuts    []*pb.Mutation
 	checkResp   *pb.CheckTxnStatusResponse
 	checkErr    error
 	checkCalls  int // Track CheckTxnStatus call count
@@ -916,6 +869,13 @@ func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version ui
 
 func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	s.mutateCalls++
+	s.lastMuts = s.lastMuts[:0]
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		s.lastMuts = append(s.lastMuts, proto.Clone(mut).(*pb.Mutation))
+	}
 	if s.mutateFn != nil {
 		return s.mutateFn()
 	}
@@ -1093,6 +1053,9 @@ func TestRaftBackendSetBranches(t *testing.T) {
 	ok, err = backend.Set(setArgs{Key: []byte("ttl"), Value: []byte("v"), ExpireAt: 123})
 	require.NoError(t, err)
 	require.True(t, ok)
+	require.Len(t, stub.lastMuts, 1)
+	require.Equal(t, pb.Mutation_Put, stub.lastMuts[0].GetOp())
+	require.Equal(t, uint64(123), stub.lastMuts[0].GetExpiresAt())
 
 	stub.mutateErr = errors.New("mutate")
 	_, err = backend.Set(setArgs{Key: []byte("err"), Value: []byte("v")})
@@ -1140,7 +1103,7 @@ func TestRaftBackendMGetErrors(t *testing.T) {
 
 	stub.batchGetErr = nil
 	stub.batchGet = map[string]*pb.GetResponse{
-		string(ttlMetaKey([]byte("k"))): {Value: []byte{0, 0, 0, 0, 0, 0, 0, 1}},
+		"k": {Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix())},
 	}
 	stub.mutateErr = errors.New("mutate")
 	_, err = backend.MGet([][]byte{[]byte("k")})
@@ -1151,6 +1114,10 @@ func TestRaftBackendMSetBranches(t *testing.T) {
 	backend, stub, _ := newStubBackend()
 	require.NoError(t, backend.MSet(nil))
 	require.Error(t, backend.MSet([][2][]byte{{nil, []byte("v")}}))
+	require.NoError(t, backend.MSet([][2][]byte{{[]byte("k"), []byte("v")}, {[]byte("k2"), []byte("v2")}}))
+	require.Len(t, stub.lastMuts, 2)
+	require.Equal(t, uint64(0), stub.lastMuts[0].GetExpiresAt())
+	require.Equal(t, uint64(0), stub.lastMuts[1].GetExpiresAt())
 
 	stub.mutateErr = errors.New("mutate")
 	require.Error(t, backend.MSet([][2][]byte{{[]byte("k"), []byte("v")}}))
@@ -1204,27 +1171,28 @@ func TestRaftBackendIncrByErrors(t *testing.T) {
 func TestBuildValueAtVersionBranches(t *testing.T) {
 	backend, stub, _ := newStubBackend()
 	key := []byte("k1")
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, uint64(time.Now().Unix()+100))
+	futureExpire := uint64(time.Now().Unix() + 100)
 
-	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true}, &pb.GetResponse{Value: ttlBuf})
+	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true})
+	require.NoError(t, err)
+	require.False(t, val.Found)
+	require.Zero(t, stub.mutateCalls)
+
+	stub.mutateCalls = 0
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{
+		Value:     []byte("v"),
+		ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix()),
+	})
 	require.NoError(t, err)
 	require.False(t, val.Found)
 	require.NotZero(t, stub.mutateCalls)
 
 	stub.mutateCalls = 0
-	expiredBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(expiredBuf, uint64(time.Now().Add(-time.Hour).Unix()))
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: expiredBuf})
-	require.NoError(t, err)
-	require.False(t, val.Found)
-	require.NotZero(t, stub.mutateCalls)
-
-	stub.mutateCalls = 0
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: ttlBuf})
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v"), ExpiresAt: futureExpire})
 	require.NoError(t, err)
 	require.True(t, val.Found)
 	require.Equal(t, []byte("v"), val.Value)
+	require.Equal(t, futureExpire, val.ExpiresAt)
 }
 
 func TestMutatePaths(t *testing.T) {
@@ -1269,7 +1237,7 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 
 	lock := &pb.Locked{
 		PrimaryLock: []byte("p"),
-		Key:         ttlMetaKey([]byte("k")),
+		Key:         []byte("k"),
 		LockVersion: 1,
 	}
 	stub.checkErr = errors.New("check")

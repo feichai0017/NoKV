@@ -279,6 +279,7 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 
 	entry := EntryPool.Get().(*Entry)
 	entry.IncrRef()
+	entry.CF = CFDefault
 	entry.Version = 0
 	entry.ValThreshold = 0
 	entry.Hlen = headerBytes
@@ -298,6 +299,7 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 		}
 		return nil, 0, err
 	}
+	_ = entry.PopulateInternalMeta()
 
 	if cap(entry.Value) < valueLen {
 		entry.Value = make([]byte, valueLen)

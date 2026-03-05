@@ -55,6 +55,8 @@ func TestEntryEncodeDecodeRoundTrip(t *testing.T) {
 	assert.Equal(t, CFWrite, cf)
 	assert.Equal(t, []byte("foo"), userKey)
 	assert.Equal(t, uint64(99), ts)
+	assert.Equal(t, cf, decoded.CF)
+	assert.Equal(t, ts, decoded.Version)
 }
 
 func TestDecodeEntryFromEOFAndPartial(t *testing.T) {

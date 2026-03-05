@@ -613,6 +613,7 @@ func (itr *blockIterator) setIdx(i int) {
 	itr.entry.Value = itr.valStruct.Value
 	itr.entry.ExpiresAt = itr.valStruct.ExpiresAt
 	itr.entry.Meta = itr.valStruct.Meta
+	_ = itr.entry.PopulateInternalMeta()
 	itr.item.e = &itr.entry
 	itr.it = &itr.item
 }

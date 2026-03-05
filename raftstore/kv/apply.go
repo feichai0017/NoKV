@@ -93,14 +93,14 @@ func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyE
 		}}
 		return &pb.GetResponse{}, keyErr, nil
 	}
-	val, err := reader.GetValue(req.GetKey(), req.GetVersion())
+	val, expiresAt, err := reader.GetValue(req.GetKey(), req.GetVersion())
 	if err != nil {
 		if errors.Is(err, utils.ErrKeyNotFound) {
 			return &pb.GetResponse{NotFound: true}, nil, nil
 		}
 		return nil, nil, err
 	}
-	return &pb.GetResponse{Value: val}, nil, nil
+	return &pb.GetResponse{Value: val, ExpiresAt: expiresAt}, nil, nil
 }
 
 func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error) {
@@ -170,15 +170,16 @@ func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error
 			advanceToNextUserKey(iter, key)
 			break
 		}
-		value, found, err := collectVisibleValue(db, iter, key, readTs)
+		value, expiresAt, found, err := collectVisibleValue(db, iter, key, readTs)
 		if err != nil {
 			return nil, err
 		}
 		if found {
 			resp.Kvs = append(resp.Kvs, &pb.KV{
-				Key:     key,
-				Value:   value,
-				Version: readTs,
+				Key:       key,
+				Value:     value,
+				Version:   readTs,
+				ExpiresAt: expiresAt,
 			})
 		}
 	}
@@ -211,7 +212,7 @@ func advanceToNextUserKey(iter utils.Iterator, current []byte) {
 	}
 }
 
-func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, readTs uint64) ([]byte, bool, error) {
+func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
@@ -225,10 +226,10 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 		}
 		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
 		if !ok {
-			return nil, false, fmt.Errorf("kv: collectVisibleValue expects internal key, got %x", entry.Key)
+			return nil, 0, false, fmt.Errorf("kv: collectVisibleValue expects internal key, got %x", entry.Key)
 		}
 		if cf != kv.CFWrite || !bytes.Equal(userKey, key) {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
 		if ts > readTs {
 			iter.Next()
@@ -236,14 +237,15 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 		}
 		write, err := percolator.DecodeWrite(entry.Value)
 		if err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 		switch write.Kind {
 		case pb.Mutation_Delete, pb.Mutation_Rollback:
 			advanceToNextUserKey(iter, key)
-			return nil, false, nil
+			return nil, 0, false, nil
 		default:
 			var value []byte
+			var expiresAt uint64
 			if len(write.ShortValue) > 0 {
 				value = write.ShortValue
 			} else {
@@ -253,16 +255,22 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 						iter.Next()
 						continue
 					}
-					return nil, false, err
+					return nil, 0, false, err
+				}
+				if entryVal.IsDeletedOrExpired() {
+					entryVal.DecrRef()
+					advanceToNextUserKey(iter, key)
+					return nil, 0, false, nil
 				}
 				value = kv.SafeCopy(nil, entryVal.Value)
+				expiresAt = entryVal.ExpiresAt
 				entryVal.DecrRef()
 			}
 			advanceToNextUserKey(iter, key)
-			return value, true, nil
+			return value, expiresAt, true, nil
 		}
 	}
-	return nil, false, nil
+	return nil, 0, false, nil
 }
 
 func lockedError(key []byte, lock *percolator.Lock) *pb.KeyError {

@@ -152,7 +152,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	val, err := reader.GetValue(key, math.MaxUint64)
+	val, _, err := reader.GetValue(key, math.MaxUint64)
 	require.NoError(t, err)
 	require.Equal(t, value, val)
 }
@@ -160,7 +160,7 @@ func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	_, err := reader.GetValue(key, math.MaxUint64)
+	_, _, err := reader.GetValue(key, math.MaxUint64)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
@@ -225,7 +225,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 
 	for idx, db := range dbs {
 		reader := percolator.NewReader(db)
-		val, err := reader.GetValue([]byte("raft-key"), math.MaxUint64)
+		val, _, err := reader.GetValue([]byte("raft-key"), math.MaxUint64)
 		require.NoError(t, err, "db %d", idx+1)
 		require.Equal(t, []byte("raft-value"), val, "db %d", idx+1)
 	}
@@ -311,7 +311,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 	net.Flush()
 
 	reader := percolator.NewReader(dbs[0])
-	val, err := reader.GetValue([]byte("txn-key"), 10)
+	val, _, err := reader.GetValue([]byte("txn-key"), 10)
 	require.NoError(t, err)
 	require.Equal(t, []byte("txn-value"), val)
 	lock, err := reader.GetLock([]byte("txn-key"))

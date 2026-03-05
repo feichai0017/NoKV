@@ -58,7 +58,7 @@ func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *pb.PrewriteRequest
 	case pb.Mutation_Put:
 		ops = append(ops,
 			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
-			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, value: mut.Value},
+			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, value: mut.Value, expires: mut.GetExpiresAt()},
 		)
 	case pb.Mutation_Delete, pb.Mutation_Lock:
 		ops = append(ops,
