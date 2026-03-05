@@ -87,7 +87,10 @@ func (e *Entry) reset() {
 	e.ref = 0
 }
 
-// NewEntry creates a new entry in the default column family.
+// NewEntry creates a lightweight entry from the provided key/value.
+//
+// It does not parse or validate key layout. CF is initialized to CFDefault and
+// Version remains unset (0) until filled by a caller that knows version context.
 func NewEntry(key, value []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key = key
@@ -102,6 +105,8 @@ func NewEntry(key, value []byte) *Entry {
 // Ownership note: userKey is encoded into a newly allocated internal-key buffer,
 // while value is referenced directly (no deep copy). Callers must keep value
 // immutable until the entry is no longer used.
+//
+// This helper also sets CF and Version to the supplied MVCC context.
 func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
 	if !cf.Valid() {
 		cf = CFDefault
@@ -110,6 +115,7 @@ func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []b
 	e.Key = InternalKey(cf, userKey, version)
 	e.Value = value
 	e.CF = cf
+	e.Version = version
 	e.Meta = meta
 	e.ExpiresAt = expiresAt
 	e.IncrRef()

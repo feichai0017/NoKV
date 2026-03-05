@@ -652,9 +652,6 @@ func TestRenderStatsFull(t *testing.T) {
 				IngestSizeBytes:  2,
 				IngestValueBytes: 3,
 			}},
-			ColumnFamilies: map[string]NoKV.ColumnFamilySnapshot{
-				"default": {Reads: 1, Writes: 2},
-			},
 		},
 		WAL: NoKV.WALStatsSnapshot{
 			ActiveSegment:           1,
@@ -696,7 +693,6 @@ func TestRenderStatsFull(t *testing.T) {
 	out := buf.String()
 	require.Contains(t, out, "ValueLog.Head")
 	require.Contains(t, out, "LSM.Levels:")
-	require.Contains(t, out, "ColumnFamilies:")
 	require.Contains(t, out, "HotKeys:")
 }
 

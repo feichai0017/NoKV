@@ -38,12 +38,6 @@ type HotKeyStat struct {
 	Count int32  `json:"count"`
 }
 
-// ColumnFamilySnapshot aggregates read/write counters for a single column family.
-type ColumnFamilySnapshot struct {
-	Writes uint64 `json:"writes"`
-	Reads  uint64 `json:"reads"`
-}
-
 // LSMLevelStats captures aggregated metrics per LSM level.
 type LSMLevelStats struct {
 	Level              int     `json:"level"`
@@ -217,11 +211,10 @@ type CacheStatsSnapshot struct {
 
 // LSMStatsSnapshot summarizes per-level storage shape and value-density signals.
 type LSMStatsSnapshot struct {
-	Levels            []LSMLevelStats                 `json:"levels,omitempty"`
-	ValueBytesTotal   int64                           `json:"value_bytes_total"`
-	ValueDensityMax   float64                         `json:"value_density_max"`
-	ValueDensityAlert bool                            `json:"value_density_alert"`
-	ColumnFamilies    map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
+	Levels            []LSMLevelStats `json:"levels,omitempty"`
+	ValueBytesTotal   int64           `json:"value_bytes_total"`
+	ValueDensityMax   float64         `json:"value_density_max"`
+	ValueDensityAlert bool            `json:"value_density_alert"`
 }
 
 func newStats(db *DB) *Stats {
@@ -556,9 +549,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Compaction.LastDurationMs = lastMs
 		snap.Compaction.MaxDurationMs = maxMs
 		snap.Compaction.Runs = runs
-	}
-	if s.db != nil {
-		snap.LSM.ColumnFamilies = s.db.columnFamilyStats()
 	}
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()
