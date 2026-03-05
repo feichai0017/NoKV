@@ -326,7 +326,6 @@ func (s *Skiplist) Add(e *kv.Entry) {
 		Meta:      e.Meta,
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
-		Version:   e.Version,
 	}
 
 	listHeight := s.getHeight()
@@ -420,22 +419,22 @@ func (s *Skiplist) findLast() *node {
 	}
 }
 
-// Get gets the value associated with the key. It returns a valid value if it finds equal or earlier
-// version of the same key.
-func (s *Skiplist) Search(key []byte) kv.ValueStruct {
+// Search returns the matched internal key and value for key (if any).
+// It returns (nil, zero) when no matching version exists.
+func (s *Skiplist) Search(key []byte) ([]byte, kv.ValueStruct) {
 	n, _ := s.findNear(key, false, true) // findGreaterOrEqual.
 	if n == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 
 	nextKey := arenaGetKey(s.arena, n.keyOffset, n.keySize)
 	if !kv.SameKey(key, nextKey) {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 
 	valOffset, valSize := n.getValueOffset()
 	vs := arenaGetVal(s.arena, valOffset, valSize)
-	return vs
+	return nextKey, vs
 }
 
 // NewIterator returns a skiplist iterator.  You have to Close() the iterator.
@@ -538,7 +537,7 @@ func (s *SkipListIterator) Item() Item {
 	s.e.Value = vs.Value
 	s.e.ExpiresAt = vs.ExpiresAt
 	s.e.Meta = vs.Meta
-	s.e.Version = vs.Version
+	_ = s.e.PopulateInternalMeta()
 	return &s.e
 }
 

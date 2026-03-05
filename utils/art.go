@@ -109,15 +109,15 @@ func (a *ART) Add(entry *kv.Entry) {
 		Meta:      entry.Meta,
 		Value:     entry.Value,
 		ExpiresAt: entry.ExpiresAt,
-		Version:   entry.Version,
 	}
 	a.tree.Set(entry.Key, vs)
 }
 
-// Search returns the value for the earliest key >= target with the same user key.
-func (a *ART) Search(key []byte) kv.ValueStruct {
+// Search returns the matched internal key and value for key (if any).
+// It returns (nil, zero) when no matching version exists.
+func (a *ART) Search(key []byte) ([]byte, kv.ValueStruct) {
 	if a == nil || a.tree == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 	return a.tree.Get(key)
 }
@@ -201,18 +201,19 @@ func (t *artTree) release() {
 	t.arena = nil
 }
 
-func (t *artTree) Get(key []byte) kv.ValueStruct {
+func (t *artTree) Get(key []byte) ([]byte, kv.ValueStruct) {
 	if t == nil || t.arena == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 	leaf := t.lowerBound(key)
 	if leaf == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
-	if !kv.SameKey(key, leaf.leafKey(t.arena)) {
-		return kv.ValueStruct{}
+	foundKey := leaf.leafKey(t.arena)
+	if !kv.SameKey(key, foundKey) {
+		return nil, kv.ValueStruct{}
 	}
-	return leaf.loadValue(t.arena)
+	return foundKey, leaf.loadValue(t.arena)
 }
 
 func (t *artTree) Set(key []byte, value kv.ValueStruct) {
@@ -1230,7 +1231,7 @@ func (it *artIterator) Item() Item {
 	it.entry.Value = vs.Value
 	it.entry.ExpiresAt = vs.ExpiresAt
 	it.entry.Meta = vs.Meta
-	it.entry.Version = vs.Version
+	_ = it.entry.PopulateInternalMeta()
 	return &it.entry
 }
 

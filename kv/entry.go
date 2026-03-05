@@ -127,6 +127,23 @@ func (e *Entry) Entry() *Entry {
 	return e
 }
 
+// PopulateInternalMeta parses e.Key as an internal key and fills CF/Version.
+// It returns false when the key is not in canonical internal-key format.
+func (e *Entry) PopulateInternalMeta() bool {
+	if e == nil {
+		return false
+	}
+	cf, _, ts, ok := SplitInternalKey(e.Key)
+	if !ok {
+		e.CF = CFDefault
+		e.Version = 0
+		return false
+	}
+	e.CF = cf
+	e.Version = ts
+	return true
+}
+
 // IsDeletedOrExpired reports whether the entry is a tombstone or has passed its expiry.
 func (e *Entry) IsDeletedOrExpired() bool {
 	if e == nil || e.Value == nil {

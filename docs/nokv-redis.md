@@ -5,7 +5,7 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/Set/SetWithTTL/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL metadata is stored under `!redis:ttl!<key>`. Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
 
 When both CLI and config provide the same setting, CLI wins.
 

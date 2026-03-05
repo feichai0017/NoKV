@@ -69,7 +69,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	val, err := reader.GetValue(key, math.MaxUint64)
+	val, _, err := reader.GetValue(key, math.MaxUint64)
 	require.NoError(t, err)
 	require.Equal(t, value, val)
 }
@@ -77,7 +77,7 @@ func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	_, err := reader.GetValue(key, math.MaxUint64)
+	_, _, err := reader.GetValue(key, math.MaxUint64)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 

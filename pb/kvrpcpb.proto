@@ -36,6 +36,7 @@ message GetResponse {
   bytes value = 1;
   bool not_found = 2;
   KeyError error = 3;
+  uint64 expires_at = 4;
 }
 
 message BatchGetRequest {
@@ -71,6 +72,7 @@ message Mutation {
   bytes key = 2;
   bytes value = 3;
   bool assertion_not_exist = 4;
+  uint64 expires_at = 5;
 }
 
 message PrewriteRequest {

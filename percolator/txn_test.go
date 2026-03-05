@@ -92,7 +92,7 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	require.Equal(t, uint64(20), commitTs)
 	require.Equal(t, req.StartVersion, write.StartTs)
 
-	val, err := reader.GetValue([]byte("k1"), 30)
+	val, _, err := reader.GetValue([]byte("k1"), 30)
 	require.NoError(t, err)
 	require.Equal(t, []byte("value1"), val)
 	lock, err = reader.GetLock([]byte("k1"))
@@ -209,7 +209,7 @@ func TestResolveLockCommit(t *testing.T) {
 	require.Nil(t, keyErr)
 	require.Equal(t, uint64(1), count)
 	reader := NewReader(db)
-	val, err := reader.GetValue([]byte("res"), 60)
+	val, _, err := reader.GetValue([]byte("res"), 60)
 	require.NoError(t, err)
 	require.Equal(t, []byte("val"), val)
 }

@@ -470,11 +470,12 @@ func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 			return utils.ErrEmptyKey
 		}
 		// ApplyInternalEntries is for pre-built internal keys only.
-		parsedCF, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		parsedCF, userKey, parsedVersion, ok := kv.SplitInternalKey(entry.Key)
 		if !ok || len(userKey) == 0 {
 			return utils.ErrInvalidRequest
 		}
 		entry.CF = parsedCF
+		entry.Version = parsedVersion
 		if err := db.maybeThrottleWrite(parsedCF, userKey); err != nil {
 			return err
 		}
@@ -545,6 +546,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	if !kv.IsValuePtr(entry) {
+		if !entry.PopulateInternalMeta() {
+			entry.DecrRef()
+			return nil, utils.ErrInvalidRequest
+		}
 		return entry, nil
 	}
 	var vp kv.ValuePtr
@@ -559,6 +564,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	}
 	entry.Value = kv.SafeCopy(nil, result)
 	entry.Meta &^= kv.BitValuePointer
+	if !entry.PopulateInternalMeta() {
+		entry.DecrRef()
+		return nil, utils.ErrInvalidRequest
+	}
 	return entry, nil
 }
 

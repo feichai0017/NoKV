@@ -58,7 +58,7 @@ func BenchmarkARTGet(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		vs := art.Search(keys[i%len(keys)])
+		_, vs := art.Search(keys[i%len(keys)])
 		if len(vs.Value) == 0 {
 			b.Fatalf("missing value")
 		}

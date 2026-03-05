@@ -20,7 +20,7 @@ type MemTable = memTable
 
 type memIndex interface {
 	Add(*kv.Entry)
-	Search([]byte) kv.ValueStruct
+	Search([]byte) ([]byte, kv.ValueStruct)
 	NewIterator(*utils.Options) utils.Iterator
 	MemSize() int64
 	IncrRef()
@@ -92,16 +92,24 @@ func (m *memTable) Set(entry *kv.Entry) error {
 
 // Get reads key from the memtable index and returns a pooled entry wrapper.
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
-	var vs kv.ValueStruct
+	var (
+		foundKey []byte
+		vs       kv.ValueStruct
+	)
 	if m.index != nil {
-		vs = m.index.Search(key)
+		foundKey, vs = m.index.Search(key)
 	}
 	e := kv.EntryPool.Get().(*kv.Entry)
-	e.Key = key
+	e.Key = foundKey
 	e.Value = vs.Value
 	e.ExpiresAt = vs.ExpiresAt
 	e.Meta = vs.Meta
-	e.Version = vs.Version
+	e.CF = kv.CFDefault
+	e.Version = 0
+	e.Offset = 0
+	e.Hlen = 0
+	e.ValThreshold = 0
+	_ = e.PopulateInternalMeta()
 	e.IncrRef()
 	return e, nil
 }
