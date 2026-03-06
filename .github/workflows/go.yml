@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -26,6 +28,18 @@ jobs:
 
     - name: Install tools
       run: make install-tools
+
+    - name: Proto format
+      run: make proto-format-check
+
+    - name: Proto lint
+      run: make proto-lint
+
+    - name: Proto breaking
+      run: make proto-breaking
+
+    - name: Proto generate
+      run: make proto-gen-check
 
     - name: Format
       run: |

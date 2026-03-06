@@ -2,20 +2,21 @@
 syntax = "proto3";
 
 package pb;
-option go_package = "github.com/feichai0017/NoKV/pb";
 
 import "metapb.proto";
 
-// Enum for read consistency control and read strategy options protocal
- enum ReadConsistency {
-    READ_CONSISTENCY_STRONG = 0;
-    READ_CONSISTENCY_BOUNDED_STALE = 1;
-  }
+option go_package = "github.com/feichai0017/NoKV/pb";
 
-  enum ReadPreference {
-    READ_PREFERENCE_LEADER_ONLY = 0;
-    READ_PREFERENCE_FOLLOWER_PREFER = 1;
-  }
+// Enum for read consistency control and read strategy options protocal
+enum ReadConsistency {
+  READ_CONSISTENCY_STRONG = 0;
+  READ_CONSISTENCY_BOUNDED_STALE = 1;
+}
+
+enum ReadPreference {
+  READ_PREFERENCE_LEADER_ONLY = 0;
+  READ_PREFERENCE_FOLLOWER_PREFER = 1;
+}
 
 // kvrpcpb carries distributed KV RPC and transaction protocol messages.
 
