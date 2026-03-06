@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1eef9521.js";
+            window.path_to_searchindex_js = "searchindex-99282d97.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b3c1044a.js"></script>
+        <script src="toc-e0ad4b63.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -658,6 +658,60 @@ func main() {
 </ul>
 <p>See also <a href="#raftstore-deep-dive"><code>docs/raftstore.md</code></a> for deeper internals, <a href="#pd-lite"><code>docs/pd.md</code></a> for control-plane details, and <a href="#testing--validation-matrix"><code>docs/testing.md</code></a> for coverage details.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="error-handling-guide"><a class="header" href="#error-handling-guide">Error Handling Guide</a></h1>
+<p>This document defines how NoKV should own, define, and propagate errors.</p>
+<hr>
+<h2 id="1-ownership-rules"><a class="header" href="#1-ownership-rules">1. Ownership Rules</a></h2>
+<ol>
+<li>Domain errors stay in domain packages.</li>
+<li>Cross-cutting runtime errors may live in <code>utils</code> only when shared by multiple subsystems.</li>
+<li>Command-local/business-flow errors should be unexported (<code>errXxx</code>) and stay in command/service packages.</li>
+</ol>
+<p>Examples:</p>
+<ul>
+<li><code>kv</code>: entry codec/read-decode errors.</li>
+<li><code>vfs</code>: filesystem contract errors.</li>
+<li><code>pd/core</code>: control-plane validation/conflict errors.</li>
+</ul>
+<hr>
+<h2 id="2-propagation-rules"><a class="header" href="#2-propagation-rules">2. Propagation Rules</a></h2>
+<ol>
+<li>Wrap with <code>%w</code> when crossing package boundaries.</li>
+<li>Match via <code>errors.Is</code>, not string compare.</li>
+<li>Keep stable sentinel values for retryable / control-flow decisions.</li>
+<li>Add context in upper layers; do not lose original cause.</li>
+</ol>
+<hr>
+<h2 id="3-naming-rules"><a class="header" href="#3-naming-rules">3. Naming Rules</a></h2>
+<ol>
+<li>Exported sentinels use <code>ErrXxx</code>.</li>
+<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/core: ...</code>, <code>vfs: ...</code>).</li>
+<li>Avoid duplicate sentinels with identical semantics in different packages.</li>
+</ol>
+<hr>
+<h2 id="4-current-project-status-2026-03-06"><a class="header" href="#4-current-project-status-2026-03-06">4. Current Project Status (2026-03-06)</a></h2>
+<p>The project is mostly aligned with this policy:</p>
+<ul>
+<li>Shared/common sentinels are in <code>utils/error.go</code>.</li>
+<li>Domain-specific sentinels exist in domain packages:
+<ul>
+<li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
+<li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
+<li><code>pd/core/errors.go</code>: PD validation/range errors</li>
+</ul>
+</li>
+</ul>
+<p>Recent cleanup already removed several unused legacy sentinels from <code>utils/error.go</code> and removed duplicated checksum sentinel in <code>utils</code>.</p>
+<hr>
+<h2 id="5-remaining-cleanup-candidates"><a class="header" href="#5-remaining-cleanup-candidates">5. Remaining Cleanup Candidates</a></h2>
+<p>No high-priority domain-leak sentinels remain in <code>utils</code> after recent cleanup.</p>
+<p>Follow-up opportunities (optional):</p>
+<ol>
+<li>Continue reducing legacy-style names/messages for consistency.</li>
+<li>Audit command-level <code>errXxx</code> values and keep them local/unexported.</li>
+<li>Keep adding <code>%w</code> wrappers at package boundaries where context is still sparse.</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="entry-lifecycle-encoding-and-field-semantics"><a class="header" href="#entry-lifecycle-encoding-and-field-semantics">Entry Lifecycle, Encoding, and Field Semantics</a></h1>
 <p><code>kv.Entry</code> is the core record container that flows through user APIs, commit batching,
 WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
@@ -1265,7 +1319,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <ul>
 <li>Writes to <code>"&lt;table&gt;.tmp.&lt;pid&gt;.&lt;ns&gt;"</code>.</li>
 <li><code>tmp.Sync()</code> to persist SST bytes.</li>
-<li><code>RenameNoReplace(tmp, final)</code> installs file atomically (or fallback semantics on unsupported platforms).</li>
+<li><code>RenameNoReplace(tmp, final)</code> installs file atomically. If unsupported by platform/filesystem, returns <code>vfs.ErrRenameNoReplaceUnsupported</code>.</li>
 <li><code>SyncDir(workdir)</code> is called before manifest edit so directory entry is durable.</li>
 </ul>
 </li>
@@ -1880,10 +1934,10 @@ _ = mgr.Remove(fid)  // close + delete file
 <p><code>RenameNoReplace</code>:</p>
 <ul>
 <li>contract: fail with <code>os.ErrExist</code> when destination already exists.</li>
-<li>on Linux, uses <code>renameat2(..., RENAME_NOREPLACE)</code> when supported.</li>
-<li>fallback path (<code>renameNoReplaceFallback</code>) checks destination existence then calls <code>Rename</code>.</li>
+<li>on Linux, uses <code>renameat2(..., RENAME_NOREPLACE)</code>.</li>
+<li>on macOS, uses <code>renamex_np(..., RENAME_EXCL)</code>.</li>
+<li>when atomic no-replace rename is unsupported by platform/filesystem, returns <code>vfs.ErrRenameNoReplaceUnsupported</code> (no non-atomic fallback).</li>
 </ul>
-<p>Important: fallback is <strong>not atomic</strong> and has TOCTOU risk. Callers needing strict no-overwrite atomicity should avoid relying on fallback behavior.</p>
 <hr>
 <h2 id="3-directory-sync-helper"><a class="header" href="#3-directory-sync-helper">3. Directory Sync Helper</a></h2>
 <p><code>vfs.SyncDir(fs, dir)</code> fsyncs directory metadata to persist entry updates (create/rename/remove).</p>

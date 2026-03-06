@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1eef9521.js";
+            window.path_to_searchindex_js = "searchindex-99282d97.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b3c1044a.js"></script>
+        <script src="toc-e0ad4b63.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -225,7 +225,7 @@
 <ul>
 <li>Writes to <code>"&lt;table&gt;.tmp.&lt;pid&gt;.&lt;ns&gt;"</code>.</li>
 <li><code>tmp.Sync()</code> to persist SST bytes.</li>
-<li><code>RenameNoReplace(tmp, final)</code> installs file atomically (or fallback semantics on unsupported platforms).</li>
+<li><code>RenameNoReplace(tmp, final)</code> installs file atomically. If unsupported by platform/filesystem, returns <code>vfs.ErrRenameNoReplaceUnsupported</code>.</li>
 <li><code>SyncDir(workdir)</code> is called before manifest edit so directory entry is durable.</li>
 </ul>
 </li>

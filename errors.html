@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>VFS - NoKV Docs</title>
+        <title>Error Handling - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,78 +178,69 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="vfs"><a class="header" href="#vfs">VFS</a></h1>
-<p>The <code>vfs</code> package provides a small filesystem abstraction used by WAL, manifest, SST, value-log, and raftstore paths.</p>
+                        <h1 id="error-handling-guide"><a class="header" href="#error-handling-guide">Error Handling Guide</a></h1>
+<p>This document defines how NoKV should own, define, and propagate errors.</p>
 <hr>
-<h2 id="1-core-interfaces"><a class="header" href="#1-core-interfaces">1. Core Interfaces</a></h2>
-<p><code>vfs.FS</code> includes:</p>
+<h2 id="1-ownership-rules"><a class="header" href="#1-ownership-rules">1. Ownership Rules</a></h2>
+<ol>
+<li>Domain errors stay in domain packages.</li>
+<li>Cross-cutting runtime errors may live in <code>utils</code> only when shared by multiple subsystems.</li>
+<li>Command-local/business-flow errors should be unexported (<code>errXxx</code>) and stay in command/service packages.</li>
+</ol>
+<p>Examples:</p>
 <ul>
-<li>file open/create: <code>OpenHandle</code>, <code>OpenFileHandle</code></li>
-<li>path ops: <code>MkdirAll</code>, <code>Remove</code>, <code>RemoveAll</code>, <code>Rename</code>, <code>RenameNoReplace</code>, <code>Stat</code>, <code>ReadDir</code>, <code>Glob</code></li>
-<li>helpers: <code>ReadFile</code>, <code>WriteFile</code>, <code>Truncate</code>, <code>Hostname</code></li>
-</ul>
-<p><code>vfs.File</code> includes:</p>
-<ul>
-<li>read/write/seek APIs</li>
-<li><code>Sync</code>, <code>Truncate</code>, <code>Close</code>, <code>Stat</code>, <code>Name</code></li>
-</ul>
-<p><code>vfs.Ensure(fs)</code> maps nil to <code>OSFS</code>.</p>
-<hr>
-<h2 id="2-rename-semantics"><a class="header" href="#2-rename-semantics">2. Rename Semantics</a></h2>
-<p><code>Rename</code>:</p>
-<ul>
-<li>normal rename/move semantics.</li>
-<li>target replacement behavior is platform-dependent (<code>os.Rename</code> behavior).</li>
-</ul>
-<p><code>RenameNoReplace</code>:</p>
-<ul>
-<li>contract: fail with <code>os.ErrExist</code> when destination already exists.</li>
-<li>on Linux, uses <code>renameat2(..., RENAME_NOREPLACE)</code>.</li>
-<li>on macOS, uses <code>renamex_np(..., RENAME_EXCL)</code>.</li>
-<li>when atomic no-replace rename is unsupported by platform/filesystem, returns <code>vfs.ErrRenameNoReplaceUnsupported</code> (no non-atomic fallback).</li>
+<li><code>kv</code>: entry codec/read-decode errors.</li>
+<li><code>vfs</code>: filesystem contract errors.</li>
+<li><code>pd/core</code>: control-plane validation/conflict errors.</li>
 </ul>
 <hr>
-<h2 id="3-directory-sync-helper"><a class="header" href="#3-directory-sync-helper">3. Directory Sync Helper</a></h2>
-<p><code>vfs.SyncDir(fs, dir)</code> fsyncs directory metadata to persist entry updates (create/rename/remove).</p>
-<p>This is used in strict durability paths (for example SST install before manifest publication) to guarantee directory entry persistence.</p>
+<h2 id="2-propagation-rules"><a class="header" href="#2-propagation-rules">2. Propagation Rules</a></h2>
+<ol>
+<li>Wrap with <code>%w</code> when crossing package boundaries.</li>
+<li>Match via <code>errors.Is</code>, not string compare.</li>
+<li>Keep stable sentinel values for retryable / control-flow decisions.</li>
+<li>Add context in upper layers; do not lose original cause.</li>
+</ol>
 <hr>
-<h2 id="4-fault-injection-faultfs"><a class="header" href="#4-fault-injection-faultfs">4. Fault Injection (<code>FaultFS</code>)</a></h2>
-<p><code>FaultFS</code> wraps an underlying <code>FS</code> and can inject failures by operation/path.</p>
-<ul>
-<li>Rule helpers: <code>FailOnceRule</code>, <code>FailOnNthRule</code>, <code>FailAfterNthRule</code>, <code>FailOnceRenameRule</code></li>
-<li>File-handle faults: write/sync/close/truncate</li>
-<li>Rename fault matching supports <code>src</code>/<code>dst</code> targeting</li>
-</ul>
-<p>Used to test manifest/WAL/recovery failure paths deterministically.</p>
+<h2 id="3-naming-rules"><a class="header" href="#3-naming-rules">3. Naming Rules</a></h2>
+<ol>
+<li>Exported sentinels use <code>ErrXxx</code>.</li>
+<li>Error text should be lowercase and package-scoped when useful (for example <code>pd/core: ...</code>, <code>vfs: ...</code>).</li>
+<li>Avoid duplicate sentinels with identical semantics in different packages.</li>
+</ol>
 <hr>
-<h2 id="5-current-implementation-set"><a class="header" href="#5-current-implementation-set">5. Current Implementation Set</a></h2>
+<h2 id="4-current-project-status-2026-03-06"><a class="header" href="#4-current-project-status-2026-03-06">4. Current Project Status (2026-03-06)</a></h2>
+<p>The project is mostly aligned with this policy:</p>
 <ul>
-<li><code>OSFS</code>: production implementation (Go <code>os</code> package).</li>
-<li><code>FaultFS</code>: failure-injection wrapper over any <code>FS</code>.</li>
+<li>Shared/common sentinels are in <code>utils/error.go</code>.</li>
+<li>Domain-specific sentinels exist in domain packages:
+<ul>
+<li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
+<li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
+<li><code>pd/core/errors.go</code>: PD validation/range errors</li>
 </ul>
-<p>No in-memory FS is included yet.</p>
+</li>
+</ul>
+<p>Recent cleanup already removed several unused legacy sentinels from <code>utils/error.go</code> and removed duplicated checksum sentinel in <code>utils</code>.</p>
 <hr>
-<h2 id="6-design-notes"><a class="header" href="#6-design-notes">6. Design Notes</a></h2>
-<ul>
-<li>Keep storage code decoupled from direct <code>os.*</code> calls.</li>
-<li>Make crash/failure tests reproducible.</li>
-<li>Keep API minimal and only add operations required by real storage call sites.</li>
-</ul>
-<p>References:</p>
-<ul>
-<li>Pebble VFS: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs</a></li>
-<li>Pebble errorfs: <a href="https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs">https://pkg.go.dev/github.com/cockroachdb/pebble/vfs/errorfs</a></li>
-</ul>
+<h2 id="5-remaining-cleanup-candidates"><a class="header" href="#5-remaining-cleanup-candidates">5. Remaining Cleanup Candidates</a></h2>
+<p>No high-priority domain-leak sentinels remain in <code>utils</code> after recent cleanup.</p>
+<p>Follow-up opportunities (optional):</p>
+<ol>
+<li>Continue reducing legacy-style names/messages for consistency.</li>
+<li>Audit command-level <code>errXxx</code> values and keep them local/unexported.</li>
+<li>Keep adding <code>%w</code> wrappers at package boundaries where context is still sparse.</li>
+</ol>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="manifest.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="file.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="entry.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -259,11 +250,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="manifest.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="file.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="entry.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
