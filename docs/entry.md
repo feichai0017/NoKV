@@ -69,7 +69,7 @@ Source: [`kv/value.go`](../kv/value.go)
 * `ExpiresAt` (uvarint)
 * `Value` (raw bytes)
 
-`ValueStruct` no longer stores `Version`; version is always taken from internal key.
+`ValueStruct` does not store `Version`; version is always taken from internal key.
 
 ### 2.3 Entry Record Encoding (WAL / Vlog record payload)
 
@@ -151,6 +151,24 @@ Source: [`db.go`](../db.go), [`iterator.go`](../iterator.go)
 * Public APIs convert internal key to user key for external consumers.
 * Returned entry is detached copy (`DB.Get`) or iterator materialized object.
 
+### 3.8 Runtime State Flow Diagram
+
+```mermaid
+flowchart TD
+  A["DB.Set/SetWithTTL/Del"] --> B["kv.NewInternalEntry"]
+  B --> C["DB.ApplyInternalEntries"]
+  C --> D["commitWorker: vlog.write"]
+  D --> E["LSM/WAL persist"]
+  E --> F["DB.GetInternalEntry"]
+  F --> G{"BitValuePointer?"}
+  G -- yes --> H["vlog.read + clear pointer bit"]
+  G -- no --> I["inline value"]
+  H --> J["PopulateInternalMeta"]
+  I --> J
+  J --> K["DB.Get cloneEntry -> user key/value"]
+  J --> L["DB.NewIterator materialize -> user key/value"]
+```
+
 ---
 
 ## 4. Field Validity Matrix
@@ -194,7 +212,7 @@ Why it exists:
 
 * pooled entries can carry stale cached fields if not reset carefully;
 * parse-once helper gives a single normalization point at codec/index/read boundaries;
-* avoids relying on deprecated non-authoritative value-side version caches.
+* keeps key-derived metadata (`CF/Version`) authoritative and consistent.
 
 ---
 
@@ -236,4 +254,3 @@ Contract:
 2. Do not reintroduce value-side version caches.
 3. Keep internal APIs internal-key-first; only external APIs should expose user keys.
 4. Preserve borrowed/detached ownership contracts in comments and tests.
-
