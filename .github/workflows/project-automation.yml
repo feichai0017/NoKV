@@ -1,0 +1,229 @@
+name: Project Automation
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled, closed]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, labeled, unlabeled, closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  repository-projects: write
+
+jobs:
+  sync-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync item to GitHub Project
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_TOKEN || github.token }}
+          script: |
+            async function main() {
+              const PROJECT_ID = 'PVT_kwHOB9_5Fc4BQ65V';
+
+              const FIELDS = {
+                status: {
+                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5rkw',
+                  todo: 'f75ad846',
+                  inProgress: '47fc9ee4',
+                  done: '98236657',
+                },
+                type: {
+                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5ro4',
+                  options: {
+                    feature: '9aec4cda',
+                    bug: '402e2eef',
+                    refactor: '17474a4c',
+                    docs: '7319207e',
+                    chore: '5d903984',
+                  },
+                },
+                priority: {
+                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5roI',
+                  options: {
+                    p0: 'ea4f9d9a',
+                    p1: 'd0f46274',
+                    p2: '41112903',
+                    p3: 'c016a8fb',
+                  },
+                },
+              };
+
+              const issue = context.payload.issue;
+              const pr = context.payload.pull_request;
+              const content = pr || issue;
+
+              if (!content || !content.node_id) {
+                core.notice('No issue/PR payload found; skipping.');
+                return;
+              }
+
+              const contentId = content.node_id;
+              const isPR = Boolean(pr);
+              const action = context.payload.action;
+              const isClosed = action === 'closed' || content.state === 'closed';
+              const isMergedPR = isPR && action === 'closed' && pr.merged === true;
+
+              function normalizeLabels(rawLabels) {
+                return (rawLabels || [])
+                  .map((l) => (typeof l === 'string' ? l : l.name || ''))
+                  .map((s) => s.trim().toLowerCase())
+                  .filter(Boolean);
+              }
+
+              function pickType(labels) {
+                const mapping = [
+                  ['type/bug', 'bug'],
+                  ['bug', 'bug'],
+                  ['type/feature', 'feature'],
+                  ['feature', 'feature'],
+                  ['type/refactor', 'refactor'],
+                  ['refactor', 'refactor'],
+                  ['type/docs', 'docs'],
+                  ['docs', 'docs'],
+                  ['type/chore', 'chore'],
+                  ['chore', 'chore'],
+                ];
+                for (const [label, key] of mapping) {
+                  if (labels.includes(label)) return FIELDS.type.options[key];
+                }
+                return null;
+              }
+
+              function pickPriority(labels) {
+                const mapping = [
+                  ['priority/p0', 'p0'],
+                  ['p0', 'p0'],
+                  ['priority/p1', 'p1'],
+                  ['p1', 'p1'],
+                  ['priority/p2', 'p2'],
+                  ['p2', 'p2'],
+                  ['priority/p3', 'p3'],
+                  ['p3', 'p3'],
+                ];
+                for (const [label, key] of mapping) {
+                  if (labels.includes(label)) return FIELDS.priority.options[key];
+                }
+                return null;
+              }
+
+              async function findItemId(projectId, targetContentId) {
+                let cursor = null;
+                while (true) {
+                  const res = await github.graphql(
+                    `
+                    query($projectId: ID!, $cursor: String) {
+                      node(id: $projectId) {
+                        ... on ProjectV2 {
+                          items(first: 100, after: $cursor) {
+                            nodes {
+                              id
+                              content {
+                                __typename
+                                ... on Issue { id }
+                                ... on PullRequest { id }
+                              }
+                            }
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                          }
+                        }
+                      }
+                    }
+                    `,
+                    { projectId, cursor }
+                  );
+
+                  const page = res?.node?.items;
+                  if (!page) return null;
+
+                  for (const item of page.nodes || []) {
+                    if (item?.content?.id === targetContentId) {
+                      return item.id;
+                    }
+                  }
+
+                  if (!page.pageInfo?.hasNextPage) return null;
+                  cursor = page.pageInfo.endCursor;
+                }
+              }
+
+              async function addOrGetItemId(projectId, targetContentId) {
+                try {
+                  const addRes = await github.graphql(
+                    `
+                    mutation($projectId: ID!, $contentId: ID!) {
+                      addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                        item { id }
+                      }
+                    }
+                    `,
+                    { projectId, contentId: targetContentId }
+                  );
+                  return addRes.addProjectV2ItemById.item.id;
+                } catch (err) {
+                  core.warning(`addProjectV2ItemById failed: ${err.message}`);
+                  const existing = await findItemId(projectId, targetContentId);
+                  if (existing) return existing;
+                  throw err;
+                }
+              }
+
+              async function updateSingleSelect(projectId, itemId, fieldId, optionId, label) {
+                if (!optionId) return;
+                await github.graphql(
+                  `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(
+                      input: {
+                        projectId: $projectId
+                        itemId: $itemId
+                        fieldId: $fieldId
+                        value: { singleSelectOptionId: $optionId }
+                      }
+                    ) {
+                      projectV2Item { id }
+                    }
+                  }
+                  `,
+                  { projectId, itemId, fieldId, optionId }
+                );
+                core.info(`Updated ${label} -> ${optionId}`);
+              }
+
+              const itemId = await addOrGetItemId(PROJECT_ID, contentId);
+              core.info(`Project item id: ${itemId}`);
+
+              const labels = normalizeLabels(content.labels);
+              const typeOption = pickType(labels);
+              const priorityOption = pickPriority(labels);
+
+              let statusOption = FIELDS.status.todo;
+              if (isClosed || isMergedPR) {
+                statusOption = FIELDS.status.done;
+              } else if (isPR) {
+                statusOption = FIELDS.status.inProgress;
+              }
+
+              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.status.fieldId, statusOption, 'status');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.type.fieldId, typeOption, 'type');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.priority.fieldId, priorityOption, 'priority');
+            }
+
+            await main().catch((err) => {
+              const message = String(err && err.message ? err.message : err);
+              if (
+                message.includes('Resource not accessible by integration') ||
+                message.includes('insufficient scopes')
+              ) {
+                core.warning(`Project automation skipped due to token scope: ${message}`);
+                return;
+              }
+              throw err;
+            });
