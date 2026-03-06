@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-777acdc5.js";
+            window.path_to_searchindex_js = "searchindex-cc06316b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -189,7 +189,7 @@
 </thead>
 <tbody>
 <tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
-<tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
+<tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncate</code>, <code>Sync</code>.</td></tr>
 <tr><td><a href="../file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
 </tbody>
 </table>
@@ -199,7 +199,7 @@
 <h2 id="2-mmap-management"><a class="header" href="#2-mmap-management">2. Mmap Management</a></h2>
 <ul>
 <li><code>OpenMmapFile</code> opens or creates a file, optionally extending it to <code>maxSz</code>, then mmaps it. The returned <code>MmapFile</code> exposes <code>Data []byte</code> and the underlying <code>*os.File</code> handle.</li>
-<li>Writes grow the map on demand: <code>AppendBuffer</code> checks if the write would exceed the current mapping and calls <code>Truncature</code> to expand (doubling up to 1 GiB increments).</li>
+<li>Writes grow the map on demand: <code>AppendBuffer</code> checks if the write would exceed the current mapping and calls <code>Truncate</code> to expand (doubling up to 1 GiB increments).</li>
 <li><code>Sync</code> flushes dirty pages (<code>mmap.Msync</code>), while <code>Delete</code> unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.</li>
 </ul>
 <p>RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.</p>
