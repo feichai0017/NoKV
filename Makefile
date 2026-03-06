@@ -5,7 +5,7 @@
 .PHONY: proto proto-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
-BUF_VERSION ?= 1.56.0
+BUF_VERSION ?= 1.66.0
 PROJECT_GO_VERSION ?= $(shell awk '/^go /{print $$2}' go.mod)
 
 # Default target
@@ -88,7 +88,8 @@ proto-check:
 	buf format -d --exit-code
 	buf lint
 	buf breaking --against '.git#branch=main,subdir=pb'
-	@before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
+	@set -e; \
+	before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
 	./scripts/gen.sh; \
 	after="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
 	test "$$before" = "$$after"
