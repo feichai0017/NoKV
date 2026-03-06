@@ -4,6 +4,7 @@ package NoKV
 import (
 	stderrors "errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -57,7 +58,7 @@ type (
 		sync.RWMutex
 		opt              *Options
 		fs               vfs.FS
-		dirLock          *utils.DirLock
+		dirLock          io.Closer
 		lsm              *lsm.LSM
 		wal              *wal.Manager
 		walWatchdog      *wal.Watchdog
@@ -133,7 +134,8 @@ func Open(opt *Options) *DB {
 		db.opt.BloomCacheSize = 0
 	}
 
-	lock, err := utils.AcquireDirLock(opt.WorkDir, db.fs)
+	utils.Panic(db.fs.MkdirAll(opt.WorkDir, os.ModePerm))
+	lock, err := db.fs.Lock(filepath.Join(opt.WorkDir, "LOCK"))
 	utils.Panic(err)
 	db.dirLock = lock
 
@@ -395,7 +397,7 @@ func (db *DB) closeInternal() error {
 	}
 
 	if db.dirLock != nil {
-		if err := db.dirLock.Release(); err != nil {
+		if err := db.dirLock.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("dir lock release: %w", err))
 		}
 		db.dirLock = nil

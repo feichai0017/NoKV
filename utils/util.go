@@ -41,16 +41,6 @@ func VlogFilePath(dirPath string, fid uint32) string {
 	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
 }
 
-// CreateSyncedFile creates a new file (using O_EXCL), errors if it already existed.
-func CreateSyncedFile(fs vfs.FS, filename string, sync bool) (vfs.File, error) {
-	fs = vfs.Ensure(fs)
-	flags := os.O_RDWR | os.O_CREATE | os.O_EXCL
-	if sync {
-		flags |= datasyncFileFlag
-	}
-	return fs.OpenFileHandle(filename, flags, 0600)
-}
-
 // FileNameSSTable returns the SSTable filename for the given ID.
 func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
@@ -126,12 +116,4 @@ func VerifyChecksum(data []byte, expected []byte) error {
 // CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
 	return uint64(crc32.Checksum(data, kv.CastagnoliCrcTable))
-}
-
-// RemoveDir _
-func RemoveDir(fs vfs.FS, dir string) {
-	fs = vfs.Ensure(fs)
-	if err := fs.RemoveAll(dir); err != nil {
-		panic(err)
-	}
 }
