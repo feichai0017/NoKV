@@ -412,6 +412,12 @@ func (lh *levelHandler) numIngestTables() int {
 	return lh.ingest.tableCount()
 }
 
+// numIngestTablesLocked returns the ingest table count without acquiring the lock.
+// Caller must already hold at least a read lock.
+func (lh *levelHandler) numIngestTablesLocked() int {
+	return lh.ingest.tableCount()
+}
+
 func (lh *levelHandler) ingestDataSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
