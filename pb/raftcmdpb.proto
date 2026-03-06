@@ -2,10 +2,11 @@
 syntax = "proto3";
 
 package pb;
-option go_package = "github.com/feichai0017/NoKV/pb";
 
 import "kvrpcpb.proto";
 import "metapb.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb";
 
 message SplitCommand {
   uint64 parent_region_id = 1;
