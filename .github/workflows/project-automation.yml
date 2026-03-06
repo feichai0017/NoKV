@@ -16,6 +16,9 @@ permissions:
 jobs:
   sync-project:
     runs-on: ubuntu-latest
+    env:
+      PROJECT_OWNER: feichai0017
+      PROJECT_NUMBER: "4"
     steps:
       - name: Sync item to GitHub Project
         uses: actions/github-script@v7
@@ -23,33 +26,38 @@ jobs:
           github-token: ${{ secrets.PROJECTS_TOKEN || github.token }}
           script: |
             async function main() {
-              const PROJECT_ID = 'PVT_kwHOB9_5Fc4BQ65V';
+              const projectOwner = process.env.PROJECT_OWNER;
+              const projectNumber = Number(process.env.PROJECT_NUMBER);
 
-              const FIELDS = {
+              if (!projectOwner || !projectNumber) {
+                core.warning('Project automation skipped: PROJECT_OWNER/PROJECT_NUMBER not configured.');
+                return;
+              }
+
+              const FIELD_NAMES = {
+                status: 'Status',
+                type: 'Type',
+                priority: 'Priority',
+              };
+
+              const OPTION_NAMES = {
                 status: {
-                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5rkw',
-                  todo: 'f75ad846',
-                  inProgress: '47fc9ee4',
-                  done: '98236657',
+                  todo: 'Todo',
+                  inProgress: 'In Progress',
+                  done: 'Done',
                 },
                 type: {
-                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5ro4',
-                  options: {
-                    feature: '9aec4cda',
-                    bug: '402e2eef',
-                    refactor: '17474a4c',
-                    docs: '7319207e',
-                    chore: '5d903984',
-                  },
+                  feature: 'feature',
+                  bug: 'bug',
+                  refactor: 'refactor',
+                  docs: 'docs',
+                  chore: 'chore',
                 },
                 priority: {
-                  fieldId: 'PVTSSF_lAHOB9_5Fc4BQ65Vzg-5roI',
-                  options: {
-                    p0: 'ea4f9d9a',
-                    p1: 'd0f46274',
-                    p2: '41112903',
-                    p3: 'c016a8fb',
-                  },
+                  p0: 'P0',
+                  p1: 'P1',
+                  p2: 'P2',
+                  p3: 'P3',
                 },
               };
 
@@ -67,6 +75,89 @@ jobs:
               const action = context.payload.action;
               const isClosed = action === 'closed' || content.state === 'closed';
               const isMergedPR = isPR && action === 'closed' && pr.merged === true;
+
+              async function resolveProject(owner, number) {
+                const res = await github.graphql(
+                  `
+                  query($owner: String!, $number: Int!) {
+                    user(login: $owner) {
+                      projectV2(number: $number) {
+                        ...ProjectData
+                      }
+                    }
+                    organization(login: $owner) {
+                      projectV2(number: $number) {
+                        ...ProjectData
+                      }
+                    }
+                  }
+
+                  fragment ProjectData on ProjectV2 {
+                    id
+                    title
+                    fields(first: 50) {
+                      nodes {
+                        __typename
+                        ... on ProjectV2FieldCommon {
+                          id
+                          name
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                  `,
+                  { owner, number }
+                );
+                return res.user?.projectV2 || res.organization?.projectV2 || null;
+              }
+
+              const project = await resolveProject(projectOwner, projectNumber);
+              if (!project) {
+                core.warning(
+                  `Project automation skipped: project ${projectOwner}#${projectNumber} is not visible to this token. ` +
+                  'Configure secrets.PROJECTS_TOKEN with project scope for user/org projects.'
+                );
+                return;
+              }
+
+              const PROJECT_ID = project.id;
+              core.info(`Resolved project ${project.title} (${PROJECT_ID})`);
+
+              function findField(name) {
+                return (project.fields?.nodes || []).find((field) => field?.name === name) || null;
+              }
+
+              function findSingleSelectField(name) {
+                const field = findField(name);
+                if (!field) {
+                  core.warning(`Project field not found: ${name}`);
+                  return null;
+                }
+                if (!Array.isArray(field.options)) {
+                  core.warning(`Project field is not single-select: ${name}`);
+                  return null;
+                }
+                return field;
+              }
+
+              function optionId(fieldName, optionName) {
+                const field = findSingleSelectField(fieldName);
+                if (!field) {
+                  return null;
+                }
+                const option = field.options.find((item) => item?.name === optionName);
+                if (!option) {
+                  core.warning(`Project option not found: ${fieldName} -> ${optionName}`);
+                  return null;
+                }
+                return option.id;
+              }
 
               function normalizeLabels(rawLabels) {
                 return (rawLabels || [])
@@ -89,7 +180,7 @@ jobs:
                   ['chore', 'chore'],
                 ];
                 for (const [label, key] of mapping) {
-                  if (labels.includes(label)) return FIELDS.type.options[key];
+                  if (labels.includes(label)) return optionId(FIELD_NAMES.type, OPTION_NAMES.type[key]);
                 }
                 return null;
               }
@@ -106,7 +197,7 @@ jobs:
                   ['p3', 'p3'],
                 ];
                 for (const [label, key] of mapping) {
-                  if (labels.includes(label)) return FIELDS.priority.options[key];
+                  if (labels.includes(label)) return optionId(FIELD_NAMES.priority, OPTION_NAMES.priority[key]);
                 }
                 return null;
               }
@@ -175,8 +266,10 @@ jobs:
                 }
               }
 
-              async function updateSingleSelect(projectId, itemId, fieldId, optionId, label) {
-                if (!optionId) return;
+              async function updateSingleSelect(projectId, itemId, fieldName, optionValueId, label) {
+                if (!optionValueId) return;
+                const field = findSingleSelectField(fieldName);
+                if (!field) return;
                 await github.graphql(
                   `
                   mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -192,9 +285,9 @@ jobs:
                     }
                   }
                   `,
-                  { projectId, itemId, fieldId, optionId }
+                  { projectId, itemId, fieldId: field.id, optionId: optionValueId }
                 );
-                core.info(`Updated ${label} -> ${optionId}`);
+                core.info(`Updated ${label} -> ${optionValueId}`);
               }
 
               const itemId = await addOrGetItemId(PROJECT_ID, contentId);
@@ -204,21 +297,22 @@ jobs:
               const typeOption = pickType(labels);
               const priorityOption = pickPriority(labels);
 
-              let statusOption = FIELDS.status.todo;
+              let statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.todo);
               if (isClosed || isMergedPR) {
-                statusOption = FIELDS.status.done;
+                statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.done);
               } else if (isPR) {
-                statusOption = FIELDS.status.inProgress;
+                statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.inProgress);
               }
 
-              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.status.fieldId, statusOption, 'status');
-              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.type.fieldId, typeOption, 'type');
-              await updateSingleSelect(PROJECT_ID, itemId, FIELDS.priority.fieldId, priorityOption, 'priority');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.status, statusOption, 'status');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.type, typeOption, 'type');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.priority, priorityOption, 'priority');
             }
 
             await main().catch((err) => {
               const message = String(err && err.message ? err.message : err);
               if (
+                message.includes('Could not resolve to a node') ||
                 message.includes('Resource not accessible by integration') ||
                 message.includes('insufficient scopes')
               ) {
