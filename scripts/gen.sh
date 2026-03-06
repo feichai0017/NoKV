@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$(go env GOPATH)/bin:${PATH}"
 
-REQUIRED_BUF_VERSION="${REQUIRED_BUF_VERSION:-1.56.0}"
+REQUIRED_BUF_VERSION="${REQUIRED_BUF_VERSION:-1.66.0}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
