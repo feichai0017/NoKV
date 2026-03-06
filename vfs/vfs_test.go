@@ -111,6 +111,30 @@ func TestSyncDirOpenFailure(t *testing.T) {
 	}
 }
 
+func TestLockExclusive(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "LOCK")
+
+	lock, err := (OSFS{}).Lock(lockPath)
+	if err != nil {
+		t.Fatalf("lock path: %v", err)
+	}
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("close lock: %v", err)
+		}
+	}()
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock file missing: %v", err)
+	}
+
+	other, err := (OSFS{}).Lock(lockPath)
+	if err == nil {
+		_ = other.Close()
+		t.Fatalf("expected second lock acquisition to fail")
+	}
+}
+
 func TestRenameNoReplaceSuccess(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "from.data")

@@ -32,6 +32,18 @@ func TestFaultFSInjectOpenFileHandle(t *testing.T) {
 	require.ErrorIs(t, err, injected)
 }
 
+func TestFaultFSInjectLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "LOCK")
+	injected := errors.New("lock injected")
+	policy := NewFaultPolicy(FailOnceRule(OpLock, path, injected))
+	fs := NewFaultFSWithPolicy(OSFS{}, policy)
+
+	lock, err := fs.Lock(path)
+	require.ErrorIs(t, err, injected)
+	require.Nil(t, lock)
+}
+
 func TestFaultFileFailOnNthWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.write")

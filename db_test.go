@@ -18,7 +18,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -913,7 +912,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	}
 	_ = db.wal.Close()
 	if db.dirLock != nil {
-		_ = db.dirLock.Release()
+		_ = db.dirLock.Close()
 		db.dirLock = nil
 	}
 
@@ -1239,11 +1238,15 @@ func TestCloseWithErrors(t *testing.T) {
 	local := *opt
 	local.WorkDir = t.TempDir()
 	dirLockErr := errors.New("dir lock release error")
-	lockPath := filepath.Join(local.WorkDir, "LOCK")
-	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, lockPath, dirLockErr))
-	local.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	db := Open(&local)
+	realLock := db.dirLock
+	db.dirLock = closeFunc(func() error {
+		if realLock != nil {
+			_ = realLock.Close()
+		}
+		return dirLockErr
+	})
 	err := db.Close()
 	require.Error(t, err)
 	require.ErrorIs(t, err, dirLockErr)
@@ -1252,6 +1255,12 @@ func TestCloseWithErrors(t *testing.T) {
 	err2 := db.Close()
 	require.Error(t, err2)
 	require.ErrorIs(t, err2, dirLockErr)
+}
+
+type closeFunc func() error
+
+func (fn closeFunc) Close() error {
+	return fn()
 }
 
 func TestCloseConcurrent(t *testing.T) {

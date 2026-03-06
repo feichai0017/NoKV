@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 )
@@ -12,6 +13,7 @@ type Op string
 const (
 	OpOpen      Op = "open"
 	OpOpenFile  Op = "open_file"
+	OpLock      Op = "lock"
 	OpFileWrite Op = "file_write"
 	OpFileSync  Op = "file_sync"
 	OpFileClose Op = "file_close"
@@ -292,6 +294,14 @@ func (f *FaultFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File,
 		return nil, err
 	}
 	return &faultFile{base: file, parent: f, path: name}, nil
+}
+
+// Lock acquires an exclusive lock on name.
+func (f *FaultFS) Lock(name string) (io.Closer, error) {
+	if err := f.before(OpLock, name); err != nil {
+		return nil, err
+	}
+	return f.base.Lock(name)
 }
 
 // MkdirAll creates a directory hierarchy.
