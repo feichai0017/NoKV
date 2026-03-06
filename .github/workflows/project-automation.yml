@@ -64,6 +64,8 @@ jobs:
               const issue = context.payload.issue;
               const pr = context.payload.pull_request;
               const content = pr || issue;
+              const repoOwner = context.repo.owner;
+              const repoName = context.repo.repo;
 
               if (!content || !content.node_id) {
                 core.notice('No issue/PR payload found; skipping.');
@@ -336,6 +338,66 @@ jobs:
                 core.info(`Updated ${label} -> ${optionValueId}`);
               }
 
+              async function getPRClosingIssueIds(owner, repo, prNumber) {
+                if (!owner || !repo || !Number.isInteger(prNumber) || prNumber <= 0) {
+                  return [];
+                }
+                const ids = [];
+                let cursor = null;
+                while (true) {
+                  const res = await github.graphql(
+                    `
+                    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                      repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                          closingIssuesReferences(first: 50, after: $cursor) {
+                            nodes {
+                              id
+                            }
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                          }
+                        }
+                      }
+                    }
+                    `,
+                    { owner, repo, number: prNumber, cursor }
+                  );
+
+                  const page = res?.repository?.pullRequest?.closingIssuesReferences;
+                  if (!page) {
+                    break;
+                  }
+                  for (const node of page.nodes || []) {
+                    if (node?.id) {
+                      ids.push(node.id);
+                    }
+                  }
+                  if (!page.pageInfo?.hasNextPage) {
+                    break;
+                  }
+                  cursor = page.pageInfo.endCursor;
+                }
+                return ids;
+              }
+
+              async function syncLinkedIssueStatus(projectId, statusOptionId) {
+                if (!isPR || !statusOptionId) {
+                  return;
+                }
+                const linkedIssueIds = await getPRClosingIssueIds(repoOwner, repoName, pr.number);
+                if (linkedIssueIds.length === 0) {
+                  core.info('No linked issues (closingIssuesReferences) found for this PR.');
+                  return;
+                }
+                for (const linkedIssueId of linkedIssueIds) {
+                  const linkedItemId = await addOrGetItemId(projectId, linkedIssueId);
+                  await updateSingleSelect(projectId, linkedItemId, FIELD_NAMES.status, statusOptionId, 'linked-issue-status');
+                }
+              }
+
               const itemId = await addOrGetItemId(PROJECT_ID, contentId);
               core.info(`Project item id: ${itemId}`);
 
@@ -353,6 +415,14 @@ jobs:
               await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.status, statusOption, 'status');
               await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.type, typeOption, 'type');
               await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.priority, priorityOption, 'priority');
+
+              let linkedIssueStatusOption = null;
+              if (isPR && isMergedPR) {
+                linkedIssueStatusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.done);
+              } else if (isPR && !isClosed) {
+                linkedIssueStatusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.inProgress);
+              }
+              await syncLinkedIssueStatus(PROJECT_ID, linkedIssueStatusOption);
             }
 
             await main().catch((err) => {
