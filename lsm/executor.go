@@ -141,7 +141,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cd.setNextLevel(lm, t, cd.thisLevel)
 		order := cd.thisLevel.ingest.shardOrderBySize()
 		if len(order) == 0 {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		baseLimit := lm.opt.IngestShardParallelism
 		if baseLimit <= 0 {
@@ -176,7 +176,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			log.Printf("[Compactor: %d] Ingest compaction for level: %d shard=%d DONE", id, sub.thisLevel.levelNum, order[i])
 		}
 		if !ran {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		return nil
 	}
@@ -185,7 +185,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	if l == 0 {
 		cd.setNextLevel(lm, t, lm.levels[t.BaseLevel])
 		if !lm.fillTablesL0(&cd) {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
@@ -203,7 +203,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			cd.setNextLevel(lm, t, lm.levels[l+1])
 		}
 		if !lm.fillTables(&cd) {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		cleanup = true
 		// Continue with the normal merge path.
@@ -1072,25 +1072,23 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			builder.Close()
 			continue
 		}
-		if err := inflightBuilders.Do(); err != nil {
+		// Leverage SSD parallel write throughput.
+		b := builder
+		if err := inflightBuilders.Go(func() error {
+			defer b.Close()
+			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
+			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
+			tbl, err := openTable(lm, sstName, b)
+			if err != nil || tbl == nil {
+				_ = utils.Err(err)
+				return nil
+			}
+			res <- tbl
+			return nil
+		}); err != nil {
 			// Can't return from here, until I decrRef all the tables that I built so far.
 			break
 		}
-		// Leverage SSD parallel write throughput.
-		go func(builder *tableBuilder) {
-			defer inflightBuilders.Done(nil)
-			defer builder.Close()
-			var tbl *table
-			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
-			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
-			var err error
-			tbl, err = openTable(lm, sstName, builder)
-			if err != nil || tbl == nil {
-				_ = utils.Err(err)
-				return
-			}
-			res <- tbl
-		}(builder)
 	}
 }
 

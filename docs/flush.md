@@ -47,7 +47,7 @@ Flush uses two write modes controlled by `Options.ManifestSync`:
 2. **Strict path (`ManifestSync=true`)**
    - Writes to `"<table>.tmp.<pid>.<ns>"`.
    - `tmp.Sync()` to persist SST bytes.
-   - `RenameNoReplace(tmp, final)` installs file atomically (or fallback semantics on unsupported platforms).
+   - `RenameNoReplace(tmp, final)` installs file atomically. If unsupported by platform/filesystem, returns `vfs.ErrRenameNoReplaceUnsupported`.
    - `SyncDir(workdir)` is called before manifest edit so directory entry is durable.
 
 This is the durability ordering used by current code.

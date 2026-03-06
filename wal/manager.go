@@ -429,7 +429,7 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case utils.ErrPartialRecord:
+	case ErrPartialRecord:
 		return nil
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
@@ -532,7 +532,7 @@ func verifySegment(fs vfs.FS, path string) error {
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case utils.ErrPartialRecord:
+	case ErrPartialRecord:
 		return f.Truncate(offset)
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
