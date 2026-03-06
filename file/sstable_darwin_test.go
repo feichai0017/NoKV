@@ -83,7 +83,7 @@ func TestSSTableInitAndAccess(t *testing.T) {
 	require.Equal(t, now, *ss.GetCreatedAt())
 
 	require.NoError(t, ss.Advise(utils.AccessPatternSequential))
-	require.NoError(t, ss.Truncature(int64(len(dataBlock))))
+	require.NoError(t, ss.Truncate(int64(len(dataBlock))))
 }
 
 func TestSSTableDelete(t *testing.T) {

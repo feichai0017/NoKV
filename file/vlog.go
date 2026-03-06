@@ -83,8 +83,7 @@ func (lf *LogFile) DoneWriting(offset uint32) error {
 	lf.Lock.Lock()
 	defer lf.Lock.Unlock()
 
-	// Truncation must run after unmapping, otherwise Windows would crap itself.
-	if err := lf.f.Truncature(int64(offset)); err != nil {
+	if err := lf.f.Truncate(int64(offset)); err != nil {
 		return errors.Wrapf(err, "Unable to truncate file: %q", lf.FileName())
 	}
 	lf.size.Store(offset)
@@ -118,7 +117,7 @@ func (lf *LogFile) Write(offset uint32, buf []byte) (err error) {
 	return err
 }
 func (lf *LogFile) Truncate(offset int64) error {
-	if err := lf.f.Truncature(offset); err != nil {
+	if err := lf.f.Truncate(offset); err != nil {
 		return err
 	}
 	if offset < 0 {

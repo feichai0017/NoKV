@@ -55,7 +55,7 @@ func TestMmapFileBasics(t *testing.T) {
 
 	require.NoError(t, mf.Advise(utils.AccessPatternSequential))
 
-	require.NoError(t, mf.Truncature(128))
+	require.NoError(t, mf.Truncate(128))
 	require.GreaterOrEqual(t, len(mf.Data), 128)
 
 	_, _, err = mf.AllocateSlice(len(mf.Data), len(mf.Data)-4)
@@ -65,7 +65,7 @@ func TestMmapFileBasics(t *testing.T) {
 	require.NoError(t, mf.Remap(true))
 }
 
-func TestTruncatureFailurePreservesMapping(t *testing.T) {
+func TestTruncateFailurePreservesMapping(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap-trunc-fail.dat")
 
@@ -89,11 +89,11 @@ func TestTruncatureFailurePreservesMapping(t *testing.T) {
 	require.NoError(t, err)
 	mf.File = roFile
 
-	err = mf.Truncature(128)
-	require.Error(t, err, "Truncature should fail with read-only file")
+	err = mf.Truncate(128)
+	require.Error(t, err, "Truncate should fail with read-only file")
 
 	// The mapping must still be intact and readable after the failure.
-	require.NotNil(t, mf.Data, "mapping should not be nil after failed Truncature")
+	require.NotNil(t, mf.Data, "mapping should not be nil after failed Truncate")
 	require.Equal(t, len(origData), len(mf.Data), "mapping length should be unchanged")
 	got := mf.Slice(0)
 	require.Equal(t, payload, got, "data should be readable through the preserved mapping")
@@ -103,7 +103,7 @@ func TestTruncatureFailurePreservesMapping(t *testing.T) {
 	mf.File = origFile
 }
 
-func TestTruncatureZeroSize(t *testing.T) {
+func TestTruncateZeroSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mmap-trunc-zero.dat")
 
@@ -119,17 +119,17 @@ func TestTruncatureZeroSize(t *testing.T) {
 
 	origLen := len(mf.Data)
 
-	err = mf.Truncature(0)
-	require.Error(t, err, "Truncature(0) should return error")
+	err = mf.Truncate(0)
+	require.Error(t, err, "Truncate(0) should return error")
 
-	require.NotNil(t, mf.Data, "mapping should not be nil after Truncature(0)")
+	require.NotNil(t, mf.Data, "mapping should not be nil after Truncate(0)")
 	require.Equal(t, origLen, len(mf.Data), "mapping length should be unchanged")
 	got := mf.Slice(0)
 	require.Equal(t, payload, got, "data should be readable through the preserved mapping")
 
-	err = mf.Truncature(-1)
-	require.Error(t, err, "Truncature(-1) should return error")
-	require.NotNil(t, mf.Data, "mapping should not be nil after Truncature(-1)")
+	err = mf.Truncate(-1)
+	require.Error(t, err, "Truncate(-1) should return error")
+	require.NotNil(t, mf.Data, "mapping should not be nil after Truncate(-1)")
 }
 
 func TestMmapFileDeleteAndSyncDir(t *testing.T) {

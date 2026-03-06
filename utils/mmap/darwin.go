@@ -24,13 +24,6 @@ func munmap(b []byte) error {
 	return unix.Munmap(b)
 }
 
-func adviseFromBool(readahead bool) Advice {
-	if readahead {
-		return AdviceNormal
-	}
-	return AdviceRandom
-}
-
 // This is required because the unix package does not support the madvise system call on OS X.
 func madvisePattern(b []byte, advice Advice) error {
 	var flag int
