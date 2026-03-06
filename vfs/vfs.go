@@ -129,6 +129,7 @@ func Ensure(fs FS) FS {
 }
 
 // UnwrapOSFile extracts the underlying *os.File from a File implementation when available.
+// Prefer FileFD in storage code that only needs an OS descriptor for syscalls.
 func UnwrapOSFile(f File) (*os.File, bool) {
 	if f == nil {
 		return nil, false
@@ -144,7 +145,8 @@ func UnwrapOSFile(f File) (*os.File, bool) {
 	return nil, false
 }
 
-// FileFD extracts a file descriptor when the file implementation supports it.
+// FileFD extracts an OS file descriptor when the file implementation supports it.
+// Storage code should prefer this capability over depending on *os.File.
 func FileFD(f File) (uintptr, bool) {
 	if f == nil {
 		return 0, false

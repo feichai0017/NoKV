@@ -3,12 +3,10 @@
 package mmap
 
 import (
-	"os"
-
 	"golang.org/x/sys/unix"
 )
 
-func Mmap(fd *os.File, writable bool, size int64) ([]byte, error) {
+func Mmap(fd uintptr, writable bool, size int64) ([]byte, error) {
 	return mmap(fd, writable, size)
 }
 

@@ -30,7 +30,7 @@ func TestMmap_Basic(t *testing.T) {
 	require.NoError(t, fd.Truncate(1024))
 
 	// Mmap the file.
-	data, err := Mmap(fd, true, 1024)
+	data, err := Mmap(fd.Fd(), true, 1024)
 	require.NoError(t, err)
 	require.Equal(t, 1024, len(data))
 
@@ -65,7 +65,7 @@ func TestMremap(t *testing.T) {
 	require.NoError(t, fd.Truncate(128))
 
 	// Mmap the file.
-	data, err := Mmap(fd, true, 128)
+	data, err := Mmap(fd.Fd(), true, 128)
 	require.NoError(t, err)
 	require.Equal(t, 128, len(data))
 
