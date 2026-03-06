@@ -6,6 +6,17 @@ option go_package = "github.com/feichai0017/NoKV/pb";
 
 import "metapb.proto";
 
+// Enum for read consistency control and read strategy options protocal
+ enum ReadConsistency {
+    READ_CONSISTENCY_STRONG = 0;
+    READ_CONSISTENCY_BOUNDED_STALE = 1;
+  }
+
+  enum ReadPreference {
+    READ_PREFERENCE_LEADER_ONLY = 0;
+    READ_PREFERENCE_FOLLOWER_PREFER = 1;
+  }
+
 // kvrpcpb carries distributed KV RPC and transaction protocol messages.
 
 // KV is the logical key/value tuple used in distributed RPC payloads
@@ -145,6 +156,11 @@ message Context {
   uint64 region_id = 1;
   RegionEpoch region_epoch = 2;
   RegionPeer peer = 3;
+
+  ReadConsistency read_consistency = 4;
+  ReadPreference read_preference = 5;
+  uint64 max_stale_read_index = 6;
+  uint64 max_stale_read_ms = 7;
 }
 
 message KvGetRequest {
