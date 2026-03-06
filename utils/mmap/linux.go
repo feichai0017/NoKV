@@ -30,14 +30,6 @@ func munmap(data []byte) error {
 	return unix.Munmap(data)
 }
 
-// adviseFromBool maps the legacy bool readahead flag to Advice.
-func adviseFromBool(readahead bool) Advice {
-	if readahead {
-		return AdviceNormal
-	}
-	return AdviceRandom
-}
-
 // madvisePattern uses the madvise system call to give advise about the use of
 // memory when using a slice that is memory-mapped to a file.
 func madvisePattern(b []byte, advice Advice) error {
