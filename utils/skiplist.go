@@ -2,7 +2,6 @@
 Adapted from RocksDB inline skiplist.
 
 Key differences:
-- No optimization for sequential inserts (no "prev").
 - No custom comparator.
 - Support overwrites. This requires care when we see the same key when inserting.
   For RocksDB or LevelDB, overwrites are implemented as a newer sequence number in the key, so
@@ -96,6 +95,15 @@ type Skiplist struct {
 	ref        atomic.Int32
 	arena      *Arena
 	OnClose    func()
+
+	// maxKeyPerLevel stores the offset of the rightmost node at each level.
+	// This enables O(1) append at any level during sequential inserts.
+	// maxKeyPerLevel[0] is the base level's rightmost node (global max key).
+	maxKeyPerLevel [maxHeight]uint32
+
+	// sequentialInserts counts the number of sequential insert operations
+	// (for metrics/debugging purposes)
+	sequentialInserts uint64
 }
 
 // IncrRef increases the refcount
@@ -318,6 +326,25 @@ func (s *Skiplist) getHeight() int32 {
 	return atomic.LoadInt32(&s.height)
 }
 
+// updateMaxPerLevel updates the maxKeyPerLevel for the given level if the new key is greater.
+func (s *Skiplist) updateMaxPerLevel(level int, newNodeOffset uint32, key []byte) {
+	for {
+		oldMaxOffset := atomic.LoadUint32(&s.maxKeyPerLevel[level])
+		if oldMaxOffset != 0 {
+			oldMaxNode := arenaGetNode(s.arena, oldMaxOffset)
+			if oldMaxNode != nil {
+				oldMaxKey := oldMaxNode.key(s.arena)
+				if CompareKeys(key, oldMaxKey) <= 0 {
+					return
+				}
+			}
+		}
+		if atomic.CompareAndSwapUint32(&s.maxKeyPerLevel[level], oldMaxOffset, newNodeOffset) {
+			return
+		}
+	}
+}
+
 // Put inserts the key-value pair.
 func (s *Skiplist) Add(e *kv.Entry) {
 	// Since we allow overwrite, we may not need to create a new node. We might not even need to
@@ -332,10 +359,28 @@ func (s *Skiplist) Add(e *kv.Entry) {
 	var prev [maxHeight + 1]uint32
 	var next [maxHeight + 1]uint32
 	prev[listHeight] = s.headOffset
+
+	// For each level, independently determine insertion point
+	// If key > maxKey at this level, we can use the maxKey node as a starting
+	// point for search (sequential optimization hint).
 	for i := int(listHeight) - 1; i >= 0; i-- {
-		// Use higher level to speed up for current level.
-		prev[i], next[i] = s.findSpliceForLevel(key, prev[i+1], i)
+		searchFrom := prev[i+1]
+		maxOffset := atomic.LoadUint32(&s.maxKeyPerLevel[i])
+		if maxOffset != 0 {
+			maxNode := arenaGetNode(s.arena, maxOffset)
+			if maxNode != nil {
+				maxKey := maxNode.key(s.arena)
+				if CompareKeys(key, maxKey) > 0 {
+					// key > maxKey: use maxNode as search start for O(1) best-case append
+					searchFrom = maxOffset
+					atomic.AddUint64(&s.sequentialInserts, 1)
+				}
+			}
+		}
+		// Search from the best known starting point (either prev[i+1] or maxNode)
+		prev[i], next[i] = s.findSpliceForLevel(key, searchFrom, i)
 		if prev[i] == next[i] {
+			// Key already exists, update value
 			vo := arenaPutVal(s.arena, v)
 			encValue := encodeValue(vo, v.EncodedSize())
 			prevNode := arenaGetNode(s.arena, prev[i])
@@ -347,6 +392,7 @@ func (s *Skiplist) Add(e *kv.Entry) {
 	// We do need to create a new node.
 	height := s.randomHeight()
 	x := newNode(s.arena, key, v, height)
+	xOffset := arenaGetNodeOffset(s.arena, x)
 
 	// Try to increase s.height via CAS.
 	listHeight = s.getHeight()
@@ -371,10 +417,15 @@ func (s *Skiplist) Add(e *kv.Entry) {
 				// the base level. But we know we are not on the base level.
 				AssertTrue(prev[i] != next[i])
 			}
+
 			x.tower[i] = next[i]
 			pnode := arenaGetNode(s.arena, prev[i])
-			if pnode.casNextOffset(i, next[i], arenaGetNodeOffset(s.arena, x)) {
+			if pnode.casNextOffset(i, next[i], xOffset) {
 				// Managed to insert x between prev[i] and next[i]. Go to the next level.
+				// If inserted at the end of this level, update maxKeyPerLevel
+				if next[i] == 0 {
+					s.updateMaxPerLevel(i, xOffset, key)
+				}
 				break
 			}
 			// CAS failed. We need to recompute prev and next.
