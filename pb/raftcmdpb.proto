@@ -30,12 +30,18 @@ message AdminCommand {
   MergeCommand merge = 3;
 }
 
+// code 6 to 9 is under implementation, DO NOT use it.
 message CmdHeader {
   uint64 region_id = 1;
   RegionEpoch region_epoch = 2;
   uint64 peer_id = 3;
   bool read_quorum = 4;
   uint64 request_id = 5;
+
+  ReadConsistency read_consistency = 6;
+  ReadPreference read_preference = 7;
+  uint64 max_stale_read_index = 8;
+  uint64 max_stale_read_ms = 9;
 }
 
 enum CmdType {
