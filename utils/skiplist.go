@@ -100,10 +100,6 @@ type Skiplist struct {
 	// This enables O(1) append at any level during sequential inserts.
 	// maxKeyPerLevel[0] is the base level's rightmost node (global max key).
 	maxKeyPerLevel [maxHeight]uint32
-
-	// sequentialInserts counts the number of sequential insert operations
-	// (for metrics/debugging purposes)
-	sequentialInserts uint64
 }
 
 // IncrRef increases the refcount
@@ -373,7 +369,6 @@ func (s *Skiplist) Add(e *kv.Entry) {
 				if CompareKeys(key, maxKey) > 0 {
 					// key > maxKey: use maxNode as search start for O(1) best-case append
 					searchFrom = maxOffset
-					atomic.AddUint64(&s.sequentialInserts, 1)
 				}
 			}
 		}
