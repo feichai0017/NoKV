@@ -62,7 +62,7 @@ func makeRandomSkiplistKey(i int) []byte {
 	permuted := uint64((i*0x5deece66d + 0xb) & 0xffffffffffff)
 	key := make([]byte, 16)
 	copy(key, "benchkey")
-	binary.LittleEndian.PutUint64(key[8:], permuted)
+	binary.BigEndian.PutUint64(key[8:], permuted)
 	return kv.InternalKey(kv.CFDefault, key, uint64(i+1))
 }
 
