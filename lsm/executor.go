@@ -16,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 type compactDef struct {
@@ -717,7 +718,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 
 	if err == nil && lm.opt.ManifestSync {
 		// Strict durability mode: persist new SST directory entries before manifest edits.
-		err = utils.SyncDir(lm.opt.FS, lm.opt.WorkDir)
+		err = vfs.SyncDir(lm.opt.FS, lm.opt.WorkDir)
 	}
 
 	if err != nil {

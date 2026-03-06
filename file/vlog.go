@@ -180,8 +180,12 @@ func (lf *LogFile) Seek(offset int64, whence int) (ret int64, err error) {
 	return lf.f.File.Seek(offset, whence)
 }
 
-func (lf *LogFile) FD() *os.File {
-	return lf.f.Fd
+// FileFD exposes the OS descriptor capability when the log file is backed by a real OS handle.
+func (lf *LogFile) FileFD() (uintptr, bool) {
+	if lf == nil || lf.f == nil {
+		return 0, false
+	}
+	return vfs.FileFD(lf.f.File)
 }
 
 func (lf *LogFile) File() vfs.File {

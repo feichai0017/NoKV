@@ -241,7 +241,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	// Strict durability mode: persist SST directory entries before manifest references.
 	if lm.opt.ManifestSync {
-		if err := utils.SyncDir(lm.opt.FS, lm.opt.WorkDir); err != nil {
+		if err := vfs.SyncDir(lm.opt.FS, lm.opt.WorkDir); err != nil {
 			return err
 		}
 	}
