@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8381e67.js";
+            window.path_to_searchindex_js = "searchindex-1eef9521.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -1367,7 +1367,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </tbody>
 </table>
 </div>
-<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
+<p>Cache hit/miss signals are exported through <code>StatsSnapshot.Cache</code> (and surfaced by <code>nokv stats</code> / expvar), which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
 <hr>
 <h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
 <p>Compaction informs value‑log GC via discard statistics:</p>
@@ -1403,7 +1403,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
 <ul>
 <li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
-<li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
+<li>Observe <code>NoKV.Stats.cache.*</code> and <code>NoKV.Stats.compaction.*</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
 <li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.</li>
 <li>Keep an eye on <code>NoKV.Stats.value_log.gc</code> (for example <code>gc_runs</code> and <code>head_updates</code>); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
 </ul>
@@ -1486,7 +1486,12 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
 <pre><code class="language-go">mgr, _ := wal.Open(wal.Config{Dir: path})
-infos, _ := mgr.Append(batchPayload)
+info, _ := mgr.AppendEntry(entry)
+batchInfo, _ := mgr.AppendEntryBatch(entries)
+typedInfos, _ := mgr.AppendRecords(wal.Record{
+    Type:    wal.RecordTypeRaftEntry,
+    Payload: raftPayload,
+})
 _ = mgr.Sync()
 _ = mgr.Rotate()
 _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
@@ -1496,7 +1501,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </code></pre>
 <p>Key behaviours:</p>
 <ul>
-<li><code>Append</code> automatically calls <code>ensureCapacity</code> to decide when to rotate; it returns <code>EntryInfo{SegmentID, Offset, Length}</code> for each payload so higher layers can build value pointers or manifest checkpoints.</li>
+<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep manifest/raft pointers.</li>
 <li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
 <li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB’s <code>LogFileManager::SwitchLog</code>).</li>
 <li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
@@ -1512,8 +1517,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </thead>
 <tbody>
 <tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
-<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
-<tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
+<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
+<tr><td><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
@@ -1561,7 +1566,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <hr>
 <h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
 <ul>
-<li>Configure <code>SyncOnWrite</code> for synchronous durability (default async like RocksDB’s default). For latency-sensitive deployments, consider enabling to emulate Badger’s <code>SyncWrites</code>.</li>
+<li>Configure <code>Options.SyncWrites=true</code> for synchronous durability (default async, similar to RocksDB’s default).</li>
 <li>After large flushes, forcing <code>Rotate</code> keeps WAL files short, reducing replay time.</li>
 <li>Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB’s <code>Checkpoints</code>.</li>
 </ul>
@@ -1924,7 +1929,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <tbody>
 <tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
 <tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
-<tr><td><a href="../file/vlog.go#L16-L130"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>EncodeEntry</code>.</td></tr>
+<tr><td><a href="../file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -1942,14 +1947,15 @@ _ = mgr.Remove(fid)  // close + delete file
 <p><code>LogFile</code> wraps <code>MmapFile</code> to simplify value-log operations:</p>
 <pre><code class="language-go">lf := &amp;file.LogFile{}
 _ = lf.Open(&amp;file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1&lt;&lt;29})
-ptr, _ := lf.EncodeEntry(entry, buf, offset)
-_ = lf.Write(offset, buf.Bytes())
-_ = lf.DoneWriting(nextOffset)
+var buf bytes.Buffer
+payload, _ := kv.EncodeEntry(&amp;buf, entry)
+_ = lf.Write(offset, payload)
+_ = lf.DoneWriting(offset + uint32(len(payload)))
 </code></pre>
 <ul>
 <li><code>Open</code> mmaps the file and records current size (guarded to <code>&lt; 4 GiB</code>).</li>
 <li><code>Read</code> validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.</li>
-<li><code>EncodeEntry</code> uses the shared <code>kv.EntryHeader</code> and CRC32 helpers to produce the exact on-disk layout consumed by <code>vlog.Manager</code> and <code>wal.Manager</code>.</li>
+<li>Entry encoding uses shared helpers in <code>kv</code> (<code>kv.EncodeEntry</code> / <code>kv.EncodeEntryTo</code>); <code>LogFile</code> focuses on write/read/truncate + durability semantics.</li>
 <li><code>DoneWriting</code> guarantees durability for both data bytes <code>[0, offset)</code> and the file metadata (size).
 <ul>
 <li>Sequence: It flushes dirty pages (<code>msync</code>), truncates the file to <code>offset</code>, and performs a file-descriptor level sync (<code>fsync</code>) to ensure the new file size is persisted on disk before returning.</li>
@@ -1982,7 +1988,7 @@ _ = lf.DoneWriting(nextOffset)
 <ul>
 <li><code>DoneWriting</code> provides strong crash-consistency guarantees. Even on filesystems where <code>ftruncate</code> metadata persistence is asynchronous, the explicit post-truncate <code>fsync</code> ensures the file size is durable upon success.</li>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
-<li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
+<li><code>LogFile</code> updates cached size internally on <code>Write</code>/<code>Truncate</code>, so read bounds stay consistent during rewrite/rewind flows.</li>
 <li><code>vfs.SyncDir</code> is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls <code>SyncDir(workdir)</code> before manifest publication.</li>
 </ul>
 <p>For more on how these primitives plug into higher layers, see <a href="#wal-subsystem"><code>docs/wal.md</code></a> and <a href="#value-log-vlog-design"><code>docs/vlog.md</code></a>.</p>
@@ -2657,7 +2663,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <tr><th>RPC</th><th>Execution Path</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><code>KvGet</code> / <code>KvScan</code></td><td><code>ReadCommand</code> → <code>kv.Apply</code> (read mode)</td><td>No raft round-trip; leader-only.</td></tr>
+<tr><td><code>KvGet</code> / <code>KvScan</code></td><td><code>ReadCommand</code> → <code>LinearizableRead(ReadIndex)</code> + <code>WaitApplied</code> → <code>kv.Apply</code> (read mode)</td><td>Leader-only strong read with Raft linearizability barrier.</td></tr>
 <tr><td><code>KvPrewrite</code> / <code>KvCommit</code> / <code>KvBatchRollback</code> / <code>KvResolveLock</code> / <code>KvCheckTxnStatus</code></td><td><code>ProposeCommand</code> → command pipeline → raft log → <code>kv.Apply</code></td><td>Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.</td></tr>
 </tbody>
 </table>
@@ -2926,7 +2932,8 @@ stronger HA semantics is incremental.</li>
 <li><code>flush.queue_length</code></li>
 <li><code>wal.segment_count</code></li>
 <li><code>value_log.heads</code></li>
-<li><code>value_log.files</code></li>
+<li><code>value_log.segments</code></li>
+<li><code>value_log.pending_deletes</code></li>
 </ul>
 <p>If <code>flush.queue_length</code> remains high after replay, inspect flush worker throughput and manifest sync settings.</p>
 <hr>

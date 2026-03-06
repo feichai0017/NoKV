@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8381e67.js";
+            window.path_to_searchindex_js = "searchindex-1eef9521.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -231,7 +231,7 @@
 </tbody>
 </table>
 </div>
-<p><code>CacheMetrics()</code> on <code>DB</code> surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
+<p>Cache hit/miss signals are exported through <code>StatsSnapshot.Cache</code> (and surfaced by <code>nokv stats</code> / expvar), which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
 <hr>
 <h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
 <p>Compaction informs value‑log GC via discard statistics:</p>
@@ -267,7 +267,7 @@
 <h2 id="7-practical-tips"><a class="header" href="#7-practical-tips">7. Practical Tips</a></h2>
 <ul>
 <li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
-<li>Observe <code>DB.CacheMetrics()</code> and <code>DB.CompactionStats()</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
+<li>Observe <code>NoKV.Stats.cache.*</code> and <code>NoKV.Stats.compaction.*</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
 <li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.</li>
 <li>Keep an eye on <code>NoKV.Stats.value_log.gc</code> (for example <code>gc_runs</code> and <code>head_updates</code>); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
 </ul>

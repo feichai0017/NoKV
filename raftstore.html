@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8381e67.js";
+            window.path_to_searchindex_js = "searchindex-1eef9521.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -268,7 +268,7 @@
 <tr><th>RPC</th><th>Execution Path</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><code>KvGet</code> / <code>KvScan</code></td><td><code>ReadCommand</code> → <code>kv.Apply</code> (read mode)</td><td>No raft round-trip; leader-only.</td></tr>
+<tr><td><code>KvGet</code> / <code>KvScan</code></td><td><code>ReadCommand</code> → <code>LinearizableRead(ReadIndex)</code> + <code>WaitApplied</code> → <code>kv.Apply</code> (read mode)</td><td>Leader-only strong read with Raft linearizability barrier.</td></tr>
 <tr><td><code>KvPrewrite</code> / <code>KvCommit</code> / <code>KvBatchRollback</code> / <code>KvResolveLock</code> / <code>KvCheckTxnStatus</code></td><td><code>ProposeCommand</code> → command pipeline → raft log → <code>kv.Apply</code></td><td>Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.</td></tr>
 </tbody>
 </table>

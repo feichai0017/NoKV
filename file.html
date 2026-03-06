@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8381e67.js";
+            window.path_to_searchindex_js = "searchindex-1eef9521.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -190,7 +190,7 @@
 <tbody>
 <tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
 <tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncature</code>, <code>Sync</code>.</td></tr>
-<tr><td><a href="../file/vlog.go#L16-L130"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>EncodeEntry</code>.</td></tr>
+<tr><td><a href="../file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -208,14 +208,15 @@
 <p><code>LogFile</code> wraps <code>MmapFile</code> to simplify value-log operations:</p>
 <pre><code class="language-go">lf := &amp;file.LogFile{}
 _ = lf.Open(&amp;file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1&lt;&lt;29})
-ptr, _ := lf.EncodeEntry(entry, buf, offset)
-_ = lf.Write(offset, buf.Bytes())
-_ = lf.DoneWriting(nextOffset)
+var buf bytes.Buffer
+payload, _ := kv.EncodeEntry(&amp;buf, entry)
+_ = lf.Write(offset, payload)
+_ = lf.DoneWriting(offset + uint32(len(payload)))
 </code></pre>
 <ul>
 <li><code>Open</code> mmaps the file and records current size (guarded to <code>&lt; 4 GiB</code>).</li>
 <li><code>Read</code> validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.</li>
-<li><code>EncodeEntry</code> uses the shared <code>kv.EntryHeader</code> and CRC32 helpers to produce the exact on-disk layout consumed by <code>vlog.Manager</code> and <code>wal.Manager</code>.</li>
+<li>Entry encoding uses shared helpers in <code>kv</code> (<code>kv.EncodeEntry</code> / <code>kv.EncodeEntryTo</code>); <code>LogFile</code> focuses on write/read/truncate + durability semantics.</li>
 <li><code>DoneWriting</code> guarantees durability for both data bytes <code>[0, offset)</code> and the file metadata (size).
 <ul>
 <li>Sequence: It flushes dirty pages (<code>msync</code>), truncates the file to <code>offset</code>, and performs a file-descriptor level sync (<code>fsync</code>) to ensure the new file size is persisted on disk before returning.</li>
@@ -248,7 +249,7 @@ _ = lf.DoneWriting(nextOffset)
 <ul>
 <li><code>DoneWriting</code> provides strong crash-consistency guarantees. Even on filesystems where <code>ftruncate</code> metadata persistence is asynchronous, the explicit post-truncate <code>fsync</code> ensures the file size is durable upon success.</li>
 <li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
-<li><code>LogFile.AddSize</code> updates the cached size used by reads—critical when rewinding or rewriting segments.</li>
+<li><code>LogFile</code> updates cached size internally on <code>Write</code>/<code>Truncate</code>, so read bounds stay consistent during rewrite/rewind flows.</li>
 <li><code>vfs.SyncDir</code> is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls <code>SyncDir(workdir)</code> before manifest publication.</li>
 </ul>
 <p>For more on how these primitives plug into higher layers, see <a href="wal.html"><code>docs/wal.md</code></a> and <a href="vlog.html"><code>docs/vlog.md</code></a>.</p>

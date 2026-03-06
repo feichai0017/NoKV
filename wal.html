@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8381e67.js";
+            window.path_to_searchindex_js = "searchindex-1eef9521.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b3c1044a.js"></script>
@@ -205,7 +205,12 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 <hr>
 <h2 id="3-public-api-go"><a class="header" href="#3-public-api-go">3. Public API (Go)</a></h2>
 <pre><code class="language-go">mgr, _ := wal.Open(wal.Config{Dir: path})
-infos, _ := mgr.Append(batchPayload)
+info, _ := mgr.AppendEntry(entry)
+batchInfo, _ := mgr.AppendEntryBatch(entries)
+typedInfos, _ := mgr.AppendRecords(wal.Record{
+    Type:    wal.RecordTypeRaftEntry,
+    Payload: raftPayload,
+})
 _ = mgr.Sync()
 _ = mgr.Rotate()
 _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
@@ -215,7 +220,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </code></pre>
 <p>Key behaviours:</p>
 <ul>
-<li><code>Append</code> automatically calls <code>ensureCapacity</code> to decide when to rotate; it returns <code>EntryInfo{SegmentID, Offset, Length}</code> for each payload so higher layers can build value pointers or manifest checkpoints.</li>
+<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep manifest/raft pointers.</li>
 <li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
 <li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB’s <code>LogFileManager::SwitchLog</code>).</li>
 <li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
@@ -231,8 +236,8 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </thead>
 <tbody>
 <tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the skiplist.</td></tr>
-<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which flows into <code>lsm.Set</code> and thus WAL.</td></tr>
-<tr><td><code>DB.Set</code></td><td>Direct write path: calls <code>lsm.Set</code>, which appends to WAL and updates the memtable.</td></tr>
+<tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
+<tr><td><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
@@ -280,7 +285,7 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <hr>
 <h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
 <ul>
-<li>Configure <code>SyncOnWrite</code> for synchronous durability (default async like RocksDB’s default). For latency-sensitive deployments, consider enabling to emulate Badger’s <code>SyncWrites</code>.</li>
+<li>Configure <code>Options.SyncWrites=true</code> for synchronous durability (default async, similar to RocksDB’s default).</li>
 <li>After large flushes, forcing <code>Rotate</code> keeps WAL files short, reducing replay time.</li>
 <li>Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB’s <code>Checkpoints</code>.</li>
 </ul>
