@@ -118,7 +118,9 @@ func TestRenameNoReplaceSuccess(t *testing.T) {
 	if err := os.WriteFile(src, []byte("value"), 0o644); err != nil {
 		t.Fatalf("write src: %v", err)
 	}
-	if err := (OSFS{}).RenameNoReplace(src, dst); err != nil {
+	if err := (OSFS{}).RenameNoReplace(src, dst); errors.Is(err, ErrRenameNoReplaceUnsupported) {
+		t.Skipf("rename no-replace unsupported on this platform/filesystem: %v", err)
+	} else if err != nil {
 		t.Fatalf("rename no replace: %v", err)
 	}
 	if _, err := os.Stat(src); !errors.Is(err, os.ErrNotExist) {
@@ -140,6 +142,9 @@ func TestRenameNoReplaceExistingTarget(t *testing.T) {
 		t.Fatalf("write dst: %v", err)
 	}
 	err := (OSFS{}).RenameNoReplace(src, dst)
+	if errors.Is(err, ErrRenameNoReplaceUnsupported) {
+		t.Skipf("rename no-replace unsupported on this platform/filesystem: %v", err)
+	}
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("expected os.ErrExist, got: %v", err)
 	}

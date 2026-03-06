@@ -7,7 +7,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/transport"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -45,7 +44,7 @@ func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 		})
 	}
 	if cfg.WAL != nil || cfg.Manifest != nil {
-		return nil, utils.ErrMissingManifestOrWAL
+		return nil, ErrMissingManifestOrWAL
 	}
 	if cfg.StorageDir != "" {
 		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir), nil)

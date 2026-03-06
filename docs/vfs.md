@@ -31,10 +31,9 @@ The `vfs` package provides a small filesystem abstraction used by WAL, manifest,
 `RenameNoReplace`:
 
 - contract: fail with `os.ErrExist` when destination already exists.
-- on Linux, uses `renameat2(..., RENAME_NOREPLACE)` when supported.
-- fallback path (`renameNoReplaceFallback`) checks destination existence then calls `Rename`.
-
-Important: fallback is **not atomic** and has TOCTOU risk. Callers needing strict no-overwrite atomicity should avoid relying on fallback behavior.
+- on Linux, uses `renameat2(..., RENAME_NOREPLACE)`.
+- on macOS, uses `renamex_np(..., RENAME_EXCL)`.
+- when atomic no-replace rename is unsupported by platform/filesystem, returns `vfs.ErrRenameNoReplaceUnsupported` (no non-atomic fallback).
 
 ---
 

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +52,7 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 	cm.runCycle(0, "test")
 	require.GreaterOrEqual(t, exec.adjusted, 1)
 
-	exec.doErr = utils.ErrFillTables
+	exec.doErr = ErrFillTables
 	require.False(t, cm.run(0, Priority{Level: 1, Adjusted: 1}))
 
 	exec.doErr = errors.New("boom")
