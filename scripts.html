@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b850fca4.js";
+            window.path_to_searchindex_js = "searchindex-777acdc5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -227,7 +227,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
 <tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags).</td></tr>
 <tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
-<tr><td><code>scripts/gen.sh</code></td><td>Generates mock data or helper artefacts (see inline comments for details).</td></tr>
+<tr><td><code>scripts/gen.sh</code></td><td>Generates protobuf Go bindings through Buf with pinned remote plugin versions.</td></tr>
 </tbody>
 </table>
 </div>
