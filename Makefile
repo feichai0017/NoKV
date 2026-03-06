@@ -2,12 +2,11 @@
 # Provides standardized commands for development workflow
 
 .PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-down bench install-tools
+.PHONY: proto proto-check
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
+BUF_VERSION ?= 1.56.0
 PROJECT_GO_VERSION ?= $(shell awk '/^go /{print $$2}' go.mod)
-PROTOC_GEN_GO_VERSION ?= $(shell go list -m -f '{{.Version}}' google.golang.org/protobuf)
-PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
-PROTOC_VERSION ?= 33.4
 
 # Default target
 help:
@@ -20,6 +19,8 @@ help:
 	@echo "  make test-coverage      - Run tests with coverage report"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
+	@echo "  make proto              - Format .proto files and regenerate protobuf Go code"
+	@echo "  make proto-check        - Verify proto format, lint, breaking checks, and generated code"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make docker-up          - Start Docker Compose cluster"
@@ -72,8 +73,26 @@ fmt:
 	for f in $$files; do \
 		[ -f "$$f" ] && printf '%s\n' "$$f"; \
 	done | xargs -r gofmt -w -s
+	buf format -w
 	go mod tidy
 	@echo "✓ Code formatted"
+
+proto:
+	@echo "Formatting .proto files and generating protobuf Go code..."
+	buf format -w
+	./scripts/gen.sh
+	@echo "✓ Protobufs formatted and generated"
+
+proto-check:
+	@echo "Checking proto format, lint, breaking changes, and generated code..."
+	buf format -d --exit-code
+	buf lint
+	buf breaking --against '.git#branch=main,subdir=pb'
+	@before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
+	./scripts/gen.sh; \
+	after="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
+	test "$$before" = "$$after"
+	@echo "✓ Proto checks passed"
 
 # Run benchmarks
 bench:
@@ -84,16 +103,7 @@ bench:
 install-tools:
 	@echo "Installing development tools (pinned versions)..."
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
-	@if ! command -v protoc >/dev/null 2>&1; then \
-		echo "WARN: protoc not found. Please install libprotoc $(PROTOC_VERSION)."; \
-	else \
-		installed="$$(protoc --version | awk '{print $$2}')"; \
-		if [ "$$installed" != "$(PROTOC_VERSION)" ]; then \
-			echo "WARN: expected libprotoc $(PROTOC_VERSION), got $$installed"; \
-		fi; \
-	fi
+	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
 	@echo "✓ Tools installed"
 
 # Start Docker Compose cluster

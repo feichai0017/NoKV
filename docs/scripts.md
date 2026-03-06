@@ -47,7 +47,7 @@ When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls 
 | `scripts/transport_chaos.sh` | Injects disconnects/blocks/delay into the `raftstore` transport to observe behaviour under faulty networks. |
 | `scripts/run_benchmarks.sh` | Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags). |
 | `scripts/debug.sh` | Convenience wrapper around `dlv test` for targeted debugging. |
-| `scripts/gen.sh` | Generates mock data or helper artefacts (see inline comments for details). |
+| `scripts/gen.sh` | Generates protobuf Go bindings through Buf with pinned remote plugin versions. |
 
 ---
 

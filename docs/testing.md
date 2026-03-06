@@ -16,6 +16,9 @@ go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|Two
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
 
+# Protobuf schema hygiene
+make proto-check
+
 # gRPC transport chaos tests + watchdog metrics
 CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
 
