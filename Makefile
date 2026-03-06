@@ -19,7 +19,7 @@ help:
 	@echo "  make test-race          - Run tests with race detector"
 	@echo "  make test-coverage      - Run tests with coverage report"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
-	@echo "  make fmt                - Format code with gofmt and tidy modules"
+	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make docker-up          - Start Docker Compose cluster"
@@ -67,6 +67,7 @@ lint:
 # Format code and tidy dependencies
 fmt:
 	@echo "Formatting code..."
+	go fix ./...
 	@files=$$(git ls-files '*.go'); \
 	for f in $$files; do \
 		[ -f "$$f" ] && printf '%s\n' "$$f"; \

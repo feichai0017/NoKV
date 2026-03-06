@@ -36,7 +36,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	maxInflight := fs.Int("raft-max-inflight", 256, "raft max inflight messages")
 	raftTickInterval := fs.Duration("raft-tick-interval", 0, "interval between raft ticks (default 100ms)")
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
-	pdAddr := fs.String("pd-addr", "", "PD-lite gRPC endpoint for cluster mode (required when --peer is set)")
+	pdAddr := fs.String("pd-addr", "", "PD-lite gRPC endpoint for cluster mode (required)")
 	pdTimeout := fs.Duration("pd-timeout", 2*time.Second, "timeout for PD-lite heartbeat RPCs")
 	var peerFlags []string
 	fs.Func("peer", "remote store mapping in the form storeID=address (repeatable)", func(value string) error {
@@ -87,7 +87,6 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = pdSink.Close()
 	}()
 	var schedulerSink scheduler.RegionSink = pdSink
-	runtimeMode := runtimeModeClusterPD
 
 	server, err := raftstore.NewServer(raftstore.ServerConfig{
 		DB: db,
@@ -109,7 +108,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	registerRuntimeStoreWithMode(server.Store(), runtimeMode)
+	registerRuntimeStore(server.Store())
 	defer unregisterRuntimeStore(server.Store())
 	defer func() {
 		_ = server.Close()

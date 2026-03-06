@@ -80,7 +80,8 @@ Watch these fields during restart:
 - `flush.queue_length`
 - `wal.segment_count`
 - `value_log.heads`
-- `value_log.files`
+- `value_log.segments`
+- `value_log.pending_deletes`
 
 If `flush.queue_length` remains high after replay, inspect flush worker throughput and manifest sync settings.
 

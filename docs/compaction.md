@@ -59,7 +59,7 @@ NoKV’s cache is split into three parts (`lsm/cache.go`):
 | OS page cache path | Deeper levels bypass user-space cache and rely on mmap + kernel page cache. | Same as above |
 | Bloom cache | Stores decoded bloom filters to reduce disk touches. | `recordBloom(hit)` |
 
-`CacheMetrics()` on `DB` surfaces hits/misses per layer, which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
+Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced by `nokv stats` / expvar), which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
 
 ---
 
@@ -94,7 +94,7 @@ When adding new compaction heuristics or cache behaviour, extend these tests (or
 ## 7. Practical Tips
 
 - Tune `Options.IngestCompactBatchSize` when ingest queues build up; increasing it lets a single move cover more tables.
-- Observe `DB.CacheMetrics()` and `DB.CompactionStats()` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
+- Observe `NoKV.Stats.cache.*` and `NoKV.Stats.compaction.*` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
 - For workloads dominated by range scans, consider increasing `Options.BlockCacheSize` if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.
 - Keep an eye on `NoKV.Stats.value_log.gc` (for example `gc_runs` and `head_updates`); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.
 
