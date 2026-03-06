@@ -29,7 +29,7 @@ func TestMremapAndMunmap(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 
-	data, err := Mmap(f, true, size)
+	data, err := Mmap(f.Fd(), true, size)
 	if err != nil {
 		t.Fatalf("mmap: %v", err)
 	}

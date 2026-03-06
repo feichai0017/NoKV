@@ -56,13 +56,6 @@ func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }
 
-// SyncDir When you create or delete a file, you have to ensure the directory entry for the file is synced
-// in order to guarantee the file is visible (if the system crashes). (See the man page for fsync,
-// or see https://github.com/coreos/etcd/issues/6368 for an example.)
-func SyncDir(fs vfs.FS, dir string) error {
-	return vfs.SyncDir(fs, dir)
-}
-
 // LoadIDMap Get the id of all sst files in the current folder
 func LoadIDMap(fs vfs.FS, dir string) map[uint64]struct{} {
 	fs = vfs.Ensure(fs)

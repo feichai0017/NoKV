@@ -64,7 +64,9 @@ func TestLogFileLifecycleHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), pos)
 
-	require.NotNil(t, lf.FD())
+	fd, ok := lf.FileFD()
+	require.True(t, ok)
+	require.NotZero(t, fd)
 	require.NotNil(t, lf.File())
 	require.Equal(t, path, lf.FileName())
 
