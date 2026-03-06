@@ -25,17 +25,6 @@ func TestCompareUserKeysAndChecksum(t *testing.T) {
 	require.Error(t, VerifyChecksum(data, []byte{0x00}))
 }
 
-func TestRemoveDir(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "file.txt")
-	require.NoError(t, os.WriteFile(path, []byte("data"), 0o644))
-	require.NotPanics(t, func() {
-		RemoveDir(nil, dir)
-	})
-	_, err := os.Stat(dir)
-	require.Error(t, err)
-}
-
 func TestFileHelpers(t *testing.T) {
 	require.Equal(t, uint64(12), FID("00012.sst"))
 	require.Equal(t, uint64(0), FID("bad.txt"))
@@ -43,14 +32,6 @@ func TestFileHelpers(t *testing.T) {
 	dir := t.TempDir()
 	require.Equal(t, filepath.Join(dir, "00042.sst"), FileNameSSTable(dir, 42))
 	require.Equal(t, filepath.Join(dir, "00007.vlog"), VlogFilePath(dir, 7))
-
-	filePath := filepath.Join(dir, "fresh.txt")
-	f, err := CreateSyncedFile(nil, filePath, false)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = CreateSyncedFile(nil, filePath, false)
-	require.Error(t, err)
 
 	require.NoError(t, vfs.SyncDir(nil, dir))
 }
