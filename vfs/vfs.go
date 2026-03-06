@@ -2,7 +2,6 @@
 package vfs
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -127,19 +126,6 @@ func Ensure(fs FS) FS {
 		return OSFS{}
 	}
 	return fs
-}
-
-// renameNoReplaceFallback is a compatibility path when atomic no-replace rename
-// is unavailable. It is NOT atomic and has a TOCTOU window between Stat and Rename.
-// Callers that require strict atomic no-overwrite semantics should treat fallback
-// activation as an error instead of relying on this path.
-func renameNoReplaceFallback(fs FS, oldPath, newPath string) error {
-	if _, err := fs.Stat(newPath); err == nil {
-		return os.ErrExist
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return fs.Rename(oldPath, newPath)
 }
 
 // UnwrapOSFile extracts the underlying *os.File from a File implementation when available.
