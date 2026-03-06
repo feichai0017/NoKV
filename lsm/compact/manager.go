@@ -5,8 +5,6 @@ import (
 	"math"
 	"math/rand"
 	"time"
-
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // Targets describes the compaction size targets for each level.
@@ -174,7 +172,7 @@ func (cm *Manager) run(id int, p Priority) bool {
 	switch err {
 	case nil:
 		return true
-	case utils.ErrFillTables:
+	case ErrFillTables:
 	default:
 		log.Printf("[compactor %d] doCompact error: %v", id, err)
 	}

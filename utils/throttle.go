@@ -37,21 +37,6 @@ func (t *Throttle) Go(fn func() error) error {
 	})
 }
 
-// Do/Done remain for compatibility with existing call sites that manage their
-// own goroutines. They simply track waitgroup/err collection without limiting
-// via channel (pool should be used via Go).
-func (t *Throttle) Do() error {
-	t.wg.Add(1)
-	return nil
-}
-
-func (t *Throttle) Done(err error) {
-	if err != nil {
-		t.errCh <- err
-	}
-	t.wg.Done()
-}
-
 // Finish waits until all workers have finished working. It returns the first
 // error encountered.
 func (t *Throttle) Finish() error {

@@ -3,6 +3,7 @@
 - [Overview](README.md)
 - [Getting Started](getting_started.md)
 - [Architecture](architecture.md)
+- [Error Handling](errors.md)
 - [Entry](entry.md)
 - [Configuration](config.md)
 - [CLI](cli.md)

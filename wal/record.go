@@ -8,7 +8,6 @@ import (
 	"io"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // RecordType identifies the kind of payload stored in the WAL.
@@ -56,14 +55,14 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 {
-		return 0, nil, 0, utils.ErrEmptyRecord
+		return 0, nil, 0, ErrEmptyRecord
 	}
 
 	// Allocate buffer for type byte + payload.
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, nil, 0, utils.ErrPartialRecord
+			return 0, nil, 0, ErrPartialRecord
 		}
 		return 0, nil, 0, err
 	}
@@ -71,7 +70,7 @@ func DecodeRecord(r io.Reader) (RecordType, []byte, uint32, error) {
 	var crcBuf [4]byte
 	if _, err := io.ReadFull(r, crcBuf[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, nil, 0, utils.ErrPartialRecord
+			return 0, nil, 0, ErrPartialRecord
 		}
 		return 0, nil, 0, err
 	}
