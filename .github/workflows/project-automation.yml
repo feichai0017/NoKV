@@ -76,7 +76,34 @@ jobs:
               const isClosed = action === 'closed' || content.state === 'closed';
               const isMergedPR = isPR && action === 'closed' && pr.merged === true;
 
-              async function resolveProject(owner, number) {
+              const projectQuery = `
+                fragment ProjectData on ProjectV2 {
+                  id
+                  title
+                  fields(first: 50) {
+                    nodes {
+                      __typename
+                      ... on ProjectV2FieldCommon {
+                        id
+                        name
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+
+              function isNotFoundError(err, kind) {
+                const message = String(err && err.message ? err.message : err);
+                return message.includes(`Could not resolve to a ${kind}`);
+              }
+
+              async function resolveProjectForUser(owner, number) {
                 const res = await github.graphql(
                   `
                   query($owner: String!, $number: Int!) {
@@ -85,36 +112,55 @@ jobs:
                         ...ProjectData
                       }
                     }
+                  }
+                  ${projectQuery}
+                  `,
+                  { owner, number }
+                );
+                return res.user?.projectV2 || null;
+              }
+
+              async function resolveProjectForOrganization(owner, number) {
+                const res = await github.graphql(
+                  `
+                  query($owner: String!, $number: Int!) {
                     organization(login: $owner) {
                       projectV2(number: $number) {
                         ...ProjectData
                       }
                     }
                   }
-
-                  fragment ProjectData on ProjectV2 {
-                    id
-                    title
-                    fields(first: 50) {
-                      nodes {
-                        __typename
-                        ... on ProjectV2FieldCommon {
-                          id
-                          name
-                        }
-                        ... on ProjectV2SingleSelectField {
-                          options {
-                            id
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
+                  ${projectQuery}
                   `,
                   { owner, number }
                 );
-                return res.user?.projectV2 || res.organization?.projectV2 || null;
+                return res.organization?.projectV2 || null;
+              }
+
+              async function resolveProject(owner, number) {
+                try {
+                  const userProject = await resolveProjectForUser(owner, number);
+                  if (userProject) {
+                    return userProject;
+                  }
+                } catch (err) {
+                  if (!isNotFoundError(err, 'User')) {
+                    throw err;
+                  }
+                }
+
+                try {
+                  const orgProject = await resolveProjectForOrganization(owner, number);
+                  if (orgProject) {
+                    return orgProject;
+                  }
+                } catch (err) {
+                  if (!isNotFoundError(err, 'Organization')) {
+                    throw err;
+                  }
+                }
+
+                return null;
               }
 
               const project = await resolveProject(projectOwner, projectNumber);
