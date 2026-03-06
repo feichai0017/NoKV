@@ -43,6 +43,12 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - **Control plane split**: `raft_config` provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
+### Detailed Runtime Paths
+
+For function-level call chains with sequence diagrams (embedded write/read,
+iterator scan, distributed read/write via Raft apply), see
+[`docs/runtime.md`](runtime.md).
+
 ---
 
 ## 2. Embedded Engine

@@ -47,14 +47,45 @@
 ### Read (strong leader read)
 1. `kv.Service.KvGet` builds `pb.RaftCmdRequest` and invokes `Store.ReadCommand`.
 2. `validateCommand` ensures the region exists, epoch matches, and the local peer is leader; a RegionError is returned otherwise.
-3. `peer.Flush()` drains pending Ready, guaranteeing the latest committed log is applied.
-4. `commandApplier` (i.e. `kv.Apply`) runs GET/SCAN directly against the DB, using MVCC readers to honour locks and version visibility.
+3. `peer.LinearizableRead` obtains a safe read index, then `peer.WaitApplied` waits until local apply index reaches it.
+4. `commandApplier` (i.e. `kv.Apply`) runs GET/SCAN against the DB using MVCC readers to honor locks and version visibility.
 
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
 2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `percolator` package.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.
 4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
+
+### Command flow diagram
+
+```mermaid
+sequenceDiagram
+    participant C as TinyKV Client
+    participant SVC as kv.Service
+    participant ST as store.Store
+    participant PR as peer.Peer
+    participant RF as raft log/replication
+    participant AP as kv.Apply
+    participant DB as NoKV DB
+
+    rect rgb(237, 247, 255)
+      C->>SVC: KvGet/KvScan
+      SVC->>ST: ReadCommand
+      ST->>PR: LinearizableRead + WaitApplied
+      ST->>AP: commandApplier(req)
+      AP->>DB: internal read path
+      AP-->>C: read response
+    end
+
+    rect rgb(241, 253, 244)
+      C->>SVC: KvPrewrite/KvCommit/...
+      SVC->>ST: ProposeCommand
+      ST->>RF: route + replicate
+      RF->>AP: apply committed entry
+      AP->>DB: percolator mutate -> ApplyInternalEntries
+      AP-->>C: write response
+    end
+```
 
 ---
 
@@ -112,8 +143,8 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 - **Merge**: leaders call `Store.ProposeMerge`, writing a merge `AdminCommand`.
   On apply, the target region range/epoch is expanded and the source peer is
   stopped/removed from the manifest.
-- These operations are explicit and are not auto-triggered by size/traffic
-  heuristics; a higher-level controller could call the same APIs.
+- These operations are explicit/manual and are not auto-triggered by
+  size/traffic heuristics.
 
 ---
 
@@ -142,10 +173,13 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 ---
 
-## 10. Extending raftstore
+## 10. Current Boundaries and Guarantees
 
-- **Adding peers**: update the manifest with new Region metadata, then call `Store.StartPeer` on the target node.
-- **Follower or lease reads**: extend `ReadCommand` to include ReadIndex or leader lease checks; current design only serves leader reads.
-- **Scheduler integration**: use PD as the cluster coordinator and operation source.
-
-This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.
+- Reads served through `ReadCommand` are leader-strong and pass a Raft
+  linearizability barrier (`LinearizableRead` + `WaitApplied`).
+- Mutating TinyKV commands are serialized through Raft log replication and apply.
+- Command payload format on apply path is strict `RaftCmdRequest` encoding.
+- Region metadata (range/epoch/peers) is validated before both read and write
+  command execution.
+- `store.RegionMetrics` + `StatsSnapshot` provide runtime visibility for region
+  count, backlog, and scheduling health.

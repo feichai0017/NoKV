@@ -35,26 +35,32 @@ Examples:
 
 ---
 
-## 4. Current Project Status (2026-03-06)
+## 4. Current Error Map
 
-The project is mostly aligned with this policy:
+### Shared runtime sentinels
 
-- Shared/common sentinels are in `utils/error.go`.
-- Domain-specific sentinels exist in domain packages:
-  - `kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
-  - `vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
-  - `pd/core/errors.go`: PD validation/range errors
+- `utils/error.go`: common cross-package sentinels such as invalid request,
+  key/value validation errors, throttling, and lifecycle guards.
 
-Recent cleanup already removed several unused legacy sentinels from `utils/error.go` and removed duplicated checksum sentinel in `utils`.
+### Domain-specific sentinels
+
+- `kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
+- `vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
+- `lsm/compact/errors.go`: compaction planner/runtime domain errors
+- `raftstore/peer/errors.go`: peer lifecycle/state errors
+- `wal/errors.go`: WAL encode/decode and segment errors
+- `pd/core/errors.go`: PD metadata and range validation errors
 
 ---
 
-## 5. Remaining Cleanup Candidates
+## 5. Propagation in Hot Paths
 
-No high-priority domain-leak sentinels remain in `utils` after recent cleanup.
-
-Follow-up opportunities (optional):
-
-1. Continue reducing legacy-style names/messages for consistency.
-2. Audit command-level `errXxx` values and keep them local/unexported.
-3. Keep adding `%w` wrappers at package boundaries where context is still sparse.
+1. Embedded write path (`DB.Set*` -> commit worker -> LSM/WAL):
+   - validation returns direct sentinel (`ErrEmptyKey`, `ErrNilValue`, `ErrInvalidRequest`);
+   - storage boundary errors are wrapped with context and preserved via `%w`.
+2. Distributed command path (`kv.Service` -> `Store.*Command` -> `kv.Apply`):
+   - region/leader/range failures are mapped to `RegionError` in protobuf response;
+   - execution failures return Go errors to RPC layer and are translated to gRPC status.
+3. Recovery/replay path (WAL/Vlog/Manifest):
+   - partial/corrupt records return domain sentinels and are handled by truncation or
+     restart logic in upper layers.

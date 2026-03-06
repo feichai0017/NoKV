@@ -11,8 +11,6 @@ The scope here is the current code path:
 - `CheckTxnStatus`
 - MVCC read visibility (`KvGet`/`KvScan` through `percolator.Reader`)
 
-It does not describe the removed standalone transaction API.
-
 ---
 
 ## 1. Where It Runs
@@ -49,6 +47,18 @@ Key files:
 - [`percolator/latch/latch.go`](../percolator/latch/latch.go)
 - [`raftstore/kv/apply.go`](../raftstore/kv/apply.go)
 - [`raftstore/client/client.go`](../raftstore/client/client.go)
+
+### 1.1 RPC to Percolator Function Mapping
+
+| TinyKV RPC | `kv.Apply` branch | Percolator function |
+| --- | --- | --- |
+| `KvPrewrite` | `CMD_PREWRITE` | `Prewrite` |
+| `KvCommit` | `CMD_COMMIT` | `Commit` |
+| `KvBatchRollback` | `CMD_BATCH_ROLLBACK` | `BatchRollback` |
+| `KvResolveLock` | `CMD_RESOLVE_LOCK` | `ResolveLock` |
+| `KvCheckTxnStatus` | `CMD_CHECK_TXN_STATUS` | `CheckTxnStatus` |
+| `KvGet` | `CMD_GET` | `Reader.GetLock` + `Reader.GetValue` |
+| `KvScan` | `CMD_SCAN` | `Reader.GetLock` + CFWrite iteration + `GetInternalEntry` |
 
 ---
 
@@ -122,7 +132,7 @@ sequenceDiagram
 
 ## 5. Write-Side Operations
 
-## 5.1 Prewrite
+### 5.1 Prewrite
 
 `Prewrite` runs mutation-by-mutation:
 
@@ -226,12 +236,14 @@ Notes:
 
 ---
 
-## 9. Current Constraints
+## 9. Current Operational Boundaries
 
-- This path is distributed-only and tied to TinyKV RPC + Raft apply.
-- Standalone/local transaction APIs are intentionally removed.
-- Latch scope is per-node process when a store reuses one shared `latch.Manager`; region-level correctness still comes from Raft sequencing.
-- `Write.ShortValue` is encoded/decoded but not used by current commit writer.
+- Percolator execution is tied to TinyKV RPC + Raft apply path.
+- Latch scope is process-local when one store shares a single `latch.Manager`;
+  region correctness still comes from Raft ordering.
+- `Write.ShortValue` and `Write.ExpiresAt` are codec fields; current commit path
+  stores primary value bytes in `CFDefault` and reads from there when short value
+  is not present.
 
 ---
 
