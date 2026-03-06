@@ -275,11 +275,14 @@ func (m *MmapFile) Close() error {
 
 // Truncature truncates and remaps the file to the provided size.
 func (m *MmapFile) Truncature(maxSz int64) error {
-	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
+	if maxSz <= 0 {
+		return fmt.Errorf("invalid truncate size: %d for file: %s", maxSz, m.fileName())
 	}
 	if err := m.File.Truncate(maxSz); err != nil {
 		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
+	}
+	if err := mmap.Munmap(m.Data); err != nil {
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	var err error
 	m.Data, err = mmap.Mmap(m.Fd, true, maxSz) // Mmap up to max size.

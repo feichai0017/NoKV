@@ -283,6 +283,9 @@ func (m *MmapFile) Close() error {
 
 // Truncature compatible interface
 func (m *MmapFile) Truncature(maxSz int64) error {
+	if maxSz <= 0 {
+		return fmt.Errorf("invalid truncate size: %d for file: %s", maxSz, m.fileName())
+	}
 	if err := m.File.Truncate(maxSz); err != nil {
 		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
 	}
