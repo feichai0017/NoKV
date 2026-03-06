@@ -100,11 +100,15 @@ func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 
 func (cd *compactDef) lockLevels() {
 	cd.thisLevel.RLock()
-	cd.nextLevel.RLock()
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RLock()
+	}
 }
 
 func (cd *compactDef) unlockLevels() {
-	cd.nextLevel.RUnlock()
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RUnlock()
+	}
 	cd.thisLevel.RUnlock()
 }
 
@@ -360,8 +364,8 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	if cd.thisLevel.numTables() == 0 {
-		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
+	if cd.thisLevel.numTablesLocked() == 0 {
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTablesLocked() > 0 {
 			meta := cd.thisLevel.ingest.allMeta()
 			if len(meta) == 0 {
 				return false
@@ -379,7 +383,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 		}
 		return false
 	}
-	tables := make([]*table, cd.thisLevel.numTables())
+	tables := make([]*table, cd.thisLevel.numTablesLocked())
 	copy(tables, cd.thisLevel.tables)
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {
@@ -400,7 +404,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	totalIngest := cd.thisLevel.numIngestTables()
+	totalIngest := cd.thisLevel.numIngestTablesLocked()
 	if totalIngest == 0 {
 		return false
 	}

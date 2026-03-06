@@ -650,6 +650,12 @@ func (lh *levelHandler) numTables() int {
 	return len(lh.tables)
 }
 
+// numTablesLocked returns len(lh.tables) without acquiring the lock.
+// Caller must already hold at least a read lock.
+func (lh *levelHandler) numTablesLocked() int {
+	return len(lh.tables)
+}
+
 // Get finds key inside this level, considering ingest shards and level semantics.
 func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
