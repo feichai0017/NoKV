@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-99282d97.js";
+            window.path_to_searchindex_js = "searchindex-b850fca4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e0ad4b63.js"></script>
+        <script src="toc-c17ea2b1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -209,34 +209,49 @@
 <li>Avoid duplicate sentinels with identical semantics in different packages.</li>
 </ol>
 <hr>
-<h2 id="4-current-project-status-2026-03-06"><a class="header" href="#4-current-project-status-2026-03-06">4. Current Project Status (2026-03-06)</a></h2>
-<p>The project is mostly aligned with this policy:</p>
+<h2 id="4-current-error-map"><a class="header" href="#4-current-error-map">4. Current Error Map</a></h2>
+<h3 id="shared-runtime-sentinels"><a class="header" href="#shared-runtime-sentinels">Shared runtime sentinels</a></h3>
 <ul>
-<li>Shared/common sentinels are in <code>utils/error.go</code>.</li>
-<li>Domain-specific sentinels exist in domain packages:
+<li><code>utils/error.go</code>: common cross-package sentinels such as invalid request,
+key/value validation errors, throttling, and lifecycle guards.</li>
+</ul>
+<h3 id="domain-specific-sentinels"><a class="header" href="#domain-specific-sentinels">Domain-specific sentinels</a></h3>
 <ul>
 <li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
 <li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
-<li><code>pd/core/errors.go</code>: PD validation/range errors</li>
+<li><code>lsm/compact/errors.go</code>: compaction planner/runtime domain errors</li>
+<li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
+<li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
+<li><code>pd/core/errors.go</code>: PD metadata and range validation errors</li>
+</ul>
+<hr>
+<h2 id="5-propagation-in-hot-paths"><a class="header" href="#5-propagation-in-hot-paths">5. Propagation in Hot Paths</a></h2>
+<ol>
+<li>Embedded write path (<code>DB.Set*</code> -&gt; commit worker -&gt; LSM/WAL):
+<ul>
+<li>validation returns direct sentinel (<code>ErrEmptyKey</code>, <code>ErrNilValue</code>, <code>ErrInvalidRequest</code>);</li>
+<li>storage boundary errors are wrapped with context and preserved via <code>%w</code>.</li>
 </ul>
 </li>
+<li>Distributed command path (<code>kv.Service</code> -&gt; <code>Store.*Command</code> -&gt; <code>kv.Apply</code>):
+<ul>
+<li>region/leader/range failures are mapped to <code>RegionError</code> in protobuf response;</li>
+<li>execution failures return Go errors to RPC layer and are translated to gRPC status.</li>
 </ul>
-<p>Recent cleanup already removed several unused legacy sentinels from <code>utils/error.go</code> and removed duplicated checksum sentinel in <code>utils</code>.</p>
-<hr>
-<h2 id="5-remaining-cleanup-candidates"><a class="header" href="#5-remaining-cleanup-candidates">5. Remaining Cleanup Candidates</a></h2>
-<p>No high-priority domain-leak sentinels remain in <code>utils</code> after recent cleanup.</p>
-<p>Follow-up opportunities (optional):</p>
-<ol>
-<li>Continue reducing legacy-style names/messages for consistency.</li>
-<li>Audit command-level <code>errXxx</code> values and keep them local/unexported.</li>
-<li>Keep adding <code>%w</code> wrappers at package boundaries where context is still sparse.</li>
+</li>
+<li>Recovery/replay path (WAL/Vlog/Manifest):
+<ul>
+<li>partial/corrupt records return domain sentinels and are handled by truncation or
+restart logic in upper layers.</li>
+</ul>
+</li>
 </ol>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="runtime.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -250,7 +265,7 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="runtime.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

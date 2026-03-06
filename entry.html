@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-99282d97.js";
+            window.path_to_searchindex_js = "searchindex-b850fca4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e0ad4b63.js"></script>
+        <script src="toc-c17ea2b1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -239,7 +239,7 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <li><code>ExpiresAt</code> (uvarint)</li>
 <li><code>Value</code> (raw bytes)</li>
 </ul>
-<p><code>ValueStruct</code> no longer stores <code>Version</code>; version is always taken from internal key.</p>
+<p><code>ValueStruct</code> does not store <code>Version</code>; version is always taken from internal key.</p>
 <h3 id="23-entry-record-encoding-wal--vlog-record-payload"><a class="header" href="#23-entry-record-encoding-wal--vlog-record-payload">2.3 Entry Record Encoding (WAL / Vlog record payload)</a></h3>
 <p>Source: <a href="../kv/entry_codec.go"><code>kv/entry_codec.go</code></a></p>
 <p>Entry codec layout:</p>
@@ -314,6 +314,22 @@ from key before entering write pipeline.</li>
 <li>Public APIs convert internal key to user key for external consumers.</li>
 <li>Returned entry is detached copy (<code>DB.Get</code>) or iterator materialized object.</li>
 </ul>
+<h3 id="38-runtime-state-flow-diagram"><a class="header" href="#38-runtime-state-flow-diagram">3.8 Runtime State Flow Diagram</a></h3>
+<pre class="mermaid">flowchart TD
+  A["DB.Set/SetWithTTL/Del"] --&gt; B["kv.NewInternalEntry"]
+  B --&gt; C["DB.ApplyInternalEntries"]
+  C --&gt; D["commitWorker: vlog.write"]
+  D --&gt; E["LSM/WAL persist"]
+  E --&gt; F["DB.GetInternalEntry"]
+  F --&gt; G{"BitValuePointer?"}
+  G -- yes --&gt; H["vlog.read + clear pointer bit"]
+  G -- no --&gt; I["inline value"]
+  H --&gt; J["PopulateInternalMeta"]
+  I --&gt; J
+  J --&gt; K["DB.Get cloneEntry -&gt; user key/value"]
+  J --&gt; L["DB.NewIterator materialize -&gt; user key/value"]
+</pre>
+
 <hr>
 <h2 id="4-field-validity-matrix"><a class="header" href="#4-field-validity-matrix">4. Field Validity Matrix</a></h2>
 <div class="table-wrapper">
@@ -362,7 +378,7 @@ from key before entering write pipeline.</li>
 <ul>
 <li>pooled entries can carry stale cached fields if not reset carefully;</li>
 <li>parse-once helper gives a single normalization point at codec/index/read boundaries;</li>
-<li>avoids relying on deprecated non-authoritative value-side version caches.</li>
+<li>keeps key-derived metadata (<code>CF/Version</code>) authoritative and consistent.</li>
 </ul>
 <hr>
 <h2 id="6-ownership-and-refcount-states"><a class="header" href="#6-ownership-and-refcount-states">6. Ownership and Refcount States</a></h2>

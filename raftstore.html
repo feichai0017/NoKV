@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-99282d97.js";
+            window.path_to_searchindex_js = "searchindex-b850fca4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e0ad4b63.js"></script>
+        <script src="toc-c17ea2b1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,8 +236,8 @@
 <ol>
 <li><code>kv.Service.KvGet</code> builds <code>pb.RaftCmdRequest</code> and invokes <code>Store.ReadCommand</code>.</li>
 <li><code>validateCommand</code> ensures the region exists, epoch matches, and the local peer is leader; a RegionError is returned otherwise.</li>
-<li><code>peer.Flush()</code> drains pending Ready, guaranteeing the latest committed log is applied.</li>
-<li><code>commandApplier</code> (i.e. <code>kv.Apply</code>) runs GET/SCAN directly against the DB, using MVCC readers to honour locks and version visibility.</li>
+<li><code>peer.LinearizableRead</code> obtains a safe read index, then <code>peer.WaitApplied</code> waits until local apply index reaches it.</li>
+<li><code>commandApplier</code> (i.e. <code>kv.Apply</code>) runs GET/SCAN against the DB using MVCC readers to honor locks and version visibility.</li>
 </ol>
 <h3 id="write-via-propose"><a class="header" href="#write-via-propose">Write (via Propose)</a></h3>
 <ol>
@@ -246,6 +246,35 @@
 <li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.</li>
 <li>Raft apply only accepts command-encoded payloads (<code>RaftCmdRequest</code>). Legacy raw KV payloads are rejected as unsupported.</li>
 </ol>
+<h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant C as TinyKV Client
+    participant SVC as kv.Service
+    participant ST as store.Store
+    participant PR as peer.Peer
+    participant RF as raft log/replication
+    participant AP as kv.Apply
+    participant DB as NoKV DB
+
+    rect rgb(237, 247, 255)
+      C-&gt;&gt;SVC: KvGet/KvScan
+      SVC-&gt;&gt;ST: ReadCommand
+      ST-&gt;&gt;PR: LinearizableRead + WaitApplied
+      ST-&gt;&gt;AP: commandApplier(req)
+      AP-&gt;&gt;DB: internal read path
+      AP--&gt;&gt;C: read response
+    end
+
+    rect rgb(241, 253, 244)
+      C-&gt;&gt;SVC: KvPrewrite/KvCommit/...
+      SVC-&gt;&gt;ST: ProposeCommand
+      ST-&gt;&gt;RF: route + replicate
+      RF-&gt;&gt;AP: apply committed entry
+      AP-&gt;&gt;DB: percolator mutate -&gt; ApplyInternalEntries
+      AP--&gt;&gt;C: write response
+    end
+</pre>
+
 <hr>
 <h2 id="4-transport"><a class="header" href="#4-transport">4. Transport</a></h2>
 <ul>
@@ -302,8 +331,8 @@ the runtime source of truth once PD is available.</li>
 <li><strong>Merge</strong>: leaders call <code>Store.ProposeMerge</code>, writing a merge <code>AdminCommand</code>.
 On apply, the target region range/epoch is expanded and the source peer is
 stopped/removed from the manifest.</li>
-<li>These operations are explicit and are not auto-triggered by size/traffic
-heuristics; a higher-level controller could call the same APIs.</li>
+<li>These operations are explicit/manual and are not auto-triggered by
+size/traffic heuristics.</li>
 </ul>
 <hr>
 <h2 id="9-observability"><a class="header" href="#9-observability">9. Observability</a></h2>
@@ -335,13 +364,17 @@ heuristics; a higher-level controller could call the same APIs.</li>
 </table>
 </div>
 <hr>
-<h2 id="10-extending-raftstore"><a class="header" href="#10-extending-raftstore">10. Extending raftstore</a></h2>
+<h2 id="10-current-boundaries-and-guarantees"><a class="header" href="#10-current-boundaries-and-guarantees">10. Current Boundaries and Guarantees</a></h2>
 <ul>
-<li><strong>Adding peers</strong>: update the manifest with new Region metadata, then call <code>Store.StartPeer</code> on the target node.</li>
-<li><strong>Follower or lease reads</strong>: extend <code>ReadCommand</code> to include ReadIndex or leader lease checks; current design only serves leader reads.</li>
-<li><strong>Scheduler integration</strong>: use PD as the cluster coordinator and operation source.</li>
+<li>Reads served through <code>ReadCommand</code> are leader-strong and pass a Raft
+linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code>).</li>
+<li>Mutating TinyKV commands are serialized through Raft log replication and apply.</li>
+<li>Command payload format on apply path is strict <code>RaftCmdRequest</code> encoding.</li>
+<li>Region metadata (range/epoch/peers) is validated before both read and write
+command execution.</li>
+<li><code>store.RegionMetrics</code> + <code>StatsSnapshot</code> provide runtime visibility for region
+count, backlog, and scheduling health.</li>
 </ul>
-<p>This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.</p>
 
                     </main>
 

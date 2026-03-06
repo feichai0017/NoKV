@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer - NoKV Docs</title>
+        <title>Runtime Call Chains - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-7218a61a.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b850fca4.js";
+            window.path_to_searchindex_js = "searchindex-b850fca4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c17ea2b1.js"></script>
+        <script src="toc-c17ea2b1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -106,7 +106,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -141,7 +141,7 @@
                     <h1 class="menu-title">NoKV Docs</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/feichai0017/NoKV" title="Git repository" aria-label="Git repository">
@@ -178,174 +178,258 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer"><a class="header" href="#2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer">2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer</a></h1>
-<p>本文档面向第一次理解 NoKV 写路径的同学，也记录这块实现里的工程化设计方法。我们讨论三件事：</p>
-<ol>
-<li><code>commit worker</code> 为什么是写路径中枢。</li>
-<li><code>write batch</code> 如何在延迟与吞吐之间做动态平衡。</li>
-<li><code>ringbuffer</code> 如何提供低开销并发队列基础。</li>
-</ol>
+                        <h1 id="runtime-call-chains-current"><a class="header" href="#runtime-call-chains-current">Runtime Call Chains (Current)</a></h1>
+<p>This document focuses on the current execution paths in NoKV and maps API calls
+to concrete functions in the codebase.</p>
+<p>It intentionally describes only what is running today.</p>
 <hr>
-<h2 id="1-设计理念写路径要像节拍器不是碰碰运气"><a class="header" href="#1-设计理念写路径要像节拍器不是碰碰运气">1. 设计理念：写路径要像“节拍器”，不是“碰碰运气”</a></h2>
-<p>写路径如果没有节拍控制，会出现三种典型问题：</p>
+<h2 id="1-api-surface-snapshot"><a class="header" href="#1-api-surface-snapshot">1. API Surface Snapshot</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Mode</th><th>Read APIs</th><th>Write APIs</th><th>Txn APIs</th></tr>
+</thead>
+<tbody>
+<tr><td>Embedded (<code>NoKV.DB</code>)</td><td><code>Get</code>, <code>NewIterator</code>, <code>NewInternalIterator</code></td><td><code>Set</code>, <code>SetWithTTL</code>, <code>Del</code>, <code>ApplyInternalEntries</code></td><td>N/A (no standalone local txn API)</td></tr>
+<tr><td>Distributed (<code>raftstore/kv</code>)</td><td><code>KvGet</code>, <code>KvBatchGet</code>, <code>KvScan</code></td><td>N/A direct write</td><td><code>KvPrewrite</code>, <code>KvCommit</code>, <code>KvBatchRollback</code>, <code>KvResolveLock</code>, <code>KvCheckTxnStatus</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Core entry points:</p>
 <ul>
-<li>突发流量把队列顶爆，内存飙升。</li>
-<li>单请求提交抖动大，尾延迟失控。</li>
-<li>错误归因粗糙，客户端重复重试放大压力。</li>
+<li>Embedded DB: <a href="../db.go"><code>db.go</code></a>, <a href="../db_write.go"><code>db_write.go</code></a>, <a href="../iterator.go"><code>iterator.go</code></a></li>
+<li>Distributed RPC: <a href="../raftstore/kv/service.go"><code>raftstore/kv/service.go</code></a></li>
+<li>Raft read/propose bridge: <a href="../raftstore/store/command_service.go"><code>raftstore/store/command_service.go</code></a></li>
+<li>MVCC logic: <a href="../percolator/txn.go"><code>percolator/txn.go</code></a>, <a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
 </ul>
-<p>NoKV 的方案是把写路径拆成“前台入队 + 后台批处理 + 明确完成语义”，让系统行为更像稳定节拍而不是随机波动。</p>
 <hr>
-<h2 id="2-总览图从请求到落盘"><a class="header" href="#2-总览图从请求到落盘">2. 总览图：从请求到落盘</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant C as Client
-  participant Q as commitQueue
-  participant W as commitWorker
-  participant V as ValueLog
-  participant L as LSM
-  participant S as WAL Sync
-
-  C-&gt;&gt;Q: enqueue request
-  Q-&gt;&gt;W: item signal
-  W-&gt;&gt;Q: pop a batch
-  W-&gt;&gt;V: vlog.write
-  W-&gt;&gt;L: applyRequests / SetBatch
-  opt SyncWrites=true
-    W-&gt;&gt;S: wal.Sync
-  end
-  W--&gt;&gt;C: per-request result
-</pre>
-
-<p>关键是顺序：先 <code>vlog.write</code>，再 <code>LSM apply</code>，最后按需 <code>wal.Sync</code>。这保证 ValuePtr 不会指向不存在的数据。</p>
-<hr>
-<h2 id="3-commitqueue三层组合而不是只有一个-ring"><a class="header" href="#3-commitqueue三层组合而不是只有一个-ring">3. commitQueue：三层组合而不是“只有一个 ring”</a></h2>
-<p><code>commitQueue</code> 的设计不是单一结构，而是三件套：</p>
+<h2 id="2-embedded-write-path-set--setwithttl--del"><a class="header" href="#2-embedded-write-path-set--setwithttl--del">2. Embedded Write Path (<code>Set</code> / <code>SetWithTTL</code> / <code>Del</code>)</a></h2>
+<h3 id="21-function-level-chain"><a class="header" href="#21-function-level-chain">2.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>Ring[*commitRequest]</code> 负责数据面高效 push/pop。</li>
-<li><code>spaces</code> 通道负责容量票据，形成硬上限背压。</li>
-<li><code>items</code> 通道负责可消费事件，避免 worker 忙等。</li>
+<li><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> creates internal-key entry via <code>kv.NewInternalEntry</code>.</li>
+<li><code>DB.ApplyInternalEntries</code> validates each internal key via <code>kv.SplitInternalKey</code>, then calls <code>batchSet</code>.</li>
+<li><code>batchSet</code> enqueues request (<code>sendToWriteCh</code> -&gt; commit queue).</li>
+<li><code>commitWorker</code> drains a batch:
+<ul>
+<li><code>vlog.write(requests)</code> writes large values first and produces <code>ValuePtr</code>.</li>
+<li><code>applyRequests</code> -&gt; <code>writeToLSM</code> -&gt; <code>lsm.SetBatch</code>.</li>
+</ul>
+</li>
+<li><code>lsm.SetBatch</code> writes one atomic batch:
+<ul>
+<li><code>memTable.setBatch</code></li>
+<li><code>wal.AppendEntryBatch</code></li>
+<li>mem index insert.</li>
+</ul>
+</li>
 </ol>
-<pre class="mermaid">flowchart LR
-  P["Producer"] --&gt; T["acquire spaces token"]
-  T --&gt; R["ring.Push(req)"]
-  R --&gt; I["items signal"]
-  I --&gt; W["worker wakeup"]
-  W --&gt; O["ring.Pop"]
-  O --&gt; RT["release spaces token"]
+<h3 id="22-sequence-diagram"><a class="header" href="#22-sequence-diagram">2.2 Sequence Diagram</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant U as User API
+    participant DB as DB.Set/SetWithTTL/Del
+    participant Q as commitQueue
+    participant W as commitWorker
+    participant V as vlog.write
+    participant L as lsm.SetBatch
+    participant M as memTable.setBatch
+    participant WAL as wal.AppendEntryBatch
+    U-&gt;&gt;DB: Set/SetWithTTL/Del
+    DB-&gt;&gt;DB: NewInternalEntry + ApplyInternalEntries
+    DB-&gt;&gt;Q: sendToWriteCh / enqueueCommitRequest
+    Q-&gt;&gt;W: nextCommitBatch
+    W-&gt;&gt;V: write(requests)
+    V--&gt;&gt;W: ValuePtr for large values
+    W-&gt;&gt;L: writeToLSM(entries)
+    L-&gt;&gt;M: setBatch(entries)
+    M-&gt;&gt;WAL: AppendEntryBatch(entries)
+    M--&gt;&gt;L: index.Add(...)
+    L--&gt;&gt;W: success
 </pre>
 
-<p>这三层叠加后，系统同时得到：并发效率、内存上限、可控阻塞语义。</p>
 <hr>
-<h2 id="4-write-batch动态策略而非固定批次"><a class="header" href="#4-write-batch动态策略而非固定批次">4. write batch：动态策略而非固定批次</a></h2>
-<p><code>nextCommitBatch</code> 的核心是“看现场调节”，不是死配阈值：</p>
+<h2 id="3-embedded-read-path-get--getinternalentry"><a class="header" href="#3-embedded-read-path-get--getinternalentry">3. Embedded Read Path (<code>Get</code> / <code>GetInternalEntry</code>)</a></h2>
+<h3 id="31-function-level-chain"><a class="header" href="#31-function-level-chain">3.1 Function-Level Chain</a></h3>
+<ol>
+<li><code>DB.Get</code> builds <code>InternalKey(CFDefault, userKey, nonTxnMaxVersion)</code>.</li>
+<li><code>loadBorrowedEntry</code> calls <code>lsm.Get</code> for the newest visible internal record.</li>
+<li>If value is pointer (<code>BitValuePointer</code>), read real bytes via <code>vlog.read</code>, clear pointer bit.</li>
+<li><code>PopulateInternalMeta</code> ensures <code>CF/Version</code> cache matches internal key.</li>
+<li><code>DB.Get</code> returns detached public entry via <code>cloneEntry</code> (user key + copied value).</li>
+<li><code>DB.GetInternalEntry</code> returns borrowed internal entry (caller must <code>DecrRef</code>).</li>
+</ol>
+<h3 id="32-sequence-diagram"><a class="header" href="#32-sequence-diagram">3.2 Sequence Diagram</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant U as User API
+    participant DB as DB.Get/GetInternalEntry
+    participant LSM as lsm.Get
+    participant VLOG as vlog.read
+    U-&gt;&gt;DB: Get(userKey)
+    DB-&gt;&gt;DB: InternalKey(CFDefault,userKey,nonTxnMaxVersion)
+    DB-&gt;&gt;LSM: Get(internalKey)
+    LSM--&gt;&gt;DB: pooled Entry (internal key)
+    alt BitValuePointer set
+        DB-&gt;&gt;VLOG: read(ValuePtr)
+        VLOG--&gt;&gt;DB: raw value bytes
+    end
+    DB-&gt;&gt;DB: PopulateInternalMeta
+    alt Get (public)
+        DB-&gt;&gt;DB: cloneEntry -&gt; user key/value copy
+        DB--&gt;&gt;U: detached Entry
+    else GetInternalEntry
+        DB--&gt;&gt;U: borrowed internal Entry (DecrRef required)
+    end
+</pre>
+
+<hr>
+<h2 id="4-iterator-paths"><a class="header" href="#4-iterator-paths">4. Iterator Paths</a></h2>
+<h3 id="41-public-iterator-dbnewiterator"><a class="header" href="#41-public-iterator-dbnewiterator">4.1 Public Iterator (<code>DB.NewIterator</code>)</a></h3>
+<ol>
+<li>Build merged internal iterator: <code>lsm.NewIterators</code> + <code>lsm.NewMergeIterator</code>.</li>
+<li><code>Seek</code> converts user key to internal seek key (<code>CFDefault + nonTxnMaxVersion</code>).</li>
+<li><code>populate/materialize</code>:
 <ul>
-<li>backlog 高：放大 <code>limitCount</code>、<code>limitSize</code>。</li>
-<li>检测到 hot write：应用 <code>HotWriteBatchMultiplier</code>。</li>
-<li>队列短暂发空但批未满：等待 <code>WriteBatchWait</code> 做 coalesce。</li>
+<li>parse internal key (<code>kv.SplitInternalKey</code>)</li>
+<li>apply bounds on user key</li>
+<li>optionally resolve vlog pointer</li>
+<li>expose user-key item.</li>
+</ul>
+</li>
+</ol>
+<h3 id="42-internal-iterator-dbnewinternaliterator"><a class="header" href="#42-internal-iterator-dbnewinternaliterator">4.2 Internal Iterator (<code>DB.NewInternalIterator</code>)</a></h3>
+<ul>
+<li>Directly returns merged iterator over internal keys.</li>
+<li>No user-key rewrite; caller handles <code>kv.SplitInternalKey</code>.</li>
 </ul>
 <pre class="mermaid">flowchart TD
-  A["start batch"] --&gt; B{"backlog high?"}
-  B --&gt;|Yes| C["increase batch limits"]
-  B --&gt;|No| D["use base limits"]
-  C --&gt; E{"hot write?"}
-  D --&gt; E
-  E --&gt;|Yes| F["apply hot multiplier"]
-  E --&gt;|No| G["keep current limits"]
-  F --&gt; H["collect until limit or timeout"]
-  G --&gt; H
+  A["DB.NewIterator"] --&gt; B["lsm.NewMergeIterator(internal keys)"]
+  B --&gt; C["Seek(userKey -&gt; InternalKey)"]
+  C --&gt; D["populate/materialize"]
+  D --&gt; E["SplitInternalKey + bounds check"]
+  E --&gt; F{"BitValuePointer?"}
+  F -- no --&gt; G["Expose inline value"]
+  F -- yes --&gt; H["vlog.read(ValuePtr)"]
+  H --&gt; G
+  G --&gt; I["Item.Entry uses user key"]
 </pre>
 
-<p>这套策略把轻载低延迟与重载高吞吐放在一个框架里。</p>
 <hr>
-<h2 id="5-最近关键修复错误归因从整批同错变成逐请求准确"><a class="header" href="#5-最近关键修复错误归因从整批同错变成逐请求准确">5. 最近关键修复：错误归因从“整批同错”变成“逐请求准确”</a></h2>
-<p>历史风险：<code>applyRequests</code> 中途失败时，整批请求被同一个错误覆盖，导致已经成功的请求被误判失败。</p>
-<p>修复后的语义：</p>
+<h2 id="5-distributed-read-path-kvget--kvbatchget--kvscan"><a class="header" href="#5-distributed-read-path-kvget--kvbatchget--kvscan">5. Distributed Read Path (<code>KvGet</code> / <code>KvBatchGet</code> / <code>KvScan</code>)</a></h2>
+<h3 id="51-function-level-chain"><a class="header" href="#51-function-level-chain">5.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>applyRequests</code> 返回失败位置 <code>failedAt</code>。</li>
-<li><code>commitWorker</code> 只标记 <code>failedAt</code> 及之后请求失败。</li>
-<li><code>finishCommitRequests</code> 支持逐请求回填错误。</li>
+<li><code>raftstore/kv.Service</code> builds <code>RaftCmdRequest</code> from TinyKV RPC.</li>
+<li><code>Store.ReadCommand</code>:
+<ul>
+<li><code>validateCommand</code> (region/epoch/leader/key-range)</li>
+<li><code>peer.LinearizableRead</code></li>
+<li><code>peer.WaitApplied</code></li>
+<li><code>commandApplier(req)</code> (injected as <code>kv.Apply</code>).</li>
+</ul>
+</li>
+<li><code>kv.Apply</code> executes:
+<ul>
+<li><code>handleGet</code> -&gt; <code>percolator.Reader.GetLock</code> + <code>GetValue</code></li>
+<li><code>handleScan</code> -&gt; iterate <code>CFWrite</code>, resolve visible versions.</li>
+</ul>
+</li>
 </ol>
-<pre class="mermaid">flowchart LR
-  A["r0 ok"] --&gt; B["r1 ok"] --&gt; C["r2 fail"] --&gt; D["r3 not applied"]
+<h3 id="52-sequence-diagram"><a class="header" href="#52-sequence-diagram">5.2 Sequence Diagram</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant C as TinyKV Client
+    participant SVC as kv.Service
+    participant ST as Store.ReadCommand
+    participant P as peer.LinearizableRead
+    participant AP as kv.Apply
+    participant R as percolator.Reader
+    participant DB as DB
+    C-&gt;&gt;SVC: KvGet/KvBatchGet/KvScan
+    SVC-&gt;&gt;ST: ReadCommand(RaftCmdRequest)
+    ST-&gt;&gt;ST: validateCommand
+    ST-&gt;&gt;P: LinearizableRead + WaitApplied
+    ST-&gt;&gt;AP: commandApplier(req)
+    AP-&gt;&gt;R: GetLock/GetValue or scan CFWrite
+    R-&gt;&gt;DB: GetInternalEntry/NewInternalIterator
+    AP--&gt;&gt;SVC: RaftCmdResponse
+    SVC--&gt;&gt;C: TinyKV response
 </pre>
 
-<p>这个改动的价值不在“快”，而在“语义正确”。</p>
 <hr>
-<h2 id="6-ringbuffermpmc-序号协议与内存保活控制"><a class="header" href="#6-ringbuffermpmc-序号协议与内存保活控制">6. RingBuffer：MPMC 序号协议与内存保活控制</a></h2>
-<p><code>utils/ringbuffer.go</code> 采用 seq 协议：</p>
+<h2 id="6-distributed-write-path-2pc-via-raft-apply"><a class="header" href="#6-distributed-write-path-2pc-via-raft-apply">6. Distributed Write Path (2PC via Raft Apply)</a></h2>
+<h3 id="61-function-level-chain"><a class="header" href="#61-function-level-chain">6.1 Function-Level Chain</a></h3>
+<ol>
+<li>Client (<code>raftstore/client</code>) runs <code>Mutate</code> / <code>TwoPhaseCommit</code> by region.</li>
+<li>RPC layer (<code>kv.Service</code>) sends write commands through <code>Store.ProposeCommand</code>.</li>
+<li>Raft replication commits log entries; apply path invokes <code>kv.Apply</code>.</li>
+<li><code>kv.Apply</code> dispatches to <code>percolator.Prewrite/Commit/BatchRollback/ResolveLock/CheckTxnStatus</code>.</li>
+<li>Percolator mutators call <code>applyVersionedOps</code>:
 <ul>
-<li><code>Push</code> 观察 <code>slot.seq == pos</code> 才能写。</li>
-<li><code>Pop</code> 观察 <code>slot.seq == pos+1</code> 才能读。</li>
-<li><code>Pop</code> 后推进 <code>seq</code> 到下一轮并清空 <code>slot.val</code>。</li>
+<li>build entries via <code>kv.NewInternalEntry</code></li>
+<li>call <code>db.ApplyInternalEntries</code></li>
+<li>release refs (<code>DecrRef</code>).</li>
 </ul>
-<pre class="mermaid">flowchart LR
-  F["free(seq=pos)"] --&gt; P["push CAS tail"]
-  P --&gt; R["ready(seq=pos+1)"]
-  R --&gt; C["pop CAS head"]
-  C --&gt; N["next free(seq=pos+cap)"]
+</li>
+<li>Storage then follows the same embedded write pipeline (vlog -&gt; LSM/WAL).</li>
+</ol>
+<h3 id="62-sequence-diagram"><a class="header" href="#62-sequence-diagram">6.2 Sequence Diagram</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant CL as raftstore/client
+    participant SVC as kv.Service
+    participant ST as Store.ProposeCommand
+    participant RF as Raft replicate/apply
+    participant AP as kv.Apply
+    participant TXN as percolator.txn
+    participant DB as DB.ApplyInternalEntries
+    CL-&gt;&gt;SVC: KvPrewrite/KvCommit/...
+    SVC-&gt;&gt;ST: ProposeCommand
+    ST-&gt;&gt;RF: route to leader + replicate
+    RF-&gt;&gt;AP: apply committed command
+    AP-&gt;&gt;TXN: Prewrite/Commit/Resolve...
+    TXN-&gt;&gt;DB: applyVersionedOps -&gt; ApplyInternalEntries
+    DB--&gt;&gt;TXN: write result
+    AP--&gt;&gt;SVC: RaftCmdResponse
+    SVC--&gt;&gt;CL: TinyKV response
 </pre>
 
-<p>清空 <code>slot.val</code> 是关键工程点：它减少对象被 ring 槽位长期引用而延迟回收。</p>
 <hr>
-<h2 id="7-与-hot-统计的耦合点写路径要避免统计偏置"><a class="header" href="#7-与-hot-统计的耦合点写路径要避免统计偏置">7. 与 Hot 统计的耦合点：写路径要避免统计偏置</a></h2>
-<p>这块最容易被忽略的风险是“统计口径不一致”与“双重计数”。</p>
-<p>当前方向（你前面定下的策略）是对的：</p>
-<ul>
-<li>读写 ring 分离，避免高读热点误触发写限流。</li>
-<li><code>isHotWrite</code> 仅做 <code>Frequency</code> 判断，不再二次 <code>Touch</code>。</li>
-</ul>
-<p>这会显著降低误判和过度限流。</p>
+<h2 id="7-entry-ownership-and-refcount-rules"><a class="header" href="#7-entry-ownership-and-refcount-rules">7. Entry Ownership and Refcount Rules</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Source</th><th>Returned entry type</th><th>Key form</th><th>Caller action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>DB.GetInternalEntry</code></td><td>Borrowed pooled</td><td>Internal key</td><td>Must call <code>DecrRef()</code> once</td></tr>
+<tr><td><code>DB.Get</code></td><td>Detached copy</td><td>User key</td><td>Must not call <code>DecrRef()</code></td></tr>
+<tr><td><code>percolator.applyVersionedOps</code> temporary entries</td><td>Borrowed pooled</td><td>Internal key</td><td>Always <code>DecrRef()</code> after <code>ApplyInternalEntries</code></td></tr>
+<tr><td><code>LSM.Get</code> / memtable reads</td><td>Borrowed pooled</td><td>Internal key</td><td>Upstream owner must release</td></tr>
+</tbody>
+</table>
+</div>
 <hr>
-<h2 id="8-参数建议新人可直接起步"><a class="header" href="#8-参数建议新人可直接起步">8. 参数建议（新人可直接起步）</a></h2>
-<ol>
-<li><code>WriteBatchMaxCount</code>: 64~128。</li>
-<li><code>WriteBatchMaxSize</code>: 1~4MiB。</li>
-<li><code>WriteBatchWait</code>: 100~300us，低延迟可设 0。</li>
-<li><code>HotWriteBatchMultiplier</code>: 2 起步，通常不建议超过 4。</li>
-<li><code>SyncWrites=true</code> 时重点观察 <code>AvgApplyMs</code> 与 <code>AvgRequestWaitMs</code>。</li>
-</ol>
-<hr>
-<h2 id="9-常见误区"><a class="header" href="#9-常见误区">9. 常见误区</a></h2>
-<ol>
-<li>
-<p>误区：batch 越大越好。
-事实：吞吐会上去，但 P99 可能更差。</p>
-</li>
-<li>
-<p>误区：ring 是无锁就等于没有阻塞。
-事实：上层 <code>spaces/items</code> 语义决定了阻塞与背压行为。</p>
-</li>
-<li>
-<p>误区：写路径优化只看 QPS。
-事实：错误归因、恢复一致性、尾延迟同样是一等指标。</p>
-</li>
-</ol>
-<hr>
-<h2 id="10-工程化检查清单"><a class="header" href="#10-工程化检查清单">10. 工程化检查清单</a></h2>
-<ol>
-<li>观察队列长度是否长期贴近上限。</li>
-<li>观察 batch size 分布是否极端两极化。</li>
-<li>观察失败请求是否都具备准确错误来源。</li>
-<li>做一次高并发压测确认 prefetch 与写路径不会空转抢 CPU。</li>
-</ol>
-<hr>
-<h2 id="11-总结"><a class="header" href="#11-总结">11. 总结</a></h2>
-<p>NoKV 这条写路径的核心不是某个“单点算法”，而是三部分协同：</p>
-<ul>
-<li><code>commit worker</code> 管节奏。</li>
-<li><code>write batch</code> 管效率曲线。</li>
-<li><code>ringbuffer</code> 管并发成本。</li>
-</ul>
-<p>把这三件事放在一起，写路径才能同时做到：有上限、有吞吐、可解释。</p>
+<h2 id="8-keyvalue-shape-by-stage"><a class="header" href="#8-keyvalue-shape-by-stage">8. Key/Value Shape by Stage</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th><code>Entry.Key</code></th><th><code>Entry.Value</code></th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>User write before queue</td><td>Internal key (<code>CF + user key + ts</code>)</td><td>Raw user bytes</td><td>Built by <code>NewInternalEntry</code></td></tr>
+<tr><td>After vlog step</td><td>Internal key</td><td>Inline value or <code>ValuePtr.Encode()</code></td><td>Pointer marked by <code>BitValuePointer</code></td></tr>
+<tr><td>LSM/WAL stored form</td><td>Internal key</td><td>Encoded value payload</td><td>Used by replay/flush/compaction</td></tr>
+<tr><td><code>GetInternalEntry</code> output</td><td>Internal key</td><td>Raw value bytes (pointer resolved)</td><td>Internal caller view</td></tr>
+<tr><td><code>Get</code> / public iterator output</td><td>User key</td><td>Raw value bytes</td><td>External caller view</td></tr>
+</tbody>
+</table>
+</div>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-02-15-vfs-design-and-storage-engine-comparison.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="errors.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -355,11 +439,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-02-15-vfs-design-and-storage-engine-comparison.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="errors.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -379,16 +463,16 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../docs/mermaid-init-8a66ee6c.js"></script>
+        <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 
 

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-99282d97.js";
+            window.path_to_searchindex_js = "searchindex-b850fca4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e0ad4b63.js"></script>
+        <script src="toc-c17ea2b1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,7 +189,6 @@
 <li><code>CheckTxnStatus</code></li>
 <li>MVCC read visibility (<code>KvGet</code>/<code>KvScan</code> through <code>percolator.Reader</code>)</li>
 </ul>
-<p>It does not describe the removed standalone transaction API.</p>
 <hr>
 <h2 id="1-where-it-runs"><a class="header" href="#1-where-it-runs">1. Where It Runs</a></h2>
 <p>Percolator logic is executed on the Raft apply path:</p>
@@ -224,6 +223,23 @@
 <li><a href="../raftstore/kv/apply.go"><code>raftstore/kv/apply.go</code></a></li>
 <li><a href="../raftstore/client/client.go"><code>raftstore/client/client.go</code></a></li>
 </ul>
+<h3 id="11-rpc-to-percolator-function-mapping"><a class="header" href="#11-rpc-to-percolator-function-mapping">1.1 RPC to Percolator Function Mapping</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>TinyKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KvPrewrite</code></td><td><code>CMD_PREWRITE</code></td><td><code>Prewrite</code></td></tr>
+<tr><td><code>KvCommit</code></td><td><code>CMD_COMMIT</code></td><td><code>Commit</code></td></tr>
+<tr><td><code>KvBatchRollback</code></td><td><code>CMD_BATCH_ROLLBACK</code></td><td><code>BatchRollback</code></td></tr>
+<tr><td><code>KvResolveLock</code></td><td><code>CMD_RESOLVE_LOCK</code></td><td><code>ResolveLock</code></td></tr>
+<tr><td><code>KvCheckTxnStatus</code></td><td><code>CMD_CHECK_TXN_STATUS</code></td><td><code>CheckTxnStatus</code></td></tr>
+<tr><td><code>KvGet</code></td><td><code>CMD_GET</code></td><td><code>Reader.GetLock</code> + <code>Reader.GetValue</code></td></tr>
+<tr><td><code>KvScan</code></td><td><code>CMD_SCAN</code></td><td><code>Reader.GetLock</code> + CFWrite iteration + <code>GetInternalEntry</code></td></tr>
+</tbody>
+</table>
+</div>
 <hr>
 <h2 id="2-mvcc-data-model"><a class="header" href="#2-mvcc-data-model">2. MVCC Data Model</a></h2>
 <p>NoKV uses three MVCC column families:</p>
@@ -284,7 +300,7 @@
 
 <hr>
 <h2 id="5-write-side-operations"><a class="header" href="#5-write-side-operations">5. Write-Side Operations</a></h2>
-<h2 id="51-prewrite"><a class="header" href="#51-prewrite">5.1 Prewrite</a></h2>
+<h3 id="51-prewrite"><a class="header" href="#51-prewrite">5.1 Prewrite</a></h3>
 <p><code>Prewrite</code> runs mutation-by-mutation:</p>
 <ol>
 <li>Check existing lock on key:
@@ -425,12 +441,14 @@
 </table>
 </div>
 <hr>
-<h2 id="9-current-constraints"><a class="header" href="#9-current-constraints">9. Current Constraints</a></h2>
+<h2 id="9-current-operational-boundaries"><a class="header" href="#9-current-operational-boundaries">9. Current Operational Boundaries</a></h2>
 <ul>
-<li>This path is distributed-only and tied to TinyKV RPC + Raft apply.</li>
-<li>Standalone/local transaction APIs are intentionally removed.</li>
-<li>Latch scope is per-node process when a store reuses one shared <code>latch.Manager</code>; region-level correctness still comes from Raft sequencing.</li>
-<li><code>Write.ShortValue</code> is encoded/decoded but not used by current commit writer.</li>
+<li>Percolator execution is tied to TinyKV RPC + Raft apply path.</li>
+<li>Latch scope is process-local when one store shares a single <code>latch.Manager</code>;
+region correctness still comes from Raft ordering.</li>
+<li><code>Write.ShortValue</code> and <code>Write.ExpiresAt</code> are codec fields; current commit path
+stores primary value bytes in <code>CFDefault</code> and reads from there when short value
+is not present.</li>
 </ul>
 <hr>
 <h2 id="10-validation-and-tests"><a class="header" href="#10-validation-and-tests">10. Validation and Tests</a></h2>
