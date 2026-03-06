@@ -216,7 +216,7 @@ func (ss *SSTable) Detele() error {
 	return ss.f.Delete()
 }
 
-// Truncature _
-func (ss *SSTable) Truncature(size int64) error {
-	return ss.f.Truncature(size)
+// Truncate resizes the underlying table mapping.
+func (ss *SSTable) Truncate(size int64) error {
+	return ss.f.Truncate(size)
 }

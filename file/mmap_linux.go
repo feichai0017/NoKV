@@ -182,7 +182,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	if start+sz > len(m.Data) {
 		const oneGB = 1 << 30
 		growBy := max(min(len(m.Data), oneGB), sz+4)
-		if err := m.Truncature(int64(len(m.Data) + growBy)); err != nil {
+		if err := m.Truncate(int64(len(m.Data) + growBy)); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -201,7 +201,7 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	if end > size {
 		growBy := max(min(size, oneGB), needSize)
 		newSize := max(size+growBy, end)
-		if err := m.Truncature(int64(newSize)); err != nil {
+		if err := m.Truncate(int64(newSize)); err != nil {
 			return err
 		}
 	}
@@ -287,8 +287,8 @@ func (m *MmapFile) Close() error {
 	return m.File.Close()
 }
 
-// Truncature compatible interface
-func (m *MmapFile) Truncature(maxSz int64) error {
+// Truncate resizes and remaps the file to the provided size.
+func (m *MmapFile) Truncate(maxSz int64) error {
 	if maxSz <= 0 {
 		return fmt.Errorf("invalid truncate size: %d for file: %s", maxSz, m.fileName())
 	}

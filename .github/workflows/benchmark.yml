@@ -9,7 +9,6 @@ on:
 
 jobs:
   micro-bench:
-    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-benchmark')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -34,8 +33,19 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' }}
           comment-on-alert: ${{ github.event_name == 'pull_request' }}
-          alert-threshold: '130%'
+          alert-threshold: '115%'
           fail-on-alert: false
+
+  ycsb-bench:
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-benchmark')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
 
       - name: Run YCSB benchmarks (NoKV)
         env:

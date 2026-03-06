@@ -9,7 +9,7 @@ The `file` package encapsulates direct file-system interaction for WAL, SST, and
 | Type | Purpose | Key Methods |
 | --- | --- | --- |
 | [`Options`](../file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
-| [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncature`, `Sync`. |
+| [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncate`, `Sync`. |
 | [`LogFile`](../file/vlog.go#L17-L223) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `Truncate`, `Bootstrap`. |
 
 Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) ensuring the package compiles on macOS without manual tuning.
@@ -19,7 +19,7 @@ Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) en
 ## 2. Mmap Management
 
 * `OpenMmapFile` opens or creates a file, optionally extending it to `maxSz`, then mmaps it. The returned `MmapFile` exposes `Data []byte` and the underlying `*os.File` handle.
-* Writes grow the map on demand: `AppendBuffer` checks if the write would exceed the current mapping and calls `Truncature` to expand (doubling up to 1 GiB increments).
+* Writes grow the map on demand: `AppendBuffer` checks if the write would exceed the current mapping and calls `Truncate` to expand (doubling up to 1 GiB increments).
 * `Sync` flushes dirty pages (`mmap.Msync`), while `Delete` unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.
 
 RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.
