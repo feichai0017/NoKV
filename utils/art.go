@@ -87,6 +87,60 @@ func arenaPayloadFromOffset(arena *Arena, offset uint32) *nodePayload {
 	return (*nodePayload)(arena.addr(offset))
 }
 
+func payloadChildOffset(payload *nodePayload, idx int) uint32 {
+	if payload == nil || idx < 0 || idx >= len(payload.children) {
+		return 0
+	}
+	return atomic.LoadUint32(&payload.children[idx])
+}
+
+func payloadChildNode(arena *Arena, payload *nodePayload, idx int) *artNode {
+	if arena == nil {
+		return nil
+	}
+	return arenaNodeFromOffset(arena, payloadChildOffset(payload, idx))
+}
+
+func node16LowerBoundIndex(keys []byte, count int, key byte) (idx int, exact bool) {
+	if count <= 0 {
+		return -1, false
+	}
+	var mask uint16
+	for i := 0; i < count; i++ {
+		if keys[i] >= key {
+			mask |= uint16(1) << i
+		}
+	}
+	if mask == 0 {
+		return -1, false
+	}
+	idx = bits.TrailingZeros16(mask)
+	if idx >= count {
+		return -1, false
+	}
+	return idx, keys[idx] == key
+}
+
+func node16UpperBoundIndex(keys []byte, count int, key byte) (idx int, exact bool) {
+	if count <= 0 {
+		return -1, false
+	}
+	var mask uint16
+	for i := 0; i < count; i++ {
+		if keys[i] <= key {
+			mask |= uint16(1) << i
+		}
+	}
+	if mask == 0 {
+		return -1, false
+	}
+	idx = 15 - bits.LeadingZeros16(mask)
+	if idx >= count {
+		return -1, false
+	}
+	return idx, keys[idx] == key
+}
+
 // ART implements an adaptive radix tree for memtable indexing.
 // Keys must use the internal-key layout; the tree stores a private
 // mem-comparable route key plus the original internal key per leaf.
@@ -263,7 +317,7 @@ func (t *artTree) tryInsert(key []byte, routeKey []byte, value kv.ValueStruct) b
 
 		depth += len(prefix)
 		nextKey := keyByte(routeKey, depth)
-		next, _ := node.findChild(t.arena, nextKey)
+		next, _ := node.lookupGE(t.arena, nextKey)
 		if next == nil {
 			return t.insertAtMissingChild(parent, parentKey, node, nextKey, key, routeKey, value)
 		}
@@ -322,6 +376,9 @@ func (t *artTree) replaceChild(parent *artNode, parentKey byte, oldChild, newChi
 	if parent == nil {
 		return t.root.CompareAndSwap(oldChild, newChild)
 	}
+	if t.tryReplaceChildInPlace(parent, parentKey, oldChild, newChild) {
+		return true
+	}
 	oldPayloadOffset := parent.payloadOffset.Load()
 	payload := arenaPayloadFromOffset(t.arena, oldPayloadOffset)
 	if payload == nil {
@@ -332,6 +389,53 @@ func (t *artTree) replaceChild(parent *artNode, parentKey byte, oldChild, newChi
 		return false
 	}
 	return parent.payloadOffset.CompareAndSwap(oldPayloadOffset, arenaPayloadOffset(t.arena, newPayload))
+}
+
+func (t *artTree) tryReplaceChildInPlace(parent *artNode, parentKey byte, oldChild, newChild *artNode) bool {
+	if t == nil || t.arena == nil || parent == nil || oldChild == nil || newChild == nil {
+		return false
+	}
+	if !parent.tryWriteLock() {
+		return false
+	}
+	defer parent.unlockWrite()
+
+	payloadOffset := parent.payloadOffset.Load()
+	payload := arenaPayloadFromOffset(t.arena, payloadOffset)
+	if payload == nil {
+		return false
+	}
+	oldOff := arenaNodeOffset(t.arena, oldChild)
+	newOff := arenaNodeOffset(t.arena, newChild)
+	if oldOff == 0 || newOff == 0 {
+		return false
+	}
+	switch parent.kind {
+	case artNode4Kind, artNode16Kind:
+		for i := 0; i < payload.count; i++ {
+			if payload.keys[i] != parentKey {
+				continue
+			}
+			return atomic.CompareAndSwapUint32(&payload.children[i], oldOff, newOff)
+		}
+	case artNode48Kind:
+		pos := payload.idx[parentKey]
+		if pos == 0 {
+			return false
+		}
+		idx := int(pos - 1)
+		if idx >= len(payload.children) {
+			return false
+		}
+		return atomic.CompareAndSwapUint32(&payload.children[idx], oldOff, newOff)
+	case artNode256Kind:
+		idx := int(parentKey)
+		if idx >= len(payload.children) {
+			return false
+		}
+		return atomic.CompareAndSwapUint32(&payload.children[idx], oldOff, newOff)
+	}
+	return false
 }
 
 func (t *artTree) lowerBound(key []byte) *artNode {
@@ -380,7 +484,7 @@ func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode
 		return nil
 	}
 	b := keyByte(key, depth)
-	eq, gt := node.findChild(arena, b)
+	eq, gt := node.lookupGE(arena, b)
 	if eq != nil {
 		res := lowerBoundNode(arena, eq, key, depth+1)
 		if res != nil {
@@ -417,7 +521,7 @@ func upperBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode
 		return nil
 	}
 	b := keyByte(key, depth)
-	eq, lt := node.findChildLE(arena, b)
+	eq, lt := node.lookupLE(arena, b)
 	if eq != nil {
 		res := upperBoundNode(arena, eq, key, depth+1)
 		if res != nil {
@@ -885,6 +989,7 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 type artNode struct {
 	value         atomic.Uint64
 	payloadOffset atomic.Uint32
+	versionLock   atomic.Uint64
 	self          uint32
 
 	kind                 uint8
@@ -975,6 +1080,28 @@ func (n *artNode) setPayload(arena *Arena, payload *nodePayload) {
 	n.payloadOffset.Store(arenaPayloadOffset(arena, payload))
 }
 
+func (n *artNode) tryWriteLock() bool {
+	if n == nil {
+		return false
+	}
+	for {
+		v := n.versionLock.Load()
+		if v&1 != 0 {
+			return false
+		}
+		if n.versionLock.CompareAndSwap(v, v+1) {
+			return true
+		}
+	}
+}
+
+func (n *artNode) unlockWrite() {
+	if n == nil {
+		return
+	}
+	n.versionLock.Add(1)
+}
+
 func (n *artNode) loadValue(arena *Arena) kv.ValueStruct {
 	if n == nil || arena == nil {
 		return kv.ValueStruct{}
@@ -1028,7 +1155,7 @@ func (n *artNode) setPrefix(arena *Arena, prefix []byte) {
 	n.prefixOverflowOffset = arenaPutKey(arena, prefix)
 }
 
-func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
+func (n *artNode) lookupGE(arena *Arena, key byte) (*artNode, *artNode) {
 	payload := n.payloadPtr(arena)
 	if payload == nil {
 		return nil, nil
@@ -1041,39 +1168,27 @@ func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 			if k == key {
 				var gt *artNode
 				if i+1 < payload.count {
-					gt = arenaNodeFromOffset(arena, payload.children[i+1])
+					gt = payloadChildNode(arena, payload, i+1)
 				}
-				return arenaNodeFromOffset(arena, payload.children[i]), gt
+				return payloadChildNode(arena, payload, i), gt
 			}
 			if k > key {
-				return nil, arenaNodeFromOffset(arena, payload.children[i])
+				return nil, payloadChildNode(arena, payload, i)
 			}
 		}
 	case artNode16Kind:
-		if payload.count == 0 {
+		idx, exact := node16LowerBoundIndex(payload.keys, payload.count, key)
+		if idx < 0 {
 			return nil, nil
 		}
-		var mask uint16
-		for i := 0; i < payload.count; i++ {
-			if payload.keys[i] >= key {
-				mask |= uint16(1) << i
-			}
-		}
-		if mask == 0 {
-			return nil, nil
-		}
-		idx := bits.TrailingZeros16(mask)
-		if idx >= payload.count {
-			return nil, nil
-		}
-		if payload.keys[idx] == key {
+		if exact {
 			var gt *artNode
 			if idx+1 < payload.count {
-				gt = arenaNodeFromOffset(arena, payload.children[idx+1])
+				gt = payloadChildNode(arena, payload, idx+1)
 			}
-			return arenaNodeFromOffset(arena, payload.children[idx]), gt
+			return payloadChildNode(arena, payload, idx), gt
 		}
-		return nil, arenaNodeFromOffset(arena, payload.children[idx])
+		return nil, payloadChildNode(arena, payload, idx)
 	case artNode48Kind:
 		// Node48 stores child pointers compacted in children[0..count),
 		// with idx[key] mapping to child index+1.
@@ -1082,7 +1197,7 @@ func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 			if pos > 0 {
 				idx := int(pos - 1)
 				if idx < len(payload.children) {
-					eq := arenaNodeFromOffset(arena, payload.children[idx])
+					eq := payloadChildNode(arena, payload, idx)
 					gt := findGreaterChild(arena, payload, int(key)+1, artNode48Kind)
 					return eq, gt
 				}
@@ -1092,7 +1207,7 @@ func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 	case artNode256Kind:
 		// Node256 stores direct byte -> child mapping.
 		if int(key) < len(payload.children) {
-			eq := arenaNodeFromOffset(arena, payload.children[key])
+			eq := payloadChildNode(arena, payload, int(key))
 			gt := findGreaterChild(arena, payload, int(key)+1, artNode256Kind)
 			return eq, gt
 		}
@@ -1100,7 +1215,7 @@ func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
 	return nil, nil
 }
 
-func (n *artNode) findChildLE(arena *Arena, key byte) (*artNode, *artNode) {
+func (n *artNode) lookupLE(arena *Arena, key byte) (*artNode, *artNode) {
 	payload := n.payloadPtr(arena)
 	if payload == nil {
 		return nil, nil
@@ -1113,38 +1228,34 @@ func (n *artNode) findChildLE(arena *Arena, key byte) (*artNode, *artNode) {
 			if k == key {
 				var lt *artNode
 				if i > 0 {
-					lt = arenaNodeFromOffset(arena, payload.children[i-1])
+					lt = payloadChildNode(arena, payload, i-1)
 				}
-				return arenaNodeFromOffset(arena, payload.children[i]), lt
+				return payloadChildNode(arena, payload, i), lt
 			}
 			if k < key {
-				return nil, arenaNodeFromOffset(arena, payload.children[i])
+				return nil, payloadChildNode(arena, payload, i)
 			}
 		}
 	case artNode16Kind:
-		if payload.count == 0 {
+		idx, exact := node16UpperBoundIndex(payload.keys, payload.count, key)
+		if idx < 0 {
 			return nil, nil
 		}
-		for i := payload.count - 1; i >= 0; i-- {
-			k := payload.keys[i]
-			if k == key {
-				var lt *artNode
-				if i > 0 {
-					lt = arenaNodeFromOffset(arena, payload.children[i-1])
-				}
-				return arenaNodeFromOffset(arena, payload.children[i]), lt
+		if exact {
+			var lt *artNode
+			if idx > 0 {
+				lt = payloadChildNode(arena, payload, idx-1)
 			}
-			if k < key {
-				return nil, arenaNodeFromOffset(arena, payload.children[i])
-			}
+			return payloadChildNode(arena, payload, idx), lt
 		}
+		return nil, payloadChildNode(arena, payload, idx)
 	case artNode48Kind:
 		if int(key) < len(payload.idx) {
 			pos := payload.idx[key]
 			if pos > 0 {
 				idx := int(pos - 1)
 				if idx < len(payload.children) {
-					eq := arenaNodeFromOffset(arena, payload.children[idx])
+					eq := payloadChildNode(arena, payload, idx)
 					lt := findLesserChild(arena, payload, int(key)-1, artNode48Kind)
 					return eq, lt
 				}
@@ -1153,7 +1264,7 @@ func (n *artNode) findChildLE(arena *Arena, key byte) (*artNode, *artNode) {
 		return nil, findLesserChild(arena, payload, int(key)-1, artNode48Kind)
 	case artNode256Kind:
 		if int(key) < len(payload.children) {
-			eq := arenaNodeFromOffset(arena, payload.children[key])
+			eq := payloadChildNode(arena, payload, int(key))
 			lt := findLesserChild(arena, payload, int(key)-1, artNode256Kind)
 			return eq, lt
 		}
@@ -1177,7 +1288,7 @@ func findGreaterChild(arena *Arena, payload *nodePayload, start int, kind uint8)
 			}
 			idx := int(pos - 1)
 			if idx < len(payload.children) {
-				return arenaNodeFromOffset(arena, payload.children[idx])
+				return payloadChildNode(arena, payload, idx)
 			}
 		}
 	case artNode256Kind:
@@ -1185,8 +1296,8 @@ func findGreaterChild(arena *Arena, payload *nodePayload, start int, kind uint8)
 			return nil
 		}
 		for i := start; i < len(payload.children); i++ {
-			if payload.children[i] != 0 {
-				return arenaNodeFromOffset(arena, payload.children[i])
+			if payloadChildOffset(payload, i) != 0 {
+				return payloadChildNode(arena, payload, i)
 			}
 		}
 	}
@@ -1206,7 +1317,7 @@ func findLesserChild(arena *Arena, payload *nodePayload, start int, kind uint8) 
 			}
 			idx := int(pos - 1)
 			if idx < len(payload.children) {
-				return arenaNodeFromOffset(arena, payload.children[idx])
+				return payloadChildNode(arena, payload, idx)
 			}
 		}
 	case artNode256Kind:
@@ -1214,8 +1325,8 @@ func findLesserChild(arena *Arena, payload *nodePayload, start int, kind uint8) 
 			start = len(payload.children) - 1
 		}
 		for i := start; i >= 0; i-- {
-			if payload.children[i] != 0 {
-				return arenaNodeFromOffset(arena, payload.children[i])
+			if payloadChildOffset(payload, i) != 0 {
+				return payloadChildNode(arena, payload, i)
 			}
 		}
 	}
@@ -1232,7 +1343,7 @@ func (n *artNode) minChild(arena *Arena) *artNode {
 		if payload.count == 0 {
 			return nil
 		}
-		return arenaNodeFromOffset(arena, payload.children[0])
+		return payloadChildNode(arena, payload, 0)
 	case artNode48Kind:
 		return findGreaterChild(arena, payload, 0, artNode48Kind)
 	case artNode256Kind:
@@ -1251,7 +1362,7 @@ func (n *artNode) maxChild(arena *Arena) *artNode {
 		if payload.count == 0 {
 			return nil
 		}
-		return arenaNodeFromOffset(arena, payload.children[payload.count-1])
+		return payloadChildNode(arena, payload, payload.count-1)
 	case artNode48Kind:
 		return findLesserChild(arena, payload, len(payload.idx)-1, artNode48Kind)
 	case artNode256Kind:
@@ -1453,17 +1564,17 @@ func (it *artIterator) nextChild(node *artNode, idx int) (*artNode, int) {
 			if childIdx >= len(payload.children) {
 				continue
 			}
-			child := arenaNodeFromOffset(arena, payload.children[childIdx])
+			child := payloadChildNode(arena, payload, childIdx)
 			if child != nil {
 				return child, i + 1
 			}
 		}
 	case artNode256Kind:
 		for i := idx; i < len(payload.children); i++ {
-			if payload.children[i] == 0 {
+			if payloadChildOffset(payload, i) == 0 {
 				continue
 			}
-			child := arenaNodeFromOffset(arena, payload.children[i])
+			child := payloadChildNode(arena, payload, i)
 			if child != nil {
 				return child, i + 1
 			}
@@ -1508,7 +1619,7 @@ func (it *artIterator) prevChild(node *artNode, idx int) (*artNode, int) {
 			if childIdx >= len(payload.children) {
 				continue
 			}
-			child := arenaNodeFromOffset(arena, payload.children[childIdx])
+			child := payloadChildNode(arena, payload, childIdx)
 			if child != nil {
 				return child, i - 1
 			}
@@ -1518,10 +1629,10 @@ func (it *artIterator) prevChild(node *artNode, idx int) (*artNode, int) {
 			idx = len(payload.children) - 1
 		}
 		for i := idx; i >= 0; i-- {
-			if payload.children[i] == 0 {
+			if payloadChildOffset(payload, i) == 0 {
 				continue
 			}
-			child := arenaNodeFromOffset(arena, payload.children[i])
+			child := payloadChildNode(arena, payload, i)
 			if child != nil {
 				return child, i - 1
 			}
@@ -1563,7 +1674,7 @@ func (it *artIterator) childForKey(node *artNode, key byte) (*artNode, int) {
 	case artNode4Kind, artNode16Kind:
 		for i := 0; i < payload.count; i++ {
 			if payload.keys[i] == key {
-				child := arenaNodeFromOffset(arena, payload.children[i])
+				child := payloadChildNode(arena, payload, i)
 				if child == nil {
 					return nil, 0
 				}
@@ -1579,16 +1690,16 @@ func (it *artIterator) childForKey(node *artNode, key byte) (*artNode, int) {
 		if childIdx >= len(payload.children) {
 			return nil, 0
 		}
-		child := arenaNodeFromOffset(arena, payload.children[childIdx])
+		child := payloadChildNode(arena, payload, childIdx)
 		if child == nil {
 			return nil, 0
 		}
 		return child, int(key) + 1
 	case artNode256Kind:
-		if payload.children[key] == 0 {
+		if payloadChildOffset(payload, int(key)) == 0 {
 			return nil, 0
 		}
-		child := arenaNodeFromOffset(arena, payload.children[key])
+		child := payloadChildNode(arena, payload, int(key))
 		if child == nil {
 			return nil, 0
 		}
@@ -1610,7 +1721,7 @@ func (it *artIterator) childForKeyDesc(node *artNode, key byte) (*artNode, int) 
 	case artNode4Kind, artNode16Kind:
 		for i := 0; i < payload.count; i++ {
 			if payload.keys[i] == key {
-				child := arenaNodeFromOffset(arena, payload.children[i])
+				child := payloadChildNode(arena, payload, i)
 				if child == nil {
 					return nil, 0
 				}
@@ -1626,16 +1737,16 @@ func (it *artIterator) childForKeyDesc(node *artNode, key byte) (*artNode, int) 
 		if childIdx >= len(payload.children) {
 			return nil, 0
 		}
-		child := arenaNodeFromOffset(arena, payload.children[childIdx])
+		child := payloadChildNode(arena, payload, childIdx)
 		if child == nil {
 			return nil, 0
 		}
 		return child, int(key) - 1
 	case artNode256Kind:
-		if payload.children[key] == 0 {
+		if payloadChildOffset(payload, int(key)) == 0 {
 			return nil, 0
 		}
-		child := arenaNodeFromOffset(arena, payload.children[key])
+		child := payloadChildNode(arena, payload, int(key))
 		if child == nil {
 			return nil, 0
 		}
