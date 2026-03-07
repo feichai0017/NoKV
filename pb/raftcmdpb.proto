@@ -3,6 +3,7 @@ syntax = "proto3";
 
 package pb;
 
+import "errorpb.proto";
 import "kvrpcpb.proto";
 import "metapb.proto";
 
@@ -43,6 +44,7 @@ message CmdHeader {
   ReadPreference read_preference = 7;
   uint64 max_stale_read_index = 8;
   uint64 max_stale_read_ms = 9;
+  uint64 store_id = 10;
 }
 
 enum CmdType {

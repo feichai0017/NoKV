@@ -12,7 +12,7 @@ It sits between:
 - `peer/`: raft peer runtime (`RawNode` ready/apply flow)
 - `engine/`: raft log/state storage on top of NoKV WAL/manifest
 - `transport/`: gRPC raft transport
-- `kv/`: TinyKv RPC service and apply bridge
+- `kv/`: NoKV RPC service and apply bridge
 - `server/`: node assembly (`raftstore.Server`)
 - `client/`: region-aware distributed client with retries
 - `scheduler/`: store-side scheduler abstractions/types

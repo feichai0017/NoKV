@@ -1,0 +1,52 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+
+import "metapb.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+// errorpb carries region/store routing errors returned by raftstore.
+
+message RegionError {
+  NotLeader not_leader = 1;
+  EpochNotMatch epoch_not_match = 2;
+  StaleCommand stale_command = 3;
+  RaftEntryTooLarge entry_too_large = 4;
+  StoreNotMatch store_not_match = 5;
+  RegionNotFound region_not_found = 6;
+  KeyNotInRegion key_not_in_region = 7;
+}
+
+message NotLeader {
+  uint64 region_id = 1;
+  RegionPeer leader = 2;
+}
+
+message EpochNotMatch {
+  RegionEpoch current_epoch = 1;
+  repeated RegionMeta regions = 2;
+}
+
+message StaleCommand {}
+
+message RaftEntryTooLarge {
+  uint64 region_id = 1;
+}
+
+message StoreNotMatch {
+  uint64 request_store_id = 1;
+  uint64 actual_store_id = 2;
+}
+
+message RegionNotFound {
+  uint64 region_id = 1;
+}
+
+message KeyNotInRegion {
+  bytes key = 1;
+  uint64 region_id = 2;
+  bytes start_key = 3;
+  bytes end_key = 4;
+}

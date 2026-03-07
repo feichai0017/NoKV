@@ -139,7 +139,7 @@ flowchart TD
 
 ### 5.1 Function-Level Chain
 
-1. `raftstore/kv.Service` builds `RaftCmdRequest` from TinyKV RPC.
+1. `raftstore/kv.Service` builds `RaftCmdRequest` from NoKV RPC.
 2. `Store.ReadCommand`:
    - `validateCommand` (region/epoch/leader/key-range)
    - `peer.LinearizableRead`
@@ -153,7 +153,7 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as Store.ReadCommand
     participant P as peer.LinearizableRead
@@ -168,7 +168,7 @@ sequenceDiagram
     AP->>R: GetLock/GetValue or scan CFWrite
     R->>DB: GetInternalEntry/NewInternalIterator
     AP-->>SVC: RaftCmdResponse
-    SVC-->>C: TinyKV response
+    SVC-->>C: NoKV response
 ```
 
 ---
@@ -206,7 +206,7 @@ sequenceDiagram
     TXN->>DB: applyVersionedOps -> ApplyInternalEntries
     DB-->>TXN: write result
     AP-->>SVC: RaftCmdResponse
-    SVC-->>CL: TinyKV response
+    SVC-->>CL: NoKV response
 ```
 
 ---
@@ -231,4 +231,3 @@ sequenceDiagram
 | LSM/WAL stored form | Internal key | Encoded value payload | Used by replay/flush/compaction |
 | `GetInternalEntry` output | Internal key | Raw value bytes (pointer resolved) | Internal caller view |
 | `Get` / public iterator output | User key | Raw value bytes | External caller view |
-

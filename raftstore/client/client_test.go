@@ -378,7 +378,7 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	t.Helper()
 	srv := grpc.NewServer()
 	service := &mockService{storeID: storeID, cluster: cluster}
-	pb.RegisterTinyKvServer(srv, service)
+	pb.RegisterNoKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -632,7 +632,7 @@ func TestClientRegionResolverLookupAndCache(t *testing.T) {
 }
 
 type errorService struct {
-	pb.UnimplementedTinyKvServer
+	pb.UnimplementedNoKVServer
 }
 
 func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
@@ -642,7 +642,7 @@ func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetRespon
 func startErrorStore(t *testing.T) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	pb.RegisterTinyKvServer(srv, &errorService{})
+	pb.RegisterNoKVServer(srv, &errorService{})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {

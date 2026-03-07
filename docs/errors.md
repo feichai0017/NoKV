@@ -48,6 +48,8 @@ Examples:
 - `vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
 - `lsm/compact/errors.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
+- `pb/errorpb.proto`: region/store routing protobuf errors (`RegionError`,
+  `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
 - `wal/errors.go`: WAL encode/decode and segment errors
 - `pd/core/errors.go`: PD metadata and range validation errors
 
@@ -59,7 +61,7 @@ Examples:
    - validation returns direct sentinel (`ErrEmptyKey`, `ErrNilValue`, `ErrInvalidRequest`);
    - storage boundary errors are wrapped with context and preserved via `%w`.
 2. Distributed command path (`kv.Service` -> `Store.*Command` -> `kv.Apply`):
-   - region/leader/range failures are mapped to `RegionError` in protobuf response;
+   - region/leader/store/range failures are mapped to `errorpb` messages in protobuf responses;
    - execution failures return Go errors to RPC layer and are translated to gRPC status.
 3. Recovery/replay path (WAL/Vlog/Manifest):
    - partial/corrupt records return domain sentinels and are handled by truncation or

@@ -80,7 +80,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Value separation + GC | `vlog/manager_test.go`, `db_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
 | Iterator consistency | `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |
 | Throttling / backpressure | `lsm/compaction_test.go`, `db_test.go::TestWriteThrottle` | L0 backlog triggers, flush queue growth, metrics observation. |
-| Distributed TinyKv client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection` | Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing. |
+| Distributed NoKV client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection` | Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing. |
 | Performance regression | `benchmark` package | Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under `benchmark/benchmark_results`. |
 
 ---

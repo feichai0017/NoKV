@@ -64,7 +64,7 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 ### `nokv serve`
 
-- Starts TinyKv gRPC service backed by local `raftstore`
+- Starts NoKV gRPC service backed by local `raftstore`
 - Requires `--workdir`, `--store-id`, and `--pd-addr`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)

@@ -10,7 +10,7 @@
 
 ## Runtime roles
 
-- `nokv serve`: starts a storage node (raftstore + TinyKv RPC) and connects to PD in distributed mode.
+- `nokv serve`: starts a storage node (raftstore + NoKV RPC) and connects to PD in distributed mode.
 - `nokv pd`: starts the PD-lite control-plane service.
 - `nokv-redis`: provides Redis protocol access on top of NoKV / raftstore client.
 

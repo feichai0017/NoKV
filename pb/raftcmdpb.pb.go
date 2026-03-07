@@ -320,6 +320,7 @@ type CmdHeader struct {
 	ReadPreference    ReadPreference         `protobuf:"varint,7,opt,name=read_preference,json=readPreference,proto3,enum=pb.ReadPreference" json:"read_preference,omitempty"`
 	MaxStaleReadIndex uint64                 `protobuf:"varint,8,opt,name=max_stale_read_index,json=maxStaleReadIndex,proto3" json:"max_stale_read_index,omitempty"`
 	MaxStaleReadMs    uint64                 `protobuf:"varint,9,opt,name=max_stale_read_ms,json=maxStaleReadMs,proto3" json:"max_stale_read_ms,omitempty"`
+	StoreId           uint64                 `protobuf:"varint,10,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -413,6 +414,13 @@ func (x *CmdHeader) GetMaxStaleReadIndex() uint64 {
 func (x *CmdHeader) GetMaxStaleReadMs() uint64 {
 	if x != nil {
 		return x.MaxStaleReadMs
+	}
+	return 0
+}
+
+func (x *CmdHeader) GetStoreId() uint64 {
+	if x != nil {
+		return x.StoreId
 	}
 	return 0
 }
@@ -865,7 +873,7 @@ var File_raftcmdpb_proto protoreflect.FileDescriptor
 
 const file_raftcmdpb_proto_rawDesc = "" +
 	"\n" +
-	"\x0fraftcmdpb.proto\x12\x02pb\x1a\rkvrpcpb.proto\x1a\fmetapb.proto\"{\n" +
+	"\x0fraftcmdpb.proto\x12\x02pb\x1a\rerrorpb.proto\x1a\rkvrpcpb.proto\x1a\fmetapb.proto\"{\n" +
 	"\fSplitCommand\x12(\n" +
 	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
 	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x12$\n" +
@@ -880,7 +888,7 @@ const file_raftcmdpb_proto_rawDesc = "" +
 	"\x04Type\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\t\n" +
 	"\x05SPLIT\x10\x01\x12\t\n" +
-	"\x05MERGE\x10\x02\"\x8e\x03\n" +
+	"\x05MERGE\x10\x02\"\xa9\x03\n" +
 	"\tCmdHeader\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x122\n" +
 	"\fregion_epoch\x18\x02 \x01(\v2\x0f.pb.RegionEpochR\vregionEpoch\x12\x17\n" +
@@ -892,7 +900,9 @@ const file_raftcmdpb_proto_rawDesc = "" +
 	"\x10read_consistency\x18\x06 \x01(\x0e2\x13.pb.ReadConsistencyR\x0freadConsistency\x12;\n" +
 	"\x0fread_preference\x18\a \x01(\x0e2\x12.pb.ReadPreferenceR\x0ereadPreference\x12/\n" +
 	"\x14max_stale_read_index\x18\b \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
-	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\"\xaa\x03\n" +
+	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\x12\x19\n" +
+	"\bstore_id\x18\n" +
+	" \x01(\x04R\astoreId\"\xaa\x03\n" +
 	"\aRequest\x12&\n" +
 	"\bcmd_type\x18\x01 \x01(\x0e2\v.pb.CmdTypeR\acmdType\x12\"\n" +
 	"\x03get\x18\x02 \x01(\v2\x0e.pb.GetRequestH\x00R\x03get\x12%\n" +
@@ -1015,6 +1025,7 @@ func file_raftcmdpb_proto_init() {
 	if File_raftcmdpb_proto != nil {
 		return
 	}
+	file_errorpb_proto_init()
 	file_kvrpcpb_proto_init()
 	file_metapb_proto_init()
 	file_raftcmdpb_proto_msgTypes[4].OneofWrappers = []any{

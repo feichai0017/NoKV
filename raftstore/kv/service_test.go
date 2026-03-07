@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type noopTransport struct{}
@@ -142,6 +143,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	ctx := &pb.Context{
 		RegionId:    meta.ID,
 		RegionEpoch: &pb.RegionEpoch{Version: cfg.epochVersion, ConfVer: cfg.epochConfVer},
+		Peer:        &pb.RegionPeer{StoreId: cfg.storeID, PeerId: cfg.peerID},
 	}
 	return serviceHarness{
 		db:      db,
@@ -673,6 +675,51 @@ func TestServiceHeaderAndScanErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))
+}
+
+func TestServiceKvGetStoreNotMatch(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        7,
+		peerID:         77,
+		regionID:       1102,
+		campaignLeader: true,
+	})
+
+	ctx := proto.Clone(env.ctx).(*pb.Context)
+	ctx.Peer = &pb.RegionPeer{StoreId: 999, PeerId: env.ctx.GetPeer().GetPeerId()}
+
+	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: ctx,
+		Request: &pb.GetRequest{Key: []byte("ak"), Version: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetStoreNotMatch())
+	require.Equal(t, uint64(999), resp.GetRegionError().GetStoreNotMatch().GetRequestStoreId())
+	require.Equal(t, uint64(7), resp.GetRegionError().GetStoreNotMatch().GetActualStoreId())
+}
+
+func TestServiceKvGetKeyNotInRegion(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        8,
+		peerID:         88,
+		regionID:       1201,
+		startKey:       []byte("a"),
+		endKey:         []byte("m"),
+		campaignLeader: true,
+	})
+
+	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: env.ctx,
+		Request: &pb.GetRequest{Key: []byte("z"), Version: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetKeyNotInRegion())
+	require.Equal(t, []byte("z"), resp.GetRegionError().GetKeyNotInRegion().GetKey())
+	require.Equal(t, env.region.ID, resp.GetRegionError().GetKeyNotInRegion().GetRegionId())
 }
 
 func TestServiceKvScanNotLeader(t *testing.T) {

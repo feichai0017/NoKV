@@ -17,7 +17,7 @@ The scope here is the current code path:
 
 Percolator logic is executed on the Raft apply path:
 
-1. Client sends TinyKV RPC (`KvPrewrite`, `KvCommit`, ...).
+1. Client sends NoKV RPC (`KvPrewrite`, `KvCommit`, ...).
 2. `raftstore/kv/service.go` wraps it into a `RaftCmdRequest`.
 3. Store proposes command through Raft.
 4. On apply, `raftstore/kv/apply.go` dispatches to `percolator.*`.
@@ -36,7 +36,7 @@ sequenceDiagram
     A->>P: percolator.Prewrite/Commit...
     P->>DB: CFDefault/CFLock/CFWrite reads+writes
     A-->>S: RaftCmdResponse
-    S-->>C: TinyKV RPC response
+    S-->>C: NoKV RPC response
 ```
 
 Key files:
@@ -50,7 +50,7 @@ Key files:
 
 ### 1.1 RPC to Percolator Function Mapping
 
-| TinyKV RPC | `kv.Apply` branch | Percolator function |
+| NoKV RPC | `kv.Apply` branch | Percolator function |
 | --- | --- | --- |
 | `KvPrewrite` | `CMD_PREWRITE` | `Prewrite` |
 | `KvCommit` | `CMD_COMMIT` | `Commit` |
@@ -238,7 +238,7 @@ Notes:
 
 ## 9. Current Operational Boundaries
 
-- Percolator execution is tied to TinyKV RPC + Raft apply path.
+- Percolator execution is tied to NoKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.
 - Latch scope is process-local when one store shares a single `latch.Manager`;
   region correctness still comes from Raft ordering.
 - `Write.ShortValue` and `Write.ExpiresAt` are codec fields; current commit path

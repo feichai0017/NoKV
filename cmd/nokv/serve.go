@@ -28,7 +28,7 @@ var notifyContext = signal.NotifyContext
 func runServeCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	workDir := fs.String("workdir", "", "database work directory")
-	listenAddr := fs.String("addr", "127.0.0.1:20160", "gRPC listen address for TinyKv + raft traffic")
+	listenAddr := fs.String("addr", "127.0.0.1:20160", "gRPC listen address for NoKV + raft traffic")
 	storeID := fs.Uint64("store-id", 0, "store ID assigned to this node")
 	electionTick := fs.Int("election-tick", 10, "raft election tick")
 	heartbeatTick := fs.Int("heartbeat-tick", 2, "raft heartbeat tick")
@@ -153,7 +153,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "TinyKv service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	_, _ = fmt.Fprintf(w, "NoKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
 	_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))
