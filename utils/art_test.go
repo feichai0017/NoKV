@@ -284,7 +284,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	if root48 == nil || root48.kind != artNode48Kind {
 		t.Fatalf("expected node48 root, got %v", root48)
 	}
-	eq, gt := root48.findChild(art48.tree.arena, 0)
+	eq, gt := root48.lookupGE(art48.tree.arena, 0)
 	if eq != nil || gt == nil {
 		t.Fatalf("expected greater child lookup in node48")
 	}
@@ -314,7 +314,7 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	if root256 == nil || root256.kind != artNode256Kind {
 		t.Fatalf("expected node256 root, got %v", root256)
 	}
-	eq, gt = root256.findChild(art256.tree.arena, 10)
+	eq, gt = root256.lookupGE(art256.tree.arena, 10)
 	if eq == nil || gt == nil {
 		t.Fatalf("expected greater child lookup in node256")
 	}
