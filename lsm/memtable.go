@@ -248,7 +248,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, errors.WithMessage(err, "while updating skiplist")
+		return nil, errors.WithMessage(err, "while updating memtable index")
 	}
 	return mt, nil
 }
@@ -327,14 +327,14 @@ func (mt *memTable) DecrRef() {
 
 func newMemIndex(opt *Options) memIndex {
 	if opt == nil {
-		return utils.NewSkiplist(arenaSizeFor(0))
+		return utils.NewART(arenaSizeFor(0))
 	}
 	switch opt.MemTableEngine {
-	case "art":
-		return utils.NewART(arenaSizeFor(opt.MemTableSize))
-	case "", "skiplist":
+	case "skiplist":
+		return utils.NewSkiplist(arenaSizeFor(opt.MemTableSize))
+	case "", "art":
 		fallthrough
 	default:
-		return utils.NewSkiplist(arenaSizeFor(opt.MemTableSize))
+		return utils.NewART(arenaSizeFor(opt.MemTableSize))
 	}
 }
