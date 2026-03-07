@@ -8,17 +8,51 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+func newDeleteRangeTestOptions(dir string) *Options {
+	cfg := *opt
+	cfg.WorkDir = dir
+	return &cfg
+}
+
+func mustSet(t *testing.T, db *DB, key, value []byte) {
+	t.Helper()
+	if err := db.Set(key, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustDeleteRange(t *testing.T, db *DB, start, end []byte) {
+	t.Helper()
+	if err := db.DeleteRange(start, end); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustDel(t *testing.T, db *DB, key []byte) {
+	t.Helper()
+	if err := db.Del(key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustClose(t *testing.T, db *DB) {
+	t.Helper()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDeleteRangeCore tests basic functionality, boundaries, lexicographic ordering,
 // empty ranges, and write-after-delete scenarios.
 func TestDeleteRangeCore(t *testing.T) {
-	opt := getTestOptions(t.TempDir())
+	opt := newDeleteRangeTestOptions(t.TempDir())
 	db := Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
 	// Test 1: Basic deletion with [start, end) semantics
-	db.Set([]byte("a"), []byte("1"))
-	db.Set([]byte("b"), []byte("2"))
-	db.Set([]byte("c"), []byte("3"))
+	mustSet(t, db, []byte("a"), []byte("1"))
+	mustSet(t, db, []byte("b"), []byte("2"))
+	mustSet(t, db, []byte("c"), []byte("3"))
 
 	if err := db.DeleteRange([]byte("a"), []byte("c")); err != nil {
 		t.Fatal(err)
@@ -35,11 +69,11 @@ func TestDeleteRangeCore(t *testing.T) {
 	}
 
 	// Test 2: Lexicographic ordering
-	db.Set([]byte("key1"), []byte("v1"))
-	db.Set([]byte("key10"), []byte("v10"))
-	db.Set([]byte("key2"), []byte("v2"))
+	mustSet(t, db, []byte("key1"), []byte("v1"))
+	mustSet(t, db, []byte("key10"), []byte("v10"))
+	mustSet(t, db, []byte("key2"), []byte("v2"))
 
-	db.DeleteRange([]byte("key1"), []byte("key2"))
+	mustDeleteRange(t, db, []byte("key1"), []byte("key2"))
 
 	if _, err := db.Get([]byte("key1")); err != utils.ErrKeyNotFound {
 		t.Error("key1 should be deleted")
@@ -52,8 +86,8 @@ func TestDeleteRangeCore(t *testing.T) {
 	}
 
 	// Test 3: Empty range (no keys in range)
-	db.Set([]byte("x"), []byte("1"))
-	db.Set([]byte("z"), []byte("2"))
+	mustSet(t, db, []byte("x"), []byte("1"))
+	mustSet(t, db, []byte("z"), []byte("2"))
 
 	if err := db.DeleteRange([]byte("xa"), []byte("xz")); err != nil {
 		t.Fatal(err)
@@ -67,14 +101,14 @@ func TestDeleteRangeCore(t *testing.T) {
 	}
 
 	// Test 4: Write after delete
-	db.Set([]byte("rewrite"), []byte("old"))
-	db.DeleteRange([]byte("rewrite"), []byte("rewritf"))
+	mustSet(t, db, []byte("rewrite"), []byte("old"))
+	mustDeleteRange(t, db, []byte("rewrite"), []byte("rewritf"))
 
 	if _, err := db.Get([]byte("rewrite")); err != utils.ErrKeyNotFound {
 		t.Error("key should be deleted")
 	}
 
-	db.Set([]byte("rewrite"), []byte("new"))
+	mustSet(t, db, []byte("rewrite"), []byte("new"))
 	if e, err := db.Get([]byte("rewrite")); err != nil || !bytes.Equal(e.Value, []byte("new")) {
 		t.Error("key should have new value after rewrite")
 	}
@@ -82,9 +116,9 @@ func TestDeleteRangeCore(t *testing.T) {
 
 // TestDeleteRangeValidation tests error handling for invalid inputs.
 func TestDeleteRangeValidation(t *testing.T) {
-	opt := getTestOptions(t.TempDir())
+	opt := newDeleteRangeTestOptions(t.TempDir())
 	db := Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
 	// Inverted range
 	if err := db.DeleteRange([]byte("z"), []byte("a")); err != utils.ErrInvalidRequest {
@@ -104,37 +138,47 @@ func TestDeleteRangeValidation(t *testing.T) {
 
 // TestDeleteRangeCF tests column family isolation.
 func TestDeleteRangeCF(t *testing.T) {
-	opt := getTestOptions(t.TempDir())
+	opt := newDeleteRangeTestOptions(t.TempDir())
 	db := Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
-	db.SetCF(kv.CFDefault, []byte("key1"), []byte("val1"))
-	db.SetCF(kv.CFLock, []byte("key1"), []byte("lock1"))
+	defaultEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key1"), nonTxnMaxVersion, []byte("val1"), 0, 0)
+	lockEntry := kv.NewInternalEntry(kv.CFLock, []byte("key1"), nonTxnMaxVersion, []byte("lock1"), 0, 0)
+	defer defaultEntry.DecrRef()
+	defer lockEntry.DecrRef()
+	if err := db.ApplyInternalEntries([]*kv.Entry{defaultEntry, lockEntry}); err != nil {
+		t.Fatal(err)
+	}
 
-	db.DeleteRangeCF(kv.CFDefault, []byte("key1"), []byte("key2"))
+	if err := db.DeleteRangeCF(kv.CFDefault, []byte("key1"), []byte("key2")); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := db.GetCF(kv.CFDefault, []byte("key1")); err != utils.ErrKeyNotFound {
+	if _, err := db.GetInternalEntry(kv.CFDefault, []byte("key1"), nonTxnMaxVersion); err != utils.ErrKeyNotFound {
 		t.Error("default CF key should be deleted")
 	}
-	if _, err := db.GetCF(kv.CFLock, []byte("key1")); err != nil {
+	entry, err := db.GetInternalEntry(kv.CFLock, []byte("key1"), nonTxnMaxVersion)
+	if err != nil {
 		t.Error("lock CF key should still exist")
+	} else {
+		entry.DecrRef()
 	}
 }
 
 // TestDeleteRangeComplex tests overlapping ranges and interaction with point deletes.
 func TestDeleteRangeComplex(t *testing.T) {
-	opt := getTestOptions(t.TempDir())
+	opt := newDeleteRangeTestOptions(t.TempDir())
 	db := Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
 	// Test 1: Overlapping ranges
-	db.Set([]byte("a"), []byte("1"))
-	db.Set([]byte("b"), []byte("2"))
-	db.Set([]byte("c"), []byte("3"))
-	db.Set([]byte("d"), []byte("4"))
+	mustSet(t, db, []byte("a"), []byte("1"))
+	mustSet(t, db, []byte("b"), []byte("2"))
+	mustSet(t, db, []byte("c"), []byte("3"))
+	mustSet(t, db, []byte("d"), []byte("4"))
 
-	db.DeleteRange([]byte("a"), []byte("c"))
-	db.DeleteRange([]byte("b"), []byte("d"))
+	mustDeleteRange(t, db, []byte("a"), []byte("c"))
+	mustDeleteRange(t, db, []byte("b"), []byte("d"))
 
 	if _, err := db.Get([]byte("a")); err != utils.ErrKeyNotFound {
 		t.Error("a should be deleted")
@@ -150,11 +194,11 @@ func TestDeleteRangeComplex(t *testing.T) {
 	}
 
 	// Test 2: Range delete over already deleted keys
-	db.Set([]byte("x"), []byte("1"))
-	db.Set([]byte("y"), []byte("2"))
-	db.Set([]byte("z"), []byte("3"))
+	mustSet(t, db, []byte("x"), []byte("1"))
+	mustSet(t, db, []byte("y"), []byte("2"))
+	mustSet(t, db, []byte("z"), []byte("3"))
 
-	db.Del([]byte("y"))
+	mustDel(t, db, []byte("y"))
 
 	if err := db.DeleteRange([]byte("x"), []byte("zz")); err != nil {
 		t.Fatal(err)
@@ -173,19 +217,19 @@ func TestDeleteRangeComplex(t *testing.T) {
 
 // TestDeleteRangeWithCompaction tests range deletion behavior during compaction.
 func TestDeleteRangeWithCompaction(t *testing.T) {
-	opt := getTestOptions(t.TempDir())
+	opt := newDeleteRangeTestOptions(t.TempDir())
 	opt.MemTableSize = 1024
 	db := Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := []byte{byte('a' + i%26), byte(i)}
-		db.Set(key, []byte("value"))
+		mustSet(t, db, key, []byte("value"))
 	}
 
-	db.DeleteRange([]byte{byte('a')}, []byte{byte('m')})
+	mustDeleteRange(t, db, []byte{byte('a')}, []byte{byte('m')})
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := []byte{byte('a' + i%26), byte(i)}
 		_, err := db.Get(key)
 		if key[0] < 'm' {
@@ -203,17 +247,17 @@ func TestDeleteRangeWithCompaction(t *testing.T) {
 // TestDeleteRangeWALRecovery tests that range tombstones are correctly recovered from WAL.
 func TestDeleteRangeWALRecovery(t *testing.T) {
 	dir := t.TempDir()
-	opt := getTestOptions(dir)
+	opt := newDeleteRangeTestOptions(dir)
 
 	db := Open(opt)
-	db.Set([]byte("key1"), []byte("val1"))
-	db.Set([]byte("key2"), []byte("val2"))
-	db.Set([]byte("key3"), []byte("val3"))
-	db.DeleteRange([]byte("key1"), []byte("key3"))
-	db.Close()
+	mustSet(t, db, []byte("key1"), []byte("val1"))
+	mustSet(t, db, []byte("key2"), []byte("val2"))
+	mustSet(t, db, []byte("key3"), []byte("val3"))
+	mustDeleteRange(t, db, []byte("key1"), []byte("key3"))
+	mustClose(t, db)
 
 	db = Open(opt)
-	defer db.Close()
+	defer func() { mustClose(t, db) }()
 
 	if _, err := db.Get([]byte("key1")); err != utils.ErrKeyNotFound {
 		t.Error("key1 should be deleted after recovery")
@@ -223,5 +267,25 @@ func TestDeleteRangeWALRecovery(t *testing.T) {
 	}
 	if _, err := db.Get([]byte("key3")); err != nil {
 		t.Error("key3 should exist after recovery")
+	}
+}
+
+// TestDeleteRangeVisibilityBug tests the bug where a newer point write
+// gets incorrectly hidden by an older range tombstone when both use the same version.
+func TestDeleteRangeVisibilityBug(t *testing.T) {
+	opt := newDeleteRangeTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { mustClose(t, db) }()
+
+	mustSet(t, db, []byte("a1"), []byte("old"))
+	mustDeleteRange(t, db, []byte("a0"), []byte("a9"))
+	mustSet(t, db, []byte("a1"), []byte("new"))
+
+	e, err := db.Get([]byte("a1"))
+	if err != nil {
+		t.Fatalf("expected key a1 to exist with value 'new', got error: %v", err)
+	}
+	if !bytes.Equal(e.Value, []byte("new")) {
+		t.Errorf("expected value 'new', got '%s'", e.Value)
 	}
 }
