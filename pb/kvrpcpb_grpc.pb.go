@@ -21,20 +21,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TinyKv_KvGet_FullMethodName            = "/pb.TinyKv/KvGet"
-	TinyKv_KvBatchGet_FullMethodName       = "/pb.TinyKv/KvBatchGet"
-	TinyKv_KvScan_FullMethodName           = "/pb.TinyKv/KvScan"
-	TinyKv_KvPrewrite_FullMethodName       = "/pb.TinyKv/KvPrewrite"
-	TinyKv_KvCommit_FullMethodName         = "/pb.TinyKv/KvCommit"
-	TinyKv_KvBatchRollback_FullMethodName  = "/pb.TinyKv/KvBatchRollback"
-	TinyKv_KvResolveLock_FullMethodName    = "/pb.TinyKv/KvResolveLock"
-	TinyKv_KvCheckTxnStatus_FullMethodName = "/pb.TinyKv/KvCheckTxnStatus"
+	NoKV_KvGet_FullMethodName            = "/pb.NoKV/KvGet"
+	NoKV_KvBatchGet_FullMethodName       = "/pb.NoKV/KvBatchGet"
+	NoKV_KvScan_FullMethodName           = "/pb.NoKV/KvScan"
+	NoKV_KvPrewrite_FullMethodName       = "/pb.NoKV/KvPrewrite"
+	NoKV_KvCommit_FullMethodName         = "/pb.NoKV/KvCommit"
+	NoKV_KvBatchRollback_FullMethodName  = "/pb.NoKV/KvBatchRollback"
+	NoKV_KvResolveLock_FullMethodName    = "/pb.NoKV/KvResolveLock"
+	NoKV_KvCheckTxnStatus_FullMethodName = "/pb.NoKV/KvCheckTxnStatus"
 )
 
-// TinyKvClient is the client API for TinyKv service.
+// NoKVClient is the client API for NoKV service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type TinyKvClient interface {
+type NoKVClient interface {
 	KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error)
 	KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error)
 	KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error)
@@ -45,98 +45,98 @@ type TinyKvClient interface {
 	KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
 }
 
-type tinyKvClient struct {
+type noKVClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewTinyKvClient(cc grpc.ClientConnInterface) TinyKvClient {
-	return &tinyKvClient{cc}
+func NewNoKVClient(cc grpc.ClientConnInterface) NoKVClient {
+	return &noKVClient{cc}
 }
 
-func (c *tinyKvClient) KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error) {
+func (c *noKVClient) KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvGetResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvGet_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error) {
+func (c *noKVClient) KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvBatchGetResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvBatchGet_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvBatchGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error) {
+func (c *noKVClient) KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvScanResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvScan_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvScan_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvPrewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error) {
+func (c *noKVClient) KvPrewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvPrewriteResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvPrewrite_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvPrewrite_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvCommit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error) {
+func (c *noKVClient) KvCommit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvCommitResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvCommit_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvCommit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error) {
+func (c *noKVClient) KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvBatchRollbackResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvBatchRollback_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvBatchRollback_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error) {
+func (c *noKVClient) KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvResolveLockResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvResolveLock_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvResolveLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tinyKvClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error) {
+func (c *noKVClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvCheckTxnStatusResponse)
-	err := c.cc.Invoke(ctx, TinyKv_KvCheckTxnStatus_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, NoKV_KvCheckTxnStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// TinyKvServer is the server API for TinyKv service.
-// All implementations should embed UnimplementedTinyKvServer
+// NoKVServer is the server API for NoKV service.
+// All implementations should embed UnimplementedNoKVServer
 // for forward compatibility.
-type TinyKvServer interface {
+type NoKVServer interface {
 	KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error)
 	KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error)
 	KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error)
@@ -147,239 +147,239 @@ type TinyKvServer interface {
 	KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
 }
 
-// UnimplementedTinyKvServer should be embedded to have
+// UnimplementedNoKVServer should be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedTinyKvServer struct{}
+type UnimplementedNoKVServer struct{}
 
-func (UnimplementedTinyKvServer) KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error) {
+func (UnimplementedNoKVServer) KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvGet not implemented")
 }
-func (UnimplementedTinyKvServer) KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error) {
+func (UnimplementedNoKVServer) KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvBatchGet not implemented")
 }
-func (UnimplementedTinyKvServer) KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error) {
+func (UnimplementedNoKVServer) KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvScan not implemented")
 }
-func (UnimplementedTinyKvServer) KvPrewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error) {
+func (UnimplementedNoKVServer) KvPrewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvPrewrite not implemented")
 }
-func (UnimplementedTinyKvServer) KvCommit(context.Context, *KvCommitRequest) (*KvCommitResponse, error) {
+func (UnimplementedNoKVServer) KvCommit(context.Context, *KvCommitRequest) (*KvCommitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvCommit not implemented")
 }
-func (UnimplementedTinyKvServer) KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error) {
+func (UnimplementedNoKVServer) KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvBatchRollback not implemented")
 }
-func (UnimplementedTinyKvServer) KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error) {
+func (UnimplementedNoKVServer) KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvResolveLock not implemented")
 }
-func (UnimplementedTinyKvServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
+func (UnimplementedNoKVServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvCheckTxnStatus not implemented")
 }
-func (UnimplementedTinyKvServer) testEmbeddedByValue() {}
+func (UnimplementedNoKVServer) testEmbeddedByValue() {}
 
-// UnsafeTinyKvServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to TinyKvServer will
+// UnsafeNoKVServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NoKVServer will
 // result in compilation errors.
-type UnsafeTinyKvServer interface {
-	mustEmbedUnimplementedTinyKvServer()
+type UnsafeNoKVServer interface {
+	mustEmbedUnimplementedNoKVServer()
 }
 
-func RegisterTinyKvServer(s grpc.ServiceRegistrar, srv TinyKvServer) {
-	// If the following call panics, it indicates UnimplementedTinyKvServer was
+func RegisterNoKVServer(s grpc.ServiceRegistrar, srv NoKVServer) {
+	// If the following call panics, it indicates UnimplementedNoKVServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&TinyKv_ServiceDesc, srv)
+	s.RegisterService(&NoKV_ServiceDesc, srv)
 }
 
-func _TinyKv_KvGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvGet(ctx, in)
+		return srv.(NoKVServer).KvGet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvGet_FullMethodName,
+		FullMethod: NoKV_KvGet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvGet(ctx, req.(*KvGetRequest))
+		return srv.(NoKVServer).KvGet(ctx, req.(*KvGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvBatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvBatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvBatchGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvBatchGet(ctx, in)
+		return srv.(NoKVServer).KvBatchGet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvBatchGet_FullMethodName,
+		FullMethod: NoKV_KvBatchGet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvBatchGet(ctx, req.(*KvBatchGetRequest))
+		return srv.(NoKVServer).KvBatchGet(ctx, req.(*KvBatchGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvScanRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvScan(ctx, in)
+		return srv.(NoKVServer).KvScan(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvScan_FullMethodName,
+		FullMethod: NoKV_KvScan_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvScan(ctx, req.(*KvScanRequest))
+		return srv.(NoKVServer).KvScan(ctx, req.(*KvScanRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvPrewrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvPrewrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvPrewriteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvPrewrite(ctx, in)
+		return srv.(NoKVServer).KvPrewrite(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvPrewrite_FullMethodName,
+		FullMethod: NoKV_KvPrewrite_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvPrewrite(ctx, req.(*KvPrewriteRequest))
+		return srv.(NoKVServer).KvPrewrite(ctx, req.(*KvPrewriteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvCommitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvCommit(ctx, in)
+		return srv.(NoKVServer).KvCommit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvCommit_FullMethodName,
+		FullMethod: NoKV_KvCommit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvCommit(ctx, req.(*KvCommitRequest))
+		return srv.(NoKVServer).KvCommit(ctx, req.(*KvCommitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvBatchRollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvBatchRollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvBatchRollbackRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvBatchRollback(ctx, in)
+		return srv.(NoKVServer).KvBatchRollback(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvBatchRollback_FullMethodName,
+		FullMethod: NoKV_KvBatchRollback_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvBatchRollback(ctx, req.(*KvBatchRollbackRequest))
+		return srv.(NoKVServer).KvBatchRollback(ctx, req.(*KvBatchRollbackRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvResolveLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvResolveLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvResolveLockRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvResolveLock(ctx, in)
+		return srv.(NoKVServer).KvResolveLock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvResolveLock_FullMethodName,
+		FullMethod: NoKV_KvResolveLock_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvResolveLock(ctx, req.(*KvResolveLockRequest))
+		return srv.(NoKVServer).KvResolveLock(ctx, req.(*KvResolveLockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TinyKv_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _NoKV_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvCheckTxnStatusRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TinyKvServer).KvCheckTxnStatus(ctx, in)
+		return srv.(NoKVServer).KvCheckTxnStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TinyKv_KvCheckTxnStatus_FullMethodName,
+		FullMethod: NoKV_KvCheckTxnStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TinyKvServer).KvCheckTxnStatus(ctx, req.(*KvCheckTxnStatusRequest))
+		return srv.(NoKVServer).KvCheckTxnStatus(ctx, req.(*KvCheckTxnStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// TinyKv_ServiceDesc is the grpc.ServiceDesc for TinyKv service.
+// NoKV_ServiceDesc is the grpc.ServiceDesc for NoKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var TinyKv_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pb.TinyKv",
-	HandlerType: (*TinyKvServer)(nil),
+var NoKV_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "pb.NoKV",
+	HandlerType: (*NoKVServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "KvGet",
-			Handler:    _TinyKv_KvGet_Handler,
+			Handler:    _NoKV_KvGet_Handler,
 		},
 		{
 			MethodName: "KvBatchGet",
-			Handler:    _TinyKv_KvBatchGet_Handler,
+			Handler:    _NoKV_KvBatchGet_Handler,
 		},
 		{
 			MethodName: "KvScan",
-			Handler:    _TinyKv_KvScan_Handler,
+			Handler:    _NoKV_KvScan_Handler,
 		},
 		{
 			MethodName: "KvPrewrite",
-			Handler:    _TinyKv_KvPrewrite_Handler,
+			Handler:    _NoKV_KvPrewrite_Handler,
 		},
 		{
 			MethodName: "KvCommit",
-			Handler:    _TinyKv_KvCommit_Handler,
+			Handler:    _NoKV_KvCommit_Handler,
 		},
 		{
 			MethodName: "KvBatchRollback",
-			Handler:    _TinyKv_KvBatchRollback_Handler,
+			Handler:    _NoKV_KvBatchRollback_Handler,
 		},
 		{
 			MethodName: "KvResolveLock",
-			Handler:    _TinyKv_KvResolveLock_Handler,
+			Handler:    _NoKV_KvResolveLock_Handler,
 		},
 		{
 			MethodName: "KvCheckTxnStatus",
-			Handler:    _TinyKv_KvCheckTxnStatus_Handler,
+			Handler:    _NoKV_KvCheckTxnStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

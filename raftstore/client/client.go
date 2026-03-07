@@ -39,7 +39,7 @@ type RegionResolver interface {
 	Close() error
 }
 
-// Config configures the TinyKv distributed client.
+// Config configures the NoKV distributed client.
 type Config struct {
 	Stores             []StoreEndpoint
 	RegionResolver     RegionResolver
@@ -52,7 +52,7 @@ type Config struct {
 type storeConn struct {
 	addr   string
 	conn   *grpc.ClientConn
-	client pb.TinyKvClient
+	client pb.NoKVClient
 }
 
 type regionState struct {
@@ -65,7 +65,7 @@ type regionSnapshot struct {
 	leader uint64
 }
 
-// Client provides Region-aware helpers for TinyKv RPCs, including 2PC.
+// Client provides Region-aware helpers for NoKV RPCs, including 2PC.
 type Client struct {
 	mu                 sync.RWMutex
 	stores             map[uint64]*storeConn
@@ -109,7 +109,7 @@ func New(cfg Config) (*Client, error) {
 		stores[endpoint.StoreID] = &storeConn{
 			addr:   endpoint.Addr,
 			conn:   conn,
-			client: pb.NewTinyKvClient(conn),
+			client: pb.NewNoKVClient(conn),
 		}
 	}
 	maxRetries := cfg.MaxRetries
@@ -815,6 +815,23 @@ func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
 		}
 		c.mu.Unlock()
 		return nil
+	}
+	if err.GetKeyNotInRegion() != nil || err.GetRegionNotFound() != nil {
+		c.mu.Lock()
+		delete(c.regions, regionID)
+		c.mu.Unlock()
+		return nil
+	}
+	if storeMismatch := err.GetStoreNotMatch(); storeMismatch != nil {
+		c.mu.Lock()
+		delete(c.regions, regionID)
+		c.mu.Unlock()
+		return fmt.Errorf(
+			"client: region %d store mismatch: requested store %d, actual store %d",
+			regionID,
+			storeMismatch.GetRequestStoreId(),
+			storeMismatch.GetActualStoreId(),
+		)
 	}
 	return fmt.Errorf("client: region %d error: %v", regionID, err)
 }

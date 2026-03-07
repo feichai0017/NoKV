@@ -25,8 +25,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type stubTinyKvServer struct {
-	pb.UnimplementedTinyKvServer
+type stubNoKVServer struct {
+	pb.UnimplementedNoKVServer
 
 	mu               sync.Mutex
 	prewriteAttempts int
@@ -38,7 +38,7 @@ type stubTinyKvServer struct {
 	responses        map[string]*pb.GetResponse
 }
 
-func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *stubNoKVServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prewriteAttempts++
@@ -64,14 +64,14 @@ func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteReq
 	return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{}}, nil
 }
 
-func (s *stubTinyKvServer) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+func (s *stubNoKVServer) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commitCalls++
 	return &pb.KvCommitResponse{Response: &pb.CommitResponse{}}, nil
 }
 
-func (s *stubTinyKvServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
+func (s *stubNoKVServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checkCalls++
@@ -80,7 +80,7 @@ func (s *stubTinyKvServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheck
 	}}, nil
 }
 
-func (s *stubTinyKvServer) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
+func (s *stubNoKVServer) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolveCalls++
@@ -89,7 +89,7 @@ func (s *stubTinyKvServer) KvResolveLock(ctx context.Context, req *pb.KvResolveL
 	}}, nil
 }
 
-func (s *stubTinyKvServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
+func (s *stubNoKVServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
 	responses := make([]*pb.GetResponse, len(req.GetRequest().GetRequests()))
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,7 +110,7 @@ func (s *stubTinyKvServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetReq
 	return &pb.KvBatchGetResponse{Response: &pb.BatchGetResponse{Responses: responses}}, nil
 }
 
-func startStubTinyKv(t *testing.T) (addr string, srv *stubTinyKvServer, shutdown func()) {
+func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -118,8 +118,8 @@ func startStubTinyKv(t *testing.T) (addr string, srv *stubTinyKvServer, shutdown
 		t.Fatalf("listen tinykv stub: %v", err)
 	}
 	server := grpc.NewServer()
-	stub := &stubTinyKvServer{}
-	pb.RegisterTinyKvServer(server, stub)
+	stub := &stubNoKVServer{}
+	pb.RegisterNoKVServer(server, stub)
 	go func() {
 		_ = server.Serve(l)
 	}()
@@ -260,7 +260,7 @@ func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
 }
 
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	pdAddr, pd, stopPD := startStubPD(t, &pb.RegionMeta{
 		Id:               1,
@@ -326,7 +326,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 }
 
 func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -336,7 +336,7 @@ func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
 }
 
 func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
@@ -381,7 +381,7 @@ func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
 }
 
 func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	pdAddr, pd, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
@@ -433,7 +433,7 @@ func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
 }
 
 func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	validPDAddr, _, stopValidPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopValidPD()
@@ -478,7 +478,7 @@ func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 }
 
 func TestRaftBackendResolveLockConflict(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfg := config.File{
@@ -549,7 +549,7 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 }
 
 func TestRaftBackendGetWithTTL(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -586,7 +586,7 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 }
 
 func TestRaftBackendExpireCleanup(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -627,7 +627,7 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 }
 
 func TestRaftBackendIncrByAndErrors(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -672,7 +672,7 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 }
 
 func TestRaftBackendMGetAndExists(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -734,7 +734,7 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 }
 
 func TestRaftBackendMSetAndDel(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
@@ -970,7 +970,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	_, err = newRaftBackend(cfgPath, "127.0.0.1:1", "host")
 	require.Error(t, err)
 
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	cfg = config.File{
 		Stores: []config.Store{{StoreID: 1, Addr: storeAddr}},
@@ -1006,7 +1006,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 }
 
 func TestNewRaftBackendInvalidPDAddress(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	cfgPath := writeBackendConfig(t, storeAddr)
 	_, err := newRaftBackend(cfgPath, "127.0.0.1:0", "host")

@@ -33,7 +33,7 @@ func openTestDB(t *testing.T) *NoKV.DB {
 	return db
 }
 
-func TestServerStartsTinyKvService(t *testing.T) {
+func TestServerStartsNoKVService(t *testing.T) {
 	db := openTestDB(t)
 	srv, err := raftstore.NewServer(raftstore.ServerConfig{
 		DB: db,
@@ -55,7 +55,7 @@ func TestServerStartsTinyKvService(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	client := pb.NewTinyKvClient(conn)
+	client := pb.NewNoKVClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, err = client.KvGet(ctx, &pb.KvGetRequest{})

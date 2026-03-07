@@ -65,7 +65,7 @@ func printUsage(w io.Writer) {
 	  manifest  Inspect manifest state, levels, and value log metadata
 	  vlog      List value log segments and active head
 	  regions   Show region metadata catalog from manifest/store
-	  serve     Start TinyKv gRPC service backed by a local raftstore
+	  serve     Start NoKV gRPC service backed by a local raftstore
 	  pd        Start PD-lite gRPC service (control plane)
 
 Run "nokv <command> -h" for command-specific flags.`)
