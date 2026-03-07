@@ -64,7 +64,7 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 
 | Call Site | Purpose |
 | --- | --- |
-| `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the skiplist. |
+| `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the active memtable index (`ART` by default, `skiplist` when explicitly selected). |
 | `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which calls `lsm.SetBatch` and appends one WAL entry-batch record per request batch. |
 | `DB.Set` / `DB.SetWithTTL` / `DB.Del` / `DB.ApplyInternalEntries` | User/internal writes all flow through the same commit queue and eventually reach `lsm.SetBatch` + WAL append. |
 | `lsm/levels.go::flush` | Persists WAL checkpoint via `manifest.LogEdits(EditAddFile, EditLogPointer)` during flush install. |

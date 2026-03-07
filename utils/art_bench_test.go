@@ -69,3 +69,65 @@ func BenchmarkARTGet(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkARTSeek(b *testing.B) {
+	const (
+		arenaSize = 1 << 20
+		keySpace  = 10_000
+	)
+	art := NewART(arenaSize)
+	defer art.DecrRef()
+	value := make([]byte, 64)
+	keys := make([][]byte, keySpace)
+	for i := range keys {
+		key := makeARTKey(i)
+		entry := kv.NewEntry(key, value)
+		art.Add(entry)
+		entry.DecrRef()
+		keys[i] = key
+	}
+
+	it := art.NewIterator(nil)
+	defer func() { _ = it.Close() }()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it.Seek(keys[i%len(keys)])
+		if !it.Valid() {
+			b.Fatalf("seek missed key")
+		}
+	}
+}
+
+func BenchmarkARTIteratorNext(b *testing.B) {
+	const (
+		arenaSize = 1 << 20
+		keySpace  = 10_000
+	)
+	art := NewART(arenaSize)
+	defer art.DecrRef()
+	value := make([]byte, 64)
+	for i := range keySpace {
+		entry := kv.NewEntry(makeARTKey(i), value)
+		art.Add(entry)
+		entry.DecrRef()
+	}
+
+	it := art.NewIterator(nil)
+	defer func() { _ = it.Close() }()
+	it.Rewind()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !it.Valid() {
+			it.Rewind()
+		}
+		if !it.Valid() {
+			b.Fatalf("iterator unexpectedly invalid after rewind")
+		}
+		_ = it.Item()
+		it.Next()
+	}
+}

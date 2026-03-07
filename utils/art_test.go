@@ -122,6 +122,56 @@ func TestARTIteratorReverseIterationAndSeek(t *testing.T) {
 	require.False(t, it.Valid())
 }
 
+func TestARTPrefixAdjacentInternalKeys(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	defer art.DecrRef()
+
+	shortKey := []byte("ready-fail-key")
+	longKey := []byte("ready-fail-key-lag")
+	for _, tc := range []struct {
+		cf    kv.ColumnFamily
+		key   []byte
+		value string
+	}{
+		{cf: kv.CFDefault, key: shortKey, value: "short-default"},
+		{cf: kv.CFDefault, key: longKey, value: "long-default"},
+		{cf: kv.CFWrite, key: shortKey, value: "short-write"},
+		{cf: kv.CFWrite, key: longKey, value: "long-write"},
+	} {
+		entry := kv.NewInternalEntry(tc.cf, tc.key, 1, []byte(tc.value), 0, 0)
+		art.Add(entry)
+		entry.DecrRef()
+	}
+
+	it := art.NewIterator(nil)
+	require.NotNil(t, it)
+	defer func() { _ = it.Close() }()
+
+	var last []byte
+	for it.Rewind(); it.Valid(); it.Next() {
+		entry := it.Item().Entry()
+		require.NotNil(t, entry)
+		if last != nil {
+			require.LessOrEqual(t, CompareKeys(last, entry.Key), 0)
+		}
+		last = entry.Key
+	}
+
+	for _, cf := range []kv.ColumnFamily{kv.CFDefault, kv.CFWrite} {
+		seek := kv.InternalKey(cf, shortKey, math.MaxUint64)
+
+		foundKey, vs := art.Search(seek)
+		require.NotEmpty(t, vs.Value)
+		require.True(t, kv.SameKey(seek, foundKey))
+
+		it.Seek(seek)
+		require.True(t, it.Valid())
+		item := it.Item().Entry()
+		require.NotNil(t, item)
+		require.True(t, kv.SameKey(seek, item.Key))
+	}
+}
+
 func TestARTConcurrentWriteIterate(t *testing.T) {
 	art := NewART(DefaultArenaSize)
 	defer art.DecrRef()

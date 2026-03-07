@@ -7,9 +7,11 @@ benchmark script (`scripts/run_benchmarks.sh`).
 
 The benchmark harness uses the YCSB workloads (A/B/C/D/E/F/G) to exercise NoKV,
 Badger, and Pebble by default (RocksDB is optional via build tags) with a fixed total operation count and report both
-throughput and latency percentiles. For memtable comparisons, the NoKV engine
-can be split into `nokv-skiplist` and `nokv-art` variants. The default script
-runs a load phase to seed data, then executes each workload and collects:
+throughput and latency percentiles. The default `nokv` engine tracks the
+project default memtable configuration (`art`); for explicit memtable
+comparisons, NoKV can also be split into `nokv-skiplist` and `nokv-art`
+variants. The default script runs a load phase to seed data, then executes each
+workload and collects:
 - Ops/s, average latency, and latency percentiles (P50/P95/P99)
 - Operation mix counts (reads, updates, inserts, scans, read-modify-write)
 - Value size stats and total data size

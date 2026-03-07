@@ -29,7 +29,7 @@ type memIndex interface {
 }
 ```
 
-* **Memtable engine** – `Options.MemTableEngine` selects `skiplist` (default) or `art` via `newMemIndex`. Skiplist favors simpler writes; ART favors tighter memory and ordered scans.
+* **Memtable engine** – `Options.MemTableEngine` selects `art` (default) or `skiplist` via `newMemIndex`. ART now uses a reversible mem-comparable route key so its trie ordering matches the LSM internal-key comparator; `skiplist` remains available as the simpler alternative.
 * **Arena sizing** – both `utils.NewSkiplist` and `utils.NewART` use `arenaSizeFor` to derive arena capacity from `Options.MemTableSize`.
 * **WAL coupling** – every `Set` uses `kv.EncodeEntry` to materialise the payload to the active WAL segment before inserting into the chosen index. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – `LSM.NewMemtable` atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.

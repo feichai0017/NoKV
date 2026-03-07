@@ -48,6 +48,58 @@ func BenchmarkSkiplistGet(b *testing.B) {
 	}
 }
 
+func BenchmarkSkiplistSeek(b *testing.B) {
+	list := NewSkiplist(1 << 20)
+	value := make([]byte, 64)
+	keys := make([][]byte, 10_000)
+	for i := range keys {
+		key := makeSkiplistKey(i)
+		entry := kv.NewEntry(key, value)
+		list.Add(entry)
+		entry.DecrRef()
+		keys[i] = key
+	}
+
+	it := list.NewIterator(nil)
+	defer func() { _ = it.Close() }()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it.Seek(keys[i%len(keys)])
+		if !it.Valid() {
+			b.Fatalf("seek missed key")
+		}
+	}
+}
+
+func BenchmarkSkiplistIteratorNext(b *testing.B) {
+	list := NewSkiplist(1 << 20)
+	value := make([]byte, 64)
+	for i := range 10_000 {
+		entry := kv.NewEntry(makeSkiplistKey(i), value)
+		list.Add(entry)
+		entry.DecrRef()
+	}
+
+	it := list.NewIterator(nil)
+	defer func() { _ = it.Close() }()
+	it.Rewind()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !it.Valid() {
+			it.Rewind()
+		}
+		if !it.Valid() {
+			b.Fatalf("iterator unexpectedly invalid after rewind")
+		}
+		_ = it.Item()
+		it.Next()
+	}
+}
+
 func makeSequentialSkiplistKey(i int) []byte {
 	key := make([]byte, 16)
 	copy(key, "benchkey")
