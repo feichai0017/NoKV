@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Config wires together the dependencies required to expose the TinyKv RPC
+// Config wires together the dependencies required to expose the NoKV RPC
 // service backed by a raftstore Store.
 type Config struct {
 	// DB provides the underlying storage engine.
@@ -29,7 +29,7 @@ type Config struct {
 	// Raft provides the base raft configuration used when bootstrapping peers.
 	// The Peer ID is populated per Region automatically.
 	Raft myraft.Config
-	// TransportAddr selects the listen address for the shared raft/TinyKv gRPC
+	// TransportAddr selects the listen address for the shared raft/NoKV gRPC
 	// server. An empty string defaults to 127.0.0.1:0.
 	TransportAddr string
 	// TransportOptions allows callers to override transport settings (TLS,
@@ -42,7 +42,7 @@ type Config struct {
 	EnableRaftDebugLog bool
 }
 
-// Server bundles the components required to serve TinyKv RPCs backed by a
+// Server bundles the components required to serve NoKV RPCs backed by a
 // raftstore Store.
 type Server struct {
 	db        *NoKV.DB
@@ -68,7 +68,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	storeCfg := cfg.Store
 	if storeCfg.CommandApplier == nil {
-		storeCfg.CommandApplier = kv.NewApplier(cfg.DB)
+		storeCfg.CommandApplier = kv.NewApplier(cfg.DB, nil)
 	}
 	router := storeCfg.Router
 	if router == nil {
@@ -130,7 +130,7 @@ func New(cfg Config) (*Server, error) {
 	var opts []transport.GRPCOption
 	opts = append(opts, cfg.TransportOptions...)
 	opts = append(opts, transport.WithServerRegistrar(func(reg grpc.ServiceRegistrar) {
-		pb.RegisterTinyKvServer(reg, service)
+		pb.RegisterNoKVServer(reg, service)
 	}))
 	tr, err := transport.NewGRPCTransport(storeCfg.StoreID, cfg.TransportAddr, opts...)
 	if err != nil {
@@ -155,7 +155,7 @@ func New(cfg Config) (*Server, error) {
 	return srv, nil
 }
 
-// Addr returns the address TinyKv clients (and raft peers) should dial.
+// Addr returns the address NoKV clients (and raft peers) should dial.
 func (s *Server) Addr() string {
 	if s == nil || s.transport == nil {
 		return ""
@@ -171,7 +171,7 @@ func (s *Server) Store() *store.Store {
 	return s.store
 }
 
-// Transport returns the shared raft/TinyKv gRPC transport.
+// Transport returns the shared raft/NoKV gRPC transport.
 func (s *Server) Transport() *transport.GRPCTransport {
 	if s == nil {
 		return nil
@@ -179,7 +179,7 @@ func (s *Server) Transport() *transport.GRPCTransport {
 	return s.transport
 }
 
-// Service returns the TinyKv RPC service implementation.
+// Service returns the NoKV RPC service implementation.
 func (s *Server) Service() *kv.Service {
 	if s == nil {
 		return nil

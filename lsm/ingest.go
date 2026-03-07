@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -63,11 +64,15 @@ func (buf *ingestBuffer) ensureInit() {
 }
 
 func shardIndexForRange(min []byte) int {
-	if len(min) == 0 {
+	_, userKey, _, ok := kv.SplitInternalKey(min)
+	utils.CondPanicFunc(!ok, func() error {
+		return fmt.Errorf("ingest shardIndexForRange expects internal key: %x", min)
+	})
+	if len(userKey) == 0 {
 		return 0
 	}
 	// Use the top bits of the first byte to partition into fixed shards.
-	return int(min[0] >> (8 - ingestShardBits))
+	return int(userKey[0] >> (8 - ingestShardBits))
 }
 
 func (buf *ingestBuffer) add(t *table) {
@@ -404,6 +409,12 @@ func (lh *levelHandler) maxIngestAgeSeconds() float64 {
 func (lh *levelHandler) numIngestTables() int {
 	lh.RLock()
 	defer lh.RUnlock()
+	return lh.ingest.tableCount()
+}
+
+// numIngestTablesLocked returns the ingest table count without acquiring the lock.
+// Caller must already hold at least a read lock.
+func (lh *levelHandler) numIngestTablesLocked() int {
 	return lh.ingest.tableCount()
 }
 

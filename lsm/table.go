@@ -28,7 +28,7 @@ var (
 type table struct {
 	lm  *levelManager
 	fid uint64
-	ref int32 // For file garbage collection. Atomic.
+	ref atomic.Int32 // For file garbage collection. Atomic.
 	lvl atomic.Int32
 
 	minKey []byte
@@ -49,21 +49,27 @@ type table struct {
 	pins int32
 }
 
-func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
+func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *table, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if out != nil && out.ss != nil {
+				_ = out.ss.Close()
+			}
+			out = nil
+			err = fmt.Errorf("open table %s panic: %v", tableName, r)
+		}
+	}()
+
 	sstSize := int(lm.opt.SSTableMaxSz)
-	if builder != nil {
-		sstSize = int(builder.done().size)
-	}
 	var (
-		t   *table
-		err error
+		t       *table
+		openErr error
 	)
 	fid := utils.FID(tableName)
 	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
-		if t, err = builder.flush(lm, tableName); err != nil {
-			_ = utils.Err(err)
-			return nil
+		if t, openErr = builder.flush(lm, tableName); openErr != nil {
+			return nil, openErr
 		}
 	} else {
 		t = &table{lm: lm, fid: fid}
@@ -75,8 +81,9 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 			MaxSz:    int(sstSize),
 			FS:       lm.opt.FS})
 	}
-	// first reference, otherwise the reference state will be incorrect
-	t.IncrRef()
+	if t == nil || t.ss == nil {
+		return nil, fmt.Errorf("open table %s: nil sstable handle", tableName)
+	}
 	// initialize the sst file, load the index
 	// The Index Block is stored as a Protobuf message (pb.TableIndex).
 	// The overall SSTable structure is:
@@ -86,9 +93,11 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
 	// +-------------------------+-----------------------+------------------------------+
 	if err := t.ss.Init(); err != nil {
-		_ = utils.Err(err)
-		return nil
+		_ = t.ss.Close()
+		return nil, err
 	}
+	// first reference, otherwise the reference state will be incorrect
+	t.IncrRef()
 
 	idx := t.ss.Indexs()
 	if idx != nil {
@@ -114,18 +123,19 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table
 	if !itr.Valid() {
 		// Empty table should not happen, but keep minKey as maxKey fallback.
 		t.maxKey = kv.SafeCopy(nil, t.minKey)
-		return t
+		return t, nil
 	}
 	item := itr.Item()
 	if item == nil || item.Entry() == nil {
 		t.maxKey = kv.SafeCopy(nil, t.minKey)
-		return t
+		return t, nil
 	}
 	maxKey := append([]byte(nil), item.Entry().Key...)
 	t.maxKey = kv.SafeCopy(nil, maxKey)
 	t.ss.SetMaxKey(maxKey)
 
-	return t
+	out = t
+	return out, nil
 }
 
 func (t *table) index() *pb.TableIndex {
@@ -306,10 +316,10 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 				t.lm.cache.addBloom(t.fid, bloomFilter)
 			}
 		}
-		probe := key
-		if len(key) > 8 {
-			probe = kv.ParseKey(key)
-		}
+		utils.CondPanicFunc(len(key) <= 8, func() error {
+			return fmt.Errorf("table.Search expects internal key: %x", key)
+		})
+		probe := kv.StripTimestamp(key)
 		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
@@ -327,12 +337,12 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	}
 
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
-		if version := kv.ParseTs(e.Key); *maxVs < version {
+		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
-			clone := kv.NewEntryWithCF(e.CF, kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
+			clone := kv.NewEntry(kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
 			clone.ExpiresAt = e.ExpiresAt
 			clone.Meta = e.Meta
-			clone.Version = version
+			_ = clone.PopulateInternalMeta()
 			clone.Offset = e.Offset
 			clone.Hlen = e.Hlen
 			clone.ValThreshold = e.ValThreshold
@@ -435,7 +445,9 @@ func (t *table) prefetchBlockForKey(key []byte) bool {
 	idx = sort.Search(len(offsets), func(i int) bool {
 		var ok bool
 		ko, ok = t.blockOffset(i)
-		utils.CondPanic(!ok, fmt.Errorf("table.prefetch idx=%d", i))
+		utils.CondPanicFunc(!ok, func() error {
+			return fmt.Errorf("table.prefetch idx=%d", i)
+		})
 		if i == len(offsets) {
 			return true
 		}
@@ -779,56 +791,53 @@ func (it *tableIterator) seekToLast() {
 	it.err = it.bi.Error()
 }
 
-// Seek positions the iterator at the appropriate entry for the given key using binary search.
+// searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
+// If none exists it returns len(offsets).
+func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
+	lo, hi := 0, len(offsets)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if utils.CompareKeys(offsets[mid].GetKey(), key) > 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo
+}
+
+// Seek positions the iterator at the appropriate entry for the given key.
 // Both modes first locate the block that could contain the key (last block where baseKey <= key).
-// Forward (IsAsc=true): within the block, seeks to the first entry >= key
-// Reverse (IsAsc=false): within the block, seeks to the last entry <= key
+// Forward (IsAsc=true): within the block, seeks to the first entry >= key.
+// Reverse (IsAsc=false): within the block, seeks to the last entry <= key.
 func (it *tableIterator) Seek(key []byte) {
 	if it.index == nil {
 		it.err = io.EOF
 		return
 	}
 	offsets := it.index.GetOffsets()
+	if len(offsets) == 0 {
+		it.err = io.EOF
+		return
+	}
+	// idx is the first block where baseKey > key. Candidate block is idx-1.
+	idx := searchFirstBlockWithBaseKeyGT(offsets, key)
 
 	if it.opt.IsAsc {
-		// Forward: find the last block where baseKey <= key
-		// Search for the first block where baseKey > key, then use idx-1
-		idx := sort.Search(len(offsets), func(idx int) bool {
-			ko, ok := it.t.blockOffset(idx)
-			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
-			if idx == len(offsets) {
-				return true
-			}
-			return utils.CompareKeys(ko.GetKey(), key) > 0
-		})
 		if idx == 0 {
 			// All blocks have baseKey > key, start from first block
 			it.seekHelper(0, key)
 			return
 		}
-		// idx is the first block where baseKey > key
-		// So we want idx-1, which is the last block where baseKey <= key
 		it.seekHelper(idx-1, key)
-	} else {
-		// Reverse: find last block that could contain key <= target
-		// We need to check from the end and find the last block where baseKey <= key
-		idx := sort.Search(len(offsets), func(idx int) bool {
-			ko, ok := it.t.blockOffset(idx)
-			utils.CondPanicFunc(!ok, func() error { return fmt.Errorf("tableutils.Seek idx < 0 || idx > len(index.GetOffsets()") })
-			if idx == len(offsets) {
-				return true
-			}
-			return utils.CompareKeys(ko.GetKey(), key) > 0
-		})
-		// idx is the first block where baseKey > key
-		// So we want idx-1, which is the last block where baseKey <= key
-		if idx == 0 {
-			// All blocks have baseKey > key, so no valid entry
-			it.err = io.EOF
-			return
-		}
-		it.seekHelper(idx-1, key)
+		return
 	}
+	// Reverse mode: if every base key is > target, there is no <= target entry.
+	if idx == 0 {
+		it.err = io.EOF
+		return
+	}
+	it.seekHelper(idx-1, key)
 }
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
@@ -904,7 +913,7 @@ func (t *table) ValueSize() uint64 { return t.valueSize }
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {
 	for {
-		current := atomic.LoadInt32(&t.ref)
+		current := t.ref.Load()
 		// 1. Guard check
 		utils.CondPanicFunc(current <= 0, func() error {
 			return fmt.Errorf("table refcount underflow: fid %d, current_ref %d", t.fid, current)
@@ -912,7 +921,7 @@ func (t *table) DecrRef() error {
 
 		newRef := current - 1
 		// 2. Atomic transition
-		if atomic.CompareAndSwapInt32(&t.ref, current, newRef) {
+		if t.ref.CompareAndSwap(current, newRef) {
 			if newRef == 0 {
 				return t.Delete()
 			}
@@ -924,7 +933,7 @@ func (t *table) DecrRef() error {
 
 // IncrRef increments the table reference count.
 func (t *table) IncrRef() {
-	atomic.AddInt32(&t.ref, 1)
+	t.ref.Add(1)
 }
 func decrRefs(tables []*table) error {
 	for _, table := range tables {

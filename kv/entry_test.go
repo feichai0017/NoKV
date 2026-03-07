@@ -50,10 +50,13 @@ func TestEntryEncodeDecodeRoundTrip(t *testing.T) {
 	assert.Equal(t, entry.Key, decoded.Key)
 	assert.Equal(t, entry.Value, decoded.Value)
 
-	cf, userKey, ts := SplitInternalKey(decoded.Key)
+	cf, userKey, ts, ok := SplitInternalKey(decoded.Key)
+	require.True(t, ok)
 	assert.Equal(t, CFWrite, cf)
 	assert.Equal(t, []byte("foo"), userKey)
 	assert.Equal(t, uint64(99), ts)
+	assert.Equal(t, cf, decoded.CF)
+	assert.Equal(t, ts, decoded.Version)
 }
 
 func TestDecodeEntryFromEOFAndPartial(t *testing.T) {
@@ -97,7 +100,8 @@ func TestEntryIterator(t *testing.T) {
 		assert.Greater(t, it.RecordLen(), uint32(0))
 		entry := it.Entry()
 		require.NotNil(t, entry)
-		cf, userKey, ts := SplitInternalKey(entry.Key)
+		cf, userKey, ts, ok := SplitInternalKey(entry.Key)
+		require.True(t, ok)
 		assert.Equal(t, CFDefault, cf)
 		assert.Equal(t, []byte("iter"), userKey)
 		assert.Equal(t, uint64(count), ts)
@@ -131,14 +135,16 @@ func TestEntryHelpers(t *testing.T) {
 		t.Fatalf("expected default CF, got %v", e.CF)
 	}
 
-	e2 := NewEntryWithCF(CFLock, []byte("lk"), []byte("lv"))
+	e2 := NewEntry([]byte("lk"), []byte("lv"))
+	e2.CF = CFLock
 	defer e2.DecrRef()
 	if e2.CF != CFLock {
 		t.Fatalf("expected CFLock, got %v", e2.CF)
 	}
 
-	if !e2.WithColumnFamily(CFWrite).CF.Valid() {
-		t.Fatalf("expected valid CF after WithColumnFamily")
+	e2.CF = CFWrite
+	if !e2.CF.Valid() {
+		t.Fatalf("expected valid CF after setting column family")
 	}
 
 	if e2.IsDeletedOrExpired() {
@@ -165,6 +171,20 @@ func TestEntryHelpers(t *testing.T) {
 	if szInline >= szPtr {
 		t.Fatalf("expected pointer estimate > inline estimate")
 	}
+}
+
+func TestNewInternalEntry(t *testing.T) {
+	e := NewInternalEntry(CFWrite, []byte("uk"), 42, []byte("val"), BitDelete, 99)
+	defer e.DecrRef()
+
+	cf, userKey, ts, ok := SplitInternalKey(e.Key)
+	require.True(t, ok)
+	require.Equal(t, CFWrite, cf)
+	require.Equal(t, []byte("uk"), userKey)
+	require.Equal(t, uint64(42), ts)
+	require.Equal(t, []byte("val"), e.Value)
+	require.Equal(t, byte(BitDelete), e.Meta)
+	require.Equal(t, uint64(99), e.ExpiresAt)
 }
 
 func TestEntryDecrRefUnderflowPanics(t *testing.T) {
@@ -217,26 +237,33 @@ func TestValueHelpers(t *testing.T) {
 		t.Fatalf("expected callback to run")
 	}
 
-	if !IsDeletedOrExpired(BitDelete, 0) {
-		t.Fatalf("expected deleted meta to be expired")
-	}
-	if IsDeletedOrExpired(0, 0) {
-		t.Fatalf("expected non-expiring value to be live")
-	}
-	if !IsDeletedOrExpired(0, uint64(time.Now().Add(-time.Second).Unix())) {
-		t.Fatalf("expected past ttl to be expired")
-	}
-	if IsDeletedOrExpired(0, uint64(time.Now().Add(time.Hour).Unix())) {
-		t.Fatalf("expected future ttl to be live")
-	}
-
-	vs := &Entry{Meta: BitValuePointer, ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}
-	if DiscardEntry(nil, vs) {
+	vs := &Entry{Meta: BitValuePointer, Value: []byte("vp"), ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}
+	if DiscardEntry(vs) {
 		t.Fatalf("expected pointer entry to be retained")
 	}
 	vs.Meta = 0
-	if !DiscardEntry(nil, vs) {
+	if !DiscardEntry(vs) {
 		t.Fatalf("expected inline entry to be discarded")
+	}
+
+	var nilEntry *Entry
+	if !nilEntry.IsDeletedOrExpired() {
+		t.Fatalf("expected nil entry to be treated as deleted")
+	}
+	if !(&Entry{Value: nil}).IsDeletedOrExpired() {
+		t.Fatalf("expected nil value entry to be treated as deleted")
+	}
+	if (&Entry{Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}).IsDeletedOrExpired() {
+		t.Fatalf("expected live entry to be retained")
+	}
+	if !(&Entry{Meta: BitDelete, Value: []byte("v")}).IsDeletedOrExpired() {
+		t.Fatalf("expected delete-marked entry to be deleted")
+	}
+	if !(&Entry{Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(-time.Second).Unix())}).IsDeletedOrExpired() {
+		t.Fatalf("expected expired entry to be deleted")
+	}
+	if (&Entry{Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}).IsDeletedOrExpired() {
+		t.Fatalf("expected future expiry entry to be live")
 	}
 }
 

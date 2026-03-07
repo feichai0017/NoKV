@@ -1,20 +1,20 @@
 package lsm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"sort"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -88,10 +88,10 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		}
 	}
 	// record the hash value of the key
-	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.ParseKey(key)))
+	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.StripTimestamp(key)))
 
 	// update the maxVersion
-	if version := kv.ParseTs(key); version > tb.maxVersion {
+	if version := kv.Timestamp(key); version > tb.maxVersion {
 		tb.maxVersion = version
 	}
 
@@ -150,7 +150,9 @@ func (tb *tableBuilder) finish() []byte {
 	bd := tb.done()
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
-	utils.CondPanic(written == len(buf), nil)
+	utils.CondPanicFunc(written != len(buf), func() error {
+		return fmt.Errorf("tableBuilder.finish: written=%d buf=%d", written, len(buf))
+	})
 	return buf
 }
 func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
@@ -161,7 +163,9 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	if len(tb.curBlock.entryOffsets) <= 0 {
 		return false
 	}
-	utils.CondPanic(uint64(len(tb.curBlock.entryOffsets)+1)*4+4+8+4 >= math.MaxUint32, errors.New("integer overflow"))
+	utils.CondPanicFunc(uint64(len(tb.curBlock.entryOffsets)+1)*4+4+8+4 >= math.MaxUint32, func() error {
+		return errors.New("integer overflow")
+	})
 	entriesOffsetsSize := int64((len(tb.curBlock.entryOffsets)+1)*4 +
 		4 + // size of list
 		8 + // Sum64 in checksum proto
@@ -170,7 +174,9 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 		int64(len(e.Key)) + int64(e.EncodedSize()) + entriesOffsetsSize
 
 	// Integer overflow check for table size.
-	utils.CondPanic(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, errors.New("integer overflow"))
+	utils.CondPanicFunc(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, func() error {
+		return errors.New("integer overflow")
+	})
 
 	return tb.curBlock.estimateSz > int64(tb.opt.BlockSize)
 }
@@ -248,7 +254,9 @@ func (tb *tableBuilder) finishBlock() {
 // append appends to curBlock.data
 func (tb *tableBuilder) append(data []byte) {
 	dst := tb.allocate(len(data))
-	utils.CondPanic(len(data) != copy(dst, data), errors.New("tableBuilder.append data"))
+	utils.CondPanicFunc(len(data) != copy(dst, data), func() error {
+		return errors.New("tableBuilder.append data")
+	})
 }
 
 func (tb *tableBuilder) allocate(need int) []byte {
@@ -279,29 +287,86 @@ func (tb *tableBuilder) keyDiff(newKey []byte) []byte {
 	return newKey[i:]
 }
 
-func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
-	bd := tb.done()
-	t = &table{lm: lm, fid: utils.FID(tableName)}
-	// if builder is nil, open an existing sst file
-	t.ss = file.OpenSStable(&file.Options{
-		FileName: tableName,
-		Dir:      lm.opt.WorkDir,
-		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(bd.size),
-		FS:       lm.opt.FS})
-	dst, err := t.ss.View(0, bd.size)
+func writeBuildDataToSST(ss *file.SSTable, bd buildData) error {
+	dst, err := ss.View(0, bd.size)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	written := bd.Copy(dst)
 	utils.CondPanicFunc(written != len(dst), func() error {
 		return fmt.Errorf("tableBuilder.flush written != len(dst)")
 	})
+	// Hint the OS that freshly written pages can be dropped; block cache holds hot copies.
+	_ = ss.Advise(utils.AccessPatternDontNeed)
+	return nil
+}
+
+func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
+	bd := tb.done()
+	t = &table{lm: lm, fid: utils.FID(tableName)}
+	// Throughput-first mode: write directly to final SST when manifest sync is disabled.
+	if lm != nil && lm.opt != nil && !lm.opt.ManifestSync {
+		t.ss = file.OpenSStable(&file.Options{
+			FileName: tableName,
+			Dir:      lm.opt.WorkDir,
+			Flag:     os.O_CREATE | os.O_EXCL | os.O_RDWR,
+			MaxSz:    int(bd.size),
+			FS:       lm.opt.FS,
+		})
+		if t.ss == nil {
+			return nil, fmt.Errorf("failed to open sstable %s", tableName)
+		}
+		if writeErr := writeBuildDataToSST(t.ss, bd); writeErr != nil {
+			_ = t.ss.Close()
+			return nil, writeErr
+		}
+		tb.blockList = nil
+		return t, nil
+	}
+
+	fs := vfs.Ensure(lm.opt.FS)
+	tmpName := fmt.Sprintf("%s.tmp.%d.%d", tableName, os.Getpid(), time.Now().UnixNano())
+	tmp := file.OpenSStable(&file.Options{
+		FileName: tmpName,
+		Dir:      lm.opt.WorkDir,
+		Flag:     os.O_CREATE | os.O_RDWR,
+		MaxSz:    int(bd.size),
+		FS:       lm.opt.FS,
+	})
+	if tmp == nil {
+		return nil, fmt.Errorf("failed to open temp sstable %s", tmpName)
+	}
+	renamed := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = tmp.Close()
+		if !renamed {
+			_ = fs.Remove(tmpName)
+		}
+	}()
+
+	if err := writeBuildDataToSST(tmp, bd); err != nil {
+		return nil, err
+	}
+	// Ensure table bytes are persisted before exposing file through manifest.
+	if err := tmp.Sync(); err != nil {
+		return nil, err
+	}
+
+	if err := fs.RenameNoReplace(tmpName, tableName); errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("sst already exists: %s", tableName)
+	} else if err != nil {
+		return nil, err
+	}
+	renamed = true
+
+	// Reuse the renamed tmp handle to avoid an extra open/mmap round trip.
+	tmp.SetFileName(tableName)
+	t.ss = tmp
 	// Allow GC to reclaim the intermediate blocks once the data is persisted.
 	tb.blockList = nil
-
-	// Hint the OS that freshly written pages can be dropped; block cache holds hot copies.
-	_ = t.ss.Advise(utils.AccessPatternDontNeed)
 	return t, nil
 }
 
@@ -468,36 +533,42 @@ func (itr *blockIterator) seekToLast() {
 }
 func (itr *blockIterator) seek(key []byte) {
 	itr.err = nil
-	startIndex := 0 // This tells from which index we should start binary search.
-
+	n := len(itr.entryOffsets)
+	if n == 0 {
+		itr.setIdx(0)
+		return
+	}
 	if itr.isAsc {
-		// Forward: find first entry >= key using binary search
-		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-			// If idx is less than start index then just return false.
-			if idx < startIndex {
-				return false
+		// Forward: first entry >= key.
+		lo, hi := 0, n
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			itr.setIdx(mid)
+			if utils.CompareKeys(itr.key, key) >= 0 {
+				hi = mid
+			} else {
+				lo = mid + 1
 			}
-			itr.setIdx(idx)
-			return utils.CompareKeys(itr.key, key) >= 0
-		})
-		itr.setIdx(foundEntryIdx)
-	} else {
-		// Reverse: find last entry <= key using binary search
-		// Strategy: find first entry > key, then use idx-1
-		foundEntryIdx := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-			if idx < startIndex {
-				return false
-			}
-			itr.setIdx(idx)
-			return utils.CompareKeys(itr.key, key) > 0
-		})
-		// foundEntryIdx is the first entry > key, so we want idx-1
-		if foundEntryIdx == 0 {
-			itr.setIdx(-1) // No entry <= key
+		}
+		itr.setIdx(lo)
+		return
+	}
+	// Reverse: last entry <= key.
+	lo, hi := 0, n
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		itr.setIdx(mid)
+		if utils.CompareKeys(itr.key, key) > 0 {
+			hi = mid
 		} else {
-			itr.setIdx(foundEntryIdx - 1)
+			lo = mid + 1
 		}
 	}
+	if lo == 0 {
+		itr.setIdx(-1)
+		return
+	}
+	itr.setIdx(lo - 1)
 }
 
 func (itr *blockIterator) setIdx(i int) {
@@ -525,18 +596,6 @@ func (itr *blockIterator) setIdx(i int) {
 		// EndOffset of the current entry is the start offset of the next entry.
 		endOffset = int(itr.entryOffsets[itr.idx+1])
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			var debugBuf bytes.Buffer
-			fmt.Fprintf(&debugBuf, "==== Recovered====\n")
-			fmt.Fprintf(&debugBuf, "Table ID: %d\nBlock ID: %d\nEntry Idx: %d\nData len: %d\n"+
-				"StartOffset: %d\nEndOffset: %d\nEntryOffsets len: %d\nEntryOffsets: %v\n",
-				itr.tableID, itr.blockID, itr.idx, len(itr.data), startOffset, endOffset,
-				len(itr.entryOffsets), itr.entryOffsets)
-			panic(debugBuf.String())
-		}
-	}()
-
 	entryData := itr.data[startOffset:endOffset]
 	var h header
 	h.decode(entryData)
@@ -554,6 +613,7 @@ func (itr *blockIterator) setIdx(i int) {
 	itr.entry.Value = itr.valStruct.Value
 	itr.entry.ExpiresAt = itr.valStruct.ExpiresAt
 	itr.entry.Meta = itr.valStruct.Meta
+	_ = itr.entry.PopulateInternalMeta()
 	itr.item.e = &itr.entry
 	itr.it = &itr.item
 }

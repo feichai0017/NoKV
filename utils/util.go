@@ -41,26 +41,9 @@ func VlogFilePath(dirPath string, fid uint32) string {
 	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
 }
 
-// CreateSyncedFile creates a new file (using O_EXCL), errors if it already existed.
-func CreateSyncedFile(fs vfs.FS, filename string, sync bool) (vfs.File, error) {
-	fs = vfs.Ensure(fs)
-	flags := os.O_RDWR | os.O_CREATE | os.O_EXCL
-	if sync {
-		flags |= datasyncFileFlag
-	}
-	return fs.OpenFileHandle(filename, flags, 0600)
-}
-
 // FileNameSSTable returns the SSTable filename for the given ID.
 func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
-}
-
-// SyncDir When you create or delete a file, you have to ensure the directory entry for the file is synced
-// in order to guarantee the file is visible (if the system crashes). (See the man page for fsync,
-// or see https://github.com/coreos/etcd/issues/6368 for an example.)
-func SyncDir(fs vfs.FS, dir string) error {
-	return vfs.SyncDir(fs, dir)
 }
 
 // LoadIDMap Get the id of all sst files in the current folder
@@ -90,7 +73,9 @@ func LoadIDMap(fs vfs.FS, dir string) map[uint64]struct{} {
 // All keys should have timestamp.
 func CompareKeys(key1, key2 []byte) int {
 	if len(key1) <= 8 || len(key2) <= 8 {
-		CondPanic(true, fmt.Errorf("%s,%s < 8", string(key1), string(key2)))
+		CondPanicFunc(true, func() error {
+			return fmt.Errorf("%s,%s < 8", string(key1), string(key2))
+		})
 	}
 	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
 		return cmp
@@ -98,10 +83,20 @@ func CompareKeys(key1, key2 []byte) int {
 	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
 }
 
-// CompareUserKeys compares keys ignoring any internal timestamp suffix.
-// It accepts either internal keys or raw user keys.
+// CompareUserKeys compares user-key portions of two internal keys.
+// Both inputs must use the InternalKey layout.
 func CompareUserKeys(key1, key2 []byte) int {
-	return bytes.Compare(kv.ParseKey(key1), kv.ParseKey(key2))
+	if len(key1) == 0 || len(key2) == 0 {
+		return bytes.Compare(key1, key2)
+	}
+	_, uk1, _, ok1 := kv.SplitInternalKey(key1)
+	_, uk2, _, ok2 := kv.SplitInternalKey(key2)
+	if !ok1 || !ok2 {
+		CondPanicFunc(true, func() error {
+			return fmt.Errorf("CompareUserKeys requires internal keys (ok1=%t ok2=%t)", ok1, ok2)
+		})
+	}
+	return bytes.Compare(uk1, uk2)
 }
 
 // VerifyChecksum crc32
@@ -121,12 +116,4 @@ func VerifyChecksum(data []byte, expected []byte) error {
 // CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
 	return uint64(crc32.Checksum(data, kv.CastagnoliCrcTable))
-}
-
-// RemoveDir _
-func RemoveDir(fs vfs.FS, dir string) {
-	fs = vfs.Ensure(fs)
-	if err := fs.RemoveAll(dir); err != nil {
-		panic(err)
-	}
 }

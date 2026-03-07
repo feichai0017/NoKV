@@ -26,9 +26,13 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.Re
 	if regionID == 0 {
 		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
 	}
+	if requestStoreID := req.Header.GetStoreId(); requestStoreID != 0 && s.storeID != 0 && requestStoreID != s.storeID {
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
+		return nil, manifest.RegionMeta{}, resp, nil
+	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(nil)}
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		return nil, manifest.RegionMeta{}, resp, nil
 	}
 	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
@@ -41,7 +45,7 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.Re
 	}
 	peer := s.regions.peer(regionID)
 	if peer == nil {
-		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: epochNotMatchError(&meta)}
+		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		return nil, meta, resp, nil
 	}
 	status := peer.Status()
@@ -122,7 +126,11 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if s.command != nil && req.Header.GetRequestId() == 0 {
 		req.Header.RequestId = s.command.nextProposalID()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	timeout := s.commandTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	index, err := peer.LinearizableRead(ctx)
 	if err != nil {
@@ -181,12 +189,12 @@ func validateRequestKeys(meta manifest.RegionMeta, req *pb.RaftCmdRequest) *pb.R
 		case pb.CmdType_CMD_GET:
 			key := r.GetGet().GetKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
-				return epochNotMatchError(&meta)
+				return keyNotInRegionError(meta, key)
 			}
 		case pb.CmdType_CMD_SCAN:
 			start := r.GetScan().GetStartKey()
 			if len(start) > 0 && !keyInRange(meta, start) {
-				return epochNotMatchError(&meta)
+				return keyNotInRegionError(meta, start)
 			}
 		case pb.CmdType_CMD_PREWRITE:
 			for _, mut := range r.GetPrewrite().GetMutations() {
@@ -195,31 +203,31 @@ func validateRequestKeys(meta manifest.RegionMeta, req *pb.RaftCmdRequest) *pb.R
 				}
 				key := mut.GetKey()
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return epochNotMatchError(&meta)
+					return keyNotInRegionError(meta, key)
 				}
 			}
 		case pb.CmdType_CMD_COMMIT:
 			for _, key := range r.GetCommit().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return epochNotMatchError(&meta)
+					return keyNotInRegionError(meta, key)
 				}
 			}
 		case pb.CmdType_CMD_BATCH_ROLLBACK:
 			for _, key := range r.GetBatchRollback().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return epochNotMatchError(&meta)
+					return keyNotInRegionError(meta, key)
 				}
 			}
 		case pb.CmdType_CMD_RESOLVE_LOCK:
 			for _, key := range r.GetResolveLock().GetKeys() {
 				if len(key) > 0 && !keyInRange(meta, key) {
-					return epochNotMatchError(&meta)
+					return keyNotInRegionError(meta, key)
 				}
 			}
 		case pb.CmdType_CMD_CHECK_TXN_STATUS:
 			key := r.GetCheckTxnStatus().GetPrimaryKey()
 			if len(key) > 0 && !keyInRange(meta, key) {
-				return epochNotMatchError(&meta)
+				return keyNotInRegionError(meta, key)
 			}
 		default:
 			return epochNotMatchError(&meta)
@@ -309,6 +317,32 @@ func notLeaderError(meta manifest.RegionMeta, leaderPeerID uint64) *pb.RegionErr
 		NotLeader: &pb.NotLeader{
 			RegionId: meta.ID,
 			Leader:   leader,
+		},
+	}
+}
+
+func storeNotMatchError(requestStoreID, actualStoreID uint64) *pb.RegionError {
+	return &pb.RegionError{
+		StoreNotMatch: &pb.StoreNotMatch{
+			RequestStoreId: requestStoreID,
+			ActualStoreId:  actualStoreID,
+		},
+	}
+}
+
+func regionNotFoundError(regionID uint64) *pb.RegionError {
+	return &pb.RegionError{
+		RegionNotFound: &pb.RegionNotFound{RegionId: regionID},
+	}
+}
+
+func keyNotInRegionError(meta manifest.RegionMeta, key []byte) *pb.RegionError {
+	return &pb.RegionError{
+		KeyNotInRegion: &pb.KeyNotInRegion{
+			Key:      append([]byte(nil), key...),
+			RegionId: meta.ID,
+			StartKey: append([]byte(nil), meta.StartKey...),
+			EndKey:   append([]byte(nil), meta.EndKey...),
 		},
 	}
 }

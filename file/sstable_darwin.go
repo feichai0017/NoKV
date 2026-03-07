@@ -32,7 +32,11 @@ type SSTable struct {
 
 // OpenSStable opens or creates an SSTable file.
 func OpenSStable(opt *Options) *SSTable {
-	omf, err := OpenMmapFile(opt.FS, opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	flag := opt.Flag
+	if flag == 0 {
+		flag = os.O_CREATE | os.O_RDWR
+	}
+	omf, err := OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
 	_ = utils.Err(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
@@ -45,8 +49,14 @@ func (ss *SSTable) Init() error {
 		return err
 	}
 	// Capture the file creation time from the filesystem.
-	stat, _ := ss.f.Fd.Stat()
-	statType := stat.Sys().(*syscall.Stat_t)
+	stat, statErr := ss.f.File.Stat()
+	if statErr != nil {
+		return errors.Wrapf(statErr, "failed to stat table file: %s", ss.f.File.Name())
+	}
+	statType, ok := stat.Sys().(*syscall.Stat_t)
+	if !ok || statType == nil {
+		return errors.Errorf("failed to decode stat type for table file: %s", ss.f.File.Name())
+	}
 	ss.createdAt = time.Unix(statType.Atimespec.Sec, statType.Atimespec.Nsec)
 	// init min key
 	keyBytes := ko.GetKey()
@@ -86,7 +96,7 @@ func (ss *SSTable) initTable() (bo *pb.BlockOffset, err error) {
 	ss.idxStart = readPos
 	data := ss.readCheckError(readPos, ss.idxLen)
 	if err := utils.VerifyChecksum(data, expectedChk); err != nil {
-		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.Fd.Name())
+		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", ss.f.File.Name())
 	}
 	indexTable := &pb.TableIndex{}
 	if err := proto.Unmarshal(data, indexTable); err != nil {
@@ -139,6 +149,22 @@ func (ss *SSTable) Advise(pattern utils.AccessPattern) error {
 	return ss.f.Advise(pattern)
 }
 
+// Sync flushes pending dirty pages for the table mapping.
+func (ss *SSTable) Sync() error {
+	if ss == nil || ss.f == nil {
+		return nil
+	}
+	return ss.f.Sync()
+}
+
+// SetFileName updates the logical path used by the underlying mmap handle.
+func (ss *SSTable) SetFileName(name string) {
+	if ss == nil || ss.f == nil {
+		return
+	}
+	ss.f.SetFileName(name)
+}
+
 func (ss *SSTable) read(off, sz int) ([]byte, error) {
 	if len(ss.f.Data) > 0 {
 		if len(ss.f.Data[off:]) < sz {
@@ -148,7 +174,7 @@ func (ss *SSTable) read(off, sz int) ([]byte, error) {
 	}
 
 	res := make([]byte, sz)
-	_, err := ss.f.Fd.ReadAt(res, int64(off))
+	_, err := ss.f.File.ReadAt(res, int64(off))
 	return res, err
 }
 func (ss *SSTable) readCheckError(off, sz int) []byte {
@@ -170,7 +196,7 @@ func (ss *SSTable) View(off, sz int) ([]byte, error) {
 
 // Size returns the size of the underlying file.
 func (ss *SSTable) Size() int64 {
-	fileStats, err := ss.f.Fd.Stat()
+	fileStats, err := ss.f.File.Stat()
 	utils.Panic(err)
 	return fileStats.Size()
 }
@@ -190,7 +216,7 @@ func (ss *SSTable) Detele() error {
 	return ss.f.Delete()
 }
 
-// Truncature _
-func (ss *SSTable) Truncature(size int64) error {
-	return ss.f.Truncature(size)
+// Truncate resizes the underlying table mapping.
+func (ss *SSTable) Truncate(size int64) error {
+	return ss.f.Truncate(size)
 }

@@ -2,6 +2,8 @@ package wal
 
 import (
 	"testing"
+
+	"github.com/feichai0017/NoKV/kv"
 )
 
 func newBenchManager(b *testing.B) *Manager {
@@ -19,11 +21,13 @@ func newBenchManager(b *testing.B) *Manager {
 func BenchmarkWALAppend(b *testing.B) {
 	mgr := newBenchManager(b)
 	payload := make([]byte, 256)
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
+	defer entry.DecrRef()
 	b.ReportAllocs()
 	b.SetBytes(int64(len(payload)))
 
 	for b.Loop() {
-		if _, err := mgr.Append(payload); err != nil {
+		if _, err := mgr.AppendEntry(entry); err != nil {
 			b.Fatalf("append: %v", err)
 		}
 	}
@@ -32,8 +36,10 @@ func BenchmarkWALAppend(b *testing.B) {
 func BenchmarkWALReplay(b *testing.B) {
 	mgr := newBenchManager(b)
 	payload := make([]byte, 128)
+	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
+	defer entry.DecrRef()
 	for range 10_000 {
-		if _, err := mgr.Append(payload); err != nil {
+		if _, err := mgr.AppendEntry(entry); err != nil {
 			b.Fatalf("append preload: %v", err)
 		}
 	}

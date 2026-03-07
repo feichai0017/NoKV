@@ -3,7 +3,6 @@ package lsm
 import (
 	"bytes"
 	"fmt"
-	"sort"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
@@ -47,21 +46,33 @@ func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
 
 // Next advances the first wrapped iterator.
 func (iter *Iterator) Next() {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
 	iter.iters[0].Next()
 }
 
 // Valid reports whether the first wrapped iterator is valid.
 func (iter *Iterator) Valid() bool {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return false
+	}
 	return iter.iters[0].Valid()
 }
 
 // Rewind rewinds the first wrapped iterator.
 func (iter *Iterator) Rewind() {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
 	iter.iters[0].Rewind()
 }
 
 // Item returns the current item from the first wrapped iterator.
 func (iter *Iterator) Item() utils.Item {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return nil
+	}
 	return iter.iters[0].Item()
 }
 
@@ -72,6 +83,10 @@ func (iter *Iterator) Close() error {
 
 // Seek is currently a no-op on this adapter.
 func (iter *Iterator) Seek(key []byte) {
+	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
+		return
+	}
+	iter.iters[0].Seek(key)
 }
 
 // memtable iterator
@@ -201,16 +216,36 @@ func (s *ConcatIterator) Item() utils.Item {
 
 // Seek brings us to element >= key if reversed is false. Otherwise, <= key.
 func (s *ConcatIterator) Seek(key []byte) {
+	n := len(s.tables)
+	if n == 0 {
+		s.setIdx(-1)
+		return
+	}
 	var idx int
 	if s.options.IsAsc {
-		idx = sort.Search(len(s.tables), func(i int) bool {
-			return utils.CompareKeys(s.tables[i].MaxKey(), key) >= 0
-		})
+		// First table whose max key >= target.
+		lo, hi := 0, n
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			if utils.CompareKeys(s.tables[mid].MaxKey(), key) >= 0 {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		idx = lo
 	} else {
-		n := len(s.tables)
-		idx = n - 1 - sort.Search(n, func(i int) bool {
-			return utils.CompareKeys(s.tables[n-1-i].MinKey(), key) <= 0
-		})
+		// Last table whose min key <= target.
+		lo, hi := 0, n
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			if utils.CompareKeys(s.tables[mid].MinKey(), key) > 0 {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		idx = lo - 1
 	}
 	if idx >= len(s.tables) || idx < 0 {
 		s.setIdx(-1)
@@ -282,6 +317,48 @@ type node struct {
 	concat *ConcatIterator
 }
 
+func (n *node) setFromMerge() {
+	n.valid = n.merge.small != nil && n.merge.small.valid && n.merge.small.entry != nil
+	n.entry = nil
+	if n.valid {
+		n.entry = n.merge.small.entry
+	}
+}
+
+func (n *node) setFromConcat() {
+	n.valid = n.concat.Valid()
+	n.entry = nil
+	if !n.valid {
+		return
+	}
+	item := n.concat.Item()
+	utils.CondPanicFunc(item == nil, func() error {
+		return fmt.Errorf("concat iterator valid but item nil (type=%T)", n.concat)
+	})
+	entry := item.Entry()
+	utils.CondPanicFunc(entry == nil, func() error {
+		return fmt.Errorf("concat iterator valid but entry nil (type=%T)", n.concat)
+	})
+	n.entry = entry
+}
+
+func (n *node) setFromIter() {
+	n.valid = n.iter.Valid()
+	n.entry = nil
+	if !n.valid {
+		return
+	}
+	item := n.iter.Item()
+	utils.CondPanicFunc(item == nil, func() error {
+		return fmt.Errorf("iterator valid but item nil (type=%T)", n.iter)
+	})
+	entry := item.Entry()
+	utils.CondPanicFunc(entry == nil, func() error {
+		return fmt.Errorf("iterator valid but entry nil (type=%T)", n.iter)
+	})
+	n.entry = entry
+}
+
 func (n *node) setIterator(iter utils.Iterator) {
 	n.iter = iter
 	// It's okay if the type assertion below fails and n.merge/n.concat are set to nil.
@@ -298,31 +375,11 @@ func (n *node) setKey() {
 	}
 	switch {
 	case n.merge != nil:
-		n.valid = n.merge.small != nil && n.merge.small.valid && n.merge.small.entry != nil
-		n.entry = nil
-		if n.valid {
-			n.entry = n.merge.small.entry
-		}
+		n.setFromMerge()
 	case n.concat != nil:
-		n.valid = n.concat.Valid()
-		n.entry = nil
-		if n.valid {
-			item := n.concat.Item()
-			utils.CondPanic(item == nil, fmt.Errorf("concat iterator valid but item nil (type=%T)", n.concat))
-			entry := item.Entry()
-			utils.CondPanic(entry == nil, fmt.Errorf("concat iterator valid but entry nil (type=%T)", n.concat))
-			n.entry = entry
-		}
+		n.setFromConcat()
 	default:
-		n.valid = n.iter.Valid()
-		n.entry = nil
-		if n.valid {
-			item := n.iter.Item()
-			utils.CondPanic(item == nil, fmt.Errorf("iterator valid but item nil (type=%T)", n.iter))
-			entry := item.Entry()
-			utils.CondPanic(entry == nil, fmt.Errorf("iterator valid but entry nil (type=%T)", n.iter))
-			n.entry = entry
-		}
+		n.setFromIter()
 	}
 }
 
@@ -335,12 +392,14 @@ func (n *node) next() {
 	switch {
 	case n.merge != nil:
 		n.merge.Next()
+		n.setFromMerge()
 	case n.concat != nil:
 		n.concat.Next()
+		n.setFromConcat()
 	default:
 		n.iter.Next()
+		n.setFromIter()
 	}
-	n.setKey()
 }
 
 func (n *node) rewind() {

@@ -10,8 +10,8 @@ import (
 type Ring[T any] struct {
 	buf    []ringSlot[T]
 	mask   uint64
-	head   uint64 // next slot to pop
-	tail   uint64 // next slot to push
+	head   atomic.Uint64 // next slot to pop
+	tail   atomic.Uint64 // next slot to push
 	closed atomic.Bool
 }
 
@@ -43,12 +43,12 @@ func (r *Ring[T]) Push(v T) bool {
 		return false
 	}
 	for {
-		pos := atomic.LoadUint64(&r.tail)
+		pos := r.tail.Load()
 		slot := &r.buf[pos&r.mask]
 		seq := slot.seq.Load()
 		diff := int64(seq) - int64(pos)
 		if diff == 0 {
-			if atomic.CompareAndSwapUint64(&r.tail, pos, pos+1) {
+			if r.tail.CompareAndSwap(pos, pos+1) {
 				slot.val = v
 				slot.seq.Store(pos + 1)
 				return true
@@ -67,12 +67,12 @@ func (r *Ring[T]) Pop() (val T, ok bool) {
 	}
 	size := r.mask + 1
 	for {
-		pos := atomic.LoadUint64(&r.head)
+		pos := r.head.Load()
 		slot := &r.buf[pos&r.mask]
 		seq := slot.seq.Load()
 		diff := int64(seq) - int64(pos+1)
 		if diff == 0 {
-			if atomic.CompareAndSwapUint64(&r.head, pos, pos+1) {
+			if r.head.CompareAndSwap(pos, pos+1) {
 				val = slot.val
 				var zero T
 				slot.val = zero
@@ -107,8 +107,8 @@ func (r *Ring[T]) Len() int {
 	if r == nil {
 		return 0
 	}
-	head := atomic.LoadUint64(&r.head)
-	tail := atomic.LoadUint64(&r.tail)
+	head := r.head.Load()
+	tail := r.tail.Load()
 	if tail < head {
 		return 0
 	}

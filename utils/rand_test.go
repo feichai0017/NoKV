@@ -3,6 +3,7 @@ package utils
 import (
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,6 +17,10 @@ func TestRandHelpers(t *testing.T) {
 
 	entry := BuildEntry()
 	require.NotNil(t, entry)
-	require.Greater(t, len(entry.Key), 8)
+	cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, kv.CFDefault, cf)
+	require.Equal(t, kv.MaxVersion, ts)
+	require.NotEmpty(t, userKey)
 	require.NotEmpty(t, entry.Value)
 }

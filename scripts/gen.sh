@@ -2,13 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROTO_DIR="${ROOT_DIR}/pb"
 export PATH="$(go env GOPATH)/bin:${PATH}"
 
-PROTOBUF_MODULE_VERSION="$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
-REQUIRED_PROTOC_VERSION="${REQUIRED_PROTOC_VERSION:-33.4}"
-REQUIRED_PROTOC_GEN_GO_VERSION="${REQUIRED_PROTOC_GEN_GO_VERSION:-${PROTOBUF_MODULE_VERSION}}"
-REQUIRED_PROTOC_GEN_GO_GRPC_VERSION="${REQUIRED_PROTOC_GEN_GO_GRPC_VERSION:-1.6.1}"
+REQUIRED_BUF_VERSION="${REQUIRED_BUF_VERSION:-1.66.0}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -27,23 +23,8 @@ assert_version() {
   fi
 }
 
-require_cmd protoc
-require_cmd protoc-gen-go
-require_cmd protoc-gen-go-grpc
+require_cmd buf
 
-assert_version "protoc" "$(protoc --version | awk '{print $2}')" "${REQUIRED_PROTOC_VERSION}"
-assert_version "protoc-gen-go" "$(protoc-gen-go --version | awk '{print $2}')" "${REQUIRED_PROTOC_GEN_GO_VERSION}"
-assert_version "protoc-gen-go-grpc" "$(protoc-gen-go-grpc --version | awk '{print $2}')" "${REQUIRED_PROTOC_GEN_GO_GRPC_VERSION}"
+assert_version "buf" "$(buf --version | awk '{print $NF}')" "${REQUIRED_BUF_VERSION}"
 
-protoc \
-  --proto_path="${PROTO_DIR}" \
-  --go_out=paths=source_relative:"${PROTO_DIR}" \
-  metapb.proto \
-  storagepb.proto \
-  kvrpcpb.proto \
-  raftcmdpb.proto
-
-protoc \
-  --proto_path="${PROTO_DIR}" \
-  --go-grpc_out=paths=source_relative,require_unimplemented_servers=false:"${PROTO_DIR}" \
-  kvrpcpb.proto
+(cd "${ROOT_DIR}" && buf generate)

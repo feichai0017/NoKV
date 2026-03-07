@@ -89,11 +89,12 @@ type Write struct {
 	Kind       pb.Mutation_Op
 	StartTs    uint64
 	ShortValue []byte
+	ExpiresAt  uint64
 }
 
 // EncodeWrite serialises a write entry.
 func EncodeWrite(w Write) []byte {
-	buf := make([]byte, 0, 1+1+binary.MaxVarintLen64*2+len(w.ShortValue))
+	buf := make([]byte, 0, 1+1+binary.MaxVarintLen64*3+len(w.ShortValue))
 	buf = append(buf, writeCodecVersion)
 	buf = append(buf, byte(w.Kind))
 	buf = binary.AppendUvarint(buf, w.StartTs)
@@ -103,6 +104,11 @@ func EncodeWrite(w Write) []byte {
 		buf = append(buf, w.ShortValue...)
 	} else {
 		buf = append(buf, 0)
+	}
+	// Optional extension field used by short-value paths to preserve TTL metadata.
+	// Older decoders safely ignore trailing bytes.
+	if len(w.ShortValue) > 0 || w.ExpiresAt > 0 {
+		buf = binary.AppendUvarint(buf, w.ExpiresAt)
 	}
 	return buf
 }
@@ -127,8 +133,9 @@ func DecodeWrite(data []byte) (Write, error) {
 	if pos >= len(data) {
 		return write, nil
 	}
-	if data[pos] == 1 {
-		pos++
+	hasShort := data[pos]
+	pos++
+	if hasShort == 1 {
 		sz, n := binary.Uvarint(data[pos:])
 		if n <= 0 {
 			return Write{}, fmt.Errorf("mvcc: write short value truncated")
@@ -138,6 +145,14 @@ func DecodeWrite(data []byte) (Write, error) {
 			return Write{}, fmt.Errorf("mvcc: write short value overflow")
 		}
 		write.ShortValue = append([]byte(nil), data[pos:pos+int(sz)]...)
+		pos += int(sz)
+	}
+	if pos < len(data) {
+		expiresAt, n := binary.Uvarint(data[pos:])
+		if n <= 0 {
+			return Write{}, fmt.Errorf("mvcc: write expires_at truncated")
+		}
+		write.ExpiresAt = expiresAt
 	}
 	return write, nil
 }

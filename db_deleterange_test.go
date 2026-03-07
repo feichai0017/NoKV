@@ -8,6 +8,17 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
+func getTestOptions(dir string) *Options {
+	opt := NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.MemTableSize = 1 << 20
+	opt.SSTableMaxSz = 1 << 20
+	opt.ValueLogFileSize = 1 << 20
+	opt.ValueThreshold = 1 << 20
+	opt.DetectConflicts = true
+	return opt
+}
+
 // TestDeleteRangeCore tests basic functionality, boundaries, lexicographic ordering,
 // empty ranges, and write-after-delete scenarios.
 func TestDeleteRangeCore(t *testing.T) {
@@ -245,4 +256,3 @@ func TestDeleteRangeVisibilityBug(t *testing.T) {
 		t.Errorf("expected value 'new', got '%s'", e.Value)
 	}
 }
-

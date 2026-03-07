@@ -8,7 +8,7 @@ This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a
 - (Optional) Docker + Docker Compose for containerized runs
 
 ## Option A: Local Cluster (recommended for dev)
-This launches a 3-node Raft cluster plus the optional TSO helper.
+This launches a 3-node Raft cluster plus a PD-lite service.
 
 ```bash
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
@@ -78,7 +78,11 @@ func main() {
 }
 ```
 
-> Note: Public read APIs (`DB.Get`, `DB.GetCF`, `DB.GetVersionedEntry`, `Txn.Get`) return detached entries. Do not call `DecrRef` on them.
+> Note:
+> - `DB.Get` returns detached entries (do not call `DecrRef`).
+> - `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
+> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` for deletes.
+> - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
 ## Benchmarks
 Micro benchmarks:

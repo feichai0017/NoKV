@@ -9,8 +9,8 @@ The `file` package encapsulates direct file-system interaction for WAL, SST, and
 | Type | Purpose | Key Methods |
 | --- | --- | --- |
 | [`Options`](../file/file.go#L5-L16) | Parameter bag for opening files (FID, path, size). | Used by WAL/vlog managers. |
-| [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncature`, `Sync`. |
-| [`LogFile`](../file/vlog.go#L16-L130) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `EncodeEntry`. |
+| [`MmapFile`](../file/mmap_linux.go#L12-L98) | Cross-platform mmap wrapper. | `OpenMmapFile`, `AppendBuffer`, `Truncate`, `Sync`. |
+| [`LogFile`](../file/vlog.go#L17-L223) | Value-log specific helper built on `MmapFile`. | `Open`, `Write`, `Read`, `DoneWriting`, `Truncate`, `Bootstrap`. |
 
 Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) ensuring the package compiles on macOS without manual tuning.
 
@@ -19,7 +19,7 @@ Darwin-specific builds live alongside (`mmap_darwin.go`, `sstable_darwin.go`) en
 ## 2. Mmap Management
 
 * `OpenMmapFile` opens or creates a file, optionally extending it to `maxSz`, then mmaps it. The returned `MmapFile` exposes `Data []byte` and the underlying `*os.File` handle.
-* Writes grow the map on demand: `AppendBuffer` checks if the write would exceed the current mapping and calls `Truncature` to expand (doubling up to 1 GiB increments).
+* Writes grow the map on demand: `AppendBuffer` checks if the write would exceed the current mapping and calls `Truncate` to expand (doubling up to 1 GiB increments).
 * `Sync` flushes dirty pages (`mmap.Msync`), while `Delete` unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.
 
 RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.
@@ -33,14 +33,15 @@ RocksDB relies on custom Env implementations for portability; NoKV keeps the log
 ```go
 lf := &file.LogFile{}
 _ = lf.Open(&file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1<<29})
-ptr, _ := lf.EncodeEntry(entry, buf, offset)
-_ = lf.Write(offset, buf.Bytes())
-_ = lf.DoneWriting(nextOffset)
+var buf bytes.Buffer
+payload, _ := kv.EncodeEntry(&buf, entry)
+_ = lf.Write(offset, payload)
+_ = lf.DoneWriting(offset + uint32(len(payload)))
 ```
 
 * `Open` mmaps the file and records current size (guarded to `< 4 GiB`).
 * `Read` validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.
-* `EncodeEntry` uses the shared `kv.EntryHeader` and CRC32 helpers to produce the exact on-disk layout consumed by `vlog.Manager` and `wal.Manager`.
+* Entry encoding uses shared helpers in `kv` (`kv.EncodeEntry` / `kv.EncodeEntryTo`); `LogFile` focuses on write/read/truncate + durability semantics.
 * `DoneWriting` guarantees durability for both data bytes `[0, offset)` and the file metadata (size).
     * Sequence: It flushes dirty pages (`msync`), truncates the file to `offset`, and performs a file-descriptor level sync (`fsync`) to ensure the new file size is persisted on disk before returning.
     * Contract: Success implies that after a crash, the file size will not exceed `offset`, and all data prior to `offset` is safe.
@@ -71,7 +72,7 @@ By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and
 
 * `DoneWriting` provides strong crash-consistency guarantees. Even on filesystems where `ftruncate` metadata persistence is asynchronous, the explicit post-truncate `fsync` ensures the file size is durable upon success.
 * Value-log and WAL segments rely on `DoneWriting`/`Truncate` to seal files; avoid manipulating files externally or mmap metadata may desynchronise.
-* `LogFile.AddSize` updates the cached size used by reads—critical when rewinding or rewriting segments.
-* `vfs.SyncDir` is invoked when new files are created to persist directory entries, similar to RocksDB's `Env::FsyncDir`.
+* `LogFile` updates cached size internally on `Write`/`Truncate`, so read bounds stay consistent during rewrite/rewind flows.
+* `vfs.SyncDir` is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls `SyncDir(workdir)` before manifest publication.
 
 For more on how these primitives plug into higher layers, see [`docs/wal.md`](wal.md) and [`docs/vlog.md`](vlog.md).

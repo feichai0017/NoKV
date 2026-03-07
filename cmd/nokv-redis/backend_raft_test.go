@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,10 +22,11 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
-type stubTinyKvServer struct {
-	pb.UnimplementedTinyKvServer
+type stubNoKVServer struct {
+	pb.UnimplementedNoKVServer
 
 	mu               sync.Mutex
 	prewriteAttempts int
@@ -40,7 +38,7 @@ type stubTinyKvServer struct {
 	responses        map[string]*pb.GetResponse
 }
 
-func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *stubNoKVServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prewriteAttempts++
@@ -61,27 +59,19 @@ func (s *stubTinyKvServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteReq
 			LockVersion: s.lockVersion,
 			LockTtl:     1,
 		}}
-		metaKey := ttlMetaKey(key)
-		lockedMeta := &pb.KeyError{Locked: &pb.Locked{
-			PrimaryLock: append([]byte(nil), primary...),
-			Key:         metaKey,
-			LockVersion: s.lockVersion,
-			LockTtl:     1,
-			LockType:    pb.Mutation_Delete,
-		}}
-		return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{Errors: []*pb.KeyError{lockedPrimary, lockedMeta}}}, nil
+		return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{Errors: []*pb.KeyError{lockedPrimary}}}, nil
 	}
 	return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{}}, nil
 }
 
-func (s *stubTinyKvServer) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+func (s *stubNoKVServer) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commitCalls++
 	return &pb.KvCommitResponse{Response: &pb.CommitResponse{}}, nil
 }
 
-func (s *stubTinyKvServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
+func (s *stubNoKVServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checkCalls++
@@ -90,7 +80,7 @@ func (s *stubTinyKvServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheck
 	}}, nil
 }
 
-func (s *stubTinyKvServer) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
+func (s *stubNoKVServer) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolveCalls++
@@ -99,7 +89,7 @@ func (s *stubTinyKvServer) KvResolveLock(ctx context.Context, req *pb.KvResolveL
 	}}, nil
 }
 
-func (s *stubTinyKvServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
+func (s *stubNoKVServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
 	responses := make([]*pb.GetResponse, len(req.GetRequest().GetRequests()))
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,7 +110,7 @@ func (s *stubTinyKvServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetReq
 	return &pb.KvBatchGetResponse{Response: &pb.BatchGetResponse{Responses: responses}}, nil
 }
 
-func startStubTinyKv(t *testing.T) (addr string, srv *stubTinyKvServer, shutdown func()) {
+func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -128,14 +118,107 @@ func startStubTinyKv(t *testing.T) (addr string, srv *stubTinyKvServer, shutdown
 		t.Fatalf("listen tinykv stub: %v", err)
 	}
 	server := grpc.NewServer()
-	stub := &stubTinyKvServer{}
-	pb.RegisterTinyKvServer(server, stub)
+	stub := &stubNoKVServer{}
+	pb.RegisterNoKVServer(server, stub)
 	go func() {
 		_ = server.Serve(l)
 	}()
 	return l.Addr().String(), stub, func() {
 		server.GracefulStop()
 		_ = l.Close()
+	}
+}
+
+type stubPDServer struct {
+	pb.UnimplementedPDServer
+
+	mu         sync.Mutex
+	region     *pb.RegionMeta
+	nextTS     uint64
+	tsoCalls   int
+	routeCalls int
+	tsoErr     error
+	routeErr   error
+}
+
+func (s *stubPDServer) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tsoCalls++
+	if s.tsoErr != nil {
+		return nil, s.tsoErr
+	}
+	count := req.GetCount()
+	if count == 0 {
+		count = 1
+	}
+	if s.nextTS == 0 {
+		s.nextTS = 1
+	}
+	first := s.nextTS
+	s.nextTS += count
+	return &pb.TsoResponse{
+		Timestamp: first,
+		Count:     count,
+	}, nil
+}
+
+func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routeCalls++
+	if s.routeErr != nil {
+		return nil, s.routeErr
+	}
+	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	return &pb.GetRegionByKeyResponse{
+		Region: proto.Clone(s.region).(*pb.RegionMeta),
+	}, nil
+}
+
+func startStubPD(t *testing.T, region *pb.RegionMeta) (addr string, srv *stubPDServer, shutdown func()) {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := grpc.NewServer()
+	stub := &stubPDServer{
+		region: region,
+		nextTS: 100,
+	}
+	pb.RegisterPDServer(server, stub)
+	go func() {
+		_ = server.Serve(l)
+	}()
+	return l.Addr().String(), stub, func() {
+		server.GracefulStop()
+		_ = l.Close()
+	}
+}
+
+func keyInRegion(key, start, end []byte) bool {
+	if len(start) > 0 && bytes.Compare(key, start) < 0 {
+		return false
+	}
+	if len(end) > 0 && bytes.Compare(key, end) >= 0 {
+		return false
+	}
+	return true
+}
+
+func defaultPDRegionMeta() *pb.RegionMeta {
+	return &pb.RegionMeta{
+		Id:               1,
+		StartKey:         nil,
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
 	}
 }
 
@@ -160,47 +243,36 @@ func TestDecodeKeyVariants(t *testing.T) {
 	}
 }
 
-func TestLocalOracleReserveMonotonic(t *testing.T) {
-	var oracle localOracle
-	first, err := oracle.Reserve(3)
-	if err != nil {
-		t.Fatalf("reserve first: %v", err)
-	}
-	second, err := oracle.Reserve(2)
-	if err != nil {
-		t.Fatalf("reserve second: %v", err)
-	}
-	if second <= first {
-		t.Fatalf("monotonicity violated: first=%d second=%d", first, second)
-	}
+func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
+	_, pd, stopPD := startStubPD(t, nil)
+	defer stopPD()
+
+	alloc := newPDTSOAllocator(pd, time.Second)
+	first, err := alloc.Reserve(3)
+	require.NoError(t, err)
+	second, err := alloc.Reserve(2)
+	require.NoError(t, err)
+	require.Greater(t, second, first)
+
+	pd.mu.Lock()
+	require.Equal(t, 2, pd.tsoCalls)
+	pd.mu.Unlock()
 }
 
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-
-	tsoCalls := make(chan uint64, 2)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		batch := r.URL.Query().Get("batch")
-		if batch == "" {
-			http.Error(w, "missing batch", http.StatusBadRequest)
-			return
-		}
-		const baseTs = 100
-		payload := struct {
-			Timestamp uint64 `json:"timestamp"`
-			Count     uint64 `json:"count"`
-		}{
-			Timestamp: baseTs,
-			Count:     2,
-		}
-		_ = json.NewEncoder(w).Encode(&payload)
-		select {
-		case tsoCalls <- payload.Timestamp:
-		default:
-		}
-	}))
-	defer ts.Close()
+	pdAddr, pd, stopPD := startStubPD(t, &pb.RegionMeta{
+		Id:               1,
+		StartKey:         nil,
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	})
+	defer stopPD()
 
 	cfg := config.File{
 		MaxRetries: 3,
@@ -211,24 +283,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 				DockerAddr: storeAddr,
 			},
 		},
-		Regions: []config.Region{
-			{
-				ID:       1,
-				StartKey: "a",
-				EndKey:   "-",
-				Epoch: config.RegionEpoch{
-					Version:     1,
-					ConfVersion: 1,
-				},
-				Peers: []config.Peer{
-					{StoreID: 1, PeerID: 101},
-				},
-				LeaderStoreID: 1,
-			},
-		},
-		TSO: &config.TSO{
-			AdvertiseURL: ts.URL,
-		},
+		Regions: nil,
 	}
 
 	dir := t.TempDir()
@@ -241,7 +296,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	backend, err := newRaftBackend(cfgPath, "", "docker")
+	backend, err := newRaftBackend(cfgPath, pdAddr, "docker")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -252,30 +307,44 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 		}
 	}()
 
-	httpTSO, ok := backend.ts.(*httpTSO)
-	if !ok {
-		t.Fatalf("expected httpTSO allocator, got %T", backend.ts)
-	}
-	if httpTSO.url != ts.URL {
-		t.Fatalf("unexpected TSO url: %s", httpTSO.url)
-	}
-
 	if _, err := backend.reserveTimestamp(2); err != nil {
 		t.Fatalf("reserve timestamp: %v", err)
 	}
 
-	select {
-	case <-tsoCalls:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("http TSO not invoked")
+	val, err := backend.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("expected nil error from stub server, got %v", err)
 	}
+	if val == nil || val.Found {
+		t.Fatalf("expected missing value")
+	}
+
+	pd.mu.Lock()
+	require.GreaterOrEqual(t, pd.tsoCalls, 1)
+	require.GreaterOrEqual(t, pd.routeCalls, 1)
+	pd.mu.Unlock()
 }
 
-func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
-	storeAddr, _, stopStore := startStubTinyKv(t)
+func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 
+	cfgPath := writeBackendConfig(t, storeAddr)
+	_, err := newRaftBackend(cfgPath, "", "host")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pd-addr is required")
+}
+
+func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
 	cfg := config.File{
+		PD: &config.PD{
+			Addr: pdAddr,
+		},
 		Stores: []config.Store{
 			{
 				StoreID: 1,
@@ -300,39 +369,116 @@ func TestNewRaftBackendFallsBackToLocalOracle(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "raft_config.json")
 	raw, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
-	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
 	backend, err := newRaftBackend(cfgPath, "", "host")
-	if err != nil {
-		t.Fatalf("new raft backend: %v", err)
-	}
-	defer func() {
-		_ = backend.Close()
-		if backend.client != nil {
-			_ = backend.client.Close()
-		}
-	}()
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
 
-	if _, ok := backend.ts.(*localOracle); !ok {
-		t.Fatalf("expected localOracle allocator, got %T", backend.ts)
+	_, err = backend.reserveTimestamp(1)
+	require.NoError(t, err)
+}
+
+func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	pdAddr, pd, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	// Keep a region in config to ensure runtime routing still goes through PD.
+	cfg := config.File{
+		PD: &config.PD{
+			Addr: pdAddr,
+		},
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID:       1,
+				StartKey: "",
+				EndKey:   "",
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
 	}
 
-	val, err := backend.Get([]byte("key"))
-	if err != nil {
-		t.Fatalf("expected nil error from stub server, got %v", err)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.Get([]byte("route-via-pd"))
+	require.NoError(t, err)
+
+	pd.mu.Lock()
+	require.GreaterOrEqual(t, pd.routeCalls, 1)
+	pd.mu.Unlock()
+}
+
+func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	validPDAddr, _, stopValidPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopValidPD()
+
+	cfg := config.File{
+		PD: &config.PD{
+			Addr: "127.0.0.1:0", // invalid on purpose; CLI override should win.
+		},
+		Stores: []config.Store{
+			{
+				StoreID: 1,
+				Addr:    storeAddr,
+			},
+		},
+		Regions: []config.Region{
+			{
+				ID: 1,
+				Epoch: config.RegionEpoch{
+					Version:     1,
+					ConfVersion: 1,
+				},
+				Peers: []config.Peer{
+					{StoreID: 1, PeerID: 101},
+				},
+				LeaderStoreID: 1,
+			},
+		},
 	}
-	if val == nil || val.Found {
-		t.Fatalf("expected missing value")
-	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(cfgPath, validPDAddr, "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.reserveTimestamp(1)
+	require.NoError(t, err)
 }
 
 func TestRaftBackendResolveLockConflict(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfg := config.File{
@@ -368,7 +514,10 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -400,11 +549,13 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 }
 
 func TestRaftBackendGetWithTTL(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -415,13 +566,10 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	key := []byte("ttl-key")
 	valueKey := string(key)
 	expireAt := uint64(time.Now().Add(time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		valueKey:                {Value: []byte("value")},
-		string(ttlMetaKey(key)): {Value: ttlBuf},
+		valueKey: {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	stub.mu.Unlock()
 
@@ -438,11 +586,13 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 }
 
 func TestRaftBackendExpireCleanup(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -452,13 +602,10 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 
 	key := []byte("expired-key")
 	expireAt := uint64(time.Now().Add(-time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		string(key):             {Value: []byte("value")},
-		string(ttlMetaKey(key)): {Value: ttlBuf},
+		string(key): {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	before := stub.commitCalls
 	stub.mu.Unlock()
@@ -480,11 +627,13 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 }
 
 func TestRaftBackendIncrByAndErrors(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -523,11 +672,13 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 }
 
 func TestRaftBackendMGetAndExists(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -538,17 +689,14 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	key1 := []byte("k1")
 	key2 := []byte("k2")
 	key3 := []byte("k3")
-	expireAt := uint64(time.Now().Add(time.Hour).Unix())
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, expireAt)
+	futureExpireAt := uint64(time.Now().Add(time.Hour).Unix())
+	pastExpireAt := uint64(time.Now().Add(-time.Hour).Unix())
 
 	stub.mu.Lock()
 	stub.responses = map[string]*pb.GetResponse{
-		string(key1):                      {Value: []byte("v1")},
-		string(key2):                      {Value: []byte("v2")},
-		string(ttlMetaKey(key2)):          {Value: ttlBuf},
-		string(ttlMetaKey(key3)):          {Value: ttlBuf},
-		string(append([]byte{}, key3...)): {NotFound: true},
+		string(key1): {Value: []byte("v1")},
+		string(key2): {Value: []byte("v2"), ExpiresAt: futureExpireAt},
+		string(key3): {Value: []byte("v3"), ExpiresAt: pastExpireAt},
 	}
 	stub.mu.Unlock()
 
@@ -562,8 +710,8 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	if !vals[0].Found || string(vals[0].Value) != "v1" {
 		t.Fatalf("expected k1 to be found")
 	}
-	if !vals[1].Found || vals[1].ExpiresAt != expireAt {
-		t.Fatalf("expected k2 ttl %d, got %+v", expireAt, vals[1])
+	if !vals[1].Found || vals[1].ExpiresAt != futureExpireAt {
+		t.Fatalf("expected k2 ttl %d, got %+v", futureExpireAt, vals[1])
 	}
 	if vals[2].Found {
 		t.Fatalf("expected k3 to be missing")
@@ -586,11 +734,13 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 }
 
 func TestRaftBackendMSetAndDel(t *testing.T) {
-	storeAddr, stub, stopStore := startStubTinyKv(t)
+	storeAddr, stub, stopStore := startStubNoKV(t)
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -624,36 +774,6 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 	stub.mu.Unlock()
 	if after <= before {
 		t.Fatalf("expected delete commit")
-	}
-}
-
-func TestDecodeTTLFromResponse(t *testing.T) {
-	if got := decodeTTLFromResponse(nil); got != 0 {
-		t.Fatalf("expected 0 for nil response")
-	}
-	if got := decodeTTLFromResponse(&pb.GetResponse{NotFound: true}); got != 0 {
-		t.Fatalf("expected 0 for not found")
-	}
-	if got := decodeTTLFromResponse(&pb.GetResponse{Value: []byte("short")}); got != 0 {
-		t.Fatalf("expected 0 for short ttl")
-	}
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, 123)
-	if got := decodeTTLFromResponse(&pb.GetResponse{Value: buf}); got != 123 {
-		t.Fatalf("expected 123, got %d", got)
-	}
-}
-
-func TestUniqueKeys(t *testing.T) {
-	keys := uniqueKeys([][]byte{
-		[]byte("a"),
-		[]byte("a"),
-		nil,
-		[]byte("b"),
-		[]byte(""),
-	})
-	if len(keys) != 2 {
-		t.Fatalf("expected 2 unique keys, got %d", len(keys))
 	}
 }
 
@@ -719,6 +839,7 @@ type stubRaftClient struct {
 	mutateErr   error
 	mutateFn    func() error
 	mutateCalls int
+	lastMuts    []*pb.Mutation
 	checkResp   *pb.CheckTxnStatusResponse
 	checkErr    error
 	checkCalls  int // Track CheckTxnStatus call count
@@ -748,6 +869,13 @@ func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version ui
 
 func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	s.mutateCalls++
+	s.lastMuts = s.lastMuts[:0]
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		s.lastMuts = append(s.lastMuts, proto.Clone(mut).(*pb.Mutation))
+	}
 	if s.mutateFn != nil {
 		return s.mutateFn()
 	}
@@ -795,68 +923,25 @@ func newStubBackend() (*raftBackend, *stubRaftClient, *stubTSO) {
 	return &raftBackend{client: client, ts: ts}, client, ts
 }
 
-func TestLocalOracleReserveZero(t *testing.T) {
-	var oracle localOracle
-	_, err := oracle.Reserve(0)
-	require.Error(t, err)
-}
-
-func TestHTTPTSOReserveErrors(t *testing.T) {
-	tso := newHTTPTSO("http://example")
-	_, err := tso.Reserve(0)
+func TestPDTSOAllocatorErrors(t *testing.T) {
+	alloc := newPDTSOAllocator(nil, time.Second)
+	_, err := alloc.Reserve(1)
 	require.Error(t, err)
 
-	tso = &httpTSO{url: "http://bad host", client: &http.Client{}}
-	_, err = tso.Reserve(1)
+	_, pd, stopPD := startStubPD(t, nil)
+	defer stopPD()
+	pd.tsoErr = errors.New("boom")
+	alloc = newPDTSOAllocator(pd, time.Second)
+	_, err = alloc.Reserve(1)
 	require.Error(t, err)
 
-	tso = &httpTSO{
-		url: "http://example",
-		client: &http.Client{
-			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("boom")
-			}),
-		},
-	}
-	_, err = tso.Reserve(1)
+	pd.tsoErr = nil
+	_, err = alloc.Reserve(0)
 	require.Error(t, err)
-
-	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
-	}))
-	defer statusServer.Close()
-	tso = newHTTPTSO(statusServer.URL)
-	_, err = tso.Reserve(1)
-	require.Error(t, err)
-
-	badJSONServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("{bad-json"))
-	}))
-	defer badJSONServer.Close()
-	tso = newHTTPTSO(badJSONServer.URL)
-	_, err = tso.Reserve(1)
-	require.Error(t, err)
-
-	countServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"timestamp": uint64(1),
-			"count":     uint64(1),
-		})
-	}))
-	defer countServer.Close()
-	tso = newHTTPTSO(countServer.URL)
-	_, err = tso.Reserve(2)
-	require.Error(t, err)
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
 }
 
 func TestNewRaftBackendErrors(t *testing.T) {
-	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "", "host")
+	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "127.0.0.1:1", "host")
 	require.Error(t, err)
 
 	cfg := config.File{
@@ -882,10 +967,10 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
-	_, err = newRaftBackend(cfgPath, "", "host")
+	_, err = newRaftBackend(cfgPath, "127.0.0.1:1", "host")
 	require.Error(t, err)
 
-	storeAddr, _, stopStore := startStubTinyKv(t)
+	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	cfg = config.File{
 		Stores: []config.Store{{StoreID: 1, Addr: storeAddr}},
@@ -897,20 +982,35 @@ func TestNewRaftBackendErrors(t *testing.T) {
 			},
 			Peers: []config.Peer{{StoreID: 1, PeerID: 101}},
 		}},
-		TSO: &config.TSO{
-			ListenAddr: "127.0.0.1:9494",
-		},
 	}
 	raw, err = json.Marshal(cfg)
 	require.NoError(t, err)
 	cfgPath = filepath.Join(dir, "cfg2.json")
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
-	backend, err := newRaftBackend(cfgPath, "", "host")
+
+	_, err = newRaftBackend(cfgPath, "", "host")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pd-addr is required")
+
+	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
-	httpTSO, ok := backend.ts.(*httpTSO)
+	_, ok := backend.ts.(*pdTSOAllocator)
 	require.True(t, ok)
-	require.Equal(t, "http://127.0.0.1:9494", httpTSO.url)
+
+	_, err = backend.reserveTimestamp(2)
+	require.NoError(t, err)
+}
+
+func TestNewRaftBackendInvalidPDAddress(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	cfgPath := writeBackendConfig(t, storeAddr)
+	_, err := newRaftBackend(cfgPath, "127.0.0.1:0", "host")
+	require.Error(t, err)
 }
 
 func TestRaftBackendCloseNil(t *testing.T) {
@@ -953,6 +1053,9 @@ func TestRaftBackendSetBranches(t *testing.T) {
 	ok, err = backend.Set(setArgs{Key: []byte("ttl"), Value: []byte("v"), ExpireAt: 123})
 	require.NoError(t, err)
 	require.True(t, ok)
+	require.Len(t, stub.lastMuts, 1)
+	require.Equal(t, pb.Mutation_Put, stub.lastMuts[0].GetOp())
+	require.Equal(t, uint64(123), stub.lastMuts[0].GetExpiresAt())
 
 	stub.mutateErr = errors.New("mutate")
 	_, err = backend.Set(setArgs{Key: []byte("err"), Value: []byte("v")})
@@ -1000,7 +1103,7 @@ func TestRaftBackendMGetErrors(t *testing.T) {
 
 	stub.batchGetErr = nil
 	stub.batchGet = map[string]*pb.GetResponse{
-		string(ttlMetaKey([]byte("k"))): {Value: []byte{0, 0, 0, 0, 0, 0, 0, 1}},
+		"k": {Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix())},
 	}
 	stub.mutateErr = errors.New("mutate")
 	_, err = backend.MGet([][]byte{[]byte("k")})
@@ -1011,6 +1114,10 @@ func TestRaftBackendMSetBranches(t *testing.T) {
 	backend, stub, _ := newStubBackend()
 	require.NoError(t, backend.MSet(nil))
 	require.Error(t, backend.MSet([][2][]byte{{nil, []byte("v")}}))
+	require.NoError(t, backend.MSet([][2][]byte{{[]byte("k"), []byte("v")}, {[]byte("k2"), []byte("v2")}}))
+	require.Len(t, stub.lastMuts, 2)
+	require.Equal(t, uint64(0), stub.lastMuts[0].GetExpiresAt())
+	require.Equal(t, uint64(0), stub.lastMuts[1].GetExpiresAt())
 
 	stub.mutateErr = errors.New("mutate")
 	require.Error(t, backend.MSet([][2][]byte{{[]byte("k"), []byte("v")}}))
@@ -1064,27 +1171,28 @@ func TestRaftBackendIncrByErrors(t *testing.T) {
 func TestBuildValueAtVersionBranches(t *testing.T) {
 	backend, stub, _ := newStubBackend()
 	key := []byte("k1")
-	ttlBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(ttlBuf, uint64(time.Now().Unix()+100))
+	futureExpire := uint64(time.Now().Unix() + 100)
 
-	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true}, &pb.GetResponse{Value: ttlBuf})
+	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true})
+	require.NoError(t, err)
+	require.False(t, val.Found)
+	require.Zero(t, stub.mutateCalls)
+
+	stub.mutateCalls = 0
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{
+		Value:     []byte("v"),
+		ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix()),
+	})
 	require.NoError(t, err)
 	require.False(t, val.Found)
 	require.NotZero(t, stub.mutateCalls)
 
 	stub.mutateCalls = 0
-	expiredBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(expiredBuf, uint64(time.Now().Add(-time.Hour).Unix()))
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: expiredBuf})
-	require.NoError(t, err)
-	require.False(t, val.Found)
-	require.NotZero(t, stub.mutateCalls)
-
-	stub.mutateCalls = 0
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v")}, &pb.GetResponse{Value: ttlBuf})
+	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v"), ExpiresAt: futureExpire})
 	require.NoError(t, err)
 	require.True(t, val.Found)
 	require.Equal(t, []byte("v"), val.Value)
+	require.Equal(t, futureExpire, val.ExpiresAt)
 }
 
 func TestMutatePaths(t *testing.T) {
@@ -1129,7 +1237,7 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 
 	lock := &pb.Locked{
 		PrimaryLock: []byte("p"),
-		Key:         ttlMetaKey([]byte("k")),
+		Key:         []byte("k"),
 		LockVersion: 1,
 	}
 	stub.checkErr = errors.New("check")

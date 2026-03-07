@@ -73,6 +73,65 @@ func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
 	return protoClone(region.meta), true
 }
 
+type mockRegionResolver struct {
+	mu       sync.Mutex
+	region   *pb.RegionMeta
+	regions  []*pb.RegionMeta
+	err      error
+	calls    int
+	closed   bool
+	closeErr error
+}
+
+func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	mr.calls++
+	if mr.err != nil {
+		return nil, mr.err
+	}
+	if req == nil {
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	if len(mr.regions) > 0 {
+		for _, meta := range mr.regions {
+			if meta != nil && containsKey(meta, req.GetKey()) {
+				return &pb.GetRegionByKeyResponse{Region: protoClone(meta)}, nil
+			}
+		}
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	if mr.region == nil || !containsKey(mr.region, req.GetKey()) {
+		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	return &pb.GetRegionByKeyResponse{
+		Region: protoClone(mr.region),
+	}, nil
+}
+
+func (mr *mockRegionResolver) Close() error {
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	mr.closed = true
+	return mr.closeErr
+}
+
+func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
+	cluster.mu.Lock()
+	defer cluster.mu.Unlock()
+	regions := make([]*pb.RegionMeta, 0, len(cluster.regions))
+	for _, region := range cluster.regions {
+		if region == nil || region.meta == nil {
+			continue
+		}
+		regions = append(regions, protoClone(region.meta))
+	}
+	sort.Slice(regions, func(i, j int) bool {
+		return regions[i].GetId() < regions[j].GetId()
+	})
+	return &mockRegionResolver{regions: regions}
+}
+
 func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.PrewriteRequest) (*pb.PrewriteResponse, *pb.RegionError) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
@@ -319,7 +378,7 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	t.Helper()
 	srv := grpc.NewServer()
 	service := &mockService{storeID: storeID, cluster: cluster}
-	pb.RegisterTinyKvServer(srv, service)
+	pb.RegisterNoKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -373,16 +432,23 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 			{StoreID: 2, Addr: addrFollower},
 			{StoreID: 1, Addr: addrLeader},
 		},
-		Regions: []RegionConfig{
-			{
-				Meta:          cluster.regions[1].meta,
-				LeaderStoreID: 2,
-			},
-			{
-				Meta:          cluster.regions[2].meta,
-				LeaderStoreID: 2,
-			},
-		},
+		RegionResolver: func() *mockRegionResolver {
+			resolver := resolverFromCluster(cluster)
+			// Force an initial stale leader guess so NotLeader retry path is
+			// exercised under PD-resolver mode as well.
+			for _, meta := range resolver.regions {
+				if meta == nil || len(meta.GetPeers()) < 2 {
+					continue
+				}
+				for i, p := range meta.GetPeers() {
+					if p != nil && p.GetStoreId() == 2 {
+						meta.Peers[0], meta.Peers[i] = meta.Peers[i], meta.Peers[0]
+						break
+					}
+				}
+			}
+			return resolver
+		}(),
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -455,10 +521,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []RegionConfig{
-			{Meta: cluster.regions[1].meta, LeaderStoreID: 1},
-			{Meta: cluster.regions[2].meta, LeaderStoreID: 1},
-		},
+		RegionResolver: resolverFromCluster(cluster),
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -506,8 +569,70 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.Contains(t, errStr, "client: prewrite key errors")
 }
 
+func TestNewRequiresRegionResolver(t *testing.T) {
+	_, err := New(Config{
+		Stores: []StoreEndpoint{
+			{StoreID: 1, Addr: "127.0.0.1:1"},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "region resolver required")
+}
+
+func TestClientRegionResolverLookupAndCache(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	resolver := &mockRegionResolver{region: cluster.regions[1].meta}
+	cli, err := New(Config{
+		Stores: []StoreEndpoint{
+			{StoreID: 1, Addr: addr},
+		},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	resp, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	resolver.mu.Lock()
+	require.Equal(t, 1, resolver.calls, "second lookup should hit local region cache")
+	resolver.mu.Unlock()
+
+	require.NoError(t, cli.Close())
+	resolver.mu.Lock()
+	require.True(t, resolver.closed)
+	resolver.mu.Unlock()
+}
+
 type errorService struct {
-	pb.UnimplementedTinyKvServer
+	pb.UnimplementedNoKVServer
 }
 
 func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
@@ -517,7 +642,7 @@ func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetRespon
 func startErrorStore(t *testing.T) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	pb.RegisterTinyKvServer(srv, &errorService{})
+	pb.RegisterNoKVServer(srv, &errorService{})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -547,9 +672,7 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 		Stores: []StoreEndpoint{
 			{StoreID: 1, Addr: addr},
 		},
-		Regions: []RegionConfig{
-			{Meta: meta, LeaderStoreID: 1},
-		},
+		RegionResolver: &mockRegionResolver{region: meta},
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -671,4 +794,15 @@ func TestCollectKeysAndPrimary(t *testing.T) {
 
 func TestNormalizeRPCError(t *testing.T) {
 	require.NoError(t, normalizeRPCError(nil))
+}
+
+func TestDefaultLeaderStoreID(t *testing.T) {
+	require.Equal(t, uint64(0), defaultLeaderStoreID(nil))
+	require.Equal(t, uint64(0), defaultLeaderStoreID(&pb.RegionMeta{}))
+	require.Equal(t, uint64(9), defaultLeaderStoreID(&pb.RegionMeta{
+		Peers: []*pb.RegionPeer{
+			nil,
+			{StoreId: 9, PeerId: 90},
+		},
+	}))
 }

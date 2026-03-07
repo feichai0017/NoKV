@@ -103,7 +103,7 @@ func TestMmapFile_Resize(t *testing.T) {
 	require.Equal(t, 100, len(mf.Data))
 
 	// Grow the file.
-	err = mf.Truncature(200)
+	err = mf.Truncate(200)
 	require.NoError(t, err)
 	require.Equal(t, 200, len(mf.Data))
 

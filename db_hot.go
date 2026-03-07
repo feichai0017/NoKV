@@ -3,7 +3,6 @@ package NoKV
 import (
 	"maps"
 	"runtime"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -67,7 +66,7 @@ func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
 		if !limited {
 			return nil
 		}
-		atomic.AddUint64(&db.hotWriteLimited, 1)
+		db.hotWriteLimited.Add(1)
 		return utils.ErrHotKeyWriteThrottle
 	}
 	if db.opt.HotWriteBurstThreshold > 0 {
@@ -109,11 +108,11 @@ func hotWriteKeyForEntry(e *kv.Entry) string {
 	if e == nil || len(e.Key) == 0 {
 		return ""
 	}
-	base := kv.ParseKey(e.Key)
-	if cf, userKey, ok := kv.DecodeKeyCF(base); ok {
-		return cfHotKey(cf, userKey)
+	cf, userKey, _, ok := kv.SplitInternalKey(e.Key)
+	if !ok {
+		return ""
 	}
-	return cfHotKey(e.CF, e.Key)
+	return cfHotKey(cf, userKey)
 }
 
 func (db *DB) enqueuePrefetch(key string) {

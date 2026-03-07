@@ -36,7 +36,6 @@ Common fields:
 - `value_log.segments`, `value_log.pending_deletes`, `value_log.gc.*`
 - `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
 - `write.queue_depth`, `write.queue_entries`, `write.hot_key_limited`
-- `txn.active`, `txn.committed`, `txn.conflicts`
 - `region.total`, `region.running`, `region.removing`
 - `hot.read_keys`, `hot.write_keys`
 - `lsm.levels`, `lsm.value_bytes_total`
@@ -63,14 +62,10 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Dumps manifest-backed region catalog (state/range/epoch/peers)
 - Supports `--json`
 
-### `nokv scheduler`
-
-- Displays scheduler heartbeat snapshot (in-process usage)
-
 ### `nokv serve`
 
-- Starts TinyKv gRPC service backed by local `raftstore`
-- Requires `--workdir` and `--store-id`
+- Starts NoKV gRPC service backed by local `raftstore`
+- Requires `--workdir`, `--store-id`, and `--pd-addr`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
   - `--peer storeID=address` (repeatable)
@@ -85,6 +80,7 @@ nokv serve \
   --workdir ./artifacts/cluster/store-1 \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
+  --pd-addr 127.0.0.1:2379 \
   --peer 2=127.0.0.1:20171 \
   --peer 3=127.0.0.1:20172
 ```

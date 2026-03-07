@@ -15,6 +15,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -109,7 +110,7 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if !ok {
 				return fmt.Errorf("raftstore peer test: unsupported legacy raft payload")
 			}
-			if _, err := kv.Apply(db, req); err != nil {
+			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err
 			}
 		}
@@ -152,7 +153,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	val, err := reader.GetValue(key, math.MaxUint64)
+	val, _, err := reader.GetValue(key, math.MaxUint64)
 	require.NoError(t, err)
 	require.Equal(t, value, val)
 }
@@ -160,7 +161,7 @@ func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
-	_, err := reader.GetValue(key, math.MaxUint64)
+	_, _, err := reader.GetValue(key, math.MaxUint64)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
@@ -225,7 +226,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 
 	for idx, db := range dbs {
 		reader := percolator.NewReader(db)
-		val, err := reader.GetValue([]byte("raft-key"), math.MaxUint64)
+		val, _, err := reader.GetValue([]byte("raft-key"), math.MaxUint64)
 		require.NoError(t, err, "db %d", idx+1)
 		require.Equal(t, []byte("raft-value"), val, "db %d", idx+1)
 	}
@@ -311,7 +312,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 	net.Flush()
 
 	reader := percolator.NewReader(dbs[0])
-	val, err := reader.GetValue([]byte("txn-key"), 10)
+	val, _, err := reader.GetValue([]byte("txn-key"), 10)
 	require.NoError(t, err)
 	require.Equal(t, []byte("txn-value"), val)
 	lock, err := reader.GetLock([]byte("txn-key"))
@@ -654,8 +655,8 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 
 func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	const raftGroupID = uint64(1)
-	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
-	defer raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
+	failpoints.Set(failpoints.None)
+	defer failpoints.Set(failpoints.None)
 
 	net := newMemoryNetwork()
 	dbDir := filepath.Join(t.TempDir(), "ready-fail-db")
@@ -691,7 +692,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	ptrBefore, ptrPresent := db.Manifest().RaftPointer(raftGroupID)
 
-	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointSkipManifest)
+	failpoints.Set(failpoints.SkipManifest)
 	payload := mustEncodePutCommand(t, []byte("ready-fail-key"), []byte("ready-fail-value"), 160)
 
 	require.NoError(t, net.Propose(leader, payload))
@@ -723,7 +724,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	require.GreaterOrEqual(t, snapBeforeCrash.Raft.MaxLagSegments, snapBeforeCrash.Raft.LagWarnThreshold)
 	require.Greater(t, snapBeforeCrash.Raft.LaggingGroups, 0)
 
-	raftstore.SetReadyFailpoint(raftstore.ReadyFailpointNone)
+	failpoints.Set(failpoints.None)
 
 	requireVisibleValue(t, db, []byte("ready-fail-key"), []byte("ready-fail-value"))
 

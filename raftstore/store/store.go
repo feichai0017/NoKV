@@ -27,7 +27,6 @@ type Store struct {
 	regions        *regionManager
 	scheduler      scheduler.RegionSink
 	storeID        uint64
-	planner        scheduler.Planner
 	operationHook  func(scheduler.Operation)
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
@@ -85,9 +84,12 @@ func NewStoreWithConfig(cfg Config) *Store {
 	}
 	hookChain = append(hookChain, cfg.RegionHooks)
 	combinedHooks := mergeRegionHooks(hookChain...)
-	planner := cfg.Planner
-	if planner == nil {
-		planner = scheduler.NoopPlanner{}
+	// Scheduler is the single injected control-plane object. When it also
+	// implements Planner, store will consume planner output from the same source.
+	// Otherwise planner is disabled.
+	var planner scheduler.Planner
+	if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
+		planner = inferred
 	}
 	queueSize := max(cfg.OperationQueueSize, 0)
 	operationCooldown := max(cfg.OperationCooldown, 0)
@@ -119,7 +121,6 @@ func NewStoreWithConfig(cfg Config) *Store {
 		manifest:       cfg.Manifest,
 		scheduler:      cfg.Scheduler,
 		storeID:        cfg.StoreID,
-		planner:        planner,
 		operationHook:  cfg.OperationObserver,
 		commandApplier: cfg.CommandApplier,
 		commandTimeout: commandTimeout,
@@ -135,6 +136,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 		if heartbeatInterval <= 0 {
 			heartbeatInterval = 3 * time.Second
 		}
+		// Heartbeat loop bridges local region/store state to the injected
+		// scheduler sink and optionally drains scheduling operations.
 		s.heartbeat = newHeartbeatLoop(
 			heartbeatInterval,
 			s.scheduler,

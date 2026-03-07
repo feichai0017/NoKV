@@ -6,30 +6,23 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCompareUserKeysAndChecksum(t *testing.T) {
-	k1 := kv.KeyWithTs([]byte("a"), 1)
-	k2 := kv.KeyWithTs([]byte("b"), 1)
+	k1 := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
+	k2 := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 	require.Less(t, CompareUserKeys(k1, k2), 0)
-	require.Equal(t, 0, CompareUserKeys([]byte("c"), []byte("c")))
+	require.Equal(t, 0, CompareUserKeys(
+		kv.InternalKey(kv.CFDefault, []byte("c"), 10),
+		kv.InternalKey(kv.CFDefault, []byte("c"), 1),
+	))
 
 	data := []byte("checksum")
 	sum := CalculateChecksum(data)
 	require.NoError(t, VerifyChecksum(data, kv.U64ToBytes(sum)))
 	require.Error(t, VerifyChecksum(data, []byte{0x00}))
-}
-
-func TestRemoveDir(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "file.txt")
-	require.NoError(t, os.WriteFile(path, []byte("data"), 0o644))
-	require.NotPanics(t, func() {
-		RemoveDir(nil, dir)
-	})
-	_, err := os.Stat(dir)
-	require.Error(t, err)
 }
 
 func TestFileHelpers(t *testing.T) {
@@ -40,15 +33,7 @@ func TestFileHelpers(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, "00042.sst"), FileNameSSTable(dir, 42))
 	require.Equal(t, filepath.Join(dir, "00007.vlog"), VlogFilePath(dir, 7))
 
-	filePath := filepath.Join(dir, "fresh.txt")
-	f, err := CreateSyncedFile(nil, filePath, false)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = CreateSyncedFile(nil, filePath, false)
-	require.Error(t, err)
-
-	require.NoError(t, SyncDir(nil, dir))
+	require.NoError(t, vfs.SyncDir(nil, dir))
 }
 
 func TestLoadIDMap(t *testing.T) {

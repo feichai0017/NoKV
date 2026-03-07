@@ -16,7 +16,6 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -320,14 +319,6 @@ func TestFormatHelpers(t *testing.T) {
 	require.Equal(t, uint64(12), totalValue(files))
 }
 
-func TestRunSchedulerCmdNoStore(t *testing.T) {
-	withStoreRegistry(t, func() {
-		var buf bytes.Buffer
-		err := runSchedulerCmd(&buf, []string{"-json"})
-		require.Error(t, err)
-	})
-}
-
 func TestPrintUsage(t *testing.T) {
 	var buf bytes.Buffer
 	printUsage(&buf)
@@ -353,21 +344,6 @@ func TestEnsureManifestExists(t *testing.T) {
 	if err := ensureManifestExists(dir); err != nil {
 		t.Fatalf("expected manifest to exist: %v", err)
 	}
-}
-
-func TestRunSchedulerCmdWithStore(t *testing.T) {
-	withStoreRegistry(t, func() {
-		registerRuntimeStore(&storepkg.Store{})
-		var buf bytes.Buffer
-		require.NoError(t, runSchedulerCmd(&buf, nil))
-		require.Contains(t, buf.String(), "Stores (0)")
-		require.Contains(t, buf.String(), "Regions (0)")
-
-		buf.Reset()
-		require.NoError(t, runSchedulerCmd(&buf, []string{"-json"}))
-		var payload map[string]any
-		require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
-	})
 }
 
 func TestFirstRegionMetricsNone(t *testing.T) {
@@ -459,19 +435,6 @@ func TestMainRegionsCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
-func TestMainSchedulerCommand(t *testing.T) {
-	withStoreRegistry(t, func() {
-		registerRuntimeStore(&storepkg.Store{})
-		code := captureExitCode(t, func() {
-			oldArgs := os.Args
-			os.Args = []string{"nokv", "scheduler", "-json"}
-			defer func() { os.Args = oldArgs }()
-			main()
-		})
-		require.Equal(t, 0, code)
-	})
-}
-
 func TestMainServeCommand(t *testing.T) {
 	origNotify := notifyContext
 	notifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
@@ -482,9 +445,11 @@ func TestMainServeCommand(t *testing.T) {
 	t.Cleanup(func() { notifyContext = origNotify })
 
 	dir := t.TempDir()
+	pdAddr, stopPD := startTestPDServer(t)
+	defer stopPD()
 	code := captureExitCode(t, func() {
 		oldArgs := os.Args
-		os.Args = []string{"nokv", "serve", "-workdir", dir, "-store-id", "1", "-addr", "127.0.0.1:0"}
+		os.Args = []string{"nokv", "serve", "-workdir", dir, "-store-id", "1", "-addr", "127.0.0.1:0", "-pd-addr", pdAddr}
 		defer func() { os.Args = oldArgs }()
 		main()
 	})
@@ -687,9 +652,6 @@ func TestRenderStatsFull(t *testing.T) {
 				IngestSizeBytes:  2,
 				IngestValueBytes: 3,
 			}},
-			ColumnFamilies: map[string]NoKV.ColumnFamilySnapshot{
-				"default": {Reads: 1, Writes: 2},
-			},
 		},
 		WAL: NoKV.WALStatsSnapshot{
 			ActiveSegment:           1,
@@ -715,12 +677,6 @@ func TestRenderStatsFull(t *testing.T) {
 			LagWarnThreshold: 1,
 			LagWarning:       true,
 		},
-		Txn: NoKV.TxnStatsSnapshot{
-			Active:    1,
-			Started:   2,
-			Committed: 3,
-			Conflicts: 4,
-		},
 		Region: NoKV.RegionStatsSnapshot{
 			Total:     5,
 			New:       1,
@@ -737,7 +693,6 @@ func TestRenderStatsFull(t *testing.T) {
 	out := buf.String()
 	require.Contains(t, out, "ValueLog.Head")
 	require.Contains(t, out, "LSM.Levels:")
-	require.Contains(t, out, "ColumnFamilies:")
 	require.Contains(t, out, "HotKeys:")
 }
 
@@ -800,41 +755,6 @@ func TestRunManifestCmdMissingManifest(t *testing.T) {
 	var buf bytes.Buffer
 	err := runManifestCmd(&buf, []string{"-workdir", t.TempDir()})
 	require.Error(t, err)
-}
-
-func TestRunSchedulerCmdSnapshot(t *testing.T) {
-	withStoreRegistry(t, func() {
-		coord := scheduler.NewCoordinator()
-		store := storepkg.NewStoreWithConfig(storepkg.Config{
-			StoreID:   1,
-			Scheduler: coord,
-		})
-		defer store.Close()
-		registerRuntimeStore(store)
-		defer unregisterRuntimeStore(store)
-
-		coord.SubmitStoreHeartbeat(scheduler.StoreStats{
-			StoreID:   1,
-			RegionNum: 2,
-			LeaderNum: 1,
-			Capacity:  1024,
-			Available: 512,
-		})
-		coord.SubmitRegionHeartbeat(manifest.RegionMeta{
-			ID:       21,
-			StartKey: []byte("a"),
-			EndKey:   []byte("b"),
-			Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-			Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 11}},
-		})
-
-		var buf bytes.Buffer
-		require.NoError(t, runSchedulerCmd(&buf, nil))
-		out := buf.String()
-		require.Contains(t, out, "Stores (1)")
-		require.Contains(t, out, "region=21")
-		require.Contains(t, out, "last_heartbeat=")
-	})
 }
 
 func TestFirstRegionMetricsFound(t *testing.T) {

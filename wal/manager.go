@@ -3,6 +3,7 @@ package wal
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -54,7 +55,7 @@ func addRecordMetric(m *RecordMetrics, recType RecordType) {
 		return
 	}
 	switch recType {
-	case RecordTypeEntry:
+	case RecordTypeEntry, RecordTypeEntryBatch:
 		m.Entries++
 	case RecordTypeRaftEntry:
 		m.RaftEntries++
@@ -77,7 +78,7 @@ type Manager struct {
 	activeSize      int64
 	closed          bool
 	segmentSize     int64
-	removedSegments uint64
+	removedSegments atomic.Uint64
 	bufferSize      int
 	writer          *bufio.Writer
 	recordTotals    RecordMetrics
@@ -234,19 +235,46 @@ func (m *Manager) switchSegment(id uint32, truncate bool) error {
 	return m.switchSegmentLocked(id, truncate)
 }
 
-// Append appends one or more payloads to WAL and returns their locations.
-func (m *Manager) Append(payloads ...[]byte) ([]EntryInfo, error) {
-	if len(payloads) == 0 {
-		return nil, nil
+// AppendEntry appends a single encoded kv entry record to WAL.
+func (m *Manager) AppendEntry(entry *kv.Entry) (EntryInfo, error) {
+	if entry == nil || len(entry.Key) == 0 {
+		return EntryInfo{}, fmt.Errorf("wal: invalid entry")
 	}
-	records := make([]Record, len(payloads))
-	for i, p := range payloads {
-		records[i] = Record{
-			Type:    RecordTypeEntry,
-			Payload: p,
-		}
+	var buf bytes.Buffer
+	payload, err := kv.EncodeEntry(&buf, entry)
+	if err != nil {
+		return EntryInfo{}, err
 	}
-	return m.AppendRecords(records...)
+	infos, err := m.AppendRecords(Record{
+		Type:    RecordTypeEntry,
+		Payload: payload,
+	})
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	if len(infos) != 1 {
+		return EntryInfo{}, fmt.Errorf("wal: expected one info for entry, got %d", len(infos))
+	}
+	return infos[0], nil
+}
+
+// AppendEntryBatch appends a batch of kv entries as one WAL record.
+func (m *Manager) AppendEntryBatch(entries []*kv.Entry) (EntryInfo, error) {
+	payload, err := EncodeEntryBatch(entries)
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	infos, err := m.AppendRecords(Record{
+		Type:    RecordTypeEntryBatch,
+		Payload: payload,
+	})
+	if err != nil {
+		return EntryInfo{}, err
+	}
+	if len(infos) != 1 {
+		return EntryInfo{}, fmt.Errorf("wal: expected one info for entry batch, got %d", len(infos))
+	}
+	return infos[0], nil
 }
 
 // AppendRecords appends typed records to WAL and returns their locations.
@@ -401,7 +429,7 @@ func (m *Manager) replayFile(id uint32, path string, fn func(info EntryInfo, pay
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case utils.ErrPartialRecord:
+	case ErrPartialRecord:
 		return nil
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch segment=%d offset=%d", id, offset)
@@ -504,7 +532,7 @@ func verifySegment(fs vfs.FS, path string) error {
 	switch err := reIter.Err(); err {
 	case nil, io.EOF:
 		return nil
-	case utils.ErrPartialRecord:
+	case ErrPartialRecord:
 		return f.Truncate(offset)
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
@@ -519,7 +547,7 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	if err := m.cfg.FS.Remove(path); err != nil {
 		return err
 	}
-	atomic.AddUint64(&m.removedSegments, 1)
+	m.removedSegments.Add(1)
 	m.mu.Lock()
 	if metrics, ok := m.segmentTotals[id]; ok {
 		m.recordTotals.Entries -= metrics.Entries
@@ -566,7 +594,7 @@ func (m *Manager) Metrics() *Metrics {
 		ActiveSegment:           m.ActiveSegment(),
 		ActiveSize:              m.ActiveSize(),
 		SegmentCount:            count,
-		RemovedSegments:         atomic.LoadUint64(&m.removedSegments),
+		RemovedSegments:         m.removedSegments.Load(),
 		RecordCounts:            recordTotals,
 		SegmentsWithRaftRecords: segmentRaft,
 	}

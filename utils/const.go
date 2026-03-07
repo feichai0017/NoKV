@@ -21,8 +21,6 @@ const (
 	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
 	DefaultFileMode                   = 0666
 	MaxValueLogSize                   = 10 << 20
-	// This is O_DSYNC (datasync) on platforms that support it -- see file_unix.go
-	datasyncFileFlag = 0x0
 	// MaxHeaderSize is the worst-case size for uvarint encoding.
 	MaxHeaderSize            = 21
 	VlogHeaderSize           = 0

@@ -47,7 +47,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 }
 
 type levelManager struct {
-	maxFID           uint64
+	maxFID           atomic.Uint64
 	opt              *Options
 	cache            *cache
 	manifestMgr      *manifest.Manager
@@ -59,9 +59,9 @@ type levelManager struct {
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
-	compactionLastNs int64
-	compactionMaxNs  int64
-	compactionRuns   uint64
+	compactionLastNs atomic.Int64
+	compactionMaxNs  atomic.Int64
+	compactionRuns   atomic.Uint64
 	hotProvider      atomic.Value // func() [][]byte
 }
 
@@ -142,24 +142,34 @@ func (lm *levelManager) build() error {
 	lm.setLogPointer(version.LogSegment, version.LogOffset)
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
-	var missing []manifest.FileMeta
+	var stale []manifest.FileMeta
 	for level, files := range version.Levels {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 			if _, err := fs.Stat(fileName); err != nil {
 				_ = utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
-				missing = append(missing, meta)
+				stale = append(stale, meta)
 				continue
 			}
 			if meta.FileID > maxFID {
 				maxFID = meta.FileID
 			}
-			t := openTable(lm, fileName, nil)
+			t, err := openTable(lm, fileName, nil)
+			if err != nil {
+				_ = utils.Err(fmt.Errorf("failed to open sstable %s: %v", fileName, err))
+				stale = append(stale, meta)
+				continue
+			}
+			if t == nil {
+				_ = utils.Err(fmt.Errorf("failed to open sstable %s: nil table", fileName))
+				stale = append(stale, meta)
+				continue
+			}
 			if meta.Ingest {
 				lm.levels[level].addIngest(t)
-			} else {
-				lm.levels[level].add(t)
+				continue
 			}
+			lm.levels[level].add(t)
 		}
 	}
 	// sort each level
@@ -167,9 +177,9 @@ func (lm *levelManager) build() error {
 		lm.levels[i].Sort()
 	}
 	// get the maximum fid value
-	atomic.AddUint64(&lm.maxFID, maxFID)
+	lm.maxFID.Store(maxFID)
 
-	for _, meta := range missing {
+	for _, meta := range stale {
 		metaCopy := meta
 		_ = lm.manifestMgr.LogEdit(manifest.Edit{
 			Type: manifest.EditDeleteFile,
@@ -205,7 +215,10 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
 		if entry != nil && entry.IsRangeDelete() && lm.rtCollector != nil {
-			cf, start, version := kv.SplitInternalKey(entry.Key)
+			cf, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				continue
+			}
 			newTombstones = append(newTombstones, RangeTombstone{
 				CF:      cf,
 				Start:   kv.SafeCopy(nil, start),
@@ -215,9 +228,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 		builder.AddKey(entry)
 	}
-	table := openTable(lm, sstName, builder)
+	table, err := openTable(lm, sstName, builder)
+	if err != nil {
+		return fmt.Errorf("failed to build sstable %s: %w", sstName, err)
+	}
 	if table == nil {
-		return fmt.Errorf("failed to build sstable %s", sstName)
+		return fmt.Errorf("failed to build sstable %s: nil table", sstName)
 	}
 	meta := &manifest.FileMeta{
 		Level:     0,
@@ -236,12 +252,18 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	pointerEdit := manifest.Edit{
 		Type:      manifest.EditLogPointer,
 		LogSeg:    immutable.segmentID,
-		LogOffset: uint64(atomic.LoadInt64(&immutable.walSize)),
+		LogOffset: uint64(immutable.walSize.Load()),
+	}
+	// Strict durability mode: persist SST directory entries before manifest references.
+	if lm.opt.ManifestSync {
+		if err := vfs.SyncDir(lm.opt.FS, lm.opt.WorkDir); err != nil {
+			return err
+		}
 	}
 	if err := lm.manifestMgr.LogEdits(fileEdit, pointerEdit); err != nil {
 		return err
 	}
-	lm.setLogPointer(immutable.segmentID, uint64(atomic.LoadInt64(&immutable.walSize)))
+	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
 	lm.levels[0].add(table)
 	// Register any range tombstones discovered during this flush.
 	if lm.rtCollector != nil {
@@ -336,22 +358,22 @@ func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 	if lm == nil {
 		return 0, 0, 0
 	}
-	lastNs := atomic.LoadInt64(&lm.compactionLastNs)
-	maxNs := atomic.LoadInt64(&lm.compactionMaxNs)
-	runs := atomic.LoadUint64(&lm.compactionRuns)
+	lastNs := lm.compactionLastNs.Load()
+	maxNs := lm.compactionMaxNs.Load()
+	runs := lm.compactionRuns.Load()
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	atomic.AddUint64(&lm.compactionRuns, 1)
+	lm.compactionRuns.Add(1)
 	last := duration.Nanoseconds()
-	atomic.StoreInt64(&lm.compactionLastNs, last)
+	lm.compactionLastNs.Store(last)
 	for {
-		prev := atomic.LoadInt64(&lm.compactionMaxNs)
+		prev := lm.compactionMaxNs.Load()
 		if last <= prev {
 			break
 		}
-		if atomic.CompareAndSwapInt64(&lm.compactionMaxNs, prev, last) {
+		if lm.compactionMaxNs.CompareAndSwap(prev, last) {
 			break
 		}
 	}
@@ -441,12 +463,12 @@ type levelHandler struct {
 	totalStaleSize        int64
 	totalValueSize        int64
 	lm                    *levelManager
-	ingestRuns            uint64
-	ingestMergeRuns       uint64
-	ingestDurationNs      int64
-	ingestMergeDurationNs int64
-	ingestTablesCompacted uint64
-	ingestMergeTables     uint64
+	ingestRuns            atomic.Uint64
+	ingestMergeRuns       atomic.Uint64
+	ingestDurationNs      atomic.Int64
+	ingestMergeDurationNs atomic.Int64
+	ingestTablesCompacted atomic.Uint64
+	ingestMergeTables     atomic.Uint64
 }
 
 type tableRange struct {
@@ -480,6 +502,9 @@ func (lh *levelHandler) close() error {
 	return nil
 }
 func (lh *levelHandler) add(t *table) {
+	if t == nil {
+		return
+	}
 	lh.Lock()
 	defer lh.Unlock()
 	t.setLevel(lh.levelNum)
@@ -563,12 +588,12 @@ func (lh *levelHandler) metricsSnapshot() LevelMetrics {
 		IngestValueBytes:      lh.ingest.totalValueSize(),
 		ValueDensity:          lh.densityLocked(),
 		IngestValueDensity:    lh.ingestDensityLocked(),
-		IngestRuns:            int64(atomic.LoadUint64(&lh.ingestRuns)),
-		IngestMs:              float64(atomic.LoadInt64(&lh.ingestDurationNs)) / 1e6,
-		IngestTablesCompacted: int64(atomic.LoadUint64(&lh.ingestTablesCompacted)),
-		IngestMergeRuns:       int64(atomic.LoadUint64(&lh.ingestMergeRuns)),
-		IngestMergeMs:         float64(atomic.LoadInt64(&lh.ingestMergeDurationNs)) / 1e6,
-		IngestMergeTables:     int64(atomic.LoadUint64(&lh.ingestMergeTables)),
+		IngestRuns:            int64(lh.ingestRuns.Load()),
+		IngestMs:              float64(lh.ingestDurationNs.Load()) / 1e6,
+		IngestTablesCompacted: int64(lh.ingestTablesCompacted.Load()),
+		IngestMergeRuns:       int64(lh.ingestMergeRuns.Load()),
+		IngestMergeMs:         float64(lh.ingestMergeDurationNs.Load()) / 1e6,
+		IngestMergeTables:     int64(lh.ingestMergeTables.Load()),
 	}
 }
 
@@ -584,16 +609,12 @@ func keyInRange(min, max, key []byte) bool {
 	if len(min) == 0 || len(max) == 0 || len(key) == 0 {
 		return false
 	}
-	// Accept both internal keys (with timestamp) and raw user keys from HotRing.
-	minUser := kv.ParseKey(min)
-	maxUser := kv.ParseKey(max)
-	keyUser := key
-	if len(key) > 8 {
-		keyUser = kv.ParseKey(key)
+	_, minUser, _, minOK := kv.SplitInternalKey(min)
+	_, maxUser, _, maxOK := kv.SplitInternalKey(max)
+	_, keyUser, _, keyOK := kv.SplitInternalKey(key)
+	if !minOK || !maxOK || !keyOK {
+		return false
 	}
-	_, minUser, _ = kv.DecodeKeyCF(minUser)
-	_, maxUser, _ = kv.DecodeKeyCF(maxUser)
-	_, keyUser, _ = kv.DecodeKeyCF(keyUser)
 	return bytes.Compare(keyUser, minUser) >= 0 && bytes.Compare(keyUser, maxUser) <= 0
 }
 
@@ -647,6 +668,12 @@ func (lh *levelHandler) hotOverlapScore(hotKeys [][]byte, ingestOnly bool) float
 func (lh *levelHandler) numTables() int {
 	lh.RLock()
 	defer lh.RUnlock()
+	return len(lh.tables)
+}
+
+// numTablesLocked returns len(lh.tables) without acquiring the lock.
+// Caller must already hold at least a read lock.
+func (lh *levelHandler) numTablesLocked() int {
 	return len(lh.tables)
 }
 
@@ -719,19 +746,24 @@ func (lh *levelHandler) prefetch(key []byte) bool {
 func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
+	lh.sortTablesLocked()
+	lh.ingest.sortShards()
+}
+
+// sortTablesLocked sorts lh.tables using level-specific ordering semantics.
+// Caller must hold lh's mutex.
+func (lh *levelHandler) sortTablesLocked() {
 	if lh.levelNum == 0 {
-		// Key range will overlap. Just sort by fileID in ascending order
-		// because newer tables are at the end of level 0.
+		// L0 key ranges may overlap, so ordering follows file creation order.
 		sort.Slice(lh.tables, func(i, j int) bool {
 			return lh.tables[i].fid < lh.tables[j].fid
 		})
-	} else {
-		// Sort tables by keys.
-		sort.Slice(lh.tables, func(i, j int) bool {
-			return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
-		})
+		return
 	}
-	lh.ingest.sortShards()
+	// L1+ tables are non-overlapping by key range.
+	sort.Slice(lh.tables, func(i, j int) bool {
+		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+	})
 }
 
 func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
@@ -789,17 +821,27 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 	return nil, utils.ErrKeyNotFound
 }
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	if len(lh.tables) > 0 && (utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
-		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0) {
+	if len(lh.tables) == 0 {
 		return nil
 	}
-	for i := len(lh.tables) - 1; i >= 0; i-- {
-		if utils.CompareUserKeys(key, lh.tables[i].MinKey()) > -1 &&
-			utils.CompareUserKeys(key, lh.tables[i].MaxKey()) < 1 {
-			return lh.tables[i]
-		}
+	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
+		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0 {
+		return nil
 	}
-	return nil
+
+	// L1+ tables are sorted and non-overlapping by user-key range.
+	// Find the first table whose max key is >= target key.
+	idx := sort.Search(len(lh.tables), func(i int) bool {
+		return utils.CompareUserKeys(lh.tables[i].MaxKey(), key) >= 0
+	})
+	if idx >= len(lh.tables) {
+		return nil
+	}
+	candidate := lh.tables[idx]
+	if utils.CompareUserKeys(key, candidate.MinKey()) < 0 {
+		return nil
+	}
+	return candidate
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
@@ -838,9 +880,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 
 	// Assign tables.
 	lh.tables = newTables
-	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
-	})
+	lh.sortTablesLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
@@ -935,17 +975,17 @@ func (lh *levelHandler) recordIngestMetrics(merge bool, duration time.Duration, 
 		tables = 0
 	}
 	if merge {
-		atomic.AddUint64(&lh.ingestMergeRuns, 1)
-		atomic.AddInt64(&lh.ingestMergeDurationNs, duration.Nanoseconds())
+		lh.ingestMergeRuns.Add(1)
+		lh.ingestMergeDurationNs.Add(duration.Nanoseconds())
 		if tables > 0 {
-			atomic.AddUint64(&lh.ingestMergeTables, uint64(tables))
+			lh.ingestMergeTables.Add(uint64(tables))
 		}
 		return
 	}
-	atomic.AddUint64(&lh.ingestRuns, 1)
-	atomic.AddInt64(&lh.ingestDurationNs, duration.Nanoseconds())
+	lh.ingestRuns.Add(1)
+	lh.ingestDurationNs.Add(duration.Nanoseconds())
 	if tables > 0 {
-		atomic.AddUint64(&lh.ingestTablesCompacted, uint64(tables))
+		lh.ingestTablesCompacted.Add(uint64(tables))
 	}
 }
 

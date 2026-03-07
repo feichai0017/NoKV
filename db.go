@@ -5,8 +5,8 @@ import (
 	"bytes"
 	stderrors "errors"
 	"fmt"
+	"io"
 	"maps"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,20 +26,32 @@ import (
 
 // nonTxnMaxVersion is the sentinel MVCC version used by non-transactional APIs.
 // Non-transactional reads/writes must not be mixed with MVCC/Txn writes.
-const nonTxnMaxVersion = math.MaxUint64
+const nonTxnMaxVersion = kv.MaxVersion
 
 type (
-	// CoreAPI describes the externally exposed NoKV operations.
-	CoreAPI interface {
+	// UserKV defines user-facing single-node key-value operations.
+	UserKV interface {
 		Set(key, value []byte) error
+		SetWithTTL(key, value []byte, ttl time.Duration) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
-		SetCF(cf kv.ColumnFamily, key, value []byte) error
-		GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error)
-		DelCF(cf kv.ColumnFamily, key []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
-		Info() *Stats
-		Close() error
+	}
+
+	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
+	MVCCStore interface {
+		ApplyInternalEntries(entries []*kv.Entry) error
+		// GetInternalEntry returns a borrowed internal entry without cloning/copying.
+		// entry.Key remains in internal encoding (cf+user_key+ts). Callers must
+		// DecrRef exactly once.
+		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
+		NewInternalIterator(opt *utils.Options) utils.Iterator
+	}
+
+	// EngineMeta exposes durability/metadata managers for distributed components.
+	EngineMeta interface {
+		WAL() *wal.Manager
+		Manifest() *manifest.Manager
 	}
 
 	// DB is the global handle for the engine and owns shared resources.
@@ -47,20 +59,19 @@ type (
 		sync.RWMutex
 		opt              *Options
 		fs               vfs.FS
-		dirLock          *utils.DirLock
+		dirLock          io.Closer
 		lsm              *lsm.LSM
 		wal              *wal.Manager
 		walWatchdog      *wal.Watchdog
 		vlog             *valueLog
 		stats            *Stats
-		blockWrites      int32
+		blockWrites      atomic.Int32
 		vheads           map[uint32]kv.ValuePtr
 		lastLoggedHeads  map[uint32]kv.ValuePtr
 		headLogDelta     uint32
-		isClosed         uint32
+		isClosed         atomic.Uint32
 		closeOnce        sync.Once
 		closeErr         error
-		orc              *oracle
 		hotRead          hotTracker
 		hotWrite         hotTracker
 		writeMetrics     *metrics.WriteMetrics
@@ -75,8 +86,7 @@ type (
 		prefetchWarm     int32
 		prefetchHot      int32
 		prefetchCooldown time.Duration
-		cfMetrics        []*cfCounters
-		hotWriteLimited  uint64
+		hotWriteLimited  atomic.Uint64
 	}
 
 	commitQueue struct {
@@ -84,11 +94,11 @@ type (
 		items          chan struct{}
 		spaces         chan struct{}
 		closeCh        chan struct{}
-		queueLen       int64
-		inflight       int64
-		pendingBytes   int64
-		pendingEntries int64
-		closed         uint32
+		queueLen       atomic.Int64
+		inflight       atomic.Int64
+		pendingBytes   atomic.Int64
+		pendingEntries atomic.Int64
+		closed         atomic.Uint32
 	}
 
 	commitRequest struct {
@@ -106,11 +116,6 @@ type (
 		valueLogDur time.Duration
 	}
 )
-
-type cfCounters struct {
-	writes uint64
-	reads  uint64
-}
 
 // Open DB
 func Open(opt *Options) *DB {
@@ -130,7 +135,8 @@ func Open(opt *Options) *DB {
 		db.opt.BloomCacheSize = 0
 	}
 
-	lock, err := utils.AcquireDirLock(opt.WorkDir, db.fs)
+	utils.Panic(db.fs.MkdirAll(opt.WorkDir, os.ModePerm))
+	lock, err := db.fs.Lock(filepath.Join(opt.WorkDir, "LOCK"))
 	utils.Panic(err)
 	db.dirLock = lock
 
@@ -206,13 +212,8 @@ func Open(opt *Options) *DB {
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
-	recoveredVersion := db.lsm.MaxVersion()
+	_ = db.lsm.MaxVersion()
 	db.iterPool = newIteratorPool()
-	cfCount := int(kv.CFWrite) + 1
-	db.cfMetrics = make([]*cfCounters, cfCount)
-	for i := range db.cfMetrics {
-		db.cfMetrics[i] = &cfCounters{}
-	}
 	// Initialize the value log.
 	db.initVLog()
 	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
@@ -252,14 +253,12 @@ func Open(opt *Options) *DB {
 				if item.Key == "" {
 					continue
 				}
-				keys = append(keys, []byte(item.Key))
+				keys = append(keys, kv.InternalKey(kv.CFDefault, []byte(item.Key), nonTxnMaxVersion))
 			}
 			return keys
 		})
 	}
 
-	db.orc = newOracle(*opt)
-	db.orc.initCommitState(recoveredVersion)
 	// Start the SSTable compaction loop.
 	db.lsm.StartCompacter()
 	// Initialize the commit queue and GC plumbing.
@@ -399,13 +398,13 @@ func (db *DB) closeInternal() error {
 	}
 
 	if db.dirLock != nil {
-		if err := db.dirLock.Release(); err != nil {
+		if err := db.dirLock.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("dir lock release: %w", err))
 		}
 		db.dirLock = nil
 	}
 
-	atomic.StoreUint32(&db.isClosed, 1)
+	db.isClosed.Store(1)
 
 	if len(errs) > 0 {
 		return stderrors.Join(errs...)
@@ -416,18 +415,22 @@ func (db *DB) closeInternal() error {
 
 // Del removes a key from the default column family by writing a tombstone.
 func (db *DB) Del(key []byte) error {
-	return db.DelCF(kv.CFDefault, key)
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
-// DelCF deletes a key from the specified column family.
+// DelCF removes a key from the specified column family by writing a tombstone.
 func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	entry := kv.NewEntryWithCF(cf, key, nil)
-	entry.Meta = kv.BitDelete
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
 	defer entry.DecrRef()
-	return db.setEntry(entry)
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
 // DeleteRange removes all keys in [start, end) from the default column family.
@@ -444,92 +447,96 @@ func (db *DB) DeleteRangeCF(cf kv.ColumnFamily, start, end []byte) error {
 	if bytes.Compare(start, end) >= 0 {
 		return utils.ErrInvalidRequest
 	}
-	// Store range tombstone: Entry.Key=start, Entry.Value=end
-	entry := kv.NewEntryWithCF(cf, start, end)
-	entry.Meta = kv.BitRangeDelete
+	entry := kv.NewInternalEntry(cf, start, nonTxnMaxVersion, end, kv.BitRangeDelete, 0)
 	defer entry.DecrRef()
-	return db.setEntry(entry)
-}
-
-func (db *DB) Set(key, value []byte) error {
-	return db.SetCF(kv.CFDefault, key, value)
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
 // SetCF writes a key/value pair into the specified column family.
 func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
-	// Non-transactional API: do not mix with MVCC/Txn writes.
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	data := kv.NewEntryWithCF(cf, key, value)
 	if value == nil {
-		data.Meta = kv.BitDelete
+		return utils.ErrNilValue
 	}
-	defer data.DecrRef()
-	return db.setEntry(data)
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, value, 0, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
-// setEntry persists an entry using the non-transactional write path.
-func (db *DB) setEntry(data *kv.Entry) error {
-	if data == nil || len(data.Key) == 0 {
+// Set writes a key/value pair into the default column family.
+// Use Del for explicit deletion; nil values are rejected.
+func (db *DB) Set(key, value []byte) error {
+	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	if !data.CF.Valid() {
-		data.CF = kv.CFDefault
+	if value == nil {
+		return utils.ErrNilValue
 	}
-	if err := db.maybeThrottleWrite(data.CF, data.Key); err != nil {
-		return err
-	}
-	// Internal keys include CF and version; non-transactional writes use max version.
-	data.Key = kv.InternalKey(data.CF, data.Key, nonTxnMaxVersion)
-
-	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	data.IncrRef()
-	if err := db.batchSet([]*kv.Entry{data}); err != nil {
-		data.DecrRef()
-		return err
-	}
-	return nil
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
-// SetVersionedEntry writes a value to the specified column family using the
-// provided version. It mirrors SetCF but allows callers to control the MVCC
-// timestamp embedded in the internal key.
-func (db *DB) SetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) error {
+// SetWithTTL writes a key/value pair into the default column family with TTL.
+// Use Del for explicit deletion; nil values are rejected.
+//
+// Ownership note: key is encoded into a new internal-key buffer, while value is
+// referenced directly (no deep copy). Callers must keep value immutable until
+// this method returns.
+func (db *DB) SetWithTTL(key, value []byte, ttl time.Duration) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if value == nil {
+		return utils.ErrNilValue
+	}
+	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	entry.WithTTL(ttl)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// ApplyInternalEntries writes pre-built internal-key entries through the regular write
+// pipeline.
+//
+// The caller must provide entries with internal keys. The entry slices must not
+// be mutated until this call returns.
+func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
-	if len(key) == 0 {
-		return utils.ErrEmptyKey
+	if len(entries) == 0 {
+		return nil
 	}
-	entry := kv.NewEntryWithCF(cf, kv.SafeCopy(nil, key), kv.SafeCopy(nil, value))
-	entry.Meta = meta
-	defer entry.DecrRef()
-
-	if err := db.maybeThrottleWrite(entry.CF, entry.Key); err != nil {
-		return err
+	for _, entry := range entries {
+		if entry == nil || len(entry.Key) == 0 {
+			return utils.ErrEmptyKey
+		}
+		// ApplyInternalEntries is for pre-built internal keys only.
+		parsedCF, userKey, parsedVersion, ok := kv.SplitInternalKey(entry.Key)
+		if !ok || len(userKey) == 0 {
+			return utils.ErrInvalidRequest
+		}
+		entry.CF = parsedCF
+		entry.Version = parsedVersion
+		if err := db.maybeThrottleWrite(parsedCF, userKey); err != nil {
+			return err
+		}
 	}
-
-	entry.Key = kv.InternalKey(entry.CF, entry.Key, version)
-
-	// Delegate to the commit pipeline to leverage batching and VLog offloading.
-	entry.IncrRef()
-	if err := db.batchSet([]*kv.Entry{entry}); err != nil {
-		entry.DecrRef()
-		return err
+	for _, entry := range entries {
+		entry.IncrRef()
 	}
-	return nil
+	return db.batchSet(entries)
 }
 
-// DeleteVersionedEntry marks the specified version as deleted by writing a
-// tombstone record.
-func (db *DB) DeleteVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) error {
-	return db.SetVersionedEntry(cf, key, version, nil, kv.BitDelete)
-}
-
-// GetVersionedEntry retrieves the value stored at the provided MVCC version.
-// The returned entry is detached from internal pools. Callers must not call DecrRef.
-func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+// GetInternalEntry retrieves one internal-key record for the provided version.
+//
+// The returned entry is borrowed from internal pools and returned as-is
+// (no clone/no copy). entry.Key remains in internal encoding
+// (cf+user_key+ts). Callers MUST call DecrRef exactly once when finished.
+func (db *DB) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
@@ -541,33 +548,44 @@ func (db *DB) GetVersionedEntry(cf kv.ColumnFamily, key []byte, version uint64) 
 	if err != nil {
 		return nil, err
 	}
-	defer entry.DecrRef()
-	return cloneEntry(entry, cf), nil
+	return entry, nil
 }
 
 // Get reads the latest visible value for key from the default column family.
 func (db *DB) Get(key []byte) (*kv.Entry, error) {
-	return db.GetCF(kv.CFDefault, key)
-}
-
-// GetCF reads a key from the specified column family.
-// The returned entry is detached from internal pools. Callers must not call DecrRef.
-func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
 	if len(key) == 0 {
 		return nil, utils.ErrEmptyKey
 	}
 	// Non-transactional API: use the max sentinel timestamp (not for MVCC).
+	internalKey := kv.InternalKey(kv.CFDefault, key, nonTxnMaxVersion)
+	entry, err := db.loadBorrowedEntry(internalKey)
+	if err != nil {
+		return nil, err
+	}
+	defer entry.DecrRef()
+	if entry.IsDeletedOrExpired() {
+		return nil, utils.ErrKeyNotFound
+	}
+	out := cloneEntry(entry)
+	db.recordRead(out.Key)
+	return out, nil
+}
+
+// GetCF reads the latest visible value for key from the specified column family.
+func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
+	if len(key) == 0 {
+		return nil, utils.ErrEmptyKey
+	}
 	internalKey := kv.InternalKey(cf, key, nonTxnMaxVersion)
 	entry, err := db.loadBorrowedEntry(internalKey)
 	if err != nil {
 		return nil, err
 	}
 	defer entry.DecrRef()
-	if isDeletedOrExpired(entry.Meta, entry.ExpiresAt) {
+	if entry.IsDeletedOrExpired() {
 		return nil, utils.ErrKeyNotFound
 	}
-	out := cloneEntry(entry, cf)
-	db.recordCFRead(out.CF, 1)
+	out := cloneEntry(entry)
 	db.recordRead(out.Key)
 	return out, nil
 }
@@ -600,6 +618,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	// the already-pinned memtables, avoiding a redundant GetMemTables call.
 
 	if !kv.IsValuePtr(entry) {
+		if !entry.PopulateInternalMeta() {
+			entry.DecrRef()
+			return nil, utils.ErrInvalidRequest
+		}
 		return entry, nil
 	}
 	var vp kv.ValuePtr
@@ -614,6 +636,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	}
 	entry.Value = kv.SafeCopy(nil, result)
 	entry.Meta &^= kv.BitValuePointer
+	if !entry.PopulateInternalMeta() {
+		entry.DecrRef()
+		return nil, utils.ErrInvalidRequest
+	}
 	return entry, nil
 }
 
@@ -630,22 +656,17 @@ func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, i
 // memory, parses internal key layout (CF/user-key/version), and fills external-facing
 // metadata. The returned entry does not participate in internal ref-count lifecycle;
 // API callers must not call DecrRef on it.
-func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
+func cloneEntry(src *kv.Entry) *kv.Entry {
 	if src == nil {
 		return nil
 	}
-	cf := fallbackCF
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	userKeySrc := src.Key
+	cf, userKeySrc, ts, ok := kv.SplitInternalKey(src.Key)
+	utils.CondPanicFunc(!ok, func() error {
+		return fmt.Errorf("cloneEntry expects internal key: %x", src.Key)
+	})
 	version := src.Version
-	if storedCF, parsedUserKey, ts := kv.SplitInternalKey(src.Key); storedCF.Valid() {
-		cf = storedCF
-		userKeySrc = parsedUserKey
-		if ts != 0 {
-			version = ts
-		}
+	if ts != 0 {
+		version = ts
 	}
 	return &kv.Entry{
 		Key:          kv.SafeCopy(nil, userKeySrc),
@@ -658,16 +679,6 @@ func cloneEntry(src *kv.Entry, fallbackCF kv.ColumnFamily) *kv.Entry {
 		Hlen:         src.Hlen,
 		ValThreshold: src.ValThreshold,
 	}
-}
-
-func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
-	if meta&kv.BitDelete > 0 {
-		return true
-	}
-	if expiresAt == 0 {
-		return false
-	}
-	return expiresAt <= uint64(time.Now().Unix())
 }
 
 // Info returns the live stats collector for snapshot/diagnostic access.
@@ -739,10 +750,6 @@ func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
 	return e.IsRangeDelete() || int64(len(e.Value)) < db.opt.ValueThreshold
 }
 
-func (db *DB) valueThreshold() int64 {
-	return atomic.LoadInt64(&db.opt.ValueThreshold)
-}
-
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
 // include region state counts.
 func (db *DB) SetRegionMetrics(rm *metrics.RegionMetrics) {
@@ -772,56 +779,5 @@ func (db *DB) Manifest() *manifest.Manager {
 
 // IsClosed reports whether Close has finished and the DB no longer accepts work.
 func (db *DB) IsClosed() bool {
-	return atomic.LoadUint32(&db.isClosed) == 1
-}
-
-func (db *DB) cfCounter(cf kv.ColumnFamily) *cfCounters {
-	if db == nil {
-		return nil
-	}
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	idx := int(cf)
-	if idx < 0 || idx >= len(db.cfMetrics) {
-		idx = int(kv.CFDefault)
-	}
-	if db.cfMetrics[idx] == nil {
-		db.cfMetrics[idx] = &cfCounters{}
-	}
-	return db.cfMetrics[idx]
-}
-
-func (db *DB) recordCFWrite(cf kv.ColumnFamily, delta uint64) {
-	if cnt := db.cfCounter(cf); cnt != nil {
-		atomic.AddUint64(&cnt.writes, delta)
-	}
-}
-
-func (db *DB) recordCFRead(cf kv.ColumnFamily, delta uint64) {
-	if cnt := db.cfCounter(cf); cnt != nil {
-		atomic.AddUint64(&cnt.reads, delta)
-	}
-}
-
-func (db *DB) columnFamilyStats() map[string]ColumnFamilySnapshot {
-	stats := make(map[string]ColumnFamilySnapshot)
-	if db == nil {
-		return stats
-	}
-	limit := int(kv.CFWrite) + 1
-	for idx := 0; idx < limit && idx < len(db.cfMetrics); idx++ {
-		cnt := db.cfMetrics[idx]
-		if cnt == nil {
-			continue
-		}
-		writes := atomic.LoadUint64(&cnt.writes)
-		reads := atomic.LoadUint64(&cnt.reads)
-		if writes == 0 && reads == 0 {
-			continue
-		}
-		cfName := kv.ColumnFamily(idx).String()
-		stats[cfName] = ColumnFamilySnapshot{Writes: writes, Reads: reads}
-	}
-	return stats
+	return db.isClosed.Load() == 1
 }

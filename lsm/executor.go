@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -17,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 )
 
 type compactDef struct {
@@ -101,18 +101,22 @@ func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
 
 func (cd *compactDef) lockLevels() {
 	cd.thisLevel.RLock()
-	cd.nextLevel.RLock()
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RLock()
+	}
 }
 
 func (cd *compactDef) unlockLevels() {
-	cd.nextLevel.RUnlock()
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RUnlock()
+	}
 	cd.thisLevel.RUnlock()
 }
 
 // doCompact selects tables from a level and merges them into the target level.
 func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	l := p.Level
-	utils.CondPanic(l >= lm.opt.MaxLevelNum, errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum")) // Sanity check.
+	utils.CondPanicFunc(l >= lm.opt.MaxLevelNum, func() error { return errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum") }) // Sanity check.
 	t := p.Target
 	if t.BaseLevel == 0 {
 		t = lm.levelTargets()
@@ -142,7 +146,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cd.setNextLevel(lm, t, cd.thisLevel)
 		order := cd.thisLevel.ingest.shardOrderBySize()
 		if len(order) == 0 {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		baseLimit := lm.opt.IngestShardParallelism
 		if baseLimit <= 0 {
@@ -177,7 +181,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			log.Printf("[Compactor: %d] Ingest compaction for level: %d shard=%d DONE", id, sub.thisLevel.levelNum, order[i])
 		}
 		if !ran {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		return nil
 	}
@@ -186,7 +190,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	if l == 0 {
 		cd.setNextLevel(lm, t, lm.levels[t.BaseLevel])
 		if !lm.fillTablesL0(&cd) {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
@@ -204,7 +208,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			cd.setNextLevel(lm, t, lm.levels[l+1])
 		}
 		if !lm.fillTables(&cd) {
-			return utils.ErrFillTables
+			return compact.ErrFillTables
 		}
 		cleanup = true
 		// Continue with the normal merge path.
@@ -361,8 +365,8 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	if cd.thisLevel.numTables() == 0 {
-		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTables() > 0 {
+	if cd.thisLevel.numTablesLocked() == 0 {
+		if cd.thisLevel.isLastLevel() && cd.thisLevel.numIngestTablesLocked() > 0 {
 			meta := cd.thisLevel.ingest.allMeta()
 			if len(meta) == 0 {
 				return false
@@ -380,7 +384,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 		}
 		return false
 	}
-	tables := make([]*table, cd.thisLevel.numTables())
+	tables := make([]*table, cd.thisLevel.numTablesLocked())
 	copy(tables, cd.thisLevel.tables)
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {
@@ -401,7 +405,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
-	totalIngest := cd.thisLevel.numIngestTables()
+	totalIngest := cd.thisLevel.numIngestTablesLocked()
 	if totalIngest == 0 {
 		return false
 	}
@@ -435,7 +439,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 
-	utils.CondPanic(len(cd.splits) != 0, errors.New("len(cd.splits) != 0"))
+	utils.CondPanicFunc(len(cd.splits) != 0, func() error { return errors.New("len(cd.splits) != 0") })
 	if thisLevel == nextLevel {
 		// No special handling for L0->L0 and Lmax->Lmax.
 	} else {
@@ -717,9 +721,9 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Wait for all builders to flush to disk.
 	wg.Wait()
 
-	if err == nil {
-		// Sync the workdir to ensure data is persisted.
-		err = utils.SyncDir(lm.opt.FS, lm.opt.WorkDir)
+	if err == nil && lm.opt.ManifestSync {
+		// Strict durability mode: persist new SST directory entries before manifest edits.
+		err = vfs.SyncDir(lm.opt.FS, lm.opt.WorkDir)
 	}
 
 	if err != nil {
@@ -762,7 +766,11 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 		}
 		if i%width == width-1 {
 			// Set the right bound to the max key.
-			right := kv.KeyWithTs(kv.ParseKey(t.MaxKey()), math.MaxUint64)
+			cf, userKey, _, ok := kv.SplitInternalKey(t.MaxKey())
+			utils.CondPanicFunc(!ok, func() error {
+				return fmt.Errorf("addSplits expects internal max key: %x", t.MaxKey())
+			})
+			right := kv.InternalKey(cf, userKey, math.MaxUint64)
 			addRange(right)
 		}
 	}
@@ -913,8 +921,8 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	// point at L0, so grabbing the RLock twice would violate RWMutex semantics and can deadlock
 	// once another goroutine attempts a write lock. Taking the shared lock exactly once matches
 	// Badger's approach and keeps lock acquisition order (level -> compactState) consistent.
-	utils.CondPanic(cd.thisLevel.levelNum != 0, errors.New("cd.thisLevel.levelNum != 0"))
-	utils.CondPanic(cd.nextLevel.levelNum != 0, errors.New("cd.nextLevel.levelNum != 0"))
+	utils.CondPanicFunc(cd.thisLevel.levelNum != 0, func() error { return errors.New("cd.thisLevel.levelNum != 0") })
+	utils.CondPanicFunc(cd.nextLevel.levelNum != 0, func() error { return errors.New("cd.nextLevel.levelNum != 0") })
 	lm.levels[0].RLock()
 	defer lm.levels[0].RUnlock()
 
@@ -957,9 +965,17 @@ func getKeyRange(tables ...*table) compact.KeyRange {
 
 	// We pick all the versions of the smallest and the biggest key. Note that version zero would
 	// be the rightmost key, considering versions are default sorted in descending order.
+	leftCF, leftUserKey, _, leftOK := kv.SplitInternalKey(minKey)
+	utils.CondPanicFunc(!leftOK, func() error {
+		return fmt.Errorf("getKeyRange expects internal min key: %x", minKey)
+	})
+	rightCF, rightUserKey, _, rightOK := kv.SplitInternalKey(maxKey)
+	utils.CondPanicFunc(!rightOK, func() error {
+		return fmt.Errorf("getKeyRange expects internal max key: %x", maxKey)
+	})
 	return compact.KeyRange{
-		Left:  kv.KeyWithTs(kv.ParseKey(minKey), math.MaxUint64),
-		Right: kv.KeyWithTs(kv.ParseKey(maxKey), 0),
+		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
+		Right: kv.InternalKey(rightCF, rightUserKey, 0),
 	}
 }
 
@@ -1020,14 +1036,17 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 		for ; it.Valid(); it.Next() {
 			entry := it.Item().Entry()
 			key := entry.Key
-			isExpired := IsDeletedOrExpired(entry)
+			isExpired := entry.IsDeletedOrExpired()
 
 			if entry.IsRangeDelete() {
 				// Preserve range tombstones even at max level. Dropping them during
 				// partial Lmax->Lmax rewrites can resurrect older covered keys that
 				// remain in untouched tables outside this compaction unit.
 				// Copy range tombstone data to avoid iterator reuse issues.
-				cf, rtStart, rtVersion := kv.SplitInternalKey(entry.Key)
+				cf, rtStart, rtVersion, ok := kv.SplitInternalKey(entry.Key)
+				if !ok {
+					continue
+				}
 				rt := rangeTombstone{
 					cf:      cf,
 					start:   kv.SafeCopy(nil, rtStart),
@@ -1036,7 +1055,6 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				}
 				rangeTombstones = append(rangeTombstones, rt)
 			}
-
 			if !kv.SameKey(key, lastKey) {
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 					break
@@ -1053,7 +1071,10 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 
 			if !entry.IsRangeDelete() {
 				covered := false
-				cf, userKey, version := kv.SplitInternalKey(key)
+				cf, userKey, version, ok := kv.SplitInternalKey(key)
+				if !ok {
+					continue
+				}
 				for _, rt := range rangeTombstones {
 					// Check CF match and version/range coverage.
 					if rt.cf == cf && rt.version > version && kv.KeyInRange(userKey, rt.start, rt.end) {
@@ -1104,36 +1125,24 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			builder.Close()
 			continue
 		}
-		if err := inflightBuilders.Do(); err != nil {
+		// Leverage SSD parallel write throughput.
+		b := builder
+		if err := inflightBuilders.Go(func() error {
+			defer b.Close()
+			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
+			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
+			tbl, err := openTable(lm, sstName, b)
+			if err != nil || tbl == nil {
+				_ = utils.Err(err)
+				return nil
+			}
+			res <- tbl
+			return nil
+		}); err != nil {
 			// Can't return from here, until I decrRef all the tables that I built so far.
 			break
 		}
-		// Leverage SSD parallel write throughput.
-		go func(builder *tableBuilder) {
-			defer inflightBuilders.Done(nil)
-			defer builder.Close()
-			var tbl *table
-			newFID := atomic.AddUint64(&lm.maxFID, 1) // Compaction does not allocate memtables; advance maxFID.
-			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
-			tbl = openTable(lm, sstName, builder)
-			if tbl == nil {
-				return
-			}
-			res <- tbl
-		}(builder)
 	}
-}
-
-// IsDeletedOrExpired reports whether an entry should be dropped.
-func IsDeletedOrExpired(e *kv.Entry) bool {
-	if e.Value == nil {
-		return true
-	}
-	if e.ExpiresAt == 0 {
-		return false
-	}
-
-	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 func (lsm *LSM) newCompactStatus() *compact.State {

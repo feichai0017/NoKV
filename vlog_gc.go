@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -64,7 +63,7 @@ func (vlog *valueLog) flushDiscardStats() {
 			return err
 		}
 
-		entry := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, lfDiscardStatsKey, 1), encodedDS)
+		entry := kv.NewInternalEntry(kv.CFDefault, lfDiscardStatsKey, 1, encodedDS, 0, 0)
 		entries := []*kv.Entry{entry}
 		req, err := vlog.db.sendToWriteCh(entries, false)
 		if err != nil {
@@ -280,18 +279,25 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 		if e == nil || len(e.Key) == 0 {
 			return false, nil
 		}
-		cf, userKey, _ := kv.SplitInternalKey(e.Key)
+		cf, userKey, version, ok := kv.SplitInternalKey(e.Key)
+		if !ok {
+			return false, fmt.Errorf("value log GC sample expects internal key: %x", e.Key)
+		}
 		if len(userKey) == 0 {
 			return false, nil
 		}
-		entry, err := vlog.db.GetCF(cf, userKey)
+		entry, err := vlog.db.GetInternalEntry(cf, userKey, version)
 		if err != nil {
 			if errors.Is(err, utils.ErrEmptyKey) {
 				return false, nil
 			}
+			if errors.Is(err, utils.ErrKeyNotFound) {
+				return true, nil
+			}
 			return false, err
 		}
-		if kv.DiscardEntry(e, entry) {
+		defer entry.DecrRef()
+		if kv.DiscardEntry(entry) {
 			return true, nil
 		}
 
@@ -319,6 +325,9 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 	if stats == nil {
 		return utils.ErrNoRewrite
 	}
+	if stats.Count == 0 || stats.TotalMiB == 0 {
+		return utils.ErrNoRewrite
+	}
 
 	vlog.logf("Fid: %d bucket: %d. Skipped: %5.2fMB Data status={total:%5.2f discard:%5.2f count:%d}", fid, bucket, stats.SkippedMiB, stats.TotalMiB, stats.DiscardMiB, stats.Count)
 
@@ -343,7 +352,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		return err
 	}
 	activeFID := mgr.ActiveFID()
-	utils.CondPanic(fid >= activeFID, fmt.Errorf("fid to move: %d. Current active fid: %d (bucket %d)", fid, activeFID, bucket))
+	utils.CondPanicFunc(fid >= activeFID, func() error {
+		return fmt.Errorf("fid to move: %d. Current active fid: %d (bucket %d)", fid, activeFID, bucket)
+	})
 
 	wb := make([]*kv.Entry, 0, 1000)
 	var size int64
@@ -353,26 +364,23 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return nil
 		}
 		entry, err := vlog.db.lsm.Get(e.Key)
-		releaseEntry := func() {}
 		if err != nil {
-			// If LSM can't find it (e.g., concurrent compaction/move), fall back to the
-			// value log copy so we don't drop a live key.
-			if errors.Is(err, utils.ErrKeyNotFound) {
-				entry = e
-			} else if errors.Is(err, utils.ErrEmptyKey) {
+			if errors.Is(err, utils.ErrEmptyKey) {
 				return nil
-			} else {
-				return err
 			}
-		} else if entry != nil {
-			releaseEntry = entry.DecrRef
-		} else {
-			// Be defensive: if storage returns a nil entry without an error, treat it
-			// as not-found and fall back to the value-log copy.
-			entry = e
+			if errors.Is(err, utils.ErrKeyNotFound) {
+				// Compromise policy: treat missing index entries as obsolete and skip
+				// this record, so rewrite can still make progress under churn.
+				return nil
+			}
+			return err
 		}
-		defer releaseEntry()
-		if kv.DiscardEntry(e, entry) {
+		if entry == nil {
+			// Fail closed on ambiguous storage results.
+			return utils.ErrNoRewrite
+		}
+		defer entry.DecrRef()
+		if kv.DiscardEntry(entry) {
 			return nil
 		}
 
@@ -381,6 +389,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		}
 
 		var diskVP kv.ValuePtr
+		if !kv.IsValuePtr(entry) {
+			return nil
+		}
 		diskVP.Decode(entry.Value)
 
 		if diskVP.Bucket != bucket {
@@ -414,6 +425,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 	if _, err := mgr.Iterate(fid, 0, func(e *kv.Entry, vp *kv.ValuePtr) error {
 		return process(e, vp)
 	}); err != nil && err != utils.ErrStop {
+		if errors.Is(err, utils.ErrNoRewrite) {
+			return utils.ErrNoRewrite
+		}
 		return err
 	}
 
@@ -464,7 +478,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 }
 
 func (vlog *valueLog) iteratorCount() int {
-	return int(atomic.LoadInt32(&vlog.numActiveIterators))
+	return int(vlog.numActiveIterators.Load())
 }
 
 func (vlog *valueLog) filterPendingDeletes(fids []manifest.ValueLogID) []manifest.ValueLogID {
@@ -597,7 +611,7 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 	if len(candidates) == 0 {
 		return files
 	}
-	start := max(int(atomic.AddUint64(&vlog.gcPickSeed, 1)), 0)
+	start := max(int(vlog.gcPickSeed.Add(1)), 0)
 	for i := 0; i < len(candidates); i++ {
 		id := candidates[(start+i)%len(candidates)]
 		if selectedBuckets[id.Bucket] {
@@ -614,10 +628,11 @@ func (vlog *valueLog) pickLogs(heads map[uint32]kv.ValuePtr, limit int) (files [
 
 func (vlog *valueLog) populateDiscardStats() error {
 	var statsMap map[manifest.ValueLogID]int64
-	vs, err := vlog.db.GetCF(kv.CFDefault, lfDiscardStatsKey)
+	vs, err := vlog.db.GetInternalEntry(kv.CFDefault, lfDiscardStatsKey, nonTxnMaxVersion)
 	if err != nil {
 		return err
 	}
+	defer vs.DecrRef()
 	if vs.Meta == 0 && len(vs.Value) == 0 {
 		return nil
 	}

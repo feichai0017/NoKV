@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -32,11 +30,10 @@ func TestAPI(t *testing.T) {
 	// Write entries.
 	for i := range 50 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.setEntry(e); err != nil {
+		ttl := 1000 * time.Second
+		if err := db.SetWithTTL([]byte(key), []byte(val), ttl); err != nil {
 			t.Fatal(err)
 		}
-		e.DecrRef()
 		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
@@ -70,11 +67,10 @@ func TestAPI(t *testing.T) {
 
 	for i := range 10 {
 		key, val := fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i)
-		e := kv.NewEntry([]byte(key), []byte(val)).WithTTL(1000 * time.Second)
-		if err := db.setEntry(e); err != nil {
+		ttl := 1000 * time.Second
+		if err := db.SetWithTTL([]byte(key), []byte(val), ttl); err != nil {
 			t.Fatal(err)
 		}
-		e.DecrRef()
 		// Read back.
 		if entry, err := db.Get([]byte(key)); err != nil {
 			t.Fatal(err)
@@ -90,24 +86,36 @@ func TestColumnFamilies(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("default")))
-	require.NoError(t, db.SetCF(kv.CFLock, key, []byte("lock")))
-	require.NoError(t, db.SetCF(kv.CFWrite, key, []byte("write")))
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, []byte("default"), 0, 0),
+		kv.NewInternalEntry(kv.CFLock, key, nonTxnMaxVersion, []byte("lock"), 0, 0),
+		kv.NewInternalEntry(kv.CFWrite, key, nonTxnMaxVersion, []byte("write"), 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	require.NoError(t, db.ApplyInternalEntries(entries))
 
-	e, err := db.GetCF(kv.CFDefault, key)
+	e, err := db.GetInternalEntry(kv.CFDefault, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFDefault, e.CF)
+	gotCF, _, _, _ := kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFDefault, gotCF)
 	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
 
-	e, err = db.GetCF(kv.CFLock, key)
+	e, err = db.GetInternalEntry(kv.CFLock, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFLock, e.CF)
+	gotCF, _, _, _ = kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFLock, gotCF)
 	require.Equal(t, []byte("lock"), e.Value)
+	e.DecrRef()
 
-	e, err = db.GetCF(kv.CFWrite, key)
+	e, err = db.GetInternalEntry(kv.CFWrite, key, nonTxnMaxVersion)
 	require.NoError(t, err)
-	require.Equal(t, kv.CFWrite, e.CF)
+	gotCF, _, _, _ = kv.SplitInternalKey(e.Key)
+	require.Equal(t, kv.CFWrite, gotCF)
 	require.Equal(t, []byte("write"), e.Value)
+	e.DecrRef()
 
 	// Default Get should read default CF.
 	e, err = db.Get(key)
@@ -115,13 +123,18 @@ func TestColumnFamilies(t *testing.T) {
 	require.Equal(t, kv.CFDefault, e.CF)
 	require.Equal(t, []byte("default"), e.Value)
 
-	require.NoError(t, db.DelCF(kv.CFLock, key))
-	_, err = db.GetCF(kv.CFLock, key)
-	require.Error(t, err)
+	lockDelete := kv.NewInternalEntry(kv.CFLock, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	defer lockDelete.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{lockDelete}))
+	lock, err := db.GetInternalEntry(kv.CFLock, key, nonTxnMaxVersion)
+	require.NoError(t, err)
+	require.True(t, lock.Meta&kv.BitDelete > 0)
+	lock.DecrRef()
 	// Default CF should remain untouched.
-	e, err = db.GetCF(kv.CFDefault, key)
+	e, err = db.GetInternalEntry(kv.CFDefault, key, nonTxnMaxVersion)
 	require.NoError(t, err)
 	require.Equal(t, []byte("default"), e.Value)
+	e.DecrRef()
 }
 
 func newTestOptions(t *testing.T) *Options {
@@ -136,6 +149,13 @@ func newTestOptions(t *testing.T) *Options {
 	return opt
 }
 
+func applyVersionedEntryForTest(t *testing.T, db *DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := kv.NewInternalEntry(cf, key, version, kv.SafeCopy(nil, value), meta, 0)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
+}
+
 func TestVersionedEntryRoundTrip(t *testing.T) {
 	opt := newTestOptions(t)
 	db := Open(opt)
@@ -145,14 +165,41 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 	version := uint64(42)
 	value := []byte("value-42")
 
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, version, value, 0))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, version, value, 0)
 
-	entry, err := db.GetVersionedEntry(kv.CFDefault, key, version)
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kv.CFDefault, entry.CF)
-	require.Equal(t, key, entry.Key)
 	require.Equal(t, version, entry.Version)
+	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, key, userKey)
+	require.Equal(t, version, kv.Timestamp(entry.Key))
 	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
+}
+
+func TestGetInternalEntryPopulatesInternalFieldsFromHitVersion(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("versioned-hit")
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 3, []byte("v3"), 0)
+
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, 2)
+	require.NoError(t, err)
+	defer entry.DecrRef()
+
+	cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, kv.CFDefault, cf)
+	require.Equal(t, key, userKey)
+	require.Equal(t, uint64(1), ts)
+	require.Equal(t, cf, entry.CF)
+	require.Equal(t, ts, entry.Version)
+	require.Equal(t, []byte("v1"), entry.Value)
 }
 
 func TestVersionedEntryDeleteTombstone(t *testing.T) {
@@ -161,19 +208,148 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-delete")
-	require.NoError(t, db.SetVersionedEntry(kv.CFDefault, key, 1, []byte("v1"), 0))
-	require.NoError(t, db.DeleteVersionedEntry(kv.CFDefault, key, 2))
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, nil, kv.BitDelete)
 
-	entry, err := db.GetVersionedEntry(kv.CFDefault, key, 2)
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, 2)
 	require.NoError(t, err)
-	require.Equal(t, key, entry.Key)
-	require.Equal(t, uint64(2), entry.Version)
+	_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, key, userKey)
+	require.Equal(t, uint64(2), kv.Timestamp(entry.Key))
 	require.True(t, entry.Meta&kv.BitDelete > 0)
+	entry.DecrRef()
 
-	entry, err = db.GetVersionedEntry(kv.CFDefault, key, 1)
+	entry, err = db.GetInternalEntry(kv.CFDefault, key, 1)
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), entry.Value)
-	require.Equal(t, uint64(1), entry.Version)
+	require.Equal(t, uint64(1), kv.Timestamp(entry.Key))
+	entry.DecrRef()
+}
+
+func TestApplyEntriesWritesBatch(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	key := []byte("batch-key")
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, kv.SafeCopy(nil, key), 11, []byte("value"), 0, 0),
+		kv.NewInternalEntry(kv.CFLock, kv.SafeCopy(nil, key), kv.MaxVersion, []byte("lock"), 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+
+	require.NoError(t, db.ApplyInternalEntries(entries))
+
+	valueEntry, err := db.GetInternalEntry(kv.CFDefault, key, 11)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), valueEntry.Value)
+	valueEntry.DecrRef()
+
+	lockEntry, err := db.GetInternalEntry(kv.CFLock, key, kv.MaxVersion)
+	require.NoError(t, err)
+	require.Equal(t, []byte("lock"), lockEntry.Value)
+	lockEntry.DecrRef()
+}
+
+func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntry(nil, []byte("value"))
+	defer entry.DecrRef()
+	entry.Key = nil
+
+	err := db.ApplyInternalEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrEmptyKey)
+}
+
+func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewEntry([]byte("plain-user-key"), []byte("value"))
+	defer entry.DecrRef()
+
+	err := db.ApplyInternalEntries([]*kv.Entry{entry})
+	require.ErrorIs(t, err, utils.ErrInvalidRequest)
+}
+
+func TestSetRejectsNilValueAndAllowsEmptyValue(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	nilKey := []byte("nil-value")
+	err := db.Set(nilKey, nil)
+	require.ErrorIs(t, err, utils.ErrNilValue)
+	_, err = db.Get(nilKey)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	nilTTLKey := []byte("nil-value-ttl")
+	err = db.SetWithTTL(nilTTLKey, nil, time.Second)
+	require.ErrorIs(t, err, utils.ErrNilValue)
+	_, err = db.Get(nilTTLKey)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	emptyKey := []byte("empty-value")
+	require.NoError(t, db.Set(emptyKey, []byte{}))
+	entry, err := db.Get(emptyKey)
+	require.NoError(t, err)
+	require.Len(t, entry.Value, 0)
+	require.Equal(t, byte(0), entry.Meta&kv.BitDelete)
+
+	emptyTTLKey := []byte("empty-value-ttl")
+	require.NoError(t, db.SetWithTTL(emptyTTLKey, []byte{}, time.Second))
+	entry, err = db.Get(emptyTTLKey)
+	require.NoError(t, err)
+	require.Len(t, entry.Value, 0)
+	require.Equal(t, byte(0), entry.Meta&kv.BitDelete)
+}
+
+func TestSetAfterCloseDoesNotPanic(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	var err error
+	require.NotPanics(t, func() {
+		err = db.Set([]byte("k"), []byte("v"))
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	require.NoError(t, db.Close())
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyInternalEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrBlockedWrites)
+}
+
+func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.MaxBatchCount = 1
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
+	var err error
+	require.NotPanics(t, func() {
+		err = db.ApplyInternalEntries([]*kv.Entry{entry})
+		entry.DecrRef()
+	})
+	require.ErrorIs(t, err, utils.ErrTxnTooBig)
 }
 
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
@@ -343,11 +519,11 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := []byte("throttle-key")
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v1")))
-	require.NoError(t, db.SetCF(kv.CFDefault, key, []byte("v2")))
-	err := db.SetCF(kv.CFDefault, key, []byte("v3"))
+	require.NoError(t, db.Set(key, []byte("v1")))
+	require.NoError(t, db.Set(key, []byte("v2")))
+	err := db.Set(key, []byte("v3"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 // -------------------------------------------------------------------------- //
@@ -532,6 +708,59 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	})
 }
 
+func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
+	dir := t.TempDir()
+	opt := &Options{
+		WorkDir:          dir,
+		ValueThreshold:   1 << 20,
+		MemTableSize:     1 << 10,
+		SSTableMaxSz:     1 << 20,
+		ValueLogFileSize: 1 << 20,
+		MaxBatchCount:    100,
+		MaxBatchSize:     1 << 20,
+	}
+
+	db := Open(opt)
+	for i := range 256 {
+		key := fmt.Appendf(nil, "sst-corrupt-%03d", i)
+		val := make([]byte, 128)
+		require.NoError(t, db.Set(key, val))
+	}
+	require.NoError(t, db.Close())
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.sst"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+
+	corruptPath := files[0]
+	corruptFID := utils.FID(corruptPath)
+	require.NoError(t, os.WriteFile(corruptPath, []byte("bad-sst"), 0o666))
+
+	db2 := Open(opt)
+	defer func() { _ = db2.Close() }()
+
+	version := db2.lsm.CurrentVersion()
+	var found bool
+	for _, metas := range version.Levels {
+		for _, meta := range metas {
+			if meta.FileID == corruptFID {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	require.False(t, found, "expected corrupt sstable to be removed from manifest view")
+
+	logRecoveryMetric(t, "sst_manifest_corrupt_cleanup", map[string]any{
+		"corrupt_path": corruptPath,
+		"corrupt_fid":  corruptFID,
+		"levels":       len(version.Levels),
+	})
+}
+
 func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
@@ -683,7 +912,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	}
 	_ = db.wal.Close()
 	if db.dirLock != nil {
-		_ = db.dirLock.Release()
+		_ = db.dirLock.Close()
 		db.dirLock = nil
 	}
 
@@ -783,7 +1012,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
+func TestWriteHotKeyThrottleBlocksSet(t *testing.T) {
 	clearDir()
 	prev := opt.WriteHotKeyLimit
 	opt.WriteHotKeyLimit = 3
@@ -794,14 +1023,12 @@ func TestWriteHotKeyThrottleBlocksTxn(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	txn := db.NewTransaction(true)
 	key := []byte("txn-hot-key")
-	require.NoError(t, txn.Set(key, []byte("a")))
-	require.NoError(t, txn.Set(key, []byte("b")))
-	err := txn.Set(key, []byte("c"))
+	require.NoError(t, db.Set(key, []byte("a")))
+	require.NoError(t, db.Set(key, []byte("b")))
+	err := db.Set(key, []byte("c"))
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
-	txn.Discard()
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 func TestCFHotKey(t *testing.T) {
@@ -822,11 +1049,13 @@ func TestHotWriteAndThrottle(t *testing.T) {
 		hotWrite: hotring.NewHotRing(8, nil),
 	}
 
-	entry := kv.NewEntry([]byte("hot"), []byte("v"))
-	err := db.maybeThrottleWrite(kv.CFDefault, entry.Key)
+	userKey := []byte("hot")
+	entry := kv.NewInternalEntry(kv.CFDefault, userKey, nonTxnMaxVersion, []byte("v"), 0, 0)
+	defer entry.DecrRef()
+	err := db.maybeThrottleWrite(kv.CFDefault, userKey)
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
 	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
-	require.Equal(t, uint64(1), atomic.LoadUint64(&db.hotWriteLimited))
+	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
 }
 
 func TestIsHotWriteUsesUserKeyForInternalEntries(t *testing.T) {
@@ -856,8 +1085,8 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	db := Open(local)
 	defer func() { _ = db.Close() }()
 
-	good := kv.NewEntryWithCF(kv.CFDefault, kv.InternalKey(kv.CFDefault, []byte("good"), nonTxnMaxVersion), []byte("v1"))
-	bad := kv.NewEntryWithCF(kv.CFDefault, []byte{}, []byte("v2"))
+	good := kv.NewInternalEntry(kv.CFDefault, []byte("good"), nonTxnMaxVersion, []byte("v1"), 0, 0)
+	bad := kv.NewEntry([]byte{}, []byte("v2"))
 	defer good.DecrRef()
 	defer bad.DecrRef()
 
@@ -1009,11 +1238,15 @@ func TestCloseWithErrors(t *testing.T) {
 	local := *opt
 	local.WorkDir = t.TempDir()
 	dirLockErr := errors.New("dir lock release error")
-	lockPath := filepath.Join(local.WorkDir, "LOCK")
-	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpRemove, lockPath, dirLockErr))
-	local.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
 
 	db := Open(&local)
+	realLock := db.dirLock
+	db.dirLock = closeFunc(func() error {
+		if realLock != nil {
+			_ = realLock.Close()
+		}
+		return dirLockErr
+	})
 	err := db.Close()
 	require.Error(t, err)
 	require.ErrorIs(t, err, dirLockErr)
@@ -1022,6 +1255,12 @@ func TestCloseWithErrors(t *testing.T) {
 	err2 := db.Close()
 	require.Error(t, err2)
 	require.ErrorIs(t, err2, dirLockErr)
+}
+
+type closeFunc func() error
+
+func (fn closeFunc) Close() error {
+	return fn()
 }
 
 func TestCloseConcurrent(t *testing.T) {

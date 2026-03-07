@@ -2,7 +2,8 @@ package percolator
 
 import (
 	"bytes"
-	"math"
+	"fmt"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -10,27 +11,28 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-const lockColumnTs = math.MaxUint64
+const lockColumnTs = kv.MaxVersion
 
 // Reader provides helper methods to inspect MVCC state within a DB instance.
 type Reader struct {
-	db *NoKV.DB
+	db NoKV.MVCCStore
 }
 
 // NewReader constructs a Reader.
-func NewReader(db *NoKV.DB) *Reader {
+func NewReader(db NoKV.MVCCStore) *Reader {
 	return &Reader{db: db}
 }
 
 // GetLock returns the lock stored for the provided key, if any.
 func (r *Reader) GetLock(key []byte) (*Lock, error) {
-	entry, err := r.db.GetVersionedEntry(kv.CFLock, key, lockColumnTs)
+	entry, err := r.db.GetInternalEntry(kv.CFLock, key, lockColumnTs)
 	if err != nil {
 		if err == utils.ErrKeyNotFound {
 			return nil, nil
 		}
 		return nil, err
 	}
+	defer entry.DecrRef()
 	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
 		return nil, nil
 	}
@@ -85,26 +87,34 @@ func (r *Reader) GetWriteByStartTs(key []byte, startTs uint64) (*Write, uint64, 
 	return result, commitTs, nil
 }
 
-// GetValue reads the value visible at the provided read timestamp.
-func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, error) {
+// GetValue reads the value visible at readTs and returns its expiry metadata
+// from the default CF record.
+func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, uint64, error) {
 	write, _, err := r.getWriteForRead(key, readTs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if write == nil {
-		return nil, utils.ErrKeyNotFound
+		return nil, 0, utils.ErrKeyNotFound
 	}
 	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
-		return nil, utils.ErrKeyNotFound
+		return nil, 0, utils.ErrKeyNotFound
 	}
-	entry, err := r.db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
+	if len(write.ShortValue) > 0 {
+		if write.ExpiresAt > 0 && write.ExpiresAt <= uint64(time.Now().Unix()) {
+			return nil, 0, utils.ErrKeyNotFound
+		}
+		return kv.SafeCopy(nil, write.ShortValue), write.ExpiresAt, nil
+	}
+	entry, err := r.db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if entry.Meta&kv.BitDelete > 0 || entry.Value == nil {
-		return nil, utils.ErrKeyNotFound
+	defer entry.DecrRef()
+	if entry.IsDeletedOrExpired() {
+		return nil, 0, utils.ErrKeyNotFound
 	}
-	return kv.SafeCopy(nil, entry.Value), nil
+	return kv.SafeCopy(nil, entry.Value), entry.ExpiresAt, nil
 }
 
 func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*Write, uint64, error) {
@@ -132,7 +142,7 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 	if iter == nil {
 		return nil
 	}
-	iter.Seek(kv.InternalKey(kv.CFWrite, key, math.MaxUint64))
+	iter.Seek(kv.InternalKey(kv.CFWrite, key, kv.MaxVersion))
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
@@ -144,7 +154,10 @@ func (r *Reader) scanWrites(key []byte, fn func(Write, uint64) bool) error {
 			iter.Next()
 			continue
 		}
-		cf, userKey, ts := kv.SplitInternalKey(entry.Key)
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return fmt.Errorf("percolator: scanWrites expects internal key, got %x", entry.Key)
+		}
 		if cf != kv.CFWrite {
 			break
 		}

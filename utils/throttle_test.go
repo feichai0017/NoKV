@@ -13,9 +13,8 @@ func TestThrottleGoAndFinish(t *testing.T) {
 	require.NoError(t, th.Finish())
 }
 
-func TestThrottleDoDoneError(t *testing.T) {
+func TestThrottleGoError(t *testing.T) {
 	th := NewThrottle(1)
-	require.NoError(t, th.Do())
-	th.Done(errors.New("boom"))
+	require.NoError(t, th.Go(func() error { return errors.New("boom") }))
 	require.Error(t, th.Finish())
 }

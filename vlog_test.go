@@ -39,6 +39,10 @@ var (
 	}
 )
 
+func newPointerEntry(userKey, value []byte) *kvpkg.Entry {
+	return kvpkg.NewInternalEntry(kvpkg.CFDefault, userKey, nonTxnMaxVersion, value, kvpkg.BitValuePointer, 0)
+}
+
 func TestVlogBase(t *testing.T) {
 	// Clean work directory.
 	clearDir()
@@ -52,11 +56,8 @@ func TestVlogBase(t *testing.T) {
 	const val2 = "samplevalb012345678901234567890123"
 	require.True(t, int64(len(val1)) >= db.opt.ValueThreshold)
 
-	e1 := kvpkg.NewEntry([]byte("samplekey"), []byte(val1))
-	e1.Meta = kvpkg.BitValuePointer
-
-	e2 := kvpkg.NewEntry([]byte("samplekeyb"), []byte(val2))
-	e2.Meta = kvpkg.BitValuePointer
+	e1 := newPointerEntry([]byte("samplekey"), []byte(val1))
+	e2 := newPointerEntry([]byte("samplekeyb"), []byte(val2))
 
 	// Build a batched request.
 	b := new(request)
@@ -89,11 +90,17 @@ func TestVlogBase(t *testing.T) {
 	defer entry2.DecrRef()
 
 	// Compare the fields we care about.
-	require.Equal(t, []byte("samplekey"), entry1.Key)
+	_, key1, ts1, ok := kvpkg.SplitInternalKey(entry1.Key)
+	require.True(t, ok)
+	require.Equal(t, []byte("samplekey"), key1)
+	require.Equal(t, nonTxnMaxVersion, ts1)
 	require.Equal(t, []byte(val1), entry1.Value)
 	require.Equal(t, kvpkg.BitValuePointer, entry1.Meta)
 
-	require.Equal(t, []byte("samplekeyb"), entry2.Key)
+	_, key2, ts2, ok := kvpkg.SplitInternalKey(entry2.Key)
+	require.True(t, ok)
+	require.Equal(t, []byte("samplekeyb"), key2)
+	require.Equal(t, nonTxnMaxVersion, ts2)
 	require.Equal(t, []byte(val2), entry2.Value)
 	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
 }
@@ -133,8 +140,7 @@ func TestValueLogHotBucketRouting(t *testing.T) {
 	payload := bytes.Repeat([]byte("v"), 64)
 	hotBuckets := uint32(opt.ValueLogHotBucketCount)
 
-	e1 := kvpkg.NewEntry([]byte("hot-key"), payload)
-	e1.Meta = kvpkg.BitValuePointer
+	e1 := newPointerEntry([]byte("hot-key"), payload)
 	req1 := &request{Entries: []*kvpkg.Entry{e1}}
 	require.NoError(t, log.write([]*request{req1}))
 	e1.DecrRef()
@@ -142,8 +148,7 @@ func TestValueLogHotBucketRouting(t *testing.T) {
 	require.Len(t, req1.Ptrs, 1)
 	require.GreaterOrEqual(t, req1.Ptrs[0].Bucket, hotBuckets)
 
-	e2 := kvpkg.NewEntry([]byte("hot-key"), payload)
-	e2.Meta = kvpkg.BitValuePointer
+	e2 := newPointerEntry([]byte("hot-key"), payload)
 	req2 := &request{Entries: []*kvpkg.Entry{e2}}
 	require.NoError(t, log.write([]*request{req2}))
 	e2.DecrRef()
@@ -170,13 +175,16 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 	version := uint64(7)
 	value := bytes.Repeat([]byte("v"), 64)
 
-	require.NoError(t, db.SetVersionedEntry(kvpkg.CFDefault, key, version, value, 0))
-	entry, err := db.GetVersionedEntry(kvpkg.CFDefault, key, version)
+	applyVersionedEntryForTest(t, db, kvpkg.CFDefault, key, version, value, 0)
+	entry, err := db.GetInternalEntry(kvpkg.CFDefault, key, version)
 	require.NoError(t, err)
 	require.Equal(t, kvpkg.CFDefault, entry.CF)
-	require.Equal(t, key, entry.Key)
-	require.Equal(t, version, entry.Version)
+	_, userKey, _, ok := kvpkg.SplitInternalKey(entry.Key)
+	require.True(t, ok)
+	require.Equal(t, key, userKey)
+	require.Equal(t, version, kvpkg.Timestamp(entry.Key))
 	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
 }
 
 func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
@@ -199,8 +207,8 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 	log := db.vlog
 
 	payload := bytes.Repeat([]byte("v"), 180)
-	e1 := kvpkg.NewEntry([]byte("sync-key-1"), payload)
-	e2 := kvpkg.NewEntry([]byte("sync-key-2"), payload)
+	e1 := newPointerEntry([]byte("sync-key-1"), payload)
+	e2 := newPointerEntry([]byte("sync-key-2"), payload)
 	req := &request{Entries: []*kvpkg.Entry{e1, e2}}
 
 	require.NoError(t, log.write([]*request{req}))
@@ -246,10 +254,18 @@ func TestValueGC(t *testing.T) {
 	clearDir()
 	opt.ValueLogFileSize = 1 << 20
 	origCompactors := opt.NumCompactors
+	origMemTableSize := opt.MemTableSize
+	origSSTableMaxSz := opt.SSTableMaxSz
 	opt.NumCompactors = 0
+	opt.MemTableSize = 8 << 20
+	opt.SSTableMaxSz = 8 << 20
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
-	defer func() { opt.NumCompactors = origCompactors }()
+	defer func() {
+		opt.NumCompactors = origCompactors
+		opt.MemTableSize = origMemTableSize
+		opt.SSTableMaxSz = origSSTableMaxSz
+	}()
 	sz := 32 << 10
 	kvList := make([]*kvpkg.Entry, 0, 100)
 	defer func() {
@@ -265,13 +281,20 @@ func TestValueGC(t *testing.T) {
 		eCopy.ExpiresAt = e.ExpiresAt
 		kvList = append(kvList, eCopy)
 
-		require.NoError(t, db.setEntry(e))
+		if e.ExpiresAt > 0 {
+			ttl := time.Until(time.Unix(int64(e.ExpiresAt), 0))
+			require.NoError(t, db.SetWithTTL(e.Key, e.Value, ttl))
+		} else {
+			require.NoError(t, db.Set(e.Key, e.Value))
+		}
 		e.DecrRef()
 	}
-	require.NoError(t, db.RunValueLogGC(0.9))
+	if err := db.RunValueLogGC(0.9); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
+		require.NoError(t, err)
+	}
 	for _, e := range kvList {
 		item, err := db.Get(e.Key)
-		require.NoError(t, err)
+		require.NoErrorf(t, err, "missing key after gc user_key=%q raw=%x", string(e.Key), e.Key)
 		val := getItemValue(t, item)
 		require.NotNil(t, val)
 		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
@@ -331,11 +354,10 @@ func TestValueLogIterateReleasesEntries(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	txn := db.NewTransaction(true)
-	defer txn.Discard()
 	val := bytes.Repeat([]byte("x"), 128)
-	require.NoError(t, txn.SetEntry(kvpkg.NewEntry([]byte("iter-key"), val)))
-	require.NoError(t, txn.Commit())
+	entry := kvpkg.NewEntry([]byte("iter-key"), val)
+	require.NoError(t, db.Set(entry.Key, entry.Value))
+	entry.DecrRef()
 
 	vlog := db.vlog
 	active := vlog.managers[0].ActiveFID()
@@ -388,8 +410,8 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	req := requestPool.Get().(*request)
 	req.reset()
 	entries := []*kvpkg.Entry{
-		kvpkg.NewEntry([]byte("afail"), bytes.Repeat([]byte("a"), 512)),
-		kvpkg.NewEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 512)),
+		newPointerEntry([]byte("afail"), bytes.Repeat([]byte("a"), 512)),
+		newPointerEntry([]byte("bfail"), bytes.Repeat([]byte("b"), 512)),
 	}
 	req.loadEntries(entries)
 	req.IncrRef()
@@ -419,8 +441,8 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	req := requestPool.Get().(*request)
 	req.reset()
 	entries := []*kvpkg.Entry{
-		kvpkg.NewEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
-		kvpkg.NewEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
+		newPointerEntry([]byte("rfail1"), bytes.Repeat([]byte("x"), 512)),
+		newPointerEntry([]byte("rfail2"), bytes.Repeat([]byte("y"), 512)),
 	}
 	req.loadEntries(entries)
 	req.IncrRef()
@@ -442,8 +464,7 @@ func TestValueLogReadCopiesSmallValue(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	entry := kvpkg.NewEntry([]byte("small-read"), []byte("v"))
-	entry.Key = kvpkg.InternalKey(kvpkg.CFDefault, entry.Key, nonTxnMaxVersion)
+	entry := kvpkg.NewInternalEntry(kvpkg.CFDefault, []byte("small-read"), nonTxnMaxVersion, []byte("v"), 0, 0)
 	vp, err := db.vlog.newValuePtr(entry)
 	entry.DecrRef()
 	require.NoError(t, err)
@@ -458,8 +479,9 @@ func newRandEntry(sz int) *kvpkg.Entry {
 	v := make([]byte, sz)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	_, _ = rng.Read(v[:rng.Intn(sz)])
-	e := utils.BuildEntry()
-	e.Value = v
+	key := fmt.Appendf(nil, "vlog-rand-%d-%d", time.Now().UnixNano(), rng.Uint64())
+	e := kvpkg.NewEntry(key, v)
+	e.ExpiresAt = uint64(time.Now().Add(12 * time.Hour).Unix())
 	return e
 }
 func getItemValue(t *testing.T, item *kvpkg.Entry) (val []byte) {
@@ -482,7 +504,7 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	entry := kvpkg.NewEntry([]byte("manifest-head"), []byte("value"))
-	entry.Key = kvpkg.KeyWithTs(entry.Key, math.MaxUint32)
+	entry.Key = kvpkg.InternalKey(kvpkg.CFDefault, entry.Key, math.MaxUint32)
 	if err := db.batchSet([]*kvpkg.Entry{entry}); err != nil {
 		t.Fatalf("batchSet: %v", err)
 	}

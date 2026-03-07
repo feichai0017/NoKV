@@ -27,7 +27,7 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 - Checksums use `kv.CastagnoliCrcTable`, the same polynomial used by RocksDB (Castagnoli). Record encoding/decoding lives in `wal/record.go`.
 - The type byte allows mixing LSM mutations with raft log/state/snapshot records in the same WAL segment.
 - Appends are buffered by `bufio.Writer` so batches become single system calls.
-- Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestReplayTruncatedTail`).
+- Replay stops cleanly at truncated tails; tests simulate torn writes by truncating the final bytes and verifying replay remains idempotent (`wal/manager_test.go::TestManagerReplayHandlesTruncate`).
 
 ---
 
@@ -35,7 +35,12 @@ uint32 checksum (CRC32 Castagnoli over type + payload)
 
 ```go
 mgr, _ := wal.Open(wal.Config{Dir: path})
-infos, _ := mgr.Append(batchPayload)
+info, _ := mgr.AppendEntry(entry)
+batchInfo, _ := mgr.AppendEntryBatch(entries)
+typedInfos, _ := mgr.AppendRecords(wal.Record{
+    Type:    wal.RecordTypeRaftEntry,
+    Payload: raftPayload,
+})
 _ = mgr.Sync()
 _ = mgr.Rotate()
 _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
@@ -45,7 +50,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 ```
 
 Key behaviours:
-- `Append` automatically calls `ensureCapacity` to decide when to rotate; it returns `EntryInfo{SegmentID, Offset, Length}` for each payload so higher layers can build value pointers or manifest checkpoints.
+- `AppendEntry`/`AppendEntryBatch`/`AppendRecords` automatically call `ensureCapacity` to decide when to rotate; they return `EntryInfo{SegmentID, Offset, Length}` so upper layers can keep manifest/raft pointers.
 - `Sync` flushes the active file (used for `Options.SyncWrites`).
 - `Rotate` forces a new segment (used after flush/compaction checkpoints similar to RocksDB's `LogFileManager::SwitchLog`).
 - `Replay` iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.
@@ -60,10 +65,10 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 | Call Site | Purpose |
 | --- | --- |
 | `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the skiplist. |
-| `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which flows into `lsm.Set` and thus WAL. |
-| `DB.Set` | Direct write path: calls `lsm.Set`, which appends to WAL and updates the memtable. |
-| `manifest.Manager.LogEdit` | Uses `EntryInfo.SegmentID` to persist the WAL checkpoint (`EditLogPointer`). This acts as the `log number` seen in RocksDB manifest entries. |
-| `lsm/flush.Manager.Update` | Once an SST is installed, WAL segments older than the checkpoint are released (`wal.Manager.Remove`). |
+| `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which calls `lsm.SetBatch` and appends one WAL entry-batch record per request batch. |
+| `DB.Set` / `DB.SetWithTTL` / `DB.Del` / `DB.ApplyInternalEntries` | User/internal writes all flow through the same commit queue and eventually reach `lsm.SetBatch` + WAL append. |
+| `lsm/levels.go::flush` | Persists WAL checkpoint via `manifest.LogEdits(EditAddFile, EditLogPointer)` during flush install. |
+| `lsm/levels.go::flush` + `lsm/levelManager.canRemoveWalSegment` | Removes obsolete WAL segments after checkpoint/raft constraints are satisfied. |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |
 
 ---
@@ -112,7 +117,7 @@ Relevant options (see `options.go` for defaults):
 
 ## 8. Operational Tips
 
-- Configure `SyncOnWrite` for synchronous durability (default async like RocksDB's default). For latency-sensitive deployments, consider enabling to emulate Badger's `SyncWrites`.
+- Configure `Options.SyncWrites=true` for synchronous durability (default async, similar to RocksDB's default).
 - After large flushes, forcing `Rotate` keeps WAL files short, reducing replay time.
 - Archived WAL segments can be copied alongside manifest files for hot-backup strategies—since the manifest contains the WAL log number, snapshots behave like RocksDB's `Checkpoints`.
 

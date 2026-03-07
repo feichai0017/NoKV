@@ -38,12 +38,6 @@ type HotKeyStat struct {
 	Count int32  `json:"count"`
 }
 
-// ColumnFamilySnapshot aggregates read/write counters for a single column family.
-type ColumnFamilySnapshot struct {
-	Writes uint64 `json:"writes"`
-	Reads  uint64 `json:"reads"`
-}
-
 // LSMLevelStats captures aggregated metrics per LSM level.
 type LSMLevelStats struct {
 	Level              int     `json:"level"`
@@ -94,7 +88,6 @@ type StatsSnapshot struct {
 	WAL        WALStatsSnapshot                  `json:"wal"`
 	Raft       RaftStatsSnapshot                 `json:"raft"`
 	Write      WriteStatsSnapshot                `json:"write"`
-	Txn        TxnStatsSnapshot                  `json:"txn"`
 	Region     RegionStatsSnapshot               `json:"region"`
 	Hot        HotStatsSnapshot                  `json:"hot"`
 	Cache      CacheStatsSnapshot                `json:"cache"`
@@ -189,14 +182,6 @@ type WriteStatsSnapshot struct {
 	HotKeyLimited    uint64  `json:"hot_key_limited"`
 }
 
-// TxnStatsSnapshot provides transaction lifecycle counters from the oracle.
-type TxnStatsSnapshot struct {
-	Active    int64  `json:"active"`
-	Started   uint64 `json:"started"`
-	Committed uint64 `json:"committed"`
-	Conflicts uint64 `json:"conflicts"`
-}
-
 // RegionStatsSnapshot reports region counts grouped by region state.
 type RegionStatsSnapshot struct {
 	Total     int64 `json:"total"`
@@ -226,11 +211,10 @@ type CacheStatsSnapshot struct {
 
 // LSMStatsSnapshot summarizes per-level storage shape and value-density signals.
 type LSMStatsSnapshot struct {
-	Levels            []LSMLevelStats                 `json:"levels,omitempty"`
-	ValueBytesTotal   int64                           `json:"value_bytes_total"`
-	ValueDensityMax   float64                         `json:"value_density_max"`
-	ValueDensityAlert bool                            `json:"value_density_alert"`
-	ColumnFamilies    map[string]ColumnFamilySnapshot `json:"column_families,omitempty"`
+	Levels            []LSMLevelStats `json:"levels,omitempty"`
+	ValueBytesTotal   int64           `json:"value_bytes_total"`
+	ValueDensityMax   float64         `json:"value_density_max"`
+	ValueDensityAlert bool            `json:"value_density_alert"`
 }
 
 func newStats(db *DB) *Stats {
@@ -410,8 +394,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.AvgApplyMs = wsnap.AvgApplyMs
 		snap.Write.BatchesTotal = wsnap.Batches
 	}
-	snap.Write.ThrottleActive = atomic.LoadInt32(&s.db.blockWrites) == 1
-	snap.Write.HotKeyLimited = atomic.LoadUint64(&s.db.hotWriteLimited)
+	snap.Write.ThrottleActive = s.db.blockWrites.Load() == 1
+	snap.Write.HotKeyLimited = s.db.hotWriteLimited.Load()
 
 	if rm := s.regionMetrics.Load(); rm != nil {
 		rms := rm.Snapshot()
@@ -519,13 +503,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue
 		snap.ValueLog.Heads = stats.Heads
 	}
-	if s.db.orc != nil {
-		tm := s.db.orc.txnMetricsSnapshot()
-		snap.Txn.Active = tm.Active
-		snap.Txn.Started = tm.Started
-		snap.Txn.Committed = tm.Committed
-		snap.Txn.Conflicts = tm.Conflicts
-	}
 	if s.db != nil && s.db.hotRead != nil {
 		topK := s.db.opt.HotRingTopK
 		if topK <= 0 {
@@ -572,9 +549,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Compaction.LastDurationMs = lastMs
 		snap.Compaction.MaxDurationMs = maxMs
 		snap.Compaction.Runs = runs
-	}
-	if s.db != nil {
-		snap.LSM.ColumnFamilies = s.db.columnFamilyStats()
 	}
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()

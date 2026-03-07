@@ -1,0 +1,439 @@
+name: Project Automation
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled, closed]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, labeled, unlabeled, closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  repository-projects: write
+
+jobs:
+  sync-project:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_OWNER: feichai0017
+      PROJECT_NUMBER: "4"
+    steps:
+      - name: Sync item to GitHub Project
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_TOKEN || github.token }}
+          script: |
+            async function main() {
+              const projectOwner = process.env.PROJECT_OWNER;
+              const projectNumber = Number(process.env.PROJECT_NUMBER);
+
+              if (!projectOwner || !projectNumber) {
+                core.warning('Project automation skipped: PROJECT_OWNER/PROJECT_NUMBER not configured.');
+                return;
+              }
+
+              const FIELD_NAMES = {
+                status: 'Status',
+                type: 'Type',
+                priority: 'Priority',
+              };
+
+              const OPTION_NAMES = {
+                status: {
+                  todo: 'Todo',
+                  inProgress: 'In Progress',
+                  done: 'Done',
+                },
+                type: {
+                  feature: 'feature',
+                  bug: 'bug',
+                  refactor: 'refactor',
+                  docs: 'docs',
+                  chore: 'chore',
+                },
+                priority: {
+                  p0: 'P0',
+                  p1: 'P1',
+                  p2: 'P2',
+                  p3: 'P3',
+                },
+              };
+
+              const issue = context.payload.issue;
+              const pr = context.payload.pull_request;
+              const content = pr || issue;
+              const repoOwner = context.repo.owner;
+              const repoName = context.repo.repo;
+
+              if (!content || !content.node_id) {
+                core.notice('No issue/PR payload found; skipping.');
+                return;
+              }
+
+              const contentId = content.node_id;
+              const isPR = Boolean(pr);
+              const action = context.payload.action;
+              const isClosed = action === 'closed' || content.state === 'closed';
+              const isMergedPR = isPR && action === 'closed' && pr.merged === true;
+
+              const projectQuery = `
+                fragment ProjectData on ProjectV2 {
+                  id
+                  title
+                  fields(first: 50) {
+                    nodes {
+                      __typename
+                      ... on ProjectV2FieldCommon {
+                        id
+                        name
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+
+              function isNotFoundError(err, kind) {
+                const message = String(err && err.message ? err.message : err);
+                return message.includes(`Could not resolve to a ${kind}`);
+              }
+
+              async function resolveProjectForUser(owner, number) {
+                const res = await github.graphql(
+                  `
+                  query($owner: String!, $number: Int!) {
+                    user(login: $owner) {
+                      projectV2(number: $number) {
+                        ...ProjectData
+                      }
+                    }
+                  }
+                  ${projectQuery}
+                  `,
+                  { owner, number }
+                );
+                return res.user?.projectV2 || null;
+              }
+
+              async function resolveProjectForOrganization(owner, number) {
+                const res = await github.graphql(
+                  `
+                  query($owner: String!, $number: Int!) {
+                    organization(login: $owner) {
+                      projectV2(number: $number) {
+                        ...ProjectData
+                      }
+                    }
+                  }
+                  ${projectQuery}
+                  `,
+                  { owner, number }
+                );
+                return res.organization?.projectV2 || null;
+              }
+
+              async function resolveProject(owner, number) {
+                try {
+                  const userProject = await resolveProjectForUser(owner, number);
+                  if (userProject) {
+                    return userProject;
+                  }
+                } catch (err) {
+                  if (!isNotFoundError(err, 'User')) {
+                    throw err;
+                  }
+                }
+
+                try {
+                  const orgProject = await resolveProjectForOrganization(owner, number);
+                  if (orgProject) {
+                    return orgProject;
+                  }
+                } catch (err) {
+                  if (!isNotFoundError(err, 'Organization')) {
+                    throw err;
+                  }
+                }
+
+                return null;
+              }
+
+              const project = await resolveProject(projectOwner, projectNumber);
+              if (!project) {
+                core.warning(
+                  `Project automation skipped: project ${projectOwner}#${projectNumber} is not visible to this token. ` +
+                  'Configure secrets.PROJECTS_TOKEN with project scope for user/org projects.'
+                );
+                return;
+              }
+
+              const PROJECT_ID = project.id;
+              core.info(`Resolved project ${project.title} (${PROJECT_ID})`);
+
+              function findField(name) {
+                return (project.fields?.nodes || []).find((field) => field?.name === name) || null;
+              }
+
+              function findSingleSelectField(name) {
+                const field = findField(name);
+                if (!field) {
+                  core.warning(`Project field not found: ${name}`);
+                  return null;
+                }
+                if (!Array.isArray(field.options)) {
+                  core.warning(`Project field is not single-select: ${name}`);
+                  return null;
+                }
+                return field;
+              }
+
+              function optionId(fieldName, optionName) {
+                const field = findSingleSelectField(fieldName);
+                if (!field) {
+                  return null;
+                }
+                const option = field.options.find((item) => item?.name === optionName);
+                if (!option) {
+                  core.warning(`Project option not found: ${fieldName} -> ${optionName}`);
+                  return null;
+                }
+                return option.id;
+              }
+
+              function normalizeLabels(rawLabels) {
+                return (rawLabels || [])
+                  .map((l) => (typeof l === 'string' ? l : l.name || ''))
+                  .map((s) => s.trim().toLowerCase())
+                  .filter(Boolean);
+              }
+
+              function pickType(labels) {
+                const mapping = [
+                  ['type/bug', 'bug'],
+                  ['bug', 'bug'],
+                  ['type/feature', 'feature'],
+                  ['feature', 'feature'],
+                  ['type/refactor', 'refactor'],
+                  ['refactor', 'refactor'],
+                  ['type/docs', 'docs'],
+                  ['docs', 'docs'],
+                  ['type/chore', 'chore'],
+                  ['chore', 'chore'],
+                ];
+                for (const [label, key] of mapping) {
+                  if (labels.includes(label)) return optionId(FIELD_NAMES.type, OPTION_NAMES.type[key]);
+                }
+                return null;
+              }
+
+              function pickPriority(labels) {
+                const mapping = [
+                  ['priority/p0', 'p0'],
+                  ['p0', 'p0'],
+                  ['priority/p1', 'p1'],
+                  ['p1', 'p1'],
+                  ['priority/p2', 'p2'],
+                  ['p2', 'p2'],
+                  ['priority/p3', 'p3'],
+                  ['p3', 'p3'],
+                ];
+                for (const [label, key] of mapping) {
+                  if (labels.includes(label)) return optionId(FIELD_NAMES.priority, OPTION_NAMES.priority[key]);
+                }
+                return null;
+              }
+
+              async function findItemId(projectId, targetContentId) {
+                let cursor = null;
+                while (true) {
+                  const res = await github.graphql(
+                    `
+                    query($projectId: ID!, $cursor: String) {
+                      node(id: $projectId) {
+                        ... on ProjectV2 {
+                          items(first: 100, after: $cursor) {
+                            nodes {
+                              id
+                              content {
+                                __typename
+                                ... on Issue { id }
+                                ... on PullRequest { id }
+                              }
+                            }
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                          }
+                        }
+                      }
+                    }
+                    `,
+                    { projectId, cursor }
+                  );
+
+                  const page = res?.node?.items;
+                  if (!page) return null;
+
+                  for (const item of page.nodes || []) {
+                    if (item?.content?.id === targetContentId) {
+                      return item.id;
+                    }
+                  }
+
+                  if (!page.pageInfo?.hasNextPage) return null;
+                  cursor = page.pageInfo.endCursor;
+                }
+              }
+
+              async function addOrGetItemId(projectId, targetContentId) {
+                try {
+                  const addRes = await github.graphql(
+                    `
+                    mutation($projectId: ID!, $contentId: ID!) {
+                      addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                        item { id }
+                      }
+                    }
+                    `,
+                    { projectId, contentId: targetContentId }
+                  );
+                  return addRes.addProjectV2ItemById.item.id;
+                } catch (err) {
+                  core.warning(`addProjectV2ItemById failed: ${err.message}`);
+                  const existing = await findItemId(projectId, targetContentId);
+                  if (existing) return existing;
+                  throw err;
+                }
+              }
+
+              async function updateSingleSelect(projectId, itemId, fieldName, optionValueId, label) {
+                if (!optionValueId) return;
+                const field = findSingleSelectField(fieldName);
+                if (!field) return;
+                await github.graphql(
+                  `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(
+                      input: {
+                        projectId: $projectId
+                        itemId: $itemId
+                        fieldId: $fieldId
+                        value: { singleSelectOptionId: $optionId }
+                      }
+                    ) {
+                      projectV2Item { id }
+                    }
+                  }
+                  `,
+                  { projectId, itemId, fieldId: field.id, optionId: optionValueId }
+                );
+                core.info(`Updated ${label} -> ${optionValueId}`);
+              }
+
+              async function getPRClosingIssueIds(owner, repo, prNumber) {
+                if (!owner || !repo || !Number.isInteger(prNumber) || prNumber <= 0) {
+                  return [];
+                }
+                const ids = [];
+                let cursor = null;
+                while (true) {
+                  const res = await github.graphql(
+                    `
+                    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                      repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                          closingIssuesReferences(first: 50, after: $cursor) {
+                            nodes {
+                              id
+                            }
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                          }
+                        }
+                      }
+                    }
+                    `,
+                    { owner, repo, number: prNumber, cursor }
+                  );
+
+                  const page = res?.repository?.pullRequest?.closingIssuesReferences;
+                  if (!page) {
+                    break;
+                  }
+                  for (const node of page.nodes || []) {
+                    if (node?.id) {
+                      ids.push(node.id);
+                    }
+                  }
+                  if (!page.pageInfo?.hasNextPage) {
+                    break;
+                  }
+                  cursor = page.pageInfo.endCursor;
+                }
+                return ids;
+              }
+
+              async function syncLinkedIssueStatus(projectId, statusOptionId) {
+                if (!isPR || !statusOptionId) {
+                  return;
+                }
+                const linkedIssueIds = await getPRClosingIssueIds(repoOwner, repoName, pr.number);
+                if (linkedIssueIds.length === 0) {
+                  core.info('No linked issues (closingIssuesReferences) found for this PR.');
+                  return;
+                }
+                for (const linkedIssueId of linkedIssueIds) {
+                  const linkedItemId = await addOrGetItemId(projectId, linkedIssueId);
+                  await updateSingleSelect(projectId, linkedItemId, FIELD_NAMES.status, statusOptionId, 'linked-issue-status');
+                }
+              }
+
+              const itemId = await addOrGetItemId(PROJECT_ID, contentId);
+              core.info(`Project item id: ${itemId}`);
+
+              const labels = normalizeLabels(content.labels);
+              const typeOption = pickType(labels);
+              const priorityOption = pickPriority(labels);
+
+              let statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.todo);
+              if (isClosed || isMergedPR) {
+                statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.done);
+              } else if (isPR) {
+                statusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.inProgress);
+              }
+
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.status, statusOption, 'status');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.type, typeOption, 'type');
+              await updateSingleSelect(PROJECT_ID, itemId, FIELD_NAMES.priority, priorityOption, 'priority');
+
+              let linkedIssueStatusOption = null;
+              if (isPR && isMergedPR) {
+                linkedIssueStatusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.done);
+              } else if (isPR && !isClosed) {
+                linkedIssueStatusOption = optionId(FIELD_NAMES.status, OPTION_NAMES.status.inProgress);
+              }
+              await syncLinkedIssueStatus(PROJECT_ID, linkedIssueStatusOption);
+            }
+
+            await main().catch((err) => {
+              const message = String(err && err.message ? err.message : err);
+              if (
+                message.includes('Could not resolve to a node') ||
+                message.includes('Resource not accessible by integration') ||
+                message.includes('insufficient scopes')
+              ) {
+                core.warning(`Project automation skipped due to token scope: ${message}`);
+                return;
+              }
+              throw err;
+            });

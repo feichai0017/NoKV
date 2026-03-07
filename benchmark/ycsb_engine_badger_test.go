@@ -10,7 +10,7 @@ import (
 func TestBadgerEngineCRUD(t *testing.T) {
 	engine := newBadgerEngine(ycsbEngineOptions{
 		BaseDir:           t.TempDir(),
-		ValueThreshold:    32,
+		ValueThreshold:    1024,
 		SyncWrites:        false,
 		BlockCacheMB:      4,
 		BadgerCompression: "none",
@@ -44,7 +44,7 @@ func TestBadgerEngineCRUD(t *testing.T) {
 func TestBadgerBatchInsert(t *testing.T) {
 	engine := newBadgerEngine(ycsbEngineOptions{
 		BaseDir:           t.TempDir(),
-		ValueThreshold:    32,
+		ValueThreshold:    1024,
 		SyncWrites:        false,
 		BlockCacheMB:      4,
 		BadgerCompression: "none",

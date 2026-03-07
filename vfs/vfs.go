@@ -2,10 +2,14 @@
 package vfs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // File describes the file operations storage components rely on.
@@ -30,13 +34,18 @@ type FDProvider interface {
 }
 
 // FS defines filesystem operations used by storage/runtime components.
+// Lock uses a Unix advisory file lock on the provided path. On Unix, fcntl
+// locks are process-scoped, so callers must avoid independently opening and
+// closing the same inode while the lock is held.
 type FS interface {
 	OpenHandle(name string) (File, error)
 	OpenFileHandle(name string, flag int, perm os.FileMode) (File, error)
+	Lock(name string) (io.Closer, error)
 	MkdirAll(path string, perm os.FileMode) error
 	RemoveAll(path string) error
 	Remove(name string) error
 	Rename(oldPath, newPath string) error
+	RenameNoReplace(oldPath, newPath string) error
 	Stat(name string) (os.FileInfo, error)
 	ReadDir(name string) ([]os.DirEntry, error)
 	ReadFile(name string) ([]byte, error)
@@ -49,6 +58,13 @@ type FS interface {
 // OSFS is the production filesystem implementation backed by the os package.
 type OSFS struct{}
 
+var processLocks = struct {
+	mu   sync.Mutex
+	held map[string]struct{}
+}{
+	held: make(map[string]struct{}),
+}
+
 // OpenHandle opens an existing file and returns a vfs.File.
 func (OSFS) OpenHandle(name string) (File, error) {
 	return os.Open(name)
@@ -57,6 +73,37 @@ func (OSFS) OpenHandle(name string) (File, error) {
 // OpenFileHandle opens or creates a file and returns a vfs.File.
 func (OSFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File, error) {
 	return os.OpenFile(name, flag, perm)
+}
+
+// Lock acquires an exclusive non-blocking lock on name and returns a closer
+// that releases it. The lock file is truncated on open so stale contents from
+// older implementations do not persist across reopen.
+func (OSFS) Lock(name string) (io.Closer, error) {
+	lockName := normalizeLockName(name)
+	if !claimProcessLock(lockName) {
+		return nil, fmt.Errorf("lock %q already held in process", lockName)
+	}
+	file, err := os.OpenFile(lockName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		releaseProcessLock(lockName)
+		return nil, err
+	}
+	fd := file.Fd()
+	spec := unix.Flock_t{
+		Type:   unix.F_WRLCK,
+		Whence: int16(io.SeekStart),
+		Start:  0,
+		Len:    0,
+	}
+	if err := unix.FcntlFlock(fd, unix.F_SETLK, &spec); err != nil {
+		releaseProcessLock(lockName)
+		_ = file.Close()
+		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EAGAIN) {
+			return nil, fmt.Errorf("lock %q already held: %w", lockName, os.ErrExist)
+		}
+		return nil, err
+	}
+	return &fileLock{name: lockName, file: file}, nil
 }
 
 // MkdirAll creates a directory hierarchy.
@@ -77,6 +124,11 @@ func (OSFS) Remove(name string) error {
 // Rename renames (moves) a file or directory.
 func (OSFS) Rename(oldPath, newPath string) error {
 	return os.Rename(oldPath, newPath)
+}
+
+// RenameNoReplace renames oldPath to newPath without overwriting an existing target.
+func (OSFS) RenameNoReplace(oldPath, newPath string) error {
+	return renameNoReplaceOS(oldPath, newPath)
 }
 
 // Stat returns file metadata.
@@ -123,6 +175,7 @@ func Ensure(fs FS) FS {
 }
 
 // UnwrapOSFile extracts the underlying *os.File from a File implementation when available.
+// Prefer FileFD in storage code that only needs an OS descriptor for syscalls.
 func UnwrapOSFile(f File) (*os.File, bool) {
 	if f == nil {
 		return nil, false
@@ -138,7 +191,8 @@ func UnwrapOSFile(f File) (*os.File, bool) {
 	return nil, false
 }
 
-// FileFD extracts a file descriptor when the file implementation supports it.
+// FileFD extracts an OS file descriptor when the file implementation supports it.
+// Storage code should prefer this capability over depending on *os.File.
 func FileFD(f File) (uintptr, bool) {
 	if f == nil {
 		return 0, false
@@ -169,4 +223,44 @@ func SyncDir(fs FS, dir string) error {
 		return fmt.Errorf("close dir %s: %w", dir, closeErr)
 	}
 	return nil
+}
+
+type fileLock struct {
+	name string
+	file File
+}
+
+func (l *fileLock) Close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	file := l.file
+	name := l.name
+	l.file = nil
+	l.name = ""
+	defer releaseProcessLock(name)
+	return file.Close()
+}
+
+func normalizeLockName(name string) string {
+	if abs, err := filepath.Abs(name); err == nil {
+		return abs
+	}
+	return filepath.Clean(name)
+}
+
+func claimProcessLock(name string) bool {
+	processLocks.mu.Lock()
+	defer processLocks.mu.Unlock()
+	if _, ok := processLocks.held[name]; ok {
+		return false
+	}
+	processLocks.held[name] = struct{}{}
+	return true
+}
+
+func releaseProcessLock(name string) {
+	processLocks.mu.Lock()
+	delete(processLocks.held, name)
+	processLocks.mu.Unlock()
 }

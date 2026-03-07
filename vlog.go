@@ -30,14 +30,14 @@ type valueLog struct {
 	managers           []*vlogpkg.Manager
 	filesToDeleteLock  sync.Mutex
 	filesToBeDeleted   []manifest.ValueLogID
-	numActiveIterators int32
+	numActiveIterators atomic.Int32
 	db                 *DB
 	opt                Options
 	hot                hotTracker
 	gcTokens           chan struct{}
 	gcParallelism      int
 	gcBucketBusy       []atomic.Uint32
-	gcPickSeed         uint64
+	gcPickSeed         atomic.Uint64
 	garbageCh          chan struct{}
 	lfDiscardStats     *lfDiscardStats
 }
@@ -186,16 +186,13 @@ func (vlog *valueLog) bucketForEntry(e *kv.Entry) uint32 {
 		}
 	}
 
-	cf := e.CF
-	userKey := e.Key
-	if len(e.Key) > 0 {
-		parsedCF, parsedKey, _ := kv.SplitInternalKey(e.Key)
-		if len(parsedKey) > 0 {
-			userKey = parsedKey
-			if parsedCF.Valid() {
-				cf = parsedCF
-			}
-		}
+	parsedCF, userKey, _, ok := kv.SplitInternalKey(e.Key)
+	utils.CondPanicFunc(!ok, func() error {
+		return fmt.Errorf("valueLog bucketForEntry expects internal key: %x", e.Key)
+	})
+	cf := parsedCF
+	if !cf.Valid() {
+		cf = kv.CFDefault
 	}
 	skey := cfHotKey(cf, userKey)
 	if skey == "" {
@@ -573,7 +570,9 @@ func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 		}
 		next := &kv.ValuePtr{Bucket: bucket, Fid: head.Fid, Offset: head.Offset, Len: head.Len}
 		if prev, ok := db.vheads[bucket]; ok && next.Less(&prev) {
-			utils.CondPanic(true, fmt.Errorf("value log head regression: bucket=%d prev=%+v next=%+v", bucket, prev, next))
+			utils.CondPanicFunc(true, func() error {
+				return fmt.Errorf("value log head regression: bucket=%d prev=%+v next=%+v", bucket, prev, next)
+			})
 		}
 		db.vheads[bucket] = *next
 		if !db.shouldPersistHead(next, bucket) {
@@ -637,7 +636,7 @@ func (vlog *valueLog) replayLog(bucket uint32, fid uint32, offset uint32, replay
 
 	vlog.logf("Truncating vlog file %05d (bucket %d) to offset: %d", fid, bucket, endOffset)
 	if err := mgr.SegmentTruncate(fid, endOffset); err != nil {
-		return utils.WarpErr(fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
+		return utils.WrapErr(fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
 	}
 	return nil
 }

@@ -1,23 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/pb"
+	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 )
 
@@ -30,6 +26,10 @@ type timestampAllocator interface {
 	Reserve(n uint64) (uint64, error)
 }
 
+type pdTSOClient interface {
+	Tso(ctx context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error)
+}
+
 type raftClient interface {
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error
@@ -38,73 +38,44 @@ type raftClient interface {
 	Close() error
 }
 
-type localOracle struct {
-	last atomic.Uint64
+type pdTSOAllocator struct {
+	client  pdTSOClient
+	timeout time.Duration
 }
 
-func (o *localOracle) Reserve(n uint64) (uint64, error) {
-	if n == 0 {
-		return 0, fmt.Errorf("oracle reserve: n must be >= 1")
+func newPDTSOAllocator(client pdTSOClient, timeout time.Duration) *pdTSOAllocator {
+	if timeout <= 0 {
+		timeout = 3 * time.Second
 	}
-	for {
-		prev := o.last.Load()
-		now := uint64(time.Now().UnixNano())
-		if now <= prev {
-			now = prev + n
-		} else {
-			now = now + (n - 1)
-		}
-		start := now - (n - 1)
-		if o.last.CompareAndSwap(prev, now) {
-			return start, nil
-		}
+	return &pdTSOAllocator{
+		client:  client,
+		timeout: timeout,
 	}
 }
 
-type httpTSO struct {
-	url    string
-	client *http.Client
-}
-
-func newHTTPTSO(url string) *httpTSO {
-	return &httpTSO{
-		url: strings.TrimRight(url, "/"),
-		client: &http.Client{
-			Timeout: 2 * time.Second,
-		},
-	}
-}
-
-func (t *httpTSO) Reserve(n uint64) (uint64, error) {
+func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	if n == 0 {
 		return 0, fmt.Errorf("tso reserve: n must be >= 1")
 	}
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/tso?batch=%d", t.url, n), nil)
+	if p == nil || p.client == nil {
+		return 0, fmt.Errorf("tso reserve: allocator not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	resp, err := p.client.Tso(ctx, &pb.TsoRequest{Count: n})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("tso reserve: rpc failed: %w", err)
 	}
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return 0, err
+	if resp == nil {
+		return 0, fmt.Errorf("tso reserve: empty response")
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("tso reserve: unexpected status %s", resp.Status)
+	if resp.GetCount() < n {
+		return 0, fmt.Errorf("tso reserve: requested %d timestamps, got %d", n, resp.GetCount())
 	}
-	var payload struct {
-		Timestamp uint64 `json:"timestamp"`
-		Count     uint64 `json:"count"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return 0, fmt.Errorf("tso reserve: decode response: %w", err)
-	}
-	if payload.Count < n {
-		return 0, fmt.Errorf("tso reserve: requested %d timestamps, got %d", n, payload.Count)
-	}
-	return payload.Timestamp, nil
+	return resp.GetTimestamp(), nil
 }
 
-func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
+func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	cfgFile, err := config.LoadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
@@ -125,51 +96,31 @@ func newRaftBackend(cfgPath, tsoURL, addrScope string) (*raftBackend, error) {
 			Addr:    addr,
 		})
 	}
-	for _, region := range cfgFile.Regions {
-		meta := &pb.RegionMeta{
-			Id:               region.ID,
-			StartKey:         decodeKey(region.StartKey),
-			EndKey:           decodeKey(region.EndKey),
-			EpochVersion:     region.Epoch.Version,
-			EpochConfVersion: region.Epoch.ConfVersion,
-		}
-		for _, peer := range region.Peers {
-			meta.Peers = append(meta.Peers, &pb.RegionPeer{
-				StoreId: peer.StoreID,
-				PeerId:  peer.PeerID,
-			})
-		}
-		cfg.Regions = append(cfg.Regions, client.RegionConfig{
-			Meta:          meta,
-			LeaderStoreID: region.LeaderStoreID,
-		})
+	// Route source is converged to PD resolver. raft_config regions are treated
+	// as bootstrap/deployment metadata and are not used as runtime routing truth.
+	pdAddr = strings.TrimSpace(pdAddr)
+	if pdAddr == "" {
+		pdAddr = cfgFile.ResolvePDAddr(addrScope)
 	}
+	if pdAddr == "" {
+		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode (flag or config.pd)")
+	}
+	dialCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	pdCli, err := pdclient.NewGRPCClient(dialCtx, pdAddr)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("raft backend: init pd client: %w", err)
+	}
+	cfg.RegionResolver = pdCli
 	cl, err := client.New(cfg)
 	if err != nil {
+		_ = pdCli.Close()
 		return nil, fmt.Errorf("raft backend: init client: %w", err)
-	}
-
-	tsoURL = strings.TrimSpace(tsoURL)
-	if tsoURL == "" && cfgFile.TSO != nil {
-		tsoURL = strings.TrimSpace(cfgFile.TSO.AdvertiseURL)
-		if tsoURL == "" {
-			tsoURL = strings.TrimSpace(cfgFile.TSO.ListenAddr)
-			if tsoURL != "" && !strings.Contains(tsoURL, "://") {
-				tsoURL = "http://" + tsoURL
-			}
-		}
-	}
-
-	var allocator timestampAllocator
-	if tsoURL != "" {
-		allocator = newHTTPTSO(tsoURL)
-	} else {
-		allocator = &localOracle{}
 	}
 
 	return &raftBackend{
 		client: cl,
-		ts:     allocator,
+		ts:     newPDTSOAllocator(pdCli, 3*time.Second),
 	}, nil
 }
 
@@ -230,28 +181,20 @@ func (b *raftBackend) Set(args setArgs) (bool, error) {
 
 	valueKey := append([]byte(nil), args.Key...)
 	valueCopy := append([]byte(nil), args.Value...)
-	var mutations []*pb.Mutation
-	mutations = append(mutations, &pb.Mutation{
-		Op:    pb.Mutation_Put,
-		Key:   valueKey,
-		Value: valueCopy,
-	})
-
-	metaKey := ttlMetaKey(args.Key)
-	if args.ExpireAt > 0 {
-		buf := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf, args.ExpireAt)
-		mutations = append(mutations, &pb.Mutation{
-			Op:    pb.Mutation_Put,
-			Key:   metaKey,
-			Value: buf,
-		})
-	} else {
-		mutations = append(mutations, &pb.Mutation{
-			Op:  pb.Mutation_Delete,
-			Key: metaKey,
-		})
+	expireAt := args.ExpireAt
+	if expireAt == 0 && args.TTL > 0 {
+		now := time.Now()
+		expireAt = uint64(now.Add(args.TTL).Unix())
+		if expireAt <= uint64(now.Unix()) {
+			expireAt = uint64(now.Add(time.Second).Unix())
+		}
 	}
+	mutations := []*pb.Mutation{{
+		Op:        pb.Mutation_Put,
+		Key:       valueKey,
+		Value:     valueCopy,
+		ExpiresAt: expireAt,
+	}}
 
 	if err := b.mutate(valueKey, mutations...); err != nil {
 		return false, err
@@ -273,7 +216,7 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 		return 0, err
 	}
 
-	mutations := make([]*pb.Mutation, 0, len(keys)*2)
+	mutations := make([]*pb.Mutation, 0, len(keys))
 	var removed int64
 	for _, key := range keys {
 		resp := resps[string(key)]
@@ -281,11 +224,7 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 			removed++
 		}
 		valueKey := append([]byte(nil), key...)
-		metaKey := ttlMetaKey(key)
-		mutations = append(mutations,
-			&pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey},
-			&pb.Mutation{Op: pb.Mutation_Delete, Key: metaKey},
-		)
+		mutations = append(mutations, &pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey})
 	}
 	if len(mutations) == 0 {
 		return removed, nil
@@ -304,15 +243,12 @@ func (b *raftBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 	if err != nil {
 		return nil, err
 	}
-	request := make([][]byte, 0, len(keys)*2)
+	request := make([][]byte, 0, len(keys))
 	valueKeys := make([][]byte, len(keys))
-	metaKeys := make([][]byte, len(keys))
 	for i, key := range keys {
 		valueKey := append([]byte(nil), key...)
 		valueKeys[i] = valueKey
-		metaKey := ttlMetaKey(key)
-		metaKeys[i] = metaKey
-		request = append(request, valueKey, metaKey)
+		request = append(request, valueKey)
 	}
 
 	resps, err := b.batchGetWithRetry(request, version)
@@ -322,8 +258,7 @@ func (b *raftBackend) MGet(keys [][]byte) ([]*redisValue, error) {
 	out := make([]*redisValue, len(keys))
 	for i, key := range keys {
 		valueResp := resps[string(valueKeys[i])]
-		ttlResp := resps[string(metaKeys[i])]
-		val, err := b.buildValueAtVersion(key, valueResp, ttlResp)
+		val, err := b.buildValueAtVersion(key, valueResp)
 		if err != nil {
 			return nil, err
 		}
@@ -336,24 +271,19 @@ func (b *raftBackend) MSet(pairs [][2][]byte) error {
 	if len(pairs) == 0 {
 		return nil
 	}
-	mutations := make([]*pb.Mutation, 0, len(pairs)*2)
+	mutations := make([]*pb.Mutation, 0, len(pairs))
 	for _, pair := range pairs {
 		if len(pair[0]) == 0 {
 			return fmt.Errorf("empty key")
 		}
-		// Write value and clear TTL metadata for every key in a single mutate call.
+		// MSET writes plain values and clears existing TTL by setting ExpiresAt=0.
 		valueKey := append([]byte(nil), pair[0]...)
 		valueCopy := append([]byte(nil), pair[1]...)
 		mutations = append(mutations, &pb.Mutation{
-			Op:    pb.Mutation_Put,
-			Key:   valueKey,
-			Value: valueCopy,
-		})
-		// Ensure any stale TTL metadata is cleared.
-		metaKey := ttlMetaKey(pair[0])
-		mutations = append(mutations, &pb.Mutation{
-			Op:  pb.Mutation_Delete,
-			Key: metaKey,
+			Op:        pb.Mutation_Put,
+			Key:       valueKey,
+			Value:     valueCopy,
+			ExpiresAt: 0,
 		})
 	}
 	return b.mutate(append([]byte(nil), pairs[0][0]...), mutations...)
@@ -410,24 +340,18 @@ const (
 	defaultLockTTL = uint64(3000)
 )
 
-var ttlMetaPrefix = []byte("!redis:ttl!")
-
 func (b *raftBackend) reserveTimestamp(n uint64) (uint64, error) {
 	return b.ts.Reserve(n)
 }
 
 func (b *raftBackend) getAtVersion(key []byte, version uint64) (*redisValue, error) {
-	request := [][]byte{
-		append([]byte(nil), key...),
-		ttlMetaKey(key),
-	}
+	request := [][]byte{append([]byte(nil), key...)}
 	resps, err := b.batchGetWithRetry(request, version)
 	if err != nil {
 		return nil, err
 	}
 	valueResp := resps[string(request[0])]
-	ttlResp := resps[string(request[1])]
-	return b.buildValueAtVersion(key, valueResp, ttlResp)
+	return b.buildValueAtVersion(key, valueResp)
 }
 
 // retryWithConflictResolution executes fn with automatic retry on KeyConflictError.
@@ -482,19 +406,13 @@ func (b *raftBackend) resolveLocks(locks []*pb.Locked) bool {
 	return true
 }
 
-func (b *raftBackend) buildValueAtVersion(key []byte, valueResp, ttlResp *pb.GetResponse) (*redisValue, error) {
+func (b *raftBackend) buildValueAtVersion(key []byte, valueResp *pb.GetResponse) (*redisValue, error) {
 	if valueResp == nil || valueResp.GetNotFound() {
-		if ttlResp != nil && !ttlResp.GetNotFound() {
-			// Stale TTL metadata without a value should be cleaned up.
-			if err := b.deleteKeys(key); err != nil {
-				return nil, err
-			}
-		}
 		return &redisValue{Found: false}, nil
 	}
-	expiresAt := decodeTTLFromResponse(ttlResp)
+	expiresAt := valueResp.GetExpiresAt()
 	if expiresAt > 0 && expiresAt <= uint64(time.Now().Unix()) {
-		if err := b.deleteKeys(key); err != nil {
+		if err := b.deleteKey(key); err != nil {
 			return nil, err
 		}
 		return &redisValue{Found: false}, nil
@@ -506,31 +424,11 @@ func (b *raftBackend) buildValueAtVersion(key []byte, valueResp, ttlResp *pb.Get
 	}, nil
 }
 
-func ttlMetaKey(key []byte) []byte {
-	out := make([]byte, len(ttlMetaPrefix)+len(key))
-	copy(out, ttlMetaPrefix)
-	copy(out[len(ttlMetaPrefix):], key)
-	return out
-}
-
-func (b *raftBackend) deleteKeys(key []byte) error {
+func (b *raftBackend) deleteKey(key []byte) error {
 	valueKey := append([]byte(nil), key...)
-	metaKey := ttlMetaKey(key)
 	return b.mutate(valueKey,
 		&pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey},
-		&pb.Mutation{Op: pb.Mutation_Delete, Key: metaKey},
 	)
-}
-
-func decodeTTLFromResponse(resp *pb.GetResponse) uint64 {
-	if resp == nil || resp.GetNotFound() {
-		return 0
-	}
-	data := resp.GetValue()
-	if len(data) != 8 {
-		return 0
-	}
-	return binary.BigEndian.Uint64(data)
 }
 
 func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
@@ -611,37 +509,8 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
 
 func (b *raftBackend) resolveLocksWithKey(lockVersion, commitVersion uint64, key []byte) bool {
 	keys := [][]byte{append([]byte(nil), key...)}
-	if isTTLMetaKey(key) {
-		base := append([]byte(nil), key[len(ttlMetaPrefix):]...)
-		if len(base) > 0 {
-			keys = append(keys, base)
-		}
-	} else {
-		keys = append(keys, ttlMetaKey(key))
-	}
 	ctx, cancel := b.context()
 	defer cancel()
-	_, err := b.client.ResolveLocks(ctx, lockVersion, commitVersion, uniqueKeys(keys))
+	_, err := b.client.ResolveLocks(ctx, lockVersion, commitVersion, keys)
 	return err == nil
-}
-
-func isTTLMetaKey(key []byte) bool {
-	return bytes.HasPrefix(key, ttlMetaPrefix)
-}
-
-func uniqueKeys(keys [][]byte) [][]byte {
-	seen := make(map[string]struct{}, len(keys))
-	out := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		if len(key) == 0 {
-			continue
-		}
-		str := string(key)
-		if _, ok := seen[str]; ok {
-			continue
-		}
-		seen[str] = struct{}{}
-		out = append(out, key)
-	}
-	return out
 }

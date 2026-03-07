@@ -21,23 +21,29 @@ services:
       - node3-data:/volumes/store-3
     restart: "no"
 
-  tso:
+  pd:
     image: nokv:latest
-    container_name: nokv-tso
-    entrypoint: ["/usr/local/bin/nokv-tso"]
+    container_name: nokv-pd
+    entrypoint: ["/usr/local/bin/nokv"]
     command:
       [
+        "pd",
         "--addr",
-        "0.0.0.0:9494",
-        "--start",
-        "100"
+        "0.0.0.0:2379",
+        "--id-start",
+        "1",
+        "--ts-start",
+        "100",
+        "--workdir",
+        "/var/lib/nokv-pd"
       ]
     expose:
-      - "9494"
+      - "2379"
     ports:
-      - "9494:9494"
+      - "2379:2379"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
+      - pd-data:/var/lib/nokv-pd
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -65,6 +71,8 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+      pd:
+        condition: service_started
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -92,6 +100,8 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+      pd:
+        condition: service_started
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -119,6 +129,8 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+      pd:
+        condition: service_started
     restart: "no"
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -133,8 +145,6 @@ services:
         "0.0.0.0:6380",
         "--raft-config",
         "/etc/nokv/raft_config.json",
-        "--tso-url",
-        "http://nokv-tso:9494",
         "--addr-scope",
         "docker"
       ]
@@ -149,7 +159,7 @@ services:
         condition: service_started
       node3:
         condition: service_started
-      tso:
+      pd:
         condition: service_started
     restart: "no"
     stop_signal: SIGINT
@@ -159,3 +169,4 @@ volumes:
   node1-data:
   node2-data:
   node3-data:
+  pd-data:

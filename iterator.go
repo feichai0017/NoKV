@@ -1,6 +1,8 @@
 package NoKV
 
 import (
+	"bytes"
+
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
@@ -15,6 +17,14 @@ type DBIterator struct {
 	ctx  *iteratorContext
 	// keyOnly avoids eager value log materialisation when true.
 	keyOnly bool
+
+	lowerBound []byte
+	upperBound []byte
+	isAsc      bool
+	// seekOutOfRange marks Seek calls that intentionally invalidated the
+	// iterator due to bounds checks. While set, Next must not advance from a
+	// stale cursor position and resurrect validity.
+	seekOutOfRange bool
 
 	entry    kv.Entry
 	item     Item
@@ -76,11 +86,14 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	ctx := db.iterPool.get()
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
-		vlog:    db.vlog,
-		db:      db,
-		pool:    db.iterPool,
-		ctx:     ctx,
-		keyOnly: keyOnly,
+		vlog:       db.vlog,
+		db:         db,
+		pool:       db.iterPool,
+		ctx:        ctx,
+		keyOnly:    keyOnly,
+		lowerBound: opt.LowerBound,
+		upperBound: opt.UpperBound,
+		isAsc:      opt.IsAsc,
 	}
 	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
@@ -89,7 +102,7 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 }
 
 // NewInternalIterator returns an iterator over internal keys (CF marker + user key + timestamp).
-// Callers must interpret kv.Entry.Key using kv.SplitInternalKey.
+// Callers should decode kv.Entry.Key via kv.SplitInternalKey and handle ok=false.
 func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
 	if opt == nil {
 		opt = &utils.Options{}
@@ -101,6 +114,10 @@ func (db *DB) NewInternalIterator(opt *utils.Options) utils.Iterator {
 // Next advances to the next visible key/value pair.
 func (iter *DBIterator) Next() {
 	if iter == nil || iter.iitr == nil {
+		return
+	}
+	if iter.seekOutOfRange {
+		iter.valid = false
 		return
 	}
 	iter.iitr.Next()
@@ -120,6 +137,7 @@ func (iter *DBIterator) Rewind() {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.seekOutOfRange = false
 	iter.iitr.Rewind()
 	iter.populate()
 }
@@ -129,6 +147,29 @@ func (iter *DBIterator) Seek(key []byte) {
 	if iter == nil || iter.iitr == nil {
 		return
 	}
+	iter.seekOutOfRange = false
+
+	// Clamping
+	if iter.isAsc {
+		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+			iter.valid = false
+			iter.seekOutOfRange = true
+			return
+		}
+		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+			key = iter.lowerBound
+		}
+	} else {
+		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+			iter.valid = false
+			iter.seekOutOfRange = true
+			return
+		}
+		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+			key = iter.upperBound
+		}
+	}
+
 	// Convert user key to internal key for seeking.
 	// We use MaxUint64 as version to seek to the latest version of the key.
 	// We default to CFDefault as DBIterator currently doesn't support specifying CF.
@@ -156,6 +197,7 @@ func (iter *DBIterator) Close() error {
 		iter.iitr = nil
 	}
 	iter.valid = false
+	iter.seekOutOfRange = false
 	iter.valueBuf = iter.valueBuf[:0]
 	if iter.pool != nil && iter.ctx != nil {
 		iter.pool.put(iter.ctx)
@@ -176,7 +218,36 @@ func (iter *DBIterator) populate() {
 			iter.iitr.Next()
 			continue
 		}
-		if iter.materialize(item.Entry()) {
+		entry := item.Entry()
+		if len(iter.lowerBound) > 0 || len(iter.upperBound) > 0 {
+			_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				// User-facing iterator remains fail-open: skip malformed internal
+				// keys instead of aborting scans.
+				iter.iitr.Next()
+				continue
+			}
+			// Skip entries below lower bound in forward mode, or invalidate in reverse.
+			if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+				if !iter.isAsc {
+					iter.valid = false
+					return
+				}
+				iter.iitr.Next()
+				continue
+			}
+			// Skip entries above upper bound in reverse mode, or invalidate in forward.
+			if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+				if iter.isAsc {
+					iter.valid = false
+					return
+				}
+				iter.iitr.Next()
+				continue
+			}
+		}
+
+		if iter.materialize(entry) {
 			iter.valid = true
 			return
 		}
@@ -196,7 +267,11 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	iter.entry = *src
-	cf, userKey, ts := kv.SplitInternalKey(iter.entry.Key)
+	cf, userKey, ts, ok := kv.SplitInternalKey(iter.entry.Key)
+	if !ok {
+		// User-facing iterator remains fail-open: skip malformed internal keys.
+		return false
+	}
 	// Check if this key is covered by a range tombstone.
 	// For iterator use, pass the original internal key so the write sequence
 	// can be looked up; if not found all active tombstones are considered.
@@ -229,7 +304,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 			iter.item.valueBuf = iter.entry.Value
 		}
 	} else {
-		if src.Value == nil || src.IsDeletedOrExpired() {
+		if src.Value == nil {
 			return false
 		}
 		iter.entry.Value = src.Value

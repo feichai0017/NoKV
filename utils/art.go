@@ -33,7 +33,7 @@ func arenaAllocNode(arena *Arena) *artNode {
 	}
 	size := int(unsafe.Sizeof(artNode{}))
 	align := int(unsafe.Alignof(artNode{}))
-	offset := arena.allocAligned(size, align)
+	offset := arena.AllocAligned(size, align)
 	node := (*artNode)(arena.addr(offset))
 	if node == nil {
 		return nil
@@ -48,7 +48,7 @@ func arenaAllocPayload(arena *Arena) *nodePayload {
 	}
 	size := int(unsafe.Sizeof(nodePayload{}))
 	align := int(unsafe.Alignof(nodePayload{}))
-	offset := arena.allocAligned(size, align)
+	offset := arena.AllocAligned(size, align)
 	payload := (*nodePayload)(arena.addr(offset))
 	if payload == nil {
 		return nil
@@ -109,15 +109,15 @@ func (a *ART) Add(entry *kv.Entry) {
 		Meta:      entry.Meta,
 		Value:     entry.Value,
 		ExpiresAt: entry.ExpiresAt,
-		Version:   entry.Version,
 	}
 	a.tree.Set(entry.Key, vs)
 }
 
-// Search returns the value for the earliest key >= target with the same user key.
-func (a *ART) Search(key []byte) kv.ValueStruct {
+// Search returns the matched internal key and value for key (if any).
+// It returns (nil, zero) when no matching version exists.
+func (a *ART) Search(key []byte) ([]byte, kv.ValueStruct) {
 	if a == nil || a.tree == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 	return a.tree.Get(key)
 }
@@ -183,7 +183,7 @@ func newARTree(arenaSize int64) *artTree {
 	if arenaSize <= 0 {
 		arenaSize = DefaultArenaSize
 	}
-	return &artTree{arena: newArena(arenaSize)}
+	return &artTree{arena: NewArena(arenaSize)}
 }
 
 func (t *artTree) MemSize() int64 {
@@ -201,22 +201,19 @@ func (t *artTree) release() {
 	t.arena = nil
 }
 
-func (t *artTree) Get(key []byte) kv.ValueStruct {
+func (t *artTree) Get(key []byte) ([]byte, kv.ValueStruct) {
 	if t == nil || t.arena == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
 	leaf := t.lowerBound(key)
 	if leaf == nil {
-		return kv.ValueStruct{}
+		return nil, kv.ValueStruct{}
 	}
-	leafKey := leaf.leafKey(t.arena)
-	if !kv.SameKey(key, leafKey) {
-		return kv.ValueStruct{}
+	foundKey := leaf.leafKey(t.arena)
+	if !kv.SameKey(key, foundKey) {
+		return nil, kv.ValueStruct{}
 	}
-	vs := leaf.loadValue(t.arena)
-	_, _, version := kv.SplitInternalKey(leafKey)
-	vs.Version = version
-	return vs
+	return foundKey, leaf.loadValue(t.arena)
 }
 
 func (t *artTree) Set(key []byte, value kv.ValueStruct) {
@@ -800,16 +797,16 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 	payload.self = self
 	switch kind {
 	case artNode4Kind:
-		payload.keys = arena.allocByteSlice(artNode4Cap, artNode4Cap)
-		payload.children = arena.allocUint32Slice(artNode4Cap, artNode4Cap)
+		payload.keys = arena.AllocByteSlice(artNode4Cap, artNode4Cap)
+		payload.children = arena.AllocUint32Slice(artNode4Cap, artNode4Cap)
 	case artNode16Kind:
-		payload.keys = arena.allocByteSlice(artNode16Cap, artNode16Cap)
-		payload.children = arena.allocUint32Slice(artNode16Cap, artNode16Cap)
+		payload.keys = arena.AllocByteSlice(artNode16Cap, artNode16Cap)
+		payload.children = arena.AllocUint32Slice(artNode16Cap, artNode16Cap)
 	case artNode48Kind:
-		payload.children = arena.allocUint32Slice(artNode48Cap, artNode48Cap)
-		payload.idx = arena.allocByteSlice(256, 256)
+		payload.children = arena.AllocUint32Slice(artNode48Cap, artNode48Cap)
+		payload.idx = arena.AllocByteSlice(256, 256)
 	case artNode256Kind:
-		payload.children = arena.allocUint32Slice(256, 256)
+		payload.children = arena.AllocUint32Slice(256, 256)
 	}
 	return payload
 }
@@ -865,14 +862,14 @@ func (n *artNode) leafKey(arena *Arena) []byte {
 	if n == nil || arena == nil || n.leafKeySize == 0 {
 		return nil
 	}
-	return arena.getKey(n.leafKeyOffset, n.leafKeySize)
+	return arenaGetKey(arena, n.leafKeyOffset, n.leafKeySize)
 }
 
 func (n *artNode) setLeafKey(arena *Arena, key []byte) {
 	if n == nil || arena == nil {
 		return
 	}
-	n.leafKeyOffset = arena.putKey(key)
+	n.leafKeyOffset = arenaPutKey(arena, key)
 	n.leafKeySize = uint16(len(key))
 }
 
@@ -898,14 +895,14 @@ func (n *artNode) loadValue(arena *Arena) kv.ValueStruct {
 	if valOffset == 0 && valSize == 0 {
 		return kv.ValueStruct{}
 	}
-	return arena.getVal(valOffset, valSize)
+	return arenaGetVal(arena, valOffset, valSize)
 }
 
 func (n *artNode) storeValue(arena *Arena, vs kv.ValueStruct) {
 	if n == nil || arena == nil {
 		return
 	}
-	valOffset := arena.putVal(vs)
+	valOffset := arenaPutVal(arena, vs)
 	n.value.Store(encodeValue(valOffset, vs.EncodedSize()))
 }
 
@@ -920,7 +917,7 @@ func (n *artNode) prefixBytes(arena *Arena) []byte {
 	if arena == nil || n.prefixOverflowOffset == 0 {
 		return n.prefix[:artMaxPrefixLen]
 	}
-	return arena.getKey(n.prefixOverflowOffset, n.prefixLen)
+	return arenaGetKey(arena, n.prefixOverflowOffset, n.prefixLen)
 }
 
 func (n *artNode) setPrefix(arena *Arena, prefix []byte) {
@@ -940,7 +937,7 @@ func (n *artNode) setPrefix(arena *Arena, prefix []byte) {
 	if arena == nil {
 		return
 	}
-	n.prefixOverflowOffset = arena.putKey(prefix)
+	n.prefixOverflowOffset = arenaPutKey(arena, prefix)
 }
 
 func (n *artNode) findChild(arena *Arena, key byte) (*artNode, *artNode) {
@@ -1234,7 +1231,7 @@ func (it *artIterator) Item() Item {
 	it.entry.Value = vs.Value
 	it.entry.ExpiresAt = vs.ExpiresAt
 	it.entry.Meta = vs.Meta
-	it.entry.Version = vs.Version
+	_ = it.entry.PopulateInternalMeta()
 	return &it.entry
 }
 

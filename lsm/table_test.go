@@ -3,7 +3,6 @@ package lsm
 import (
 	"fmt"
 	"os"
-	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -20,6 +19,13 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	require.NoError(t, err)
 	lsm := NewLSM(opt, wlog)
 	return lsm
+}
+
+func splitTableUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
 }
 
 // TestTableReverseIteration tests reverse iteration behavior on a single table.
@@ -42,11 +48,12 @@ func TestTableReverseIteration(t *testing.T) {
 	builder := newTableBuiler(opt)
 	for i := range 10 {
 		key := []byte{byte('a' + i)}
-		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value")))
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value")))
 	}
 
 	tableName := utils.FileNameSSTable(dir, 1)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
@@ -57,7 +64,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "jihgfedcba", string(keys))
 	})
@@ -66,13 +73,13 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("f"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("f"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("f"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("f"), splitTableUserKey(t, it.Item().Entry().Key))
 
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "fedcba", string(keys))
 	})
@@ -84,7 +91,7 @@ func TestTableReverseIteration(t *testing.T) {
 		it.Rewind()
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 		}
 		require.Equal(t, "abcdefghij", string(keys))
 	})
@@ -93,9 +100,9 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("a"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("a"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("a"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("a"), splitTableUserKey(t, it.Item().Entry().Key))
 		it.Next()
 		require.False(t, it.Valid())
 	})
@@ -104,9 +111,9 @@ func TestTableReverseIteration(t *testing.T) {
 		it := tbl.NewIterator(&utils.Options{IsAsc: false})
 		defer func() { _ = it.Close() }()
 
-		it.Seek(kv.KeyWithTs([]byte("j"), 1))
+		it.Seek(kv.InternalKey(kv.CFDefault, []byte("j"), 1))
 		require.True(t, it.Valid())
-		require.Equal(t, []byte("j"), kv.ParseKey(it.Item().Entry().Key))
+		require.Equal(t, []byte("j"), splitTableUserKey(t, it.Item().Entry().Key))
 	})
 }
 
@@ -130,11 +137,12 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 	builder := newTableBuiler(opt)
 	for i := range 20 {
 		key := []byte{byte('a' + i)}
-		builder.AddKey(kv.NewEntry(kv.KeyWithTs(key, 1), []byte("value-with-more-data")))
+		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value-with-more-data")))
 	}
 
 	tableName := utils.FileNameSSTable(dir, 2)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
@@ -146,7 +154,7 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		count := 0
 		var keys []byte
 		for ; it.Valid(); it.Next() {
-			keys = append(keys, kv.ParseKey(it.Item().Entry().Key)...)
+			keys = append(keys, splitTableUserKey(t, it.Item().Entry().Key)...)
 			count++
 		}
 		require.Equal(t, 20, count)
@@ -171,12 +179,13 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 }
 
 func TestTableDecrRefUnderflow(t *testing.T) {
-	tbl := &table{fid: 1, ref: 2}
+	tbl := &table{fid: 1}
+	tbl.ref.Store(2)
 	require.NoError(t, tbl.DecrRef())
-	require.Equal(t, int32(1), atomic.LoadInt32(&tbl.ref))
+	require.Equal(t, int32(1), tbl.ref.Load())
 
 	// Avoid the 1->0 path in this unit test (which requires a real table handle).
-	atomic.StoreInt32(&tbl.ref, 0)
+	tbl.ref.Store(0)
 	require.PanicsWithError(t, fmt.Errorf("table refcount underflow: fid %d, current_ref %d", tbl.fid, int32(0)).Error(), func() {
 		_ = tbl.DecrRef()
 	})

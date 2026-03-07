@@ -1,0 +1,15 @@
+version: v2
+
+modules:
+  - path: pb
+
+lint:
+  use:
+    - MINIMAL
+    - FILE_LOWER_SNAKE_CASE
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+
+breaking:
+  use:
+    - FILE

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -107,5 +108,71 @@ func TestSyncDirOpenFailure(t *testing.T) {
 	err := SyncDir(fs, dir)
 	if !errors.Is(err, injected) {
 		t.Fatalf("expected injected error, got %v", err)
+	}
+}
+
+func TestLockExclusive(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "LOCK")
+
+	lock, err := (OSFS{}).Lock(lockPath)
+	if err != nil {
+		t.Fatalf("lock path: %v", err)
+	}
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("close lock: %v", err)
+		}
+	}()
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock file missing: %v", err)
+	}
+
+	other, err := (OSFS{}).Lock(lockPath)
+	if err == nil {
+		_ = other.Close()
+		t.Fatalf("expected second lock acquisition to fail")
+	}
+}
+
+func TestRenameNoReplaceSuccess(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "from.data")
+	dst := filepath.Join(dir, "to.data")
+	if err := os.WriteFile(src, []byte("value"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	if err := (OSFS{}).RenameNoReplace(src, dst); errors.Is(err, ErrRenameNoReplaceUnsupported) {
+		t.Skipf("rename no-replace unsupported on this platform/filesystem: %v", err)
+	} else if err != nil {
+		t.Fatalf("rename no replace: %v", err)
+	}
+	if _, err := os.Stat(src); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected src missing, got: %v", err)
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("expected dst present, got: %v", err)
+	}
+}
+
+func TestRenameNoReplaceExistingTarget(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "from.data")
+	dst := filepath.Join(dir, "to.data")
+	if err := os.WriteFile(src, []byte("from"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte("to"), 0o644); err != nil {
+		t.Fatalf("write dst: %v", err)
+	}
+	err := (OSFS{}).RenameNoReplace(src, dst)
+	if errors.Is(err, ErrRenameNoReplaceUnsupported) {
+		t.Skipf("rename no-replace unsupported on this platform/filesystem: %v", err)
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("expected os.ErrExist, got: %v", err)
+	}
+	if _, statErr := os.Stat(src); statErr != nil {
+		t.Fatalf("expected src retained, got: %v", statErr)
 	}
 }

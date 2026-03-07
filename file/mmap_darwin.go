@@ -16,16 +16,22 @@ import (
 
 // MmapFile represents an mmapd file and includes both the buffer to the data and the file descriptor.
 type MmapFile struct {
-	Data []byte
-	Fd   *os.File // for mmap
-	File vfs.File // for file ops
-	fs   vfs.FS
+	Data  []byte
+	File  vfs.File // for file ops
+	fs    vfs.FS
+	path  string
+	fd    uintptr
+	hasFD bool
 }
 
-// OpenMmapFileUsing maps a file descriptor using the provided filesystem.
-func OpenMmapFileUsing(fs vfs.FS, file vfs.File, fd *os.File, sz int, writable bool) (*MmapFile, error) {
+// openMmapFileHandle maps an already-open file handle using the fd capability exposed by vfs.File.
+func openMmapFileHandle(fs vfs.FS, file vfs.File, sz int, writable bool) (*MmapFile, error) {
 	fs = vfs.Ensure(fs)
 	filename := file.Name()
+	fd, ok := vfs.FileFD(file)
+	if !ok {
+		return nil, errors.Errorf("unable to mmap file without fd capability: %s", filename)
+	}
 	fi, err := file.Stat()
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot stat file: %s", filename)
@@ -54,11 +60,34 @@ func OpenMmapFileUsing(fs vfs.FS, file vfs.File, fd *os.File, sz int, writable b
 		}()
 	}
 	return &MmapFile{
-		Data: buf,
-		Fd:   fd,
-		File: file,
-		fs:   fs,
+		Data:  buf,
+		File:  file,
+		fs:    fs,
+		path:  filename,
+		fd:    fd,
+		hasFD: true,
 	}, rerr
+}
+
+func (m *MmapFile) fileName() string {
+	if m == nil {
+		return ""
+	}
+	if m.path != "" {
+		return m.path
+	}
+	if m.File != nil {
+		return m.File.Name()
+	}
+	return ""
+}
+
+// SetFileName updates the logical file path associated with this mmap handle.
+func (m *MmapFile) SetFileName(name string) {
+	if m == nil || name == "" {
+		return
+	}
+	m.path = name
 }
 
 // OpenMmapFile opens an existing file or creates a new file. If the file is
@@ -72,13 +101,13 @@ func OpenMmapFile(fs vfs.FS, filename string, flag int, maxSz int) (*MmapFile, e
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", filename)
 	}
-	fd, ok := vfs.UnwrapOSFile(handle)
-	if !ok {
-		_ = handle.Close()
-		return nil, errors.Errorf("unable to mmap non-os file handle: %s", filename)
-	}
 	writable := flag != os.O_RDONLY
-	return OpenMmapFileUsing(fs, handle, fd, maxSz, writable)
+	omf, err := openMmapFileHandle(fs, handle, maxSz, writable)
+	if err != nil {
+		_ = handle.Close()
+		return nil, err
+	}
+	return omf, nil
 }
 
 type mmapReader struct {
@@ -149,7 +178,7 @@ func (m *MmapFile) AllocateSlice(sz, offset int) ([]byte, int, error) {
 	if start+sz > len(m.Data) {
 		const oneGB = 1 << 30
 		growBy := max(min(len(m.Data), oneGB), sz+4)
-		if err := m.Truncature(int64(len(m.Data) + growBy)); err != nil {
+		if err := m.Truncate(int64(len(m.Data) + growBy)); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -164,7 +193,7 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	needSize := len(buf)
 	end := int(offset) + needSize
 	if end > size {
-		if err := m.Truncature(int64(end)); err != nil {
+		if err := m.Truncate(int64(end)); err != nil {
 			return err
 		}
 	}
@@ -200,7 +229,7 @@ func (m *MmapFile) SyncAsyncRange(off, n int64) error {
 
 // Remap remaps the file with the requested writability.
 func (m *MmapFile) Remap(writable bool) error {
-	if m == nil || m.Fd == nil || m.File == nil {
+	if m == nil || !m.hasFD || m.File == nil {
 		return fmt.Errorf("mmap file remap: nil receiver")
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
@@ -210,7 +239,7 @@ func (m *MmapFile) Remap(writable bool) error {
 	if err != nil {
 		return err
 	}
-	buf, err := mmap.Mmap(m.Fd, writable, fi.Size())
+	buf, err := mmap.Mmap(m.fd, writable, fi.Size())
 	if err != nil {
 		return err
 	}
@@ -219,46 +248,49 @@ func (m *MmapFile) Remap(writable bool) error {
 }
 
 func (m *MmapFile) Delete() error {
-	if m == nil || m.Fd == nil || m.File == nil {
+	if m == nil || !m.hasFD || m.File == nil {
 		return nil
 	}
 
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	m.Data = nil
 	if err := m.File.Truncate(0); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
 	}
 	if err := m.File.Close(); err != nil {
-		return fmt.Errorf("while close file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while close file: %s, error: %v", m.fileName(), err)
 	}
-	return vfs.Ensure(m.fs).Remove(m.File.Name())
+	return vfs.Ensure(m.fs).Remove(m.fileName())
 }
 
 // Close would close the file. It would also truncate the file if maxSz >= 0.
 func (m *MmapFile) Close() error {
-	if m == nil || m.Fd == nil || m.File == nil {
+	if m == nil || !m.hasFD || m.File == nil {
 		return nil
 	}
 	if err := m.Sync(); err != nil {
-		return fmt.Errorf("while sync file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while sync file: %s, error: %v", m.fileName(), err)
 	}
 	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	return m.File.Close()
 }
 
-// Truncature truncates and remaps the file to the provided size.
-func (m *MmapFile) Truncature(maxSz int64) error {
-	if err := mmap.Munmap(m.Data); err != nil {
-		return fmt.Errorf("while munmap file: %s, error: %v", m.File.Name(), err)
+// Truncate truncates and remaps the file to the provided size.
+func (m *MmapFile) Truncate(maxSz int64) error {
+	if maxSz <= 0 {
+		return fmt.Errorf("invalid truncate size: %d for file: %s", maxSz, m.fileName())
 	}
 	if err := m.File.Truncate(maxSz); err != nil {
-		return fmt.Errorf("while truncate file: %s, error: %v", m.File.Name(), err)
+		return fmt.Errorf("while truncate file: %s, error: %v", m.fileName(), err)
+	}
+	if err := mmap.Munmap(m.Data); err != nil {
+		return fmt.Errorf("while munmap file: %s, error: %v", m.fileName(), err)
 	}
 	var err error
-	m.Data, err = mmap.Mmap(m.Fd, true, maxSz) // Mmap up to max size.
+	m.Data, err = mmap.Mmap(m.fd, true, maxSz) // Mmap up to max size.
 	return err
 }

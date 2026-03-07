@@ -10,13 +10,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Service exposes TinyKV gRPC handlers backed by a raftstore Store.
+// Service exposes NoKV gRPC handlers backed by a raftstore Store.
 type Service struct {
-	pb.UnimplementedTinyKvServer
+	pb.UnimplementedNoKVServer
 	store *store.Store
 }
 
-// NewService constructs a TinyKV service bound to the provided store.
+// NewService constructs a NoKV service bound to the provided store.
 func NewService(st *store.Store) *Service {
 	return &Service{store: st}
 }
@@ -282,6 +282,7 @@ func buildHeader(ctx *pb.Context) (*pb.CmdHeader, error) {
 	header := &pb.CmdHeader{RegionId: ctx.GetRegionId(), RegionEpoch: ctx.GetRegionEpoch()}
 	if peer := ctx.GetPeer(); peer != nil {
 		header.PeerId = peer.GetPeerId()
+		header.StoreId = peer.GetStoreId()
 	}
 	return header, nil
 }

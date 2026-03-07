@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"time"
 )
 
 var (
@@ -27,6 +28,7 @@ type setArgs struct {
 	Value    []byte
 	NX       bool
 	XX       bool
+	TTL      time.Duration
 	ExpireAt uint64
 }
 

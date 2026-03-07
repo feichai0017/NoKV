@@ -1,6 +1,6 @@
 # RaftStore Deep Dive
 
-`raftstore` powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.
+`raftstore` powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the `NoKV` gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.
 
 ---
 
@@ -11,9 +11,9 @@
 | [`store`](../raftstore/store) | Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as `StartPeer`, `ProposeCommand`, `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync. |
-| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv). |
-| [`kv`](../raftstore/kv) | TinyKv RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
-| [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and TinyKv server into a reusable node primitive. |
+| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
+| [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
+| [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and NoKV server into a reusable node primitive. |
 
 ---
 
@@ -28,7 +28,7 @@
        TransportAddr: "127.0.0.1:20160",
    })
    ```
-   - A gRPC transport is created, the TinyKv service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
+   - A gRPC transport is created, the NoKV service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
    - `store.Store` loads `manifest.RegionSnapshot()` to rebuild the Region catalog (router + metrics).
 
 2. **Start local peers**
@@ -47,8 +47,8 @@
 ### Read (strong leader read)
 1. `kv.Service.KvGet` builds `pb.RaftCmdRequest` and invokes `Store.ReadCommand`.
 2. `validateCommand` ensures the region exists, epoch matches, and the local peer is leader; a RegionError is returned otherwise.
-3. `peer.Flush()` drains pending Ready, guaranteeing the latest committed log is applied.
-4. `commandApplier` (i.e. `kv.Apply`) runs GET/SCAN directly against the DB, using MVCC readers to honour locks and version visibility.
+3. `peer.LinearizableRead` obtains a safe read index, then `peer.WaitApplied` waits until local apply index reaches it.
+4. `commandApplier` (i.e. `kv.Apply`) runs GET/SCAN against the DB using MVCC readers to honor locks and version visibility.
 
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
@@ -56,11 +56,42 @@
 3. `engine.WALStorage` persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.
 4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
 
+### Command flow diagram
+
+```mermaid
+sequenceDiagram
+    participant C as NoKV Client
+    participant SVC as kv.Service
+    participant ST as store.Store
+    participant PR as peer.Peer
+    participant RF as raft log/replication
+    participant AP as kv.Apply
+    participant DB as NoKV DB
+
+    rect rgb(237, 247, 255)
+      C->>SVC: KvGet/KvScan
+      SVC->>ST: ReadCommand
+      ST->>PR: LinearizableRead + WaitApplied
+      ST->>AP: commandApplier(req)
+      AP->>DB: internal read path
+      AP-->>C: read response
+    end
+
+    rect rgb(241, 253, 244)
+      C->>SVC: KvPrewrite/KvCommit/...
+      SVC->>ST: ProposeCommand
+      ST->>RF: route + replicate
+      RF->>AP: apply committed entry
+      AP->>DB: percolator mutate -> ApplyInternalEntries
+      AP-->>C: write response
+    end
+```
+
 ---
 
 ## 4. Transport
 
-- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and TinyKv RPC.
+- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and NoKV RPC.
 - `SetPeer` updates the mapping of remote store IDs to addresses; `BlockPeer` can be used by tests or chaos tooling.
 - Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.
 
@@ -74,11 +105,11 @@
 
 ---
 
-## 6. TinyKv RPC Integration
+## 6. NoKV RPC Integration
 
 | RPC | Execution Path | Notes |
 | --- | --- | --- |
-| `KvGet` / `KvScan` | `ReadCommand` → `kv.Apply` (read mode) | No raft round-trip; leader-only.
+| `KvGet` / `KvScan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
 | `KvPrewrite` / `KvCommit` / `KvBatchRollback` / `KvResolveLock` / `KvCheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
 
 The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a manifest summary (key ranges, peers) so operators can verify the node’s view at startup.
@@ -90,7 +121,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 - Region-aware routing with NotLeader/EpochNotMatch retry.
 - `Mutate` splits mutations by region and performs two-phase commit (primary first). `Put` / `Delete` are convenience wrappers.
 - `Scan` transparently walks region boundaries.
-- End-to-end coverage lives in `raftstore/server/server_client_integration_test.go`, which launches real servers, uses the client to write and delete keys, and verifies the results.
+- End-to-end coverage lives in `raftstore/server/server_test.go`, which launches real servers, uses the client to write and delete keys, and verifies the results.
 
 ---
 
@@ -99,10 +130,11 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 ### 8.1 Topology & Routing
 - Topology is sourced from `raft_config.example.json` (via `config.LoadFile`) and
   reused by scripts, Docker Compose, and the Redis gateway.
-- The client builds a static region map (`[]RegionConfig`) and store endpoints
-  from the same file; there is no dynamic PD-style reconfiguration today.
-- The built-in scheduler currently emits leader-transfer operations only
-  (see `raftstore/scheduler`), acting as a minimal control plane.
+- Runtime routing is PD-first: `raftstore/client` resolves Regions by key through
+  `GetRegionByKey` and caches route entries for retries.
+- `raft_config` regions are treated as bootstrap/deployment metadata and are not
+  the runtime source of truth once PD is available.
+- PD is the only control-plane source of truth for runtime scheduling/routing.
 
 ### 8.2 Split / Merge
 - **Split**: leaders call `Store.ProposeSplit`, which writes a split
@@ -111,8 +143,8 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 - **Merge**: leaders call `Store.ProposeMerge`, writing a merge `AdminCommand`.
   On apply, the target region range/epoch is expanded and the source peer is
   stopped/removed from the manifest.
-- These operations are explicit and are not auto-triggered by size/traffic
-  heuristics; a higher-level controller could call the same APIs.
+- These operations are explicit/manual and are not auto-triggered by
+  size/traffic heuristics.
 
 ---
 
@@ -137,14 +169,17 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 | Command pipeline | [`command_pipeline.go`](../raftstore/store/command_pipeline.go) | Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers. |
 | Region manager | [`region_manager.go`](../raftstore/store/region_manager.go) | Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks. |
 | Operation scheduler | [`operation_scheduler.go`](../raftstore/store/operation_scheduler.go) | Buffers planner output, enforces cooldown & burst limits, dispatches leader transfers or other operations. |
-| Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and re-runs the planner to produce scheduling actions. |
+| Heartbeat loop | [`heartbeat_loop.go`](../raftstore/store/heartbeat_loop.go) | Periodically publishes region/store heartbeats and, when the sink implements planner capability, drains scheduling actions. |
 
 ---
 
-## 10. Extending raftstore
+## 10. Current Boundaries and Guarantees
 
-- **Adding peers**: update the manifest with new Region metadata, then call `Store.StartPeer` on the target node.
-- **Follower or lease reads**: extend `ReadCommand` to include ReadIndex or leader lease checks; current design only serves leader reads.
-- **Scheduler integration**: pair `RegionSnapshot()` and `RegionMetrics()` with an external scheduler (PD-like) for dynamic balancing.
-
-This layering keeps the embedded storage engine intact while providing a production-ready replication path, robust observability, and straightforward integration in both CLI and programmatic contexts.
+- Reads served through `ReadCommand` are leader-strong and pass a Raft
+  linearizability barrier (`LinearizableRead` + `WaitApplied`).
+- Mutating NoKV RPC commands are serialized through Raft log replication and apply.
+- Command payload format on apply path is strict `RaftCmdRequest` encoding.
+- Region metadata (range/epoch/peers) is validated before both read and write
+  command execution.
+- `store.RegionMetrics` + `StatsSnapshot` provide runtime visibility for region
+  count, backlog, and scheduling health.

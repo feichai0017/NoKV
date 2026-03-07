@@ -19,7 +19,11 @@ func BenchmarkARTInsert(b *testing.B) {
 		keySpace  = 4096
 	)
 	art := NewART(arenaSize)
-	defer art.DecrRef()
+	defer func() {
+		if art != nil {
+			art.DecrRef()
+		}
+	}()
 	value := make([]byte, 64)
 	keys := make([][]byte, keySpace)
 	for i := range keys {
@@ -30,8 +34,9 @@ func BenchmarkARTInsert(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if i > 0 && i%keySpace == 0 {
-			art.DecrRef()
+			old := art
 			art = NewART(arenaSize)
+			old.DecrRef()
 		}
 		entry := kv.NewEntry(keys[i%keySpace], value)
 		art.Add(entry)
@@ -58,7 +63,7 @@ func BenchmarkARTGet(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		vs := art.Search(keys[i%len(keys)])
+		_, vs := art.Search(keys[i%len(keys)])
 		if len(vs.Value) == 0 {
 			b.Fatalf("missing value")
 		}

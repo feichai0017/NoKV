@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 )
@@ -12,6 +13,7 @@ type Op string
 const (
 	OpOpen      Op = "open"
 	OpOpenFile  Op = "open_file"
+	OpLock      Op = "lock"
 	OpFileWrite Op = "file_write"
 	OpFileSync  Op = "file_sync"
 	OpFileClose Op = "file_close"
@@ -294,6 +296,14 @@ func (f *FaultFS) OpenFileHandle(name string, flag int, perm os.FileMode) (File,
 	return &faultFile{base: file, parent: f, path: name}, nil
 }
 
+// Lock acquires an exclusive lock on name.
+func (f *FaultFS) Lock(name string) (io.Closer, error) {
+	if err := f.before(OpLock, name); err != nil {
+		return nil, err
+	}
+	return f.base.Lock(name)
+}
+
 // MkdirAll creates a directory hierarchy.
 func (f *FaultFS) MkdirAll(path string, perm os.FileMode) error {
 	if err := f.before(OpMkdirAll, path); err != nil {
@@ -324,6 +334,14 @@ func (f *FaultFS) Rename(oldPath, newPath string) error {
 		return err
 	}
 	return f.base.Rename(oldPath, newPath)
+}
+
+// RenameNoReplace renames oldPath to newPath without replacing an existing target.
+func (f *FaultFS) RenameNoReplace(oldPath, newPath string) error {
+	if err := f.beforeRename(oldPath, newPath); err != nil {
+		return err
+	}
+	return f.base.RenameNoReplace(oldPath, newPath)
 }
 
 // Stat returns file metadata.

@@ -22,7 +22,7 @@ type MemTable = memTable
 
 type memIndex interface {
 	Add(*kv.Entry)
-	Search([]byte) kv.ValueStruct
+	Search([]byte) ([]byte, kv.ValueStruct)
 	NewIterator(*utils.Options) utils.Iterator
 	MemSize() int64
 	IncrRef()
@@ -48,7 +48,10 @@ type memTable struct {
 	segmentID  uint32
 	index      memIndex
 	maxVersion uint64
-	walSize    int64
+	walSize    atomic.Int64
+	// reservedSize tracks in-flight write reservations to avoid overcommitting
+	// a memtable when multiple writers proceed under read locks.
+	reservedSize atomic.Int64
 
 	// rtMu protects rangeTombstones. Written by setBatch (which may run
 	// under lsm.lock read-lock or write-lock), read concurrently by
@@ -114,13 +117,12 @@ func arenaSizeFor(memTableSize int64) int64 {
 
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
 func (lsm *LSM) NewMemtable() *memTable {
-	newFid := atomic.AddUint64(&(lsm.levels.maxFID), 1)
+	newFid := lsm.levels.maxFID.Add(1)
 	utils.Panic(lsm.wal.SwitchSegment(uint32(newFid), true))
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		index:     newMemIndex(lsm.option),
-		walSize:   0,
 	}
 }
 
@@ -140,22 +142,62 @@ func (m *memTable) close() error {
 
 // Set inserts one entry into the memtable and appends it to WAL.
 func (m *memTable) Set(entry *kv.Entry) error {
-	entries := [1]*kv.Entry{entry}
-	return m.setBatch(entries[:])
+	if m == nil {
+		return errors.New("lsm: memtable not initialized")
+	}
+	if entry == nil || len(entry.Key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	info, err := m.lsm.wal.AppendEntry(entry)
+	if err != nil {
+		return err
+	}
+	m.walSize.Add(int64(info.Length) + 8)
+	if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
+		m.maxVersion = ts
+	}
+	m.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: m.segmentID, offset: info.Offset})
+	if m.index != nil {
+		m.index.Add(entry)
+	}
+	if entry.IsRangeDelete() {
+		_, start, version, ok := kv.SplitInternalKey(entry.Key)
+		if ok {
+			m.rtMu.Lock()
+			m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
+				cf:        entry.CF,
+				start:     kv.SafeCopy(nil, start),
+				end:       kv.SafeCopy(nil, entry.RangeEnd()),
+				version:   version,
+				segmentID: m.segmentID,
+				walOffset: info.Offset,
+			})
+			m.rtMu.Unlock()
+		}
+	}
+	return nil
 }
 
 // Get reads key from the memtable index and returns a pooled entry wrapper.
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
-	var vs kv.ValueStruct
+	var (
+		foundKey []byte
+		vs       kv.ValueStruct
+	)
 	if m.index != nil {
-		vs = m.index.Search(key)
+		foundKey, vs = m.index.Search(key)
 	}
 	e := kv.EntryPool.Get().(*kv.Entry)
-	e.Key = key
+	e.Key = foundKey
 	e.Value = vs.Value
 	e.ExpiresAt = vs.ExpiresAt
 	e.Meta = vs.Meta
-	e.Version = vs.Version
+	e.CF = kv.CFDefault
+	e.Version = 0
+	e.Offset = 0
+	e.Hlen = 0
+	e.ValThreshold = 0
+	_ = e.PopulateInternalMeta()
 	e.IncrRef()
 	return e, nil
 }
@@ -172,55 +214,37 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if m == nil || len(entries) == 0 {
 		return nil
 	}
-	payloads := make([][]byte, 0, len(entries))
-	buffers := make([]*bytes.Buffer, 0, len(entries))
-	releaseBuffers := func() {
-		for _, buf := range buffers {
-			putWalBuffer(buf)
-		}
+	if len(entries) == 1 {
+		return m.Set(entries[0])
 	}
-	for _, entry := range entries {
-		buf := getWalBuffer()
-		payload, err := kv.EncodeEntry(buf, entry)
-		if err != nil {
-			putWalBuffer(buf)
-			releaseBuffers()
-			return err
-		}
-		payloads = append(payloads, payload)
-		buffers = append(buffers, buf)
-	}
-	infos, err := m.lsm.wal.Append(payloads...)
-	releaseBuffers()
+	info, err := m.lsm.wal.AppendEntryBatch(entries)
 	if err != nil {
 		return err
 	}
-	for _, info := range infos {
-		atomic.AddInt64(&m.walSize, int64(info.Length)+8)
-	}
-	// Build a map from entry index → WAL offset for range tombstone sequencing.
-	// infos[i] corresponds to payloads[i] which corresponds to entries[i].
-	if m.index != nil {
-		for i, entry := range entries {
-			var offset int64
-			if i < len(infos) {
-				offset = infos[i].Offset
-			}
+	m.walSize.Add(int64(info.Length) + 8)
+	for i, entry := range entries {
+		if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
+			m.maxVersion = ts
+		}
+		offset := info.Offset + int64(i)
+		if m.index != nil {
 			m.index.Add(entry)
-			// Record the sequence key for this entry. ValueStruct.Version is not
-			// serialized by the arena, so we maintain a side map instead.
-			m.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: m.segmentID, offset: offset})
-			if entry.IsRangeDelete() {
-				_, start, _ := kv.SplitInternalKey(entry.Key)
-				rt := memRangeTombstone{
+		}
+		// Batched WAL appends produce one physical record; we synthesize a stable
+		// per-entry offset from the batch order for in-mem ordering checks only.
+		m.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: m.segmentID, offset: offset})
+		if entry.IsRangeDelete() {
+			_, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if ok {
+				m.rtMu.Lock()
+				m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
 					cf:        entry.CF,
 					start:     kv.SafeCopy(nil, start),
 					end:       kv.SafeCopy(nil, entry.RangeEnd()),
+					version:   version,
 					segmentID: m.segmentID,
 					walOffset: offset,
-				}
-				m.rtMu.Lock()
-				m.rangeTombstones = append(m.rangeTombstones, rt)
+				})
 				m.rtMu.Unlock()
 			}
 		}
@@ -235,7 +259,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		utils.Panic(err)
 	}
 	var fids []uint64
-	maxFid := lsm.levels.maxFID
+	maxFid := lsm.levels.maxFID.Load()
 	for _, path := range files {
 		base := filepath.Base(path)
 		if !strings.HasSuffix(base, ".wal") {
@@ -271,7 +295,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	}
 
 	if len(fids) == 0 {
-		lsm.levels.maxFID = maxFid
+		lsm.levels.maxFID.Store(maxFid)
 		return lsm.NewMemtable(), nil
 	}
 
@@ -285,11 +309,11 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		tables = append(tables, mt)
 	}
 	if len(tables) == 0 {
-		lsm.levels.maxFID = maxFid
+		lsm.levels.maxFID.Store(maxFid)
 		return lsm.NewMemtable(), nil
 	}
 
-	lsm.levels.maxFID = maxFid
+	lsm.levels.maxFID.Store(maxFid)
 	active := tables[len(tables)-1]
 	tables = tables[:len(tables)-1]
 	utils.Panic(lsm.wal.SwitchSegment(active.segmentID, false))
@@ -303,39 +327,118 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 		index:     newMemIndex(lsm.option),
 	}
 	err := lsm.wal.ReplaySegment(uint32(fid), func(info wal.EntryInfo, payload []byte) error {
-		if info.Type != wal.RecordTypeEntry {
-			return nil
+		applyEntry := func(entry *kv.Entry) {
+			if ts := kv.Timestamp(entry.Key); ts > mt.maxVersion {
+				mt.maxVersion = ts
+			}
+			if mt.index != nil {
+				mt.index.Add(entry)
+			}
+			entry.DecrRef()
 		}
-		entry, err := kv.DecodeEntry(payload)
-		if err != nil {
-			return err
-		}
-		if ts := kv.ParseTs(entry.Key); ts > mt.maxVersion {
-			mt.maxVersion = ts
-		}
-		if mt.index != nil {
-			mt.index.Add(entry)
-		}
-		mt.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: mt.segmentID, offset: info.Offset})
-		if entry.IsRangeDelete() {
-			_, start, version := kv.SplitInternalKey(entry.Key)
+		trackEntry := func(entry *kv.Entry, offset int64) {
+			mt.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: mt.segmentID, offset: offset})
+			if !entry.IsRangeDelete() {
+				return
+			}
+			_, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				return
+			}
+			mt.rtMu.Lock()
 			mt.rangeTombstones = append(mt.rangeTombstones, memRangeTombstone{
 				cf:        entry.CF,
 				start:     kv.SafeCopy(nil, start),
 				end:       kv.SafeCopy(nil, entry.RangeEnd()),
 				version:   version,
 				segmentID: mt.segmentID,
-				walOffset: info.Offset,
+				walOffset: offset,
 			})
+			mt.rtMu.Unlock()
 		}
-		entry.DecrRef()
-		atomic.AddInt64(&mt.walSize, int64(info.Length)+8)
+		switch info.Type {
+		case wal.RecordTypeEntry:
+			entry, err := kv.DecodeEntry(payload)
+			if err != nil {
+				return err
+			}
+			trackEntry(entry, info.Offset)
+			applyEntry(entry)
+		case wal.RecordTypeEntryBatch:
+			entries, err := wal.DecodeEntryBatch(payload)
+			if err != nil {
+				return err
+			}
+			for idx, entry := range entries {
+				trackEntry(entry, info.Offset+int64(idx))
+				applyEntry(entry)
+			}
+		default:
+			return nil
+		}
+		mt.walSize.Add(int64(info.Length) + 8)
 		return nil
 	})
 	if err != nil {
 		return nil, errors.WithMessage(err, "while updating skiplist")
 	}
 	return mt, nil
+}
+
+func (mt *memTable) canReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	used := mt.walSize.Load()
+	reserved := mt.reservedSize.Load()
+	if used < 0 || reserved < 0 || used > limit {
+		return false
+	}
+	remaining := limit - used
+	if reserved > remaining {
+		return false
+	}
+	remaining -= reserved
+	return need <= remaining
+}
+
+func (mt *memTable) tryReserve(need, limit int64) bool {
+	if mt == nil {
+		return false
+	}
+	if need <= 0 {
+		return true
+	}
+	for {
+		used := mt.walSize.Load()
+		reserved := mt.reservedSize.Load()
+		if used < 0 || reserved < 0 || used > limit {
+			return false
+		}
+		remaining := limit - used
+		if reserved > remaining {
+			return false
+		}
+		remaining -= reserved
+		if need > remaining {
+			return false
+		}
+		if mt.reservedSize.CompareAndSwap(reserved, reserved+need) {
+			return true
+		}
+	}
+}
+
+func (mt *memTable) releaseReserve(need int64) {
+	if mt == nil || need <= 0 {
+		return
+	}
+	if n := mt.reservedSize.Add(-need); n < 0 {
+		panic("lsm: memtable reservation underflow")
+	}
 }
 
 // reference counting helpers, delegate to the backing index.

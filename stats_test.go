@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/stretchr/testify/require"
@@ -25,9 +24,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
 	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
 
-	require.NoError(t, db.Update(func(txn *Txn) error {
-		return txn.SetEntry(kv.NewEntry([]byte("stats-key"), []byte("stats-value")))
-	}))
+	require.NoError(t, db.Set([]byte("stats-key"), []byte("stats-value")))
 	entry, err := db.Get([]byte("stats-key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("stats-value"), entry.Value)
@@ -44,11 +41,6 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.False(t, snap.Write.ThrottleActive)
 	require.Equal(t, db.iterPool.reused(), snap.Cache.IteratorReused)
 
-	cfStats, ok := snap.LSM.ColumnFamilies[kv.CFDefault.String()]
-	require.True(t, ok)
-	require.Greater(t, cfStats.Writes, uint64(0))
-	require.Greater(t, cfStats.Reads, uint64(0))
-
 	require.Equal(t, db.lsm.FlushPending(), snap.Flush.Pending)
 	require.Equal(t, int64(2), snap.Region.Total)
 	require.Equal(t, int64(1), snap.Region.Running)
@@ -63,7 +55,6 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Equal(t, snap.WAL.ActiveSegment, exported.WAL.ActiveSegment)
 	require.Equal(t, snap.WAL.SegmentsRemoved, exported.WAL.SegmentsRemoved)
 	require.Equal(t, snap.Region.Total, exported.Region.Total)
-	require.Equal(t, snap.Txn.Started, exported.Txn.Started)
 
 	// Legacy scalar keys are intentionally removed.
 	require.Nil(t, expvar.Get("NoKV.Stats.Flush.Pending"))
@@ -78,9 +69,7 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	db := Open(opt)
 	defer func() { _ = db.Close() }()
 
-	require.NoError(t, db.Update(func(txn *Txn) error {
-		return txn.SetEntry(kv.NewEntry([]byte("wal-metrics"), []byte("value")))
-	}))
+	require.NoError(t, db.Set([]byte("wal-metrics"), []byte("value")))
 	require.NoError(t, db.wal.Rotate())
 
 	segments, err := db.wal.ListSegments()

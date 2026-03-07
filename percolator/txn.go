@@ -7,11 +7,10 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator/latch"
-	"github.com/feichai0017/NoKV/utils"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
-func Prewrite(db *NoKV.DB, latches *latch.Manager, req *pb.PrewriteRequest) []*pb.KeyError {
+func Prewrite(db NoKV.MVCCStore, latches *latch.Manager, req *pb.PrewriteRequest) []*pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -37,7 +36,7 @@ func Prewrite(db *NoKV.DB, latches *latch.Manager, req *pb.PrewriteRequest) []*p
 	return errs
 }
 
-func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut *pb.Mutation) *pb.KeyError {
+func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *pb.PrewriteRequest, mut *pb.Mutation) *pb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
 		return keyErrorAbort("empty key in mutation")
@@ -54,18 +53,17 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 	} else if write != nil && commitTs >= req.StartVersion {
 		return keyErrorWriteConflict(key, req.PrimaryLock, commitTs, write.StartTs, req.StartVersion)
 	}
+	ops := make([]versionedOp, 0, 3)
 	switch mut.Op {
 	case pb.Mutation_Put:
-		if err := db.DeleteVersionedEntry(kv.CFDefault, key, req.StartVersion); err != nil && err != utils.ErrKeyNotFound {
-			return keyErrorRetryable(err)
-		}
-		if err := db.SetVersionedEntry(kv.CFDefault, key, req.StartVersion, mut.Value, 0); err != nil {
-			return keyErrorRetryable(err)
-		}
+		ops = append(ops,
+			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
+			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, value: mut.Value, expires: mut.GetExpiresAt()},
+		)
 	case pb.Mutation_Delete, pb.Mutation_Lock:
-		if err := db.DeleteVersionedEntry(kv.CFDefault, key, req.StartVersion); err != nil && err != utils.ErrKeyNotFound {
-			return keyErrorRetryable(err)
-		}
+		ops = append(ops,
+			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
+		)
 	default:
 		return keyErrorAbort(fmt.Sprintf("unsupported mutation op %v", mut.Op))
 	}
@@ -77,7 +75,8 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 		MinCommitTs: req.MinCommitTs,
 	}
 	encoded := EncodeLock(newLock)
-	if err := db.SetVersionedEntry(kv.CFLock, key, lockColumnTs, encoded, 0); err != nil {
+	ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, value: encoded})
+	if err := applyVersionedOps(db, ops...); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
@@ -85,7 +84,7 @@ func prewriteMutation(db *NoKV.DB, reader *Reader, req *pb.PrewriteRequest, mut 
 
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
-func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyError {
+func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -122,7 +121,7 @@ func Commit(db *NoKV.DB, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyE
 }
 
 // BatchRollback rolls back the provided keys for the given start version.
-func BatchRollback(db *NoKV.DB, latches *latch.Manager, req *pb.BatchRollbackRequest) *pb.KeyError {
+func BatchRollback(db NoKV.MVCCStore, latches *latch.Manager, req *pb.BatchRollbackRequest) *pb.KeyError {
 	if req == nil {
 		return nil
 	}
@@ -142,7 +141,7 @@ func BatchRollback(db *NoKV.DB, latches *latch.Manager, req *pb.BatchRollbackReq
 
 // ResolveLock resolves locks for the given transaction. commitVersion == 0
 // performs a rollback; otherwise the keys are committed.
-func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest) (uint64, *pb.KeyError) {
+func ResolveLock(db NoKV.MVCCStore, latches *latch.Manager, req *pb.ResolveLockRequest) (uint64, *pb.KeyError) {
 	if req == nil {
 		return 0, nil
 	}
@@ -178,7 +177,7 @@ func ResolveLock(db *NoKV.DB, latches *latch.Manager, req *pb.ResolveLockRequest
 
 // CheckTxnStatus inspects the primary lock state and optionally rolls back
 // expired transactions.
-func CheckTxnStatus(db *NoKV.DB, latches *latch.Manager, req *pb.CheckTxnStatusRequest) *pb.CheckTxnStatusResponse {
+func CheckTxnStatus(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CheckTxnStatusRequest) *pb.CheckTxnStatusResponse {
 	resp := &pb.CheckTxnStatusResponse{}
 	if req == nil {
 		return resp
@@ -208,7 +207,12 @@ func CheckTxnStatus(db *NoKV.DB, latches *latch.Manager, req *pb.CheckTxnStatusR
 		}
 		if req.CallerStartTs > 0 && lock.MinCommitTs < req.CallerStartTs+1 {
 			lock.MinCommitTs = req.CallerStartTs + 1
-			if err := db.SetVersionedEntry(kv.CFLock, req.PrimaryKey, lockColumnTs, EncodeLock(*lock), 0); err != nil {
+			if err := applyVersionedOps(db, versionedOp{
+				cf:      kv.CFLock,
+				key:     req.PrimaryKey,
+				version: lockColumnTs,
+				value:   EncodeLock(*lock),
+			}); err != nil {
 				resp.Error = keyErrorRetryable(err)
 				return resp
 			}
@@ -286,7 +290,7 @@ func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *pb.KeyEr
 	}
 }
 
-func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
+func commitKey(db NoKV.MVCCStore, reader *Reader, key []byte, lock *Lock, commitVersion uint64) *pb.KeyError {
 	if lock.MinCommitTs > commitVersion {
 		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
@@ -300,7 +304,12 @@ func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersio
 		}
 		if commitTs != commitVersion {
 			// Already committed with a different commit version; treat as success.
-			if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
+			if err := applyVersionedOps(db, versionedOp{
+				cf:      kv.CFLock,
+				key:     key,
+				version: lockColumnTs,
+				meta:    kv.BitDelete,
+			}); err != nil {
 				return keyErrorRetryable(err)
 			}
 			return nil
@@ -309,37 +318,59 @@ func commitKey(db *NoKV.DB, reader *Reader, key []byte, lock *Lock, commitVersio
 	}
 
 	entry := EncodeWrite(Write{Kind: lock.Kind, StartTs: lock.Ts})
-	if err := db.SetVersionedEntry(kv.CFWrite, key, commitVersion, entry, 0); err != nil {
-		return keyErrorRetryable(err)
-	}
-	if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
+	if err := applyVersionedOps(db,
+		versionedOp{cf: kv.CFWrite, key: key, version: commitVersion, value: entry},
+		versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
+	); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
 }
 
-func rollbackKey(db *NoKV.DB, reader *Reader, key []byte, startTs uint64) *pb.KeyError {
+func rollbackKey(db NoKV.MVCCStore, reader *Reader, key []byte, startTs uint64) *pb.KeyError {
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	if err != nil {
 		return keyErrorRetryable(err)
 	}
 	if write != nil {
-		if write.Kind == pb.Mutation_Rollback {
-			return nil
-		}
 		return nil
 	}
-	if err := db.DeleteVersionedEntry(kv.CFLock, key, lockColumnTs); err != nil && err != utils.ErrKeyNotFound {
-		return keyErrorRetryable(err)
-	}
-	if err := db.DeleteVersionedEntry(kv.CFDefault, key, startTs); err != nil && err != utils.ErrKeyNotFound {
-		return keyErrorRetryable(err)
-	}
 	rollback := EncodeWrite(Write{Kind: pb.Mutation_Rollback, StartTs: startTs})
-	if err := db.SetVersionedEntry(kv.CFWrite, key, startTs, rollback, 0); err != nil {
+	if err := applyVersionedOps(db,
+		versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
+		versionedOp{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete},
+		versionedOp{cf: kv.CFWrite, key: key, version: startTs, value: rollback},
+	); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
+}
+
+type versionedOp struct {
+	cf      kv.ColumnFamily
+	key     []byte
+	version uint64
+	value   []byte
+	meta    byte
+	expires uint64
+}
+
+func applyVersionedOps(db NoKV.MVCCStore, ops ...versionedOp) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	entries := make([]*kv.Entry, 0, len(ops))
+	for _, op := range ops {
+		entry := kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires)
+		entries = append(entries, entry)
+	}
+	err := db.ApplyInternalEntries(entries)
+	for _, entry := range entries {
+		if entry != nil {
+			entry.DecrRef()
+		}
+	}
+	return err
 }
 
 func isLockExpired(lock *Lock, currentTs uint64) bool {

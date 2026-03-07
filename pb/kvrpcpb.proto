@@ -2,9 +2,22 @@
 syntax = "proto3";
 
 package pb;
+
+import "errorpb.proto";
+import "metapb.proto";
+
 option go_package = "github.com/feichai0017/NoKV/pb";
 
-import "metapb.proto";
+// Enum for read consistency control and read strategy options protocal
+enum ReadConsistency {
+  READ_CONSISTENCY_STRONG = 0;
+  READ_CONSISTENCY_BOUNDED_STALE = 1;
+}
+
+enum ReadPreference {
+  READ_PREFERENCE_LEADER_ONLY = 0;
+  READ_PREFERENCE_FOLLOWER_PREFER = 1;
+}
 
 // kvrpcpb carries distributed KV RPC and transaction protocol messages.
 
@@ -36,6 +49,7 @@ message GetResponse {
   bytes value = 1;
   bool not_found = 2;
   KeyError error = 3;
+  uint64 expires_at = 4;
 }
 
 message BatchGetRequest {
@@ -71,6 +85,7 @@ message Mutation {
   bytes key = 2;
   bytes value = 3;
   bool assertion_not_exist = 4;
+  uint64 expires_at = 5;
 }
 
 message PrewriteRequest {
@@ -143,6 +158,11 @@ message Context {
   uint64 region_id = 1;
   RegionEpoch region_epoch = 2;
   RegionPeer peer = 3;
+
+  ReadConsistency read_consistency = 4;
+  ReadPreference read_preference = 5;
+  uint64 max_stale_read_index = 6;
+  uint64 max_stale_read_ms = 7;
 }
 
 message KvGetRequest {
@@ -225,7 +245,7 @@ message KvCheckTxnStatusResponse {
   RegionError region_error = 2;
 }
 
-service TinyKv {
+service NoKV {
   rpc KvGet(KvGetRequest) returns (KvGetResponse);
   rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
   rpc KvScan(KvScanRequest) returns (KvScanResponse);
@@ -270,27 +290,4 @@ message CommitTsExpired {
   bytes key = 1;
   uint64 commit_ts = 2;
   uint64 min_commit_ts = 3;
-}
-
-message RegionError {
-  NotLeader not_leader = 1;
-  EpochNotMatch epoch_not_match = 2;
-  StaleCommand stale_command = 3;
-  RaftEntryTooLarge entry_too_large = 4;
-}
-
-message NotLeader {
-  uint64 region_id = 1;
-  RegionPeer leader = 2;
-}
-
-message EpochNotMatch {
-  RegionEpoch current_epoch = 1;
-  repeated RegionMeta regions = 2;
-}
-
-message StaleCommand {}
-
-message RaftEntryTooLarge {
-  uint64 region_id = 1;
 }

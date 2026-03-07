@@ -3,6 +3,7 @@ package kv_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type noopTransport struct{}
@@ -29,6 +31,13 @@ func openTestDB(t *testing.T) *NoKV.DB {
 	db := NoKV.Open(opt)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+	t.Helper()
+	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, 0)
+	defer entry.DecrRef()
+	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
@@ -44,7 +53,7 @@ func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
 			if !ok {
 				return status.Error(codes.InvalidArgument, "unsupported legacy raft payload")
 			}
-			if _, err := kv.Apply(db, req); err != nil {
+			if _, err := kv.Apply(db, nil, req); err != nil {
 				return err
 			}
 		}
@@ -96,7 +105,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	}
 
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
@@ -134,6 +143,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	ctx := &pb.Context{
 		RegionId:    meta.ID,
 		RegionEpoch: &pb.RegionEpoch{Version: cfg.epochVersion, ConfVer: cfg.epochConfVer},
+		Peer:        &pb.RegionPeer{StoreId: cfg.storeID, PeerId: cfg.peerID},
 	}
 	return serviceHarness{
 		db:      db,
@@ -187,7 +197,7 @@ func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, s
 
 func TestServicePrewriteCommit(t *testing.T) {
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
@@ -315,7 +325,7 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 
 func TestServiceRegionEpochMismatch(t *testing.T) {
 	db := openTestDB(t)
-	applier := kv.NewApplier(db)
+	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &manifest.RegionMeta{
@@ -363,13 +373,15 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 
 	key := []byte("alpha")
 	value := []byte("value")
+	expiresAt := uint64(time.Now().Add(time.Hour).Unix())
 	prewriteReq := &pb.KvPrewriteRequest{
 		Context: env.ctx,
 		Request: &pb.PrewriteRequest{
 			Mutations: []*pb.Mutation{{
-				Op:    pb.Mutation_Put,
-				Key:   key,
-				Value: value,
+				Op:        pb.Mutation_Put,
+				Key:       key,
+				Value:     value,
+				ExpiresAt: expiresAt,
 			}},
 			PrimaryLock:  key,
 			StartVersion: 42,
@@ -413,6 +425,62 @@ func TestServiceKvGetLeaderRead(t *testing.T) {
 	require.False(t, readResp.GetResponse().GetNotFound())
 	require.Nil(t, readResp.GetResponse().GetError())
 	require.Equal(t, value, readResp.GetResponse().GetValue())
+	require.Equal(t, expiresAt, readResp.GetResponse().GetExpiresAt())
+}
+
+func TestServiceKvGetLeaderReadExpiredValue(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        3,
+		peerID:         33,
+		regionID:       702,
+		campaignLeader: true,
+	})
+
+	key := []byte("expired")
+	value := []byte("value")
+	expiredAt := uint64(time.Now().Add(-time.Second).Unix())
+	prewriteReq := &pb.KvPrewriteRequest{
+		Context: env.ctx,
+		Request: &pb.PrewriteRequest{
+			Mutations: []*pb.Mutation{{
+				Op:        pb.Mutation_Put,
+				Key:       key,
+				Value:     value,
+				ExpiresAt: expiredAt,
+			}},
+			PrimaryLock:  key,
+			StartVersion: 52,
+			LockTtl:      3000,
+		},
+	}
+	preResp, err := env.service.KvPrewrite(context.Background(), prewriteReq)
+	require.NoError(t, err)
+	require.Nil(t, preResp.GetRegionError())
+	require.Empty(t, preResp.GetResponse().GetErrors())
+
+	commitResp, err := env.service.KvCommit(context.Background(), &pb.KvCommitRequest{
+		Context: env.ctx,
+		Request: &pb.CommitRequest{
+			Keys:          [][]byte{key},
+			StartVersion:  52,
+			CommitVersion: 56,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, commitResp.GetRegionError())
+	require.Nil(t, commitResp.GetResponse().GetError())
+
+	readResp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: env.ctx,
+		Request: &pb.GetRequest{
+			Key:     key,
+			Version: 60,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, readResp.GetRegionError())
+	require.NotNil(t, readResp.GetResponse())
+	require.True(t, readResp.GetResponse().GetNotFound())
 }
 
 func TestServiceKvGetNotLeader(t *testing.T) {
@@ -510,9 +578,9 @@ func TestServiceKvScanRespectsRegionEnd(t *testing.T) {
 
 	startTs := uint64(10)
 	commitTs := uint64(20)
-	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0))
+	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFDefault, []byte("mz"), startTs, []byte("value-z"), 0)
 	write := percolator.EncodeWrite(percolator.Write{Kind: pb.Mutation_Put, StartTs: startTs})
-	require.NoError(t, env.db.SetVersionedEntry(entrykv.CFWrite, []byte("mz"), commitTs, write, 0))
+	applyVersionedEntryForServiceTest(t, env.db, entrykv.CFWrite, []byte("mz"), commitTs, write, 0)
 
 	resp, err := env.service.KvScan(context.Background(), &pb.KvScanRequest{
 		Context: env.ctx,
@@ -607,6 +675,51 @@ func TestServiceHeaderAndScanErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))
+}
+
+func TestServiceKvGetStoreNotMatch(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        7,
+		peerID:         77,
+		regionID:       1102,
+		campaignLeader: true,
+	})
+
+	ctx := proto.Clone(env.ctx).(*pb.Context)
+	ctx.Peer = &pb.RegionPeer{StoreId: 999, PeerId: env.ctx.GetPeer().GetPeerId()}
+
+	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: ctx,
+		Request: &pb.GetRequest{Key: []byte("ak"), Version: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetStoreNotMatch())
+	require.Equal(t, uint64(999), resp.GetRegionError().GetStoreNotMatch().GetRequestStoreId())
+	require.Equal(t, uint64(7), resp.GetRegionError().GetStoreNotMatch().GetActualStoreId())
+}
+
+func TestServiceKvGetKeyNotInRegion(t *testing.T) {
+	env := newServiceHarness(t, harnessConfig{
+		storeID:        8,
+		peerID:         88,
+		regionID:       1201,
+		startKey:       []byte("a"),
+		endKey:         []byte("m"),
+		campaignLeader: true,
+	})
+
+	resp, err := env.service.KvGet(context.Background(), &pb.KvGetRequest{
+		Context: env.ctx,
+		Request: &pb.GetRequest{Key: []byte("z"), Version: 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetKeyNotInRegion())
+	require.Equal(t, []byte("z"), resp.GetRegionError().GetKeyNotInRegion().GetKey())
+	require.Equal(t, env.region.ID, resp.GetRegionError().GetKeyNotInRegion().GetRegionId())
 }
 
 func TestServiceKvScanNotLeader(t *testing.T) {

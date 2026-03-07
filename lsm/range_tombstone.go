@@ -108,7 +108,11 @@ func (lm *levelManager) rebuildRangeTombstones() {
 		for it.Valid() {
 			if item := it.Item(); item != nil {
 				if e := item.Entry(); e != nil && e.IsRangeDelete() {
-					cf, start, version := kv.SplitInternalKey(e.Key)
+					cf, start, version, ok := kv.SplitInternalKey(e.Key)
+					if !ok {
+						it.Next()
+						continue
+					}
 					tombstones = append(tombstones, RangeTombstone{
 						CF:      cf,
 						Start:   kv.SafeCopy(nil, start),

@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -33,6 +34,10 @@ var (
 		NumCompactors:       3,
 	}
 )
+
+func buildInternalTestEntry() *kv.Entry {
+	return utils.BuildEntry()
+}
 
 // TestBase is a basic correctness test.
 func TestBase(t *testing.T) {
@@ -71,7 +76,8 @@ func TestHitStorage(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
-	e := utils.BuildEntry()
+	e := buildInternalTestEntry()
+	defer e.DecrRef()
 	if err := lsm.Set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
@@ -94,7 +100,8 @@ func TestHitStorage(t *testing.T) {
 	}
 	// Exercise the bloom-filter miss path.
 	hitBloom := func() {
-		ee := utils.BuildEntry()
+		ee := buildInternalTestEntry()
+		defer ee.DecrRef()
 		// Query a missing key; a bloom-filter miss confirms absence.
 		tables := lsm.levels.levels[0].tablesSnapshot()
 		if len(tables) == 0 {
@@ -193,8 +200,8 @@ func TestIngestBufferAccounting(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:           1,
-		minKey:        kv.KeyWithTs([]byte{0x00, 'a'}, 1),
-		maxKey:        kv.KeyWithTs([]byte{0x00, 'z'}, 1),
+		minKey:        kv.InternalKey(kv.CFDefault, []byte{0x00, 'a'}, 1),
+		maxKey:        kv.InternalKey(kv.CFDefault, []byte{0x00, 'z'}, 1),
 		size:          100,
 		valueSize:     40,
 		createdAt:     now.Add(-2 * time.Minute),
@@ -203,8 +210,8 @@ func TestIngestBufferAccounting(t *testing.T) {
 	}
 	t2 := &table{
 		fid:        2,
-		minKey:     kv.KeyWithTs([]byte{0x80, 'a'}, 1),
-		maxKey:     kv.KeyWithTs([]byte{0x80, 'z'}, 1),
+		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'a'}, 1),
+		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'z'}, 1),
 		size:       200,
 		valueSize:  100,
 		createdAt:  now.Add(-1 * time.Minute),
@@ -212,8 +219,8 @@ func TestIngestBufferAccounting(t *testing.T) {
 	}
 	t3 := &table{
 		fid:        3,
-		minKey:     kv.KeyWithTs([]byte{0x40, 'a'}, 1),
-		maxKey:     kv.KeyWithTs([]byte{0x40, 'z'}, 1),
+		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x40, 'a'}, 1),
+		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x40, 'z'}, 1),
 		size:       50,
 		valueSize:  10,
 		createdAt:  now.Add(-3 * time.Minute),
@@ -279,15 +286,18 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	builder := newTableBuiler(&builderOpt)
 
 	for i := range 20 {
-		key := kv.KeyWithTs(fmt.Appendf(nil, "k%02d", i), 1)
+		key := kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "k%02d", i), 1)
 		value := bytes.Repeat([]byte{'v'}, 48)
 		builder.AddKey(kv.NewEntry(key, value))
 	}
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, 1)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	defer func() {
 		_ = tbl.DecrRef()
@@ -303,7 +313,7 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	tbl.maxVersion = 0
 	tbl.hasBloom = false
 
-	seekKey := kv.KeyWithTs([]byte("k10"), 1)
+	seekKey := kv.InternalKey(kv.CFDefault, []byte("k10"), 1)
 	if !tbl.prefetchBlockForKey(seekKey) {
 		t.Fatalf("expected prefetch to load block")
 	}
@@ -371,8 +381,8 @@ func TestFillMaxLevelTables(t *testing.T) {
 
 	tbl := &table{
 		fid:           101,
-		minKey:        kv.KeyWithTs([]byte("a"), 1),
-		maxKey:        kv.KeyWithTs([]byte("z"), 1),
+		minKey:        kv.InternalKey(kv.CFDefault, []byte("a"), 1),
+		maxKey:        kv.InternalKey(kv.CFDefault, []byte("z"), 1),
 		size:          1 << 20,
 		staleDataSize: 11 << 20,
 		createdAt:     time.Now().Add(-2 * time.Hour),
@@ -407,7 +417,7 @@ func TestMaxLevelCompactionNoRangeDeleteResurrection(t *testing.T) {
 	}
 
 	// Table A: range tombstone [a, z)@10.
-	rt := kv.NewEntry(kv.KeyWithTs([]byte("a"), 10), []byte("z"))
+	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
 	rt.Meta = kv.BitRangeDelete
 	tombstoneTbl := buildTableWithEntries(t, lsm, 1001, rt)
 
@@ -604,8 +614,8 @@ func TestLevelHandlerIngestMetrics(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
 		fid:        10,
-		minKey:     kv.KeyWithTs([]byte{0x00, 'a'}, 1),
-		maxKey:     kv.KeyWithTs([]byte{0x00, 'z'}, 1),
+		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x00, 'a'}, 1),
+		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x00, 'z'}, 1),
 		size:       120,
 		valueSize:  30,
 		createdAt:  now.Add(-time.Minute),
@@ -613,8 +623,8 @@ func TestLevelHandlerIngestMetrics(t *testing.T) {
 	}
 	t2 := &table{
 		fid:        11,
-		minKey:     kv.KeyWithTs([]byte{0x80, 'a'}, 1),
-		maxKey:     kv.KeyWithTs([]byte{0x80, 'z'}, 1),
+		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'a'}, 1),
+		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'z'}, 1),
 		size:       60,
 		valueSize:  10,
 		createdAt:  now.Add(-2 * time.Minute),
@@ -658,14 +668,17 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 
 	keys := []string{"a", "b", "c"}
 	for _, k := range keys {
-		key := kv.KeyWithTs([]byte(k), 1)
+		key := kv.InternalKey(kv.CFDefault, []byte(k), 1)
 		builder.AddKey(kv.NewEntry(key, []byte("val-"+k)))
 	}
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	return tbl
 }
@@ -677,13 +690,16 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 	builderOpt.BloomFalsePositive = 0.01
 	builder := newTableBuiler(&builderOpt)
 
-	ikey := kv.KeyWithTs([]byte(key), ver)
+	ikey := kv.InternalKey(kv.CFDefault, []byte(key), ver)
 	builder.AddKey(kv.NewEntry(ikey, []byte(val)))
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("openTable: %v", err)
+	}
 	if tbl == nil {
-		t.Fatalf("expected table from builder")
+		t.Fatalf("expected table from builder, got nil")
 	}
 	return tbl
 }
@@ -700,7 +716,10 @@ func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.En
 	}
 
 	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl := openTable(lsm.levels, tableName, builder)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	if err != nil {
+		t.Fatalf("open table: %v", err)
+	}
 	if tbl == nil {
 		t.Fatalf("expected table from builder")
 	}
@@ -737,7 +756,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	tbl := buildTestTable(t, lsm, 7)
 	defer func() { _ = tbl.DecrRef() }()
 
-	key := kv.KeyWithTs([]byte("b"), 1)
+	key := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 
 	var buf ingestBuffer
 	buf.add(tbl)
@@ -748,6 +767,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatalf("expected entry")
+		return
 	}
 	if string(found.Key) != string(key) {
 		t.Fatalf("expected key %q, got %q", key, found.Key)
@@ -758,7 +778,7 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 		t.Fatalf("expected prefetch hit")
 	}
 
-	_, err = buf.search(kv.KeyWithTs([]byte("missing"), 1), nil)
+	_, err = buf.search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
 	if err != utils.ErrKeyNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -778,7 +798,7 @@ func TestIngestSearchPrefersLatestVersion(t *testing.T) {
 	buf.add(tblOld)
 	buf.add(tblNew)
 
-	key := kv.KeyWithTs([]byte("b"), math.MaxUint64)
+	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
 	found, err := buf.search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("ingest search err=%v entry=%v", err, found)
@@ -803,7 +823,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	lh.ingest.add(ingestTbl)
 	lh.tables = []*table{mainTbl}
 
-	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 	got, err := lh.Get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
@@ -825,7 +845,7 @@ func TestLevelGetMainWhenIngestEmpty(t *testing.T) {
 	lh := &levelHandler{levelNum: 2}
 	lh.tables = []*table{mainTbl}
 
-	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 	got, err := lh.Get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
@@ -848,7 +868,7 @@ func TestL0SearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblOld.DecrRef() }()
 	defer func() { _ = tblNew.DecrRef() }()
 
-	key := kv.KeyWithTs([]byte("b"), math.MaxUint64)
+	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
 	l0 := &levelHandler{levelNum: 0, tables: []*table{tblOther, tblOld, tblNew}}
 	got, err := l0.searchL0SST(key)
 	if err != nil || got == nil {
@@ -879,7 +899,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3, tables: []*table{tbl}}
-	key := kv.KeyWithTs([]byte("k"), math.MaxUint64)
+	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 
 	maxVer := uint64(5)
 	got, err := lh.searchLNSST(key, &maxVer)
@@ -896,7 +916,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	tbl := buildTestTable(t, lsm, 9)
 	defer func() { _ = tbl.DecrRef() }()
 
-	key := kv.KeyWithTs([]byte("c"), 1)
+	key := kv.InternalKey(kv.CFDefault, []byte("c"), 1)
 
 	lh := &levelHandler{levelNum: 3}
 	lh.ingest.add(tbl)
@@ -913,7 +933,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	}
 	found.DecrRef()
 
-	if lh.getTableForKey(kv.KeyWithTs([]byte("z"), 1)) != nil {
+	if lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 1)) != nil {
 		t.Fatalf("expected no table for key")
 	}
 
@@ -944,6 +964,50 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 	lmHit.DecrRef()
 }
 
+func TestGetTableForKeyBinarySearchBoundariesAndGap(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	tblA := buildTableWithEntry(t, lsm, 51, "a", 1, "va")
+	tblD := buildTableWithEntry(t, lsm, 52, "d", 1, "vd")
+	tblG := buildTableWithEntry(t, lsm, 53, "g", 1, "vg")
+	defer func() { _ = tblA.DecrRef() }()
+	defer func() { _ = tblD.DecrRef() }()
+	defer func() { _ = tblG.DecrRef() }()
+
+	lh := &levelHandler{
+		levelNum: 2,
+		tables:   []*table{tblA, tblD, tblG},
+	}
+
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("a"), math.MaxUint64)); got != tblA {
+		t.Fatalf("expected table a, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 1)); got != tblD {
+		t.Fatalf("expected table d, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("g"), 7)); got != tblG {
+		t.Fatalf("expected table g, got %+v", got)
+	}
+
+	// Key gaps between single-key tables should return nil.
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("b"), 1)); got != nil {
+		t.Fatalf("expected nil for key gap b, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("f"), 1)); got != nil {
+		t.Fatalf("expected nil for key gap f, got %+v", got)
+	}
+
+	// Out-of-range keys should return nil quickly.
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("0"), 1)); got != nil {
+		t.Fatalf("expected nil for low key, got %+v", got)
+	}
+	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 1)); got != nil {
+		t.Fatalf("expected nil for high key, got %+v", got)
+	}
+}
+
 func TestLSMMetricsAPIs(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -953,7 +1017,8 @@ func TestLSMMetricsAPIs(t *testing.T) {
 		return nil
 	})
 
-	entry := utils.BuildEntry()
+	entry := buildInternalTestEntry()
+	defer entry.DecrRef()
 	requireNoError := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -994,8 +1059,8 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	entries := []*kv.Entry{
-		kv.NewEntry(kv.KeyWithTs([]byte("b1"), 1), []byte("v1")),
-		kv.NewEntry(kv.KeyWithTs([]byte("b2"), 1), []byte("v2")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b1"), 1), []byte("v1")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b2"), 1), []byte("v2")),
 	}
 	if err := lsm.SetBatch(nil); err != nil {
 		t.Fatalf("unexpected error on empty batch: %v", err)
@@ -1032,6 +1097,118 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 
 	lsm.Prefetch(entries[0].Key)
 	lsm.Prefetch(nil)
+}
+
+func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab1"), 1), []byte("v1")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab2"), 1), []byte("v2")),
+	}
+	if err := lsm.SetBatch(entries); err != nil {
+		t.Fatalf("set batch: %v", err)
+	}
+	if err := lsm.wal.Sync(); err != nil {
+		t.Fatalf("wal sync: %v", err)
+	}
+
+	var (
+		entryRecords uint64
+		batchRecords uint64
+	)
+	if err := lsm.wal.Replay(func(info wal.EntryInfo, _ []byte) error {
+		switch info.Type {
+		case wal.RecordTypeEntry:
+			entryRecords++
+		case wal.RecordTypeEntryBatch:
+			batchRecords++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if entryRecords != 0 {
+		t.Fatalf("expected zero single entry records, got %d", entryRecords)
+	}
+	if batchRecords != 1 {
+		t.Fatalf("expected one batch record, got %d", batchRecords)
+	}
+}
+
+func TestLSMSetBatchRejectsOversizedAtomicBatch(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	large := bytes.Repeat([]byte("x"), 700)
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big1"), 1), large),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big2"), 1), large),
+	}
+	err := lsm.SetBatch(entries)
+	if !errors.Is(err, utils.ErrTxnTooBig) {
+		t.Fatalf("expected ErrTxnTooBig, got %v", err)
+	}
+}
+
+func TestLSMSetBatchConcurrentReservations(t *testing.T) {
+	clearDir()
+	prevSize := opt.MemTableSize
+	opt.MemTableSize = 8 << 10
+	defer func() { opt.MemTableSize = prevSize }()
+
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	const (
+		workers = 4
+		rounds  = 30
+	)
+	value := bytes.Repeat([]byte("v"), 64)
+
+	errCh := make(chan error, workers*rounds)
+	var wg sync.WaitGroup
+	for w := range workers {
+		workerID := w
+		wg.Go(func() {
+			for i := range rounds {
+				entries := []*kv.Entry{
+					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-a", workerID, i), 1), value),
+					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-b", workerID, i), 1), value),
+				}
+				err := lsm.SetBatch(entries)
+				for _, entry := range entries {
+					entry.DecrRef()
+				}
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		})
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for concurrent SetBatch writers")
+	}
+
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("set batch failed: %v", err)
+		}
+	}
 }
 
 func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
@@ -1084,10 +1261,10 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	if keyInRange(min, max, nil) {
 		t.Fatalf("expected nil key to be out of range")
 	}
-	if !keyInRange(min, max, []byte("m")) {
+	if !keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("m"), 1)) {
 		t.Fatalf("expected key to be in range")
 	}
-	if keyInRange(min, max, []byte("0")) {
+	if keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("0"), 1)) {
 		t.Fatalf("expected key to be out of range")
 	}
 
@@ -1103,7 +1280,11 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 		valueSize: 20,
 	})
 
-	hotKeys := [][]byte{[]byte("b"), []byte("k"), []byte("x")}
+	hotKeys := [][]byte{
+		kv.InternalKey(kv.CFDefault, []byte("b"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("k"), 1),
+		kv.InternalKey(kv.CFDefault, []byte("x"), 1),
+	}
 	score := lh.hotOverlapScore(hotKeys, false)
 	expected := float64(3) / float64(len(hotKeys))
 	if math.Abs(score-expected) > 1e-9 {
@@ -1183,7 +1364,7 @@ func TestCompact(t *testing.T) {
 	l0ToL0 := func() {
 		// Seed some data first.
 		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID + 1
+		fid := lsm.levels.maxFID.Load() + 1
 		cd := buildCompactDef(lsm, 0, 0, 0)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
@@ -1198,7 +1379,7 @@ func TestCompact(t *testing.T) {
 	}
 	nextCompact := func() {
 		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID + 1
+		fid := lsm.levels.maxFID.Load() + 1
 		cd := buildCompactDef(lsm, 0, 0, 1)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
@@ -1214,7 +1395,7 @@ func TestCompact(t *testing.T) {
 
 	maxToMax := func() {
 		baseTest(t, lsm, 128)
-		prevMax := lsm.levels.maxFID
+		prevMax := lsm.levels.maxFID.Load()
 		cd := buildCompactDef(lsm, 6, 6, 6)
 		// Use a test-only tweak to satisfy validation checks.
 		tricky(cd.thisLevel.tablesSnapshot())
@@ -1394,18 +1575,16 @@ func TestIngestShardParallelSafety(t *testing.T) {
 // baseTest performs correctness checks.
 func baseTest(_ *testing.T, lsm *LSM, n int) {
 	// Tracking entry for debugging.
-	e := &kv.Entry{
-		Key:       []byte("CRTS😁NoKVMrGSBtL12345678"),
-		Value:     []byte("我草了"),
-		ExpiresAt: 123,
-	}
+	e := kv.NewInternalEntry(kv.CFDefault, []byte("CRTS😁NoKVMrGSBtL"), kv.MaxVersion, []byte("我草了"), 0, 123)
+	defer e.DecrRef()
 	//caseList := make([]*kv.Entry, 0)
 	//caseList = append(caseList, e)
 
 	// Randomized data to exercise write paths.
 	_ = utils.Err(lsm.Set(e))
 	for i := 1; i < n; i++ {
-		ee := utils.BuildEntry()
+		ee := buildInternalTestEntry()
+		defer ee.DecrRef()
 		_ = utils.Err(lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}

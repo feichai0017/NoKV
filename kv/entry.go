@@ -88,32 +88,69 @@ func (e *Entry) reset() {
 	e.ref = 0
 }
 
-// NewEntry creates a new entry in the default column family.
+// NewEntry creates a lightweight entry from the provided key/value.
+//
+// It does not parse or validate key layout. CF is initialized to CFDefault and
+// Version remains unset (0) until filled by a caller that knows version context.
 func NewEntry(key, value []byte) *Entry {
-	return NewEntryWithCF(CFDefault, key, value)
-}
-
-// NewEntryWithCF creates an Entry for the specified column family.
-func NewEntryWithCF(cf ColumnFamily, key, value []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key = key
 	e.Value = value
-	if !cf.Valid() {
-		cf = CFDefault
-	}
-	e.CF = cf
+	e.CF = CFDefault
 	e.IncrRef()
 	return e
 }
 
-// Entry returns itself. It is kept for compatibility with iterator interfaces.
+// NewInternalEntry creates an Entry whose key is encoded as an internal key.
+//
+// Ownership note: userKey is encoded into a newly allocated internal-key buffer,
+// while value is referenced directly (no deep copy). Callers must keep value
+// immutable until the entry is no longer used.
+//
+// This helper also sets CF and Version to the supplied MVCC context.
+func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
+	if !cf.Valid() {
+		cf = CFDefault
+	}
+	e := EntryPool.Get().(*Entry)
+	e.Key = InternalKey(cf, userKey, version)
+	e.Value = value
+	e.CF = cf
+	e.Version = version
+	e.Meta = meta
+	e.ExpiresAt = expiresAt
+	e.IncrRef()
+	return e
+}
+
+// Entry returns itself to satisfy iterator item interfaces.
 func (e *Entry) Entry() *Entry {
 	return e
 }
 
+// PopulateInternalMeta parses e.Key as an internal key and fills CF/Version.
+// It returns false when the key is not in canonical internal-key format.
+func (e *Entry) PopulateInternalMeta() bool {
+	if e == nil {
+		return false
+	}
+	cf, _, ts, ok := SplitInternalKey(e.Key)
+	if !ok {
+		e.CF = CFDefault
+		e.Version = 0
+		return false
+	}
+	e.CF = cf
+	e.Version = ts
+	return true
+}
+
 // IsDeletedOrExpired reports whether the entry is a tombstone or has passed its expiry.
 func (e *Entry) IsDeletedOrExpired() bool {
-	if e.Value == nil {
+	if e == nil || e.Value == nil {
+		return true
+	}
+	if e.Meta&BitDelete > 0 {
 		return true
 	}
 	if e.ExpiresAt == 0 {
@@ -125,18 +162,6 @@ func (e *Entry) IsDeletedOrExpired() bool {
 // WithTTL sets the TTL for the entry.
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
-	return e
-}
-
-// WithColumnFamily sets the column family for the entry.
-func (e *Entry) WithColumnFamily(cf ColumnFamily) *Entry {
-	if e == nil {
-		return e
-	}
-	if !cf.Valid() {
-		cf = CFDefault
-	}
-	e.CF = cf
 	return e
 }
 

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
+	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
@@ -14,14 +14,17 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-var defaultLatches = latch.NewManager(512)
+const defaultLatchSlots = 512
 
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Only MVCC prewrite/commit operations
 // are supported at the moment.
-func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
+	}
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
 	}
 	resp := &pb.RaftCmdResponse{Header: req.Header}
 	for _, r := range req.Requests {
@@ -39,19 +42,19 @@ func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 			}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Get{Get: result}})
 		case pb.CmdType_CMD_PREWRITE:
-			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, defaultLatches, r.GetPrewrite())}
+			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
 		case pb.CmdType_CMD_COMMIT:
-			err := percolator.Commit(db, defaultLatches, r.GetCommit())
+			err := percolator.Commit(db, latches, r.GetCommit())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
 		case pb.CmdType_CMD_BATCH_ROLLBACK:
-			err := percolator.BatchRollback(db, defaultLatches, r.GetBatchRollback())
+			err := percolator.BatchRollback(db, latches, r.GetBatchRollback())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_BatchRollback{BatchRollback: &pb.BatchRollbackResponse{Error: err}}})
 		case pb.CmdType_CMD_RESOLVE_LOCK:
-			count, err := percolator.ResolveLock(db, defaultLatches, r.GetResolveLock())
+			count, err := percolator.ResolveLock(db, latches, r.GetResolveLock())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_ResolveLock{ResolveLock: &pb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
 		case pb.CmdType_CMD_CHECK_TXN_STATUS:
-			result := percolator.CheckTxnStatus(db, defaultLatches, r.GetCheckTxnStatus())
+			result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
 			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_CheckTxnStatus{CheckTxnStatus: result}})
 		case pb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
@@ -68,13 +71,16 @@ func Apply(db *NoKV.DB, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db *NoKV.DB) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
+	}
 	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
-		return Apply(db, req)
+		return Apply(db, latches, req)
 	}
 }
 
-func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, error) {
+func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, error) {
 	if req == nil {
 		return &pb.GetResponse{NotFound: true}, nil, nil
 	}
@@ -94,17 +100,17 @@ func handleGet(db *NoKV.DB, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, 
 		}}
 		return &pb.GetResponse{}, keyErr, nil
 	}
-	val, err := reader.GetValue(req.GetKey(), req.GetVersion())
+	val, expiresAt, err := reader.GetValue(req.GetKey(), req.GetVersion())
 	if err != nil {
 		if errors.Is(err, utils.ErrKeyNotFound) {
 			return &pb.GetResponse{NotFound: true}, nil, nil
 		}
 		return nil, nil, err
 	}
-	return &pb.GetResponse{Value: val}, nil, nil
+	return &pb.GetResponse{Value: val, ExpiresAt: expiresAt}, nil, nil
 }
 
-func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
+func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	if req == nil {
 		return &pb.ScanResponse{}, nil
 	}
@@ -117,9 +123,9 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	}
 	readTs := req.GetVersion()
 	if readTs == 0 {
-		readTs = math.MaxUint64
+		readTs = kv.MaxVersion
 	}
-	iter := db.NewIterator(&utils.Options{IsAsc: true})
+	iter := db.NewInternalIterator(&utils.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 
 	startKey := append([]byte(nil), req.GetStartKey()...)
@@ -127,7 +133,7 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 	started := len(startKey) == 0
 
 	resp := &pb.ScanResponse{}
-	iter.Rewind()
+	iter.Seek(kv.InternalKey(kv.CFWrite, startKey, kv.MaxVersion))
 	reader := percolator.NewReader(db)
 	for iter.Valid() && len(resp.Kvs) < limit {
 		item := iter.Item()
@@ -140,11 +146,20 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 			iter.Next()
 			continue
 		}
-		if entry.CF != kv.CFWrite {
+		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return nil, fmt.Errorf("kv: scan iterator expects internal key, got %x", entry.Key)
+		}
+		if cf != kv.CFWrite {
+			// Since iterator is seeked into CFWrite range, encountering any non-write CF
+			// means there are no more write records for subsequent keys.
+			break
+		}
+		key := kv.SafeCopy(nil, userKey)
+		if len(key) == 0 {
 			iter.Next()
 			continue
 		}
-		key := kv.SafeCopy(nil, entry.Key)
 		if !started {
 			cmp := bytes.Compare(key, startKey)
 			if cmp < 0 || (cmp == 0 && !includeStart) {
@@ -162,15 +177,16 @@ func handleScan(db *NoKV.DB, req *pb.ScanRequest) (*pb.ScanResponse, error) {
 			advanceToNextUserKey(iter, key)
 			break
 		}
-		value, found, err := collectVisibleValue(db, iter, key, readTs)
+		value, expiresAt, found, err := collectVisibleValue(db, iter, key, readTs)
 		if err != nil {
 			return nil, err
 		}
 		if found {
 			resp.Kvs = append(resp.Kvs, &pb.KV{
-				Key:     key,
-				Value:   value,
-				Version: readTs,
+				Key:       key,
+				Value:     value,
+				Version:   readTs,
+				ExpiresAt: expiresAt,
 			})
 		}
 	}
@@ -190,13 +206,20 @@ func advanceToNextUserKey(iter utils.Iterator, current []byte) {
 		if entry == nil {
 			continue
 		}
-		if !bytes.Equal(entry.Key, current) {
+		_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			utils.CondPanicFunc(true, func() error {
+				return fmt.Errorf("kv: advanceToNextUserKey expects internal key, got %x", entry.Key)
+			})
+			return
+		}
+		if !bytes.Equal(userKey, current) {
 			return
 		}
 	}
 }
 
-func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs uint64) ([]byte, bool, error) {
+func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, readTs uint64) ([]byte, uint64, bool, error) {
 	for iter.Valid() {
 		item := iter.Item()
 		if item == nil {
@@ -208,41 +231,58 @@ func collectVisibleValue(db *NoKV.DB, iter utils.Iterator, key []byte, readTs ui
 			iter.Next()
 			continue
 		}
-		if !bytes.Equal(entry.Key, key) {
-			return nil, false, nil
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			return nil, 0, false, fmt.Errorf("kv: collectVisibleValue expects internal key, got %x", entry.Key)
 		}
-		if entry.Version > readTs {
+		if cf != kv.CFWrite || !bytes.Equal(userKey, key) {
+			return nil, 0, false, nil
+		}
+		if ts > readTs {
 			iter.Next()
 			continue
 		}
 		write, err := percolator.DecodeWrite(entry.Value)
 		if err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 		switch write.Kind {
 		case pb.Mutation_Delete, pb.Mutation_Rollback:
 			advanceToNextUserKey(iter, key)
-			return nil, false, nil
+			return nil, 0, false, nil
 		default:
 			var value []byte
+			var expiresAt uint64
 			if len(write.ShortValue) > 0 {
 				value = write.ShortValue
+				expiresAt = write.ExpiresAt
+				if expiresAt > 0 && expiresAt <= uint64(time.Now().Unix()) {
+					advanceToNextUserKey(iter, key)
+					return nil, 0, false, nil
+				}
 			} else {
-				entryVal, err := db.GetVersionedEntry(kv.CFDefault, key, write.StartTs)
+				entryVal, err := db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
 				if err != nil {
 					if errors.Is(err, utils.ErrKeyNotFound) {
 						iter.Next()
 						continue
 					}
-					return nil, false, err
+					return nil, 0, false, err
 				}
-				value = entryVal.Value
+				if entryVal.IsDeletedOrExpired() {
+					entryVal.DecrRef()
+					advanceToNextUserKey(iter, key)
+					return nil, 0, false, nil
+				}
+				value = kv.SafeCopy(nil, entryVal.Value)
+				expiresAt = entryVal.ExpiresAt
+				entryVal.DecrRef()
 			}
 			advanceToNextUserKey(iter, key)
-			return value, true, nil
+			return value, expiresAt, true, nil
 		}
 	}
-	return nil, false, nil
+	return nil, 0, false, nil
 }
 
 func lockedError(key []byte, lock *percolator.Lock) *pb.KeyError {

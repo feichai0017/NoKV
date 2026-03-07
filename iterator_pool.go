@@ -13,7 +13,7 @@ type iteratorContext struct {
 
 type iteratorPool struct {
 	pool  sync.Pool
-	reuse uint64
+	reuse atomic.Uint64
 }
 
 func newIteratorPool() *iteratorPool {
@@ -28,7 +28,7 @@ func (p *iteratorPool) get() *iteratorContext {
 	}
 	if v := p.pool.Get(); v != nil {
 		if ctx, ok := v.(*iteratorContext); ok {
-			atomic.AddUint64(&p.reuse, 1)
+			p.reuse.Add(1)
 			ctx.reset()
 			return ctx
 		}
@@ -48,7 +48,7 @@ func (p *iteratorPool) reused() uint64 {
 	if p == nil {
 		return 0
 	}
-	return atomic.LoadUint64(&p.reuse)
+	return p.reuse.Load()
 }
 
 func (ctx *iteratorContext) reset() {
