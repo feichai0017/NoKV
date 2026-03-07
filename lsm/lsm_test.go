@@ -393,6 +393,213 @@ func TestFillMaxLevelTables(t *testing.T) {
 	}
 }
 
+// TestMaxLevelCompactionNoRangeDeleteResurrection verifies that a max-level
+// compaction which rewrites only the tombstone table does not resurrect older
+// covered point keys that remain in other max-level tables.
+func TestMaxLevelCompactionNoRangeDeleteResurrection(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	maxLevel := lsm.option.MaxLevelNum - 1
+	if maxLevel < 1 {
+		t.Fatalf("invalid max level %d", maxLevel)
+	}
+
+	// Table A: range tombstone [a, z)@10.
+	rt := kv.NewEntry(kv.KeyWithTs([]byte("a"), 10), []byte("z"))
+	rt.Meta = kv.BitRangeDelete
+	tombstoneTbl := buildTableWithEntries(t, lsm, 1001, rt)
+
+	// Table B: older covered point key y@1.
+	pointTbl := buildTableWithEntry(t, lsm, 1002, "y", 1, "old-y")
+
+	lh := lsm.levels.levels[maxLevel]
+	lh.add(tombstoneTbl)
+	lh.add(pointTbl)
+	lh.Sort()
+
+	// Force max-level planner to pick only tombstoneTbl.
+	tombstoneTbl.staleDataSize = 11 << 20
+	tombstoneTbl.createdAt = time.Now().Add(-2 * time.Hour)
+	pointTbl.staleDataSize = 0
+	pointTbl.createdAt = time.Now().Add(-2 * time.Hour)
+
+	// We inserted tables directly, so rebuild the in-memory tombstone index.
+	lsm.levels.rebuildRangeTombstones()
+	if lsm.RangeTombstoneCount() == 0 {
+		t.Fatalf("expected range tombstone collector to contain tombstones")
+	}
+
+	seek := kv.InternalKey(kv.CFDefault, []byte("y"), math.MaxUint64)
+	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
+		if got != nil {
+			got.DecrRef()
+		}
+		t.Fatalf("before compaction: expected key y to be hidden by range tombstone, got err=%v", err)
+	}
+
+	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
+	// Keep target size tiny so collectBotTables does not include pointTbl.
+	cd.plan.ThisFileSize = 1
+	cd.plan.NextFileSize = 1
+	if ok := lsm.levels.fillTables(cd); !ok {
+		t.Fatalf("expected max-level compaction plan")
+	}
+	if len(cd.top) != 1 || cd.top[0].fid != tombstoneTbl.fid {
+		t.Fatalf("expected compaction to select only tombstone table, got top=%v", tablesToString(cd.top))
+	}
+	if len(cd.bot) != 0 {
+		t.Fatalf("expected no bot tables to be compacted, got %d", len(cd.bot))
+	}
+
+	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
+		t.Fatalf("runCompactDef max-level: %v", err)
+	}
+	lsm.levels.compactState.Delete(cd.stateEntry())
+
+	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
+		if got != nil {
+			got.DecrRef()
+		}
+		t.Fatalf("after compaction: key resurrected, expected ErrKeyNotFound, got err=%v", err)
+	}
+}
+
+// TestMaxLevelCompactionRangeDeleteResurrection is a regression test for the
+// bug where dropping a max-level range tombstone during partial rewrite could
+// resurrect older covered point keys once tombstone state is rebuilt.
+func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	maxLevel := lsm.option.MaxLevelNum - 1
+	if maxLevel < 1 {
+		t.Fatalf("invalid max level %d", maxLevel)
+	}
+
+	compactL0To := func(level int) {
+		t.Helper()
+		cd := buildCompactDef(lsm, 0, 0, level)
+		if ok := lsm.levels.fillTables(cd); !ok {
+			t.Fatalf("expected L0->L%d compaction plan", level)
+		}
+		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
+			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
+		}
+		lsm.levels.compactState.Delete(cd.stateEntry())
+	}
+	seek := kv.InternalKey(kv.CFDefault, []byte("y"), math.MaxUint64)
+
+	// 1) Create older point key in one max-level table.
+	point := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("y"), 1), []byte("old-y"))
+	if err := lsm.Set(point); err != nil {
+		t.Fatalf("set point: %v", err)
+	}
+	lsm.Rotate()
+	waitForL0(t, lsm)
+	compactL0To(maxLevel)
+	if got, err := lsm.Get(seek); err != nil {
+		t.Fatalf("expected point key visible before tombstone, got err=%v", err)
+	} else {
+		if !bytes.Equal(got.Value, []byte("old-y")) {
+			got.DecrRef()
+			t.Fatalf("expected point value old-y, got %q", got.Value)
+		}
+		got.DecrRef()
+	}
+
+	// 2) Create newer range tombstone in a separate max-level table.
+	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
+	rt.Meta = kv.BitRangeDelete
+	if err := lsm.Set(rt); err != nil {
+		t.Fatalf("set range tombstone: %v", err)
+	}
+	lsm.Rotate()
+	waitForL0(t, lsm)
+	compactL0To(maxLevel)
+
+	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
+		if got != nil {
+			got.DecrRef()
+		}
+		t.Fatalf("precondition failed: expected y hidden by tombstone, got err=%v", err)
+	}
+
+	// 3) Force max-level planner to rewrite only the tombstone table.
+	maxTables := lsm.levels.levels[maxLevel].tablesSnapshot()
+	if len(maxTables) < 2 {
+		t.Fatalf("expected at least two max-level tables, got %d", len(maxTables))
+	}
+	var tombstoneTbl *table
+	oldEnough := time.Now().Add(-2 * time.Hour)
+	for _, tbl := range maxTables {
+		tbl.createdAt = oldEnough
+		tbl.staleDataSize = 0
+		if tableContainsRangeDelete(tbl) {
+			tombstoneTbl = tbl
+		}
+	}
+	if tombstoneTbl == nil {
+		t.Fatalf("expected one max-level table containing range tombstone")
+	}
+	tombstoneTbl.staleDataSize = 11 << 20
+
+	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
+	// Keep target size tiny so collectBotTables does not include adjacent tables.
+	cd.plan.ThisFileSize = 1
+	cd.plan.NextFileSize = 1
+	if ok := lsm.levels.fillTables(cd); !ok {
+		t.Fatalf("expected max-level compaction plan")
+	}
+	if len(cd.top) != 1 || cd.top[0].fid != tombstoneTbl.fid {
+		t.Fatalf("expected compaction top to be only tombstone table, got %v", tablesToString(cd.top))
+	}
+	if len(cd.bot) != 0 {
+		t.Fatalf("expected bot to be empty for partial max-level rewrite, got %d", len(cd.bot))
+	}
+
+	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
+		t.Fatalf("runCompactDef max-level: %v", err)
+	}
+	lsm.levels.compactState.Delete(cd.stateEntry())
+
+	// Sanity: point key table should still exist because only tombstone table was compacted.
+	hasPointInSST := false
+	for _, tbl := range lsm.levels.levels[maxLevel].tablesSnapshot() {
+		if tbl == nil {
+			continue
+		}
+		var v uint64
+		e, err := tbl.Search(seek, &v)
+		if err == nil && e != nil {
+			hasPointInSST = true
+			e.DecrRef()
+			break
+		}
+	}
+	if !hasPointInSST {
+		t.Fatalf("sanity failed: no max-level SST contains key y after tombstone-only compaction")
+	}
+
+	// 4) Restart to ensure visibility comes only from persisted state.
+	// If tombstone was dropped too early, y becomes visible again (resurrection).
+	workDir := lsm.option.WorkDir
+	if err := lsm.Close(); err != nil {
+		t.Fatalf("close before reopen: %v", err)
+	}
+	opt.WorkDir = workDir
+	lsm = buildLSM()
+
+	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
+		if got != nil {
+			got.DecrRef()
+		}
+		t.Fatalf("regression: key y resurrected after max-level tombstone drop, err=%v", err)
+	}
+}
+
 func TestLevelHandlerIngestMetrics(t *testing.T) {
 	now := time.Now()
 	t1 := &table{
@@ -479,6 +686,47 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 		t.Fatalf("expected table from builder")
 	}
 	return tbl
+}
+
+func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.Entry) *table {
+	t.Helper()
+	builderOpt := *opt
+	builderOpt.BlockSize = 64
+	builderOpt.BloomFalsePositive = 0.01
+	builder := newTableBuiler(&builderOpt)
+
+	for _, e := range entries {
+		builder.AddKey(e)
+	}
+
+	tableName := utils.FileNameSSTable(lsm.option.WorkDir, fid)
+	tbl := openTable(lsm.levels, tableName, builder)
+	if tbl == nil {
+		t.Fatalf("expected table from builder")
+	}
+	return tbl
+}
+
+func tableContainsRangeDelete(tbl *table) bool {
+	if tbl == nil {
+		return false
+	}
+	it := tbl.NewIterator(&utils.Options{IsAsc: true})
+	if it == nil {
+		return false
+	}
+	defer func() { _ = it.Close() }()
+
+	for it.Rewind(); it.Valid(); it.Next() {
+		item := it.Item()
+		if item == nil || item.Entry() == nil {
+			continue
+		}
+		if item.Entry().IsRangeDelete() {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIngestSearchAndPrefetch(t *testing.T) {

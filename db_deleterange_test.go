@@ -225,3 +225,24 @@ func TestDeleteRangeWALRecovery(t *testing.T) {
 		t.Error("key3 should exist after recovery")
 	}
 }
+
+// TestDeleteRangeVisibilityBug tests the bug where a newer point write
+// gets incorrectly hidden by an older range tombstone when both use the same version.
+func TestDeleteRangeVisibilityBug(t *testing.T) {
+	opt := getTestOptions(t.TempDir())
+	db := Open(opt)
+	defer db.Close()
+
+	db.Set([]byte("a1"), []byte("old"))
+	db.DeleteRange([]byte("a0"), []byte("a9"))
+	db.Set([]byte("a1"), []byte("new"))
+
+	e, err := db.Get([]byte("a1"))
+	if err != nil {
+		t.Fatalf("expected key a1 to exist with value 'new', got error: %v", err)
+	}
+	if !bytes.Equal(e.Value, []byte("new")) {
+		t.Errorf("expected value 'new', got '%s'", e.Value)
+	}
+}
+

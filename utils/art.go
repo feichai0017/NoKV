@@ -209,10 +209,14 @@ func (t *artTree) Get(key []byte) kv.ValueStruct {
 	if leaf == nil {
 		return kv.ValueStruct{}
 	}
-	if !kv.SameKey(key, leaf.leafKey(t.arena)) {
+	leafKey := leaf.leafKey(t.arena)
+	if !kv.SameKey(key, leafKey) {
 		return kv.ValueStruct{}
 	}
-	return leaf.loadValue(t.arena)
+	vs := leaf.loadValue(t.arena)
+	_, _, version := kv.SplitInternalKey(leafKey)
+	vs.Version = version
+	return vs
 }
 
 func (t *artTree) Set(key []byte, value kv.ValueStruct) {

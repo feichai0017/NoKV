@@ -451,7 +451,6 @@ func (db *DB) DeleteRangeCF(cf kv.ColumnFamily, start, end []byte) error {
 	return db.setEntry(entry)
 }
 
-// Set writes a key/value pair into the default column family.
 func (db *DB) Set(key, value []byte) error {
 	return db.SetCF(kv.CFDefault, key, value)
 }
@@ -597,11 +596,8 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 
-	cf, userKey, version := kv.SplitInternalKey(internalKey)
-	if db.isKeyCoveredByRangeTombstone(cf, userKey, version) {
-		entry.DecrRef()
-		return nil, utils.ErrKeyNotFound
-	}
+	// Range tombstone coverage is now checked inside lsm.Get() using
+	// the already-pinned memtables, avoiding a redundant GetMemTables call.
 
 	if !kv.IsValuePtr(entry) {
 		return entry, nil
@@ -622,59 +618,10 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 }
 
 // isKeyCoveredByRangeTombstone checks if a key is covered by any range tombstone.
-//
-// PERFORMANCE WARNING: This implementation creates new iterators and performs a full
-// scan of all LSM levels for every check. This is O(n) per read operation and causes
-// significant overhead when range tombstones are present.
-//
-// TODO: Integrate range tombstone checking into the merge iterator logic to avoid
-// creating new iterators and scanning all levels for every read. Proper implementation
-// should:
-//  1. Track range tombstones during merge iteration
-//  2. Use a fragmented range tombstone structure (similar to RocksDB/Pebble)
-//  3. Check coverage during normal LSM traversal without separate scans
-func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
-	opt := &utils.Options{IsAsc: true}
-	iters := db.lsm.NewIterators(opt)
-	// Ensure all iterators are closed even on early return.
-	defer func() {
-		for _, it := range iters {
-			if it != nil {
-				_ = it.Close()
-			}
-		}
-	}()
-
-	for _, it := range iters {
-		if it == nil {
-			continue
-		}
-		it.Rewind()
-		for it.Valid() {
-			item := it.Item()
-			if item == nil {
-				it.Next()
-				continue
-			}
-			e := item.Entry()
-			if e == nil || !e.IsRangeDelete() {
-				it.Next()
-				continue
-			}
-			rangeCF, rangeStart, rangeVersion := kv.SplitInternalKey(e.Key)
-			// Check CF match and version coverage.
-			if rangeCF != cf || rangeVersion < version {
-				it.Next()
-				continue
-			}
-			rangeEnd := e.RangeEnd()
-			if kv.KeyInRange(userKey, rangeStart, rangeEnd) {
-				return true
-			}
-			it.Next()
-		}
-	}
-	return false
+// internalKey is used to look up the entry's write sequence from the memtable
+// side map; entries not found in any memtable have all tombstones applied.
+func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, internalKey []byte) bool {
+	return db.lsm.IsKeyCoveredByRangeTombstone(cf, userKey, internalKey)
 }
 
 // cloneEntry converts an internal/buffered entry into a detached public value object.

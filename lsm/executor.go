@@ -549,6 +549,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMode == compact.IngestKeep, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
+	// After max-level compaction, range tombstone layout may change.
+	// Rebuild the in-memory range tombstone index to keep read visibility correct.
+	if cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum-1 && lm.rtCollector != nil {
+		lm.rebuildRangeTombstones()
+	}
 	return nil
 }
 
@@ -1008,7 +1013,6 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 
 	// Keep tombstone state across builder splits.
 	var rangeTombstones []rangeTombstone
-	isMaxLevel := cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum
 
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
@@ -1019,10 +1023,9 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			isExpired := IsDeletedOrExpired(entry)
 
 			if entry.IsRangeDelete() {
-				if isMaxLevel {
-					updateStats(entry)
-					continue
-				}
+				// Preserve range tombstones even at max level. Dropping them during
+				// partial Lmax->Lmax rewrites can resurrect older covered keys that
+				// remain in untouched tables outside this compaction unit.
 				// Copy range tombstone data to avoid iterator reuse issues.
 				cf, rtStart, rtVersion := kv.SplitInternalKey(entry.Key)
 				rt := rangeTombstone{
@@ -1053,7 +1056,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				cf, userKey, version := kv.SplitInternalKey(key)
 				for _, rt := range rangeTombstones {
 					// Check CF match and version/range coverage.
-					if rt.cf == cf && rt.version >= version && kv.KeyInRange(userKey, rt.start, rt.end) {
+					if rt.cf == cf && rt.version > version && kv.KeyInRange(userKey, rt.start, rt.end) {
 						covered = true
 						updateStats(entry)
 						break

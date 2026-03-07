@@ -403,6 +403,8 @@ func (s *Skiplist) Search(key []byte) kv.ValueStruct {
 
 	valOffset, valSize := n.getValueOffset()
 	vs := s.arena.getVal(valOffset, valSize)
+	_, _, version := kv.SplitInternalKey(nextKey)
+	vs.Version = version
 	return vs
 }
 

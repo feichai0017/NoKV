@@ -197,8 +197,10 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 	}
 	iter.entry = *src
 	cf, userKey, ts := kv.SplitInternalKey(iter.entry.Key)
-	// Check if this key is covered by a range tombstone
-	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, ts) {
+	// Check if this key is covered by a range tombstone.
+	// For iterator use, pass the original internal key so the write sequence
+	// can be looked up; if not found all active tombstones are considered.
+	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, iter.entry.Key) {
 		return false
 	}
 	iter.entry.Key = userKey

@@ -83,6 +83,61 @@ type Options struct {
 	ManifestRewriteThreshold int64
 }
 
+// checkRangeTombstone is the core tombstone coverage check using pre-pinned
+// memtables. This avoids a redundant GetMemTables call when the caller
+// already holds a reference (e.g. inside lsm.Get).
+func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVersion uint64, internalKey []byte, tables []*memTable) bool {
+	// Find the entry's write sequence from the side map.
+	entrySeq, seqFound := walSeqKey{}, false
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		if seq, ok := mt.walSeqForKey(internalKey); ok {
+			entrySeq = seq
+			seqFound = true
+			break
+		}
+	}
+	// Check memtable tombstones (O(M) where M = number of range tombstones).
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		if mt.isKeyCoveredByRangeTombstone(cf, userKey, entryVersion, entrySeq, seqFound) {
+			return true
+		}
+	}
+	// Check flushed range tombstones via collector (version-based).
+	if lsm.levels == nil || lsm.levels.rtCollector == nil {
+		return false
+	}
+	return lsm.levels.rtCollector.IsKeyCovered(cf, userKey, entryVersion)
+}
+
+// IsKeyCoveredByRangeTombstone checks if a key is covered by any active
+// range tombstone. Pins memtables internally; callers that already hold
+// pinned tables should use checkRangeTombstone directly.
+func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, internalKey []byte) bool {
+	if lsm == nil {
+		return false
+	}
+	tables, release := lsm.GetMemTables()
+	if release != nil {
+		defer release()
+	}
+	_, _, version := kv.SplitInternalKey(internalKey)
+	return lsm.checkRangeTombstone(cf, userKey, version, internalKey, tables)
+}
+
+// RangeTombstoneCount returns the number of tracked range tombstones.
+func (lsm *LSM) RangeTombstoneCount() int {
+	if lsm == nil || lsm.levels == nil || lsm.levels.rtCollector == nil {
+		return 0
+	}
+	return lsm.levels.rtCollector.Count()
+}
+
 // Close  _
 func (lsm *LSM) Close() error {
 	if lsm == nil {
@@ -338,6 +393,10 @@ func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
 	lsm.levels = lsm.initLevelManager(opt)
+	// Populate range tombstone collector from existing SSTables
+	if lsm.levels != nil && lsm.levels.rtCollector != nil {
+		lsm.levels.rebuildRangeTombstones()
+	}
 	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
 	lsm.memTable, lsm.immutables = lsm.recovery()
 	lsm.startFlushWorkers(1)
@@ -493,12 +552,29 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 	}
 
+	// isCovered checks range tombstone coverage for a found entry using
+	// the already-pinned memtables, avoiding a second GetMemTables call.
+	isCovered := func(entry *kv.Entry) bool {
+		if entry == nil || entry.IsRangeDelete() {
+			return false
+		}
+		cf, userKey, _ := kv.SplitInternalKey(key)
+		// Reconstruct the actual internal key using the entry's real version
+		// (not the search version) for accurate WAL sequence lookup.
+		actualKey := kv.InternalKey(cf, userKey, entry.Version)
+		return lsm.checkRangeTombstone(cf, userKey, entry.Version, actualKey, tables)
+	}
+
 	for _, mt := range tables {
 		if mt == nil {
 			continue
 		}
 		entry, err := mt.Get(key)
 		if isMemHit(entry) {
+			if isCovered(entry) {
+				entry.DecrRef()
+				return nil, utils.ErrKeyNotFound
+			}
 			return entry, err
 		}
 		if entry != nil {
@@ -506,7 +582,15 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		}
 	}
 	// query from the level manager
-	return lsm.levels.Get(key)
+	entry, err := lsm.levels.Get(key)
+	if err != nil || entry == nil {
+		return entry, err
+	}
+	if isCovered(entry) {
+		entry.DecrRef()
+		return nil, utils.ErrKeyNotFound
+	}
+	return entry, nil
 }
 
 // Prefetch warms cache layers for the key by issuing targeted block loads.
