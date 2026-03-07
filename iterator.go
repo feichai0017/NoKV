@@ -12,6 +12,7 @@ import (
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
+	db   *DB
 	pool *iteratorPool
 	ctx  *iteratorContext
 	// keyOnly avoids eager value log materialisation when true.
@@ -86,6 +87,7 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
 		vlog:       db.vlog,
+		db:         db,
 		pool:       db.iterPool,
 		ctx:        ctx,
 		keyOnly:    keyOnly,
@@ -260,10 +262,20 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 	if src.IsDeletedOrExpired() {
 		return false
 	}
+	// Skip range tombstone entries themselves
+	if src.IsRangeDelete() {
+		return false
+	}
 	iter.entry = *src
 	cf, userKey, ts, ok := kv.SplitInternalKey(iter.entry.Key)
 	if !ok {
 		// User-facing iterator remains fail-open: skip malformed internal keys.
+		return false
+	}
+	// Check if this key is covered by a range tombstone.
+	// For iterator use, pass the original internal key so the write sequence
+	// can be looked up; if not found all active tombstones are considered.
+	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, iter.entry.Key) {
 		return false
 	}
 	iter.entry.Key = userKey

@@ -1,12 +1,14 @@
 package lsm
 
 import (
+	"bytes"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -27,6 +29,19 @@ type memIndex interface {
 	DecrRef()
 }
 
+// memRangeTombstone is a lightweight copy of a range tombstone stored
+// directly in the memtable for O(M) lookup without iterator allocation.
+// segmentID + walOffset form a globally monotonic write sequence number:
+// higher segmentID is always newer; within the same segment, higher walOffset is newer.
+type memRangeTombstone struct {
+	cf        kv.ColumnFamily
+	start     []byte
+	end       []byte
+	version   uint64
+	segmentID uint32
+	walOffset int64
+}
+
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
 	lsm        *LSM
@@ -37,6 +52,53 @@ type memTable struct {
 	// reservedSize tracks in-flight write reservations to avoid overcommitting
 	// a memtable when multiple writers proceed under read locks.
 	reservedSize atomic.Int64
+
+	// rtMu protects rangeTombstones. Written by setBatch (which may run
+	// under lsm.lock read-lock or write-lock), read concurrently by
+	// isKeyCoveredByRangeTombstone. rtMu is the sole guard for this slice.
+	rtMu            sync.RWMutex
+	rangeTombstones []memRangeTombstone
+
+	// keyWalOffset maps string(internalKey) -> walSeqKey (segmentID + walOffset)
+	// of the most recent write for that key. Used to determine whether a range
+	// tombstone postdates a specific key write. ValueStruct.Version is not
+	// serialized by the arena so we cannot rely on the index to carry this.
+	keyWalOffset sync.Map // value type: walSeqKey
+}
+
+// walSeqKey is a globally monotonic write sequence key:
+// higher segmentID is always newer; within the same segment, higher walOffset is newer.
+type walSeqKey struct {
+	segmentID uint32
+	offset    int64
+}
+
+var walBufferPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+const walBufferMaxReuse = 1 << 22 // 4 MiB guard to avoid retaining huge buffers unnecessarily.
+
+func getWalBuffer() *bytes.Buffer {
+	if bufAny := walBufferPool.Get(); bufAny != nil {
+		buf := bufAny.(*bytes.Buffer)
+		buf.Reset()
+		return buf
+	}
+	return &bytes.Buffer{}
+}
+
+func putWalBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	if buf.Cap() > walBufferMaxReuse {
+		return
+	}
+	buf.Reset()
+	walBufferPool.Put(buf)
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -68,6 +130,13 @@ func (m *memTable) close() error {
 	if m == nil {
 		return nil
 	}
+	// Release the keyWalOffset side map and range tombstone cache to prevent
+	// unbounded memory growth after flush. Range tombstones have already been
+	// transferred to rtCollector by the flush path before close is called.
+	m.keyWalOffset.Clear()
+	m.rtMu.Lock()
+	m.rangeTombstones = nil
+	m.rtMu.Unlock()
 	return nil
 }
 
@@ -84,8 +153,27 @@ func (m *memTable) Set(entry *kv.Entry) error {
 		return err
 	}
 	m.walSize.Add(int64(info.Length) + 8)
+	if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
+		m.maxVersion = ts
+	}
+	m.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: m.segmentID, offset: info.Offset})
 	if m.index != nil {
 		m.index.Add(entry)
+	}
+	if entry.IsRangeDelete() {
+		_, start, version, ok := kv.SplitInternalKey(entry.Key)
+		if ok {
+			m.rtMu.Lock()
+			m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
+				cf:        entry.CF,
+				start:     kv.SafeCopy(nil, start),
+				end:       kv.SafeCopy(nil, entry.RangeEnd()),
+				version:   version,
+				segmentID: m.segmentID,
+				walOffset: info.Offset,
+			})
+			m.rtMu.Unlock()
+		}
 	}
 	return nil
 }
@@ -134,9 +222,31 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 		return err
 	}
 	m.walSize.Add(int64(info.Length) + 8)
-	if m.index != nil {
-		for _, entry := range entries {
+	for i, entry := range entries {
+		if ts := kv.Timestamp(entry.Key); ts > m.maxVersion {
+			m.maxVersion = ts
+		}
+		offset := info.Offset + int64(i)
+		if m.index != nil {
 			m.index.Add(entry)
+		}
+		// Batched WAL appends produce one physical record; we synthesize a stable
+		// per-entry offset from the batch order for in-mem ordering checks only.
+		m.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: m.segmentID, offset: offset})
+		if entry.IsRangeDelete() {
+			_, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if ok {
+				m.rtMu.Lock()
+				m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
+					cf:        entry.CF,
+					start:     kv.SafeCopy(nil, start),
+					end:       kv.SafeCopy(nil, entry.RangeEnd()),
+					version:   version,
+					segmentID: m.segmentID,
+					walOffset: offset,
+				})
+				m.rtMu.Unlock()
+			}
 		}
 	}
 	return nil
@@ -226,19 +336,41 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 			}
 			entry.DecrRef()
 		}
+		trackEntry := func(entry *kv.Entry, offset int64) {
+			mt.keyWalOffset.Store(string(entry.Key), walSeqKey{segmentID: mt.segmentID, offset: offset})
+			if !entry.IsRangeDelete() {
+				return
+			}
+			_, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				return
+			}
+			mt.rtMu.Lock()
+			mt.rangeTombstones = append(mt.rangeTombstones, memRangeTombstone{
+				cf:        entry.CF,
+				start:     kv.SafeCopy(nil, start),
+				end:       kv.SafeCopy(nil, entry.RangeEnd()),
+				version:   version,
+				segmentID: mt.segmentID,
+				walOffset: offset,
+			})
+			mt.rtMu.Unlock()
+		}
 		switch info.Type {
 		case wal.RecordTypeEntry:
 			entry, err := kv.DecodeEntry(payload)
 			if err != nil {
 				return err
 			}
+			trackEntry(entry, info.Offset)
 			applyEntry(entry)
 		case wal.RecordTypeEntryBatch:
 			entries, err := wal.DecodeEntryBatch(payload)
 			if err != nil {
 				return err
 			}
-			for _, entry := range entries {
+			for idx, entry := range entries {
+				trackEntry(entry, info.Offset+int64(idx))
 				applyEntry(entry)
 			}
 		default:
@@ -323,6 +455,70 @@ func (mt *memTable) DecrRef() {
 		return
 	}
 	mt.index.DecrRef()
+}
+
+// isKeyCoveredByRangeTombstone checks if userKey in cf is covered by any
+// range tombstone. A tombstone covers an entry if:
+// 1. tombstone version > entry version (tombstone is definitely newer), OR
+// 2. tombstone version == entry version AND tombstone was written after entry (WAL sequence)
+// When entryVersion is 0, we can't determine version relationship, so rely on WAL sequence only.
+func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVersion uint64, entrySeq walSeqKey, seqFound bool) bool {
+	if m == nil {
+		return false
+	}
+	m.rtMu.RLock()
+	rts := m.rangeTombstones
+	m.rtMu.RUnlock()
+	for i := range rts {
+		rt := &rts[i]
+		if rt.cf != cf {
+			continue
+		}
+		// Check version relationship if both versions are non-zero
+		if entryVersion > 0 && rt.version > 0 {
+			if rt.version < entryVersion {
+				continue // Tombstone is older, doesn't cover
+			}
+			if rt.version > entryVersion {
+				// Tombstone is newer, covers if key is in range
+				if kv.KeyInRange(userKey, rt.start, rt.end) {
+					return true
+				}
+				continue
+			}
+		}
+		// Same version or can't determine from version: check WAL sequence
+		// A tombstone covers this entry only if it was written after the entry.
+		// When seqFound is false we don't know the ordering: all tombstones apply.
+		if seqFound && !seqAfter(rt.segmentID, rt.walOffset, entrySeq) {
+			continue
+		}
+		if kv.KeyInRange(userKey, rt.start, rt.end) {
+			return true
+		}
+	}
+	return false
+}
+
+// seqAfter reports whether (seg, off) is strictly after entry.
+// Higher segmentID is always newer; within the same segment, higher offset is newer.
+func seqAfter(seg uint32, off int64, entry walSeqKey) bool {
+	if seg != entry.segmentID {
+		return seg > entry.segmentID
+	}
+	return off > entry.offset
+}
+
+// walSeqForKey returns the composite write sequence key of the most recent
+// write for internalKey within this memtable, or a zero walSeqKey and false.
+func (m *memTable) walSeqForKey(internalKey []byte) (walSeqKey, bool) {
+	if m == nil {
+		return walSeqKey{}, false
+	}
+	if v, ok := m.keyWalOffset.Load(string(internalKey)); ok {
+		return v.(walSeqKey), true
+	}
+	return walSeqKey{}, false
 }
 
 func newMemIndex(opt *Options) memIndex {

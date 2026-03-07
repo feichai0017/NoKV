@@ -2,6 +2,7 @@
 package NoKV
 
 import (
+	"bytes"
 	stderrors "errors"
 	"fmt"
 	"io"
@@ -422,6 +423,48 @@ func (db *DB) Del(key []byte) error {
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
 
+// DelCF removes a key from the specified column family by writing a tombstone.
+func (db *DB) DelCF(cf kv.ColumnFamily, key []byte) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// DeleteRange removes all keys in [start, end) from the default column family.
+func (db *DB) DeleteRange(start, end []byte) error {
+	return db.DeleteRangeCF(kv.CFDefault, start, end)
+}
+
+// DeleteRangeCF removes all keys in [start, end) from the specified column family.
+// Range tombstones reuse Entry structure: Key=start, Value=end, Meta=BitRangeDelete.
+func (db *DB) DeleteRangeCF(cf kv.ColumnFamily, start, end []byte) error {
+	if len(start) == 0 || len(end) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if bytes.Compare(start, end) >= 0 {
+		return utils.ErrInvalidRequest
+	}
+	entry := kv.NewInternalEntry(cf, start, nonTxnMaxVersion, end, kv.BitRangeDelete, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// SetCF writes a key/value pair into the specified column family.
+func (db *DB) SetCF(cf kv.ColumnFamily, key, value []byte) error {
+	if len(key) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if value == nil {
+		return utils.ErrNilValue
+	}
+	entry := kv.NewInternalEntry(cf, key, nonTxnMaxVersion, value, 0, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
 // Set writes a key/value pair into the default column family.
 // Use Del for explicit deletion; nil values are rejected.
 func (db *DB) Set(key, value []byte) error {
@@ -528,6 +571,25 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	return out, nil
 }
 
+// GetCF reads the latest visible value for key from the specified column family.
+func (db *DB) GetCF(cf kv.ColumnFamily, key []byte) (*kv.Entry, error) {
+	if len(key) == 0 {
+		return nil, utils.ErrEmptyKey
+	}
+	internalKey := kv.InternalKey(cf, key, nonTxnMaxVersion)
+	entry, err := db.loadBorrowedEntry(internalKey)
+	if err != nil {
+		return nil, err
+	}
+	defer entry.DecrRef()
+	if entry.IsDeletedOrExpired() {
+		return nil, utils.ErrKeyNotFound
+	}
+	out := cloneEntry(entry)
+	db.recordRead(out.Key)
+	return out, nil
+}
+
 // loadBorrowedEntry fetches one internal-key record from LSM and resolves value-log
 // indirection before returning it to the caller.
 //
@@ -547,6 +609,14 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	if entry == nil {
 		return nil, utils.ErrKeyNotFound
 	}
+	if entry.IsRangeDelete() {
+		entry.DecrRef()
+		return nil, utils.ErrKeyNotFound
+	}
+
+	// Range tombstone coverage is now checked inside lsm.Get() using
+	// the already-pinned memtables, avoiding a redundant GetMemTables call.
+
 	if !kv.IsValuePtr(entry) {
 		if !entry.PopulateInternalMeta() {
 			entry.DecrRef()
@@ -571,6 +641,13 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		return nil, utils.ErrInvalidRequest
 	}
 	return entry, nil
+}
+
+// isKeyCoveredByRangeTombstone checks if a key is covered by any range tombstone.
+// internalKey is used to look up the entry's write sequence from the memtable
+// side map; entries not found in any memtable have all tombstones applied.
+func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, internalKey []byte) bool {
+	return db.lsm.IsKeyCoveredByRangeTombstone(cf, userKey, internalKey)
 }
 
 // cloneEntry converts an internal/buffered entry into a detached public value object.
@@ -670,7 +747,7 @@ func (db *DB) runValueLogGCPeriodically() {
 }
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
-	return int64(len(e.Value)) < db.opt.ValueThreshold
+	return e.IsRangeDelete() || int64(len(e.Value)) < db.opt.ValueThreshold
 }
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
