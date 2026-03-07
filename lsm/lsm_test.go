@@ -827,8 +827,8 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	if lsm.MemSize() <= 0 {
 		t.Fatalf("expected memtable size to be positive")
 	}
-	if lsm.GetSkipListFromMemTable() == nil {
-		t.Fatalf("expected skiplist-backed memtable")
+	if _, ok := lsm.memTable.index.(*utils.ART); !ok {
+		t.Fatalf("expected ART-backed memtable")
 	}
 
 	tables, release := lsm.GetMemTables()

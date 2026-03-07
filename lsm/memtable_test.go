@@ -59,7 +59,7 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 
 	_, err = lsm.openMemTable(uint64(segID))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "while updating skiplist")
+	require.Contains(t, err.Error(), "while updating memtable index")
 }
 
 func TestMemTableSetRejectsInvalidInput(t *testing.T) {

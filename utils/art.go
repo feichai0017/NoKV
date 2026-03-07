@@ -25,6 +25,8 @@ const (
 	artNode16Cap    = 16
 	artNode48Cap    = 48
 	artMaxPrefixLen = 16
+	artCmpGroupSize = 8
+	artCmpGroupEnd  = 0xFF
 )
 
 func arenaAllocNode(arena *Arena) *artNode {
@@ -86,6 +88,8 @@ func arenaPayloadFromOffset(arena *Arena, offset uint32) *nodePayload {
 }
 
 // ART implements an adaptive radix tree for memtable indexing.
+// Keys must use the internal-key layout; the tree stores a private
+// mem-comparable route key plus the original internal key per leaf.
 // Concurrency model: copy-on-write nodes with CAS installs; reads are lock-free
 // and observe immutable nodes.
 type ART struct {
@@ -119,7 +123,16 @@ func (a *ART) Search(key []byte) ([]byte, kv.ValueStruct) {
 	if a == nil || a.tree == nil {
 		return nil, kv.ValueStruct{}
 	}
-	return a.tree.Get(key)
+	var scratch [256]byte
+	routeKey := artEncodeComparableKeyTo(scratch[:0], key)
+	foundKey, vs := a.tree.Get(routeKey)
+	if len(foundKey) == 0 {
+		return nil, kv.ValueStruct{}
+	}
+	if !kv.SameKey(key, foundKey) {
+		return nil, kv.ValueStruct{}
+	}
+	return foundKey, vs
 }
 
 // NewIterator returns a tree iterator with directional semantics from options.
@@ -209,26 +222,24 @@ func (t *artTree) Get(key []byte) ([]byte, kv.ValueStruct) {
 	if leaf == nil {
 		return nil, kv.ValueStruct{}
 	}
-	foundKey := leaf.leafKey(t.arena)
-	if !kv.SameKey(key, foundKey) {
-		return nil, kv.ValueStruct{}
-	}
-	return foundKey, leaf.loadValue(t.arena)
+	return leaf.originalKey(t.arena), leaf.loadValue(t.arena)
 }
 
 func (t *artTree) Set(key []byte, value kv.ValueStruct) {
 	if t == nil || len(key) == 0 {
 		return
 	}
+	var scratch [256]byte
+	routeKey := artEncodeComparableKeyTo(scratch[:0], key)
 	for {
-		if t.tryInsert(key, value) {
+		if t.tryInsert(key, routeKey, value) {
 			return
 		}
 		runtime.Gosched()
 	}
 }
 
-func (t *artTree) tryInsert(key []byte, value kv.ValueStruct) bool {
+func (t *artTree) tryInsert(key []byte, routeKey []byte, value kv.ValueStruct) bool {
 	root := t.root.Load()
 	if root == nil {
 		leaf := newARTLeaf(t.arena, key, value)
@@ -242,19 +253,19 @@ func (t *artTree) tryInsert(key []byte, value kv.ValueStruct) bool {
 
 	for {
 		if node.isLeaf() {
-			return t.insertAtLeaf(parent, parentKey, node, key, value, depth)
+			return t.insertAtLeaf(parent, parentKey, node, key, routeKey, value, depth)
 		}
 
-		prefix, match, cmp := matchPrefix(t.arena, node, key, depth)
+		prefix, match, cmp := matchPrefix(t.arena, node, routeKey, depth)
 		if cmp != 0 {
-			return t.insertAtPrefixMismatch(parent, parentKey, node, key, value, depth, match, prefix)
+			return t.insertAtPrefixMismatch(parent, parentKey, node, key, routeKey, value, depth, match, prefix)
 		}
 
 		depth += len(prefix)
-		nextKey := keyByte(key, depth)
+		nextKey := keyByte(routeKey, depth)
 		next, _ := node.findChild(t.arena, nextKey)
 		if next == nil {
-			return t.insertAtMissingChild(parent, parentKey, node, nextKey, key, value)
+			return t.insertAtMissingChild(parent, parentKey, node, nextKey, key, routeKey, value)
 		}
 
 		parent = node
@@ -264,8 +275,8 @@ func (t *artTree) tryInsert(key []byte, value kv.ValueStruct) bool {
 	}
 }
 
-func (t *artTree) insertAtLeaf(parent *artNode, parentKey byte, leaf *artNode, key []byte, value kv.ValueStruct, depth int) bool {
-	if bytes.Equal(leaf.leafKey(t.arena), key) {
+func (t *artTree) insertAtLeaf(parent *artNode, parentKey byte, leaf *artNode, key []byte, routeKey []byte, value kv.ValueStruct, depth int) bool {
+	if bytes.Equal(leaf.leafKey(t.arena), routeKey) {
 		leaf.storeValue(t.arena, value)
 		return true
 	}
@@ -280,7 +291,7 @@ func (t *artTree) insertAtLeaf(parent *artNode, parentKey byte, leaf *artNode, k
 	return t.replaceChild(parent, parentKey, leaf, newParent)
 }
 
-func (t *artTree) insertAtPrefixMismatch(parent *artNode, parentKey byte, node *artNode, key []byte, value kv.ValueStruct, depth, match int, prefix []byte) bool {
+func (t *artTree) insertAtPrefixMismatch(parent *artNode, parentKey byte, node *artNode, key []byte, routeKey []byte, value kv.ValueStruct, depth, match int, prefix []byte) bool {
 	newLeaf := newARTLeaf(t.arena, key, value)
 	if newLeaf == nil {
 		return false
@@ -295,7 +306,7 @@ func (t *artTree) insertAtPrefixMismatch(parent *artNode, parentKey byte, node *
 	return t.replaceChild(parent, parentKey, node, newParent)
 }
 
-func (t *artTree) insertAtMissingChild(parent *artNode, parentKey byte, node *artNode, childKey byte, key []byte, value kv.ValueStruct) bool {
+func (t *artTree) insertAtMissingChild(parent *artNode, parentKey byte, node *artNode, childKey byte, key []byte, routeKey []byte, value kv.ValueStruct) bool {
 	newLeaf := newARTLeaf(t.arena, key, value)
 	if newLeaf == nil {
 		return false
@@ -350,7 +361,7 @@ func lowerBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode
 		return nil
 	}
 	if node.isLeaf() {
-		if CompareKeys(node.leafKey(arena), key) >= 0 {
+		if bytes.Compare(node.leafKey(arena), key) >= 0 {
 			return node
 		}
 		return nil
@@ -387,7 +398,7 @@ func upperBoundNode(arena *Arena, node *artNode, key []byte, depth int) *artNode
 		return nil
 	}
 	if node.isLeaf() {
-		if CompareKeys(node.leafKey(arena), key) <= 0 {
+		if bytes.Compare(node.leafKey(arena), key) <= 0 {
 			return node
 		}
 		return nil
@@ -469,6 +480,66 @@ func keyByte(key []byte, depth int) byte {
 		return key[depth]
 	}
 	return 0
+}
+
+func artComparableEncodedLen(n int) int {
+	return ((n / artCmpGroupSize) + 1) * (artCmpGroupSize + 1)
+}
+
+func artRouteKeyLen(key []byte) int {
+	artRequireInternalKey(key)
+	return artComparableEncodedLen(len(key)-8) + 8
+}
+
+func artRequireInternalKey(key []byte) {
+	if len(key) <= 8 {
+		panic("ART requires internal keys")
+	}
+}
+
+func artEncodeComparableKeyTo(dst []byte, key []byte) []byte {
+	artRequireInternalKey(key)
+	need := artRouteKeyLen(key)
+	if cap(dst) < need {
+		dst = make([]byte, need)
+	} else {
+		dst = dst[:need]
+	}
+	n := artEncodeOrderedBytes(dst, key[:len(key)-8])
+	copy(dst[n:], key[len(key)-8:])
+	return dst[:n+8]
+}
+
+func artPutComparableKey(arena *Arena, key []byte) (uint32, uint16) {
+	if arena == nil {
+		return 0, 0
+	}
+	artRequireInternalKey(key)
+	size := artRouteKeyLen(key)
+	offset := arena.Allocate(uint32(size))
+	buf := arena.bytesAt(offset, size)
+	n := artEncodeOrderedBytes(buf, key[:len(key)-8])
+	copy(buf[n:], key[len(key)-8:])
+	return offset, uint16(size)
+}
+
+func artEncodeOrderedBytes(dst []byte, src []byte) int {
+	out := dst
+	remain := src
+	for len(remain) >= artCmpGroupSize {
+		copy(out[:artCmpGroupSize], remain[:artCmpGroupSize])
+		out[artCmpGroupSize] = artCmpGroupEnd
+		out = out[artCmpGroupSize+1:]
+		remain = remain[artCmpGroupSize:]
+	}
+
+	pad := artCmpGroupSize - len(remain)
+	copy(out[:len(remain)], remain)
+	for i := len(remain); i < artCmpGroupSize; i++ {
+		out[i] = 0
+	}
+	out[artCmpGroupSize] = artCmpGroupEnd - byte(pad)
+	return len(dst) - len(out) + artCmpGroupSize + 1
 }
 
 func splitLeaf(arena *Arena, existing, incoming *artNode, depth int) *artNode {
@@ -824,6 +895,8 @@ type artNode struct {
 	// Leaf metadata lives in the arena to avoid GC pressure.
 	leafKeyOffset uint32
 	leafKeySize   uint16
+	origKeyOffset uint32
+	origKeySize   uint16
 }
 
 func newARTNode(arena *Arena, kind uint8, prefix []byte, payload *nodePayload) *artNode {
@@ -850,6 +923,7 @@ func newARTLeaf(arena *Arena, key []byte, value kv.ValueStruct) *artNode {
 	leaf.self = self
 	leaf.kind = artLeafKind
 	leaf.setLeafKey(arena, key)
+	leaf.setOriginalKey(arena, key)
 	leaf.storeValue(arena, value)
 	return leaf
 }
@@ -869,8 +943,22 @@ func (n *artNode) setLeafKey(arena *Arena, key []byte) {
 	if n == nil || arena == nil {
 		return
 	}
-	n.leafKeyOffset = arenaPutKey(arena, key)
-	n.leafKeySize = uint16(len(key))
+	n.leafKeyOffset, n.leafKeySize = artPutComparableKey(arena, key)
+}
+
+func (n *artNode) originalKey(arena *Arena) []byte {
+	if n == nil || arena == nil || n.origKeySize == 0 {
+		return nil
+	}
+	return arenaGetKey(arena, n.origKeyOffset, n.origKeySize)
+}
+
+func (n *artNode) setOriginalKey(arena *Arena, key []byte) {
+	if n == nil || arena == nil {
+		return
+	}
+	n.origKeyOffset = arenaPutKey(arena, key)
+	n.origKeySize = uint16(len(key))
 }
 
 func (n *artNode) payloadPtr(arena *Arena) *nodePayload {
@@ -1227,7 +1315,7 @@ func (it *artIterator) Item() Item {
 	}
 	arena := it.tree.arena
 	vs := it.curr.loadValue(arena)
-	it.entry.Key = it.curr.leafKey(arena)
+	it.entry.Key = it.curr.originalKey(arena)
 	it.entry.Value = vs.Value
 	it.entry.ExpiresAt = vs.ExpiresAt
 	it.entry.Meta = vs.Meta
@@ -1256,11 +1344,13 @@ func (it *artIterator) Seek(key []byte) {
 		return
 	}
 	it.stack = it.stack[:0]
+	var scratch [256]byte
+	routeKey := artEncodeComparableKeyTo(scratch[:0], key)
 	var leaf *artNode
 	if it.isAsc {
-		leaf = it.tree.lowerBound(key)
+		leaf = it.tree.lowerBound(routeKey)
 	} else {
-		leaf = it.tree.upperBound(key)
+		leaf = it.tree.upperBound(routeKey)
 	}
 	if leaf == nil {
 		it.curr = nil
