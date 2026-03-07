@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="raftstore-deep-dive"><a class="header" href="#raftstore-deep-dive">RaftStore Deep Dive</a></h1>
-<p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
+<p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the <code>NoKV</code> gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
 <hr>
 <h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
 <div class="table-wrapper">
@@ -191,9 +191,9 @@
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync.</td></tr>
-<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv).</td></tr>
-<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and TinyKv server into a reusable node primitive.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
 </tbody>
 </table>
 </div>
@@ -210,7 +210,7 @@
 })
 </code></pre>
 <ul>
-<li>A gRPC transport is created, the TinyKv service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
+<li>A gRPC transport is created, the NoKV service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
 <li><code>store.Store</code> loads <code>manifest.RegionSnapshot()</code> to rebuild the Region catalog (router + metrics).</li>
 </ul>
 </li>
@@ -248,7 +248,7 @@
 </ol>
 <h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as store.Store
     participant PR as peer.Peer
@@ -278,7 +278,7 @@
 <hr>
 <h2 id="4-transport"><a class="header" href="#4-transport">4. Transport</a></h2>
 <ul>
-<li>gRPC transport listens on <code>TransportAddr</code>, serving both raft Step RPC and TinyKv RPC.</li>
+<li>gRPC transport listens on <code>TransportAddr</code>, serving both raft Step RPC and NoKV RPC.</li>
 <li><code>SetPeer</code> updates the mapping of remote store IDs to addresses; <code>BlockPeer</code> can be used by tests or chaos tooling.</li>
 <li>Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.</li>
 </ul>
@@ -290,7 +290,7 @@
 <li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
 </ul>
 <hr>
-<h2 id="6-tinykv-rpc-integration"><a class="header" href="#6-tinykv-rpc-integration">6. TinyKv RPC Integration</a></h2>
+<h2 id="6-nokv-rpc-integration"><a class="header" href="#6-nokv-rpc-integration">6. NoKV RPC Integration</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -368,7 +368,7 @@ size/traffic heuristics.</li>
 <ul>
 <li>Reads served through <code>ReadCommand</code> are leader-strong and pass a Raft
 linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code>).</li>
-<li>Mutating TinyKV commands are serialized through Raft log replication and apply.</li>
+<li>Mutating NoKV RPC commands are serialized through Raft log replication and apply.</li>
 <li>Command payload format on apply path is strict <code>RaftCmdRequest</code> encoding.</li>
 <li>Region metadata (range/epoch/peers) is validated before both read and write
 command execution.</li>

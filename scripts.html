@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -184,7 +184,7 @@
 <h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
 <h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>

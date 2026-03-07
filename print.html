@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -446,10 +446,10 @@ func main() {
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
-<p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a TinyKv-compatible distributed service. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
+<p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed NoKV service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV’s own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
 <hr>
 <h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
-<pre><code>┌─────────────────────────┐   TinyKv gRPC   ┌─────────────────────────┐
+<pre><code>┌─────────────────────────┐   NoKV gRPC   ┌─────────────────────────┐
 │ raftstore Service       │◀──────────────▶ │ raftstore/client        │
 └───────────┬─────────────┘                 │  (Get / Scan / Mutate)  │
             │                               └─────────────────────────┘
@@ -481,7 +481,7 @@ func main() {
 </code></pre>
 <ul>
 <li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
-<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve TinyKv RPCs.</li>
+<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve NoKV RPCs.</li>
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
@@ -568,15 +568,15 @@ iterator scan, distributed read/write via Raft apply), see
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping manifest metadata in sync.</td></tr>
-<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for TinyKv RPC.</td></tr>
-<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and TinyKv service into a reusable node instance.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
 </tbody>
 </table>
 </div>
 <h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
 <ol>
-<li><code>raftstore.NewServer</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers TinyKv RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li><code>raftstore.NewServer</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
 <li>CLI (<code>nokv serve</code>) or application enumerates <code>Manifest.RegionSnapshot()</code> and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
 <li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
@@ -592,12 +592,12 @@ iterator scan, distributed read/write via Raft apply), see
 </ul>
 <h3 id="33-transport"><a class="header" href="#33-transport">3.3 Transport</a></h3>
 <ul>
-<li>gRPC server handles Step RPCs and TinyKv RPCs on the same endpoint; peers are registered via <code>SetPeer</code>.</li>
+<li>gRPC server handles Step RPCs and NoKV RPCs on the same endpoint; peers are registered via <code>SetPeer</code>.</li>
 <li>Retry policies (<code>WithRetry</code>) and TLS credentials are configurable. Tests cover partitions, blocked peers, and slow followers.</li>
 </ul>
 <hr>
-<h2 id="4-tinykv-service"><a class="header" href="#4-tinykv-service">4. TinyKv Service</a></h2>
-<p><code>raftstore/kv/service.go</code> exposes pb.TinyKv RPCs:</p>
+<h2 id="4-nokv-service"><a class="header" href="#4-nokv-service">4. NoKV Service</a></h2>
+<p><code>raftstore/kv/service.go</code> exposes pb.NoKV RPCs:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -614,12 +614,13 @@ iterator scan, distributed read/write via Raft apply), see
 </table>
 </div>
 <p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal region manifest, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
 <p><code>raftstore/client</code> offers a leader-aware client with retry logic and convenient helpers:</p>
 <ul>
 <li><strong>Initialization</strong>: provide <code>[]StoreEndpoint</code> + <code>RegionResolver</code> (<code>GetRegionByKey</code>) so runtime routing is PD-driven.</li>
-<li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue TinyKv RPCs, and retry on NotLeader/EpochNotMatch.</li>
+<li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
 <li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches PD-lite, and starts the stores declared in the config.</li>
@@ -647,7 +648,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
 <ul>
-<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node TinyKv cluster locally.</li>
+<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
 <li><code>scripts/recovery_scenarios.sh</code> – crash-recovery test harness.</li>
 <li><code>scripts/transport_chaos.sh</code> – inject network faults and observe transport metrics.</li>
 </ul>
@@ -657,7 +658,7 @@ iterator scan, distributed read/write via Raft apply), see
 <h2 id="8-when-to-use-nokv"><a class="header" href="#8-when-to-use-nokv">8. When to Use NoKV</a></h2>
 <ul>
 <li><strong>Embedded</strong>: call <code>NoKV.Open</code>, use the local non-transactional DB APIs.</li>
-<li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any TinyKv gRPC client) to perform reads, scans, and 2PC writes.</li>
+<li><strong>Distributed</strong>: deploy <code>nokv serve</code> nodes, use <code>raftstore/client</code> (or any NoKV gRPC client) to perform reads, scans, and 2PC writes.</li>
 <li><strong>Observability-first</strong>: inspection via CLI or expvar is built-in; Region, WAL, Flush, and Raft metrics are accessible without extra instrumentation.</li>
 </ul>
 <p>See also <a href="#raftstore-deep-dive"><code>docs/raftstore.md</code></a> for deeper internals, <a href="#pd-lite"><code>docs/pd.md</code></a> for control-plane details, and <a href="#testing--validation-matrix"><code>docs/testing.md</code></a> for coverage details.</p>
@@ -800,7 +801,7 @@ to concrete functions in the codebase.</p>
 <h2 id="5-distributed-read-path-kvget--kvbatchget--kvscan"><a class="header" href="#5-distributed-read-path-kvget--kvbatchget--kvscan">5. Distributed Read Path (<code>KvGet</code> / <code>KvBatchGet</code> / <code>KvScan</code>)</a></h2>
 <h3 id="51-function-level-chain"><a class="header" href="#51-function-level-chain">5.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>raftstore/kv.Service</code> builds <code>RaftCmdRequest</code> from TinyKV RPC.</li>
+<li><code>raftstore/kv.Service</code> builds <code>RaftCmdRequest</code> from NoKV RPC.</li>
 <li><code>Store.ReadCommand</code>:
 <ul>
 <li><code>validateCommand</code> (region/epoch/leader/key-range)</li>
@@ -818,7 +819,7 @@ to concrete functions in the codebase.</p>
 </ol>
 <h3 id="52-sequence-diagram"><a class="header" href="#52-sequence-diagram">5.2 Sequence Diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as Store.ReadCommand
     participant P as peer.LinearizableRead
@@ -833,7 +834,7 @@ to concrete functions in the codebase.</p>
     AP-&gt;&gt;R: GetLock/GetValue or scan CFWrite
     R-&gt;&gt;DB: GetInternalEntry/NewInternalIterator
     AP--&gt;&gt;SVC: RaftCmdResponse
-    SVC--&gt;&gt;C: TinyKV response
+    SVC--&gt;&gt;C: NoKV response
 </pre>
 
 <hr>
@@ -870,7 +871,7 @@ to concrete functions in the codebase.</p>
     TXN-&gt;&gt;DB: applyVersionedOps -&gt; ApplyInternalEntries
     DB--&gt;&gt;TXN: write result
     AP--&gt;&gt;SVC: RaftCmdResponse
-    SVC--&gt;&gt;CL: TinyKV response
+    SVC--&gt;&gt;CL: NoKV response
 </pre>
 
 <hr>
@@ -948,6 +949,8 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 <li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
 <li><code>lsm/compact/errors.go</code>: compaction planner/runtime domain errors</li>
 <li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
+<li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
+<code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
 <li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
 <li><code>pd/core/errors.go</code>: PD metadata and range validation errors</li>
 </ul>
@@ -962,7 +965,7 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 </li>
 <li>Distributed command path (<code>kv.Service</code> -&gt; <code>Store.*Command</code> -&gt; <code>kv.Apply</code>):
 <ul>
-<li>region/leader/range failures are mapped to <code>RegionError</code> in protobuf response;</li>
+<li>region/leader/store/range failures are mapped to <code>errorpb</code> messages in protobuf responses;</li>
 <li>execution failures return Go errors to RPC layer and are translated to gRPC status.</li>
 </ul>
 </li>
@@ -1424,7 +1427,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>
-<li>Starts TinyKv gRPC service backed by local <code>raftstore</code></li>
+<li>Starts NoKV gRPC service backed by local <code>raftstore</code></li>
 <li>Requires <code>--workdir</code>, <code>--store-id</code>, and <code>--pd-addr</code></li>
 <li>Common flags:
 <ul>
@@ -2655,7 +2658,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <h2 id="1-where-it-runs"><a class="header" href="#1-where-it-runs">1. Where It Runs</a></h2>
 <p>Percolator logic is executed on the Raft apply path:</p>
 <ol>
-<li>Client sends TinyKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
+<li>Client sends NoKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
 <li><code>raftstore/kv/service.go</code> wraps it into a <code>RaftCmdRequest</code>.</li>
 <li>Store proposes command through Raft.</li>
 <li>On apply, <code>raftstore/kv/apply.go</code> dispatches to <code>percolator.*</code>.</li>
@@ -2673,7 +2676,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
     A-&gt;&gt;P: percolator.Prewrite/Commit...
     P-&gt;&gt;DB: CFDefault/CFLock/CFWrite reads+writes
     A--&gt;&gt;S: RaftCmdResponse
-    S--&gt;&gt;C: TinyKV RPC response
+    S--&gt;&gt;C: NoKV RPC response
 </pre>
 
 <p>Key files:</p>
@@ -2689,7 +2692,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>TinyKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
+<tr><th>NoKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
 </thead>
 <tbody>
 <tr><td><code>KvPrewrite</code></td><td><code>CMD_PREWRITE</code></td><td><code>Prewrite</code></td></tr>
@@ -2905,7 +2908,7 @@ inherits the global <code>HotRing*</code> configuration.</p>
 <hr>
 <h2 id="9-current-operational-boundaries"><a class="header" href="#9-current-operational-boundaries">9. Current Operational Boundaries</a></h2>
 <ul>
-<li>Percolator execution is tied to TinyKV RPC + Raft apply path.</li>
+<li>Percolator execution is tied to NoKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.</li>
 <li>Latch scope is process-local when one store shares a single <code>latch.Manager</code>;
 region correctness still comes from Raft ordering.</li>
 <li><code>Write.ShortValue</code> and <code>Write.ExpiresAt</code> are codec fields; current commit path
@@ -2924,7 +2927,7 @@ is not present.</li>
 <p>These tests cover 2PC happy path, lock conflicts, status checks, resolve/rollback behavior, and client region-aware retries.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="raftstore-deep-dive"><a class="header" href="#raftstore-deep-dive">RaftStore Deep Dive</a></h1>
-<p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
+<p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the <code>NoKV</code> gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
 <hr>
 <h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
 <div class="table-wrapper">
@@ -2936,9 +2939,9 @@ is not present.</li>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync.</td></tr>
-<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv).</td></tr>
-<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>TinyKv RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
-<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and TinyKv server into a reusable node primitive.</td></tr>
+<tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
+<tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
+<tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2955,7 +2958,7 @@ is not present.</li>
 })
 </code></pre>
 <ul>
-<li>A gRPC transport is created, the TinyKv service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
+<li>A gRPC transport is created, the NoKV service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
 <li><code>store.Store</code> loads <code>manifest.RegionSnapshot()</code> to rebuild the Region catalog (router + metrics).</li>
 </ul>
 </li>
@@ -2993,7 +2996,7 @@ is not present.</li>
 </ol>
 <h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as store.Store
     participant PR as peer.Peer
@@ -3023,7 +3026,7 @@ is not present.</li>
 <hr>
 <h2 id="4-transport"><a class="header" href="#4-transport">4. Transport</a></h2>
 <ul>
-<li>gRPC transport listens on <code>TransportAddr</code>, serving both raft Step RPC and TinyKv RPC.</li>
+<li>gRPC transport listens on <code>TransportAddr</code>, serving both raft Step RPC and NoKV RPC.</li>
 <li><code>SetPeer</code> updates the mapping of remote store IDs to addresses; <code>BlockPeer</code> can be used by tests or chaos tooling.</li>
 <li>Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.</li>
 </ul>
@@ -3035,7 +3038,7 @@ is not present.</li>
 <li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
 </ul>
 <hr>
-<h2 id="6-tinykv-rpc-integration"><a class="header" href="#6-tinykv-rpc-integration">6. TinyKv RPC Integration</a></h2>
+<h2 id="6-nokv-rpc-integration"><a class="header" href="#6-nokv-rpc-integration">6. NoKV RPC Integration</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -3113,7 +3116,7 @@ size/traffic heuristics.</li>
 <ul>
 <li>Reads served through <code>ReadCommand</code> are leader-strong and pass a Raft
 linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code>).</li>
-<li>Mutating TinyKV commands are serialized through Raft log replication and apply.</li>
+<li>Mutating NoKV RPC commands are serialized through Raft log replication and apply.</li>
 <li>Command payload format on apply path is strict <code>RaftCmdRequest</code> encoding.</li>
 <li>Region metadata (range/epoch/peers) is validated before both read and write
 command execution.</li>
@@ -3543,7 +3546,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
 <tr><td>Iterator consistency</td><td><code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
 <tr><td>Throttling / backpressure</td><td><code>lsm/compaction_test.go</code>, <code>db_test.go::TestWriteThrottle</code></td><td>L0 backlog triggers, flush queue growth, metrics observation.</td></tr>
-<tr><td>Distributed TinyKv client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
+<tr><td>Distributed NoKV client</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection</code></td><td>Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing.</td></tr>
 <tr><td>Performance regression</td><td><code>benchmark</code> package</td><td>Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under <code>benchmark/benchmark_results</code>.</td></tr>
 </tbody>
 </table>
@@ -3572,7 +3575,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
 <h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>
@@ -3650,7 +3653,7 @@ The script iterates over every store in the config and writes Region metadata vi
 </thead>
 <tbody>
 <tr><td>Embedded (<code>embedded</code>)</td><td>Opens a local <code>*NoKV.DB</code> work directory. Commands (<code>SET</code>, <code>SET NX/XX</code>, <code>EX/PX/EXAT/PXAT</code>, <code>MSET</code>, <code>INCR/DECR</code>, <code>DEL</code>, <code>MGET</code>, <code>EXISTS</code>, …) run through regular DB APIs (<code>Get/Set/SetWithTTL/Del</code>) with backend-side synchronization for read-modify-write operations.</td><td><code>--workdir &lt;dir&gt;</code></td></tr>
-<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
+<tr><td>Raft (<code>raft</code>)</td><td>Routes requests through <code>raftstore/client</code> and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry <code>expires_at</code> metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata).</td><td><code>--raft-config &lt;file&gt;</code><br><code>--pd-addr host:port</code> (optional override; defaults to <code>config.pd</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -3666,7 +3669,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <h3 id="raft-backend"><a class="header" href="#raft-backend">Raft backend</a></h3>
 <ol>
 <li>
-<p>Start TinyKv and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
+<p>Start NoKV and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh
 # or: docker compose up --build
 </code></pre>

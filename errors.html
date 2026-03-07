@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -221,6 +221,8 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 <li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
 <li><code>lsm/compact/errors.go</code>: compaction planner/runtime domain errors</li>
 <li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
+<li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
+<code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
 <li><code>wal/errors.go</code>: WAL encode/decode and segment errors</li>
 <li><code>pd/core/errors.go</code>: PD metadata and range validation errors</li>
 </ul>
@@ -235,7 +237,7 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 </li>
 <li>Distributed command path (<code>kv.Service</code> -&gt; <code>Store.*Command</code> -&gt; <code>kv.Apply</code>):
 <ul>
-<li>region/leader/range failures are mapped to <code>RegionError</code> in protobuf response;</li>
+<li>region/leader/store/range failures are mapped to <code>errorpb</code> messages in protobuf responses;</li>
 <li>execution failures return Go errors to RPC layer and are translated to gRPC status.</li>
 </ul>
 </li>

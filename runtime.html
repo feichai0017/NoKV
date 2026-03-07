@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -316,7 +316,7 @@ to concrete functions in the codebase.</p>
 <h2 id="5-distributed-read-path-kvget--kvbatchget--kvscan"><a class="header" href="#5-distributed-read-path-kvget--kvbatchget--kvscan">5. Distributed Read Path (<code>KvGet</code> / <code>KvBatchGet</code> / <code>KvScan</code>)</a></h2>
 <h3 id="51-function-level-chain"><a class="header" href="#51-function-level-chain">5.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>raftstore/kv.Service</code> builds <code>RaftCmdRequest</code> from TinyKV RPC.</li>
+<li><code>raftstore/kv.Service</code> builds <code>RaftCmdRequest</code> from NoKV RPC.</li>
 <li><code>Store.ReadCommand</code>:
 <ul>
 <li><code>validateCommand</code> (region/epoch/leader/key-range)</li>
@@ -334,7 +334,7 @@ to concrete functions in the codebase.</p>
 </ol>
 <h3 id="52-sequence-diagram"><a class="header" href="#52-sequence-diagram">5.2 Sequence Diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as Store.ReadCommand
     participant P as peer.LinearizableRead
@@ -349,7 +349,7 @@ to concrete functions in the codebase.</p>
     AP-&gt;&gt;R: GetLock/GetValue or scan CFWrite
     R-&gt;&gt;DB: GetInternalEntry/NewInternalIterator
     AP--&gt;&gt;SVC: RaftCmdResponse
-    SVC--&gt;&gt;C: TinyKV response
+    SVC--&gt;&gt;C: NoKV response
 </pre>
 
 <hr>
@@ -386,7 +386,7 @@ to concrete functions in the codebase.</p>
     TXN-&gt;&gt;DB: applyVersionedOps -&gt; ApplyInternalEntries
     DB--&gt;&gt;TXN: write result
     AP--&gt;&gt;SVC: RaftCmdResponse
-    SVC--&gt;&gt;CL: TinyKV response
+    SVC--&gt;&gt;CL: NoKV response
 </pre>
 
 <hr>

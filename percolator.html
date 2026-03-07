@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cc06316b.js";
+            window.path_to_searchindex_js = "searchindex-aca6c03f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -193,7 +193,7 @@
 <h2 id="1-where-it-runs"><a class="header" href="#1-where-it-runs">1. Where It Runs</a></h2>
 <p>Percolator logic is executed on the Raft apply path:</p>
 <ol>
-<li>Client sends TinyKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
+<li>Client sends NoKV RPC (<code>KvPrewrite</code>, <code>KvCommit</code>, …).</li>
 <li><code>raftstore/kv/service.go</code> wraps it into a <code>RaftCmdRequest</code>.</li>
 <li>Store proposes command through Raft.</li>
 <li>On apply, <code>raftstore/kv/apply.go</code> dispatches to <code>percolator.*</code>.</li>
@@ -211,7 +211,7 @@
     A-&gt;&gt;P: percolator.Prewrite/Commit...
     P-&gt;&gt;DB: CFDefault/CFLock/CFWrite reads+writes
     A--&gt;&gt;S: RaftCmdResponse
-    S--&gt;&gt;C: TinyKV RPC response
+    S--&gt;&gt;C: NoKV RPC response
 </pre>
 
 <p>Key files:</p>
@@ -227,7 +227,7 @@
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>TinyKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
+<tr><th>NoKV RPC</th><th><code>kv.Apply</code> branch</th><th>Percolator function</th></tr>
 </thead>
 <tbody>
 <tr><td><code>KvPrewrite</code></td><td><code>CMD_PREWRITE</code></td><td><code>Prewrite</code></td></tr>
@@ -443,7 +443,7 @@
 <hr>
 <h2 id="9-current-operational-boundaries"><a class="header" href="#9-current-operational-boundaries">9. Current Operational Boundaries</a></h2>
 <ul>
-<li>Percolator execution is tied to TinyKV RPC + Raft apply path.</li>
+<li>Percolator execution is tied to NoKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.</li>
 <li>Latch scope is process-local when one store shares a single <code>latch.Manager</code>;
 region correctness still comes from Raft ordering.</li>
 <li><code>Write.ShortValue</code> and <code>Write.ExpiresAt</code> are codec fields; current commit path
