@@ -29,6 +29,18 @@ const (
 	artCmpGroupEnd  = 0xFF
 )
 
+type artValueRef struct {
+	expiresAt uint64
+	valueSize uint32
+	meta      byte
+	_         [3]byte
+}
+
+var (
+	artValueRefSize  = uint32(unsafe.Sizeof(artValueRef{}))
+	artValueRefAlign = int(unsafe.Alignof(artValueRef{}))
+)
+
 func arenaAllocNode(arena *Arena) *artNode {
 	if arena == nil {
 		return nil
@@ -78,6 +90,47 @@ func arenaPayloadOffset(arena *Arena, payload *nodePayload) uint32 {
 		return 0
 	}
 	return payload.self
+}
+
+func arenaPutArtValue(arena *Arena, vs kv.ValueStruct) uint32 {
+	if arena == nil {
+		return 0
+	}
+	size := int(artValueRefSize) + len(vs.Value)
+	if size <= 0 {
+		return 0
+	}
+	offset := arena.AllocAligned(size, artValueRefAlign)
+	ref := (*artValueRef)(arena.addr(offset))
+	ref.expiresAt = vs.ExpiresAt
+	ref.valueSize = uint32(len(vs.Value))
+	ref.meta = vs.Meta
+	if len(vs.Value) > 0 {
+		buf := arena.bytesAt(offset+artValueRefSize, len(vs.Value))
+		copy(buf, vs.Value)
+	}
+	return offset
+}
+
+func arenaGetArtValue(arena *Arena, offset uint32) kv.ValueStruct {
+	if arena == nil || offset == 0 {
+		return kv.ValueStruct{}
+	}
+	ref := (*artValueRef)(arena.addr(offset))
+	if ref == nil {
+		return kv.ValueStruct{}
+	}
+	var value []byte
+	if ref.valueSize != 0 {
+		value = arena.bytesAt(offset+artValueRefSize, int(ref.valueSize))
+	} else if ptr := (*byte)(arena.addr(offset + artValueRefSize)); ptr != nil {
+		value = unsafe.Slice(ptr, 0)
+	}
+	return kv.ValueStruct{
+		Meta:      ref.meta,
+		Value:     value,
+		ExpiresAt: ref.expiresAt,
+	}
 }
 
 func arenaPayloadFromOffset(arena *Arena, offset uint32) *nodePayload {
@@ -628,6 +681,14 @@ func artPutComparableKey(arena *Arena, key []byte) (uint32, uint16) {
 }
 
 func artEncodeOrderedBytes(dst []byte, src []byte) int {
+	if len(src) < artCmpGroupSize {
+		copy(dst[:len(src)], src)
+		for i := len(src); i < artCmpGroupSize; i++ {
+			dst[i] = 0
+		}
+		dst[artCmpGroupSize] = artCmpGroupEnd - byte(artCmpGroupSize-len(src))
+		return artCmpGroupSize + 1
+	}
 	out := dst
 	remain := src
 	for len(remain) >= artCmpGroupSize {
@@ -987,7 +1048,7 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 }
 
 type artNode struct {
-	value         atomic.Uint64
+	valueOffset   atomic.Uint32
 	payloadOffset atomic.Uint32
 	versionLock   atomic.Uint64
 	self          uint32
@@ -1106,19 +1167,14 @@ func (n *artNode) loadValue(arena *Arena) kv.ValueStruct {
 	if n == nil || arena == nil {
 		return kv.ValueStruct{}
 	}
-	valOffset, valSize := decodeValue(n.value.Load())
-	if valOffset == 0 && valSize == 0 {
-		return kv.ValueStruct{}
-	}
-	return arenaGetVal(arena, valOffset, valSize)
+	return arenaGetArtValue(arena, n.valueOffset.Load())
 }
 
 func (n *artNode) storeValue(arena *Arena, vs kv.ValueStruct) {
 	if n == nil || arena == nil {
 		return
 	}
-	valOffset := arenaPutVal(arena, vs)
-	n.value.Store(encodeValue(valOffset, vs.EncodedSize()))
+	n.valueOffset.Store(arenaPutArtValue(arena, vs))
 }
 
 func (n *artNode) prefixBytes(arena *Arena) []byte {
