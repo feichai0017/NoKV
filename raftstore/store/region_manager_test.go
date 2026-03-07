@@ -129,8 +129,24 @@ func TestStoreReadCommandValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp == nil || resp.RegionError == nil || resp.RegionError.EpochNotMatch == nil {
-		t.Fatalf("expected epoch not match error")
+	if resp == nil || resp.RegionError == nil || resp.RegionError.RegionNotFound == nil {
+		t.Fatalf("expected region not found error")
+	}
+}
+
+func TestStoreReadCommandStoreNotMatch(t *testing.T) {
+	store := NewStoreWithConfig(Config{StoreID: 7})
+
+	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
+	resp, err := store.ReadCommand(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil || resp.RegionError == nil || resp.RegionError.StoreNotMatch == nil {
+		t.Fatalf("expected store not match error")
+	}
+	if resp.RegionError.StoreNotMatch.RequestStoreId != 9 || resp.RegionError.StoreNotMatch.ActualStoreId != 7 {
+		t.Fatalf("unexpected store mismatch payload: %+v", resp.RegionError.StoreNotMatch)
 	}
 }
 

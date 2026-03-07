@@ -3,6 +3,7 @@ syntax = "proto3";
 
 package pb;
 
+import "errorpb.proto";
 import "metapb.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb";
@@ -244,7 +245,7 @@ message KvCheckTxnStatusResponse {
   RegionError region_error = 2;
 }
 
-service TinyKv {
+service NoKV {
   rpc KvGet(KvGetRequest) returns (KvGetResponse);
   rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
   rpc KvScan(KvScanRequest) returns (KvScanResponse);
@@ -289,27 +290,4 @@ message CommitTsExpired {
   bytes key = 1;
   uint64 commit_ts = 2;
   uint64 min_commit_ts = 3;
-}
-
-message RegionError {
-  NotLeader not_leader = 1;
-  EpochNotMatch epoch_not_match = 2;
-  StaleCommand stale_command = 3;
-  RaftEntryTooLarge entry_too_large = 4;
-}
-
-message NotLeader {
-  uint64 region_id = 1;
-  RegionPeer leader = 2;
-}
-
-message EpochNotMatch {
-  RegionEpoch current_epoch = 1;
-  repeated RegionMeta regions = 2;
-}
-
-message StaleCommand {}
-
-message RaftEntryTooLarge {
-  uint64 region_id = 1;
 }

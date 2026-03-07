@@ -1,6 +1,6 @@
 # RaftStore Deep Dive
 
-`raftstore` powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.
+`raftstore` powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the `NoKV` gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.
 
 ---
 
@@ -11,9 +11,9 @@
 | [`store`](../raftstore/store) | Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as `StartPeer`, `ProposeCommand`, `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync. |
-| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (TinyKv). |
-| [`kv`](../raftstore/kv) | TinyKv RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
-| [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and TinyKv server into a reusable node primitive. |
+| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
+| [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
+| [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and NoKV server into a reusable node primitive. |
 
 ---
 
@@ -28,7 +28,7 @@
        TransportAddr: "127.0.0.1:20160",
    })
    ```
-   - A gRPC transport is created, the TinyKv service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
+   - A gRPC transport is created, the NoKV service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
    - `store.Store` loads `manifest.RegionSnapshot()` to rebuild the Region catalog (router + metrics).
 
 2. **Start local peers**
@@ -60,7 +60,7 @@
 
 ```mermaid
 sequenceDiagram
-    participant C as TinyKV Client
+    participant C as NoKV Client
     participant SVC as kv.Service
     participant ST as store.Store
     participant PR as peer.Peer
@@ -91,7 +91,7 @@ sequenceDiagram
 
 ## 4. Transport
 
-- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and TinyKv RPC.
+- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and NoKV RPC.
 - `SetPeer` updates the mapping of remote store IDs to addresses; `BlockPeer` can be used by tests or chaos tooling.
 - Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.
 
@@ -105,7 +105,7 @@ sequenceDiagram
 
 ---
 
-## 6. TinyKv RPC Integration
+## 6. NoKV RPC Integration
 
 | RPC | Execution Path | Notes |
 | --- | --- | --- |
@@ -177,7 +177,7 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a man
 
 - Reads served through `ReadCommand` are leader-strong and pass a Raft
   linearizability barrier (`LinearizableRead` + `WaitApplied`).
-- Mutating TinyKV commands are serialized through Raft log replication and apply.
+- Mutating NoKV RPC commands are serialized through Raft log replication and apply.
 - Command payload format on apply path is strict `RaftCmdRequest` encoding.
 - Region metadata (range/epoch/peers) is validated before both read and write
   command execution.

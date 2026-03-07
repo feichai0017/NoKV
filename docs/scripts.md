@@ -7,7 +7,7 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
 ## Cluster helpers
 
 ### `scripts/run_local_cluster.sh`
-- **Purpose** – builds `nokv` and `nokv-config`, reads `raft_config.json`, seeds manifests, starts PD-lite, and starts the TinyKv nodes. If a store directory already contains a manifest (`CURRENT`), the seeding step is skipped so previously bootstrapped data is reused.
+- **Purpose** – builds `nokv` and `nokv-config`, reads `raft_config.json`, seeds manifests, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a manifest (`CURRENT`), the seeding step is skipped so previously bootstrapped data is reused.
 - **Usage**
   ```bash
   ./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster

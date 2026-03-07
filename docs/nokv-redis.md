@@ -5,7 +5,7 @@
 | Mode | Description | Key flags |
 | --- | --- | --- |
 | Embedded (`embedded`) | Opens a local `*NoKV.DB` work directory. Commands (`SET`, `SET NX/XX`, `EX/PX/EXAT/PXAT`, `MSET`, `INCR/DECR`, `DEL`, `MGET`, `EXISTS`, …) run through regular DB APIs (`Get/Set/SetWithTTL/Del`) with backend-side synchronization for read-modify-write operations. | `--workdir <dir>` |
-| Raft (`raft`) | Routes requests through `raftstore/client` and a TinyKv cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
+| Raft (`raft`) | Routes requests through `raftstore/client` and a NoKV cluster. Writes execute via TwoPhaseCommit; TTL is persisted directly in entry `expires_at` metadata (same write path as value updates). Routing and TSO allocation are provided by PD-lite over gRPC (PD is runtime route source; config regions are bootstrap metadata). | `--raft-config <file>`<br>`--pd-addr host:port` (optional override; defaults to `config.pd`) |
 
 When both CLI and config provide the same setting, CLI wins.
 
@@ -24,7 +24,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 
 ### Raft backend
 
-1. Start TinyKv and PD-lite using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv pd` automatically:
+1. Start NoKV and PD-lite using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv pd` automatically:
 
    ```bash
    ./scripts/run_local_cluster.sh

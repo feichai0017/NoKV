@@ -229,9 +229,9 @@ type protoreflectEnum interface {
 	EnumDescriptor() ([]byte, []int)
 }
 
-func TestTinyKvClientAndServerHelpers(t *testing.T) {
+func TestNoKVClientAndServerHelpers(t *testing.T) {
 	conn := &fakeConn{}
-	client := NewTinyKvClient(conn)
+	client := NewNoKVClient(conn)
 
 	_, err := client.KvGet(context.Background(), &KvGetRequest{})
 	require.NoError(t, err)
@@ -251,15 +251,15 @@ func TestTinyKvClientAndServerHelpers(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, conn.methods, 8)
-	require.Equal(t, TinyKv_KvGet_FullMethodName, conn.methods[0])
+	require.Equal(t, NoKV_KvGet_FullMethodName, conn.methods[0])
 
 	reg := &fakeRegistrar{}
-	RegisterTinyKvServer(reg, UnimplementedTinyKvServer{})
+	RegisterNoKVServer(reg, UnimplementedNoKVServer{})
 	require.NotNil(t, reg.desc)
-	require.Equal(t, "pb.TinyKv", reg.desc.ServiceName)
+	require.Equal(t, "pb.NoKV", reg.desc.ServiceName)
 	require.NotNil(t, reg.srv)
 
-	srv := UnimplementedTinyKvServer{}
+	srv := UnimplementedNoKVServer{}
 	_, err = srv.KvGet(context.Background(), &KvGetRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))

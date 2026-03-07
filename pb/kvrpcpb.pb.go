@@ -2636,263 +2636,11 @@ func (x *CommitTsExpired) GetMinCommitTs() uint64 {
 	return 0
 }
 
-type RegionError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NotLeader     *NotLeader             `protobuf:"bytes,1,opt,name=not_leader,json=notLeader,proto3" json:"not_leader,omitempty"`
-	EpochNotMatch *EpochNotMatch         `protobuf:"bytes,2,opt,name=epoch_not_match,json=epochNotMatch,proto3" json:"epoch_not_match,omitempty"`
-	StaleCommand  *StaleCommand          `protobuf:"bytes,3,opt,name=stale_command,json=staleCommand,proto3" json:"stale_command,omitempty"`
-	EntryTooLarge *RaftEntryTooLarge     `protobuf:"bytes,4,opt,name=entry_too_large,json=entryTooLarge,proto3" json:"entry_too_large,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RegionError) Reset() {
-	*x = RegionError{}
-	mi := &file_kvrpcpb_proto_msgTypes[41]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegionError) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegionError) ProtoMessage() {}
-
-func (x *RegionError) ProtoReflect() protoreflect.Message {
-	mi := &file_kvrpcpb_proto_msgTypes[41]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegionError.ProtoReflect.Descriptor instead.
-func (*RegionError) Descriptor() ([]byte, []int) {
-	return file_kvrpcpb_proto_rawDescGZIP(), []int{41}
-}
-
-func (x *RegionError) GetNotLeader() *NotLeader {
-	if x != nil {
-		return x.NotLeader
-	}
-	return nil
-}
-
-func (x *RegionError) GetEpochNotMatch() *EpochNotMatch {
-	if x != nil {
-		return x.EpochNotMatch
-	}
-	return nil
-}
-
-func (x *RegionError) GetStaleCommand() *StaleCommand {
-	if x != nil {
-		return x.StaleCommand
-	}
-	return nil
-}
-
-func (x *RegionError) GetEntryTooLarge() *RaftEntryTooLarge {
-	if x != nil {
-		return x.EntryTooLarge
-	}
-	return nil
-}
-
-type NotLeader struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	Leader        *RegionPeer            `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *NotLeader) Reset() {
-	*x = NotLeader{}
-	mi := &file_kvrpcpb_proto_msgTypes[42]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NotLeader) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NotLeader) ProtoMessage() {}
-
-func (x *NotLeader) ProtoReflect() protoreflect.Message {
-	mi := &file_kvrpcpb_proto_msgTypes[42]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NotLeader.ProtoReflect.Descriptor instead.
-func (*NotLeader) Descriptor() ([]byte, []int) {
-	return file_kvrpcpb_proto_rawDescGZIP(), []int{42}
-}
-
-func (x *NotLeader) GetRegionId() uint64 {
-	if x != nil {
-		return x.RegionId
-	}
-	return 0
-}
-
-func (x *NotLeader) GetLeader() *RegionPeer {
-	if x != nil {
-		return x.Leader
-	}
-	return nil
-}
-
-type EpochNotMatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CurrentEpoch  *RegionEpoch           `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
-	Regions       []*RegionMeta          `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EpochNotMatch) Reset() {
-	*x = EpochNotMatch{}
-	mi := &file_kvrpcpb_proto_msgTypes[43]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EpochNotMatch) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EpochNotMatch) ProtoMessage() {}
-
-func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_kvrpcpb_proto_msgTypes[43]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EpochNotMatch.ProtoReflect.Descriptor instead.
-func (*EpochNotMatch) Descriptor() ([]byte, []int) {
-	return file_kvrpcpb_proto_rawDescGZIP(), []int{43}
-}
-
-func (x *EpochNotMatch) GetCurrentEpoch() *RegionEpoch {
-	if x != nil {
-		return x.CurrentEpoch
-	}
-	return nil
-}
-
-func (x *EpochNotMatch) GetRegions() []*RegionMeta {
-	if x != nil {
-		return x.Regions
-	}
-	return nil
-}
-
-type StaleCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StaleCommand) Reset() {
-	*x = StaleCommand{}
-	mi := &file_kvrpcpb_proto_msgTypes[44]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StaleCommand) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StaleCommand) ProtoMessage() {}
-
-func (x *StaleCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_kvrpcpb_proto_msgTypes[44]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StaleCommand.ProtoReflect.Descriptor instead.
-func (*StaleCommand) Descriptor() ([]byte, []int) {
-	return file_kvrpcpb_proto_rawDescGZIP(), []int{44}
-}
-
-type RaftEntryTooLarge struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RaftEntryTooLarge) Reset() {
-	*x = RaftEntryTooLarge{}
-	mi := &file_kvrpcpb_proto_msgTypes[45]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RaftEntryTooLarge) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RaftEntryTooLarge) ProtoMessage() {}
-
-func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
-	mi := &file_kvrpcpb_proto_msgTypes[45]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RaftEntryTooLarge.ProtoReflect.Descriptor instead.
-func (*RaftEntryTooLarge) Descriptor() ([]byte, []int) {
-	return file_kvrpcpb_proto_rawDescGZIP(), []int{45}
-}
-
-func (x *RaftEntryTooLarge) GetRegionId() uint64 {
-	if x != nil {
-		return x.RegionId
-	}
-	return 0
-}
-
 var File_kvrpcpb_proto protoreflect.FileDescriptor
 
 const file_kvrpcpb_proto_rawDesc = "" +
 	"\n" +
-	"\rkvrpcpb.proto\x12\x02pb\x1a\fmetapb.proto\"\xb3\x01\n" +
+	"\rkvrpcpb.proto\x12\x02pb\x1a\rerrorpb.proto\x1a\fmetapb.proto\"\xb3\x01\n" +
 	"\x02KV\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12\x1b\n" +
@@ -3065,22 +2813,7 @@ const file_kvrpcpb_proto_rawDesc = "" +
 	"\x0fCommitTsExpired\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x1b\n" +
 	"\tcommit_ts\x18\x02 \x01(\x04R\bcommitTs\x12\"\n" +
-	"\rmin_commit_ts\x18\x03 \x01(\x04R\vminCommitTs\"\xec\x01\n" +
-	"\vRegionError\x12,\n" +
-	"\n" +
-	"not_leader\x18\x01 \x01(\v2\r.pb.NotLeaderR\tnotLeader\x129\n" +
-	"\x0fepoch_not_match\x18\x02 \x01(\v2\x11.pb.EpochNotMatchR\repochNotMatch\x125\n" +
-	"\rstale_command\x18\x03 \x01(\v2\x10.pb.StaleCommandR\fstaleCommand\x12=\n" +
-	"\x0fentry_too_large\x18\x04 \x01(\v2\x15.pb.RaftEntryTooLargeR\rentryTooLarge\"P\n" +
-	"\tNotLeader\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12&\n" +
-	"\x06leader\x18\x02 \x01(\v2\x0e.pb.RegionPeerR\x06leader\"o\n" +
-	"\rEpochNotMatch\x124\n" +
-	"\rcurrent_epoch\x18\x01 \x01(\v2\x0f.pb.RegionEpochR\fcurrentEpoch\x12(\n" +
-	"\aregions\x18\x02 \x03(\v2\x0e.pb.RegionMetaR\aregions\"\x0e\n" +
-	"\fStaleCommand\"0\n" +
-	"\x11RaftEntryTooLarge\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId*R\n" +
+	"\rmin_commit_ts\x18\x03 \x01(\x04R\vminCommitTs*R\n" +
 	"\x0fReadConsistency\x12\x1b\n" +
 	"\x17READ_CONSISTENCY_STRONG\x10\x00\x12\"\n" +
 	"\x1eREAD_CONSISTENCY_BOUNDED_STALE\x10\x01*V\n" +
@@ -3091,8 +2824,8 @@ const file_kvrpcpb_proto_rawDesc = "" +
 	"\x16CheckTxnStatusNoAction\x10\x00\x12#\n" +
 	"\x1fCheckTxnStatusTTLExpireRollback\x10\x01\x12&\n" +
 	"\"CheckTxnStatusLockNotExistRollback\x10\x02\x12#\n" +
-	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x032\xf9\x03\n" +
-	"\x06TinyKv\x12,\n" +
+	"\x1fCheckTxnStatusMinCommitTsPushed\x10\x032\xf7\x03\n" +
+	"\x04NoKV\x12,\n" +
 	"\x05KvGet\x12\x10.pb.KvGetRequest\x1a\x11.pb.KvGetResponse\x12;\n" +
 	"\n" +
 	"KvBatchGet\x12\x15.pb.KvBatchGetRequest\x1a\x16.pb.KvBatchGetResponse\x12/\n" +
@@ -3117,7 +2850,7 @@ func file_kvrpcpb_proto_rawDescGZIP() []byte {
 }
 
 var file_kvrpcpb_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_kvrpcpb_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_kvrpcpb_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_kvrpcpb_proto_goTypes = []any{
 	(ReadConsistency)(0),             // 0: pb.ReadConsistency
 	(ReadPreference)(0),              // 1: pb.ReadPreference
@@ -3164,14 +2897,9 @@ var file_kvrpcpb_proto_goTypes = []any{
 	(*WriteConflict)(nil),            // 42: pb.WriteConflict
 	(*KeyAlreadyExists)(nil),         // 43: pb.KeyAlreadyExists
 	(*CommitTsExpired)(nil),          // 44: pb.CommitTsExpired
-	(*RegionError)(nil),              // 45: pb.RegionError
-	(*NotLeader)(nil),                // 46: pb.NotLeader
-	(*EpochNotMatch)(nil),            // 47: pb.EpochNotMatch
-	(*StaleCommand)(nil),             // 48: pb.StaleCommand
-	(*RaftEntryTooLarge)(nil),        // 49: pb.RaftEntryTooLarge
-	(*RegionEpoch)(nil),              // 50: pb.RegionEpoch
-	(*RegionPeer)(nil),               // 51: pb.RegionPeer
-	(*RegionMeta)(nil),               // 52: pb.RegionMeta
+	(*RegionEpoch)(nil),              // 45: pb.RegionEpoch
+	(*RegionPeer)(nil),               // 46: pb.RegionPeer
+	(*RegionError)(nil),              // 47: pb.RegionError
 }
 var file_kvrpcpb_proto_depIdxs = []int32{
 	4,  // 0: pb.KVList.kv:type_name -> pb.KV
@@ -3188,75 +2916,68 @@ var file_kvrpcpb_proto_depIdxs = []int32{
 	40, // 11: pb.ResolveLockResponse.error:type_name -> pb.KeyError
 	40, // 12: pb.CheckTxnStatusResponse.error:type_name -> pb.KeyError
 	2,  // 13: pb.CheckTxnStatusResponse.action:type_name -> pb.CheckTxnStatusAction
-	50, // 14: pb.Context.region_epoch:type_name -> pb.RegionEpoch
-	51, // 15: pb.Context.peer:type_name -> pb.RegionPeer
+	45, // 14: pb.Context.region_epoch:type_name -> pb.RegionEpoch
+	46, // 15: pb.Context.peer:type_name -> pb.RegionPeer
 	0,  // 16: pb.Context.read_consistency:type_name -> pb.ReadConsistency
 	1,  // 17: pb.Context.read_preference:type_name -> pb.ReadPreference
 	23, // 18: pb.KvGetRequest.context:type_name -> pb.Context
 	6,  // 19: pb.KvGetRequest.request:type_name -> pb.GetRequest
 	7,  // 20: pb.KvGetResponse.response:type_name -> pb.GetResponse
-	45, // 21: pb.KvGetResponse.region_error:type_name -> pb.RegionError
+	47, // 21: pb.KvGetResponse.region_error:type_name -> pb.RegionError
 	23, // 22: pb.KvBatchGetRequest.context:type_name -> pb.Context
 	8,  // 23: pb.KvBatchGetRequest.request:type_name -> pb.BatchGetRequest
 	9,  // 24: pb.KvBatchGetResponse.response:type_name -> pb.BatchGetResponse
-	45, // 25: pb.KvBatchGetResponse.region_error:type_name -> pb.RegionError
+	47, // 25: pb.KvBatchGetResponse.region_error:type_name -> pb.RegionError
 	23, // 26: pb.KvScanRequest.context:type_name -> pb.Context
 	10, // 27: pb.KvScanRequest.request:type_name -> pb.ScanRequest
 	11, // 28: pb.KvScanResponse.response:type_name -> pb.ScanResponse
-	45, // 29: pb.KvScanResponse.region_error:type_name -> pb.RegionError
+	47, // 29: pb.KvScanResponse.region_error:type_name -> pb.RegionError
 	23, // 30: pb.KvPrewriteRequest.context:type_name -> pb.Context
 	13, // 31: pb.KvPrewriteRequest.request:type_name -> pb.PrewriteRequest
 	14, // 32: pb.KvPrewriteResponse.response:type_name -> pb.PrewriteResponse
-	45, // 33: pb.KvPrewriteResponse.region_error:type_name -> pb.RegionError
+	47, // 33: pb.KvPrewriteResponse.region_error:type_name -> pb.RegionError
 	23, // 34: pb.KvCommitRequest.context:type_name -> pb.Context
 	15, // 35: pb.KvCommitRequest.request:type_name -> pb.CommitRequest
 	16, // 36: pb.KvCommitResponse.response:type_name -> pb.CommitResponse
-	45, // 37: pb.KvCommitResponse.region_error:type_name -> pb.RegionError
+	47, // 37: pb.KvCommitResponse.region_error:type_name -> pb.RegionError
 	23, // 38: pb.KvBatchRollbackRequest.context:type_name -> pb.Context
 	17, // 39: pb.KvBatchRollbackRequest.request:type_name -> pb.BatchRollbackRequest
 	18, // 40: pb.KvBatchRollbackResponse.response:type_name -> pb.BatchRollbackResponse
-	45, // 41: pb.KvBatchRollbackResponse.region_error:type_name -> pb.RegionError
+	47, // 41: pb.KvBatchRollbackResponse.region_error:type_name -> pb.RegionError
 	23, // 42: pb.KvResolveLockRequest.context:type_name -> pb.Context
 	19, // 43: pb.KvResolveLockRequest.request:type_name -> pb.ResolveLockRequest
 	20, // 44: pb.KvResolveLockResponse.response:type_name -> pb.ResolveLockResponse
-	45, // 45: pb.KvResolveLockResponse.region_error:type_name -> pb.RegionError
+	47, // 45: pb.KvResolveLockResponse.region_error:type_name -> pb.RegionError
 	23, // 46: pb.KvCheckTxnStatusRequest.context:type_name -> pb.Context
 	21, // 47: pb.KvCheckTxnStatusRequest.request:type_name -> pb.CheckTxnStatusRequest
 	22, // 48: pb.KvCheckTxnStatusResponse.response:type_name -> pb.CheckTxnStatusResponse
-	45, // 49: pb.KvCheckTxnStatusResponse.region_error:type_name -> pb.RegionError
+	47, // 49: pb.KvCheckTxnStatusResponse.region_error:type_name -> pb.RegionError
 	41, // 50: pb.KeyError.locked:type_name -> pb.Locked
 	42, // 51: pb.KeyError.write_conflict:type_name -> pb.WriteConflict
 	43, // 52: pb.KeyError.already_exists:type_name -> pb.KeyAlreadyExists
 	44, // 53: pb.KeyError.commit_ts_expired:type_name -> pb.CommitTsExpired
 	3,  // 54: pb.Locked.lock_type:type_name -> pb.Mutation.Op
-	46, // 55: pb.RegionError.not_leader:type_name -> pb.NotLeader
-	47, // 56: pb.RegionError.epoch_not_match:type_name -> pb.EpochNotMatch
-	48, // 57: pb.RegionError.stale_command:type_name -> pb.StaleCommand
-	49, // 58: pb.RegionError.entry_too_large:type_name -> pb.RaftEntryTooLarge
-	51, // 59: pb.NotLeader.leader:type_name -> pb.RegionPeer
-	50, // 60: pb.EpochNotMatch.current_epoch:type_name -> pb.RegionEpoch
-	52, // 61: pb.EpochNotMatch.regions:type_name -> pb.RegionMeta
-	24, // 62: pb.TinyKv.KvGet:input_type -> pb.KvGetRequest
-	26, // 63: pb.TinyKv.KvBatchGet:input_type -> pb.KvBatchGetRequest
-	28, // 64: pb.TinyKv.KvScan:input_type -> pb.KvScanRequest
-	30, // 65: pb.TinyKv.KvPrewrite:input_type -> pb.KvPrewriteRequest
-	32, // 66: pb.TinyKv.KvCommit:input_type -> pb.KvCommitRequest
-	34, // 67: pb.TinyKv.KvBatchRollback:input_type -> pb.KvBatchRollbackRequest
-	36, // 68: pb.TinyKv.KvResolveLock:input_type -> pb.KvResolveLockRequest
-	38, // 69: pb.TinyKv.KvCheckTxnStatus:input_type -> pb.KvCheckTxnStatusRequest
-	25, // 70: pb.TinyKv.KvGet:output_type -> pb.KvGetResponse
-	27, // 71: pb.TinyKv.KvBatchGet:output_type -> pb.KvBatchGetResponse
-	29, // 72: pb.TinyKv.KvScan:output_type -> pb.KvScanResponse
-	31, // 73: pb.TinyKv.KvPrewrite:output_type -> pb.KvPrewriteResponse
-	33, // 74: pb.TinyKv.KvCommit:output_type -> pb.KvCommitResponse
-	35, // 75: pb.TinyKv.KvBatchRollback:output_type -> pb.KvBatchRollbackResponse
-	37, // 76: pb.TinyKv.KvResolveLock:output_type -> pb.KvResolveLockResponse
-	39, // 77: pb.TinyKv.KvCheckTxnStatus:output_type -> pb.KvCheckTxnStatusResponse
-	70, // [70:78] is the sub-list for method output_type
-	62, // [62:70] is the sub-list for method input_type
-	62, // [62:62] is the sub-list for extension type_name
-	62, // [62:62] is the sub-list for extension extendee
-	0,  // [0:62] is the sub-list for field type_name
+	24, // 55: pb.NoKV.KvGet:input_type -> pb.KvGetRequest
+	26, // 56: pb.NoKV.KvBatchGet:input_type -> pb.KvBatchGetRequest
+	28, // 57: pb.NoKV.KvScan:input_type -> pb.KvScanRequest
+	30, // 58: pb.NoKV.KvPrewrite:input_type -> pb.KvPrewriteRequest
+	32, // 59: pb.NoKV.KvCommit:input_type -> pb.KvCommitRequest
+	34, // 60: pb.NoKV.KvBatchRollback:input_type -> pb.KvBatchRollbackRequest
+	36, // 61: pb.NoKV.KvResolveLock:input_type -> pb.KvResolveLockRequest
+	38, // 62: pb.NoKV.KvCheckTxnStatus:input_type -> pb.KvCheckTxnStatusRequest
+	25, // 63: pb.NoKV.KvGet:output_type -> pb.KvGetResponse
+	27, // 64: pb.NoKV.KvBatchGet:output_type -> pb.KvBatchGetResponse
+	29, // 65: pb.NoKV.KvScan:output_type -> pb.KvScanResponse
+	31, // 66: pb.NoKV.KvPrewrite:output_type -> pb.KvPrewriteResponse
+	33, // 67: pb.NoKV.KvCommit:output_type -> pb.KvCommitResponse
+	35, // 68: pb.NoKV.KvBatchRollback:output_type -> pb.KvBatchRollbackResponse
+	37, // 69: pb.NoKV.KvResolveLock:output_type -> pb.KvResolveLockResponse
+	39, // 70: pb.NoKV.KvCheckTxnStatus:output_type -> pb.KvCheckTxnStatusResponse
+	63, // [63:71] is the sub-list for method output_type
+	55, // [55:63] is the sub-list for method input_type
+	55, // [55:55] is the sub-list for extension type_name
+	55, // [55:55] is the sub-list for extension extendee
+	0,  // [0:55] is the sub-list for field type_name
 }
 
 func init() { file_kvrpcpb_proto_init() }
@@ -3264,6 +2985,7 @@ func file_kvrpcpb_proto_init() {
 	if File_kvrpcpb_proto != nil {
 		return
 	}
+	file_errorpb_proto_init()
 	file_metapb_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3271,7 +2993,7 @@ func file_kvrpcpb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kvrpcpb_proto_rawDesc), len(file_kvrpcpb_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   46,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
