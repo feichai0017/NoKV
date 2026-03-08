@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e97d2f4f.js";
+            window.path_to_searchindex_js = "searchindex-48185e16.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c17ea2b1.js"></script>
@@ -201,11 +201,11 @@
 }
 </code></pre>
 <ul>
-<li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>art</code> (default) or <code>skiplist</code> via <code>newMemIndex</code>. ART now uses a reversible mem-comparable route key so its trie ordering matches the LSM internal-key comparator; <code>skiplist</code> remains available as the simpler alternative.</li>
+<li><strong>Memtable engine</strong> – <code>Options.MemTableEngine</code> selects <code>art</code> (default) or <code>skiplist</code> via <code>newMemIndex</code>. ART is not a generic trie: it is an internal-key-only memtable index. It uses a reversible mem-comparable route key so trie ordering matches the LSM internal-key comparator; <code>skiplist</code> remains available as the simpler baseline alternative.</li>
 <li><strong>Arena sizing</strong> – both <code>utils.NewSkiplist</code> and <code>utils.NewART</code> use <code>arenaSizeFor</code> to derive arena capacity from <code>Options.MemTableSize</code>.</li>
 <li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
 <li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB’s <code>logfile_number</code> field.</li>
-<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses copy-on-write payload/node clones with CAS installs for writes, and keeps reads lock-free on immutable snapshots.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The main concurrency model is still copy-on-write payload/node cloning with CAS installs; the only retained writer-side <code>OLC-lite</code> fast path is a narrow in-place <code>replaceChild</code> update. Reads stay lock-free and do not run full version validation.</li>
 </ul>
 <hr>
 <h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
@@ -259,7 +259,7 @@
 <tr><th>Aspect</th><th>RocksDB</th><th>BadgerDB</th><th>NoKV</th></tr>
 </thead>
 <tbody>
-<tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena</td></tr>
+<tr><td>Data structure</td><td>Skiplist + arena</td><td>Skiplist + arena</td><td>Skiplist or ART + arena (<code>art</code> default)</td></tr>
 <tr><td>WAL linkage</td><td><code>logfile_number</code> per memtable</td><td>Segment ID stored in vlog entries</td><td><code>segmentID</code> on <code>memTable</code>, logged via manifest</td></tr>
 <tr><td>Recovery</td><td>Memtable replays from WAL, referencing <code>MANIFEST</code></td><td>Replays WAL segments</td><td>Replays WAL segments, prunes ≤ manifest log pointer</td></tr>
 <tr><td>Flush trigger</td><td>Size/entries/time</td><td>Size-based</td><td>WAL-size budget (<code>walSize</code>) with explicit queue metrics</td></tr>
@@ -270,6 +270,7 @@
 <h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
 <ul>
 <li>Tuning <code>Options.MemTableSize</code> affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.</li>
+<li>ART currently uses noticeably more memindex arena memory than skiplist because it stores both route keys and original internal keys in leaves; in local measurements the ART memindex is roughly <code>2x</code> the skiplist memindex footprint for the same key/value set.</li>
 <li>Monitor <code>NoKV.Stats.flush.*</code> fields to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.</li>
 <li>Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine’s manifest-driven cleanup.</li>
 </ul>

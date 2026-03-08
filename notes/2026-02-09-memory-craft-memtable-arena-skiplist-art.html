@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e97d2f4f.js";
+            window.path_to_searchindex_js = "../searchindex-48185e16.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-c17ea2b1.js"></script>
@@ -278,7 +278,13 @@
 <ul>
 <li>Node4/16/48/256 自适应升级。</li>
 <li>前缀压缩减少重复路径。</li>
-<li>leaf 保存完整 key + value。</li>
+<li>leaf 同时保存两份键：
+<ul>
+<li><code>route key</code>：只给 trie 路由与顺序查找使用</li>
+<li><code>original internal key</code>：给 memtable / iterator / 上层系统返回</li>
+</ul>
+</li>
+<li>ART 是 <strong>internal-key-only</strong> 的 memtable 索引，不再兼容 raw key 路径。</li>
 </ul>
 <pre class="mermaid">flowchart LR
   N4["Node4"] --&gt; N16["Node16"]
@@ -287,15 +293,21 @@
 </pre>
 
 <h3 id="62-并发模型"><a class="header" href="#62-并发模型">6.2 并发模型</a></h3>
-<p>NoKV ART 的关键不是“树结构本身”，而是 COW + CAS 安装：</p>
+<p>NoKV ART 的关键不是“树结构本身”，而是主 <code>COW + CAS</code> 模型下的克制优化：</p>
 <ul>
-<li>读路径读不可变快照。</li>
-<li>写路径复制 payload 后 CAS 替换。</li>
-<li>冲突时重试 <code>tryInsert</code>。</li>
+<li>读路径读不可变快照，不做 full OLC 的 read-side version validate。</li>
+<li>大多数结构更新仍然是复制 payload / node 后 CAS 安装。</li>
+<li>当前只保留一个很窄的 writer-side <code>OLC-lite</code> fast path：<code>replaceChild</code> 可原地替换单个 child pointer。</li>
+<li>冲突时仍然重试 <code>tryInsert</code>。</li>
 </ul>
-<p>这让 ART 在高并发读写场景下通常能拿到更低延迟。</p>
+<p>这比 full OLC 更容易维护，也更符合 NoKV 当前的工程目标：先保证 internal-key 语义、可维护性，再拿稳定的热点收益。</p>
 <h3 id="63-查询与范围扫描"><a class="header" href="#63-查询与范围扫描">6.3 查询与范围扫描</a></h3>
-<p><code>lowerBound</code> 统一了 <code>Search</code> 与 <code>Seek</code> 的行为语义，也让范围扫描路径更自然。</p>
+<p><code>lowerBound</code> 统一了 <code>Search</code> 与 <code>Seek</code> 的行为语义，也让范围扫描路径更自然。但要明确：</p>
+<ul>
+<li><code>ART</code> 更擅长 <code>Insert / Get / Seek</code></li>
+<li>纯 <code>IteratorNext</code> 仍然通常弱于 skiplist</li>
+<li>当前实现是用更高的 memindex 内存去换热点路径性能，不是“白赚”</li>
+</ul>
 <hr>
 <h2 id="7-skiplist-vs-art不是谁更先进而是谁更合身"><a class="header" href="#7-skiplist-vs-art不是谁更先进而是谁更合身">7. Skiplist vs ART：不是“谁更先进”，而是“谁更合身”</a></h2>
 <div class="table-wrapper">
@@ -307,16 +319,19 @@
 <tr><td style="text-align: left">复杂度</td><td style="text-align: left">中等，结构直观</td><td style="text-align: left">高，路径分叉多</td></tr>
 <tr><td style="text-align: left">可维护性</td><td style="text-align: left">强</td><td style="text-align: left">中</td></tr>
 <tr><td style="text-align: left">常见读延迟</td><td style="text-align: left">中</td><td style="text-align: left">低（常见负载）</td></tr>
-<tr><td style="text-align: left">范围扫描</td><td style="text-align: left">好</td><td style="text-align: left">很好</td></tr>
-<tr><td style="text-align: left">并发写冲突行为</td><td style="text-align: left">CAS 重试、简单</td><td style="text-align: left">COW+CAS、实现复杂</td></tr>
+<tr><td style="text-align: left">Insert / Get / Seek</td><td style="text-align: left">中</td><td style="text-align: left">强</td></tr>
+<tr><td style="text-align: left">纯 IteratorNext</td><td style="text-align: left">强</td><td style="text-align: left">中</td></tr>
+<tr><td style="text-align: left">memindex 内存</td><td style="text-align: left">低</td><td style="text-align: left">高（当前约 <code>2x</code> skiplist）</td></tr>
+<tr><td style="text-align: left">并发写冲突行为</td><td style="text-align: left">CAS 重试、简单</td><td style="text-align: left">主 <code>COW+CAS</code> + 窄 <code>OLC-lite</code></td></tr>
 <tr><td style="text-align: left">调试成本</td><td style="text-align: left">低</td><td style="text-align: left">高</td></tr>
 </tbody>
 </table>
 </div>
 <p>工程建议：</p>
 <ul>
-<li>默认以 Skiplist 起步，先把系统行为跑稳。</li>
-<li>明确读热点与范围扫描占比后，再切 ART 并做专项 benchmark。</li>
+<li>如果系统默认目标是更好的 <code>Insert / Get / Seek</code>，当前 NoKV 选择 <code>ART</code> 是合理的。</li>
+<li>如果更关注纯顺序迭代、实现简单度或 memindex 内存，<code>skiplist</code> 仍然是稳健基线。</li>
+<li>不要把 “使用 ART” 当作算法创新；真正有价值的是它已经和 NoKV 的 internal-key、arena 生命周期和 LSM 读写路径绑定在一起。</li>
 </ul>
 <hr>
 <h2 id="8-常见误区新人最容易踩的坑"><a class="header" href="#8-常见误区新人最容易踩的坑">8. 常见误区（新人最容易踩的坑）</a></h2>
@@ -331,7 +346,7 @@
 </li>
 <li>
 <p>误区：ART 一定全面优于 Skiplist。
-事实：ART 的收益依赖负载形态与实现细节，不是无条件成立。</p>
+事实：ART 的收益依赖负载形态与实现细节；当前 NoKV 里它明显改善 <code>Insert / Get / Seek</code>，但纯 <code>IteratorNext</code> 与 memindex 内存并不占优。</p>
 </li>
 </ol>
 <hr>
@@ -349,7 +364,7 @@
 <ul>
 <li>Arena 决定上限性能是否稳定。</li>
 <li>Skiplist 决定基线是否稳健可控。</li>
-<li>ART 决定是否能进一步逼近延迟和吞吐上限。</li>
+<li>ART 让 NoKV 在 memtable 热点路径上拥有一条区别于主流 skiplist 路线的工程选择，但它的代价和边界也必须被明确记录。</li>
 </ul>
 <p>NoKV 的这套实现是很典型的工程答案：先保语义，再做性能，再留插拔空间。</p>
 
