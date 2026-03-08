@@ -13,6 +13,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestARTEncodeComparablePrefixToGroupBoundaries(t *testing.T) {
+	for _, n := range []int{8, 16} {
+		src := make([]byte, n)
+		for i := range src {
+			src[i] = byte(i + 1)
+		}
+		got := make([]byte, artComparableEncodedLen(len(src)))
+		want := make([]byte, artComparableEncodedLen(len(src)))
+		gotN := artEncodeComparablePrefixTo(got, src)
+		wantN := artEncodeOrderedBytes(want, src)
+		require.Equal(t, wantN, gotN)
+		require.Equal(t, want[:wantN], got[:gotN])
+	}
+}
+
 func TestARTGetLatest(t *testing.T) {
 	art := NewART(DefaultArenaSize)
 	defer art.DecrRef()
@@ -284,21 +299,16 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	if root48 == nil || root48.kind != artNode48Kind {
 		t.Fatalf("expected node48 root, got %v", root48)
 	}
-	eq, gt := root48.lookupGE(art48.tree.arena, 0)
+	payload48 := root48.payloadPtr(art48.tree.arena)
+	eq, gt := lookupGEPayload(art48.tree.arena, root48.kind, payload48, 0)
 	if eq != nil || gt == nil {
 		t.Fatalf("expected greater child lookup in node48")
 	}
 
-	it48 := art48.NewIterator(nil)
-	artIt48, ok := it48.(*artIterator)
-	if !ok {
-		t.Fatalf("expected art iterator, got %T", it48)
-	}
-	child, nextIdx := artIt48.childForKey(root48, 5)
-	if child == nil || nextIdx == 0 {
+	child, pos := lookupExactPosPayload(art48.tree.arena, root48.kind, payload48, 5)
+	if child == nil || pos < 0 {
 		t.Fatalf("expected child lookup in node48")
 	}
-	_ = artIt48.Close()
 
 	art256 := NewART(DefaultArenaSize)
 	defer art256.DecrRef()
@@ -314,21 +324,16 @@ func TestARTPrefixMismatchAndNodeKinds(t *testing.T) {
 	if root256 == nil || root256.kind != artNode256Kind {
 		t.Fatalf("expected node256 root, got %v", root256)
 	}
-	eq, gt = root256.lookupGE(art256.tree.arena, 10)
+	payload256 := root256.payloadPtr(art256.tree.arena)
+	eq, gt = lookupGEPayload(art256.tree.arena, root256.kind, payload256, 10)
 	if eq == nil || gt == nil {
 		t.Fatalf("expected greater child lookup in node256")
 	}
 
-	it256 := art256.NewIterator(nil)
-	artIt256, ok := it256.(*artIterator)
-	if !ok {
-		t.Fatalf("expected art iterator, got %T", it256)
-	}
-	child, nextIdx = artIt256.childForKey(root256, 10)
-	if child == nil || nextIdx == 0 {
+	child, pos = lookupExactPosPayload(art256.tree.arena, root256.kind, payload256, 10)
+	if child == nil || pos < 0 {
 		t.Fatalf("expected child lookup in node256")
 	}
-	_ = artIt256.Close()
 }
 
 func TestARTDecrRefUnderflow(t *testing.T) {
