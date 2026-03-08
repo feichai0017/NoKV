@@ -29,11 +29,11 @@ type memIndex interface {
 }
 ```
 
-* **Memtable engine** – `Options.MemTableEngine` selects `art` (default) or `skiplist` via `newMemIndex`. ART now uses a reversible mem-comparable route key so its trie ordering matches the LSM internal-key comparator; `skiplist` remains available as the simpler alternative.
+* **Memtable engine** – `Options.MemTableEngine` selects `art` (default) or `skiplist` via `newMemIndex`. ART is not a generic trie: it is an internal-key-only memtable index. It uses a reversible mem-comparable route key so trie ordering matches the LSM internal-key comparator; `skiplist` remains available as the simpler baseline alternative.
 * **Arena sizing** – both `utils.NewSkiplist` and `utils.NewART` use `arenaSizeFor` to derive arena capacity from `Options.MemTableSize`.
 * **WAL coupling** – every `Set` uses `kv.EncodeEntry` to materialise the payload to the active WAL segment before inserting into the chosen index. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – `LSM.NewMemtable` atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.
-* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256), uses copy-on-write payload/node clones with CAS installs for writes, and keeps reads lock-free on immutable snapshots.
+* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The main concurrency model is still copy-on-write payload/node cloning with CAS installs; the only retained writer-side `OLC-lite` fast path is a narrow in-place `replaceChild` update. Reads stay lock-free and do not run full version validation.
 
 ---
 
@@ -85,7 +85,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 | Aspect | RocksDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
-| Data structure | Skiplist + arena | Skiplist + arena | Skiplist or ART + arena |
+| Data structure | Skiplist + arena | Skiplist + arena | Skiplist or ART + arena (`art` default) |
 | WAL linkage | `logfile_number` per memtable | Segment ID stored in vlog entries | `segmentID` on `memTable`, logged via manifest |
 | Recovery | Memtable replays from WAL, referencing `MANIFEST` | Replays WAL segments | Replays WAL segments, prunes ≤ manifest log pointer |
 | Flush trigger | Size/entries/time | Size-based | WAL-size budget (`walSize`) with explicit queue metrics |
@@ -95,6 +95,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 ## 6. Operational Notes
 
 * Tuning `Options.MemTableSize` affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.
+* ART currently uses noticeably more memindex arena memory than skiplist because it stores both route keys and original internal keys in leaves; in local measurements the ART memindex is roughly `2x` the skiplist memindex footprint for the same key/value set.
 * Monitor `NoKV.Stats.flush.*` fields to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.
 * Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine's manifest-driven cleanup.
 
