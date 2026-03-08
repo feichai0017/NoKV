@@ -346,6 +346,8 @@ func (vlog *valueLog) write(reqs []*request) error {
 	fail := func(err error, context string) error {
 		for _, req := range reqs {
 			req.Ptrs = req.Ptrs[:0]
+			req.ptrIdxs = req.ptrIdxs[:0]
+			req.ptrBuckets = req.ptrBuckets[:0]
 		}
 		for bucket := range touched {
 			mgr, mgrErr := vlog.managerFor(bucket)
@@ -365,20 +367,26 @@ func (vlog *valueLog) write(reqs []*request) error {
 		if req == nil {
 			continue
 		}
-		if cap(req.Ptrs) < len(req.Entries) {
-			req.Ptrs = make([]kv.ValuePtr, len(req.Entries))
-		} else {
-			req.Ptrs = req.Ptrs[:len(req.Entries)]
-			for i := range req.Ptrs {
-				req.Ptrs[i] = kv.ValuePtr{}
-			}
-		}
+		req.Ptrs = req.Ptrs[:0]
+		req.ptrIdxs = req.ptrIdxs[:0]
+		req.ptrBuckets = req.ptrBuckets[:0]
 		bucketEntries := make(map[uint32][]int)
 		for i, e := range req.Entries {
 			if !vlog.db.shouldWriteValueToLSM(e) {
 				wrote = true
 				bucket := vlog.bucketForEntry(e)
 				bucketEntries[bucket] = append(bucketEntries[bucket], i)
+			}
+		}
+		if len(bucketEntries) == 0 {
+			continue
+		}
+		if cap(req.Ptrs) < len(req.Entries) {
+			req.Ptrs = make([]kv.ValuePtr, len(req.Entries))
+		} else {
+			req.Ptrs = req.Ptrs[:len(req.Entries)]
+			for i := range req.Ptrs {
+				req.Ptrs[i] = kv.ValuePtr{}
 			}
 		}
 		for bucket, idxs := range bucketEntries {
@@ -400,12 +408,17 @@ func (vlog *valueLog) write(reqs []*request) error {
 			for i, idx := range idxs {
 				req.Ptrs[idx] = ptrs[i]
 			}
+			req.ptrIdxs = append(req.ptrIdxs, idxs...)
+			req.ptrBuckets = append(req.ptrBuckets, bucket)
 			touched[bucket] = struct{}{}
 		}
 	}
 	if wrote && vlog.db != nil && vlog.db.opt.SyncWrites {
 		byBucket := make(map[uint32]map[uint32]struct{})
 		for _, req := range reqs {
+			if len(req.ptrBuckets) == 0 {
+				continue
+			}
 			for _, ptr := range req.Ptrs {
 				if ptr.IsZero() {
 					continue
@@ -539,15 +552,8 @@ func (db *DB) getHeads() map[uint32]kv.ValuePtr {
 	return heads
 }
 
-func (db *DB) updateHead(ptrs []kv.ValuePtr) {
-	touched := make(map[uint32]struct{})
-	for _, p := range ptrs {
-		if p.IsZero() {
-			continue
-		}
-		touched[p.Bucket] = struct{}{}
-	}
-	if len(touched) == 0 {
+func (db *DB) updateHeadBuckets(buckets []uint32) {
+	if len(buckets) == 0 {
 		return
 	}
 	if db.vlog == nil {
@@ -559,7 +565,7 @@ func (db *DB) updateHead(ptrs []kv.ValuePtr) {
 	if db.lastLoggedHeads == nil {
 		db.lastLoggedHeads = make(map[uint32]kv.ValuePtr)
 	}
-	for bucket := range touched {
+	for _, bucket := range buckets {
 		mgr, err := db.vlog.managerFor(bucket)
 		if err != nil {
 			continue

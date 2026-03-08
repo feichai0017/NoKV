@@ -1111,6 +1111,36 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	got.DecrRef()
 }
 
+func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
+	local := NewDefaultOptions()
+	local.WorkDir = t.TempDir()
+	local.EnableWALWatchdog = false
+	local.ValueLogGCInterval = 0
+	local.WriteBatchWait = 0
+	local.ValueThreshold = 1 << 20
+
+	db := Open(local)
+	defer func() { _ = db.Close() }()
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("inline-fast-path"), nonTxnMaxVersion, []byte("v1"), 0, 0)
+	defer entry.DecrRef()
+
+	reqs := []*request{
+		{
+			Entries: []*kv.Entry{entry},
+		},
+	}
+
+	failedAt, err := db.applyRequests(reqs)
+	require.Equal(t, -1, failedAt)
+	require.NoError(t, err)
+
+	got, getErr := db.lsm.Get(entry.Key)
+	require.NoError(t, getErr)
+	require.Equal(t, []byte("v1"), got.Value)
+	got.DecrRef()
+}
+
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 	db := &DB{}
 	req1 := &request{}

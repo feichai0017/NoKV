@@ -455,6 +455,28 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	require.Len(t, req.Ptrs, 0)
 }
 
+func TestValueLogWriteInlineRequestSkipsPtrs(t *testing.T) {
+	clearDir()
+	prevThreshold := opt.ValueThreshold
+	opt.ValueThreshold = 1 << 20
+	defer func() { opt.ValueThreshold = prevThreshold }()
+
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	req := requestPool.Get().(*request)
+	req.reset()
+	entry := kvpkg.NewInternalEntry(kvpkg.CFDefault, []byte("inline-vlog"), nonTxnMaxVersion, []byte("v"), 0, 0)
+	req.loadEntries([]*kvpkg.Entry{entry})
+	req.IncrRef()
+	defer req.DecrRef()
+
+	require.NoError(t, db.vlog.write([]*request{req}))
+	require.Len(t, req.Ptrs, 0)
+	require.Len(t, req.ptrIdxs, 0)
+	require.Len(t, req.ptrBuckets, 0)
+}
+
 func TestValueLogReadCopiesSmallValue(t *testing.T) {
 	clearDir()
 	prevThreshold := opt.ValueThreshold

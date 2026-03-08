@@ -444,8 +444,11 @@ func (db *DB) applyRequests(reqs []*request) (int, error) {
 		if err := db.writeToLSM(r); err != nil {
 			return i, pkgerrors.Wrap(err, "writeRequests")
 		}
+		if len(r.ptrBuckets) == 0 {
+			continue
+		}
 		db.Lock()
-		db.updateHead(r.Ptrs)
+		db.updateHeadBuckets(r.ptrBuckets)
 		db.Unlock()
 	}
 	return -1, nil
@@ -474,17 +477,20 @@ func (db *DB) finishCommitRequests(reqs []*commitRequest, defaultErr error, perR
 }
 
 func (db *DB) writeToLSM(b *request) error {
+	if len(b.ptrIdxs) == 0 {
+		if len(b.Ptrs) != 0 && len(b.Ptrs) != len(b.Entries) {
+			return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
+		}
+		return db.lsm.SetBatch(b.Entries)
+	}
 	if len(b.Ptrs) != len(b.Entries) {
 		return pkgerrors.Errorf("Ptrs and Entries don't match: %+v", b)
 	}
 
-	for i, entry := range b.Entries {
-		if db.shouldWriteValueToLSM(entry) { // Will include deletion / tombstone case.
-			entry.Meta = entry.Meta &^ kv.BitValuePointer
-		} else {
-			entry.Meta = entry.Meta | kv.BitValuePointer
-			entry.Value = b.Ptrs[i].Encode()
-		}
+	for _, idx := range b.ptrIdxs {
+		entry := b.Entries[idx]
+		entry.Meta = entry.Meta | kv.BitValuePointer
+		entry.Value = b.Ptrs[idx].Encode()
 	}
 	if err := db.lsm.SetBatch(b.Entries); err != nil {
 		return err
