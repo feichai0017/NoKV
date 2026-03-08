@@ -2,6 +2,7 @@ package utils
 
 import (
 	"log"
+	"math/bits"
 	"sync/atomic"
 	"unsafe"
 
@@ -17,9 +18,11 @@ const (
 
 // Arena should be lock-free.
 type Arena struct {
-	n         uint32
-	chunkSize uint32
-	chunks    []atomic.Pointer[byte]
+	n          uint32
+	chunkSize  uint32
+	chunkMask  uint32
+	chunkShift uint8
+	chunks     []atomic.Pointer[byte]
 }
 
 // NewArena returns a new arena.
@@ -34,10 +37,18 @@ func NewArena(n int64) *Arena {
 	}
 	chunkSize := max(min(n, DefaultArenaSize), minArenaChunkSize)
 	AssertTrue(chunkSize > 0)
+	var chunkMask uint32
+	var chunkShift uint8
+	if isPow2(uint32(chunkSize)) {
+		chunkMask = uint32(chunkSize) - 1
+		chunkShift = uint8(bits.TrailingZeros32(uint32(chunkSize)))
+	}
 	out := &Arena{
-		n:         1,
-		chunkSize: uint32(chunkSize),
-		chunks:    make([]atomic.Pointer[byte], maxChunks(uint32(chunkSize))),
+		n:          1,
+		chunkSize:  uint32(chunkSize),
+		chunkMask:  chunkMask,
+		chunkShift: chunkShift,
+		chunks:     make([]atomic.Pointer[byte], maxChunks(uint32(chunkSize))),
 	}
 	first := make([]byte, int(chunkSize))
 	out.chunks[0].Store(&first[0])
@@ -135,11 +146,8 @@ func (s *Arena) bytesAt(offset uint32, length int) []byte {
 	if ptr == nil {
 		return nil
 	}
-	chunk := unsafe.Slice(ptr, int(s.chunkSize))
-	start := int(off)
-	end := start + length
-	AssertTrue(end <= len(chunk))
-	return chunk[start:end]
+	AssertTrue(off+uint32(length) <= s.chunkSize)
+	return unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(ptr), uintptr(off))), length)
 }
 
 func (s *Arena) addr(offset uint32) unsafe.Pointer {
@@ -157,12 +165,18 @@ func (s *Arena) chunkFor(offset uint32) (*byte, uint32) {
 	if s == nil || offset == 0 {
 		return nil, 0
 	}
-	idx := offset / s.chunkSize
-	off := offset % s.chunkSize
+	idx, off := s.chunkIndex(offset)
 	if int(idx) >= len(s.chunks) {
 		return nil, 0
 	}
 	return s.chunks[idx].Load(), off
+}
+
+func (s *Arena) chunkIndex(offset uint32) (uint32, uint32) {
+	if s.chunkMask != 0 {
+		return offset >> s.chunkShift, offset & s.chunkMask
+	}
+	return offset / s.chunkSize, offset % s.chunkSize
 }
 
 func (s *Arena) ensureChunk(idx uint32) {
@@ -237,6 +251,10 @@ func maxChunks(chunkSize uint32) int {
 	}
 	max := uint64(^uint32(0))
 	return int(max/uint64(chunkSize) + 1)
+}
+
+func isPow2(v uint32) bool {
+	return v != 0 && v&(v-1) == 0
 }
 
 // AssertTrue asserts that b is true. Otherwise, it would log fatal.
