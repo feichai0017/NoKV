@@ -46,6 +46,7 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 
 - 🚀 **Dual runtime modes** – call `NoKV.Open` inside your process or launch `nokv serve` for a distributed deployment, no code changes required.
 - 🔁 **Hybrid LSM + ValueLog** – WAL → MemTable → SST pipeline for latency, with a ValueLog to keep large payloads off the hot path.
+- 🌲 **ART-backed default memtable index** – the mutable memtable uses an internal-key-specialized ART by default, trading higher memindex memory for faster insert/get/seek than the skiplist baseline.
 - ⚡ **MVCC + Percolator transaction path** – distributed 2PC flows use MVCC versioned keys with snapshot-style reads and lock-based commits.
 - 🧠 **Multi-Raft regions** – `raftstore` manages per-region raft groups, WAL/manifest pointers, and tick-driven leader elections.
 - 🛰️ **Redis gateway** – `cmd/nokv-redis` exposes RESP commands (SET with NX/XX + EX/PX/EXAT/PXAT, GET/MGET, INCR/DECR...) on top of raft-backed storage.
