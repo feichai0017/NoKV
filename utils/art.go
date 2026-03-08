@@ -145,7 +145,7 @@ func node16LowerBoundIndex(keys []byte, count int, key byte) (idx int, exact boo
 		return -1, false
 	}
 	var mask uint16
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if keys[i] >= key {
 			mask |= uint16(1) << i
 		}
@@ -165,7 +165,7 @@ func node16ExactIndex(keys []byte, count int, key byte) int {
 		return -1
 	}
 	var mask uint16
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if keys[i] == key {
 			mask |= uint16(1) << i
 		}
@@ -185,7 +185,7 @@ func node16UpperBoundIndex(keys []byte, count int, key byte) (idx int, exact boo
 		return -1, false
 	}
 	var mask uint16
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if keys[i] <= key {
 			mask |= uint16(1) << i
 		}
@@ -705,7 +705,7 @@ func artEncodeComparablePrefixTo(dst []byte, src []byte) int {
 		copy(out[:artCmpGroupSize], src[artCmpGroupSize:])
 		out[artCmpGroupSize] = artCmpGroupEnd
 		out = out[artCmpGroupSize+1:]
-		for i := 0; i < artCmpGroupSize; i++ {
+		for i := range artCmpGroupSize {
 			out[i] = 0
 		}
 		out[artCmpGroupSize] = artCmpGroupEnd - artCmpGroupSize

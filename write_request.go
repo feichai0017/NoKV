@@ -9,12 +9,14 @@ import (
 )
 
 type request struct {
-	Entries   []*kv.Entry
-	Ptrs      []kv.ValuePtr
-	Err       error
-	ref       atomic.Int32
-	enqueueAt time.Time
-	wg        sync.WaitGroup
+	Entries    []*kv.Entry
+	Ptrs       []kv.ValuePtr
+	ptrIdxs    []int
+	ptrBuckets []uint32
+	Err        error
+	ref        atomic.Int32
+	enqueueAt  time.Time
+	wg         sync.WaitGroup
 }
 
 var requestPool = sync.Pool{
@@ -24,6 +26,8 @@ var requestPool = sync.Pool{
 func (req *request) reset() {
 	req.Entries = req.Entries[:0]
 	req.Ptrs = req.Ptrs[:0]
+	req.ptrIdxs = req.ptrIdxs[:0]
+	req.ptrBuckets = req.ptrBuckets[:0]
 	req.Err = nil
 	req.ref.Store(0)
 	req.enqueueAt = time.Time{}
@@ -60,6 +64,8 @@ func (req *request) DecrRef() {
 	}
 	req.Entries = nil
 	req.Ptrs = nil
+	req.ptrIdxs = nil
+	req.ptrBuckets = nil
 	requestPool.Put(req)
 }
 
