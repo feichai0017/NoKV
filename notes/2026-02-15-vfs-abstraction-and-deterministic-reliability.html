@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Memory Kernel: Arena &amp; Adaptive Index - NoKV Docs</title>
+        <title>2026-02-15 VFS Abstraction: Deterministic Reliability - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e5306e4.js";
+            window.path_to_searchindex_js = "../searchindex-bdaabb40.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3381e86f.js"></script>
+        <script src="../toc-5ff2b812.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,19 +178,87 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="memory-kernel-arena--adaptive-index"><a class="header" href="#memory-kernel-arena--adaptive-index">Memory Kernel: Arena &amp; Adaptive Index</a></h1>
+                        <h1 id="nokv-vfs-抽象跨越-os-边界的存储契约与确定性故障模拟"><a class="header" href="#nokv-vfs-抽象跨越-os-边界的存储契约与确定性故障模拟">NoKV VFS 抽象：跨越 OS 边界的存储契约与确定性故障模拟</a></h1>
+<p>NoKV 的 VFS（Virtual File System）层不是为了增加复杂性，它是整个引擎实现 <strong>“确定性可靠性”</strong> 的核心堡垒。通过将存储语义与操作系统细节彻底解耦，NoKV 实现了跨平台的原子语义保障和极高强度的故障模拟测试。</p>
+<hr>
+<h2 id="1-为什么工业级存储引擎需要-vfs"><a class="header" href="#1-为什么工业级存储引擎需要-vfs">1. 为什么工业级存储引擎需要 VFS？</a></h2>
+<p>在存储引擎开发中，直接依赖原生 <code>os</code> 包会带来三个致命问题：</p>
+<ol>
+<li><strong>原子语义缺失</strong>：LSM 引擎依赖 <code>Rename</code> 的原子性来更新 Manifest。但在不同操作系统上，<code>Rename</code> 是否允许覆盖现有文件、是否保证原子性，其表现差异巨大。</li>
+<li><strong>测试黑盒</strong>：如何验证磁盘在 <code>Sync</code> 时突然断电的行为？如何在不拆硬盘的情况下模拟磁盘坏道？</li>
+<li><strong>扩展受限</strong>：如果未来需要接入 <strong>分布式文件系统 (HDFS/S3)</strong> 或者实现 <strong>纯内存模式 (In-Memory)</strong>，没有 VFS 将意味着需要重写整个存储内核。</li>
+</ol>
+<p>NoKV 通过 <code>vfs.FS</code> 和 <code>vfs.File</code> 接口（位于 <code>vfs/vfs.go</code>），将所有的 IO 行为抽象为一套统一的契约。</p>
+<hr>
+<h2 id="2-faultfs精准的故障手术刀"><a class="header" href="#2-faultfs精准的故障手术刀">2. FaultFS：精准的“故障手术刀”</a></h2>
+<p><code>vfs/faultfs.go</code> 是 NoKV 最引以为傲的可靠性测试工具。它通过装饰器模式包装了标准文件系统，允许测试用例以编程方式注入各种极端故障。</p>
+<h3 id="21-故障策略-faultpolicy"><a class="header" href="#21-故障策略-faultpolicy">2.1 故障策略 (FaultPolicy)</a></h3>
+<p>开发者可以定义极其复杂的故障场景，并观察引擎的自愈能力：</p>
+<ul>
+<li><strong>FailOnce</strong>：在操作某特定文件时触发一次错误（模拟瞬时 IO 抖动）。</li>
+<li><strong>FailOnNth</strong>：在第 N 次操作（如第 100 次 <code>Write</code>）时触发故障。这在验证 <strong>崩溃恢复 (Recovery)</strong> 的幂等性时至关重要。</li>
+<li><strong>FailOnOp</strong>：只在执行 <code>Sync</code> 或 <code>Truncate</code> 这种改变文件系统元数据的重型操作时触发故障。</li>
+</ul>
+<h3 id="22-实现机制解析"><a class="header" href="#22-实现机制解析">2.2 实现机制解析</a></h3>
+<pre><code class="language-go">// faultFile 的 WriteAt 实现
+func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
+    // 1. 在真正 IO 前，先通过 Policy 进行前置检查
+    if err := f.fs.before(OpWriteAt, f.name); err != nil {
+        return 0, err // 模拟故障返回
+    }
+    // 2. 执行真正的 OS 调用
+    return f.File.WriteAt(p, off)
+}
+</code></pre>
+<p>通过这套机制，NoKV 的测试集成功模拟了：</p>
+<ul>
+<li>Manifest 写入一半时磁盘满。</li>
+<li>SSTable 生成后 <code>Sync</code> 失败，但文件已存在的情况。</li>
+<li>WAL 在回滚过程中发生权限错误的极端场景。</li>
+</ul>
+<hr>
+<h2 id="3-跨平台语义抹平原子重命名协议"><a class="header" href="#3-跨平台语义抹平原子重命名协议">3. 跨平台语义抹平：原子重命名协议</a></h2>
+<p>LSM 引擎的命脉在于 <strong>Manifest 的原子替换</strong>。NoKV 在 VFS 层针对不同系统做了极致的封装。</p>
+<h3 id="31-linux-平台的-renamenoreplace"><a class="header" href="#31-linux-平台的-renamenoreplace">3.1 Linux 平台的 RenameNoReplace</a></h3>
+<p>在 Linux 上，NoKV 利用了 <code>unix.RENAME_NOREPLACE</code> 系统调用。</p>
+<ul>
+<li><strong>设计价值</strong>：它保证了如果目标 Manifest 文件已存在，Rename 会直接原子地报错，而不是覆盖它。这从根本上杜绝了由于进程异常重启导致的旧元数据被误覆盖的问题。</li>
+</ul>
+<h3 id="32-darwin-平台的模拟支持"><a class="header" href="#32-darwin-平台的模拟支持">3.2 Darwin 平台的模拟支持</a></h3>
+<p>由于 macOS 并不原生支持 <code>RENAME_NOREPLACE</code>，NoKV 在 VFS 层通过专有的 <code>getattrlist</code> 和原子判断逻辑模拟了这一行为，确保了开发者在 Mac 上也能跑出与 Linux 生产环境完全一致的逻辑闭环。</p>
+<hr>
+<h2 id="4-性能提升preadpwrite-并发契约"><a class="header" href="#4-性能提升preadpwrite-并发契约">4. 性能提升：PRead/PWrite 并发契约</a></h2>
+<p>VFS 不仅是为了可靠性，它还解锁了高性能的 <strong>Lock-free 并发读</strong> 模式。</p>
+<ul>
+<li><strong>PRead 语义 (ReadAt)</strong>：<code>vfs.File</code> 强制要求实现 <code>ReadAt</code>。</li>
+<li><strong>无竞争读取</strong>：在 ValueLog 的读取路径中，多个查询协程可以并发地使用同一个文件描述符执行 <code>ReadAt</code>。由于 <code>ReadAt</code> 是自带 Offset 的原子操作，它不需要像 <code>Seek + Read</code> 模式那样需要获取文件句柄级别的互斥锁。</li>
+<li><strong>结果</strong>：在多核机器上执行大 Value 读取时，NoKV 的吞吐量随着 CPU 核心数呈完美的线性增长。</li>
+</ul>
+<hr>
+<h2 id="5-存储引擎对比分析"><a class="header" href="#5-存储引擎对比分析">5. 存储引擎对比分析</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">特性</th><th style="text-align: left">NoKV</th><th style="text-align: left">Pebble (CockroachDB)</th><th style="text-align: left">RocksDB</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>VFS 核心架构</strong></td><td style="text-align: left">精简接口 + 装饰器注入</td><td style="text-align: left">深度集成 (errorfs)</td><td style="text-align: left">复杂的 Env/FileSystem 抽象</td></tr>
+<tr><td style="text-align: left"><strong>故障注入强度</strong></td><td style="text-align: left">强（支持路径/操作级别计数）</td><td style="text-align: left">极强（支持各种计数策略）</td><td style="text-align: left">中（依赖 Env 注入点）</td></tr>
+<tr><td style="text-align: left"><strong>并发读契约</strong></td><td style="text-align: left">强制 PRead/PWrite</td><td style="text-align: left">深度优化 PRead</td><td style="text-align: left">依赖操作系统支持</td></tr>
+<tr><td style="text-align: left"><strong>跨平台原子性</strong></td><td style="text-align: left">抹平 Linux/Darwin 差异</td><td style="text-align: left">通过 Go 运行时保证</td><td style="text-align: left">依赖特定的插件实现</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：VFS 并不是一种代码开销，它是 <strong>“对每一行磁盘操作负责”</strong> 的态度。通过 VFS，NoKV 将复杂的底层系统调用和不可预测的硬件故障，收敛为了一个可预测、可测试、可证明的确定性模型。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -198,13 +266,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>

@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e5306e4.js";
+            window.path_to_searchindex_js = "searchindex-bdaabb40.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-3381e86f.js"></script>
+        <script src="toc-5ff2b812.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -4484,11 +4484,300 @@ type ingestShard struct {
 </ul>
 <p>这使得 vlog 从“可用”走向“可运维 + 可扩展”。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="memory-kernel-arena--adaptive-index"><a class="header" href="#memory-kernel-arena--adaptive-index">Memory Kernel: Arena &amp; Adaptive Index</a></h1>
+<h1 id="nokv-内存内核arena-线性分配与自适应索引art-vs-skiplist的极致工程实现"><a class="header" href="#nokv-内存内核arena-线性分配与自适应索引art-vs-skiplist的极致工程实现">NoKV 内存内核：Arena 线性分配与自适应索引（ART vs SkipList）的极致工程实现</a></h1>
+<p>在高性能存储引擎中，内存管理直接决定了系统的吞吐上限和延迟稳定性。NoKV 的 MemTable 层通过 Arena 线性分配和高度优化的索引结构，实现了零 GC 压力下的极速读写。本文将深度拆解这一层级的核心架构设计与工程权衡。</p>
+<hr>
+<h2 id="1-arena构建指针无关的堆外内存池"><a class="header" href="#1-arena构建指针无关的堆外内存池">1. Arena：构建“指针无关”的堆外内存池</a></h2>
+<p>NoKV 的 Arena（位于 <code>utils/arena.go</code>）是所有内存索引的物理基石。它通过“单向追加”和“偏移量寻址”机制，将海量的小对象分配从 Go Runtime 的堆内存中剥离出来。</p>
+<h3 id="11-物理布局与分配策略"><a class="header" href="#11-物理布局与分配策略">1.1 物理布局与分配策略</a></h3>
+<p>Arena 并不是零散的内存块，而是一个连续的 <code>[]byte</code>。</p>
+<ul>
+<li><strong>线性分配 (Bump Allocation)</strong>：分配开销仅为一个原子加法。</li>
+<li><strong>内存对齐 (Alignment)</strong>：为了保证原子操作（如 64 位版本号更新）的安全性，Arena 强制执行对齐：</li>
+</ul>
+<pre><code class="language-go">// AllocAligned 确保分配的起始地址在 align 的倍数上
+func (a *Arena) AllocAligned(size, align int) uint32 {
+    // 计算对齐补齐量 (Padding)
+    padding := (align - (int(a.n) % align)) % align
+    // 原子地移动分配指针
+    offset := a.Allocate(uint32(size + padding))
+    // 返回真实的起始偏移量
+    return offset + uint32(padding)
+}
+</code></pre>
+<p><strong>为什么对齐是刚需？</strong>：在现代 64 位 CPU 上，如果一个 8 字节的 <code>uint64</code> 跨越了缓存行 (Cache Line)，硬件无法保证其原子写操作的原子性。NoKV 通过 Arena 对齐，保证了所有元数据更新（如 SkipList 的 Tower 链接或 ART 的版本号）在物理上是并发安全的。</p>
+<h3 id="12-寻址艺术uint32-offset-vs-pointer"><a class="header" href="#12-寻址艺术uint32-offset-vs-pointer">1.2 寻址艺术：Uint32 Offset vs Pointer</a></h3>
+<p>在 Go 堆中存储数百万个节点指针会导致 GC 扫描极慢（STW 延迟剧增）。NoKV 所有的索引节点内部都使用 <code>uint32</code> 的 Offset 来互相引用。</p>
+<ul>
+<li><strong>GC 友好性</strong>：Offset 对 GC 是透明的。在扫描阶段，GC 只需要扫描 Arena 那个巨大的 <code>[]byte</code> 切片头，而不需要递归扫描数以万计的小对象。</li>
+<li><strong>内存节省</strong>：在 64 位系统上，<code>uint32</code> (4B) 只有原生指针 (8B) 的一半大小，这让内存索引的有效负载比提高了近一倍。</li>
+</ul>
+<hr>
+<h2 id="2-skiplist经典的并发写基准"><a class="header" href="#2-skiplist经典的并发写基准">2. SkipList：经典的并发写基准</a></h2>
+<p>SkipList（位于 <code>utils/skiplist.go</code>）以其实现简单、并发稳健著称，是 NoKV 的基准索引。</p>
+<h3 id="21-架构设计"><a class="header" href="#21-架构设计">2.1 架构设计</a></h3>
+<ul>
+<li><strong>多级塔式索引</strong>：通过随机化层高（MaxHeight=20，概率 P=0.25），实现平均 $O(\log N)$ 的查找复杂度。</li>
+<li><strong>无锁并发 (Lock-free)</strong>：利用 <code>atomic.CompareAndSwapUint32</code> 在每一层进行节点插入。</li>
+</ul>
+<h3 id="22-插入协议-add-逻辑"><a class="header" href="#22-插入协议-add-逻辑">2.2 插入协议 (Add 逻辑)</a></h3>
+<p>SkipList 的插入不是简单的 <code>Lock -&gt; Insert</code>，而是一个多阶段的原子安装过程：</p>
+<ol>
+<li><strong>节点创建</strong>：在 Arena 中预分配节点空间，设置 Key/Value 的 Offset。</li>
+<li><strong>寻找切面 (Find Splice)</strong>：从最高层开始向下寻找每一层的前驱 (<code>prev</code>) 和后继 (<code>next</code>) 节点。</li>
+<li><strong>逐层原子链接</strong>：从 Level 0 开始向上 CAS 安装。如果 CAS 失败（说明并发环境下有其他节点插入），则局部重试寻找切面，直到安装完成。</li>
+</ol>
+<pre><code class="language-go">func (s *Skiplist) Add(entry *kv.Entry) {
+    // 1. 预分配节点并随机化层高
+    nodeOffset := s.newNode(entry.Key, entry.Value, height)
+    // 2. 局部 CAS 链接
+    for i := 0; i &lt; height; i++ {
+        for {
+            prev, next := s.findSpliceForLevel(entry.Key, i)
+            // 将新节点的 next 指向找到的后继
+            s.setNextOffset(nodeOffset, i, next)
+            // 原子地将前驱的 next 指向新节点
+            if s.casNextOffset(prev, i, next, nodeOffset) {
+                break 
+            }
+        }
+    }
+}
+</code></pre>
+<hr>
+<h2 id="3-art追求极致的自适应基数树"><a class="header" href="#3-art追求极致的自适应基数树">3. ART：追求极致的自适应基数树</a></h2>
+<p>ART（Adaptive Radix Tree，位于 <code>utils/art.go</code>）是 NoKV 的默认索引，专为现代 CPU 缓存架构和内存效率平衡设计。</p>
+<h3 id="31-自适应节点架构"><a class="header" href="#31-自适应节点架构">3.1 自适应节点架构</a></h3>
+<p>ART 会根据子节点数量动态调整节点物理大小，以平衡空间利用率和查询效率：</p>
+<ul>
+<li><strong>Node4 / Node16</strong>：使用线性扫描寻找子节点，适合分支较少的路径。</li>
+<li><strong>Node48</strong>：使用间接索引表（256 字节哈希表），空间效率极高。</li>
+<li><strong>Node256</strong>：直接数组寻址，提供极致的 $O(k)$ 寻址性能。</li>
+</ul>
+<h3 id="32-排序难题comparable-route-key-编码"><a class="header" href="#32-排序难题comparable-route-key-编码">3.2 排序难题：Comparable Route Key 编码</a></h3>
+<p>Radix Tree 原生基于字节比较，不支持 LSM 要求的复合排序（UserKey 升序 + Version 降序）。NoKV 通过一套精妙的编码解决：</p>
+<ul>
+<li><strong>编码公式</strong>：<code>RouteKey = EncodeComparable(UserKey) + BigEndian(Timestamp)</code>。</li>
+<li><strong>设计价值</strong>：这保证了在 ART 树的层级深度遍历结果完全等价于 LSM 的 <code>Key + Version</code> 排序逻辑，从而完美支持 <code>Seek</code> 和范围扫描。</li>
+</ul>
+<h3 id="33-并发模型cow--olc-lite"><a class="header" href="#33-并发模型cow--olc-lite">3.3 并发模型：COW + OLC-lite</a></h3>
+<ul>
+<li><strong>完全无锁读 (Lock-free Read)</strong>：通过 COW (Copy-On-Write) 保证读取路径观察到的是一致的、不可变的节点快照。</li>
+<li><strong>OLC-lite 原地更新</strong>：针对单点修改（如更新已存在的 Key 的 Value），ART 保留了一个快速路径，在不复制节点的前提下通过原子指令替换 <code>ValuePtr</code>，极大降低了分配开销。</li>
+</ul>
+<hr>
+<h2 id="4-memtable-原子预留协议-workflow"><a class="header" href="#4-memtable-原子预留协议-workflow">4. MemTable 原子预留协议 (Workflow)</a></h2>
+<p>当用户调用 <code>Set</code> 时，LSM 内核的协调流程如下：</p>
+<pre class="mermaid">sequenceDiagram
+    participant U as User
+    participant LSM as LSM Kernel
+    participant MT as Active MemTable
+    participant FM as Flush Manager
+
+    U-&gt;&gt;LSM: Set(entry)
+    LSM-&gt;&gt;LSM: Acquire RLock (Concurrent writers entry)
+    LSM-&gt;&gt;MT: tryReserve(estimate_size)
+    alt 预留成功 (Fast Path)
+        MT-&gt;&gt;MT: 原子移动 reservedSize
+        MT-&gt;&gt;MT: 并发写入 Index 和 WAL
+        LSM-&gt;&gt;LSM: Release RLock
+    else 空间不足 (Slow Path - Rotation)
+        LSM-&gt;&gt;LSM: Upgrade to WLock (Stop all writers)
+        LSM-&gt;&gt;LSM: rotateLocked (Seal current MT -&gt; Move to Immutables)
+        LSM-&gt;&gt;FM: submitFlush(oldMemTable)
+        LSM-&gt;&gt;LSM: Create New Active MemTable &amp; WAL Segment
+        LSM-&gt;&gt;LSM: Release WLock
+        LSM-&gt;&gt;U: Retry Set (Go to Fast Path)
+    end
+</pre>
+
+<hr>
+<h2 id="5-性能参数与工程取舍建议"><a class="header" href="#5-性能参数与工程取舍建议">5. 性能参数与工程取舍建议</a></h2>
+<p>在 <code>Options</code> 中配置索引引擎时，应考虑负载特性：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">维度</th><th style="text-align: left">SkipList</th><th style="text-align: left">ART (Default)</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>点查延迟 (Get)</strong></td><td style="text-align: left">$O(\log N)$，较高 Cache Miss</td><td style="text-align: left">$O(k)$，缓存局部性极佳</td></tr>
+<tr><td style="text-align: left"><strong>范围定位 (Seek)</strong></td><td style="text-align: left">中等</td><td style="text-align: left">极快（前缀压缩优势）</td></tr>
+<tr><td style="text-align: left"><strong>内存占用</strong></td><td style="text-align: left">极低（仅存储 Offset）</td><td style="text-align: left">较高（当前约 2x，包含内部节点）</td></tr>
+<tr><td style="text-align: left"><strong>代码可维护性</strong></td><td style="text-align: left">极佳</td><td style="text-align: left">较高（节点升级降级复杂）</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：NoKV 的内存设计遵循 <strong>“空间即状态，并发即原子”</strong> 的原则。Arena 锁定了物理稳定性，自适应索引提供了灵活的性能上限。这套方案让 NoKV 在单机热点场景下表现出了极强的韧性。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="write-pipeline-mpsc--adaptive-batching"><a class="header" href="#write-pipeline-mpsc--adaptive-batching">Write Pipeline: MPSC &amp; Adaptive Batching</a></h1>
+<h1 id="nokv-写入流水线从-mpsc-节拍器到自适应聚合的深度演进"><a class="header" href="#nokv-写入流水线从-mpsc-节拍器到自适应聚合的深度演进">NoKV 写入流水线：从 MPSC 节拍器到自适应聚合的深度演进</a></h1>
+<p>高性能存储引擎的写入路径必须像“节拍器”一样稳定。NoKV 的写入流水线不仅是一个并发队列，它是一套具备 <strong>自适应反馈能力</strong> 和 <strong>分段一致性保证</strong> 的异步聚合系统。本文深度拆解 NoKV 如何在高并发压力下保持极致的写入吞吐与低尾延迟。</p>
+<hr>
+<h2 id="1-架构模型mpsc-聚合流水线"><a class="header" href="#1-架构模型mpsc-聚合流水线">1. 架构模型：MPSC 聚合流水线</a></h2>
+<p>NoKV 并没有让每个用户协程都直接去竞争底层的磁盘锁或 WAL 互斥量，而是采用了 <strong>MPSC (Multi-Producer, Single-Consumer)</strong> 异步聚合模型。</p>
+<h3 id="11-设计背景为什么是-mpsc"><a class="header" href="#11-设计背景为什么是-mpsc">1.1 设计背景：为什么是 MPSC？</a></h3>
+<p>在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 <code>write()</code> 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
+NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 <code>commitWorker</code> 中，将随机小写入转化为大块的顺序磁盘 IO。</p>
+<h3 id="12-核心组件commitqueue"><a class="header" href="#12-核心组件commitqueue">1.2 核心组件：commitQueue</a></h3>
+<p><code>commitQueue</code>（位于 <code>db_write.go</code>）并不是一个简单的 Channel，它是由三部分构成的协同系统：</p>
+<ul>
+<li><strong>RingBuffer</strong>：基于原子序列号的无锁循环队列，负责极速的数据传递。</li>
+<li><strong>Spaces Channel</strong>：作为“票据”系统，控制队列的硬上限，形成天然的 <strong>Backpressure (背压)</strong>。</li>
+<li><strong>Items Channel</strong>：作为“唤醒”信号，通知后台 Worker 有新数据到达，避免 Worker 空转浪费 CPU。</li>
+</ul>
+<hr>
+<h2 id="2-自适应批处理算法-adaptive-coalescing"><a class="header" href="#2-自适应批处理算法-adaptive-coalescing">2. 自适应批处理算法 (Adaptive Coalescing)</a></h2>
+<p><code>nextCommitBatch</code> 是整个流水线的灵魂。它不是死板地按照固定大小打包，而是能够根据系统负载动态调整其“吞吐模式”。</p>
+<h3 id="21-积压驱动的动态上限"><a class="header" href="#21-积压驱动的动态上限">2.1 积压驱动的动态上限</a></h3>
+<p>系统实时监控队列积压程度 (<code>queueLen</code>)。当积压严重时，Worker 会自动“变强”：</p>
+<pre><code class="language-go">// 动态调整 Batch 限制
+backlog := int(cq.queueLen.Load())
+if backlog &gt; limitCount {
+    // 如果队列积压，按比例放大 Batch 大小，最高 4 倍
+    factor := min(max(backlog/limitCount, 1), 4)
+    limitCount = min(limitCount * factor, hardLimit)
+    limitSize *= int64(factor)
+}
+</code></pre>
+<p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
+<h3 id="22-热点感知倍率-hot-aware"><a class="header" href="#22-热点感知倍率-hot-aware">2.2 热点感知倍率 (Hot-Aware)</a></h3>
+<p>如果 Batch 中包含由 <code>hotTracker</code> 识别出的热点写 Key，系统会应用 <code>HotWriteBatchMultiplier</code>。</p>
+<ul>
+<li><strong>原理</strong>：对于热点 Key，多次写入往往可以合并。通过扩大 Batch，我们让热点请求在进入 WAL 之前有更多机会在内存中被“折叠”，极大减轻了物理磁盘的带宽压力。</li>
+</ul>
+<h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
+<p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
+<hr>
+<h2 id="3-核心调用逻辑一个请求的入库之旅"><a class="header" href="#3-核心调用逻辑一个请求的入库之旅">3. 核心调用逻辑：一个请求的“入库”之旅</a></h2>
+<pre class="mermaid">graph TD
+    A[User db.Set/Apply] --&gt; B{L0 Throttle Check?}
+    B -- Blocked --&gt; A
+    B -- Pass --&gt; C[Encode Internal Key]
+    C --&gt; D[Push to RingBuffer]
+    D --&gt; E[Wait for Request.WaitGroup]
+    
+    subgraph "commitWorker (Background)"
+        F[nextCommitBatch: Collect Requests] --&gt; G[vlog.write: Value Separation]
+        G --&gt; H[wal.Append: Durability]
+        H --&gt; I[lsm.SetBatch: Index Apply]
+        I --&gt; J{SyncWrites Enabled?}
+        J -- Yes --&gt; K[wal.Sync: Flush to Disk]
+        J -- No --&gt; L[Skip Sync]
+        K --&gt; M[Signal All WaitGroups]
+        L --&gt; M
+    end
+    
+    M --&gt; N[User returns Success/Err]
+</pre>
+
+<hr>
+<h2 id="4-健壮性设计分段式错误归因与回滚"><a class="header" href="#4-健壮性设计分段式错误归因与回滚">4. 健壮性设计：分段式错误归因与回滚</a></h2>
+<p>在聚合系统中，最怕的是“一人犯错，全家连坐”。如果一个包含 100 个请求的 Batch 在执行到第 50 个时磁盘满了，剩下的 50 个怎么办？</p>
+<p>NoKV 实现了 <strong>精确的失败路径追踪</strong>：</p>
+<ol>
+<li><strong>逐请求执行</strong>：<code>applyRequests</code> 会在遇到第一个错误时停止，并返回 <code>failedAt</code> 索引。</li>
+<li><strong>错误隔离</strong>：
+<pre><code class="language-go">// finishCommitRequests 负责分发结果
+for i, cr := range batch.reqs {
+    if i &lt; failedAt {
+        cr.req.Err = nil // 前面的请求已经成功落盘
+    } else {
+        cr.req.Err = actualErr // 从失败点开始的所有请求标记为错误
+    }
+    cr.req.wg.Done()
+}
+</code></pre>
+</li>
+<li><strong>VLog 回滚</strong>：如果写入一半失败，VLog 会执行 <code>Rewind</code> 操作，将文件头指针回滚到上一个已知的安全点，防止留下不完整的脏数据。</li>
+</ol>
+<hr>
+<h2 id="5-性能参数推导与调优"><a class="header" href="#5-性能参数推导与调优">5. 性能参数推导与调优</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">参数</th><th style="text-align: left">默认值</th><th style="text-align: left">调优逻辑</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>WriteBatchMaxCount</code></td><td style="text-align: left">64</td><td style="text-align: left">聚合深度。提高可增加吞吐，但会拉长 P99 延迟。</td></tr>
+<tr><td style="text-align: left"><code>WriteBatchWait</code></td><td style="text-align: left">200us</td><td style="text-align: left">聚合等待时间。Sync 写场景下建议保留，非 Sync 场景可设为 0。</td></tr>
+<tr><td style="text-align: left"><code>SyncWrites</code></td><td style="text-align: left">false</td><td style="text-align: left">是否每次 Batch 都调用 <code>fsync</code>。设为 true 会让吞吐下降一个数量级，但保证强持久性。</td></tr>
+<tr><td style="text-align: left"><code>HotWriteMultiplier</code></td><td style="text-align: left">2</td><td style="text-align: left">热点聚合倍率。对于倾斜严重的负载，可设为 4。</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：NoKV 的写路径通过“牺牲”极微小的入队延迟，换取了极其稳健的磁盘顺序写入带宽。这种 <strong>“漏斗式”</strong> 的设计配合 <strong>自适应调节算法</strong>，是 NoKV 能够从容应对分布式环境下突发写潮汐的关键所在。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="vfs-abstraction-deterministic-reliability"><a class="header" href="#vfs-abstraction-deterministic-reliability">VFS Abstraction: Deterministic Reliability</a></h1>
+<h1 id="nokv-vfs-抽象跨越-os-边界的存储契约与确定性故障模拟"><a class="header" href="#nokv-vfs-抽象跨越-os-边界的存储契约与确定性故障模拟">NoKV VFS 抽象：跨越 OS 边界的存储契约与确定性故障模拟</a></h1>
+<p>NoKV 的 VFS（Virtual File System）层不是为了增加复杂性，它是整个引擎实现 <strong>“确定性可靠性”</strong> 的核心堡垒。通过将存储语义与操作系统细节彻底解耦，NoKV 实现了跨平台的原子语义保障和极高强度的故障模拟测试。</p>
+<hr>
+<h2 id="1-为什么工业级存储引擎需要-vfs"><a class="header" href="#1-为什么工业级存储引擎需要-vfs">1. 为什么工业级存储引擎需要 VFS？</a></h2>
+<p>在存储引擎开发中，直接依赖原生 <code>os</code> 包会带来三个致命问题：</p>
+<ol>
+<li><strong>原子语义缺失</strong>：LSM 引擎依赖 <code>Rename</code> 的原子性来更新 Manifest。但在不同操作系统上，<code>Rename</code> 是否允许覆盖现有文件、是否保证原子性，其表现差异巨大。</li>
+<li><strong>测试黑盒</strong>：如何验证磁盘在 <code>Sync</code> 时突然断电的行为？如何在不拆硬盘的情况下模拟磁盘坏道？</li>
+<li><strong>扩展受限</strong>：如果未来需要接入 <strong>分布式文件系统 (HDFS/S3)</strong> 或者实现 <strong>纯内存模式 (In-Memory)</strong>，没有 VFS 将意味着需要重写整个存储内核。</li>
+</ol>
+<p>NoKV 通过 <code>vfs.FS</code> 和 <code>vfs.File</code> 接口（位于 <code>vfs/vfs.go</code>），将所有的 IO 行为抽象为一套统一的契约。</p>
+<hr>
+<h2 id="2-faultfs精准的故障手术刀"><a class="header" href="#2-faultfs精准的故障手术刀">2. FaultFS：精准的“故障手术刀”</a></h2>
+<p><code>vfs/faultfs.go</code> 是 NoKV 最引以为傲的可靠性测试工具。它通过装饰器模式包装了标准文件系统，允许测试用例以编程方式注入各种极端故障。</p>
+<h3 id="21-故障策略-faultpolicy"><a class="header" href="#21-故障策略-faultpolicy">2.1 故障策略 (FaultPolicy)</a></h3>
+<p>开发者可以定义极其复杂的故障场景，并观察引擎的自愈能力：</p>
+<ul>
+<li><strong>FailOnce</strong>：在操作某特定文件时触发一次错误（模拟瞬时 IO 抖动）。</li>
+<li><strong>FailOnNth</strong>：在第 N 次操作（如第 100 次 <code>Write</code>）时触发故障。这在验证 <strong>崩溃恢复 (Recovery)</strong> 的幂等性时至关重要。</li>
+<li><strong>FailOnOp</strong>：只在执行 <code>Sync</code> 或 <code>Truncate</code> 这种改变文件系统元数据的重型操作时触发故障。</li>
+</ul>
+<h3 id="22-实现机制解析"><a class="header" href="#22-实现机制解析">2.2 实现机制解析</a></h3>
+<pre><code class="language-go">// faultFile 的 WriteAt 实现
+func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
+    // 1. 在真正 IO 前，先通过 Policy 进行前置检查
+    if err := f.fs.before(OpWriteAt, f.name); err != nil {
+        return 0, err // 模拟故障返回
+    }
+    // 2. 执行真正的 OS 调用
+    return f.File.WriteAt(p, off)
+}
+</code></pre>
+<p>通过这套机制，NoKV 的测试集成功模拟了：</p>
+<ul>
+<li>Manifest 写入一半时磁盘满。</li>
+<li>SSTable 生成后 <code>Sync</code> 失败，但文件已存在的情况。</li>
+<li>WAL 在回滚过程中发生权限错误的极端场景。</li>
+</ul>
+<hr>
+<h2 id="3-跨平台语义抹平原子重命名协议"><a class="header" href="#3-跨平台语义抹平原子重命名协议">3. 跨平台语义抹平：原子重命名协议</a></h2>
+<p>LSM 引擎的命脉在于 <strong>Manifest 的原子替换</strong>。NoKV 在 VFS 层针对不同系统做了极致的封装。</p>
+<h3 id="31-linux-平台的-renamenoreplace"><a class="header" href="#31-linux-平台的-renamenoreplace">3.1 Linux 平台的 RenameNoReplace</a></h3>
+<p>在 Linux 上，NoKV 利用了 <code>unix.RENAME_NOREPLACE</code> 系统调用。</p>
+<ul>
+<li><strong>设计价值</strong>：它保证了如果目标 Manifest 文件已存在，Rename 会直接原子地报错，而不是覆盖它。这从根本上杜绝了由于进程异常重启导致的旧元数据被误覆盖的问题。</li>
+</ul>
+<h3 id="32-darwin-平台的模拟支持"><a class="header" href="#32-darwin-平台的模拟支持">3.2 Darwin 平台的模拟支持</a></h3>
+<p>由于 macOS 并不原生支持 <code>RENAME_NOREPLACE</code>，NoKV 在 VFS 层通过专有的 <code>getattrlist</code> 和原子判断逻辑模拟了这一行为，确保了开发者在 Mac 上也能跑出与 Linux 生产环境完全一致的逻辑闭环。</p>
+<hr>
+<h2 id="4-性能提升preadpwrite-并发契约"><a class="header" href="#4-性能提升preadpwrite-并发契约">4. 性能提升：PRead/PWrite 并发契约</a></h2>
+<p>VFS 不仅是为了可靠性，它还解锁了高性能的 <strong>Lock-free 并发读</strong> 模式。</p>
+<ul>
+<li><strong>PRead 语义 (ReadAt)</strong>：<code>vfs.File</code> 强制要求实现 <code>ReadAt</code>。</li>
+<li><strong>无竞争读取</strong>：在 ValueLog 的读取路径中，多个查询协程可以并发地使用同一个文件描述符执行 <code>ReadAt</code>。由于 <code>ReadAt</code> 是自带 Offset 的原子操作，它不需要像 <code>Seek + Read</code> 模式那样需要获取文件句柄级别的互斥锁。</li>
+<li><strong>结果</strong>：在多核机器上执行大 Value 读取时，NoKV 的吞吐量随着 CPU 核心数呈完美的线性增长。</li>
+</ul>
+<hr>
+<h2 id="5-存储引擎对比分析"><a class="header" href="#5-存储引擎对比分析">5. 存储引擎对比分析</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">特性</th><th style="text-align: left">NoKV</th><th style="text-align: left">Pebble (CockroachDB)</th><th style="text-align: left">RocksDB</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>VFS 核心架构</strong></td><td style="text-align: left">精简接口 + 装饰器注入</td><td style="text-align: left">深度集成 (errorfs)</td><td style="text-align: left">复杂的 Env/FileSystem 抽象</td></tr>
+<tr><td style="text-align: left"><strong>故障注入强度</strong></td><td style="text-align: left">强（支持路径/操作级别计数）</td><td style="text-align: left">极强（支持各种计数策略）</td><td style="text-align: left">中（依赖 Env 注入点）</td></tr>
+<tr><td style="text-align: left"><strong>并发读契约</strong></td><td style="text-align: left">强制 PRead/PWrite</td><td style="text-align: left">深度优化 PRead</td><td style="text-align: left">依赖操作系统支持</td></tr>
+<tr><td style="text-align: left"><strong>跨平台原子性</strong></td><td style="text-align: left">抹平 Linux/Darwin 差异</td><td style="text-align: left">通过 Go 运行时保证</td><td style="text-align: left">依赖特定的插件实现</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：VFS 并不是一种代码开销，它是 <strong>“对每一行磁盘操作负责”</strong> 的态度。通过 VFS，NoKV 将复杂的底层系统调用和不可预测的硬件故障，收敛为了一个可预测、可测试、可证明的确定性模型。</p>
 
                     </main>
 

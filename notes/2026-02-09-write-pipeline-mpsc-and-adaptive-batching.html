@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Write Pipeline: MPSC &amp; Adaptive Batching - NoKV Docs</title>
+        <title>2026-02-09 Write Pipeline: MPSC &amp; Adaptive Batching - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e5306e4.js";
+            window.path_to_searchindex_js = "../searchindex-bdaabb40.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3381e86f.js"></script>
+        <script src="../toc-5ff2b812.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,17 +178,112 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="write-pipeline-mpsc--adaptive-batching"><a class="header" href="#write-pipeline-mpsc--adaptive-batching">Write Pipeline: MPSC &amp; Adaptive Batching</a></h1>
+                        <h1 id="nokv-写入流水线从-mpsc-节拍器到自适应聚合的深度演进"><a class="header" href="#nokv-写入流水线从-mpsc-节拍器到自适应聚合的深度演进">NoKV 写入流水线：从 MPSC 节拍器到自适应聚合的深度演进</a></h1>
+<p>高性能存储引擎的写入路径必须像“节拍器”一样稳定。NoKV 的写入流水线不仅是一个并发队列，它是一套具备 <strong>自适应反馈能力</strong> 和 <strong>分段一致性保证</strong> 的异步聚合系统。本文深度拆解 NoKV 如何在高并发压力下保持极致的写入吞吐与低尾延迟。</p>
+<hr>
+<h2 id="1-架构模型mpsc-聚合流水线"><a class="header" href="#1-架构模型mpsc-聚合流水线">1. 架构模型：MPSC 聚合流水线</a></h2>
+<p>NoKV 并没有让每个用户协程都直接去竞争底层的磁盘锁或 WAL 互斥量，而是采用了 <strong>MPSC (Multi-Producer, Single-Consumer)</strong> 异步聚合模型。</p>
+<h3 id="11-设计背景为什么是-mpsc"><a class="header" href="#11-设计背景为什么是-mpsc">1.1 设计背景：为什么是 MPSC？</a></h3>
+<p>在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 <code>write()</code> 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
+NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 <code>commitWorker</code> 中，将随机小写入转化为大块的顺序磁盘 IO。</p>
+<h3 id="12-核心组件commitqueue"><a class="header" href="#12-核心组件commitqueue">1.2 核心组件：commitQueue</a></h3>
+<p><code>commitQueue</code>（位于 <code>db_write.go</code>）并不是一个简单的 Channel，它是由三部分构成的协同系统：</p>
+<ul>
+<li><strong>RingBuffer</strong>：基于原子序列号的无锁循环队列，负责极速的数据传递。</li>
+<li><strong>Spaces Channel</strong>：作为“票据”系统，控制队列的硬上限，形成天然的 <strong>Backpressure (背压)</strong>。</li>
+<li><strong>Items Channel</strong>：作为“唤醒”信号，通知后台 Worker 有新数据到达，避免 Worker 空转浪费 CPU。</li>
+</ul>
+<hr>
+<h2 id="2-自适应批处理算法-adaptive-coalescing"><a class="header" href="#2-自适应批处理算法-adaptive-coalescing">2. 自适应批处理算法 (Adaptive Coalescing)</a></h2>
+<p><code>nextCommitBatch</code> 是整个流水线的灵魂。它不是死板地按照固定大小打包，而是能够根据系统负载动态调整其“吞吐模式”。</p>
+<h3 id="21-积压驱动的动态上限"><a class="header" href="#21-积压驱动的动态上限">2.1 积压驱动的动态上限</a></h3>
+<p>系统实时监控队列积压程度 (<code>queueLen</code>)。当积压严重时，Worker 会自动“变强”：</p>
+<pre><code class="language-go">// 动态调整 Batch 限制
+backlog := int(cq.queueLen.Load())
+if backlog &gt; limitCount {
+    // 如果队列积压，按比例放大 Batch 大小，最高 4 倍
+    factor := min(max(backlog/limitCount, 1), 4)
+    limitCount = min(limitCount * factor, hardLimit)
+    limitSize *= int64(factor)
+}
+</code></pre>
+<p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
+<h3 id="22-热点感知倍率-hot-aware"><a class="header" href="#22-热点感知倍率-hot-aware">2.2 热点感知倍率 (Hot-Aware)</a></h3>
+<p>如果 Batch 中包含由 <code>hotTracker</code> 识别出的热点写 Key，系统会应用 <code>HotWriteBatchMultiplier</code>。</p>
+<ul>
+<li><strong>原理</strong>：对于热点 Key，多次写入往往可以合并。通过扩大 Batch，我们让热点请求在进入 WAL 之前有更多机会在内存中被“折叠”，极大减轻了物理磁盘的带宽压力。</li>
+</ul>
+<h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
+<p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
+<hr>
+<h2 id="3-核心调用逻辑一个请求的入库之旅"><a class="header" href="#3-核心调用逻辑一个请求的入库之旅">3. 核心调用逻辑：一个请求的“入库”之旅</a></h2>
+<pre class="mermaid">graph TD
+    A[User db.Set/Apply] --&gt; B{L0 Throttle Check?}
+    B -- Blocked --&gt; A
+    B -- Pass --&gt; C[Encode Internal Key]
+    C --&gt; D[Push to RingBuffer]
+    D --&gt; E[Wait for Request.WaitGroup]
+    
+    subgraph "commitWorker (Background)"
+        F[nextCommitBatch: Collect Requests] --&gt; G[vlog.write: Value Separation]
+        G --&gt; H[wal.Append: Durability]
+        H --&gt; I[lsm.SetBatch: Index Apply]
+        I --&gt; J{SyncWrites Enabled?}
+        J -- Yes --&gt; K[wal.Sync: Flush to Disk]
+        J -- No --&gt; L[Skip Sync]
+        K --&gt; M[Signal All WaitGroups]
+        L --&gt; M
+    end
+    
+    M --&gt; N[User returns Success/Err]
+</pre>
+
+<hr>
+<h2 id="4-健壮性设计分段式错误归因与回滚"><a class="header" href="#4-健壮性设计分段式错误归因与回滚">4. 健壮性设计：分段式错误归因与回滚</a></h2>
+<p>在聚合系统中，最怕的是“一人犯错，全家连坐”。如果一个包含 100 个请求的 Batch 在执行到第 50 个时磁盘满了，剩下的 50 个怎么办？</p>
+<p>NoKV 实现了 <strong>精确的失败路径追踪</strong>：</p>
+<ol>
+<li><strong>逐请求执行</strong>：<code>applyRequests</code> 会在遇到第一个错误时停止，并返回 <code>failedAt</code> 索引。</li>
+<li><strong>错误隔离</strong>：
+<pre><code class="language-go">// finishCommitRequests 负责分发结果
+for i, cr := range batch.reqs {
+    if i &lt; failedAt {
+        cr.req.Err = nil // 前面的请求已经成功落盘
+    } else {
+        cr.req.Err = actualErr // 从失败点开始的所有请求标记为错误
+    }
+    cr.req.wg.Done()
+}
+</code></pre>
+</li>
+<li><strong>VLog 回滚</strong>：如果写入一半失败，VLog 会执行 <code>Rewind</code> 操作，将文件头指针回滚到上一个已知的安全点，防止留下不完整的脏数据。</li>
+</ol>
+<hr>
+<h2 id="5-性能参数推导与调优"><a class="header" href="#5-性能参数推导与调优">5. 性能参数推导与调优</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">参数</th><th style="text-align: left">默认值</th><th style="text-align: left">调优逻辑</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>WriteBatchMaxCount</code></td><td style="text-align: left">64</td><td style="text-align: left">聚合深度。提高可增加吞吐，但会拉长 P99 延迟。</td></tr>
+<tr><td style="text-align: left"><code>WriteBatchWait</code></td><td style="text-align: left">200us</td><td style="text-align: left">聚合等待时间。Sync 写场景下建议保留，非 Sync 场景可设为 0。</td></tr>
+<tr><td style="text-align: left"><code>SyncWrites</code></td><td style="text-align: left">false</td><td style="text-align: left">是否每次 Batch 都调用 <code>fsync</code>。设为 true 会让吞吐下降一个数量级，但保证强持久性。</td></tr>
+<tr><td style="text-align: left"><code>HotWriteMultiplier</code></td><td style="text-align: left">2</td><td style="text-align: left">热点聚合倍率。对于倾斜严重的负载，可设为 4。</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：NoKV 的写路径通过“牺牲”极微小的入队延迟，换取了极其稳健的磁盘顺序写入带宽。这种 <strong>“漏斗式”</strong> 的设计配合 <strong>自适应调节算法</strong>，是 NoKV 能够从容应对分布式环境下突发写潮汐的关键所在。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-09-memory-kernel-arena-and-adaptive-index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../notes/2026-02-15-vfs-design-and-storage-engine-comparison.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -198,11 +293,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-09-memory-craft-memtable-arena-skiplist-art.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-09-memory-kernel-arena-and-adaptive-index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../notes/2026-02-15-vfs-design-and-storage-engine-comparison.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>VFS Abstraction: Deterministic Reliability - NoKV Docs</title>
+        <title>2026-02-09 Memory Kernel: Arena &amp; Adaptive Index - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e5306e4.js";
+            window.path_to_searchindex_js = "../searchindex-bdaabb40.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3381e86f.js"></script>
+        <script src="../toc-5ff2b812.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,16 +178,142 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="vfs-abstraction-deterministic-reliability"><a class="header" href="#vfs-abstraction-deterministic-reliability">VFS Abstraction: Deterministic Reliability</a></h1>
+                        <h1 id="nokv-内存内核arena-线性分配与自适应索引art-vs-skiplist的极致工程实现"><a class="header" href="#nokv-内存内核arena-线性分配与自适应索引art-vs-skiplist的极致工程实现">NoKV 内存内核：Arena 线性分配与自适应索引（ART vs SkipList）的极致工程实现</a></h1>
+<p>在高性能存储引擎中，内存管理直接决定了系统的吞吐上限和延迟稳定性。NoKV 的 MemTable 层通过 Arena 线性分配和高度优化的索引结构，实现了零 GC 压力下的极速读写。本文将深度拆解这一层级的核心架构设计与工程权衡。</p>
+<hr>
+<h2 id="1-arena构建指针无关的堆外内存池"><a class="header" href="#1-arena构建指针无关的堆外内存池">1. Arena：构建“指针无关”的堆外内存池</a></h2>
+<p>NoKV 的 Arena（位于 <code>utils/arena.go</code>）是所有内存索引的物理基石。它通过“单向追加”和“偏移量寻址”机制，将海量的小对象分配从 Go Runtime 的堆内存中剥离出来。</p>
+<h3 id="11-物理布局与分配策略"><a class="header" href="#11-物理布局与分配策略">1.1 物理布局与分配策略</a></h3>
+<p>Arena 并不是零散的内存块，而是一个连续的 <code>[]byte</code>。</p>
+<ul>
+<li><strong>线性分配 (Bump Allocation)</strong>：分配开销仅为一个原子加法。</li>
+<li><strong>内存对齐 (Alignment)</strong>：为了保证原子操作（如 64 位版本号更新）的安全性，Arena 强制执行对齐：</li>
+</ul>
+<pre><code class="language-go">// AllocAligned 确保分配的起始地址在 align 的倍数上
+func (a *Arena) AllocAligned(size, align int) uint32 {
+    // 计算对齐补齐量 (Padding)
+    padding := (align - (int(a.n) % align)) % align
+    // 原子地移动分配指针
+    offset := a.Allocate(uint32(size + padding))
+    // 返回真实的起始偏移量
+    return offset + uint32(padding)
+}
+</code></pre>
+<p><strong>为什么对齐是刚需？</strong>：在现代 64 位 CPU 上，如果一个 8 字节的 <code>uint64</code> 跨越了缓存行 (Cache Line)，硬件无法保证其原子写操作的原子性。NoKV 通过 Arena 对齐，保证了所有元数据更新（如 SkipList 的 Tower 链接或 ART 的版本号）在物理上是并发安全的。</p>
+<h3 id="12-寻址艺术uint32-offset-vs-pointer"><a class="header" href="#12-寻址艺术uint32-offset-vs-pointer">1.2 寻址艺术：Uint32 Offset vs Pointer</a></h3>
+<p>在 Go 堆中存储数百万个节点指针会导致 GC 扫描极慢（STW 延迟剧增）。NoKV 所有的索引节点内部都使用 <code>uint32</code> 的 Offset 来互相引用。</p>
+<ul>
+<li><strong>GC 友好性</strong>：Offset 对 GC 是透明的。在扫描阶段，GC 只需要扫描 Arena 那个巨大的 <code>[]byte</code> 切片头，而不需要递归扫描数以万计的小对象。</li>
+<li><strong>内存节省</strong>：在 64 位系统上，<code>uint32</code> (4B) 只有原生指针 (8B) 的一半大小，这让内存索引的有效负载比提高了近一倍。</li>
+</ul>
+<hr>
+<h2 id="2-skiplist经典的并发写基准"><a class="header" href="#2-skiplist经典的并发写基准">2. SkipList：经典的并发写基准</a></h2>
+<p>SkipList（位于 <code>utils/skiplist.go</code>）以其实现简单、并发稳健著称，是 NoKV 的基准索引。</p>
+<h3 id="21-架构设计"><a class="header" href="#21-架构设计">2.1 架构设计</a></h3>
+<ul>
+<li><strong>多级塔式索引</strong>：通过随机化层高（MaxHeight=20，概率 P=0.25），实现平均 $O(\log N)$ 的查找复杂度。</li>
+<li><strong>无锁并发 (Lock-free)</strong>：利用 <code>atomic.CompareAndSwapUint32</code> 在每一层进行节点插入。</li>
+</ul>
+<h3 id="22-插入协议-add-逻辑"><a class="header" href="#22-插入协议-add-逻辑">2.2 插入协议 (Add 逻辑)</a></h3>
+<p>SkipList 的插入不是简单的 <code>Lock -&gt; Insert</code>，而是一个多阶段的原子安装过程：</p>
+<ol>
+<li><strong>节点创建</strong>：在 Arena 中预分配节点空间，设置 Key/Value 的 Offset。</li>
+<li><strong>寻找切面 (Find Splice)</strong>：从最高层开始向下寻找每一层的前驱 (<code>prev</code>) 和后继 (<code>next</code>) 节点。</li>
+<li><strong>逐层原子链接</strong>：从 Level 0 开始向上 CAS 安装。如果 CAS 失败（说明并发环境下有其他节点插入），则局部重试寻找切面，直到安装完成。</li>
+</ol>
+<pre><code class="language-go">func (s *Skiplist) Add(entry *kv.Entry) {
+    // 1. 预分配节点并随机化层高
+    nodeOffset := s.newNode(entry.Key, entry.Value, height)
+    // 2. 局部 CAS 链接
+    for i := 0; i &lt; height; i++ {
+        for {
+            prev, next := s.findSpliceForLevel(entry.Key, i)
+            // 将新节点的 next 指向找到的后继
+            s.setNextOffset(nodeOffset, i, next)
+            // 原子地将前驱的 next 指向新节点
+            if s.casNextOffset(prev, i, next, nodeOffset) {
+                break 
+            }
+        }
+    }
+}
+</code></pre>
+<hr>
+<h2 id="3-art追求极致的自适应基数树"><a class="header" href="#3-art追求极致的自适应基数树">3. ART：追求极致的自适应基数树</a></h2>
+<p>ART（Adaptive Radix Tree，位于 <code>utils/art.go</code>）是 NoKV 的默认索引，专为现代 CPU 缓存架构和内存效率平衡设计。</p>
+<h3 id="31-自适应节点架构"><a class="header" href="#31-自适应节点架构">3.1 自适应节点架构</a></h3>
+<p>ART 会根据子节点数量动态调整节点物理大小，以平衡空间利用率和查询效率：</p>
+<ul>
+<li><strong>Node4 / Node16</strong>：使用线性扫描寻找子节点，适合分支较少的路径。</li>
+<li><strong>Node48</strong>：使用间接索引表（256 字节哈希表），空间效率极高。</li>
+<li><strong>Node256</strong>：直接数组寻址，提供极致的 $O(k)$ 寻址性能。</li>
+</ul>
+<h3 id="32-排序难题comparable-route-key-编码"><a class="header" href="#32-排序难题comparable-route-key-编码">3.2 排序难题：Comparable Route Key 编码</a></h3>
+<p>Radix Tree 原生基于字节比较，不支持 LSM 要求的复合排序（UserKey 升序 + Version 降序）。NoKV 通过一套精妙的编码解决：</p>
+<ul>
+<li><strong>编码公式</strong>：<code>RouteKey = EncodeComparable(UserKey) + BigEndian(Timestamp)</code>。</li>
+<li><strong>设计价值</strong>：这保证了在 ART 树的层级深度遍历结果完全等价于 LSM 的 <code>Key + Version</code> 排序逻辑，从而完美支持 <code>Seek</code> 和范围扫描。</li>
+</ul>
+<h3 id="33-并发模型cow--olc-lite"><a class="header" href="#33-并发模型cow--olc-lite">3.3 并发模型：COW + OLC-lite</a></h3>
+<ul>
+<li><strong>完全无锁读 (Lock-free Read)</strong>：通过 COW (Copy-On-Write) 保证读取路径观察到的是一致的、不可变的节点快照。</li>
+<li><strong>OLC-lite 原地更新</strong>：针对单点修改（如更新已存在的 Key 的 Value），ART 保留了一个快速路径，在不复制节点的前提下通过原子指令替换 <code>ValuePtr</code>，极大降低了分配开销。</li>
+</ul>
+<hr>
+<h2 id="4-memtable-原子预留协议-workflow"><a class="header" href="#4-memtable-原子预留协议-workflow">4. MemTable 原子预留协议 (Workflow)</a></h2>
+<p>当用户调用 <code>Set</code> 时，LSM 内核的协调流程如下：</p>
+<pre class="mermaid">sequenceDiagram
+    participant U as User
+    participant LSM as LSM Kernel
+    participant MT as Active MemTable
+    participant FM as Flush Manager
+
+    U-&gt;&gt;LSM: Set(entry)
+    LSM-&gt;&gt;LSM: Acquire RLock (Concurrent writers entry)
+    LSM-&gt;&gt;MT: tryReserve(estimate_size)
+    alt 预留成功 (Fast Path)
+        MT-&gt;&gt;MT: 原子移动 reservedSize
+        MT-&gt;&gt;MT: 并发写入 Index 和 WAL
+        LSM-&gt;&gt;LSM: Release RLock
+    else 空间不足 (Slow Path - Rotation)
+        LSM-&gt;&gt;LSM: Upgrade to WLock (Stop all writers)
+        LSM-&gt;&gt;LSM: rotateLocked (Seal current MT -&gt; Move to Immutables)
+        LSM-&gt;&gt;FM: submitFlush(oldMemTable)
+        LSM-&gt;&gt;LSM: Create New Active MemTable &amp; WAL Segment
+        LSM-&gt;&gt;LSM: Release WLock
+        LSM-&gt;&gt;U: Retry Set (Go to Fast Path)
+    end
+</pre>
+
+<hr>
+<h2 id="5-性能参数与工程取舍建议"><a class="header" href="#5-性能参数与工程取舍建议">5. 性能参数与工程取舍建议</a></h2>
+<p>在 <code>Options</code> 中配置索引引擎时，应考虑负载特性：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">维度</th><th style="text-align: left">SkipList</th><th style="text-align: left">ART (Default)</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>点查延迟 (Get)</strong></td><td style="text-align: left">$O(\log N)$，较高 Cache Miss</td><td style="text-align: left">$O(k)$，缓存局部性极佳</td></tr>
+<tr><td style="text-align: left"><strong>范围定位 (Seek)</strong></td><td style="text-align: left">中等</td><td style="text-align: left">极快（前缀压缩优势）</td></tr>
+<tr><td style="text-align: left"><strong>内存占用</strong></td><td style="text-align: left">极低（仅存储 Offset）</td><td style="text-align: left">较高（当前约 2x，包含内部节点）</td></tr>
+<tr><td style="text-align: left"><strong>代码可维护性</strong></td><td style="text-align: left">极佳</td><td style="text-align: left">较高（节点升级降级复杂）</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>总结</strong>：NoKV 的内存设计遵循 <strong>“空间即状态，并发即原子”</strong> 的原则。Arena 锁定了物理稳定性，自适应索引提供了灵活的性能上限。这套方案让 NoKV 在单机热点场景下表现出了极强的韧性。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
+                            <a rel="next prefetch" href="../notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -195,10 +321,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../notes/2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../notes/2026-02-05-vlog-design-and-gc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
+                    <a rel="next prefetch" href="../notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>
