@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer - NoKV Docs</title>
+        <title>Write Pipeline: MPSC &amp; Adaptive Batching - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-48185e16.js";
+            window.path_to_searchindex_js = "../searchindex-9e5306e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c17ea2b1.js"></script>
+        <script src="../toc-3381e86f.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,164 +178,7 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer"><a class="header" href="#2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer">2026-02-09-rhythm-of-writes-commit-worker-batch-ringbuffer</a></h1>
-<p>本文档面向第一次理解 NoKV 写路径的同学，也记录这块实现里的工程化设计方法。我们讨论三件事：</p>
-<ol>
-<li><code>commit worker</code> 为什么是写路径中枢。</li>
-<li><code>write batch</code> 如何在延迟与吞吐之间做动态平衡。</li>
-<li><code>ringbuffer</code> 如何提供低开销并发队列基础。</li>
-</ol>
-<hr>
-<h2 id="1-设计理念写路径要像节拍器不是碰碰运气"><a class="header" href="#1-设计理念写路径要像节拍器不是碰碰运气">1. 设计理念：写路径要像“节拍器”，不是“碰碰运气”</a></h2>
-<p>写路径如果没有节拍控制，会出现三种典型问题：</p>
-<ul>
-<li>突发流量把队列顶爆，内存飙升。</li>
-<li>单请求提交抖动大，尾延迟失控。</li>
-<li>错误归因粗糙，客户端重复重试放大压力。</li>
-</ul>
-<p>NoKV 的方案是把写路径拆成“前台入队 + 后台批处理 + 明确完成语义”，让系统行为更像稳定节拍而不是随机波动。</p>
-<hr>
-<h2 id="2-总览图从请求到落盘"><a class="header" href="#2-总览图从请求到落盘">2. 总览图：从请求到落盘</a></h2>
-<pre class="mermaid">sequenceDiagram
-  participant C as Client
-  participant Q as commitQueue
-  participant W as commitWorker
-  participant V as ValueLog
-  participant L as LSM
-  participant S as WAL Sync
-
-  C-&gt;&gt;Q: enqueue request
-  Q-&gt;&gt;W: item signal
-  W-&gt;&gt;Q: pop a batch
-  W-&gt;&gt;V: vlog.write
-  W-&gt;&gt;L: applyRequests / SetBatch
-  opt SyncWrites=true
-    W-&gt;&gt;S: wal.Sync
-  end
-  W--&gt;&gt;C: per-request result
-</pre>
-
-<p>关键是顺序：先 <code>vlog.write</code>，再 <code>LSM apply</code>，最后按需 <code>wal.Sync</code>。这保证 ValuePtr 不会指向不存在的数据。</p>
-<hr>
-<h2 id="3-commitqueue三层组合而不是只有一个-ring"><a class="header" href="#3-commitqueue三层组合而不是只有一个-ring">3. commitQueue：三层组合而不是“只有一个 ring”</a></h2>
-<p><code>commitQueue</code> 的设计不是单一结构，而是三件套：</p>
-<ol>
-<li><code>Ring[*commitRequest]</code> 负责数据面高效 push/pop。</li>
-<li><code>spaces</code> 通道负责容量票据，形成硬上限背压。</li>
-<li><code>items</code> 通道负责可消费事件，避免 worker 忙等。</li>
-</ol>
-<pre class="mermaid">flowchart LR
-  P["Producer"] --&gt; T["acquire spaces token"]
-  T --&gt; R["ring.Push(req)"]
-  R --&gt; I["items signal"]
-  I --&gt; W["worker wakeup"]
-  W --&gt; O["ring.Pop"]
-  O --&gt; RT["release spaces token"]
-</pre>
-
-<p>这三层叠加后，系统同时得到：并发效率、内存上限、可控阻塞语义。</p>
-<hr>
-<h2 id="4-write-batch动态策略而非固定批次"><a class="header" href="#4-write-batch动态策略而非固定批次">4. write batch：动态策略而非固定批次</a></h2>
-<p><code>nextCommitBatch</code> 的核心是“看现场调节”，不是死配阈值：</p>
-<ul>
-<li>backlog 高：放大 <code>limitCount</code>、<code>limitSize</code>。</li>
-<li>检测到 hot write：应用 <code>HotWriteBatchMultiplier</code>。</li>
-<li>队列短暂发空但批未满：等待 <code>WriteBatchWait</code> 做 coalesce。</li>
-</ul>
-<pre class="mermaid">flowchart TD
-  A["start batch"] --&gt; B{"backlog high?"}
-  B --&gt;|Yes| C["increase batch limits"]
-  B --&gt;|No| D["use base limits"]
-  C --&gt; E{"hot write?"}
-  D --&gt; E
-  E --&gt;|Yes| F["apply hot multiplier"]
-  E --&gt;|No| G["keep current limits"]
-  F --&gt; H["collect until limit or timeout"]
-  G --&gt; H
-</pre>
-
-<p>这套策略把轻载低延迟与重载高吞吐放在一个框架里。</p>
-<hr>
-<h2 id="5-最近关键修复错误归因从整批同错变成逐请求准确"><a class="header" href="#5-最近关键修复错误归因从整批同错变成逐请求准确">5. 最近关键修复：错误归因从“整批同错”变成“逐请求准确”</a></h2>
-<p>历史风险：<code>applyRequests</code> 中途失败时，整批请求被同一个错误覆盖，导致已经成功的请求被误判失败。</p>
-<p>修复后的语义：</p>
-<ol>
-<li><code>applyRequests</code> 返回失败位置 <code>failedAt</code>。</li>
-<li><code>commitWorker</code> 只标记 <code>failedAt</code> 及之后请求失败。</li>
-<li><code>finishCommitRequests</code> 支持逐请求回填错误。</li>
-</ol>
-<pre class="mermaid">flowchart LR
-  A["r0 ok"] --&gt; B["r1 ok"] --&gt; C["r2 fail"] --&gt; D["r3 not applied"]
-</pre>
-
-<p>这个改动的价值不在“快”，而在“语义正确”。</p>
-<hr>
-<h2 id="6-ringbuffermpmc-序号协议与内存保活控制"><a class="header" href="#6-ringbuffermpmc-序号协议与内存保活控制">6. RingBuffer：MPMC 序号协议与内存保活控制</a></h2>
-<p><code>utils/ringbuffer.go</code> 采用 seq 协议：</p>
-<ul>
-<li><code>Push</code> 观察 <code>slot.seq == pos</code> 才能写。</li>
-<li><code>Pop</code> 观察 <code>slot.seq == pos+1</code> 才能读。</li>
-<li><code>Pop</code> 后推进 <code>seq</code> 到下一轮并清空 <code>slot.val</code>。</li>
-</ul>
-<pre class="mermaid">flowchart LR
-  F["free(seq=pos)"] --&gt; P["push CAS tail"]
-  P --&gt; R["ready(seq=pos+1)"]
-  R --&gt; C["pop CAS head"]
-  C --&gt; N["next free(seq=pos+cap)"]
-</pre>
-
-<p>清空 <code>slot.val</code> 是关键工程点：它减少对象被 ring 槽位长期引用而延迟回收。</p>
-<hr>
-<h2 id="7-与-hot-统计的耦合点写路径要避免统计偏置"><a class="header" href="#7-与-hot-统计的耦合点写路径要避免统计偏置">7. 与 Hot 统计的耦合点：写路径要避免统计偏置</a></h2>
-<p>这块最容易被忽略的风险是“统计口径不一致”与“双重计数”。</p>
-<p>当前方向（你前面定下的策略）是对的：</p>
-<ul>
-<li>读写 ring 分离，避免高读热点误触发写限流。</li>
-<li><code>isHotWrite</code> 仅做 <code>Frequency</code> 判断，不再二次 <code>Touch</code>。</li>
-</ul>
-<p>这会显著降低误判和过度限流。</p>
-<hr>
-<h2 id="8-参数建议新人可直接起步"><a class="header" href="#8-参数建议新人可直接起步">8. 参数建议（新人可直接起步）</a></h2>
-<ol>
-<li><code>WriteBatchMaxCount</code>: 64~128。</li>
-<li><code>WriteBatchMaxSize</code>: 1~4MiB。</li>
-<li><code>WriteBatchWait</code>: 100~300us，低延迟可设 0。</li>
-<li><code>HotWriteBatchMultiplier</code>: 2 起步，通常不建议超过 4。</li>
-<li><code>SyncWrites=true</code> 时重点观察 <code>AvgApplyMs</code> 与 <code>AvgRequestWaitMs</code>。</li>
-</ol>
-<hr>
-<h2 id="9-常见误区"><a class="header" href="#9-常见误区">9. 常见误区</a></h2>
-<ol>
-<li>
-<p>误区：batch 越大越好。
-事实：吞吐会上去，但 P99 可能更差。</p>
-</li>
-<li>
-<p>误区：ring 是无锁就等于没有阻塞。
-事实：上层 <code>spaces/items</code> 语义决定了阻塞与背压行为。</p>
-</li>
-<li>
-<p>误区：写路径优化只看 QPS。
-事实：错误归因、恢复一致性、尾延迟同样是一等指标。</p>
-</li>
-</ol>
-<hr>
-<h2 id="10-工程化检查清单"><a class="header" href="#10-工程化检查清单">10. 工程化检查清单</a></h2>
-<ol>
-<li>观察队列长度是否长期贴近上限。</li>
-<li>观察 batch size 分布是否极端两极化。</li>
-<li>观察失败请求是否都具备准确错误来源。</li>
-<li>做一次高并发压测确认 prefetch 与写路径不会空转抢 CPU。</li>
-</ol>
-<hr>
-<h2 id="11-总结"><a class="header" href="#11-总结">11. 总结</a></h2>
-<p>NoKV 这条写路径的核心不是某个“单点算法”，而是三部分协同：</p>
-<ul>
-<li><code>commit worker</code> 管节奏。</li>
-<li><code>write batch</code> 管效率曲线。</li>
-<li><code>ringbuffer</code> 管并发成本。</li>
-</ul>
-<p>把这三件事放在一起，写路径才能同时做到：有上限、有吞吐、可解释。</p>
+                        <h1 id="write-pipeline-mpsc--adaptive-batching"><a class="header" href="#write-pipeline-mpsc--adaptive-batching">Write Pipeline: MPSC &amp; Adaptive Batching</a></h1>
 
                     </main>
 
