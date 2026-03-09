@@ -425,19 +425,13 @@ func (db *DB) Del(key []byte) error {
 
 // DeleteRange removes all keys in [start, end) from the default column family.
 func (db *DB) DeleteRange(start, end []byte) error {
-	return db.DeleteRangeCF(kv.CFDefault, start, end)
-}
-
-// DeleteRangeCF removes all keys in [start, end) from the specified column family.
-// Range tombstones reuse Entry structure: Key=start, Value=end, Meta=BitRangeDelete.
-func (db *DB) DeleteRangeCF(cf kv.ColumnFamily, start, end []byte) error {
 	if len(start) == 0 || len(end) == 0 {
 		return utils.ErrEmptyKey
 	}
 	if bytes.Compare(start, end) >= 0 {
 		return utils.ErrInvalidRequest
 	}
-	entry := kv.NewInternalEntry(cf, start, nonTxnMaxVersion, end, kv.BitRangeDelete, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, start, nonTxnMaxVersion, end, kv.BitRangeDelete, 0)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
