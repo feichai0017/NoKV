@@ -1443,8 +1443,8 @@ func TestDeleteRangeValidation(t *testing.T) {
 	}
 }
 
-// TestDeleteRangeCF tests column family isolation.
-func TestDeleteRangeCF(t *testing.T) {
+// TestDeleteRangeIsolation tests that default-CF DeleteRange does not affect other CFs.
+func TestDeleteRangeIsolation(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
 	db := Open(opt)
 	defer func() { drMustClose(t, db) }()
@@ -1457,7 +1457,7 @@ func TestDeleteRangeCF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.DeleteRangeCF(kv.CFDefault, []byte("key1"), []byte("key2")); err != nil {
+	if err := db.DeleteRange([]byte("key1"), []byte("key2")); err != nil {
 		t.Fatal(err)
 	}
 
