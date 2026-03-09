@@ -21,7 +21,7 @@ jobs:
       PROJECT_NUMBER: "4"
     steps:
       - name: Sync item to GitHub Project
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.PROJECTS_TOKEN || github.token }}
           script: |
