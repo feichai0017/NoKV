@@ -131,7 +131,8 @@ elif [[ "$PD_WORKDIR" != /* ]]; then
 fi
 mkdir -p "$PD_WORKDIR"
 
-mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
+STORE_LINES=()
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
 if [ "${#STORE_LINES[@]}" -eq 0 ]; then
   echo "no stores defined in $CONFIG_PATH" >&2
   exit 1
@@ -163,7 +164,8 @@ for line in "${STORE_LINES[@]}"; do
   fi
 done
 
-mapfile -t REGION_LINES < <(nokv-config regions --config "$CONFIG_PATH" --format simple)
+REGION_LINES=()
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG_PATH" --format simple)
 if [ "${#REGION_LINES[@]}" -eq 0 ]; then
   echo "no regions defined in $CONFIG_PATH" >&2
   exit 1
