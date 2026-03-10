@@ -93,7 +93,8 @@ if [[ -z "$PD_ADDR" ]]; then
   fi
 fi
 
-mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG" --format simple)
+STORE_LINES=()
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG" --format simple)
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
   echo "serve_from_config: no stores defined in $CONFIG" >&2
   exit 1
@@ -127,7 +128,8 @@ if [[ -z "$TARGET_LISTEN" ]]; then
   exit 1
 fi
 
-mapfile -t REGION_LINES < <(nokv-config regions --config "$CONFIG" --format simple)
+REGION_LINES=()
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG" --format simple)
 for region_line in "${REGION_LINES[@]}"; do
   read -r _ start_key end_key _ _ peer_str _ <<<"$region_line"
   IFS=',' read -ra peers <<<"$peer_str"

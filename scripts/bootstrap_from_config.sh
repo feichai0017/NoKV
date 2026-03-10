@@ -67,13 +67,15 @@ if ! command -v nokv-config >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -t STORE_LINES < <(nokv-config stores --config "$CONFIG" --format simple)
+STORE_LINES=()
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG" --format simple)
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
   echo "bootstrap_from_config: no stores defined in $CONFIG" >&2
   exit 1
 fi
 
-mapfile -t REGION_LINES < <(nokv-config regions --config "$CONFIG" --format simple)
+REGION_LINES=()
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG" --format simple)
 if [[ "${#REGION_LINES[@]}" -eq 0 ]]; then
   echo "bootstrap_from_config: no regions defined in $CONFIG" >&2
   exit 1
