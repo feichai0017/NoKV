@@ -273,7 +273,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	// Check if this key is covered by a range tombstone.
-	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, iter.entry.Key) {
+	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, ts) {
 		return false
 	}
 	iter.entry.Key = userKey

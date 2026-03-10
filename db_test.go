@@ -1349,6 +1349,26 @@ func drMustClose(t *testing.T, db *DB) {
 	}
 }
 
+func drWaitForFlushedSST(t *testing.T, db *DB) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := db.Info().Snapshot()
+		hasSST := false
+		for _, lvl := range snap.LSM.Levels {
+			if lvl.TableCount > 0 || lvl.IngestTables > 0 {
+				hasSST = true
+				break
+			}
+		}
+		if hasSST && snap.Flush.Pending == 0 && snap.Flush.Active == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for flushed sst")
+}
+
 // TestDeleteRangeCore tests basic functionality, boundaries, lexicographic ordering,
 // empty ranges, and write-after-delete scenarios.
 func TestDeleteRangeCore(t *testing.T) {
@@ -1449,8 +1469,8 @@ func TestDeleteRangeIsolation(t *testing.T) {
 	db := Open(opt)
 	defer func() { drMustClose(t, db) }()
 
-	defaultEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key1"), nonTxnMaxVersion, []byte("val1"), 0, 0)
-	lockEntry := kv.NewInternalEntry(kv.CFLock, []byte("key1"), nonTxnMaxVersion, []byte("lock1"), 0, 0)
+	defaultEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key1"), db.nextNonTxnVersion(), []byte("val1"), 0, 0)
+	lockEntry := kv.NewInternalEntry(kv.CFLock, []byte("key1"), db.nextNonTxnVersion(), []byte("lock1"), 0, 0)
 	defer defaultEntry.DecrRef()
 	defer lockEntry.DecrRef()
 	if err := db.ApplyInternalEntries([]*kv.Entry{defaultEntry, lockEntry}); err != nil {
@@ -1577,8 +1597,8 @@ func TestDeleteRangeWALRecovery(t *testing.T) {
 	}
 }
 
-// TestDeleteRangeVisibilityBug tests the bug where a newer point write
-// gets incorrectly hidden by an older range tombstone when both use the same version.
+// TestDeleteRangeVisibilityBug ensures a newer point write remains visible after
+// an earlier range tombstone.
 func TestDeleteRangeVisibilityBug(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
 	db := Open(opt)
@@ -1595,4 +1615,62 @@ func TestDeleteRangeVisibilityBug(t *testing.T) {
 	if !bytes.Equal(e.Value, []byte("new")) {
 		t.Errorf("expected value 'new', got '%s'", e.Value)
 	}
+}
+
+func TestDeleteRangePersistsAfterFlushAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	opt := drTestOptions(dir)
+	opt.MemTableSize = 512
+	opt.NumLevelZeroTables = 1000
+
+	db := Open(opt)
+	drMustSet(t, db, []byte("b"), []byte("old"))
+	drMustDeleteRange(t, db, []byte("a"), []byte("z"))
+	drMustSet(t, db, []byte("y"), []byte("new"))
+
+	padding := bytes.Repeat([]byte("x"), 192)
+	for i := range 64 {
+		key := fmt.Appendf(nil, "pad-%03d", i)
+		drMustSet(t, db, key, padding)
+	}
+	drWaitForFlushedSST(t, db)
+	drMustClose(t, db)
+
+	db = Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	_, err := db.Get([]byte("b"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	entry, err := db.Get([]byte("y"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), entry.Value)
+}
+
+func TestDeleteRangeBatchOrdering(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	// point then range tombstone in one batch: point should be hidden.
+	setV := db.nextNonTxnVersion()
+	rtV := db.nextNonTxnVersion()
+	setEntry := kv.NewInternalEntry(kv.CFDefault, []byte("b"), setV, []byte("old"), 0, 0)
+	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("a"), rtV, []byte("z"), kv.BitRangeDelete, 0)
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{setEntry, rtEntry}))
+	setEntry.DecrRef()
+	rtEntry.DecrRef()
+	_, err := db.Get([]byte("b"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	// range tombstone then point in one batch: point should remain visible.
+	rtV2 := db.nextNonTxnVersion()
+	setV2 := db.nextNonTxnVersion()
+	rtEntry2 := kv.NewInternalEntry(kv.CFDefault, []byte("a"), rtV2, []byte("z"), kv.BitRangeDelete, 0)
+	setEntry2 := kv.NewInternalEntry(kv.CFDefault, []byte("c"), setV2, []byte("new"), 0, 0)
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{rtEntry2, setEntry2}))
+	rtEntry2.DecrRef()
+	setEntry2.DecrRef()
+	entry, err := db.Get([]byte("c"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), entry.Value)
 }
