@@ -87,7 +87,12 @@ proto-check:
 	@echo "Checking proto format, lint, breaking changes, and generated code..."
 	buf format -d --exit-code
 	buf lint
-	buf breaking --against '.git#branch=main,subdir=pb'
+	@set -e; \
+	base_ref="refs/remotes/origin/main"; \
+	if ! git show-ref --verify --quiet "$$base_ref"; then \
+		base_ref="refs/heads/main"; \
+	fi; \
+	buf breaking --against ".git#ref=$$base_ref,subdir=pb"
 	@set -e; \
 	before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
 	./scripts/gen.sh; \

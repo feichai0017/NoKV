@@ -32,7 +32,7 @@ jobs:
           output-file-path: benchmark.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' }}
-          comment-on-alert: ${{ github.event_name == 'pull_request' }}
+          comment-on-alert: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
           alert-threshold: '115%'
           fail-on-alert: false
 
