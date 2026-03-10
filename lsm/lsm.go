@@ -103,20 +103,6 @@ func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVer
 	return lsm.levels.rtCollector.IsKeyCovered(cf, userKey, entryVersion)
 }
 
-// IsKeyCoveredByRangeTombstone checks if a key is covered by any active
-// range tombstone. Pins memtables internally; callers that already hold
-// pinned tables should use checkRangeTombstone directly.
-func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
-	if lsm == nil {
-		return false
-	}
-	tables, release := lsm.GetMemTables()
-	if release != nil {
-		defer release()
-	}
-	return lsm.checkRangeTombstone(cf, userKey, version, tables)
-}
-
 // RangeTombstoneCount returns the number of tracked range tombstones.
 func (lsm *LSM) RangeTombstoneCount() int {
 	if lsm == nil || lsm.levels == nil || lsm.levels.rtCollector == nil {

@@ -605,11 +605,6 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	return entry, nil
 }
 
-// isKeyCoveredByRangeTombstone checks if userKey@version is covered by any range tombstone.
-func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
-	return db.lsm.IsKeyCoveredByRangeTombstone(cf, userKey, version)
-}
-
 // cloneEntry converts an internal/buffered entry into a detached public value object.
 //
 // It deep-copies key/value bytes so the returned entry is independent from pooled

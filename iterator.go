@@ -12,8 +12,6 @@ import (
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
-	db   *DB
-	lsm  *lsm.LSM
 	pool *iteratorPool
 	ctx  *iteratorContext
 	rtv  *lsm.RangeTombstoneView
@@ -92,8 +90,6 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
 		vlog:       db.vlog,
-		db:         db,
-		lsm:        db.lsm,
 		pool:       db.iterPool,
 		ctx:        ctx,
 		keyOnly:    keyOnly,
@@ -289,15 +285,8 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	// Check if this key is covered by a range tombstone.
-	if iter.rtCheck {
-		if iter.rtv != nil {
-			if iter.rtv.IsKeyCovered(cf, userKey, ts) {
-				return false
-			}
-		} else if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, ts) {
-			// Defensive fallback: this should be rare.
-			return false
-		}
+	if iter.rtCheck && iter.rtv != nil && iter.rtv.IsKeyCovered(cf, userKey, ts) {
+		return false
 	}
 	iter.entry.Key = userKey
 	iter.entry.CF = cf
