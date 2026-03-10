@@ -995,13 +995,6 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 }
 
 // rangeTombstone represents a copied range tombstone for compaction.
-type rangeTombstone struct {
-	cf      kv.ColumnFamily
-	start   []byte
-	end     []byte
-	version uint64
-}
-
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
@@ -1028,7 +1021,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	}
 
 	// Keep tombstone state across builder splits.
-	var rangeTombstones []rangeTombstone
+	var rangeTombstones []RangeTombstone
 
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
@@ -1047,11 +1040,11 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				if !ok {
 					continue
 				}
-				rt := rangeTombstone{
-					cf:      cf,
-					start:   kv.SafeCopy(nil, rtStart),
-					end:     kv.SafeCopy(nil, entry.RangeEnd()),
-					version: rtVersion,
+				rt := RangeTombstone{
+					CF:      cf,
+					Start:   kv.SafeCopy(nil, rtStart),
+					End:     kv.SafeCopy(nil, entry.RangeEnd()),
+					Version: rtVersion,
 				}
 				rangeTombstones = append(rangeTombstones, rt)
 			}
@@ -1077,7 +1070,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				}
 				for _, rt := range rangeTombstones {
 					// Check CF match and version/range coverage.
-					if rt.cf == cf && rt.version > version && kv.KeyInRange(userKey, rt.start, rt.end) {
+					if rt.CF == cf && rt.Version > version && kv.KeyInRange(userKey, rt.Start, rt.End) {
 						covered = true
 						updateStats(entry)
 						break
