@@ -2,6 +2,7 @@
 package NoKV
 
 import (
+	"bytes"
 	stderrors "errors"
 	"fmt"
 	"io"
@@ -23,8 +24,8 @@ import (
 	"github.com/feichai0017/NoKV/wal"
 )
 
-// nonTxnMaxVersion is the sentinel MVCC version used by non-transactional APIs.
-// Non-transactional reads/writes must not be mixed with MVCC/Txn writes.
+// nonTxnMaxVersion is the read upper-bound sentinel used by non-transactional APIs.
+// Non-transactional writes use monotonic versions <= this sentinel.
 const nonTxnMaxVersion = kv.MaxVersion
 
 type (
@@ -64,6 +65,7 @@ type (
 		walWatchdog      *wal.Watchdog
 		vlog             *valueLog
 		stats            *Stats
+		nonTxnVersion    atomic.Uint64
 		blockWrites      atomic.Int32
 		vheads           map[uint32]kv.ValuePtr
 		lastLoggedHeads  map[uint32]kv.ValuePtr
@@ -211,7 +213,8 @@ func Open(opt *Options) *DB {
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
 	}, wlog)
 	db.lsm.SetThrottleCallback(db.applyThrottle)
-	_ = db.lsm.MaxVersion()
+	seed := db.lsm.MaxVersion()
+	db.nonTxnVersion.Store(seed)
 	db.iterPool = newIteratorPool()
 	// Initialize the value log.
 	db.initVLog()
@@ -417,7 +420,20 @@ func (db *DB) Del(key []byte) error {
 	if len(key) == 0 {
 		return utils.ErrEmptyKey
 	}
-	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, nil, kv.BitDelete, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, db.nextNonTxnVersion(), nil, kv.BitDelete, 0)
+	defer entry.DecrRef()
+	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// DeleteRange removes all keys in [start, end) from the default column family.
+func (db *DB) DeleteRange(start, end []byte) error {
+	if len(start) == 0 || len(end) == 0 {
+		return utils.ErrEmptyKey
+	}
+	if bytes.Compare(start, end) >= 0 {
+		return utils.ErrInvalidRequest
+	}
+	entry := kv.NewInternalEntry(kv.CFDefault, start, db.nextNonTxnVersion(), end, kv.BitRangeDelete, 0)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
@@ -431,7 +447,7 @@ func (db *DB) Set(key, value []byte) error {
 	if value == nil {
 		return utils.ErrNilValue
 	}
-	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, db.nextNonTxnVersion(), value, 0, 0)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
 }
@@ -449,10 +465,19 @@ func (db *DB) SetWithTTL(key, value []byte, ttl time.Duration) error {
 	if value == nil {
 		return utils.ErrNilValue
 	}
-	entry := kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
+	entry := kv.NewInternalEntry(kv.CFDefault, key, db.nextNonTxnVersion(), value, 0, 0)
 	entry.WithTTL(ttl)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// nextNonTxnVersion allocates the next monotonic version for non-transactional writes.
+func (db *DB) nextNonTxnVersion() uint64 {
+	next := db.nonTxnVersion.Add(1)
+	if next == 0 {
+		panic("NoKV: non-transactional version overflow (legacy max-sentinel data requires migration)")
+	}
+	return next
 }
 
 // ApplyInternalEntries writes pre-built internal-key entries through the regular write
@@ -547,6 +572,13 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	if entry == nil {
 		return nil, utils.ErrKeyNotFound
 	}
+	if entry.IsRangeDelete() {
+		entry.DecrRef()
+		return nil, utils.ErrKeyNotFound
+	}
+
+	// Range tombstone coverage is checked in lsm.Get() while memtables are pinned.
+
 	if !kv.IsValuePtr(entry) {
 		if !entry.PopulateInternalMeta() {
 			entry.DecrRef()
@@ -571,6 +603,11 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 		return nil, utils.ErrInvalidRequest
 	}
 	return entry, nil
+}
+
+// isKeyCoveredByRangeTombstone checks if userKey@version is covered by any range tombstone.
+func (db *DB) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
+	return db.lsm.IsKeyCoveredByRangeTombstone(cf, userKey, version)
 }
 
 // cloneEntry converts an internal/buffered entry into a detached public value object.
@@ -670,7 +707,7 @@ func (db *DB) runValueLogGCPeriodically() {
 }
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
-	return int64(len(e.Value)) < db.opt.ValueThreshold
+	return e.IsRangeDelete() || int64(len(e.Value)) < db.opt.ValueThreshold
 }
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
