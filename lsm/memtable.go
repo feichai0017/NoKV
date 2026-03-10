@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -27,6 +28,15 @@ type memIndex interface {
 	DecrRef()
 }
 
+// memRangeTombstone is a lightweight copy of a range tombstone stored
+// directly in the memtable for O(M) lookup without iterator allocation.
+type memRangeTombstone struct {
+	cf      kv.ColumnFamily
+	start   []byte
+	end     []byte
+	version uint64
+}
+
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
 	lsm        *LSM
@@ -37,6 +47,12 @@ type memTable struct {
 	// reservedSize tracks in-flight write reservations to avoid overcommitting
 	// a memtable when multiple writers proceed under read locks.
 	reservedSize atomic.Int64
+
+	// rtMu protects rangeTombstones. Written by setBatch (which may run
+	// under lsm.lock read-lock or write-lock), read concurrently by
+	// isKeyCoveredByRangeTombstone. rtMu is the sole guard for this slice.
+	rtMu            sync.RWMutex
+	rangeTombstones []memRangeTombstone
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -68,6 +84,10 @@ func (m *memTable) close() error {
 	if m == nil {
 		return nil
 	}
+	// Range tombstones have already been transferred to rtCollector by the flush path.
+	m.rtMu.Lock()
+	m.rangeTombstones = nil
+	m.rtMu.Unlock()
 	return nil
 }
 
@@ -86,6 +106,7 @@ func (m *memTable) Set(entry *kv.Entry) error {
 	m.walSize.Add(int64(info.Length) + 8)
 	if m.index != nil {
 		m.index.Add(entry)
+		m.trackRangeTombstone(entry)
 	}
 	return nil
 }
@@ -109,6 +130,10 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	e.Offset = 0
 	e.Hlen = 0
 	e.ValThreshold = 0
+	if cf, _, version, ok := kv.SplitInternalKey(foundKey); ok {
+		e.CF = cf
+		e.Version = version
+	}
 	_ = e.PopulateInternalMeta()
 	e.IncrRef()
 	return e, nil
@@ -137,6 +162,7 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 	if m.index != nil {
 		for _, entry := range entries {
 			m.index.Add(entry)
+			m.trackRangeTombstone(entry)
 		}
 	}
 	return nil
@@ -224,6 +250,7 @@ func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
 			if mt.index != nil {
 				mt.index.Add(entry)
 			}
+			mt.trackRangeTombstone(entry)
 			entry.DecrRef()
 		}
 		switch info.Type {
@@ -323,6 +350,47 @@ func (mt *memTable) DecrRef() {
 		return
 	}
 	mt.index.DecrRef()
+}
+
+// isKeyCoveredByRangeTombstone checks if userKey@entryVersion in cf is covered
+// by any in-memory range tombstone.
+func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVersion uint64) bool {
+	if m == nil {
+		return false
+	}
+	m.rtMu.RLock()
+	rts := m.rangeTombstones
+	m.rtMu.RUnlock()
+	for i := range rts {
+		rt := &rts[i]
+		if rt.cf != cf {
+			continue
+		}
+		if rt.version > entryVersion && kv.KeyInRange(userKey, rt.start, rt.end) {
+			return true
+		}
+	}
+	return false
+}
+
+// trackRangeTombstone caches range tombstones in memtable-local memory so read
+// path coverage checks avoid allocating iterators.
+func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
+	if m == nil || entry == nil || !entry.IsRangeDelete() {
+		return
+	}
+	_, start, version, ok := kv.SplitInternalKey(entry.Key)
+	if !ok {
+		return
+	}
+	m.rtMu.Lock()
+	m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
+		cf:      entry.CF,
+		start:   kv.SafeCopy(nil, start),
+		end:     kv.SafeCopy(nil, entry.RangeEnd()),
+		version: version,
+	})
+	m.rtMu.Unlock()
 }
 
 func newMemIndex(opt *Options) memIndex {

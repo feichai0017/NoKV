@@ -553,6 +553,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMode == compact.IngestKeep, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
+	// After max-level compaction, range tombstone layout may change.
+	// Rebuild the in-memory range tombstone index to keep read visibility correct.
+	if cd.nextLevel != nil && cd.nextLevel.levelNum == lm.opt.MaxLevelNum-1 && lm.rtCollector != nil {
+		lm.rebuildRangeTombstones()
+	}
 	return nil
 }
 
@@ -989,6 +994,7 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 	}
 }
 
+// rangeTombstone represents a copied range tombstone for compaction.
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
@@ -1013,39 +1019,74 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			discardStats[manifest.ValueLogID{Bucket: vp.Bucket, FileID: vp.Fid}] += int64(math.Round(weighted))
 		}
 	}
+
+	// Keep tombstone state across builder splits.
+	var rangeTombstones []RangeTombstone
+
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
+
 		for ; it.Valid(); it.Next() {
-			key := it.Item().Entry().Key
-			//version := kv.Timestamp(key)
-			isExpired := it.Item().Entry().IsDeletedOrExpired()
+			entry := it.Item().Entry()
+			key := entry.Key
+			isExpired := entry.IsDeletedOrExpired()
+
+			if entry.IsRangeDelete() {
+				// Preserve range tombstones even at max level. Dropping them during
+				// partial Lmax->Lmax rewrites can resurrect older covered keys that
+				// remain in untouched tables outside this compaction unit.
+				// Copy range tombstone data to avoid iterator reuse issues.
+				cf, rtStart, rtVersion, ok := kv.SplitInternalKey(entry.Key)
+				if !ok {
+					continue
+				}
+				rt := RangeTombstone{
+					CF:      cf,
+					Start:   kv.SafeCopy(nil, rtStart),
+					End:     kv.SafeCopy(nil, entry.RangeEnd()),
+					Version: rtVersion,
+				}
+				rangeTombstones = append(rangeTombstones, rt)
+			}
 			if !kv.SameKey(key, lastKey) {
-				// Stop when the iterator key is beyond the range.
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
-					// Stop when the SST size estimate is exceeded.
 					break
 				}
-				// Update lastKey with the current key.
 				lastKey = kv.SafeCopy(lastKey, key)
-				//umVersions = 0
-				// If the left bound is empty, set it to the current key.
 				if len(tableKr.Left) == 0 {
 					tableKr.Left = kv.SafeCopy(tableKr.Left, key)
 				}
-				// Update the right bound.
 				tableKr.Right = lastKey
 			}
-			// Drop expired entries.
-			valueLen := entryValueLen(it.Item().Entry())
-			switch {
-			case isExpired:
-				updateStats(it.Item().Entry())
-				builder.AddStaleEntryWithLen(it.Item().Entry(), valueLen)
-			default:
-				builder.AddKeyWithLen(it.Item().Entry(), valueLen)
+
+			if !entry.IsRangeDelete() {
+				covered := false
+				cf, userKey, version, ok := kv.SplitInternalKey(key)
+				if !ok {
+					continue
+				}
+				for _, rt := range rangeTombstones {
+					// Check CF match and version/range coverage.
+					if rt.CF == cf && rt.Version > version && kv.KeyInRange(userKey, rt.Start, rt.End) {
+						covered = true
+						updateStats(entry)
+						break
+					}
+				}
+				if covered {
+					continue
+				}
+			}
+
+			valueLen := entryValueLen(entry)
+			if isExpired {
+				updateStats(entry)
+				builder.AddStaleEntryWithLen(entry, valueLen)
+			} else {
+				builder.AddKeyWithLen(entry, valueLen)
 			}
 		}
 	}

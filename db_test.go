@@ -1314,3 +1314,363 @@ func TestCloseConcurrent(t *testing.T) {
 	}
 	require.True(t, db.IsClosed())
 }
+
+func drTestOptions(dir string) *Options {
+	cfg := *opt
+	cfg.WorkDir = dir
+	return &cfg
+}
+
+func drMustSet(t *testing.T, db *DB, key, value []byte) {
+	t.Helper()
+	if err := db.Set(key, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drMustDeleteRange(t *testing.T, db *DB, start, end []byte) {
+	t.Helper()
+	if err := db.DeleteRange(start, end); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drMustDel(t *testing.T, db *DB, key []byte) {
+	t.Helper()
+	if err := db.Del(key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drMustClose(t *testing.T, db *DB) {
+	t.Helper()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drWaitForFlushedSST(t *testing.T, db *DB) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := db.Info().Snapshot()
+		hasSST := false
+		for _, lvl := range snap.LSM.Levels {
+			if lvl.TableCount > 0 || lvl.IngestTables > 0 {
+				hasSST = true
+				break
+			}
+		}
+		if hasSST && snap.Flush.Pending == 0 && snap.Flush.Active == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for flushed sst")
+}
+
+// TestDeleteRangeCore tests basic functionality, boundaries, lexicographic ordering,
+// empty ranges, and write-after-delete scenarios.
+func TestDeleteRangeCore(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	// Test 1: Basic deletion with [start, end) semantics
+	drMustSet(t, db, []byte("a"), []byte("1"))
+	drMustSet(t, db, []byte("b"), []byte("2"))
+	drMustSet(t, db, []byte("c"), []byte("3"))
+
+	if err := db.DeleteRange([]byte("a"), []byte("c")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Get([]byte("a")); err != utils.ErrKeyNotFound {
+		t.Error("start key should be deleted")
+	}
+	if _, err := db.Get([]byte("b")); err != utils.ErrKeyNotFound {
+		t.Error("middle key should be deleted")
+	}
+	if e, err := db.Get([]byte("c")); err != nil || !bytes.Equal(e.Value, []byte("3")) {
+		t.Error("end key should not be deleted (exclusive)")
+	}
+
+	// Test 2: Lexicographic ordering
+	drMustSet(t, db, []byte("key1"), []byte("v1"))
+	drMustSet(t, db, []byte("key10"), []byte("v10"))
+	drMustSet(t, db, []byte("key2"), []byte("v2"))
+
+	drMustDeleteRange(t, db, []byte("key1"), []byte("key2"))
+
+	if _, err := db.Get([]byte("key1")); err != utils.ErrKeyNotFound {
+		t.Error("key1 should be deleted")
+	}
+	if _, err := db.Get([]byte("key10")); err != utils.ErrKeyNotFound {
+		t.Error("key10 should be deleted (lexicographically between key1 and key2)")
+	}
+	if _, err := db.Get([]byte("key2")); err != nil {
+		t.Error("key2 should exist (exclusive end)")
+	}
+
+	// Test 3: Empty range (no keys in range)
+	drMustSet(t, db, []byte("x"), []byte("1"))
+	drMustSet(t, db, []byte("z"), []byte("2"))
+
+	if err := db.DeleteRange([]byte("xa"), []byte("xz")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Get([]byte("x")); err != nil {
+		t.Error("key before range should exist")
+	}
+	if _, err := db.Get([]byte("z")); err != nil {
+		t.Error("key after range should exist")
+	}
+
+	// Test 4: Write after delete
+	drMustSet(t, db, []byte("rewrite"), []byte("old"))
+	drMustDeleteRange(t, db, []byte("rewrite"), []byte("rewritf"))
+
+	if _, err := db.Get([]byte("rewrite")); err != utils.ErrKeyNotFound {
+		t.Error("key should be deleted")
+	}
+
+	drMustSet(t, db, []byte("rewrite"), []byte("new"))
+	if e, err := db.Get([]byte("rewrite")); err != nil || !bytes.Equal(e.Value, []byte("new")) {
+		t.Error("key should have new value after rewrite")
+	}
+}
+
+// TestDeleteRangeValidation tests error handling for invalid inputs.
+func TestDeleteRangeValidation(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	// Inverted range
+	if err := db.DeleteRange([]byte("z"), []byte("a")); err != utils.ErrInvalidRequest {
+		t.Errorf("expected invalid request for inverted range, got %v", err)
+	}
+
+	// Equal keys
+	if err := db.DeleteRange([]byte("a"), []byte("a")); err != utils.ErrInvalidRequest {
+		t.Errorf("expected invalid request for equal keys, got %v", err)
+	}
+
+	// Empty key
+	if err := db.DeleteRange([]byte(""), []byte("a")); err != utils.ErrEmptyKey {
+		t.Errorf("expected empty key error, got %v", err)
+	}
+}
+
+// TestDeleteRangeIsolation tests that default-CF DeleteRange does not affect other CFs.
+func TestDeleteRangeIsolation(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	defaultEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key1"), db.nextNonTxnVersion(), []byte("val1"), 0, 0)
+	lockEntry := kv.NewInternalEntry(kv.CFLock, []byte("key1"), db.nextNonTxnVersion(), []byte("lock1"), 0, 0)
+	defer defaultEntry.DecrRef()
+	defer lockEntry.DecrRef()
+	if err := db.ApplyInternalEntries([]*kv.Entry{defaultEntry, lockEntry}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.DeleteRange([]byte("key1"), []byte("key2")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.GetInternalEntry(kv.CFDefault, []byte("key1"), nonTxnMaxVersion); err != utils.ErrKeyNotFound {
+		t.Error("default CF key should be deleted")
+	}
+	entry, err := db.GetInternalEntry(kv.CFLock, []byte("key1"), nonTxnMaxVersion)
+	if err != nil {
+		t.Error("lock CF key should still exist")
+	} else {
+		entry.DecrRef()
+	}
+}
+
+// TestDeleteRangeComplex tests overlapping ranges and interaction with point deletes.
+func TestDeleteRangeComplex(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	// Test 1: Overlapping ranges
+	drMustSet(t, db, []byte("a"), []byte("1"))
+	drMustSet(t, db, []byte("b"), []byte("2"))
+	drMustSet(t, db, []byte("c"), []byte("3"))
+	drMustSet(t, db, []byte("d"), []byte("4"))
+
+	drMustDeleteRange(t, db, []byte("a"), []byte("c"))
+	drMustDeleteRange(t, db, []byte("b"), []byte("d"))
+
+	if _, err := db.Get([]byte("a")); err != utils.ErrKeyNotFound {
+		t.Error("a should be deleted")
+	}
+	if _, err := db.Get([]byte("b")); err != utils.ErrKeyNotFound {
+		t.Error("b should be deleted")
+	}
+	if _, err := db.Get([]byte("c")); err != utils.ErrKeyNotFound {
+		t.Error("c should be deleted")
+	}
+	if _, err := db.Get([]byte("d")); err != nil {
+		t.Error("d should exist")
+	}
+
+	// Test 2: Range delete over already deleted keys
+	drMustSet(t, db, []byte("x"), []byte("1"))
+	drMustSet(t, db, []byte("y"), []byte("2"))
+	drMustSet(t, db, []byte("z"), []byte("3"))
+
+	drMustDel(t, db, []byte("y"))
+
+	if err := db.DeleteRange([]byte("x"), []byte("zz")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Get([]byte("x")); err != utils.ErrKeyNotFound {
+		t.Error("x should be deleted")
+	}
+	if _, err := db.Get([]byte("y")); err != utils.ErrKeyNotFound {
+		t.Error("y should remain deleted")
+	}
+	if _, err := db.Get([]byte("z")); err != utils.ErrKeyNotFound {
+		t.Error("z should be deleted")
+	}
+}
+
+// TestDeleteRangeWithCompaction tests range deletion behavior during compaction.
+func TestDeleteRangeWithCompaction(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	opt.MemTableSize = 1024
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	for i := range 100 {
+		key := []byte{byte('a' + i%26), byte(i)}
+		drMustSet(t, db, key, []byte("value"))
+	}
+
+	drMustDeleteRange(t, db, []byte{byte('a')}, []byte{byte('m')})
+
+	for i := range 100 {
+		key := []byte{byte('a' + i%26), byte(i)}
+		_, err := db.Get(key)
+		if key[0] < 'm' {
+			if err != utils.ErrKeyNotFound {
+				t.Errorf("key %v should be deleted", key)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("key %v should exist", key)
+			}
+		}
+	}
+}
+
+// TestDeleteRangeWALRecovery tests that range tombstones are correctly recovered from WAL.
+func TestDeleteRangeWALRecovery(t *testing.T) {
+	dir := t.TempDir()
+	opt := drTestOptions(dir)
+
+	db := Open(opt)
+	drMustSet(t, db, []byte("key1"), []byte("val1"))
+	drMustSet(t, db, []byte("key2"), []byte("val2"))
+	drMustSet(t, db, []byte("key3"), []byte("val3"))
+	drMustDeleteRange(t, db, []byte("key1"), []byte("key3"))
+	drMustClose(t, db)
+
+	db = Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	if _, err := db.Get([]byte("key1")); err != utils.ErrKeyNotFound {
+		t.Error("key1 should be deleted after recovery")
+	}
+	if _, err := db.Get([]byte("key2")); err != utils.ErrKeyNotFound {
+		t.Error("key2 should be deleted after recovery")
+	}
+	if _, err := db.Get([]byte("key3")); err != nil {
+		t.Error("key3 should exist after recovery")
+	}
+}
+
+// TestDeleteRangeVisibilityBug ensures a newer point write remains visible after
+// an earlier range tombstone.
+func TestDeleteRangeVisibilityBug(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	drMustSet(t, db, []byte("a1"), []byte("old"))
+	drMustDeleteRange(t, db, []byte("a0"), []byte("a9"))
+	drMustSet(t, db, []byte("a1"), []byte("new"))
+
+	e, err := db.Get([]byte("a1"))
+	if err != nil {
+		t.Fatalf("expected key a1 to exist with value 'new', got error: %v", err)
+	}
+	if !bytes.Equal(e.Value, []byte("new")) {
+		t.Errorf("expected value 'new', got '%s'", e.Value)
+	}
+}
+
+func TestDeleteRangePersistsAfterFlushAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	opt := drTestOptions(dir)
+	opt.MemTableSize = 512
+	opt.NumLevelZeroTables = 1000
+
+	db := Open(opt)
+	drMustSet(t, db, []byte("b"), []byte("old"))
+	drMustDeleteRange(t, db, []byte("a"), []byte("z"))
+	drMustSet(t, db, []byte("y"), []byte("new"))
+
+	padding := bytes.Repeat([]byte("x"), 192)
+	for i := range 64 {
+		key := fmt.Appendf(nil, "pad-%03d", i)
+		drMustSet(t, db, key, padding)
+	}
+	drWaitForFlushedSST(t, db)
+	drMustClose(t, db)
+
+	db = Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	_, err := db.Get([]byte("b"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	entry, err := db.Get([]byte("y"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), entry.Value)
+}
+
+func TestDeleteRangeBatchOrdering(t *testing.T) {
+	opt := drTestOptions(t.TempDir())
+	db := Open(opt)
+	defer func() { drMustClose(t, db) }()
+
+	// point then range tombstone in one batch: point should be hidden.
+	setV := db.nextNonTxnVersion()
+	rtV := db.nextNonTxnVersion()
+	setEntry := kv.NewInternalEntry(kv.CFDefault, []byte("b"), setV, []byte("old"), 0, 0)
+	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("a"), rtV, []byte("z"), kv.BitRangeDelete, 0)
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{setEntry, rtEntry}))
+	setEntry.DecrRef()
+	rtEntry.DecrRef()
+	_, err := db.Get([]byte("b"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	// range tombstone then point in one batch: point should remain visible.
+	rtV2 := db.nextNonTxnVersion()
+	setV2 := db.nextNonTxnVersion()
+	rtEntry2 := kv.NewInternalEntry(kv.CFDefault, []byte("a"), rtV2, []byte("z"), kv.BitRangeDelete, 0)
+	setEntry2 := kv.NewInternalEntry(kv.CFDefault, []byte("c"), setV2, []byte("new"), 0, 0)
+	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{rtEntry2, setEntry2}))
+	rtEntry2.DecrRef()
+	setEntry2.DecrRef()
+	entry, err := db.Get([]byte("c"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), entry.Value)
+}

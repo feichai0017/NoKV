@@ -38,6 +38,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if err := lm.build(); err != nil {
 		panic(err)
 	}
+	lm.rtCollector = NewRangeTombstoneCollector()
 	lm.compaction = compact.NewManager(lm, lm.opt.NumCompactors)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
@@ -54,6 +55,7 @@ type levelManager struct {
 	lsm              *LSM
 	compactState     *compact.State
 	compaction       *compact.Manager
+	rtCollector      *RangeTombstoneCollector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
@@ -207,10 +209,23 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		return nil
 	}
 
-	// build a builder
+	// build a builder and collect range tombstones
 	builder := newTableBuiler(lm.opt)
+	var newTombstones []RangeTombstone
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
+		if entry != nil && entry.IsRangeDelete() && lm.rtCollector != nil {
+			cf, start, version, ok := kv.SplitInternalKey(entry.Key)
+			if !ok {
+				continue
+			}
+			newTombstones = append(newTombstones, RangeTombstone{
+				CF:      cf,
+				Start:   kv.SafeCopy(nil, start),
+				End:     kv.SafeCopy(nil, entry.RangeEnd()),
+				Version: version,
+			})
+		}
 		builder.AddKey(entry)
 	}
 	table, err := openTable(lm, sstName, builder)
@@ -250,6 +265,12 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	lm.setLogPointer(immutable.segmentID, uint64(immutable.walSize.Load()))
 	lm.levels[0].add(table)
+	// Register any range tombstones discovered during this flush.
+	if lm.rtCollector != nil {
+		for _, rt := range newTombstones {
+			lm.rtCollector.Add(rt)
+		}
+	}
 	if lm.canRemoveWalSegment(uint32(fid)) {
 		if err := lm.lsm.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
