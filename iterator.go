@@ -26,6 +26,15 @@ type DBIterator struct {
 	// stale cursor position and resurrect validity.
 	seekOutOfRange bool
 
+	lastUserKey []byte
+	pendingKey  []byte
+	pendingVal  []byte
+	pending     kv.Entry
+	hasPending  bool
+	latestKey   []byte
+	latestVal   []byte
+	latest      kv.Entry
+
 	entry    kv.Entry
 	item     Item
 	valueBuf []byte
@@ -120,7 +129,9 @@ func (iter *DBIterator) Next() {
 		iter.valid = false
 		return
 	}
-	iter.iitr.Next()
+	if !iter.hasPending {
+		iter.iitr.Next()
+	}
 	iter.populate()
 }
 
@@ -138,6 +149,7 @@ func (iter *DBIterator) Rewind() {
 		return
 	}
 	iter.seekOutOfRange = false
+	iter.resetIterationState()
 	iter.iitr.Rewind()
 	iter.populate()
 }
@@ -148,12 +160,14 @@ func (iter *DBIterator) Seek(key []byte) {
 		return
 	}
 	iter.seekOutOfRange = false
+	iter.resetIterationState()
 
 	// Clamping
 	if iter.isAsc {
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
+			iter.resetIterationState()
 			return
 		}
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
@@ -163,6 +177,7 @@ func (iter *DBIterator) Seek(key []byte) {
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
+			iter.resetIterationState()
 			return
 		}
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
@@ -199,6 +214,7 @@ func (iter *DBIterator) Close() error {
 	iter.valid = false
 	iter.seekOutOfRange = false
 	iter.valueBuf = iter.valueBuf[:0]
+	iter.resetIterationState()
 	if iter.pool != nil && iter.ctx != nil {
 		iter.pool.put(iter.ctx)
 	}
@@ -212,47 +228,203 @@ func (iter *DBIterator) populate() {
 	}
 	iter.valid = false
 	iter.item.valueBuf = iter.item.valueBuf[:0]
-	for iter.iitr.Valid() {
-		item := iter.iitr.Item()
-		if item == nil {
+	if iter.isAsc {
+		iter.populateForward()
+		return
+	}
+	iter.populateReverse()
+}
+
+func (iter *DBIterator) populateForward() {
+	for {
+		entry, fromPending := iter.takeEntry()
+		if entry == nil {
+			if fromPending {
+				continue
+			}
+			if iter.iitr == nil || !iter.iitr.Valid() {
+				return
+			}
 			iter.iitr.Next()
 			continue
 		}
-		entry := item.Entry()
-		if len(iter.lowerBound) > 0 || len(iter.upperBound) > 0 {
-			_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
-			if !ok {
-				// User-facing iterator remains fail-open: skip malformed internal
-				// keys instead of aborting scans.
-				iter.iitr.Next()
-				continue
-			}
-			// Skip entries below lower bound in forward mode, or invalidate in reverse.
-			if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
-				if !iter.isAsc {
-					iter.valid = false
-					return
-				}
-				iter.iitr.Next()
-				continue
-			}
-			// Skip entries above upper bound in reverse mode, or invalidate in forward.
-			if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
-				if iter.isAsc {
-					iter.valid = false
-					return
-				}
-				iter.iitr.Next()
-				continue
-			}
+		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			// User-facing iterator remains fail-open: skip malformed internal keys.
+			iter.advance(fromPending)
+			continue
+		}
+		if cf != kv.CFDefault {
+			iter.advance(fromPending)
+			continue
+		}
+		if len(iter.lastUserKey) > 0 && bytes.Equal(userKey, iter.lastUserKey) {
+			iter.advance(fromPending)
+			continue
+		}
+		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+			iter.setLastUserKey(userKey)
+			iter.advance(fromPending)
+			continue
+		}
+		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+			iter.valid = false
+			return
 		}
 
 		if iter.materialize(entry) {
 			iter.valid = true
+			iter.setLastUserKey(userKey)
 			return
 		}
+		iter.setLastUserKey(userKey)
+		iter.advance(fromPending)
+	}
+}
+
+func (iter *DBIterator) populateReverse() {
+	for {
+		entry, fromPending := iter.takeEntry()
+		if entry == nil {
+			if fromPending {
+				continue
+			}
+			if iter.iitr == nil || !iter.iitr.Valid() {
+				return
+			}
+			iter.iitr.Next()
+			continue
+		}
+		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		if !ok {
+			iter.advance(fromPending)
+			continue
+		}
+		if cf != kv.CFDefault {
+			iter.advance(fromPending)
+			continue
+		}
+		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+			iter.valid = false
+			return
+		}
+		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+			iter.advance(fromPending)
+			continue
+		}
+
+		iter.setLastUserKey(userKey)
+		latest := iter.snapshotEntry(entry)
+
+		iter.advance(fromPending)
+		for iter.iitr.Valid() {
+			item := iter.iitr.Item()
+			if item == nil {
+				iter.iitr.Next()
+				continue
+			}
+			nextEntry := item.Entry()
+			if nextEntry == nil {
+				iter.iitr.Next()
+				continue
+			}
+			nextCF, nextUserKey, _, ok := kv.SplitInternalKey(nextEntry.Key)
+			if !ok {
+				iter.iitr.Next()
+				continue
+			}
+			if nextCF != kv.CFDefault {
+				iter.iitr.Next()
+				continue
+			}
+			if !bytes.Equal(nextUserKey, iter.lastUserKey) {
+				iter.stashPending(nextEntry)
+				break
+			}
+			latest = iter.snapshotEntry(nextEntry)
+			iter.iitr.Next()
+		}
+
+		if iter.materialize(latest) {
+			iter.valid = true
+			return
+		}
+		if !iter.iitr.Valid() && !iter.hasPending {
+			return
+		}
+	}
+}
+
+func (iter *DBIterator) resetIterationState() {
+	iter.lastUserKey = iter.lastUserKey[:0]
+	iter.pendingKey = iter.pendingKey[:0]
+	iter.pendingVal = iter.pendingVal[:0]
+	iter.latestKey = iter.latestKey[:0]
+	iter.latestVal = iter.latestVal[:0]
+	iter.hasPending = false
+}
+
+func (iter *DBIterator) setLastUserKey(key []byte) {
+	iter.lastUserKey = append(iter.lastUserKey[:0], key...)
+}
+
+func (iter *DBIterator) takeEntry() (*kv.Entry, bool) {
+	if iter.hasPending {
+		iter.hasPending = false
+		return &iter.pending, true
+	}
+	if iter.iitr == nil || !iter.iitr.Valid() {
+		return nil, false
+	}
+	item := iter.iitr.Item()
+	if item == nil {
+		return nil, false
+	}
+	return item.Entry(), false
+}
+
+func (iter *DBIterator) advance(fromPending bool) {
+	if fromPending {
+		return
+	}
+	if iter.iitr != nil {
 		iter.iitr.Next()
 	}
+}
+
+func (iter *DBIterator) stashPending(entry *kv.Entry) {
+	if iter == nil || entry == nil || iter.iitr == nil {
+		return
+	}
+	iter.pendingKey = append(iter.pendingKey[:0], entry.Key...)
+	iter.pendingVal = append(iter.pendingVal[:0], entry.Value...)
+	iter.pending = kv.Entry{
+		Key:       iter.pendingKey,
+		Value:     iter.pendingVal,
+		ExpiresAt: entry.ExpiresAt,
+		Meta:      entry.Meta,
+		CF:        entry.CF,
+		Version:   entry.Version,
+	}
+	iter.hasPending = true
+	iter.iitr.Next()
+}
+
+func (iter *DBIterator) snapshotEntry(entry *kv.Entry) *kv.Entry {
+	if iter == nil || entry == nil {
+		return nil
+	}
+	iter.latestKey = append(iter.latestKey[:0], entry.Key...)
+	iter.latestVal = append(iter.latestVal[:0], entry.Value...)
+	iter.latest = kv.Entry{
+		Key:       iter.latestKey,
+		Value:     iter.latestVal,
+		ExpiresAt: entry.ExpiresAt,
+		Meta:      entry.Meta,
+		CF:        entry.CF,
+		Version:   entry.Version,
+	}
+	return &iter.latest
 }
 
 func (iter *DBIterator) materialize(src *kv.Entry) bool {
