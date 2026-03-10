@@ -86,25 +86,13 @@ type Options struct {
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
 // memtables. This avoids a redundant GetMemTables call when the caller
 // already holds a reference (e.g. inside lsm.Get).
-func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVersion uint64, internalKey []byte, tables []*memTable) bool {
-	// Find the entry's write sequence from the side map.
-	entrySeq, seqFound := walSeqKey{}, false
+func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVersion uint64, tables []*memTable) bool {
+	// Check memtable tombstones (O(M), M = in-memory range tombstones).
 	for _, mt := range tables {
 		if mt == nil {
 			continue
 		}
-		if seq, ok := mt.walSeqForKey(internalKey); ok {
-			entrySeq = seq
-			seqFound = true
-			break
-		}
-	}
-	// Check memtable tombstones (O(M) where M = number of range tombstones).
-	for _, mt := range tables {
-		if mt == nil {
-			continue
-		}
-		if mt.isKeyCoveredByRangeTombstone(cf, userKey, entryVersion, entrySeq, seqFound) {
+		if mt.isKeyCoveredByRangeTombstone(cf, userKey, entryVersion) {
 			return true
 		}
 	}
@@ -118,7 +106,7 @@ func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVer
 // IsKeyCoveredByRangeTombstone checks if a key is covered by any active
 // range tombstone. Pins memtables internally; callers that already hold
 // pinned tables should use checkRangeTombstone directly.
-func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, internalKey []byte) bool {
+func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
 	if lsm == nil {
 		return false
 	}
@@ -126,11 +114,7 @@ func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte,
 	if release != nil {
 		defer release()
 	}
-	_, _, version, ok := kv.SplitInternalKey(internalKey)
-	if !ok {
-		return false
-	}
-	return lsm.checkRangeTombstone(cf, userKey, version, internalKey, tables)
+	return lsm.checkRangeTombstone(cf, userKey, version, tables)
 }
 
 // RangeTombstoneCount returns the number of tracked range tombstones.
@@ -563,10 +547,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		if !ok {
 			return false
 		}
-		// Reconstruct the actual internal key using the entry's real version
-		// (not the search version) for accurate WAL sequence lookup.
-		actualKey := kv.InternalKey(cf, userKey, entry.Version)
-		return lsm.checkRangeTombstone(cf, userKey, entry.Version, actualKey, tables)
+		return lsm.checkRangeTombstone(cf, userKey, entry.Version, tables)
 	}
 
 	for _, mt := range tables {
