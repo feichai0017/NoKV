@@ -358,6 +358,75 @@ func (h *rangeMaxVersionHeap) Pop() any {
 	return value
 }
 
+// RangeTombstoneView captures a stable read-view for range tombstone checks.
+//
+// The view pins the current memtable set once, then reuses it for repeated
+// coverage probes. This avoids per-key GetMemTables pin/unpin overhead on scan
+// paths (for example, DB iterators / YCSB-E).
+//
+// Call Close when finished.
+type RangeTombstoneView struct {
+	lsm     *LSM
+	tables  []*memTable
+	release func()
+}
+
+// HasAnyRangeTombstone reports whether the current LSM state has any in-memory
+// or flushed range tombstones.
+func (lsm *LSM) HasAnyRangeTombstone() bool {
+	if lsm == nil {
+		return false
+	}
+	lsm.lock.RLock()
+	mem := lsm.memTable
+	immutables := lsm.immutables
+	lsm.lock.RUnlock()
+	if mem != nil && mem.hasRangeTombstones() {
+		return true
+	}
+	for _, mt := range immutables {
+		if mt != nil && mt.hasRangeTombstones() {
+			return true
+		}
+	}
+	return lsm.RangeTombstoneCount() > 0
+}
+
+// PinRangeTombstoneView captures and pins the current memtable set for repeated
+// range tombstone checks.
+func (lsm *LSM) PinRangeTombstoneView() *RangeTombstoneView {
+	if lsm == nil {
+		return nil
+	}
+	tables, release := lsm.GetMemTables()
+	return &RangeTombstoneView{
+		lsm:     lsm,
+		tables:  tables,
+		release: release,
+	}
+}
+
+// IsKeyCovered checks whether userKey@version is covered in this pinned view.
+func (v *RangeTombstoneView) IsKeyCovered(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
+	if v == nil || v.lsm == nil {
+		return false
+	}
+	return v.lsm.checkRangeTombstone(cf, userKey, version, v.tables)
+}
+
+// Close releases pinned memtables held by this view.
+func (v *RangeTombstoneView) Close() {
+	if v == nil {
+		return
+	}
+	if v.release != nil {
+		v.release()
+	}
+	v.tables = nil
+	v.release = nil
+	v.lsm = nil
+}
+
 // rebuildRangeTombstones scans SST levels to repopulate the range tombstone
 // collector. Memtable tombstones are tracked separately in memTable.rangeTombstones
 // and must not be included here to avoid duplication when those memtables flush.

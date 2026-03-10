@@ -383,6 +383,16 @@ func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []by
 	return isKeyCoveredBySpans(spans, userKey, entryVersion)
 }
 
+func (m *memTable) hasRangeTombstones() bool {
+	if m == nil {
+		return false
+	}
+	m.rtMu.RLock()
+	n := len(m.rangeTombstones)
+	m.rtMu.RUnlock()
+	return n > 0
+}
+
 // trackRangeTombstone caches range tombstones in memtable-local memory so read
 // path coverage checks avoid allocating iterators.
 func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
