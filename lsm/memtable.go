@@ -50,9 +50,12 @@ type memTable struct {
 
 	// rtMu protects rangeTombstones. Written by setBatch (which may run
 	// under lsm.lock read-lock or write-lock), read concurrently by
-	// isKeyCoveredByRangeTombstone. rtMu is the sole guard for this slice.
+	// isKeyCoveredByRangeTombstone. The cached per-CF span index is rebuilt
+	// lazily on demand when rtIndexDirty is set.
 	rtMu            sync.RWMutex
 	rangeTombstones []memRangeTombstone
+	rtIndex         map[kv.ColumnFamily][]rangeTombstoneSpan
+	rtIndexDirty    bool
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -87,6 +90,8 @@ func (m *memTable) close() error {
 	// Range tombstones have already been transferred to rtCollector by the flush path.
 	m.rtMu.Lock()
 	m.rangeTombstones = nil
+	m.rtIndex = nil
+	m.rtIndexDirty = false
 	m.rtMu.Unlock()
 	return nil
 }
@@ -359,18 +364,23 @@ func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []by
 		return false
 	}
 	m.rtMu.RLock()
-	rts := m.rangeTombstones
-	m.rtMu.RUnlock()
-	for i := range rts {
-		rt := &rts[i]
-		if rt.cf != cf {
-			continue
-		}
-		if rt.version > entryVersion && kv.KeyInRange(userKey, rt.start, rt.end) {
-			return true
-		}
+	dirty := m.rtIndexDirty
+	var spans []rangeTombstoneSpan
+	if !dirty {
+		spans = m.rtIndex[cf]
 	}
-	return false
+	m.rtMu.RUnlock()
+	if !dirty {
+		return isKeyCoveredBySpans(spans, userKey, entryVersion)
+	}
+	m.rtMu.Lock()
+	if m.rtIndexDirty {
+		m.rtIndex = buildMemRangeIndex(m.rangeTombstones)
+		m.rtIndexDirty = false
+	}
+	spans = m.rtIndex[cf]
+	m.rtMu.Unlock()
+	return isKeyCoveredBySpans(spans, userKey, entryVersion)
 }
 
 // trackRangeTombstone caches range tombstones in memtable-local memory so read
@@ -390,6 +400,7 @@ func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
 		end:     kv.SafeCopy(nil, entry.RangeEnd()),
 		version: version,
 	})
+	m.rtIndexDirty = true
 	m.rtMu.Unlock()
 }
 
