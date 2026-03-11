@@ -110,8 +110,16 @@ Minimal shape:
     "work_dir": "./artifacts/cluster/pd",
     "docker_work_dir": "/var/lib/nokv-pd"
   },
+  "store_work_dir_template": "./artifacts/cluster/store-{id}",
+  "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
   "stores": [
-    { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
+    {
+      "store_id": 1,
+      "listen_addr": "127.0.0.1:20170",
+      "addr": "127.0.0.1:20170",
+      "work_dir": "./artifacts/cluster/store-1",
+      "docker_work_dir": "/var/lib/nokv/store-1"
+    }
   ],
   "regions": [
     {
@@ -130,11 +138,18 @@ Notes:
 - `start_key` / `end_key` accept plain strings, `hex:<bytes>`, or base64. Use
   `"-"` or empty for unbounded ranges.
 - `stores` define both host and docker addresses for local runs vs containers.
+- Store workdir can be configured per store (`stores[i].work_dir` / `docker_work_dir`)
+  or via global templates (`store_work_dir_template` /
+  `store_docker_work_dir_template`, both must include `{id}`).
 - `pd.addr` is the default PD endpoint for host scope; `pd.docker_addr` is used
   when tools run in docker scope.
 - `pd.work_dir` / `pd.docker_work_dir` are optional PD persistence directories
   used by bootstrap tooling and `nokv pd --config ...` when `--workdir` is not
   set explicitly.
+- Store workdir resolution order (`ResolveStoreWorkDir`):
+  1. store-scoped override
+  2. global template
+  3. empty (caller falls back to its own default)
 - `leader_store_id` is optional bootstrap metadata. Runtime routing in cluster
   mode is resolved through PD (`GetRegionByKey`), not static leader hints.
 

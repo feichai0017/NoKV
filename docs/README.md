@@ -83,36 +83,18 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
 <br>
 
-## 📊 Performance Benchmark
-
-Latest full baseline (generated on 2026-03-11 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=1000, workloads A-F, engines NoKV/Badger/Pebble):
-
-| Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
-| :--- | ---: | ---: | ---: |
-| YCSB-A | 481,609 | 253,610 | 199,619 |
-| YCSB-B | 1,162,246 | 445,283 | 322,322 |
-| YCSB-C | 914,103 | 527,690 | 178,969 |
-| YCSB-D | 1,210,300 | 459,614 | 577,120 |
-| YCSB-E | 271,677 | 40,402 | 99,485 |
-| YCSB-F | 364,485 | 177,261 | 206,718 |
-
-<details>
-<summary><em>Click to view full benchmark summary</em></summary>
-
-```text
-NoKV    YCSB-A 481609   YCSB-B 1162246  YCSB-C 914103   YCSB-D 1210300  YCSB-E 271677  YCSB-F 364485
-Badger  YCSB-A 253610   YCSB-B 445283   YCSB-C 527690   YCSB-D 459614   YCSB-E 40402   YCSB-F 177261
-Pebble  YCSB-A 199619   YCSB-B 322322   YCSB-C 178969   YCSB-D 577120   YCSB-E 99485   YCSB-F 206718
-```
-</details>
-
-Raw reports are generated locally under `benchmark/benchmark_results/` (gitignored).
+Benchmark methodology and result snapshots are maintained only in:
+[`../benchmark/README.md`](../benchmark/README.md)
 
 <br>
 
 ## 🏗️ Architecture
 
 ```mermaid
+%%{init: {
+  "themeVariables": { "fontSize": "20px" },
+  "flowchart": { "nodeSpacing": 55, "rankSpacing": 75, "curve": "basis" }
+}}%%
 graph TD
     Client["Client / Redis"] -->|RESP Protocol| Gateway["Redis Gateway"]
     Gateway -->|RaftCmd| RaftStore
