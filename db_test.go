@@ -137,6 +137,39 @@ func TestColumnFamilies(t *testing.T) {
 	e.DecrRef()
 }
 
+func TestSetBatch(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	require.NoError(t, db.SetBatch([]BatchSetItem{
+		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k2"), Value: []byte("v2")},
+	}))
+
+	e, err := db.Get([]byte("k1"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v1"), e.Value)
+
+	e, err = db.Get([]byte("k2"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v2"), e.Value)
+}
+
+func TestSetBatchValidation(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	require.NoError(t, db.SetBatch(nil))
+	require.Equal(t, utils.ErrEmptyKey, db.SetBatch([]BatchSetItem{
+		{Key: nil, Value: []byte("v")},
+	}))
+	require.Equal(t, utils.ErrNilValue, db.SetBatch([]BatchSetItem{
+		{Key: []byte("k"), Value: nil},
+	}))
+}
+
 func newTestOptions(t *testing.T) *Options {
 	t.Helper()
 	opt := NewDefaultOptions()

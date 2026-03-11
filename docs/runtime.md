@@ -11,7 +11,7 @@ It intentionally describes only what is running today.
 
 | Mode | Read APIs | Write APIs | Txn APIs |
 | --- | --- | --- | --- |
-| Embedded (`NoKV.DB`) | `Get`, `NewIterator`, `NewInternalIterator` | `Set`, `SetWithTTL`, `Del`, `ApplyInternalEntries` | N/A (no standalone local txn API) |
+| Embedded (`NoKV.DB`) | `Get`, `NewIterator`, `NewInternalIterator` | `Set`, `SetBatch`, `SetWithTTL`, `Del`, `DeleteRange`, `ApplyInternalEntries` | N/A (no standalone local txn API) |
 | Distributed (`raftstore/kv`) | `KvGet`, `KvBatchGet`, `KvScan` | N/A direct write | `KvPrewrite`, `KvCommit`, `KvBatchRollback`, `KvResolveLock`, `KvCheckTxnStatus` |
 
 Core entry points:
@@ -23,11 +23,11 @@ Core entry points:
 
 ---
 
-## 2. Embedded Write Path (`Set` / `SetWithTTL` / `Del`)
+## 2. Embedded Write Path (`Set` / `SetBatch` / `SetWithTTL` / `Del` / `DeleteRange`)
 
 ### 2.1 Function-Level Chain
 
-1. `DB.Set` / `DB.SetWithTTL` / `DB.Del` creates internal-key entry via `kv.NewInternalEntry`.
+1. `DB.Set` / `DB.SetBatch` / `DB.SetWithTTL` / `DB.Del` / `DB.DeleteRange` allocates monotonic non-transactional versions and creates internal-key entries via `kv.NewInternalEntry`.
 2. `DB.ApplyInternalEntries` validates each internal key via `kv.SplitInternalKey`, then calls `batchSet`.
 3. `batchSet` enqueues request (`sendToWriteCh` -> commit queue).
 4. `commitWorker` drains a batch:
@@ -43,14 +43,14 @@ Core entry points:
 ```mermaid
 sequenceDiagram
     participant U as User API
-    participant DB as DB.Set/SetWithTTL/Del
+    participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
     participant Q as commitQueue
     participant W as commitWorker
     participant V as vlog.write
     participant L as lsm.SetBatch
     participant M as memTable.setBatch
     participant WAL as wal.AppendEntryBatch
-    U->>DB: Set/SetWithTTL/Del
+    U->>DB: Set/SetBatch/SetWithTTL/Del/DeleteRange
     DB->>DB: NewInternalEntry + ApplyInternalEntries
     DB->>Q: sendToWriteCh / enqueueCommitRequest
     Q->>W: nextCommitBatch

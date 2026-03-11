@@ -42,17 +42,8 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 
 ---
 
-## ✨ Feature Highlights
-
-- 🚀 **Dual runtime modes** – call `NoKV.Open` inside your process or launch `nokv serve` for a distributed deployment, no code changes required.
-- 🔁 **Hybrid LSM + ValueLog** – WAL → MemTable → SST pipeline for latency, with a ValueLog to keep large payloads off the hot path.
-- 🌲 **ART-backed default memtable index** – the mutable memtable uses an internal-key-specialized ART by default, trading higher memindex memory for faster insert/get/seek than the skiplist baseline.
-- ⚡ **MVCC + Percolator transaction path** – distributed 2PC flows use MVCC versioned keys with snapshot-style reads and lock-based commits.
-- 🧠 **Multi-Raft regions** – `raftstore` manages per-region raft groups, WAL/manifest pointers, and tick-driven leader elections.
-- 🛰️ **Redis gateway** – `cmd/nokv-redis` exposes RESP commands (SET with NX/XX + EX/PX/EXAT/PXAT, GET/MGET, INCR/DECR...) on top of raft-backed storage.
-- 🧪 **Pebble-inspired VFS** – a unified `vfs` layer with deterministic fault injection (`FaultFS`) for sync/close/truncate rollback testing.
-- 🔍 **Observability first** – `nokv stats`, expvar endpoints, hot key tracking, RECOVERY/TRANSPORT metrics, and ready-to-use recovery scripts.
-- 🧰 **Single-source config** – `raft_config.json` feeds local scripts, Docker Compose, Redis gateway, and CI so there’s zero drift.
+Benchmark details and latest result snapshots are maintained in:
+[`benchmark/README.md`](./benchmark/README.md)
 
 ---
 
@@ -116,7 +107,7 @@ func main() {
 > Note:
 > - `DB.Get` returns detached entries (do not call `DecrRef`).
 > - `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
-> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` for deletes.
+> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
 > - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
 > ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds manifests via `nokv-config manifest`, starts PD-lite (`nokv pd`), and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.

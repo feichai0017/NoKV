@@ -1,6 +1,6 @@
 # WAL Subsystem
 
-NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via `lsm.Set`), while values that are routed to the value log are written *before* the WAL so that replay always sees durable value pointers.
+NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact Go module similar to Badger's journal. WAL appends happen alongside memtable writes (via `lsm.SetBatch` in the DB write pipeline), while values that are routed to the value log are written *before* the WAL so that replay always sees durable value pointers.
 
 ---
 
@@ -64,9 +64,9 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 
 | Call Site | Purpose |
 | --- | --- |
-| `lsm.memTable.set` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the active memtable index (`ART` by default, `skiplist` when explicitly selected). |
+| `lsm.memTable.setBatch` | Encodes each entry (`kv.EncodeEntry`) and appends to WAL before inserting into the active memtable index (`ART` by default, `skiplist` when explicitly selected). |
 | `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which calls `lsm.SetBatch` and appends one WAL entry-batch record per request batch. |
-| `DB.Set` / `DB.SetWithTTL` / `DB.Del` / `DB.ApplyInternalEntries` | User/internal writes all flow through the same commit queue and eventually reach `lsm.SetBatch` + WAL append. |
+| `DB.Set` / `DB.SetBatch` / `DB.SetWithTTL` / `DB.Del` / `DB.DeleteRange` / `DB.ApplyInternalEntries` | User/internal writes all flow through the same commit queue and eventually reach `lsm.SetBatch` + WAL append. |
 | `lsm/levels.go::flush` | Persists WAL checkpoint via `manifest.LogEdits(EditAddFile, EditLogPointer)` during flush install. |
 | `lsm/levels.go::flush` + `lsm/levelManager.canRemoveWalSegment` | Removes obsolete WAL segments after checkpoint/raft constraints are satisfied. |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |

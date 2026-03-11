@@ -29,12 +29,23 @@ import (
 const nonTxnMaxVersion = kv.MaxVersion
 
 type (
+	// BatchSetItem represents one non-transactional write in the default CF.
+	//
+	// Ownership note: key is copied into the internal-key encoding; value is
+	// referenced directly until the write path finishes.
+	BatchSetItem struct {
+		Key   []byte
+		Value []byte
+	}
+
 	// UserKV defines user-facing single-node key-value operations.
 	UserKV interface {
 		Set(key, value []byte) error
+		SetBatch(items []BatchSetItem) error
 		SetWithTTL(key, value []byte, ttl time.Duration) error
 		Get(key []byte) (*kv.Entry, error)
 		Del(key []byte) error
+		DeleteRange(start, end []byte) error
 		NewIterator(opt *utils.Options) utils.Iterator
 	}
 
@@ -450,6 +461,48 @@ func (db *DB) Set(key, value []byte) error {
 	entry := kv.NewInternalEntry(kv.CFDefault, key, db.nextNonTxnVersion(), value, 0, 0)
 	defer entry.DecrRef()
 	return db.ApplyInternalEntries([]*kv.Entry{entry})
+}
+
+// SetBatch writes multiple key/value pairs into the default column family.
+//
+// Semantics:
+//   - Non-transactional API: each entry receives a monotonically increasing
+//     internal version.
+//   - The batch is submitted through the regular write pipeline and commit queue.
+//
+// Validation:
+//   - Empty batch is a no-op.
+//   - Every item must have a non-empty key and non-nil value.
+//
+// Ownership:
+//   - key bytes are encoded into internal keys.
+//   - value slices are referenced directly until this call returns; callers must
+//     keep them immutable for the duration of this call.
+func (db *DB) SetBatch(items []BatchSetItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	entries := make([]*kv.Entry, 0, len(items))
+	release := func() {
+		for _, entry := range entries {
+			if entry != nil {
+				entry.DecrRef()
+			}
+		}
+	}
+	for _, item := range items {
+		if len(item.Key) == 0 {
+			release()
+			return utils.ErrEmptyKey
+		}
+		if item.Value == nil {
+			release()
+			return utils.ErrNilValue
+		}
+		entries = append(entries, kv.NewInternalEntry(kv.CFDefault, item.Key, db.nextNonTxnVersion(), item.Value, 0, 0))
+	}
+	defer release()
+	return db.ApplyInternalEntries(entries)
 }
 
 // SetWithTTL writes a key/value pair into the default column family with TTL.
