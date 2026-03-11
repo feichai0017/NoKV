@@ -43,7 +43,7 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 type artNode struct {
 	valueOffset   atomic.Uint32
 	payloadOffset atomic.Uint32
-	self        uint32
+	self          uint32
 
 	kind                 uint8
 	prefixLen            uint16
