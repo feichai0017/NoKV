@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -253,10 +253,10 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 records get consistent <code>CF/Version</code> immediately.</p>
 <hr>
 <h2 id="3-stage-by-stage-meaning-of-key-and-value"><a class="header" href="#3-stage-by-stage-meaning-of-key-and-value">3. Stage-by-Stage Meaning of <code>Key</code> and <code>Value</code></a></h2>
-<h3 id="31-user-write-dbset-dbsetwithttl-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetwithttl-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetWithTTL</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
+<h3 id="31-user-write-dbset-dbsetbatch-dbsetwithttl-dbdel-dbdeleterange-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetbatch-dbsetwithttl-dbdel-dbdeleterange-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetBatch</code>, <code>DB.SetWithTTL</code>, <code>DB.Del</code>, <code>DB.DeleteRange</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
 <p>Source: <a href="../db.go"><code>db.go</code></a></p>
 <ul>
-<li><code>Set</code>/<code>SetWithTTL</code> use <code>NewInternalEntry(...)</code>:
+<li><code>Set</code>/<code>SetBatch</code>/<code>SetWithTTL</code>/<code>Del</code>/<code>DeleteRange</code> use <code>NewInternalEntry(...)</code>:
 <ul>
 <li><code>Key</code>: encoded internal key.</li>
 <li><code>Value</code>: user value bytes.</li>

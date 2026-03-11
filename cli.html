@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -237,7 +237,8 @@
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
-<li><code>--peer storeID=address</code> (repeatable)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
+<li><code>--peer peerID=address</code> (repeatable, uses raft peer IDs from region metadata)</li>
 <li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
 <li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
 <li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
@@ -250,8 +251,29 @@
   --store-id 1 \
   --addr 127.0.0.1:20170 \
   --pd-addr 127.0.0.1:2379 \
-  --peer 2=127.0.0.1:20171 \
-  --peer 3=127.0.0.1:20172
+  --peer 201=127.0.0.1:20171 \
+  --peer 301=127.0.0.1:20172
+</code></pre>
+<p>When a store hosts multiple regions, include mappings for every remote peer ID
+reachable from those regions (using <code>scripts/serve_from_config.sh</code> avoids manual drift).</p>
+<h3 id="nokv-pd"><a class="header" href="#nokv-pd"><code>nokv pd</code></a></h3>
+<ul>
+<li>Starts the PD-lite gRPC service used by distributed mode.</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
+<li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
+<li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
+<li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv pd \
+  --config ./raft_config.example.json \
+  --scope host \
+  --metrics-addr 127.0.0.1:23790
 </code></pre>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>

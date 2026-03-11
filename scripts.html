@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -190,7 +190,7 @@
 </code></pre>
 </li>
 </ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. By default, store processes resolve PD from config; <code>--pd-listen</code> override is only forwarded when explicitly set. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. Relative <code>pd.work_dir</code> is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as <code>--pd-addr</code> (explicit <code>--pd-listen</code> overrides config/default resolution). The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
 When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
 <blockquote>
 <p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>

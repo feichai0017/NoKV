@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -283,34 +283,15 @@
 </div>
 
 <br>
-<h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>Latest full baseline (generated on 2026-03-11 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=1000, workloads A-F, engines NoKV/Badger/Pebble):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
-</tbody>
-</table>
-</div>
-<details>
-<summary><em>Click to view full benchmark summary</em></summary>
-<pre><code class="language-text">NoKV    YCSB-A 481609   YCSB-B 1162246  YCSB-C 914103   YCSB-D 1210300  YCSB-E 271677  YCSB-F 364485
-Badger  YCSB-A 253610   YCSB-B 445283   YCSB-C 527690   YCSB-D 459614   YCSB-E 40402   YCSB-F 177261
-Pebble  YCSB-A 199619   YCSB-B 322322   YCSB-C 178969   YCSB-D 577120   YCSB-E 99485   YCSB-F 206718
-</code></pre>
-</details>
-<p>Raw reports are generated locally under <code>benchmark/benchmark_results/</code> (gitignored).</p>
+<p>Benchmark methodology and result snapshots are maintained only in:
+<a href="../benchmark/README.html"><code>../benchmark/README.md</code></a></p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
-<pre class="mermaid">graph TD
+<pre class="mermaid">%%{init: {
+  "themeVariables": { "fontSize": "20px" },
+  "flowchart": { "nodeSpacing": 55, "rankSpacing": 75, "curve": "basis" }
+}}%%
+graph TD
     Client["Client / Redis"] --&gt;|RESP Protocol| Gateway["Redis Gateway"]
     Gateway --&gt;|RaftCmd| RaftStore
     

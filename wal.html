@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="wal-subsystem"><a class="header" href="#wal-subsystem">WAL Subsystem</a></h1>
-<p>NoKV’s write-ahead log mirrors RocksDB’s durability model and is implemented as a compact Go module similar to Badger’s journal. WAL appends happen alongside memtable writes (via <code>lsm.Set</code>), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
+<p>NoKV’s write-ahead log mirrors RocksDB’s durability model and is implemented as a compact Go module similar to Badger’s journal. WAL appends happen alongside memtable writes (via <code>lsm.SetBatch</code> in the DB write pipeline), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
 <hr>
 <h2 id="1-file-layout--naming"><a class="header" href="#1-file-layout--naming">1. File Layout &amp; Naming</a></h2>
 <ul>
@@ -235,9 +235,9 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><th>Call Site</th><th>Purpose</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
+<tr><td><code>lsm.memTable.setBatch</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
-<tr><td><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
+<tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>

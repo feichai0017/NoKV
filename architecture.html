@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -213,7 +213,7 @@
 └─────────────────────────┘
 </code></pre>
 <ul>
-<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
+<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.</li>
 <li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve NoKV RPCs.</li>
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
@@ -316,7 +316,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
 </ul>
 </li>
-<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>. In cluster mode, runtime routing/control-plane decisions come from PD.</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(peerID, addr)</code> (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.</li>
 </ol>
 <h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
 <ul>

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -284,34 +284,15 @@
 </div>
 
 <br>
-<h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>Latest full baseline (generated on 2026-03-11 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=1000, workloads A-F, engines NoKV/Badger/Pebble):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
-</tbody>
-</table>
-</div>
-<details>
-<summary><em>Click to view full benchmark summary</em></summary>
-<pre><code class="language-text">NoKV    YCSB-A 481609   YCSB-B 1162246  YCSB-C 914103   YCSB-D 1210300  YCSB-E 271677  YCSB-F 364485
-Badger  YCSB-A 253610   YCSB-B 445283   YCSB-C 527690   YCSB-D 459614   YCSB-E 40402   YCSB-F 177261
-Pebble  YCSB-A 199619   YCSB-B 322322   YCSB-C 178969   YCSB-D 577120   YCSB-E 99485   YCSB-F 206718
-</code></pre>
-</details>
-<p>Raw reports are generated locally under <code>benchmark/benchmark_results/</code> (gitignored).</p>
+<p>Benchmark methodology and result snapshots are maintained only in:
+<a href="../benchmark/README.html"><code>../benchmark/README.md</code></a></p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
-<pre class="mermaid">graph TD
+<pre class="mermaid">%%{init: {
+  "themeVariables": { "fontSize": "20px" },
+  "flowchart": { "nodeSpacing": 55, "rankSpacing": 75, "curve": "basis" }
+}}%%
+graph TD
     Client["Client / Redis"] --&gt;|RESP Protocol| Gateway["Redis Gateway"]
     Gateway --&gt;|RaftCmd| RaftStore
     
@@ -402,7 +383,7 @@ func main() {
 <ul>
 <li><code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>).</li>
 <li><code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</li>
-<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> for deletes.</li>
+<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetBatch</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> or <code>DB.DeleteRange(start,end)</code> for deletes.</li>
 <li><code>DB.NewIterator</code> exposes user-facing entries, while <code>DB.NewInternalIterator</code> scans raw internal keys (<code>cf+user_key+ts</code>).</li>
 </ul>
 </blockquote>
@@ -416,22 +397,8 @@ func main() {
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
-<p>Latest full baseline (2026-03-11):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
-</tbody>
-</table>
-</div>
+<p>Detailed benchmark methodology and latest result snapshots are maintained in:
+<a href="../benchmark/README.html"><code>benchmark/README.md</code></a>.</p>
 <h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
 <p>If a local run crashes or you want a clean slate:</p>
 <pre><code class="language-bash">make clean
@@ -478,7 +445,7 @@ func main() {
 └─────────────────────────┘
 </code></pre>
 <ul>
-<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, MVCC semantics, rich stats.</li>
+<li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.</li>
 <li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve NoKV RPCs.</li>
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
@@ -581,7 +548,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
 </ul>
 </li>
-<li>Peers from other stores can be configured through <code>transport.SetPeer(storeID, addr)</code>. In cluster mode, runtime routing/control-plane decisions come from PD.</li>
+<li>Peers from other stores can be configured through <code>transport.SetPeer(peerID, addr)</code> (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.</li>
 </ol>
 <h3 id="32-command-paths"><a class="header" href="#32-command-paths">3.2 Command Paths</a></h3>
 <ul>
@@ -673,7 +640,7 @@ to concrete functions in the codebase.</p>
 <tr><th>Mode</th><th>Read APIs</th><th>Write APIs</th><th>Txn APIs</th></tr>
 </thead>
 <tbody>
-<tr><td>Embedded (<code>NoKV.DB</code>)</td><td><code>Get</code>, <code>NewIterator</code>, <code>NewInternalIterator</code></td><td><code>Set</code>, <code>SetWithTTL</code>, <code>Del</code>, <code>ApplyInternalEntries</code></td><td>N/A (no standalone local txn API)</td></tr>
+<tr><td>Embedded (<code>NoKV.DB</code>)</td><td><code>Get</code>, <code>NewIterator</code>, <code>NewInternalIterator</code></td><td><code>Set</code>, <code>SetBatch</code>, <code>SetWithTTL</code>, <code>Del</code>, <code>DeleteRange</code>, <code>ApplyInternalEntries</code></td><td>N/A (no standalone local txn API)</td></tr>
 <tr><td>Distributed (<code>raftstore/kv</code>)</td><td><code>KvGet</code>, <code>KvBatchGet</code>, <code>KvScan</code></td><td>N/A direct write</td><td><code>KvPrewrite</code>, <code>KvCommit</code>, <code>KvBatchRollback</code>, <code>KvResolveLock</code>, <code>KvCheckTxnStatus</code></td></tr>
 </tbody>
 </table>
@@ -686,10 +653,10 @@ to concrete functions in the codebase.</p>
 <li>MVCC logic: <a href="../percolator/txn.go"><code>percolator/txn.go</code></a>, <a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
 </ul>
 <hr>
-<h2 id="2-embedded-write-path-set--setwithttl--del"><a class="header" href="#2-embedded-write-path-set--setwithttl--del">2. Embedded Write Path (<code>Set</code> / <code>SetWithTTL</code> / <code>Del</code>)</a></h2>
+<h2 id="2-embedded-write-path-set--setbatch--setwithttl--del--deleterange"><a class="header" href="#2-embedded-write-path-set--setbatch--setwithttl--del--deleterange">2. Embedded Write Path (<code>Set</code> / <code>SetBatch</code> / <code>SetWithTTL</code> / <code>Del</code> / <code>DeleteRange</code>)</a></h2>
 <h3 id="21-function-level-chain"><a class="header" href="#21-function-level-chain">2.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> creates internal-key entry via <code>kv.NewInternalEntry</code>.</li>
+<li><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> allocates monotonic non-transactional versions and creates internal-key entries via <code>kv.NewInternalEntry</code>.</li>
 <li><code>DB.ApplyInternalEntries</code> validates each internal key via <code>kv.SplitInternalKey</code>, then calls <code>batchSet</code>.</li>
 <li><code>batchSet</code> enqueues request (<code>sendToWriteCh</code> -&gt; commit queue).</li>
 <li><code>commitWorker</code> drains a batch:
@@ -709,14 +676,14 @@ to concrete functions in the codebase.</p>
 <h3 id="22-sequence-diagram"><a class="header" href="#22-sequence-diagram">2.2 Sequence Diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
     participant U as User API
-    participant DB as DB.Set/SetWithTTL/Del
+    participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
     participant Q as commitQueue
     participant W as commitWorker
     participant V as vlog.write
     participant L as lsm.SetBatch
     participant M as memTable.setBatch
     participant WAL as wal.AppendEntryBatch
-    U-&gt;&gt;DB: Set/SetWithTTL/Del
+    U-&gt;&gt;DB: Set/SetBatch/SetWithTTL/Del/DeleteRange
     DB-&gt;&gt;DB: NewInternalEntry + ApplyInternalEntries
     DB-&gt;&gt;Q: sendToWriteCh / enqueueCommitRequest
     Q-&gt;&gt;W: nextCommitBatch
@@ -1050,10 +1017,10 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 records get consistent <code>CF/Version</code> immediately.</p>
 <hr>
 <h2 id="3-stage-by-stage-meaning-of-key-and-value"><a class="header" href="#3-stage-by-stage-meaning-of-key-and-value">3. Stage-by-Stage Meaning of <code>Key</code> and <code>Value</code></a></h2>
-<h3 id="31-user-write-dbset-dbsetwithttl-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetwithttl-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetWithTTL</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
+<h3 id="31-user-write-dbset-dbsetbatch-dbsetwithttl-dbdel-dbdeleterange-dbapplyinternalentries"><a class="header" href="#31-user-write-dbset-dbsetbatch-dbsetwithttl-dbdel-dbdeleterange-dbapplyinternalentries">3.1 User write (<code>DB.Set</code>, <code>DB.SetBatch</code>, <code>DB.SetWithTTL</code>, <code>DB.Del</code>, <code>DB.DeleteRange</code>, <code>DB.ApplyInternalEntries</code>)</a></h3>
 <p>Source: <a href="../db.go"><code>db.go</code></a></p>
 <ul>
-<li><code>Set</code>/<code>SetWithTTL</code> use <code>NewInternalEntry(...)</code>:
+<li><code>Set</code>/<code>SetBatch</code>/<code>SetWithTTL</code>/<code>Del</code>/<code>DeleteRange</code> use <code>NewInternalEntry(...)</code>:
 <ul>
 <li><code>Key</code>: encoded internal key.</li>
 <li><code>Value</code>: user value bytes.</li>
@@ -1333,8 +1300,16 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
     "work_dir": "./artifacts/cluster/pd",
     "docker_work_dir": "/var/lib/nokv-pd"
   },
+  "store_work_dir_template": "./artifacts/cluster/store-{id}",
+  "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
   "stores": [
-    { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
+    {
+      "store_id": 1,
+      "listen_addr": "127.0.0.1:20170",
+      "addr": "127.0.0.1:20170",
+      "work_dir": "./artifacts/cluster/store-1",
+      "docker_work_dir": "/var/lib/nokv/store-1"
+    }
   ],
   "regions": [
     {
@@ -1353,11 +1328,21 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
 <li><code>start_key</code> / <code>end_key</code> accept plain strings, <code>hex:&lt;bytes&gt;</code>, or base64. Use
 <code>"-"</code> or empty for unbounded ranges.</li>
 <li><code>stores</code> define both host and docker addresses for local runs vs containers.</li>
+<li>Store workdir can be configured per store (<code>stores[i].work_dir</code> / <code>docker_work_dir</code>)
+or via global templates (<code>store_work_dir_template</code> /
+<code>store_docker_work_dir_template</code>, both must include <code>{id}</code>).</li>
 <li><code>pd.addr</code> is the default PD endpoint for host scope; <code>pd.docker_addr</code> is used
 when tools run in docker scope.</li>
 <li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
 used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
 set explicitly.</li>
+<li>Store workdir resolution order (<code>ResolveStoreWorkDir</code>):
+<ol>
+<li>store-scoped override</li>
+<li>global template</li>
+<li>empty (caller falls back to its own default)</li>
+</ol>
+</li>
 <li><code>leader_store_id</code> is optional bootstrap metadata. Runtime routing in cluster
 mode is resolved through PD (<code>GetRegionByKey</code>), not static leader hints.</li>
 </ul>
@@ -1430,7 +1415,8 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <li>Common flags:
 <ul>
 <li><code>--addr</code> (default <code>127.0.0.1:20160</code>)</li>
-<li><code>--peer storeID=address</code> (repeatable)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
+<li><code>--peer peerID=address</code> (repeatable, uses raft peer IDs from region metadata)</li>
 <li><code>--election-tick</code>, <code>--heartbeat-tick</code></li>
 <li><code>--raft-max-msg-bytes</code>, <code>--raft-max-inflight</code></li>
 <li><code>--raft-tick-interval</code>, <code>--raft-debug-log</code></li>
@@ -1443,8 +1429,29 @@ if err := cfg.Validate(); err != nil { /* handle */ }
   --store-id 1 \
   --addr 127.0.0.1:20170 \
   --pd-addr 127.0.0.1:2379 \
-  --peer 2=127.0.0.1:20171 \
-  --peer 3=127.0.0.1:20172
+  --peer 201=127.0.0.1:20171 \
+  --peer 301=127.0.0.1:20172
+</code></pre>
+<p>When a store hosts multiple regions, include mappings for every remote peer ID
+reachable from those regions (using <code>scripts/serve_from_config.sh</code> avoids manual drift).</p>
+<h3 id="nokv-pd"><a class="header" href="#nokv-pd"><code>nokv pd</code></a></h3>
+<ul>
+<li>Starts the PD-lite gRPC service used by distributed mode.</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> (default <code>127.0.0.1:2379</code>)</li>
+<li><code>--workdir</code> (optional persistence directory for region catalog + allocator state)</li>
+<li><code>--config</code> + <code>--scope host|docker</code> (resolve defaults from <code>raft_config.json</code>)</li>
+<li><code>--id-start</code>, <code>--ts-start</code> (allocator start values)</li>
+<li><code>--metrics-addr</code> (optional expvar endpoint, exposes <code>/debug/vars</code>)</li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">nokv pd \
+  --config ./raft_config.example.json \
+  --scope host \
+  --metrics-addr 127.0.0.1:23790
 </code></pre>
 <hr>
 <h2 id="integration-tips"><a class="header" href="#integration-tips">Integration Tips</a></h2>
@@ -1794,7 +1801,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="wal-subsystem"><a class="header" href="#wal-subsystem">WAL Subsystem</a></h1>
-<p>NoKV’s write-ahead log mirrors RocksDB’s durability model and is implemented as a compact Go module similar to Badger’s journal. WAL appends happen alongside memtable writes (via <code>lsm.Set</code>), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
+<p>NoKV’s write-ahead log mirrors RocksDB’s durability model and is implemented as a compact Go module similar to Badger’s journal. WAL appends happen alongside memtable writes (via <code>lsm.SetBatch</code> in the DB write pipeline), while values that are routed to the value log are written <em>before</em> the WAL so that replay always sees durable value pointers.</p>
 <hr>
 <h2 id="1-file-layout--naming"><a class="header" href="#1-file-layout--naming">1. File Layout &amp; Naming</a></h2>
 <ul>
@@ -1850,9 +1857,9 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><th>Call Site</th><th>Purpose</th></tr>
 </thead>
 <tbody>
-<tr><td><code>lsm.memTable.set</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
+<tr><td><code>lsm.memTable.setBatch</code></td><td>Encodes each entry (<code>kv.EncodeEntry</code>) and appends to WAL before inserting into the active memtable index (<code>ART</code> by default, <code>skiplist</code> when explicitly selected).</td></tr>
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
-<tr><td><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
+<tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
@@ -2551,7 +2558,7 @@ settings. When override is enabled, <strong>zeros disable features</strong> (exc
 which falls back to the ring default).</p>
 <hr>
 <h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
-<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, user writes (<code>DB.Set</code>, <code>DB.SetWithTTL</code>) and internal writes (<code>DB.ApplyInternalEntries</code>) invoke <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
+<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, user writes (<code>DB.Set</code>, <code>DB.SetBatch</code>, <code>DB.SetWithTTL</code>, <code>DB.Del</code>, <code>DB.DeleteRange</code>) and internal writes (<code>DB.ApplyInternalEntries</code>) invoke <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
 <p>Operational hints:</p>
 <ul>
 <li><code>StatsSnapshot.Write.HotKeyLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
@@ -2972,7 +2979,7 @@ is not present.</li>
 <li>
 <p><strong>Peer connectivity</strong></p>
 <ul>
-<li><code>transport.SetPeer(storeID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer storeID=addr</code>.</li>
+<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer peerID=addr</code>.</li>
 <li>Additional services can reuse the same gRPC server through <code>transport.WithServerRegistrar</code>.</li>
 </ul>
 </li>
@@ -3216,6 +3223,8 @@ routing source of truth.</p>
 <p>Related CLI behavior:</p>
 <ul>
 <li>Inspect control-plane state through PD APIs/metrics.</li>
+<li><code>nokv pd --metrics-addr &lt;host:port&gt;</code> exposes native expvar on <code>/debug/vars</code>.</li>
+<li><code>nokv serve --metrics-addr &lt;host:port&gt;</code> exposes store/runtime expvar on <code>/debug/vars</code>.</li>
 </ul>
 <hr>
 <h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
@@ -3580,7 +3589,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </code></pre>
 </li>
 </ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. By default, store processes resolve PD from config; <code>--pd-listen</code> override is only forwarded when explicitly set. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. Relative <code>pd.work_dir</code> is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as <code>--pd-addr</code> (explicit <code>--pd-listen</code> overrides config/default resolution). The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
 When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
 <blockquote>
 <p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>

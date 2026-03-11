@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -241,7 +241,7 @@ func main() {
 <ul>
 <li><code>DB.Get</code> returns detached entries (do not call <code>DecrRef</code>).</li>
 <li><code>DB.GetInternalEntry</code> returns borrowed entries and callers must call <code>DecrRef</code> exactly once.</li>
-<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> for deletes.</li>
+<li><code>DB.SetWithTTL</code> accepts <code>time.Duration</code> (relative TTL). <code>DB.Set</code>/<code>DB.SetBatch</code>/<code>DB.SetWithTTL</code> reject <code>nil</code> values; use <code>DB.Del</code> or <code>DB.DeleteRange(start,end)</code> for deletes.</li>
 <li><code>DB.NewIterator</code> exposes user-facing entries, while <code>DB.NewInternalIterator</code> scans raw internal keys (<code>cf+user_key+ts</code>).</li>
 </ul>
 </blockquote>
@@ -255,22 +255,8 @@ func main() {
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
-<p>Latest full baseline (2026-03-11):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
-</tbody>
-</table>
-</div>
+<p>Detailed benchmark methodology and latest result snapshots are maintained in:
+<a href="../benchmark/README.html"><code>benchmark/README.md</code></a>.</p>
 <h2 id="cleanup"><a class="header" href="#cleanup">Cleanup</a></h2>
 <p>If a local run crashes or you want a clean slate:</p>
 <pre><code class="language-bash">make clean

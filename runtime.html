@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -190,7 +190,7 @@ to concrete functions in the codebase.</p>
 <tr><th>Mode</th><th>Read APIs</th><th>Write APIs</th><th>Txn APIs</th></tr>
 </thead>
 <tbody>
-<tr><td>Embedded (<code>NoKV.DB</code>)</td><td><code>Get</code>, <code>NewIterator</code>, <code>NewInternalIterator</code></td><td><code>Set</code>, <code>SetWithTTL</code>, <code>Del</code>, <code>ApplyInternalEntries</code></td><td>N/A (no standalone local txn API)</td></tr>
+<tr><td>Embedded (<code>NoKV.DB</code>)</td><td><code>Get</code>, <code>NewIterator</code>, <code>NewInternalIterator</code></td><td><code>Set</code>, <code>SetBatch</code>, <code>SetWithTTL</code>, <code>Del</code>, <code>DeleteRange</code>, <code>ApplyInternalEntries</code></td><td>N/A (no standalone local txn API)</td></tr>
 <tr><td>Distributed (<code>raftstore/kv</code>)</td><td><code>KvGet</code>, <code>KvBatchGet</code>, <code>KvScan</code></td><td>N/A direct write</td><td><code>KvPrewrite</code>, <code>KvCommit</code>, <code>KvBatchRollback</code>, <code>KvResolveLock</code>, <code>KvCheckTxnStatus</code></td></tr>
 </tbody>
 </table>
@@ -203,10 +203,10 @@ to concrete functions in the codebase.</p>
 <li>MVCC logic: <a href="../percolator/txn.go"><code>percolator/txn.go</code></a>, <a href="../percolator/reader.go"><code>percolator/reader.go</code></a></li>
 </ul>
 <hr>
-<h2 id="2-embedded-write-path-set--setwithttl--del"><a class="header" href="#2-embedded-write-path-set--setwithttl--del">2. Embedded Write Path (<code>Set</code> / <code>SetWithTTL</code> / <code>Del</code>)</a></h2>
+<h2 id="2-embedded-write-path-set--setbatch--setwithttl--del--deleterange"><a class="header" href="#2-embedded-write-path-set--setbatch--setwithttl--del--deleterange">2. Embedded Write Path (<code>Set</code> / <code>SetBatch</code> / <code>SetWithTTL</code> / <code>Del</code> / <code>DeleteRange</code>)</a></h2>
 <h3 id="21-function-level-chain"><a class="header" href="#21-function-level-chain">2.1 Function-Level Chain</a></h3>
 <ol>
-<li><code>DB.Set</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> creates internal-key entry via <code>kv.NewInternalEntry</code>.</li>
+<li><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> allocates monotonic non-transactional versions and creates internal-key entries via <code>kv.NewInternalEntry</code>.</li>
 <li><code>DB.ApplyInternalEntries</code> validates each internal key via <code>kv.SplitInternalKey</code>, then calls <code>batchSet</code>.</li>
 <li><code>batchSet</code> enqueues request (<code>sendToWriteCh</code> -&gt; commit queue).</li>
 <li><code>commitWorker</code> drains a batch:
@@ -226,14 +226,14 @@ to concrete functions in the codebase.</p>
 <h3 id="22-sequence-diagram"><a class="header" href="#22-sequence-diagram">2.2 Sequence Diagram</a></h3>
 <pre class="mermaid">sequenceDiagram
     participant U as User API
-    participant DB as DB.Set/SetWithTTL/Del
+    participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
     participant Q as commitQueue
     participant W as commitWorker
     participant V as vlog.write
     participant L as lsm.SetBatch
     participant M as memTable.setBatch
     participant WAL as wal.AppendEntryBatch
-    U-&gt;&gt;DB: Set/SetWithTTL/Del
+    U-&gt;&gt;DB: Set/SetBatch/SetWithTTL/Del/DeleteRange
     DB-&gt;&gt;DB: NewInternalEntry + ApplyInternalEntries
     DB-&gt;&gt;Q: sendToWriteCh / enqueueCommitRequest
     Q-&gt;&gt;W: nextCommitBatch

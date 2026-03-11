@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -295,8 +295,16 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
     "work_dir": "./artifacts/cluster/pd",
     "docker_work_dir": "/var/lib/nokv-pd"
   },
+  "store_work_dir_template": "./artifacts/cluster/store-{id}",
+  "store_docker_work_dir_template": "/var/lib/nokv/store-{id}",
   "stores": [
-    { "store_id": 1, "listen_addr": "127.0.0.1:20170", "addr": "127.0.0.1:20170" }
+    {
+      "store_id": 1,
+      "listen_addr": "127.0.0.1:20170",
+      "addr": "127.0.0.1:20170",
+      "work_dir": "./artifacts/cluster/store-1",
+      "docker_work_dir": "/var/lib/nokv/store-1"
+    }
   ],
   "regions": [
     {
@@ -315,11 +323,21 @@ file, CLI flags take precedence; config acts as startup defaults.</p>
 <li><code>start_key</code> / <code>end_key</code> accept plain strings, <code>hex:&lt;bytes&gt;</code>, or base64. Use
 <code>"-"</code> or empty for unbounded ranges.</li>
 <li><code>stores</code> define both host and docker addresses for local runs vs containers.</li>
+<li>Store workdir can be configured per store (<code>stores[i].work_dir</code> / <code>docker_work_dir</code>)
+or via global templates (<code>store_work_dir_template</code> /
+<code>store_docker_work_dir_template</code>, both must include <code>{id}</code>).</li>
 <li><code>pd.addr</code> is the default PD endpoint for host scope; <code>pd.docker_addr</code> is used
 when tools run in docker scope.</li>
 <li><code>pd.work_dir</code> / <code>pd.docker_work_dir</code> are optional PD persistence directories
 used by bootstrap tooling and <code>nokv pd --config ...</code> when <code>--workdir</code> is not
 set explicitly.</li>
+<li>Store workdir resolution order (<code>ResolveStoreWorkDir</code>):
+<ol>
+<li>store-scoped override</li>
+<li>global template</li>
+<li>empty (caller falls back to its own default)</li>
+</ol>
+</li>
 <li><code>leader_store_id</code> is optional bootstrap metadata. Runtime routing in cluster
 mode is resolved through PD (<code>GetRegionByKey</code>), not static leader hints.</li>
 </ul>

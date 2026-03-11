@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -225,7 +225,7 @@
 <li>
 <p><strong>Peer connectivity</strong></p>
 <ul>
-<li><code>transport.SetPeer(storeID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer storeID=addr</code>.</li>
+<li><code>transport.SetPeer(peerID, addr)</code> defines outbound raft connections; the CLI exposes it via <code>--peer peerID=addr</code>.</li>
 <li>Additional services can reuse the same gRPC server through <code>transport.WithServerRegistrar</code>.</li>
 </ul>
 </li>

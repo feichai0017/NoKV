@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-355eb19c.js";
+            window.path_to_searchindex_js = "searchindex-eab541a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -271,6 +271,8 @@ routing source of truth.</p>
 <p>Related CLI behavior:</p>
 <ul>
 <li>Inspect control-plane state through PD APIs/metrics.</li>
+<li><code>nokv pd --metrics-addr &lt;host:port&gt;</code> exposes native expvar on <code>/debug/vars</code>.</li>
+<li><code>nokv serve --metrics-addr &lt;host:port&gt;</code> exposes store/runtime expvar on <code>/debug/vars</code>.</li>
 </ul>
 <hr>
 <h2 id="7-comparison-tinykv--tikv"><a class="header" href="#7-comparison-tinykv--tikv">7. Comparison: TinyKV / TiKV</a></h2>
