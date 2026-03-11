@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bdaabb40.js";
+            window.path_to_searchindex_js = "searchindex-355eb19c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -243,7 +243,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
 <tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, manifest logging CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
-<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-G) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
 </table>
 </div>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bdaabb40.js";
+            window.path_to_searchindex_js = "../searchindex-355eb19c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5ff2b812.js"></script>
@@ -254,10 +254,10 @@ func (a *Arena) AllocAligned(size, align int) uint32 {
 <li><strong>编码公式</strong>：<code>RouteKey = EncodeComparable(UserKey) + BigEndian(Timestamp)</code>。</li>
 <li><strong>设计价值</strong>：这保证了在 ART 树的层级深度遍历结果完全等价于 LSM 的 <code>Key + Version</code> 排序逻辑，从而完美支持 <code>Seek</code> 和范围扫描。</li>
 </ul>
-<h3 id="33-并发模型cow--olc-lite"><a class="header" href="#33-并发模型cow--olc-lite">3.3 并发模型：COW + OLC-lite</a></h3>
+<h3 id="33-并发模型纯-cow--cas-发布"><a class="header" href="#33-并发模型纯-cow--cas-发布">3.3 并发模型：纯 COW + CAS 发布</a></h3>
 <ul>
 <li><strong>完全无锁读 (Lock-free Read)</strong>：通过 COW (Copy-On-Write) 保证读取路径观察到的是一致的、不可变的节点快照。</li>
-<li><strong>OLC-lite 原地更新</strong>：针对单点修改（如更新已存在的 Key 的 Value），ART 保留了一个快速路径，在不复制节点的前提下通过原子指令替换 <code>ValuePtr</code>，极大降低了分配开销。</li>
+<li><strong>写入语义</strong>：写路径始终克隆父节点 payload，在克隆副本上完成修改，再通过 CAS 原子发布新 payload。已发布 payload 不再原地修改，降低并发一致性风险并简化维护。</li>
 </ul>
 <hr>
 <h2 id="4-memtable-原子预留协议-workflow"><a class="header" href="#4-memtable-原子预留协议-workflow">4. MemTable 原子预留协议 (Workflow)</a></h2>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bdaabb40.js";
+            window.path_to_searchindex_js = "searchindex-355eb19c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -249,26 +249,25 @@ func main() {
 <p>Micro benchmarks:</p>
 <pre><code class="language-bash">go test -bench=. -run=^$ ./...
 </code></pre>
-<p>YCSB (default: NoKV + Badger + Pebble, workloads A-G):</p>
+<p>YCSB (default: NoKV + Badger + Pebble, workloads A-F):</p>
 <pre><code class="language-bash">make bench
 </code></pre>
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
-<p>Latest full baseline (2026-02-23):</p>
+<p>Latest full baseline (2026-03-11):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
-<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
 </tbody>
 </table>
 </div>

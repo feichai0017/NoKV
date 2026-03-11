@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bdaabb40.js";
+            window.path_to_searchindex_js = "searchindex-355eb19c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -205,7 +205,7 @@
 <li><strong>Arena sizing</strong> – both <code>utils.NewSkiplist</code> and <code>utils.NewART</code> use <code>arenaSizeFor</code> to derive arena capacity from <code>Options.MemTableSize</code>.</li>
 <li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
 <li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB’s <code>logfile_number</code> field.</li>
-<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The main concurrency model is still copy-on-write payload/node cloning with CAS installs; the only retained writer-side <code>OLC-lite</code> fast path is a narrow in-place <code>replaceChild</code> update. Reads stay lock-free and do not run full version validation.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The concurrency model is pure copy-on-write payload/node cloning with CAS installs: published payloads are immutable, reads stay lock-free, and writers only publish fully-built cloned payloads.</li>
 </ul>
 <hr>
 <h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>

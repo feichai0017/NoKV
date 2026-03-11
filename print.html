@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bdaabb40.js";
+            window.path_to_searchindex_js = "searchindex-355eb19c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -285,31 +285,30 @@
 
 <br>
 <h2 id="-performance-benchmark"><a class="header" href="#-performance-benchmark">📊 Performance Benchmark</a></h2>
-<p>Latest full baseline (generated on 2026-02-23 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):</p>
+<p>Latest full baseline (generated on 2026-03-11 with default <code>make bench</code> profile: records=1M, ops=1M, conc=16, value_size=1000, workloads A-F, engines NoKV/Badger/Pebble):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
-<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
 </tbody>
 </table>
 </div>
 <details>
 <summary><em>Click to view full benchmark summary</em></summary>
-<pre><code class="language-text">NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
-Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
-Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
+<pre><code class="language-text">NoKV    YCSB-A 481609   YCSB-B 1162246  YCSB-C 914103   YCSB-D 1210300  YCSB-E 271677  YCSB-F 364485
+Badger  YCSB-A 253610   YCSB-B 445283   YCSB-C 527690   YCSB-D 459614   YCSB-E 40402   YCSB-F 177261
+Pebble  YCSB-A 199619   YCSB-B 322322   YCSB-C 178969   YCSB-D 577120   YCSB-E 99485   YCSB-F 206718
 </code></pre>
 </details>
-<p>Raw report: <a href="https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt">benchmark_results_20260223_195951.txt</a></p>
+<p>Raw reports are generated locally under <code>benchmark/benchmark_results/</code> (gitignored).</p>
 <br>
 <h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
 <pre class="mermaid">graph TD
@@ -411,26 +410,25 @@ func main() {
 <p>Micro benchmarks:</p>
 <pre><code class="language-bash">go test -bench=. -run=^$ ./...
 </code></pre>
-<p>YCSB (default: NoKV + Badger + Pebble, workloads A-G):</p>
+<p>YCSB (default: NoKV + Badger + Pebble, workloads A-F):</p>
 <pre><code class="language-bash">make bench
 </code></pre>
 <p>Override defaults with env vars:</p>
 <pre><code class="language-bash">YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 </code></pre>
-<p>Latest full baseline (2026-02-23):</p>
+<p>Latest full baseline (2026-03-11):</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th style="text-align: left">Workload</th><th style="text-align: right">NoKV (ops/s)</th><th style="text-align: right">Badger (ops/s)</th><th style="text-align: right">Pebble (ops/s)</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">847,660</td><td style="text-align: right">396,314</td><td style="text-align: right">1,282,218</td></tr>
-<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,742,820</td><td style="text-align: right">716,151</td><td style="text-align: right">1,941,330</td></tr>
-<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">2,070,856</td><td style="text-align: right">826,766</td><td style="text-align: right">847,764</td></tr>
-<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,754,955</td><td style="text-align: right">842,637</td><td style="text-align: right">2,509,809</td></tr>
-<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">205,489</td><td style="text-align: right">41,508</td><td style="text-align: right">554,557</td></tr>
-<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">715,946</td><td style="text-align: right">326,343</td><td style="text-align: right">1,123,473</td></tr>
-<tr><td style="text-align: left">YCSB-G</td><td style="text-align: right">413,521</td><td style="text-align: right">399,405</td><td style="text-align: right">583,584</td></tr>
+<tr><td style="text-align: left">YCSB-A</td><td style="text-align: right">481,609</td><td style="text-align: right">253,610</td><td style="text-align: right">199,619</td></tr>
+<tr><td style="text-align: left">YCSB-B</td><td style="text-align: right">1,162,246</td><td style="text-align: right">445,283</td><td style="text-align: right">322,322</td></tr>
+<tr><td style="text-align: left">YCSB-C</td><td style="text-align: right">914,103</td><td style="text-align: right">527,690</td><td style="text-align: right">178,969</td></tr>
+<tr><td style="text-align: left">YCSB-D</td><td style="text-align: right">1,210,300</td><td style="text-align: right">459,614</td><td style="text-align: right">577,120</td></tr>
+<tr><td style="text-align: left">YCSB-E</td><td style="text-align: right">271,677</td><td style="text-align: right">40,402</td><td style="text-align: right">99,485</td></tr>
+<tr><td style="text-align: left">YCSB-F</td><td style="text-align: right">364,485</td><td style="text-align: right">177,261</td><td style="text-align: right">206,718</td></tr>
 </tbody>
 </table>
 </div>
@@ -1483,7 +1481,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <li><strong>Arena sizing</strong> – both <code>utils.NewSkiplist</code> and <code>utils.NewART</code> use <code>arenaSizeFor</code> to derive arena capacity from <code>Options.MemTableSize</code>.</li>
 <li><strong>WAL coupling</strong> – every <code>Set</code> uses <code>kv.EncodeEntry</code> to materialise the payload to the active WAL segment before inserting into the chosen index. <code>walSize</code> tracks how much of the segment is consumed so flush can release it later.</li>
 <li><strong>Segment ID</strong> – <code>LSM.NewMemtable</code> atomically increments <code>levels.maxFID</code>, switches the WAL to a new segment (<code>wal.Manager.SwitchSegment</code>), and tags the memtable with that FID. This matches RocksDB’s <code>logfile_number</code> field.</li>
-<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The main concurrency model is still copy-on-write payload/node cloning with CAS installs; the only retained writer-side <code>OLC-lite</code> fast path is a narrow in-place <code>replaceChild</code> update. Reads stay lock-free and do not run full version validation.</li>
+<li><strong>ART specifics</strong> – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The concurrency model is pure copy-on-write payload/node cloning with CAS installs: published payloads are immutable, reads stay lock-free, and writers only publish fully-built cloned payloads.</li>
 </ul>
 <hr>
 <h2 id="2-lifecycle"><a class="header" href="#2-lifecycle">2. Lifecycle</a></h2>
@@ -3529,7 +3527,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
 <tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, manifest logging CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
-<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-G) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
+<tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
 </table>
 </div>
@@ -3617,7 +3615,7 @@ The script iterates over every store in the config and writes Region metadata vi
 <tbody>
 <tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
 <tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags).</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-F; optional RocksDB via build tags).</td></tr>
 <tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
 <tr><td><code>scripts/gen.sh</code></td><td>Generates protobuf Go bindings through Buf with pinned remote plugin versions.</td></tr>
 </tbody>
@@ -4560,10 +4558,10 @@ func (a *Arena) AllocAligned(size, align int) uint32 {
 <li><strong>编码公式</strong>：<code>RouteKey = EncodeComparable(UserKey) + BigEndian(Timestamp)</code>。</li>
 <li><strong>设计价值</strong>：这保证了在 ART 树的层级深度遍历结果完全等价于 LSM 的 <code>Key + Version</code> 排序逻辑，从而完美支持 <code>Seek</code> 和范围扫描。</li>
 </ul>
-<h3 id="33-并发模型cow--olc-lite"><a class="header" href="#33-并发模型cow--olc-lite">3.3 并发模型：COW + OLC-lite</a></h3>
+<h3 id="33-并发模型纯-cow--cas-发布"><a class="header" href="#33-并发模型纯-cow--cas-发布">3.3 并发模型：纯 COW + CAS 发布</a></h3>
 <ul>
 <li><strong>完全无锁读 (Lock-free Read)</strong>：通过 COW (Copy-On-Write) 保证读取路径观察到的是一致的、不可变的节点快照。</li>
-<li><strong>OLC-lite 原地更新</strong>：针对单点修改（如更新已存在的 Key 的 Value），ART 保留了一个快速路径，在不复制节点的前提下通过原子指令替换 <code>ValuePtr</code>，极大降低了分配开销。</li>
+<li><strong>写入语义</strong>：写路径始终克隆父节点 payload，在克隆副本上完成修改，再通过 CAS 原子发布新 payload。已发布 payload 不再原地修改，降低并发一致性风险并简化维护。</li>
 </ul>
 <hr>
 <h2 id="4-memtable-原子预留协议-workflow"><a class="header" href="#4-memtable-原子预留协议-workflow">4. MemTable 原子预留协议 (Workflow)</a></h2>
