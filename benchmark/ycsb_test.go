@@ -41,8 +41,6 @@ func TestBenchmarkYCSB(t *testing.T) {
 		StatusEvery: *ycsbStatusInterval,
 		Workloads:   workloads,
 		Engines:     engines,
-		BatchInsert: *ycsbBatchInsert,
-		BatchSize:   *ycsbBatchSize,
 	}
 
 	opts := ycsbEngineOptions{

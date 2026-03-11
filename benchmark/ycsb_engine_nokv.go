@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -124,6 +125,7 @@ func (e *nokvEngine) Update(key, value []byte) error {
 
 func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 	var read int
+	var lastKey []byte
 	it := e.db.NewIterator(&utils.Options{IsAsc: true})
 	defer func() { _ = it.Close() }()
 	it.Seek(startKey)
@@ -132,25 +134,19 @@ func (e *nokvEngine) Scan(startKey []byte, count int) (int, error) {
 		if item == nil || item.Entry() == nil {
 			return 0, fmt.Errorf("nokv: iterator returned nil item during scan")
 		}
+		// YCSB scan counts records (logical keys), not MVCC/internal versions.
+		// Skip duplicate user keys that may appear in iterator streams.
+		key := item.Entry().Key
+		if len(lastKey) > 0 && bytes.Equal(lastKey, key) {
+			continue
+		}
+		lastKey = append(lastKey[:0], key...)
 		// Values are already materialized for non-key-only iterators; touching
 		// the entry avoids an extra per-item copy/allocation in benchmark scans.
 		_ = len(item.Entry().Value)
 		read++
 	}
 	return read, nil
-}
-
-func (e *nokvEngine) BatchInsert(keys, values [][]byte) error {
-	if len(keys) != len(values) {
-		return fmt.Errorf("nokv: in batch insert, keys and values length mismatch")
-	}
-	for i := range keys {
-		// Use the non-transactional API intentionally for pure-insert benchmarks.
-		if err := e.db.Set(keys[i], values[i]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (e *nokvEngine) startStatsTicker() {
