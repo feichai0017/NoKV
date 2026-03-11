@@ -193,12 +193,17 @@ func TestWorkloadParsingAndHelpers(t *testing.T) {
 	require.Equal(t, int64(5), state.totalRecords())
 
 	key := selectExistingKey(fixedGen{v: 99}, state)
-	require.Equal(t, "user000000000004", string(key))
+	require.Contains(t, string(key), "user")
 	state = &ycsbKeyspace{}
 	key = selectExistingKey(fixedGen{v: 0}, state)
-	require.Equal(t, "user000000000000", string(key))
+	require.Contains(t, string(key), "user")
 
-	require.Equal(t, "user000000000123", string(formatYCSBKey(123)))
+	// Official insert order is hashed and deterministic.
+	hashedA := formatYCSBKey(123, 12)
+	hashedB := formatYCSBKey(123, 12)
+	require.Equal(t, string(hashedA), string(hashedB))
+	require.NotEqual(t, "user000000000123", string(hashedA))
+	require.GreaterOrEqual(t, len(hashedA), len("user000000000000"))
 }
 
 func TestValuePoolAndRandomValue(t *testing.T) {
@@ -339,4 +344,18 @@ func TestKeyGenerators(t *testing.T) {
 func TestMinHelper(t *testing.T) {
 	require.Equal(t, 1, min(1, 2))
 	require.Equal(t, 2, min(3, 2))
+}
+
+func TestChooseScanLength(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+
+	require.Equal(t, 1, chooseScanLength(rng, 0))
+	require.Equal(t, 7, chooseScanLength(nil, 7))
+
+	// Uniform should produce values in [1, maxLen].
+	for i := 0; i < 100; i++ {
+		v := chooseScanLength(rng, 100)
+		require.GreaterOrEqual(t, v, 1)
+		require.LessOrEqual(t, v, 100)
+	}
 }
