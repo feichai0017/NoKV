@@ -89,11 +89,11 @@ records get consistent `CF/Version` immediately.
 
 ## 3. Stage-by-Stage Meaning of `Key` and `Value`
 
-### 3.1 User write (`DB.Set`, `DB.SetWithTTL`, `DB.ApplyInternalEntries`)
+### 3.1 User write (`DB.Set`, `DB.SetBatch`, `DB.SetWithTTL`, `DB.Del`, `DB.DeleteRange`, `DB.ApplyInternalEntries`)
 
 Source: [`db.go`](../db.go)
 
-* `Set`/`SetWithTTL` use `NewInternalEntry(...)`:
+* `Set`/`SetBatch`/`SetWithTTL`/`Del`/`DeleteRange` use `NewInternalEntry(...)`:
   * `Key`: encoded internal key.
   * `Value`: user value bytes.
 * `ApplyInternalEntries` validates internal key, then writes back parsed `CF/Version`

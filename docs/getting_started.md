@@ -81,7 +81,7 @@ func main() {
 > Note:
 > - `DB.Get` returns detached entries (do not call `DecrRef`).
 > - `DB.GetInternalEntry` returns borrowed entries and callers must call `DecrRef` exactly once.
-> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` for deletes.
+> - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
 > - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
 ## Benchmarks
@@ -102,18 +102,8 @@ Override defaults with env vars:
 ```bash
 YCSB_RECORDS=1000000 YCSB_OPS=1000000 YCSB_CONC=8 make bench
 ```
-
-Latest full baseline (2026-03-11):
-
-| Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
-| :--- | ---: | ---: | ---: |
-| YCSB-A | 481,609 | 253,610 | 199,619 |
-| YCSB-B | 1,162,246 | 445,283 | 322,322 |
-| YCSB-C | 914,103 | 527,690 | 178,969 |
-| YCSB-D | 1,210,300 | 459,614 | 577,120 |
-| YCSB-E | 271,677 | 40,402 | 99,485 |
-| YCSB-F | 364,485 | 177,261 | 206,718 |
-
+Detailed benchmark methodology and latest result snapshots are maintained in:
+[`benchmark/README.md`](../benchmark/README.md).
 
 ## Cleanup
 If a local run crashes or you want a clean slate:

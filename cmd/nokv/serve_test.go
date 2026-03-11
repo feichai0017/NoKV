@@ -28,6 +28,23 @@ func TestRunServeCmdErrors(t *testing.T) {
 	require.ErrorContains(t, runServeCmd(&buf, []string{"-workdir", t.TempDir(), "-store-id", "1", "-peer", "2=127.0.0.1:20160"}), "--pd-addr is required")
 }
 
+func TestRunServeCmdInvalidMetricsAddr(t *testing.T) {
+	withNotifyContext(t, true, func() {
+		dir := t.TempDir()
+		pdAddr, stopPD := startTestPDServer(t)
+		defer stopPD()
+		var buf bytes.Buffer
+		err := runServeCmd(&buf, []string{
+			"-workdir", dir,
+			"-store-id", "1",
+			"-addr", "127.0.0.1:0",
+			"-pd-addr", pdAddr,
+			"-metrics-addr", "bad",
+		})
+		require.ErrorContains(t, err, "start serve metrics endpoint")
+	})
+}
+
 func TestStartStorePeersNil(t *testing.T) {
 	_, _, err := startStorePeers(nil, nil, 1, 1, 1, 1, 1)
 	require.Error(t, err)
@@ -116,9 +133,11 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 			"-store-id", "1",
 			"-addr", "127.0.0.1:0",
 			"-pd-addr", pdAddr,
+			"-metrics-addr", "127.0.0.1:0",
 		})
 		require.NoError(t, err)
 		require.Contains(t, buf.String(), "Manifest contains no regions")
+		require.Contains(t, buf.String(), "Serve metrics endpoint listening on http://")
 		require.Contains(t, buf.String(), "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
 	})
 }
