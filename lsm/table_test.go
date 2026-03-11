@@ -197,7 +197,7 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 	builder := newTableBuiler(opt)
 	const total = 500
 	for i := range total {
-		userKey := []byte(fmt.Sprintf("k%06d", i))
+		userKey := fmt.Appendf(nil, "k%06d", i)
 		builder.AddKey(kv.NewEntry(
 			kv.InternalKey(kv.CFDefault, userKey, uint64(i+1)),
 			[]byte("value"),
@@ -211,7 +211,7 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 	defer func() { _ = tbl.DecrRef() }()
 
 	for i := range total {
-		userKey := []byte(fmt.Sprintf("k%06d", i))
+		userKey := fmt.Appendf(nil, "k%06d", i)
 		maxVs := uint64(0)
 		entry, err := tbl.Search(kv.InternalKey(kv.CFDefault, userKey, kv.MaxVersion), &maxVs)
 		require.NoError(t, err)
