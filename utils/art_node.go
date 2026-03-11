@@ -43,9 +43,6 @@ func initPayloadForKind(arena *Arena, kind uint8) *nodePayload {
 type artNode struct {
 	valueOffset   atomic.Uint32
 	payloadOffset atomic.Uint32
-	// versionLock only guards the narrow writer-side replaceChild fast path.
-	// The tree still uses COW+CAS as its primary concurrency model.
-	versionLock atomic.Uint64
 	self        uint32
 
 	kind                 uint8
@@ -134,28 +131,6 @@ func (n *artNode) setPayload(arena *Arena, payload *nodePayload) {
 		return
 	}
 	n.payloadOffset.Store(payload.self)
-}
-
-func (n *artNode) tryWriteLock() bool {
-	if n == nil {
-		return false
-	}
-	for {
-		v := n.versionLock.Load()
-		if v&1 != 0 {
-			return false
-		}
-		if n.versionLock.CompareAndSwap(v, v+1) {
-			return true
-		}
-	}
-}
-
-func (n *artNode) unlockWrite() {
-	if n == nil {
-		return
-	}
-	n.versionLock.Add(1)
 }
 
 func (n *artNode) loadValue(arena *Arena) kv.ValueStruct {

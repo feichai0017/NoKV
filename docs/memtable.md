@@ -33,7 +33,7 @@ type memIndex interface {
 * **Arena sizing** – both `utils.NewSkiplist` and `utils.NewART` use `arenaSizeFor` to derive arena capacity from `Options.MemTableSize`.
 * **WAL coupling** – every `Set` uses `kv.EncodeEntry` to materialise the payload to the active WAL segment before inserting into the chosen index. `walSize` tracks how much of the segment is consumed so flush can release it later.
 * **Segment ID** – `LSM.NewMemtable` atomically increments `levels.maxFID`, switches the WAL to a new segment (`wal.Manager.SwitchSegment`), and tags the memtable with that FID. This matches RocksDB's `logfile_number` field.
-* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The main concurrency model is still copy-on-write payload/node cloning with CAS installs; the only retained writer-side `OLC-lite` fast path is a narrow in-place `replaceChild` update. Reads stay lock-free and do not run full version validation.
+* **ART specifics** – ART stores prefix-compressed inner nodes (Node4/16/48/256). Each leaf keeps both the private route key used by the trie and the original canonical internal key returned to callers. The concurrency model is pure copy-on-write payload/node cloning with CAS installs: published payloads are immutable, reads stay lock-free, and writers only publish fully-built cloned payloads.
 
 ---
 

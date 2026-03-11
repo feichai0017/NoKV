@@ -85,29 +85,28 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
 ## 📊 Performance Benchmark
 
-Latest full baseline (generated on 2026-02-23 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=256, workloads A-G, engines NoKV/Badger/Pebble):
+Latest full baseline (generated on 2026-03-11 with default `make bench` profile: records=1M, ops=1M, conc=16, value_size=1000, workloads A-F, engines NoKV/Badger/Pebble):
 
 | Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) |
 | :--- | ---: | ---: | ---: |
-| YCSB-A | 847,660 | 396,314 | 1,282,218 |
-| YCSB-B | 1,742,820 | 716,151 | 1,941,330 |
-| YCSB-C | 2,070,856 | 826,766 | 847,764 |
-| YCSB-D | 1,754,955 | 842,637 | 2,509,809 |
-| YCSB-E | 205,489 | 41,508 | 554,557 |
-| YCSB-F | 715,946 | 326,343 | 1,123,473 |
-| YCSB-G | 413,521 | 399,405 | 583,584 |
+| YCSB-A | 481,609 | 253,610 | 199,619 |
+| YCSB-B | 1,162,246 | 445,283 | 322,322 |
+| YCSB-C | 914,103 | 527,690 | 178,969 |
+| YCSB-D | 1,210,300 | 459,614 | 577,120 |
+| YCSB-E | 271,677 | 40,402 | 99,485 |
+| YCSB-F | 364,485 | 177,261 | 206,718 |
 
 <details>
 <summary><em>Click to view full benchmark summary</em></summary>
 
 ```text
-NoKV    YCSB-A 847660   YCSB-B 1742820  YCSB-C 2070856  YCSB-D 1754955  YCSB-E 205489  YCSB-F 715946  YCSB-G 413521
-Badger  YCSB-A 396314   YCSB-B 716151   YCSB-C 826766   YCSB-D 842637   YCSB-E 41508   YCSB-F 326343  YCSB-G 399405
-Pebble  YCSB-A 1282218  YCSB-B 1941330  YCSB-C 847764   YCSB-D 2509809  YCSB-E 554557  YCSB-F 1123473 YCSB-G 583584
+NoKV    YCSB-A 481609   YCSB-B 1162246  YCSB-C 914103   YCSB-D 1210300  YCSB-E 271677  YCSB-F 364485
+Badger  YCSB-A 253610   YCSB-B 445283   YCSB-C 527690   YCSB-D 459614   YCSB-E 40402   YCSB-F 177261
+Pebble  YCSB-A 199619   YCSB-B 322322   YCSB-C 178969   YCSB-D 577120   YCSB-E 99485   YCSB-F 206718
 ```
 </details>
 
-Raw report: [benchmark_results_20260223_195951.txt](https://github.com/feichai0017/NoKV/blob/main/benchmark/benchmark_results/benchmark_results_20260223_195951.txt)
+Raw reports are generated locally under `benchmark/benchmark_results/` (gitignored).
 
 <br>
 
