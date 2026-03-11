@@ -830,6 +830,12 @@ func (it *tableIterator) Seek(key []byte) {
 			return
 		}
 		it.seekHelper(idx-1, key)
+		// Internal-key ordering is (userKey ASC, ts DESC). For point-lookups we seek
+		// with ts=MaxVersion, which can place idx-1 on a previous block whose largest
+		// key is still < target. When that happens, retry the next block once.
+		if it.err == io.EOF && idx < len(offsets) {
+			it.seekHelper(idx, key)
+		}
 		return
 	}
 	// Reverse mode: if every base key is > target, there is no <= target entry.

@@ -802,46 +802,72 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 }
 
 func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	table := lh.getTableForKey(key)
-	if table == nil {
-		return nil, utils.ErrKeyNotFound
-	}
-	if maxVersion != nil && table.MaxVersionVal() <= *maxVersion {
+	tables := lh.getTablesForKey(key)
+	if len(tables) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
 	if maxVersion == nil {
 		var tmp uint64
 		maxVersion = &tmp
 	}
-	if entry, err := table.Search(key, maxVersion); err == nil {
-		return entry, nil
-	} else if err != utils.ErrKeyNotFound {
-		return nil, err
+	var best *kv.Entry
+	for _, table := range tables {
+		if table == nil {
+			continue
+		}
+		if table.MaxVersionVal() <= *maxVersion {
+			continue
+		}
+		if entry, err := table.Search(key, maxVersion); err == nil {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+			continue
+		} else if err != utils.ErrKeyNotFound {
+			if best != nil {
+				best.DecrRef()
+			}
+			return nil, err
+		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
 }
+
 func (lh *levelHandler) getTableForKey(key []byte) *table {
+	tables := lh.getTablesForKey(key)
+	if len(tables) == 0 {
+		return nil
+	}
+	return tables[0]
+}
+
+// getTablesForKey returns every table in this level whose user-key range covers key.
+// Tables are returned in min-key order.
+func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
-		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0 {
+	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
-
-	// L1+ tables are sorted and non-overlapping by user-key range.
-	// Find the first table whose max key is >= target key.
-	idx := sort.Search(len(lh.tables), func(i int) bool {
-		return utils.CompareUserKeys(lh.tables[i].MaxKey(), key) >= 0
-	})
-	if idx >= len(lh.tables) {
-		return nil
+	out := make([]*table, 0, 1)
+	for _, t := range lh.tables {
+		if t == nil {
+			continue
+		}
+		// Since min keys are sorted ascending, we can stop once min > key.
+		if utils.CompareUserKeys(t.MinKey(), key) > 0 {
+			break
+		}
+		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 {
+			out = append(out, t)
+		}
 	}
-	candidate := lh.tables[idx]
-	if utils.CompareUserKeys(key, candidate.MinKey()) < 0 {
-		return nil
-	}
-	return candidate
+	return out
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1

@@ -672,13 +672,26 @@ func newCreateChange(id uint64, level int) *pb.ManifestChange {
 // compactBuildTables merges SSTables from two levels.
 func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, func() error, error) {
 
-	topTables := cd.top
-	botTables := cd.bot
+	topTables := append([]*table(nil), cd.top...)
+	botTables := append([]*table(nil), cd.bot...)
+	// Ensure concat/merge inputs are in ascending key-range order.
+	// Some planning paths may preserve selection order but not strict key order.
+	if len(topTables) > 1 {
+		sort.Slice(topTables, func(i, j int) bool {
+			return utils.CompareKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
+		})
+	}
+	if len(botTables) > 1 {
+		sort.Slice(botTables, func(i, j int) bool {
+			return utils.CompareKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
+		})
+	}
 	iterOpt := &utils.Options{
 		IsAsc:          true,
 		AccessPattern:  utils.AccessPatternSequential,
 		PrefetchBlocks: 1,
 	}
+	botCanConcat := tablesStrictlyOrdered(botTables)
 	//numTables := int64(len(topTables) + len(botTables))
 	newIterator := func() []utils.Iterator {
 		// Create iterators across all the tables involved first.
@@ -689,7 +702,15 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		case len(topTables) > 0:
 			iters = append(iters, iteratorsReversed(topTables, iterOpt)...)
 		}
-		return append(iters, NewConcatIterator(botTables, iterOpt))
+		if len(botTables) == 0 {
+			return iters
+		}
+		if botCanConcat {
+			return append(iters, NewConcatIterator(botTables, iterOpt))
+		}
+		// Fallback for overlapping/out-of-order next-level windows.
+		// ConcatIterator assumes strict non-overlap; merge keeps global key ordering.
+		return append(iters, iteratorsReversed(botTables, iterOpt)...)
 	}
 
 	// Start parallel compaction tasks.
@@ -988,6 +1009,30 @@ func iteratorsReversed(th []*table, opt *utils.Options) []utils.Iterator {
 		out = append(out, th[i].NewIterator(opt))
 	}
 	return out
+}
+
+// tablesStrictlyOrdered reports whether consecutive tables are in strictly
+// increasing, non-overlapping user-key order.
+func tablesStrictlyOrdered(tables []*table) bool {
+	if len(tables) <= 1 {
+		return true
+	}
+	prev := tables[0]
+	if prev == nil {
+		return false
+	}
+	for i := 1; i < len(tables); i++ {
+		cur := tables[i]
+		if cur == nil {
+			return false
+		}
+		// Non-overlap requires prev.max user key < cur.min user key.
+		if utils.CompareUserKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
+			return false
+		}
+		prev = cur
+	}
+	return true
 }
 func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
 	select {

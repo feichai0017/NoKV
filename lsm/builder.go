@@ -482,8 +482,6 @@ type blockIterator struct {
 	tableID uint64
 	blockID int
 
-	prevOverlap uint16
-
 	entry     kv.Entry
 	valStruct kv.ValueStruct
 	item      Item
@@ -516,7 +514,6 @@ func (itr *blockIterator) setBlock(b *block) {
 	itr.err = nil
 	itr.idx = 0
 	itr.baseKey = itr.baseKey[:0]
-	itr.prevOverlap = 0
 	itr.key = itr.key[:0]
 	itr.val = itr.val[:0]
 	// Drop the index from the block. We don't need it anymore.
@@ -599,14 +596,12 @@ func (itr *blockIterator) setIdx(i int) {
 	entryData := itr.data[startOffset:endOffset]
 	var h header
 	h.decode(entryData)
-	if h.overlap > itr.prevOverlap {
-		itr.key = append(itr.key[:itr.prevOverlap], itr.baseKey[itr.prevOverlap:h.overlap]...)
-	}
-
-	itr.prevOverlap = h.overlap
 	valueOff := headerSize + h.diff
 	diffKey := entryData[headerSize:valueOff]
-	itr.key = append(itr.key[:h.overlap], diffKey...)
+	// Rebuild key from baseKey + diff for every index access.
+	// Binary seek jumps across entries, so incremental overlap state is unsafe.
+	itr.key = append(itr.key[:0], itr.baseKey[:h.overlap]...)
+	itr.key = append(itr.key, diffKey...)
 	itr.entry.Key = itr.key
 	itr.valStruct.DecodeValue(entryData[valueOff:])
 	itr.val = itr.valStruct.Value
@@ -676,7 +671,6 @@ func (itr *blockIterator) reset() {
 	itr.block = nil
 	itr.tableID = 0
 	itr.blockID = 0
-	itr.prevOverlap = 0
 	itr.entry = kv.Entry{}
 	itr.valStruct = kv.ValueStruct{}
 	itr.item = Item{}
