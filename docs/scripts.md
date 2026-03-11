@@ -45,7 +45,7 @@ When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls 
 | --- | --- |
 | `scripts/recovery_scenarios.sh` | Runs crash-recovery scenarios across WAL/manifest/vlog. Set `RECOVERY_TRACE_METRICS=1` to collect metrics under `artifacts/recovery/`. |
 | `scripts/transport_chaos.sh` | Injects disconnects/blocks/delay into the `raftstore` transport to observe behaviour under faulty networks. |
-| `scripts/run_benchmarks.sh` | Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-G; optional RocksDB via build tags). |
+| `scripts/run_benchmarks.sh` | Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-F; optional RocksDB via build tags). |
 | `scripts/debug.sh` | Convenience wrapper around `dlv test` for targeted debugging. |
 | `scripts/gen.sh` | Generates protobuf Go bindings through Buf with pinned remote plugin versions. |
 
