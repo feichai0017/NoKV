@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	stderrors "errors"
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
@@ -942,10 +943,11 @@ func (t *table) IncrRef() {
 	t.ref.Add(1)
 }
 func decrRefs(tables []*table) error {
+	var decrRefsErr error
 	for _, table := range tables {
 		if err := table.DecrRef(); err != nil {
-			return err
+			decrRefsErr = stderrors.Join(decrRefsErr, err)
 		}
 	}
-	return nil
+	return decrRefsErr
 }
