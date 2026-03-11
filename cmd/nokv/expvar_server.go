@@ -29,4 +29,3 @@ func startExpvarServer(addr string) (net.Listener, error) {
 	}()
 	return ln, nil
 }
-
