@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/pkg/errors"
 )
 
 // KeyRange describes a compaction key span.
@@ -165,15 +166,15 @@ func (cs *State) AddRangeWithTables(level int, kr KeyRange, tableIDs []uint64) {
 }
 
 // Delete clears state for a completed compaction.
-func (cs *State) Delete(entry StateEntry) {
+func (cs *State) Delete(entry StateEntry) error {
 	cs.Lock()
 	defer cs.Unlock()
 
 	if entry.ThisLevel < 0 || entry.ThisLevel >= len(cs.levels) {
-		return
+		return nil
 	}
 	if entry.NextLevel < 0 || entry.NextLevel >= len(cs.levels) {
-		return
+		return nil
 	}
 
 	thisLevel := cs.levels[entry.ThisLevel]
@@ -188,10 +189,12 @@ func (cs *State) Delete(entry StateEntry) {
 	if !found {
 		this := entry.ThisRange
 		next := entry.NextRange
-		panic(fmt.Sprintf(
-			"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
-			this, entry.ThisLevel, thisLevel.debug(), next, entry.NextLevel, nextLevel.debug(),
-		))
+		fmt.Printf("Looking for: %s in this level %d.\n", this, entry.ThisLevel)
+		fmt.Printf("This Level:\n%s\n", thisLevel.debug())
+		fmt.Println()
+		fmt.Printf("Looking for: %s in next level %d.\n", next, entry.NextLevel)
+		fmt.Printf("Next Level:\n%s\n", nextLevel.debug())
+		return errors.New("keyRange not found")
 	}
 
 	for _, fid := range entry.TableIDs {
@@ -201,6 +204,7 @@ func (cs *State) Delete(entry StateEntry) {
 		})
 		delete(cs.tables, fid)
 	}
+	return nil
 }
 
 // CompareAndAdd reserves ranges and table IDs if they do not overlap.

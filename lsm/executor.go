@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"sort"
@@ -138,7 +139,9 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 	var cleanup bool
 	defer func() {
 		if cleanup {
-			lm.compactState.Delete(cd.stateEntry())
+			if err := lm.compactState.Delete(cd.stateEntry()); err != nil {
+				log.Printf("[Compactor: %d] WARNING: Failed to cleanup compaction state: %v", id, err)
+			}
 		}
 	}()
 
@@ -173,10 +176,11 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			sub.plan.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
 				lm.getLogger().Error("ingest compaction failed", "worker", id, "err", err, "def", sub)
-				lm.compactState.Delete(sub.stateEntry())
+				if stateDelErr := lm.compactState.Delete(sub.stateEntry()); stateDelErr != nil {
+					return errors.Join(err, stateDelErr)
+				}
 				return err
 			}
-			lm.compactState.Delete(sub.stateEntry())
 			ran = true
 			lm.getLogger().Info("ingest compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
 		}
