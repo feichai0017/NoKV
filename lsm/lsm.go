@@ -30,6 +30,7 @@ type LSM struct {
 
 	runtimeMu      sync.RWMutex
 	discardStatsCh chan map[manifest.ValueLogID]int64
+	walGCPolicy    WALGCPolicy
 
 	throttleFn func(bool)
 	throttled  atomic.Int32
@@ -90,6 +91,10 @@ type Options struct {
 	// ManifestRewriteThreshold triggers a manifest rewrite when the manifest
 	// grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
+
+	// WALGCPolicy controls whether old WAL segments can be deleted.
+	// Nil defaults to AllowAllWALGCPolicy.
+	WALGCPolicy WALGCPolicy
 }
 
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
@@ -189,6 +194,16 @@ func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
 	}
 }
 
+// SetWALGCPolicy updates the WAL segment-GC strategy used by LSM recovery.
+func (lsm *LSM) SetWALGCPolicy(policy WALGCPolicy) {
+	if lsm == nil {
+		return
+	}
+	lsm.runtimeMu.Lock()
+	lsm.walGCPolicy = normalizeWALGCPolicy(policy)
+	lsm.runtimeMu.Unlock()
+}
+
 func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	if lsm == nil {
 		return nil
@@ -197,6 +212,20 @@ func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	ch := lsm.discardStatsCh
 	lsm.runtimeMu.RUnlock()
 	return ch
+}
+
+func (lsm *LSM) getWALGCPolicy() WALGCPolicy {
+	if lsm == nil {
+		return AllowAllWALGCPolicy{}
+	}
+	lsm.runtimeMu.RLock()
+	policy := lsm.walGCPolicy
+	lsm.runtimeMu.RUnlock()
+	return normalizeWALGCPolicy(policy)
+}
+
+func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
+	return lsm.getWALGCPolicy().CanRemoveSegment(id)
 }
 
 func (lsm *LSM) getLogger() *slog.Logger {
@@ -417,6 +446,7 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if frozen.DiscardStatsCh != nil {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
+	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)

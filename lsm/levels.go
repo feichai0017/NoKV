@@ -426,36 +426,10 @@ func (lm *levelManager) maxVersion() uint64 {
 }
 
 func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
-	if lm == nil || lm.manifestMgr == nil {
+	if lm == nil || lm.lsm == nil {
 		return true
 	}
-	ptrs := lm.manifestMgr.RaftPointerSnapshot()
-	for _, ptr := range ptrs {
-		if ptr.SegmentIndex > 0 {
-			if id >= uint32(ptr.SegmentIndex) {
-				return false
-			}
-		}
-		if ptr.Segment == 0 {
-			continue
-		}
-		if id >= ptr.Segment {
-			return false
-		}
-	}
-	if lm.lsm != nil && lm.lsm.wal != nil {
-		metrics := lm.lsm.wal.SegmentRecordMetrics(id)
-		if metrics.RaftRecords() > 0 {
-			lm.getLogger().Warn(
-				"wal segment retains raft records during GC eligibility",
-				"segment", id,
-				"raft_entries", metrics.RaftEntries,
-				"raft_states", metrics.RaftStates,
-				"raft_snapshots", metrics.RaftSnapshots,
-			)
-		}
-	}
-	return true
+	return lm.lsm.canRemoveWalSegment(id)
 }
 
 func (lm *levelManager) prefetch(key []byte) {

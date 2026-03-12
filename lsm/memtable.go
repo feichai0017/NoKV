@@ -195,7 +195,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
-				if !lsm.levels.canRemoveWalSegment(uint32(fid)) {
+				if !lsm.canRemoveWalSegment(uint32(fid)) {
 					cleaned = append(cleaned, fid)
 					continue
 				}
