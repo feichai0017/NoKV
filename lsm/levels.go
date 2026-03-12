@@ -1065,7 +1065,7 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		for _, tbl := range importedTables {
 			if tbl != nil {
 				lm.cache.delIndex(tbl.fid)
-				tbl.closeHandle()
+				_ = tbl.closeHandle()
 			}
 		}
 		for _, fid := range tempFIDs {
