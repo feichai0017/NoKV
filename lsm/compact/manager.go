@@ -1,7 +1,7 @@
 package compact
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"time"
@@ -67,10 +67,11 @@ type Manager struct {
 	policy    Policy
 	triggerCh chan struct{}
 	maxRuns   int
+	logger    *slog.Logger
 }
 
 // NewManager creates a compaction manager for the supplied executor.
-func NewManager(exec Executor, maxRuns int, policy Policy) *Manager {
+func NewManager(exec Executor, maxRuns int, policy Policy, logger *slog.Logger) *Manager {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
@@ -79,11 +80,15 @@ func NewManager(exec Executor, maxRuns int, policy Policy) *Manager {
 	if policy == nil {
 		policy = LeveledPolicy{}
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	cm := &Manager{
 		exec:      exec,
 		policy:    policy,
 		triggerCh: make(chan struct{}, 16),
 		maxRuns:   maxRuns,
+		logger:    logger,
 	}
 	cm.Trigger()
 	return cm
@@ -187,7 +192,7 @@ func (cm *Manager) run(id int, p Priority) bool {
 		return true
 	case ErrFillTables:
 	default:
-		log.Printf("[compactor %d] doCompact error: %v", id, err)
+		cm.logger.Error("doCompact failed", "worker", id, "level", p.Level, "score", p.Score, "adjusted", p.Adjusted, "err", err)
 	}
 	return false
 }

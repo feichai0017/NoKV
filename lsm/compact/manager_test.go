@@ -46,7 +46,7 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 		priorities: []Priority{{Level: 0, Score: 1, Adjusted: 1}},
 		needsSeq:   []bool{true, false},
 	}
-	cm := NewManager(exec, 2, nil)
+	cm := NewManager(exec, 2, nil, nil)
 	ok := cm.RunOnce(0)
 	require.True(t, ok)
 	require.Equal(t, 1, exec.doCalls)
@@ -63,7 +63,7 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 
 func TestManagerStartClose(t *testing.T) {
 	exec := &fakeExecutor{}
-	cm := NewManager(exec, 1, nil)
+	cm := NewManager(exec, 1, nil, nil)
 	closeCh := make(chan struct{})
 	close(closeCh)
 	cm.Start(0, closeCh, nil)
@@ -90,7 +90,7 @@ func TestManagerRunOnceUsesPolicyOrdering(t *testing.T) {
 		},
 	}
 	policy := &reversePolicy{}
-	cm := NewManager(exec, 1, policy)
+	cm := NewManager(exec, 1, policy, nil)
 
 	ok := cm.RunOnce(0)
 	require.True(t, ok)
@@ -119,7 +119,7 @@ func TestManagerRunReportsFeedback(t *testing.T) {
 		priorities: []Priority{{Level: 2, Score: 1.1, Adjusted: 1.1, IngestMode: IngestDrain}},
 	}
 	policy := &observePolicy{}
-	cm := NewManager(exec, 1, policy)
+	cm := NewManager(exec, 1, policy, nil)
 
 	ok := cm.RunOnce(0)
 	require.True(t, ok)
