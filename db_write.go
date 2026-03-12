@@ -2,23 +2,21 @@ package NoKV
 
 import (
 	"errors"
+	"math"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
 
-const (
-	defaultWriteBatchMaxCount = 64
-	defaultWriteBatchMaxSize  = 1 << 20
-)
-
 var (
-	errWriteThrottleEnabled = errors.New("write throttle enabled due to L0 backlog")
-	errWriteThrottleRelease = errors.New("write throttle released")
+	errWriteStopEnabled  = errors.New("write stop enabled due to compaction backlog")
+	errWriteSlowEnabled  = errors.New("write slowdown enabled due to compaction backlog")
+	errWriteThrottleIdle = errors.New("write throttling cleared")
 )
 
 var commitReqPool = sync.Pool{
@@ -117,41 +115,45 @@ func (cq *commitQueue) pop() *commitRequest {
 	}
 }
 
-func (db *DB) initWriteBatchOptions() {
-	if db.opt.WriteBatchMaxCount <= 0 {
-		db.opt.WriteBatchMaxCount = defaultWriteBatchMaxCount
+func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
+	state = normalizeWriteThrottleState(state)
+	stop := int32(0)
+	slow := int32(0)
+	switch state {
+	case lsm.WriteThrottleStop:
+		stop = 1
+	case lsm.WriteThrottleSlowdown:
+		slow = 1
 	}
-	if db.opt.WriteBatchMaxSize <= 0 {
-		db.opt.WriteBatchMaxSize = defaultWriteBatchMaxSize
-	}
-	if db.opt.MaxBatchCount <= 0 {
-		db.opt.MaxBatchCount = int64(db.opt.WriteBatchMaxCount)
-	}
-	if db.opt.MaxBatchSize <= 0 {
-		db.opt.MaxBatchSize = db.opt.WriteBatchMaxSize
-	}
-	if db.opt.WriteBatchWait < 0 {
-		db.opt.WriteBatchWait = 0
-	}
-}
-
-func (db *DB) applyThrottle(enable bool) {
-	var val int32
-	if enable {
-		val = 1
-	}
-	prev := db.blockWrites.Swap(val)
-	if prev == val {
+	prevStop := db.blockWrites.Swap(stop)
+	prevSlow := db.slowWrites.Swap(slow)
+	if prevStop == stop && prevSlow == slow {
 		return
 	}
-	if enable {
-		_ = utils.Err(errWriteThrottleEnabled)
-	} else {
-		_ = utils.Err(errWriteThrottleRelease)
+	switch state {
+	case lsm.WriteThrottleStop:
+		_ = utils.Err(errWriteStopEnabled)
+	case lsm.WriteThrottleSlowdown:
+		_ = utils.Err(errWriteSlowEnabled)
+	default:
+		_ = utils.Err(errWriteThrottleIdle)
 	}
 }
 
 func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request, error) {
+	var size int64
+	count := int64(len(entries))
+	for _, e := range entries {
+		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
+	}
+	if count >= db.opt.MaxBatchCount || size >= db.opt.MaxBatchSize {
+		return nil, utils.ErrTxnTooBig
+	}
+	if db.slowWrites.Load() == 1 {
+		if d := db.currentSlowdownDelay(size); d > 0 {
+			time.Sleep(d)
+		}
+	}
 	for db.blockWrites.Load() == 1 {
 		if !waitOnThrottle {
 			return nil, utils.ErrBlockedWrites
@@ -160,14 +162,6 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 			return nil, utils.ErrBlockedWrites
 		}
 		time.Sleep(200 * time.Microsecond)
-	}
-	var size int64
-	count := int64(len(entries))
-	for _, e := range entries {
-		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
-	}
-	if count >= db.opt.MaxBatchCount || size >= db.opt.MaxBatchSize {
-		return nil, utils.ErrTxnTooBig
 	}
 
 	req := requestPool.Get().(*request)
@@ -196,6 +190,33 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 	}
 
 	return req, nil
+}
+
+func normalizeWriteThrottleState(state lsm.WriteThrottleState) lsm.WriteThrottleState {
+	switch state {
+	case lsm.WriteThrottleNone, lsm.WriteThrottleSlowdown, lsm.WriteThrottleStop:
+		return state
+	default:
+		return lsm.WriteThrottleNone
+	}
+}
+
+func (db *DB) currentSlowdownDelay(batchSize int64) time.Duration {
+	if batchSize <= 0 || db.lsm == nil {
+		return 0
+	}
+	rate := db.lsm.ThrottleRateBytesPerSec()
+	if rate == 0 {
+		return 0
+	}
+	delayNs := (uint64(batchSize) * uint64(time.Second)) / rate
+	if delayNs == 0 {
+		return 0
+	}
+	if delayNs > uint64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(delayNs)
 }
 
 func (db *DB) batchSet(entries []*kv.Entry) error {

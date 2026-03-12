@@ -32,11 +32,29 @@ type LSM struct {
 	discardStatsCh chan map[manifest.ValueLogID]int64
 	walGCPolicy    WALGCPolicy
 
-	throttleFn func(bool)
-	throttled  atomic.Int32
+	throttleFn    func(WriteThrottleState)
+	throttleState atomic.Int32
+	// throttlePressure stores pacing pressure in permille [0,1000].
+	throttlePressure atomic.Uint32
+	// throttleRate stores the current slowdown target in bytes/sec.
+	throttleRate atomic.Uint64
 
 	closed atomic.Bool
 }
+
+// WriteThrottleState models write admission control at the DB layer.
+//
+// Design:
+// - WriteThrottleNone: writes proceed without extra delay.
+// - WriteThrottleSlowdown: writes are accepted but paced.
+// - WriteThrottleStop: writes are blocked until backlog recovers.
+type WriteThrottleState int32
+
+const (
+	WriteThrottleNone WriteThrottleState = iota
+	WriteThrottleSlowdown
+	WriteThrottleStop
+)
 
 // Options _
 type Options struct {
@@ -67,6 +85,30 @@ type Options struct {
 	BaseTableSize       int64
 	NumLevelZeroTables  int
 	MaxLevelNum         int
+	// L0SlowdownWritesTrigger starts write pacing when L0 table count reaches
+	// this threshold. Values <= 0 disable L0-based slowdown.
+	L0SlowdownWritesTrigger int
+	// L0StopWritesTrigger blocks writes when L0 table count reaches this
+	// threshold. Values <= 0 disable L0-based hard stop.
+	L0StopWritesTrigger int
+	// L0ResumeWritesTrigger clears slowdown/stop only when L0 table count drops
+	// to this threshold or lower, providing hysteresis and reducing oscillation.
+	L0ResumeWritesTrigger int
+	// CompactionSlowdownTrigger starts write pacing when max compaction score
+	// reaches this value. Values <= 0 disable score-based slowdown.
+	CompactionSlowdownTrigger float64
+	// CompactionStopTrigger blocks writes when max compaction score reaches this
+	// value. Values <= 0 disable score-based hard stop.
+	CompactionStopTrigger float64
+	// CompactionResumeTrigger clears throttling only when max compaction score
+	// drops to this value or lower, providing hysteresis.
+	CompactionResumeTrigger float64
+	// WriteThrottleMinRate is the target write admission rate in bytes/sec when
+	// slowdown pressure approaches the stop threshold.
+	WriteThrottleMinRate int64
+	// WriteThrottleMaxRate is the target write admission rate in bytes/sec when
+	// slowdown first becomes active.
+	WriteThrottleMaxRate int64
 
 	IngestCompactBatchSize  int
 	IngestBacklogMergeScore float64
@@ -135,7 +177,7 @@ func (lsm *LSM) Close() error {
 	}
 	var closeErr error
 	// wait for all api calls to finish
-	lsm.throttleWrites(false)
+	lsm.throttleWrites(WriteThrottleNone, 0, 0)
 	if lsm.closer != nil {
 		lsm.closer.Close()
 	}
@@ -235,25 +277,70 @@ func (lsm *LSM) getLogger() *slog.Logger {
 	return lsm.logger
 }
 
-// SetThrottleCallback registers a callback used to toggle write throttling at the DB layer.
-func (lsm *LSM) SetThrottleCallback(fn func(bool)) {
+// SetThrottleCallback registers the DB-layer callback for write admission changes.
+func (lsm *LSM) SetThrottleCallback(fn func(WriteThrottleState)) {
 	lsm.throttleFn = fn
 }
 
-func (lsm *LSM) throttleWrites(on bool) {
+// ThrottleState reports the current write admission state.
+func (lsm *LSM) ThrottleState() WriteThrottleState {
+	return normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Load()))
+}
+
+func normalizeWriteThrottleState(state WriteThrottleState) WriteThrottleState {
+	switch state {
+	case WriteThrottleNone, WriteThrottleSlowdown, WriteThrottleStop:
+		return state
+	default:
+		return WriteThrottleNone
+	}
+}
+
+// ThrottlePressurePermille returns current write pacing pressure [0,1000].
+func (lsm *LSM) ThrottlePressurePermille() uint32 {
+	if lsm == nil {
+		return 0
+	}
+	p := lsm.throttlePressure.Load()
+	if p > 1000 {
+		return 1000
+	}
+	return p
+}
+
+// ThrottleRateBytesPerSec returns the current slowdown target in bytes/sec.
+func (lsm *LSM) ThrottleRateBytesPerSec() uint64 {
+	if lsm == nil {
+		return 0
+	}
+	return lsm.throttleRate.Load()
+}
+
+func (lsm *LSM) throttleWrites(state WriteThrottleState, pressure uint32, rate uint64) {
+	state = normalizeWriteThrottleState(state)
+	if pressure > 1000 {
+		pressure = 1000
+	}
+	switch state {
+	case WriteThrottleNone:
+		pressure = 0
+		rate = 0
+	case WriteThrottleStop:
+		pressure = 1000
+		rate = 0
+	default:
+	}
+	lsm.throttlePressure.Store(pressure)
+	lsm.throttleRate.Store(rate)
+	prev := normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Swap(int32(state))))
+	if prev == state {
+		return
+	}
 	fn := lsm.throttleFn
 	if fn == nil {
 		return
 	}
-	if on {
-		if lsm.throttled.CompareAndSwap(0, 1) {
-			fn(true)
-		}
-		return
-	}
-	if lsm.throttled.CompareAndSwap(1, 0) {
-		fn(false)
-	}
+	fn(state)
 }
 
 // FlushPending returns the number of pending flush tasks.
@@ -421,18 +508,9 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if walMgr == nil {
 		return nil, errors.New("lsm: nil wal manager")
 	}
-	frozen := opt.Clone()
+	frozen := opt.normalized()
 	if frozen == nil {
 		return nil, errors.New("lsm: nil cloned options")
-	}
-	if frozen.CompactionValueWeight < 0 {
-		frozen.CompactionValueWeight = 0
-	}
-	if frozen.CompactionValueWeight == 0 {
-		frozen.CompactionValueWeight = 0.35
-	}
-	if frozen.CompactionValueAlertThreshold <= 0 {
-		frozen.CompactionValueAlertThreshold = 0.6
 	}
 	lsm := &LSM{
 		option: frozen,
@@ -477,9 +555,6 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 // StartCompacter _
 func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
-	if n <= 0 {
-		n = 1
-	}
 	lsm.closer.Add(n)
 	for i := 0; i < n; i++ {
 		go lsm.levels.compaction.Start(i, lsm.closer.CloseSignal, lsm.closer.Done)

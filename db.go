@@ -9,7 +9,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,37 +67,37 @@ type (
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
 		sync.RWMutex
-		opt              *Options
-		fs               vfs.FS
-		dirLock          io.Closer
-		lsm              *lsm.LSM
-		wal              *wal.Manager
-		walWatchdog      *wal.Watchdog
-		vlog             *valueLog
-		stats            *Stats
-		nonTxnVersion    atomic.Uint64
-		blockWrites      atomic.Int32
-		vheads           map[uint32]kv.ValuePtr
-		lastLoggedHeads  map[uint32]kv.ValuePtr
-		headLogDelta     uint32
-		isClosed         atomic.Uint32
-		closeOnce        sync.Once
-		closeErr         error
-		hotRead          hotTracker
-		hotWrite         hotTracker
-		writeMetrics     *metrics.WriteMetrics
-		commitQueue      commitQueue
-		commitWG         sync.WaitGroup
-		commitBatchPool  sync.Pool
-		iterPool         *iteratorPool
-		prefetchRing     *utils.Ring[prefetchRequest]
-		prefetchItems    chan struct{}
-		prefetchWG       sync.WaitGroup
-		prefetchState    atomic.Pointer[prefetchState]
-		prefetchWarm     int32
-		prefetchHot      int32
-		prefetchCooldown time.Duration
-		hotWriteLimited  atomic.Uint64
+		opt               *Options
+		fs                vfs.FS
+		dirLock           io.Closer
+		lsm               *lsm.LSM
+		wal               *wal.Manager
+		walWatchdog       *wal.Watchdog
+		vlog              *valueLog
+		stats             *Stats
+		nonTxnVersion     atomic.Uint64
+		blockWrites       atomic.Int32
+		slowWrites        atomic.Int32
+		vheads            map[uint32]kv.ValuePtr
+		lastLoggedHeads   map[uint32]kv.ValuePtr
+		headLogDelta      uint32
+		isClosed          atomic.Uint32
+		closeOnce         sync.Once
+		closeErr          error
+		hotRead           hotTracker
+		hotWrite          hotTracker
+		writeMetrics      *metrics.WriteMetrics
+		commitQueue       commitQueue
+		commitWG          sync.WaitGroup
+		commitBatchPool   sync.Pool
+		iterPool          *iteratorPool
+		prefetchRing      *utils.Ring[prefetchRequest]
+		prefetchItems     chan struct{}
+		prefetchWG        sync.WaitGroup
+		prefetchState     atomic.Pointer[prefetchState]
+		prefetchThreshold int32
+		prefetchCooldown  time.Duration
+		hotWriteLimited   atomic.Uint64
 	}
 
 	commitQueue struct {
@@ -131,20 +130,13 @@ type (
 
 // Open DB
 func Open(opt *Options) *DB {
+	opt = opt.normalized()
 	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
-	db.initWriteBatchOptions()
 	db.commitBatchPool.New = func() any {
 		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
 		return &batch
-	}
-
-	if db.opt.BlockCacheSize < 0 {
-		db.opt.BlockCacheSize = 0
-	}
-	if db.opt.BloomCacheSize < 0 {
-		db.opt.BloomCacheSize = 0
 	}
 
 	utils.Panic(db.fs.MkdirAll(opt.WorkDir, os.ModePerm))
@@ -162,29 +154,6 @@ func Open(opt *Options) *DB {
 	utils.Panic(err)
 	db.wal = wlog
 
-	numCompactors := opt.NumCompactors
-	if numCompactors <= 0 {
-		cpu := runtime.NumCPU()
-		if cpu <= 1 {
-			numCompactors = 1
-		} else {
-			numCompactors = min(max(cpu/2, 2), 8)
-		}
-	}
-	numL0Tables := opt.NumLevelZeroTables
-	if numL0Tables <= 0 {
-		numL0Tables = 15
-	}
-	// IngestCompactBatchSize defaulting is centralized inside lsm.initLevelManager.
-	ingestBatchSize := opt.IngestCompactBatchSize
-	mergeScore := opt.IngestBacklogMergeScore
-	if mergeScore <= 0 {
-		mergeScore = 2.0
-	}
-	shardParallel := opt.IngestShardParallelism
-	if shardParallel <= 0 {
-		shardParallel = max(numCompactors/2, 2)
-	}
 	baseTableSize := opt.MemTableSize
 	if baseTableSize <= 0 {
 		baseTableSize = 8 << 20
@@ -198,30 +167,39 @@ func Open(opt *Options) *DB {
 	baseLevelSize := max(baseTableSize*4, 32<<20)
 	// Initialize the LSM tree.
 	lsmCore, err := lsm.NewLSM(&lsm.Options{
-		FS:                       db.fs,
-		WorkDir:                  opt.WorkDir,
-		MemTableSize:             opt.MemTableSize,
-		MemTableEngine:           string(opt.MemTableEngine),
-		SSTableMaxSz:             opt.SSTableMaxSz,
-		BlockSize:                8 * 1024,
-		BloomFalsePositive:       0.01,
-		BaseLevelSize:            baseLevelSize,
-		LevelSizeMultiplier:      8,
-		BaseTableSize:            baseTableSize,
-		TableSizeMultiplier:      2,
-		NumLevelZeroTables:       numL0Tables,
-		MaxLevelNum:              utils.MaxLevelNum,
-		NumCompactors:            numCompactors,
-		CompactionPolicy:         string(opt.CompactionPolicy),
-		IngestCompactBatchSize:   ingestBatchSize,
-		IngestBacklogMergeScore:  mergeScore,
-		IngestShardParallelism:   shardParallel,
-		CompactionValueWeight:    db.opt.CompactionValueWeight,
-		BlockCacheSize:           db.opt.BlockCacheSize,
-		BloomCacheSize:           db.opt.BloomCacheSize,
-		ManifestSync:             db.opt.ManifestSync,
-		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
-		WALGCPolicy:              newDBWALGCPolicy(db),
+		FS:                            db.fs,
+		WorkDir:                       opt.WorkDir,
+		MemTableSize:                  opt.MemTableSize,
+		MemTableEngine:                string(opt.MemTableEngine),
+		SSTableMaxSz:                  opt.SSTableMaxSz,
+		BlockSize:                     8 * 1024,
+		BloomFalsePositive:            0.01,
+		BaseLevelSize:                 baseLevelSize,
+		LevelSizeMultiplier:           8,
+		BaseTableSize:                 baseTableSize,
+		TableSizeMultiplier:           2,
+		NumLevelZeroTables:            opt.NumLevelZeroTables,
+		L0SlowdownWritesTrigger:       opt.L0SlowdownWritesTrigger,
+		L0StopWritesTrigger:           opt.L0StopWritesTrigger,
+		L0ResumeWritesTrigger:         opt.L0ResumeWritesTrigger,
+		CompactionSlowdownTrigger:     opt.CompactionSlowdownTrigger,
+		CompactionStopTrigger:         opt.CompactionStopTrigger,
+		CompactionResumeTrigger:       opt.CompactionResumeTrigger,
+		MaxLevelNum:                   utils.MaxLevelNum,
+		NumCompactors:                 opt.NumCompactors,
+		CompactionPolicy:              string(opt.CompactionPolicy),
+		IngestCompactBatchSize:        opt.IngestCompactBatchSize,
+		IngestBacklogMergeScore:       opt.IngestBacklogMergeScore,
+		IngestShardParallelism:        opt.IngestShardParallelism,
+		WriteThrottleMinRate:          opt.WriteThrottleMinRate,
+		WriteThrottleMaxRate:          opt.WriteThrottleMaxRate,
+		CompactionValueWeight:         db.opt.CompactionValueWeight,
+		CompactionValueAlertThreshold: db.opt.CompactionValueAlertThreshold,
+		BlockCacheSize:                db.opt.BlockCacheSize,
+		BloomCacheSize:                db.opt.BloomCacheSize,
+		ManifestSync:                  db.opt.ManifestSync,
+		ManifestRewriteThreshold:      db.opt.ManifestRewriteThreshold,
+		WALGCPolicy:                   newDBWALGCPolicy(db),
 	}, wlog)
 	utils.Panic(err)
 	db.lsm = lsmCore
@@ -238,15 +216,8 @@ func Open(opt *Options) *DB {
 	db.hotRead = newHotTracker(opt)
 	db.hotWrite = newHotTrackerForWrite(opt)
 	if db.hotRead != nil {
-		if opt.HotRingTopK <= 0 {
-			opt.HotRingTopK = 16
-		}
-		db.prefetchWarm = 4
-		db.prefetchHot = 16
-		if db.prefetchHot <= db.prefetchWarm {
-			db.prefetchHot = db.prefetchWarm + 4
-		}
-		db.prefetchCooldown = 15 * time.Second
+		db.prefetchThreshold = opt.HotReadPrefetchThreshold
+		db.prefetchCooldown = opt.HotReadPrefetchCooldown
 		db.prefetchRing = utils.NewRing[prefetchRequest](256)
 		db.prefetchItems = make(chan struct{}, db.prefetchRing.Cap())
 		db.prefetchState.Store(&prefetchState{
