@@ -454,6 +454,54 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	})
 }
 
+func TestDBIteratorUserView(t *testing.T) {
+	t.Run("filters-non-default-cf", func(t *testing.T) {
+		opt := newTestOptions(t)
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k1"), nonTxnMaxVersion, []byte("default"), 0)
+		applyVersionedEntryForTest(t, db, kv.CFLock, []byte("k2"), nonTxnMaxVersion, []byte("lock"), 0)
+		applyVersionedEntryForTest(t, db, kv.CFWrite, []byte("k3"), nonTxnMaxVersion, []byte("write"), 0)
+
+		it := db.NewIterator(&utils.Options{IsAsc: true})
+		defer func() { _ = it.Close() }()
+
+		var keys []string
+		var cfs []kv.ColumnFamily
+		for it.Rewind(); it.Valid(); it.Next() {
+			entry := it.Item().Entry()
+			keys = append(keys, string(entry.Key))
+			cfs = append(cfs, entry.CF)
+		}
+		require.Equal(t, []string{"k1"}, keys)
+		require.Equal(t, []kv.ColumnFamily{kv.CFDefault}, cfs)
+	})
+
+	t.Run("returns-latest-version-only", func(t *testing.T) {
+		opt := newTestOptions(t)
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		key := []byte("k")
+		applyVersionedEntryForTest(t, db, kv.CFDefault, key, 1, []byte("v1"), 0)
+		applyVersionedEntryForTest(t, db, kv.CFDefault, key, 2, []byte("v2"), 0)
+
+		it := db.NewIterator(&utils.Options{IsAsc: true})
+		defer func() { _ = it.Close() }()
+
+		var versions []uint64
+		var values []string
+		for it.Rewind(); it.Valid(); it.Next() {
+			entry := it.Item().Entry()
+			versions = append(versions, entry.Version)
+			values = append(values, string(entry.Value))
+		}
+		require.Equal(t, []uint64{2}, versions)
+		require.Equal(t, []string{"v2"}, values)
+	})
+}
+
 func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MemTableEngine = MemTableEngineART
@@ -472,6 +520,32 @@ func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 		keys = append(keys, string(it.Item().Entry().Key))
 	}
 	require.Equal(t, []string{"d", "c", "b", "a"}, keys)
+}
+
+func TestDBIteratorReverseLatestVersion(t *testing.T) {
+	opt := newTestOptions(t)
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("a"), 1, []byte("va"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k"), 1, []byte("v1"), 0)
+	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k"), 2, []byte("v2"), 0)
+
+	it := db.NewIterator(&utils.Options{IsAsc: false})
+	defer func() { require.NoError(t, it.Close()) }()
+
+	var keys []string
+	var versions []uint64
+	var values []string
+	for it.Rewind(); it.Valid(); it.Next() {
+		entry := it.Item().Entry()
+		keys = append(keys, string(entry.Key))
+		versions = append(versions, entry.Version)
+		values = append(values, string(entry.Value))
+	}
+	require.Equal(t, []string{"k", "a"}, keys)
+	require.Equal(t, []uint64{2, 1}, versions)
+	require.Equal(t, []string{"v2", "va"}, values)
 }
 
 func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
