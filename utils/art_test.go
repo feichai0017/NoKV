@@ -357,3 +357,30 @@ func TestARTIteratorCloseIdempotent(t *testing.T) {
 	require.Equal(t, int32(1), art.ref.Load())
 	art.DecrRef() // ref = 0
 }
+
+func TestARTIteratorOutOfRangeDoesNotResurrect(t *testing.T) {
+	art := NewART(DefaultArenaSize)
+	defer art.DecrRef()
+	for _, k := range []string{"a", "b", "c"} {
+		e := kv.NewInternalEntry(kv.CFDefault, []byte(k), 1, []byte("v_"+k), 0, 0)
+		art.Add(e)
+		e.DecrRef()
+	}
+
+	it := art.NewIterator(&Options{IsAsc: true})
+	require.NotNil(t, it)
+	defer func() { _ = it.Close() }()
+
+	it.Seek(kv.InternalKey(kv.CFDefault, []byte("z"), 1))
+	require.False(t, it.Valid())
+	it.Next()
+	require.False(t, it.Valid())
+
+	rit := art.NewIterator(&Options{IsAsc: false})
+	require.NotNil(t, rit)
+	defer func() { _ = rit.Close() }()
+	rit.Seek(kv.InternalKey(kv.CFDefault, []byte("0"), 1))
+	require.False(t, rit.Valid())
+	rit.Next()
+	require.False(t, rit.Valid())
+}

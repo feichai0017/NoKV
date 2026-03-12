@@ -112,6 +112,8 @@ This avoids dual sources drifting over time (config vs PD).
 Related CLI behavior:
 
 - Inspect control-plane state through PD APIs/metrics.
+- `nokv pd --metrics-addr <host:port>` exposes native expvar on `/debug/vars`.
+- `nokv serve --metrics-addr <host:port>` exposes store/runtime expvar on `/debug/vars`.
 
 ---
 

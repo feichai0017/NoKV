@@ -105,10 +105,10 @@ func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	s.enqueueOperations(resp.GetOperations())
 }
 
-// Plan returns and drains pending scheduling operations received from PD.
-// Snapshot input is intentionally ignored because scheduling is centralized in
-// PD; this method only forwards already-decided operations into raftstore.
-func (s *RegionSink) Plan(_ scheduler.Snapshot) []scheduler.Operation {
+// DrainOperations returns and drains pending scheduling operations received
+// from PD. Scheduling is centralized in PD; this method only forwards
+// already-decided operations into raftstore.
+func (s *RegionSink) DrainOperations() []scheduler.Operation {
 	if s == nil {
 		return nil
 	}

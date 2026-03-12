@@ -3,7 +3,6 @@ package compact
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/feichai0017/NoKV/utils"
@@ -189,12 +188,10 @@ func (cs *State) Delete(entry StateEntry) {
 	if !found {
 		this := entry.ThisRange
 		next := entry.NextRange
-		fmt.Printf("Looking for: %s in this level %d.\n", this, entry.ThisLevel)
-		fmt.Printf("This Level:\n%s\n", thisLevel.debug())
-		fmt.Println()
-		fmt.Printf("Looking for: %s in next level %d.\n", next, entry.NextLevel)
-		fmt.Printf("Next Level:\n%s\n", nextLevel.debug())
-		log.Fatal("keyRange not found")
+		panic(fmt.Sprintf(
+			"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
+			this, entry.ThisLevel, thisLevel.debug(), next, entry.NextLevel, nextLevel.debug(),
+		))
 	}
 
 	for _, fid := range entry.TableIDs {

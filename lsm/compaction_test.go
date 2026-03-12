@@ -1,9 +1,12 @@
 package lsm
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 func TestCompactionMoveToIngest(t *testing.T) {
@@ -56,6 +59,90 @@ func TestCompactionMoveToIngest(t *testing.T) {
 	cd.nextLevel.RUnlock()
 	if !found {
 		t.Fatalf("table %d not found in ingest buffer", cd.top[0].fid)
+	}
+}
+
+func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	top := buildTableWithEntries(t, lsm, 1001,
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("u"), 3), []byte("top-u")),
+	)
+	botA := buildTableWithEntries(t, lsm, 1002,
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("m"), 2), []byte("bot-a-m")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("z"), 2), []byte("bot-a-z")),
+	)
+	// botB overlaps botA on user-key range [t,y], so concat order would be unsafe.
+	botB := buildTableWithEntries(t, lsm, 1003,
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("t"), 1), []byte("bot-b-t")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("y"), 1), []byte("bot-b-y")),
+	)
+	defer func() {
+		_ = top.DecrRef()
+		_ = botA.DecrRef()
+		_ = botB.DecrRef()
+	}()
+
+	cd := compactDef{
+		thisLevel: lsm.levels.levels[5],
+		nextLevel: lsm.levels.levels[6],
+		top:       []*table{top},
+		bot:       []*table{botA, botB},
+		splits:    []compact.KeyRange{{}},
+		plan: compact.Plan{
+			NextFileSize: 1 << 20,
+		},
+	}
+
+	newTables, decr, err := lsm.levels.compactBuildTables(5, cd)
+	if err != nil {
+		t.Fatalf("compactBuildTables: %v", err)
+	}
+	defer func() {
+		if decr != nil {
+			_ = decr()
+		}
+	}()
+	if len(newTables) == 0 {
+		t.Fatalf("expected output tables")
+	}
+
+	for _, tbl := range newTables {
+		it := tbl.NewIterator(&utils.Options{IsAsc: true})
+		if it == nil {
+			t.Fatalf("nil iterator for output table")
+		}
+		var prev []byte
+		var seen [][]byte
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			if item == nil || item.Entry() == nil {
+				continue
+			}
+			cur := item.Entry().Key
+			if prev != nil && utils.CompareKeys(prev, cur) > 0 {
+				_ = it.Close()
+				t.Fatalf("output table out of order: prev=%q cur=%q", prev, cur)
+			}
+			prev = kv.SafeCopy(prev, cur)
+			_, user, _, ok := kv.SplitInternalKey(cur)
+			if !ok {
+				_ = it.Close()
+				t.Fatalf("expected internal key, got %x", cur)
+			}
+			seen = append(seen, kv.SafeCopy(nil, user))
+		}
+		_ = it.Close()
+		joined := bytes.Join(seen, []byte(","))
+		if !bytes.Contains(joined, []byte("m")) ||
+			!bytes.Contains(joined, []byte("t")) ||
+			!bytes.Contains(joined, []byte("u")) ||
+			!bytes.Contains(joined, []byte("y")) ||
+			!bytes.Contains(joined, []byte("z")) {
+			t.Fatalf("expected merged output keys m,t,u,y,z; got %q", string(joined))
+		}
 	}
 }
 

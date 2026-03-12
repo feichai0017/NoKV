@@ -97,9 +97,8 @@ func TestMemTableReservationAccounting(t *testing.T) {
 	require.Equal(t, int64(0), mt.reservedSize.Load())
 }
 
-func TestMemTableReservationUnderflowPanics(t *testing.T) {
+func TestMemTableReservationUnderflowIsClamped(t *testing.T) {
 	var mt memTable
-	require.PanicsWithValue(t, "lsm: memtable reservation underflow", func() {
-		mt.releaseReserve(1)
-	})
+	mt.releaseReserve(1)
+	require.Equal(t, int64(0), mt.reservedSize.Load())
 }

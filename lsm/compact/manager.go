@@ -1,7 +1,7 @@
 package compact
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"time"
@@ -64,30 +64,40 @@ type Executor interface {
 // Manager coordinates background compaction workers.
 type Manager struct {
 	exec      Executor
-	triggerCh chan string
+	policy    Policy
+	triggerCh chan struct{}
 	maxRuns   int
+	logger    *slog.Logger
 }
 
 // NewManager creates a compaction manager for the supplied executor.
-func NewManager(exec Executor, maxRuns int) *Manager {
+func NewManager(exec Executor, maxRuns int, policy Policy, logger *slog.Logger) *Manager {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
 		maxRuns = 4
 	}
+	if policy == nil {
+		policy = LeveledPolicy{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	cm := &Manager{
 		exec:      exec,
-		triggerCh: make(chan string, 16),
+		policy:    policy,
+		triggerCh: make(chan struct{}, 16),
 		maxRuns:   maxRuns,
+		logger:    logger,
 	}
-	cm.Trigger("bootstrap")
+	cm.Trigger()
 	return cm
 }
 
 // Trigger nudges the manager to run a compaction cycle.
-func (cm *Manager) Trigger(reason string) {
+func (cm *Manager) Trigger() {
 	select {
-	case cm.triggerCh <- reason:
+	case cm.triggerCh <- struct{}{}:
 	default:
 	}
 }
@@ -112,16 +122,15 @@ func (cm *Manager) Start(id int, closeCh <-chan struct{}, done func()) {
 		select {
 		case <-closeCh:
 			return
-		case reason := <-cm.triggerCh:
-			cm.runCycle(id, reason)
+		case <-cm.triggerCh:
+			cm.runCycle(id)
 		case <-ticker.C:
-			cm.runCycle(id, "periodic")
+			cm.runCycle(id)
 		}
 	}
 }
 
-func (cm *Manager) runCycle(id int, reason string) {
-	_ = reason
+func (cm *Manager) runCycle(id int) {
 	maxRuns := cm.maxRuns
 	ranAny := false
 	for range maxRuns {
@@ -140,14 +149,14 @@ func (cm *Manager) runCycle(id int, reason string) {
 		}
 	}
 	if ranAny && cm.exec.NeedsCompaction() {
-		cm.Trigger("backlog")
+		cm.Trigger()
 	}
 }
 
 func (cm *Manager) runOnce(id int) bool {
 	prios := cm.exec.PickCompactLevels()
-	if id == 0 {
-		prios = MoveL0ToFront(prios)
+	if cm.policy != nil {
+		prios = cm.policy.Arrange(id, prios)
 	}
 	for _, p := range prios {
 		if id == 0 && p.Level == 0 {
@@ -168,13 +177,22 @@ func (cm *Manager) RunOnce(id int) bool {
 }
 
 func (cm *Manager) run(id int, p Priority) bool {
+	start := time.Now()
 	err := cm.exec.DoCompact(id, p)
+	if observer, ok := cm.policy.(FeedbackPolicy); ok {
+		observer.Observe(FeedbackEvent{
+			WorkerID: id,
+			Priority: p,
+			Err:      err,
+			Duration: time.Since(start),
+		})
+	}
 	switch err {
 	case nil:
 		return true
 	case ErrFillTables:
 	default:
-		log.Printf("[compactor %d] doCompact error: %v", id, err)
+		cm.logger.Error("doCompact failed", "worker", id, "level", p.Level, "score", p.Score, "adjusted", p.Adjusted, "err", err)
 	}
 	return false
 }

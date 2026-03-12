@@ -169,6 +169,9 @@ type Options struct {
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.
 	NumCompactors int
+	// CompactionPolicy selects how compaction priorities are arranged.
+	// Supported values: leveled, tiered, hybrid.
+	CompactionPolicy CompactionPolicy
 	// NumLevelZeroTables controls when write throttling kicks in and feeds into
 	// the compaction priority calculation. Zero falls back to the legacy default.
 	NumLevelZeroTables int
@@ -192,6 +195,15 @@ type Options struct {
 	// single ingest-only pass. A value <= 0 falls back to 1 (sequential).
 	IngestShardParallelism int
 }
+
+// CompactionPolicy defines compaction priority-arrangement strategy.
+type CompactionPolicy string
+
+const (
+	CompactionPolicyLeveled CompactionPolicy = "leveled"
+	CompactionPolicyTiered  CompactionPolicy = "tiered"
+	CompactionPolicyHybrid  CompactionPolicy = "hybrid"
+)
 
 // MemTableEngine selects the in-memory index implementation used by memtables.
 type MemTableEngine string
@@ -269,6 +281,7 @@ func NewDefaultOptions() *Options {
 	opt.IngestCompactBatchSize = 4
 	opt.IngestBacklogMergeScore = 2.0
 	opt.NumCompactors = 4
+	opt.CompactionPolicy = CompactionPolicyLeveled
 	opt.IngestShardParallelism = 2
 	return opt
 }

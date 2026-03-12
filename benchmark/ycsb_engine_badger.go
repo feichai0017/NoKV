@@ -68,72 +68,60 @@ func (e *badgerEngine) Close() error {
 }
 
 func (e *badgerEngine) Read(key []byte, dst []byte) ([]byte, error) {
-	var out []byte
-	err := e.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(key)
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		out, err = item.ValueCopy(dst)
-		return err
-	})
-	return out, err
+	txn := e.db.NewTransaction(false)
+	defer txn.Discard()
+
+	item, err := txn.Get(key)
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return item.ValueCopy(dst)
 }
 
 func (e *badgerEngine) Insert(key, value []byte) error {
-	return e.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, value)
-	})
+	txn := e.db.NewTransaction(true)
+	defer txn.Discard()
+	if err := txn.Set(key, value); err != nil {
+		return err
+	}
+	return txn.Commit()
 }
 
 func (e *badgerEngine) Update(key, value []byte) error {
-	return e.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, value)
-	})
+	txn := e.db.NewTransaction(true)
+	defer txn.Discard()
+	if err := txn.Set(key, value); err != nil {
+		return err
+	}
+	return txn.Commit()
 }
 
 func (e *badgerEngine) Scan(startKey []byte, count int) (int, error) {
 	var read int
-	err := e.db.View(func(txn *badger.Txn) error {
-		it := txn.NewIterator(badger.IteratorOptions{
-			PrefetchSize:   count,
-			PrefetchValues: true,
-		})
-		defer it.Close()
-		for it.Seek(startKey); it.Valid(); it.Next() {
-			if read >= count {
-				break
-			}
-			item := it.Item()
-			if item == nil {
-				break
-			}
-			if err := item.Value(func(_ []byte) error { return nil }); err != nil {
-				return err
-			}
-			read++
-		}
-		return nil
+	txn := e.db.NewTransaction(false)
+	defer txn.Discard()
+
+	it := txn.NewIterator(badger.IteratorOptions{
+		PrefetchSize:   count,
+		PrefetchValues: true,
 	})
-	if err != nil {
-		return 0, err
+	defer it.Close()
+
+	for it.Seek(startKey); it.Valid(); it.Next() {
+		if read >= count {
+			break
+		}
+		item := it.Item()
+		if item == nil {
+			break
+		}
+		if err := item.Value(func(_ []byte) error { return nil }); err != nil {
+			return 0, err
+		}
+		read++
 	}
 	return read, nil
-}
-
-func (e *badgerEngine) BatchInsert(keys, values [][]byte) error {
-	if len(keys) != len(values) {
-		return fmt.Errorf("badger: in batch insert, keys and values length mismatch")
-	}
-	wb := e.db.NewWriteBatch()
-	defer wb.Cancel()
-	for i := range keys {
-		if err := wb.Set(keys[i], values[i]); err != nil {
-			return err
-		}
-	}
-	return wb.Flush()
 }

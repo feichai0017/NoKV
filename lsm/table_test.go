@@ -17,7 +17,8 @@ func buildTestLSM(t *testing.T, opt *Options) *LSM {
 	opt.DiscardStatsCh = &c
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
-	lsm := NewLSM(opt, wlog)
+	lsm, err := NewLSM(opt, wlog)
+	require.NoError(t, err)
 	return lsm
 }
 
@@ -176,6 +177,101 @@ func TestTableReverseIterationMultiBlock(t *testing.T) {
 		}
 		require.Equal(t, 20, count)
 	})
+}
+
+func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-table-search-maxver")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          128, // force many blocks; reproduces cross-block seek edge.
+		BloomFalsePositive: 0.0,
+	}
+
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	const total = 500
+	for i := range total {
+		userKey := fmt.Appendf(nil, "k%06d", i)
+		builder.AddKey(kv.NewEntry(
+			kv.InternalKey(kv.CFDefault, userKey, uint64(i+1)),
+			[]byte("value"),
+		))
+	}
+
+	tableName := utils.FileNameSSTable(dir, 3)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	for i := range total {
+		userKey := fmt.Appendf(nil, "k%06d", i)
+		maxVs := uint64(0)
+		entry, err := tbl.Search(kv.InternalKey(kv.CFDefault, userKey, kv.MaxVersion), &maxVs)
+		require.NoError(t, err)
+		require.NotNil(t, entry)
+		require.Equal(t, userKey, splitTableUserKey(t, entry.Key))
+		require.Equal(t, uint64(i+1), maxVs)
+		entry.DecrRef()
+	}
+}
+
+func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-level-overlap")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          4 << 10,
+		BloomFalsePositive: 0.0,
+		MaxLevelNum:        utils.MaxLevelNum,
+	}
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	buildTable := func(fid uint64, keys ...string) *table {
+		builder := newTableBuiler(opt)
+		for _, k := range keys {
+			builder.AddKey(kv.NewEntry(
+				kv.InternalKey(kv.CFDefault, []byte(k), 1),
+				[]byte("v-"+k),
+			))
+		}
+		name := utils.FileNameSSTable(dir, fid)
+		tbl, err := openTable(lsm.levels, name, builder)
+		require.NoError(t, err)
+		require.NotNil(t, tbl)
+		return tbl
+	}
+
+	// Two tables overlap on user-key ranges:
+	// t1 covers [a, c], t2 covers [b, d]. Key "b" only exists in t2.
+	t1 := buildTable(11, "a", "c")
+	t2 := buildTable(12, "b", "d")
+	defer func() { _ = t1.DecrRef() }()
+	defer func() { _ = t2.DecrRef() }()
+
+	lh := lsm.levels.levels[6]
+	lh.add(t1)
+	lh.add(t2)
+	lh.Sort()
+
+	query := kv.InternalKey(kv.CFDefault, []byte("b"), kv.MaxVersion)
+	entry, err := lh.Get(query)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("b"), splitTableUserKey(t, entry.Key))
+	entry.DecrRef()
 }
 
 func TestTableDecrRefUnderflow(t *testing.T) {

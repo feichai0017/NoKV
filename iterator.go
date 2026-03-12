@@ -12,9 +12,12 @@ import (
 type DBIterator struct {
 	iitr utils.Iterator
 	vlog *valueLog
-	db   *DB
 	pool *iteratorPool
 	ctx  *iteratorContext
+	rtv  *lsm.RangeTombstoneView
+	// rtCheck indicates whether this iterator snapshot needs tombstone
+	// coverage checks.
+	rtCheck bool
 	// keyOnly avoids eager value log materialisation when true.
 	keyOnly bool
 
@@ -96,7 +99,6 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	ctx.iters = append(ctx.iters, db.lsm.NewIterators(opt)...)
 	itr := &DBIterator{
 		vlog:       db.vlog,
-		db:         db,
 		pool:       db.iterPool,
 		ctx:        ctx,
 		keyOnly:    keyOnly,
@@ -107,6 +109,12 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 	itr.item.vlog = db.vlog
 	itr.item.e = &itr.entry
 	itr.iitr = lsm.NewMergeIterator(ctx.iters, !opt.IsAsc)
+	if db.lsm != nil {
+		itr.rtCheck = db.lsm.HasAnyRangeTombstone()
+	}
+	if itr.rtCheck {
+		itr.rtv = db.lsm.PinRangeTombstoneView()
+	}
 	return itr
 }
 
@@ -217,6 +225,10 @@ func (iter *DBIterator) Close() error {
 	iter.resetIterationState()
 	if iter.pool != nil && iter.ctx != nil {
 		iter.pool.put(iter.ctx)
+	}
+	if iter.rtv != nil {
+		iter.rtv.Close()
+		iter.rtv = nil
 	}
 	iter.ctx = nil
 	return err
@@ -445,7 +457,7 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	// Check if this key is covered by a range tombstone.
-	if iter.db != nil && iter.db.isKeyCoveredByRangeTombstone(cf, userKey, ts) {
+	if iter.rtCheck && iter.rtv != nil && iter.rtv.IsKeyCovered(cf, userKey, ts) {
 		return false
 	}
 	iter.entry.Key = userKey

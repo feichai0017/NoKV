@@ -84,13 +84,7 @@ func NewStoreWithConfig(cfg Config) *Store {
 	}
 	hookChain = append(hookChain, cfg.RegionHooks)
 	combinedHooks := mergeRegionHooks(hookChain...)
-	// Scheduler is the single injected control-plane object. When it also
-	// implements Planner, store will consume planner output from the same source.
-	// Otherwise planner is disabled.
-	var planner scheduler.Planner
-	if inferred, ok := cfg.Scheduler.(scheduler.Planner); ok {
-		planner = inferred
-	}
+	// Scheduler is the single injected control-plane object.
 	queueSize := max(cfg.OperationQueueSize, 0)
 	operationCooldown := max(cfg.OperationCooldown, 0)
 	if operationCooldown == 0 {
@@ -141,11 +135,9 @@ func NewStoreWithConfig(cfg Config) *Store {
 		s.heartbeat = newHeartbeatLoop(
 			heartbeatInterval,
 			s.scheduler,
-			planner,
 			s.storeID,
 			s.RegionMetas,
 			s.storeStatsSnapshot,
-			s.SchedulerSnapshot,
 			s.enqueueOperation,
 		)
 		if s.heartbeat != nil {

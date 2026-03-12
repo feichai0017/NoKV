@@ -44,8 +44,8 @@ type Config struct {
 	Manifest    *manifest.Manager
 	// Scheduler is the single control-plane extension point for store runtime.
 	// - Cluster mode: use a PD-backed sink (pd/adapter.RegionSink).
-	// If the sink also implements scheduler.Planner, heartbeat loop will consume
-	// its operations and enqueue them to operationScheduler.
+	// Heartbeat loop drains operations from the sink and enqueues them to
+	// operationScheduler.
 	Scheduler          scheduler.RegionSink
 	HeartbeatInterval  time.Duration
 	StoreID            uint64

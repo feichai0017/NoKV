@@ -3,7 +3,6 @@ package lsm
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"slices"
 	"sort"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
@@ -172,13 +172,13 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			sub.plan.IngestMode = p.IngestMode
 			sub.plan.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
-				log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, sub)
+				lm.getLogger().Error("ingest compaction failed", "worker", id, "err", err, "def", sub)
 				lm.compactState.Delete(sub.stateEntry())
 				return err
 			}
 			lm.compactState.Delete(sub.stateEntry())
 			ran = true
-			log.Printf("[Compactor: %d] Ingest compaction for level: %d shard=%d DONE", id, sub.thisLevel.levelNum, order[i])
+			lm.getLogger().Info("ingest compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
 		}
 		if !ran {
 			return compact.ErrFillTables
@@ -195,10 +195,10 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
 			if err := lm.moveToIngest(&cd); err != nil {
-				log.Printf("[Compactor: %d] LOG Move to ingest FAILED with error: %+v: %+v", id, err, cd)
+				lm.getLogger().Error("move to ingest failed", "worker", id, "err", err, "def", cd)
 				return err
 			}
-			log.Printf("[Compactor: %d] Moved %d tables from L0 to ingest buffer of L%d", id, len(cd.top), cd.nextLevel.levelNum)
+			lm.getLogger().Info("moved L0 tables to ingest buffer", "worker", id, "tables", len(cd.top), "target_level", cd.nextLevel.levelNum)
 			return nil
 		}
 	} else {
@@ -213,20 +213,20 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cleanup = true
 		// Continue with the normal merge path.
 		if err := lm.runCompactDef(id, l, cd); err != nil {
-			log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+			lm.getLogger().Error("compaction failed", "worker", id, "err", err, "def", cd)
 			return err
 		}
-		log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+		lm.getLogger().Info("compaction complete", "worker", id, "level", cd.thisLevel.levelNum)
 		return nil
 	}
 
 	// Execute the merge plan.
 	if err := lm.runCompactDef(id, l, cd); err != nil {
 		// This compaction couldn't be done successfully.
-		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+		lm.getLogger().Error("compaction failed", "worker", id, "err", err, "def", cd)
 		return err
 	}
-	log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+	lm.getLogger().Info("compaction complete", "worker", id, "level", cd.thisLevel.levelNum)
 	return nil
 }
 
@@ -537,15 +537,20 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	from := append(tablesToString(cd.top), tablesToString(cd.bot)...)
 	to := tablesToString(newTables)
 	if dur := time.Since(timeStart); dur > 2*time.Second {
-		var expensive string
-		if dur > time.Second {
-			expensive = " [E]"
-		}
-		fmt.Printf("[%d]%s LOG Compact %d->%d (%d, %d -> %d tables with %d splits)."+
-			" [%s] -> [%s], took %v\n",
-			id, expensive, thisLevel.levelNum, nextLevel.levelNum, len(cd.top), len(cd.bot),
-			len(newTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
-			dur.Round(time.Millisecond))
+		lm.getLogger().Info(
+			"compaction detail",
+			"worker", id,
+			"expensive", dur > time.Second,
+			"from_level", thisLevel.levelNum,
+			"to_level", nextLevel.levelNum,
+			"top_tables", len(cd.top),
+			"bottom_tables", len(cd.bot),
+			"new_tables", len(newTables),
+			"splits", len(cd.splits),
+			"from", strings.Join(from, " "),
+			"to", strings.Join(to, " "),
+			"duration", dur.Round(time.Millisecond).String(),
+		)
 	}
 	// Record ingest metrics if applicable.
 	if cd.plan.IngestMode.UsesIngest() {
@@ -670,13 +675,26 @@ func newCreateChange(id uint64, level int) *pb.ManifestChange {
 // compactBuildTables merges SSTables from two levels.
 func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, func() error, error) {
 
-	topTables := cd.top
-	botTables := cd.bot
+	topTables := append([]*table(nil), cd.top...)
+	botTables := append([]*table(nil), cd.bot...)
+	// Ensure concat/merge inputs are in ascending key-range order.
+	// Some planning paths may preserve selection order but not strict key order.
+	if len(topTables) > 1 {
+		sort.Slice(topTables, func(i, j int) bool {
+			return utils.CompareKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
+		})
+	}
+	if len(botTables) > 1 {
+		sort.Slice(botTables, func(i, j int) bool {
+			return utils.CompareKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
+		})
+	}
 	iterOpt := &utils.Options{
 		IsAsc:          true,
 		AccessPattern:  utils.AccessPatternSequential,
 		PrefetchBlocks: 1,
 	}
+	botCanConcat := tablesStrictlyOrdered(botTables)
 	//numTables := int64(len(topTables) + len(botTables))
 	newIterator := func() []utils.Iterator {
 		// Create iterators across all the tables involved first.
@@ -687,7 +705,15 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		case len(topTables) > 0:
 			iters = append(iters, iteratorsReversed(topTables, iterOpt)...)
 		}
-		return append(iters, NewConcatIterator(botTables, iterOpt))
+		if len(botTables) == 0 {
+			return iters
+		}
+		if botCanConcat {
+			return append(iters, NewConcatIterator(botTables, iterOpt))
+		}
+		// Fallback for overlapping/out-of-order next-level windows.
+		// ConcatIterator assumes strict non-overlap; merge keeps global key ordering.
+		return append(iters, iteratorsReversed(botTables, iterOpt)...)
 	}
 
 	// Start parallel compaction tasks.
@@ -872,14 +898,14 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 	first.Unlock()
 
 	if lm.compaction != nil {
-		lm.compaction.Trigger("ingest-buffer")
+		lm.compaction.Trigger()
 	}
 	return nil
 }
 
 func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if cd.nextLevel.levelNum == 0 {
-		utils.Panic(errors.New("base level can be zero"))
+		return false
 	}
 	// Skip if priority is below 1.
 	if cd.adjusted > 0.0 && cd.adjusted < 1.0 {
@@ -987,14 +1013,44 @@ func iteratorsReversed(th []*table, opt *utils.Options) []utils.Iterator {
 	}
 	return out
 }
+
+// tablesStrictlyOrdered reports whether consecutive tables are in strictly
+// increasing, non-overlapping user-key order.
+func tablesStrictlyOrdered(tables []*table) bool {
+	if len(tables) <= 1 {
+		return true
+	}
+	prev := tables[0]
+	if prev == nil {
+		return false
+	}
+	for i := 1; i < len(tables); i++ {
+		cur := tables[i]
+		if cur == nil {
+			return false
+		}
+		// Non-overlap requires prev.max user key < cur.min user key.
+		if utils.CompareUserKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
+			return false
+		}
+		prev = cur
+	}
+	return true
+}
 func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
+	if lm == nil || lm.lsm == nil {
+		return
+	}
+	ch := lm.lsm.getDiscardStatsCh()
+	if ch == nil {
+		return
+	}
 	select {
-	case *lm.lsm.option.DiscardStatsCh <- discardStats:
+	case ch <- discardStats:
 	default:
 	}
 }
 
-// rangeTombstone represents a copied range tombstone for compaction.
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
@@ -1021,7 +1077,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	}
 
 	// Keep tombstone state across builder splits.
-	var rangeTombstones []RangeTombstone
+	rtTracker := tombstone.NewCompactionTracker()
 
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
@@ -1040,13 +1096,13 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				if !ok {
 					continue
 				}
-				rt := RangeTombstone{
+				rt := tombstone.Range{
 					CF:      cf,
 					Start:   kv.SafeCopy(nil, rtStart),
 					End:     kv.SafeCopy(nil, entry.RangeEnd()),
 					Version: rtVersion,
 				}
-				rangeTombstones = append(rangeTombstones, rt)
+				rtTracker.Add(rt)
 			}
 			if !kv.SameKey(key, lastKey) {
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
@@ -1063,20 +1119,14 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			}
 
 			if !entry.IsRangeDelete() {
-				covered := false
 				cf, userKey, version, ok := kv.SplitInternalKey(key)
 				if !ok {
 					continue
 				}
-				for _, rt := range rangeTombstones {
-					// Check CF match and version/range coverage.
-					if rt.CF == cf && rt.Version > version && kv.KeyInRange(userKey, rt.Start, rt.End) {
-						covered = true
-						updateStats(entry)
-						break
-					}
-				}
-				if covered {
+				if rtTracker.Covers(cf, userKey, version) {
+					// Covered point versions become stale once a newer range
+					// tombstone is active at this key.
+					updateStats(entry)
 					continue
 				}
 			}
@@ -1114,7 +1164,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 		// called Add() at least once, and builder is not Empty().
 		if builder.empty() {
 			// Cleanup builder resources:
-			builder.finish()
+			_, _ = builder.finish()
 			builder.Close()
 			continue
 		}

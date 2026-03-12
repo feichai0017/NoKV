@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	stderrors "errors"
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
@@ -830,6 +831,12 @@ func (it *tableIterator) Seek(key []byte) {
 			return
 		}
 		it.seekHelper(idx-1, key)
+		// Internal-key ordering is (userKey ASC, ts DESC). For point-lookups we seek
+		// with ts=MaxVersion, which can place idx-1 on a previous block whose largest
+		// key is still < target. When that happens, retry the next block once.
+		if it.err == io.EOF && idx < len(offsets) {
+			it.seekHelper(idx, key)
+		}
 		return
 	}
 	// Reverse mode: if every base key is > target, there is no <= target entry.
@@ -936,10 +943,11 @@ func (t *table) IncrRef() {
 	t.ref.Add(1)
 }
 func decrRefs(tables []*table) error {
+	var decrRefsErr error
 	for _, table := range tables {
 		if err := table.DecrRef(); err != nil {
-			return err
+			decrRefsErr = stderrors.Join(decrRefsErr, err)
 		}
 	}
-	return nil
+	return decrRefsErr
 }
