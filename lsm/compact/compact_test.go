@@ -109,6 +109,33 @@ func TestStateCompareAndDeleteIfKeyNotInRange(t *testing.T) {
 	require.NotNil(t, state.Delete(entry))
 }
 
+func TestStateDeleteErrorIsAtomic(t *testing.T) {
+	state := NewState(2)
+	entry := StateEntry{
+		ThisLevel: 0,
+		NextLevel: 1,
+		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
+		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
+		ThisSize:  128,
+		TableIDs:  []uint64{1, 2},
+	}
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
+
+	missing := entry
+	missing.ThisRange = KeyRange{Left: ikey("x", 10), Right: ikey("y", 1)}
+	err := state.Delete(missing)
+	require.Error(t, err)
+	require.Equal(t, int64(128), state.DelSize(0))
+	require.True(t, state.HasRanges())
+	require.True(t, state.HasTable(1))
+	require.True(t, state.Overlaps(0, entry.ThisRange))
+
+	require.NoError(t, state.Delete(entry))
+	require.Zero(t, state.DelSize(0))
+	require.False(t, state.HasRanges())
+	require.False(t, state.HasTable(1))
+}
+
 func TestPlanStateEntry(t *testing.T) {
 	plan := Plan{
 		ThisLevel: 0,
