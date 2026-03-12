@@ -90,10 +90,23 @@ func TestStateCompareAndDelete(t *testing.T) {
 	overlap.ThisRange = KeyRange{Left: ikey("a", 9), Right: ikey("b", 0)}
 	require.False(t, state.CompareAndAdd(LevelsLocked{}, overlap))
 
-	state.Delete(entry)
+	require.Nil(t, state.Delete(entry))
 	require.False(t, state.HasRanges())
 	require.False(t, state.HasTable(1))
 	require.Zero(t, state.DelSize(0))
+}
+
+func TestStateCompareAndDeleteIfKeyNotInRange(t *testing.T) {
+	state := NewState(2)
+	entry := StateEntry{
+		ThisLevel: 0,
+		NextLevel: 1,
+		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
+		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
+		ThisSize:  128,
+		TableIDs:  []uint64{1, 2},
+	}
+	require.NotNil(t, state.Delete(entry))
 }
 
 func TestPlanStateEntry(t *testing.T) {
