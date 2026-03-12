@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -469,6 +472,21 @@ func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 		keys = append(keys, string(it.Item().Entry().Key))
 	}
 	require.Equal(t, []string{"d", "c", "b", "a"}, keys)
+}
+
+func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		opt := newTestOptions(t)
+		opt.MemTableEngine = engine
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		require.NoError(t, db.Set([]byte("k"), []byte("v")))
+		it := db.NewIterator(&utils.Options{IsAsc: true})
+		it.Rewind()
+		require.NoError(t, it.Close())
+		require.NoError(t, it.Close())
+	})
 }
 
 func TestCFHotKeyEncoding(t *testing.T) {
@@ -937,17 +955,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	require.NoError(t, db.Set(key, val))
 
 	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
-	_ = db.stats.close()
-	for _, mgr := range db.vlog.managers {
-		if mgr != nil {
-			_ = mgr.Close()
-		}
-	}
-	_ = db.wal.Close()
-	if db.dirLock != nil {
-		_ = db.dirLock.Close()
-		db.dirLock = nil
-	}
+	drSimulateCrash(t, db)
 
 	db2 := Open(opt)
 	defer func() { _ = db2.Close() }()
@@ -1402,6 +1410,69 @@ func drWaitForFlushedSST(t *testing.T, db *DB) {
 	t.Fatalf("timeout waiting for flushed sst")
 }
 
+func drForEachMemTableEngine(t *testing.T, fn func(t *testing.T, engine MemTableEngine)) {
+	t.Helper()
+	for _, engine := range []MemTableEngine{MemTableEngineART, MemTableEngineSkiplist} {
+		t.Run(string(engine), func(t *testing.T) {
+			fn(t, engine)
+		})
+	}
+}
+
+func drSimulateCrash(t *testing.T, db *DB) {
+	t.Helper()
+	_ = db.stats.close()
+	for _, mgr := range db.vlog.managers {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}
+	_ = db.wal.Close()
+	if db.dirLock != nil {
+		_ = db.dirLock.Close()
+		db.dirLock = nil
+	}
+}
+
+func drRequireValue(t *testing.T, db *DB, key, expected []byte) {
+	t.Helper()
+	entry, err := db.Get(key)
+	require.NoError(t, err)
+	require.Equal(t, expected, entry.Value)
+}
+
+func drRequireNotFound(t *testing.T, db *DB, key []byte) {
+	t.Helper()
+	_, err := db.Get(key)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func drFirstWALSegmentPath(t *testing.T, dir string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected at least one wal segment")
+	return files[0]
+}
+
+func drAppendPartialWALTail(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var recordLen uint32 = 32
+	buf := make([]byte, 4)
+	buf[0] = byte(recordLen >> 24)
+	buf[1] = byte(recordLen >> 16)
+	buf[2] = byte(recordLen >> 8)
+	buf[3] = byte(recordLen)
+	_, err = f.Write(buf)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("partial"))
+	require.NoError(t, err)
+}
+
 // TestDeleteRangeCore tests basic functionality, boundaries, lexicographic ordering,
 // empty ranges, and write-after-delete scenarios.
 func TestDeleteRangeCore(t *testing.T) {
@@ -1706,4 +1777,393 @@ func TestDeleteRangeBatchOrdering(t *testing.T) {
 	entry, err := db.Get([]byte("c"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("new"), entry.Value)
+}
+
+func TestDBIteratorBoundsAndOutOfRangeSeekContract(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		opt := newTestOptions(t)
+		opt.MemTableEngine = engine
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		for _, k := range []string{"a", "b", "c", "d"} {
+			require.NoError(t, db.Set([]byte(k), []byte("v_"+k)))
+		}
+
+		t.Run("forward", func(t *testing.T) {
+			it := db.NewIterator(&utils.Options{
+				IsAsc:      true,
+				LowerBound: []byte("b"),
+				UpperBound: []byte("d"),
+			})
+			defer func() { require.NoError(t, it.Close()) }()
+
+			var keys []string
+			for it.Rewind(); it.Valid(); it.Next() {
+				keys = append(keys, string(it.Item().Entry().Key))
+			}
+			require.Equal(t, []string{"b", "c"}, keys)
+
+			it.Seek([]byte("a"))
+			require.True(t, it.Valid())
+			require.Equal(t, "b", string(it.Item().Entry().Key))
+
+			it.Seek([]byte("z"))
+			require.False(t, it.Valid())
+			it.Next()
+			require.False(t, it.Valid(), "Next must not resurrect validity after out-of-range seek")
+
+			it.Rewind()
+			require.True(t, it.Valid())
+			require.Equal(t, "b", string(it.Item().Entry().Key))
+		})
+
+		t.Run("reverse", func(t *testing.T) {
+			it := db.NewIterator(&utils.Options{
+				IsAsc:      false,
+				LowerBound: []byte("b"),
+				UpperBound: []byte("d"),
+			})
+			defer func() { require.NoError(t, it.Close()) }()
+
+			var keys []string
+			for it.Rewind(); it.Valid(); it.Next() {
+				keys = append(keys, string(it.Item().Entry().Key))
+			}
+			require.Equal(t, []string{"c", "b"}, keys)
+
+			it.Seek([]byte("a"))
+			require.False(t, it.Valid())
+			it.Next()
+			require.False(t, it.Valid(), "Next must not resurrect validity after out-of-range seek")
+
+			it.Seek([]byte("z"))
+			require.True(t, it.Valid())
+			require.Equal(t, "c", string(it.Item().Entry().Key))
+		})
+	})
+}
+
+func TestAPIMixedOpsPersistAcrossFlushCompactionAndReopen(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		dir := t.TempDir()
+		opt := drTestOptions(dir)
+		opt.MemTableEngine = engine
+		opt.MemTableSize = 512
+		opt.NumLevelZeroTables = 2
+
+		db := Open(opt)
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("k1"), Value: []byte("v1")},
+			{Key: []byte("k2"), Value: []byte("v2")},
+			{Key: []byte("k3"), Value: []byte("v3")},
+		}))
+		require.NoError(t, db.Del([]byte("k1")))
+		require.NoError(t, db.DeleteRange([]byte("k2"), []byte("k4")))
+		require.NoError(t, db.Set([]byte("k3"), []byte("v3-new")))
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("k4"), Value: []byte("v4")},
+			{Key: []byte("k5"), Value: []byte("v5")},
+		}))
+		require.NoError(t, db.DeleteRange([]byte("k5"), []byte("k6")))
+
+		padding := bytes.Repeat([]byte("p"), 160)
+		for i := range 48 {
+			key := fmt.Appendf(nil, "pad-%03d", i)
+			require.NoError(t, db.Set(key, padding))
+		}
+		drWaitForFlushedSST(t, db)
+
+		drMustClose(t, db)
+		db = Open(opt)
+		defer func() { drMustClose(t, db) }()
+
+		drRequireNotFound(t, db, []byte("k1"))
+		drRequireNotFound(t, db, []byte("k2"))
+		drRequireValue(t, db, []byte("k3"), []byte("v3-new"))
+		drRequireValue(t, db, []byte("k4"), []byte("v4"))
+		drRequireNotFound(t, db, []byte("k5"))
+	})
+}
+
+func TestRecoveryWALReplayMixedBatchDeleteAndRangeDelete(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		dir := t.TempDir()
+		opt := newTestOptions(t)
+		opt.WorkDir = dir
+		opt.MemTableEngine = engine
+		opt.MemTableSize = 1 << 16
+		opt.SSTableMaxSz = 1 << 20
+		opt.ValueLogFileSize = 1 << 20
+		opt.ValueThreshold = 1 << 20
+
+		db := Open(opt)
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("a"), Value: []byte("va")},
+			{Key: []byte("b"), Value: []byte("vb")},
+			{Key: []byte("c"), Value: []byte("vc")},
+		}))
+		require.NoError(t, db.DeleteRange([]byte("b"), []byte("d")))
+		require.NoError(t, db.Set([]byte("c"), []byte("vc-new")))
+		require.NoError(t, db.Del([]byte("a")))
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("d"), Value: []byte("vd")},
+			{Key: []byte("e"), Value: []byte("ve")},
+		}))
+
+		drSimulateCrash(t, db)
+
+		db2 := Open(opt)
+		defer func() { _ = db2.Close() }()
+		drRequireNotFound(t, db2, []byte("a"))
+		drRequireNotFound(t, db2, []byte("b"))
+		drRequireValue(t, db2, []byte("c"), []byte("vc-new"))
+		drRequireValue(t, db2, []byte("d"), []byte("vd"))
+		drRequireValue(t, db2, []byte("e"), []byte("ve"))
+	})
+}
+
+func TestRecoveryWALReplayIdempotentAcrossRepeatedReopen(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		dir := t.TempDir()
+		opt := newTestOptions(t)
+		opt.WorkDir = dir
+		opt.MemTableEngine = engine
+		opt.MemTableSize = 1 << 16
+
+		db := Open(opt)
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("k1"), Value: []byte("v1")},
+			{Key: []byte("k2"), Value: []byte("v2")},
+		}))
+		require.NoError(t, db.DeleteRange([]byte("k2"), []byte("k3")))
+		require.NoError(t, db.Set([]byte("k2"), []byte("v2-new")))
+		drSimulateCrash(t, db)
+
+		db2 := Open(opt)
+		drRequireValue(t, db2, []byte("k1"), []byte("v1"))
+		drRequireValue(t, db2, []byte("k2"), []byte("v2-new"))
+		// Replay same WAL one more time (without clean close) and verify no semantic drift.
+		drSimulateCrash(t, db2)
+
+		db3 := Open(opt)
+		defer func() { _ = db3.Close() }()
+		drRequireValue(t, db3, []byte("k1"), []byte("v1"))
+		drRequireValue(t, db3, []byte("k2"), []byte("v2-new"))
+	})
+}
+
+func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		dir := t.TempDir()
+		opt := newTestOptions(t)
+		opt.WorkDir = dir
+		opt.MemTableEngine = engine
+
+		db := Open(opt)
+		require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
+		require.NoError(t, db.SetBatch([]BatchSetItem{
+			{Key: []byte("b1"), Value: []byte("v1")},
+			{Key: []byte("b2"), Value: []byte("v2")},
+			{Key: []byte("b3"), Value: []byte("v3")},
+		}))
+		require.NoError(t, db.Close())
+
+		seg := drFirstWALSegmentPath(t, dir)
+		fi, err := os.Stat(seg)
+		require.NoError(t, err)
+		require.Greater(t, fi.Size(), int64(8))
+		require.NoError(t, os.Truncate(seg, fi.Size()-3))
+
+		db2 := Open(opt)
+		defer func() { _ = db2.Close() }()
+		drRequireValue(t, db2, []byte("anchor"), []byte("ok"))
+
+		found := 0
+		for _, k := range []string{"b1", "b2", "b3"} {
+			if _, err := db2.Get([]byte(k)); err == nil {
+				found++
+			}
+		}
+		require.True(t, found == 0 || found == 3, "batch replay must be atomic, found=%d", found)
+	})
+}
+
+func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		dir := t.TempDir()
+		opt := newTestOptions(t)
+		opt.WorkDir = dir
+		opt.MemTableEngine = engine
+		opt.ValueThreshold = 0
+		opt.ValueLogFileSize = 1 << 16
+
+		v1 := bytes.Repeat([]byte("A"), 1024)
+		v2 := bytes.Repeat([]byte("B"), 1536)
+		db := Open(opt)
+		require.NoError(t, db.Set([]byte("vp-1"), v1))
+		require.NoError(t, db.Set([]byte("vp-2"), v2))
+		require.NoError(t, db.Close())
+
+		db = Open(opt)
+		defer func() { _ = db.Close() }()
+		drRequireValue(t, db, []byte("vp-1"), v1)
+		drRequireValue(t, db, []byte("vp-2"), v2)
+
+		it := db.NewIterator(&utils.Options{IsAsc: true, OnlyUseKey: true})
+		defer func() { _ = it.Close() }()
+		it.Seek([]byte("vp-1"))
+		require.True(t, it.Valid())
+		item, ok := it.Item().(*Item)
+		require.True(t, ok)
+		val, err := item.ValueCopy(nil)
+		require.NoError(t, err)
+		require.Equal(t, v1, val)
+	})
+}
+
+func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "00001.wal")
+	walSyncErr := errors.New("wal sync close error")
+	dirCloseErr := errors.New("dir lock close error")
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		// Open() recovery may issue one sync on the active segment; fail the next
+		// one so the error is observed during DB.Close aggregation.
+		vfs.FailOnNthRule(vfs.OpFileSync, walPath, 2, walSyncErr),
+	))
+
+	opt := newTestOptions(t)
+	opt.WorkDir = dir
+	opt.FS = fs
+	db := Open(opt)
+	require.NoError(t, db.Set([]byte("k"), []byte("v")))
+
+	realLock := db.dirLock
+	db.dirLock = closeFunc(func() error {
+		if realLock != nil {
+			_ = realLock.Close()
+		}
+		return dirCloseErr
+	})
+
+	err := db.Close()
+	require.Error(t, err)
+	require.ErrorIs(t, err, walSyncErr)
+	require.ErrorIs(t, err, dirCloseErr)
+	require.True(t, db.IsClosed())
+}
+
+func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "00001.wal")
+	injected := errors.New("wal write injected")
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpFileWrite, walPath, injected),
+	))
+
+	opt := newTestOptions(t)
+	opt.WorkDir = dir
+	opt.FS = fs
+
+	db := Open(opt)
+	// Use a large payload to force bufio flush and hit underlying file Write.
+	big := bytes.Repeat([]byte("w"), 512<<10)
+	err := db.Set([]byte("first"), big)
+	require.ErrorIs(t, err, injected)
+	// A write-path IO error can poison the current writer state; verify restart
+	// recovery instead of requiring same-process follow-up writes to succeed.
+	err = db.Close()
+	require.ErrorIs(t, err, injected)
+
+	db = Open(opt)
+	defer func() { _ = db.Close() }()
+	_, err = db.Get([]byte("first"))
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	require.NoError(t, db.Set([]byte("second"), []byte("v2")))
+	drRequireValue(t, db, []byte("second"), []byte("v2"))
+}
+
+func TestRecoveryTruncateFailureThenSucceedsWithHealthyFS(t *testing.T) {
+	dir := t.TempDir()
+	opt := newTestOptions(t)
+	opt.WorkDir = dir
+
+	db := Open(opt)
+	require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
+	require.NoError(t, db.Close())
+
+	seg := drFirstWALSegmentPath(t, dir)
+	drAppendPartialWALTail(t, seg)
+
+	truncErr := errors.New("truncate injected")
+	faultFS := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpFileTrunc, seg, truncErr),
+	))
+	err := wal.VerifyDir(dir, faultFS)
+	require.ErrorIs(t, err, truncErr)
+
+	db = Open(opt)
+	defer func() { _ = db.Close() }()
+	drRequireValue(t, db, []byte("anchor"), []byte("ok"))
+}
+
+func TestConcurrentReadWriteFlushCompactionStress(t *testing.T) {
+	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
+		opt := newTestOptions(t)
+		opt.MemTableEngine = engine
+		opt.MemTableSize = 4 << 10
+		opt.NumLevelZeroTables = 8
+		opt.NumCompactors = 2
+		opt.WriteHotKeyLimit = 0
+		db := Open(opt)
+		defer func() { _ = db.Close() }()
+
+		const (
+			writers = 4
+			readers = 3
+			ops     = 180
+		)
+		var wg sync.WaitGroup
+		var writeErr atomic.Int64
+		var readErr atomic.Int64
+		for i := range writers {
+			wg.Go(func() {
+				rng := rand.New(rand.NewSource(int64(1000 + i)))
+				for j := range ops {
+					kid := rng.Intn(128)
+					key := fmt.Appendf(nil, "k-%03d", kid)
+					val := fmt.Appendf(nil, "v-%d-%d", i, j)
+					if err := db.Set(key, val); err != nil {
+						writeErr.Add(1)
+					}
+					if j%120 == 0 {
+						start := fmt.Appendf(nil, "k-%03d", rng.Intn(96))
+						end := fmt.Appendf(nil, "k-%03d", rng.Intn(31)+97)
+						if bytes.Compare(start, end) < 0 {
+							_ = db.DeleteRange(start, end)
+						}
+					}
+				}
+			})
+		}
+		for i := range readers {
+			wg.Go(func() {
+				rng := rand.New(rand.NewSource(int64(2000 + i)))
+				for range ops {
+					key := fmt.Appendf(nil, "k-%03d", rng.Intn(128))
+					_, err := db.Get(key)
+					if err != nil && !errors.Is(err, utils.ErrKeyNotFound) {
+						readErr.Add(1)
+					}
+				}
+			})
+		}
+		wg.Wait()
+		require.EqualValues(t, 0, writeErr.Load())
+		require.EqualValues(t, 0, readErr.Load())
+
+		require.NoError(t, db.Set([]byte("tail"), []byte("ok")))
+		drRequireValue(t, db, []byte("tail"), []byte("ok"))
+	})
 }
