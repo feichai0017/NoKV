@@ -329,3 +329,39 @@ func TestSkiplistIteratorCloseIdempotent(t *testing.T) {
 	assert.Equal(t, int32(1), sl.ref.Load())
 	sl.DecrRef() // ref = 0
 }
+
+func TestSkipListIteratorPrevSeekToLastOutOfRangeContract(t *testing.T) {
+	list := NewSkiplist(1024)
+	for _, k := range []string{"a", "b", "c"} {
+		list.Add(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte(k), 1), []byte("v_"+k)))
+	}
+
+	iterIface := list.NewIterator(&Options{IsAsc: true})
+	iter, ok := iterIface.(*SkipListIterator)
+	require.True(t, ok)
+	defer func() { require.NoError(t, iter.Close()) }()
+
+	iter.SeekToLast()
+	require.True(t, iter.Valid())
+	require.Equal(t, "c", string(splitUserKey(t, iter.Key())))
+
+	iter.Prev()
+	require.True(t, iter.Valid())
+	require.Equal(t, "b", string(splitUserKey(t, iter.Key())))
+	iter.Prev()
+	require.True(t, iter.Valid())
+	require.Equal(t, "a", string(splitUserKey(t, iter.Key())))
+	iter.Prev()
+	require.False(t, iter.Valid())
+	// No resurrection on repeated backward steps while invalid.
+	iter.Prev()
+	require.False(t, iter.Valid())
+
+	// Seek beyond upper bound invalidates; Next/Prev must remain invalid.
+	iter.Seek(kv.InternalKey(kv.CFDefault, []byte("z"), 1))
+	require.False(t, iter.Valid())
+	iter.Next()
+	require.False(t, iter.Valid())
+	iter.Prev()
+	require.False(t, iter.Valid())
+}
