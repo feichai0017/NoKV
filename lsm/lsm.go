@@ -2,6 +2,8 @@ package lsm
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -24,6 +26,11 @@ type LSM struct {
 	wal        *wal.Manager
 	flushMgr   *flush.Manager
 	flushWG    sync.WaitGroup
+	logger     *slog.Logger
+
+	runtimeMu      sync.RWMutex
+	discardStatsCh chan map[manifest.ValueLogID]int64
+	walGCPolicy    WALGCPolicy
 
 	throttleFn func(bool)
 	throttled  atomic.Int32
@@ -35,6 +42,8 @@ type LSM struct {
 type Options struct {
 	// FS provides the filesystem implementation for manifest operations.
 	FS vfs.FS
+	// Logger handles background/storage logs for the LSM subsystem.
+	Logger *slog.Logger
 
 	WorkDir        string
 	MemTableSize   int64
@@ -51,6 +60,7 @@ type Options struct {
 
 	// compact
 	NumCompactors       int
+	CompactionPolicy    string
 	BaseLevelSize       int64
 	LevelSizeMultiplier int // Target size ratio between levels.
 	TableSizeMultiplier int
@@ -81,6 +91,10 @@ type Options struct {
 	// ManifestRewriteThreshold triggers a manifest rewrite when the manifest
 	// grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
+
+	// WALGCPolicy controls whether old WAL segments can be deleted.
+	// Nil defaults to AllowAllWALGCPolicy.
+	WALGCPolicy WALGCPolicy
 }
 
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
@@ -103,20 +117,6 @@ func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVer
 	return lsm.levels.rtCollector.IsKeyCovered(cf, userKey, entryVersion)
 }
 
-// IsKeyCoveredByRangeTombstone checks if a key is covered by any active
-// range tombstone. Pins memtables internally; callers that already hold
-// pinned tables should use checkRangeTombstone directly.
-func (lsm *LSM) IsKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
-	if lsm == nil {
-		return false
-	}
-	tables, release := lsm.GetMemTables()
-	if release != nil {
-		defer release()
-	}
-	return lsm.checkRangeTombstone(cf, userKey, version, tables)
-}
-
 // RangeTombstoneCount returns the number of tracked range tombstones.
 func (lsm *LSM) RangeTombstoneCount() int {
 	if lsm == nil || lsm.levels == nil || lsm.levels.rtCollector == nil {
@@ -133,11 +133,14 @@ func (lsm *LSM) Close() error {
 	if !lsm.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	var closeErr error
 	// wait for all api calls to finish
 	lsm.throttleWrites(false)
-	lsm.closer.Close()
-	if err := lsm.flushMgr.Close(); err != nil {
-		return err
+	if lsm.closer != nil {
+		lsm.closer.Close()
+	}
+	if lsm.flushMgr != nil {
+		closeErr = errors.Join(closeErr, lsm.flushMgr.Close())
 	}
 	lsm.flushWG.Wait()
 
@@ -149,42 +152,87 @@ func (lsm *LSM) Close() error {
 	lsm.lock.Unlock()
 
 	if mem != nil {
-		if err := mem.close(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, mem.close())
 	}
 	for _, mt := range immutables {
 		if mt == nil {
 			continue
 		}
-		if err := mt.close(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, mt.close())
 	}
-	if err := lsm.levels.close(); err != nil {
-		return err
+	if lsm.levels != nil {
+		closeErr = errors.Join(closeErr, lsm.levels.close())
 	}
-	return nil
+	return closeErr
 }
 
 // SetDiscardStatsCh updates the discard stats channel used during compaction.
 func (lsm *LSM) SetDiscardStatsCh(ch *chan map[manifest.ValueLogID]int64) {
-	lsm.option.DiscardStatsCh = ch
-	if lsm.levels != nil {
-		lsm.levels.opt.DiscardStatsCh = ch
+	if lsm == nil {
+		return
 	}
+	var resolved chan map[manifest.ValueLogID]int64
+	if ch != nil {
+		resolved = *ch
+	}
+	lsm.runtimeMu.Lock()
+	lsm.discardStatsCh = resolved
+	lsm.runtimeMu.Unlock()
 }
 
 // SetHotKeyProvider wires a callback that returns currently hot keys as
 // InternalKey values so compaction can prioritise hot ranges.
 func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
+	if lsm == nil {
+		return
+	}
 	if fn == nil {
 		return
 	}
-	lsm.option.HotKeyProvider = fn
 	if lsm.levels != nil {
 		lsm.levels.setHotKeyProvider(fn)
 	}
+}
+
+// SetWALGCPolicy updates the WAL segment-GC strategy used by LSM recovery.
+func (lsm *LSM) SetWALGCPolicy(policy WALGCPolicy) {
+	if lsm == nil {
+		return
+	}
+	lsm.runtimeMu.Lock()
+	lsm.walGCPolicy = normalizeWALGCPolicy(policy)
+	lsm.runtimeMu.Unlock()
+}
+
+func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
+	if lsm == nil {
+		return nil
+	}
+	lsm.runtimeMu.RLock()
+	ch := lsm.discardStatsCh
+	lsm.runtimeMu.RUnlock()
+	return ch
+}
+
+func (lsm *LSM) getWALGCPolicy() WALGCPolicy {
+	if lsm == nil {
+		return AllowAllWALGCPolicy{}
+	}
+	lsm.runtimeMu.RLock()
+	policy := lsm.walGCPolicy
+	lsm.runtimeMu.RUnlock()
+	return normalizeWALGCPolicy(policy)
+}
+
+func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
+	return lsm.getWALGCPolicy().CanRemoveSegment(id)
+}
+
+func (lsm *LSM) getLogger() *slog.Logger {
+	if lsm == nil || lsm.logger == nil {
+		return slog.Default()
+	}
+	return lsm.logger
 }
 
 // SetThrottleCallback registers a callback used to toggle write throttling at the DB layer.
@@ -365,34 +413,65 @@ func (lsm *LSM) CurrentVersion() manifest.Version {
 	return lsm.levels.manifestMgr.Current()
 }
 
-// NewLSM _
-func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
-	if opt.CompactionValueWeight < 0 {
-		opt.CompactionValueWeight = 0
+// NewLSM constructs the LSM core and returns initialization errors.
+func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
+	if opt == nil {
+		return nil, errors.New("lsm: nil options")
 	}
-	if opt.CompactionValueWeight == 0 {
-		opt.CompactionValueWeight = 0.35
+	if walMgr == nil {
+		return nil, errors.New("lsm: nil wal manager")
 	}
-	if opt.CompactionValueAlertThreshold <= 0 {
-		opt.CompactionValueAlertThreshold = 0.6
+	frozen := opt.Clone()
+	if frozen == nil {
+		return nil, errors.New("lsm: nil cloned options")
 	}
-	lsm := &LSM{option: opt, wal: walMgr}
+	if frozen.CompactionValueWeight < 0 {
+		frozen.CompactionValueWeight = 0
+	}
+	if frozen.CompactionValueWeight == 0 {
+		frozen.CompactionValueWeight = 0.35
+	}
+	if frozen.CompactionValueAlertThreshold <= 0 {
+		frozen.CompactionValueAlertThreshold = 0.6
+	}
+	lsm := &LSM{
+		option: frozen,
+		wal:    walMgr,
+		closer: utils.NewCloser(),
+		logger: frozen.Logger,
+	}
+	if lsm.logger == nil {
+		lsm.logger = slog.Default()
+	}
+	if frozen.DiscardStatsCh != nil {
+		lsm.discardStatsCh = *frozen.DiscardStatsCh
+	}
+	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
-	lsm.levels = lsm.initLevelManager(opt)
+	lm, err := lsm.initLevelManager(frozen)
+	if err != nil {
+		return nil, fmt.Errorf("lsm init level manager: %w", err)
+	}
+	lsm.levels = lm
 	// Populate range tombstone collector from existing SSTables
 	if lsm.levels != nil && lsm.levels.rtCollector != nil {
 		lsm.levels.rebuildRangeTombstones()
 	}
 	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
-	lsm.memTable, lsm.immutables = lsm.recovery()
+	lsm.memTable, lsm.immutables, err = lsm.recovery()
+	if err != nil {
+		_ = lsm.Close()
+		return nil, fmt.Errorf("lsm recovery: %w", err)
+	}
 	lsm.startFlushWorkers(1)
 	for _, mt := range lsm.immutables {
-		lsm.submitFlush(mt)
+		if err := lsm.submitFlush(mt); err != nil {
+			_ = lsm.Close()
+			return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
+		}
 	}
-	// initialize closer for resource recycling signal control
-	lsm.closer = utils.NewCloser()
-	return lsm
+	return lsm, nil
 }
 
 // StartCompacter _
@@ -458,14 +537,22 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 		}
 		lsm.lock.RUnlock()
 
-		var old *memTable
+		var (
+			old    *memTable
+			rotErr error
+		)
 		lsm.lock.Lock()
 		if lsm.memTable == mt && !mt.canReserve(estimate, lsm.option.MemTableSize) {
-			old = lsm.rotateLocked()
+			old, rotErr = lsm.rotateLocked()
 		}
 		lsm.lock.Unlock()
+		if rotErr != nil {
+			return rotErr
+		}
 		if old != nil {
-			lsm.submitFlush(old)
+			if err := lsm.submitFlush(old); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -506,14 +593,22 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 		}
 		lsm.lock.RUnlock()
 
-		var old *memTable
+		var (
+			old    *memTable
+			rotErr error
+		)
 		lsm.lock.Lock()
 		if lsm.memTable == mt && !mt.canReserve(totalEstimate, lsm.option.MemTableSize) {
-			old = lsm.rotateLocked()
+			old, rotErr = lsm.rotateLocked()
 		}
 		lsm.lock.Unlock()
+		if rotErr != nil {
+			return rotErr
+		}
 		if old != nil {
-			lsm.submitFlush(old)
+			if err := lsm.submitFlush(old); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -612,19 +707,26 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 }
 
 // Rotate seals the active memtable, creates a new one, and schedules flush.
-func (lsm *LSM) Rotate() {
+func (lsm *LSM) Rotate() error {
 	lsm.lock.Lock()
-	old := lsm.rotateLocked()
+	old, err := lsm.rotateLocked()
 	lsm.lock.Unlock()
-	lsm.submitFlush(old)
+	if err != nil {
+		return err
+	}
+	return lsm.submitFlush(old)
 }
 
 // rotateLocked swaps the active memtable; caller must hold lsm.lock.
-func (lsm *LSM) rotateLocked() *memTable {
+func (lsm *LSM) rotateLocked() (*memTable, error) {
 	old := lsm.memTable
+	next, err := lsm.NewMemtable()
+	if err != nil {
+		return nil, err
+	}
 	lsm.immutables = append(lsm.immutables, old)
-	lsm.memTable = lsm.NewMemtable()
-	return old
+	lsm.memTable = next
+	return old, nil
 }
 
 // GetMemTables pins active+immutable memtables and returns an unlock callback.
@@ -650,15 +752,16 @@ func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
 
 }
 
-func (lsm *LSM) submitFlush(mt *memTable) {
+func (lsm *LSM) submitFlush(mt *memTable) error {
 	if mt == nil {
-		return
+		return nil
 	}
 	mt.IncrRef()
 	if _, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt}); err != nil {
 		mt.DecrRef()
-		utils.Panic(err)
+		return err
 	}
+	return nil
 }
 
 func (lsm *LSM) startFlushWorkers(n int) {

@@ -146,14 +146,17 @@ func newTableBuiler(opt *Options) *tableBuilder {
 // Empty returns whether it's empty.
 func (tb *tableBuilder) empty() bool { return len(tb.keyHashes) == 0 }
 
-func (tb *tableBuilder) finish() []byte {
-	bd := tb.done()
+func (tb *tableBuilder) finish() ([]byte, error) {
+	bd, err := tb.done()
+	if err != nil {
+		return nil, err
+	}
 	buf := make([]byte, bd.size)
 	written := bd.Copy(buf)
 	utils.CondPanicFunc(written != len(buf), func() error {
 		return fmt.Errorf("tableBuilder.finish: written=%d buf=%d", written, len(buf))
 	})
-	return buf
+	return buf, nil
 }
 func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 	if tb.curBlock == nil {
@@ -302,7 +305,10 @@ func writeBuildDataToSST(ss *file.SSTable, bd buildData) error {
 }
 
 func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
-	bd := tb.done()
+	bd, err := tb.done()
+	if err != nil {
+		return nil, err
+	}
 	t = &table{lm: lm, fid: utils.FID(tableName)}
 	// Throughput-first mode: write directly to final SST when manifest sync is disabled.
 	if lm != nil && lm.opt != nil && !lm.opt.ManifestSync {
@@ -384,10 +390,10 @@ func (bd *buildData) Copy(dst []byte) int {
 	return written
 }
 
-func (tb *tableBuilder) done() buildData {
+func (tb *tableBuilder) done() (buildData, error) {
 	tb.finishBlock()
 	if len(tb.blockList) == 0 {
-		return buildData{}
+		return buildData{}, nil
 	}
 	bd := buildData{
 		blockList: tb.blockList,
@@ -406,17 +412,20 @@ func (tb *tableBuilder) done() buildData {
 	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
 	// +-------------------------+-----------------------+------------------------------+
 
-	index, dataSize := tb.buildIndex(f)
+	index, dataSize, err := tb.buildIndex(f)
+	if err != nil {
+		return buildData{}, err
+	}
 	checksum := tb.calculateChecksum(index)
 	bd.index = index
 	bd.checksum = checksum
 	total := int(dataSize) + len(index) + len(checksum) + 4 + 4
 	bd.size = total
 	tb.estimateSz = int64(total)
-	return bd
+	return bd, nil
 }
 
-func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
+func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32, error) {
 	tableIndex := &pb.TableIndex{}
 	if len(bloom) > 0 {
 		tableIndex.BloomFilter = bloom
@@ -437,8 +446,10 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32) {
 		dataSize += uint32(tb.blockList[i].end)
 	}
 	data, err := proto.Marshal(tableIndex)
-	utils.Panic(err)
-	return data, dataSize
+	if err != nil {
+		return nil, 0, err
+	}
+	return data, dataSize, nil
 }
 
 func (tb *tableBuilder) writeBlockOffsets() []*pb.BlockOffset {
@@ -482,8 +493,6 @@ type blockIterator struct {
 	tableID uint64
 	blockID int
 
-	prevOverlap uint16
-
 	entry     kv.Entry
 	valStruct kv.ValueStruct
 	item      Item
@@ -516,7 +525,6 @@ func (itr *blockIterator) setBlock(b *block) {
 	itr.err = nil
 	itr.idx = 0
 	itr.baseKey = itr.baseKey[:0]
-	itr.prevOverlap = 0
 	itr.key = itr.key[:0]
 	itr.val = itr.val[:0]
 	// Drop the index from the block. We don't need it anymore.
@@ -599,14 +607,12 @@ func (itr *blockIterator) setIdx(i int) {
 	entryData := itr.data[startOffset:endOffset]
 	var h header
 	h.decode(entryData)
-	if h.overlap > itr.prevOverlap {
-		itr.key = append(itr.key[:itr.prevOverlap], itr.baseKey[itr.prevOverlap:h.overlap]...)
-	}
-
-	itr.prevOverlap = h.overlap
 	valueOff := headerSize + h.diff
 	diffKey := entryData[headerSize:valueOff]
-	itr.key = append(itr.key[:h.overlap], diffKey...)
+	// Rebuild key from baseKey + diff for every index access.
+	// Binary seek jumps across entries, so incremental overlap state is unsafe.
+	itr.key = append(itr.key[:0], itr.baseKey[:h.overlap]...)
+	itr.key = append(itr.key, diffKey...)
 	itr.entry.Key = itr.key
 	itr.valStruct.DecodeValue(entryData[valueOff:])
 	itr.val = itr.valStruct.Value
@@ -676,7 +682,6 @@ func (itr *blockIterator) reset() {
 	itr.block = nil
 	itr.tableID = 0
 	itr.blockID = 0
-	itr.prevOverlap = 0
 	itr.entry = kv.Entry{}
 	itr.valStruct = kv.ValueStruct{}
 	itr.item = Item{}

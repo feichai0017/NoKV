@@ -34,6 +34,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	workdir := fs.String("workdir", "", "optional manifest work directory for persisting/loading PD region catalog")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve pd workdir")
 	scope := fs.String("scope", "host", "scope for config-resolved pd workdir: host|docker")
+	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -108,12 +109,22 @@ func runPDCmd(w io.Writer, args []string) error {
 	go func() {
 		serveErrCh <- grpcServer.Serve(lis)
 	}()
+	metricsLn, err := startExpvarServer(*metricsAddr)
+	if err != nil {
+		return fmt.Errorf("start pd metrics endpoint: %w", err)
+	}
+	if metricsLn != nil {
+		defer func() { _ = metricsLn.Close() }()
+	}
 
 	if store != nil {
 		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loadedRegions, workdirPath)
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 	}
 	_, _ = fmt.Fprintf(w, "PD-lite service listening on %s\n", lis.Addr().String())
+	if metricsLn != nil {
+		_, _ = fmt.Fprintf(w, "PD metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
+	}
 	ctx, cancel := pdNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
@@ -20,7 +21,7 @@ import (
 )
 
 // initLevelManager initialize the levelManager
-func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
+func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 	lm := &levelManager{lsm: lsm} // dereference lsm
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
@@ -29,21 +30,26 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	}
 	// read the manifest file to build the manager
 	if err := lm.loadManifest(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	if lm.manifestMgr != nil {
 		lm.manifestMgr.SetSync(opt.ManifestSync)
 		lm.manifestMgr.SetRewriteThreshold(opt.ManifestRewriteThreshold)
 	}
 	if err := lm.build(); err != nil {
-		panic(err)
+		return nil, err
 	}
-	lm.rtCollector = NewRangeTombstoneCollector()
-	lm.compaction = compact.NewManager(lm, lm.opt.NumCompactors)
+	lm.rtCollector = tombstone.NewCollector()
+	lm.compaction = compact.NewManager(
+		lm,
+		lm.opt.NumCompactors,
+		compact.NewPolicy(lm.opt.CompactionPolicy),
+		lsm.getLogger(),
+	)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
 	}
-	return lm
+	return lm, nil
 }
 
 type levelManager struct {
@@ -55,7 +61,7 @@ type levelManager struct {
 	lsm              *LSM
 	compactState     *compact.State
 	compaction       *compact.Manager
-	rtCollector      *RangeTombstoneCollector
+	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
@@ -69,18 +75,20 @@ type levelManager struct {
 type LevelMetrics = metrics.LevelMetrics
 
 func (lm *levelManager) close() error {
-	if err := lm.cache.close(); err != nil {
-		return err
+	var closeErr error
+	if lm.cache != nil {
+		closeErr = errors.Join(closeErr, lm.cache.close())
 	}
-	if err := lm.manifestMgr.Close(); err != nil {
-		return err
+	if lm.manifestMgr != nil {
+		closeErr = errors.Join(closeErr, lm.manifestMgr.Close())
 	}
 	for i := range lm.levels {
-		if err := lm.levels[i].close(); err != nil {
-			return err
+		if lm.levels[i] == nil {
+			continue
 		}
+		closeErr = errors.Join(closeErr, lm.levels[i].close())
 	}
-	return nil
+	return closeErr
 }
 
 func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
@@ -91,6 +99,13 @@ func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
 		return
 	}
 	lm.hotProvider.Store(fn)
+}
+
+func (lm *levelManager) getLogger() *slog.Logger {
+	if lm == nil || lm.lsm == nil {
+		return slog.Default()
+	}
+	return lm.lsm.getLogger()
 }
 
 func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
@@ -211,7 +226,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 
 	// build a builder and collect range tombstones
 	builder := newTableBuiler(lm.opt)
-	var newTombstones []RangeTombstone
+	var newTombstones []tombstone.Range
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
 		if entry != nil && entry.IsRangeDelete() && lm.rtCollector != nil {
@@ -219,7 +234,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 			if !ok {
 				continue
 			}
-			newTombstones = append(newTombstones, RangeTombstone{
+			newTombstones = append(newTombstones, tombstone.Range{
 				CF:      cf,
 				Start:   kv.SafeCopy(nil, start),
 				End:     kv.SafeCopy(nil, entry.RangeEnd()),
@@ -277,7 +292,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 	}
 	if lm.compaction != nil {
-		lm.compaction.Trigger("flush")
+		lm.compaction.Trigger()
 	}
 	return nil
 }
@@ -411,30 +426,10 @@ func (lm *levelManager) maxVersion() uint64 {
 }
 
 func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
-	if lm == nil || lm.manifestMgr == nil {
+	if lm == nil || lm.lsm == nil {
 		return true
 	}
-	ptrs := lm.manifestMgr.RaftPointerSnapshot()
-	for _, ptr := range ptrs {
-		if ptr.SegmentIndex > 0 {
-			if id >= uint32(ptr.SegmentIndex) {
-				return false
-			}
-		}
-		if ptr.Segment == 0 {
-			continue
-		}
-		if id >= ptr.Segment {
-			return false
-		}
-	}
-	if lm.lsm != nil && lm.lsm.wal != nil {
-		metrics := lm.lsm.wal.SegmentRecordMetrics(id)
-		if metrics.RaftRecords() > 0 {
-			log.Printf("[wal] segment %d retains raft records during GC eligibility (raft_entries=%d raft_states=%d raft_snapshots=%d)", id, metrics.RaftEntries, metrics.RaftStates, metrics.RaftSnapshots)
-		}
-	}
-	return true
+	return lm.lsm.canRemoveWalSegment(id)
 }
 
 func (lm *levelManager) prefetch(key []byte) {
@@ -483,23 +478,20 @@ func (lh *levelHandler) close() error {
 	ingestTables := append([]*table(nil), lh.ingest.allTables()...)
 	lh.RUnlock()
 
+	var closeErr error
 	for _, t := range tables {
 		if t == nil {
 			continue
 		}
-		if err := t.closeHandle(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, t.closeHandle())
 	}
 	for _, t := range ingestTables {
 		if t == nil {
 			continue
 		}
-		if err := t.closeHandle(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, t.closeHandle())
 	}
-	return nil
+	return closeErr
 }
 func (lh *levelHandler) add(t *table) {
 	if t == nil {
@@ -802,46 +794,72 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 }
 
 func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	table := lh.getTableForKey(key)
-	if table == nil {
-		return nil, utils.ErrKeyNotFound
-	}
-	if maxVersion != nil && table.MaxVersionVal() <= *maxVersion {
+	tables := lh.getTablesForKey(key)
+	if len(tables) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
 	if maxVersion == nil {
 		var tmp uint64
 		maxVersion = &tmp
 	}
-	if entry, err := table.Search(key, maxVersion); err == nil {
-		return entry, nil
-	} else if err != utils.ErrKeyNotFound {
-		return nil, err
+	var best *kv.Entry
+	for _, table := range tables {
+		if table == nil {
+			continue
+		}
+		if table.MaxVersionVal() <= *maxVersion {
+			continue
+		}
+		if entry, err := table.Search(key, maxVersion); err == nil {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+			continue
+		} else if err != utils.ErrKeyNotFound {
+			if best != nil {
+				best.DecrRef()
+			}
+			return nil, err
+		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
 }
+
 func (lh *levelHandler) getTableForKey(key []byte) *table {
+	tables := lh.getTablesForKey(key)
+	if len(tables) == 0 {
+		return nil
+	}
+	return tables[0]
+}
+
+// getTablesForKey returns every table in this level whose user-key range covers key.
+// Tables are returned in min-key order.
+func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 ||
-		utils.CompareUserKeys(key, lh.tables[len(lh.tables)-1].MaxKey()) > 0 {
+	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
-
-	// L1+ tables are sorted and non-overlapping by user-key range.
-	// Find the first table whose max key is >= target key.
-	idx := sort.Search(len(lh.tables), func(i int) bool {
-		return utils.CompareUserKeys(lh.tables[i].MaxKey(), key) >= 0
-	})
-	if idx >= len(lh.tables) {
-		return nil
+	out := make([]*table, 0, 1)
+	for _, t := range lh.tables {
+		if t == nil {
+			continue
+		}
+		// Since min keys are sorted ascending, we can stop once min > key.
+		if utils.CompareUserKeys(t.MinKey(), key) > 0 {
+			break
+		}
+		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 {
+			out = append(out, t)
+		}
 	}
-	candidate := lh.tables[idx]
-	if utils.CompareUserKeys(key, candidate.MinKey()) < 0 {
-		return nil
-	}
-	return candidate
+	return out
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1

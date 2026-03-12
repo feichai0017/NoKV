@@ -38,8 +38,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	raftDebugLog := fs.Bool("raft-debug-log", false, "enable verbose raft debug logging")
 	pdAddr := fs.String("pd-addr", "", "PD-lite gRPC endpoint for cluster mode (required)")
 	pdTimeout := fs.Duration("pd-timeout", 2*time.Second, "timeout for PD-lite heartbeat RPCs")
+	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	var peerFlags []string
-	fs.Func("peer", "remote store mapping in the form storeID=address (repeatable)", func(value string) error {
+	fs.Func("peer", "remote raft peer mapping in the form peerID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			return fmt.Errorf("peer value cannot be empty")
@@ -113,19 +114,23 @@ func runServeCmd(w io.Writer, args []string) error {
 	defer func() {
 		_ = server.Close()
 	}()
+	metricsLn, err := startExpvarServer(*metricsAddr)
+	if err != nil {
+		return fmt.Errorf("start serve metrics endpoint: %w", err)
+	}
+	if metricsLn != nil {
+		defer func() { _ = metricsLn.Close() }()
+	}
 
 	transport := server.Transport()
 	for _, mapping := range peerFlags {
 		parts := strings.SplitN(mapping, "=", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid --peer value %q (want storeID=address)", mapping)
+			return fmt.Errorf("invalid --peer value %q (want peerID=address)", mapping)
 		}
 		id, err := parseUint(parts[0])
 		if err != nil {
-			return fmt.Errorf("invalid store id in --peer %q: %w", mapping, err)
-		}
-		if id == *storeID {
-			continue
+			return fmt.Errorf("invalid peer id in --peer %q: %w", mapping, err)
 		}
 		transport.SetPeer(id, parts[1])
 	}
@@ -154,6 +159,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "NoKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	if metricsLn != nil {
+		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
+	}
 	_, _ = fmt.Fprintf(w, "Serve mode: cluster (PD enabled, addr=%s)\n", strings.TrimSpace(*pdAddr))
 	if len(peerFlags) > 0 {
 		_, _ = fmt.Fprintf(w, "Configured peers: %s\n", strings.Join(peerFlags, ", "))

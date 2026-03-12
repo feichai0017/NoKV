@@ -24,8 +24,6 @@ default_engines="nokv,badger,pebble"
 default_records=1000000
 default_ops=1000000
 default_conc=16
-default_batch_insert="false"
-default_batch_size=1000000
 
 ycsb_engines="${YCSB_ENGINES:-$default_engines}"
 ycsb_workloads="${YCSB_WORKLOADS:-$default_workloads}"
@@ -33,7 +31,8 @@ ycsb_records="${YCSB_RECORDS:-$default_records}"
 ycsb_ops="${YCSB_OPS:-$default_ops}"
 ycsb_conc="${YCSB_CONC:-$default_conc}"
 ycsb_block_cache_mb="${YCSB_BLOCK_CACHE_MB:-512}"
-ycsb_value_size="${YCSB_VALUE_SIZE:-256}"
+ycsb_nokv_compaction_policy="${YCSB_NOKV_COMPACTION_POLICY:-leveled}"
+ycsb_value_size="${YCSB_VALUE_SIZE:-1000}"
 ycsb_scan_len="${YCSB_SCAN_LEN:-100}"
 ycsb_seed="${YCSB_SEED:-42}"
 ycsb_sync="${YCSB_SYNC_WRITES:-false}"
@@ -41,10 +40,8 @@ ycsb_badger_comp="${YCSB_BADGER_COMPRESSION:-none}"
 ycsb_pebble_comp="${YCSB_PEBBLE_COMPRESSION:-none}"
 ycsb_rocks_comp="${YCSB_ROCKS_COMPRESSION:-none}"
 benchdir="${YCSB_BENCHDIR:-benchmark_data}"
-ycsb_warm_ops="${YCSB_WARM_OPS:-100000}"
+ycsb_warm_ops="${YCSB_WARM_OPS:-0}"
 ycsb_timeout="${YCSB_GO_TEST_TIMEOUT:-}"
-ycsb_batch_insert="${YCSB_BATCH_INSERT:-$default_batch_insert}"
-ycsb_batch_size="${YCSB_BATCH_SIZE:-$default_batch_size}"
 
 export NOKV_RUN_BENCHMARKS=1
 
@@ -114,9 +111,8 @@ args=(
   -ycsb_value_size "${ycsb_value_size}"
   -ycsb_rocks_compression "${ycsb_rocks_comp}"
   -ycsb_block_cache_mb "${ycsb_block_cache_mb}"
+  -ycsb_nokv_compaction_policy "${ycsb_nokv_compaction_policy}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
-  -ycsb_batch_insert="${ycsb_batch_insert}"
-  -ycsb_batch_size="${ycsb_batch_size}"
 )
 
 
