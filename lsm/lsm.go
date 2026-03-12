@@ -51,6 +51,7 @@ type Options struct {
 
 	// compact
 	NumCompactors       int
+	CompactionPolicy    string
 	BaseLevelSize       int64
 	LevelSizeMultiplier int // Target size ratio between levels.
 	TableSizeMultiplier int
