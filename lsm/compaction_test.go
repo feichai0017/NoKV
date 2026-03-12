@@ -7,6 +7,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCompactionMoveToIngest(t *testing.T) {
@@ -181,7 +182,7 @@ func TestCompactStatusGuards(t *testing.T) {
 	if cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected overlapping compaction to be rejected")
 	}
-	cs.Delete(cd.stateEntry())
+	require.Nil(t, cs.Delete(cd.stateEntry()))
 	if !cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected compareAndAdd to succeed after delete")
 	}
@@ -244,7 +245,7 @@ func TestRunCompactDefIngestNoneDecrementsTopOnce(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
 		t.Fatalf("runCompactDef ingest-none: %v", err)
 	}
-	lsm.levels.compactState.Delete(cd.stateEntry())
+	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 }
 
@@ -291,7 +292,7 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef ingest-drain: %v", err)
 	}
-	lsm.levels.compactState.Delete(cd.stateEntry())
+	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
 		if hasIngestTable(target, tbl.fid) {
@@ -342,7 +343,7 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef ingest-keep: %v", err)
 	}
-	lsm.levels.compactState.Delete(cd.stateEntry())
+	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	if target.numIngestTables() == 0 {
 		t.Fatalf("expected ingest tables to remain after ingest-keep compaction")
