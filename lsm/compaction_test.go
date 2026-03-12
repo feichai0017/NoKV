@@ -6,6 +6,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -355,57 +356,57 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 }
 
 func TestCompactRangeTracker_CoversWithMonotonicKeys(t *testing.T) {
-	tracker := newCompactRangeTracker()
+	tracker := tombstone.NewCompactionTracker()
 
 	// Compaction iterates keys in ascending order. Once a range tombstone
 	// [b,f)@10 has been seen, subsequent keys >= b should respect it until f.
-	tracker.add(RangeTombstone{
+	tracker.Add(tombstone.Range{
 		CF:      kv.CFDefault,
 		Start:   []byte("b"),
 		End:     []byte("f"),
 		Version: 10,
 	})
 
-	if !tracker.covers(kv.CFDefault, []byte("b"), 1) {
+	if !tracker.Covers(kv.CFDefault, []byte("b"), 1) {
 		t.Fatalf("expected key b@1 to be covered")
 	}
-	if !tracker.covers(kv.CFDefault, []byte("e"), 9) {
+	if !tracker.Covers(kv.CFDefault, []byte("e"), 9) {
 		t.Fatalf("expected key e@9 to be covered")
 	}
-	if tracker.covers(kv.CFDefault, []byte("e"), 10) {
+	if tracker.Covers(kv.CFDefault, []byte("e"), 10) {
 		t.Fatalf("expected key e@10 not covered when versions are equal")
 	}
-	if tracker.covers(kv.CFDefault, []byte("f"), 1) {
+	if tracker.Covers(kv.CFDefault, []byte("f"), 1) {
 		t.Fatalf("expected key f@1 not covered (end is exclusive)")
 	}
 }
 
 func TestCompactRangeTracker_OverlapAndCFIsolation(t *testing.T) {
-	tracker := newCompactRangeTracker()
+	tracker := tombstone.NewCompactionTracker()
 
-	tracker.add(RangeTombstone{
+	tracker.Add(tombstone.Range{
 		CF:      kv.CFDefault,
 		Start:   []byte("a"),
 		End:     []byte("z"),
 		Version: 100,
 	})
-	tracker.add(RangeTombstone{
+	tracker.Add(tombstone.Range{
 		CF:      kv.CFDefault,
 		Start:   []byte("d"),
 		End:     []byte("h"),
 		Version: 200,
 	})
 
-	if !tracker.covers(kv.CFDefault, []byte("e"), 150) {
+	if !tracker.Covers(kv.CFDefault, []byte("e"), 150) {
 		t.Fatalf("expected key e@150 covered by newer overlapping tombstone")
 	}
-	if tracker.covers(kv.CFDefault, []byte("e"), 200) {
+	if tracker.Covers(kv.CFDefault, []byte("e"), 200) {
 		t.Fatalf("expected key e@200 not covered when versions are equal")
 	}
-	if !tracker.covers(kv.CFDefault, []byte("y"), 99) {
+	if !tracker.Covers(kv.CFDefault, []byte("y"), 99) {
 		t.Fatalf("expected key y@99 covered by wide tombstone")
 	}
-	if tracker.covers(kv.CFLock, []byte("e"), 1) {
+	if tracker.Covers(kv.CFLock, []byte("e"), 1) {
 		t.Fatalf("expected key e@1 in lock CF not covered by default CF tombstones")
 	}
 }
