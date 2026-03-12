@@ -1749,7 +1749,7 @@ func TestImportExternalSST(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to build SST file: %v", err)
 	}
-	testTable.closeHandle()
+	require.NoError(t, testTable.closeHandle())
 	builder.Close()
 
 	require.NoError(t, lsm.ImportExternalSST([]string{testFilePath}))
@@ -1807,7 +1807,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	})
 	tbl1, err := builder1.flush(lsm.levels, sst1Path)
 	require.NoError(t, err)
-	tbl1.closeHandle()
+	require.NoError(t, tbl1.closeHandle())
 	builder1.Close()
 
 	sst2Path := workDir + "/99996.sst"
@@ -1818,7 +1818,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	})
 	tbl2, err := builder2.flush(lsm.levels, sst2Path)
 	require.NoError(t, err)
-	tbl2.closeHandle()
+	require.NoError(t, tbl2.closeHandle())
 	builder2.Close()
 
 	err = lsm.ImportExternalSST([]string{sst1Path, sst2Path})
@@ -1834,7 +1834,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	})
 	tblValid, err := builderValid.flush(lsm.levels, validSSTPath)
 	require.NoError(t, err)
-	tblValid.closeHandle()
+	require.NoError(t, tblValid.closeHandle())
 	builderValid.Close()
 	require.NoError(t, lsm.ImportExternalSST([]string{validSSTPath}))
 	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
@@ -1852,7 +1852,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	})
 	tblOverlap, err := builderOverlap.flush(lsm.levels, overlapSSTPath)
 	require.NoError(t, err)
-	tblOverlap.closeHandle()
+	require.NoError(t, tblOverlap.closeHandle())
 	builderOverlap.Close()
 
 	err = lsm.ImportExternalSST([]string{overlapSSTPath})
@@ -1897,7 +1897,7 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	})
 	tbl, err := builder.flush(lsm1.levels, testSSTPath)
 	require.NoError(t, err)
-	tbl.closeHandle()
+	require.NoError(t, tbl.closeHandle())
 	builder.Close()
 
 	err = lsm1.ImportExternalSST([]string{testSSTPath})
@@ -1965,7 +1965,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	})
 	tbl, err := builder.flush(lsm.levels, testSSTPath)
 	require.NoError(t, err)
-	tbl.closeHandle()
+	require.NoError(t, tbl.closeHandle())
 	builder.Close()
 
 	// Test 1: First import should succeed and key should be accessible
