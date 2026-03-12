@@ -76,6 +76,9 @@ func (e *nokvEngine) Open(clean bool) error {
 	if e.memtableEngine != "" {
 		opt.MemTableEngine = e.memtableEngine
 	}
+	if e.opts.NoKVCompactionPolicy != "" {
+		opt.CompactionPolicy = NoKV.CompactionPolicy(e.opts.NoKVCompactionPolicy)
+	}
 	if e.opts.BlockCacheMB >= 0 {
 		// BlockCacheSize counts blocks; translate MB to ~4KB blocks for parity with other engines.
 		opt.BlockCacheSize = e.opts.BlockCacheMB * (1 << 20) / (4 << 10)
