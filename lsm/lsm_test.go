@@ -1757,6 +1757,7 @@ func TestImportExternalSST(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
 }
 
 func TestImportExternalSSTValidationFailure(t *testing.T) {
@@ -1840,6 +1841,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("valid"), entry.Value)
+	entry.DecrRef()
 
 	// Test 6: Import SST that overlaps with existing L0 table
 	overlapSSTPath := workDir + "/99994.sst"
@@ -1927,6 +1929,7 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
 }
 
 func TestImportExternalSSTIdempotency(t *testing.T) {
@@ -1967,6 +1970,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
 
 	// Test 2: Re-importing the same SST file should fail
 	err = lsm.ImportExternalSST([]string{testSSTPath})

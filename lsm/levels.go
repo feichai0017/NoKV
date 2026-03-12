@@ -1059,13 +1059,13 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 	rollback := func() {
 		for sourcePath, targetPath := range pathMappings {
 			if _, err := fs.Stat(targetPath); err == nil {
-				_ = fs.Remove(sourcePath)
 				_ = fs.Rename(targetPath, sourcePath)
 			}
 		}
 		for _, tbl := range importedTables {
 			if tbl != nil {
 				lm.cache.delIndex(tbl.fid)
+				tbl.closeHandle()
 			}
 		}
 		for _, fid := range tempFIDs {
