@@ -25,9 +25,6 @@ func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 	lm := &levelManager{lsm: lsm} // dereference lsm
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
-	if lm.opt.IngestCompactBatchSize <= 0 {
-		lm.opt.IngestCompactBatchSize = 4
-	}
 	// read the manifest file to build the manager
 	if err := lm.loadManifest(); err != nil {
 		return nil, err

@@ -3,8 +3,17 @@ package NoKV
 import (
 	"time"
 
+	lsmpkg "github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
+)
+
+const (
+	defaultWriteBatchMaxCount             = 64
+	defaultWriteBatchMaxSize        int64 = 1 << 20
+	defaultHotRingTopK                    = 16
+	defaultHotReadPrefetchThreshold int32 = 16
+	defaultHotReadPrefetchCooldown        = 15 * time.Second
 )
 
 // Options holds the top-level database configuration.
@@ -69,6 +78,12 @@ type Options struct {
 	HotRingEnabled  bool
 	HotRingBits     uint8
 	HotRingTopK     int
+	// HotReadPrefetchThreshold enqueues async read prefetch once a key reaches
+	// this hot-read count. Values <= 0 fall back to the default threshold.
+	HotReadPrefetchThreshold int32
+	// HotReadPrefetchCooldown suppresses repeated prefetch for the same hot key
+	// during this interval. Values <= 0 fall back to the default cooldown.
+	HotReadPrefetchCooldown time.Duration
 	// HotRingRotationInterval enables dual-ring rotation for hotness tracking.
 	// Zero disables rotation.
 	HotRingRotationInterval time.Duration
@@ -129,6 +144,12 @@ type Options struct {
 	// momentarily empty, letting small bursts share one WAL fsync/apply pass.
 	// Zero disables the delay.
 	WriteBatchWait time.Duration
+	// WriteThrottleMinRate is the target write admission rate in bytes/sec when
+	// slowdown pressure approaches the stop threshold.
+	WriteThrottleMinRate int64
+	// WriteThrottleMaxRate is the target write admission rate in bytes/sec when
+	// slowdown first becomes active.
+	WriteThrottleMaxRate int64
 
 	// Block cache configuration for read path optimization. Cached blocks
 	// target L0/L1; colder data relies on the OS page cache.
@@ -175,6 +196,24 @@ type Options struct {
 	// NumLevelZeroTables controls when write throttling kicks in and feeds into
 	// the compaction priority calculation. Zero falls back to the legacy default.
 	NumLevelZeroTables int
+	// L0SlowdownWritesTrigger starts write pacing when L0 table count reaches
+	// this threshold. Zero falls back to NumLevelZeroTables.
+	L0SlowdownWritesTrigger int
+	// L0StopWritesTrigger blocks writes when L0 table count reaches this
+	// threshold. Zero falls back to 3*NumLevelZeroTables.
+	L0StopWritesTrigger int
+	// L0ResumeWritesTrigger clears throttling only when L0 table count drops to
+	// this threshold or lower. Zero falls back to ~75% of slowdown threshold.
+	L0ResumeWritesTrigger int
+	// CompactionSlowdownTrigger starts write pacing when max compaction score
+	// reaches this value. Zero falls back to 4.0.
+	CompactionSlowdownTrigger float64
+	// CompactionStopTrigger blocks writes when max compaction score reaches this
+	// value. Zero falls back to 12.0.
+	CompactionStopTrigger float64
+	// CompactionResumeTrigger clears throttling only when max compaction score
+	// drops to this value or lower. Zero falls back to 2.0.
+	CompactionResumeTrigger float64
 	// IngestCompactBatchSize decides how many L0 tables to promote into the
 	// ingest buffer per compaction cycle. Zero falls back to the legacy default.
 	IngestCompactBatchSize int
@@ -222,7 +261,9 @@ func NewDefaultOptions() *Options {
 		SSTableMaxSz:                      256 << 20,
 		HotRingEnabled:                    true,
 		HotRingBits:                       12,
-		HotRingTopK:                       16,
+		HotRingTopK:                       defaultHotRingTopK,
+		HotReadPrefetchThreshold:          defaultHotReadPrefetchThreshold,
+		HotReadPrefetchCooldown:           defaultHotReadPrefetchCooldown,
 		HotRingRotationInterval:           30 * time.Minute,
 		HotRingNodeCap:                    250_000,
 		HotRingNodeSampleBits:             0,
@@ -251,6 +292,8 @@ func NewDefaultOptions() *Options {
 		HotWriteBurstThreshold:        8,
 		HotWriteBatchMultiplier:       2,
 		WriteBatchWait:                200 * time.Microsecond,
+		WriteThrottleMinRate:          lsmpkg.DefaultWriteThrottleMinRate,
+		WriteThrottleMaxRate:          lsmpkg.DefaultWriteThrottleMaxRate,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
 		WALAutoGCInterval:             15 * time.Second,
@@ -258,8 +301,8 @@ func NewDefaultOptions() *Options {
 		WALAutoGCMaxBatch:             4,
 		WALTypedRecordWarnRatio:       0.35,
 		WALTypedRecordWarnSegments:    6,
-		CompactionValueWeight:         0.35,
-		CompactionValueAlertThreshold: 0.6,
+		CompactionValueWeight:         lsmpkg.DefaultCompactionValueWeight,
+		CompactionValueAlertThreshold: lsmpkg.DefaultCompactionValueAlertThreshold,
 		ValueLogGCInterval:            10 * time.Minute,
 		ValueLogGCDiscardRatio:        0.5,
 		ValueLogGCParallelism:         0,
@@ -277,11 +320,134 @@ func NewDefaultOptions() *Options {
 
 	// Relax L0 throttling defaults and increase compaction parallelism a bit to
 	// reduce write-path sleeps under load.
-	opt.NumLevelZeroTables = 16
-	opt.IngestCompactBatchSize = 4
-	opt.IngestBacklogMergeScore = 2.0
+	opt.NumLevelZeroTables = lsmpkg.DefaultNumLevelZeroTables
+	opt.L0SlowdownWritesTrigger = lsmpkg.DefaultNumLevelZeroTables
+	opt.L0StopWritesTrigger = lsmpkg.DefaultNumLevelZeroTables * 3
+	opt.L0ResumeWritesTrigger = 24
+	opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
+	opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
+	opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
+	opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
+	opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
 	opt.NumCompactors = 4
 	opt.CompactionPolicy = CompactionPolicyLeveled
 	opt.IngestShardParallelism = 2
 	return opt
+}
+
+// normalized returns a shallow copy with runtime defaults resolved once at the
+// DB boundary. Zero remains meaningful for settings that explicitly use zero to
+// disable a feature; only legacy "fallback" fields are filled here.
+func (opt *Options) normalized() *Options {
+	if opt == nil {
+		return nil
+	}
+	clone := *opt
+	clone.normalizeInPlace()
+	return &clone
+}
+
+func (opt *Options) normalizeInPlace() {
+	if opt == nil {
+		return
+	}
+	if opt.MemTableEngine == "" {
+		opt.MemTableEngine = MemTableEngineART
+	}
+	if opt.CompactionPolicy == "" {
+		opt.CompactionPolicy = CompactionPolicyLeveled
+	}
+	if opt.HotRingTopK <= 0 {
+		opt.HotRingTopK = defaultHotRingTopK
+	}
+	if opt.HotReadPrefetchThreshold <= 0 {
+		opt.HotReadPrefetchThreshold = defaultHotReadPrefetchThreshold
+	}
+	if opt.HotReadPrefetchCooldown <= 0 {
+		opt.HotReadPrefetchCooldown = defaultHotReadPrefetchCooldown
+	}
+	if opt.WriteBatchMaxCount <= 0 {
+		opt.WriteBatchMaxCount = defaultWriteBatchMaxCount
+	}
+	if opt.WriteBatchMaxSize <= 0 {
+		opt.WriteBatchMaxSize = defaultWriteBatchMaxSize
+	}
+	if opt.MaxBatchCount <= 0 {
+		opt.MaxBatchCount = int64(opt.WriteBatchMaxCount)
+	}
+	if opt.MaxBatchSize <= 0 {
+		opt.MaxBatchSize = opt.WriteBatchMaxSize
+	}
+	if opt.WriteBatchWait < 0 {
+		opt.WriteBatchWait = 0
+	}
+	if opt.WriteThrottleMinRate <= 0 {
+		opt.WriteThrottleMinRate = lsmpkg.DefaultWriteThrottleMinRate
+	}
+	if opt.WriteThrottleMaxRate <= 0 {
+		opt.WriteThrottleMaxRate = lsmpkg.DefaultWriteThrottleMaxRate
+	}
+	if opt.WriteThrottleMaxRate < opt.WriteThrottleMinRate {
+		opt.WriteThrottleMaxRate = opt.WriteThrottleMinRate
+	}
+	if opt.BlockCacheSize < 0 {
+		opt.BlockCacheSize = 0
+	}
+	if opt.BloomCacheSize < 0 {
+		opt.BloomCacheSize = 0
+	}
+	if opt.NumCompactors <= 0 {
+		opt.NumCompactors = lsmpkg.DefaultNumCompactors()
+	}
+	if opt.NumLevelZeroTables <= 0 {
+		opt.NumLevelZeroTables = lsmpkg.DefaultNumLevelZeroTables
+	}
+	if opt.L0SlowdownWritesTrigger <= 0 {
+		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
+	}
+	if opt.L0StopWritesTrigger <= 0 {
+		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
+	}
+	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
+		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
+	}
+	if opt.L0ResumeWritesTrigger <= 0 {
+		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
+	}
+	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
+		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
+	}
+	if opt.CompactionSlowdownTrigger <= 0 {
+		opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
+	}
+	if opt.CompactionStopTrigger <= 0 {
+		opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
+	}
+	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
+		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
+	}
+	if opt.CompactionResumeTrigger <= 0 {
+		opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
+	}
+	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
+		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
+	}
+	if opt.IngestCompactBatchSize <= 0 {
+		opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
+	}
+	if opt.IngestBacklogMergeScore <= 0 {
+		opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
+	}
+	if opt.IngestShardParallelism <= 0 {
+		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
+	}
+	if opt.CompactionValueWeight < 0 {
+		opt.CompactionValueWeight = 0
+	}
+	if opt.CompactionValueWeight == 0 {
+		opt.CompactionValueWeight = lsmpkg.DefaultCompactionValueWeight
+	}
+	if opt.CompactionValueAlertThreshold <= 0 {
+		opt.CompactionValueAlertThreshold = lsmpkg.DefaultCompactionValueAlertThreshold
+	}
 }

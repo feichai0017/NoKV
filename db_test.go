@@ -173,6 +173,67 @@ func TestSetBatchValidation(t *testing.T) {
 	}))
 }
 
+func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
+	opt := newTestOptions(t)
+	opt.WriteBatchMaxCount = 0
+	opt.WriteBatchMaxSize = 0
+	opt.MaxBatchCount = 0
+	opt.MaxBatchSize = 0
+	opt.WriteThrottleMinRate = 0
+	opt.WriteThrottleMaxRate = 0
+	opt.NumCompactors = 0
+	opt.NumLevelZeroTables = 0
+	opt.L0SlowdownWritesTrigger = 0
+	opt.L0StopWritesTrigger = 0
+	opt.L0ResumeWritesTrigger = 0
+	opt.CompactionSlowdownTrigger = 0
+	opt.CompactionStopTrigger = 0
+	opt.CompactionResumeTrigger = 0
+	opt.IngestCompactBatchSize = 0
+	opt.IngestBacklogMergeScore = 0
+	opt.IngestShardParallelism = 0
+	opt.CompactionValueWeight = 0
+	opt.CompactionValueAlertThreshold = 0
+	opt.HotRingTopK = 0
+	opt.HotReadPrefetchThreshold = 0
+	opt.HotReadPrefetchCooldown = 0
+
+	db := Open(opt)
+	defer func() { _ = db.Close() }()
+
+	require.Zero(t, opt.WriteBatchMaxCount)
+	require.Zero(t, opt.WriteThrottleMinRate)
+	require.Zero(t, opt.NumCompactors)
+	require.Zero(t, opt.L0StopWritesTrigger)
+	require.Zero(t, opt.CompactionStopTrigger)
+	require.Zero(t, opt.HotRingTopK)
+	require.Zero(t, opt.HotReadPrefetchThreshold)
+	require.Zero(t, opt.HotReadPrefetchCooldown)
+
+	require.Greater(t, db.opt.WriteBatchMaxCount, 0)
+	require.Greater(t, db.opt.WriteBatchMaxSize, int64(0))
+	require.Greater(t, db.opt.MaxBatchCount, int64(0))
+	require.Greater(t, db.opt.MaxBatchSize, int64(0))
+	require.Greater(t, db.opt.WriteThrottleMinRate, int64(0))
+	require.GreaterOrEqual(t, db.opt.WriteThrottleMaxRate, db.opt.WriteThrottleMinRate)
+	require.Greater(t, db.opt.NumCompactors, 0)
+	require.Greater(t, db.opt.NumLevelZeroTables, 0)
+	require.Greater(t, db.opt.L0SlowdownWritesTrigger, 0)
+	require.Greater(t, db.opt.L0StopWritesTrigger, db.opt.L0SlowdownWritesTrigger)
+	require.Less(t, db.opt.L0ResumeWritesTrigger, db.opt.L0SlowdownWritesTrigger)
+	require.Greater(t, db.opt.CompactionSlowdownTrigger, 0.0)
+	require.GreaterOrEqual(t, db.opt.CompactionStopTrigger, db.opt.CompactionSlowdownTrigger)
+	require.LessOrEqual(t, db.opt.CompactionResumeTrigger, db.opt.CompactionSlowdownTrigger)
+	require.Greater(t, db.opt.IngestCompactBatchSize, 0)
+	require.Greater(t, db.opt.IngestBacklogMergeScore, 0.0)
+	require.Greater(t, db.opt.IngestShardParallelism, 0)
+	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
+	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
+	require.Greater(t, db.opt.HotRingTopK, 0)
+	require.Greater(t, db.opt.HotReadPrefetchThreshold, int32(0))
+	require.Greater(t, db.opt.HotReadPrefetchCooldown, time.Duration(0))
+}
+
 func newTestOptions(t *testing.T) *Options {
 	t.Helper()
 	opt := NewDefaultOptions()
@@ -1282,10 +1343,10 @@ func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 
 func TestRecordReadEnqueuesPrefetch(t *testing.T) {
 	db := &DB{
-		opt:          &Options{},
-		hotRead:      hotring.NewHotRing(8, nil),
-		prefetchRing: utils.NewRing[prefetchRequest](2),
-		prefetchHot:  1,
+		opt:               &Options{},
+		hotRead:           hotring.NewHotRing(8, nil),
+		prefetchRing:      utils.NewRing[prefetchRequest](2),
+		prefetchThreshold: 1,
 	}
 	db.prefetchState.Store(&prefetchState{
 		pend:       make(map[string]struct{}),

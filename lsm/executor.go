@@ -238,23 +238,124 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 	return nil
 }
 
-// AdjustThrottle enables or clears write throttling based on L0 table pressure.
+// AdjustThrottle updates write admission state using a two-stage model:
+// slowdown (pace writes) and stop (block writes). Hysteresis is applied to
+// avoid oscillation under heavy compaction pressure.
 func (lm *levelManager) AdjustThrottle() {
 	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
 		return
 	}
-	limit := lm.opt.NumLevelZeroTables
-	if limit <= 0 {
-		limit = 4
-	}
 	l0Tables := lm.levels[0].numTables()
-	highWatermark := limit * 2
-	switch {
-	case l0Tables >= highWatermark:
-		lm.lsm.throttleWrites(true)
-	case l0Tables <= limit:
-		lm.lsm.throttleWrites(false)
+	_, maxScore := lm.compactionStats()
+
+	l0Slow := lm.opt.L0SlowdownWritesTrigger
+	l0Stop := lm.opt.L0StopWritesTrigger
+	l0Resume := lm.opt.L0ResumeWritesTrigger
+
+	scoreSlow := lm.opt.CompactionSlowdownTrigger
+	scoreStop := lm.opt.CompactionStopTrigger
+	scoreResume := lm.opt.CompactionResumeTrigger
+
+	stopCond := l0Tables >= l0Stop
+	slowCond := l0Tables >= l0Slow || maxScore >= scoreSlow
+	resumeCond := l0Tables <= l0Resume && maxScore <= scoreResume
+
+	cur := lm.lsm.ThrottleState()
+	target := cur
+	switch cur {
+	case WriteThrottleStop:
+		if stopCond {
+			target = WriteThrottleStop
+		} else if slowCond {
+			target = WriteThrottleSlowdown
+		} else if resumeCond {
+			target = WriteThrottleNone
+		}
+	case WriteThrottleSlowdown:
+		if stopCond {
+			target = WriteThrottleStop
+		} else if resumeCond {
+			target = WriteThrottleNone
+		}
+	default:
+		if stopCond {
+			target = WriteThrottleStop
+		} else if slowCond {
+			target = WriteThrottleSlowdown
+		} else {
+			target = WriteThrottleNone
+		}
 	}
+	l0Pressure := normalizedThrottlePressure(float64(l0Tables), float64(l0Slow), float64(l0Stop))
+	scorePressure := normalizedThrottlePressure(maxScore, scoreSlow, scoreStop)
+	pressure := max(l0Pressure, scorePressure)
+	switch target {
+	case WriteThrottleNone:
+		pressure = 0
+	case WriteThrottleStop:
+		pressure = 1000
+	case WriteThrottleSlowdown:
+		if pressure == 0 {
+			pressure = 1
+		}
+	}
+	rate := uint64(0)
+	if target == WriteThrottleSlowdown {
+		rate = throttleRateForPressure(
+			uint32(pressure),
+			lm.opt.WriteThrottleMinRate,
+			lm.opt.WriteThrottleMaxRate,
+		)
+	}
+	lm.lsm.throttleWrites(target, uint32(pressure), rate)
+}
+
+func normalizedThrottlePressure(value, slowdown, stop float64) int {
+	if stop <= slowdown {
+		if value >= stop {
+			return 1000
+		}
+		return 0
+	}
+	if value <= slowdown {
+		return 0
+	}
+	if value >= stop {
+		return 1000
+	}
+	ratio := (value - slowdown) / (stop - slowdown)
+	if ratio <= 0 {
+		return 0
+	}
+	if ratio >= 1 {
+		return 1000
+	}
+	return int(ratio*1000 + 0.5)
+}
+
+func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
+	if pressure == 0 || maxRate <= 0 {
+		return 0
+	}
+	if minRate <= 0 {
+		minRate = maxRate
+	}
+	if maxRate < minRate {
+		maxRate = minRate
+	}
+	ratio := float64(pressure) / 1000
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	curve := ratio * ratio
+	rate := float64(maxRate) - (float64(maxRate-minRate) * curve)
+	if rate < float64(minRate) {
+		rate = float64(minRate)
+	}
+	return uint64(rate + 0.5)
 }
 
 // NeedsCompaction reports whether any level currently exceeds compaction thresholds.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/stretchr/testify/require"
@@ -81,11 +82,14 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.wal.RemoveSegment(removedID))
 
-	db.applyThrottle(true)
-	defer db.applyThrottle(false)
+	db.applyThrottle(lsm.WriteThrottleStop)
+	defer db.applyThrottle(lsm.WriteThrottleNone)
 
 	snap := db.Info().Snapshot()
 	require.True(t, snap.Write.ThrottleActive)
+	require.Equal(t, "stop", snap.Write.ThrottleMode)
+	require.Equal(t, uint32(1000), snap.Write.ThrottlePressure)
+	require.Equal(t, uint64(0), snap.Write.ThrottleRate)
 	require.Greater(t, snap.WAL.SegmentsRemoved, uint64(0))
 	require.Greater(t, snap.WAL.SegmentCount, int64(0))
 
@@ -93,10 +97,16 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	exported := loadExpvarStatsSnapshot(t)
 	require.Equal(t, snap.WAL.SegmentsRemoved, exported.WAL.SegmentsRemoved)
 	require.True(t, exported.Write.ThrottleActive)
+	require.Equal(t, "stop", exported.Write.ThrottleMode)
+	require.Equal(t, uint32(1000), exported.Write.ThrottlePressure)
+	require.Equal(t, uint64(0), exported.Write.ThrottleRate)
 
-	db.applyThrottle(false)
+	db.applyThrottle(lsm.WriteThrottleNone)
 	snapAfter := db.Info().Snapshot()
 	require.False(t, snapAfter.Write.ThrottleActive)
+	require.Equal(t, "none", snapAfter.Write.ThrottleMode)
+	require.Equal(t, uint32(0), snapAfter.Write.ThrottlePressure)
+	require.Equal(t, uint64(0), snapAfter.Write.ThrottleRate)
 
 	db.stats.collect()
 	exportedAfter := loadExpvarStatsSnapshot(t)

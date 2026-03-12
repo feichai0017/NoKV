@@ -231,29 +231,33 @@ func TestLSMThrottleCallback(t *testing.T) {
 
 	var (
 		mu     sync.Mutex
-		events []bool
+		events []WriteThrottleState
 	)
-	lsm.SetThrottleCallback(func(on bool) {
+	lsm.SetThrottleCallback(func(state WriteThrottleState) {
 		mu.Lock()
-		events = append(events, on)
+		events = append(events, state)
 		mu.Unlock()
 	})
 
-	lsm.throttleWrites(true)
-	lsm.throttleWrites(true)
-	lsm.throttleWrites(false)
-	lsm.throttleWrites(false)
+	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
+	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
+	lsm.throttleWrites(WriteThrottleSlowdown, 400, 256<<20)
+	lsm.throttleWrites(WriteThrottleNone, 0, 0)
+	lsm.throttleWrites(WriteThrottleNone, 0, 0)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(events) != 2 {
+	if len(events) != 3 {
 		t.Fatalf("unexpected throttle events: %+v", events)
 	}
-	if !events[0] {
-		t.Fatalf("expected first throttle event to enable writes")
+	if events[0] != WriteThrottleStop {
+		t.Fatalf("expected first throttle event to enter stop mode, got %+v", events[0])
 	}
-	if events[1] {
-		t.Fatalf("expected second throttle event to disable throttling")
+	if events[1] != WriteThrottleSlowdown {
+		t.Fatalf("expected second throttle event to enter slowdown mode, got %+v", events[1])
+	}
+	if events[2] != WriteThrottleNone {
+		t.Fatalf("expected third throttle event to clear throttling, got %+v", events[2])
 	}
 }
 
@@ -1331,19 +1335,49 @@ func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	var events []bool
-	lsm.SetThrottleCallback(func(on bool) {
-		events = append(events, on)
+	var events []WriteThrottleState
+	lsm.SetThrottleCallback(func(state WriteThrottleState) {
+		events = append(events, state)
 	})
 
-	// Force a low L0 table limit so AdjustThrottle toggles quickly.
-	lsm.levels.opt.NumLevelZeroTables = 1
+	// Force explicit thresholds so we can validate stop -> slowdown -> none.
+	lsm.levels.opt.L0SlowdownWritesTrigger = 2
+	lsm.levels.opt.L0StopWritesTrigger = 3
+	lsm.levels.opt.L0ResumeWritesTrigger = 1
+	lsm.levels.opt.CompactionSlowdownTrigger = 1000
+	lsm.levels.opt.CompactionStopTrigger = 2000
+	lsm.levels.opt.CompactionResumeTrigger = 500
+	lsm.levels.opt.WriteThrottleMinRate = 64 << 20
+	lsm.levels.opt.WriteThrottleMaxRate = 512 << 20
 	l0 := lsm.levels.levels[0]
 	l0.tables = []*table{{}, {}, {}}
 	lsm.levels.AdjustThrottle()
+	if got := lsm.ThrottlePressurePermille(); got != 1000 {
+		t.Fatalf("expected stop pressure=1000, got %d", got)
+	}
+	if got := lsm.ThrottleRateBytesPerSec(); got != 0 {
+		t.Fatalf("expected stop rate=0, got %d", got)
+	}
+	l0.tables = []*table{{}, {}}
+	lsm.levels.AdjustThrottle()
+	if got := lsm.ThrottlePressurePermille(); got == 0 || got >= 1000 {
+		t.Fatalf("expected slowdown pressure in (0,1000), got %d", got)
+	}
+	if got := lsm.ThrottleRateBytesPerSec(); got == 0 {
+		t.Fatalf("expected slowdown rate > 0")
+	}
 	l0.tables = nil
 	lsm.levels.AdjustThrottle()
-	if len(events) != 2 || !events[0] || events[1] {
+	if got := lsm.ThrottlePressurePermille(); got != 0 {
+		t.Fatalf("expected clear pressure=0, got %d", got)
+	}
+	if got := lsm.ThrottleRateBytesPerSec(); got != 0 {
+		t.Fatalf("expected clear rate=0, got %d", got)
+	}
+	if len(events) != 3 ||
+		events[0] != WriteThrottleStop ||
+		events[1] != WriteThrottleSlowdown ||
+		events[2] != WriteThrottleNone {
 		t.Fatalf("unexpected throttle events: %+v", events)
 	}
 

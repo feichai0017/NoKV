@@ -179,6 +179,10 @@ type WriteStatsSnapshot struct {
 	AvgApplyMs       float64 `json:"avg_apply_ms"`
 	BatchesTotal     int64   `json:"batches_total"`
 	ThrottleActive   bool    `json:"throttle_active"`
+	SlowdownActive   bool    `json:"slowdown_active"`
+	ThrottleMode     string  `json:"throttle_mode"`
+	ThrottlePressure uint32  `json:"throttle_pressure_permille"`
+	ThrottleRate     uint64  `json:"throttle_rate_bytes_per_sec"`
 	HotKeyLimited    uint64  `json:"hot_key_limited"`
 }
 
@@ -394,7 +398,27 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.AvgApplyMs = wsnap.AvgApplyMs
 		snap.Write.BatchesTotal = wsnap.Batches
 	}
-	snap.Write.ThrottleActive = s.db.blockWrites.Load() == 1
+	stopActive := s.db.blockWrites.Load() == 1
+	slowActive := s.db.slowWrites.Load() == 1
+	snap.Write.ThrottleActive = stopActive || slowActive
+	snap.Write.SlowdownActive = slowActive
+	switch {
+	case stopActive:
+		snap.Write.ThrottleMode = "stop"
+	case slowActive:
+		snap.Write.ThrottleMode = "slowdown"
+	default:
+		snap.Write.ThrottleMode = "none"
+	}
+	if s.db.lsm != nil {
+		snap.Write.ThrottlePressure = s.db.lsm.ThrottlePressurePermille()
+		snap.Write.ThrottleRate = s.db.lsm.ThrottleRateBytesPerSec()
+	}
+	if stopActive && snap.Write.ThrottlePressure == 0 {
+		snap.Write.ThrottlePressure = 1000
+	} else if slowActive && snap.Write.ThrottlePressure == 0 {
+		snap.Write.ThrottlePressure = 1
+	}
 	snap.Write.HotKeyLimited = s.db.hotWriteLimited.Load()
 
 	if rm := s.regionMetrics.Load(); rm != nil {
@@ -504,22 +528,14 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.Heads = stats.Heads
 	}
 	if s.db != nil && s.db.hotRead != nil {
-		topK := s.db.opt.HotRingTopK
-		if topK <= 0 {
-			topK = 16
-		}
-		for _, item := range s.db.hotRead.TopN(topK) {
+		for _, item := range s.db.hotRead.TopN(s.db.opt.HotRingTopK) {
 			snap.Hot.ReadKeys = append(snap.Hot.ReadKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
 		hotStats := s.db.hotRead.Stats()
 		snap.Hot.ReadRing = &hotStats
 	}
 	if s.db != nil && s.db.hotWrite != nil {
-		topK := s.db.opt.HotRingTopK
-		if topK <= 0 {
-			topK = 16
-		}
-		for _, item := range s.db.hotWrite.TopN(topK) {
+		for _, item := range s.db.hotWrite.TopN(s.db.opt.HotRingTopK) {
 			snap.Hot.WriteKeys = append(snap.Hot.WriteKeys, HotKeyStat{Key: item.Key, Count: item.Count})
 		}
 		hotStats := s.db.hotWrite.Stats()

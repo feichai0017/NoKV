@@ -77,6 +77,7 @@ The HotRing emphasises simplicity: lock-free bucket lists with atomic counters (
 ## 6. Operational Tips
 
 * `Options.HotRingTopK` controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.
+* `Options.HotReadPrefetchThreshold` and `Options.HotReadPrefetchCooldown` control when hot reads trigger async cache prefetch and how quickly the same key can be prefetched again.
 * Combine `TouchAndClamp` with request middleware to detect abusive tenants: when `limited` is true, log the key and latency impact.
 * Resetting the ring is as simple as instantiating a new `HotRing`—useful for benchmarks that require clean counters between phases.
 
@@ -93,6 +94,8 @@ Global HotRing defaults (`NewDefaultOptions`):
 | `HotRingEnabled` | `true` | Master switch for DB hot tracking. |
 | `HotRingBits` | `12` | 4096 buckets. |
 | `HotRingTopK` | `16` | Top-K hot keys for stats/CLI. |
+| `HotReadPrefetchThreshold` | `16` | Async prefetch starts once a key reaches this read count. |
+| `HotReadPrefetchCooldown` | `15s` | Suppress repeated prefetch for the same hot key. |
 | `HotRingDecayInterval` | `0` | Decay disabled by default. |
 | `HotRingDecayShift` | `0` | Decay disabled by default. |
 | `HotRingWindowSlots` | `8` | Sliding window enabled. |
