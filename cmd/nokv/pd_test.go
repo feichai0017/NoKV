@@ -32,8 +32,23 @@ func TestRunPDCmdStartsAndStops(t *testing.T) {
 	t.Cleanup(func() { pdNotifyContext = origNotify })
 
 	var buf bytes.Buffer
-	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0"}))
+	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-metrics-addr", "127.0.0.1:0"}))
 	require.Contains(t, buf.String(), "PD-lite service listening on")
+	require.Contains(t, buf.String(), "PD metrics endpoint listening on http://")
+}
+
+func TestRunPDCmdInvalidMetricsAddr(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	var buf bytes.Buffer
+	err := runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-metrics-addr", "bad"})
+	require.ErrorContains(t, err, "start pd metrics endpoint")
 }
 
 func TestMainPDCommand(t *testing.T) {

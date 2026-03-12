@@ -5,9 +5,9 @@ Key design points:
 - This implementation is internal-key-only. It is not a general-purpose radix tree.
 - Leaf nodes store two key forms: a private route key for trie ordering and the
   original canonical internal key for external semantics.
-- The primary concurrency model is copy-on-write plus CAS. We keep one narrow
-  writer-side OLC-lite fast path for child replacement, but do not use read-side
-  version validation or full optimistic lock coupling.
+- The primary concurrency model is copy-on-write plus CAS. Published payloads are
+  immutable; writers clone payloads, apply updates on the clone, and atomically
+  publish the new pointer.
 - Arena allocation ties node lifetime to the memtable lifetime, avoiding per-node GC.
 */
 
@@ -814,9 +814,6 @@ func (t *artTree) replaceChild(parent *artNode, parentKey byte, oldChild, newChi
 	if parent == nil {
 		return t.root.CompareAndSwap(oldChild, newChild)
 	}
-	if t.tryReplaceChildInPlace(parent, parentKey, oldChild, newChild) {
-		return true
-	}
 	oldPayloadOffset := parent.payloadOffset.Load()
 	payload := arenaPayloadFromOffset(t.arena, oldPayloadOffset)
 	if payload == nil {
@@ -827,56 +824,6 @@ func (t *artTree) replaceChild(parent *artNode, parentKey byte, oldChild, newChi
 		return false
 	}
 	return parent.payloadOffset.CompareAndSwap(oldPayloadOffset, newPayload.self)
-}
-
-// tryReplaceChildInPlace is the only retained OLC-lite fast path. It avoids
-// cloning the parent payload when a single child pointer can be replaced safely;
-// broader structural updates still use the main COW+CAS path.
-func (t *artTree) tryReplaceChildInPlace(parent *artNode, parentKey byte, oldChild, newChild *artNode) bool {
-	if t == nil || t.arena == nil || parent == nil || oldChild == nil || newChild == nil {
-		return false
-	}
-	if !parent.tryWriteLock() {
-		return false
-	}
-	defer parent.unlockWrite()
-
-	payloadOffset := parent.payloadOffset.Load()
-	payload := arenaPayloadFromOffset(t.arena, payloadOffset)
-	if payload == nil {
-		return false
-	}
-	oldOff := oldChild.self
-	newOff := newChild.self
-	if oldOff == 0 || newOff == 0 {
-		return false
-	}
-	switch parent.kind {
-	case artNode4Kind, artNode16Kind:
-		for i := 0; i < payload.count; i++ {
-			if payload.keys[i] != parentKey {
-				continue
-			}
-			return atomic.CompareAndSwapUint32(&payload.children[i], oldOff, newOff)
-		}
-	case artNode48Kind:
-		pos := payload.idx[parentKey]
-		if pos == 0 {
-			return false
-		}
-		idx := int(pos - 1)
-		if idx >= len(payload.children) {
-			return false
-		}
-		return atomic.CompareAndSwapUint32(&payload.children[idx], oldOff, newOff)
-	case artNode256Kind:
-		idx := int(parentKey)
-		if idx >= len(payload.children) {
-			return false
-		}
-		return atomic.CompareAndSwapUint32(&payload.children[idx], oldOff, newOff)
-	}
-	return false
 }
 
 func (t *artTree) lowerBound(key []byte) *artNode {

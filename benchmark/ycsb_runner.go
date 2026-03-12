@@ -37,7 +37,6 @@ var defaultYCSBWorkloads = map[string]ycsbWorkload{
 	"D": {Name: "D", ReadRatio: 0.95, InsertRatio: 0.05, Distribution: "latest", Description: "95% read, 5% insert (latest)"},
 	"E": {Name: "E", ScanRatio: 0.95, InsertRatio: 0.05, Distribution: "zipfian", Description: "95% scan, 5% insert"},
 	"F": {Name: "F", ReadRatio: 0.5, ReadModifyWrite: 0.5, Distribution: "zipfian", Description: "read-modify-write"},
-	"G": {Name: "G", InsertRatio: 1.0, Distribution: "zipfian", Description: "100% insert"},
 }
 
 type ycsbConfig struct {
@@ -58,8 +57,6 @@ type ycsbConfig struct {
 	StatusEvery time.Duration
 	Workloads   []ycsbWorkload
 	Engines     []string
-	BatchInsert bool
-	BatchSize   int
 }
 
 type ycsbKeyspace struct {
@@ -212,6 +209,49 @@ func (ks *ycsbKeyspace) totalRecords() int64 {
 func (ks *ycsbKeyspace) nextInsertID() int64 {
 	n := ks.inserted.Add(1)
 	return ks.baseRecords + n - 1
+}
+
+func chooseScanLength(rng *rand.Rand, maxLen int) int {
+	if maxLen <= 0 {
+		return 1
+	}
+	if maxLen == 1 || rng == nil {
+		return maxLen
+	}
+	// Official workload E uses maxscanlength + uniform scan length distribution.
+	return rng.Intn(maxLen) + 1
+}
+
+func ycsbKeyNumWidth(recordCount, operations int) int {
+	maxKeyNum := int64(recordCount) + int64(operations)
+	if maxKeyNum <= 0 {
+		return 1
+	}
+	return len(strconv.FormatInt(maxKeyNum-1, 10))
+}
+
+func ycsbHashKeyNum(keyNum int64) int64 {
+	if keyNum < 0 {
+		keyNum = 0
+	}
+	val := uint64(keyNum)
+	var hash uint64 = 0xcbf29ce484222325
+	const prime uint64 = 1099511628211
+	for i := 0; i < 8; i++ {
+		octet := val & 0x00ff
+		val >>= 8
+		hash ^= octet
+		hash *= prime
+	}
+	signed := int64(hash)
+	if signed < 0 {
+		signed = -signed
+		// Preserve non-negative behavior even for MinInt64.
+		if signed < 0 {
+			return 0
+		}
+	}
+	return signed
 }
 
 type keyGenerator interface {
@@ -378,6 +418,10 @@ func runIsolatedWorkload(engine ycsbEngine, cfg ycsbConfig, workload ycsbWorkloa
 
 func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
 	records := cfg.RecordCount
+	keyWidth := ycsbKeyNumWidth(cfg.RecordCount, cfg.Operations)
+	keyFor := func(id int64) []byte {
+		return formatYCSBKey(id, keyWidth)
+	}
 	perWorker := (records + cfg.Concurrency - 1) / cfg.Concurrency
 	errCh := make(chan error, cfg.Concurrency)
 	var wg sync.WaitGroup
@@ -393,7 +437,7 @@ func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(cfg.Seed + int64(s)))
 			for i := s; i < e; i++ {
-				key := formatYCSBKey(int64(i))
+				key := keyFor(int64(i))
 				val := randomValue(rng, sizer.Next(rng))
 				if err := engine.Insert(key, val); err != nil {
 					errCh <- err
@@ -417,6 +461,13 @@ func ycsbLoad(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace) error {
 func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl ycsbWorkload) (BenchmarkResult, error) {
 	totalOps := cfg.Operations
 	opsPerWorker := (totalOps + cfg.Concurrency - 1) / cfg.Concurrency
+	if cfg.ScanLength <= 0 {
+		cfg.ScanLength = 1
+	}
+	keyWidth := ycsbKeyNumWidth(cfg.RecordCount, cfg.Operations)
+	keyFor := func(id int64) []byte {
+		return formatYCSBKey(id, keyWidth)
+	}
 	latRec := newLatencyRecorder(totalOps)
 	valRec := newIntRecorder(totalOps)
 	var loadedOps atomic.Int64
@@ -485,40 +536,13 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 			rng := rand.New(rand.NewSource(cfg.Seed + int64(idx) + 1))
 			readGen := newKeyGenerator(wl.Distribution, rng, keySpan, state)
 
-			batchWriter, supportBatch := engine.(BatchWriter)
-			batchSize := cfg.BatchSize
-			if batchSize <= 0 {
-				batchSize = 1
-			}
-			var batchKeys [][]byte
-			var batchVals [][]byte
-
-			flushBatch := func() error {
-				if len(batchKeys) == 0 {
-					return nil
-				}
-				if err := batchWriter.BatchInsert(batchKeys, batchVals); err != nil {
-					return err
-				}
-				for _, v := range batchVals {
-					valueBufPool.Put(v)
-				}
-				batchKeys = batchKeys[:0]
-				batchVals = batchVals[:0]
-				return nil
-			}
-			defer func() {
-				if err := flushBatch(); err != nil {
-					errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
-				}
-			}()
-
 			for i := s; i < e; i++ {
 				opType := chooseOperation(rng, wl)
 				startOp := time.Now()
 				switch opType {
 				case "read":
-					key := selectExistingKey(readGen, state)
+					id := selectExistingKeyID(readGen, state)
+					key := keyFor(id)
 					valBuf := valueBufPool.Get(maxBuf)
 					out, err := engine.Read(key, valBuf)
 					if err != nil {
@@ -530,7 +554,8 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					readOps.Add(1)
 					dataBytes.Add(int64(len(out)))
 				case "update":
-					key := selectExistingKey(readGen, state)
+					id := selectExistingKeyID(readGen, state)
+					key := keyFor(id)
 					sz := sizer.Next(rng)
 					val := randomValue(rng, sz)
 					if err := engine.Update(key, val); err != nil {
@@ -543,31 +568,22 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 					dataBytes.Add(int64(sz))
 				case "insert":
 					id := state.nextInsertID()
-					key := formatYCSBKey(id)
+					key := keyFor(id)
 					sz := sizer.Next(rng)
 					val := randomValue(rng, sz)
-					if cfg.BatchInsert && supportBatch {
-						batchKeys = append(batchKeys, key)
-						batchVals = append(batchVals, val)
-						if len(batchKeys) >= batchSize {
-							if err := flushBatch(); err != nil {
-								errCh <- fmt.Errorf("%s batch flush: %w", engine.Name(), err)
-								return
-							}
-						}
-					} else {
-						if err := engine.Insert(key, val); err != nil {
-							errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
-							return
-						}
-						valueBufPool.Put(val)
+					if err := engine.Insert(key, val); err != nil {
+						errCh <- fmt.Errorf("%s insert: %w", engine.Name(), err)
+						return
 					}
+					valueBufPool.Put(val)
 					insertOps.Add(1)
 					valRec.Record(sz)
 					dataBytes.Add(int64(sz))
 				case "scan":
-					key := selectExistingKey(readGen, state)
-					items, err := engine.Scan(key, cfg.ScanLength)
+					id := selectExistingKeyID(readGen, state)
+					key := keyFor(id)
+					scanLen := chooseScanLength(rng, cfg.ScanLength)
+					items, err := engine.Scan(key, scanLen)
 					if err != nil {
 						errCh <- fmt.Errorf("%s scan: %w", engine.Name(), err)
 						return
@@ -578,7 +594,8 @@ func ycsbRunWorkload(engine ycsbEngine, cfg ycsbConfig, state *ycsbKeyspace, wl 
 						dataBytes.Add(int64(items) * int64(cfg.ValueSize))
 					}
 				case "readmodifywrite":
-					key := selectExistingKey(readGen, state)
+					id := selectExistingKeyID(readGen, state)
+					key := keyFor(id)
 					valBuf := valueBufPool.Get(maxBuf)
 					out, err := engine.Read(key, valBuf)
 					if err != nil {
@@ -678,37 +695,45 @@ func chooseOperation(r *rand.Rand, wl ycsbWorkload) string {
 	}
 }
 
-func selectExistingKey(gen keyGenerator, state *ycsbKeyspace) []byte {
+func selectExistingKeyID(gen keyGenerator, state *ycsbKeyspace) int64 {
 	count := state.totalRecords()
 	if count <= 0 {
-		return formatYCSBKey(0)
+		return 0
 	}
 	id := gen.Next(count)
+	if id < 0 {
+		id = 0
+	}
 	if id >= count {
 		id = count - 1
 	}
-	return formatYCSBKey(id)
+	return id
 }
 
-func formatYCSBKey(id int64) []byte {
-	buf := make([]byte, 0, 16)
+func selectExistingKey(gen keyGenerator, state *ycsbKeyspace) []byte {
+	return formatYCSBKey(selectExistingKeyID(gen, state), 12)
+}
+
+func formatYCSBKey(id int64, width int) []byte {
+	if id < 0 {
+		id = 0
+	}
+	id = ycsbHashKeyNum(id)
+	if width < 1 {
+		width = 1
+	}
+	decimal := strconv.FormatInt(id, 10)
+	if len(decimal) < width {
+		padded := make([]byte, 0, width)
+		for i := 0; i < width-len(decimal); i++ {
+			padded = append(padded, '0')
+		}
+		padded = append(padded, decimal...)
+		decimal = string(padded)
+	}
+	buf := make([]byte, 0, 4+len(decimal))
 	buf = append(buf, 'u', 's', 'e', 'r')
-	// Zero-pad to 12 digits to retain fixed-width keys.
-	var tmp [12]byte
-	pos := len(tmp)
-	if id == 0 {
-		pos--
-		tmp[pos] = '0'
-	}
-	for v := id; v > 0 && pos > 0; v /= 10 {
-		pos--
-		tmp[pos] = byte('0' + v%10)
-	}
-	for pos > 0 {
-		pos--
-		tmp[pos] = '0'
-	}
-	buf = append(buf, tmp[:]...)
+	buf = append(buf, decimal...)
 	return buf
 }
 

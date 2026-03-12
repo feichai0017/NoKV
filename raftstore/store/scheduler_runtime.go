@@ -3,7 +3,6 @@ package store
 import (
 	"fmt"
 	"syscall"
-	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -70,54 +69,6 @@ func (s *Store) countLeaders() uint64 {
 		}
 	})
 	return leaders
-}
-
-// SchedulerSnapshot returns the scheduler snapshot if the store is connected to
-// a coordinator that implements SnapshotProvider. When unavailable, an empty
-// snapshot is returned.
-func (s *Store) SchedulerSnapshot() scheduler.Snapshot {
-	if s == nil {
-		return scheduler.Snapshot{}
-	}
-	snap := scheduler.Snapshot{}
-	if provider, ok := s.scheduler.(scheduler.SnapshotProvider); ok {
-		regions := provider.RegionSnapshot()
-		stores := provider.StoreSnapshot()
-		snap.Stores = append(snap.Stores, stores...)
-		for _, info := range regions {
-			snap.Regions = append(snap.Regions, s.buildRegionDescriptor(info))
-		}
-	}
-	return snap
-}
-
-func (s *Store) buildRegionDescriptor(info scheduler.RegionInfo) scheduler.RegionDescriptor {
-	meta := info.Meta
-	desc := scheduler.RegionDescriptor{
-		ID:            meta.ID,
-		StartKey:      append([]byte(nil), meta.StartKey...),
-		EndKey:        append([]byte(nil), meta.EndKey...),
-		Epoch:         meta.Epoch,
-		LastHeartbeat: info.LastHeartbeat,
-	}
-	var leaderPeerID uint64
-	if local := s.regions.peer(meta.ID); local != nil {
-		if local.Status().RaftState == myraft.StateLeader {
-			leaderPeerID = local.ID()
-		}
-	}
-	if !info.LastHeartbeat.IsZero() {
-		lag := max(time.Since(info.LastHeartbeat), 0)
-		desc.Lag = lag
-	}
-	for _, peerMeta := range meta.Peers {
-		desc.Peers = append(desc.Peers, scheduler.PeerDescriptor{
-			StoreID: peerMeta.StoreID,
-			PeerID:  peerMeta.PeerID,
-			Leader:  peerMeta.PeerID == leaderPeerID,
-		})
-	}
-	return desc
 }
 
 func (s *Store) diskStats() (uint64, uint64, bool) {

@@ -6,6 +6,7 @@ testdata
 
 test_results
 benchmark/benchmark_data/*
+benchmark/benchmark_data_policy_*/
 benchmark/benchmark_results.txt
 benchmark/benchmark_results/
 

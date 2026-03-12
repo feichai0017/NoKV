@@ -37,7 +37,7 @@
    - `StartPeer` registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.
 
 3. **Peer connectivity**
-   - `transport.SetPeer(storeID, addr)` defines outbound raft connections; the CLI exposes it via `--peer storeID=addr`.
+   - `transport.SetPeer(peerID, addr)` defines outbound raft connections; the CLI exposes it via `--peer peerID=addr`.
    - Additional services can reuse the same gRPC server through `transport.WithServerRegistrar`.
 
 ---

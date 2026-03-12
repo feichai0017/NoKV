@@ -84,9 +84,9 @@ Radix Tree 原生基于字节比较，不支持 LSM 要求的复合排序（User
 *   **编码公式**：`RouteKey = EncodeComparable(UserKey) + BigEndian(Timestamp)`。
 *   **设计价值**：这保证了在 ART 树的层级深度遍历结果完全等价于 LSM 的 `Key + Version` 排序逻辑，从而完美支持 `Seek` 和范围扫描。
 
-### 3.3 并发模型：COW + OLC-lite
+### 3.3 并发模型：纯 COW + CAS 发布
 *   **完全无锁读 (Lock-free Read)**：通过 COW (Copy-On-Write) 保证读取路径观察到的是一致的、不可变的节点快照。
-*   **OLC-lite 原地更新**：针对单点修改（如更新已存在的 Key 的 Value），ART 保留了一个快速路径，在不复制节点的前提下通过原子指令替换 `ValuePtr`，极大降低了分配开销。
+*   **写入语义**：写路径始终克隆父节点 payload，在克隆副本上完成修改，再通过 CAS 原子发布新 payload。已发布 payload 不再原地修改，降低并发一致性风险并简化维护。
 
 ---
 

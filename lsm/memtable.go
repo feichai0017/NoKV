@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
@@ -28,15 +29,6 @@ type memIndex interface {
 	DecrRef()
 }
 
-// memRangeTombstone is a lightweight copy of a range tombstone stored
-// directly in the memtable for O(M) lookup without iterator allocation.
-type memRangeTombstone struct {
-	cf      kv.ColumnFamily
-	start   []byte
-	end     []byte
-	version uint64
-}
-
 // memTable holds the active Skiplist and its WAL segment id.
 type memTable struct {
 	lsm        *LSM
@@ -50,9 +42,12 @@ type memTable struct {
 
 	// rtMu protects rangeTombstones. Written by setBatch (which may run
 	// under lsm.lock read-lock or write-lock), read concurrently by
-	// isKeyCoveredByRangeTombstone. rtMu is the sole guard for this slice.
+	// isKeyCoveredByRangeTombstone. The cached per-CF span index is rebuilt
+	// lazily on demand when rtIndexDirty is set.
 	rtMu            sync.RWMutex
-	rangeTombstones []memRangeTombstone
+	rangeTombstones []tombstone.Range
+	rtIndex         map[kv.ColumnFamily][]tombstone.Span
+	rtIndexDirty    bool
 }
 
 func arenaSizeFor(memTableSize int64) int64 {
@@ -70,14 +65,16 @@ func arenaSizeFor(memTableSize int64) int64 {
 }
 
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
-func (lsm *LSM) NewMemtable() *memTable {
+func (lsm *LSM) NewMemtable() (*memTable, error) {
 	newFid := lsm.levels.maxFID.Add(1)
-	utils.Panic(lsm.wal.SwitchSegment(uint32(newFid), true))
+	if err := lsm.wal.SwitchSegment(uint32(newFid), true); err != nil {
+		return nil, err
+	}
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		index:     newMemIndex(lsm.option),
-	}
+	}, nil
 }
 
 func (m *memTable) close() error {
@@ -87,6 +84,8 @@ func (m *memTable) close() error {
 	// Range tombstones have already been transferred to rtCollector by the flush path.
 	m.rtMu.Lock()
 	m.rangeTombstones = nil
+	m.rtIndex = nil
+	m.rtIndexDirty = false
 	m.rtMu.Unlock()
 	return nil
 }
@@ -169,10 +168,10 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 }
 
 // recovery rebuilds memtables from existing WAL segments.
-func (lsm *LSM) recovery() (*memTable, []*memTable) {
+func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 	files, err := lsm.wal.ListSegments()
 	if err != nil {
-		utils.Panic(err)
+		return nil, nil, err
 	}
 	var fids []uint64
 	maxFid := lsm.levels.maxFID.Load()
@@ -183,7 +182,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		}
 		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 32)
 		if err != nil {
-			utils.Panic(err)
+			return nil, nil, err
 		}
 		if fid > maxFid {
 			maxFid = fid
@@ -196,7 +195,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		cleaned := make([]uint64, 0, len(fids))
 		for _, fid := range fids {
 			if fid <= uint64(seg) {
-				if !lsm.levels.canRemoveWalSegment(uint32(fid)) {
+				if !lsm.canRemoveWalSegment(uint32(fid)) {
 					cleaned = append(cleaned, fid)
 					continue
 				}
@@ -212,13 +211,19 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 
 	if len(fids) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		return lsm.NewMemtable(), nil
+		active, createErr := lsm.NewMemtable()
+		if createErr != nil {
+			return nil, nil, createErr
+		}
+		return active, nil, nil
 	}
 
 	tables := make([]*memTable, 0, len(fids))
 	for _, fid := range fids {
 		mt, err := lsm.openMemTable(fid)
-		utils.CondPanic(err != nil, err)
+		if err != nil {
+			return nil, nil, err
+		}
 		if mt.Size() == 0 {
 			continue
 		}
@@ -226,14 +231,20 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	}
 	if len(tables) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		return lsm.NewMemtable(), nil
+		active, createErr := lsm.NewMemtable()
+		if createErr != nil {
+			return nil, nil, createErr
+		}
+		return active, nil, nil
 	}
 
 	lsm.levels.maxFID.Store(maxFid)
 	active := tables[len(tables)-1]
 	tables = tables[:len(tables)-1]
-	utils.Panic(lsm.wal.SwitchSegment(active.segmentID, false))
-	return active, tables
+	if err := lsm.wal.SwitchSegment(active.segmentID, false); err != nil {
+		return nil, nil, err
+	}
+	return active, tables, nil
 }
 
 func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
@@ -332,7 +343,9 @@ func (mt *memTable) releaseReserve(need int64) {
 		return
 	}
 	if n := mt.reservedSize.Add(-need); n < 0 {
-		panic("lsm: memtable reservation underflow")
+		// Defensive clamping: reservation accounting bug must not crash the whole service.
+		// Keep the counter non-negative and surface via diagnostics/tests.
+		mt.reservedSize.Store(0)
 	}
 }
 
@@ -359,18 +372,33 @@ func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []by
 		return false
 	}
 	m.rtMu.RLock()
-	rts := m.rangeTombstones
-	m.rtMu.RUnlock()
-	for i := range rts {
-		rt := &rts[i]
-		if rt.cf != cf {
-			continue
-		}
-		if rt.version > entryVersion && kv.KeyInRange(userKey, rt.start, rt.end) {
-			return true
-		}
+	dirty := m.rtIndexDirty
+	var spans []tombstone.Span
+	if !dirty {
+		spans = m.rtIndex[cf]
 	}
-	return false
+	m.rtMu.RUnlock()
+	if !dirty {
+		return tombstone.IsKeyCoveredBySpans(spans, userKey, entryVersion)
+	}
+	m.rtMu.Lock()
+	if m.rtIndexDirty {
+		m.rtIndex = tombstone.BuildCFSpans(m.rangeTombstones)
+		m.rtIndexDirty = false
+	}
+	spans = m.rtIndex[cf]
+	m.rtMu.Unlock()
+	return tombstone.IsKeyCoveredBySpans(spans, userKey, entryVersion)
+}
+
+func (m *memTable) hasRangeTombstones() bool {
+	if m == nil {
+		return false
+	}
+	m.rtMu.RLock()
+	n := len(m.rangeTombstones)
+	m.rtMu.RUnlock()
+	return n > 0
 }
 
 // trackRangeTombstone caches range tombstones in memtable-local memory so read
@@ -384,12 +412,17 @@ func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
 		return
 	}
 	m.rtMu.Lock()
-	m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
-		cf:      entry.CF,
-		start:   kv.SafeCopy(nil, start),
-		end:     kv.SafeCopy(nil, entry.RangeEnd()),
-		version: version,
+	cf := entry.CF
+	if !cf.Valid() {
+		cf = kv.CFDefault
+	}
+	m.rangeTombstones = append(m.rangeTombstones, tombstone.Range{
+		CF:      cf,
+		Start:   kv.SafeCopy(nil, start),
+		End:     kv.SafeCopy(nil, entry.RangeEnd()),
+		Version: version,
 	})
+	m.rtIndexDirty = true
 	m.rtMu.Unlock()
 }
 

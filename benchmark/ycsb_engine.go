@@ -26,14 +26,15 @@ type ycsbEngine interface {
 // implementation. It focuses on the knobs that influence performance so the
 // benchmark runner can keep the engines aligned.
 type ycsbEngineOptions struct {
-	BaseDir        string
-	ValueSize      int
-	ValueThreshold int
-	SyncWrites     bool
-	BlockCacheMB   int
-	MemtableMB     int
-	SSTableMB      int
-	VlogFileMB     int
+	BaseDir              string
+	ValueSize            int
+	ValueThreshold       int
+	SyncWrites           bool
+	BlockCacheMB         int
+	NoKVCompactionPolicy string
+	MemtableMB           int
+	SSTableMB            int
+	VlogFileMB           int
 
 	// Badger specific cache sizes (in MB).
 	BadgerBlockCacheMB int
@@ -43,10 +44,6 @@ type ycsbEngineOptions struct {
 	// RocksDB installation prefix (contains include/ and lib/).
 	RocksDBCompression string
 	PebbleCompression  string
-}
-
-type BatchWriter interface {
-	BatchInsert(key, value [][]byte) error
 }
 
 // engineDir derives an engine-specific work directory rooted at BaseDir.

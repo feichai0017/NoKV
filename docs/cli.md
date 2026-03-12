@@ -68,7 +68,8 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Requires `--workdir`, `--store-id`, and `--pd-addr`
 - Common flags:
   - `--addr` (default `127.0.0.1:20160`)
-  - `--peer storeID=address` (repeatable)
+  - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
+  - `--peer peerID=address` (repeatable, uses raft peer IDs from region metadata)
   - `--election-tick`, `--heartbeat-tick`
   - `--raft-max-msg-bytes`, `--raft-max-inflight`
   - `--raft-tick-interval`, `--raft-debug-log`
@@ -81,8 +82,30 @@ nokv serve \
   --store-id 1 \
   --addr 127.0.0.1:20170 \
   --pd-addr 127.0.0.1:2379 \
-  --peer 2=127.0.0.1:20171 \
-  --peer 3=127.0.0.1:20172
+  --peer 201=127.0.0.1:20171 \
+  --peer 301=127.0.0.1:20172
+```
+
+When a store hosts multiple regions, include mappings for every remote peer ID
+reachable from those regions (using `scripts/serve_from_config.sh` avoids manual drift).
+
+### `nokv pd`
+
+- Starts the PD-lite gRPC service used by distributed mode.
+- Common flags:
+  - `--addr` (default `127.0.0.1:2379`)
+  - `--workdir` (optional persistence directory for region catalog + allocator state)
+  - `--config` + `--scope host|docker` (resolve defaults from `raft_config.json`)
+  - `--id-start`, `--ts-start` (allocator start values)
+  - `--metrics-addr` (optional expvar endpoint, exposes `/debug/vars`)
+
+Example:
+
+```bash
+nokv pd \
+  --config ./raft_config.example.json \
+  --scope host \
+  --metrics-addr 127.0.0.1:23790
 ```
 
 ---

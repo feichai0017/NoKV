@@ -41,24 +41,23 @@ func TestBenchmarkYCSB(t *testing.T) {
 		StatusEvery: *ycsbStatusInterval,
 		Workloads:   workloads,
 		Engines:     engines,
-		BatchInsert: *ycsbBatchInsert,
-		BatchSize:   *ycsbBatchSize,
 	}
 
 	opts := ycsbEngineOptions{
-		BaseDir:            baseDir,
-		ValueSize:          cfg.ValueSize,
-		ValueThreshold:     *fValueThreshold,
-		SyncWrites:         *fSyncWrites,
-		BlockCacheMB:       *ycsbBlockCacheMB,
-		MemtableMB:         *ycsbMemtableMB,
-		SSTableMB:          *ycsbSSTableMB,
-		VlogFileMB:         *ycsbVlogFileMB,
-		BadgerBlockCacheMB: *fBadgerBlockMB,
-		BadgerIndexCacheMB: *fBadgerIndexMB,
-		BadgerCompression:  strings.ToLower(*fBadgerCompression),
-		PebbleCompression:  strings.ToLower(*ycsbPebbleCompression),
-		RocksDBCompression: strings.ToLower(*ycsbRocksCompression),
+		BaseDir:              baseDir,
+		ValueSize:            cfg.ValueSize,
+		ValueThreshold:       *fValueThreshold,
+		SyncWrites:           *fSyncWrites,
+		BlockCacheMB:         *ycsbBlockCacheMB,
+		NoKVCompactionPolicy: strings.ToLower(strings.TrimSpace(*ycsbNoKVCompaction)),
+		MemtableMB:           *ycsbMemtableMB,
+		SSTableMB:            *ycsbSSTableMB,
+		VlogFileMB:           *ycsbVlogFileMB,
+		BadgerBlockCacheMB:   *fBadgerBlockMB,
+		BadgerIndexCacheMB:   *fBadgerIndexMB,
+		BadgerCompression:    strings.ToLower(*fBadgerCompression),
+		PebbleCompression:    strings.ToLower(*ycsbPebbleCompression),
+		RocksDBCompression:   strings.ToLower(*ycsbRocksCompression),
 	}
 
 	results, err := runYCSBBenchmarks(cfg, opts)
