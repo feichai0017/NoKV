@@ -25,7 +25,8 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	entry := kv.NewEntry([]byte("stale-key"), []byte("stale-value"))
 	builder.AddStaleKey(entry)
 
-	bd := builder.done()
+	bd, err := builder.done()
+	require.NoError(t, err)
 	require.NotNil(t, bd.index)
 	require.NotEmpty(t, bd.index)
 
@@ -46,7 +47,8 @@ func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("value-b")))
 
-	buf := builder.finish()
+	buf, err := builder.finish()
+	require.NoError(t, err)
 	require.NotEmpty(t, buf)
 	builder.Close()
 

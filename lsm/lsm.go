@@ -26,6 +26,9 @@ type LSM struct {
 	flushMgr   *flush.Manager
 	flushWG    sync.WaitGroup
 
+	runtimeMu      sync.RWMutex
+	discardStatsCh chan map[manifest.ValueLogID]int64
+
 	throttleFn func(bool)
 	throttled  atomic.Int32
 
@@ -156,22 +159,40 @@ func (lsm *LSM) Close() error {
 
 // SetDiscardStatsCh updates the discard stats channel used during compaction.
 func (lsm *LSM) SetDiscardStatsCh(ch *chan map[manifest.ValueLogID]int64) {
-	lsm.option.DiscardStatsCh = ch
-	if lsm.levels != nil {
-		lsm.levels.opt.DiscardStatsCh = ch
+	if lsm == nil {
+		return
 	}
+	var resolved chan map[manifest.ValueLogID]int64
+	if ch != nil {
+		resolved = *ch
+	}
+	lsm.runtimeMu.Lock()
+	lsm.discardStatsCh = resolved
+	lsm.runtimeMu.Unlock()
 }
 
 // SetHotKeyProvider wires a callback that returns currently hot keys as
 // InternalKey values so compaction can prioritise hot ranges.
 func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
+	if lsm == nil {
+		return
+	}
 	if fn == nil {
 		return
 	}
-	lsm.option.HotKeyProvider = fn
 	if lsm.levels != nil {
 		lsm.levels.setHotKeyProvider(fn)
 	}
+}
+
+func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
+	if lsm == nil {
+		return nil
+	}
+	lsm.runtimeMu.RLock()
+	ch := lsm.discardStatsCh
+	lsm.runtimeMu.RUnlock()
+	return ch
 }
 
 // SetThrottleCallback registers a callback used to toggle write throttling at the DB layer.
@@ -360,23 +381,30 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if walMgr == nil {
 		return nil, errors.New("lsm: nil wal manager")
 	}
-	if opt.CompactionValueWeight < 0 {
-		opt.CompactionValueWeight = 0
+	frozen := opt.Clone()
+	if frozen == nil {
+		return nil, errors.New("lsm: nil cloned options")
 	}
-	if opt.CompactionValueWeight == 0 {
-		opt.CompactionValueWeight = 0.35
+	if frozen.CompactionValueWeight < 0 {
+		frozen.CompactionValueWeight = 0
 	}
-	if opt.CompactionValueAlertThreshold <= 0 {
-		opt.CompactionValueAlertThreshold = 0.6
+	if frozen.CompactionValueWeight == 0 {
+		frozen.CompactionValueWeight = 0.35
+	}
+	if frozen.CompactionValueAlertThreshold <= 0 {
+		frozen.CompactionValueAlertThreshold = 0.6
 	}
 	lsm := &LSM{
-		option: opt,
+		option: frozen,
 		wal:    walMgr,
 		closer: utils.NewCloser(),
 	}
+	if frozen.DiscardStatsCh != nil {
+		lsm.discardStatsCh = *frozen.DiscardStatsCh
+	}
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
-	lm, err := lsm.initLevelManager(opt)
+	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
 		return nil, fmt.Errorf("lsm init level manager: %w", err)
 	}
@@ -386,7 +414,11 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		lsm.levels.rebuildRangeTombstones()
 	}
 	// start the db recovery process to load the wal, if there is no recovery content, create a new memtable
-	lsm.memTable, lsm.immutables = lsm.recovery()
+	lsm.memTable, lsm.immutables, err = lsm.recovery()
+	if err != nil {
+		_ = lsm.Close()
+		return nil, fmt.Errorf("lsm recovery: %w", err)
+	}
 	lsm.startFlushWorkers(1)
 	for _, mt := range lsm.immutables {
 		if err := lsm.submitFlush(mt); err != nil {
@@ -460,12 +492,18 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 		}
 		lsm.lock.RUnlock()
 
-		var old *memTable
+		var (
+			old    *memTable
+			rotErr error
+		)
 		lsm.lock.Lock()
 		if lsm.memTable == mt && !mt.canReserve(estimate, lsm.option.MemTableSize) {
-			old = lsm.rotateLocked()
+			old, rotErr = lsm.rotateLocked()
 		}
 		lsm.lock.Unlock()
+		if rotErr != nil {
+			return rotErr
+		}
 		if old != nil {
 			if err := lsm.submitFlush(old); err != nil {
 				return err
@@ -510,12 +548,18 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 		}
 		lsm.lock.RUnlock()
 
-		var old *memTable
+		var (
+			old    *memTable
+			rotErr error
+		)
 		lsm.lock.Lock()
 		if lsm.memTable == mt && !mt.canReserve(totalEstimate, lsm.option.MemTableSize) {
-			old = lsm.rotateLocked()
+			old, rotErr = lsm.rotateLocked()
 		}
 		lsm.lock.Unlock()
+		if rotErr != nil {
+			return rotErr
+		}
 		if old != nil {
 			if err := lsm.submitFlush(old); err != nil {
 				return err
@@ -620,17 +664,24 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 // Rotate seals the active memtable, creates a new one, and schedules flush.
 func (lsm *LSM) Rotate() error {
 	lsm.lock.Lock()
-	old := lsm.rotateLocked()
+	old, err := lsm.rotateLocked()
 	lsm.lock.Unlock()
+	if err != nil {
+		return err
+	}
 	return lsm.submitFlush(old)
 }
 
 // rotateLocked swaps the active memtable; caller must hold lsm.lock.
-func (lsm *LSM) rotateLocked() *memTable {
+func (lsm *LSM) rotateLocked() (*memTable, error) {
 	old := lsm.memTable
+	next, err := lsm.NewMemtable()
+	if err != nil {
+		return nil, err
+	}
 	lsm.immutables = append(lsm.immutables, old)
-	lsm.memTable = lsm.NewMemtable()
-	return old
+	lsm.memTable = next
+	return old, nil
 }
 
 // GetMemTables pins active+immutable memtables and returns an unlock callback.
