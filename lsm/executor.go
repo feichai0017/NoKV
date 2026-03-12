@@ -895,7 +895,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 	first.Unlock()
 
 	if lm.compaction != nil {
-		lm.compaction.Trigger("ingest-buffer")
+		lm.compaction.Trigger()
 	}
 	return nil
 }
