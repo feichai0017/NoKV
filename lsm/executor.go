@@ -1,8 +1,6 @@
 package lsm
 
 import (
-	"bytes"
-	"container/heap"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
@@ -1041,125 +1040,6 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 	}
 }
 
-type compactRangeEnd struct {
-	end     []byte
-	version uint64
-}
-
-type compactRangeEndHeap []compactRangeEnd
-
-func (h compactRangeEndHeap) Len() int {
-	return len(h)
-}
-
-func (h compactRangeEndHeap) Less(i, j int) bool {
-	return bytes.Compare(h[i].end, h[j].end) < 0
-}
-
-func (h compactRangeEndHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *compactRangeEndHeap) Push(x any) {
-	*h = append(*h, x.(compactRangeEnd))
-}
-
-func (h *compactRangeEndHeap) Pop() any {
-	old := *h
-	last := len(old) - 1
-	value := old[last]
-	*h = old[:last]
-	return value
-}
-
-type compactCFRangeTracker struct {
-	ends     compactRangeEndHeap
-	versions *rangeVersionSet
-}
-
-func newCompactCFRangeTracker() *compactCFRangeTracker {
-	return &compactCFRangeTracker{
-		versions: newRangeVersionSet(16),
-	}
-}
-
-func (t *compactCFRangeTracker) add(end []byte, version uint64) {
-	if t == nil {
-		return
-	}
-	heap.Push(&t.ends, compactRangeEnd{
-		end:     kv.SafeCopy(nil, end),
-		version: version,
-	})
-	t.versions.add(version)
-}
-
-func (t *compactCFRangeTracker) evict(userKey []byte) {
-	if t == nil {
-		return
-	}
-	for t.ends.Len() > 0 {
-		head := t.ends[0]
-		if bytes.Compare(head.end, userKey) > 0 {
-			break
-		}
-		popped := heap.Pop(&t.ends).(compactRangeEnd)
-		t.versions.remove(popped.version)
-	}
-}
-
-func (t *compactCFRangeTracker) covers(userKey []byte, version uint64) bool {
-	if t == nil {
-		return false
-	}
-	t.evict(userKey)
-	maxVersion, ok := t.versions.max()
-	if !ok {
-		return false
-	}
-	return maxVersion > version
-}
-
-type compactRangeTracker struct {
-	byCF map[kv.ColumnFamily]*compactCFRangeTracker
-}
-
-func newCompactRangeTracker() *compactRangeTracker {
-	return &compactRangeTracker{
-		byCF: make(map[kv.ColumnFamily]*compactCFRangeTracker, 3),
-	}
-}
-
-func (t *compactRangeTracker) add(rt RangeTombstone) {
-	if t == nil {
-		return
-	}
-	if bytes.Compare(rt.Start, rt.End) >= 0 {
-		return
-	}
-	cf := rt.CF
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	tracker := t.byCF[cf]
-	if tracker == nil {
-		tracker = newCompactCFRangeTracker()
-		t.byCF[cf] = tracker
-	}
-	tracker.add(rt.End, rt.Version)
-}
-
-func (t *compactRangeTracker) covers(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
-	if t == nil {
-		return false
-	}
-	tracker := t.byCF[cf]
-	if tracker == nil {
-		return false
-	}
-	return tracker.covers(userKey, version)
-}
-
 // subcompact runs a single parallel compaction over a key range.
 func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
@@ -1186,7 +1066,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	}
 
 	// Keep tombstone state across builder splits.
-	rtTracker := newCompactRangeTracker()
+	rtTracker := tombstone.NewCompactionTracker()
 
 	addKeys := func(builder *tableBuilder) {
 		var tableKr compact.KeyRange
@@ -1205,13 +1085,13 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				if !ok {
 					continue
 				}
-				rt := RangeTombstone{
+				rt := tombstone.Range{
 					CF:      cf,
 					Start:   kv.SafeCopy(nil, rtStart),
 					End:     kv.SafeCopy(nil, entry.RangeEnd()),
 					Version: rtVersion,
 				}
-				rtTracker.add(rt)
+				rtTracker.Add(rt)
 			}
 			if !kv.SameKey(key, lastKey) {
 				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
@@ -1232,7 +1112,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 				if !ok {
 					continue
 				}
-				if rtTracker.covers(cf, userKey, version) {
+				if rtTracker.Covers(cf, userKey, version) {
 					// Covered point versions become stale once a newer range
 					// tombstone is active at this key.
 					updateStats(entry)

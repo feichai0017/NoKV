@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/pkg/errors"
@@ -26,15 +27,6 @@ type memIndex interface {
 	MemSize() int64
 	IncrRef()
 	DecrRef()
-}
-
-// memRangeTombstone is a lightweight copy of a range tombstone stored
-// directly in the memtable for O(M) lookup without iterator allocation.
-type memRangeTombstone struct {
-	cf      kv.ColumnFamily
-	start   []byte
-	end     []byte
-	version uint64
 }
 
 // memTable holds the active Skiplist and its WAL segment id.
@@ -53,8 +45,8 @@ type memTable struct {
 	// isKeyCoveredByRangeTombstone. The cached per-CF span index is rebuilt
 	// lazily on demand when rtIndexDirty is set.
 	rtMu            sync.RWMutex
-	rangeTombstones []memRangeTombstone
-	rtIndex         map[kv.ColumnFamily][]rangeTombstoneSpan
+	rangeTombstones []tombstone.Range
+	rtIndex         map[kv.ColumnFamily][]tombstone.Span
 	rtIndexDirty    bool
 }
 
@@ -365,22 +357,22 @@ func (m *memTable) isKeyCoveredByRangeTombstone(cf kv.ColumnFamily, userKey []by
 	}
 	m.rtMu.RLock()
 	dirty := m.rtIndexDirty
-	var spans []rangeTombstoneSpan
+	var spans []tombstone.Span
 	if !dirty {
 		spans = m.rtIndex[cf]
 	}
 	m.rtMu.RUnlock()
 	if !dirty {
-		return isKeyCoveredBySpans(spans, userKey, entryVersion)
+		return tombstone.IsKeyCoveredBySpans(spans, userKey, entryVersion)
 	}
 	m.rtMu.Lock()
 	if m.rtIndexDirty {
-		m.rtIndex = buildMemRangeIndex(m.rangeTombstones)
+		m.rtIndex = tombstone.BuildCFSpans(m.rangeTombstones)
 		m.rtIndexDirty = false
 	}
 	spans = m.rtIndex[cf]
 	m.rtMu.Unlock()
-	return isKeyCoveredBySpans(spans, userKey, entryVersion)
+	return tombstone.IsKeyCoveredBySpans(spans, userKey, entryVersion)
 }
 
 func (m *memTable) hasRangeTombstones() bool {
@@ -404,11 +396,15 @@ func (m *memTable) trackRangeTombstone(entry *kv.Entry) {
 		return
 	}
 	m.rtMu.Lock()
-	m.rangeTombstones = append(m.rangeTombstones, memRangeTombstone{
-		cf:      entry.CF,
-		start:   kv.SafeCopy(nil, start),
-		end:     kv.SafeCopy(nil, entry.RangeEnd()),
-		version: version,
+	cf := entry.CF
+	if !cf.Valid() {
+		cf = kv.CFDefault
+	}
+	m.rangeTombstones = append(m.rangeTombstones, tombstone.Range{
+		CF:      cf,
+		Start:   kv.SafeCopy(nil, start),
+		End:     kv.SafeCopy(nil, entry.RangeEnd()),
+		Version: version,
 	})
 	m.rtIndexDirty = true
 	m.rtMu.Unlock()

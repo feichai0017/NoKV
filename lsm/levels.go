@@ -13,6 +13,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm/compact"
+	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
@@ -38,7 +39,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if err := lm.build(); err != nil {
 		panic(err)
 	}
-	lm.rtCollector = NewRangeTombstoneCollector()
+	lm.rtCollector = tombstone.NewCollector()
 	lm.compaction = compact.NewManager(
 		lm,
 		lm.opt.NumCompactors,
@@ -59,7 +60,7 @@ type levelManager struct {
 	lsm              *LSM
 	compactState     *compact.State
 	compaction       *compact.Manager
-	rtCollector      *RangeTombstoneCollector
+	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
 	logPtrOffset     uint64
@@ -215,7 +216,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 
 	// build a builder and collect range tombstones
 	builder := newTableBuiler(lm.opt)
-	var newTombstones []RangeTombstone
+	var newTombstones []tombstone.Range
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
 		if entry != nil && entry.IsRangeDelete() && lm.rtCollector != nil {
@@ -223,7 +224,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 			if !ok {
 				continue
 			}
-			newTombstones = append(newTombstones, RangeTombstone{
+			newTombstones = append(newTombstones, tombstone.Range{
 				CF:      cf,
 				Start:   kv.SafeCopy(nil, start),
 				End:     kv.SafeCopy(nil, entry.RangeEnd()),
