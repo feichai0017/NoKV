@@ -14,6 +14,7 @@ type fakeExecutor struct {
 	adjusted   int
 	doCalls    int
 	pickCalls  int
+	lastDo     Priority
 }
 
 func (f *fakeExecutor) PickCompactLevels() []Priority {
@@ -21,8 +22,9 @@ func (f *fakeExecutor) PickCompactLevels() []Priority {
 	return f.priorities
 }
 
-func (f *fakeExecutor) DoCompact(_ int, _ Priority) error {
+func (f *fakeExecutor) DoCompact(_ int, p Priority) error {
 	f.doCalls++
+	f.lastDo = p
 	return f.doErr
 }
 
@@ -44,7 +46,7 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 		priorities: []Priority{{Level: 0, Score: 1, Adjusted: 1}},
 		needsSeq:   []bool{true, false},
 	}
-	cm := NewManager(exec, 2)
+	cm := NewManager(exec, 2, nil)
 	ok := cm.RunOnce(0)
 	require.True(t, ok)
 	require.Equal(t, 1, exec.doCalls)
@@ -61,8 +63,39 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 
 func TestManagerStartClose(t *testing.T) {
 	exec := &fakeExecutor{}
-	cm := NewManager(exec, 1)
+	cm := NewManager(exec, 1, nil)
 	closeCh := make(chan struct{})
 	close(closeCh)
 	cm.Start(0, closeCh, nil)
+}
+
+type reversePolicy struct {
+	called int
+}
+
+func (p *reversePolicy) Name() string { return "reverse-test" }
+
+func (p *reversePolicy) Arrange(_ int, priorities []Priority) []Priority {
+	p.called++
+	out := append([]Priority(nil), priorities...)
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+func TestManagerRunOnceUsesPolicyOrdering(t *testing.T) {
+	exec := &fakeExecutor{
+		priorities: []Priority{
+			{Level: 1, Score: 1.2, Adjusted: 1.2},
+			{Level: 0, Score: 1.1, Adjusted: 1.1},
+		},
+	}
+	policy := &reversePolicy{}
+	cm := NewManager(exec, 1, policy)
+
+	ok := cm.RunOnce(0)
+	require.True(t, ok)
+	require.Equal(t, 1, policy.called)
+	require.Equal(t, 0, exec.lastDo.Level, "policy ordering should decide first tried priority")
 }

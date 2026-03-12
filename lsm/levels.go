@@ -39,7 +39,11 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 		panic(err)
 	}
 	lm.rtCollector = NewRangeTombstoneCollector()
-	lm.compaction = compact.NewManager(lm, lm.opt.NumCompactors)
+	lm.compaction = compact.NewManager(
+		lm,
+		lm.opt.NumCompactors,
+		compact.NewPolicy(lm.opt.CompactionPolicy),
+	)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
 	}
