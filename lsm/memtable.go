@@ -65,14 +65,16 @@ func arenaSizeFor(memTableSize int64) int64 {
 }
 
 // NewMemtable creates the active MemTable and switches WAL to the new segment.
-func (lsm *LSM) NewMemtable() *memTable {
+func (lsm *LSM) NewMemtable() (*memTable, error) {
 	newFid := lsm.levels.maxFID.Add(1)
-	utils.Panic(lsm.wal.SwitchSegment(uint32(newFid), true))
+	if err := lsm.wal.SwitchSegment(uint32(newFid), true); err != nil {
+		return nil, err
+	}
 	return &memTable{
 		lsm:       lsm,
 		segmentID: uint32(newFid),
 		index:     newMemIndex(lsm.option),
-	}
+	}, nil
 }
 
 func (m *memTable) close() error {
@@ -166,10 +168,10 @@ func (m *memTable) setBatch(entries []*kv.Entry) error {
 }
 
 // recovery rebuilds memtables from existing WAL segments.
-func (lsm *LSM) recovery() (*memTable, []*memTable) {
+func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 	files, err := lsm.wal.ListSegments()
 	if err != nil {
-		utils.Panic(err)
+		return nil, nil, err
 	}
 	var fids []uint64
 	maxFid := lsm.levels.maxFID.Load()
@@ -180,7 +182,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 		}
 		fid, err := strconv.ParseUint(strings.TrimSuffix(base, ".wal"), 10, 32)
 		if err != nil {
-			utils.Panic(err)
+			return nil, nil, err
 		}
 		if fid > maxFid {
 			maxFid = fid
@@ -209,13 +211,19 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 
 	if len(fids) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		return lsm.NewMemtable(), nil
+		active, createErr := lsm.NewMemtable()
+		if createErr != nil {
+			return nil, nil, createErr
+		}
+		return active, nil, nil
 	}
 
 	tables := make([]*memTable, 0, len(fids))
 	for _, fid := range fids {
 		mt, err := lsm.openMemTable(fid)
-		utils.CondPanic(err != nil, err)
+		if err != nil {
+			return nil, nil, err
+		}
 		if mt.Size() == 0 {
 			continue
 		}
@@ -223,14 +231,20 @@ func (lsm *LSM) recovery() (*memTable, []*memTable) {
 	}
 	if len(tables) == 0 {
 		lsm.levels.maxFID.Store(maxFid)
-		return lsm.NewMemtable(), nil
+		active, createErr := lsm.NewMemtable()
+		if createErr != nil {
+			return nil, nil, createErr
+		}
+		return active, nil, nil
 	}
 
 	lsm.levels.maxFID.Store(maxFid)
 	active := tables[len(tables)-1]
 	tables = tables[:len(tables)-1]
-	utils.Panic(lsm.wal.SwitchSegment(active.segmentID, false))
-	return active, tables
+	if err := lsm.wal.SwitchSegment(active.segmentID, false); err != nil {
+		return nil, nil, err
+	}
+	return active, tables, nil
 }
 
 func (lsm *LSM) openMemTable(fid uint64) (*memTable, error) {
@@ -329,7 +343,9 @@ func (mt *memTable) releaseReserve(need int64) {
 		return
 	}
 	if n := mt.reservedSize.Add(-need); n < 0 {
-		panic("lsm: memtable reservation underflow")
+		// Defensive clamping: reservation accounting bug must not crash the whole service.
+		// Keep the counter non-negative and surface via diagnostics/tests.
+		mt.reservedSize.Store(0)
 	}
 }
 

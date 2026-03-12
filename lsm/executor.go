@@ -901,7 +901,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 
 func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if cd.nextLevel.levelNum == 0 {
-		utils.Panic(errors.New("base level can be zero"))
+		return false
 	}
 	// Skip if priority is below 1.
 	if cd.adjusted > 0.0 && cd.adjusted < 1.0 {
@@ -1034,8 +1034,15 @@ func tablesStrictlyOrdered(tables []*table) bool {
 	return true
 }
 func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
+	if lm == nil || lm.lsm == nil {
+		return
+	}
+	ch := lm.lsm.getDiscardStatsCh()
+	if ch == nil {
+		return
+	}
 	select {
-	case *lm.lsm.option.DiscardStatsCh <- discardStats:
+	case ch <- discardStats:
 	default:
 	}
 }
@@ -1153,7 +1160,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 		// called Add() at least once, and builder is not Empty().
 		if builder.empty() {
 			// Cleanup builder resources:
-			builder.finish()
+			_, _ = builder.finish()
 			builder.Close()
 			continue
 		}
