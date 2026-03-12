@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -37,6 +39,24 @@ var (
 
 func buildInternalTestEntry() *kv.Entry {
 	return utils.BuildEntry()
+}
+
+func newTestLSMOptions(workDir string, fs vfs.FS) *Options {
+	return &Options{
+		FS:                  fs,
+		WorkDir:             workDir,
+		SSTableMaxSz:        1 << 20,
+		MemTableSize:        1 << 20,
+		BlockSize:           4 << 10,
+		BloomFalsePositive:  0.01,
+		BaseLevelSize:       10 << 20,
+		LevelSizeMultiplier: 10,
+		BaseTableSize:       2 << 20,
+		TableSizeMultiplier: 2,
+		NumLevelZeroTables:  15,
+		MaxLevelNum:         7,
+		NumCompactors:       1,
+	}
 }
 
 // TestBase is a basic correctness test.
@@ -69,6 +89,94 @@ func TestClose(t *testing.T) {
 	}
 	// Run N times to exercise multiple SSTables.
 	runTest(1, test)
+}
+
+func TestNewLSMInitReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("manifest open injected")
+	manifestPath := filepath.Join(dir, "MANIFEST-000001")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpenFile, manifestPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	wlog, err := wal.Open(wal.Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = wlog.Close() }()
+
+	_, err = NewLSM(newTestLSMOptions(dir, fs), wlog)
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected injected init error, got: %v", err)
+	}
+}
+
+func TestRotateReturnsSubmitError(t *testing.T) {
+	dir := t.TempDir()
+	wlog, err := wal.Open(wal.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	lsm, err := NewLSM(newTestLSMOptions(dir, nil), wlog)
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer func() { _ = wlog.Close() }()
+	defer func() { _ = lsm.Close() }()
+
+	if err := lsm.flushMgr.Close(); err != nil {
+		t.Fatalf("close flush manager: %v", err)
+	}
+	if err := lsm.Rotate(); err == nil {
+		t.Fatalf("expected rotate to return submit error")
+	}
+}
+
+func TestCloseBestEffortAggregatesErrors(t *testing.T) {
+	dir := t.TempDir()
+	policy := vfs.NewFaultPolicy()
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	wlog, err := wal.Open(wal.Config{Dir: dir, FS: fs})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	lsm, err := NewLSM(newTestLSMOptions(dir, fs), wlog)
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer func() { _ = wlog.Close() }()
+
+	for i := range 2 {
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte{byte('a' + i)}, uint64(i+1), []byte("v"), 0, 0)
+		if err := lsm.Set(entry); err != nil {
+			entry.DecrRef()
+			t.Fatalf("set entry %d: %v", i, err)
+		}
+		entry.DecrRef()
+		if err := lsm.Rotate(); err != nil {
+			t.Fatalf("rotate %d: %v", i, err)
+		}
+	}
+	waitForL0Tables(t, lsm, 2)
+
+	l0Tables := lsm.levels.levels[0].tablesSnapshot()
+	if len(l0Tables) < 2 {
+		t.Fatalf("expected at least 2 L0 tables, got %d", len(l0Tables))
+	}
+	path1 := utils.FileNameSSTable(dir, l0Tables[0].fid)
+	path2 := utils.FileNameSSTable(dir, l0Tables[1].fid)
+	closeErr1 := errors.New("close table 1 injected")
+	closeErr2 := errors.New("close table 2 injected")
+	policy.AddRule(vfs.FailOnceRule(vfs.OpFileClose, path1, closeErr1))
+	policy.AddRule(vfs.FailOnceRule(vfs.OpFileClose, path2, closeErr2))
+
+	err = lsm.Close()
+	if !errors.Is(err, closeErr1) {
+		t.Fatalf("expected joined close error to include err1, got: %v", err)
+	}
+	if !errors.Is(err, closeErr2) {
+		t.Fatalf("expected joined close error to include err2, got: %v", err)
+	}
 }
 
 // TestHitStorage exercises read paths across storage tiers.
@@ -175,7 +283,9 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 		t.Fatalf("lsm.Set: %v", err)
 	}
 
-	lsm.Rotate()
+	if err := lsm.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
 	waitForL0(t, lsm)
 
 	del := kv.NewEntry(key, nil)
@@ -507,7 +617,9 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 	if err := lsm.Set(point); err != nil {
 		t.Fatalf("set point: %v", err)
 	}
-	lsm.Rotate()
+	if err := lsm.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
 	waitForL0(t, lsm)
 	compactL0To(maxLevel)
 	if got, err := lsm.Get(seek); err != nil {
@@ -526,7 +638,9 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 	if err := lsm.Set(rt); err != nil {
 		t.Fatalf("set range tombstone: %v", err)
 	}
-	lsm.Rotate()
+	if err := lsm.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
 	waitForL0(t, lsm)
 	compactL0To(maxLevel)
 
@@ -1627,7 +1741,10 @@ func buildLSM() *LSM {
 	if err != nil {
 		panic(err)
 	}
-	lsm := NewLSM(opt, wlog)
+	lsm, err := NewLSM(opt, wlog)
+	if err != nil {
+		panic(err)
+	}
 	lsm.SetDiscardStatsCh(&c)
 	return lsm
 }
@@ -1693,16 +1810,23 @@ func tricky(tables []*table) {
 }
 
 func waitForL0(t *testing.T, lsm *LSM) {
+	waitForL0Tables(t, lsm, 1)
+}
+
+func waitForL0Tables(t *testing.T, lsm *LSM, atLeast int) {
 	t.Helper()
+	if atLeast <= 0 {
+		atLeast = 1
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if lsm.FlushPending() == 0 && lsm.levels.levels[0].numTables() > 0 {
+		if lsm.FlushPending() == 0 && lsm.levels.levels[0].numTables() >= atLeast {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timeout waiting for L0 table (pending=%d tables=%d)",
-		lsm.FlushPending(), lsm.levels.levels[0].numTables())
+	t.Fatalf("timeout waiting for L0 table (pending=%d tables=%d, need>=%d)",
+		lsm.FlushPending(), lsm.levels.levels[0].numTables(), atLeast)
 }
 
 func clearDir() {

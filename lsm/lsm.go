@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -120,11 +121,14 @@ func (lsm *LSM) Close() error {
 	if !lsm.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	var closeErr error
 	// wait for all api calls to finish
 	lsm.throttleWrites(false)
-	lsm.closer.Close()
-	if err := lsm.flushMgr.Close(); err != nil {
-		return err
+	if lsm.closer != nil {
+		lsm.closer.Close()
+	}
+	if lsm.flushMgr != nil {
+		closeErr = errors.Join(closeErr, lsm.flushMgr.Close())
 	}
 	lsm.flushWG.Wait()
 
@@ -136,22 +140,18 @@ func (lsm *LSM) Close() error {
 	lsm.lock.Unlock()
 
 	if mem != nil {
-		if err := mem.close(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, mem.close())
 	}
 	for _, mt := range immutables {
 		if mt == nil {
 			continue
 		}
-		if err := mt.close(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, mt.close())
 	}
-	if err := lsm.levels.close(); err != nil {
-		return err
+	if lsm.levels != nil {
+		closeErr = errors.Join(closeErr, lsm.levels.close())
 	}
-	return nil
+	return closeErr
 }
 
 // SetDiscardStatsCh updates the discard stats channel used during compaction.
@@ -352,8 +352,14 @@ func (lsm *LSM) CurrentVersion() manifest.Version {
 	return lsm.levels.manifestMgr.Current()
 }
 
-// NewLSM _
-func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
+// NewLSM constructs the LSM core and returns initialization errors.
+func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
+	if opt == nil {
+		return nil, errors.New("lsm: nil options")
+	}
+	if walMgr == nil {
+		return nil, errors.New("lsm: nil wal manager")
+	}
 	if opt.CompactionValueWeight < 0 {
 		opt.CompactionValueWeight = 0
 	}
@@ -363,10 +369,18 @@ func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 	if opt.CompactionValueAlertThreshold <= 0 {
 		opt.CompactionValueAlertThreshold = 0.6
 	}
-	lsm := &LSM{option: opt, wal: walMgr}
+	lsm := &LSM{
+		option: opt,
+		wal:    walMgr,
+		closer: utils.NewCloser(),
+	}
 	lsm.flushMgr = flush.NewManager()
 	// initialize levelManager
-	lsm.levels = lsm.initLevelManager(opt)
+	lm, err := lsm.initLevelManager(opt)
+	if err != nil {
+		return nil, fmt.Errorf("lsm init level manager: %w", err)
+	}
+	lsm.levels = lm
 	// Populate range tombstone collector from existing SSTables
 	if lsm.levels != nil && lsm.levels.rtCollector != nil {
 		lsm.levels.rebuildRangeTombstones()
@@ -375,11 +389,12 @@ func NewLSM(opt *Options, walMgr *wal.Manager) *LSM {
 	lsm.memTable, lsm.immutables = lsm.recovery()
 	lsm.startFlushWorkers(1)
 	for _, mt := range lsm.immutables {
-		lsm.submitFlush(mt)
+		if err := lsm.submitFlush(mt); err != nil {
+			_ = lsm.Close()
+			return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
+		}
 	}
-	// initialize closer for resource recycling signal control
-	lsm.closer = utils.NewCloser()
-	return lsm
+	return lsm, nil
 }
 
 // StartCompacter _
@@ -452,7 +467,9 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 		}
 		lsm.lock.Unlock()
 		if old != nil {
-			lsm.submitFlush(old)
+			if err := lsm.submitFlush(old); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -500,7 +517,9 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 		}
 		lsm.lock.Unlock()
 		if old != nil {
-			lsm.submitFlush(old)
+			if err := lsm.submitFlush(old); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -599,11 +618,11 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
 }
 
 // Rotate seals the active memtable, creates a new one, and schedules flush.
-func (lsm *LSM) Rotate() {
+func (lsm *LSM) Rotate() error {
 	lsm.lock.Lock()
 	old := lsm.rotateLocked()
 	lsm.lock.Unlock()
-	lsm.submitFlush(old)
+	return lsm.submitFlush(old)
 }
 
 // rotateLocked swaps the active memtable; caller must hold lsm.lock.
@@ -637,15 +656,16 @@ func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
 
 }
 
-func (lsm *LSM) submitFlush(mt *memTable) {
+func (lsm *LSM) submitFlush(mt *memTable) error {
 	if mt == nil {
-		return
+		return nil
 	}
 	mt.IncrRef()
 	if _, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt}); err != nil {
 		mt.DecrRef()
-		utils.Panic(err)
+		return err
 	}
+	return nil
 }
 
 func (lsm *LSM) startFlushWorkers(n int) {

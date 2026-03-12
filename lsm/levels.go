@@ -21,7 +21,7 @@ import (
 )
 
 // initLevelManager initialize the levelManager
-func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
+func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 	lm := &levelManager{lsm: lsm} // dereference lsm
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
@@ -30,14 +30,14 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	}
 	// read the manifest file to build the manager
 	if err := lm.loadManifest(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	if lm.manifestMgr != nil {
 		lm.manifestMgr.SetSync(opt.ManifestSync)
 		lm.manifestMgr.SetRewriteThreshold(opt.ManifestRewriteThreshold)
 	}
 	if err := lm.build(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
 	lm.compaction = compact.NewManager(
@@ -48,7 +48,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
 	}
-	return lm
+	return lm, nil
 }
 
 type levelManager struct {
@@ -74,18 +74,20 @@ type levelManager struct {
 type LevelMetrics = metrics.LevelMetrics
 
 func (lm *levelManager) close() error {
-	if err := lm.cache.close(); err != nil {
-		return err
+	var closeErr error
+	if lm.cache != nil {
+		closeErr = errors.Join(closeErr, lm.cache.close())
 	}
-	if err := lm.manifestMgr.Close(); err != nil {
-		return err
+	if lm.manifestMgr != nil {
+		closeErr = errors.Join(closeErr, lm.manifestMgr.Close())
 	}
 	for i := range lm.levels {
-		if err := lm.levels[i].close(); err != nil {
-			return err
+		if lm.levels[i] == nil {
+			continue
 		}
+		closeErr = errors.Join(closeErr, lm.levels[i].close())
 	}
-	return nil
+	return closeErr
 }
 
 func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
@@ -488,23 +490,20 @@ func (lh *levelHandler) close() error {
 	ingestTables := append([]*table(nil), lh.ingest.allTables()...)
 	lh.RUnlock()
 
+	var closeErr error
 	for _, t := range tables {
 		if t == nil {
 			continue
 		}
-		if err := t.closeHandle(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, t.closeHandle())
 	}
 	for _, t := range ingestTables {
 		if t == nil {
 			continue
 		}
-		if err := t.closeHandle(); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, t.closeHandle())
 	}
-	return nil
+	return closeErr
 }
 func (lh *levelHandler) add(t *table) {
 	if t == nil {
