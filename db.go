@@ -214,6 +214,7 @@ func Open(opt *Options) *DB {
 		NumLevelZeroTables:       numL0Tables,
 		MaxLevelNum:              utils.MaxLevelNum,
 		NumCompactors:            numCompactors,
+		CompactionPolicy:         string(opt.CompactionPolicy),
 		IngestCompactBatchSize:   ingestBatchSize,
 		IngestBacklogMergeScore:  mergeScore,
 		IngestShardParallelism:   shardParallel,

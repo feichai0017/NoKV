@@ -64,19 +64,24 @@ type Executor interface {
 // Manager coordinates background compaction workers.
 type Manager struct {
 	exec      Executor
+	policy    Policy
 	triggerCh chan string
 	maxRuns   int
 }
 
 // NewManager creates a compaction manager for the supplied executor.
-func NewManager(exec Executor, maxRuns int) *Manager {
+func NewManager(exec Executor, maxRuns int, policy Policy) *Manager {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
 		maxRuns = 4
 	}
+	if policy == nil {
+		policy = LeveledPolicy{}
+	}
 	cm := &Manager{
 		exec:      exec,
+		policy:    policy,
 		triggerCh: make(chan string, 16),
 		maxRuns:   maxRuns,
 	}
@@ -146,8 +151,8 @@ func (cm *Manager) runCycle(id int, reason string) {
 
 func (cm *Manager) runOnce(id int) bool {
 	prios := cm.exec.PickCompactLevels()
-	if id == 0 {
-		prios = MoveL0ToFront(prios)
+	if cm.policy != nil {
+		prios = cm.policy.Arrange(id, prios)
 	}
 	for _, p := range prios {
 		if id == 0 && p.Level == 0 {
