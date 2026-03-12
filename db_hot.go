@@ -43,11 +43,7 @@ func (db *DB) recordRead(key []byte) {
 	if db.prefetchRing == nil {
 		return
 	}
-	clamp := db.prefetchHot
-	if clamp <= 0 {
-		clamp = max(db.prefetchWarm, 1)
-	}
-	if clamp > 0 && count >= clamp {
+	if db.prefetchThreshold > 0 && count >= db.prefetchThreshold {
 		db.enqueuePrefetch(skey)
 	}
 }

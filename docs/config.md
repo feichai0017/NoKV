@@ -19,6 +19,7 @@ Key option groups (see `options.go` for the full list):
   - `WorkDir`, `SyncWrites`, `ManifestSync`, `ManifestRewriteThreshold`
 - **Write pipeline**
   - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `WriteBatchWait`
+  - `WriteThrottleMinRate`, `WriteThrottleMaxRate`
 - **Value log**
   - `ValueThreshold`, `ValueLogFileSize`, `ValueLogMaxEntries`
   - `ValueLogGCInterval`, `ValueLogGCDiscardRatio`
@@ -35,7 +36,7 @@ Key option groups (see `options.go` for the full list):
   - `BlockCacheSize`, `BloomCacheSize`
 - **Hot key throttling**
   - `WriteHotKeyLimit`, `HotWriteBurstThreshold`, `HotWriteBatchMultiplier`
-  - `HotRingEnabled`, `HotRingTopK`, decay/window settings
+  - `HotRingEnabled`, `HotRingTopK`, `HotReadPrefetchThreshold`, `HotReadPrefetchCooldown`, decay/window settings
   - `HotRingNodeCap`, `HotRingNodeSampleBits`, `HotRingRotationInterval`
   - `ValueLogHotRingOverride` + `ValueLogHotRing*` overrides
 - **WAL watchdog**
@@ -56,6 +57,14 @@ opt.WriteBatchMaxCount = 128
 db := NoKV.Open(opt)
 defer db.Close()
 ```
+
+Notes:
+- `Open()` normalizes legacy fallback fields once at the option boundary. The
+  DB and LSM layers then consume the resolved values directly instead of
+  re-applying defaults internally.
+- Write slowdown is bandwidth-driven: `WriteThrottleMaxRate` applies when
+  slowdown first becomes active, and pressure lowers the target rate toward
+  `WriteThrottleMinRate` as compaction debt approaches the stop threshold.
 
 ### Load Options From TOML
 
