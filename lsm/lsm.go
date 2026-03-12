@@ -694,3 +694,23 @@ func (lsm *LSM) startFlushWorkers(n int) {
 		})
 	}
 }
+
+func (lsm *LSM) ImportExternalSST(paths []string) error {
+	if lsm == nil {
+		return errors.New("nil LSM")
+	}
+	if lsm.closed.Load() {
+		return errors.New("LSM is closed")
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	lsm.lock.Lock()
+	defer lsm.lock.Unlock()
+
+	lsm.closer.Add(1)
+	defer lsm.closer.Done()
+
+	return lsm.levels.importExternalSST(paths)
+}
