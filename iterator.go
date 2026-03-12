@@ -175,7 +175,6 @@ func (iter *DBIterator) Seek(key []byte) {
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
-			iter.resetIterationState()
 			return
 		}
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
@@ -185,7 +184,6 @@ func (iter *DBIterator) Seek(key []byte) {
 		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
-			iter.resetIterationState()
 			return
 		}
 		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
@@ -329,6 +327,10 @@ func (iter *DBIterator) populateReverse() {
 		latest := iter.snapshotEntry(entry)
 
 		iter.advance(fromPending)
+		// Internal keys sort by user key, then by descending version.
+		// Under reverse iteration this means we observe one user key's versions
+		// from older to newer while scanning this loop. Keep overwriting `latest`
+		// so the final materialized entry is the newest visible version.
 		for iter.iitr.Valid() {
 			item := iter.iitr.Item()
 			if item == nil {
