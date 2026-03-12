@@ -10,20 +10,18 @@ import (
 type heartbeatLoop struct {
 	interval time.Duration
 	sink     scheduler.RegionSink
-	planner  scheduler.Planner
 	storeID  uint64
 	regions  func() []manifest.RegionMeta
 	stats    func() scheduler.StoreStats
-	snapshot func() scheduler.Snapshot
 	enqueue  func(scheduler.Operation)
 	stop     chan struct{}
 	done     chan struct{}
 }
 
 // newHeartbeatLoop creates the periodic scheduler bridge for a store instance.
-// It publishes region/store heartbeats and optionally consumes planner output.
-func newHeartbeatLoop(interval time.Duration, sink scheduler.RegionSink, planner scheduler.Planner, storeID uint64,
-	regions func() []manifest.RegionMeta, stats func() scheduler.StoreStats, snapshot func() scheduler.Snapshot,
+// It publishes region/store heartbeats and drains scheduler operations.
+func newHeartbeatLoop(interval time.Duration, sink scheduler.RegionSink, storeID uint64,
+	regions func() []manifest.RegionMeta, stats func() scheduler.StoreStats,
 	enqueue func(scheduler.Operation)) *heartbeatLoop {
 	if sink == nil || interval <= 0 {
 		return nil
@@ -31,11 +29,9 @@ func newHeartbeatLoop(interval time.Duration, sink scheduler.RegionSink, planner
 	return &heartbeatLoop{
 		interval: interval,
 		sink:     sink,
-		planner:  planner,
 		storeID:  storeID,
 		regions:  regions,
 		stats:    stats,
-		snapshot: snapshot,
 		enqueue:  enqueue,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -73,7 +69,7 @@ func (hl *heartbeatLoop) run() {
 }
 
 // sendHeartbeats pushes current region/store state to the scheduler sink, then
-// drains planner operations if planner capability is present.
+// drains pending operations from the same sink.
 func (hl *heartbeatLoop) sendHeartbeats() {
 	if hl == nil || hl.sink == nil {
 		return
@@ -84,10 +80,7 @@ func (hl *heartbeatLoop) sendHeartbeats() {
 	if hl.storeID != 0 {
 		hl.sink.SubmitStoreHeartbeat(hl.stats())
 	}
-	if hl.planner != nil && hl.snapshot != nil {
-		ops := hl.planner.Plan(hl.snapshot())
-		for _, op := range ops {
-			hl.enqueue(op)
-		}
+	for _, op := range hl.sink.DrainOperations() {
+		hl.enqueue(op)
 	}
 }

@@ -175,10 +175,8 @@ func Open(opt *Options) *DB {
 	if numL0Tables <= 0 {
 		numL0Tables = 15
 	}
+	// IngestCompactBatchSize defaulting is centralized inside lsm.initLevelManager.
 	ingestBatchSize := opt.IngestCompactBatchSize
-	if ingestBatchSize <= 0 {
-		ingestBatchSize = 8
-	}
 	mergeScore := opt.IngestBacklogMergeScore
 	if mergeScore <= 0 {
 		mergeScore = 2.0
