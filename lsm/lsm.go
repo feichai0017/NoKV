@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -25,6 +26,7 @@ type LSM struct {
 	wal        *wal.Manager
 	flushMgr   *flush.Manager
 	flushWG    sync.WaitGroup
+	logger     *slog.Logger
 
 	runtimeMu      sync.RWMutex
 	discardStatsCh chan map[manifest.ValueLogID]int64
@@ -39,6 +41,8 @@ type LSM struct {
 type Options struct {
 	// FS provides the filesystem implementation for manifest operations.
 	FS vfs.FS
+	// Logger handles background/storage logs for the LSM subsystem.
+	Logger *slog.Logger
 
 	WorkDir        string
 	MemTableSize   int64
@@ -193,6 +197,13 @@ func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	ch := lsm.discardStatsCh
 	lsm.runtimeMu.RUnlock()
 	return ch
+}
+
+func (lsm *LSM) getLogger() *slog.Logger {
+	if lsm == nil || lsm.logger == nil {
+		return slog.Default()
+	}
+	return lsm.logger
 }
 
 // SetThrottleCallback registers a callback used to toggle write throttling at the DB layer.
@@ -398,6 +409,10 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		option: frozen,
 		wal:    walMgr,
 		closer: utils.NewCloser(),
+		logger: frozen.Logger,
+	}
+	if lsm.logger == nil {
+		lsm.logger = slog.Default()
 	}
 	if frozen.DiscardStatsCh != nil {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh

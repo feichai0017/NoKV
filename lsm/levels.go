@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -44,6 +44,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 		lm,
 		lm.opt.NumCompactors,
 		compact.NewPolicy(lm.opt.CompactionPolicy),
+		lsm.getLogger(),
 	)
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.setHotKeyProvider(opt.HotKeyProvider)
@@ -98,6 +99,13 @@ func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
 		return
 	}
 	lm.hotProvider.Store(fn)
+}
+
+func (lm *levelManager) getLogger() *slog.Logger {
+	if lm == nil || lm.lsm == nil {
+		return slog.Default()
+	}
+	return lm.lsm.getLogger()
 }
 
 func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
@@ -438,7 +446,13 @@ func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 	if lm.lsm != nil && lm.lsm.wal != nil {
 		metrics := lm.lsm.wal.SegmentRecordMetrics(id)
 		if metrics.RaftRecords() > 0 {
-			log.Printf("[wal] segment %d retains raft records during GC eligibility (raft_entries=%d raft_states=%d raft_snapshots=%d)", id, metrics.RaftEntries, metrics.RaftStates, metrics.RaftSnapshots)
+			lm.getLogger().Warn(
+				"wal segment retains raft records during GC eligibility",
+				"segment", id,
+				"raft_entries", metrics.RaftEntries,
+				"raft_states", metrics.RaftStates,
+				"raft_snapshots", metrics.RaftSnapshots,
+			)
 		}
 	}
 	return true
