@@ -1,19 +1,18 @@
-package lsm
+package tombstone
 
 import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/tombstone"
 )
 
-func TestRangeTombstoneCollector_Add(t *testing.T) {
-	c := tombstone.NewCollector()
+func TestCollectorAdd(t *testing.T) {
+	c := NewCollector()
 	if c.Count() != 0 {
 		t.Fatal("new collector should be empty")
 	}
 
-	c.Add(tombstone.Range{
+	c.Add(Range{
 		CF:      kv.CFDefault,
 		Start:   []byte("a"),
 		End:     []byte("z"),
@@ -25,9 +24,9 @@ func TestRangeTombstoneCollector_Add(t *testing.T) {
 	}
 }
 
-func TestRangeTombstoneCollector_IsKeyCovered(t *testing.T) {
-	c := tombstone.NewCollector()
-	c.Add(tombstone.Range{
+func TestCollectorIsKeyCovered(t *testing.T) {
+	c := NewCollector()
+	c.Add(Range{
 		CF:      kv.CFDefault,
 		Start:   []byte("b"),
 		End:     []byte("d"),
@@ -59,16 +58,16 @@ func TestRangeTombstoneCollector_IsKeyCovered(t *testing.T) {
 	}
 }
 
-func TestRangeTombstoneCollector_Rebuild(t *testing.T) {
-	c := tombstone.NewCollector()
-	c.Add(tombstone.Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("b"), Version: 1})
-	c.Add(tombstone.Range{CF: kv.CFDefault, Start: []byte("c"), End: []byte("d"), Version: 2})
+func TestCollectorRebuild(t *testing.T) {
+	c := NewCollector()
+	c.Add(Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("b"), Version: 1})
+	c.Add(Range{CF: kv.CFDefault, Start: []byte("c"), End: []byte("d"), Version: 2})
 
 	if c.Count() != 2 {
 		t.Fatal("expected 2 tombstones")
 	}
 
-	c.Rebuild([]tombstone.Range{
+	c.Rebuild([]Range{
 		{CF: kv.CFDefault, Start: []byte("x"), End: []byte("z"), Version: 10},
 	})
 
@@ -84,10 +83,10 @@ func TestRangeTombstoneCollector_Rebuild(t *testing.T) {
 	}
 }
 
-func TestRangeTombstoneCollector_Overlapping(t *testing.T) {
-	c := tombstone.NewCollector()
-	c.Add(tombstone.Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("m"), Version: 100})
-	c.Add(tombstone.Range{CF: kv.CFDefault, Start: []byte("h"), End: []byte("z"), Version: 200})
+func TestCollectorOverlapping(t *testing.T) {
+	c := NewCollector()
+	c.Add(Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("m"), Version: 100})
+	c.Add(Range{CF: kv.CFDefault, Start: []byte("h"), End: []byte("z"), Version: 200})
 
 	if !c.IsKeyCovered(kv.CFDefault, []byte("j"), 50) {
 		t.Error("key j should be covered by first tombstone")
@@ -97,10 +96,10 @@ func TestRangeTombstoneCollector_Overlapping(t *testing.T) {
 	}
 }
 
-func TestRangeTombstoneCollector_CFIsolation(t *testing.T) {
-	c := tombstone.NewCollector()
-	c.Add(tombstone.Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("z"), Version: 100})
-	c.Add(tombstone.Range{CF: kv.CFLock, Start: []byte("a"), End: []byte("z"), Version: 100})
+func TestCollectorCFIsolation(t *testing.T) {
+	c := NewCollector()
+	c.Add(Range{CF: kv.CFDefault, Start: []byte("a"), End: []byte("z"), Version: 100})
+	c.Add(Range{CF: kv.CFLock, Start: []byte("a"), End: []byte("z"), Version: 100})
 
 	if !c.IsKeyCovered(kv.CFDefault, []byte("m"), 50) {
 		t.Error("key should be covered in CFDefault")
