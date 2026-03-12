@@ -3,7 +3,6 @@ package lsm
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"slices"
 	"sort"
@@ -173,13 +172,13 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 			sub.plan.IngestMode = p.IngestMode
 			sub.plan.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
-				log.Printf("[Compactor: %d] LOG Ingest Compact FAILED with error: %+v: %+v", id, err, sub)
+				lm.getLogger().Error("ingest compaction failed", "worker", id, "err", err, "def", sub)
 				lm.compactState.Delete(sub.stateEntry())
 				return err
 			}
 			lm.compactState.Delete(sub.stateEntry())
 			ran = true
-			log.Printf("[Compactor: %d] Ingest compaction for level: %d shard=%d DONE", id, sub.thisLevel.levelNum, order[i])
+			lm.getLogger().Info("ingest compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
 		}
 		if !ran {
 			return compact.ErrFillTables
@@ -196,10 +195,10 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
 			if err := lm.moveToIngest(&cd); err != nil {
-				log.Printf("[Compactor: %d] LOG Move to ingest FAILED with error: %+v: %+v", id, err, cd)
+				lm.getLogger().Error("move to ingest failed", "worker", id, "err", err, "def", cd)
 				return err
 			}
-			log.Printf("[Compactor: %d] Moved %d tables from L0 to ingest buffer of L%d", id, len(cd.top), cd.nextLevel.levelNum)
+			lm.getLogger().Info("moved L0 tables to ingest buffer", "worker", id, "tables", len(cd.top), "target_level", cd.nextLevel.levelNum)
 			return nil
 		}
 	} else {
@@ -214,20 +213,20 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		cleanup = true
 		// Continue with the normal merge path.
 		if err := lm.runCompactDef(id, l, cd); err != nil {
-			log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+			lm.getLogger().Error("compaction failed", "worker", id, "err", err, "def", cd)
 			return err
 		}
-		log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+		lm.getLogger().Info("compaction complete", "worker", id, "level", cd.thisLevel.levelNum)
 		return nil
 	}
 
 	// Execute the merge plan.
 	if err := lm.runCompactDef(id, l, cd); err != nil {
 		// This compaction couldn't be done successfully.
-		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+		lm.getLogger().Error("compaction failed", "worker", id, "err", err, "def", cd)
 		return err
 	}
-	log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelNum)
+	lm.getLogger().Info("compaction complete", "worker", id, "level", cd.thisLevel.levelNum)
 	return nil
 }
 
@@ -538,15 +537,20 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	from := append(tablesToString(cd.top), tablesToString(cd.bot)...)
 	to := tablesToString(newTables)
 	if dur := time.Since(timeStart); dur > 2*time.Second {
-		var expensive string
-		if dur > time.Second {
-			expensive = " [E]"
-		}
-		fmt.Printf("[%d]%s LOG Compact %d->%d (%d, %d -> %d tables with %d splits)."+
-			" [%s] -> [%s], took %v\n",
-			id, expensive, thisLevel.levelNum, nextLevel.levelNum, len(cd.top), len(cd.bot),
-			len(newTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
-			dur.Round(time.Millisecond))
+		lm.getLogger().Info(
+			"compaction detail",
+			"worker", id,
+			"expensive", dur > time.Second,
+			"from_level", thisLevel.levelNum,
+			"to_level", nextLevel.levelNum,
+			"top_tables", len(cd.top),
+			"bottom_tables", len(cd.bot),
+			"new_tables", len(newTables),
+			"splits", len(cd.splits),
+			"from", strings.Join(from, " "),
+			"to", strings.Join(to, " "),
+			"duration", dur.Round(time.Millisecond).String(),
+		)
 	}
 	// Record ingest metrics if applicable.
 	if cd.plan.IngestMode.UsesIngest() {
