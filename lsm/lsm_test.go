@@ -17,6 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -576,7 +577,7 @@ func TestMaxLevelCompactionNoRangeDeleteResurrection(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
 		t.Fatalf("runCompactDef max-level: %v", err)
 	}
-	lsm.levels.compactState.Delete(cd.stateEntry())
+	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 
 	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
 		if got != nil {
@@ -608,7 +609,7 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
 			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
 		}
-		lsm.levels.compactState.Delete(cd.stateEntry())
+		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	}
 	seek := kv.InternalKey(kv.CFDefault, []byte("y"), math.MaxUint64)
 
@@ -687,7 +688,7 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
 		t.Fatalf("runCompactDef max-level: %v", err)
 	}
-	lsm.levels.compactState.Delete(cd.stateEntry())
+	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 
 	// Sanity: point key table should still exist because only tombstone table was compacted.
 	hasPointInSST := false
@@ -1486,7 +1487,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] lsm.levels.fillTablesL0ToL0(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// Clear global state to isolate downstream tests.
-		lsm.levels.compactState.Delete(cd.stateEntry())
+		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[0], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
@@ -1501,7 +1502,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// Clear global state to isolate downstream tests.
-		lsm.levels.compactState.Delete(cd.stateEntry())
+		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 		_ = utils.Err(err)
 		ok = hasTable(lsm.levels.levels[1], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
@@ -1529,7 +1530,7 @@ func TestCompact(t *testing.T) {
 		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
 		err := lsm.levels.runCompactDef(0, 6, *cd)
 		// Clear global state to isolate downstream tests.
-		lsm.levels.compactState.Delete(cd.stateEntry())
+		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 		_ = utils.Err(err)
 		ok = false
 		if hasTable(lsm.levels.levels[6], prevMax+1) {
