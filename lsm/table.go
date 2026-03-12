@@ -4,7 +4,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	stderrors "errors"
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm/sstable"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
@@ -478,13 +478,9 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	return ss.Bytes(off, sz)
 }
 
-const maxUint32 = uint64(math.MaxUint32)
-
 // blockCacheKey is used to store blocks in the block cache.
 func (t *table) blockCacheKey(idx int) uint64 {
-	utils.CondPanicFunc(t.fid > maxUint32, func() error { return fmt.Errorf("table fid %d exceeds 32-bit limit", t.fid) })
-	utils.CondPanicFunc(idx < 0 || uint64(idx) > maxUint32, func() error { return fmt.Errorf("invalid block index %d", idx) })
-	return (t.fid << 32) | uint64(uint32(idx))
+	return sstable.MustBlockCacheKey(t.fid, idx)
 }
 
 // MinKey returns the smallest user key stored in this SSTable.
@@ -499,7 +495,7 @@ func (t *table) KeyCount() uint32 {
 		return t.keyCount
 	}
 	if idx := t.index(); idx != nil {
-		t.keyCount = idx.GetKeyCount()
+		t.keyCount = sstable.KeyCount(idx)
 		return t.keyCount
 	}
 	return 0
@@ -511,7 +507,7 @@ func (t *table) MaxVersionVal() uint64 {
 		return t.maxVersion
 	}
 	if idx := t.index(); idx != nil {
-		t.maxVersion = idx.GetMaxVersion()
+		t.maxVersion = sstable.MaxVersion(idx)
 		return t.maxVersion
 	}
 	return 0
@@ -522,7 +518,7 @@ func (t *table) HasBloomFilter() bool {
 	if t.hasBloom {
 		return true
 	}
-	if idx := t.index(); idx != nil && len(idx.BloomFilter) > 0 {
+	if idx := t.index(); sstable.HasBloomFilter(idx) {
 		t.hasBloom = true
 		return true
 	}
@@ -792,21 +788,6 @@ func (it *tableIterator) seekToLast() {
 	it.err = it.bi.Error()
 }
 
-// searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
-// If none exists it returns len(offsets).
-func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
-	lo, hi := 0, len(offsets)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		if utils.CompareKeys(offsets[mid].GetKey(), key) > 0 {
-			hi = mid
-		} else {
-			lo = mid + 1
-		}
-	}
-	return lo
-}
-
 // Seek positions the iterator at the appropriate entry for the given key.
 // Both modes first locate the block that could contain the key (last block where baseKey <= key).
 // Forward (IsAsc=true): within the block, seeks to the first entry >= key.
@@ -821,30 +802,22 @@ func (it *tableIterator) Seek(key []byte) {
 		it.err = io.EOF
 		return
 	}
-	// idx is the first block where baseKey > key. Candidate block is idx-1.
-	idx := searchFirstBlockWithBaseKeyGT(offsets, key)
+	candidate, ok := sstable.SeekCandidateBlock(offsets, key, it.opt.IsAsc)
+	if !ok {
+		it.err = io.EOF
+		return
+	}
+	it.seekHelper(candidate, key)
 
 	if it.opt.IsAsc {
-		if idx == 0 {
-			// All blocks have baseKey > key, start from first block
-			it.seekHelper(0, key)
-			return
-		}
-		it.seekHelper(idx-1, key)
+		idx := sstable.SearchFirstBlockWithBaseKeyGT(offsets, key)
 		// Internal-key ordering is (userKey ASC, ts DESC). For point-lookups we seek
 		// with ts=MaxVersion, which can place idx-1 on a previous block whose largest
 		// key is still < target. When that happens, retry the next block once.
 		if it.err == io.EOF && idx < len(offsets) {
 			it.seekHelper(idx, key)
 		}
-		return
 	}
-	// Reverse mode: if every base key is > target, there is no <= target entry.
-	if idx == 0 {
-		it.err = io.EOF
-		return
-	}
-	it.seekHelper(idx-1, key)
 }
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
@@ -865,18 +838,7 @@ func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 }
 
 func (t *table) blockOffset(i int) (*pb.BlockOffset, bool) {
-	index := t.index()
-	if index == nil {
-		return nil, false
-	}
-	offsets := index.GetOffsets()
-	if i < 0 || i > len(offsets) {
-		return nil, false
-	}
-	if i == len(offsets) {
-		return nil, true
-	}
-	return offsets[i], true
+	return sstable.BlockOffset(t.index(), i)
 }
 
 // Size is its file size in bytes
