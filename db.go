@@ -197,7 +197,7 @@ func Open(opt *Options) *DB {
 	}
 	baseLevelSize := max(baseTableSize*4, 32<<20)
 	// Initialize the LSM tree.
-	db.lsm = lsm.NewLSM(&lsm.Options{
+	lsmCore, err := lsm.NewLSM(&lsm.Options{
 		FS:                       db.fs,
 		WorkDir:                  opt.WorkDir,
 		MemTableSize:             opt.MemTableSize,
@@ -222,6 +222,8 @@ func Open(opt *Options) *DB {
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
 	}, wlog)
+	utils.Panic(err)
+	db.lsm = lsmCore
 	db.lsm.SetThrottleCallback(db.applyThrottle)
 	seed := db.lsm.MaxVersion()
 	db.nonTxnVersion.Store(seed)

@@ -37,7 +37,10 @@ func newBenchLSM(b *testing.B, memTableSize int64) *LSM {
 		CompactionValueWeight:         0.35,
 		CompactionValueAlertThreshold: 0.6,
 	}
-	lsm := NewLSM(opt, wlog)
+	lsm, err := NewLSM(opt, wlog)
+	if err != nil {
+		b.Fatalf("new lsm: %v", err)
+	}
 	b.Cleanup(func() {
 		_ = lsm.Close()
 		_ = wlog.Close()
@@ -104,7 +107,9 @@ func BenchmarkLSMRotateFlush(b *testing.B) {
 		if err := lsm.SetBatch(entries); err != nil {
 			b.Fatalf("set batch: %v", err)
 		}
-		lsm.Rotate()
+		if err := lsm.Rotate(); err != nil {
+			b.Fatalf("rotate: %v", err)
+		}
 		waitForFlush(b, lsm)
 	}
 }
