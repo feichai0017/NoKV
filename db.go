@@ -221,6 +221,7 @@ func Open(opt *Options) *DB {
 		BloomCacheSize:           db.opt.BloomCacheSize,
 		ManifestSync:             db.opt.ManifestSync,
 		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
+		WALGCPolicy:              newDBWALGCPolicy(db),
 	}, wlog)
 	utils.Panic(err)
 	db.lsm = lsmCore
