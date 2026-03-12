@@ -1158,6 +1158,13 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		}
 	}
 
+	if lm.opt.ManifestSync {
+		if err := vfs.SyncDir(lm.opt.FS, workDir); err != nil {
+			rollback()
+			return fmt.Errorf("sync work dir failed: %w", err)
+		}
+	}
+
 	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
 		rollback()
 		return fmt.Errorf("log manifest edits failed: %w", err)
