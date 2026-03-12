@@ -1882,7 +1882,12 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 		ManifestSync:  true,
 	}
 	lsm1 := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm1.Close()) }()
+	shouldCloseLsm1 := true
+	defer func() {
+		if shouldCloseLsm1 {
+			require.NoError(t, lsm1.Close())
+		}
+	}()
 
 	testSSTPath := workDir + "/99999.sst"
 	builder := newTableBuiler(opt)
@@ -1915,6 +1920,7 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 
 	require.NoError(t, lsm1.Close())
+	shouldCloseLsm1 = false
 	lsm2 := buildTestLSM(t, opt)
 	defer func() { require.NoError(t, lsm2.Close()) }()
 
