@@ -115,7 +115,7 @@ func (cd *compactDef) unlockLevels() {
 }
 
 // doCompact selects tables from a level and merges them into the target level.
-func (lm *levelManager) doCompact(id int, p compact.Priority) error {
+func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 	l := p.Level
 	utils.CondPanicFunc(l >= lm.opt.MaxLevelNum, func() error { return errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum") }) // Sanity check.
 	t := p.Target
@@ -141,6 +141,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 		if cleanup {
 			if err := lm.compactState.Delete(cd.stateEntry()); err != nil {
 				log.Printf("[Compactor: %d] WARNING: Failed to cleanup compaction state: %v", id, err)
+				retErr = errors.Join(retErr, err)
 			}
 		}
 	}()
@@ -179,6 +180,9 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) error {
 				if stateDelErr := lm.compactState.Delete(sub.stateEntry()); stateDelErr != nil {
 					return errors.Join(err, stateDelErr)
 				}
+				return err
+			}
+			if err := lm.compactState.Delete(sub.stateEntry()); err != nil {
 				return err
 			}
 			ran = true

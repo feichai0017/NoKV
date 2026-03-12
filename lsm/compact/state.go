@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/pkg/errors"
 )
 
 // KeyRange describes a compaction key span.
@@ -180,21 +179,27 @@ func (cs *State) Delete(entry StateEntry) error {
 	thisLevel := cs.levels[entry.ThisLevel]
 	nextLevel := cs.levels[entry.NextLevel]
 
-	thisLevel.delSize -= entry.ThisSize
-	found := thisLevel.remove(entry.ThisRange)
+	// Validate all affected ranges first so Delete remains atomic on error.
+	found := thisLevel.contains(entry.ThisRange)
 	if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
-		found = nextLevel.remove(entry.NextRange) && found
+		found = nextLevel.contains(entry.NextRange) && found
+	}
+	if !found {
+		return fmt.Errorf(
+			"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
+			entry.ThisRange,
+			entry.ThisLevel,
+			thisLevel.debug(),
+			entry.NextRange,
+			entry.NextLevel,
+			nextLevel.debug(),
+		)
 	}
 
-	if !found {
-		this := entry.ThisRange
-		next := entry.NextRange
-		fmt.Printf("Looking for: %s in this level %d.\n", this, entry.ThisLevel)
-		fmt.Printf("This Level:\n%s\n", thisLevel.debug())
-		fmt.Println()
-		fmt.Printf("Looking for: %s in next level %d.\n", next, entry.NextLevel)
-		fmt.Printf("Next Level:\n%s\n", nextLevel.debug())
-		return errors.New("keyRange not found")
+	thisLevel.delSize -= entry.ThisSize
+	_ = thisLevel.remove(entry.ThisRange)
+	if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
+		_ = nextLevel.remove(entry.NextRange)
 	}
 
 	for _, fid := range entry.TableIDs {
@@ -259,6 +264,15 @@ func (ls *levelState) remove(dst KeyRange) bool {
 	}
 	ls.ranges = final
 	return found
+}
+
+func (ls *levelState) contains(dst KeyRange) bool {
+	for _, r := range ls.ranges {
+		if r.Equals(dst) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ls *levelState) debug() string {
