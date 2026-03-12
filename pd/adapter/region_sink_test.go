@@ -109,13 +109,13 @@ func TestRegionSinkForwardsAndPlans(t *testing.T) {
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 
-	ops := sink.Plan(scheduler.Snapshot{})
+	ops := sink.DrainOperations()
 	require.Len(t, ops, 1)
 	require.Equal(t, scheduler.OperationLeaderTransfer, ops[0].Type)
 	require.Equal(t, uint64(10), ops[0].Region)
 	require.Equal(t, uint64(101), ops[0].Source)
 	require.Equal(t, uint64(201), ops[0].Target)
-	require.Nil(t, sink.Plan(scheduler.Snapshot{}), "Plan should drain pending ops")
+	require.Nil(t, sink.DrainOperations(), "DrainOperations should drain pending ops")
 }
 
 func TestRegionSinkErrorCallbackAndClose(t *testing.T) {

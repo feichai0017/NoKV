@@ -27,15 +27,20 @@ func (noopTransport) Send(myraft.Message) {}
 
 type testSchedulerSink struct {
 	mu       sync.RWMutex
-	regions  map[uint64]scheduler.RegionInfo
+	regions  map[uint64]regionHeartbeat
 	stores   map[uint64]scheduler.StoreStats
 	op       scheduler.Operation
 	withPlan bool
 }
 
+type regionHeartbeat struct {
+	Meta          manifest.RegionMeta
+	LastHeartbeat time.Time
+}
+
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
-		regions: make(map[uint64]scheduler.RegionInfo),
+		regions: make(map[uint64]regionHeartbeat),
 		stores:  make(map[uint64]scheduler.StoreStats),
 	}
 }
@@ -45,7 +50,7 @@ func (s *testSchedulerSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 		return
 	}
 	s.mu.Lock()
-	s.regions[meta.ID] = scheduler.RegionInfo{
+	s.regions[meta.ID] = regionHeartbeat{
 		Meta:          manifest.CloneRegionMeta(meta),
 		LastHeartbeat: time.Now(),
 	}
@@ -71,14 +76,14 @@ func (s *testSchedulerSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) RegionSnapshot() []scheduler.RegionInfo {
+func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]scheduler.RegionInfo, 0, len(s.regions))
+	out := make([]regionHeartbeat, 0, len(s.regions))
 	for _, info := range s.regions {
-		out = append(out, scheduler.RegionInfo{
+		out = append(out, regionHeartbeat{
 			Meta:          manifest.CloneRegionMeta(info.Meta),
 			LastHeartbeat: info.LastHeartbeat,
 		})
@@ -113,8 +118,7 @@ func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
 	return info.LastHeartbeat, true
 }
 
-func (s *testSchedulerSink) Plan(snap scheduler.Snapshot) []scheduler.Operation {
-	_ = snap
+func (s *testSchedulerSink) DrainOperations() []scheduler.Operation {
 	if s == nil || !s.withPlan {
 		return nil
 	}
@@ -555,9 +559,6 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	require.NoError(t, rs.RemoveRegion(42))
 	snapshot = sink.RegionSnapshot()
 	require.Empty(t, snapshot)
-
-	storeSnap := rs.SchedulerSnapshot()
-	require.Empty(t, storeSnap.Regions)
 }
 
 func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
@@ -602,12 +603,13 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, second.After(first))
 
-	snap := rs.SchedulerSnapshot()
-	require.Len(t, snap.Stores, 1)
-	require.Equal(t, uint64(1), snap.Stores[0].LeaderNum)
-	require.NotEmpty(t, snap.Regions)
-	require.Equal(t, uint64(77), snap.Regions[0].ID)
-	require.False(t, snap.Regions[0].LastHeartbeat.IsZero())
+	storeSnap := coord.StoreSnapshot()
+	require.Len(t, storeSnap, 1)
+	require.Equal(t, uint64(1), storeSnap[0].LeaderNum)
+	regionSnap := coord.RegionSnapshot()
+	require.NotEmpty(t, regionSnap)
+	require.Equal(t, uint64(77), regionSnap[0].Meta.ID)
+	require.False(t, regionSnap[0].LastHeartbeat.IsZero())
 }
 
 func TestStorePlannerQueuesOperations(t *testing.T) {

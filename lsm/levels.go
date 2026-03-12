@@ -281,7 +281,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 	}
 	if lm.compaction != nil {
-		lm.compaction.Trigger("flush")
+		lm.compaction.Trigger()
 	}
 	return nil
 }

@@ -51,7 +51,7 @@ func TestManagerRunOnceAndCycle(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 1, exec.doCalls)
 
-	cm.runCycle(0, "test")
+	cm.runCycle(0)
 	require.GreaterOrEqual(t, exec.adjusted, 1)
 
 	exec.doErr = ErrFillTables
@@ -72,8 +72,6 @@ func TestManagerStartClose(t *testing.T) {
 type reversePolicy struct {
 	called int
 }
-
-func (p *reversePolicy) Name() string { return "reverse-test" }
 
 func (p *reversePolicy) Arrange(_ int, priorities []Priority) []Priority {
 	p.called++
@@ -98,4 +96,36 @@ func TestManagerRunOnceUsesPolicyOrdering(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 1, policy.called)
 	require.Equal(t, 0, exec.lastDo.Level, "policy ordering should decide first tried priority")
+}
+
+type observePolicy struct {
+	arrangeCalled int
+	observed      int
+	lastEvent     FeedbackEvent
+}
+
+func (p *observePolicy) Arrange(_ int, priorities []Priority) []Priority {
+	p.arrangeCalled++
+	return priorities
+}
+
+func (p *observePolicy) Observe(event FeedbackEvent) {
+	p.observed++
+	p.lastEvent = event
+}
+
+func TestManagerRunReportsFeedback(t *testing.T) {
+	exec := &fakeExecutor{
+		priorities: []Priority{{Level: 2, Score: 1.1, Adjusted: 1.1, IngestMode: IngestDrain}},
+	}
+	policy := &observePolicy{}
+	cm := NewManager(exec, 1, policy)
+
+	ok := cm.RunOnce(0)
+	require.True(t, ok)
+	require.Equal(t, 1, policy.arrangeCalled)
+	require.Equal(t, 1, policy.observed)
+	require.Equal(t, 0, policy.lastEvent.WorkerID)
+	require.Equal(t, IngestDrain, policy.lastEvent.Priority.IngestMode)
+	require.NoError(t, policy.lastEvent.Err)
 }

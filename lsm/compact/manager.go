@@ -65,7 +65,7 @@ type Executor interface {
 type Manager struct {
 	exec      Executor
 	policy    Policy
-	triggerCh chan string
+	triggerCh chan struct{}
 	maxRuns   int
 }
 
@@ -82,17 +82,17 @@ func NewManager(exec Executor, maxRuns int, policy Policy) *Manager {
 	cm := &Manager{
 		exec:      exec,
 		policy:    policy,
-		triggerCh: make(chan string, 16),
+		triggerCh: make(chan struct{}, 16),
 		maxRuns:   maxRuns,
 	}
-	cm.Trigger("bootstrap")
+	cm.Trigger()
 	return cm
 }
 
 // Trigger nudges the manager to run a compaction cycle.
-func (cm *Manager) Trigger(reason string) {
+func (cm *Manager) Trigger() {
 	select {
-	case cm.triggerCh <- reason:
+	case cm.triggerCh <- struct{}{}:
 	default:
 	}
 }
@@ -117,16 +117,15 @@ func (cm *Manager) Start(id int, closeCh <-chan struct{}, done func()) {
 		select {
 		case <-closeCh:
 			return
-		case reason := <-cm.triggerCh:
-			cm.runCycle(id, reason)
+		case <-cm.triggerCh:
+			cm.runCycle(id)
 		case <-ticker.C:
-			cm.runCycle(id, "periodic")
+			cm.runCycle(id)
 		}
 	}
 }
 
-func (cm *Manager) runCycle(id int, reason string) {
-	_ = reason
+func (cm *Manager) runCycle(id int) {
 	maxRuns := cm.maxRuns
 	ranAny := false
 	for range maxRuns {
@@ -145,7 +144,7 @@ func (cm *Manager) runCycle(id int, reason string) {
 		}
 	}
 	if ranAny && cm.exec.NeedsCompaction() {
-		cm.Trigger("backlog")
+		cm.Trigger()
 	}
 }
 
@@ -173,7 +172,16 @@ func (cm *Manager) RunOnce(id int) bool {
 }
 
 func (cm *Manager) run(id int, p Priority) bool {
+	start := time.Now()
 	err := cm.exec.DoCompact(id, p)
+	if observer, ok := cm.policy.(FeedbackPolicy); ok {
+		observer.Observe(FeedbackEvent{
+			WorkerID: id,
+			Priority: p,
+			Err:      err,
+			Duration: time.Since(start),
+		})
+	}
 	switch err {
 	case nil:
 		return true
