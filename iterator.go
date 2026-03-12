@@ -23,6 +23,8 @@ type DBIterator struct {
 
 	lowerBound []byte
 	upperBound []byte
+	hasLower   bool
+	hasUpper   bool
 	isAsc      bool
 	// seekOutOfRange marks Seek calls that intentionally invalidated the
 	// iterator due to bounds checks. While set, Next must not advance from a
@@ -104,6 +106,8 @@ func (db *DB) NewIterator(opt *utils.Options) utils.Iterator {
 		keyOnly:    keyOnly,
 		lowerBound: opt.LowerBound,
 		upperBound: opt.UpperBound,
+		hasLower:   len(opt.LowerBound) > 0,
+		hasUpper:   len(opt.UpperBound) > 0,
 		isAsc:      opt.IsAsc,
 	}
 	itr.item.vlog = db.vlog
@@ -172,21 +176,21 @@ func (iter *DBIterator) Seek(key []byte) {
 
 	// Clamping
 	if iter.isAsc {
-		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+		if iter.hasUpper && bytes.Compare(key, iter.upperBound) >= 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
 			return
 		}
-		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+		if iter.hasLower && bytes.Compare(key, iter.lowerBound) < 0 {
 			key = iter.lowerBound
 		}
 	} else {
-		if len(iter.lowerBound) > 0 && bytes.Compare(key, iter.lowerBound) < 0 {
+		if iter.hasLower && bytes.Compare(key, iter.lowerBound) < 0 {
 			iter.valid = false
 			iter.seekOutOfRange = true
 			return
 		}
-		if len(iter.upperBound) > 0 && bytes.Compare(key, iter.upperBound) >= 0 {
+		if iter.hasUpper && bytes.Compare(key, iter.upperBound) >= 0 {
 			key = iter.upperBound
 		}
 	}
@@ -246,49 +250,48 @@ func (iter *DBIterator) populate() {
 }
 
 func (iter *DBIterator) populateForward() {
-	for {
-		entry, fromPending := iter.takeEntry()
-		if entry == nil {
-			if fromPending {
-				continue
-			}
-			if iter.iitr == nil || !iter.iitr.Valid() {
-				return
-			}
+	for iter.iitr.Valid() {
+		item := iter.iitr.Item()
+		if item == nil {
 			iter.iitr.Next()
 			continue
 		}
-		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		entry := item.Entry()
+		if entry == nil {
+			iter.iitr.Next()
+			continue
+		}
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
 		if !ok {
 			// User-facing iterator remains fail-open: skip malformed internal keys.
-			iter.advance(fromPending)
+			iter.iitr.Next()
 			continue
 		}
 		if cf != kv.CFDefault {
-			iter.advance(fromPending)
+			iter.iitr.Next()
 			continue
 		}
 		if len(iter.lastUserKey) > 0 && bytes.Equal(userKey, iter.lastUserKey) {
-			iter.advance(fromPending)
+			iter.iitr.Next()
 			continue
 		}
-		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+		if iter.hasLower && bytes.Compare(userKey, iter.lowerBound) < 0 {
 			iter.setLastUserKey(userKey)
-			iter.advance(fromPending)
+			iter.iitr.Next()
 			continue
 		}
-		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+		if iter.hasUpper && bytes.Compare(userKey, iter.upperBound) >= 0 {
 			iter.valid = false
 			return
 		}
 
-		if iter.materialize(entry) {
+		if iter.materializeDecoded(entry, cf, userKey, ts) {
 			iter.valid = true
 			iter.setLastUserKey(userKey)
 			return
 		}
 		iter.setLastUserKey(userKey)
-		iter.advance(fromPending)
+		iter.iitr.Next()
 	}
 }
 
@@ -305,7 +308,7 @@ func (iter *DBIterator) populateReverse() {
 			iter.iitr.Next()
 			continue
 		}
-		cf, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
 		if !ok {
 			iter.advance(fromPending)
 			continue
@@ -314,17 +317,19 @@ func (iter *DBIterator) populateReverse() {
 			iter.advance(fromPending)
 			continue
 		}
-		if len(iter.lowerBound) > 0 && bytes.Compare(userKey, iter.lowerBound) < 0 {
+		if iter.hasLower && bytes.Compare(userKey, iter.lowerBound) < 0 {
 			iter.valid = false
 			return
 		}
-		if len(iter.upperBound) > 0 && bytes.Compare(userKey, iter.upperBound) >= 0 {
+		if iter.hasUpper && bytes.Compare(userKey, iter.upperBound) >= 0 {
 			iter.advance(fromPending)
 			continue
 		}
 
 		iter.setLastUserKey(userKey)
 		latest := iter.snapshotEntry(entry)
+		latestCF := cf
+		latestTS := ts
 
 		iter.advance(fromPending)
 		// Internal keys sort by user key, then by descending version.
@@ -342,7 +347,7 @@ func (iter *DBIterator) populateReverse() {
 				iter.iitr.Next()
 				continue
 			}
-			nextCF, nextUserKey, _, ok := kv.SplitInternalKey(nextEntry.Key)
+			nextCF, nextUserKey, nextTs, ok := kv.SplitInternalKey(nextEntry.Key)
 			if !ok {
 				iter.iitr.Next()
 				continue
@@ -356,10 +361,12 @@ func (iter *DBIterator) populateReverse() {
 				break
 			}
 			latest = iter.snapshotEntry(nextEntry)
+			latestCF = nextCF
+			latestTS = nextTs
 			iter.iitr.Next()
 		}
 
-		if iter.materialize(latest) {
+		if iter.materializeDecoded(latest, latestCF, iter.lastUserKey, latestTS) {
 			iter.valid = true
 			return
 		}
@@ -441,7 +448,7 @@ func (iter *DBIterator) snapshotEntry(entry *kv.Entry) *kv.Entry {
 	return &iter.latest
 }
 
-func (iter *DBIterator) materialize(src *kv.Entry) bool {
+func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, userKey []byte, ts uint64) bool {
 	if iter == nil || src == nil {
 		return false
 	}
@@ -453,11 +460,6 @@ func (iter *DBIterator) materialize(src *kv.Entry) bool {
 		return false
 	}
 	iter.entry = *src
-	cf, userKey, ts, ok := kv.SplitInternalKey(iter.entry.Key)
-	if !ok {
-		// User-facing iterator remains fail-open: skip malformed internal keys.
-		return false
-	}
 	// Check if this key is covered by a range tombstone.
 	if iter.rtCheck && iter.rtv != nil && iter.rtv.IsKeyCovered(cf, userKey, ts) {
 		return false
