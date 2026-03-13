@@ -29,7 +29,6 @@ func BenchmarkDBBatchSet(b *testing.B) {
 	batchSize := 64
 
 	for _, mode := range modes {
-		mode := mode
 		b.Run(mode.name, func(b *testing.B) {
 			db := newBenchDB(b, func(opt *Options) {
 				opt.WriteBatchMaxCount = 128
