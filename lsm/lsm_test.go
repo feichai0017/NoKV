@@ -80,7 +80,7 @@ func TestClose(t *testing.T) {
 		first := buildLSM()
 		first.StartCompacter()
 		baseTest(t, first, 128)
-		_ = utils.Err(first.Close())
+		require.NoError(t, first.Close())
 
 		// A successful restart must still pass the base test.
 		reopened := buildLSM()
@@ -193,7 +193,7 @@ func TestHitStorage(t *testing.T) {
 	// Hit the memtable path.
 	hitMemtable := func() {
 		v, err := lsm.memTable.Get(e.Key)
-		_ = utils.Err(err)
+		require.NoError(t, err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
 	// Hit the L0 path.
@@ -1522,7 +1522,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// Clear global state to isolate downstream tests.
 		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		_ = utils.Err(err)
+		require.NoError(t, err)
 		ok = hasTable(lsm.levels.levels[0], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
 	}
@@ -1537,7 +1537,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 0, *cd)
 		// Clear global state to isolate downstream tests.
 		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		_ = utils.Err(err)
+		require.NoError(t, err)
 		ok = hasTable(lsm.levels.levels[1], fid)
 		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
 	}
@@ -1557,7 +1557,7 @@ func TestCompact(t *testing.T) {
 				Score:      2,
 				Adjusted:   2,
 			}
-			_ = utils.Err(lsm.levels.doCompact(0, pri))
+			require.NoError(t, lsm.levels.doCompact(0, pri))
 			tricky(cd.thisLevel.tablesSnapshot())
 			ok = lsm.levels.fillTables(cd)
 		}
@@ -1565,7 +1565,7 @@ func TestCompact(t *testing.T) {
 		err := lsm.levels.runCompactDef(0, 6, *cd)
 		// Clear global state to isolate downstream tests.
 		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		_ = utils.Err(err)
+		require.NoError(t, err)
 		ok = false
 		if hasTable(lsm.levels.levels[6], prevMax+1) {
 			ok = true
@@ -1715,14 +1715,14 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	_ = target.numIngestTables()
 
 	// Simulate restart and ensure ingest state can be recovered (may be empty if fully drained).
-	_ = utils.Err(lsm.Close())
+	require.NoError(t, lsm.Close())
 	lsm = buildLSM()
 	defer func() { _ = lsm.Close() }()
 	_ = lsm.levels.levels[6].numIngestTables()
 }
 
 // baseTest performs correctness checks.
-func baseTest(_ *testing.T, lsm *LSM, n int) {
+func baseTest(t *testing.T, lsm *LSM, n int) {
 	// Tracking entry for debugging.
 	e := kv.NewInternalEntry(kv.CFDefault, []byte("CRTS😁NoKVMrGSBtL"), kv.MaxVersion, []byte("我草了"), 0, 123)
 	defer e.DecrRef()
@@ -1730,11 +1730,11 @@ func baseTest(_ *testing.T, lsm *LSM, n int) {
 	//caseList = append(caseList, e)
 
 	// Randomized data to exercise write paths.
-	_ = utils.Err(lsm.Set(e))
+	require.NoError(t, lsm.Set(e))
 	for i := 1; i < n; i++ {
 		ee := buildInternalTestEntry()
 		defer ee.DecrRef()
-		_ = utils.Err(lsm.Set(ee))
+		require.NoError(t, lsm.Set(ee))
 		// caseList = append(caseList, ee)
 	}
 	// Read back from the levels.

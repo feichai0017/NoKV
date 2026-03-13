@@ -32,17 +32,6 @@ func NewRegionMetrics() *RegionMetrics {
 	}
 }
 
-// Hooks returns a RegionHooks structure wired to update the recorder.
-func (rm *RegionMetrics) Hooks() RegionHooks {
-	if rm == nil {
-		return RegionHooks{}
-	}
-	return RegionHooks{
-		OnRegionUpdate: rm.onRegionUpdate,
-		OnRegionRemove: rm.onRegionRemove,
-	}
-}
-
 // Snapshot returns the current counts.
 func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 	if rm == nil {
@@ -69,7 +58,8 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 	return snap
 }
 
-func (rm *RegionMetrics) onRegionUpdate(meta manifest.RegionMeta) {
+// RecordUpdate updates the metrics snapshot for a region metadata change.
+func (rm *RegionMetrics) RecordUpdate(meta manifest.RegionMeta) {
 	if rm == nil || meta.ID == 0 {
 		return
 	}
@@ -89,7 +79,8 @@ func (rm *RegionMetrics) onRegionUpdate(meta manifest.RegionMeta) {
 	rm.stateByID[meta.ID] = meta.State
 }
 
-func (rm *RegionMetrics) onRegionRemove(regionID uint64) {
+// RecordRemove updates the metrics snapshot for a region removal.
+func (rm *RegionMetrics) RecordRemove(regionID uint64) {
 	if rm == nil || regionID == 0 {
 		return
 	}
@@ -117,10 +108,4 @@ func (rm *RegionMetrics) decrement(state manifest.RegionState) {
 			rm.counts[state] = curr - 1
 		}
 	}
-}
-
-// RegionHooks wires region lifecycle callbacks.
-type RegionHooks struct {
-	OnRegionUpdate func(meta manifest.RegionMeta)
-	OnRegionRemove func(regionID uint64)
 }

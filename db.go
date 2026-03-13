@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -702,7 +703,7 @@ func (db *DB) runValueLogGCPeriodically() {
 				if err == utils.ErrNoRewrite {
 					db.vlog.logf("No rewrite on GC.")
 				} else {
-					_ = utils.Err(err)
+					slog.Default().Warn("value log gc", "error", err)
 				}
 			}
 		case <-db.vlog.lfDiscardStats.closer.CloseSignal:

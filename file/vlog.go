@@ -32,17 +32,17 @@ func (lf *LogFile) Open(opt *Options) error {
 	}
 	lf.f, err = OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
 	if err != nil {
-		return utils.WrapErr("unable to open value log file", err)
+		return errors.Wrapf(err, "unable to open value log file")
 	}
 	fi, err := lf.f.File.Stat()
 	if err != nil {
-		return utils.WrapErr("Unable to run file.Stat", err)
+		return errors.Wrapf(err, "Unable to run file.Stat")
 	}
 	// Load the current file size.
 	sz := fi.Size()
-	utils.CondPanicFunc(sz > math.MaxUint32, func() error {
-		return fmt.Errorf("file size: %d greater than %d", uint32(sz), uint32(math.MaxUint32))
-	})
+	if sz > math.MaxUint32 {
+		panic(fmt.Errorf("file size: %d greater than %d", uint32(sz), uint32(math.MaxUint32)))
+	}
 	lf.size.Store(uint32(sz))
 	lf.ro = flag == os.O_RDONLY
 	// TODO: consider reserving a header region for metadata.
@@ -165,9 +165,9 @@ func (lf *LogFile) Init() error {
 		// File is empty. We don't need to mmap it. Return.
 		return nil
 	}
-	utils.CondPanicFunc(sz > math.MaxUint32, func() error {
-		return fmt.Errorf("[LogFile.Init] sz > math.MaxUint32")
-	})
+	if sz > math.MaxUint32 {
+		panic(fmt.Errorf("[LogFile.Init] sz > math.MaxUint32"))
+	}
 	lf.size.Store(uint32(sz))
 	return nil
 }

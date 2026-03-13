@@ -17,18 +17,6 @@ func (s *Store) Router() *Router {
 	return s.router
 }
 
-// SetPeerFactory overrides the peer constructor used for subsequent
-// StartPeer calls. It is safe to invoke at runtime, enabling tests to inject
-// failpoints or custom peer implementations.
-func (s *Store) SetPeerFactory(factory PeerFactory) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.peerFactory = factory
-	s.mu.Unlock()
-}
-
 // StartPeer builds and registers a peer according to the supplied
 // configuration. The peer is automatically registered with the Store router.
 // When bootstrapPeers is non-empty StartPeer will call Bootstrap with those
@@ -47,12 +35,6 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		}
 		regionMeta = manifest.CloneRegionMetaPtr(cfg.Region)
 	}
-	s.mu.RLock()
-	factory := s.peerFactory
-	s.mu.RUnlock()
-	if factory == nil {
-		factory = peer.NewPeer
-	}
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
 	if cfgCopy.AdminApply == nil {
@@ -61,12 +43,12 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	cfgCopy.Apply = func(entries []myraft.Entry) error {
 		return s.applyEntries(entries)
 	}
-	p, err := factory(&cfgCopy)
+	p, err := peer.NewPeer(&cfgCopy)
 	if err != nil {
 		return nil, err
 	}
 	id := p.ID()
-	if err := s.peers.add(p); err != nil {
+	if err := s.router.add(p); err != nil {
 		_ = p.Close()
 		return nil, err
 	}
@@ -74,25 +56,13 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		s.regions.setPeer(regionMeta.ID, p)
 	}
 
-	if err := s.router.Register(p); err != nil {
-		s.peers.remove(id)
-		if regionMeta != nil {
-			s.regions.setPeer(regionMeta.ID, nil)
-		}
-		_ = p.Close()
-		return nil, err
-	}
 	if regionMeta != nil {
 		if err := s.UpdateRegion(*regionMeta); err != nil {
-			s.router.Deregister(id)
-			s.peers.remove(id)
+			s.router.remove(id)
 			s.regions.setPeer(regionMeta.ID, nil)
 			_ = p.Close()
 			return nil, err
 		}
-	}
-	if hook := s.hooks.OnPeerStart; hook != nil {
-		hook(p)
 	}
 	if len(bootstrapPeers) > 0 {
 		if err := p.Bootstrap(bootstrapPeers); err != nil {
@@ -108,8 +78,7 @@ func (s *Store) StopPeer(id uint64) {
 	if s == nil || id == 0 {
 		return
 	}
-	s.router.Deregister(id)
-	p := s.peers.remove(id)
+	p := s.router.remove(id)
 	var regionID uint64
 	if p != nil {
 		if meta := p.RegionMeta(); meta != nil {
@@ -119,9 +88,6 @@ func (s *Store) StopPeer(id uint64) {
 	if regionID != 0 {
 		s.regions.setPeer(regionID, nil)
 		_ = s.UpdateRegionState(regionID, manifest.RegionStateRemoving)
-	}
-	if hook := s.hooks.OnPeerStop; hook != nil && p != nil {
-		hook(p)
 	}
 	if p != nil {
 		_ = p.Close()
@@ -139,6 +105,9 @@ func (s *Store) Close() {
 	if s.operations != nil {
 		s.operations.stopLoop()
 	}
+	if s.scheduler != nil {
+		_ = s.scheduler.Close()
+	}
 }
 
 // VisitPeers executes the provided callback for every peer registered with the
@@ -148,7 +117,7 @@ func (s *Store) VisitPeers(fn func(*peer.Peer)) {
 	if s == nil || fn == nil {
 		return
 	}
-	s.peers.visit(fn)
+	s.router.visit(fn)
 }
 
 // Peer returns the peer registered with the provided ID.
@@ -156,7 +125,7 @@ func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	if s == nil || id == 0 {
 		return nil, false
 	}
-	return s.peers.get(id)
+	return s.router.get(id)
 }
 
 // Step forwards the provided raft message to the target peer hosted on this
@@ -179,7 +148,7 @@ func (s *Store) Peers() []PeerHandle {
 	if s == nil {
 		return nil
 	}
-	raw := s.peers.list()
+	raw := s.router.list()
 	handles := make([]PeerHandle, 0, len(raw))
 	for _, p := range raw {
 		handles = append(handles, PeerHandle{

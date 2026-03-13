@@ -159,7 +159,7 @@ func (lm *levelManager) build() error {
 		for _, meta := range files {
 			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 			if _, err := fs.Stat(fileName); err != nil {
-				_ = utils.Err(fmt.Errorf("missing sstable %s: %v", fileName, err))
+				slog.Default().Error("missing sstable", "path", fileName, "error", err)
 				stale = append(stale, meta)
 				continue
 			}
@@ -168,12 +168,12 @@ func (lm *levelManager) build() error {
 			}
 			t, err := openTable(lm, fileName, nil)
 			if err != nil {
-				_ = utils.Err(fmt.Errorf("failed to open sstable %s: %v", fileName, err))
+				slog.Default().Error("failed to open sstable", "path", fileName, "error", err)
 				stale = append(stale, meta)
 				continue
 			}
 			if t == nil {
-				_ = utils.Err(fmt.Errorf("failed to open sstable %s: nil table", fileName))
+				slog.Default().Error("failed to open sstable", "path", fileName, "error", "nil table")
 				stale = append(stale, meta)
 				continue
 			}

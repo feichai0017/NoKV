@@ -120,7 +120,7 @@ func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.
 			if !meta.Valid {
 				if _, ok := existing[fid]; ok {
 					if err := mgr.Remove(fid); err != nil {
-						_ = utils.Err(fmt.Errorf("value log reconcile remove fid %d (bucket %d): %v", fid, bucket, err))
+						slog.Default().Warn("value log reconcile remove", "fid", fid, "bucket", bucket, "error", err)
 						continue
 					}
 					delete(existing, fid)
@@ -136,7 +136,7 @@ func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.
 				delete(existing, fid)
 				continue
 			}
-			_ = utils.Err(fmt.Errorf("value log reconcile: manifest references missing file %d (bucket %d)", fid, bucket))
+			slog.Default().Warn("value log reconcile missing file", "fid", fid, "bucket", bucket)
 		}
 		if !hasValid {
 			continue
@@ -147,11 +147,11 @@ func (vlog *valueLog) reconcileManifest(status map[manifest.ValueLogID]manifest.
 				continue
 			}
 			if err := mgr.Remove(fid); err != nil {
-				_ = utils.Err(fmt.Errorf("value log reconcile remove orphan fid %d (bucket %d): %v", fid, bucket, err))
+				slog.Default().Warn("value log reconcile remove orphan", "fid", fid, "bucket", bucket, "error", err)
 				continue
 			}
 			metrics.DefaultValueLogGCCollector().IncSegmentsRemoved()
-			_ = utils.Err(fmt.Errorf("value log reconcile: removed untracked value log segment %d (bucket %d)", fid, bucket))
+			slog.Default().Warn("value log reconcile removed untracked segment", "fid", fid, "bucket", bucket)
 		}
 	}
 }
@@ -234,7 +234,7 @@ func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
 	if err := mgr.Remove(fid); err != nil {
 		if hasMeta {
 			if errRestore := vlog.db.lsm.LogValueLogUpdate(&meta); errRestore != nil {
-				_ = utils.Err(fmt.Errorf("value log delete rollback fid %d (bucket %d): %v", fid, bucket, errRestore))
+				slog.Default().Error("value log delete rollback", "fid", fid, "bucket", bucket, "error", errRestore)
 			}
 		}
 		return errors.Wrapf(err, "remove value log fid %d (bucket %d)", fid, bucket)
@@ -321,7 +321,7 @@ func (vlog *valueLog) open(heads map[uint32]kv.ValuePtr, replayFn kv.LogEntry) e
 	}
 	if err := vlog.populateDiscardStats(); err != nil {
 		if err != utils.ErrKeyNotFound {
-			_ = utils.Err(fmt.Errorf("failed to populate discard stats: %w", err))
+			slog.Default().Warn("populate discard stats", "error", err)
 		}
 	}
 	return nil
@@ -357,7 +357,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 			}
 			if head, ok := heads[bucket]; ok {
 				if rewindErr := mgr.Rewind(head); rewindErr != nil {
-					_ = utils.Err(fmt.Errorf("%s: %v", context, rewindErr))
+					slog.Default().Error("value log rewind after failure", "context", context, "bucket", bucket, "error", rewindErr)
 				}
 			}
 		}
@@ -586,7 +586,7 @@ func (db *DB) updateHeadBuckets(buckets []uint32) {
 			continue
 		}
 		if err := db.lsm.LogValueLogHead(next); err != nil {
-			_ = utils.Err(fmt.Errorf("log value log head: %w", err))
+			slog.Default().Error("log value log head", "bucket", bucket, "error", err)
 			continue
 		}
 		metrics.DefaultValueLogGCCollector().IncHeadUpdates()
@@ -643,7 +643,7 @@ func (vlog *valueLog) replayLog(bucket uint32, fid uint32, offset uint32, replay
 
 	vlog.logf("Truncating vlog file %05d (bucket %d) to offset: %d", fid, bucket, endOffset)
 	if err := mgr.SegmentTruncate(fid, endOffset); err != nil {
-		return utils.WrapErr(fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
+		return fmt.Errorf("truncation needed at offset %d. Can be done manually as well: %w", endOffset, err)
 	}
 	return nil
 }

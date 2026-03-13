@@ -3,14 +3,12 @@ package store
 import (
 	"sync"
 	"time"
-
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
-type operationApplier func(scheduler.Operation) bool
+type operationApplier func(Operation) bool
 
 type operationScheduler struct {
-	input     chan scheduler.Operation
+	input     chan Operation
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	cooldown  time.Duration
@@ -20,10 +18,9 @@ type operationScheduler struct {
 	pending   map[operationKey]struct{}
 	lastApply map[operationKey]time.Time
 	apply     operationApplier
-	hook      func(scheduler.Operation)
 }
 
-func newOperationScheduler(queueSize int, interval, cooldown time.Duration, burst int, apply operationApplier, hook func(scheduler.Operation)) *operationScheduler {
+func newOperationScheduler(queueSize int, interval, cooldown time.Duration, burst int, apply operationApplier) *operationScheduler {
 	os := &operationScheduler{
 		cooldown:  cooldown,
 		interval:  interval,
@@ -31,10 +28,9 @@ func newOperationScheduler(queueSize int, interval, cooldown time.Duration, burs
 		pending:   make(map[operationKey]struct{}),
 		lastApply: make(map[operationKey]time.Time),
 		apply:     apply,
-		hook:      hook,
 	}
 	if queueSize > 0 {
-		os.input = make(chan scheduler.Operation, queueSize)
+		os.input = make(chan Operation, queueSize)
 		os.stop = make(chan struct{})
 		os.wg.Add(1)
 		go os.worker()
@@ -50,11 +46,11 @@ func (os *operationScheduler) stopLoop() {
 	os.wg.Wait()
 }
 
-func (os *operationScheduler) enqueue(op scheduler.Operation) {
+func (os *operationScheduler) enqueue(op Operation) {
 	if os == nil {
 		return
 	}
-	if op.Type == scheduler.OperationNone || op.Region == 0 {
+	if op.Type == OperationNone || op.Region == 0 {
 		return
 	}
 	if os.input == nil {
@@ -87,7 +83,7 @@ func (os *operationScheduler) worker() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	type scheduledOp struct {
-		op    scheduler.Operation
+		op    Operation
 		ready time.Time
 	}
 	var pending []scheduledOp
@@ -124,18 +120,14 @@ func (os *operationScheduler) worker() {
 	}
 }
 
-func (os *operationScheduler) execute(op scheduler.Operation) bool {
+func (os *operationScheduler) execute(op Operation) bool {
 	if os == nil || os.apply == nil {
 		return false
 	}
-	applied := os.apply(op)
-	if applied && os.hook != nil {
-		os.hook(op)
-	}
-	return applied
+	return os.apply(op)
 }
 
-func (os *operationScheduler) nextReadyTime(op scheduler.Operation) time.Time {
+func (os *operationScheduler) nextReadyTime(op Operation) time.Time {
 	if os == nil {
 		return time.Time{}
 	}
@@ -153,7 +145,7 @@ func (os *operationScheduler) nextReadyTime(op scheduler.Operation) time.Time {
 	return last.Add(cooldown)
 }
 
-func (os *operationScheduler) markApplied(op scheduler.Operation, ts time.Time) {
+func (os *operationScheduler) markApplied(op Operation, ts time.Time) {
 	if os == nil {
 		return
 	}

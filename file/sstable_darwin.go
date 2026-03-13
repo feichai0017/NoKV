@@ -37,7 +37,7 @@ func OpenSStable(opt *Options) *SSTable {
 		flag = os.O_CREATE | os.O_RDWR
 	}
 	omf, err := OpenMmapFile(opt.FS, opt.FileName, flag, opt.MaxSz)
-	_ = utils.Err(err)
+	utils.Panic(err)
 	return &SSTable{f: omf, fid: opt.FID, lock: &sync.RWMutex{}}
 }
 

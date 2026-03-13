@@ -70,3 +70,16 @@ func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
 	require.NoError(t, result.err)
 	require.NotNil(t, result.resp)
 }
+
+func TestCommandPipelineRejectsLegacyPayload(t *testing.T) {
+	cp := newCommandPipeline(func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+		t.Fatal("legacy payload must not reach applier")
+		return nil, nil
+	})
+
+	err := cp.applyEntries([]myraft.Entry{
+		{Type: myraft.EntryNormal, Data: []byte("legacy-payload")},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported legacy raft payload")
+}

@@ -24,7 +24,7 @@ type Config struct {
 	// DB provides the underlying storage engine.
 	DB *NoKV.DB
 	// Store describes how the raftstore should be constructed. StoreID must be
-	// populated; Router, PeerFactory, and hooks are optional.
+	// populated; Router and PeerBuilder are optional.
 	Store store.Config
 	// Raft provides the base raft configuration used when bootstrapping peers.
 	// The Peer ID is populated per Region automatically.

@@ -79,12 +79,11 @@ func TestRedisMetricsCounters(t *testing.T) {
 	}
 }
 
-func TestRegionMetricsHooks(t *testing.T) {
+func TestRegionMetrics(t *testing.T) {
 	rm := NewRegionMetrics()
-	hooks := rm.Hooks()
-	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
-	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
-	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateTombstone})
+	rm.RecordUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
+	rm.RecordUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
+	rm.RecordUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateTombstone})
 
 	snap := rm.Snapshot()
 	if snap.Total != 2 {
@@ -94,7 +93,7 @@ func TestRegionMetricsHooks(t *testing.T) {
 		t.Fatalf("unexpected snapshot: %+v", snap)
 	}
 
-	hooks.OnRegionRemove(1)
+	rm.RecordRemove(1)
 	snap = rm.Snapshot()
 	if snap.Total != 1 || snap.Tombstone != 0 {
 		t.Fatalf("unexpected snapshot after remove: %+v", snap)

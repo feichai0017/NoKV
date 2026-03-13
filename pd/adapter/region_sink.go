@@ -2,36 +2,34 @@ package adapter
 
 import (
 	"context"
-	"log"
-	"sync"
+	"log/slog"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 const defaultRPCTimeout = 2 * time.Second
 
-// RegionSinkConfig defines how a PD-backed scheduler sink behaves.
-type RegionSinkConfig struct {
+// SchedulerClientConfig defines how a PD-backed scheduler client behaves.
+type SchedulerClientConfig struct {
 	PD      pdclient.Client
 	Timeout time.Duration
 	OnError func(op string, err error)
 }
 
-// RegionSink forwards scheduler heartbeats to PD.
-type RegionSink struct {
-	mu      sync.Mutex
+// SchedulerClient forwards region/store metadata to PD and returns the
+// scheduling operations PD wants the store to apply.
+type SchedulerClient struct {
 	pd      pdclient.Client
 	timeout time.Duration
 	onError func(op string, err error)
-	pending []scheduler.Operation
 }
 
-// NewRegionSink constructs a PD-backed RegionSink.
-func NewRegionSink(cfg RegionSinkConfig) *RegionSink {
+// NewSchedulerClient constructs a PD-backed scheduler client.
+func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultRPCTimeout
@@ -39,22 +37,19 @@ func NewRegionSink(cfg RegionSinkConfig) *RegionSink {
 	onErr := cfg.OnError
 	if onErr == nil {
 		onErr = func(op string, err error) {
-			log.Printf("pd adapter: %s failed: %v", op, err)
+			slog.Default().Warn("pd adapter operation failed", "op", op, "err", err)
 		}
 	}
-	return &RegionSink{
+	return &SchedulerClient{
 		pd:      cfg.PD,
 		timeout: timeout,
 		onError: onErr,
 	}
 }
 
-// SubmitRegionHeartbeat publishes region metadata to PD.
-func (s *RegionSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
-	if s == nil || meta.ID == 0 {
-		return
-	}
-	if s.pd == nil {
+// PublishRegion publishes region metadata to PD.
+func (s *SchedulerClient) PublishRegion(meta manifest.RegionMeta) {
+	if s == nil || meta.ID == 0 || s.pd == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
@@ -66,11 +61,8 @@ func (s *RegionSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
 }
 
 // RemoveRegion removes region metadata from PD.
-func (s *RegionSink) RemoveRegion(regionID uint64) {
-	if s == nil || regionID == 0 {
-		return
-	}
-	if s.pd == nil {
+func (s *SchedulerClient) RemoveRegion(regionID uint64) {
+	if s == nil || regionID == 0 || s.pd == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
@@ -81,13 +73,11 @@ func (s *RegionSink) RemoveRegion(regionID uint64) {
 	}
 }
 
-// SubmitStoreHeartbeat publishes store stats to PD.
-func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
-	if s == nil || stats.StoreID == 0 {
-		return
-	}
-	if s.pd == nil {
-		return
+// StoreHeartbeat publishes store stats to PD and returns any operations PD
+// wants the store to apply.
+func (s *SchedulerClient) StoreHeartbeat(stats storepkg.StoreStats) []storepkg.Operation {
+	if s == nil || stats.StoreID == 0 || s.pd == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
@@ -100,69 +90,49 @@ func (s *RegionSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
 	})
 	if err != nil {
 		s.onError("StoreHeartbeat", err)
-		return
-	}
-	s.enqueueOperations(resp.GetOperations())
-}
-
-// DrainOperations returns and drains pending scheduling operations received
-// from PD. Scheduling is centralized in PD; this method only forwards
-// already-decided operations into raftstore.
-func (s *RegionSink) DrainOperations() []scheduler.Operation {
-	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.pending) == 0 {
-		return nil
-	}
-	out := make([]scheduler.Operation, len(s.pending))
-	copy(out, s.pending)
-	s.pending = s.pending[:0]
-	return out
+	return fromPBOperations(resp.GetOperations())
 }
 
-func (s *RegionSink) enqueueOperations(ops []*pb.SchedulerOperation) {
-	if s == nil || len(ops) == 0 {
-		return
+func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
+	if len(ops) == 0 {
+		return nil
 	}
-	converted := make([]scheduler.Operation, 0, len(ops))
+	converted := make([]storepkg.Operation, 0, len(ops))
 	for _, op := range ops {
 		if next, ok := fromPBOperation(op); ok {
 			converted = append(converted, next)
 		}
 	}
 	if len(converted) == 0 {
-		return
+		return nil
 	}
-	s.mu.Lock()
-	s.pending = append(s.pending, converted...)
-	s.mu.Unlock()
+	return converted
 }
 
-func fromPBOperation(op *pb.SchedulerOperation) (scheduler.Operation, bool) {
+func fromPBOperation(op *pb.SchedulerOperation) (storepkg.Operation, bool) {
 	if op == nil {
-		return scheduler.Operation{}, false
+		return storepkg.Operation{}, false
 	}
 	switch op.GetType() {
 	case pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
 		if op.GetRegionId() == 0 || op.GetSourcePeerId() == 0 || op.GetTargetPeerId() == 0 {
-			return scheduler.Operation{}, false
+			return storepkg.Operation{}, false
 		}
-		return scheduler.Operation{
-			Type:   scheduler.OperationLeaderTransfer,
+		return storepkg.Operation{
+			Type:   storepkg.OperationLeaderTransfer,
 			Region: op.GetRegionId(),
 			Source: op.GetSourcePeerId(),
 			Target: op.GetTargetPeerId(),
 		}, true
 	default:
-		return scheduler.Operation{}, false
+		return storepkg.Operation{}, false
 	}
 }
 
 // Close closes the PD client if present.
-func (s *RegionSink) Close() error {
+func (s *SchedulerClient) Close() error {
 	if s == nil || s.pd == nil {
 		return nil
 	}

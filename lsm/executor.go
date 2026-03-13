@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sort"
@@ -1284,7 +1285,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 			sstName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
 			tbl, err := openTable(lm, sstName, b)
 			if err != nil || tbl == nil {
-				_ = utils.Err(err)
+				slog.Default().Error("open compacted table", "path", sstName, "error", err)
 				return nil
 			}
 			res <- tbl
