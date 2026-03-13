@@ -1,9 +1,9 @@
 package store
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -11,7 +11,7 @@ import (
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	snapshot := map[uint64]manifest.RegionMeta{
+	snapshot := map[uint64]raftmeta.RegionMeta{
 		1: {
 			ID:       1,
 			StartKey: []byte("a"),
@@ -47,7 +47,7 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 
 func TestRegionManagerRemove(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	requireNoError(t, rm.updateRegion(manifest.RegionMeta{ID: 3}))
+	requireNoError(t, rm.updateRegion(raftmeta.RegionMeta{ID: 3}))
 	rm.setPeer(3, &peer.Peer{})
 
 	requireNoError(t, rm.removeRegion(3))
@@ -61,7 +61,7 @@ func TestRegionManagerRemove(t *testing.T) {
 
 func TestRegionManagerListMetas(t *testing.T) {
 	rm := newRegionManager(nil, nil, nil)
-	rm.loadSnapshot(map[uint64]manifest.RegionMeta{
+	rm.loadSnapshot(map[uint64]raftmeta.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
 	})

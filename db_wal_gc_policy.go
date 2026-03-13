@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/feichai0017/NoKV/lsm"
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/wal"
 )
 
@@ -18,28 +18,22 @@ import (
 //     by raft pointers and warn when a removable segment still contains raft
 //     records.
 type dbWALGCPolicy struct {
-	raftPointers   func() map[uint64]manifest.RaftLogPointer
+	raftPointers   func() map[uint64]raftmeta.RaftLogPointer
 	segmentMetrics func(segmentID uint32) wal.RecordMetrics
 	warn           func(msg string, args ...any)
 }
 
 // newDBWALGCPolicy builds the default DB-backed WAL GC policy.
 //
-// The adapter reads raft checkpoints from Manifest() and record counters from
-// WAL(). It is injected into LSM so LSM core stays decoupled from raft pointer
-// and WAL typed-record details.
+// The adapter reads raft checkpoints from the top-level DB options callback and
+// record counters from WAL(). It is injected into LSM so LSM core stays
+// decoupled from store-local raft metadata and WAL typed-record details.
 func newDBWALGCPolicy(db *DB) lsm.WALGCPolicy {
 	if db == nil {
 		return &dbWALGCPolicy{}
 	}
 	return &dbWALGCPolicy{
-		raftPointers: func() map[uint64]manifest.RaftLogPointer {
-			man := db.Manifest()
-			if man == nil {
-				return nil
-			}
-			return man.RaftPointerSnapshot()
-		},
+		raftPointers: db.opt.RaftPointerSnapshot,
 		segmentMetrics: func(segmentID uint32) wal.RecordMetrics {
 			w := db.WAL()
 			if w == nil {

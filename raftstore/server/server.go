@@ -8,10 +8,10 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
@@ -87,7 +87,7 @@ func New(cfg Config) (*Server, error) {
 
 	builder := storeCfg.PeerBuilder
 	if builder == nil {
-		builder = defaultPeerBuilder(cfg.DB, storeCfg.StoreID, cfg.Raft, tr)
+		builder = defaultPeerBuilder(cfg.DB, storeCfg.LocalMeta, storeCfg.StoreID, cfg.Raft, tr)
 	}
 	storeCfg.PeerBuilder = builder
 
@@ -121,8 +121,8 @@ func New(cfg Config) (*Server, error) {
 	return srv, nil
 }
 
-func defaultPeerBuilder(db *NoKV.DB, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
-	return func(meta manifest.RegionMeta) (*peer.Config, error) {
+func defaultPeerBuilder(db *NoKV.DB, localMeta *raftmeta.Store, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
+	return func(meta raftmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, p := range meta.Peers {
 			if p.StoreID == storeID {
@@ -138,9 +138,9 @@ func defaultPeerBuilder(db *NoKV.DB, storeID uint64, baseRaft myraft.Config, tr 
 			Transport:  tr,
 			Apply:      kv.NewEntryApplier(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    meta.ID,
-			Region:     manifest.CloneRegionMetaPtr(&meta),
+			Region:     raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 }

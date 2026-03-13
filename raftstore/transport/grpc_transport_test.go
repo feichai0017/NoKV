@@ -20,11 +20,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
@@ -200,7 +200,7 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 
 	requireVisibleValue(t, cluster.db(followerID), []byte("grpc-reconnect"), []byte("recovered"))
 
-	ptr, ok := cluster.manifest(followerID).RaftPointer(cluster.groupID)
+	ptr, ok := cluster.localMeta(followerID).RaftPointer(cluster.groupID)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, ptr.AppliedIndex, uint64(2))
 }
@@ -313,6 +313,7 @@ type grpcTestCluster struct {
 type grpcTestNode struct {
 	id        uint64
 	db        *NoKV.DB
+	localMeta *raftmeta.Store
 	peer      *peerpkg.Peer
 	transport *transportpkg.GRPCTransport
 }
@@ -352,12 +353,12 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg peerpkg.Config, opts ...
 
 	for _, id := range ids {
 		dbPath := filepath.Join(baseDir, fmt.Sprintf("node-%d", id))
-		db := openDBAt(t, dbPath)
+		db, localMeta := openDBAt(t, dbPath)
 		transport := cluster.transports[id]
 		config := cfg
 		config.Transport = transport
 		config.WAL = db.WAL()
-		config.Manifest = db.Manifest()
+		config.LocalMeta = localMeta
 		config.Apply = applyToDB(db)
 		config.GroupID = cluster.groupID
 		config.RaftConfig.ID = id
@@ -379,6 +380,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg peerpkg.Config, opts ...
 		cluster.nodes[id] = &grpcTestNode{
 			id:        id,
 			db:        db,
+			localMeta: localMeta,
 			peer:      peer,
 			transport: transport,
 		}
@@ -387,6 +389,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg peerpkg.Config, opts ...
 	t.Cleanup(func() {
 		for _, node := range cluster.nodes {
 			_ = node.db.Close()
+			_ = node.localMeta.Close()
 		}
 		for _, transport := range cluster.transports {
 			_ = transport.Close()
@@ -448,8 +451,8 @@ func (c *grpcTestCluster) db(id uint64) *NoKV.DB {
 	return c.nodes[id].db
 }
 
-func (c *grpcTestCluster) manifest(id uint64) *manifest.Manager {
-	return c.nodes[id].db.Manifest()
+func (c *grpcTestCluster) localMeta(id uint64) *raftmeta.Store {
+	return c.nodes[id].localMeta
 }
 
 func buildTestCredentials(t *testing.T) (credentials.TransportCredentials, credentials.TransportCredentials) {
@@ -494,11 +497,13 @@ func buildTestCredentials(t *testing.T) (credentials.TransportCredentials, crede
 	return serverCreds, clientCreds
 }
 
-func openDBAt(t *testing.T, dir string) *NoKV.DB {
+func openDBAt(t *testing.T, dir string) (*NoKV.DB, *raftmeta.Store) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
+	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
@@ -506,7 +511,8 @@ func openDBAt(t *testing.T, dir string) *NoKV.DB {
 	opt.ValueLogFileSize = 1 << 20
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	opt.RaftLagWarnSegments = 1
-	return NoKV.Open(opt)
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	return NoKV.Open(opt), localMeta
 }
 
 func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {

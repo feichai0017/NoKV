@@ -3,9 +3,9 @@ package peer
 import (
 	"path/filepath"
 
-	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/wal"
 )
@@ -24,9 +24,9 @@ type Config struct {
 	ConfChange       ConfChangeHandler
 	StorageDir       string
 	WAL              *wal.Manager
-	Manifest         *manifest.Manager
+	LocalMeta        *raftmeta.Store
 	GroupID          uint64
-	Region           *manifest.RegionMeta
+	Region           *raftmeta.RegionMeta
 	LogRetainEntries uint64
 	MaxInFlightApply uint64
 }
@@ -36,15 +36,15 @@ func ResolveStorage(cfg *Config) (engine.PeerStorage, error) {
 	if cfg == nil {
 		return nil, nil
 	}
-	if cfg.WAL != nil && cfg.Manifest != nil {
+	if cfg.WAL != nil && cfg.LocalMeta != nil {
 		return engine.OpenWALStorage(engine.WALStorageConfig{
-			GroupID:  nonZeroGroupID(cfg.GroupID),
-			WAL:      cfg.WAL,
-			Manifest: cfg.Manifest,
+			GroupID:   nonZeroGroupID(cfg.GroupID),
+			WAL:       cfg.WAL,
+			LocalMeta: cfg.LocalMeta,
 		})
 	}
-	if cfg.WAL != nil || cfg.Manifest != nil {
-		return nil, ErrMissingManifestOrWAL
+	if cfg.WAL != nil || cfg.LocalMeta != nil {
+		return nil, ErrMissingLocalMetaOrWAL
 	}
 	if cfg.StorageDir != "" {
 		return engine.OpenDiskStorage(filepath.Clean(cfg.StorageDir), nil)

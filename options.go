@@ -4,6 +4,7 @@ import (
 	"time"
 
 	lsmpkg "github.com/feichai0017/NoKV/lsm"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -193,6 +194,10 @@ type Options struct {
 	// of WAL segments containing raft records exceeds this threshold. Zero
 	// disables segment-count warnings.
 	WALTypedRecordWarnSegments int64
+	// RaftPointerSnapshot returns store-local raft WAL checkpoints used by WAL
+	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
+	// Nil disables raft-specific backlog accounting.
+	RaftPointerSnapshot func() map[uint64]raftmeta.RaftLogPointer
 
 	// DiscardStatsFlushThreshold controls how many discard-stat updates must be
 	// accumulated before they are flushed back into the LSM. Zero keeps the

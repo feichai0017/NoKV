@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,15 +122,15 @@ func TestRunManifestWritesRegion(t *testing.T) {
 		return runManifest(args)
 	})
 	require.NoError(t, err)
-	require.Contains(t, output, "logged region 99")
+	require.Contains(t, output, "stored region 99 in local peer catalog")
 
-	mgr, err := manifest.Open(manifestDir, nil)
+	metaStore, err := raftmeta.OpenLocalStore(manifestDir, nil)
 	require.NoError(t, err)
 	defer func() {
-		_ = mgr.Close()
+		_ = metaStore.Close()
 	}()
 
-	regions := mgr.RegionSnapshot()
+	regions := metaStore.Snapshot()
 	meta, ok := regions[99]
 	require.True(t, ok)
 	require.Equal(t, []byte("aa"), meta.StartKey)
@@ -138,7 +138,7 @@ func TestRunManifestWritesRegion(t *testing.T) {
 	require.Equal(t, uint64(7), meta.Epoch.Version)
 	require.Equal(t, uint64(5), meta.Epoch.ConfVersion)
 	require.Len(t, meta.Peers, 2)
-	require.Equal(t, manifest.PeerMeta{StoreID: 1, PeerID: 1001}, meta.Peers[0])
+	require.Equal(t, raftmeta.PeerMeta{StoreID: 1, PeerID: 1001}, meta.Peers[0])
 }
 
 func TestMainStoresCommand(t *testing.T) {
@@ -382,9 +382,9 @@ func TestParseUintErrors(t *testing.T) {
 }
 
 func TestParseRegionState(t *testing.T) {
-	require.Equal(t, manifest.RegionStateRunning, parseRegionState(""))
-	require.Equal(t, manifest.RegionStateTombstone, parseRegionState("tombstone"))
-	require.Equal(t, manifest.RegionStateRunning, parseRegionState("unknown"))
+	require.Equal(t, raftmeta.RegionStateRunning, parseRegionState(""))
+	require.Equal(t, raftmeta.RegionStateTombstone, parseRegionState("tombstone"))
+	require.Equal(t, raftmeta.RegionStateRunning, parseRegionState("unknown"))
 }
 
 func TestDecodeKeyInvalidHexPanics(t *testing.T) {
@@ -444,7 +444,7 @@ func TestRunManifestDefaults(t *testing.T) {
 		return runManifest(args)
 	})
 	require.NoError(t, err)
-	require.Contains(t, output, "logged region 10")
+	require.Contains(t, output, "stored region 10 in local peer catalog")
 }
 
 func captureExitCode(t *testing.T, fn func()) (code int) {

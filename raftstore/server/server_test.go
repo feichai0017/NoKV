@@ -15,27 +15,31 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
-func openTestDB(t *testing.T) *NoKV.DB {
+func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
+	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	require.NoError(t, err)
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db := NoKV.Open(opt)
 	t.Cleanup(func() { _ = db.Close() })
-	return db
+	t.Cleanup(func() { _ = localMeta.Close() })
+	return db, localMeta
 }
 
 func TestServerStartsNoKVService(t *testing.T) {
-	db := openTestDB(t)
+	db, _ := openTestDB(t)
 	srv, err := serverpkg.New(serverpkg.Config{
 		DB: db,
 		Store: storepkg.Config{
@@ -67,12 +71,13 @@ func TestServerStartsNoKVService(t *testing.T) {
 }
 
 type testNode struct {
-	storeID uint64
-	peerID  uint64
-	region  manifest.RegionMeta
-	db      *NoKV.DB
-	srv     *serverpkg.Server
-	addr    string
+	storeID   uint64
+	peerID    uint64
+	region    raftmeta.RegionMeta
+	db        *NoKV.DB
+	localMeta *raftmeta.Store
+	srv       *serverpkg.Server
+	addr      string
 }
 
 type staticRegionResolver struct {
@@ -100,23 +105,23 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		{
 			storeID: 1,
 			peerID:  101,
-			region: manifest.RegionMeta{
+			region: raftmeta.RegionMeta{
 				ID:       1,
 				StartKey: []byte("a"),
 				EndKey:   []byte("m"),
-				Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 101}},
+				Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 			},
 		},
 		{
 			storeID: 2,
 			peerID:  201,
-			region: manifest.RegionMeta{
+			region: raftmeta.RegionMeta{
 				ID:       2,
 				StartKey: []byte("m"),
 				EndKey:   nil,
-				Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 201}},
+				Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
 			},
 		},
 	}
@@ -125,13 +130,18 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		workDir := t.TempDir()
 		opt := NoKV.NewDefaultOptions()
 		opt.WorkDir = workDir
+		localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
+		require.NoError(t, err)
+		opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 		db := NoKV.Open(opt)
 		nodes[i].db = db
+		nodes[i].localMeta = localMeta
 
 		srv, err := serverpkg.New(serverpkg.Config{
 			DB: db,
 			Store: storepkg.Config{
-				StoreID: nodes[i].storeID,
+				StoreID:   nodes[i].storeID,
+				LocalMeta: localMeta,
 			},
 			Raft: myraft.Config{
 				ElectionTick:    5,
@@ -154,6 +164,9 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 			}
 			if nodes[i].db != nil {
 				_ = nodes[i].db.Close()
+			}
+			if nodes[i].localMeta != nil {
+				_ = nodes[i].localMeta.Close()
 			}
 		}
 	}()
@@ -224,9 +237,9 @@ func startRegionPeer(t *testing.T, n testNode) {
 		Transport: n.srv.Transport(),
 		Apply:     kv.NewEntryApplier(n.db),
 		WAL:       n.db.WAL(),
-		Manifest:  n.db.Manifest(),
+		LocalMeta: n.localMeta,
 		GroupID:   n.region.ID,
-		Region:    manifest.CloneRegionMetaPtr(&n.region),
+		Region:    raftmeta.CloneRegionMetaPtr(&n.region),
 	}
 	bootstrap := []myraft.Peer{{ID: n.peerID}}
 	p, err := store.StartPeer(cfg, bootstrap)
@@ -238,7 +251,7 @@ func startRegionPeer(t *testing.T, n testNode) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func regionMetaToPB(meta manifest.RegionMeta) *pb.RegionMeta {
+func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {
 	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
 		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})

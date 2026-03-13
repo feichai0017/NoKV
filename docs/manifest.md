@@ -5,7 +5,6 @@ The manifest is NoKV's metadata log for:
 - SST files (`EditAddFile` / `EditDeleteFile`)
 - WAL checkpoint (`EditLogPointer`)
 - value-log metadata (`EditValueLogHead`, `EditDeleteValueLog`, `EditUpdateValueLog`)
-- raft and region metadata (`EditRaftPointer`, `EditRegion`)
 
 Implementation: [`manifest/manager.go`](../manifest/manager.go), [`manifest/codec.go`](../manifest/codec.go), [`manifest/types.go`](../manifest/types.go).
 
@@ -35,15 +34,12 @@ type Version struct {
     LogOffset    uint64
     ValueLogs    map[ValueLogID]ValueLogMeta
     ValueLogHead map[uint32]ValueLogMeta
-    RaftPointers map[uint64]RaftLogPointer
-    Regions      map[uint64]RegionMeta
 }
 ```
 
 - `Levels`: per-level SST metadata.
 - `LogSegment/LogOffset`: WAL replay checkpoint.
 - `ValueLogs` + `ValueLogHead`: all known vlog segments and per-bucket active heads.
-- `RaftPointers/Regions`: raftstore progress + region metadata.
 
 ---
 
@@ -85,7 +81,7 @@ If rewrite fails before `CURRENT` update, restart continues using previous manif
 | `lsm/levels.go::build` | During startup, missing/corrupt SST entries are marked stale and cleaned via `EditDeleteFile`. |
 | `wal` | Replays from manifest checkpoint (`LogSegment`, `LogOffset`). |
 | `vlog` | Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup. |
-| `raftstore` | Persists raft pointers and region metadata through manifest edits. |
+| `raftstore` | Does not own manifest state. Store-local peer catalog and raft WAL checkpoints live in `raftstore/meta`; runtime routing state lives in PD storage. |
 
 ---
 
@@ -93,7 +89,7 @@ If rewrite fails before `CURRENT` update, restart continues using previous manif
 
 1. Manifest append is ordered by single manager mutex.
 2. WAL replay starts from manifest checkpoint.
-3. Stale manifest SST entries are self-healed on startup (delete edit appended).
+3. Restart replays only storage-engine metadata.
 4. `CURRENT` indirection protects against partial manifest rewrite publication.
 
 ---

@@ -1,10 +1,10 @@
 package storage
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"path/filepath"
 	"testing"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,11 +27,11 @@ func TestLocalStorePersistsRegionsAndAllocator(t *testing.T) {
 	store, err := OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       11,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
@@ -67,11 +67,11 @@ func TestLocalStoreDeleteRegion(t *testing.T) {
 		require.NoError(t, store.Close())
 	}()
 
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("x"),
 		EndKey:   []byte("z"),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
