@@ -4,25 +4,25 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
 type heartbeatLoop struct {
 	interval time.Duration
-	sink     scheduler.RegionSink
+	sink     SchedulerClient
 	storeID  uint64
 	regions  func() []manifest.RegionMeta
-	stats    func() scheduler.StoreStats
-	enqueue  func(scheduler.Operation)
+	stats    func() StoreStats
+	enqueue  func(Operation)
 	stop     chan struct{}
 	done     chan struct{}
 }
 
 // newHeartbeatLoop creates the periodic scheduler bridge for a store instance.
-// It publishes region/store heartbeats and drains scheduler operations.
-func newHeartbeatLoop(interval time.Duration, sink scheduler.RegionSink, storeID uint64,
-	regions func() []manifest.RegionMeta, stats func() scheduler.StoreStats,
-	enqueue func(scheduler.Operation)) *heartbeatLoop {
+// It publishes region/store heartbeats and immediately enqueues returned
+// operations.
+func newHeartbeatLoop(interval time.Duration, sink SchedulerClient, storeID uint64,
+	regions func() []manifest.RegionMeta, stats func() StoreStats,
+	enqueue func(Operation)) *heartbeatLoop {
 	if sink == nil || interval <= 0 {
 		return nil
 	}
@@ -68,19 +68,17 @@ func (hl *heartbeatLoop) run() {
 	}
 }
 
-// sendHeartbeats pushes current region/store state to the scheduler sink, then
-// drains pending operations from the same sink.
 func (hl *heartbeatLoop) sendHeartbeats() {
 	if hl == nil || hl.sink == nil {
 		return
 	}
 	for _, meta := range hl.regions() {
-		hl.sink.SubmitRegionHeartbeat(meta)
+		hl.sink.PublishRegion(meta)
 	}
-	if hl.storeID != 0 {
-		hl.sink.SubmitStoreHeartbeat(hl.stats())
+	if hl.storeID == 0 {
+		return
 	}
-	for _, op := range hl.sink.DrainOperations() {
+	for _, op := range hl.sink.StoreHeartbeat(hl.stats()) {
 		hl.enqueue(op)
 	}
 }

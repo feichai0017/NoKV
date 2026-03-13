@@ -9,11 +9,6 @@ import (
 
 func TestErrorHelpers(t *testing.T) {
 	err := errors.New("boom")
-	require.NotNil(t, Err(err))
-	require.NotNil(t, WrapErr("wrap", err))
-	require.Nil(t, Err(nil))
-	require.Nil(t, WrapErr("wrap", nil))
-
 	require.PanicsWithValue(t, err, func() { Panic(err) })
 	require.NotPanics(t, func() { Panic(nil) })
 
@@ -25,10 +20,6 @@ func TestErrorHelpers(t *testing.T) {
 	require.NotPanics(t, func() {
 		CondPanicFunc(false, func() error { return err })
 	})
-}
-
-func TestLocationHelper(t *testing.T) {
-	require.NotEmpty(t, location(1, false))
 }
 
 func TestAssertTruefNoop(t *testing.T) {

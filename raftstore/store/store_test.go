@@ -16,7 +16,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -25,11 +24,9 @@ type noopTransport struct{}
 func (noopTransport) Send(myraft.Message) {}
 
 type testSchedulerSink struct {
-	mu       sync.RWMutex
-	regions  map[uint64]regionHeartbeat
-	stores   map[uint64]scheduler.StoreStats
-	op       scheduler.Operation
-	withPlan bool
+	mu      sync.RWMutex
+	regions map[uint64]regionHeartbeat
+	stores  map[uint64]store.StoreStats
 }
 
 type regionHeartbeat struct {
@@ -40,11 +37,11 @@ type regionHeartbeat struct {
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
-		stores:  make(map[uint64]scheduler.StoreStats),
+		stores:  make(map[uint64]store.StoreStats),
 	}
 }
 
-func (s *testSchedulerSink) SubmitRegionHeartbeat(meta manifest.RegionMeta) {
+func (s *testSchedulerSink) PublishRegion(meta manifest.RegionMeta) {
 	if s == nil || meta.ID == 0 {
 		return
 	}
@@ -65,14 +62,15 @@ func (s *testSchedulerSink) RemoveRegion(id uint64) {
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) SubmitStoreHeartbeat(stats scheduler.StoreStats) {
+func (s *testSchedulerSink) StoreHeartbeat(stats store.StoreStats) []store.Operation {
 	if s == nil || stats.StoreID == 0 {
-		return
+		return nil
 	}
 	stats.UpdatedAt = time.Now()
 	s.mu.Lock()
 	s.stores[stats.StoreID] = stats
 	s.mu.Unlock()
+	return nil
 }
 
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
@@ -91,12 +89,12 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	return out
 }
 
-func (s *testSchedulerSink) StoreSnapshot() []scheduler.StoreStats {
+func (s *testSchedulerSink) StoreSnapshot() []store.StoreStats {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]scheduler.StoreStats, 0, len(s.stores))
+	out := make([]store.StoreStats, 0, len(s.stores))
 	for _, st := range s.stores {
 		out = append(out, st)
 	}
@@ -117,14 +115,8 @@ func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
 	return info.LastHeartbeat, true
 }
 
-func (s *testSchedulerSink) DrainOperations() []scheduler.Operation {
-	if s == nil || !s.withPlan {
-		return nil
-	}
-	if s.op.Type == scheduler.OperationNone || s.op.Region == 0 {
-		return nil
-	}
-	return []scheduler.Operation{s.op}
+func (s *testSchedulerSink) Close() error {
+	return nil
 }
 
 func testPeerBuilder(storeID uint64) store.PeerBuilder {
@@ -227,59 +219,10 @@ func TestStoreDuplicatePeer(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestStoreRejectsLegacyApplyPayload(t *testing.T) {
-	var wrapped peer.ApplyFunc
-	rs := store.NewStoreWithConfig(store.Config{
-		PeerFactory: func(cfg *peer.Config) (*peer.Peer, error) {
-			wrapped = cfg.Apply
-			return peer.NewPeer(cfg)
-		},
-	})
-	defer rs.Close()
-
-	cfg := &peer.Config{
-		RaftConfig: myraft.Config{
-			ID:              7,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-		},
-		Transport: noopTransport{},
-		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &manifest.RegionMeta{
-			ID:       700,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-		},
-	}
-
-	p, err := rs.StartPeer(cfg, nil)
-	require.NoError(t, err)
-	defer rs.StopPeer(p.ID())
-	require.NotNil(t, wrapped)
-
-	err = wrapped([]myraft.Entry{{Type: myraft.EntryNormal, Data: []byte("legacy-payload")}})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported legacy raft payload")
-}
-
-func TestStoreCustomFactoryAndHooks(t *testing.T) {
+func TestStorePeersSnapshot(t *testing.T) {
 	router := store.NewRouter()
-	factoryCalls := 0
-	startCalls := 0
-	stopCalls := 0
-
 	rs := store.NewStoreWithConfig(store.Config{
 		Router: router,
-		PeerFactory: func(cfg *peer.Config) (*peer.Peer, error) {
-			factoryCalls++
-			return peer.NewPeer(cfg)
-		},
-		Hooks: store.LifecycleHooks{
-			OnPeerStart: func(*peer.Peer) { startCalls++ },
-			OnPeerStop:  func(*peer.Peer) { stopCalls++ },
-		},
 	})
 
 	cfg := &peer.Config{
@@ -302,8 +245,6 @@ func TestStoreCustomFactoryAndHooks(t *testing.T) {
 	peer, err := rs.StartPeer(cfg, nil)
 	require.NoError(t, err)
 	require.NotNil(t, peer)
-	require.Equal(t, 1, factoryCalls)
-	require.Equal(t, 1, startCalls)
 
 	handles := rs.Peers()
 	require.Len(t, handles, 1)
@@ -313,7 +254,6 @@ func TestStoreCustomFactoryAndHooks(t *testing.T) {
 	require.Equal(t, byte('c'), meta.StartKey[0])
 
 	rs.StopPeer(peer.ID())
-	require.Equal(t, 1, stopCalls)
 	require.Empty(t, rs.Peers())
 }
 
@@ -323,21 +263,8 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	updateCalls := 0
-	removeCalls := 0
-	var states []manifest.RegionState
-
 	rs := store.NewStoreWithConfig(store.Config{
 		Manifest: mgr,
-		RegionHooks: store.RegionHooks{
-			OnRegionUpdate: func(meta manifest.RegionMeta) {
-				updateCalls++
-				states = append(states, meta.State)
-			},
-			OnRegionRemove: func(id uint64) {
-				removeCalls++
-			},
-		},
 	})
 
 	cfg := &peer.Config{
@@ -365,7 +292,9 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Len(t, metas, 1)
 	require.Equal(t, uint64(500), metas[0].ID)
 	require.Equal(t, manifest.RegionStateRunning, metas[0].State)
-	require.Equal(t, 1, updateCalls)
+	metricsSnap := rs.RegionMetrics().Snapshot()
+	require.Equal(t, uint64(1), metricsSnap.Total)
+	require.Equal(t, uint64(1), metricsSnap.Running)
 
 	snapshot := mgr.RegionSnapshot()
 	require.Len(t, snapshot, 1)
@@ -415,6 +344,9 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 	metas = rs.RegionMetas()
 	require.Equal(t, manifest.RegionStateRemoving, metas[0].State)
+	metricsSnap = rs.RegionMetrics().Snapshot()
+	require.Equal(t, uint64(1), metricsSnap.Total)
+	require.Equal(t, uint64(1), metricsSnap.Removing)
 	snapshot = mgr.RegionSnapshot()
 	meta, ok = snapshot[500]
 	require.True(t, ok)
@@ -430,6 +362,9 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 	metas = rs.RegionMetas()
 	require.Equal(t, manifest.RegionStateTombstone, metas[0].State)
+	metricsSnap = rs.RegionMetrics().Snapshot()
+	require.Equal(t, uint64(1), metricsSnap.Total)
+	require.Equal(t, uint64(1), metricsSnap.Tombstone)
 	snapshot = mgr.RegionSnapshot()
 	meta, ok = snapshot[500]
 	require.True(t, ok)
@@ -442,18 +377,11 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 0)
+	metricsSnap = rs.RegionMetrics().Snapshot()
+	require.Zero(t, metricsSnap.Total)
 
 	snapshot = mgr.RegionSnapshot()
 	require.Len(t, snapshot, 0)
-	require.Equal(t, 1, removeCalls)
-	expectedStates := []manifest.RegionState{
-		manifest.RegionStateRunning,
-		manifest.RegionStateRunning,
-		manifest.RegionStateRemoving,
-		manifest.RegionStateRemoving,
-		manifest.RegionStateTombstone,
-	}
-	require.Equal(t, expectedStates, states)
 
 	child := manifest.RegionMeta{
 		ID:       600,
@@ -472,8 +400,9 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 2)
-
-	_ = len(states)
+	metricsSnap = rs.RegionMetrics().Snapshot()
+	require.Equal(t, uint64(2), metricsSnap.Total)
+	require.Equal(t, uint64(2), metricsSnap.Running)
 }
 
 func TestStoreSplitRegionStartsChildPeer(t *testing.T) {
@@ -609,73 +538,6 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	require.NotEmpty(t, regionSnap)
 	require.Equal(t, uint64(77), regionSnap[0].Meta.ID)
 	require.False(t, regionSnap[0].LastHeartbeat.IsZero())
-}
-
-func TestStorePlannerQueuesOperations(t *testing.T) {
-	plannerSink := newTestSchedulerSink()
-	plannerSink.withPlan = true
-	var mu sync.Mutex
-	var applied []time.Time
-	plannerSink.op = scheduler.Operation{
-		Type:   scheduler.OperationLeaderTransfer,
-		Region: 200,
-		Source: 701,
-		Target: 702,
-	}
-	rs := store.NewStoreWithConfig(store.Config{
-		Scheduler:          plannerSink,
-		StoreID:            12,
-		PeerBuilder:        testPeerBuilder(12),
-		HeartbeatInterval:  25 * time.Millisecond,
-		OperationQueueSize: 8,
-		OperationCooldown:  80 * time.Millisecond,
-		OperationInterval:  20 * time.Millisecond,
-		OperationBurst:     1,
-		OperationObserver: func(op scheduler.Operation) {
-			mu.Lock()
-			applied = append(applied, time.Now())
-			mu.Unlock()
-		},
-	})
-	defer rs.Close()
-
-	cfg := &peer.Config{
-		RaftConfig: myraft.Config{
-			ID:              701,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-		},
-		Transport: noopTransport{},
-		Apply:     func([]myraft.Entry) error { return nil },
-		Region: &manifest.RegionMeta{
-			ID:       200,
-			StartKey: []byte("k0"),
-			EndKey:   []byte("k9"),
-			Peers: []manifest.PeerMeta{
-				{StoreID: 12, PeerID: 701},
-				{StoreID: 99, PeerID: 702},
-			},
-		},
-	}
-	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 701}})
-	require.NoError(t, err)
-	defer rs.StopPeer(peer.ID())
-	require.NoError(t, peer.Campaign())
-
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(applied) >= 2
-	}, time.Second, 20*time.Millisecond)
-
-	mu.Lock()
-	recorded := append([]time.Time(nil), applied...)
-	mu.Unlock()
-	require.GreaterOrEqual(t, len(recorded), 2)
-	delta := recorded[1].Sub(recorded[0])
-	require.GreaterOrEqual(t, delta, 60*time.Millisecond)
 }
 
 func TestStoreProposeCommandPrewriteCommit(t *testing.T) {

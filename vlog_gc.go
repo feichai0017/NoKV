@@ -3,6 +3,7 @@ package NoKV
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,7 +82,7 @@ func (vlog *valueLog) flushDiscardStats() {
 				select {
 				case stats := <-vlog.lfDiscardStats.flushChan:
 					if err := process(stats, false); err != nil {
-						_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+						slog.Default().Error("process discard stats", "error", err)
 					}
 				default:
 					goto drainComplete
@@ -89,12 +90,12 @@ func (vlog *valueLog) flushDiscardStats() {
 			}
 		drainComplete:
 			if err := process(nil, true); err != nil {
-				_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				slog.Default().Error("process discard stats", "error", err)
 			}
 			return
 		case stats := <-vlog.lfDiscardStats.flushChan:
 			if err := process(stats, false); err != nil {
-				_ = utils.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				slog.Default().Error("process discard stats", "error", err)
 			}
 		}
 	}

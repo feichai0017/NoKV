@@ -1,19 +1,7 @@
 package utils
 
 import (
-	"fmt"
-	"os"
-	"path"
-	"path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
-
 	"github.com/pkg/errors"
-)
-
-var (
-	gopath = path.Join(os.Getenv("GOPATH"), "src") + "/"
 )
 
 // ErrKeyNotFound indicates a missing key.
@@ -62,37 +50,6 @@ func Panic(err error) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-// Err err
-func Err(err error) error {
-	if err != nil {
-		fmt.Printf("%s %s\n", location(2, true), err)
-	}
-	return err
-}
-
-// WrapErr logs and returns err with caller location metadata.
-func WrapErr(format string, err error) error {
-	if err != nil {
-		fmt.Printf("%s %s %s", format, location(2, true), err)
-	}
-	return err
-}
-
-func location(deep int, fullPath bool) string {
-	_, file, line, ok := runtime.Caller(deep)
-	if !ok {
-		file = "???"
-		line = 0
-	}
-
-	if fullPath {
-		file = strings.TrimPrefix(file, gopath)
-	} else {
-		file = filepath.Base(file)
-	}
-	return file + ":" + strconv.Itoa(line)
 }
 
 // CondPanic panics with err when condition is true.

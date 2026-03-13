@@ -854,7 +854,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 				mt, _ := task.Data.(*memTable)
 				if mt == nil {
 					if err := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable")); err != nil {
-						_ = utils.Err(err)
+						lsm.getLogger().Error("flush task update", "error", err)
 					}
 					continue
 				}
@@ -863,12 +863,12 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					defer mt.DecrRef()
 					if err := lsm.levels.flush(mt); err != nil {
 						if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err); updateErr != nil {
-							_ = utils.Err(updateErr)
+							lsm.getLogger().Error("flush task update", "error", updateErr)
 						}
 						return
 					}
 					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil); updateErr != nil {
-						_ = utils.Err(updateErr)
+						lsm.getLogger().Error("flush task update", "error", updateErr)
 					}
 					lsm.lock.Lock()
 					for idx, imm := range lsm.immutables {
@@ -880,7 +880,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					lsm.lock.Unlock()
 					_ = mt.close()
 					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil); updateErr != nil {
-						_ = utils.Err(updateErr)
+						lsm.getLogger().Error("flush task update", "error", updateErr)
 					}
 				}()
 			}

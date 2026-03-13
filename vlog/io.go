@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -406,7 +407,7 @@ func VerifyDir(cfg Config) error {
 		}
 		if int64(valid) < info.Size() {
 			if err := fs.Truncate(path, int64(valid)); err != nil {
-				_ = utils.Err(fmt.Errorf("value log verify truncate %s: %w", path, err))
+				slog.Default().Warn("value log verify truncate", "path", path, "error", err)
 			}
 		}
 	}
@@ -416,7 +417,7 @@ func VerifyDir(cfg Config) error {
 func extractFID(path string) uint64 {
 	var fid uint64
 	if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
-		_ = utils.Err(err)
+		slog.Default().Warn("value log extract fid", "path", path, "error", err)
 		return 0
 	}
 	return fid
@@ -520,7 +521,7 @@ func iterateLogFile(store *file.LogFile, bucket uint32, fid uint32, offset uint3
 			if callErr == utils.ErrStop {
 				return validEndOffset, nil
 			}
-			return 0, utils.WrapErr(fmt.Sprintf("Iteration function %s", store.FileName()), callErr)
+			return 0, fmt.Errorf("iteration function %s: %w", store.FileName(), callErr)
 		}
 	}
 

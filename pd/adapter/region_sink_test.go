@@ -9,7 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 type fakePDClient struct {
@@ -67,7 +67,7 @@ func (f *fakePDClient) Close() error {
 	return nil
 }
 
-func TestRegionSinkForwardsAndPlans(t *testing.T) {
+func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	pd := &fakePDClient{
 		storeResp: &pb.StoreHeartbeatResponse{
 			Accepted: true,
@@ -81,7 +81,7 @@ func TestRegionSinkForwardsAndPlans(t *testing.T) {
 			},
 		},
 	}
-	sink := NewRegionSink(RegionSinkConfig{
+	sink := NewSchedulerClient(SchedulerClientConfig{
 		PD: pd,
 	})
 
@@ -95,8 +95,8 @@ func TestRegionSinkForwardsAndPlans(t *testing.T) {
 		},
 		Peers: []manifest.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
-	sink.SubmitRegionHeartbeat(meta)
-	sink.SubmitStoreHeartbeat(scheduler.StoreStats{
+	sink.PublishRegion(meta)
+	ops := sink.StoreHeartbeat(storepkg.StoreStats{
 		StoreID:   1,
 		RegionNum: 3,
 		LeaderNum: 1,
@@ -109,16 +109,14 @@ func TestRegionSinkForwardsAndPlans(t *testing.T) {
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 
-	ops := sink.DrainOperations()
 	require.Len(t, ops, 1)
-	require.Equal(t, scheduler.OperationLeaderTransfer, ops[0].Type)
+	require.Equal(t, storepkg.OperationLeaderTransfer, ops[0].Type)
 	require.Equal(t, uint64(10), ops[0].Region)
 	require.Equal(t, uint64(101), ops[0].Source)
 	require.Equal(t, uint64(201), ops[0].Target)
-	require.Nil(t, sink.DrainOperations(), "DrainOperations should drain pending ops")
 }
 
-func TestRegionSinkErrorCallbackAndClose(t *testing.T) {
+func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	storeErr := errors.New("store heartbeat failed")
 	regionErr := errors.New("region heartbeat failed")
 	pd := &fakePDClient{
@@ -126,15 +124,15 @@ func TestRegionSinkErrorCallbackAndClose(t *testing.T) {
 		regionErr: regionErr,
 	}
 	var got []string
-	sink := NewRegionSink(RegionSinkConfig{
+	sink := NewSchedulerClient(SchedulerClientConfig{
 		PD: pd,
 		OnError: func(op string, err error) {
 			got = append(got, op+": "+err.Error())
 		},
 	})
 
-	sink.SubmitStoreHeartbeat(scheduler.StoreStats{StoreID: 7})
-	sink.SubmitRegionHeartbeat(manifest.RegionMeta{ID: 9})
+	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
+	sink.PublishRegion(manifest.RegionMeta{ID: 9})
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -142,22 +140,22 @@ func TestRegionSinkErrorCallbackAndClose(t *testing.T) {
 	require.True(t, pd.closed)
 }
 
-func TestRegionSinkNoopOnZeroIDs(t *testing.T) {
+func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
-	sink := NewRegionSink(RegionSinkConfig{PD: pd})
-	sink.SubmitStoreHeartbeat(scheduler.StoreStats{StoreID: 0})
-	sink.SubmitRegionHeartbeat(manifest.RegionMeta{ID: 0})
+	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
+	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 0})
+	sink.PublishRegion(manifest.RegionMeta{ID: 0})
 	sink.RemoveRegion(0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.removeReqs)
 }
 
-func TestRegionSinkRemoveRegionForwardsAndReportsErrors(t *testing.T) {
+func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 	removeErr := errors.New("remove region failed")
 	pd := &fakePDClient{removeErr: removeErr}
 	var got []string
-	sink := NewRegionSink(RegionSinkConfig{
+	sink := NewSchedulerClient(SchedulerClientConfig{
 		PD: pd,
 		OnError: func(op string, err error) {
 			got = append(got, op+": "+err.Error())
@@ -173,7 +171,7 @@ func TestRegionSinkRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 			ConfVersion: 1,
 		},
 	}
-	sink.SubmitRegionHeartbeat(meta)
+	sink.PublishRegion(meta)
 
 	sink.RemoveRegion(100)
 	require.Len(t, pd.removeReqs, 1)
@@ -197,5 +195,5 @@ func TestFromPBOperationValidation(t *testing.T) {
 		TargetPeerId: 20,
 	})
 	require.True(t, ok)
-	require.Equal(t, scheduler.OperationLeaderTransfer, op.Type)
+	require.Equal(t, storepkg.OperationLeaderTransfer, op.Type)
 }

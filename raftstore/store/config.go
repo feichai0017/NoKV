@@ -4,56 +4,63 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
-
-// PeerFactory constructs raft peers for the store. It mirrors TinyKV's ability
-// to plug customised peer state machines (e.g. learners, schedulers) while
-// keeping the store orchestration generic.
-type PeerFactory func(*peer.Config) (*peer.Peer, error)
 
 // PeerBuilder constructs peer configuration for the provided region metadata.
 // It allows the store to spawn new peers for splits without external callers
 // wiring the configuration manually.
 type PeerBuilder func(meta manifest.RegionMeta) (*peer.Config, error)
 
-// LifecycleHooks exposes callbacks triggered when peers are started or
-// stopped. The hooks allow tests and higher-level components to mirror
-// TinyKV's raftstore design, where the store notifies schedulers about region
-// lifecycle events.
-type LifecycleHooks struct {
-	OnPeerStart func(*peer.Peer)
-	OnPeerStop  func(*peer.Peer)
+// StoreStats captures minimal store-level heartbeat information.
+type StoreStats struct {
+	StoreID   uint64    `json:"store_id"`
+	RegionNum uint64    `json:"region_num"`
+	LeaderNum uint64    `json:"leader_num"`
+	Capacity  uint64    `json:"capacity"`
+	Available uint64    `json:"available"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// RegionHooks exposes callbacks triggered when region metadata changes or is
-// removed from the store catalog.
-type RegionHooks = metrics.RegionHooks
+// Operation represents a scheduling decision to be executed by store runtime.
+type Operation struct {
+	Type   OperationType
+	Region uint64
+	Source uint64
+	Target uint64
+}
 
-// Config configures Store construction. Only the Router field is mandatory;
-// factory and hooks default to sensible values when omitted.
+// OperationType identifies the scheduler operation kind.
+type OperationType uint8
+
+const (
+	OperationNone OperationType = iota
+	OperationLeaderTransfer
+)
+
+// SchedulerClient publishes store state to the control plane and returns any
+// scheduling decisions that should be applied locally.
+type SchedulerClient interface {
+	PublishRegion(manifest.RegionMeta)
+	RemoveRegion(uint64)
+	StoreHeartbeat(StoreStats) []Operation
+	Close() error
+}
+
+// Config configures Store construction. Only the Router field is optional; the
+// store fills in a default router when omitted.
 type Config struct {
-	Router      *Router
-	PeerFactory PeerFactory
-	PeerBuilder PeerBuilder
-	Hooks       LifecycleHooks
-	RegionHooks RegionHooks
-	Manifest    *manifest.Manager
-	// Scheduler is the single control-plane extension point for store runtime.
-	// - Cluster mode: use a PD-backed sink (pd/adapter.RegionSink).
-	// Heartbeat loop drains operations from the sink and enqueues them to
-	// operationScheduler.
-	Scheduler          scheduler.RegionSink
+	Router             *Router
+	PeerBuilder        PeerBuilder
+	Manifest           *manifest.Manager
+	Scheduler          SchedulerClient
 	HeartbeatInterval  time.Duration
 	StoreID            uint64
 	OperationQueueSize int
 	OperationCooldown  time.Duration
 	OperationInterval  time.Duration
 	OperationBurst     int
-	OperationObserver  func(scheduler.Operation)
 	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
 }

@@ -16,7 +16,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ┌─────────────────────────┐
 │ store.Store / peer.Peer │  ← multi-Raft region lifecycle
 │  ├ Manifest snapshot    │
-│  ├ Router / RegionHooks │
+│  ├ Router / region catalog │
 │  └ transport (gRPC)     │
 └───────────┬─────────────┘
             │ Apply via kv.Apply

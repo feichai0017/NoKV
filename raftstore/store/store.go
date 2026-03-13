@@ -1,33 +1,25 @@
 package store
 
 import (
-	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
-// Store hosts a collection of peers and provides helpers inspired by
-// TinyKV's raftstore::Store structure. It wires peers to the router, exposes
-// lifecycle hooks, and allows higher layers (RPC, schedulers, tests) to drive
-// ticks or proposals without needing to keep global peer maps themselves.
+// Store hosts a collection of peers and exposes the concrete runtime helpers
+// used by raftstore. It owns peer registration, region metadata, optional
+// control-plane heartbeats, and command application.
 type Store struct {
-	mu             sync.RWMutex
 	router         *Router
-	peers          *peerSet
-	peerFactory    PeerFactory
 	peerBuilder    PeerBuilder
-	hooks          LifecycleHooks
 	regionMetrics  *metrics.RegionMetrics
 	manifest       *manifest.Manager
 	regions        *regionManager
-	scheduler      scheduler.RegionSink
+	scheduler      SchedulerClient
 	storeID        uint64
-	operationHook  func(scheduler.Operation)
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
 	commandTimeout time.Duration
@@ -37,7 +29,7 @@ type Store struct {
 
 type operationKey struct {
 	region uint64
-	typeID scheduler.OperationType
+	typeID OperationType
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -61,30 +53,15 @@ func NewStore(router *Router) *Store {
 	return NewStoreWithConfig(Config{Router: router})
 }
 
-// NewStoreWithConfig allows callers to supply a custom PeerFactory and
-// LifecycleHooks when creating a store. This mirrors TinyKV's configurable
-// raftstore bootstrap pipeline where schedulers wire themselves into peer
-// lifecycle events.
+// NewStoreWithConfig constructs a Store using concrete dependencies. It keeps
+// peer construction, region tracking, and scheduler heartbeats explicit rather
+// than routing them through callback chains.
 func NewStoreWithConfig(cfg Config) *Store {
 	router := cfg.Router
 	if router == nil {
 		router = NewRouter()
 	}
-	factory := cfg.PeerFactory
-	if factory == nil {
-		factory = peer.NewPeer
-	}
 	regionMetrics := metrics.NewRegionMetrics()
-	hookChain := []RegionHooks{regionMetrics.Hooks()}
-	if cfg.Scheduler != nil {
-		hookChain = append(hookChain, RegionHooks{
-			OnRegionUpdate: cfg.Scheduler.SubmitRegionHeartbeat,
-			OnRegionRemove: cfg.Scheduler.RemoveRegion,
-		})
-	}
-	hookChain = append(hookChain, cfg.RegionHooks)
-	combinedHooks := mergeRegionHooks(hookChain...)
-	// Scheduler is the single injected control-plane object.
 	queueSize := max(cfg.OperationQueueSize, 0)
 	operationCooldown := max(cfg.OperationCooldown, 0)
 	if operationCooldown == 0 {
@@ -107,21 +84,17 @@ func NewStoreWithConfig(cfg Config) *Store {
 	}
 	s := &Store{
 		router:         router,
-		peers:          newPeerSet(),
-		peerFactory:    factory,
 		peerBuilder:    cfg.PeerBuilder,
-		hooks:          cfg.Hooks,
 		regionMetrics:  regionMetrics,
 		manifest:       cfg.Manifest,
 		scheduler:      cfg.Scheduler,
 		storeID:        cfg.StoreID,
-		operationHook:  cfg.OperationObserver,
 		commandApplier: cfg.CommandApplier,
 		commandTimeout: commandTimeout,
 	}
-	s.regions = newRegionManager(cfg.Manifest, combinedHooks)
+	s.regions = newRegionManager(cfg.Manifest, regionMetrics, cfg.Scheduler)
 	s.command = newCommandPipeline(cfg.CommandApplier)
-	s.operations = newOperationScheduler(queueSize, operationInterval, operationCooldown, operationBurst, s.applyOperation, s.operationHook)
+	s.operations = newOperationScheduler(queueSize, operationInterval, operationCooldown, operationBurst, s.applyOperation)
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
@@ -130,8 +103,6 @@ func NewStoreWithConfig(cfg Config) *Store {
 		if heartbeatInterval <= 0 {
 			heartbeatInterval = 3 * time.Second
 		}
-		// Heartbeat loop bridges local region/store state to the injected
-		// scheduler sink and optionally drains scheduling operations.
 		s.heartbeat = newHeartbeatLoop(
 			heartbeatInterval,
 			s.scheduler,
@@ -145,35 +116,4 @@ func NewStoreWithConfig(cfg Config) *Store {
 		}
 	}
 	return s
-}
-
-func mergeRegionHooks(hooks ...RegionHooks) RegionHooks {
-	update := func(meta manifest.RegionMeta) {
-		for _, h := range hooks {
-			if h.OnRegionUpdate != nil {
-				h.OnRegionUpdate(meta)
-			}
-		}
-	}
-	remove := func(id uint64) {
-		for _, h := range hooks {
-			if h.OnRegionRemove != nil {
-				h.OnRegionRemove(id)
-			}
-		}
-	}
-	return RegionHooks{
-		OnRegionUpdate: func(meta manifest.RegionMeta) {
-			if len(hooks) == 0 {
-				return
-			}
-			update(meta)
-		},
-		OnRegionRemove: func(id uint64) {
-			if len(hooks) == 0 {
-				return
-			}
-			remove(id)
-		},
-	}
 }

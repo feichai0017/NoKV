@@ -6,15 +6,14 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
-func (s *Store) applyOperation(op scheduler.Operation) bool {
+func (s *Store) applyOperation(op Operation) bool {
 	if s == nil {
 		return false
 	}
 	switch op.Type {
-	case scheduler.OperationLeaderTransfer:
+	case OperationLeaderTransfer:
 		if op.Source == 0 || op.Target == 0 {
 			return false
 		}
@@ -38,15 +37,15 @@ func (s *Store) applyEntries(entries []myraft.Entry) error {
 	return s.command.applyEntries(entries)
 }
 
-func (s *Store) enqueueOperation(op scheduler.Operation) {
+func (s *Store) enqueueOperation(op Operation) {
 	if s == nil || s.operations == nil {
 		return
 	}
 	s.operations.enqueue(op)
 }
 
-func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
-	stats := scheduler.StoreStats{
+func (s *Store) storeStatsSnapshot() StoreStats {
+	stats := StoreStats{
 		StoreID:   s.storeID,
 		RegionNum: uint64(len(s.RegionMetas())),
 		LeaderNum: s.countLeaders(),

@@ -1,7 +1,7 @@
 package NoKV
 
 import (
-	"errors"
+	"log/slog"
 	"math"
 	"runtime"
 	"sync"
@@ -11,12 +11,6 @@ import (
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
-)
-
-var (
-	errWriteStopEnabled  = errors.New("write stop enabled due to compaction backlog")
-	errWriteSlowEnabled  = errors.New("write slowdown enabled due to compaction backlog")
-	errWriteThrottleIdle = errors.New("write throttling cleared")
 )
 
 var commitReqPool = sync.Pool{
@@ -132,11 +126,11 @@ func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
 	}
 	switch state {
 	case lsm.WriteThrottleStop:
-		_ = utils.Err(errWriteStopEnabled)
+		slog.Default().Warn("write stop enabled due to compaction backlog")
 	case lsm.WriteThrottleSlowdown:
-		_ = utils.Err(errWriteSlowEnabled)
+		slog.Default().Info("write slowdown enabled due to compaction backlog")
 	default:
-		_ = utils.Err(errWriteThrottleIdle)
+		slog.Default().Info("write throttling cleared")
 	}
 }
 

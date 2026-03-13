@@ -10,7 +10,7 @@ import (
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
-	rm := newRegionManager(nil, RegionHooks{})
+	rm := newRegionManager(nil, nil, nil)
 	snapshot := map[uint64]manifest.RegionMeta{
 		1: {
 			ID:       1,
@@ -32,7 +32,7 @@ func TestRegionManagerLoadAndMeta(t *testing.T) {
 }
 
 func TestRegionManagerPeerTracking(t *testing.T) {
-	rm := newRegionManager(nil, RegionHooks{})
+	rm := newRegionManager(nil, nil, nil)
 	fakePeer := &peer.Peer{}
 	rm.setPeer(2, fakePeer)
 	if got := rm.peer(2); got != fakePeer {
@@ -46,7 +46,7 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 }
 
 func TestRegionManagerRemove(t *testing.T) {
-	rm := newRegionManager(nil, RegionHooks{})
+	rm := newRegionManager(nil, nil, nil)
 	requireNoError(t, rm.updateRegion(manifest.RegionMeta{ID: 3}))
 	rm.setPeer(3, &peer.Peer{})
 
@@ -60,7 +60,7 @@ func TestRegionManagerRemove(t *testing.T) {
 }
 
 func TestRegionManagerListMetas(t *testing.T) {
-	rm := newRegionManager(nil, RegionHooks{})
+	rm := newRegionManager(nil, nil, nil)
 	rm.loadSnapshot(map[uint64]manifest.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
@@ -82,13 +82,6 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 	store := NewStore(nil)
 	if store.Router() == nil {
 		t.Fatalf("expected router to be non-nil")
-	}
-	factory := func(cfg *peer.Config) (*peer.Peer, error) {
-		return nil, nil
-	}
-	store.SetPeerFactory(factory)
-	if store.peerFactory == nil {
-		t.Fatalf("expected peer factory to be set")
 	}
 
 	snap := store.RegionSnapshot()
