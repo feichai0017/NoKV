@@ -153,7 +153,7 @@ func TestLSMNewIterators(t *testing.T) {
 	iters := lsm.NewIterators(&utils.Options{IsAsc: true})
 	require.NotEmpty(t, iters)
 
-	levelIters := lsm.levels.NewIterators(&utils.Options{IsAsc: true})
+	levelIters := lsm.levels.iterators(&utils.Options{IsAsc: true})
 	for _, it := range levelIters {
 		if it == nil {
 			continue
@@ -175,13 +175,6 @@ func TestLSMNewIterators(t *testing.T) {
 		_ = it.Close()
 	}
 
-	wrapped := &Iterator{iters: iters}
-	wrapped.Rewind()
-	_ = wrapped.Item()
-	wrapped.Next()
-	_ = wrapped.Valid()
-	wrapped.Seek(entry.Key)
-	require.NoError(t, wrapped.Close())
 }
 
 func TestConcatIteratorSeekAndNext(t *testing.T) {

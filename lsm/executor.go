@@ -57,7 +57,7 @@ func (cd *compactDef) stateEntry() compact.StateEntry {
 	return cd.plan.StateEntry(cd.thisSize)
 }
 
-func (cd *compactDef) setNextLevel(lm *levelManager, t compact.Targets, next *levelHandler) {
+func (cd *compactDef) setNextLevel(lm *levelsRuntime, t compact.Targets, next *levelHandler) {
 	cd.nextLevel = next
 	if next == nil {
 		return
@@ -76,7 +76,7 @@ func (cd *compactDef) applyPlan(plan compact.Plan) {
 }
 
 // resolvePlanLocked binds plan tables; caller must hold cd level locks.
-func (lm *levelManager) resolvePlanLocked(cd *compactDef) bool {
+func (lm *levelsRuntime) resolvePlanLocked(cd *compactDef) bool {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return false
 	}
@@ -115,7 +115,7 @@ func (cd *compactDef) unlockLevels() {
 }
 
 // doCompact selects tables from a level and merges them into the target level.
-func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
+func (lm *levelsRuntime) doCompact(id int, p compact.Priority) (retErr error) {
 	l := p.Level
 	utils.CondPanicFunc(l >= lm.opt.MaxLevelNum, func() error { return errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum") }) // Sanity check.
 	t := p.Target
@@ -241,7 +241,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 // AdjustThrottle updates write admission state using a two-stage model:
 // slowdown (pace writes) and stop (block writes). Hysteresis is applied to
 // avoid oscillation under heavy compaction pressure.
-func (lm *levelManager) AdjustThrottle() {
+func (lm *levelsRuntime) AdjustThrottle() {
 	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
 		return
 	}
@@ -359,22 +359,22 @@ func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
 }
 
 // NeedsCompaction reports whether any level currently exceeds compaction thresholds.
-func (lm *levelManager) NeedsCompaction() bool {
+func (lm *levelsRuntime) NeedsCompaction() bool {
 	return len(lm.pickCompactLevels()) > 0
 }
 
 // PickCompactLevels returns current compaction candidates ordered by priority.
-func (lm *levelManager) PickCompactLevels() []compact.Priority {
+func (lm *levelsRuntime) PickCompactLevels() []compact.Priority {
 	return lm.pickCompactLevels()
 }
 
 // DoCompact executes one compaction job selected by the picker.
-func (lm *levelManager) DoCompact(id int, p compact.Priority) error {
+func (lm *levelsRuntime) DoCompact(id int, p compact.Priority) error {
 	return lm.doCompact(id, p)
 }
 
 // pickCompactLevels chooses compaction candidates and returns priorities.
-func (lm *levelManager) pickCompactLevels() (prios []compact.Priority) {
+func (lm *levelsRuntime) pickCompactLevels() (prios []compact.Priority) {
 	input := lm.buildPickerInput()
 	if len(input.Levels) == 0 {
 		return nil
@@ -382,7 +382,7 @@ func (lm *levelManager) pickCompactLevels() (prios []compact.Priority) {
 	return compact.PickPriorities(input)
 }
 
-func (lm *levelManager) buildPickerInput() compact.PickerInput {
+func (lm *levelsRuntime) buildPickerInput() compact.PickerInput {
 	if lm == nil || lm.opt == nil {
 		return compact.PickerInput{}
 	}
@@ -428,7 +428,7 @@ func (lm *levelManager) buildPickerInput() compact.PickerInput {
 }
 
 // levelTargets
-func (lm *levelManager) levelTargets() compact.Targets {
+func (lm *levelsRuntime) levelTargets() compact.Targets {
 	if lm == nil || lm.opt == nil || len(lm.levels) == 0 {
 		return compact.Targets{}
 	}
@@ -441,7 +441,7 @@ func (lm *levelManager) levelTargets() compact.Targets {
 	})
 }
 
-func (lm *levelManager) targetFileSizeForLevel(t compact.Targets, level int) int64 {
+func (lm *levelsRuntime) targetFileSizeForLevel(t compact.Targets, level int) int64 {
 	if level < 0 {
 		return 0
 	}
@@ -454,7 +454,7 @@ func (lm *levelManager) targetFileSizeForLevel(t compact.Targets, level int) int
 	return 0
 }
 
-func (lm *levelManager) levelSizes() []int64 {
+func (lm *levelsRuntime) levelSizes() []int64 {
 	if lm == nil || len(lm.levels) == 0 {
 		return nil
 	}
@@ -468,7 +468,7 @@ func (lm *levelManager) levelSizes() []int64 {
 	return sizes
 }
 
-func (lm *levelManager) fillTables(cd *compactDef) bool {
+func (lm *levelsRuntime) fillTables(cd *compactDef) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
@@ -508,7 +508,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
 }
 
-func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
+func (lm *levelsRuntime) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
 
@@ -537,7 +537,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	}
 	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
 }
-func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
+func (lm *levelsRuntime) runCompactDef(id, l int, cd compactDef) (err error) {
 	if cd.plan.NextFileSize <= 0 {
 		return errors.New("Next file size cannot be zero. Targets are not set")
 	}
@@ -780,7 +780,7 @@ func newCreateChange(id uint64, level int) *pb.ManifestChange {
 }
 
 // compactBuildTables merges SSTables from two levels.
-func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, func() error, error) {
+func (lm *levelsRuntime) compactBuildTables(lev int, cd compactDef) ([]*table, func() error, error) {
 
 	topTables := append([]*table(nil), cd.top...)
 	botTables := append([]*table(nil), cd.bot...)
@@ -872,7 +872,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 }
 
 // addSplits prepares key ranges for parallel sub-compactions.
-func (lm *levelManager) addSplits(cd *compactDef) {
+func (lm *levelsRuntime) addSplits(cd *compactDef) {
 	cd.splits = cd.splits[:0]
 
 	// Let's say we have 10 tables in cd.bot and min width = 3. Then, we'll pick
@@ -910,7 +910,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 }
 
 // fillMaxLevelTables handles max-level compaction.
-func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
+func (lm *levelsRuntime) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
 	plan, ok := compact.PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
 	if !ok {
 		return false
@@ -923,14 +923,14 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 }
 
 // fillTablesL0 tries L0->Lbase first, then falls back to L0->L0.
-func (lm *levelManager) fillTablesL0(cd *compactDef) bool {
+func (lm *levelsRuntime) fillTablesL0(cd *compactDef) bool {
 	if ok := lm.fillTablesL0ToLbase(cd); ok {
 		return true
 	}
 	return lm.fillTablesL0ToL0(cd)
 }
 
-func (lm *levelManager) moveToIngest(cd *compactDef) error {
+func (lm *levelsRuntime) moveToIngest(cd *compactDef) error {
 	if cd == nil || cd.thisLevel == nil || cd.nextLevel == nil {
 		return errors.New("invalid compaction definition for ingest move")
 	}
@@ -1010,7 +1010,7 @@ func (lm *levelManager) moveToIngest(cd *compactDef) error {
 	return nil
 }
 
-func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
+func (lm *levelsRuntime) fillTablesL0ToLbase(cd *compactDef) bool {
 	if cd.nextLevel.levelNum == 0 {
 		return false
 	}
@@ -1038,7 +1038,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 }
 
 // fillTablesL0ToL0 performs L0->L0 compaction.
-func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
+func (lm *levelsRuntime) fillTablesL0ToL0(cd *compactDef) bool {
 	if cd.compactorId != 0 {
 		// Only allow compactor 0 to avoid L0->L0 contention.
 		return false
@@ -1144,7 +1144,7 @@ func tablesStrictlyOrdered(tables []*table) bool {
 	}
 	return true
 }
-func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
+func (lm *levelsRuntime) updateDiscardStats(discardStats map[manifest.ValueLogID]int64) {
 	if lm == nil || lm.lsm == nil {
 		return
 	}
@@ -1159,7 +1159,7 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 }
 
 // subcompact runs a single parallel compaction over a key range.
-func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
+func (lm *levelsRuntime) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
 	// Track discardStats for value log GC.
