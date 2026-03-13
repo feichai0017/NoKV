@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"context"
 	"sync"
 )
 
@@ -11,79 +10,69 @@ var (
 
 // Closer coordinates shutdown and resource cleanup.
 type Closer struct {
-	waiting sync.WaitGroup
-
-	ctx         context.Context
-	CloseSignal chan struct{}
-	cancel      context.CancelFunc
-	closeOnce   sync.Once
+	waiting   sync.WaitGroup
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
-// NewCloser returns a Closer with an open CloseSignal channel.
+// NewCloser returns a Closer with an open shutdown channel.
 func NewCloser() *Closer {
-	closer := &Closer{waiting: sync.WaitGroup{}}
-	closer.ctx, closer.cancel = context.WithCancel(context.Background())
-	closer.CloseSignal = make(chan struct{})
-	return closer
+	return &Closer{
+		waiting: sync.WaitGroup{},
+		closed:  make(chan struct{}),
+	}
 }
 
-// NewCloserInitial creates a closer with an initial WaitGroup count and a
-// dedicated close signal/context pair for cooperative shutdown.
+// NewCloserInitial creates a closer with an initial WaitGroup count.
 func NewCloserInitial(initial int) *Closer {
-	ret := &Closer{}
-	ret.ctx, ret.cancel = context.WithCancel(context.Background())
-	ret.CloseSignal = make(chan struct{})
-	ret.waiting.Add(initial)
+	ret := NewCloser()
+	if initial > 0 {
+		ret.waiting.Add(initial)
+	}
 	return ret
 }
 
 // Close signals downstream goroutines and waits for them to finish.
 func (c *Closer) Close() {
+	if c == nil {
+		return
+	}
 	c.signal()
 	c.waiting.Wait()
 }
 
 // Done marks a goroutine as finished.
 func (c *Closer) Done() {
+	if c == nil {
+		return
+	}
 	c.waiting.Done()
 }
 
 // Add adjusts the WaitGroup counter.
 func (c *Closer) Add(n int) {
+	if c == nil {
+		return
+	}
 	c.waiting.Add(n)
 }
 
-func (c *Closer) HasBeenClosed() <-chan struct{} {
-	if c == nil || c.ctx == nil {
+// Closed returns a channel that is closed exactly once when shutdown begins.
+func (c *Closer) Closed() <-chan struct{} {
+	if c == nil || c.closed == nil {
 		return dummyCloserChan
 	}
-	return c.ctx.Done()
+	return c.closed
 }
 
-func (c *Closer) SignalAndWait() {
-	c.Signal()
-	c.Wait()
-}
-
-func (c *Closer) Signal() {
-	c.signal()
-}
-
-func (c *Closer) Wait() {
-	c.waiting.Wait()
-}
-
-// signal notifies listeners only once and is safe under concurrent Signal/Close calls.
+// signal notifies listeners only once and is safe under concurrent Close calls.
 func (c *Closer) signal() {
 	if c == nil {
 		return
 	}
 	c.closeOnce.Do(func() {
-		if c.cancel != nil {
-			c.cancel()
-		}
-		if c.CloseSignal != nil {
-			close(c.CloseSignal)
+		if c.closed != nil {
+			close(c.closed)
 		}
 	})
 }

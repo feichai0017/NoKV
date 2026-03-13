@@ -692,7 +692,7 @@ func (db *DB) runValueLogGCPeriodically() {
 					slog.Default().Warn("value log gc", "error", err)
 				}
 			}
-		case <-db.vlog.lfDiscardStats.closer.CloseSignal:
+		case <-db.vlog.lfDiscardStats.closer.Closed():
 			return
 		}
 	}
