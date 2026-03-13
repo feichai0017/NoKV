@@ -23,6 +23,10 @@ type WriteMetrics struct {
 
 	applySumNs   atomic.Int64
 	applySamples atomic.Int64
+
+	syncSumNs      atomic.Int64
+	syncSamples    atomic.Int64
+	syncBatchCount atomic.Int64 // number of syncBatch items coalesced per fsync
 }
 
 // WriteMetricsSnapshot is a read-only view of WriteMetrics counters.
@@ -36,9 +40,12 @@ type WriteMetricsSnapshot struct {
 	AvgRequestWaitMs float64
 	AvgValueLogMs    float64
 	AvgApplyMs       float64
+	AvgSyncMs        float64
+	AvgSyncBatch     float64
 	RequestSamples   int64
 	ValueLogSamples  int64
 	ApplySamples     int64
+	SyncSamples      int64
 }
 
 func NewWriteMetrics() *WriteMetrics {
@@ -81,6 +88,17 @@ func (m *WriteMetrics) RecordApply(d time.Duration) {
 	m.applySamples.Add(1)
 }
 
+// RecordSync records one WAL fsync call. coalesced is the number of syncBatch
+// items that were grouped into this single fsync.
+func (m *WriteMetrics) RecordSync(d time.Duration, coalesced int) {
+	if m == nil {
+		return
+	}
+	m.syncSumNs.Add(d.Nanoseconds())
+	m.syncSamples.Add(1)
+	m.syncBatchCount.Add(int64(coalesced))
+}
+
 func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	if m == nil {
 		return WriteMetricsSnapshot{}
@@ -97,6 +115,9 @@ func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	vlogSamples := m.vlogSamples.Load()
 	applySumNs := m.applySumNs.Load()
 	applySamples := m.applySamples.Load()
+	syncSumNs := m.syncSumNs.Load()
+	syncSamples := m.syncSamples.Load()
+	syncBatchCount := m.syncBatchCount.Load()
 	snap := WriteMetricsSnapshot{
 		QueueLen:        queueLen,
 		QueueEntries:    queueEntries,
@@ -105,6 +126,7 @@ func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 		RequestSamples:  waitSamples,
 		ValueLogSamples: vlogSamples,
 		ApplySamples:    applySamples,
+		SyncSamples:     syncSamples,
 	}
 	if batchCount > 0 {
 		snap.AvgBatchEntries = float64(batchEntries) / float64(batchCount)
@@ -118,6 +140,11 @@ func (m *WriteMetrics) Snapshot() WriteMetricsSnapshot {
 	}
 	if applySamples > 0 {
 		snap.AvgApplyMs = float64(applySumNs) / float64(applySamples) / 1e6
+	}
+	if syncSamples > 0 {
+		snap.AvgSyncMs = float64(syncSumNs) / float64(syncSamples) / 1e6
+		snap.AvgSyncBatch = float64(syncBatchCount) / float64(syncSamples)
+
 	}
 	return snap
 }

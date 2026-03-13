@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	defaultSegmentSize = 64 << 20  // 64 MiB
-	minSegmentSize     = 64 << 10  // 64 KiB
-	defaultBufferSize  = 256 << 10 // 256 KiB
+	defaultSegmentSize = 64 << 20 // 64 MiB
+	minSegmentSize     = 64 << 10 // 64 KiB
+	defaultBufferSize  = 4 << 20  // 4 MiB
 )
 
 // Config controls WAL manager behaviour.
@@ -354,16 +354,26 @@ func (m *Manager) rotateLocked() error {
 // Sync fsyncs the active segment.
 func (m *Manager) Sync() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return fmt.Errorf("wal: manager closed")
 	}
+	active := m.active
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
+			m.mu.Unlock()
 			return err
 		}
 	}
-	return m.active.Sync()
+	m.mu.Unlock()
+	if active == nil {
+		return nil
+	}
+	err := active.Sync()
+	if err == nil || errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 // ActiveSegment returns current segment ID.
