@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1011,4 +1012,181 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 		itrs = append(itrs, NewConcatIterator(lh.tables, topt))
 	}
 	return itrs
+}
+
+func checkTablesOverlap(tables []*table) error {
+	sorted := make([]*table, len(tables))
+	copy(sorted, tables)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		return utils.CompareUserKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
+	})
+
+	for i := 1; i < len(sorted); i++ {
+		prev := sorted[i-1]
+		curr := sorted[i]
+		if utils.CompareUserKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
+			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
+				prev.fid, curr.fid)
+		}
+	}
+	return nil
+}
+
+func (lm *levelManager) checkTablesOverlapWithL0(tables []*table) error {
+	l0 := lm.levels[0]
+
+	for _, tbl := range tables {
+		for _, existing := range l0.tables {
+			if existing == nil {
+				continue
+			}
+			if utils.CompareUserKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
+				utils.CompareUserKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
+				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
+					tbl.fid, existing.fid)
+			}
+		}
+	}
+	return nil
+}
+
+func (lm *levelManager) importExternalSST(paths []string) error {
+	fs := vfs.Ensure(lm.opt.FS)
+	workDir := lm.opt.WorkDir
+	var (
+		importedTables []*table
+		importedMetas  []*manifest.FileMeta
+		tempFIDs       []uint64
+		pathMappings   = make(map[string]string)
+	)
+
+	rollback := func() {
+		for sourcePath, targetPath := range pathMappings {
+			if _, err := fs.Stat(targetPath); err == nil {
+				_ = fs.Rename(targetPath, sourcePath)
+			}
+		}
+		for _, tbl := range importedTables {
+			if tbl != nil {
+				lm.cache.delIndex(tbl.fid)
+				_ = tbl.closeHandle()
+			}
+		}
+		for _, fid := range tempFIDs {
+			sstPath := utils.FileNameSSTable(workDir, fid)
+			if _, err := fs.Stat(sstPath); err == nil {
+				_ = fs.Remove(sstPath)
+			}
+		}
+
+		rollbackEdits := make([]manifest.Edit, len(importedMetas))
+		for i, meta := range importedMetas {
+			rollbackEdits[i] = manifest.Edit{
+				Type: manifest.EditDeleteFile,
+				File: meta,
+			}
+		}
+		_ = lm.manifestMgr.LogEdits(rollbackEdits...)
+	}
+
+	for _, path := range paths {
+		stat, err := fs.Stat(path)
+		if err != nil {
+			rollback()
+			return fmt.Errorf("invalid external SST: %s, err: %w", path, err)
+		}
+		if stat.IsDir() {
+			rollback()
+			return fmt.Errorf("external SST is a directory: %s", path)
+		}
+		if !strings.HasSuffix(path, ".sst") {
+			rollback()
+			return fmt.Errorf("external file is not an SST (missing .sst suffix): %s", path)
+		}
+
+		tempFID := lm.maxFID.Add(1)
+		tempFIDs = append(tempFIDs, tempFID)
+		targetPath := utils.FileNameSSTable(workDir, tempFID)
+
+		if _, err := fs.Stat(targetPath); err == nil {
+			rollback()
+			return fmt.Errorf("target SST path already exists: %s", targetPath)
+		}
+		if err := fs.Rename(path, targetPath); err != nil {
+			rollback()
+			return fmt.Errorf("failed to move external SST: %s -> %s, err: %w", path, targetPath, err)
+		}
+		pathMappings[path] = targetPath
+
+		tbl, err := openTable(lm, targetPath, nil)
+		if err != nil {
+			rollback()
+			return fmt.Errorf("open imported sst failed: %s, err: %w", targetPath, err)
+		}
+		importedTables = append(importedTables, tbl)
+	}
+
+	if err := checkTablesOverlap(importedTables); err != nil {
+		rollback()
+		return fmt.Errorf("imported ssts overlap: %w", err)
+	}
+
+	l0 := lm.levels[0]
+	l0.Lock()
+	defer l0.Unlock()
+
+	if err := lm.checkTablesOverlapWithL0(importedTables); err != nil {
+		rollback()
+		return fmt.Errorf("overlap with L0: %w", err)
+	}
+
+	for _, tbl := range importedTables {
+		meta := &manifest.FileMeta{
+			Level:     0,
+			FileID:    tbl.fid,
+			Size:      uint64(tbl.Size()),
+			Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
+			Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
+			CreatedAt: uint64(time.Now().Unix()),
+			ValueSize: tbl.ValueSize(),
+			Ingest:    false,
+		}
+		importedMetas = append(importedMetas, meta)
+	}
+
+	edits := make([]manifest.Edit, len(importedMetas))
+	for i, meta := range importedMetas {
+		edits[i] = manifest.Edit{
+			Type: manifest.EditAddFile,
+			File: meta,
+		}
+	}
+
+	if lm.opt.ManifestSync {
+		if err := vfs.SyncDir(lm.opt.FS, workDir); err != nil {
+			rollback()
+			return fmt.Errorf("sync work dir failed: %w", err)
+		}
+	}
+
+	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
+		rollback()
+		return fmt.Errorf("log manifest edits failed: %w", err)
+	}
+
+	for _, tbl := range importedTables {
+		if tbl == nil {
+			continue
+		}
+		tbl.setLevel(l0.levelNum)
+		l0.tables = append(l0.tables, tbl)
+		l0.totalSize += tbl.Size()
+		l0.totalStaleSize += int64(tbl.StaleDataSize())
+		l0.totalValueSize += int64(tbl.ValueSize())
+	}
+	l0.sortTablesLocked()
+	l0.ingest.sortShards()
+
+	return nil
 }
