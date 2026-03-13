@@ -20,7 +20,7 @@ type levelHandler struct {
 	totalSize             int64
 	totalStaleSize        int64
 	totalValueSize        int64
-	lm                    *levelsRuntime
+	lm                    *levelManager
 	ingestRuns            atomic.Uint64
 	ingestMergeRuns       atomic.Uint64
 	ingestDurationNs      atomic.Int64

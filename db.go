@@ -209,7 +209,7 @@ func Open(opt *Options) *DB {
 	}, wlog)
 	utils.Panic(err)
 	db.lsm = lsmCore
-	seed := db.lsm.MaxVersion()
+	seed := db.lsm.Diagnostics().MaxVersion
 	db.nonTxnVersion.Store(seed)
 	db.iterPool = newIteratorPool()
 	// Initialize the value log.
@@ -658,7 +658,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return utils.ErrInvalidRequest
 	}
-	heads := db.lsm.ValueLogHead()
+	heads := db.lsm.Diagnostics().ValueLogHead
 	if len(heads) == 0 {
 		db.RLock()
 		if len(db.vheads) > 0 {

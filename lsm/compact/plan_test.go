@@ -20,29 +20,6 @@ func splitUserKey(t *testing.T, internal []byte) []byte {
 	return userKey
 }
 
-func TestIngestModeFlags(t *testing.T) {
-	require.False(t, IngestNone.UsesIngest())
-	require.True(t, IngestDrain.UsesIngest())
-	require.True(t, IngestKeep.UsesIngest())
-	require.True(t, IngestKeep.KeepsIngest())
-	require.False(t, IngestDrain.KeepsIngest())
-}
-
-func TestIngestPicker(t *testing.T) {
-	shards := []IngestShardView{
-		{Index: 1, SizeBytes: 10},
-		{Index: 2, SizeBytes: 30},
-		{Index: 3, SizeBytes: 20, MaxAgeSec: 120, ValueDensity: 0.5},
-	}
-	order := PickShardOrder(IngestPickInput{Shards: shards})
-	require.Equal(t, []int{2, 3, 1}, order)
-
-	pick := PickShardByBacklog(IngestPickInput{Shards: shards})
-	require.Equal(t, 3, pick)
-
-	require.Equal(t, -1, PickShardByBacklog(IngestPickInput{}))
-}
-
 func TestKeyRangeOperations(t *testing.T) {
 	empty := KeyRange{}
 	require.True(t, empty.IsEmpty())

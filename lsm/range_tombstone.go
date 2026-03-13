@@ -48,7 +48,7 @@ func (lsm *LSM) PinRangeTombstoneView() *RangeTombstoneView {
 	if lsm == nil {
 		return nil
 	}
-	tables, release := lsm.GetMemTables()
+	tables, release := lsm.getMemTables()
 	return &RangeTombstoneView{
 		lsm:     lsm,
 		tables:  tables,
@@ -81,7 +81,7 @@ func (v *RangeTombstoneView) Close() {
 // collector. Memtable tombstones are tracked separately in memTable.rangeTombstones
 // and must not be included here to avoid duplication when those memtables flush.
 // This is called at startup and after max-level compaction (which may drop tombstones).
-func (lm *levelsRuntime) rebuildRangeTombstones() {
+func (lm *levelManager) rebuildRangeTombstones() {
 	if lm == nil || lm.rtCollector == nil || len(lm.levels) == 0 {
 		return
 	}
