@@ -21,9 +21,8 @@ func TestStatsCollectSnapshots(t *testing.T) {
 
 	rm := metrics.NewRegionMetrics()
 	db.SetRegionMetrics(rm)
-	hooks := rm.Hooks()
-	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
-	hooks.OnRegionUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
+	rm.RecordUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
+	rm.RecordUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
 
 	require.NoError(t, db.Set([]byte("stats-key"), []byte("stats-value")))
 	entry, err := db.Get([]byte("stats-key"))

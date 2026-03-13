@@ -4,6 +4,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"runtime"
@@ -157,7 +158,7 @@ func (t *table) index() *pb.TableIndex {
 		return idx
 	}
 	if err := t.openSSTableLocked(true); err != nil {
-		_ = utils.Err(err)
+		slog.Default().Error("open sstable", "fid", t.fid, "error", err)
 		return nil
 	}
 	idx := t.ss.Indexs()

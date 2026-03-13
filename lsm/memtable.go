@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -197,7 +198,7 @@ func (lsm *LSM) recovery() (*memTable, []*memTable, error) {
 					continue
 				}
 				if err := lsm.wal.RemoveSegment(uint32(fid)); err != nil && !os.IsNotExist(err) {
-					_ = utils.Err(errors.Wrapf(err, "remove wal segment %d", fid))
+					slog.Default().Error("remove wal segment", "segment", fid, "error", err)
 				}
 				continue
 			}

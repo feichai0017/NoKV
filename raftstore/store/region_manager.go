@@ -5,23 +5,26 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type regionManager struct {
-	mu       sync.RWMutex
-	metaByID map[uint64]manifest.RegionMeta
-	peers    map[uint64]*peer.Peer
-	manifest *manifest.Manager
-	hooks    RegionHooks
+	mu            sync.RWMutex
+	metaByID      map[uint64]manifest.RegionMeta
+	peers         map[uint64]*peer.Peer
+	manifest      *manifest.Manager
+	regionMetrics *metrics.RegionMetrics
+	scheduler     SchedulerClient
 }
 
-func newRegionManager(man *manifest.Manager, hooks RegionHooks) *regionManager {
+func newRegionManager(man *manifest.Manager, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
 	return &regionManager{
-		metaByID: make(map[uint64]manifest.RegionMeta),
-		peers:    make(map[uint64]*peer.Peer),
-		manifest: man,
-		hooks:    hooks,
+		metaByID:      make(map[uint64]manifest.RegionMeta),
+		peers:         make(map[uint64]*peer.Peer),
+		manifest:      man,
+		regionMetrics: regionMetrics,
+		scheduler:     scheduler,
 	}
 }
 
@@ -31,7 +34,11 @@ func (rm *regionManager) loadSnapshot(snapshot map[uint64]manifest.RegionMeta) {
 	}
 	rm.mu.Lock()
 	for id, meta := range snapshot {
-		rm.metaByID[id] = manifest.CloneRegionMeta(meta)
+		metaCopy := manifest.CloneRegionMeta(meta)
+		rm.metaByID[id] = metaCopy
+		if rm.regionMetrics != nil {
+			rm.regionMetrics.RecordUpdate(metaCopy)
+		}
 	}
 	rm.mu.Unlock()
 }
@@ -124,8 +131,11 @@ func (rm *regionManager) updateRegion(meta manifest.RegionMeta) error {
 	if p != nil {
 		p.SetRegionMeta(metaCopy)
 	}
-	if rm.hooks.OnRegionUpdate != nil {
-		rm.hooks.OnRegionUpdate(metaCopy)
+	if rm.regionMetrics != nil {
+		rm.regionMetrics.RecordUpdate(metaCopy)
+	}
+	if rm.scheduler != nil {
+		rm.scheduler.PublishRegion(metaCopy)
 	}
 	return nil
 }
@@ -168,8 +178,11 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 	delete(rm.metaByID, regionID)
 	delete(rm.peers, regionID)
 	rm.mu.Unlock()
-	if rm.hooks.OnRegionRemove != nil {
-		rm.hooks.OnRegionRemove(regionID)
+	if rm.regionMetrics != nil {
+		rm.regionMetrics.RecordRemove(regionID)
+	}
+	if rm.scheduler != nil {
+		rm.scheduler.RemoveRegion(regionID)
 	}
 	return nil
 }

@@ -26,12 +26,10 @@ func FID(name string) uint64 {
 	name = strings.TrimSuffix(name, ".sst")
 	id, err := strconv.Atoi(name)
 	if err != nil {
-		_ = Err(err)
 		return 0
 	}
 	// Ensure the parsed ID fits into 32 bits so downstream uint32 casts are safe.
 	if id < 0 || uint64(id) > math.MaxUint32 {
-		_ = Err(fmt.Errorf("FID out of range: %d", id))
 		return 0
 	}
 	return uint64(id)
@@ -52,7 +50,6 @@ func LoadIDMap(fs vfs.FS, dir string) map[uint64]struct{} {
 	idMap := make(map[uint64]struct{})
 	entries, err := fs.ReadDir(dir)
 	if err != nil {
-		_ = Err(err)
 		return idMap
 	}
 	for _, entry := range entries {

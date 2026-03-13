@@ -19,7 +19,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
@@ -81,20 +80,16 @@ func runServeCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return fmt.Errorf("dial pd %q: %w", *pdAddr, err)
 	}
-	pdSink := pdadapter.NewRegionSink(pdadapter.RegionSinkConfig{
+	pdScheduler := pdadapter.NewSchedulerClient(pdadapter.SchedulerClientConfig{
 		PD:      pdCli,
 		Timeout: *pdTimeout,
 	})
-	defer func() {
-		_ = pdSink.Close()
-	}()
-	var schedulerSink scheduler.RegionSink = pdSink
 
 	server, err := serverpkg.New(serverpkg.Config{
 		DB: db,
 		Store: storepkg.Config{
 			StoreID:   *storeID,
-			Scheduler: schedulerSink,
+			Scheduler: pdScheduler,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
 		RaftTickInterval:   *raftTickInterval,

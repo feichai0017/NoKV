@@ -24,10 +24,8 @@ func NewRouter() *Router {
 	return &Router{peers: make(map[uint64]*peer.Peer)}
 }
 
-// Register wires a peer into the router. Register must only be called once
-// per peer ID.
-func (r *Router) Register(p *peer.Peer) error {
-	if p == nil {
+func (r *Router) add(p *peer.Peer) error {
+	if r == nil || p == nil {
 		return fmt.Errorf("raftstore: router cannot register nil peer")
 	}
 	id := p.ID()
@@ -40,26 +38,70 @@ func (r *Router) Register(p *peer.Peer) error {
 	return nil
 }
 
+func (r *Router) remove(id uint64) *peer.Peer {
+	if r == nil || id == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.peers[id]
+	delete(r.peers, id)
+	return p
+}
+
+func (r *Router) get(id uint64) (*peer.Peer, bool) {
+	if r == nil || id == 0 {
+		return nil, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.peers[id]
+	return p, ok
+}
+
+func (r *Router) visit(fn func(*peer.Peer)) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.RLock()
+	peers := make([]*peer.Peer, 0, len(r.peers))
+	for _, p := range r.peers {
+		peers = append(peers, p)
+	}
+	r.mu.RUnlock()
+	for _, p := range peers {
+		fn(p)
+	}
+}
+
+func (r *Router) list() []*peer.Peer {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*peer.Peer, 0, len(r.peers))
+	for _, p := range r.peers {
+		out = append(out, p)
+	}
+	return out
+}
+
+// Register wires a peer into the router. Register must only be called once
+// per peer ID.
+func (r *Router) Register(p *peer.Peer) error {
+	return r.add(p)
+}
+
 // Deregister removes a peer mapping. The caller is responsible for closing
 // the peer after deregistration.
 func (r *Router) Deregister(id uint64) {
-	if id == 0 {
-		return
-	}
-	r.mu.Lock()
-	delete(r.peers, id)
-	r.mu.Unlock()
+	r.remove(id)
 }
 
 // Peer returns a peer handle by ID.
 func (r *Router) Peer(id uint64) (*peer.Peer, bool) {
-	if id == 0 {
-		return nil, false
-	}
-	r.mu.RLock()
-	p, ok := r.peers[id]
-	r.mu.RUnlock()
-	return p, ok
+	return r.get(id)
 }
 
 // SendRaft delivers a raft protocol message to the registered peer.
@@ -104,12 +146,7 @@ func (r *Router) SendTick(id uint64) error {
 // BroadcastTick invokes Tick on every registered peer. The first error is
 // returned to the caller.
 func (r *Router) BroadcastTick() error {
-	r.mu.RLock()
-	peers := make([]*peer.Peer, 0, len(r.peers))
-	for _, p := range r.peers {
-		peers = append(peers, p)
-	}
-	r.mu.RUnlock()
+	peers := r.list()
 	for _, p := range peers {
 		if err := p.Tick(); err != nil {
 			return err
@@ -121,12 +158,7 @@ func (r *Router) BroadcastTick() error {
 // BroadcastFlush forces processReady on all registered peers. This mirrors
 // TinyKV's behavior of draining the ready queue when necessary.
 func (r *Router) BroadcastFlush() error {
-	r.mu.RLock()
-	peers := make([]*peer.Peer, 0, len(r.peers))
-	for _, p := range r.peers {
-		peers = append(peers, p)
-	}
-	r.mu.RUnlock()
+	peers := r.list()
 	for _, p := range peers {
 		if err := p.Flush(); err != nil {
 			return err
