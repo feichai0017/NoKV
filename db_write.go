@@ -400,7 +400,11 @@ func (db *DB) commitWorker() {
 		}
 
 		if err == nil && db.opt.SyncWrites {
+			syncStart := time.Now()
 			err = db.wal.Sync()
+			if db.writeMetrics != nil {
+				db.writeMetrics.RecordSync(time.Since(syncStart), 1)
+			}
 		}
 
 		// Record apply metrics.
