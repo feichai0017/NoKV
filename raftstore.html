@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
+            window.path_to_searchindex_js = "searchindex-e40abed7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -202,9 +202,9 @@
 <ol>
 <li>
 <p><strong>Construct Server</strong></p>
-<pre><code class="language-go">srv, _ := raftstore.NewServer(raftstore.ServerConfig{
+<pre><code class="language-go">srv, _ := server.New(server.Config{
     DB: db,
-    Store: raftstore.StoreConfig{StoreID: 1},
+    Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
 })

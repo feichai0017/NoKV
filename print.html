@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
+            window.path_to_searchindex_js = "searchindex-e40abed7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -423,7 +423,7 @@ func main() {
 ┌─────────────────────────┐
 │ store.Store / peer.Peer │  ← multi-Raft region lifecycle
 │  ├ Manifest snapshot    │
-│  ├ Router / RegionHooks │
+│  ├ Router / region catalog │
 │  └ transport (gRPC)     │
 └───────────┬─────────────┘
             │ Apply via kv.Apply
@@ -541,7 +541,7 @@ iterator scan, distributed read/write via Raft apply), see
 </div>
 <h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
 <ol>
-<li><code>raftstore.NewServer</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
+<li><code>server.New</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
 <li>CLI (<code>nokv serve</code>) or application enumerates <code>Manifest.RegionSnapshot()</code> and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
 <li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
@@ -2971,9 +2971,9 @@ is not present.</li>
 <ol>
 <li>
 <p><strong>Construct Server</strong></p>
-<pre><code class="language-go">srv, _ := raftstore.NewServer(raftstore.ServerConfig{
+<pre><code class="language-go">srv, _ := server.New(server.Config{
     DB: db,
-    Store: raftstore.StoreConfig{StoreID: 1},
+    Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",
 })
