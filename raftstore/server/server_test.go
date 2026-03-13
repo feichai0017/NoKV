@@ -18,10 +18,11 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 func openTestDB(t *testing.T) *NoKV.DB {
@@ -35,9 +36,9 @@ func openTestDB(t *testing.T) *NoKV.DB {
 
 func TestServerStartsNoKVService(t *testing.T) {
 	db := openTestDB(t)
-	srv, err := raftstore.NewServer(raftstore.ServerConfig{
+	srv, err := serverpkg.New(serverpkg.Config{
 		DB: db,
-		Store: raftstore.StoreConfig{
+		Store: storepkg.Config{
 			StoreID: 1,
 		},
 		TransportAddr: "127.0.0.1:0",
@@ -70,7 +71,7 @@ type testNode struct {
 	peerID  uint64
 	region  manifest.RegionMeta
 	db      *NoKV.DB
-	srv     *raftstore.Server
+	srv     *serverpkg.Server
 	addr    string
 }
 
@@ -127,9 +128,9 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		db := NoKV.Open(opt)
 		nodes[i].db = db
 
-		srv, err := raftstore.NewServer(raftstore.ServerConfig{
+		srv, err := serverpkg.New(serverpkg.Config{
 			DB: db,
-			Store: raftstore.StoreConfig{
+			Store: storepkg.Config{
 				StoreID: nodes[i].storeID,
 			},
 			Raft: myraft.Config{

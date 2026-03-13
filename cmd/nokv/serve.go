@@ -17,10 +17,11 @@ import (
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 var notifyContext = signal.NotifyContext
@@ -89,9 +90,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	}()
 	var schedulerSink scheduler.RegionSink = pdSink
 
-	server, err := raftstore.NewServer(raftstore.ServerConfig{
+	server, err := serverpkg.New(serverpkg.Config{
 		DB: db,
-		Store: raftstore.StoreConfig{
+		Store: storepkg.Config{
 			StoreID:   *storeID,
 			Scheduler: schedulerSink,
 		},
@@ -176,7 +177,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	return nil
 }
 
-func startStorePeers(server *raftstore.Server, db *NoKV.DB, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]manifest.RegionMeta, int, error) {
+func startStorePeers(server *serverpkg.Server, db *NoKV.DB, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]manifest.RegionMeta, int, error) {
 	if server == nil || db == nil {
 		return nil, 0, fmt.Errorf("raftstore: server or db is nil")
 	}

@@ -37,17 +37,6 @@ type (
 		Value []byte
 	}
 
-	// UserKV defines user-facing single-node key-value operations.
-	UserKV interface {
-		Set(key, value []byte) error
-		SetBatch(items []BatchSetItem) error
-		SetWithTTL(key, value []byte, ttl time.Duration) error
-		Get(key []byte) (*kv.Entry, error)
-		Del(key []byte) error
-		DeleteRange(start, end []byte) error
-		NewIterator(opt *utils.Options) utils.Iterator
-	}
-
 	// MVCCStore defines MVCC/internal operations consumed by percolator and raftstore.
 	MVCCStore interface {
 		ApplyInternalEntries(entries []*kv.Entry) error
@@ -56,12 +45,6 @@ type (
 		// DecrRef exactly once.
 		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
 		NewInternalIterator(opt *utils.Options) utils.Iterator
-	}
-
-	// EngineMeta exposes durability/metadata managers for distributed components.
-	EngineMeta interface {
-		WAL() *wal.Manager
-		Manifest() *manifest.Manager
 	}
 
 	// DB is the global handle for the engine and owns shared resources.

@@ -13,27 +13,27 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
 type memoryNetwork struct {
-	peers   map[uint64]*raftstore.Peer
+	peers   map[uint64]*peerpkg.Peer
 	blocked map[uint64]bool
 }
 
 func newMemoryNetwork() *memoryNetwork {
 	return &memoryNetwork{
-		peers:   make(map[uint64]*raftstore.Peer),
+		peers:   make(map[uint64]*peerpkg.Peer),
 		blocked: make(map[uint64]bool),
 	}
 }
 
-func (n *memoryNetwork) Register(peer *raftstore.Peer) {
+func (n *memoryNetwork) Register(peer *peerpkg.Peer) {
 	n.peers[peer.ID()] = peer
 }
 
@@ -97,7 +97,7 @@ func (n *memoryNetwork) Unblock(id uint64) {
 	}
 }
 
-func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
+func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
@@ -167,7 +167,7 @@ func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 
 func TestRaftStoreReplicatesProposals(t *testing.T) {
 	net := newMemoryNetwork()
-	var peers []*raftstore.Peer
+	var peers []*peerpkg.Peer
 	var dbs []*NoKV.DB
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
 
@@ -187,7 +187,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
@@ -198,7 +198,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 		require.NoError(t, err)
 		net.Register(peer)
 		t.Cleanup(func() { _ = peer.Close() })
-		t.Cleanup(func(peer *raftstore.Peer) func() {
+		t.Cleanup(func(peer *peerpkg.Peer) func() {
 			return func() { _ = peer.Close() }
 		}(peer))
 		peers = append(peers, peer)
@@ -234,7 +234,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 
 func TestPeerPrewriteCommit(t *testing.T) {
 	net := newMemoryNetwork()
-	var peers []*raftstore.Peer
+	var peers []*peerpkg.Peer
 	var dbs []*NoKV.DB
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}}
 
@@ -250,7 +250,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
@@ -334,7 +334,7 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 		MaxInflightMsgs: 256,
 		PreVote:         true,
 	}
-	peer, err := raftstore.NewPeer(&raftstore.Config{
+	peer, err := peerpkg.NewPeer(&peerpkg.Config{
 		RaftConfig:       rc,
 		Transport:        net,
 		Apply:            applyToDB(db),
@@ -392,7 +392,7 @@ func TestPeerTransferLeader(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
@@ -437,7 +437,7 @@ func TestPeerTransferLeader(t *testing.T) {
 func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	baseDir := t.TempDir()
 	net := newMemoryNetwork()
-	var peers []*raftstore.Peer
+	var peers []*peerpkg.Peer
 	type node struct {
 		id    uint64
 		dbDir string
@@ -458,7 +458,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
@@ -468,7 +468,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net.Register(peer)
-		t.Cleanup(func(peer *raftstore.Peer) func() {
+		t.Cleanup(func(peer *peerpkg.Peer) func() {
 			return func() { _ = peer.Close() }
 		}(peer))
 		peers = append(peers, peer)
@@ -509,7 +509,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net2,
 			Apply:      applyToDB(db),
@@ -519,7 +519,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net2.Register(peer)
-		t.Cleanup(func(peer *raftstore.Peer) func() {
+		t.Cleanup(func(peer *peerpkg.Peer) func() {
 			return func() { _ = peer.Close() }
 		}(peer))
 		nodes[i].db = db
@@ -573,7 +573,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 	)
 
 	dbs := make(map[uint64]*NoKV.DB)
-	var peers []*raftstore.Peer
+	var peers []*peerpkg.Peer
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
 
 	for id := uint64(1); id <= 3; id++ {
@@ -588,7 +588,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		}
-		peer, err := raftstore.NewPeer(&raftstore.Config{
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
@@ -598,7 +598,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 		})
 		require.NoError(t, err)
 		net.Register(peer)
-		t.Cleanup(func(peer *raftstore.Peer) func() {
+		t.Cleanup(func(peer *peerpkg.Peer) func() {
 			return func() { _ = peer.Close() }
 		}(peer))
 		peers = append(peers, peer)
@@ -670,7 +670,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		MaxInflightMsgs: 256,
 		PreVote:         true,
 	}
-	peer, err := raftstore.NewPeer(&raftstore.Config{
+	peer, err := peerpkg.NewPeer(&peerpkg.Config{
 		RaftConfig: rc,
 		Transport:  net,
 		Apply:      applyToDB(db),
@@ -735,7 +735,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	netRestart := newMemoryNetwork()
 	rc2 := rc
-	peerRestart, err := raftstore.NewPeer(&raftstore.Config{
+	peerRestart, err := peerpkg.NewPeer(&peerpkg.Config{
 		RaftConfig: rc2,
 		Transport:  netRestart,
 		Apply:      applyToDB(dbRestart),
@@ -790,7 +790,7 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 		MaxInflightMsgs: 256,
 		PreVote:         true,
 	}
-	peer, err := raftstore.NewPeer(&raftstore.Config{
+	peer, err := peerpkg.NewPeer(&peerpkg.Config{
 		RaftConfig: rc,
 		Transport:  net,
 		Apply:      applyFn,
