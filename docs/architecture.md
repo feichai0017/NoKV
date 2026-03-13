@@ -55,7 +55,7 @@ iterator scan, distributed read/write via Raft apply), see
 
 ### 2.1 WAL & MemTable
 - `wal.Manager` appends `[len|type|payload|crc]` records (typed WAL), rotates segments, and replays logs on crash.
-- `MemTable` accumulates writes until full, then enters the flush queue; `flush.Manager` runs `Prepare → Build → Install → Release`, logs edits, and releases WAL segments.
+- `MemTable` accumulates writes until full, then enters the flush queue; the concrete flush runtime runs `Enqueue → Build → Install → Release`, logs edits, and releases WAL segments.
 - Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.
 
 ### 2.2 ValueLog

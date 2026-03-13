@@ -18,13 +18,12 @@ func (p testWALGCPolicy) CanRemoveSegment(segmentID uint32) bool {
 }
 
 func TestLevelManagerCanRemoveWalSegmentDelegatesPolicy(t *testing.T) {
-	lsm := &LSM{}
-	lsm.SetWALGCPolicy(testWALGCPolicy{
+	lsm := &LSM{walGCPolicy: testWALGCPolicy{
 		blocked: map[uint32]struct{}{
 			3: {},
 			8: {},
 		},
-	})
+	}}
 	lm := &levelManager{lsm: lsm}
 	require.True(t, lm.canRemoveWalSegment(1))
 	require.False(t, lm.canRemoveWalSegment(3))
