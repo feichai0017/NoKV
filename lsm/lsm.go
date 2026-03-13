@@ -846,9 +846,6 @@ func (lsm *LSM) ImportExternalSST(paths []string) error {
 		return nil
 	}
 
-	lsm.lock.Lock()
-	defer lsm.lock.Unlock()
-
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
 
