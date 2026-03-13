@@ -304,7 +304,7 @@ func writeBuildDataToSST(ss *file.SSTable, bd buildData) error {
 	return nil
 }
 
-func (tb *tableBuilder) flush(lm *levelsRuntime, tableName string) (t *table, err error) {
+func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err error) {
 	bd, err := tb.done()
 	if err != nil {
 		return nil, err

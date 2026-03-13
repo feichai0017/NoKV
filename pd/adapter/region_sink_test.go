@@ -114,6 +114,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	require.Equal(t, uint64(10), ops[0].Region)
 	require.Equal(t, uint64(101), ops[0].Source)
 	require.Equal(t, uint64(201), ops[0].Target)
+	require.False(t, sink.Status().Degraded)
 }
 
 func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
@@ -136,6 +137,10 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
+	status := sink.Status()
+	require.True(t, status.Degraded)
+	require.Contains(t, status.LastError, "RegionHeartbeat")
+	require.False(t, status.LastErrorAt.IsZero())
 	require.NoError(t, sink.Close())
 	require.True(t, pd.closed)
 }
@@ -178,6 +183,21 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 	require.Equal(t, uint64(100), pd.removeReqs[0].GetRegionId())
 	require.Len(t, got, 1)
 	require.Contains(t, got[0], "RemoveRegion")
+	require.True(t, sink.Status().Degraded)
+}
+
+func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
+	pd := &fakePDClient{storeErr: errors.New("heartbeat failed")}
+	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
+
+	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
+	require.True(t, sink.Status().Degraded)
+
+	pd.storeErr = nil
+	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
+	status := sink.Status()
+	require.False(t, status.Degraded)
+	require.Contains(t, status.LastError, "StoreHeartbeat")
 }
 
 func TestFromPBOperationValidation(t *testing.T) {

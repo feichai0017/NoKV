@@ -47,3 +47,26 @@ func TestStoreOperationCooldown(t *testing.T) {
 	st.operationMu.Unlock()
 	require.GreaterOrEqual(t, second.Sub(first), 60*time.Millisecond)
 }
+
+func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
+	st := &Store{
+		operationInput:     make(chan Operation, 1),
+		operationPending:   make(map[operationKey]struct{}),
+		operationLastApply: make(map[operationKey]time.Time),
+	}
+	st.operationInput <- Operation{Type: OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}
+
+	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
+
+	status := st.SchedulerStatus()
+	require.True(t, status.Degraded)
+	require.Equal(t, uint64(1), status.DroppedOperations)
+	require.Contains(t, status.LastError, "scheduler queue full")
+
+	<-st.operationInput
+	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
+
+	status = st.SchedulerStatus()
+	require.False(t, status.Degraded)
+	require.Equal(t, uint64(1), status.DroppedOperations)
+}

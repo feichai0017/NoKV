@@ -1136,7 +1136,7 @@ func TestLSMMetricsAPIs(t *testing.T) {
 		return nil
 	}
 
-	entry := buildInternalTestEntry()
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("diag-key"), 9, []byte("diag-value"), 0, 0)
 	defer entry.DecrRef()
 	requireNoError := func(err error) {
 		t.Helper()
@@ -1147,24 +1147,22 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	requireNoError(lsm.Set(entry))
 
 	_ = lsm.FlushPending()
-	_ = lsm.FlushMetrics()
-	_, _ = lsm.CompactionStats()
-	_, _, _ = lsm.CompactionDurations()
-	_ = lsm.LevelMetrics()
-	_ = lsm.CacheMetrics()
-	_ = lsm.MaxVersion()
-
-	if lsm.CompactionValueWeight() <= 0 {
+	diag := lsm.Diagnostics()
+	if diag.MaxVersion != lsm.MaxVersion() {
+		t.Fatalf("expected diagnostics max version %d to match lsm max version %d", diag.MaxVersion, lsm.MaxVersion())
+	}
+	if diag.Compaction.ValueWeight <= 0 {
 		t.Fatalf("expected compaction value weight to be positive")
 	}
-	if lsm.CompactionValueAlertThreshold() <= 0 {
+	if diag.Compaction.AlertThreshold <= 0 {
 		t.Fatalf("expected compaction value alert threshold to be positive")
 	}
 	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Bucket: 0, Fid: 1, Offset: 2}))
 	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{Bucket: 0, FileID: 1, Offset: 5, Valid: true}))
-	_ = lsm.ValueLogHead()
-	_ = lsm.ValueLogStatus()
-	_ = lsm.CurrentVersion()
+	diag = lsm.Diagnostics()
+	_ = diag.ValueLogHead
+	_ = diag.ValueLogStatus
+	_ = diag.CurrentVersion
 	requireNoError(lsm.LogValueLogDelete(0, 1))
 }
 
@@ -1187,7 +1185,7 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		t.Fatalf("expected empty key error")
 	}
 
-	if lsm.MemTableIsNil() {
+	if lsm.memTableIsNil() {
 		t.Fatalf("expected memtable to be initialized")
 	}
 	if lsm.MemSize() <= 0 {
@@ -1197,7 +1195,7 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		t.Fatalf("expected ART-backed memtable")
 	}
 
-	tables, release := lsm.GetMemTables()
+	tables, release := lsm.getMemTables()
 	if len(tables) == 0 {
 		t.Fatalf("expected memtables snapshot")
 	}
@@ -1205,8 +1203,8 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		release()
 	}
 
-	lsm.levels.levels[0].tables = []*table{{keyCount: 2}}
-	if count := lsm.EntryCount(); count <= 0 {
+	lsm.levels.levels[0].tables = []*table{{keyCount: 2, maxVersion: 1}}
+	if count := lsm.Diagnostics().Entries; count <= 0 {
 		t.Fatalf("expected entry count > 0, got %d", count)
 	}
 
@@ -1347,7 +1345,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	lsm.levels.opt.WriteThrottleMaxRate = 512 << 20
 	l0 := lsm.levels.levels[0]
 	l0.tables = []*table{{}, {}, {}}
-	lsm.levels.AdjustThrottle()
+	lsm.levels.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 1000 {
 		t.Fatalf("expected stop pressure=1000, got %d", got)
 	}
@@ -1355,7 +1353,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected stop rate=0, got %d", got)
 	}
 	l0.tables = []*table{{}, {}}
-	lsm.levels.AdjustThrottle()
+	lsm.levels.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got == 0 || got >= 1000 {
 		t.Fatalf("expected slowdown pressure in (0,1000), got %d", got)
 	}
@@ -1363,7 +1361,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected slowdown rate > 0")
 	}
 	l0.tables = nil
-	lsm.levels.AdjustThrottle()
+	lsm.levels.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 0 {
 		t.Fatalf("expected clear pressure=0, got %d", got)
 	}

@@ -20,9 +20,9 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
-// initLevelsRuntime initialize the levels runtime
-func (lsm *LSM) initLevelsRuntime(opt *Options) (*levelsRuntime, error) {
-	lm := &levelsRuntime{lsm: lsm} // attach lsm owner
+// initLevelManager initialize the levels runtime
+func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
+	lm := &levelManager{lsm: lsm} // attach lsm owner
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
 	// read the manifest file to build the levels runtime
@@ -37,19 +37,14 @@ func (lsm *LSM) initLevelsRuntime(opt *Options) (*levelsRuntime, error) {
 		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
-	lm.compaction = compact.NewManager(
-		lm,
-		lm.opt.NumCompactors,
-		compact.NewSchedulerPolicy(lm.opt.CompactionPolicy),
-		lsm.getLogger(),
-	)
+	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
 	if opt != nil && opt.HotKeyProvider != nil {
 		lm.hotProvider = opt.HotKeyProvider
 	}
 	return lm, nil
 }
 
-type levelsRuntime struct {
+type levelManager struct {
 	maxFID           atomic.Uint64
 	opt              *Options
 	cache            *cache
@@ -57,7 +52,7 @@ type levelsRuntime struct {
 	levels           []*levelHandler
 	lsm              *LSM
 	compactState     *compact.State
-	compaction       *compact.Manager
+	compaction       *compaction
 	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
 	logPtrSeg        uint32
@@ -71,7 +66,7 @@ type levelsRuntime struct {
 // LevelMetrics aliases the shared metrics package model to keep the lsm API stable.
 type LevelMetrics = metrics.LevelMetrics
 
-func (lm *levelsRuntime) close() error {
+func (lm *levelManager) close() error {
 	var closeErr error
 	if lm.cache != nil {
 		closeErr = errors.Join(closeErr, lm.cache.close())
@@ -88,14 +83,14 @@ func (lm *levelsRuntime) close() error {
 	return closeErr
 }
 
-func (lm *levelsRuntime) getLogger() *slog.Logger {
+func (lm *levelManager) getLogger() *slog.Logger {
 	if lm == nil || lm.lsm == nil {
 		return slog.Default()
 	}
 	return lm.lsm.getLogger()
 }
 
-func (lm *levelsRuntime) iterators(opt *utils.Options) []utils.Iterator {
+func (lm *levelManager) iterators(opt *utils.Options) []utils.Iterator {
 	itrs := make([]utils.Iterator, 0, len(lm.levels))
 	for _, level := range lm.levels {
 		itrs = append(itrs, level.iterators(opt)...)
@@ -104,7 +99,7 @@ func (lm *levelsRuntime) iterators(opt *utils.Options) []utils.Iterator {
 }
 
 // Get searches levels from L0 to Ln and returns the newest visible entry for key.
-func (lm *levelsRuntime) Get(key []byte) (*kv.Entry, error) {
+func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
 	var (
 		entry *kv.Entry
 		err   error
@@ -123,11 +118,11 @@ func (lm *levelsRuntime) Get(key []byte) (*kv.Entry, error) {
 	return entry, utils.ErrKeyNotFound
 }
 
-func (lm *levelsRuntime) loadManifest() (err error) {
+func (lm *levelManager) loadManifest() (err error) {
 	lm.manifestMgr, err = manifest.Open(lm.opt.WorkDir, lm.opt.FS)
 	return err
 }
-func (lm *levelsRuntime) build() error {
+func (lm *levelManager) build() error {
 	fs := vfs.Ensure(lm.opt.FS)
 	lm.levels = make([]*levelHandler, 0, lm.opt.MaxLevelNum)
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
@@ -192,7 +187,7 @@ func (lm *levelsRuntime) build() error {
 }
 
 // flush a sstable to L0 layer
-func (lm *levelsRuntime) flush(immutable *memTable) (err error) {
+func (lm *levelManager) flush(immutable *memTable) (err error) {
 	// allocate a fid
 	fid := uint64(immutable.segmentID)
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
@@ -285,7 +280,7 @@ func (lm *levelsRuntime) flush(immutable *memTable) (err error) {
 }
 
 // LogValueLogHead persists the latest value-log head pointer into manifest state.
-func (lm *levelsRuntime) LogValueLogHead(ptr *kv.ValuePtr) error {
+func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
 	if ptr == nil {
 		return nil
 	}
@@ -293,12 +288,12 @@ func (lm *levelsRuntime) LogValueLogHead(ptr *kv.ValuePtr) error {
 }
 
 // LogValueLogDelete records a value-log file deletion in the manifest.
-func (lm *levelsRuntime) LogValueLogDelete(bucket uint32, fid uint32) error {
+func (lm *levelManager) LogValueLogDelete(bucket uint32, fid uint32) error {
 	return lm.manifestMgr.LogValueLogDelete(bucket, fid)
 }
 
 // LogValueLogUpdate updates value-log metadata for an existing file.
-func (lm *levelsRuntime) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
+func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	if meta == nil {
 		return nil
 	}
@@ -306,29 +301,29 @@ func (lm *levelsRuntime) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 }
 
 // ValueLogHead returns manifest-tracked per-bucket active value-log heads.
-func (lm *levelsRuntime) ValueLogHead() map[uint32]manifest.ValueLogMeta {
+func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
 }
 
 // ValueLogStatus returns manifest metadata for all known value-log files.
-func (lm *levelsRuntime) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
+func (lm *levelManager) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogStatus()
 }
 
-func (lm *levelsRuntime) setLogPointer(seg uint32, offset uint64) {
+func (lm *levelManager) setLogPointer(seg uint32, offset uint64) {
 	lm.logPtrMu.Lock()
 	lm.logPtrSeg = seg
 	lm.logPtrOffset = offset
 	lm.logPtrMu.Unlock()
 }
 
-func (lm *levelsRuntime) logPointer() (uint32, uint64) {
+func (lm *levelManager) logPointer() (uint32, uint64) {
 	lm.logPtrMu.RLock()
 	defer lm.logPtrMu.RUnlock()
 	return lm.logPtrSeg, lm.logPtrOffset
 }
 
-func (lm *levelsRuntime) compactionStats() (int64, float64) {
+func (lm *levelManager) compactionStats() (int64, float64) {
 	if lm == nil {
 		return 0, 0
 	}
@@ -342,7 +337,7 @@ func (lm *levelsRuntime) compactionStats() (int64, float64) {
 	return int64(len(prios)), max
 }
 
-func (lm *levelsRuntime) levelMetricsSnapshot() []LevelMetrics {
+func (lm *levelManager) levelMetricsSnapshot() []LevelMetrics {
 	if lm == nil {
 		return nil
 	}
@@ -356,7 +351,7 @@ func (lm *levelsRuntime) levelMetricsSnapshot() []LevelMetrics {
 	return metrics
 }
 
-func (lm *levelsRuntime) compactionDurations() (float64, float64, uint64) {
+func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 	if lm == nil {
 		return 0, 0, 0
 	}
@@ -366,7 +361,7 @@ func (lm *levelsRuntime) compactionDurations() (float64, float64, uint64) {
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
-func (lm *levelsRuntime) recordCompactionMetrics(duration time.Duration) {
+func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
 	lm.compactionRuns.Add(1)
 	last := duration.Nanoseconds()
 	lm.compactionLastNs.Store(last)
@@ -381,14 +376,14 @@ func (lm *levelsRuntime) recordCompactionMetrics(duration time.Duration) {
 	}
 }
 
-func (lm *levelsRuntime) cacheMetrics() CacheMetrics {
+func (lm *levelManager) cacheMetrics() CacheMetrics {
 	if lm == nil || lm.cache == nil {
 		return CacheMetrics{}
 	}
 	return lm.cache.metricsSnapshot()
 }
 
-func (lm *levelsRuntime) maxVersion() uint64 {
+func (lm *levelManager) maxVersion() uint64 {
 	if lm == nil {
 		return 0
 	}
@@ -412,14 +407,14 @@ func (lm *levelsRuntime) maxVersion() uint64 {
 	return max
 }
 
-func (lm *levelsRuntime) canRemoveWalSegment(id uint32) bool {
+func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 	if lm == nil || lm.lsm == nil {
 		return true
 	}
 	return lm.lsm.canRemoveWalSegment(id)
 }
 
-func (lm *levelsRuntime) prefetch(key []byte) {
+func (lm *levelManager) prefetch(key []byte) {
 	if lm == nil || len(key) == 0 {
 		return
 	}
@@ -457,7 +452,7 @@ func checkTablesOverlap(tables []*table) error {
 
 // checkTablesOverlapWithL0Locked checks imported tables against existing L0
 // tables. Caller must hold l0.Lock().
-func (lm *levelsRuntime) checkTablesOverlapWithL0Locked(tables []*table) error {
+func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 	l0 := lm.levels[0]
 
 	for _, tbl := range tables {
@@ -475,7 +470,7 @@ func (lm *levelsRuntime) checkTablesOverlapWithL0Locked(tables []*table) error {
 	return nil
 }
 
-func (lm *levelsRuntime) importExternalSST(paths []string) error {
+func (lm *levelManager) importExternalSST(paths []string) error {
 	fs := vfs.Ensure(lm.opt.FS)
 	workDir := lm.opt.WorkDir
 	var (

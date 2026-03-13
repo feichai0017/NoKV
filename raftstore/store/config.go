@@ -39,12 +39,31 @@ const (
 	OperationLeaderTransfer
 )
 
+func (t OperationType) String() string {
+	switch t {
+	case OperationLeaderTransfer:
+		return "leader-transfer"
+	default:
+		return "none"
+	}
+}
+
+// SchedulerStatus captures local/control-plane scheduler health. It is a
+// diagnostic view only; stores must not treat it as routing authority.
+type SchedulerStatus struct {
+	Degraded          bool      `json:"degraded"`
+	LastError         string    `json:"last_error,omitempty"`
+	LastErrorAt       time.Time `json:"last_error_at"`
+	DroppedOperations uint64    `json:"dropped_operations"`
+}
+
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
 	PublishRegion(raftmeta.RegionMeta)
 	RemoveRegion(uint64)
 	StoreHeartbeat(StoreStats) []Operation
+	Status() SchedulerStatus
 	Close() error
 }
 

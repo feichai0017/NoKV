@@ -79,7 +79,7 @@ func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {
 	builder := newTableBuiler(opt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelsRuntime{opt: opt}
+	lm := &levelManager{opt: opt}
 	_, err := builder.flush(lm, tableName)
 	require.ErrorIs(t, err, injected)
 
@@ -106,7 +106,7 @@ func TestTableBuilderFlushStrictPathDoesNotReopenFinalSST(t *testing.T) {
 	builder := newTableBuiler(opt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelsRuntime{opt: opt}
+	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -132,7 +132,7 @@ func TestTableBuilderFlushFastPathSkipsPreStat(t *testing.T) {
 	builder := newTableBuiler(opt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelsRuntime{opt: opt}
+	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
@@ -160,7 +160,7 @@ func TestTableBuilderFlushStrictPathSkipsPreStat(t *testing.T) {
 	builder := newTableBuiler(opt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelsRuntime{opt: opt}
+	lm := &levelManager{opt: opt}
 	tbl, err := builder.flush(lm, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)

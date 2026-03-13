@@ -17,8 +17,8 @@ import (
 const StateFileName = "RAFTSTORE_STATE.json"
 
 type diskState struct {
-	Regions      map[uint64]RegionMeta `json:"regions"`
-	RaftPointers map[uint64]RaftLogPointer      `json:"raft_pointers"`
+	Regions      map[uint64]RegionMeta     `json:"regions"`
+	RaftPointers map[uint64]RaftLogPointer `json:"raft_pointers"`
 }
 
 // Store persists store-local region metadata used only for local recovery.

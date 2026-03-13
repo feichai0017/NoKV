@@ -220,7 +220,7 @@ func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
 	if err != nil {
 		return err
 	}
-	status := vlog.db.lsm.ValueLogStatus()
+	status := vlog.db.lsm.Diagnostics().ValueLogStatus
 	var (
 		meta    manifest.ValueLogMeta
 		hasMeta bool
@@ -504,7 +504,7 @@ func (db *DB) initVLog() {
 		managers[bucket] = manager
 	}
 
-	status := db.lsm.ValueLogStatus()
+	status := db.lsm.Diagnostics().ValueLogStatus
 
 	threshold := db.opt.DiscardStatsFlushThreshold
 	if threshold <= 0 {
@@ -546,7 +546,7 @@ func (db *DB) initVLog() {
 }
 
 func (db *DB) getHeads() map[uint32]kv.ValuePtr {
-	heads := db.lsm.ValueLogHead()
+	heads := db.lsm.Diagnostics().ValueLogHead
 	if len(heads) == 0 {
 		return make(map[uint32]kv.ValuePtr)
 	}

@@ -29,7 +29,7 @@ flowchart LR
 ```
 
 - **Enqueue**: `lsm.submitFlush` pushes the immutable memtable into the concrete flush queue and records wait-start time.
-- **Build**: worker pulls the next task, builds the SST (`levelsRuntime.flush` -> `openTable` -> `tableBuilder.flush`).
+- **Build**: worker pulls the next task, builds the SST (`levelManager.flush` -> `openTable` -> `tableBuilder.flush`).
 - **Install**: after SST + manifest edits succeed, the worker records install timing.
 - **Release**: worker removes the immutable from memory, closes the memtable, records release timing, and completes the task.
 
@@ -58,7 +58,7 @@ This is the durability ordering used by current code.
 
 1. `lsm.Set`/`lsm.SetBatch` detects `walSize + estimate > MemTableSize` and rotates memtable.
 2. Rotated memtable is submitted to the flush queue (`lsm.submitFlush`).
-3. Worker executes `levelsRuntime.flush(mt)`:
+3. Worker executes `levelManager.flush(mt)`:
    - iterates memtable entries,
    - builds SST via `tableBuilder`,
    - prepares manifest edits: `EditAddFile` + `EditLogPointer`.
@@ -69,7 +69,7 @@ This is the durability ordering used by current code.
 
 ## 5. Recovery Notes
 
-- Startup rebuild (`levelsRuntime.build`) validates manifest SST entries against disk.
+- Startup rebuild (`levelManager.build`) validates manifest SST entries against disk.
 - Missing or unreadable SSTs are treated as stale and removed from manifest via `EditDeleteFile`, allowing startup to continue.
 - Temp SST names are only used in strict mode and are created in `WorkDir` with suffix `.tmp.<pid>.<ns>` (not a dedicated `tmp/` directory).
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"log/slog"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ func (s *Store) enqueueOperation(op Operation) {
 		return
 	}
 	if s.operationInput == nil {
+		s.clearLocalSchedulerDegraded()
 		s.applyOperation(op)
 		return
 	}
@@ -59,10 +61,12 @@ func (s *Store) enqueueOperation(op Operation) {
 	s.operationMu.Unlock()
 	select {
 	case s.operationInput <- op:
+		s.clearLocalSchedulerDegraded()
 	default:
 		s.operationMu.Lock()
 		delete(s.operationPending, key)
 		s.operationMu.Unlock()
+		s.recordLocalSchedulerDrop(op)
 	}
 }
 
@@ -198,6 +202,30 @@ func (s *Store) markOperationApplied(op Operation, ts time.Time) {
 	}
 	delete(s.operationPending, key)
 	s.operationMu.Unlock()
+}
+
+func (s *Store) clearLocalSchedulerDegraded() {
+	if s == nil {
+		return
+	}
+	s.operationMu.Lock()
+	s.schedulerDegraded = false
+	s.operationMu.Unlock()
+}
+
+func (s *Store) recordLocalSchedulerDrop(op Operation) {
+	if s == nil {
+		return
+	}
+	msg := fmt.Sprintf("scheduler queue full: dropped %s for region %d", op.Type.String(), op.Region)
+	now := time.Now()
+	s.operationMu.Lock()
+	s.schedulerDropped++
+	s.schedulerDegraded = true
+	s.schedulerLastError = msg
+	s.schedulerLastAt = now
+	s.operationMu.Unlock()
+	slog.Default().Warn(msg)
 }
 
 func (s *Store) storeStatsSnapshot() StoreStats {

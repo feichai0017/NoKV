@@ -68,7 +68,7 @@ Compared with Badger: Badger keeps a single vlog for both data and durability. N
 | `DB.commitWorker` | Commit worker applies batched writes via `writeToLSM`, which calls `lsm.SetBatch` and appends one WAL entry-batch record per request batch. |
 | `DB.Set` / `DB.SetBatch` / `DB.SetWithTTL` / `DB.Del` / `DB.DeleteRange` / `DB.ApplyInternalEntries` | User/internal writes all flow through the same commit queue and eventually reach `lsm.SetBatch` + WAL append. |
 | `lsm/levels.go::flush` | Persists WAL checkpoint via `manifest.LogEdits(EditAddFile, EditLogPointer)` during flush install. |
-| `lsm/levels.go::flush` + `lsm/levelsRuntime.canRemoveWalSegment` | Removes obsolete WAL segments after storage checkpoint and `raftstore/meta` replay constraints are satisfied. |
+| `lsm/levels.go::flush` + `lsm/levelManager.canRemoveWalSegment` | Removes obsolete WAL segments after storage checkpoint and `raftstore/meta` replay constraints are satisfied. |
 | `db.runRecoveryChecks` | Ensures WAL directory invariants before manifest replay, similar to Badger's directory bootstrap. |
 
 ---
@@ -127,6 +127,6 @@ Relevant options (see `options.go` for defaults):
 
 - `raftstore/engine/wal_storage` keeps a per-group index of `[firstIndex,lastIndex]` spans for each WAL record so it can map raft log indices back to the segment that stored them.
 - When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in `raftstore/meta` is updated with the index/term, segment ID (`RaftLogPointer.SegmentIndex`), and byte offset (`RaftLogPointer.TruncatedOffset`) that delimit the remaining WAL data.
-- `lsm/levelsRuntime.canRemoveWalSegment` blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.
+- `lsm/levelManager.canRemoveWalSegment` blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.
 
 For broader context, read the [architecture overview](architecture.md) and [flush pipeline](flush.md) documents.

@@ -4,6 +4,7 @@ import (
 	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -26,6 +27,8 @@ type SchedulerClient struct {
 	pd      pdclient.Client
 	timeout time.Duration
 	onError func(op string, err error)
+	mu      sync.RWMutex
+	status  storepkg.SchedulerStatus
 }
 
 // NewSchedulerClient constructs a PD-backed scheduler client.
@@ -56,8 +59,10 @@ func (s *SchedulerClient) PublishRegion(meta raftmeta.RegionMeta) {
 	defer cancel()
 	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{Region: toPBRegionMeta(meta)})
 	if err != nil {
-		s.onError("RegionHeartbeat", err)
+		s.recordError("RegionHeartbeat", err)
+		return
 	}
+	s.markHealthy()
 }
 
 // RemoveRegion removes region metadata from PD.
@@ -69,8 +74,10 @@ func (s *SchedulerClient) RemoveRegion(regionID uint64) {
 	defer cancel()
 	_, err := s.pd.RemoveRegion(ctx, &pb.RemoveRegionRequest{RegionId: regionID})
 	if err != nil {
-		s.onError("RemoveRegion", err)
+		s.recordError("RemoveRegion", err)
+		return
 	}
+	s.markHealthy()
 }
 
 // StoreHeartbeat publishes store stats to PD and returns any operations PD
@@ -89,10 +96,21 @@ func (s *SchedulerClient) StoreHeartbeat(stats storepkg.StoreStats) []storepkg.O
 		Available: stats.Available,
 	})
 	if err != nil {
-		s.onError("StoreHeartbeat", err)
+		s.recordError("StoreHeartbeat", err)
 		return nil
 	}
+	s.markHealthy()
 	return fromPBOperations(resp.GetOperations())
+}
+
+// Status returns the current control-plane health view for this scheduler client.
+func (s *SchedulerClient) Status() storepkg.SchedulerStatus {
+	if s == nil {
+		return storepkg.SchedulerStatus{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
 }
 
 func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
@@ -137,6 +155,29 @@ func (s *SchedulerClient) Close() error {
 		return nil
 	}
 	return s.pd.Close()
+}
+
+func (s *SchedulerClient) recordError(op string, err error) {
+	if s == nil {
+		return
+	}
+	msg := op + ": " + err.Error()
+	now := time.Now()
+	s.mu.Lock()
+	s.status.Degraded = true
+	s.status.LastError = msg
+	s.status.LastErrorAt = now
+	s.mu.Unlock()
+	s.onError(op, err)
+}
+
+func (s *SchedulerClient) markHealthy() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.status.Degraded = false
+	s.mu.Unlock()
 }
 
 func toPBRegionMeta(meta raftmeta.RegionMeta) *pb.RegionMeta {
