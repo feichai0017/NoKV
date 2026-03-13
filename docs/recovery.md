@@ -57,10 +57,11 @@ go test ./... -run 'Recovery|ReplayHandlesTruncate'
 
 Set `RECOVERY_TRACE_METRICS=1` to emit `RECOVERY_METRIC ...` lines in tests.
 
-### 3.2 Script harness
+### 3.2 Targeted harness command
 
 ```bash
-RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 ```
 
 Outputs are saved under `artifacts/recovery/`.

@@ -14,7 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/utils"
-	"github.com/feichai0017/NoKV/vfs"
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -373,16 +372,12 @@ func (m *Manager) Sample(fid uint32, opt SampleOptions, cb SampleCallback) (*Sam
 // records left behind due to crashes. It validates checksums to ensure future
 // replays operate on consistent data.
 func VerifyDir(cfg Config) error {
-	if cfg.Dir == "" {
-		return fmt.Errorf("vlog verify: dir required")
+	var err error
+	cfg, err = cfg.normalized()
+	if err != nil {
+		return err
 	}
-	fs := vfs.Ensure(cfg.FS)
-	if cfg.FileMode == 0 {
-		cfg.FileMode = utils.DefaultFileMode
-	}
-	if cfg.MaxSize == 0 {
-		cfg.MaxSize = int64(1 << 29)
-	}
+	fs := cfg.FS
 	files, err := fs.Glob(filepath.Join(cfg.Dir, "*.vlog"))
 	if err != nil {
 		return err

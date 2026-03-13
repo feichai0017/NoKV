@@ -61,28 +61,7 @@ func (e *nokvEngine) Open(clean bool) error {
 	} else if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("nokv: mkdir: %w", err)
 	}
-	opt := &NoKV.Options{
-		WorkDir:            dir,
-		MemTableSize:       int64(e.opts.MemtableMB) << 20,
-		SSTableMaxSz:       int64(e.opts.SSTableMB) << 20,
-		ValueLogFileSize:   e.opts.VlogFileMB << 20,
-		ValueLogMaxEntries: 1 << 20,
-		ValueThreshold:     int64(e.opts.ValueThreshold),
-		MaxBatchCount:      10000,
-		MaxBatchSize:       128 << 20,
-		DetectConflicts:    false,
-		SyncWrites:         e.opts.SyncWrites,
-	}
-	if e.memtableEngine != "" {
-		opt.MemTableEngine = e.memtableEngine
-	}
-	if e.opts.NoKVCompactionPolicy != "" {
-		opt.CompactionPolicy = NoKV.CompactionPolicy(e.opts.NoKVCompactionPolicy)
-	}
-	if e.opts.BlockCacheMB >= 0 {
-		// BlockCacheSize counts blocks; translate MB to ~4KB blocks for parity with other engines.
-		opt.BlockCacheSize = e.opts.BlockCacheMB * (1 << 20) / (4 << 10)
-	}
+	opt := buildNoKVBenchmarkOptions(dir, e.opts, e.memtableEngine)
 	e.db = NoKV.Open(opt)
 	e.valueSize = e.opts.ValueSize
 	if e.valueSize <= 0 {

@@ -31,6 +31,10 @@ ycsb_records="${YCSB_RECORDS:-$default_records}"
 ycsb_ops="${YCSB_OPS:-$default_ops}"
 ycsb_conc="${YCSB_CONC:-$default_conc}"
 ycsb_block_cache_mb="${YCSB_BLOCK_CACHE_MB:-512}"
+ycsb_nokv_index_cache_mb="${YCSB_NOKV_INDEX_CACHE_MB:-}"
+ycsb_nokv_bloom_cache_mb="${YCSB_NOKV_BLOOM_CACHE_MB:-}"
+ycsb_badger_block_cache_mb="${YCSB_BADGER_BLOCK_CACHE_MB:-}"
+ycsb_badger_index_cache_mb="${YCSB_BADGER_INDEX_CACHE_MB:-}"
 ycsb_nokv_compaction_policy="${YCSB_NOKV_COMPACTION_POLICY:-leveled}"
 ycsb_value_size="${YCSB_VALUE_SIZE:-1000}"
 ycsb_scan_len="${YCSB_SCAN_LEN:-100}"
@@ -98,8 +102,6 @@ args=(
   -seed "${ycsb_seed}"
   -sync="${ycsb_sync}"
   -value_threshold 1024
-  -badger_block_cache_mb "${ycsb_block_cache_mb}"
-  -badger_index_cache_mb "${ycsb_block_cache_mb}"
   -badger_compression "${ycsb_badger_comp}"
   -ycsb_pebble_compression "${ycsb_pebble_comp}"
   -ycsb_workloads "${ycsb_workloads}"
@@ -114,6 +116,19 @@ args=(
   -ycsb_nokv_compaction_policy "${ycsb_nokv_compaction_policy}"
   -ycsb_warm_ops "${ycsb_warm_ops}"
 )
+
+if [[ -n "${ycsb_nokv_index_cache_mb}" ]]; then
+  args+=(-ycsb_nokv_index_cache_mb "${ycsb_nokv_index_cache_mb}")
+fi
+if [[ -n "${ycsb_nokv_bloom_cache_mb}" ]]; then
+  args+=(-ycsb_nokv_bloom_cache_mb "${ycsb_nokv_bloom_cache_mb}")
+fi
+if [[ -n "${ycsb_badger_block_cache_mb}" ]]; then
+  args+=(-badger_block_cache_mb "${ycsb_badger_block_cache_mb}")
+fi
+if [[ -n "${ycsb_badger_index_cache_mb}" ]]; then
+  args+=(-badger_index_cache_mb "${ycsb_badger_index_cache_mb}")
+fi
 
 
 

@@ -193,8 +193,8 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - Inspect scheduler/control-plane state via PD APIs/metrics.
 - Scripts:
   - `scripts/run_local_cluster.sh` – launch a multi-node NoKV cluster locally.
-  - `scripts/recovery_scenarios.sh` – crash-recovery test harness.
-  - `scripts/transport_chaos.sh` – inject network faults and observe transport metrics.
+  - `RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v` – crash-recovery validation.
+  - `CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport` – inject network faults and observe transport metrics.
 
 ---
 

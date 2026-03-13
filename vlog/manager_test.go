@@ -39,6 +39,28 @@ func TestManagerAppendRead(t *testing.T) {
 	}
 }
 
+func TestConfigNormalizedDefaults(t *testing.T) {
+	cfg, err := (Config{Dir: t.TempDir()}).normalized()
+	if err != nil {
+		t.Fatalf("normalized config: %v", err)
+	}
+	if cfg.FileMode == 0 {
+		t.Fatalf("expected default file mode to be populated")
+	}
+	if cfg.MaxSize != defaultMaxSize {
+		t.Fatalf("expected default max size %d, got %d", defaultMaxSize, cfg.MaxSize)
+	}
+	if cfg.FS == nil {
+		t.Fatalf("expected filesystem to be initialized")
+	}
+}
+
+func TestConfigNormalizedRequiresDir(t *testing.T) {
+	if _, err := (Config{}).normalized(); err == nil {
+		t.Fatalf("expected missing dir to return error")
+	}
+}
+
 func TestManagerReadValueAutoCopiesSmall(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := Open(Config{Dir: dir})

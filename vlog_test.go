@@ -11,6 +11,7 @@ import (
 	"time"
 
 	kvpkg "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
@@ -579,8 +580,8 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	require.NoError(t, db.Set(e.Key, e.Value))
 	e.DecrRef()
 
-	db.applyThrottle(true)
-	defer db.applyThrottle(false)
+	db.applyThrottle(lsm.WriteThrottleStop)
+	defer db.applyThrottle(lsm.WriteThrottleNone)
 
 	if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, utils.ErrNoRewrite) {
 		t.Fatalf("expected ErrNoRewrite when writes blocked, got %v", err)
