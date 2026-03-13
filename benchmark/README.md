@@ -68,19 +68,3 @@ Key components:
 - Results pipeline: summaries are printed to stdout, written as CSV under
   `benchmark_data/ycsb/results`, and a text report is saved under
   `benchmark_results/benchmark_results_*.txt`.
-
-## Latest Full Results (Default Script)
-
-Snapshot source: `benchmark_results/benchmark_results_20260312_020325.txt`  
-Generated at: `2026-03-12 02:03:25`  
-Profile: workloads `A-F`, engines `NoKV/Badger/Pebble`, `records=1,000,000`,
-`ops=1,000,000`, `value_size=1000`, `conc=16`.
-
-| Workload | NoKV (ops/s) | Badger (ops/s) | Pebble (ops/s) | NoKV vs Next Best |
-| --- | ---: | ---: | ---: | ---: |
-| YCSB-A | 542,280 | 283,656 | 185,218 | 1.91x |
-| YCSB-B | 1,381,799 | 538,008 | 222,688 | 2.57x |
-| YCSB-C | 879,190 | 607,790 | 266,813 | 1.45x |
-| YCSB-D | 1,378,122 | 630,307 | 633,871 | 2.17x |
-| YCSB-E | 323,793 | 21,931 | 133,463 | 2.43x |
-| YCSB-F | 532,153 | 144,477 | 191,223 | 2.78x |
