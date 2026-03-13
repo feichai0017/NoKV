@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +26,7 @@ func TestWatchdogAutoGC(t *testing.T) {
 	}
 	require.NoError(t, mgr.Sync())
 
-	ptrs := map[uint64]manifest.RaftLogPointer{
+	ptrs := map[uint64]raftmeta.RaftLogPointer{
 		42: {GroupID: 42, Segment: 4, SegmentIndex: 4},
 	}
 	wd := NewWatchdog(WatchdogConfig{
@@ -36,7 +36,7 @@ func TestWatchdogAutoGC(t *testing.T) {
 		MaxBatch:     2,
 		WarnRatio:    0,
 		WarnSegments: 0,
-		RaftPointers: func() map[uint64]manifest.RaftLogPointer { return ptrs },
+		RaftPointers: func() map[uint64]raftmeta.RaftLogPointer { return ptrs },
 	})
 
 	wd.RunOnce()

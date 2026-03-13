@@ -12,9 +12,9 @@ const (
 	// BeforeStorage injects an error before Ready data is written to persistent
 	// storage, matching earlier unit test behaviour.
 	BeforeStorage Mode = 1 << iota
-	// SkipManifest simulates a crash after WAL append but before manifest
+	// SkipLocalMeta simulates a crash after WAL append but before local raft WAL
 	// pointers advance, allowing recovery tests to replay from WAL.
-	SkipManifest
+	SkipLocalMeta
 )
 
 var currentMode atomic.Uint32
@@ -36,8 +36,8 @@ func ShouldFailBeforeStorage() bool {
 	return Current()&BeforeStorage != 0
 }
 
-// ShouldSkipManifestUpdate reports whether manifest pointer updates should be
-// skipped even though WAL data was appended.
-func ShouldSkipManifestUpdate() bool {
-	return Current()&SkipManifest != 0
+// ShouldSkipLocalMetaUpdate reports whether local raft WAL pointer updates
+// should be skipped even though WAL data was appended.
+func ShouldSkipLocalMetaUpdate() bool {
+	return Current()&SkipLocalMeta != 0
 }

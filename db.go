@@ -250,12 +250,7 @@ func Open(opt *Options) *DB {
 			MaxBatch:     db.opt.WALAutoGCMaxBatch,
 			WarnRatio:    db.opt.WALTypedRecordWarnRatio,
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
-			RaftPointers: func() map[uint64]manifest.RaftLogPointer {
-				if man := db.Manifest(); man != nil {
-					return man.RaftPointerSnapshot()
-				}
-				return nil
-			},
+			RaftPointers: db.opt.RaftPointerSnapshot,
 		})
 		if db.walWatchdog != nil {
 			db.walWatchdog.Start()
@@ -740,12 +735,12 @@ func (db *DB) WAL() *wal.Manager {
 	return db.wal
 }
 
-// Manifest exposes the manifest manager for coordination components.
-func (db *DB) Manifest() *manifest.Manager {
-	if db == nil || db.lsm == nil {
-		return nil
+// WorkDir returns the database working directory.
+func (db *DB) WorkDir() string {
+	if db == nil || db.opt == nil {
+		return ""
 	}
-	return db.lsm.ManifestManager()
+	return db.opt.WorkDir
 }
 
 // IsClosed reports whether Close has finished and the DB no longer accepts work.

@@ -1160,10 +1160,6 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	if lsm.CompactionValueAlertThreshold() <= 0 {
 		t.Fatalf("expected compaction value alert threshold to be positive")
 	}
-	if lsm.ManifestManager() == nil {
-		t.Fatalf("expected manifest manager to be available")
-	}
-
 	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Bucket: 0, Fid: 1, Offset: 2}))
 	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{Bucket: 0, FileID: 1, Offset: 5, Valid: true}))
 	_ = lsm.ValueLogHead()

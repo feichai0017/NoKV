@@ -59,7 +59,7 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 ### `nokv regions`
 
-- Dumps manifest-backed region catalog (state/range/epoch/peers)
+- Dumps the local peer catalog used for store recovery (state/range/epoch/peers)
 - Supports `--json`
 
 ### `nokv serve`

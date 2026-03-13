@@ -1,4 +1,5 @@
-// Package manifest persists SST, WAL checkpoint, vlog, and raft metadata.
+// Package manifest persists storage-engine metadata such as SST layout, WAL
+// replay position, and value-log state.
 package manifest
 
 import (
@@ -102,8 +103,6 @@ func (m *Manager) createNew() error {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
 		ValueLogHead: make(map[uint32]ValueLogMeta),
-		RaftPointers: make(map[uint64]RaftLogPointer),
-		Regions:      make(map[uint64]RegionMeta),
 	}
 	return nil
 }
@@ -125,8 +124,6 @@ func (m *Manager) replay() error {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
 		ValueLogHead: make(map[uint32]ValueLogMeta),
-		RaftPointers: make(map[uint64]RaftLogPointer),
-		Regions:      make(map[uint64]RegionMeta),
 	}
 	reader := bufio.NewReader(m.manifest)
 	for {
@@ -194,23 +191,6 @@ func (m *Manager) apply(edit Edit) {
 				} else {
 					delete(m.version.ValueLogHead, meta.Bucket)
 				}
-			}
-		}
-	case EditRaftPointer:
-		if edit.Raft != nil {
-			ptr := *edit.Raft
-			m.version.RaftPointers[ptr.GroupID] = ptr
-		}
-	case EditRegion:
-		if edit.Region != nil {
-			if edit.Region.Delete {
-				delete(m.version.Regions, edit.Region.Meta.ID)
-			} else {
-				meta := edit.Region.Meta
-				meta.StartKey = append([]byte(nil), meta.StartKey...)
-				meta.EndKey = append([]byte(nil), meta.EndKey...)
-				meta.Peers = append([]PeerMeta(nil), meta.Peers...)
-				m.version.Regions[meta.ID] = meta
 			}
 		}
 	}
@@ -429,35 +409,6 @@ func (m *Manager) writeSnapshot(w io.Writer) error {
 		}
 	}
 
-	if len(version.RaftPointers) > 0 {
-		groupIDs := make([]uint64, 0, len(version.RaftPointers))
-		for id := range version.RaftPointers {
-			groupIDs = append(groupIDs, id)
-		}
-		slices.Sort(groupIDs)
-		for _, id := range groupIDs {
-			ptr := version.RaftPointers[id]
-			ptrCopy := ptr
-			if err := writeEdit(w, Edit{Type: EditRaftPointer, Raft: &ptrCopy}); err != nil {
-				return err
-			}
-		}
-	}
-
-	if len(version.Regions) > 0 {
-		regionIDs := make([]uint64, 0, len(version.Regions))
-		for id := range version.Regions {
-			regionIDs = append(regionIDs, id)
-		}
-		slices.Sort(regionIDs)
-		for _, id := range regionIDs {
-			meta := CloneRegionMeta(version.Regions[id])
-			edit := RegionEdit{Meta: meta}
-			if err := writeEdit(w, Edit{Type: EditRegion, Region: &edit}); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -517,22 +468,12 @@ func (m *Manager) Current() Version {
 		Levels:       make(map[int][]FileMeta),
 		ValueLogs:    make(map[ValueLogID]ValueLogMeta),
 		ValueLogHead: make(map[uint32]ValueLogMeta, len(m.version.ValueLogHead)),
-		RaftPointers: make(map[uint64]RaftLogPointer, len(m.version.RaftPointers)),
-		Regions:      make(map[uint64]RegionMeta, len(m.version.Regions)),
 	}
 	for level, files := range m.version.Levels {
 		cp.Levels[level] = append([]FileMeta(nil), files[:]...)
 	}
 	maps.Copy(cp.ValueLogs, m.version.ValueLogs)
 	maps.Copy(cp.ValueLogHead, m.version.ValueLogHead)
-	maps.Copy(cp.RaftPointers, m.version.RaftPointers)
-	for id, meta := range m.version.Regions {
-		metaCopy := meta
-		metaCopy.StartKey = append([]byte(nil), meta.StartKey...)
-		metaCopy.EndKey = append([]byte(nil), meta.EndKey...)
-		metaCopy.Peers = append([]PeerMeta(nil), meta.Peers...)
-		cp.Regions[id] = metaCopy
-	}
 	return cp
 }
 
@@ -602,103 +543,6 @@ func (m *Manager) ValueLogStatus() map[ValueLogID]ValueLogMeta {
 	defer m.mu.Unlock()
 	out := make(map[ValueLogID]ValueLogMeta, len(m.version.ValueLogs))
 	maps.Copy(out, m.version.ValueLogs)
-	return out
-}
-
-// LogRaftPointer persists the WAL checkpoint for a raft group.
-func (m *Manager) LogRaftPointer(ptr RaftLogPointer) error {
-	cp := ptr
-	return m.LogEdit(Edit{Type: EditRaftPointer, Raft: &cp})
-}
-
-// LogRegionUpdate records region metadata.
-func (m *Manager) LogRegionUpdate(meta RegionMeta) error {
-	edit := RegionEdit{Meta: meta}
-	return m.LogEdit(Edit{Type: EditRegion, Region: &edit})
-}
-
-// LogRegionDelete marks the region as removed.
-func (m *Manager) LogRegionDelete(regionID uint64) error {
-	edit := RegionEdit{Meta: RegionMeta{ID: regionID}, Delete: true}
-	return m.LogEdit(Edit{Type: EditRegion, Region: &edit})
-}
-
-// RegionSnapshot returns a copy of region metadata map.
-func (m *Manager) RegionSnapshot() map[uint64]RegionMeta {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make(map[uint64]RegionMeta, len(m.version.Regions))
-	for id, meta := range m.version.Regions {
-		metaCopy := meta
-		metaCopy.StartKey = append([]byte(nil), meta.StartKey...)
-		metaCopy.EndKey = append([]byte(nil), meta.EndKey...)
-		metaCopy.Peers = append([]PeerMeta(nil), meta.Peers...)
-		out[id] = metaCopy
-	}
-	return out
-}
-
-// LogRaftTruncate records the log truncation point (index/term) for a raft
-// group without altering other pointer metadata. When segment is non-zero it
-// updates the segment containing the truncated index; offset, when provided,
-// marks the byte position within that segment that must be retained. If the
-// persisted state already matches the provided values the call is a no-op.
-func (m *Manager) LogRaftTruncate(groupID, index, term uint64, segment uint32, offset uint64) error {
-	if groupID == 0 {
-		return fmt.Errorf("manifest: raft truncate requires group id")
-	}
-	var ptr RaftLogPointer
-	m.mu.Lock()
-	existing, ok := m.version.RaftPointers[groupID]
-	if ok {
-		ptr = existing
-	}
-	m.mu.Unlock()
-
-	if !ok {
-		if index == 0 && term == 0 {
-			return nil
-		}
-		ptr.GroupID = groupID
-	}
-	if ptr.TruncatedIndex == index && ptr.TruncatedTerm == term {
-		if segment == 0 || ptr.SegmentIndex == uint64(segment) {
-			if offset == 0 || ptr.TruncatedOffset == offset {
-				return nil
-			}
-		}
-		if offset == 0 {
-			return nil
-		}
-	}
-	ptr.GroupID = groupID
-	ptr.TruncatedIndex = index
-	ptr.TruncatedTerm = term
-	if segment == 0 && ptr.SegmentIndex != 0 {
-		segment = uint32(ptr.SegmentIndex)
-	}
-	ptr.SegmentIndex = uint64(segment)
-	if offset == 0 && ptr.TruncatedOffset != 0 {
-		offset = ptr.TruncatedOffset
-	}
-	ptr.TruncatedOffset = offset
-	return m.LogRaftPointer(ptr)
-}
-
-// RaftPointer returns the last persisted raft WAL pointer for the given group.
-func (m *Manager) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ptr, ok := m.version.RaftPointers[groupID]
-	return ptr, ok
-}
-
-// RaftPointerSnapshot returns a copy of all raft WAL checkpoints.
-func (m *Manager) RaftPointerSnapshot() map[uint64]RaftLogPointer {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make(map[uint64]RaftLogPointer, len(m.version.RaftPointers))
-	maps.Copy(out, m.version.RaftPointers)
 	return out
 }
 

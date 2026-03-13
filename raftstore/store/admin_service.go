@@ -3,8 +3,8 @@ package store
 import (
 	"bytes"
 	"fmt"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -14,14 +14,14 @@ import (
 // splitRegionLocal updates the parent region metadata and bootstraps a new
 // peer for the child region. It is intentionally kept local to the store
 // package so callers cannot bypass raft and mutate region layout directly.
-func (s *Store) splitRegionLocal(parentID uint64, childMeta manifest.RegionMeta) (*peer.Peer, error) {
+func (s *Store) splitRegionLocal(parentID uint64, childMeta raftmeta.RegionMeta) (*peer.Peer, error) {
 	if s == nil {
 		return nil, fmt.Errorf("raftstore: store is nil")
 	}
 	if parentID == 0 {
 		return nil, fmt.Errorf("raftstore: parent region id is zero")
 	}
-	childMeta = manifest.CloneRegionMeta(childMeta)
+	childMeta = raftmeta.CloneRegionMeta(childMeta)
 	if childMeta.ID == 0 {
 		return nil, fmt.Errorf("raftstore: child region id is zero")
 	}
@@ -32,7 +32,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta manifest.RegionMeta)
 	if !ok {
 		return nil, fmt.Errorf("raftstore: parent region %d not found", parentID)
 	}
-	originalParent := manifest.CloneRegionMeta(parentMeta)
+	originalParent := raftmeta.CloneRegionMeta(parentMeta)
 	if len(parentMeta.EndKey) > 0 && bytes.Compare(childMeta.StartKey, parentMeta.EndKey) >= 0 {
 		return nil, fmt.Errorf("raftstore: split key >= parent end key")
 	}
@@ -46,7 +46,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta manifest.RegionMeta)
 		return nil, err
 	}
 	if childMeta.State == 0 {
-		childMeta.State = manifest.RegionStateRunning
+		childMeta.State = raftmeta.RegionStateRunning
 	}
 	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
 	if err != nil {
@@ -63,7 +63,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta manifest.RegionMeta)
 
 // ProposeSplit issues a split command through the raft log of the parent
 // region. The child metadata must describe the new region configuration.
-func (s *Store) ProposeSplit(parentID uint64, childMeta manifest.RegionMeta, splitKey []byte) error {
+func (s *Store) ProposeSplit(parentID uint64, childMeta raftmeta.RegionMeta, splitKey []byte) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
@@ -121,7 +121,7 @@ func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
 	return peer.ProposeAdmin(data)
 }
 
-func (s *Store) buildChildPeerConfig(child manifest.RegionMeta) (*peer.Config, []myraft.Peer, error) {
+func (s *Store) buildChildPeerConfig(child raftmeta.RegionMeta) (*peer.Config, []myraft.Peer, error) {
 	if s.peerBuilder == nil {
 		return nil, nil, fmt.Errorf("raftstore: peer builder not configured")
 	}
@@ -161,7 +161,7 @@ func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
 		return fmt.Errorf("raftstore: split command missing payload")
 	}
 	childMeta := pbRegionMetaToManifest(split.GetChild())
-	childMeta.State = manifest.RegionStateRunning
+	childMeta.State = raftmeta.RegionStateRunning
 	if len(childMeta.StartKey) == 0 {
 		childMeta.StartKey = append([]byte(nil), split.GetSplitKey()...)
 	}
@@ -198,7 +198,7 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 	return nil
 }
 
-func regionMetaToPB(meta manifest.RegionMeta) *pb.RegionMeta {
+func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {
 	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
 		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
@@ -213,21 +213,21 @@ func regionMetaToPB(meta manifest.RegionMeta) *pb.RegionMeta {
 	}
 }
 
-func pbRegionMetaToManifest(pbMeta *pb.RegionMeta) manifest.RegionMeta {
+func pbRegionMetaToManifest(pbMeta *pb.RegionMeta) raftmeta.RegionMeta {
 	if pbMeta == nil {
-		return manifest.RegionMeta{}
+		return raftmeta.RegionMeta{}
 	}
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       pbMeta.GetId(),
 		StartKey: append([]byte(nil), pbMeta.GetStartKey()...),
 		EndKey:   append([]byte(nil), pbMeta.GetEndKey()...),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     pbMeta.GetEpochVersion(),
 			ConfVersion: pbMeta.GetEpochConfVersion(),
 		},
 	}
 	for _, peerPB := range pbMeta.GetPeers() {
-		meta.Peers = append(meta.Peers, manifest.PeerMeta{
+		meta.Peers = append(meta.Peers, raftmeta.PeerMeta{
 			StoreID: peerPB.GetStoreId(),
 			PeerID:  peerPB.GetPeerId(),
 		})

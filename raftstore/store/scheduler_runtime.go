@@ -227,15 +227,11 @@ func (s *Store) countLeaders() uint64 {
 }
 
 func (s *Store) diskStats() (uint64, uint64, bool) {
-	if s == nil || s.manifest == nil {
-		return 0, 0, false
-	}
-	dir := s.manifest.Dir()
-	if dir == "" {
+	if s == nil || s.workDir == "" {
 		return 0, 0, false
 	}
 	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
+	if err := syscall.Statfs(s.workDir, &st); err != nil {
 		return 0, 0, false
 	}
 	capacity := uint64(st.Blocks) * uint64(st.Bsize)

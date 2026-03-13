@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"io"
 	"net"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"syscall"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
@@ -31,7 +31,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	addr := fs.String("addr", "127.0.0.1:2379", "listen address for PD-lite gRPC service")
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value")
-	workdir := fs.String("workdir", "", "optional manifest work directory for persisting/loading PD region catalog")
+	workdir := fs.String("workdir", "", "optional PD local state directory for persisting allocator and region catalog")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve pd workdir")
 	scope := fs.String("scope", "host", "scope for config-resolved pd workdir: host|docker")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
@@ -118,7 +118,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 
 	if store != nil {
-		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from manifest: %s\n", loadedRegions, workdirPath)
+		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from local storage: %s\n", loadedRegions, workdirPath)
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 	}
 	_, _ = fmt.Fprintf(w, "PD-lite service listening on %s\n", lis.Addr().String())
@@ -157,7 +157,7 @@ func flagPassed(fs *flag.FlagSet, name string) bool {
 	return passed
 }
 
-func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]manifest.RegionMeta) (int, error) {
+func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]raftmeta.RegionMeta) (int, error) {
 	if cluster == nil || len(snapshot) == 0 {
 		return 0, nil
 	}

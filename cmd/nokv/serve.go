@@ -13,11 +13,11 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -66,8 +66,17 @@ func runServeCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--pd-addr is required (PD is the only scheduler/control-plane source)")
 	}
 
+	localMeta, err := raftmeta.OpenLocalStore(*workDir, nil)
+	if err != nil {
+		return fmt.Errorf("open raftstore local metadata: %w", err)
+	}
+	defer func() {
+		_ = localMeta.Close()
+	}()
+
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db := NoKV.Open(opt)
 	defer func() {
 		_ = db.Close()
@@ -89,6 +98,8 @@ func runServeCmd(w io.Writer, args []string) error {
 		DB: db,
 		Store: storepkg.Config{
 			StoreID:   *storeID,
+			LocalMeta: localMeta,
+			WorkDir:   *workDir,
 			Scheduler: pdScheduler,
 		},
 		EnableRaftDebugLog: *raftDebugLog,
@@ -131,14 +142,14 @@ func runServeCmd(w io.Writer, args []string) error {
 		transport.SetPeer(id, parts[1])
 	}
 
-	startedRegions, totalRegions, err := startStorePeers(server, db, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
+	startedRegions, totalRegions, err := startStorePeers(server, db, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
 	if err != nil {
 		return err
 	}
 	if totalRegions == 0 {
-		_, _ = fmt.Fprintln(w, "Manifest contains no regions; waiting for bootstrap")
+		_, _ = fmt.Fprintln(w, "Local peer catalog contains no regions; waiting for bootstrap")
 	} else {
-		_, _ = fmt.Fprintf(w, "Manifest regions: %d, local peers started: %d\n", totalRegions, len(startedRegions))
+		_, _ = fmt.Fprintf(w, "Local peer catalog regions: %d, local peers started: %d\n", totalRegions, len(startedRegions))
 		if missing := totalRegions - len(startedRegions); missing > 0 {
 			_, _ = fmt.Fprintf(w, "Store %d not present in %d region(s)\n", *storeID, missing)
 		}
@@ -172,15 +183,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	return nil
 }
 
-func startStorePeers(server *serverpkg.Server, db *NoKV.DB, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]manifest.RegionMeta, int, error) {
-	if server == nil || db == nil {
-		return nil, 0, fmt.Errorf("raftstore: server or db is nil")
+func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]raftmeta.RegionMeta, int, error) {
+	if server == nil || db == nil || localMeta == nil {
+		return nil, 0, fmt.Errorf("raftstore: server, db, or local metadata is nil")
 	}
-	mgr := db.Manifest()
-	if mgr == nil {
-		return nil, 0, fmt.Errorf("raftstore: manifest manager unavailable")
-	}
-	snapshot := mgr.RegionSnapshot()
+	snapshot := server.Store().RegionSnapshot().Regions
 	total := len(snapshot)
 	if total == 0 {
 		return nil, 0, nil
@@ -188,7 +195,7 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, storeID uint64, elec
 
 	store := server.Store()
 	transport := server.Transport()
-	var started []manifest.RegionMeta
+	var started []raftmeta.RegionMeta
 	for _, meta := range snapshot {
 		var peerID uint64
 		for _, p := range meta.Peers {
@@ -212,9 +219,9 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, storeID uint64, elec
 			Transport: transport,
 			Apply:     kv.NewEntryApplier(db),
 			WAL:       db.WAL(),
-			Manifest:  mgr,
+			LocalMeta: localMeta,
 			GroupID:   meta.ID,
-			Region:    manifest.CloneRegionMetaPtr(&meta),
+			Region:    raftmeta.CloneRegionMetaPtr(&meta),
 		}
 		var bootstrapPeers []myraft.Peer
 		for _, p := range meta.Peers {

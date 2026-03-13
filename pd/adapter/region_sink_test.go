@@ -3,11 +3,11 @@ package adapter
 import (
 	"context"
 	"errors"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
@@ -85,15 +85,15 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		PD: pd,
 	})
 
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []manifest.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Peers: []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
 	sink.PublishRegion(meta)
 	ops := sink.StoreHeartbeat(storepkg.StoreStats{
@@ -132,7 +132,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegion(manifest.RegionMeta{ID: 9})
+	sink.PublishRegion(raftmeta.RegionMeta{ID: 9})
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -144,7 +144,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 0})
-	sink.PublishRegion(manifest.RegionMeta{ID: 0})
+	sink.PublishRegion(raftmeta.RegionMeta{ID: 0})
 	sink.RemoveRegion(0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
@@ -162,11 +162,11 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 		},
 	})
 
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       100,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},

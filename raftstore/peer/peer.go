@@ -8,12 +8,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -46,7 +46,7 @@ type Peer struct {
 	applyLimit       uint64
 	stopCtx          context.Context
 	stopCancel       context.CancelFunc
-	region           *manifest.RegionMeta
+	region           *raftmeta.RegionMeta
 	readSeq          atomic.Uint64
 	readMu           sync.Mutex
 	pendingReads     map[string]chan uint64
@@ -107,13 +107,13 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		apply:            cfg.Apply,
 		adminApply:       cfg.AdminApply,
 		confChangeHook:   cfg.ConfChange,
-		raftLog:          newRaftLogTracker(cfg.Manifest, cfg.WAL, nonZeroGroupID(cfg.GroupID)),
+		raftLog:          newRaftLogTracker(cfg.WAL, nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
 		logRetainEntries: cfg.LogRetainEntries,
 		applyCloser:      utils.NewCloserInitial(1),
 		stopCtx:          stopCtx,
 		stopCancel:       stopCancel,
-		region:           manifest.CloneRegionMetaPtr(cfg.Region),
+		region:           raftmeta.CloneRegionMetaPtr(cfg.Region),
 		pendingReads:     make(map[string]chan uint64),
 	}
 	if peer.logRetainEntries == 0 {
@@ -137,21 +137,21 @@ func (p *Peer) ID() uint64 {
 // RegionMeta returns a clone of the region metadata associated with this
 // peer. It mirrors TinyKV's approach of surfacing region layout through the
 // store for schedulers and debugging endpoints.
-func (p *Peer) RegionMeta() *manifest.RegionMeta {
+func (p *Peer) RegionMeta() *raftmeta.RegionMeta {
 	if p == nil || p.region == nil {
 		return nil
 	}
-	return manifest.CloneRegionMetaPtr(p.region)
+	return raftmeta.CloneRegionMetaPtr(p.region)
 }
 
 // SetRegionMeta replaces the in-memory region metadata with the provided
 // snapshot. It mirrors TinyKV's behaviour where raftstore updates peer state
 // based on scheduler decisions (splits, epoch bumps, membership changes).
-func (p *Peer) SetRegionMeta(meta manifest.RegionMeta) {
+func (p *Peer) SetRegionMeta(meta raftmeta.RegionMeta) {
 	if p == nil {
 		return
 	}
-	cp := manifest.CloneRegionMetaPtr(&meta)
+	cp := raftmeta.CloneRegionMetaPtr(&meta)
 	p.mu.Lock()
 	p.region = cp
 	p.mu.Unlock()
@@ -347,7 +347,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			return err
 		}
 		if info := p.raftLog; info != nil {
-			info.capturePointer(manifest.RaftLogPointer{
+			info.capturePointer(raftmeta.RaftLogPointer{
 				GroupID:      info.groupID,
 				AppliedIndex: rd.Commit,
 				AppliedTerm:  rd.Term,
@@ -363,7 +363,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if info := p.raftLog; info != nil {
 			meta := rd.Snapshot.Metadata
-			info.capturePointer(manifest.RaftLogPointer{
+			info.capturePointer(raftmeta.RaftLogPointer{
 				GroupID:       info.groupID,
 				SnapshotIndex: meta.Index,
 				SnapshotTerm:  meta.Term,
@@ -382,7 +382,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if info := p.raftLog; info != nil {
 			last := rd.Entries[len(rd.Entries)-1]
-			info.capturePointer(manifest.RaftLogPointer{
+			info.capturePointer(raftmeta.RaftLogPointer{
 				GroupID:      info.groupID,
 				AppliedIndex: last.Index,
 				AppliedTerm:  last.Term,

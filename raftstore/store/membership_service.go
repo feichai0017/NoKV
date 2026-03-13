@@ -3,8 +3,8 @@ package store
 import (
 	"encoding/binary"
 	"fmt"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -20,7 +20,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if region == nil || region.ID == 0 {
 		return nil
 	}
-	meta := manifest.CloneRegionMeta(*region)
+	meta := raftmeta.CloneRegionMeta(*region)
 	changed, err := applyConfChangeToMeta(&meta, ev.ConfChange)
 	if err != nil {
 		return err
@@ -35,9 +35,9 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 }
 
 // ProposeAddPeer issues a configuration change to add the provided peer to the
-// region's raft group. The manifest and in-memory region metadata are updated
-// once the configuration change is committed and applied.
-func (s *Store) ProposeAddPeer(regionID uint64, meta manifest.PeerMeta) error {
+// region's raft group. Local region metadata is updated once the configuration
+// change is committed and applied.
+func (s *Store) ProposeAddPeer(regionID uint64, meta raftmeta.PeerMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
@@ -58,7 +58,7 @@ func (s *Store) ProposeAddPeer(regionID uint64, meta manifest.PeerMeta) error {
 				NodeID: meta.PeerID,
 			},
 		},
-		Context: encodeConfChangeContext([]manifest.PeerMeta{meta}),
+		Context: encodeConfChangeContext([]raftmeta.PeerMeta{meta}),
 	}
 	return peerRef.ProposeConfChange(cc)
 }
@@ -76,7 +76,7 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}
-	ctxMeta := manifest.PeerMeta{StoreID: peerID, PeerID: peerID}
+	ctxMeta := raftmeta.PeerMeta{StoreID: peerID, PeerID: peerID}
 	if meta, ok := s.RegionMetaByID(regionID); ok {
 		if idx := peerIndexByID(meta.Peers, peerID); idx >= 0 {
 			ctxMeta = meta.Peers[idx]
@@ -89,7 +89,7 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 				NodeID: peerID,
 			},
 		},
-		Context: encodeConfChangeContext([]manifest.PeerMeta{ctxMeta}),
+		Context: encodeConfChangeContext([]raftmeta.PeerMeta{ctxMeta}),
 	}
 	return peerRef.ProposeConfChange(cc)
 }
@@ -110,7 +110,7 @@ func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
 	return peerRef.TransferLeader(targetPeerID)
 }
 
-func applyConfChangeToMeta(meta *manifest.RegionMeta, cc raftpb.ConfChangeV2) (bool, error) {
+func applyConfChangeToMeta(meta *raftmeta.RegionMeta, cc raftpb.ConfChangeV2) (bool, error) {
 	if meta == nil {
 		return false, fmt.Errorf("raftstore: region meta is nil")
 	}
@@ -121,7 +121,7 @@ func applyConfChangeToMeta(meta *manifest.RegionMeta, cc raftpb.ConfChangeV2) (b
 	}
 	ctxIndex := 0
 	for _, change := range cc.Changes {
-		peerMeta := manifest.PeerMeta{StoreID: change.NodeID, PeerID: change.NodeID}
+		peerMeta := raftmeta.PeerMeta{StoreID: change.NodeID, PeerID: change.NodeID}
 		if ctxIndex < len(ctxPeers) {
 			peerMeta = ctxPeers[ctxIndex]
 		}
@@ -149,7 +149,7 @@ func applyConfChangeToMeta(meta *manifest.RegionMeta, cc raftpb.ConfChangeV2) (b
 	return changed, nil
 }
 
-func encodeConfChangeContext(peers []manifest.PeerMeta) []byte {
+func encodeConfChangeContext(peers []raftmeta.PeerMeta) []byte {
 	if len(peers) == 0 {
 		return nil
 	}
@@ -161,11 +161,11 @@ func encodeConfChangeContext(peers []manifest.PeerMeta) []byte {
 	return buf
 }
 
-func decodeConfChangeContext(ctx []byte) ([]manifest.PeerMeta, error) {
+func decodeConfChangeContext(ctx []byte) ([]raftmeta.PeerMeta, error) {
 	if len(ctx) == 0 {
 		return nil, nil
 	}
-	peers := make([]manifest.PeerMeta, 0, 2)
+	peers := make([]raftmeta.PeerMeta, 0, 2)
 	for len(ctx) > 0 {
 		storeID, n := binary.Uvarint(ctx)
 		if n <= 0 {
@@ -177,12 +177,12 @@ func decodeConfChangeContext(ctx []byte) ([]manifest.PeerMeta, error) {
 			return nil, fmt.Errorf("raftstore: invalid conf change context")
 		}
 		ctx = ctx[m:]
-		peers = append(peers, manifest.PeerMeta{StoreID: storeID, PeerID: peerID})
+		peers = append(peers, raftmeta.PeerMeta{StoreID: storeID, PeerID: peerID})
 	}
 	return peers, nil
 }
 
-func peerIndexByID(peers []manifest.PeerMeta, peerID uint64) int {
+func peerIndexByID(peers []raftmeta.PeerMeta, peerID uint64) int {
 	for i, meta := range peers {
 		if meta.PeerID == peerID {
 			return i

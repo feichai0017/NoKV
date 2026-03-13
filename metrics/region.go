@@ -1,17 +1,16 @@
 package metrics
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"sync"
-
-	"github.com/feichai0017/NoKV/manifest"
 )
 
 // RegionMetrics records region counts grouped by lifecycle state. It is safe for concurrent use.
 type RegionMetrics struct {
 	mu        sync.Mutex
 	total     uint64
-	stateByID map[uint64]manifest.RegionState
-	counts    map[manifest.RegionState]uint64
+	stateByID map[uint64]raftmeta.RegionState
+	counts    map[raftmeta.RegionState]uint64
 }
 
 // RegionMetricsSnapshot captures point-in-time counts per region state.
@@ -27,8 +26,8 @@ type RegionMetricsSnapshot struct {
 // NewRegionMetrics creates an empty recorder.
 func NewRegionMetrics() *RegionMetrics {
 	return &RegionMetrics{
-		stateByID: make(map[uint64]manifest.RegionState),
-		counts:    make(map[manifest.RegionState]uint64),
+		stateByID: make(map[uint64]raftmeta.RegionState),
+		counts:    make(map[raftmeta.RegionState]uint64),
 	}
 }
 
@@ -43,13 +42,13 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 	snap := RegionMetricsSnapshot{Total: rm.total}
 	for state, count := range rm.counts {
 		switch state {
-		case manifest.RegionStateNew:
+		case raftmeta.RegionStateNew:
 			snap.New = count
-		case manifest.RegionStateRunning:
+		case raftmeta.RegionStateRunning:
 			snap.Running = count
-		case manifest.RegionStateRemoving:
+		case raftmeta.RegionStateRemoving:
 			snap.Removing = count
-		case manifest.RegionStateTombstone:
+		case raftmeta.RegionStateTombstone:
 			snap.Tombstone = count
 		default:
 			snap.Other += count
@@ -59,7 +58,7 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 }
 
 // RecordUpdate updates the metrics snapshot for a region metadata change.
-func (rm *RegionMetrics) RecordUpdate(meta manifest.RegionMeta) {
+func (rm *RegionMetrics) RecordUpdate(meta raftmeta.RegionMeta) {
 	if rm == nil || meta.ID == 0 {
 		return
 	}
@@ -96,11 +95,11 @@ func (rm *RegionMetrics) RecordRemove(regionID uint64) {
 	}
 }
 
-func (rm *RegionMetrics) increment(state manifest.RegionState) {
+func (rm *RegionMetrics) increment(state raftmeta.RegionState) {
 	rm.counts[state] = rm.counts[state] + 1
 }
 
-func (rm *RegionMetrics) decrement(state manifest.RegionState) {
+func (rm *RegionMetrics) decrement(state raftmeta.RegionState) {
 	if curr, ok := rm.counts[state]; ok {
 		if curr <= 1 {
 			delete(rm.counts, state)

@@ -16,6 +16,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
@@ -64,7 +65,7 @@ func printUsage(w io.Writer) {
 	  stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
 	  manifest  Inspect manifest state, levels, and value log metadata
 	  vlog      List value log segments and active head
-	  regions   Show region metadata catalog from manifest/store
+	  regions   Show the local peer catalog used for store recovery
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  pd        Start PD-lite gRPC service (control plane)
 
@@ -475,14 +476,14 @@ func runRegionsCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	mgr, err := manifest.Open(*workDir, nil)
+	metaStore, err := raftmeta.OpenLocalStore(*workDir, nil)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() { _ = metaStore.Close() }()
 
-	snapshot := mgr.RegionSnapshot()
-	regions := make([]manifest.RegionMeta, 0, len(snapshot))
+	snapshot := metaStore.Snapshot()
+	regions := make([]raftmeta.RegionMeta, 0, len(snapshot))
 	for _, meta := range snapshot {
 		regions = append(regions, meta)
 	}
@@ -515,8 +516,14 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	if workDir == "" {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("workdir is required")
 	}
+	metaStore, err := raftmeta.OpenLocalStore(workDir, nil)
+	if err != nil {
+		return NoKV.StatsSnapshot{}, err
+	}
+	defer func() { _ = metaStore.Close() }()
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
+	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
 	db := NoKV.Open(opts)
 	defer func() {
 		_ = db.Close()
@@ -617,22 +624,22 @@ func firstRegionMetrics() *metrics.RegionMetrics {
 	return nil
 }
 
-func formatRegionState(state manifest.RegionState) string {
+func formatRegionState(state raftmeta.RegionState) string {
 	switch state {
-	case manifest.RegionStateNew:
+	case raftmeta.RegionStateNew:
 		return "new"
-	case manifest.RegionStateRunning:
+	case raftmeta.RegionStateRunning:
 		return "running"
-	case manifest.RegionStateRemoving:
+	case raftmeta.RegionStateRemoving:
 		return "removing"
-	case manifest.RegionStateTombstone:
+	case raftmeta.RegionStateTombstone:
 		return "tombstone"
 	default:
 		return fmt.Sprintf("unknown(%d)", state)
 	}
 }
 
-func formatPeers(peers []manifest.PeerMeta) string {
+func formatPeers(peers []raftmeta.PeerMeta) string {
 	if len(peers) == 0 {
 		return "[]"
 	}

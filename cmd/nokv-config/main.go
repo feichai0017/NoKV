@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 )
 
 var exit = os.Exit
@@ -220,7 +220,7 @@ Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
   pd       Print PD-lite endpoint from the raft configuration
-  manifest Write region metadata into a manifest
+  manifest Write region metadata into the raftstore local peer catalog
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
@@ -230,7 +230,7 @@ Flags:
 
 func runManifest(args []string) error {
 	fs := flag.NewFlagSet("manifest", flag.ExitOnError)
-	workdir := fs.String("workdir", "", "manifest directory to update")
+	workdir := fs.String("workdir", "", "work directory containing the local peer catalog")
 	regionID := fs.Uint64("region-id", 0, "region identifier")
 	startKey := fs.String("start-key", "", "region start key (plain or hex:<bytes>)")
 	endKey := fs.String("end-key", "", "region end key (exclusive, plain or hex:<bytes>)")
@@ -253,10 +253,10 @@ func runManifest(args []string) error {
 		return fmt.Errorf("at least one --peer is required")
 	}
 
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:    *regionID,
 		State: parseRegionState(*stateStr),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     *version,
 			ConfVersion: *confVer,
 		},
@@ -269,7 +269,7 @@ func runManifest(args []string) error {
 		if err != nil {
 			return fmt.Errorf("parsing --peer %q: %w", entry, err)
 		}
-		meta.Peers = append(meta.Peers, manifest.PeerMeta{
+		meta.Peers = append(meta.Peers, raftmeta.PeerMeta{
 			StoreID: storeID,
 			PeerID:  peerID,
 		})
@@ -279,16 +279,16 @@ func runManifest(args []string) error {
 		meta.Epoch.ConfVersion = uint64(len(meta.Peers))
 	}
 
-	mgr, err := manifest.Open(*workdir, nil)
+	metaStore, err := raftmeta.OpenLocalStore(*workdir, nil)
 	if err != nil {
-		return fmt.Errorf("open manifest at %s: %w", *workdir, err)
+		return fmt.Errorf("open local peer catalog at %s: %w", *workdir, err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() { _ = metaStore.Close() }()
 
-	if err := mgr.LogRegionUpdate(meta); err != nil {
-		return fmt.Errorf("log region: %w", err)
+	if err := metaStore.SaveRegion(meta); err != nil {
+		return fmt.Errorf("persist region: %w", err)
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "logged region %d to %s\n", meta.ID, *workdir); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "stored region %d in local peer catalog at %s\n", meta.ID, *workdir); err != nil {
 		return err
 	}
 	return nil
@@ -339,14 +339,14 @@ func parseUint(value string) (uint64, error) {
 	return out, nil
 }
 
-func parseRegionState(state string) manifest.RegionState {
+func parseRegionState(state string) raftmeta.RegionState {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "", "running":
-		return manifest.RegionStateRunning
+		return raftmeta.RegionStateRunning
 	case "tombstone":
-		return manifest.RegionStateTombstone
+		return raftmeta.RegionStateTombstone
 	default:
-		return manifest.RegionStateRunning
+		return raftmeta.RegionStateRunning
 	}
 }
 

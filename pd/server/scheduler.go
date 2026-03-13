@@ -1,9 +1,9 @@
 package server
 
 import (
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 )
 
 // planStoreOperations builds lightweight scheduling hints for the heartbeat
@@ -76,7 +76,7 @@ func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstSto
 	return nil, false
 }
 
-func buildLeaderTransfer(meta manifest.RegionMeta, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
+func buildLeaderTransfer(meta raftmeta.RegionMeta, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
 	if meta.ID == 0 || len(meta.Peers) == 0 {
 		return nil, false
 	}
@@ -102,7 +102,7 @@ func buildLeaderTransfer(meta manifest.RegionMeta, srcStoreID, dstStoreID uint64
 	}, true
 }
 
-func peerIDOnStore(peers []manifest.PeerMeta, storeID uint64) (uint64, bool) {
+func peerIDOnStore(peers []raftmeta.PeerMeta, storeID uint64) (uint64, bool) {
 	for _, p := range peers {
 		if p.StoreID == storeID && p.PeerID != 0 {
 			return p.PeerID, true

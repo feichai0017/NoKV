@@ -3,7 +3,7 @@ package metrics
 import (
 	"testing"
 
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 )
 
 func TestWALRecordMetricsTotals(t *testing.T) {
@@ -29,7 +29,7 @@ func TestAnalyzeWALBacklogAndWarning(t *testing.T) {
 		3: {RaftEntries: 1},
 		5: {Entries: 5},
 	}
-	ptrs := map[uint64]manifest.RaftLogPointer{
+	ptrs := map[uint64]raftmeta.RaftLogPointer{
 		1: {GroupID: 1, Segment: 4},
 		2: {GroupID: 2, SegmentIndex: 3},
 	}

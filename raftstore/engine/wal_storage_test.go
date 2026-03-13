@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -19,12 +19,12 @@ import (
 func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	manifestMgr := openManifestManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 
 	ws, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	}
 	require.NoError(t, ws.ApplySnapshot(snap))
 
-	ptr, ok := manifestMgr.RaftPointer(1)
+	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
 	require.Equal(t, snap.Metadata.Index, ptr.TruncatedIndex)
 	require.Equal(t, snap.Metadata.Term, ptr.TruncatedTerm)
@@ -63,15 +63,15 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	require.Greater(t, ptr.TruncatedOffset, uint64(0))
 }
 
-func TestWALStorageCompactUpdatesManifest(t *testing.T) {
+func TestWALStorageCompactUpdatesLocalMeta(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	manifestMgr := openManifestManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 
 	ws, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -86,7 +86,7 @@ func TestWALStorageCompactUpdatesManifest(t *testing.T) {
 
 	require.NoError(t, ws.compactTo(3))
 
-	ptr, ok := manifestMgr.RaftPointer(1)
+	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
 	require.Equal(t, uint64(3), ptr.TruncatedIndex)
 	require.Equal(t, uint64(2), ptr.TruncatedTerm)
@@ -100,12 +100,12 @@ func TestWALStorageCompactUpdatesManifest(t *testing.T) {
 	require.Equal(t, uint32(ptr.Segment), seg)
 }
 
-func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
+func TestWALStorageRejectsLocalMetaPointerToNonRaftRecord(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
 	defer func() { _ = walMgr.Close() }()
-	manifestMgr := openManifestManager(t, dir)
-	defer func() { _ = manifestMgr.Close() }()
+	localMeta := openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
 
 	plain := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("plain"), 1), []byte("entry"))
 	info, err := walMgr.AppendEntry(plain)
@@ -113,17 +113,17 @@ func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 	plain.DecrRef()
 	require.NoError(t, walMgr.Sync())
 
-	ptr := manifest.RaftLogPointer{
+	ptr := raftmeta.RaftLogPointer{
 		GroupID: 1,
 		Segment: info.SegmentID,
 		Offset:  recordEnd(info),
 	}
-	require.NoError(t, manifestMgr.LogRaftPointer(ptr))
+	require.NoError(t, localMeta.SaveRaftPointer(ptr))
 
 	_, err = OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-raft record type")
@@ -132,12 +132,12 @@ func TestWALStorageRejectsManifestPointerToNonRaftRecord(t *testing.T) {
 func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	manifestMgr := openManifestManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 
 	ws, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -147,13 +147,13 @@ func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
 	}))
 	require.NoError(t, walMgr.Sync())
 
-	ptr, ok := manifestMgr.RaftPointer(1)
+	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
 	require.Greater(t, ptr.Offset, uint64(0))
 
 	segmentPath := filepath.Join(dir, "wal", fmt.Sprintf("%05d.wal", ptr.Segment))
 
-	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, localMeta.Close())
 	require.NoError(t, walMgr.Close())
 
 	file, err := os.OpenFile(segmentPath, os.O_WRONLY, 0)
@@ -164,33 +164,33 @@ func TestWALStorageDetectsTruncatedSegment(t *testing.T) {
 
 	walMgr = openWalManager(t, dir)
 	defer func() { _ = walMgr.Close() }()
-	manifestMgr = openManifestManager(t, dir)
-	defer func() { _ = manifestMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
 
 	_, err = OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "manifest pointer")
+	require.Contains(t, err.Error(), "raft pointer")
 }
 
-func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
+func TestWALStorageValidatesLocalMetaPointerWithBacklog(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	manifestMgr := openManifestManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 
 	ws1, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 	ws2, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  2,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   2,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -212,18 +212,18 @@ func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
 	}))
 
 	require.NoError(t, walMgr.Sync())
-	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, localMeta.Close())
 	require.NoError(t, walMgr.Close())
 
 	walMgr = openWalManager(t, dir)
 	defer func() { _ = walMgr.Close() }()
-	manifestMgr = openManifestManager(t, dir)
-	defer func() { _ = manifestMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
 
 	ws1, err = OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -231,20 +231,20 @@ func TestWALStorageValidatesManifestPointerWithBacklog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), lastIdx)
 
-	ptr, ok := manifestMgr.RaftPointer(1)
+	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
-	require.NoError(t, validateManifestPointer(walMgr, ptr))
+	require.NoError(t, validateRaftPointer(walMgr, ptr))
 }
 
 func TestWALStorageHardStateAndEntries(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
-	manifestMgr := openManifestManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
 
 	ws, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -301,12 +301,12 @@ func TestWALStorageEncodingHelpers(t *testing.T) {
 func TestWALSnapshotExportImport(t *testing.T) {
 	baseDir := t.TempDir()
 	walMgr := openWalManager(t, baseDir)
-	manifestMgr := openManifestManager(t, baseDir)
+	localMeta := openLocalMetaStore(t, baseDir)
 
 	ws, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgr,
-		Manifest: manifestMgr,
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
 	})
 	require.NoError(t, err)
 
@@ -323,19 +323,19 @@ func TestWALSnapshotExportImport(t *testing.T) {
 	exportPath := filepath.Join(baseDir, "snapshot.bin")
 	require.NoError(t, ExportSnapshot(ws, exportPath, nil))
 
-	require.NoError(t, manifestMgr.Close())
+	require.NoError(t, localMeta.Close())
 	require.NoError(t, walMgr.Close())
 
 	restoreDir := filepath.Join(baseDir, "restore")
 	walMgrRestore := openWalManager(t, restoreDir)
 	defer func() { _ = walMgrRestore.Close() }()
-	manifestMgrRestore := openManifestManager(t, restoreDir)
-	defer func() { _ = manifestMgrRestore.Close() }()
+	localMetaRestore := openLocalMetaStore(t, restoreDir)
+	defer func() { _ = localMetaRestore.Close() }()
 
 	wsRestore, err := OpenWALStorage(WALStorageConfig{
-		GroupID:  1,
-		WAL:      walMgrRestore,
-		Manifest: manifestMgrRestore,
+		GroupID:   1,
+		WAL:       walMgrRestore,
+		LocalMeta: localMetaRestore,
 	})
 	require.NoError(t, err)
 
@@ -345,7 +345,7 @@ func TestWALSnapshotExportImport(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), lastIdx)
 
-	ptr, ok := manifestMgrRestore.RaftPointer(1)
+	ptr, ok := localMetaRestore.RaftPointer(1)
 	require.True(t, ok)
 	require.Equal(t, uint64(10), ptr.SnapshotIndex)
 	require.Equal(t, uint64(3), ptr.SnapshotTerm)
@@ -360,9 +360,9 @@ func openWalManager(t *testing.T, dir string) *wal.Manager {
 	return mgr
 }
 
-func openManifestManager(t *testing.T, dir string) *manifest.Manager {
+func openLocalMetaStore(t *testing.T, dir string) *raftmeta.Store {
 	t.Helper()
-	mgr, err := manifest.Open(filepath.Join(dir, "manifest"), nil)
+	mgr, err := raftmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
 	require.NoError(t, err)
 	return mgr
 }

@@ -8,9 +8,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/wal"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -19,9 +19,9 @@ const walRecordOverhead = 8 // length (4 bytes) + checksum (4 bytes)
 
 // WALStorageConfig configures WAL-backed raft storage.
 type WALStorageConfig struct {
-	GroupID  uint64
-	WAL      *wal.Manager
-	Manifest *manifest.Manager
+	GroupID   uint64
+	WAL       *wal.Manager
+	LocalMeta *raftmeta.Store
 }
 
 var errStopPointerValidation = errors.New("raftstore: stop pointer validation")
@@ -35,15 +35,15 @@ type entrySpan struct {
 }
 
 // WALStorage implements the PeerStorage interface using the shared WAL manager
-// plus manifest metadata. It mirrors the storage layout used in TinyKV/TiKV,
-// tracking segments so WAL GC can coordinate across raft groups.
+// plus store-local raft replay metadata. It mirrors the storage layout used in
+// TinyKV/TiKV, tracking segments so WAL GC can coordinate across raft groups.
 type WALStorage struct {
 	mu         sync.Mutex
 	groupID    uint64
 	wal        *wal.Manager
-	manifest   *manifest.Manager
+	localMeta  *raftmeta.Store
 	mem        *myraft.MemoryStorage
-	pointer    manifest.RaftLogPointer
+	pointer    raftmeta.RaftLogPointer
 	entrySpans []entrySpan
 }
 
@@ -58,20 +58,20 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	ws := &WALStorage{
 		groupID:    cfg.GroupID,
 		wal:        cfg.WAL,
-		manifest:   cfg.Manifest,
+		localMeta:  cfg.LocalMeta,
 		mem:        myraft.NewMemoryStorage(),
 		entrySpans: make([]entrySpan, 0, 16),
 	}
-	if cfg.Manifest != nil {
-		if ptr, ok := cfg.Manifest.RaftPointer(cfg.GroupID); ok {
-			if err := validateManifestPointer(cfg.WAL, ptr); err != nil {
+	if cfg.LocalMeta != nil {
+		if ptr, ok := cfg.LocalMeta.RaftPointer(cfg.GroupID); ok {
+			if err := validateRaftPointer(cfg.WAL, ptr); err != nil {
 				return nil, err
 			}
 			ws.pointer = ptr
 		}
 	}
 
-	var replayPtr manifest.RaftLogPointer
+	var replayPtr raftmeta.RaftLogPointer
 
 	if err := cfg.WAL.Replay(func(info wal.EntryInfo, payload []byte) error {
 		switch info.Type {
@@ -264,11 +264,6 @@ func (ws *WALStorage) ApplySnapshot(snap myraft.Snapshot) error {
 		return err
 	}
 	ws.pruneEntrySpans(meta.Index)
-	if ws.manifest != nil && ws.pointer == ptr {
-		if err := ws.manifest.LogRaftTruncate(ws.groupID, meta.Index, meta.Term, truncSegment, truncOffset); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -354,7 +349,7 @@ func (ws *WALStorage) Snapshot() (myraft.Snapshot, error) {
 
 // Internal helpers ----------------------------------------------------------
 
-func (ws *WALStorage) updatePointer(ptr manifest.RaftLogPointer) error {
+func (ws *WALStorage) updatePointer(ptr raftmeta.RaftLogPointer) error {
 	if ptr.Segment == 0 {
 		return nil
 	}
@@ -362,11 +357,11 @@ func (ws *WALStorage) updatePointer(ptr manifest.RaftLogPointer) error {
 	if ws.pointer == ptr {
 		return nil
 	}
-	if failpoints.ShouldSkipManifestUpdate() {
+	if failpoints.ShouldSkipLocalMetaUpdate() {
 		return nil
 	}
-	if ws.manifest != nil {
-		if err := ws.manifest.LogRaftPointer(ptr); err != nil {
+	if ws.localMeta != nil {
+		if err := ws.localMeta.SaveRaftPointer(ptr); err != nil {
 			return err
 		}
 	}
@@ -410,11 +405,6 @@ func (ws *WALStorage) compactTo(index uint64) error {
 		return err
 	}
 	ws.pruneEntrySpans(index)
-	if ws.manifest != nil && ws.pointer == ptr {
-		if err := ws.manifest.LogRaftTruncate(ws.groupID, index, ptr.TruncatedTerm, segment, truncOffset); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -547,7 +537,7 @@ func recordEnd(info wal.EntryInfo) uint64 {
 	return uint64(info.Offset) + uint64(info.Length) + walRecordOverhead
 }
 
-func isPointerAhead(newPtr, oldPtr manifest.RaftLogPointer) bool {
+func isPointerAhead(newPtr, oldPtr raftmeta.RaftLogPointer) bool {
 	if newPtr.Segment == 0 {
 		return false
 	}
@@ -560,7 +550,7 @@ func isPointerAhead(newPtr, oldPtr manifest.RaftLogPointer) bool {
 	return newPtr.Offset > oldPtr.Offset
 }
 
-func validateManifestPointer(walMgr *wal.Manager, ptr manifest.RaftLogPointer) error {
+func validateRaftPointer(walMgr *wal.Manager, ptr raftmeta.RaftLogPointer) error {
 	if walMgr == nil {
 		return nil
 	}
@@ -580,7 +570,7 @@ func validateManifestPointer(walMgr *wal.Manager, ptr manifest.RaftLogPointer) e
 			return errStopPointerValidation
 		}
 		if end > ptrOffset {
-			return fmt.Errorf("raftstore: manifest pointer offset %d falls within record ending at %d (segment=%d)",
+			return fmt.Errorf("raftstore: local raft pointer offset %d falls within record ending at %d (segment=%d)",
 				ptrOffset, end, ptr.Segment)
 		}
 		return nil
@@ -592,13 +582,13 @@ func validateManifestPointer(walMgr *wal.Manager, ptr manifest.RaftLogPointer) e
 		return err
 	}
 	if !found {
-		return fmt.Errorf("raftstore: manifest pointer offset %d not found in segment %d", ptrOffset, ptr.Segment)
+		return fmt.Errorf("raftstore: local raft pointer offset %d not found in segment %d", ptrOffset, ptr.Segment)
 	}
 	switch recType {
 	case wal.RecordTypeRaftEntry, wal.RecordTypeRaftState, wal.RecordTypeRaftSnapshot:
 		return nil
 	default:
-		return fmt.Errorf("raftstore: manifest pointer references non-raft record type %d in segment %d",
+		return fmt.Errorf("raftstore: local raft pointer references non-raft record type %d in segment %d",
 			recType, ptr.Segment)
 	}
 }

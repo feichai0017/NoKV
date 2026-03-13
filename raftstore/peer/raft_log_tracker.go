@@ -4,29 +4,28 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/wal"
 )
 
 type raftLogTracker struct {
-	mu       sync.Mutex
-	manifest *manifest.Manager
-	wal      *wal.Manager
-	groupID  uint64
+	mu      sync.Mutex
+	wal     *wal.Manager
+	groupID uint64
 
-	lastPointer manifest.RaftLogPointer
+	lastPointer raftmeta.RaftLogPointer
 	lastError   error
 	injected    bool
 }
 
-func newRaftLogTracker(man *manifest.Manager, walMgr *wal.Manager, groupID uint64) *raftLogTracker {
-	if man == nil || walMgr == nil {
+func newRaftLogTracker(walMgr *wal.Manager, groupID uint64) *raftLogTracker {
+	if walMgr == nil {
 		return nil
 	}
-	return &raftLogTracker{manifest: man, wal: walMgr, groupID: groupID}
+	return &raftLogTracker{wal: walMgr, groupID: groupID}
 }
 
-func (r *raftLogTracker) capturePointer(ptr manifest.RaftLogPointer) {
+func (r *raftLogTracker) capturePointer(ptr raftmeta.RaftLogPointer) {
 	if r == nil {
 		return
 	}
@@ -74,7 +73,7 @@ func (r *raftLogTracker) Info() *RaftLogInfo {
 }
 
 type RaftLogInfo struct {
-	Pointer  manifest.RaftLogPointer
+	Pointer  raftmeta.RaftLogPointer
 	LastErr  error
 	Injected bool
 }

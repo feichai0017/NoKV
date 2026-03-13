@@ -9,13 +9,13 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -175,7 +175,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", id))
-		db := openDBAt(t, dbDir)
+		db, localMeta := openDBAt(t, dbDir)
 		t.Cleanup(func(db *NoKV.DB) func() {
 			return func() { _ = db.Close() }
 		}(db))
@@ -192,7 +192,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 			Transport:  net,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 
 	for id := uint64(1); id <= 2; id++ {
 		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", id))
-		db := openDBAt(t, dbDir)
+		db, localMeta := openDBAt(t, dbDir)
 		dbs = append(dbs, db)
 		rc := myraft.Config{
 			ID:              id,
@@ -255,9 +255,9 @@ func TestPeerPrewriteCommit(t *testing.T) {
 			Transport:  net,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    11,
-			Region:     &manifest.RegionMeta{ID: 11},
+			Region:     &raftmeta.RegionMeta{ID: 11},
 		})
 		require.NoError(t, err)
 		net.Register(peer)
@@ -323,7 +323,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 	net := newMemoryNetwork()
 	dbDir := filepath.Join(t.TempDir(), "auto-compact")
-	db := openDBAt(t, dbDir)
+	db, localMeta := openDBAt(t, dbDir)
 	t.Cleanup(func() { _ = db.Close() })
 
 	rc := myraft.Config{
@@ -339,7 +339,7 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 		Transport:        net,
 		Apply:            applyToDB(db),
 		WAL:              db.WAL(),
-		Manifest:         db.Manifest(),
+		LocalMeta:        localMeta,
 		GroupID:          1,
 		LogRetainEntries: 1,
 	})
@@ -370,7 +370,7 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 		net.Flush()
 	}
 
-	ptr, ok := db.Manifest().RaftPointer(1)
+	ptr, ok := localMeta.RaftPointer(1)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, ptr.TruncatedIndex, uint64(5))
 	require.Equal(t, uint64(ptr.Segment), ptr.SegmentIndex)
@@ -382,7 +382,7 @@ func TestPeerTransferLeader(t *testing.T) {
 
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("transfer-%d", id))
-		db := openDBAt(t, dbDir)
+		db, localMeta := openDBAt(t, dbDir)
 		t.Cleanup(func(db *NoKV.DB) func() { return func() { _ = db.Close() } }(db))
 		rc := myraft.Config{
 			ID:              id,
@@ -397,7 +397,7 @@ func TestPeerTransferLeader(t *testing.T) {
 			Transport:  net,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    1,
 		})
 		require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(baseDir, fmt.Sprintf("db-%d", id))
-		db := openDBAt(t, dbDir)
+		db, localMeta := openDBAt(t, dbDir)
 		rc := myraft.Config{
 			ID:              id,
 			ElectionTick:    5,
@@ -463,7 +463,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			Transport:  net,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -500,7 +500,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 	// Restart peers with persistent storage.
 	net2 := newMemoryNetwork()
 	for i, n := range nodes {
-		db := openDBAt(t, n.dbDir)
+		db, localMeta := openDBAt(t, n.dbDir)
 		rc := myraft.Config{
 			ID:              n.id,
 			ElectionTick:    5,
@@ -514,7 +514,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			Transport:  net2,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -573,13 +573,15 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 	)
 
 	dbs := make(map[uint64]*NoKV.DB)
+	localMetas := make(map[uint64]*raftmeta.Store)
 	var peers []*peerpkg.Peer
 	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
 
 	for id := uint64(1); id <= 3; id++ {
 		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("slow-follower-db-%d", id))
-		db := openDBAt(t, dbDir)
+		db, localMeta := openDBAt(t, dbDir)
 		dbs[id] = db
+		localMetas[id] = localMeta
 		rc := myraft.Config{
 			ID:              id,
 			ElectionTick:    5,
@@ -593,7 +595,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 			Transport:  net,
 			Apply:      applyToDB(db),
 			WAL:        db.WAL(),
-			Manifest:   db.Manifest(),
+			LocalMeta:  localMeta,
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -618,9 +620,10 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 	payload := mustEncodePutCommand(t, []byte("slow-follower-key"), []byte("slow-follower-value"), 140)
 
 	followerDB := dbs[followerID]
-	ptrBaseline, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	followerMeta := localMetas[followerID]
+	ptrBaseline, ok := followerMeta.RaftPointer(raftGroupID)
 	if !ok {
-		ptrBaseline = manifest.RaftLogPointer{}
+		ptrBaseline = raftmeta.RaftLogPointer{}
 	}
 
 	net.Block(followerID)
@@ -634,7 +637,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 
 	requireMissingValue(t, followerDB, []byte("slow-follower-key"))
 
-	ptrDuring, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	ptrDuring, ok := followerMeta.RaftPointer(raftGroupID)
 	if ok {
 		require.Equal(t, ptrBaseline.AppliedIndex, ptrDuring.AppliedIndex, "follower pointer should remain unchanged while blocked")
 	}
@@ -648,7 +651,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 
 	requireVisibleValue(t, followerDB, []byte("slow-follower-key"), []byte("slow-follower-value"))
 
-	ptrAfter, ok := followerDB.Manifest().RaftPointer(raftGroupID)
+	ptrAfter, ok := followerMeta.RaftPointer(raftGroupID)
 	require.True(t, ok)
 	require.Greater(t, ptrAfter.AppliedIndex, ptrBaseline.AppliedIndex)
 }
@@ -660,7 +663,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	net := newMemoryNetwork()
 	dbDir := filepath.Join(t.TempDir(), "ready-fail-db")
-	db := openDBAt(t, dbDir)
+	db, localMeta := openDBAt(t, dbDir)
 
 	rc := myraft.Config{
 		ID:              1,
@@ -675,7 +678,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		Transport:  net,
 		Apply:      applyToDB(db),
 		WAL:        db.WAL(),
-		Manifest:   db.Manifest(),
+		LocalMeta:  localMeta,
 		GroupID:    raftGroupID,
 	})
 	require.NoError(t, err)
@@ -690,9 +693,9 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(1), leader)
 
-	ptrBefore, ptrPresent := db.Manifest().RaftPointer(raftGroupID)
+	ptrBefore, ptrPresent := localMeta.RaftPointer(raftGroupID)
 
-	failpoints.Set(failpoints.SkipManifest)
+	failpoints.Set(failpoints.SkipLocalMeta)
 	payload := mustEncodePutCommand(t, []byte("ready-fail-key"), []byte("ready-fail-value"), 160)
 
 	require.NoError(t, net.Propose(leader, payload))
@@ -701,12 +704,12 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		net.Flush()
 	}
 
-	ptrAfterFail, ptrAfterPresent := db.Manifest().RaftPointer(raftGroupID)
+	ptrAfterFail, ptrAfterPresent := localMeta.RaftPointer(raftGroupID)
 	if ptrPresent {
-		require.True(t, ptrAfterPresent, "manifest pointer should exist when it existed before failpoint")
-		require.Equal(t, ptrBefore, ptrAfterFail, "manifest pointer must not advance under failpoint")
+		require.True(t, ptrAfterPresent, "local raft pointer should exist when it existed before failpoint")
+		require.Equal(t, ptrBefore, ptrAfterFail, "local raft pointer must not advance under failpoint")
 	} else {
-		require.False(t, ptrAfterPresent, "manifest pointer should remain absent under failpoint")
+		require.False(t, ptrAfterPresent, "local raft pointer should remain absent under failpoint")
 	}
 
 	require.NoError(t, db.WAL().Rotate())
@@ -730,7 +733,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	dbRestart := openDBAt(t, dbDir)
+	dbRestart, localMetaRestart := openDBAt(t, dbDir)
 	t.Cleanup(func() { _ = dbRestart.Close() })
 
 	netRestart := newMemoryNetwork()
@@ -740,7 +743,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		Transport:  netRestart,
 		Apply:      applyToDB(dbRestart),
 		WAL:        dbRestart.WAL(),
-		Manifest:   dbRestart.Manifest(),
+		LocalMeta:  localMetaRestart,
 		GroupID:    raftGroupID,
 	})
 	require.NoError(t, err)
@@ -748,11 +751,11 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 	t.Cleanup(func() { _ = peerRestart.Close() })
 	require.NoError(t, peerRestart.Bootstrap([]myraft.Peer{{ID: 1}}))
 
-	ptrRecovered, recovered := dbRestart.Manifest().RaftPointer(raftGroupID)
-	require.True(t, recovered, "manifest pointer should be recorded after restart")
+	ptrRecovered, recovered := localMetaRestart.RaftPointer(raftGroupID)
+	require.True(t, recovered, "local raft pointer should be recorded after restart")
 	if ptrPresent {
 		require.GreaterOrEqual(t, ptrRecovered.AppliedIndex, ptrBefore.AppliedIndex)
-		require.NotEqual(t, ptrBefore, ptrRecovered, "recovery should advance manifest pointer beyond failpoint snapshot")
+		require.NotEqual(t, ptrBefore, ptrRecovered, "recovery should advance local raft pointer beyond failpoint snapshot")
 	} else {
 		require.Greater(t, ptrRecovered.AppliedIndex, uint64(0))
 	}
@@ -768,7 +771,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 	net := newMemoryNetwork()
 	dbDir := filepath.Join(t.TempDir(), "wait-applied-db")
-	db := openDBAt(t, dbDir)
+	db, localMeta := openDBAt(t, dbDir)
 	t.Cleanup(func() { _ = db.Close() })
 
 	appliedCh := make(chan uint64, 4)
@@ -795,7 +798,7 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 		Transport:  net,
 		Apply:      applyFn,
 		WAL:        db.WAL(),
-		Manifest:   db.Manifest(),
+		LocalMeta:  localMeta,
 		GroupID:    1,
 	})
 	require.NoError(t, err)

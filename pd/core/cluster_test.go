@@ -1,11 +1,10 @@
 package core
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/feichai0017/NoKV/manifest"
 )
 
 func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
@@ -27,17 +26,17 @@ func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 
 func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       1,
 		StartKey: []byte(""),
 		EndKey:   []byte("m"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	}))
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       2,
 		StartKey: []byte("m"),
 		EndKey:   []byte(""),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	}))
 
 	meta, ok := c.GetRegionByKey([]byte("a"))
@@ -58,18 +57,18 @@ func TestClusterRegionHeartbeatAndRouteLookup(t *testing.T) {
 
 func TestClusterRejectsStaleRegionHeartbeat(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 3},
+		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 3},
 	}))
 
-	err := c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	err := c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 99},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 99},
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrRegionHeartbeatStale)
@@ -77,18 +76,18 @@ func TestClusterRejectsStaleRegionHeartbeat(t *testing.T) {
 
 func TestClusterRejectsOverlappingRegionRanges(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("k"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	}))
 
-	err := c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	err := c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       2,
 		StartKey: []byte("j"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrRegionRangeOverlap)
@@ -96,18 +95,18 @@ func TestClusterRejectsOverlappingRegionRanges(t *testing.T) {
 
 func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	}))
 
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       7,
 		StartKey: []byte("a"),
 		EndKey:   []byte("n"),
-		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
 	}))
 	meta, ok := c.GetRegionByKey([]byte("m"))
 	require.True(t, ok)
@@ -117,11 +116,11 @@ func TestClusterAllowsReplacingSameRegionWithNewEpoch(t *testing.T) {
 
 func TestClusterRemoveRegion(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.UpsertRegionHeartbeat(manifest.RegionMeta{
+	require.NoError(t, c.UpsertRegionHeartbeat(raftmeta.RegionMeta{
 		ID:       1,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 	}))
 
 	_, ok := c.GetRegionByKey([]byte("m"))

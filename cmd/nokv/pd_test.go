@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 
@@ -69,33 +69,34 @@ func TestMainPDCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
-func TestRestorePDRegionsFromManifestSnapshot(t *testing.T) {
+func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
+	store, err := pdstorage.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
 	}))
-	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
 		ID:       20,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: manifest.RegionEpoch{
+		Epoch: raftmeta.RegionEpoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
 	}))
-	snapshot := mgr.RegionSnapshot()
-	require.NoError(t, mgr.Close())
+	snapshotState, err := store.Load()
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
 
 	cluster := core.NewCluster()
-	loaded, err := restorePDRegions(cluster, snapshot)
+	loaded, err := restorePDRegions(cluster, snapshotState.Regions)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
@@ -174,8 +175,11 @@ func TestRunPDCmdResolvesWorkdirFromConfig(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
-	require.Contains(t, buf.String(), "PD restored 0 region(s) from manifest")
-	require.FileExists(t, filepath.Join(cfg.PD.WorkDir, "CURRENT"))
+	require.Contains(t, buf.String(), "PD restored 0 region(s) from local storage")
+	require.DirExists(t, cfg.PD.WorkDir)
+	store, err := pdstorage.OpenLocalStore(cfg.PD.WorkDir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 }
 
 func TestRunPDCmdResolvesAddrFromConfig(t *testing.T) {

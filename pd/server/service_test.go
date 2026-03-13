@@ -3,13 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
@@ -31,7 +31,7 @@ func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
 	return pdstorage.Snapshot{}, nil
 }
 
-func (f *fakeStorage) SaveRegion(meta manifest.RegionMeta) error {
+func (f *fakeStorage) SaveRegion(meta raftmeta.RegionMeta) error {
 	f.updateCalls++
 	if f.updateErr != nil {
 		return f.updateErr
