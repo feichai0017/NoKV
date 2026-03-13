@@ -23,9 +23,9 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 
@@ -83,7 +83,7 @@ func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 
 func TestGRPCTransportReplicatesProposals(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
-	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, peerpkg.Config{})
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
 	cluster.flush()
@@ -103,7 +103,7 @@ func TestGRPCTransportReplicatesProposals(t *testing.T) {
 
 func TestGRPCTransportManualTicksDriveElection(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
-	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, raftstore.Config{})
+	cluster := newGRPCTestCluster(t, []uint64{1, 2, 3}, peerpkg.Config{})
 	cluster.flush()
 
 	if _, ok := cluster.leader(); ok {
@@ -130,11 +130,11 @@ func TestGRPCTransportSupportsTLS(t *testing.T) {
 	cluster := newGRPCTestCluster(
 		t,
 		[]uint64{1, 2},
-		raftstore.Config{},
-		raftstore.WithGRPCServerCredentials(serverCreds),
-		raftstore.WithGRPCClientCredentials(clientCreds),
-		raftstore.WithGRPCRetry(1, 25*time.Millisecond),
-		raftstore.WithGRPCSendTimeout(750*time.Millisecond),
+		peerpkg.Config{},
+		transportpkg.WithServerCredentials(serverCreds),
+		transportpkg.WithClientCredentials(clientCreds),
+		transportpkg.WithRetry(1, 25*time.Millisecond),
+		transportpkg.WithSendTimeout(750*time.Millisecond),
 	)
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(2)
@@ -158,9 +158,9 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	cluster := newGRPCTestCluster(
 		t,
 		[]uint64{1, 2, 3},
-		raftstore.Config{},
-		raftstore.WithGRPCRetry(2, 25*time.Millisecond),
-		raftstore.WithGRPCSendTimeout(750*time.Millisecond),
+		peerpkg.Config{},
+		transportpkg.WithRetry(2, 25*time.Millisecond),
+		transportpkg.WithSendTimeout(750*time.Millisecond),
 	)
 	require.NoError(t, cluster.campaign(1))
 	cluster.tickMany(3)
@@ -208,12 +208,12 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
 
-	transport, err := raftstore.NewGRPCTransport(
+	transport, err := transportpkg.NewGRPCTransport(
 		1,
 		"127.0.0.1:0",
-		raftstore.WithGRPCDialTimeout(50*time.Millisecond),
-		raftstore.WithGRPCSendTimeout(50*time.Millisecond),
-		raftstore.WithGRPCRetry(0, 0),
+		transportpkg.WithDialTimeout(50*time.Millisecond),
+		transportpkg.WithSendTimeout(50*time.Millisecond),
+		transportpkg.WithRetry(0, 0),
 	)
 	require.NoError(t, err)
 	defer func() { _ = transport.Close() }()
@@ -231,11 +231,11 @@ func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 	require.True(t, strings.Contains(snap.WatchdogReason, "dial failure"))
 	logTransportMetric(t, "watchdog_after_failures", snap)
 
-	peer, err := raftstore.NewGRPCTransport(
+	peer, err := transportpkg.NewGRPCTransport(
 		2,
 		"127.0.0.1:0",
-		raftstore.WithGRPCDialTimeout(50*time.Millisecond),
-		raftstore.WithGRPCSendTimeout(50*time.Millisecond),
+		transportpkg.WithDialTimeout(50*time.Millisecond),
+		transportpkg.WithSendTimeout(50*time.Millisecond),
 	)
 	require.NoError(t, err)
 	defer func() { _ = peer.Close() }()
@@ -253,7 +253,7 @@ func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 func TestGRPCTransportMetricsBlockedPeers(t *testing.T) {
 	transportpkg.ResetGRPCMetricsForTesting()
 
-	tr, err := raftstore.NewGRPCTransport(1, "127.0.0.1:0")
+	tr, err := transportpkg.NewGRPCTransport(1, "127.0.0.1:0")
 	require.NoError(t, err)
 	trRef := tr
 	t.Cleanup(func() {
@@ -307,23 +307,23 @@ type grpcTestCluster struct {
 	t          *testing.T
 	groupID    uint64
 	nodes      map[uint64]*grpcTestNode
-	transports map[uint64]*raftstore.GRPCTransport
+	transports map[uint64]*transportpkg.GRPCTransport
 }
 
 type grpcTestNode struct {
 	id        uint64
 	db        *NoKV.DB
-	peer      *raftstore.Peer
-	transport *raftstore.GRPCTransport
+	peer      *peerpkg.Peer
+	transport *transportpkg.GRPCTransport
 }
 
-func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config, opts ...raftstore.GRPCOption) *grpcTestCluster {
+func newGRPCTestCluster(t *testing.T, ids []uint64, cfg peerpkg.Config, opts ...transportpkg.GRPCOption) *grpcTestCluster {
 	t.Helper()
 	cluster := &grpcTestCluster{
 		t:          t,
 		groupID:    cfg.GroupID,
 		nodes:      make(map[uint64]*grpcTestNode),
-		transports: make(map[uint64]*raftstore.GRPCTransport),
+		transports: make(map[uint64]*transportpkg.GRPCTransport),
 	}
 	if cluster.groupID == 0 {
 		cluster.groupID = 1
@@ -332,7 +332,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config, opts .
 
 	addresses := make(map[uint64]string)
 	for _, id := range ids {
-		transport, err := raftstore.NewGRPCTransport(id, "127.0.0.1:0", opts...)
+		transport, err := transportpkg.NewGRPCTransport(id, "127.0.0.1:0", opts...)
 		require.NoError(t, err)
 		cluster.transports[id] = transport
 		addresses[id] = transport.Addr()
@@ -371,7 +371,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg raftstore.Config, opts .
 				PreVote:         true,
 			}
 		}
-		peer, err := raftstore.NewPeer(&config)
+		peer, err := peerpkg.NewPeer(&config)
 		require.NoError(t, err)
 		transport.SetHandler(peer.Step)
 		require.NoError(t, peer.Bootstrap(peers))
@@ -509,7 +509,7 @@ func openDBAt(t *testing.T, dir string) *NoKV.DB {
 	return NoKV.Open(opt)
 }
 
-func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
+func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {

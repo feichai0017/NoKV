@@ -11,9 +11,9 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -40,7 +40,7 @@ func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.Col
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
-func applyToDB(db *NoKV.DB) raftstore.ApplyFunc {
+func applyToDB(db *NoKV.DB) peer.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
@@ -116,7 +116,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 		Epoch:    manifest.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
 		Peers:    []manifest.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
 	}
-	cfgPeer := &raftstore.Config{
+	cfgPeer := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              cfg.peerID,
 			ElectionTick:    5,
@@ -208,7 +208,7 @@ func TestServicePrewriteCommit(t *testing.T) {
 		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 11}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              11,
 			ElectionTick:    5,
@@ -335,7 +335,7 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 1},
 		Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 22}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              22,
 			ElectionTick:    5,

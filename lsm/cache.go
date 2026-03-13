@@ -386,9 +386,6 @@ func cacheCountersForBudget(budgetBytes, avgItemBytes int64) int64 {
 	if avgItemBytes <= 0 {
 		avgItemBytes = 1
 	}
-	items := budgetBytes / avgItemBytes
-	if items < minCacheCounters {
-		items = minCacheCounters
-	}
+	items := max(budgetBytes/avgItemBytes, minCacheCounters)
 	return items * 8
 }

@@ -21,9 +21,9 @@
 
 1. **Construct Server**
    ```go
-   srv, _ := raftstore.NewServer(raftstore.ServerConfig{
+   srv, _ := server.New(server.Config{
        DB: db,
-       Store: raftstore.StoreConfig{StoreID: 1},
+       Store: store.Config{StoreID: 1},
        Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
        TransportAddr: "127.0.0.1:20160",
    })
