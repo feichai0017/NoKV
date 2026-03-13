@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -253,6 +253,7 @@
 <h2 id="6-operational-tips"><a class="header" href="#6-operational-tips">6. Operational Tips</a></h2>
 <ul>
 <li><code>Options.HotRingTopK</code> controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.</li>
+<li><code>Options.HotReadPrefetchThreshold</code> and <code>Options.HotReadPrefetchCooldown</code> control when hot reads trigger async cache prefetch and how quickly the same key can be prefetched again.</li>
 <li>Combine <code>TouchAndClamp</code> with request middleware to detect abusive tenants: when <code>limited</code> is true, log the key and latency impact.</li>
 <li>Resetting the ring is as simple as instantiating a new <code>HotRing</code>—useful for benchmarks that require clean counters between phases.</li>
 </ul>
@@ -269,6 +270,8 @@
 <tr><td><code>HotRingEnabled</code></td><td><code>true</code></td><td>Master switch for DB hot tracking.</td></tr>
 <tr><td><code>HotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
 <tr><td><code>HotRingTopK</code></td><td><code>16</code></td><td>Top-K hot keys for stats/CLI.</td></tr>
+<tr><td><code>HotReadPrefetchThreshold</code></td><td><code>16</code></td><td>Async prefetch starts once a key reaches this read count.</td></tr>
+<tr><td><code>HotReadPrefetchCooldown</code></td><td><code>15s</code></td><td>Suppress repeated prefetch for the same hot key.</td></tr>
 <tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>

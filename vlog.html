@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -324,7 +324,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
 <li>GC scheduling exposes <code>NoKV.Stats.value_log.gc</code> (including <code>gc_parallelism</code>, <code>gc_active</code>, <code>gc_scheduled</code>, <code>gc_throttled</code>, <code>gc_skipped</code>, <code>gc_rejected</code>) for diagnostics.</li>
 <li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
-<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
+<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages through the process <code>slog</code> logger.</li>
 </ul>
 <hr>
 <h2 id="10-quick-comparison"><a class="header" href="#10-quick-comparison">10. Quick Comparison</a></h2>

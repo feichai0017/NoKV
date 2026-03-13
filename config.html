@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -199,6 +199,7 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><strong>Write pipeline</strong>
 <ul>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
+<li><code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code></li>
 </ul>
 </li>
 <li><strong>Value log</strong>
@@ -221,13 +222,13 @@ calling <code>NoKV.Open(opt)</code>.</p>
 </li>
 <li><strong>Caches</strong>
 <ul>
-<li><code>BlockCacheSize</code>, <code>BloomCacheSize</code></li>
+<li><code>BlockCacheBytes</code>, <code>IndexCacheBytes</code>, <code>BloomCacheBytes</code></li>
 </ul>
 </li>
 <li><strong>Hot key throttling</strong>
 <ul>
 <li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
-<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
+<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, <code>HotReadPrefetchThreshold</code>, <code>HotReadPrefetchCooldown</code>, decay/window settings</li>
 <li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
 <li><code>ValueLogHotRingOverride</code> + <code>ValueLogHotRing*</code> overrides</li>
 </ul>
@@ -254,6 +255,15 @@ opt.WriteBatchMaxCount = 128
 db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>Open()</code> normalizes legacy fallback fields once at the option boundary. The
+DB and LSM layers then consume the resolved values directly instead of
+re-applying defaults internally.</li>
+<li>Write slowdown is bandwidth-driven: <code>WriteThrottleMaxRate</code> applies when
+slowdown first becomes active, and pressure lowers the target rate toward
+<code>WriteThrottleMinRate</code> as compaction debt approaches the stop threshold.</li>
+</ul>
 <h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
 <p>For convenience, you can load engine options from a TOML file. Unspecified
 fields keep their defaults from <code>NewDefaultOptions</code>.</p>

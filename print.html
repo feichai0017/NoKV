@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -257,7 +257,7 @@
 <h3 style="margin-top: 0;">🧠 Smart Caching</h3>
 
     
-<p>Built-in <strong>W-TinyLFU</strong> Block Cache (via Ristretto) and <strong>HotRing</strong> implementation ensure 99% cache hit rates and adapt to skew access patterns.</p>
+<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches and <strong>HotRing</strong> keep hot working sets close to the read path.</p>
 
   </div>
 
@@ -311,7 +311,7 @@ graph TD
     
     subgraph "Cache Layer"
         BlockCache["Block Cache (Ristretto)"] -.-&gt; SSTable
-        IndexCache["Index Cache (W-TinyLFU)"] -.-&gt; SSTable
+        IndexCache["Index Cache (W-TinyLFU, byte budget)"] -.-&gt; SSTable
     end
 </pre>
 
@@ -614,8 +614,8 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Scripts:
 <ul>
 <li><code>scripts/run_local_cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
-<li><code>scripts/recovery_scenarios.sh</code> – crash-recovery test harness.</li>
-<li><code>scripts/transport_chaos.sh</code> – inject network faults and observe transport metrics.</li>
+<li><code>RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v</code> – crash-recovery validation.</li>
+<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> – inject network faults and observe transport metrics.</li>
 </ul>
 </li>
 </ul>
@@ -1204,6 +1204,7 @@ calling <code>NoKV.Open(opt)</code>.</p>
 <li><strong>Write pipeline</strong>
 <ul>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
+<li><code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code></li>
 </ul>
 </li>
 <li><strong>Value log</strong>
@@ -1226,13 +1227,13 @@ calling <code>NoKV.Open(opt)</code>.</p>
 </li>
 <li><strong>Caches</strong>
 <ul>
-<li><code>BlockCacheSize</code>, <code>BloomCacheSize</code></li>
+<li><code>BlockCacheBytes</code>, <code>IndexCacheBytes</code>, <code>BloomCacheBytes</code></li>
 </ul>
 </li>
 <li><strong>Hot key throttling</strong>
 <ul>
 <li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
-<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
+<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, <code>HotReadPrefetchThreshold</code>, <code>HotReadPrefetchCooldown</code>, decay/window settings</li>
 <li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
 <li><code>ValueLogHotRingOverride</code> + <code>ValueLogHotRing*</code> overrides</li>
 </ul>
@@ -1259,6 +1260,15 @@ opt.WriteBatchMaxCount = 128
 db := NoKV.Open(opt)
 defer db.Close()
 </code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>Open()</code> normalizes legacy fallback fields once at the option boundary. The
+DB and LSM layers then consume the resolved values directly instead of
+re-applying defaults internally.</li>
+<li>Write slowdown is bandwidth-driven: <code>WriteThrottleMaxRate</code> applies when
+slowdown first becomes active, and pressure lowers the target rate toward
+<code>WriteThrottleMinRate</code> as compaction debt approaches the stop threshold.</li>
+</ul>
 <h3 id="load-options-from-toml"><a class="header" href="#load-options-from-toml">Load Options From TOML</a></h3>
 <p>For convenience, you can load engine options from a TOML file. Unspecified
 fields keep their defaults from <code>NewDefaultOptions</code>.</p>
@@ -1745,7 +1755,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <ul>
 <li>Tune <code>Options.IngestCompactBatchSize</code> when ingest queues build up; increasing it lets a single move cover more tables.</li>
 <li>Observe <code>NoKV.Stats.cache.*</code> and <code>NoKV.Stats.compaction.*</code> via the CLI (<code>nokv stats</code>) to decide whether you need more compaction workers or bigger caches.</li>
-<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheSize</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.</li>
+<li>For workloads dominated by range scans, consider increasing <code>Options.BlockCacheBytes</code> if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.</li>
 <li>Keep an eye on <code>NoKV.Stats.value_log.gc</code> (for example <code>gc_runs</code> and <code>head_updates</code>); if compactions are generating discard stats but the value log head doesn’t move, GC thresholds may be too conservative.</li>
 </ul>
 <p>With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.</p>
@@ -2066,7 +2076,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <li>Metrics in <a href="../stats.go"><code>stats.go</code></a> report segment counts, pending deletions, discard queue depth, and GC head pointer via <code>expvar</code>.</li>
 <li>GC scheduling exposes <code>NoKV.Stats.value_log.gc</code> (including <code>gc_parallelism</code>, <code>gc_active</code>, <code>gc_scheduled</code>, <code>gc_throttled</code>, <code>gc_skipped</code>, <code>gc_rejected</code>) for diagnostics.</li>
 <li><code>nokv vlog --workdir &lt;dir&gt;</code> loads a manager in read-only mode and prints current head plus file status (valid, gc candidate). It invokes <a href="../vlog/io.go"><code>vlog.VerifyDir</code></a> before describing segments.</li>
-<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages to stdout.</li>
+<li>Recovery traces controlled by <code>RECOVERY_TRACE_METRICS</code> log every head movement and file removal, aiding pressure testing of GC edge cases. For ad-hoc diagnostics, enable <code>Options.ValueLogVerbose</code> to emit replay/GC messages through the process <code>slog</code> logger.</li>
 </ul>
 <hr>
 <h2 id="10-quick-comparison"><a class="header" href="#10-quick-comparison">10. Quick Comparison</a></h2>
@@ -2344,18 +2354,18 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 <tr><th>Component</th><th>Purpose</th><th>Source</th></tr>
 </thead>
 <tbody>
-<tr><td><code>cache.indexs</code></td><td>Table index cache (<code>fid</code> → <code>*pb.TableIndex</code>) reused across reopen.</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
+<tr><td><code>cache.indexes</code></td><td>Byte-budgeted W-TinyLFU cache for decoded table indexes (<code>fid</code> → <code>*pb.TableIndex</code>).</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
 <tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>bloomCache</code></td><td>LRU cache of bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>bloomCache</code></td><td>Budgeted LRU for bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
 <tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger uses a similar block cache split (<code>Pinner</code>/<code>Cache</code>) while RocksDB exposes block cache(s) via the <code>BlockBasedTableOptions</code>. NoKV keeps it Go-native and GC-friendly.</p>
+<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block/index/bloom caches distinct, but all three now use byte budgets so memory planning stays explicit.</p>
 <hr>
 <h3 id="11-index-cache--handles"><a class="header" href="#11-index-cache--handles">1.1 Index Cache &amp; Handles</a></h3>
 <ul>
-<li>SSTable metadata stays with the <code>table</code> struct, while decoded protobuf indexes are stored in <code>cache.indexs</code>. Lookups first hit the cache before falling back to disk.</li>
+<li>SSTable metadata stays with the <code>table</code> struct, while decoded protobuf indexes are stored in <code>cache.indexes</code>. Lookups first hit the cache before falling back to disk.</li>
 <li>SST handles are reopened on demand for lower levels. L0/L1 tables keep their file descriptors pinned, while deeper levels close them once no iterator is using the table.</li>
 </ul>
 <hr>
@@ -2364,7 +2374,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <ul>
-<li><code>Options.BlockCacheSize</code> sets capacity in <strong>blocks</strong> (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.</li>
+<li><code>Options.BlockCacheBytes</code> sets the block-cache budget in bytes. Entries are admitted with an estimated block footprint, so larger blocks naturally consume more of the budget.</li>
 <li>Per-table direct slots (<code>table.cacheSlots[idx]</code>) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).</li>
 <li>Evictions clear the table slot via <code>OnEvict</code>; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.</li>
 <li>Access patterns: <code>getBlock</code> also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.</li>
@@ -2383,7 +2393,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <ul>
 <li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
 <li>Cache policy is LRU.</li>
-<li>Capacity is controlled by <code>Options.BloomCacheSize</code>.</li>
+<li>Capacity is controlled by <code>Options.BloomCacheBytes</code>.</li>
+<li><code>indexCache</code> keeps the existing W-TinyLFU admission path and budgets decoded <code>pb.TableIndex</code> payloads using the protobuf-encoded size (<code>proto.Size</code>).</li>
 <li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
@@ -2430,6 +2441,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <ul>
 <li>If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.</li>
 <li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
+<li>Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.</li>
 </ul>
 <p>More on SST layout lives in <a href="#manifest--version-management"><code>docs/manifest.md</code></a> and <a href="#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2508,6 +2520,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <h2 id="6-operational-tips"><a class="header" href="#6-operational-tips">6. Operational Tips</a></h2>
 <ul>
 <li><code>Options.HotRingTopK</code> controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.</li>
+<li><code>Options.HotReadPrefetchThreshold</code> and <code>Options.HotReadPrefetchCooldown</code> control when hot reads trigger async cache prefetch and how quickly the same key can be prefetched again.</li>
 <li>Combine <code>TouchAndClamp</code> with request middleware to detect abusive tenants: when <code>limited</code> is true, log the key and latency impact.</li>
 <li>Resetting the ring is as simple as instantiating a new <code>HotRing</code>—useful for benchmarks that require clean counters between phases.</li>
 </ul>
@@ -2524,6 +2537,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <tr><td><code>HotRingEnabled</code></td><td><code>true</code></td><td>Master switch for DB hot tracking.</td></tr>
 <tr><td><code>HotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
 <tr><td><code>HotRingTopK</code></td><td><code>16</code></td><td>Top-K hot keys for stats/CLI.</td></tr>
+<tr><td><code>HotReadPrefetchThreshold</code></td><td><code>16</code></td><td>Async prefetch starts once a key reaches this read count.</td></tr>
+<tr><td><code>HotReadPrefetchCooldown</code></td><td><code>15s</code></td><td>Suppress repeated prefetch for the same hot key.</td></tr>
 <tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
 <tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>
@@ -3093,7 +3108,7 @@ size/traffic heuristics.</li>
 <ul>
 <li><code>store.RegionMetrics()</code> feeds into <code>StatsSnapshot</code>, making region counts and backlog visible via expvar and <code>nokv stats</code>.</li>
 <li><code>nokv regions</code> shows manifest-backed regions: ID, range, peers, state.</li>
-<li><code>scripts/transport_chaos.sh</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
+<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
 </ul>
 <h3 id="store-internals-at-a-glance"><a class="header" href="#store-internals-at-a-glance">Store internals at a glance</a></h3>
 <div class="table-wrapper">
@@ -3309,8 +3324,9 @@ stronger HA semantics is incremental.</li>
 <pre><code class="language-bash">go test ./... -run 'Recovery|ReplayHandlesTruncate'
 </code></pre>
 <p>Set <code>RECOVERY_TRACE_METRICS=1</code> to emit <code>RECOVERY_METRIC ...</code> lines in tests.</p>
-<h3 id="32-script-harness"><a class="header" href="#32-script-harness">3.2 Script harness</a></h3>
-<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+<h3 id="32-targeted-harness-command"><a class="header" href="#32-targeted-harness-command">3.2 Targeted harness command</a></h3>
+<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 </code></pre>
 <p>Outputs are saved under <code>artifacts/recovery/</code>.</p>
 <h3 id="33-cli-checks"><a class="header" href="#33-cli-checks">3.3 CLI checks</a></h3>
@@ -3482,13 +3498,15 @@ GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...
 go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|TwoPhaseCommit)'
 
 # Crash recovery scenarios
-RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 # Protobuf schema hygiene
 make proto-check
 
 # gRPC transport chaos tests + watchdog metrics
-CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
+CHAOS_TRACE_METRICS=1 \
+go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 
 # Sample PD-lite service for shared TSO / routing in distributed tests
 go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
@@ -3548,7 +3566,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><th>Scenario</th><th>Coverage</th><th>Focus</th></tr>
 </thead>
 <tbody>
-<tr><td>Crash recovery</td><td><code>db_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
+<tr><td>Crash recovery</td><td><code>db_test.go</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
 <tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Distributed transaction contention</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>percolator/*_test.go</code></td><td>Lock conflicts, retries, and 2PC sequencing under region routing.</td></tr>
 <tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
@@ -3562,8 +3580,8 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <hr>
 <h2 id="4-observability-in-tests"><a class="header" href="#4-observability-in-tests">4. Observability in Tests</a></h2>
 <ul>
-<li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; consumed by recovery script and helpful when triaging CI failures.</li>
-<li><strong>TRANSPORT_METRIC logs</strong> – emitted by <code>scripts/transport_chaos.sh</code> when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
+<li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; helpful when triaging targeted recovery suites and CI failures.</li>
+<li><strong>TRANSPORT_METRIC logs</strong> – emitted by transport chaos tests when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
 <li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
 <li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/benchmark_results/*.txt</code> for historical comparison. Aligns with README instructions.</li>
 </ul>
@@ -3622,14 +3640,19 @@ The script iterates over every store in the config and writes Region metadata vi
 <tr><th>Script</th><th>Purpose</th></tr>
 </thead>
 <tbody>
-<tr><td><code>scripts/recovery_scenarios.sh</code></td><td>Runs crash-recovery scenarios across WAL/manifest/vlog. Set <code>RECOVERY_TRACE_METRICS=1</code> to collect metrics under <code>artifacts/recovery/</code>.</td></tr>
-<tr><td><code>scripts/transport_chaos.sh</code></td><td>Injects disconnects/blocks/delay into the <code>raftstore</code> transport to observe behaviour under faulty networks.</td></tr>
 <tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-F; optional RocksDB via build tags).</td></tr>
 <tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
 <tr><td><code>scripts/gen.sh</code></td><td>Generates protobuf Go bindings through Buf with pinned remote plugin versions.</td></tr>
 </tbody>
 </table>
 </div>
+<p>For recovery and transport fault validation, use direct Go test commands instead of shell wrappers:</p>
+<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
+
+CHAOS_TRACE_METRICS=1 \
+go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
+</code></pre>
 <hr>
 <h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
 <h3 id="cmdnokv-pd"><a class="header" href="#cmdnokv-pd"><code>cmd/nokv pd</code></a></h3>

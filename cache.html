@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -188,18 +188,18 @@
 <tr><th>Component</th><th>Purpose</th><th>Source</th></tr>
 </thead>
 <tbody>
-<tr><td><code>cache.indexs</code></td><td>Table index cache (<code>fid</code> → <code>*pb.TableIndex</code>) reused across reopen.</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
+<tr><td><code>cache.indexes</code></td><td>Byte-budgeted W-TinyLFU cache for decoded table indexes (<code>fid</code> → <code>*pb.TableIndex</code>).</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
 <tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>bloomCache</code></td><td>LRU cache of bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
+<tr><td><code>bloomCache</code></td><td>Budgeted LRU for bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
 <tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger uses a similar block cache split (<code>Pinner</code>/<code>Cache</code>) while RocksDB exposes block cache(s) via the <code>BlockBasedTableOptions</code>. NoKV keeps it Go-native and GC-friendly.</p>
+<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block/index/bloom caches distinct, but all three now use byte budgets so memory planning stays explicit.</p>
 <hr>
 <h3 id="11-index-cache--handles"><a class="header" href="#11-index-cache--handles">1.1 Index Cache &amp; Handles</a></h3>
 <ul>
-<li>SSTable metadata stays with the <code>table</code> struct, while decoded protobuf indexes are stored in <code>cache.indexs</code>. Lookups first hit the cache before falling back to disk.</li>
+<li>SSTable metadata stays with the <code>table</code> struct, while decoded protobuf indexes are stored in <code>cache.indexes</code>. Lookups first hit the cache before falling back to disk.</li>
 <li>SST handles are reopened on demand for lower levels. L0/L1 tables keep their file descriptors pinned, while deeper levels close them once no iterator is using the table.</li>
 </ul>
 <hr>
@@ -208,7 +208,7 @@
 Deeper levels rely on OS page cache + mmap readahead
 </code></pre>
 <ul>
-<li><code>Options.BlockCacheSize</code> sets capacity in <strong>blocks</strong> (cost=1 per block). Entries keep parsed blocks (data slice + offsets/baseKey/checksum), so hits avoid re-parsing.</li>
+<li><code>Options.BlockCacheBytes</code> sets the block-cache budget in bytes. Entries are admitted with an estimated block footprint, so larger blocks naturally consume more of the budget.</li>
 <li>Per-table direct slots (<code>table.cacheSlots[idx]</code>) give a lock-free fast path. Misses fall back to the shared Ristretto cache (approx LFU with admission).</li>
 <li>Evictions clear the table slot via <code>OnEvict</code>; user-space cache only tracks L0/L1 blocks. Deeper levels depend on the OS page cache.</li>
 <li>Access patterns: <code>getBlock</code> also updates hit/miss metrics for L0/L1; deeper levels bypass the cache and do not affect metrics.</li>
@@ -227,7 +227,8 @@ Deeper levels rely on OS page cache + mmap readahead
 <ul>
 <li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
 <li>Cache policy is LRU.</li>
-<li>Capacity is controlled by <code>Options.BloomCacheSize</code>.</li>
+<li>Capacity is controlled by <code>Options.BloomCacheBytes</code>.</li>
+<li><code>indexCache</code> keeps the existing W-TinyLFU admission path and budgets decoded <code>pb.TableIndex</code> payloads using the protobuf-encoded size (<code>proto.Size</code>).</li>
 <li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
@@ -274,6 +275,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <ul>
 <li>If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.</li>
 <li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
+<li>Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.</li>
 </ul>
 <p>More on SST layout lives in <a href="manifest.html"><code>docs/manifest.md</code></a> and <a href="architecture.html#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
 

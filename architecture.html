@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -382,8 +382,8 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Scripts:
 <ul>
 <li><code>scripts/run_local_cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
-<li><code>scripts/recovery_scenarios.sh</code> – crash-recovery test harness.</li>
-<li><code>scripts/transport_chaos.sh</code> – inject network faults and observe transport metrics.</li>
+<li><code>RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v</code> – crash-recovery validation.</li>
+<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> – inject network faults and observe transport metrics.</li>
 </ul>
 </li>
 </ul>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -231,8 +231,9 @@
 <pre><code class="language-bash">go test ./... -run 'Recovery|ReplayHandlesTruncate'
 </code></pre>
 <p>Set <code>RECOVERY_TRACE_METRICS=1</code> to emit <code>RECOVERY_METRIC ...</code> lines in tests.</p>
-<h3 id="32-script-harness"><a class="header" href="#32-script-harness">3.2 Script harness</a></h3>
-<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+<h3 id="32-targeted-harness-command"><a class="header" href="#32-targeted-harness-command">3.2 Targeted harness command</a></h3>
+<pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 </code></pre>
 <p>Outputs are saved under <code>artifacts/recovery/</code>.</p>
 <h3 id="33-cli-checks"><a class="header" href="#33-cli-checks">3.3 CLI checks</a></h3>

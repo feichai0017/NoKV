@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -339,7 +339,7 @@ size/traffic heuristics.</li>
 <ul>
 <li><code>store.RegionMetrics()</code> feeds into <code>StatsSnapshot</code>, making region counts and backlog visible via expvar and <code>nokv stats</code>.</li>
 <li><code>nokv regions</code> shows manifest-backed regions: ID, range, peers, state.</li>
-<li><code>scripts/transport_chaos.sh</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
+<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
 </ul>
 <h3 id="store-internals-at-a-glance"><a class="header" href="#store-internals-at-a-glance">Store internals at a glance</a></h3>
 <div class="table-wrapper">

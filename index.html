@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -256,7 +256,7 @@
 <h3 style="margin-top: 0;">🧠 Smart Caching</h3>
 
     
-<p>Built-in <strong>W-TinyLFU</strong> Block Cache (via Ristretto) and <strong>HotRing</strong> implementation ensure 99% cache hit rates and adapt to skew access patterns.</p>
+<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches and <strong>HotRing</strong> keep hot working sets close to the read path.</p>
 
   </div>
 
@@ -310,7 +310,7 @@ graph TD
     
     subgraph "Cache Layer"
         BlockCache["Block Cache (Ristretto)"] -.-&gt; SSTable
-        IndexCache["Index Cache (W-TinyLFU)"] -.-&gt; SSTable
+        IndexCache["Index Cache (W-TinyLFU, byte budget)"] -.-&gt; SSTable
     end
 </pre>
 

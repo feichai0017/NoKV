@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab541a1.js";
+            window.path_to_searchindex_js = "searchindex-9f7e8a21.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -189,13 +189,15 @@ GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...
 go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|TwoPhaseCommit)'
 
 # Crash recovery scenarios
-RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 # Protobuf schema hygiene
 make proto-check
 
 # gRPC transport chaos tests + watchdog metrics
-CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
+CHAOS_TRACE_METRICS=1 \
+go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 
 # Sample PD-lite service for shared TSO / routing in distributed tests
 go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
@@ -255,7 +257,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><th>Scenario</th><th>Coverage</th><th>Focus</th></tr>
 </thead>
 <tbody>
-<tr><td>Crash recovery</td><td><code>db_test.go</code>, <code>scripts/recovery_scenarios.sh</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
+<tr><td>Crash recovery</td><td><code>db_test.go</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
 <tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Distributed transaction contention</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>percolator/*_test.go</code></td><td>Lock conflicts, retries, and 2PC sequencing under region routing.</td></tr>
 <tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
@@ -269,8 +271,8 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <hr>
 <h2 id="4-observability-in-tests"><a class="header" href="#4-observability-in-tests">4. Observability in Tests</a></h2>
 <ul>
-<li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; consumed by recovery script and helpful when triaging CI failures.</li>
-<li><strong>TRANSPORT_METRIC logs</strong> – emitted by <code>scripts/transport_chaos.sh</code> when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
+<li><strong>RECOVERY_METRIC logs</strong> – produced when <code>RECOVERY_TRACE_METRICS=1</code>; helpful when triaging targeted recovery suites and CI failures.</li>
+<li><strong>TRANSPORT_METRIC logs</strong> – emitted by transport chaos tests when <code>CHAOS_TRACE_METRICS=1</code>, capturing gRPC watchdog counters during network partitions and retries.</li>
 <li><strong>Stats snapshots</strong> – <code>stats_test.go</code> verifies JSON structure so CLI output remains backwards compatible.</li>
 <li><strong>Benchmark artefacts</strong> – stored under <code>benchmark/benchmark_results/*.txt</code> for historical comparison. Aligns with README instructions.</li>
 </ul>
