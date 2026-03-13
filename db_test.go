@@ -2200,6 +2200,7 @@ func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
 	opt.FS = fs
+	opt.WALBufferSize = 256 << 10 // Force large write to hit injected error.
 
 	db := Open(opt)
 	// Use a large payload to force bufio flush and hit underlying file Write.

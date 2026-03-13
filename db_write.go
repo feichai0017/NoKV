@@ -358,8 +358,7 @@ func (db *DB) commitWorker() {
 		batch.batchStart = time.Now()
 		requests, totalEntries, totalSize, waitSum := db.collectCommitRequests(batch.reqs, batch.batchStart)
 		if len(requests) == 0 {
-			db.finishCommitRequests(batch.reqs, nil, nil)
-			db.releaseCommitBatch(batch)
+			db.ackCommitBatch(batch.reqs, batch.pool, nil, -1, nil)
 			continue
 		}
 		batch.requests = requests
@@ -370,8 +369,7 @@ func (db *DB) commitWorker() {
 		err := db.vlog.write(requests)
 
 		if err != nil {
-			db.finishCommitRequests(batch.reqs, err, nil)
-			db.releaseCommitBatch(batch)
+			db.ackCommitBatch(batch.reqs, batch.pool, requests, -1, err)
 			continue
 		}
 		if db.writeMetrics != nil {
@@ -382,9 +380,34 @@ func (db *DB) commitWorker() {
 		}
 
 		failedAt, err := db.applyRequests(batch.requests)
-		if err == nil && db.opt.SyncWrites {
-			err = db.wal.Sync()
+
+		// If a dedicated sync pipeline is enabled and apply succeeded, hand off
+		// to the sync worker for fsync + ack so we don't block the commit loop.
+		if err == nil && db.syncQueue != nil {
+			sb := &syncBatch{
+				reqs:      batch.reqs,
+				pool:      batch.pool,
+				requests:  batch.requests,
+				failedAt:  failedAt,
+				applyDone: time.Now(),
+			}
+			// Detach from commitBatch so releaseCommitBatch won't reclaim it.
+			batch.reqs = nil
+			batch.pool = nil
+			db.releaseCommitBatch(batch)
+			db.syncQueue <- sb
+			continue
 		}
+
+		if err == nil && db.opt.SyncWrites {
+			syncStart := time.Now()
+			err = db.wal.Sync()
+			if db.writeMetrics != nil {
+				db.writeMetrics.RecordSync(time.Since(syncStart), 1)
+			}
+		}
+
+		// Record apply metrics.
 		if db.writeMetrics != nil {
 			totalDur := max(time.Since(batch.batchStart), 0)
 			applyDur := max(totalDur-batch.valueLogDur, 0)
@@ -392,25 +415,94 @@ func (db *DB) commitWorker() {
 				db.writeMetrics.RecordApply(applyDur)
 			}
 		}
-		if err != nil && failedAt >= 0 {
-			perReqErr := make(map[*request]error, len(batch.requests)-failedAt)
-			for i := failedAt; i < len(batch.requests); i++ {
-				if batch.requests[i] == nil {
-					continue
+
+		db.ackCommitBatch(batch.reqs, batch.pool, batch.requests, failedAt, err)
+	}
+}
+
+// syncWorker runs a dedicated goroutine that batches pending syncBatch items,
+// calls wal.Sync() once for the whole batch, then acks all enclosed requests.
+// This decouples the fsync latency from the commit pipeline so commitWorker can
+// keep applying new writes to the LSM/WAL buffer while a previous fsync is in
+// flight.
+func (db *DB) syncWorker() {
+	defer db.syncWG.Done()
+
+	// Temporary buffer for draining the channel in bulk.
+	pending := make([]*syncBatch, 0, 64)
+
+	for first := range db.syncQueue {
+		pending = append(pending, first)
+		// Drain everything currently queued so we coalesce a single fsync.
+	drain:
+		for {
+			select {
+			case sb, ok := <-db.syncQueue:
+				if !ok {
+					break drain
 				}
-				perReqErr[batch.requests[i]] = err
+				pending = append(pending, sb)
+			default:
+				break drain
 			}
-			db.finishCommitRequests(batch.reqs, nil, perReqErr)
-		} else {
-			db.finishCommitRequests(batch.reqs, err, nil)
 		}
-		db.releaseCommitBatch(batch)
+
+		// One fsync covers all pending batches.
+		syncStart := time.Now()
+		syncErr := db.wal.Sync()
+		if db.writeMetrics != nil {
+			db.writeMetrics.RecordSync(time.Since(syncStart), len(pending))
+		}
+
+		// Ack every request in every pending syncBatch.
+		for _, sb := range pending {
+			db.ackCommitBatch(sb.reqs, sb.pool, sb.requests, sb.failedAt, syncErr)
+		}
+		pending = pending[:0]
+	}
+}
+
+// ackCommitBatch finishes a batch of commit requests: sets per-request errors,
+// signals waiters, and returns the backing slice to the pool.
+//
+// requests is the ordered slice returned by collectCommitRequests (same order as
+// applyRequests processes them). failedAt is the index into requests where the
+// first error occurred; requests before that index succeeded and get nil error.
+// When failedAt < 0, every request receives defaultErr uniformly (which may be
+// nil on success).
+func (db *DB) ackCommitBatch(reqs []*commitRequest, pool *[]*commitRequest, requests []*request, failedAt int, defaultErr error) {
+	if defaultErr != nil && failedAt >= 0 && failedAt < len(requests) {
+		// Partial failure: only requests[failedAt:] receive the error;
+		// earlier requests already applied successfully and get nil.
+		perReqErr := make(map[*request]error, len(requests)-failedAt)
+		for i := failedAt; i < len(requests); i++ {
+			if requests[i] != nil {
+				perReqErr[requests[i]] = defaultErr
+			}
+		}
+		db.finishCommitRequests(reqs, nil, perReqErr)
+	} else {
+		// Global success or global failure — every request gets defaultErr.
+		db.finishCommitRequests(reqs, defaultErr, nil)
+	}
+	if pool != nil {
+		for i := range reqs {
+			reqs[i] = nil
+		}
+		*pool = reqs[:0]
+		db.commitBatchPool.Put(pool)
 	}
 }
 
 func (db *DB) stopCommitWorkers() {
 	db.commitQueue.close()
 	db.commitWG.Wait()
+	// After commit workers are done, close the sync queue so the sync worker
+	// drains remaining batches and exits.
+	if db.syncQueue != nil {
+		close(db.syncQueue)
+		db.syncWG.Wait()
+	}
 }
 
 func (db *DB) collectCommitRequests(reqs []*commitRequest, now time.Time) ([]*request, int, int64, int64) {

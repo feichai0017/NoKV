@@ -177,6 +177,9 @@ type WriteStatsSnapshot struct {
 	AvgRequestWaitMs float64 `json:"avg_request_wait_ms"`
 	AvgValueLogMs    float64 `json:"avg_vlog_ms"`
 	AvgApplyMs       float64 `json:"avg_apply_ms"`
+	AvgSyncMs        float64 `json:"avg_sync_ms"`
+	AvgSyncBatch     float64 `json:"avg_sync_batch"`
+	SyncCount        int64   `json:"sync_count"`
 	BatchesTotal     int64   `json:"batches_total"`
 	ThrottleActive   bool    `json:"throttle_active"`
 	SlowdownActive   bool    `json:"slowdown_active"`
@@ -396,6 +399,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.AvgRequestWaitMs = wsnap.AvgRequestWaitMs
 		snap.Write.AvgValueLogMs = wsnap.AvgValueLogMs
 		snap.Write.AvgApplyMs = wsnap.AvgApplyMs
+		snap.Write.AvgSyncMs = wsnap.AvgSyncMs
+		snap.Write.AvgSyncBatch = wsnap.AvgSyncBatch
+		snap.Write.SyncCount = wsnap.SyncSamples
 		snap.Write.BatchesTotal = wsnap.Batches
 	}
 	stopActive := s.db.blockWrites.Load() == 1

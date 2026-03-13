@@ -13,6 +13,7 @@ func TestWriteMetricsSnapshot(t *testing.T) {
 	m.RecordBatch(2, 20, 2048, int64(3*time.Millisecond))
 	m.RecordValueLog(5 * time.Millisecond)
 	m.RecordApply(7 * time.Millisecond)
+	m.RecordSync(2*time.Millisecond, 3)
 
 	snap := m.Snapshot()
 	if snap.QueueLen != 5 || snap.QueueEntries != 10 || snap.QueueBytes != 1024 {
@@ -23,6 +24,15 @@ func TestWriteMetricsSnapshot(t *testing.T) {
 	}
 	if snap.AvgRequestWaitMs <= 0 || snap.AvgValueLogMs <= 0 || snap.AvgApplyMs <= 0 {
 		t.Fatalf("timing averages missing: %+v", snap)
+	}
+	if snap.SyncSamples != 1 {
+		t.Fatalf("expected 1 sync sample, got %d", snap.SyncSamples)
+	}
+	if snap.AvgSyncMs <= 0 {
+		t.Fatalf("expected positive AvgSyncMs, got %f", snap.AvgSyncMs)
+	}
+	if snap.AvgSyncBatch != 3.0 {
+		t.Fatalf("expected AvgSyncBatch=3, got %f", snap.AvgSyncBatch)
 	}
 }
 
