@@ -201,3 +201,21 @@ func (db *DB) executePrefetch(req prefetchRequest) {
 		}
 	}
 }
+
+func (db *DB) hotReadKeys() [][]byte {
+	if db == nil || db.hotRead == nil {
+		return nil
+	}
+	top := db.hotRead.TopN(db.opt.HotRingTopK)
+	if len(top) == 0 {
+		return nil
+	}
+	keys := make([][]byte, 0, len(top))
+	for _, item := range top {
+		if item.Key == "" {
+			continue
+		}
+		keys = append(keys, kv.InternalKey(kv.CFDefault, []byte(item.Key), nonTxnMaxVersion))
+	}
+	return keys
+}

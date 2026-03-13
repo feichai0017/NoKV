@@ -1,6 +1,6 @@
 # MemTable Flush Pipeline
 
-NoKV's flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The task scheduler is in [`lsm/flush`](../lsm/flush); SST persistence and manifest install are in [`lsm/builder.go`](../lsm/builder.go) and [`lsm/levels.go`](../lsm/levels.go).
+NoKV's flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in [`lsm/flush_runtime.go`](../lsm/flush_runtime.go); SST persistence and manifest install are in [`lsm/builder.go`](../lsm/builder.go) and [`lsm/levels.go`](../lsm/levels.go).
 
 ---
 
@@ -13,25 +13,25 @@ NoKV's flush path converts immutable memtables into L0 SST files, then advances 
 
 ---
 
-## 2. Stage Machine
+## 2. Concrete Flush Queue
 
 ```mermaid
 flowchart LR
     Active[Active MemTable]
     Immutable[Immutable MemTable]
-    FlushQ[flush.Manager queue]
-    Build[StageBuild]
-    Install[StageInstall]
-    Release[StageRelease]
+    FlushQ[flush queue]
+    Build[Build SST]
+    Install[Install SST]
+    Release[Release MemTable]
 
     Active -->|threshold reached| Immutable --> FlushQ
     FlushQ --> Build --> Install --> Release --> Active
 ```
 
-- **StagePrepare**: `flush.Manager.Submit` enqueues task and records wait-start time.
-- **StageBuild**: worker pulls task via `flush.Manager.Next`, builds SST (`levelManager.flush` -> `openTable` -> `tableBuilder.flush`).
-- **StageInstall**: after SST + manifest edits succeed, worker marks install complete (`flush.Manager.Update(..., StageInstall, ...)`).
-- **StageRelease**: worker removes immutable from in-memory list, closes memtable, records release metrics, and completes task.
+- **Enqueue**: `lsm.submitFlush` pushes the immutable memtable into the concrete flush queue and records wait-start time.
+- **Build**: worker pulls the next task, builds the SST (`levelManager.flush` -> `openTable` -> `tableBuilder.flush`).
+- **Install**: after SST + manifest edits succeed, the worker records install timing.
+- **Release**: worker removes the immutable from memory, closes the memtable, records release timing, and completes the task.
 
 ---
 
@@ -57,7 +57,7 @@ This is the durability ordering used by current code.
 ## 4. Execution Path in Code
 
 1. `lsm.Set`/`lsm.SetBatch` detects `walSize + estimate > MemTableSize` and rotates memtable.
-2. Rotated memtable is submitted to `flush.Manager` (`lsm.submitFlush`).
+2. Rotated memtable is submitted to the flush queue (`lsm.submitFlush`).
 3. Worker executes `levelManager.flush(mt)`:
    - iterates memtable entries,
    - builds SST via `tableBuilder`,
@@ -77,7 +77,7 @@ This is the durability ordering used by current code.
 
 ## 6. Metrics & CLI
 
-`flush.Manager.Stats()` feeds `StatsSnapshot.Flush`:
+`flushRuntime.stats()` feeds `StatsSnapshot.Flush`:
 
 - `pending`, `queue`, `active`
 - wait/build/release totals, counts, last, max
@@ -95,7 +95,7 @@ to inspect flush backlog and latency.
 
 ## 7. Related Tests
 
-- `lsm/flush/manager_test.go`: queue/stage transitions and timing counters.
+- `lsm/flush_runtime_test.go`: queue lifecycle and timing counters.
 - `db_test.go::TestRecoveryWALReplayRestoresData`: replay still restores data after crash before flush completion.
 - `db_test.go::TestRecoveryCleansMissingSSTFromManifest` and `db_test.go::TestRecoveryCleansCorruptSSTFromManifest`: stale manifest SST cleanup on startup.
 

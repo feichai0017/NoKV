@@ -99,12 +99,8 @@ func (s *Store) Close() {
 	if s == nil {
 		return
 	}
-	if s.heartbeat != nil {
-		s.heartbeat.stopLoop()
-	}
-	if s.operations != nil {
-		s.operations.stopLoop()
-	}
+	s.stopHeartbeatLoop()
+	s.stopOperationLoop()
 	if s.scheduler != nil {
 		_ = s.scheduler.Close()
 	}

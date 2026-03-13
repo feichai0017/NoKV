@@ -26,7 +26,7 @@ flowchart TD
 3. **Manifest replay + SST load**: `levelManager.build` replays manifest version and opens SST files.
 4. **Stale SST cleanup**: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (`EditDeleteFile`) so startup can continue.
 5. **WAL replay**: `lsm.recovery` replays post-checkpoint WAL records into memtables.
-6. **Flush backlog restore**: recovered immutable memtables are resubmitted to `flush.Manager`.
+6. **Flush backlog restore**: recovered immutable memtables are resubmitted to the flush queue.
 7. **ValueLog recovery**: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.
 8. **Runtime restart**: metrics and periodic workers start again.
 

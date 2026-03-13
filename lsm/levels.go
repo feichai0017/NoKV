@@ -44,7 +44,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 		lsm.getLogger(),
 	)
 	if opt != nil && opt.HotKeyProvider != nil {
-		lm.setHotKeyProvider(opt.HotKeyProvider)
+		lm.hotProvider = opt.HotKeyProvider
 	}
 	return lm, nil
 }
@@ -65,7 +65,7 @@ type levelManager struct {
 	compactionLastNs atomic.Int64
 	compactionMaxNs  atomic.Int64
 	compactionRuns   atomic.Uint64
-	hotProvider      atomic.Value // func() [][]byte
+	hotProvider      func() [][]byte
 }
 
 // LevelMetrics aliases the shared metrics package model to keep the lsm API stable.
@@ -86,16 +86,6 @@ func (lm *levelManager) close() error {
 		closeErr = errors.Join(closeErr, lm.levels[i].close())
 	}
 	return closeErr
-}
-
-func (lm *levelManager) setHotKeyProvider(fn func() [][]byte) {
-	if lm == nil {
-		return
-	}
-	if fn == nil {
-		return
-	}
-	lm.hotProvider.Store(fn)
 }
 
 func (lm *levelManager) getLogger() *slog.Logger {

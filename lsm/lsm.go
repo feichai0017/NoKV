@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/flush"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
@@ -24,11 +24,10 @@ type LSM struct {
 	option     *Options
 	closer     *utils.Closer
 	wal        *wal.Manager
-	flushMgr   *flush.Manager
+	flushQueue *flushRuntime
 	flushWG    sync.WaitGroup
 	logger     *slog.Logger
 
-	runtimeMu      sync.RWMutex
 	discardStatsCh chan map[manifest.ValueLogID]int64
 	walGCPolicy    WALGCPolicy
 
@@ -138,6 +137,10 @@ type Options struct {
 	// WALGCPolicy controls whether old WAL segments can be deleted.
 	// Nil defaults to AllowAllWALGCPolicy.
 	WALGCPolicy WALGCPolicy
+
+	// ThrottleCallback receives write admission changes after the LSM updates its
+	// internal throttle state.
+	ThrottleCallback func(WriteThrottleState)
 }
 
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
@@ -182,8 +185,8 @@ func (lsm *LSM) Close() error {
 	if lsm.closer != nil {
 		lsm.closer.Close()
 	}
-	if lsm.flushMgr != nil {
-		closeErr = errors.Join(closeErr, lsm.flushMgr.Close())
+	if lsm.flushQueue != nil {
+		closeErr = errors.Join(closeErr, lsm.flushQueue.close())
 	}
 	lsm.flushWG.Wait()
 
@@ -209,62 +212,18 @@ func (lsm *LSM) Close() error {
 	return closeErr
 }
 
-// SetDiscardStatsCh updates the discard stats channel used during compaction.
-func (lsm *LSM) SetDiscardStatsCh(ch *chan map[manifest.ValueLogID]int64) {
-	if lsm == nil {
-		return
-	}
-	var resolved chan map[manifest.ValueLogID]int64
-	if ch != nil {
-		resolved = *ch
-	}
-	lsm.runtimeMu.Lock()
-	lsm.discardStatsCh = resolved
-	lsm.runtimeMu.Unlock()
-}
-
-// SetHotKeyProvider wires a callback that returns currently hot keys as
-// InternalKey values so compaction can prioritise hot ranges.
-func (lsm *LSM) SetHotKeyProvider(fn func() [][]byte) {
-	if lsm == nil {
-		return
-	}
-	if fn == nil {
-		return
-	}
-	if lsm.levels != nil {
-		lsm.levels.setHotKeyProvider(fn)
-	}
-}
-
-// SetWALGCPolicy updates the WAL segment-GC strategy used by LSM recovery.
-func (lsm *LSM) SetWALGCPolicy(policy WALGCPolicy) {
-	if lsm == nil {
-		return
-	}
-	lsm.runtimeMu.Lock()
-	lsm.walGCPolicy = normalizeWALGCPolicy(policy)
-	lsm.runtimeMu.Unlock()
-}
-
 func (lsm *LSM) getDiscardStatsCh() chan map[manifest.ValueLogID]int64 {
 	if lsm == nil {
 		return nil
 	}
-	lsm.runtimeMu.RLock()
-	ch := lsm.discardStatsCh
-	lsm.runtimeMu.RUnlock()
-	return ch
+	return lsm.discardStatsCh
 }
 
 func (lsm *LSM) getWALGCPolicy() WALGCPolicy {
 	if lsm == nil {
 		return AllowAllWALGCPolicy{}
 	}
-	lsm.runtimeMu.RLock()
-	policy := lsm.walGCPolicy
-	lsm.runtimeMu.RUnlock()
-	return normalizeWALGCPolicy(policy)
+	return normalizeWALGCPolicy(lsm.walGCPolicy)
 }
 
 func (lsm *LSM) canRemoveWalSegment(id uint32) bool {
@@ -276,11 +235,6 @@ func (lsm *LSM) getLogger() *slog.Logger {
 		return slog.Default()
 	}
 	return lsm.logger
-}
-
-// SetThrottleCallback registers the DB-layer callback for write admission changes.
-func (lsm *LSM) SetThrottleCallback(fn func(WriteThrottleState)) {
-	lsm.throttleFn = fn
 }
 
 // ThrottleState reports the current write admission state.
@@ -346,18 +300,18 @@ func (lsm *LSM) throttleWrites(state WriteThrottleState, pressure uint32, rate u
 
 // FlushPending returns the number of pending flush tasks.
 func (lsm *LSM) FlushPending() int64 {
-	if lsm == nil || lsm.flushMgr == nil {
+	if lsm == nil || lsm.flushQueue == nil {
 		return 0
 	}
-	return lsm.flushMgr.Stats().Pending
+	return lsm.flushQueue.stats().Pending
 }
 
-// FlushMetrics returns detailed flush manager statistics.
-func (lsm *LSM) FlushMetrics() flush.Metrics {
-	if lsm == nil || lsm.flushMgr == nil {
-		return flush.Metrics{}
+// FlushMetrics returns detailed flush queue statistics.
+func (lsm *LSM) FlushMetrics() metrics.FlushMetrics {
+	if lsm == nil || lsm.flushQueue == nil {
+		return metrics.FlushMetrics{}
 	}
-	return lsm.flushMgr.Stats()
+	return lsm.flushQueue.stats()
 }
 
 // CompactionStats returns (#pending candidates, max adjusted score).
@@ -526,7 +480,8 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 		lsm.discardStatsCh = *frozen.DiscardStatsCh
 	}
 	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
-	lsm.flushMgr = flush.NewManager()
+	lsm.throttleFn = frozen.ThrottleCallback
+	lsm.flushQueue = newFlushRuntime()
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -833,7 +788,7 @@ func (lsm *LSM) submitFlush(mt *memTable) error {
 		return nil
 	}
 	mt.IncrRef()
-	if _, err := lsm.flushMgr.Submit(&flush.Task{SegmentID: mt.segmentID, Data: mt}); err != nil {
+	if err := lsm.flushQueue.enqueue(mt); err != nil {
 		mt.DecrRef()
 		return err
 	}
@@ -847,29 +802,23 @@ func (lsm *LSM) startFlushWorkers(n int) {
 	for i := 0; i < n; i++ {
 		lsm.flushWG.Go(func() {
 			for {
-				task, ok := lsm.flushMgr.Next()
+				task, ok := lsm.flushQueue.next()
 				if !ok {
 					return
 				}
-				mt, _ := task.Data.(*memTable)
+				mt := task.memTable
 				if mt == nil {
-					if err := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, errors.New("nil memtable")); err != nil {
-						lsm.getLogger().Error("flush task update", "error", err)
-					}
+					lsm.flushQueue.markDone(task)
 					continue
 				}
 
 				func() {
 					defer mt.DecrRef()
 					if err := lsm.levels.flush(mt); err != nil {
-						if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, err); updateErr != nil {
-							lsm.getLogger().Error("flush task update", "error", updateErr)
-						}
+						lsm.flushQueue.markDone(task)
 						return
 					}
-					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageInstall, nil, nil); updateErr != nil {
-						lsm.getLogger().Error("flush task update", "error", updateErr)
-					}
+					lsm.flushQueue.markInstalled(task)
 					lsm.lock.Lock()
 					for idx, imm := range lsm.immutables {
 						if imm == mt {
@@ -879,9 +828,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 					}
 					lsm.lock.Unlock()
 					_ = mt.close()
-					if updateErr := lsm.flushMgr.Update(task.ID, flush.StageRelease, nil, nil); updateErr != nil {
-						lsm.getLogger().Error("flush task update", "error", updateErr)
-					}
+					lsm.flushQueue.markDone(task)
 				}()
 			}
 		})

@@ -519,7 +519,7 @@ func (db *DB) initVLog() {
 		lfDiscardStats: &lfDiscardStats{
 			m:              make(map[manifest.ValueLogID]int64),
 			closer:         utils.NewCloser(),
-			flushChan:      make(chan map[manifest.ValueLogID]int64, 16),
+			flushChan:      db.discardStatsCh,
 			flushThreshold: threshold,
 		},
 		db:            db,

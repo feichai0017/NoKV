@@ -62,6 +62,7 @@ type (
 		nonTxnVersion     atomic.Uint64
 		blockWrites       atomic.Int32
 		slowWrites        atomic.Int32
+		discardStatsCh    chan map[manifest.ValueLogID]int64
 		vheads            map[uint32]kv.ValuePtr
 		lastLoggedHeads   map[uint32]kv.ValuePtr
 		headLogDelta      uint32
@@ -118,6 +119,9 @@ func Open(opt *Options) *DB {
 	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
+	db.hotRead = newHotTracker(opt)
+	db.hotWrite = newHotTrackerForWrite(opt)
+	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {
 		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
 		return &batch
@@ -182,24 +186,23 @@ func Open(opt *Options) *DB {
 		BlockCacheBytes:               db.opt.BlockCacheBytes,
 		IndexCacheBytes:               db.opt.IndexCacheBytes,
 		BloomCacheBytes:               db.opt.BloomCacheBytes,
+		DiscardStatsCh:                &db.discardStatsCh,
+		HotKeyProvider:                db.hotReadKeys,
 		ManifestSync:                  db.opt.ManifestSync,
 		ManifestRewriteThreshold:      db.opt.ManifestRewriteThreshold,
 		WALGCPolicy:                   newDBWALGCPolicy(db),
+		ThrottleCallback:              db.applyThrottle,
 	}, wlog)
 	utils.Panic(err)
 	db.lsm = lsmCore
-	db.lsm.SetThrottleCallback(db.applyThrottle)
 	seed := db.lsm.MaxVersion()
 	db.nonTxnVersion.Store(seed)
 	db.iterPool = newIteratorPool()
 	// Initialize the value log.
 	db.initVLog()
-	db.lsm.SetDiscardStatsCh(&(db.vlog.lfDiscardStats.flushChan))
 	// Initialize stats tracking.
 	db.stats = newStats(db)
 
-	db.hotRead = newHotTracker(opt)
-	db.hotWrite = newHotTrackerForWrite(opt)
 	if db.hotRead != nil {
 		db.prefetchThreshold = opt.HotReadPrefetchThreshold
 		db.prefetchCooldown = opt.HotReadPrefetchCooldown
@@ -211,23 +214,6 @@ func Open(opt *Options) *DB {
 		})
 		db.prefetchWG.Add(1)
 		go db.prefetchLoop()
-		db.lsm.SetHotKeyProvider(func() [][]byte {
-			if db.hotRead == nil {
-				return nil
-			}
-			top := db.hotRead.TopN(opt.HotRingTopK)
-			if len(top) == 0 {
-				return nil
-			}
-			keys := make([][]byte, 0, len(top))
-			for _, item := range top {
-				if item.Key == "" {
-					continue
-				}
-				keys = append(keys, kv.InternalKey(kv.CFDefault, []byte(item.Key), nonTxnMaxVersion))
-			}
-			return keys
-		})
 	}
 
 	// Start the SSTable compaction loop.
