@@ -1877,3 +1877,277 @@ func clearDir() {
 	}
 	opt.WorkDir = dir
 }
+
+func TestImportExternalSST(t *testing.T) {
+	workDir, err := os.MkdirTemp("", "nokv-import-test")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(workDir)) }()
+
+	opt := &Options{
+		WorkDir:       workDir,
+		MemTableSize:  1024 * 1024,
+		SSTableMaxSz:  1024 * 1024,
+		BlockSize:     4096,
+		NumCompactors: 1,
+		BaseLevelSize: 1024 * 1024,
+		MaxLevelNum:   7,
+		FS:            vfs.OSFS{},
+	}
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	testFilePath := opt.WorkDir + "/99999.sst"
+	builder := newTableBuiler(opt)
+	builder.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("key"), 1),
+		Value: []byte("value"),
+	})
+	testTable, err := builder.flush(lsm.levels, testFilePath)
+	if err != nil {
+		t.Fatalf("Failed to build SST file: %v", err)
+	}
+	require.NoError(t, testTable.closeHandle())
+	builder.Close()
+
+	require.NoError(t, lsm.ImportExternalSST([]string{testFilePath}))
+	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
+}
+
+func TestImportExternalSSTValidationFailure(t *testing.T) {
+	workDir, err := os.MkdirTemp("", "nokv-import-validation-test")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(workDir)) }()
+
+	opt := &Options{
+		WorkDir:       workDir,
+		MemTableSize:  1024 * 1024,
+		SSTableMaxSz:  1024 * 1024,
+		BlockSize:     4096,
+		NumCompactors: 1,
+		BaseLevelSize: 1024 * 1024,
+		MaxLevelNum:   7,
+		FS:            vfs.OSFS{},
+	}
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	// Test 1: Import file without .sst suffix (invalid file type)
+	nonSSTFile := workDir + "/99999.txt"
+	require.NoError(t, os.WriteFile(nonSSTFile, []byte("test"), 0644))
+	err = lsm.ImportExternalSST([]string{nonSSTFile})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing .sst suffix")
+
+	// Test 2: Import directory path (not a file)
+	dirPath := workDir + "/test_dir"
+	require.NoError(t, os.Mkdir(dirPath, 0755))
+	err = lsm.ImportExternalSST([]string{dirPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is a directory")
+
+	// Test 3: Import non-existent SST file
+	nonExistFile := workDir + "/99998.sst"
+	err = lsm.ImportExternalSST([]string{nonExistFile})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid external SST")
+
+	// Test 4: Import multiple SSTs with overlapping key ranges
+	sst1Path := workDir + "/99997.sst"
+	builder1 := newTableBuiler(opt)
+	builder1.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("a"), 1),
+		Value: []byte("val1"),
+	})
+	tbl1, err := builder1.flush(lsm.levels, sst1Path)
+	require.NoError(t, err)
+	require.NoError(t, tbl1.closeHandle())
+	builder1.Close()
+
+	sst2Path := workDir + "/99996.sst"
+	builder2 := newTableBuiler(opt)
+	builder2.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("a"), 2),
+		Value: []byte("val2"),
+	})
+	tbl2, err := builder2.flush(lsm.levels, sst2Path)
+	require.NoError(t, err)
+	require.NoError(t, tbl2.closeHandle())
+	builder2.Close()
+
+	err = lsm.ImportExternalSST([]string{sst1Path, sst2Path})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "imported SSTs have key range overlap")
+
+	// Test 5: Verify valid non-overlapping SST can be imported successfully
+	validSSTPath := workDir + "/99995.sst"
+	builderValid := newTableBuiler(opt)
+	builderValid.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("b"), 1),
+		Value: []byte("valid"),
+	})
+	tblValid, err := builderValid.flush(lsm.levels, validSSTPath)
+	require.NoError(t, err)
+	require.NoError(t, tblValid.closeHandle())
+	builderValid.Close()
+	require.NoError(t, lsm.ImportExternalSST([]string{validSSTPath}))
+	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("valid"), entry.Value)
+	entry.DecrRef()
+
+	// Test 6: Import SST that overlaps with existing L0 table
+	overlapSSTPath := workDir + "/99994.sst"
+	builderOverlap := newTableBuiler(opt)
+	builderOverlap.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("b"), 2),
+		Value: []byte("overlap"),
+	})
+	tblOverlap, err := builderOverlap.flush(lsm.levels, overlapSSTPath)
+	require.NoError(t, err)
+	require.NoError(t, tblOverlap.closeHandle())
+	builderOverlap.Close()
+
+	err = lsm.ImportExternalSST([]string{overlapSSTPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overlaps with L0 existing table")
+}
+
+func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
+	workDir, err := os.MkdirTemp("", "nokv-import-atomicity-test")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(workDir)) }()
+
+	faultPolicy := vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpFileSync, fmt.Sprintf("%s/MANIFEST-000001", workDir), errors.New("manifest write failed")),
+	)
+	faultFS := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, faultPolicy)
+
+	opt := &Options{
+		WorkDir:       workDir,
+		MemTableSize:  1024 * 1024,
+		SSTableMaxSz:  1024 * 1024,
+		BlockSize:     4096,
+		NumCompactors: 1,
+		BaseLevelSize: 1024 * 1024,
+		MaxLevelNum:   7,
+		FS:            faultFS,
+		ManifestSync:  true,
+	}
+	lsm1 := buildTestLSM(t, opt)
+	shouldCloseLsm1 := true
+	defer func() {
+		if shouldCloseLsm1 {
+			require.NoError(t, lsm1.Close())
+		}
+	}()
+
+	testSSTPath := workDir + "/99999.sst"
+	builder := newTableBuiler(opt)
+	builder.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, []byte("key"), 1),
+		Value: []byte("value"),
+	})
+	tbl, err := builder.flush(lsm1.levels, testSSTPath)
+	require.NoError(t, err)
+	require.NoError(t, tbl.closeHandle())
+	builder.Close()
+
+	err = lsm1.ImportExternalSST([]string{testSSTPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log manifest edits failed")
+
+	// Verify original SST file still exists
+	_, err = os.Stat(testSSTPath)
+	require.NoError(t, err)
+
+	// Verify no temporary SST file was left behind
+	tempFID := lsm1.levels.maxFID.Load()
+	tempSSTPath := utils.FileNameSSTable(workDir, tempFID)
+	_, err = os.Stat(tempSSTPath)
+	require.True(t, os.IsNotExist(err))
+
+	// Verify imported key is not accessible (import rolled back completely)
+	entry, err := lsm1.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
+	require.Nil(t, entry)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	require.NoError(t, lsm1.Close())
+	shouldCloseLsm1 = false
+	lsm2 := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm2.Close()) }()
+
+	// Verify key remains inaccessible after LSM reinitialization
+	entry, err = lsm2.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
+	require.Nil(t, entry)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	// Verify SST can be imported successfully after crash recovery
+	require.NoError(t, lsm2.ImportExternalSST([]string{testSSTPath}))
+	entry, err = lsm2.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
+}
+
+func TestImportExternalSSTIdempotency(t *testing.T) {
+	workDir, err := os.MkdirTemp("", "nokv-import-idempotency-test")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(workDir)) }()
+
+	opt := &Options{
+		WorkDir:       workDir,
+		MemTableSize:  1024 * 1024,
+		SSTableMaxSz:  1024 * 1024,
+		BlockSize:     4096,
+		NumCompactors: 1,
+		BaseLevelSize: 1024 * 1024,
+		MaxLevelNum:   7,
+		FS:            vfs.OSFS{},
+	}
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	testSSTPath := workDir + "/99999.sst"
+	builder := newTableBuiler(opt)
+	testKey := []byte("key")
+	builder.AddKey(&kv.Entry{
+		Key:   kv.InternalKey(kv.CFDefault, testKey, 1),
+		Value: []byte("value"),
+	})
+	tbl, err := builder.flush(lsm.levels, testSSTPath)
+	require.NoError(t, err)
+	require.NoError(t, tbl.closeHandle())
+	builder.Close()
+
+	// Test 1: First import should succeed and key should be accessible
+	err = lsm.ImportExternalSST([]string{testSSTPath})
+	require.NoError(t, err)
+
+	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, testKey, 1))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, []byte("value"), entry.Value)
+	entry.DecrRef()
+
+	// Test 2: Re-importing the same SST file should fail
+	err = lsm.ImportExternalSST([]string{testSSTPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid external SST")
+
+	// Test 3: Importing duplicate SST (same content) should fail due to key overlap
+	dupSSTPath := workDir + "/99998.sst"
+	importedSSTPath := utils.FileNameSSTable(workDir, lsm.levels.maxFID.Load())
+	content, err := os.ReadFile(importedSSTPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dupSSTPath, content, 0644))
+
+	err = lsm.ImportExternalSST([]string{dupSSTPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overlaps with L0 existing table")
+}
