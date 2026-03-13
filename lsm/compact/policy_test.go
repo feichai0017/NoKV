@@ -7,16 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewPolicy(t *testing.T) {
-	require.IsType(t, LeveledPolicy{}, NewPolicy(""))
-	require.IsType(t, LeveledPolicy{}, NewPolicy("unknown"))
-	require.IsType(t, LeveledPolicy{}, NewPolicy(PolicyLeveled))
-	require.IsType(t, &TieredPolicy{}, NewPolicy(PolicyTiered))
-	require.IsType(t, &HybridPolicy{}, NewPolicy(PolicyHybrid))
+func TestNewSchedulerPolicy(t *testing.T) {
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy("").mode)
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy("unknown").mode)
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy(PolicyLeveled).mode)
+	require.Equal(t, PolicyTiered, NewSchedulerPolicy(PolicyTiered).mode)
+	require.Equal(t, PolicyHybrid, NewSchedulerPolicy(PolicyHybrid).mode)
 }
 
-func TestLeveledPolicyArrange(t *testing.T) {
-	p := LeveledPolicy{}
+func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyLeveled)
 	in := []Priority{
 		{Level: 1, Adjusted: 2},
 		{Level: 0, Adjusted: 1},
@@ -32,8 +32,8 @@ func TestLeveledPolicyArrange(t *testing.T) {
 	require.Equal(t, 0, forWorker1[1].Level)
 }
 
-func TestTieredPolicyArrangePrefersIngest(t *testing.T) {
-	p := &TieredPolicy{}
+func TestSchedulerPolicyArrangeTieredPrefersIngest(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyTiered)
 	in := []Priority{
 		{Level: 0, Adjusted: 9, IngestMode: IngestNone},
 		{Level: 3, Adjusted: 2, IngestMode: IngestKeep},
@@ -50,8 +50,8 @@ func TestTieredPolicyArrangePrefersIngest(t *testing.T) {
 	require.Equal(t, 1, out[3].Level)
 }
 
-func TestHybridPolicyArrangeSwitchesByIngestPresence(t *testing.T) {
-	p := &HybridPolicy{}
+func TestSchedulerPolicyArrangeHybridSwitchesByIngestPressure(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyHybrid)
 	// Mild ingest pressure keeps leveled ordering.
 	withMildIngest := []Priority{
 		{Level: 1, Adjusted: 2, IngestMode: IngestNone},
@@ -78,7 +78,7 @@ func TestHybridPolicyArrangeSwitchesByIngestPresence(t *testing.T) {
 	require.Equal(t, IngestDrain, out[1].IngestMode)
 }
 
-func TestTieredPolicyFeedbackAdjustsQuota(t *testing.T) {
+func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
 	baseInput := []Priority{
 		{Level: 0, Adjusted: 3.0, IngestMode: IngestNone},
 		{Level: 6, Adjusted: 6.0, IngestMode: IngestKeep},
@@ -93,12 +93,12 @@ func TestTieredPolicyFeedbackAdjustsQuota(t *testing.T) {
 		{Level: 2, Adjusted: 5.4, IngestMode: IngestNone},
 	}
 
-	normal := &TieredPolicy{}
+	normal := NewSchedulerPolicy(PolicyTiered)
 	normalOut := normal.Arrange(0, baseInput)
 	normalIdx := firstRegularNonL0(normalOut)
 	require.Greater(t, normalIdx, 0)
 
-	failed := &TieredPolicy{}
+	failed := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		failed.Observe(FeedbackEvent{
 			Priority: Priority{IngestMode: IngestDrain},
@@ -109,7 +109,7 @@ func TestTieredPolicyFeedbackAdjustsQuota(t *testing.T) {
 	failedIdx := firstRegularNonL0(failedOut)
 	require.Less(t, failedIdx, normalIdx, "ingest failures should shift quota toward regular progress")
 
-	success := &TieredPolicy{}
+	success := NewSchedulerPolicy(PolicyTiered)
 	for range 3 {
 		success.Observe(FeedbackEvent{
 			Priority: Priority{IngestMode: IngestKeep},

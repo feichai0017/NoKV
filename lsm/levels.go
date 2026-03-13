@@ -40,7 +40,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
 	lm.compaction = compact.NewManager(
 		lm,
 		lm.opt.NumCompactors,
-		compact.NewPolicy(lm.opt.CompactionPolicy),
+		compact.NewSchedulerPolicy(lm.opt.CompactionPolicy),
 		lsm.getLogger(),
 	)
 	if opt != nil && opt.HotKeyProvider != nil {

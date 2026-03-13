@@ -42,16 +42,10 @@ type priorityQueues struct {
 	regular []Priority
 }
 
-// Policy reorders compaction priorities selected by the picker.
-// It does not change candidate generation; it only changes execution order.
-type Policy interface {
-	Arrange(workerID int, priorities []Priority) []Priority
-}
-
 // FeedbackEvent captures one compaction execution outcome.
 //
-// Policies can consume this signal to tune scheduling decisions in subsequent
-// rounds without modifying picker behavior.
+// The scheduler policy consumes this signal to tune scheduling decisions in
+// subsequent rounds without modifying picker behavior.
 type FeedbackEvent struct {
 	WorkerID int
 	Priority Priority
@@ -59,28 +53,76 @@ type FeedbackEvent struct {
 	Duration time.Duration
 }
 
-// FeedbackPolicy is an optional extension for policies that support runtime
-// closed-loop adjustments.
-type FeedbackPolicy interface {
-	Observe(event FeedbackEvent)
+// SchedulerPolicy reorders compaction priorities selected by the picker.
+//
+// It does not change candidate generation; it only changes execution order.
+// The mode stays concrete and local: there is one policy object with one
+// explicit behavior switch, not a plugin surface.
+type SchedulerPolicy struct {
+	mode       string
+	ingestBias atomic.Int32
 }
 
-// LeveledPolicy preserves legacy behavior.
+// NewSchedulerPolicy constructs a compaction scheduler policy by name.
+// Unknown names gracefully fall back to leveled behavior.
+func NewSchedulerPolicy(name string) *SchedulerPolicy {
+	return &SchedulerPolicy{mode: normalizePolicyMode(name)}
+}
+
+func normalizePolicyMode(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", PolicyLeveled:
+		return PolicyLeveled
+	case PolicyTiered:
+		return PolicyTiered
+	case PolicyHybrid:
+		return PolicyHybrid
+	default:
+		return PolicyLeveled
+	}
+}
+
+// Arrange reorders priorities according to the configured compaction mode.
+func (p *SchedulerPolicy) Arrange(workerID int, priorities []Priority) []Priority {
+	mode := PolicyLeveled
+	if p != nil {
+		mode = p.mode
+	}
+	switch mode {
+	case PolicyTiered:
+		return p.arrangeTiered(workerID, priorities)
+	case PolicyHybrid:
+		return p.arrangeHybrid(workerID, priorities)
+	default:
+		return arrangeLeveled(workerID, priorities)
+	}
+}
+
+// Observe ingests runtime execution feedback and updates scheduler bias when
+// the configured mode uses ingest-aware ordering.
+func (p *SchedulerPolicy) Observe(event FeedbackEvent) {
+	if p == nil {
+		return
+	}
+	switch p.mode {
+	case PolicyTiered, PolicyHybrid:
+		p.observeTiered(event)
+	}
+}
+
+// arrangeLeveled preserves legacy behavior.
 //
 // Design:
 // - Worker 0 keeps L0 relief first to reduce write stalls quickly.
 // - Other workers keep picker order untouched.
-type LeveledPolicy struct{}
-
-// Arrange reorders priorities according to leveled compaction expectations.
-func (LeveledPolicy) Arrange(workerID int, priorities []Priority) []Priority {
+func arrangeLeveled(workerID int, priorities []Priority) []Priority {
 	if workerID == 0 {
 		return MoveL0ToFront(priorities)
 	}
 	return priorities
 }
 
-// TieredPolicy prioritizes ingest convergence with guarded fairness.
+// arrangeTiered prioritizes ingest convergence with guarded fairness.
 //
 // Design:
 //   - Split priorities into four queues: L0 relief, ingest-keep, ingest-drain,
@@ -88,24 +130,13 @@ func (LeveledPolicy) Arrange(workerID int, priorities []Priority) []Priority {
 //   - Interleave queues by pressure-aware quotas instead of draining one queue
 //     completely, to avoid starvation.
 //   - Worker 0 reserves one hard L0 slot under critical backlog.
-type TieredPolicy struct {
-	// ingestBias tunes how aggressively tiered scheduling prioritizes ingest work.
-	// Positive values increase ingest quota; negative values protect regular work.
-	ingestBias atomic.Int32
-}
-
-// Arrange reorders priorities to favor ingest-buffer workflows while keeping
-// regular progress.
-func (p *TieredPolicy) Arrange(workerID int, priorities []Priority) []Priority {
+func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []Priority) []Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
 	if !hasIngestWork(ordered) {
-		return LeveledPolicy{}.Arrange(workerID, ordered)
-	}
-	if p == nil {
-		return LeveledPolicy{}.Arrange(workerID, ordered)
+		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
 	ingestScore := maxScore(queues.keep, queues.drain)
@@ -113,8 +144,9 @@ func (p *TieredPolicy) Arrange(workerID int, priorities []Priority) []Priority {
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-// Observe ingests runtime execution feedback and updates tiered scheduling bias.
-func (p *TieredPolicy) Observe(event FeedbackEvent) {
+// observeTiered ingests runtime execution feedback and updates ingest-aware
+// scheduling bias.
+func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 	if p == nil {
 		return
 	}
@@ -137,58 +169,26 @@ func (p *TieredPolicy) Observe(event FeedbackEvent) {
 	p.shiftBias(-1)
 }
 
-// HybridPolicy adapts between leveled and tiered scheduling.
+// arrangeHybrid adapts between leveled and tiered scheduling.
 //
 // Design:
 // - Low ingest pressure: keep leveled behavior for stable mixed workloads.
 // - High ingest pressure: switch to tiered queue scheduling.
-type HybridPolicy struct {
-	tiered TieredPolicy
-}
-
-// Arrange selects policy behavior by ingest pressure.
-func (p *HybridPolicy) Arrange(workerID int, priorities []Priority) []Priority {
+func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
 	ordered := append([]Priority(nil), priorities...)
 	if !hasIngestWork(ordered) {
-		return LeveledPolicy{}.Arrange(workerID, ordered)
+		return arrangeLeveled(workerID, ordered)
 	}
 	queues := classifyQueues(ordered)
 	ingestScore := maxScore(queues.keep, queues.drain)
 	if ingestScore < hybridTieredThreshold {
-		return LeveledPolicy{}.Arrange(workerID, ordered)
+		return arrangeLeveled(workerID, ordered)
 	}
-	if p == nil {
-		tiered := &TieredPolicy{}
-		return tiered.Arrange(workerID, ordered)
-	}
-	quota := p.tiered.effectiveQuota(ingestScore)
+	quota := p.effectiveQuota(ingestScore)
 	return arrangeByQueues(workerID, queues, quota)
-}
-
-// Observe forwards runtime feedback to the embedded tiered controller.
-func (p *HybridPolicy) Observe(event FeedbackEvent) {
-	if p == nil {
-		return
-	}
-	p.tiered.Observe(event)
-}
-
-// NewPolicy constructs a compaction policy by name.
-// Unknown names gracefully fall back to leveled behavior.
-func NewPolicy(name string) Policy {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", PolicyLeveled:
-		return LeveledPolicy{}
-	case PolicyTiered:
-		return &TieredPolicy{}
-	case PolicyHybrid:
-		return &HybridPolicy{}
-	default:
-		return LeveledPolicy{}
-	}
 }
 
 func hasIngestWork(priorities []Priority) bool {
@@ -232,7 +232,7 @@ func tieredQuotaByPressure(ingestScore float64) queueQuota {
 	}
 }
 
-func (p *TieredPolicy) effectiveQuota(ingestScore float64) queueQuota {
+func (p *SchedulerPolicy) effectiveQuota(ingestScore float64) queueQuota {
 	quota := tieredQuotaByPressure(ingestScore)
 	return applyIngestBias(quota, int(p.ingestBias.Load()))
 }
@@ -262,7 +262,7 @@ func applyIngestBias(quota queueQuota, bias int) queueQuota {
 	return quota
 }
 
-func (p *TieredPolicy) shiftBias(delta int32) {
+func (p *SchedulerPolicy) shiftBias(delta int32) {
 	for {
 		old := p.ingestBias.Load()
 		next := clampI32(old+delta, -2, 2)
@@ -272,7 +272,7 @@ func (p *TieredPolicy) shiftBias(delta int32) {
 	}
 }
 
-func (p *TieredPolicy) decayBiasTowardsZero() {
+func (p *SchedulerPolicy) decayBiasTowardsZero() {
 	for {
 		old := p.ingestBias.Load()
 		var next int32
