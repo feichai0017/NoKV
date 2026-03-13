@@ -189,10 +189,13 @@ type GRPCTransport struct {
 	maxRetries   int
 	retryBackoff time.Duration
 	clientCreds  credentials.TransportCredentials
+	started      bool
+	closed       bool
 }
 
-// NewGRPCTransport starts a gRPC server bound to listenAddr.
-func NewGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*GRPCTransport, error) {
+// NewUnstartedGRPCTransport creates a transport with its gRPC server and raft
+// service registered, but does not start serving yet.
+func NewUnstartedGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*GRPCTransport, error) {
 	if localID == 0 {
 		return nil, errors.New("raftstore: gRPC transport requires non-zero local ID")
 	}
@@ -240,9 +243,57 @@ func NewGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*G
 			register(t.server)
 		}
 	}
+	return t, nil
+}
+
+// NewGRPCTransport creates and starts a gRPC transport bound to listenAddr.
+func NewGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOption) (*GRPCTransport, error) {
+	t, err := NewUnstartedGRPCTransport(localID, listenAddr, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.Start(); err != nil {
+		_ = t.Close()
+		return nil, err
+	}
+	return t, nil
+}
+
+// RegisterServer registers an additional gRPC service before the transport
+// starts serving.
+func (t *GRPCTransport) RegisterServer(register func(grpc.ServiceRegistrar)) error {
+	if t == nil || register == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return errors.New("raftstore: transport closed")
+	}
+	if t.started {
+		return errors.New("raftstore: cannot register service after transport start")
+	}
+	register(t.server)
+	return nil
+}
+
+// Start begins serving inbound raft and RPC traffic.
+func (t *GRPCTransport) Start() error {
+	if t == nil {
+		return errors.New("raftstore: transport is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return errors.New("raftstore: transport closed")
+	}
+	if t.started {
+		return nil
+	}
+	t.started = true
 	t.wg.Add(1)
 	go t.serve()
-	return t, nil
+	return nil
 }
 
 func (t *GRPCTransport) serve() {
@@ -484,8 +535,21 @@ func (t *GRPCTransport) waitForClientReady(ctx context.Context, conn *grpc.Clien
 
 // Close shuts down the transport and releases resources.
 func (t *GRPCTransport) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
+	started := t.started
+	t.mu.Unlock()
 	close(t.stopCh)
-	t.server.GracefulStop()
+	if started {
+		t.server.GracefulStop()
+	}
 	_ = t.ln.Close()
 	var conns []*grpc.ClientConn
 	var blockedCount int64
