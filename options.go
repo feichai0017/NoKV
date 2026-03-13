@@ -14,6 +14,7 @@ const (
 	defaultHotRingTopK                    = 16
 	defaultHotReadPrefetchThreshold int32 = 16
 	defaultHotReadPrefetchCooldown        = 15 * time.Second
+	defaultWALBufferSize                  = 4 << 20 // 4 MiB
 )
 
 // Options holds the top-level database configuration.
@@ -171,6 +172,10 @@ type Options struct {
 	// EnableWALWatchdog enables the background WAL backlog watchdog which
 	// surfaces typed-record warnings and optionally runs automated segment GC.
 	EnableWALWatchdog bool
+	// WALBufferSize controls the size of the in-memory write buffer used by
+	// the WAL manager. Larger buffers reduce syscall frequency at the cost of
+	// memory. Values <= 0 fall back to the default (4 MiB).
+	WALBufferSize int
 	// WALAutoGCInterval controls how frequently the watchdog evaluates WAL
 	// backlog for automated garbage collection.
 	WALAutoGCInterval time.Duration
@@ -304,6 +309,7 @@ func NewDefaultOptions() *Options {
 		WriteThrottleMaxRate:          lsmpkg.DefaultWriteThrottleMaxRate,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
+		WALBufferSize:                 defaultWALBufferSize,
 		WALAutoGCInterval:             15 * time.Second,
 		WALAutoGCMinRemovable:         1,
 		WALAutoGCMaxBatch:             4,
@@ -460,5 +466,8 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.CompactionValueAlertThreshold <= 0 {
 		opt.CompactionValueAlertThreshold = lsmpkg.DefaultCompactionValueAlertThreshold
+	}
+	if opt.WALBufferSize <= 0 {
+		opt.WALBufferSize = defaultWALBufferSize
 	}
 }

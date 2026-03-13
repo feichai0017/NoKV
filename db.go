@@ -74,8 +74,8 @@ type (
 		commitQueue       commitQueue
 		commitWG          sync.WaitGroup
 		commitBatchPool   sync.Pool
-		syncQueue        chan *syncBatch
-		syncWG           sync.WaitGroup
+		syncQueue         chan *syncBatch
+		syncWG            sync.WaitGroup
 		iterPool          *iteratorPool
 		prefetchRing      *utils.Ring[prefetchRequest]
 		prefetchItems     chan struct{}
@@ -146,6 +146,7 @@ func Open(opt *Options) *DB {
 	wlog, err := wal.Open(wal.Config{
 		Dir:         opt.WorkDir,
 		SyncOnWrite: false,
+		BufferSize:  opt.WALBufferSize,
 		FS:          db.fs,
 	})
 	utils.Panic(err)
