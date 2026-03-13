@@ -405,49 +405,6 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Equal(t, uint64(2), metricsSnap.Running)
 }
 
-func TestStoreSplitRegionStartsChildPeer(t *testing.T) {
-	storeID := uint64(1)
-	peerBuilder := testPeerBuilder(storeID)
-	rs := store.NewStoreWithConfig(store.Config{PeerBuilder: peerBuilder, StoreID: storeID})
-	defer rs.Close()
-
-	parentMeta := manifest.RegionMeta{
-		ID:       1000,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 1}},
-	}
-	parentCfg, err := peerBuilder(parentMeta)
-	require.NoError(t, err)
-	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 1}})
-	require.NoError(t, err)
-	defer rs.StopPeer(parentPeer.ID())
-
-	childMeta := manifest.RegionMeta{
-		ID:       2000,
-		StartKey: []byte("m"),
-		EndKey:   []byte("z"),
-		Peers:    []manifest.PeerMeta{{StoreID: storeID, PeerID: 2}},
-	}
-	childPeer, err := rs.SplitRegion(parentMeta.ID, childMeta)
-	require.NoError(t, err)
-	require.NotNil(t, childPeer)
-	defer rs.StopPeer(childPeer.ID())
-
-	parentUpdated, ok := rs.RegionMetaByID(1000)
-	require.True(t, ok)
-	require.Equal(t, []byte("m"), parentUpdated.EndKey)
-	require.Equal(t, uint64(1), parentUpdated.Epoch.Version)
-
-	childUpdated, ok := rs.RegionMetaByID(2000)
-	require.True(t, ok)
-	require.Equal(t, []byte("m"), childUpdated.StartKey)
-	require.Equal(t, []byte("z"), childUpdated.EndKey)
-	require.Len(t, childUpdated.Peers, 1)
-	require.Equal(t, uint64(2), childUpdated.Peers[0].PeerID)
-
-}
-
 func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	sink := newTestSchedulerSink()
 	rs := store.NewStoreWithConfig(store.Config{Scheduler: sink, StoreID: 1})

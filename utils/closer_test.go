@@ -7,16 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCloserSignalAndWait(t *testing.T) {
+func TestCloserCloseSignalsAndWaits(t *testing.T) {
 	closer := NewCloserInitial(1)
 	done := make(chan struct{})
 	go func() {
-		<-closer.HasBeenClosed()
+		<-closer.Closed()
 		close(done)
 		closer.Done()
 	}()
 
-	closer.SignalAndWait()
+	closer.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -28,7 +28,7 @@ func TestCloserClose(t *testing.T) {
 	closer := NewCloser()
 	closer.Add(1)
 	go func() {
-		<-closer.CloseSignal
+		<-closer.Closed()
 		closer.Done()
 	}()
 	closer.Close()

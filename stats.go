@@ -270,7 +270,7 @@ func (s *Stats) run() {
 		select {
 		case <-ticker.C:
 			s.collect()
-		case <-s.closer.CloseSignal:
+		case <-s.closer.Closed():
 			return
 		}
 	}

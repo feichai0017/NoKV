@@ -77,7 +77,7 @@ func (vlog *valueLog) flushDiscardStats() {
 	closer := vlog.lfDiscardStats.closer
 	for {
 		select {
-		case <-closer.CloseSignal:
+		case <-closer.Closed():
 			for {
 				select {
 				case stats := <-vlog.lfDiscardStats.flushChan:
