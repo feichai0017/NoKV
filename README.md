@@ -40,22 +40,48 @@
 
 NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline with Badger-inspired value separation. You can embed it locally, drive it via multi-Raft regions, or front it with a Redis protocol gateway—all from a single topology file.
 
----
+## 📊 CI Benchmark Snapshot
 
-Benchmark details and latest result snapshots are maintained in:
-[`benchmark/README.md`](./benchmark/README.md)
+Latest public benchmark snapshot from CI, using the default YCSB profile (`A-F`,
+`records=1,000,000`, `ops=1,000,000`, `value_size=1000`, `conc=16`).
 
----
+Methodology and harness details live in [`benchmark/README.md`](./benchmark/README.md).
+
+| Engine | Workload | Mode | Ops/s | Avg Latency | P95 | P99 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| NoKV | YCSB-A | 50/50 read/update | 176,525 | 5.664µs | 277.311µs | 502.765µs |
+| NoKV | YCSB-B | 95/5 read/update | 526,524 | 1.899µs | 15.549µs | 829.478µs |
+| NoKV | YCSB-C | 100% read | 375,199 | 2.665µs | 185.1µs | 797.624µs |
+| NoKV | YCSB-D | 95% read, 5% insert (latest) | 632,425 | 1.581µs | 13.675µs | 643.858µs |
+| NoKV | YCSB-E | 95% scan, 5% insert | 54,546 | 18.333µs | 103.733µs | 164.376µs |
+| NoKV | YCSB-F | read-modify-write | 152,798 | 6.544µs | 365.59µs | 757.99µs |
+| Badger | YCSB-A | 50/50 read/update | 89,929 | 11.119µs | 381.76µs | 603.803µs |
+| Badger | YCSB-B | 95/5 read/update | 188,976 | 5.291µs | 342.942µs | 745.166µs |
+| Badger | YCSB-C | 100% read | 209,322 | 4.777µs | 48.11µs | 2.163414ms |
+| Badger | YCSB-D | 95% read, 5% insert (latest) | 213,332 | 4.687µs | 265.171µs | 593.855µs |
+| Badger | YCSB-E | 95% scan, 5% insert | 15,356 | 65.121µs | 3.995611ms | 7.51454ms |
+| Badger | YCSB-F | read-modify-write | 72,533 | 13.786µs | 481.716µs | 815.928µs |
+| Pebble | YCSB-A | 50/50 read/update | 182,009 | 5.494µs | 432.983µs | 1.515963ms |
+| Pebble | YCSB-B | 95/5 read/update | 156,620 | 6.384µs | 577.714µs | 1.235952ms |
+| Pebble | YCSB-C | 100% read | 100,467 | 9.953µs | 794.58µs | 1.616875ms |
+| Pebble | YCSB-D | 95% read, 5% insert (latest) | 220,683 | 4.531µs | 441.659µs | 1.168746ms |
+| Pebble | YCSB-E | 95% scan, 5% insert | 46,023 | 21.728µs | 1.214492ms | 2.096041ms |
+| Pebble | YCSB-F | read-modify-write | 136,220 | 7.341µs | 684.23µs | 1.556296ms |
 
 ## 🚦 Quick Start
 
 Start an end-to-end playground with either the local script or Docker Compose. Both spin up a three-node Raft cluster with a PD-lite service and expose the Redis-compatible gateway.
 
+![NoKV demo](./img/nokv-demo.gif)
+
 ```bash
 # Option A: local processes
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
 # In another shell: launch the Redis gateway on top of the running cluster
-go run ./cmd/nokv-redis --addr 127.0.0.1:6380 --raft-config raft_config.example.json
+go run ./cmd/nokv-redis \
+  --addr 127.0.0.1:6380 \
+  --raft-config ./raft_config.example.json \
+  --metrics-addr 127.0.0.1:9100
 
 # Option B: Docker Compose (cluster + gateway + PD)
 docker compose up --build
@@ -68,7 +94,10 @@ Once the cluster is running you can point any Redis client at `127.0.0.1:6380` (
 For quick CLI checks:
 
 ```bash
-# Inspect stats from an existing workdir
+# Online stats from a running node
+go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
+
+# Offline forensics from a stopped node workdir
 go run ./cmd/nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
@@ -110,7 +139,7 @@ func main() {
 > - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
 > - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
-> ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config manifest`, starts PD-lite (`nokv pd`), and parks logs under `artifacts/cluster/store-<id>/server.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
+> ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config manifest`, starts PD-lite (`nokv pd`), streams PD/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/pd.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 
 ---
 

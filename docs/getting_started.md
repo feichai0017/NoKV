@@ -14,6 +14,8 @@ This launches a 3-node Raft cluster plus a PD-lite service.
 ./scripts/run_local_cluster.sh --config ./raft_config.example.json
 ```
 
+The launcher stays attached, streams PD/store logs to the terminal, and also writes them under `./artifacts/cluster/`.
+
 Start the Redis-compatible gateway in another shell:
 
 ```bash
