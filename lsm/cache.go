@@ -3,7 +3,6 @@ package lsm
 import (
 	"container/list"
 	"sync"
-	"sync/atomic"
 
 	"github.com/dgraph-io/ristretto/v2"
 
@@ -12,15 +11,20 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
+	"google.golang.org/protobuf/proto"
 )
 
-const defaultCacheSize = 1024
+const (
+	defaultBlockCacheAdmissionSize int64 = 4 << 10
+	defaultIndexCacheAdmissionSize int64 = 64 << 10
+	minCacheCounters                     = 64
+)
 
 // CacheMetrics is an alias for the shared cache metrics snapshot type.
 type CacheMetrics = metrics.CacheSnapshot
 
 type cache struct {
-	indexs  *coreCache.Cache // key: fid, value: *pb.TableIndex
+	indexes *coreCache.Cache
 	blocks  *blockCache
 	blooms  *bloomCache
 	metrics *metrics.CacheCounters
@@ -31,7 +35,9 @@ func (c *cache) close() error {
 	if c == nil {
 		return nil
 	}
-	c.indexs = nil
+	if c.indexes != nil {
+		c.indexes = nil
+	}
 	if c.blocks != nil {
 		c.blocks.close()
 		c.blocks = nil
@@ -49,34 +55,26 @@ func newCache(opt *Options) *cache {
 		opt = &Options{}
 	}
 	counters := metrics.NewCacheCounters()
-	blockCacheSize := opt.BlockCacheSize
-	bloomCacheSize := opt.BloomCacheSize
-	hotCap := max(blockCacheSize, 0)
-	blocks := newBlockCache(hotCap)
-	blooms := newBloomCache(bloomCacheSize)
 	return &cache{
-		indexs:  coreCache.NewCache(defaultCacheSize),
-		blocks:  blocks,
-		blooms:  blooms,
+		indexes: newIndexCache(opt.IndexCacheBytes),
+		blocks:  newBlockCache(opt.BlockCacheBytes),
+		blooms:  newBloomCache(opt.BloomCacheBytes),
 		metrics: counters,
 	}
 }
 
 func (c *cache) addIndex(fid uint64, idx *pb.TableIndex) {
-	if c == nil || c.indexs == nil {
+	if c == nil || c.indexes == nil || idx == nil {
 		return
 	}
-	if idx == nil {
-		return
-	}
-	c.indexs.Set(fid, idx)
+	c.indexes.Set(fid, idx)
 }
 
 func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
-	if c == nil || c.indexs == nil {
+	if c == nil || c.indexes == nil {
 		return nil, false
 	}
-	val, ok := c.indexs.Get(fid)
+	val, ok := c.indexes.Get(fid)
 	if c.metrics != nil {
 		c.metrics.RecordIndex(ok)
 	}
@@ -91,10 +89,10 @@ func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
 }
 
 func (c *cache) delIndex(fid uint64) {
-	if c == nil || c.indexs == nil {
+	if c == nil || c.indexes == nil {
 		return
 	}
-	c.indexs.Del(fid)
+	c.indexes.Del(fid)
 }
 
 func (c *cache) getBlock(level int, key uint64) (*block, bool) {
@@ -134,16 +132,26 @@ func (c *cache) addBloom(fid uint64, filter utils.Filter) {
 }
 
 func (c *cache) metricsSnapshot() metrics.CacheSnapshot {
-	if c == nil {
+	if c == nil || c.metrics == nil {
 		return metrics.CacheSnapshot{}
 	}
 	return c.metrics.Snapshot()
 }
 
-type blockCache struct {
-	rc *ristretto.Cache[uint64, *blockEntry]
+func newIndexCache(budgetBytes int64) *coreCache.Cache {
+	if budgetBytes <= 0 {
+		return nil
+	}
+	estimatedItems := int(max(budgetBytes/defaultIndexCacheAdmissionSize, minCacheCounters))
+	return coreCache.NewWeightedCache(budgetBytes, estimatedItems, func(value any) int64 {
+		idx, _ := value.(*pb.TableIndex)
+		return indexCacheCost(idx)
+	})
+}
 
-	closing atomic.Bool
+type blockCache struct {
+	budgetBytes int64
+	rc          *ristretto.Cache[uint64, *blockEntry]
 }
 
 type blockEntry struct {
@@ -151,6 +159,7 @@ type blockEntry struct {
 	tbl *table
 	blk *block
 
+	cost        int64
 	releaseOnce sync.Once
 }
 
@@ -163,23 +172,23 @@ func (be *blockEntry) release() {
 	})
 }
 
-func newBlockCache(capacity int) *blockCache {
-	if capacity <= 0 {
+func newBlockCache(budgetBytes int64) *blockCache {
+	if budgetBytes <= 0 {
 		return nil
 	}
-	bc := &blockCache{}
+	bc := &blockCache{budgetBytes: budgetBytes}
 	rc, err := ristretto.NewCache(&ristretto.Config[uint64, *blockEntry]{
-		NumCounters: int64(capacity) * 8,
-		MaxCost:     int64(capacity),
+		NumCounters: cacheCountersForBudget(budgetBytes, defaultBlockCacheAdmissionSize),
+		MaxCost:     budgetBytes,
 		BufferItems: 64,
-		Cost: func(_ *blockEntry) int64 {
-			return 1
+		Cost: func(entry *blockEntry) int64 {
+			if entry == nil || entry.cost <= 0 {
+				return 1
+			}
+			return entry.cost
 		},
 		OnEvict: func(item *ristretto.Item[*blockEntry]) {
 			if item == nil || item.Value == nil {
-				return
-			}
-			if bc.closing.Load() {
 				return
 			}
 			item.Value.release()
@@ -209,49 +218,54 @@ func (c *blockCache) add(level int, tbl *table, key uint64, blk *block) {
 	if level > 1 {
 		return
 	}
+	cost := blockCacheCost(blk)
+	if cost <= 0 || cost > c.budgetBytes {
+		return
+	}
 	entry := &blockEntry{
-		key: key,
-		tbl: tbl,
-		blk: blk,
+		key:  key,
+		tbl:  tbl,
+		blk:  blk,
+		cost: cost,
 	}
 	if entry.tbl != nil {
 		entry.tbl.IncrRef()
 	}
-	_ = c.rc.Set(key, entry, 1)
+	if accepted := c.rc.Set(key, entry, cost); !accepted {
+		entry.release()
+	}
 }
 
 func (c *blockCache) close() {
-	if c == nil {
+	if c == nil || c.rc == nil {
 		return
 	}
-	c.closing.Store(true)
-	if c.rc != nil {
-		c.rc.Close()
-	}
+	c.rc.Close()
 }
 
 type bloomCache struct {
-	mu    sync.Mutex
-	cap   int
-	items map[uint64]*list.Element
-	lru   *list.List
+	mu        sync.Mutex
+	budget    int64
+	usedBytes int64
+	items     map[uint64]*list.Element
+	lru       *list.List
 }
 
 type bloomEntry struct {
 	fid    uint64
 	filter utils.Filter
+	cost   int64
 }
 
-func newBloomCache(capacity int) *bloomCache {
-	if capacity <= 0 {
+func newBloomCache(budgetBytes int64) *bloomCache {
+	if budgetBytes <= 0 {
 		return nil
 	}
-	bc := &bloomCache{
-		cap:   capacity,
-		items: make(map[uint64]*list.Element, capacity),
-		lru:   list.New(),
+	return &bloomCache{
+		budget: budgetBytes,
+		items:  make(map[uint64]*list.Element),
+		lru:    list.New(),
 	}
-	return bc
 }
 
 func (bc *bloomCache) get(fid uint64) (utils.Filter, bool) {
@@ -260,12 +274,13 @@ func (bc *bloomCache) get(fid uint64) (utils.Filter, bool) {
 	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
-	if elem, ok := bc.items[fid]; ok {
-		bc.lru.MoveToFront(elem)
-		entry := elem.Value.(*bloomEntry)
-		return entry.filter, true
+	elem, ok := bc.items[fid]
+	if !ok {
+		return nil, false
 	}
-	return nil, false
+	bc.lru.MoveToFront(elem)
+	entry := elem.Value.(*bloomEntry)
+	return entry.filter, true
 }
 
 func (bc *bloomCache) add(fid uint64, filter utils.Filter) {
@@ -273,23 +288,30 @@ func (bc *bloomCache) add(fid uint64, filter utils.Filter) {
 		return
 	}
 	dup := kv.SafeCopy(nil, filter)
+	cost := bloomCacheCost(dup)
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 	if elem, ok := bc.items[fid]; ok {
-		elem.Value.(*bloomEntry).filter = dup
+		entry := elem.Value.(*bloomEntry)
+		bc.usedBytes -= entry.cost
+		if cost > bc.budget {
+			bc.removeLocked(elem)
+			return
+		}
+		entry.filter = dup
+		entry.cost = cost
+		bc.usedBytes += cost
 		bc.lru.MoveToFront(elem)
+		bc.trimLocked()
 		return
 	}
-	if bc.lru.Len() >= bc.cap {
-		tail := bc.lru.Back()
-		if tail != nil {
-			entry := tail.Value.(*bloomEntry)
-			delete(bc.items, entry.fid)
-			bc.lru.Remove(tail)
-		}
+	if cost > bc.budget {
+		return
 	}
-	elem := bc.lru.PushFront(&bloomEntry{fid: fid, filter: dup})
+	elem := bc.lru.PushFront(&bloomEntry{fid: fid, filter: dup, cost: cost})
 	bc.items[fid] = elem
+	bc.usedBytes += cost
+	bc.trimLocked()
 }
 
 func (bc *bloomCache) close() {
@@ -300,5 +322,73 @@ func (bc *bloomCache) close() {
 	defer bc.mu.Unlock()
 	bc.items = nil
 	bc.lru = nil
-	bc.cap = 0
+	bc.usedBytes = 0
+	bc.budget = 0
+}
+
+func (bc *bloomCache) trimLocked() {
+	for bc.usedBytes > bc.budget && bc.lru.Len() > 0 {
+		bc.removeLocked(bc.lru.Back())
+	}
+}
+
+func (bc *bloomCache) removeLocked(elem *list.Element) {
+	if elem == nil {
+		return
+	}
+	entry := elem.Value.(*bloomEntry)
+	delete(bc.items, entry.fid)
+	bc.lru.Remove(elem)
+	bc.usedBytes -= entry.cost
+	if bc.usedBytes < 0 {
+		bc.usedBytes = 0
+	}
+}
+
+func indexCacheCost(idx *pb.TableIndex) int64 {
+	if idx == nil {
+		return 0
+	}
+	cost := int64(proto.Size(idx))
+	if cost <= 0 {
+		return 1
+	}
+	return cost
+}
+
+func blockCacheCost(blk *block) int64 {
+	if blk == nil {
+		return 0
+	}
+	if blk.estimateSz > 0 {
+		return blk.estimateSz
+	}
+	if cap(blk.data) > 0 {
+		return int64(cap(blk.data))
+	}
+	if len(blk.data) > 0 {
+		return int64(len(blk.data))
+	}
+	return 1
+}
+
+func bloomCacheCost(filter utils.Filter) int64 {
+	if len(filter) == 0 {
+		return 0
+	}
+	return int64(len(filter))
+}
+
+func cacheCountersForBudget(budgetBytes, avgItemBytes int64) int64 {
+	if budgetBytes <= 0 {
+		return minCacheCounters
+	}
+	if avgItemBytes <= 0 {
+		avgItemBytes = 1
+	}
+	items := budgetBytes / avgItemBytes
+	if items < minCacheCounters {
+		items = minCacheCounters
+	}
+	return items * 8
 }

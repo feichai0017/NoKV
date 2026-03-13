@@ -6,12 +6,13 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCacheHotColdMetrics(t *testing.T) {
 	opt := &Options{
-		BlockCacheSize: 4,
-		BloomCacheSize: 4,
+		BlockCacheBytes: 256,
+		BloomCacheBytes: 1 << 20,
 	}
 	cache := newCache(opt)
 	if cache == nil {
@@ -57,8 +58,8 @@ func TestCacheHotColdMetrics(t *testing.T) {
 
 func TestCacheIndexAndBloom(t *testing.T) {
 	opt := &Options{
-		BlockCacheSize: 0,
-		BloomCacheSize: 2,
+		IndexCacheBytes: 1 << 20,
+		BloomCacheBytes: 16,
 	}
 	c := newCache(opt)
 	idx := &pb.TableIndex{KeyCount: 10}
@@ -81,7 +82,7 @@ func TestCacheIndexAndBloom(t *testing.T) {
 }
 
 func TestBlockCacheOperations(t *testing.T) {
-	bc := newBlockCache(16)
+	bc := newBlockCache(1 << 20)
 	blk := &block{data: []byte("data")}
 
 	bc.add(2, nil, 1, blk)
@@ -93,9 +94,9 @@ func TestBlockCacheOperations(t *testing.T) {
 }
 
 func TestBloomCacheEviction(t *testing.T) {
-	bc := newBloomCache(1)
 	filter1 := utils.Filter{0x01}
 	filter2 := utils.Filter{0x02}
+	bc := newBloomCache(bloomCacheCost(filter1))
 	bc.add(1, filter1)
 	bc.add(2, filter2)
 
@@ -106,6 +107,24 @@ func TestBloomCacheEviction(t *testing.T) {
 	require.Equal(t, filter2, got)
 
 	bc.close()
+}
+
+func TestIndexCacheEvictionByBudget(t *testing.T) {
+	idx1 := &pb.TableIndex{KeyCount: 1, BloomFilter: make([]byte, 64)}
+	idx2 := &pb.TableIndex{KeyCount: 2, BloomFilter: make([]byte, 64)}
+	budget := int64(proto.Size(idx1))
+	ic := newIndexCache(budget)
+	require.NotNil(t, ic)
+
+	ic.Set(1, idx1)
+	ic.Set(2, idx2)
+
+	_, ok := ic.Get(1)
+	require.False(t, ok)
+	val, ok := ic.Get(2)
+	require.True(t, ok)
+	got := val.(*pb.TableIndex)
+	require.Equal(t, uint32(2), got.GetKeyCount())
 }
 
 func TestBlockEntryReleaseNilAndNoTable(t *testing.T) {

@@ -14,13 +14,15 @@ GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...
 go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|TwoPhaseCommit)'
 
 # Crash recovery scenarios
-RECOVERY_TRACE_METRICS=1 ./scripts/recovery_scenarios.sh
+RECOVERY_TRACE_METRICS=1 \
+go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 # Protobuf schema hygiene
 make proto-check
 
 # gRPC transport chaos tests + watchdog metrics
-CHAOS_TRACE_METRICS=1 ./scripts/transport_chaos.sh
+CHAOS_TRACE_METRICS=1 \
+go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 
 # Sample PD-lite service for shared TSO / routing in distributed tests
 go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
@@ -74,7 +76,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 
 | Scenario | Coverage | Focus |
 | --- | --- | --- |
-| Crash recovery | `db_test.go`, `scripts/recovery_scenarios.sh` | WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety. |
+| Crash recovery | `db_test.go` | WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety. |
 | WAL pointer desync | `raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment` | Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption. |
 | Distributed transaction contention | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `percolator/*_test.go` | Lock conflicts, retries, and 2PC sequencing under region routing. |
 | Value separation + GC | `vlog/manager_test.go`, `db_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
@@ -87,8 +89,8 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 
 ## 4. Observability in Tests
 
-- **RECOVERY_METRIC logs** – produced when `RECOVERY_TRACE_METRICS=1`; consumed by recovery script and helpful when triaging CI failures.
-- **TRANSPORT_METRIC logs** – emitted by `scripts/transport_chaos.sh` when `CHAOS_TRACE_METRICS=1`, capturing gRPC watchdog counters during network partitions and retries.
+- **RECOVERY_METRIC logs** – produced when `RECOVERY_TRACE_METRICS=1`; helpful when triaging targeted recovery suites and CI failures.
+- **TRANSPORT_METRIC logs** – emitted by transport chaos tests when `CHAOS_TRACE_METRICS=1`, capturing gRPC watchdog counters during network partitions and retries.
 - **Stats snapshots** – `stats_test.go` verifies JSON structure so CLI output remains backwards compatible.
 - **Benchmark artefacts** – stored under `benchmark/benchmark_results/*.txt` for historical comparison. Aligns with README instructions.
 

@@ -46,6 +46,13 @@ Key components:
 - Engine interface: `benchmark/ycsb_engine.go` defines `Read/Insert/Update/Scan`
   and per-engine implementations live in `benchmark/ycsb_engine_*` (including
   `nokv-skiplist` / `nokv-art` for memtable-only comparisons).
+- Engine profiles: each engine is constructed from an explicit benchmark
+  profile in `benchmark/ycsb_profiles.go`; the harness does not inherit
+  `NoKV.NewDefaultOptions()` or `badger.DefaultOptions()` implicitly, which
+  keeps benchmark semantics stable across runtime default changes. The default
+  profile uses a 512MB total cache budget and splits it explicitly per engine:
+  Pebble uses a single 512MB cache, Badger defaults to 256MB block + 256MB
+  index, and NoKV defaults to 384MB block + 96MB index + 32MB bloom.
 - Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/E/F mixes,
   request ratios, and key distributions (zipfian/uniform/latest).
 - Official-aligned defaults: insert order uses `hashed`, workload E uses

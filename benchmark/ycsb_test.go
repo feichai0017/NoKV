@@ -49,6 +49,8 @@ func TestBenchmarkYCSB(t *testing.T) {
 		ValueThreshold:       *fValueThreshold,
 		SyncWrites:           *fSyncWrites,
 		BlockCacheMB:         *ycsbBlockCacheMB,
+		NoKVIndexCacheMB:     *ycsbNoKVIndexCacheMB,
+		NoKVBloomCacheMB:     *ycsbNoKVBloomCacheMB,
 		NoKVCompactionPolicy: strings.ToLower(strings.TrimSpace(*ycsbNoKVCompaction)),
 		MemtableMB:           *ycsbMemtableMB,
 		SSTableMB:            *ycsbSSTableMB,

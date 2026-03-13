@@ -18,32 +18,48 @@ type Cache struct {
 	t         int32
 	threshold int32
 	data      map[uint64]*list.Element
+	maxCost   int64
+	usedCost  int64
+	costFn    func(any) int64
 }
 
-// NewCache size means the number of data to be cached
+// NewCache creates a W-TinyLFU cache whose budget is expressed in entry count.
 func NewCache(size int) *Cache {
+	return NewWeightedCache(int64(size), size, func(any) int64 { return 1 })
+}
+
+// NewWeightedCache creates a W-TinyLFU cache whose budget is enforced by the
+// provided cost function. estimatedItems sizes the admission/filter metadata.
+func NewWeightedCache(maxCost int64, estimatedItems int, costFn func(any) int64) *Cache {
+	if maxCost <= 0 {
+		panic("cache: invalid maxCost")
+	}
+	if estimatedItems <= 0 {
+		estimatedItems = 1
+	}
 	//define the percentage of window cache, here is 1%
 	const lruPct = 1
 	//calculate the capacity of window cache
-	lruSz := max((lruPct*size)/100, 1)
+	lruSz := max((lruPct*estimatedItems)/100, 1)
 
 	//calculate the capacity of LFU cache
-	slruSz := max(int(float64(size)*((100-lruPct)/100.0)), 1)
+	slruSz := max(int(float64(estimatedItems)*((100-lruPct)/100.0)), 1)
 
 	//LFU is divided into two parts, stageOne accounts for 20%
 	slruO := max(int(0.2*float64(slruSz)), 1)
 
-	data := make(map[uint64]*list.Element, size)
+	data := make(map[uint64]*list.Element, estimatedItems)
 
 	return &Cache{
 		lru:       newWindowLRU(lruSz, data),
 		slru:      newSLRU(data, slruO, slruSz-slruO),
-		door:      newFilter(size, 0.01), //set the error rate of bloom filter to 0.01
-		c:         newCmSketch(int64(size)),
+		door:      newFilter(estimatedItems, 0.01), //set the error rate of bloom filter to 0.01
+		c:         newCmSketch(int64(estimatedItems)),
 		data:      data, //share the same map to store data
-		threshold: int32(size * 10),
+		threshold: int32(estimatedItems * 10),
+		maxCost:   maxCost,
+		costFn:    costFn,
 	}
-
 }
 
 func (c *Cache) Set(key any, value any) bool {
@@ -55,6 +71,32 @@ func (c *Cache) Set(key any, value any) bool {
 func (c *Cache) set(key, value any) bool {
 	// keyHash is used to quickly locate, conflict is used to determine conflicts
 	keyHash, conflictHash := c.keyToHash(key)
+	cost := c.entryCost(value)
+	if cost > c.maxCost {
+		if elem, ok := c.data[keyHash]; ok {
+			item := elem.Value.(*storeItem)
+			if item.conflict == conflictHash {
+				c.removeElement(elem)
+			}
+		}
+		return false
+	}
+
+	if elem, ok := c.data[keyHash]; ok {
+		item := elem.Value.(*storeItem)
+		if item.conflict == conflictHash {
+			c.usedCost += cost - item.cost
+			item.value = value
+			item.cost = cost
+			if item.stage == 0 {
+				c.lru.get(elem)
+			} else {
+				c.slru.get(elem)
+			}
+			c.trimToBudget()
+			return true
+		}
+	}
 
 	// the newly added cache is placed in window lru, so stage = 0
 	i := storeItem{
@@ -62,14 +104,18 @@ func (c *Cache) set(key, value any) bool {
 		key:      keyHash,
 		conflict: conflictHash,
 		value:    value,
+		cost:     cost,
 	}
 
 	// if window is full, return the evicted data
 	eitem, evicted := c.lru.add(i)
 
 	if !evicted {
+		c.usedCost += cost
+		c.trimToBudget()
 		return true
 	}
+	c.usedCost += cost - eitem.cost
 
 	// if there is an evicted data in window, it will come here
 	// need to find a victim from stageOne of LFU
@@ -78,7 +124,11 @@ func (c *Cache) set(key, value any) bool {
 
 	// come here because LFU is not full, so the evicted data in window can enter stageOne
 	if victim == nil {
-		c.slru.add(eitem)
+		if removed, ok := c.slru.add(eitem); ok {
+			c.usedCost -= removed.cost
+		}
+		c.usedCost += eitem.cost
+		c.trimToBudget()
 		return true
 	}
 
@@ -96,11 +146,16 @@ func (c *Cache) set(key, value any) bool {
 	ocount := c.c.Estimate(eitem.key)
 
 	if ocount < vcount {
+		c.trimToBudget()
 		return true
 	}
 
 	// the one who stays enters stageOne
-	c.slru.add(eitem)
+	if removed, ok := c.slru.add(eitem); ok {
+		c.usedCost -= removed.cost
+	}
+	c.usedCost += eitem.cost
+	c.trimToBudget()
 	return true
 }
 
@@ -175,8 +230,56 @@ func (c *Cache) del(key any) (any, bool) {
 		return 0, false
 	}
 
-	delete(c.data, keyHash)
+	c.removeElement(val)
 	return item.conflict, true
+}
+
+func (c *Cache) entryCost(value any) int64 {
+	if c.costFn == nil {
+		return 1
+	}
+	cost := c.costFn(value)
+	if cost <= 0 {
+		return 1
+	}
+	return cost
+}
+
+func (c *Cache) removeElement(elem *list.Element) {
+	if elem == nil {
+		return
+	}
+	item := elem.Value.(*storeItem)
+	if item.stage == 0 {
+		c.lru.remove(elem)
+	} else {
+		c.slru.remove(elem)
+	}
+	c.usedCost -= item.cost
+	if c.usedCost < 0 {
+		c.usedCost = 0
+	}
+}
+
+func (c *Cache) trimToBudget() {
+	for c.usedCost > c.maxCost {
+		if item, ok := c.slru.removeStageOneOldest(); ok {
+			c.usedCost -= item.cost
+			continue
+		}
+		if item, ok := c.lru.removeOldest(); ok {
+			c.usedCost -= item.cost
+			continue
+		}
+		if item, ok := c.slru.removeStageTwoOldest(); ok {
+			c.usedCost -= item.cost
+			continue
+		}
+		break
+	}
+	if c.usedCost < 0 {
+		c.usedCost = 0
+	}
 }
 
 func (c *Cache) keyToHash(key any) (uint64, uint64) {

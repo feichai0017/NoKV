@@ -18,12 +18,29 @@ import (
 	pkgerrors "github.com/pkg/errors"
 )
 
+const defaultMaxSize int64 = 1 << 29
+
 type Config struct {
 	Dir      string
 	FileMode os.FileMode
 	MaxSize  int64
 	Bucket   uint32
 	FS       vfs.FS
+}
+
+// normalized resolves constructor-boundary defaults for the value-log manager.
+func (cfg Config) normalized() (Config, error) {
+	if cfg.Dir == "" {
+		return Config{}, fmt.Errorf("vlog manager: dir required")
+	}
+	cfg.FS = vfs.Ensure(cfg.FS)
+	if cfg.FileMode == 0 {
+		cfg.FileMode = utils.DefaultFileMode
+	}
+	if cfg.MaxSize == 0 {
+		cfg.MaxSize = defaultMaxSize
+	}
+	return cfg, nil
 }
 
 type Manager struct {
@@ -87,18 +104,13 @@ func (m *Manager) ensureActiveLocked() (*file.LogFile, uint32, error) {
 }
 
 func Open(cfg Config) (*Manager, error) {
-	if cfg.Dir == "" {
-		return nil, fmt.Errorf("vlog manager: dir required")
-	}
-	cfg.FS = vfs.Ensure(cfg.FS)
-	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+	var err error
+	cfg, err = cfg.normalized()
+	if err != nil {
 		return nil, err
 	}
-	if cfg.FileMode == 0 {
-		cfg.FileMode = utils.DefaultFileMode
-	}
-	if cfg.MaxSize == 0 {
-		cfg.MaxSize = int64(1 << 29)
+	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+		return nil, err
 	}
 	mgr := &Manager{
 		cfg:    cfg,

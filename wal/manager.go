@@ -36,6 +36,27 @@ type Config struct {
 	FS          vfs.FS
 }
 
+// normalized resolves legacy defaults once at the WAL constructor boundary.
+func (cfg Config) normalized() (Config, error) {
+	if cfg.Dir == "" {
+		return Config{}, fmt.Errorf("wal: directory required")
+	}
+	cfg.FS = vfs.Ensure(cfg.FS)
+	if cfg.FileMode == 0 {
+		cfg.FileMode = utils.DefaultFileMode
+	}
+	if cfg.SegmentSize == 0 {
+		cfg.SegmentSize = defaultSegmentSize
+	}
+	if cfg.SegmentSize < minSegmentSize {
+		cfg.SegmentSize = minSegmentSize
+	}
+	if cfg.BufferSize <= 0 {
+		cfg.BufferSize = defaultBufferSize
+	}
+	return cfg, nil
+}
+
 // EntryInfo describes an entry written to WAL.
 type EntryInfo struct {
 	SegmentID uint32
@@ -87,33 +108,19 @@ type Manager struct {
 
 // Open creates or resumes a WAL manager.
 func Open(cfg Config) (*Manager, error) {
-	if cfg.Dir == "" {
-		return nil, fmt.Errorf("wal: directory required")
-	}
-	cfg.FS = vfs.Ensure(cfg.FS)
-	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+	var err error
+	cfg, err = cfg.normalized()
+	if err != nil {
 		return nil, err
 	}
-	if cfg.FileMode == 0 {
-		cfg.FileMode = utils.DefaultFileMode
-	}
-	segSize := cfg.SegmentSize
-	if segSize == 0 {
-		segSize = defaultSegmentSize
-	}
-	if segSize < minSegmentSize {
-		segSize = minSegmentSize
-	}
-
-	bufSize := cfg.BufferSize
-	if bufSize <= 0 {
-		bufSize = defaultBufferSize
+	if err := cfg.FS.MkdirAll(cfg.Dir, os.ModePerm); err != nil {
+		return nil, err
 	}
 
 	m := &Manager{
 		cfg:           cfg,
-		segmentSize:   segSize,
-		bufferSize:    bufSize,
+		segmentSize:   cfg.SegmentSize,
+		bufferSize:    cfg.BufferSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
 	if err := m.openLatestSegment(); err != nil {

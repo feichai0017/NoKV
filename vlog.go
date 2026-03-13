@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"fmt"
+	"log/slog"
 	"maps"
 	"path/filepath"
 	"sync"
@@ -62,7 +63,7 @@ func (vlog *valueLog) logf(format string, args ...any) {
 	if vlog == nil || !vlog.opt.ValueLogVerbose {
 		return
 	}
-	fmt.Printf(format+"\n", args...)
+	slog.Default().Info(fmt.Sprintf(format, args...))
 }
 
 // metrics captures backlog counters for the value log.

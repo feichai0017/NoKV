@@ -37,6 +37,38 @@ func TestManagerOpenWithFaultFS(t *testing.T) {
 	}
 }
 
+func TestManagerOpenRequiresDir(t *testing.T) {
+	if _, err := wal.Open(wal.Config{}); err == nil {
+		t.Fatalf("expected missing dir to return error")
+	}
+}
+
+func TestManagerOpenClampsSmallSegmentSize(t *testing.T) {
+	dir := t.TempDir()
+	m, err := wal.Open(wal.Config{Dir: dir, SegmentSize: 1})
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	appendEntryValue(t, m, "k1", "v1")
+	appendEntryValue(t, m, "k2", "v2")
+	if err := m.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	files, err := m.ListSegments()
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected normalized segment size to keep two small entries in one segment, got %d segments", len(files))
+	}
+	if got := m.ActiveSegment(); got != 1 {
+		t.Fatalf("expected active segment 1, got %d", got)
+	}
+}
+
 func TestManagerCloseReturnsSyncFailure(t *testing.T) {
 	dir := t.TempDir()
 	segmentPath := filepath.Join(dir, "00001.wal")

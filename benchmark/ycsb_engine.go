@@ -31,6 +31,8 @@ type ycsbEngineOptions struct {
 	ValueThreshold       int
 	SyncWrites           bool
 	BlockCacheMB         int
+	NoKVIndexCacheMB     int
+	NoKVBloomCacheMB     int
 	NoKVCompactionPolicy string
 	MemtableMB           int
 	SSTableMB            int

@@ -27,14 +27,14 @@ func newSLRU(data map[uint64]*list.Element, stageOneCap, stageTwoCap int) *segme
 	}
 }
 
-func (slru *segmentedLRU) add(newitem storeItem) {
+func (slru *segmentedLRU) add(newitem storeItem) (storeItem, bool) {
 	// first add to stageOne
 	newitem.stage = 1
 
 	// if stageOne is not full, or the whole LFU is not full
 	if slru.stageOne.Len() < slru.stageOneCap || slru.Len() < slru.stageOneCap+slru.stageTwoCap {
 		slru.data[newitem.key] = slru.stageOne.PushFront(&newitem)
-		return
+		return storeItem{}, false
 	}
 
 	//if we reach here, it means StageOne is full, or the whole LFU is full
@@ -45,10 +45,12 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 	//here we really evict the item
 	delete(slru.data, item.key)
 
+	evicted := *item
 	*item = newitem
 
 	slru.data[item.key] = e
 	slru.stageOne.MoveToFront(e)
+	return evicted, true
 }
 
 func (slru *segmentedLRU) get(v *list.Element) {
@@ -100,6 +102,33 @@ func (slru *segmentedLRU) victim() *storeItem {
 	// here we just take the last element from the tail
 	v := slru.stageOne.Back()
 	return v.Value.(*storeItem)
+}
+
+func (slru *segmentedLRU) remove(v *list.Element) storeItem {
+	item := v.Value.(*storeItem)
+	delete(slru.data, item.key)
+	if item.stage == STAGE_TWO {
+		slru.stageTwo.Remove(v)
+	} else {
+		slru.stageOne.Remove(v)
+	}
+	return *item
+}
+
+func (slru *segmentedLRU) removeStageOneOldest() (storeItem, bool) {
+	tail := slru.stageOne.Back()
+	if tail == nil {
+		return storeItem{}, false
+	}
+	return slru.remove(tail), true
+}
+
+func (slru *segmentedLRU) removeStageTwoOldest() (storeItem, bool) {
+	tail := slru.stageTwo.Back()
+	if tail == nil {
+		return storeItem{}, false
+	}
+	return slru.remove(tail), true
 }
 
 func (slru *segmentedLRU) String() string {

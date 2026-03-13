@@ -1,7 +1,7 @@
 package wal
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"os"
 	"sync/atomic"
@@ -10,6 +10,12 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
+)
+
+const (
+	defaultWatchdogInterval     = 15 * time.Second
+	defaultWatchdogMinRemovable = 1
+	defaultWatchdogMaxBatch     = 4
 )
 
 // WatchdogConfig controls WAL watchdog behavior.
@@ -21,6 +27,20 @@ type WatchdogConfig struct {
 	WarnRatio    float64
 	WarnSegments int64
 	RaftPointers func() map[uint64]manifest.RaftLogPointer
+}
+
+// normalized resolves constructor-boundary defaults for the watchdog config.
+func (cfg WatchdogConfig) normalized() WatchdogConfig {
+	if cfg.Interval <= 0 {
+		cfg.Interval = defaultWatchdogInterval
+	}
+	if cfg.MinRemovable <= 0 {
+		cfg.MinRemovable = defaultWatchdogMinRemovable
+	}
+	if cfg.MaxBatch <= 0 {
+		cfg.MaxBatch = defaultWatchdogMaxBatch
+	}
+	return cfg
 }
 
 // WatchdogSnapshot captures WAL watchdog state for reporting.
@@ -62,23 +82,12 @@ func NewWatchdog(cfg WatchdogConfig) *Watchdog {
 	if cfg.Manager == nil {
 		return nil
 	}
-	interval := cfg.Interval
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	minRemovable := cfg.MinRemovable
-	if minRemovable <= 0 {
-		minRemovable = 1
-	}
-	maxBatch := cfg.MaxBatch
-	if maxBatch <= 0 {
-		maxBatch = 4
-	}
+	cfg = cfg.normalized()
 	w := &Watchdog{
 		manager:      cfg.Manager,
-		interval:     interval,
-		minRemovable: minRemovable,
-		maxBatch:     maxBatch,
+		interval:     cfg.Interval,
+		minRemovable: cfg.MinRemovable,
+		maxBatch:     cfg.MaxBatch,
 		warnRatio:    cfg.WarnRatio,
 		warnSegments: cfg.WarnSegments,
 		autoEnabled:  cfg.MinRemovable > 0 && cfg.MaxBatch > 0,
@@ -196,7 +205,7 @@ func (w *Watchdog) observe() {
 			if os.IsNotExist(err) {
 				continue
 			}
-			log.Printf("[wal-watchdog] remove segment %d failed: %v", id, err)
+			slog.Default().Warn("wal watchdog remove segment failed", "segment", id, "err", err)
 			continue
 		}
 		removed++

@@ -72,9 +72,10 @@ type Options struct {
 	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
 	BloomFalsePositive float64
 
-	// Block cache controls.
-	BlockCacheSize int
-	BloomCacheSize int
+	// Cache budgets. Zero disables the corresponding user-space cache.
+	BlockCacheBytes int64
+	IndexCacheBytes int64
+	BloomCacheBytes int64
 
 	// compact
 	NumCompactors       int
