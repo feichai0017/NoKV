@@ -17,9 +17,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// MemTable is an exported alias for the in-memory mutable table implementation.
-type MemTable = memTable
-
 type memIndex interface {
 	Add(*kv.Entry)
 	Search([]byte) ([]byte, kv.ValueStruct)

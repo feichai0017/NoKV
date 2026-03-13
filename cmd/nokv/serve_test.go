@@ -13,7 +13,8 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
-	"github.com/feichai0017/NoKV/raftstore"
+	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -219,11 +220,11 @@ func newTestDBWithDir(t *testing.T, dir string) *NoKV.DB {
 	return db
 }
 
-func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *raftstore.Server {
+func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Server {
 	t.Helper()
-	server, err := raftstore.NewServer(raftstore.ServerConfig{
+	server, err := serverpkg.New(serverpkg.Config{
 		DB: db,
-		Store: raftstore.StoreConfig{
+		Store: storepkg.Config{
 			StoreID: storeID,
 		},
 		TransportAddr: "127.0.0.1:0",

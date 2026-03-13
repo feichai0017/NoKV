@@ -14,7 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
@@ -129,7 +128,7 @@ func (s *testSchedulerSink) DrainOperations() []scheduler.Operation {
 }
 
 func testPeerBuilder(storeID uint64) store.PeerBuilder {
-	return func(meta manifest.RegionMeta) (*raftstore.Config, error) {
+	return func(meta manifest.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, peerMeta := range meta.Peers {
 			if peerMeta.StoreID == storeID {
@@ -140,7 +139,7 @@ func testPeerBuilder(storeID uint64) store.PeerBuilder {
 		if peerID == 0 {
 			return nil, fmt.Errorf("store %d missing peer in region %d", storeID, meta.ID)
 		}
-		cfg := &raftstore.Config{
+		cfg := &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              peerID,
 				ElectionTick:    5,
@@ -170,7 +169,7 @@ func TestStorePeerLifecycle(t *testing.T) {
 	router := store.NewRouter()
 	rs := store.NewStore(router)
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
 			ElectionTick:    10,
@@ -206,7 +205,7 @@ func TestStorePeerLifecycle(t *testing.T) {
 
 func TestStoreDuplicatePeer(t *testing.T) {
 	rs := store.NewStore(nil)
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
 			ElectionTick:    5,
@@ -238,7 +237,7 @@ func TestStoreRejectsLegacyApplyPayload(t *testing.T) {
 	})
 	defer rs.Close()
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              7,
 			ElectionTick:    5,
@@ -283,7 +282,7 @@ func TestStoreCustomFactoryAndHooks(t *testing.T) {
 		},
 	})
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              2,
 			ElectionTick:    5,
@@ -341,7 +340,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 		},
 	})
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              3,
 			ElectionTick:    5,
@@ -525,7 +524,7 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	rs := store.NewStoreWithConfig(store.Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
 			ElectionTick:    5,
@@ -571,7 +570,7 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	})
 	defer rs.Close()
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              7,
 			ElectionTick:    5,
@@ -640,7 +639,7 @@ func TestStorePlannerQueuesOperations(t *testing.T) {
 	})
 	defer rs.Close()
 
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              701,
 			ElectionTick:    5,
@@ -696,7 +695,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 		},
 		Peers: []manifest.PeerMeta{{StoreID: 1, PeerID: 1}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
 			ElectionTick:    5,
@@ -791,7 +790,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 17}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              17,
 			ElectionTick:    5,
@@ -867,7 +866,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 5}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              5,
 			ElectionTick:    10,
@@ -910,7 +909,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 1},
 		Peers:    []manifest.PeerMeta{{StoreID: 3, PeerID: 7}},
 	}
-	cfg := &raftstore.Config{
+	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              7,
 			ElectionTick:    5,
