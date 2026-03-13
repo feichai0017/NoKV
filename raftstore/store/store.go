@@ -1,6 +1,7 @@
 package store
 
 import (
+	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/manifest"
@@ -23,8 +24,20 @@ type Store struct {
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
 	commandTimeout time.Duration
-	operations     *operationScheduler
-	heartbeat      *heartbeatLoop
+
+	operationInput     chan Operation
+	operationStop      chan struct{}
+	operationWG        sync.WaitGroup
+	operationCooldown  time.Duration
+	operationInterval  time.Duration
+	operationBurst     int
+	operationMu        sync.Mutex
+	operationPending   map[operationKey]struct{}
+	operationLastApply map[operationKey]time.Time
+
+	heartbeatInterval time.Duration
+	heartbeatStop     chan struct{}
+	heartbeatWG       sync.WaitGroup
 }
 
 type operationKey struct {
@@ -83,37 +96,37 @@ func NewStoreWithConfig(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:         router,
-		peerBuilder:    cfg.PeerBuilder,
-		regionMetrics:  regionMetrics,
-		manifest:       cfg.Manifest,
-		scheduler:      cfg.Scheduler,
-		storeID:        cfg.StoreID,
-		commandApplier: cfg.CommandApplier,
-		commandTimeout: commandTimeout,
+		router:             router,
+		peerBuilder:        cfg.PeerBuilder,
+		regionMetrics:      regionMetrics,
+		manifest:           cfg.Manifest,
+		scheduler:          cfg.Scheduler,
+		storeID:            cfg.StoreID,
+		commandApplier:     cfg.CommandApplier,
+		commandTimeout:     commandTimeout,
+		operationCooldown:  operationCooldown,
+		operationInterval:  operationInterval,
+		operationBurst:     operationBurst,
+		operationPending:   make(map[operationKey]struct{}),
+		operationLastApply: make(map[operationKey]time.Time),
 	}
 	s.regions = newRegionManager(cfg.Manifest, regionMetrics, cfg.Scheduler)
 	s.command = newCommandPipeline(cfg.CommandApplier)
-	s.operations = newOperationScheduler(queueSize, operationInterval, operationCooldown, operationBurst, s.applyOperation)
+	if queueSize > 0 {
+		s.operationInput = make(chan Operation, queueSize)
+		s.operationStop = make(chan struct{})
+		s.operationWG.Add(1)
+		go s.runOperationLoop()
+	}
 	if cfg.Manifest != nil {
 		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
 	}
 	if s.scheduler != nil {
-		heartbeatInterval := cfg.HeartbeatInterval
-		if heartbeatInterval <= 0 {
-			heartbeatInterval = 3 * time.Second
+		s.heartbeatInterval = cfg.HeartbeatInterval
+		if s.heartbeatInterval <= 0 {
+			s.heartbeatInterval = 3 * time.Second
 		}
-		s.heartbeat = newHeartbeatLoop(
-			heartbeatInterval,
-			s.scheduler,
-			s.storeID,
-			s.RegionMetas,
-			s.storeStatsSnapshot,
-			s.enqueueOperation,
-		)
-		if s.heartbeat != nil {
-			s.heartbeat.start()
-		}
+		s.startHeartbeatLoop()
 	}
 	return s
 }

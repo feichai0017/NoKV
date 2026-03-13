@@ -1,6 +1,6 @@
 # Memtable Design & Lifecycle
 
-NoKV's write path mirrors RocksDB: every write lands in the **WAL** and an in-memory **memtable** backed by a selectable in-memory index (skiplist or ART). The implementation lives in [`lsm/memtable.go`](../lsm/memtable.go) and ties directly into the flush manager (`lsm/flush`).
+NoKV's write path mirrors RocksDB: every write lands in the **WAL** and an in-memory **memtable** backed by a selectable in-memory index (skiplist or ART). The implementation lives in [`lsm/memtable.go`](../lsm/memtable.go) and ties directly into the concrete flush queue in [`lsm/flush_runtime.go`](../lsm/flush_runtime.go).
 
 ---
 
@@ -53,7 +53,7 @@ sequenceDiagram
 ```
 
 1. **Active → Immutable** – when `mt.walSize + estimate` exceeds `Options.MemTableSize`, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.
-2. **Flush** – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in `memTable.segmentID` once the SST is durably installed.
+2. **Flush** – the flush queue drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in `memTable.segmentID` once the SST is durably installed.
 3. **Recovery** – `LSM.recovery` scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest's log pointer. Entries are replayed via `wal.Manager.ReplaySegment` into fresh indexes and the active in-memory state is rebuilt.
 
 Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger's arena allocator for simplicity.

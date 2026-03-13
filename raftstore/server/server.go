@@ -92,21 +92,8 @@ func New(cfg Config) (*Server, error) {
 			if peerID == 0 {
 				return nil, fmt.Errorf("raftstore/server: store %d missing peer in region %d", storeCfg.StoreID, meta.ID)
 			}
-			raftCfg := cfg.Raft
-			raftCfg.ID = peerID
-			if raftCfg.ElectionTick == 0 {
-				raftCfg.ElectionTick = 10
-			}
-			if raftCfg.HeartbeatTick == 0 {
-				raftCfg.HeartbeatTick = 2
-			}
-			if raftCfg.MaxSizePerMsg == 0 {
-				raftCfg.MaxSizePerMsg = 1 << 20
-			}
-			if raftCfg.MaxInflightMsgs == 0 {
-				raftCfg.MaxInflightMsgs = 256
-			}
-			peerCfg := &peer.Config{
+			raftCfg := defaultRaftConfig(cfg.Raft, peerID)
+			return &peer.Config{
 				RaftConfig: raftCfg,
 				Transport:  transportRef,
 				Apply:      kv.NewEntryApplier(cfg.DB),
@@ -114,8 +101,7 @@ func New(cfg Config) (*Server, error) {
 				Manifest:   cfg.DB.Manifest(),
 				GroupID:    meta.ID,
 				Region:     manifest.CloneRegionMetaPtr(&meta),
-			}
-			return peerCfg, nil
+			}, nil
 		}
 	}
 	storeCfg.PeerBuilder = builder
@@ -153,6 +139,23 @@ func New(cfg Config) (*Server, error) {
 	}
 	srv.startRaftTickLoop(interval)
 	return srv, nil
+}
+
+func defaultRaftConfig(base myraft.Config, peerID uint64) myraft.Config {
+	base.ID = peerID
+	if base.ElectionTick == 0 {
+		base.ElectionTick = 10
+	}
+	if base.HeartbeatTick == 0 {
+		base.HeartbeatTick = 2
+	}
+	if base.MaxSizePerMsg == 0 {
+		base.MaxSizePerMsg = 1 << 20
+	}
+	if base.MaxInflightMsgs == 0 {
+		base.MaxInflightMsgs = 256
+	}
+	return base
 }
 
 // Addr returns the address NoKV clients (and raft peers) should dial.

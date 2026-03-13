@@ -387,10 +387,8 @@ func (lm *levelManager) buildPickerInput() compact.PickerInput {
 		return compact.PickerInput{}
 	}
 	var hotKeys [][]byte
-	if v := lm.hotProvider.Load(); v != nil {
-		if fn, ok := v.(func() [][]byte); ok && fn != nil {
-			hotKeys = fn()
-		}
+	if lm.hotProvider != nil {
+		hotKeys = lm.hotProvider()
 	}
 	levels := make([]compact.LevelInput, len(lm.levels))
 	for i, lvl := range lm.levels {

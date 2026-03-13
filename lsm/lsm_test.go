@@ -124,8 +124,8 @@ func TestRotateReturnsSubmitError(t *testing.T) {
 	defer func() { _ = wlog.Close() }()
 	defer func() { _ = lsm.Close() }()
 
-	if err := lsm.flushMgr.Close(); err != nil {
-		t.Fatalf("close flush manager: %v", err)
+	if err := lsm.flushQueue.close(); err != nil {
+		t.Fatalf("close flush queue: %v", err)
 	}
 	if err := lsm.Rotate(); err == nil {
 		t.Fatalf("expected rotate to return submit error")
@@ -233,11 +233,11 @@ func TestLSMThrottleCallback(t *testing.T) {
 		mu     sync.Mutex
 		events []WriteThrottleState
 	)
-	lsm.SetThrottleCallback(func(state WriteThrottleState) {
+	lsm.throttleFn = func(state WriteThrottleState) {
 		mu.Lock()
 		events = append(events, state)
 		mu.Unlock()
-	})
+	}
 
 	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
 	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
@@ -1132,9 +1132,9 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	lsm.SetHotKeyProvider(func() [][]byte {
+	lsm.levels.hotProvider = func() [][]byte {
 		return nil
-	})
+	}
 
 	entry := buildInternalTestEntry()
 	defer entry.DecrRef()
@@ -1336,9 +1336,9 @@ func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	var events []WriteThrottleState
-	lsm.SetThrottleCallback(func(state WriteThrottleState) {
+	lsm.throttleFn = func(state WriteThrottleState) {
 		events = append(events, state)
-	})
+	}
 
 	// Force explicit thresholds so we can validate stop -> slowdown -> none.
 	lsm.levels.opt.L0SlowdownWritesTrigger = 2
@@ -1776,11 +1776,11 @@ func buildLSM() *LSM {
 	if err != nil {
 		panic(err)
 	}
+	opt.DiscardStatsCh = &c
 	lsm, err := NewLSM(opt, wlog)
 	if err != nil {
 		panic(err)
 	}
-	lsm.SetDiscardStatsCh(&c)
 	return lsm
 }
 
