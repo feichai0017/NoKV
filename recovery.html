@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e40abed7.js";
+            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -202,7 +202,7 @@
 <li><strong>Manifest replay + SST load</strong>: <code>levelManager.build</code> replays manifest version and opens SST files.</li>
 <li><strong>Stale SST cleanup</strong>: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (<code>EditDeleteFile</code>) so startup can continue.</li>
 <li><strong>WAL replay</strong>: <code>lsm.recovery</code> replays post-checkpoint WAL records into memtables.</li>
-<li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to <code>flush.Manager</code>.</li>
+<li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to the flush queue.</li>
 <li><strong>ValueLog recovery</strong>: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.</li>
 <li><strong>Runtime restart</strong>: metrics and periodic workers start again.</li>
 </ol>

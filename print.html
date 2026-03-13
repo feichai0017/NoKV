@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e40abed7.js";
+            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -459,7 +459,7 @@ iterator scan, distributed read/write via Raft apply), see
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
 <li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
-<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
+<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; the concrete flush runtime runs <code>Enqueue → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
 <li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
 </ul>
 <h3 id="22-valuelog"><a class="header" href="#22-valuelog">2.2 ValueLog</a></h3>
@@ -1472,7 +1472,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-design--lifecycle"><a class="header" href="#memtable-design--lifecycle">Memtable Design &amp; Lifecycle</a></h1>
-<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the flush manager (<code>lsm/flush</code>).</p>
+<p>NoKV’s write path mirrors RocksDB: every write lands in the <strong>WAL</strong> and an in-memory <strong>memtable</strong> backed by a selectable in-memory index (skiplist or ART). The implementation lives in <a href="../lsm/memtable.go"><code>lsm/memtable.go</code></a> and ties directly into the concrete flush queue in <a href="../lsm/flush_runtime.go"><code>lsm/flush_runtime.go</code></a>.</p>
 <hr>
 <h2 id="1-structure"><a class="header" href="#1-structure">1. Structure</a></h2>
 <pre><code class="language-go">type memTable struct {
@@ -1516,7 +1516,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 
 <ol>
 <li><strong>Active → Immutable</strong> – when <code>mt.walSize + estimate</code> exceeds <code>Options.MemTableSize</code>, the memtable is rotated and pushed onto the flush queue. The new active memtable triggers another WAL segment switch.</li>
-<li><strong>Flush</strong> – the flush manager drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
+<li><strong>Flush</strong> – the flush queue drains immutable memtables, builds SSTables, logs manifest edits, and releases the WAL segment ID recorded in <code>memTable.segmentID</code> once the SST is durably installed.</li>
 <li><strong>Recovery</strong> – <code>LSM.recovery</code> scans WAL files, reopens memtables per segment (most recent becomes active), and deletes segments ≤ the manifest’s log pointer. Entries are replayed via <code>wal.Manager.ReplaySegment</code> into fresh indexes and the active in-memory state is rebuilt.</li>
 </ol>
 <p>Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas with reference counting—NoKV reuses Badger’s arena allocator for simplicity.</p>
@@ -1570,7 +1570,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <p>See <a href="#memtable-flush-pipeline"><code>docs/flush.md</code></a> for the end-to-end flush scheduler and <code>[docs/architecture.md](architecture.md#3-end-to-end-write-flow)</code> for where memtables sit in the write pipeline.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="memtable-flush-pipeline"><a class="header" href="#memtable-flush-pipeline">MemTable Flush Pipeline</a></h1>
-<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The task scheduler is in <a href="../lsm/flush"><code>lsm/flush</code></a>; SST persistence and manifest install are in <a href="../lsm/builder.go"><code>lsm/builder.go</code></a> and <a href="../lsm/levels.go"><code>lsm/levels.go</code></a>.</p>
+<p>NoKV’s flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in <a href="../lsm/flush_runtime.go"><code>lsm/flush_runtime.go</code></a>; SST persistence and manifest install are in <a href="../lsm/builder.go"><code>lsm/builder.go</code></a> and <a href="../lsm/levels.go"><code>lsm/levels.go</code></a>.</p>
 <hr>
 <h2 id="1-responsibilities"><a class="header" href="#1-responsibilities">1. Responsibilities</a></h2>
 <ol>
@@ -1580,24 +1580,24 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <li><strong>Observability</strong>: export queue/build/release timing through flush metrics.</li>
 </ol>
 <hr>
-<h2 id="2-stage-machine"><a class="header" href="#2-stage-machine">2. Stage Machine</a></h2>
+<h2 id="2-concrete-flush-queue"><a class="header" href="#2-concrete-flush-queue">2. Concrete Flush Queue</a></h2>
 <pre class="mermaid">flowchart LR
     Active[Active MemTable]
     Immutable[Immutable MemTable]
-    FlushQ[flush.Manager queue]
-    Build[StageBuild]
-    Install[StageInstall]
-    Release[StageRelease]
+    FlushQ[flush queue]
+    Build[Build SST]
+    Install[Install SST]
+    Release[Release MemTable]
 
     Active --&gt;|threshold reached| Immutable --&gt; FlushQ
     FlushQ --&gt; Build --&gt; Install --&gt; Release --&gt; Active
 </pre>
 
 <ul>
-<li><strong>StagePrepare</strong>: <code>flush.Manager.Submit</code> enqueues task and records wait-start time.</li>
-<li><strong>StageBuild</strong>: worker pulls task via <code>flush.Manager.Next</code>, builds SST (<code>levelManager.flush</code> -&gt; <code>openTable</code> -&gt; <code>tableBuilder.flush</code>).</li>
-<li><strong>StageInstall</strong>: after SST + manifest edits succeed, worker marks install complete (<code>flush.Manager.Update(..., StageInstall, ...)</code>).</li>
-<li><strong>StageRelease</strong>: worker removes immutable from in-memory list, closes memtable, records release metrics, and completes task.</li>
+<li><strong>Enqueue</strong>: <code>lsm.submitFlush</code> pushes the immutable memtable into the concrete flush queue and records wait-start time.</li>
+<li><strong>Build</strong>: worker pulls the next task, builds the SST (<code>levelManager.flush</code> -&gt; <code>openTable</code> -&gt; <code>tableBuilder.flush</code>).</li>
+<li><strong>Install</strong>: after SST + manifest edits succeed, the worker records install timing.</li>
+<li><strong>Release</strong>: worker removes the immutable from memory, closes the memtable, records release timing, and completes the task.</li>
 </ul>
 <hr>
 <h2 id="3-sst-persistence-modes"><a class="header" href="#3-sst-persistence-modes">3. SST Persistence Modes</a></h2>
@@ -1626,7 +1626,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <h2 id="4-execution-path-in-code"><a class="header" href="#4-execution-path-in-code">4. Execution Path in Code</a></h2>
 <ol>
 <li><code>lsm.Set</code>/<code>lsm.SetBatch</code> detects <code>walSize + estimate &gt; MemTableSize</code> and rotates memtable.</li>
-<li>Rotated memtable is submitted to <code>flush.Manager</code> (<code>lsm.submitFlush</code>).</li>
+<li>Rotated memtable is submitted to the flush queue (<code>lsm.submitFlush</code>).</li>
 <li>Worker executes <code>levelManager.flush(mt)</code>:
 <ul>
 <li>iterates memtable entries,</li>
@@ -1646,7 +1646,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 </ul>
 <hr>
 <h2 id="6-metrics--cli"><a class="header" href="#6-metrics--cli">6. Metrics &amp; CLI</a></h2>
-<p><code>flush.Manager.Stats()</code> feeds <code>StatsSnapshot.Flush</code>:</p>
+<p><code>flushRuntime.stats()</code> feeds <code>StatsSnapshot.Flush</code>:</p>
 <ul>
 <li><code>pending</code>, <code>queue</code>, <code>active</code></li>
 <li>wait/build/release totals, counts, last, max</li>
@@ -1659,7 +1659,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <hr>
 <h2 id="7-related-tests"><a class="header" href="#7-related-tests">7. Related Tests</a></h2>
 <ul>
-<li><code>lsm/flush/manager_test.go</code>: queue/stage transitions and timing counters.</li>
+<li><code>lsm/flush_runtime_test.go</code>: queue lifecycle and timing counters.</li>
 <li><code>db_test.go::TestRecoveryWALReplayRestoresData</code>: replay still restores data after crash before flush completion.</li>
 <li><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> and <code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code>: stale manifest SST cleanup on startup.</li>
 </ul>
@@ -3295,7 +3295,7 @@ stronger HA semantics is incremental.</li>
 <li><strong>Manifest replay + SST load</strong>: <code>levelManager.build</code> replays manifest version and opens SST files.</li>
 <li><strong>Stale SST cleanup</strong>: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (<code>EditDeleteFile</code>) so startup can continue.</li>
 <li><strong>WAL replay</strong>: <code>lsm.recovery</code> replays post-checkpoint WAL records into memtables.</li>
-<li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to <code>flush.Manager</code>.</li>
+<li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to the flush queue.</li>
 <li><strong>ValueLog recovery</strong>: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.</li>
 <li><strong>Runtime restart</strong>: metrics and periodic workers start again.</li>
 </ol>
@@ -3546,7 +3546,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/compact/*_test.go</code>, <code>lsm/flush/manager_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/compact/*_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
 <tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
 <tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
 <tr><td>Percolator / Distributed Txn</td><td><code>percolator/*_test.go</code>, <code>raftstore/client/client_test.go</code>, <code>stats_test.go</code></td><td>Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting.</td><td>Mixed multi-region fuzzing with lock TTL and leader churn.</td></tr>

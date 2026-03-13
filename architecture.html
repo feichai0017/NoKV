@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e40abed7.js";
+            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -227,7 +227,7 @@ iterator scan, distributed read/write via Raft apply), see
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
 <li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
-<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; <code>flush.Manager</code> runs <code>Prepare → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
+<li><code>MemTable</code> accumulates writes until full, then enters the flush queue; the concrete flush runtime runs <code>Enqueue → Build → Install → Release</code>, logs edits, and releases WAL segments.</li>
 <li>Writes are handled by a single commit worker that performs value-log append first, then WAL/memtable apply, keeping durability ordering simple and consistent.</li>
 </ul>
 <h3 id="22-valuelog"><a class="header" href="#22-valuelog">2.2 ValueLog</a></h3>
