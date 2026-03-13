@@ -11,8 +11,6 @@ import (
 //	Async          – SyncWrites=false (no fsync, baseline)
 //	SyncInline     – SyncWrites=true, SyncPipeline=false (commit worker fsync inline)
 //	SyncPipeline   – SyncWrites=true, SyncPipeline=true  (dedicated sync worker)
-//
-// Each mode is tested with batch sizes 1, 8, 64.
 func BenchmarkDBBatchSet(b *testing.B) {
 	type syncMode struct {
 		name     string
@@ -35,11 +33,11 @@ func BenchmarkDBBatchSet(b *testing.B) {
 				opt.SyncWrites = mode.sync
 				opt.SyncPipeline = mode.pipeline
 			})
-			entries := make([]*kv.Entry, batchSize)
 			b.ReportAllocs()
 			b.SetBytes(int64(batchSize * len(value)))
 			b.ResetTimer()
 			for i := 0; b.Loop(); i++ {
+				entries := make([]*kv.Entry, batchSize)
 				for j := range batchSize {
 					key := makeBenchKey(i*batchSize + j)
 					entries[j] = kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
