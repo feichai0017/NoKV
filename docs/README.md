@@ -66,7 +66,7 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
     <h3 style="margin-top: 0;">🧠 Smart Caching</h3>
-    <p>Built-in <strong>W-TinyLFU</strong> Block Cache (via Ristretto) and <strong>HotRing</strong> implementation ensure 99% cache hit rates and adapt to skew access patterns.</p>
+    <p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches and <strong>HotRing</strong> keep hot working sets close to the read path.</p>
   </div>
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
@@ -114,7 +114,7 @@ graph TD
     
     subgraph "Cache Layer"
         BlockCache["Block Cache (Ristretto)"] -.-> SSTable
-        IndexCache["Index Cache (W-TinyLFU)"] -.-> SSTable
+        IndexCache["Index Cache (W-TinyLFU, byte budget)"] -.-> SSTable
     end
 ```
 

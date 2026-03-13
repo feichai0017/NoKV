@@ -3,7 +3,6 @@ package lsm
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"slices"
 	"sort"
@@ -140,7 +139,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 	defer func() {
 		if cleanup {
 			if err := lm.compactState.Delete(cd.stateEntry()); err != nil {
-				log.Printf("[Compactor: %d] WARNING: Failed to cleanup compaction state: %v", id, err)
+				lm.getLogger().Warn("failed to cleanup compaction state", "worker", id, "err", err)
 				retErr = errors.Join(retErr, err)
 			}
 		}

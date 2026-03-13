@@ -36,21 +36,8 @@ func (e *pebbleEngine) Open(clean bool) error {
 		return fmt.Errorf("pebble: mkdir: %w", err)
 	}
 
-	opts := &pebble.Options{}
-	if mb := e.opts.BlockCacheMB; mb > 0 {
-		e.cache = pebble.NewCache(int64(mb) << 20)
-		opts.Cache = e.cache
-	}
-	if mb := e.opts.MemtableMB; mb > 0 {
-		opts.MemTableSize = uint64(mb) << 20
-	}
-	level0 := pebble.LevelOptions{
-		Compression: parsePebbleCompression(e.opts.PebbleCompression),
-	}
-	if mb := e.opts.SSTableMB; mb > 0 {
-		level0.TargetFileSize = int64(mb) << 20
-	}
-	opts.Levels = []pebble.LevelOptions{level0}
+	opts := buildPebbleBenchmarkOptions(e.opts)
+	e.cache = opts.Cache
 
 	db, err := pebble.Open(dir, opts)
 	if err != nil {

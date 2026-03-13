@@ -17,6 +17,7 @@ type storeItem struct {
 	key      uint64
 	conflict uint64
 	value    any
+	cost     int64
 }
 
 func newWindowLRU(size int, data map[uint64]*list.Element) *windowLRU {
@@ -50,6 +51,21 @@ func (lru *windowLRU) add(newitem storeItem) (eitem storeItem, evicted bool) {
 
 func (lru *windowLRU) get(v *list.Element) {
 	lru.list.MoveToFront(v)
+}
+
+func (lru *windowLRU) remove(v *list.Element) storeItem {
+	item := v.Value.(*storeItem)
+	delete(lru.data, item.key)
+	lru.list.Remove(v)
+	return *item
+}
+
+func (lru *windowLRU) removeOldest() (storeItem, bool) {
+	tail := lru.list.Back()
+	if tail == nil {
+		return storeItem{}, false
+	}
+	return lru.remove(tail), true
 }
 
 func (lru *windowLRU) String() string {

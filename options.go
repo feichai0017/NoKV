@@ -151,10 +151,13 @@ type Options struct {
 	// slowdown first becomes active.
 	WriteThrottleMaxRate int64
 
-	// Block cache configuration for read path optimization. Cached blocks
-	// target L0/L1; colder data relies on the OS page cache.
-	BlockCacheSize int
-	BloomCacheSize int
+	// BlockCacheBytes bounds the in-memory budget for cached L0/L1 data blocks.
+	// Deeper levels continue to rely on the OS page cache.
+	BlockCacheBytes int64
+	// IndexCacheBytes bounds the in-memory budget for decoded SSTable indexes.
+	IndexCacheBytes int64
+	// BloomCacheBytes bounds the in-memory budget for cached bloom filters.
+	BloomCacheBytes int64
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -283,8 +286,9 @@ func NewDefaultOptions() *Options {
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,
-		BlockCacheSize:                4096,
-		BloomCacheSize:                1024,
+		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
+		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
+		BloomCacheBytes:               lsmpkg.DefaultBloomCacheBytes,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		ManifestRewriteThreshold:      64 << 20,
@@ -390,11 +394,14 @@ func (opt *Options) normalizeInPlace() {
 	if opt.WriteThrottleMaxRate < opt.WriteThrottleMinRate {
 		opt.WriteThrottleMaxRate = opt.WriteThrottleMinRate
 	}
-	if opt.BlockCacheSize < 0 {
-		opt.BlockCacheSize = 0
+	if opt.BlockCacheBytes < 0 {
+		opt.BlockCacheBytes = 0
 	}
-	if opt.BloomCacheSize < 0 {
-		opt.BloomCacheSize = 0
+	if opt.IndexCacheBytes < 0 {
+		opt.IndexCacheBytes = 0
+	}
+	if opt.BloomCacheBytes < 0 {
+		opt.BloomCacheBytes = 0
 	}
 	if opt.NumCompactors <= 0 {
 		opt.NumCompactors = lsmpkg.DefaultNumCompactors()
