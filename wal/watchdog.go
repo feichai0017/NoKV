@@ -156,7 +156,7 @@ func (w *Watchdog) run() {
 		select {
 		case <-ticker.C:
 			w.observe()
-		case <-w.closer.CloseSignal:
+		case <-w.closer.Closed():
 			return
 		}
 	}

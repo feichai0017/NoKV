@@ -451,7 +451,7 @@ func (vlog *valueLog) close() error {
 	if vlog == nil || vlog.db == nil {
 		return nil
 	}
-	<-vlog.lfDiscardStats.closer.CloseSignal
+	<-vlog.lfDiscardStats.closer.Closed()
 	if vlog.hot != nil {
 		vlog.hot.Close()
 	}

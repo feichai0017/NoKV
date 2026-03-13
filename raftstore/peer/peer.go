@@ -513,7 +513,7 @@ func (p *Peer) Close() error {
 	}
 	p.stopCancel()
 	if p.applyCloser != nil {
-		p.applyCloser.SignalAndWait()
+		p.applyCloser.Close()
 	}
 	p.readMu.Lock()
 	for key, ch := range p.pendingReads {

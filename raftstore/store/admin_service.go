@@ -11,10 +11,10 @@ import (
 	proto "google.golang.org/protobuf/proto"
 )
 
-// SplitRegion updates the parent region metadata and bootstraps a new peer for
-// the child region. The child metadata must describe the desired child region
-// (key range, peers, epoch).
-func (s *Store) SplitRegion(parentID uint64, childMeta manifest.RegionMeta) (*peer.Peer, error) {
+// splitRegionLocal updates the parent region metadata and bootstraps a new
+// peer for the child region. It is intentionally kept local to the store
+// package so callers cannot bypass raft and mutate region layout directly.
+func (s *Store) splitRegionLocal(parentID uint64, childMeta manifest.RegionMeta) (*peer.Peer, error) {
 	if s == nil {
 		return nil, fmt.Errorf("raftstore: store is nil")
 	}
@@ -165,7 +165,7 @@ func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
 	if len(childMeta.StartKey) == 0 {
 		childMeta.StartKey = append([]byte(nil), split.GetSplitKey()...)
 	}
-	_, err := s.SplitRegion(split.GetParentRegionId(), childMeta)
+	_, err := s.splitRegionLocal(split.GetParentRegionId(), childMeta)
 	return err
 }
 
