@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
+            window.path_to_searchindex_js = "searchindex-61707827.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -220,7 +220,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </code></pre>
 <p>Key behaviours:</p>
 <ul>
-<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep manifest/raft pointers.</li>
+<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep storage WAL checkpoints and store-local raft replay pointers.</li>
 <li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
 <li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB’s <code>LogFileManager::SwitchLog</code>).</li>
 <li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
@@ -239,7 +239,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/meta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -259,7 +259,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 surface warnings when raft-typed records dominate the log. It:</p>
 <ul>
 <li>Samples WAL metrics + per-segment metrics and combines them with
-<code>manifest.RaftPointerSnapshot()</code> to compute removable segments.</li>
+<code>raftstore/meta</code> raft pointer snapshots to compute removable segments.</li>
 <li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
 <code>WALAutoGCMinRemovable</code> are eligible.</li>
 <li>Exposes counters (<code>wal.auto_gc_runs/removed/last_unix</code>) and warning state
@@ -293,8 +293,8 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
 <ul>
 <li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
-<li>When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via <code>LogRaftTruncate</code> with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
-<li><code>lsm/levelManager.canRemoveWalSegment</code> now blocks garbage collection whenever any raft group still references a segment through its truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
+<li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/meta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
+<li><code>lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
 <p>For broader context, read the <a href="architecture.html">architecture overview</a> and <a href="flush.html">flush pipeline</a> documents.</p>
 

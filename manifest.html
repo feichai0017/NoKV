@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
+            window.path_to_searchindex_js = "searchindex-61707827.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -184,7 +184,6 @@
 <li>SST files (<code>EditAddFile</code> / <code>EditDeleteFile</code>)</li>
 <li>WAL checkpoint (<code>EditLogPointer</code>)</li>
 <li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
-<li>raft and region metadata (<code>EditRaftPointer</code>, <code>EditRegion</code>)</li>
 </ul>
 <p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
 <hr>
@@ -207,15 +206,12 @@
     LogOffset    uint64
     ValueLogs    map[ValueLogID]ValueLogMeta
     ValueLogHead map[uint32]ValueLogMeta
-    RaftPointers map[uint64]RaftLogPointer
-    Regions      map[uint64]RegionMeta
 }
 </code></pre>
 <ul>
 <li><code>Levels</code>: per-level SST metadata.</li>
 <li><code>LogSegment/LogOffset</code>: WAL replay checkpoint.</li>
 <li><code>ValueLogs</code> + <code>ValueLogHead</code>: all known vlog segments and per-bucket active heads.</li>
-<li><code>RaftPointers/Regions</code>: raftstore progress + region metadata.</li>
 </ul>
 <hr>
 <h2 id="3-edit-append-semantics"><a class="header" href="#3-edit-append-semantics">3. Edit Append Semantics</a></h2>
@@ -256,7 +252,7 @@
 <tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
-<tr><td><code>raftstore</code></td><td>Persists raft pointers and region metadata through manifest edits.</td></tr>
+<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local peer catalog and raft WAL checkpoints live in <code>raftstore/meta</code>; runtime routing state lives in PD storage.</td></tr>
 </tbody>
 </table>
 </div>
@@ -265,7 +261,7 @@
 <ol>
 <li>Manifest append is ordered by single manager mutex.</li>
 <li>WAL replay starts from manifest checkpoint.</li>
-<li>Stale manifest SST entries are self-healed on startup (delete edit appended).</li>
+<li>Restart replays only storage-engine metadata.</li>
 <li><code>CURRENT</code> indirection protects against partial manifest rewrite publication.</li>
 </ol>
 <hr>

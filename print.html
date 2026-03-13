@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-62d58c6d.js";
+            window.path_to_searchindex_js = "searchindex-61707827.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -422,7 +422,7 @@ func main() {
             ▼
 ┌─────────────────────────┐
 │ store.Store / peer.Peer │  ← multi-Raft region lifecycle
-│  ├ Manifest snapshot    │
+│  ├ Local peer catalog   │
 │  ├ Router / region catalog │
 │  └ transport (gRPC)     │
 └───────────┬─────────────┘
@@ -446,7 +446,7 @@ func main() {
 </code></pre>
 <ul>
 <li><strong>Embedded mode</strong> uses <code>NoKV.Open</code> directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.</li>
-<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve NoKV RPCs.</li>
+<li><strong>Distributed mode</strong> layers <code>raftstore</code> on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve NoKV RPCs.</li>
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
@@ -469,8 +469,8 @@ iterator scan, distributed read/write via Raft apply), see
 </ul>
 <h3 id="23-manifest"><a class="header" href="#23-manifest">2.3 Manifest</a></h3>
 <ul>
-<li><code>manifest.Manager</code> stores SST metadata, WAL checkpoints, ValueLog metadata, and (importantly) Region descriptors used by raftstore.</li>
-<li><code>CURRENT</code> provides crash-safe pointer updates; Region state is replicated through manifest edits.</li>
+<li><code>manifest.Manager</code> stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in <code>raftstore/meta</code>.</li>
+<li><code>CURRENT</code> provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.</li>
 </ul>
 <h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
 <ul>
@@ -532,7 +532,7 @@ iterator scan, distributed read/write via Raft apply), see
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping manifest metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC handler plus <code>kv.Apply</code> bridging Raft commands to MVCC logic.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> combine DB, Store, transport, and NoKV service into a reusable node instance.</td></tr>
@@ -542,7 +542,7 @@ iterator scan, distributed read/write via Raft apply), see
 <h3 id="31-bootstrap-sequence"><a class="header" href="#31-bootstrap-sequence">3.1 Bootstrap Sequence</a></h3>
 <ol>
 <li><code>server.New</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
-<li>CLI (<code>nokv serve</code>) or application enumerates <code>Manifest.RegionSnapshot()</code> and calls <code>Store.StartPeer</code> for every Region containing the local store:
+<li>CLI (<code>nokv serve</code>) or application enumerates the local peer catalog and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
 <li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
@@ -578,7 +578,7 @@ iterator scan, distributed read/write via Raft apply), see
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal region manifest, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -588,7 +588,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds manifests via <code>nokv-config manifest</code>, launches PD-lite, and starts the stores declared in the config.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config manifest</code>, launches PD-lite, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -600,7 +600,7 @@ iterator scan, distributed read/write via Raft apply), see
 <hr>
 <h2 id="6-failure-handling"><a class="header" href="#6-failure-handling">6. Failure Handling</a></h2>
 <ul>
-<li>Manifest edits capture Region metadata, WAL checkpoints, and ValueLog pointers. Restart simply reads <code>CURRENT</code> and replays edits.</li>
+<li>Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from <code>raftstore/meta</code>.</li>
 <li>WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.</li>
 <li><code>Stats.StartStats</code> resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via <code>nokv stats</code>.</li>
 </ul>
@@ -608,7 +608,7 @@ iterator scan, distributed read/write via Raft apply), see
 <h2 id="7-observability--tooling"><a class="header" href="#7-observability--tooling">7. Observability &amp; Tooling</a></h2>
 <ul>
 <li><code>StatsSnapshot</code> publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. <code>nokv stats</code> and the expvar endpoint expose the same data.</li>
-<li><code>nokv regions</code> inspects Manifest-backed Region metadata.</li>
+<li><code>nokv regions</code> inspects the local peer catalog.</li>
 <li><code>nokv serve</code> advertises Region samples on startup (ID, key range, peers) for quick verification.</li>
 <li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
@@ -1415,7 +1415,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </ul>
 <h3 id="nokv-regions"><a class="header" href="#nokv-regions"><code>nokv regions</code></a></h3>
 <ul>
-<li>Dumps manifest-backed region catalog (state/range/epoch/peers)</li>
+<li>Dumps the local peer catalog used for store recovery (state/range/epoch/peers)</li>
 <li>Supports <code>--json</code></li>
 </ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
@@ -1852,7 +1852,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 </code></pre>
 <p>Key behaviours:</p>
 <ul>
-<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep manifest/raft pointers.</li>
+<li><code>AppendEntry</code>/<code>AppendEntryBatch</code>/<code>AppendRecords</code> automatically call <code>ensureCapacity</code> to decide when to rotate; they return <code>EntryInfo{SegmentID, Offset, Length}</code> so upper layers can keep storage WAL checkpoints and store-local raft replay pointers.</li>
 <li><code>Sync</code> flushes the active file (used for <code>Options.SyncWrites</code>).</li>
 <li><code>Rotate</code> forces a new segment (used after flush/compaction checkpoints similar to RocksDB’s <code>LogFileManager::SwitchLog</code>).</li>
 <li><code>Replay</code> iterates segments in numeric order, forwarding each payload to the callback. Errors abort replay so recovery can surface corruption early.</li>
@@ -1871,7 +1871,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 <tr><td><code>DB.commitWorker</code></td><td>Commit worker applies batched writes via <code>writeToLSM</code>, which calls <code>lsm.SetBatch</code> and appends one WAL entry-batch record per request batch.</td></tr>
 <tr><td><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> / <code>DB.ApplyInternalEntries</code></td><td>User/internal writes all flow through the same commit queue and eventually reach <code>lsm.SetBatch</code> + WAL append.</td></tr>
 <tr><td><code>lsm/levels.go::flush</code></td><td>Persists WAL checkpoint via <code>manifest.LogEdits(EditAddFile, EditLogPointer)</code> during flush install.</td></tr>
-<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after checkpoint/raft constraints are satisfied.</td></tr>
+<tr><td><code>lsm/levels.go::flush</code> + <code>lsm/levelManager.canRemoveWalSegment</code></td><td>Removes obsolete WAL segments after storage checkpoint and <code>raftstore/meta</code> replay constraints are satisfied.</td></tr>
 <tr><td><code>db.runRecoveryChecks</code></td><td>Ensures WAL directory invariants before manifest replay, similar to Badger’s directory bootstrap.</td></tr>
 </tbody>
 </table>
@@ -1891,7 +1891,7 @@ _ = mgr.Replay(func(info wal.EntryInfo, payload []byte) error {
 surface warnings when raft-typed records dominate the log. It:</p>
 <ul>
 <li>Samples WAL metrics + per-segment metrics and combines them with
-<code>manifest.RaftPointerSnapshot()</code> to compute removable segments.</li>
+<code>raftstore/meta</code> raft pointer snapshots to compute removable segments.</li>
 <li>Removes up to <code>WALAutoGCMaxBatch</code> segments when at least
 <code>WALAutoGCMinRemovable</code> are eligible.</li>
 <li>Exposes counters (<code>wal.auto_gc_runs/removed/last_unix</code>) and warning state
@@ -1925,8 +1925,8 @@ surface warnings when raft-typed records dominate the log. It:</p>
 <h2 id="9-truncation-metadata"><a class="header" href="#9-truncation-metadata">9. Truncation Metadata</a></h2>
 <ul>
 <li><code>raftstore/engine/wal_storage</code> keeps a per-group index of <code>[firstIndex,lastIndex]</code> spans for each WAL record so it can map raft log indices back to the segment that stored them.</li>
-<li>When a log is truncated (either via snapshot or future compaction hooks), the manifest is updated via <code>LogRaftTruncate</code> with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
-<li><code>lsm/levelManager.canRemoveWalSegment</code> now blocks garbage collection whenever any raft group still references a segment through its truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
+<li>When a log is truncated (either via snapshot or future compaction hooks), the store-local metadata in <code>raftstore/meta</code> is updated with the index/term, segment ID (<code>RaftLogPointer.SegmentIndex</code>), and byte offset (<code>RaftLogPointer.TruncatedOffset</code>) that delimit the remaining WAL data.</li>
+<li><code>lsm/levelManager.canRemoveWalSegment</code> blocks garbage collection whenever any raft group still references a segment through that store-local truncation metadata, preventing slow followers from losing required WAL history while letting aggressively compacted groups release older segments earlier.</li>
 </ul>
 <p>For broader context, read the <a href="#nokv-architecture-overview">architecture overview</a> and <a href="#memtable-flush-pipeline">flush pipeline</a> documents.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2108,7 +2108,6 @@ _ = mgr.Remove(fid)  // close + delete file
 <li>SST files (<code>EditAddFile</code> / <code>EditDeleteFile</code>)</li>
 <li>WAL checkpoint (<code>EditLogPointer</code>)</li>
 <li>value-log metadata (<code>EditValueLogHead</code>, <code>EditDeleteValueLog</code>, <code>EditUpdateValueLog</code>)</li>
-<li>raft and region metadata (<code>EditRaftPointer</code>, <code>EditRegion</code>)</li>
 </ul>
 <p>Implementation: <a href="../manifest/manager.go"><code>manifest/manager.go</code></a>, <a href="../manifest/codec.go"><code>manifest/codec.go</code></a>, <a href="../manifest/types.go"><code>manifest/types.go</code></a>.</p>
 <hr>
@@ -2131,15 +2130,12 @@ _ = mgr.Remove(fid)  // close + delete file
     LogOffset    uint64
     ValueLogs    map[ValueLogID]ValueLogMeta
     ValueLogHead map[uint32]ValueLogMeta
-    RaftPointers map[uint64]RaftLogPointer
-    Regions      map[uint64]RegionMeta
 }
 </code></pre>
 <ul>
 <li><code>Levels</code>: per-level SST metadata.</li>
 <li><code>LogSegment/LogOffset</code>: WAL replay checkpoint.</li>
 <li><code>ValueLogs</code> + <code>ValueLogHead</code>: all known vlog segments and per-bucket active heads.</li>
-<li><code>RaftPointers/Regions</code>: raftstore progress + region metadata.</li>
 </ul>
 <hr>
 <h2 id="3-edit-append-semantics"><a class="header" href="#3-edit-append-semantics">3. Edit Append Semantics</a></h2>
@@ -2180,7 +2176,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <tr><td><code>lsm/levels.go::build</code></td><td>During startup, missing/corrupt SST entries are marked stale and cleaned via <code>EditDeleteFile</code>.</td></tr>
 <tr><td><code>wal</code></td><td>Replays from manifest checkpoint (<code>LogSegment</code>, <code>LogOffset</code>).</td></tr>
 <tr><td><code>vlog</code></td><td>Persists head/update/delete metadata and uses manifest state for stale/orphan cleanup on startup.</td></tr>
-<tr><td><code>raftstore</code></td><td>Persists raft pointers and region metadata through manifest edits.</td></tr>
+<tr><td><code>raftstore</code></td><td>Does not own manifest state. Store-local peer catalog and raft WAL checkpoints live in <code>raftstore/meta</code>; runtime routing state lives in PD storage.</td></tr>
 </tbody>
 </table>
 </div>
@@ -2189,7 +2185,7 @@ _ = mgr.Remove(fid)  // close + delete file
 <ol>
 <li>Manifest append is ordered by single manager mutex.</li>
 <li>WAL replay starts from manifest checkpoint.</li>
-<li>Stale manifest SST entries are self-healed on startup (delete edit appended).</li>
+<li>Restart replays only storage-engine metadata.</li>
 <li><code>CURRENT</code> indirection protects against partial manifest rewrite publication.</li>
 </ol>
 <hr>
@@ -2959,7 +2955,8 @@ is not present.</li>
 <tbody>
 <tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Orchestrates peer set, command pipeline, region manager, scheduler/heartbeat loops; exposes helpers such as <code>StartPeer</code>, <code>ProposeCommand</code>, <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog.</td></tr>
-<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while keeping manifest metadata in sync.</td></tr>
+<tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata.</td></tr>
+<tr><td><a href="../raftstore/meta"><code>meta</code></a></td><td>Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV).</td></tr>
 <tr><td><a href="../raftstore/kv"><code>kv</code></a></td><td>NoKV RPC implementation, bridging Raft commands to MVCC operations via <code>kv.Apply</code>.</td></tr>
 <tr><td><a href="../raftstore/server"><code>server</code></a></td><td><code>ServerConfig</code> + <code>New</code> that bind DB, Store, transport, and NoKV server into a reusable node primitive.</td></tr>
@@ -2980,13 +2977,13 @@ is not present.</li>
 </code></pre>
 <ul>
 <li>A gRPC transport is created, the NoKV service is registered, and <code>transport.SetHandler(store.Step)</code> wires raft Step handling.</li>
-<li><code>store.Store</code> loads <code>manifest.RegionSnapshot()</code> to rebuild the Region catalog (router + metrics).</li>
+<li><code>store.Store</code> loads the local peer catalog from <code>raftstore/meta</code> to rebuild the Region catalog (router + metrics).</li>
 </ul>
 </li>
 <li>
 <p><strong>Start local peers</strong></p>
 <ul>
-<li>CLI (<code>nokv serve</code>) iterates the manifest snapshot and calls <code>Store.StartPeer</code> for every region that includes the local store.</li>
+<li>CLI (<code>nokv serve</code>) loads the local peer catalog and calls <code>Store.StartPeer</code> for every region that includes the local store.</li>
 <li>Each <code>peer.Config</code> carries raft parameters, the transport reference, <code>kv.NewEntryApplier</code>, WAL/manifest handles, and Region metadata.</li>
 <li><code>StartPeer</code> registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.</li>
 </ul>
@@ -3012,7 +3009,7 @@ is not present.</li>
 <ol>
 <li>Write RPCs (Prewrite/Commit/…) call <code>Store.ProposeCommand</code>, encoding the command and routing to the leader peer.</li>
 <li>The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to <code>kv.Apply</code>, which maps Prewrite/Commit/ResolveLock to the <code>percolator</code> package.</li>
-<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates manifest raft pointers. This keeps WAL GC and raft truncation aligned.</li>
+<li><code>engine.WALStorage</code> persists raft entries/state snapshots and updates <code>raftstore/meta</code> raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.</li>
 <li>Raft apply only accepts command-encoded payloads (<code>RaftCmdRequest</code>). Legacy raw KV payloads are rejected as unsupported.</li>
 </ol>
 <h3 id="command-flow-diagram"><a class="header" href="#command-flow-diagram">Command flow diagram</a></h3>
@@ -3055,7 +3052,7 @@ is not present.</li>
 <h2 id="5-storage-backend-engine"><a class="header" href="#5-storage-backend-engine">5. Storage Backend (engine)</a></h2>
 <ul>
 <li><code>WALStorage</code> piggybacks on the embedded WAL: each Raft group writes typed entries, HardState, and snapshots into the shared log.</li>
-<li><code>LogRaftPointer</code> and <code>LogRaftTruncate</code> edit manifest metadata so WAL GC knows how far it can compact per group.</li>
+<li><code>raftstore/meta</code> persists the store-local raft replay pointer used by WAL GC and replay.</li>
 <li>Alternative storage backends (<code>DiskStorage</code>, <code>MemoryStorage</code>) are available for tests and special scenarios.</li>
 </ul>
 <hr>
@@ -3071,7 +3068,7 @@ is not present.</li>
 </tbody>
 </table>
 </div>
-<p>The <code>cmd/nokv serve</code> command uses <code>raftstore.Server</code> internally and prints a manifest summary (key ranges, peers) so operators can verify the node’s view at startup.</p>
+<p>The <code>cmd/nokv serve</code> command uses <code>raftstore.Server</code> internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.</p>
 <hr>
 <h2 id="7-client-interaction-raftstoreclient"><a class="header" href="#7-client-interaction-raftstoreclient">7. Client Interaction (<code>raftstore/client</code>)</a></h2>
 <ul>
@@ -3085,7 +3082,7 @@ is not present.</li>
 <h3 id="81-topology--routing"><a class="header" href="#81-topology--routing">8.1 Topology &amp; Routing</a></h3>
 <ul>
 <li>Topology is sourced from <code>raft_config.example.json</code> (via <code>config.LoadFile</code>) and
-reused by scripts, Docker Compose, and the Redis gateway.</li>
+reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.</li>
 <li>Runtime routing is PD-first: <code>raftstore/client</code> resolves Regions by key through
 <code>GetRegionByKey</code> and caches route entries for retries.</li>
 <li><code>raft_config</code> regions are treated as bootstrap/deployment metadata and are not
@@ -3107,7 +3104,7 @@ size/traffic heuristics.</li>
 <h2 id="9-observability"><a class="header" href="#9-observability">9. Observability</a></h2>
 <ul>
 <li><code>store.RegionMetrics()</code> feeds into <code>StatsSnapshot</code>, making region counts and backlog visible via expvar and <code>nokv stats</code>.</li>
-<li><code>nokv regions</code> shows manifest-backed regions: ID, range, peers, state.</li>
+<li><code>nokv regions</code> shows the local peer catalog used for store recovery: ID, range, peers, state. It is a store-local recovery view, not cluster routing authority.</li>
 <li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
 </ul>
 <h3 id="store-internals-at-a-glance"><a class="header" href="#store-internals-at-a-glance">Store internals at a glance</a></h3>
@@ -3121,14 +3118,12 @@ size/traffic heuristics.</li>
 <tr><td>Peer lifecycle</td><td><a href="../raftstore/store/peer_lifecycle.go"><code>peer_lifecycle.go</code></a></td><td>Start/stop peers, router registration, lifecycle hooks, and store shutdown sequencing.</td></tr>
 <tr><td>Command service</td><td><a href="../raftstore/store/command_service.go"><code>command_service.go</code></a></td><td>Region/epoch/key-range validation and read/propose request handling.</td></tr>
 <tr><td>Admin service</td><td><a href="../raftstore/store/admin_service.go"><code>admin_service.go</code></a></td><td>Split/merge proposal handling and applied admin command side effects.</td></tr>
-<tr><td>Membership service</td><td><a href="../raftstore/store/membership_service.go"><code>membership_service.go</code></a></td><td>Conf-change proposal helpers and manifest metadata updates after membership changes.</td></tr>
+<tr><td>Membership service</td><td><a href="../raftstore/store/membership_service.go"><code>membership_service.go</code></a></td><td>Conf-change proposal helpers and local region metadata updates after membership changes.</td></tr>
 <tr><td>Region catalog</td><td><a href="../raftstore/store/region_catalog.go"><code>region_catalog.go</code></a></td><td>Public region catalog accessors and region metadata lifecycle operations.</td></tr>
-<tr><td>Scheduler runtime</td><td><a href="../raftstore/store/scheduler_runtime.go"><code>scheduler_runtime.go</code></a></td><td>Scheduler snapshot generation, store stats, operation application, and apply-entry dispatch.</td></tr>
-<tr><td>Peer set</td><td><a href="../raftstore/store/peer_set.go"><code>peer_set.go</code></a></td><td>Tracks active peers and exposes thread-safe lookups/iteration snapshots.</td></tr>
+<tr><td>Router</td><td><a href="../raftstore/store/router.go"><code>router.go</code></a></td><td>Tracks active peers and dispatches requests/messages to the owning peer.</td></tr>
 <tr><td>Command pipeline</td><td><a href="../raftstore/store/command_pipeline.go"><code>command_pipeline.go</code></a></td><td>Assigns request IDs, records proposals, matches apply results, returns responses/errors to callers.</td></tr>
-<tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, writes manifest edits, updates peer metadata, triggers region hooks.</td></tr>
-<tr><td>Operation scheduler</td><td><a href="../raftstore/store/operation_scheduler.go"><code>operation_scheduler.go</code></a></td><td>Buffers planner output, enforces cooldown &amp; burst limits, dispatches leader transfers or other operations.</td></tr>
-<tr><td>Heartbeat loop</td><td><a href="../raftstore/store/heartbeat_loop.go"><code>heartbeat_loop.go</code></a></td><td>Periodically publishes region/store heartbeats and, when the sink implements planner capability, drains scheduling actions.</td></tr>
+<tr><td>Region manager</td><td><a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a></td><td>Validates state transitions, persists local peer catalog updates, updates peer metadata, publishes scheduler-visible region state.</td></tr>
+<tr><td>Scheduler runtime</td><td><a href="../raftstore/store/scheduler_runtime.go"><code>scheduler_runtime.go</code></a></td><td>Periodically publishes region/store heartbeats, enforces cooldown &amp; burst limits, and applies scheduling actions.</td></tr>
 </tbody>
 </table>
 </div>
@@ -3567,7 +3562,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>Crash recovery</td><td><code>db_test.go</code></td><td>WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety.</td></tr>
-<tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
+<tr><td>WAL pointer desync</td><td><code>raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment</code></td><td>Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption.</td></tr>
 <tr><td>Distributed transaction contention</td><td><code>raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet</code>, <code>percolator/*_test.go</code></td><td>Lock conflicts, retries, and 2PC sequencing under region routing.</td></tr>
 <tr><td>Value separation + GC</td><td><code>vlog/manager_test.go</code>, <code>db_test.go::TestRecoveryRemovesStaleValueLogSegment</code></td><td>GC correctness, manifest integration, iterator stability.</td></tr>
 <tr><td>Iterator consistency</td><td><code>lsm/iterator_test.go</code></td><td>Snapshot visibility, merging iterators across levels and memtables.</td></tr>
@@ -3601,24 +3596,24 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
 <h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds manifests, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a manifest (<code>CURRENT</code>), the seeding step is skipped so previously bootstrapped data is reused.</li>
+<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds local peer catalogs, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a local peer catalog, the seeding step is skipped so previously bootstrapped data is reused.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>
 </li>
 </ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so region routing metadata survives restarts. Relative <code>pd.work_dir</code> is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as <code>--pd-addr</code> (explicit <code>--pd-listen</code> overrides config/default resolution). The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
+<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config manifest</code>, then launches <code>nokv pd</code> and the store processes. <code>nokv-config manifest</code> now writes the local peer catalog used by <code>nokv serve</code> recovery; PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so control-plane routing metadata survives restarts. Relative <code>pd.work_dir</code> is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as <code>--pd-addr</code> (explicit <code>--pd-listen</code> overrides config/default resolution). The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
 When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
 <blockquote>
 <p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
 </blockquote>
 <h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – manifest-only bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a manifest are detected and skipped.</li>
+<li><strong>Purpose</strong> – local-peer-catalog bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a local peer catalog are detected and skipped.</li>
 <li><strong>Usage</strong>
 <pre><code class="language-bash">./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
 </code></pre>
-The script iterates over every store in the config and writes Region metadata via <code>nokv-config manifest</code> into the provided path template.</li>
+The script iterates over every store in the config and writes local peer catalog metadata via <code>nokv-config manifest</code> into the provided path template.</li>
 </ul>
 <h3 id="scriptsserve_from_configsh"><a class="header" href="#scriptsserve_from_configsh"><code>scripts/serve_from_config.sh</code></a></h3>
 <ul>
@@ -3669,7 +3664,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
 <li><code>nokv-config stores</code> / <code>regions</code> / <code>pd</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
-<li><code>nokv-config manifest</code> writes Region metadata into manifests and replaces the historical <code>manifestctl</code> binary.</li>
+<li><code>nokv-config manifest</code> writes Region metadata into the local peer catalog and replaces the historical <code>manifestctl</code> binary.</li>
 <li><code>cmd/nokv-redis</code> reads the same config and uses <code>config.pd</code> by default in raft mode (<code>--pd-addr</code> remains an override).</li>
 <li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
 </ul>
