@@ -74,6 +74,8 @@ type (
 		commitQueue       commitQueue
 		commitWG          sync.WaitGroup
 		commitBatchPool   sync.Pool
+		syncQueue        chan *syncBatch
+		syncWG           sync.WaitGroup
 		iterPool          *iteratorPool
 		prefetchRing      *utils.Ring[prefetchRequest]
 		prefetchItems     chan struct{}
@@ -109,6 +111,17 @@ type (
 		requests    []*request
 		batchStart  time.Time
 		valueLogDur time.Duration
+	}
+
+	// syncBatch carries committed-but-unsynced requests from commitWorker to
+	// syncWorker. The syncWorker calls wal.Sync() once per batch of syncBatch
+	// items before ack-ing the enclosed requests.
+	syncBatch struct {
+		reqs      []*commitRequest
+		pool      *[]*commitRequest
+		requests  []*request // apply-order slice for perReqErr
+		failedAt  int
+		applyDone time.Time // timestamp after apply, for metrics
 	}
 )
 
@@ -235,6 +248,11 @@ func Open(opt *Options) *DB {
 	// Initialize the commit queue and GC plumbing.
 	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
 	db.commitQueue.init(queueCap)
+	if db.opt.SyncWrites && db.opt.SyncPipeline {
+		db.syncQueue = make(chan *syncBatch, 128)
+		db.syncWG.Add(1)
+		go db.syncWorker()
+	}
 	db.commitWG.Add(1)
 	go db.commitWorker()
 	if db.opt.EnableWALWatchdog {

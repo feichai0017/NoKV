@@ -125,7 +125,11 @@ type Options struct {
 	// ValueLogHotRingWindowSlotDuration sets the duration of each value-log window bucket.
 	ValueLogHotRingWindowSlotDuration time.Duration
 
-	SyncWrites   bool
+	SyncWrites bool
+	// SyncPipeline enables a dedicated sync worker goroutine that decouples
+	// WAL fsync from the commit pipeline. When false (the default), the commit
+	// worker performs fsync inline. Only effective when SyncWrites is true.
+	SyncPipeline bool
 	ManifestSync bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
