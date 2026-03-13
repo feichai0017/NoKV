@@ -770,7 +770,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	removed := os.IsNotExist(err)
 	require.True(t, removed, "expected stale value log file to be deleted on recovery")
 
-	status := db2.lsm.ValueLogStatus()
+	status := db2.lsm.Diagnostics().ValueLogStatus
 	meta, ok := status[manifest.ValueLogID{Bucket: 0, FileID: staleFID}]
 	if ok {
 		require.False(t, meta.Valid)
@@ -807,7 +807,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
 	headCopy := headPtr
 	require.NoError(t, db.lsm.LogValueLogHead(&headCopy))
-	before := db.lsm.ValueLogStatus()
+	before := db.lsm.Diagnostics().ValueLogStatus
 	beforeInfo := make(map[manifest.ValueLogID]bool, len(before))
 	for id, meta := range before {
 		beforeInfo[id] = meta.Valid
@@ -821,8 +821,9 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	db2 := Open(opt)
 	defer func() { _ = db2.Close() }()
 
-	headMeta, hasHead := db2.lsm.ValueLogHead()[0]
-	status := db2.lsm.ValueLogStatus()
+	diag := db2.lsm.Diagnostics()
+	headMeta, hasHead := diag.ValueLogHead[0]
+	status := diag.ValueLogStatus
 	statusInfo := make(map[manifest.ValueLogID]bool, len(status))
 	for id, meta := range status {
 		statusInfo[id] = meta.Valid
@@ -878,7 +879,7 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 	db2 := Open(opt)
 	defer func() { _ = db2.Close() }()
 
-	version := db2.lsm.CurrentVersion()
+	version := db2.lsm.Diagnostics().CurrentVersion
 	levelFiles := version.Levels[0]
 	fileIDs := make([]uint64, 0, len(levelFiles))
 	for _, meta := range levelFiles {
@@ -926,7 +927,7 @@ func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
 	db2 := Open(opt)
 	defer func() { _ = db2.Close() }()
 
-	version := db2.lsm.CurrentVersion()
+	version := db2.lsm.Diagnostics().CurrentVersion
 	var found bool
 	for _, metas := range version.Levels {
 		for _, meta := range metas {

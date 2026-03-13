@@ -203,7 +203,8 @@ func (vlog *valueLog) effectiveGCParallelism() (effective int, throttled bool, s
 		skipBacklog = max(reduceBacklog*2, 4)
 	}
 
-	backlog, maxScore := vlog.db.lsm.CompactionStats()
+	diag := vlog.db.lsm.Diagnostics()
+	backlog, maxScore := diag.Compaction.Backlog, diag.Compaction.MaxScore
 	if (skipBacklog > 0 && backlog >= int64(skipBacklog)) || (skipScore > 0 && maxScore >= skipScore) {
 		return 0, true, true
 	}

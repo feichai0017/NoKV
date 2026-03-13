@@ -34,6 +34,10 @@ type Store struct {
 	operationMu        sync.Mutex
 	operationPending   map[operationKey]struct{}
 	operationLastApply map[operationKey]time.Time
+	schedulerDropped   uint64
+	schedulerDegraded  bool
+	schedulerLastError string
+	schedulerLastAt    time.Time
 
 	heartbeatInterval time.Duration
 	heartbeatStop     chan struct{}
@@ -132,4 +136,27 @@ func NewStoreWithConfig(cfg Config) *Store {
 		s.startHeartbeatLoop()
 	}
 	return s
+}
+
+// SchedulerStatus returns the current scheduler health view by combining the
+// local queue state with the control-plane client status.
+func (s *Store) SchedulerStatus() SchedulerStatus {
+	if s == nil {
+		return SchedulerStatus{}
+	}
+	status := SchedulerStatus{}
+	if s.scheduler != nil {
+		status = s.scheduler.Status()
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	status.DroppedOperations += s.schedulerDropped
+	if s.schedulerDegraded {
+		status.Degraded = true
+		if status.LastErrorAt.Before(s.schedulerLastAt) || status.LastError == "" {
+			status.LastError = s.schedulerLastError
+			status.LastErrorAt = s.schedulerLastAt
+		}
+	}
+	return status
 }

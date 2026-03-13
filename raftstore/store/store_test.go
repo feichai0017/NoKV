@@ -73,6 +73,10 @@ func (s *testSchedulerSink) StoreHeartbeat(stats store.StoreStats) []store.Opera
 	return nil
 }
 
+func (s *testSchedulerSink) Status() store.SchedulerStatus {
+	return store.SchedulerStatus{}
+}
+
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	if s == nil {
 		return nil

@@ -6,6 +6,131 @@ import (
 	"strings"
 )
 
+// Targets describes the compaction size targets for each level.
+type Targets struct {
+	BaseLevel int
+	TargetSz  []int64
+	FileSz    []int64
+}
+
+// Priority describes a single compaction candidate.
+type Priority struct {
+	Level        int
+	Score        float64
+	Adjusted     float64
+	DropPrefixes [][]byte
+	Target       Targets
+	IngestMode   IngestMode
+	StatsTag     string
+}
+
+// ApplyValueWeight boosts the priority based on value log density.
+func (cp *Priority) ApplyValueWeight(weight, valueScore float64) {
+	if weight <= 0 || valueScore <= 0 {
+		return
+	}
+	capped := math.Min(valueScore, 16)
+	cp.Score += weight * capped
+	cp.Adjusted = cp.Score
+}
+
+// MoveL0ToFront ensures the first priority is for L0 if one exists.
+func MoveL0ToFront(prios []Priority) []Priority {
+	idx := -1
+	for i, p := range prios {
+		if p.Level == 0 {
+			idx = i
+			break
+		}
+	}
+	if idx > 0 {
+		out := append([]Priority{}, prios[idx])
+		out = append(out, prios[:idx]...)
+		out = append(out, prios[idx+1:]...)
+		return out
+	}
+	return prios
+}
+
+// IngestMode describes how a compaction interacts with ingest tables.
+type IngestMode uint8
+
+const (
+	// IngestNone indicates a regular compaction using main tables only.
+	IngestNone IngestMode = iota
+	// IngestDrain compacts ingest tables and writes output into main tables.
+	IngestDrain
+	// IngestKeep compacts ingest tables and keeps output in ingest buffers.
+	IngestKeep
+)
+
+func (m IngestMode) UsesIngest() bool {
+	return m != IngestNone
+}
+
+func (m IngestMode) KeepsIngest() bool {
+	return m == IngestKeep
+}
+
+// IngestShardView is a lightweight view of an ingest shard for strategy decisions.
+type IngestShardView struct {
+	Index        int
+	TableCount   int
+	SizeBytes    int64
+	ValueBytes   int64
+	MaxAgeSec    float64
+	ValueDensity float64
+}
+
+// IngestPickInput bundles inputs for ingest shard picking.
+type IngestPickInput struct {
+	Shards []IngestShardView
+}
+
+// PickShardOrder returns shard indices sorted by backlog size (largest first).
+func PickShardOrder(in IngestPickInput) []int {
+	if len(in.Shards) == 0 {
+		return nil
+	}
+	shards := append([]IngestShardView(nil), in.Shards...)
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].SizeBytes > shards[j].SizeBytes
+	})
+	out := make([]int, 0, len(shards))
+	for _, sh := range shards {
+		out = append(out, sh.Index)
+	}
+	return out
+}
+
+// PickShardByBacklog returns the shard index with the highest backlog score.
+func PickShardByBacklog(in IngestPickInput) int {
+	if len(in.Shards) == 0 {
+		return -1
+	}
+	best := in.Shards[0]
+	bestScore := backlogScore(best)
+	for i := 1; i < len(in.Shards); i++ {
+		score := backlogScore(in.Shards[i])
+		if score > bestScore {
+			best = in.Shards[i]
+			bestScore = score
+		}
+	}
+	return best.Index
+}
+
+func backlogScore(sh IngestShardView) float64 {
+	score := float64(sh.SizeBytes)
+	if sh.MaxAgeSec > 0 {
+		score *= 1.0 + math.Min(sh.MaxAgeSec/60.0, 4.0)
+	}
+	if sh.ValueDensity > 0 {
+		score *= 1.0 + math.Min(sh.ValueDensity, 1.0)
+	}
+	return score
+}
+
 // TargetOptions controls how level size targets are computed.
 type TargetOptions struct {
 	BaseLevelSize       int64

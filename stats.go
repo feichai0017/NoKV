@@ -301,11 +301,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		}
 	}
 
-	// Flush backlog (pending flush tasks).
+	// Flush backlog and LSM diagnostics.
 	if s.db.lsm != nil {
-		snap.Compaction.ValueWeight = s.db.lsm.CompactionValueWeight()
-		alertThreshold := s.db.lsm.CompactionValueAlertThreshold()
-		fstats := s.db.lsm.FlushMetrics()
+		diag := s.db.lsm.Diagnostics()
+		snap.Compaction.ValueWeight = diag.Compaction.ValueWeight
+		alertThreshold := diag.Compaction.AlertThreshold
+		fstats := diag.Flush
 		snap.Flush.Pending = fstats.Pending
 		snap.Flush.QueueLength = fstats.Queue
 		snap.Flush.Active = fstats.Active
@@ -337,8 +338,9 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			snap.Flush.MaxReleaseMs = float64(fstats.ReleaseMaxNs) / 1e6
 		}
 		snap.Flush.Completed = fstats.Completed
-		snap.Compaction.Backlog, snap.Compaction.MaxScore = s.db.lsm.CompactionStats()
-		if levels := s.db.lsm.LevelMetrics(); len(levels) > 0 {
+		snap.Compaction.Backlog = diag.Compaction.Backlog
+		snap.Compaction.MaxScore = diag.Compaction.MaxScore
+		if levels := diag.Levels; len(levels) > 0 {
 			snap.LSM.Levels = make([]LSMLevelStats, 0, len(levels))
 			var maxDensity float64
 			var ingestRuns, ingestMergeRuns int64
@@ -380,13 +382,30 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				snap.Compaction.ValueWeightSuggested = math.Round(recommend*100) / 100
 			}
 		}
-	}
-	if len(snap.LSM.Levels) > 0 {
-		var totalValue int64
-		for _, lvl := range snap.LSM.Levels {
-			totalValue += lvl.ValueBytes + lvl.IngestValueBytes
+		if len(snap.LSM.Levels) > 0 {
+			var totalValue int64
+			for _, lvl := range snap.LSM.Levels {
+				totalValue += lvl.ValueBytes + lvl.IngestValueBytes
+			}
+			snap.LSM.ValueBytesTotal = totalValue
 		}
-		snap.LSM.ValueBytesTotal = totalValue
+		snap.Entries = diag.Entries
+		snap.Compaction.LastDurationMs = diag.Compaction.LastDurationMs
+		snap.Compaction.MaxDurationMs = diag.Compaction.MaxDurationMs
+		snap.Compaction.Runs = diag.Compaction.Runs
+		cm := diag.Cache
+		if total := cm.L0Hits + cm.L0Misses; total > 0 {
+			snap.Cache.BlockL0HitRate = float64(cm.L0Hits) / float64(total)
+		}
+		if total := cm.L1Hits + cm.L1Misses; total > 0 {
+			snap.Cache.BlockL1HitRate = float64(cm.L1Hits) / float64(total)
+		}
+		if total := cm.BloomHits + cm.BloomMisses; total > 0 {
+			snap.Cache.BloomHitRate = float64(cm.BloomHits) / float64(total)
+		}
+		if total := cm.IndexHits + cm.IndexMisses; total > 0 {
+			snap.Cache.IndexHitRate = float64(cm.IndexHits) / float64(total)
+		}
 	}
 
 	if s.db.writeMetrics != nil {
@@ -547,30 +566,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		hotStats := s.db.hotWrite.Stats()
 		snap.Hot.WriteRing = &hotStats
 	}
-	if s.db != nil && s.db.lsm != nil {
-		cm := s.db.lsm.CacheMetrics()
-		if total := cm.L0Hits + cm.L0Misses; total > 0 {
-			snap.Cache.BlockL0HitRate = float64(cm.L0Hits) / float64(total)
-		}
-		if total := cm.L1Hits + cm.L1Misses; total > 0 {
-			snap.Cache.BlockL1HitRate = float64(cm.L1Hits) / float64(total)
-		}
-		if total := cm.BloomHits + cm.BloomMisses; total > 0 {
-			snap.Cache.BloomHitRate = float64(cm.BloomHits) / float64(total)
-		}
-		if total := cm.IndexHits + cm.IndexMisses; total > 0 {
-			snap.Cache.IndexHitRate = float64(cm.IndexHits) / float64(total)
-		}
-	}
 	if s.db != nil && s.db.iterPool != nil {
 		snap.Cache.IteratorReused = s.db.iterPool.reused()
-	}
-	if s.db != nil && s.db.lsm != nil {
-		snap.Entries = s.db.lsm.EntryCount()
-		lastMs, maxMs, runs := s.db.lsm.CompactionDurations()
-		snap.Compaction.LastDurationMs = lastMs
-		snap.Compaction.MaxDurationMs = maxMs
-		snap.Compaction.Runs = runs
 	}
 	snap.ValueLog.GC = metrics.DefaultValueLogGCCollector().Snapshot()
 	snap.Transport = transportpkg.GRPCMetricsSnapshot()

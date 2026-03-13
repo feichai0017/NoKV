@@ -24,7 +24,7 @@ func TestLevelsRuntimeCanRemoveWalSegmentDelegatesPolicy(t *testing.T) {
 			8: {},
 		},
 	}}
-	lm := &levelsRuntime{lsm: lsm}
+	lm := &levelManager{lsm: lsm}
 	require.True(t, lm.canRemoveWalSegment(1))
 	require.False(t, lm.canRemoveWalSegment(3))
 	require.True(t, lm.canRemoveWalSegment(7))
@@ -32,7 +32,7 @@ func TestLevelsRuntimeCanRemoveWalSegmentDelegatesPolicy(t *testing.T) {
 }
 
 func TestLevelsRuntimeCanRemoveWalSegmentNilLSM(t *testing.T) {
-	lm := &levelsRuntime{}
+	lm := &levelManager{}
 	require.True(t, lm.canRemoveWalSegment(1))
 }
 

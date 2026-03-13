@@ -9,7 +9,6 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
@@ -20,7 +19,7 @@ type LSM struct {
 	lock       sync.RWMutex
 	memTable   *memTable
 	immutables []*memTable
-	levels     *levelsRuntime
+	levels     *levelManager
 	option     *Options
 	closer     *utils.Closer
 	wal        *wal.Manager
@@ -306,62 +305,6 @@ func (lsm *LSM) FlushPending() int64 {
 	return lsm.flushQueue.stats().Pending
 }
 
-// FlushMetrics returns detailed flush queue statistics.
-func (lsm *LSM) FlushMetrics() metrics.FlushMetrics {
-	if lsm == nil || lsm.flushQueue == nil {
-		return metrics.FlushMetrics{}
-	}
-	return lsm.flushQueue.stats()
-}
-
-// CompactionStats returns (#pending candidates, max adjusted score).
-func (lsm *LSM) CompactionStats() (int64, float64) {
-	if lsm == nil || lsm.levels == nil {
-		return 0, 0
-	}
-	return lsm.levels.compactionStats()
-}
-
-// CompactionDurations returns the last and max compaction durations (ms) and run count.
-func (lsm *LSM) CompactionDurations() (float64, float64, uint64) {
-	if lsm == nil || lsm.levels == nil {
-		return 0, 0, 0
-	}
-	return lsm.levels.compactionDurations()
-}
-
-// LevelMetrics returns aggregated statistics per LSM level.
-func (lsm *LSM) LevelMetrics() []LevelMetrics {
-	if lsm == nil || lsm.levels == nil {
-		return nil
-	}
-	return lsm.levels.levelMetricsSnapshot()
-}
-
-// CompactionValueWeight returns the current compaction value weighting factor.
-func (lsm *LSM) CompactionValueWeight() float64 {
-	if lsm == nil || lsm.option == nil {
-		return 0
-	}
-	return lsm.option.CompactionValueWeight
-}
-
-// CompactionValueAlertThreshold returns the alert threshold for value density.
-func (lsm *LSM) CompactionValueAlertThreshold() float64 {
-	if lsm == nil || lsm.option == nil {
-		return 0.6
-	}
-	return lsm.option.CompactionValueAlertThreshold
-}
-
-// CacheMetrics returns read-path cache hit statistics.
-func (lsm *LSM) CacheMetrics() CacheMetrics {
-	if lsm == nil || lsm.levels == nil {
-		return CacheMetrics{}
-	}
-	return lsm.levels.cacheMetrics()
-}
-
 // MaxVersion returns the largest commit timestamp known to the LSM tree.
 func (lsm *LSM) MaxVersion() uint64 {
 	if lsm == nil {
@@ -411,42 +354,6 @@ func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 	return lsm.levels.LogValueLogUpdate(meta)
 }
 
-// ValueLogHead returns persisted head pointers keyed by bucket.
-func (lsm *LSM) ValueLogHead() map[uint32]kv.ValuePtr {
-	heads := lsm.levels.ValueLogHead()
-	if len(heads) == 0 {
-		return nil
-	}
-	out := make(map[uint32]kv.ValuePtr, len(heads))
-	for bucket, meta := range heads {
-		if !meta.Valid {
-			continue
-		}
-		out[bucket] = kv.ValuePtr{
-			Bucket: bucket,
-			Fid:    meta.FileID,
-			Offset: uint32(meta.Offset),
-		}
-	}
-	return out
-}
-
-// ValueLogStatus returns manifest tracked value log metadata.
-func (lsm *LSM) ValueLogStatus() map[manifest.ValueLogID]manifest.ValueLogMeta {
-	if lsm.levels == nil {
-		return nil
-	}
-	return lsm.levels.ValueLogStatus()
-}
-
-// CurrentVersion returns a snapshot of manifest version state.
-func (lsm *LSM) CurrentVersion() manifest.Version {
-	if lsm.levels == nil || lsm.levels.manifestMgr == nil {
-		return manifest.Version{}
-	}
-	return lsm.levels.manifestMgr.Current()
-}
-
 // NewLSM constructs the LSM core and returns initialization errors.
 func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if opt == nil {
@@ -474,10 +381,10 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.throttleFn = frozen.ThrottleCallback
 	lsm.flushQueue = newFlushRuntime()
-	// initialize levelsRuntime
-	lm, err := lsm.initLevelsRuntime(frozen)
+	// initialize levelManager
+	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
-		return nil, fmt.Errorf("lsm init levels runtime: %w", err)
+		return nil, fmt.Errorf("lsm init level manager: %w", err)
 	}
 	lsm.levels = lm
 	// Populate range tombstone collector from existing SSTables
@@ -644,7 +551,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	}
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
-	tables, release := lsm.GetMemTables()
+	tables, release := lsm.getMemTables()
 	if release != nil {
 		defer release()
 	}
@@ -713,8 +620,8 @@ func (lsm *LSM) MemSize() int64 {
 	return lsm.memTable.Size()
 }
 
-// MemTableIsNil reports whether the active memtable pointer is unset.
-func (lsm *LSM) MemTableIsNil() bool {
+// memTableIsNil reports whether the active memtable pointer is unset.
+func (lsm *LSM) memTableIsNil() bool {
 	return lsm.memTable == nil
 }
 
@@ -741,8 +648,8 @@ func (lsm *LSM) rotateLocked() (*memTable, error) {
 	return old, nil
 }
 
-// GetMemTables pins active+immutable memtables and returns an unlock callback.
-func (lsm *LSM) GetMemTables() ([]*memTable, func()) {
+// getMemTables pins active+immutable memtables and returns an unlock callback.
+func (lsm *LSM) getMemTables() ([]*memTable, func()) {
 	lsm.lock.RLock()
 	defer lsm.lock.RUnlock()
 
