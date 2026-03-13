@@ -4,37 +4,37 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type regionManager struct {
 	mu            sync.RWMutex
-	metaByID      map[uint64]manifest.RegionMeta
+	metaByID      map[uint64]raftmeta.RegionMeta
 	peers         map[uint64]*peer.Peer
-	manifest      *manifest.Manager
+	localMeta     *raftmeta.Store
 	regionMetrics *metrics.RegionMetrics
 	scheduler     SchedulerClient
 }
 
-func newRegionManager(man *manifest.Manager, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
+func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
 	return &regionManager{
-		metaByID:      make(map[uint64]manifest.RegionMeta),
+		metaByID:      make(map[uint64]raftmeta.RegionMeta),
 		peers:         make(map[uint64]*peer.Peer),
-		manifest:      man,
+		localMeta:     localMeta,
 		regionMetrics: regionMetrics,
 		scheduler:     scheduler,
 	}
 }
 
-func (rm *regionManager) loadSnapshot(snapshot map[uint64]manifest.RegionMeta) {
+func (rm *regionManager) loadSnapshot(snapshot map[uint64]raftmeta.RegionMeta) {
 	if rm == nil || len(snapshot) == 0 {
 		return
 	}
 	rm.mu.Lock()
 	for id, meta := range snapshot {
-		metaCopy := manifest.CloneRegionMeta(meta)
+		metaCopy := raftmeta.CloneRegionMeta(meta)
 		rm.metaByID[id] = metaCopy
 		if rm.regionMetrics != nil {
 			rm.regionMetrics.RecordUpdate(metaCopy)
@@ -66,50 +66,50 @@ func (rm *regionManager) peer(regionID uint64) *peer.Peer {
 	return p
 }
 
-func (rm *regionManager) meta(regionID uint64) (manifest.RegionMeta, bool) {
+func (rm *regionManager) meta(regionID uint64) (raftmeta.RegionMeta, bool) {
 	if rm == nil || regionID == 0 {
-		return manifest.RegionMeta{}, false
+		return raftmeta.RegionMeta{}, false
 	}
 	rm.mu.RLock()
 	meta, ok := rm.metaByID[regionID]
 	rm.mu.RUnlock()
 	if !ok {
-		return manifest.RegionMeta{}, false
+		return raftmeta.RegionMeta{}, false
 	}
-	return manifest.CloneRegionMeta(meta), true
+	return raftmeta.CloneRegionMeta(meta), true
 }
 
-func (rm *regionManager) listMetas() []manifest.RegionMeta {
+func (rm *regionManager) listMetas() []raftmeta.RegionMeta {
 	if rm == nil {
 		return nil
 	}
 	rm.mu.RLock()
-	out := make([]manifest.RegionMeta, 0, len(rm.metaByID))
+	out := make([]raftmeta.RegionMeta, 0, len(rm.metaByID))
 	for _, meta := range rm.metaByID {
-		out = append(out, manifest.CloneRegionMeta(meta))
+		out = append(out, raftmeta.CloneRegionMeta(meta))
 	}
 	rm.mu.RUnlock()
 	return out
 }
 
-func (rm *regionManager) updateRegion(meta manifest.RegionMeta) error {
+func (rm *regionManager) updateRegion(meta raftmeta.RegionMeta) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
 	if meta.ID == 0 {
 		return fmt.Errorf("raftstore: region id is zero")
 	}
-	metaCopy := manifest.CloneRegionMeta(meta)
+	metaCopy := raftmeta.CloneRegionMeta(meta)
 	if metaCopy.State == 0 {
-		metaCopy.State = manifest.RegionStateRunning
+		metaCopy.State = raftmeta.RegionStateRunning
 	}
 
-	var currentState manifest.RegionState
+	var currentState raftmeta.RegionState
 	rm.mu.RLock()
 	if existing, ok := rm.metaByID[metaCopy.ID]; ok {
 		currentState = existing.State
 	} else {
-		currentState = manifest.RegionStateNew
+		currentState = raftmeta.RegionStateNew
 	}
 	rm.mu.RUnlock()
 
@@ -117,14 +117,14 @@ func (rm *regionManager) updateRegion(meta manifest.RegionMeta) error {
 		return fmt.Errorf("raftstore: invalid region %d state transition %v -> %v", metaCopy.ID, currentState, metaCopy.State)
 	}
 
-	if rm.manifest != nil {
-		if err := rm.manifest.LogRegionUpdate(metaCopy); err != nil {
+	if rm.localMeta != nil {
+		if err := rm.localMeta.SaveRegion(metaCopy); err != nil {
 			return err
 		}
 	}
 
 	rm.mu.Lock()
-	rm.metaByID[metaCopy.ID] = manifest.CloneRegionMeta(metaCopy)
+	rm.metaByID[metaCopy.ID] = raftmeta.CloneRegionMeta(metaCopy)
 	p := rm.peers[metaCopy.ID]
 	rm.mu.Unlock()
 
@@ -140,7 +140,7 @@ func (rm *regionManager) updateRegion(meta manifest.RegionMeta) error {
 	return nil
 }
 
-func (rm *regionManager) updateRegionState(regionID uint64, state manifest.RegionState) error {
+func (rm *regionManager) updateRegionState(regionID uint64, state raftmeta.RegionState) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -163,14 +163,14 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 	if !ok {
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
-	if meta.State != manifest.RegionStateTombstone {
-		meta.State = manifest.RegionStateTombstone
+	if meta.State != raftmeta.RegionStateTombstone {
+		meta.State = raftmeta.RegionStateTombstone
 		if err := rm.updateRegion(meta); err != nil {
 			return err
 		}
 	}
-	if rm.manifest != nil {
-		if err := rm.manifest.LogRegionDelete(regionID); err != nil {
+	if rm.localMeta != nil {
+		if err := rm.localMeta.DeleteRegion(regionID); err != nil {
 			return err
 		}
 	}
@@ -187,19 +187,19 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 	return nil
 }
 
-func validRegionStateTransition(current, next manifest.RegionState) bool {
+func validRegionStateTransition(current, next raftmeta.RegionState) bool {
 	if current == next {
 		return true
 	}
 	switch current {
-	case manifest.RegionStateNew:
-		return next == manifest.RegionStateRunning
-	case manifest.RegionStateRunning:
-		return next == manifest.RegionStateRemoving || next == manifest.RegionStateTombstone
-	case manifest.RegionStateRemoving:
-		return next == manifest.RegionStateTombstone
-	case manifest.RegionStateTombstone:
-		return next == manifest.RegionStateTombstone
+	case raftmeta.RegionStateNew:
+		return next == raftmeta.RegionStateRunning
+	case raftmeta.RegionStateRunning:
+		return next == raftmeta.RegionStateRemoving || next == raftmeta.RegionStateTombstone
+	case raftmeta.RegionStateRemoving:
+		return next == raftmeta.RegionStateTombstone
+	case raftmeta.RegionStateTombstone:
+		return next == raftmeta.RegionStateTombstone
 	default:
 		return false
 	}

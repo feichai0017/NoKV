@@ -7,12 +7,12 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -25,12 +25,16 @@ type noopTransport struct{}
 
 func (noopTransport) Send(myraft.Message) {}
 
-func openTestDB(t *testing.T) *NoKV.DB {
+func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
+	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
+	require.NoError(t, err)
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 	db := NoKV.Open(opt)
 	t.Cleanup(func() { _ = db.Close() })
-	return db
+	t.Cleanup(func() { _ = localMeta.Close() })
+	return db, localMeta
 }
 
 func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
@@ -77,7 +81,7 @@ type serviceHarness struct {
 	store   *store.Store
 	service *kv.Service
 	ctx     *pb.Context
-	region  *manifest.RegionMeta
+	region  *raftmeta.RegionMeta
 }
 
 func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
@@ -104,17 +108,17 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 		cfg.epochConfVer = 1
 	}
 
-	db := openTestDB(t)
+	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	meta := &manifest.RegionMeta{
+	meta := &raftmeta.RegionMeta{
 		ID:       cfg.regionID,
 		StartKey: append([]byte(nil), cfg.startKey...),
 		EndKey:   append([]byte(nil), cfg.endKey...),
-		Epoch:    manifest.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
-		Peers:    []manifest.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
+		Epoch:    raftmeta.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
+		Peers:    []raftmeta.PeerMeta{{StoreID: cfg.storeID, PeerID: cfg.peerID}},
 	}
 	cfgPeer := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -127,7 +131,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 		},
 		Transport: noopTransport{},
 		WAL:       db.WAL(),
-		Manifest:  db.Manifest(),
+		LocalMeta: localMeta,
 		GroupID:   cfg.regionID,
 		Region:    meta,
 		Apply:     applyToDB(db),
@@ -196,17 +200,17 @@ func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, s
 }
 
 func TestServicePrewriteCommit(t *testing.T) {
-	db := openTestDB(t)
+	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
-	region := &manifest.RegionMeta{
+	region := &raftmeta.RegionMeta{
 		ID:       501,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 11}},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -219,7 +223,7 @@ func TestServicePrewriteCommit(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		WAL:       db.WAL(),
-		Manifest:  db.Manifest(),
+		LocalMeta: localMeta,
 		GroupID:   501,
 		Region:    region,
 		Apply:     applyToDB(db),
@@ -324,16 +328,16 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 }
 
 func TestServiceRegionEpochMismatch(t *testing.T) {
-	db := openTestDB(t)
+	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
 	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
-	region := &manifest.RegionMeta{
+	region := &raftmeta.RegionMeta{
 		ID:       601,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    manifest.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []manifest.PeerMeta{{StoreID: 2, PeerID: 22}},
+		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 2, PeerID: 22}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -345,7 +349,7 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 		},
 		Transport: noopTransport{},
 		WAL:       db.WAL(),
-		Manifest:  db.Manifest(),
+		LocalMeta: localMeta,
 		GroupID:   601,
 		Region:    region,
 		Apply:     applyToDB(db),

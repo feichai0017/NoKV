@@ -10,8 +10,8 @@ import (
 	"github.com/feichai0017/NoKV/hotring"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
@@ -440,7 +440,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	var (
 		wstats         *wal.Metrics
 		segmentMetrics map[uint32]wal.RecordMetrics
-		ptrs           map[uint64]manifest.RaftLogPointer
+		ptrs           map[uint64]raftmeta.RaftLogPointer
 	)
 	if s.db.wal != nil {
 		wstats = s.db.wal.Metrics()
@@ -452,8 +452,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		}
 		segmentMetrics = s.db.wal.SegmentMetrics()
 	}
-	if man := s.db.Manifest(); man != nil {
-		ptrs = man.RaftPointerSnapshot()
+	if s.db.opt != nil && s.db.opt.RaftPointerSnapshot != nil {
+		ptrs = s.db.opt.RaftPointerSnapshot()
 		snap.Raft.GroupCount = len(ptrs)
 	}
 

@@ -1,9 +1,9 @@
 package peer
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/stretchr/testify/require"
 
@@ -136,7 +136,7 @@ func TestPeerRegionMetaSetters(t *testing.T) {
 		Apply: func(entries []myraft.Entry) error {
 			return nil
 		},
-		Region: &manifest.RegionMeta{
+		Region: &raftmeta.RegionMeta{
 			ID:       1,
 			StartKey: []byte("a"),
 			EndKey:   []byte("b"),
@@ -151,7 +151,7 @@ func TestPeerRegionMetaSetters(t *testing.T) {
 	meta2 := peer.RegionMeta()
 	require.Equal(t, byte('a'), meta2.StartKey[0])
 
-	peer.SetRegionMeta(manifest.RegionMeta{ID: 2, StartKey: []byte("c")})
+	peer.SetRegionMeta(raftmeta.RegionMeta{ID: 2, StartKey: []byte("c")})
 	meta3 := peer.RegionMeta()
 	require.Equal(t, uint64(2), meta3.ID)
 }

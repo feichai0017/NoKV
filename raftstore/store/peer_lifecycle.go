@@ -2,8 +2,8 @@ package store
 
 import (
 	"fmt"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 
-	"github.com/feichai0017/NoKV/manifest"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -28,12 +28,12 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	if cfg == nil {
 		return nil, fmt.Errorf("raftstore: peer config is nil")
 	}
-	var regionMeta *manifest.RegionMeta
+	var regionMeta *raftmeta.RegionMeta
 	if cfg.Region != nil {
 		if cfg.Region.State == 0 {
-			cfg.Region.State = manifest.RegionStateRunning
+			cfg.Region.State = raftmeta.RegionStateRunning
 		}
-		regionMeta = manifest.CloneRegionMetaPtr(cfg.Region)
+		regionMeta = raftmeta.CloneRegionMetaPtr(cfg.Region)
 	}
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
@@ -87,7 +87,7 @@ func (s *Store) StopPeer(id uint64) {
 	}
 	if regionID != 0 {
 		s.regions.setPeer(regionID, nil)
-		_ = s.UpdateRegionState(regionID, manifest.RegionStateRemoving)
+		_ = s.UpdateRegionState(regionID, raftmeta.RegionStateRemoving)
 	}
 	if p != nil {
 		_ = p.Close()
@@ -150,7 +150,7 @@ func (s *Store) Peers() []PeerHandle {
 		handles = append(handles, PeerHandle{
 			ID:     p.ID(),
 			Peer:   p,
-			Region: manifest.CloneRegionMetaPtr(p.RegionMeta()),
+			Region: raftmeta.CloneRegionMetaPtr(p.RegionMeta()),
 		})
 	}
 	return handles

@@ -3,15 +3,15 @@ package store
 import (
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 // PeerBuilder constructs peer configuration for the provided region metadata.
 // It allows the store to spawn new peers for splits without external callers
 // wiring the configuration manually.
-type PeerBuilder func(meta manifest.RegionMeta) (*peer.Config, error)
+type PeerBuilder func(meta raftmeta.RegionMeta) (*peer.Config, error)
 
 // StoreStats captures minimal store-level heartbeat information.
 type StoreStats struct {
@@ -42,7 +42,7 @@ const (
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
-	PublishRegion(manifest.RegionMeta)
+	PublishRegion(raftmeta.RegionMeta)
 	RemoveRegion(uint64)
 	StoreHeartbeat(StoreStats) []Operation
 	Close() error
@@ -53,7 +53,8 @@ type SchedulerClient interface {
 type Config struct {
 	Router             *Router
 	PeerBuilder        PeerBuilder
-	Manifest           *manifest.Manager
+	LocalMeta          *raftmeta.Store
+	WorkDir            string
 	Scheduler          SchedulerClient
 	HeartbeatInterval  time.Duration
 	StoreID            uint64

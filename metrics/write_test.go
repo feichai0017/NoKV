@@ -1,10 +1,9 @@
 package metrics
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 	"time"
-
-	"github.com/feichai0017/NoKV/manifest"
 )
 
 func TestWriteMetricsSnapshot(t *testing.T) {
@@ -91,9 +90,9 @@ func TestRedisMetricsCounters(t *testing.T) {
 
 func TestRegionMetrics(t *testing.T) {
 	rm := NewRegionMetrics()
-	rm.RecordUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateRunning})
-	rm.RecordUpdate(manifest.RegionMeta{ID: 2, State: manifest.RegionStateRemoving})
-	rm.RecordUpdate(manifest.RegionMeta{ID: 1, State: manifest.RegionStateTombstone})
+	rm.RecordUpdate(raftmeta.RegionMeta{ID: 1, State: raftmeta.RegionStateRunning})
+	rm.RecordUpdate(raftmeta.RegionMeta{ID: 2, State: raftmeta.RegionStateRemoving})
+	rm.RecordUpdate(raftmeta.RegionMeta{ID: 1, State: raftmeta.RegionStateTombstone})
 
 	snap := rm.Snapshot()
 	if snap.Total != 2 {

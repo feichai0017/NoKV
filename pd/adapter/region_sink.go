@@ -2,10 +2,10 @@ package adapter
 
 import (
 	"context"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"log/slog"
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -48,7 +48,7 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 }
 
 // PublishRegion publishes region metadata to PD.
-func (s *SchedulerClient) PublishRegion(meta manifest.RegionMeta) {
+func (s *SchedulerClient) PublishRegion(meta raftmeta.RegionMeta) {
 	if s == nil || meta.ID == 0 || s.pd == nil {
 		return
 	}
@@ -139,7 +139,7 @@ func (s *SchedulerClient) Close() error {
 	return s.pd.Close()
 }
 
-func toPBRegionMeta(meta manifest.RegionMeta) *pb.RegionMeta {
+func toPBRegionMeta(meta raftmeta.RegionMeta) *pb.RegionMeta {
 	out := &pb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),

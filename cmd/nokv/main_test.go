@@ -16,6 +16,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -300,13 +301,13 @@ func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 }
 
 func TestFormatHelpers(t *testing.T) {
-	require.Equal(t, "new", formatRegionState(manifest.RegionStateNew))
-	require.Equal(t, "running", formatRegionState(manifest.RegionStateRunning))
-	require.Equal(t, "removing", formatRegionState(manifest.RegionStateRemoving))
-	require.Equal(t, "tombstone", formatRegionState(manifest.RegionStateTombstone))
+	require.Equal(t, "new", formatRegionState(raftmeta.RegionStateNew))
+	require.Equal(t, "running", formatRegionState(raftmeta.RegionStateRunning))
+	require.Equal(t, "removing", formatRegionState(raftmeta.RegionStateRemoving))
+	require.Equal(t, "tombstone", formatRegionState(raftmeta.RegionStateTombstone))
 	require.Equal(t, "unknown(99)", formatRegionState(99))
 
-	peers := []manifest.PeerMeta{{StoreID: 1, PeerID: 2}}
+	peers := []raftmeta.PeerMeta{{StoreID: 1, PeerID: 2}}
 	require.Equal(t, "[{store:1 peer:2}]", formatPeers(peers))
 	require.Equal(t, "[]", formatPeers(nil))
 
@@ -415,17 +416,17 @@ func TestMainVlogCommand(t *testing.T) {
 
 func TestMainRegionsCommand(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
+	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	require.NoError(t, mgr.LogRegionUpdate(manifest.RegionMeta{
+	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
 		ID:       1,
-		State:    manifest.RegionStateRunning,
+		State:    raftmeta.RegionStateRunning,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
 	}))
-	require.NoError(t, mgr.Close())
+	require.NoError(t, metaStore.Close())
 	code := captureExitCode(t, func() {
 		oldArgs := os.Args
 		os.Args = []string{"nokv", "regions", "-workdir", dir}
@@ -726,18 +727,18 @@ func TestRunRegionsCmdMissingWorkdir(t *testing.T) {
 
 func TestRunRegionsCmdPlainWithRegion(t *testing.T) {
 	dir := t.TempDir()
-	mgr, err := manifest.Open(dir, nil)
+	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	meta := manifest.RegionMeta{
+	meta := raftmeta.RegionMeta{
 		ID:       10,
-		State:    manifest.RegionStateTombstone,
+		State:    raftmeta.RegionStateTombstone,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    manifest.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []manifest.PeerMeta{{StoreID: 1, PeerID: 10}},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
 	}
-	require.NoError(t, mgr.LogRegionUpdate(meta))
-	require.NoError(t, mgr.Close())
+	require.NoError(t, metaStore.SaveRegion(meta))
+	require.NoError(t, metaStore.Close())
 
 	var buf bytes.Buffer
 	err = runRegionsCmd(&buf, []string{"-workdir", dir})

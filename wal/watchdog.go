@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -26,7 +26,7 @@ type WatchdogConfig struct {
 	MaxBatch     int
 	WarnRatio    float64
 	WarnSegments int64
-	RaftPointers func() map[uint64]manifest.RaftLogPointer
+	RaftPointers func() map[uint64]raftmeta.RaftLogPointer
 }
 
 // normalized resolves constructor-boundary defaults for the watchdog config.
@@ -64,7 +64,7 @@ type Watchdog struct {
 	warnRatio    float64
 	warnSegments int64
 	autoEnabled  bool
-	raftPointers func() map[uint64]manifest.RaftLogPointer
+	raftPointers func() map[uint64]raftmeta.RaftLogPointer
 	closer       *utils.Closer
 
 	autoRuns        atomic.Uint64
@@ -170,7 +170,7 @@ func (w *Watchdog) observe() {
 
 	wmetrics := w.manager.Metrics()
 	segmentMetrics := w.manager.SegmentMetrics()
-	var ptrs map[uint64]manifest.RaftLogPointer
+	var ptrs map[uint64]raftmeta.RaftLogPointer
 	if w.raftPointers != nil {
 		ptrs = w.raftPointers()
 	}

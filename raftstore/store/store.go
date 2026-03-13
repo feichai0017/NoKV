@@ -1,10 +1,10 @@
 package store
 
 import (
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"sync"
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -17,9 +17,9 @@ type Store struct {
 	router         *Router
 	peerBuilder    PeerBuilder
 	regionMetrics  *metrics.RegionMetrics
-	manifest       *manifest.Manager
 	regions        *regionManager
 	scheduler      SchedulerClient
+	workDir        string
 	storeID        uint64
 	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	command        *commandPipeline
@@ -51,12 +51,12 @@ type operationKey struct {
 type PeerHandle struct {
 	ID     uint64
 	Peer   *peer.Peer
-	Region *manifest.RegionMeta
+	Region *raftmeta.RegionMeta
 }
 
 // RegionSnapshot provides an external view of the tracked Region metadata.
 type RegionSnapshot struct {
-	Regions []manifest.RegionMeta `json:"regions"`
+	Regions []raftmeta.RegionMeta `json:"regions"`
 }
 
 // NewStore creates a Store with the provided router. When router is nil a new
@@ -99,8 +99,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 		router:             router,
 		peerBuilder:        cfg.PeerBuilder,
 		regionMetrics:      regionMetrics,
-		manifest:           cfg.Manifest,
 		scheduler:          cfg.Scheduler,
+		workDir:            cfg.WorkDir,
 		storeID:            cfg.StoreID,
 		commandApplier:     cfg.CommandApplier,
 		commandTimeout:     commandTimeout,
@@ -110,7 +110,10 @@ func NewStoreWithConfig(cfg Config) *Store {
 		operationPending:   make(map[operationKey]struct{}),
 		operationLastApply: make(map[operationKey]time.Time),
 	}
-	s.regions = newRegionManager(cfg.Manifest, regionMetrics, cfg.Scheduler)
+	if s.workDir == "" && cfg.LocalMeta != nil {
+		s.workDir = cfg.LocalMeta.WorkDir()
+	}
+	s.regions = newRegionManager(cfg.LocalMeta, regionMetrics, cfg.Scheduler)
 	s.command = newCommandPipeline(cfg.CommandApplier)
 	if queueSize > 0 {
 		s.operationInput = make(chan Operation, queueSize)
@@ -118,8 +121,8 @@ func NewStoreWithConfig(cfg Config) *Store {
 		s.operationWG.Add(1)
 		go s.runOperationLoop()
 	}
-	if cfg.Manifest != nil {
-		s.regions.loadSnapshot(cfg.Manifest.RegionSnapshot())
+	if cfg.LocalMeta != nil {
+		s.regions.loadSnapshot(cfg.LocalMeta.Snapshot())
 	}
 	if s.scheduler != nil {
 		s.heartbeatInterval = cfg.HeartbeatInterval

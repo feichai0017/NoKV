@@ -15,7 +15,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
             ▼
 ┌─────────────────────────┐
 │ store.Store / peer.Peer │  ← multi-Raft region lifecycle
-│  ├ Manifest snapshot    │
+│  ├ Local peer catalog   │
 │  ├ Router / region catalog │
 │  └ transport (gRPC)     │
 └───────────┬─────────────┘
@@ -39,7 +39,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ```
 
 - **Embedded mode** uses `NoKV.Open` directly: WAL→MemTable→SST durability, ValueLog separation, non-transactional APIs with internal version ordering, and rich stats.
-- **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL/Manifest, expose metrics, and serve NoKV RPCs.
+- **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve NoKV RPCs.
 - **Control plane split**: `raft_config` provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
@@ -63,8 +63,8 @@ iterator scan, distributed read/write via Raft apply), see
 - `vlog.Manager` tracks the active head and uses flush discard stats to trigger GC; manifest records new heads and removed segments.
 
 ### 2.3 Manifest
-- `manifest.Manager` stores SST metadata, WAL checkpoints, ValueLog metadata, and (importantly) Region descriptors used by raftstore.
-- `CURRENT` provides crash-safe pointer updates; Region state is replicated through manifest edits.
+- `manifest.Manager` stores only storage-engine metadata: SST metadata, WAL checkpoints, and ValueLog metadata. Store-local raft replay pointers live in `raftstore/meta`.
+- `CURRENT` provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.
 
 ### 2.4 LSM Compaction & Ingest Buffer
 - `compact.Manager` drives compaction cycles; `lsm.levelsRuntime` supplies table metadata and executes the plan.
@@ -118,14 +118,14 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | --- | --- |
 | [`store`](../raftstore/store) | Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as `StartPeer` / `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, handles Ready pipeline, snapshot resend queue, backlog instrumentation. |
-| [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping manifest metadata in sync. |
+| [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
 | [`transport`](../raftstore/transport) | gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC. |
 | [`kv`](../raftstore/kv) | NoKV RPC handler plus `kv.Apply` bridging Raft commands to MVCC logic. |
 | [`server`](../raftstore/server) | `ServerConfig` + `New` combine DB, Store, transport, and NoKV service into a reusable node instance. |
 
 ### 3.1 Bootstrap Sequence
 1. `server.New` wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets `transport.SetHandler(store.Step)`.
-2. CLI (`nokv serve`) or application enumerates `Manifest.RegionSnapshot()` and calls `Store.StartPeer` for every Region containing the local store:
+2. CLI (`nokv serve`) or application enumerates the local peer catalog and calls `Store.StartPeer` for every Region containing the local store:
    - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, WAL/Manifest handles, Region metadata.
    - Router registration, regionManager bookkeeping, optional `Peer.Bootstrap` with initial peer list, leader campaign.
 3. Peers from other stores can be configured through `transport.SetPeer(peerID, addr)` (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.
@@ -153,7 +153,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | `KvResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
 | `KvCheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
 
-`nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a manifest summary (Regions, key ranges, peers). `scripts/run_local_cluster.sh` builds the CLI, writes a minimal region manifest, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
+`nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/run_local_cluster.sh` builds the CLI, writes a minimal local peer catalog, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
 
 The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is `pb.NoKV`.
 
@@ -167,7 +167,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use PD-lite (`nokv pd`) to obtain globally increasing values before calling `TwoPhaseCommit`.
-- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds manifests via `nokv-config manifest`, launches PD-lite, and starts the stores declared in the config.
+- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config manifest`, launches PD-lite, and starts the stores declared in the config.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
@@ -179,7 +179,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 
 ## 6. Failure Handling
 
-- Manifest edits capture Region metadata, WAL checkpoints, and ValueLog pointers. Restart simply reads `CURRENT` and replays edits.
+- Manifest edits capture only storage metadata, WAL checkpoints, and ValueLog pointers. Store-local region recovery state and raft replay pointers are loaded from `raftstore/meta`.
 - WAL replay reconstructs memtables and Raft groups; ValueLog recovery trims partial records.
 - `Stats.StartStats` resumes metrics sampling immediately after restart, making it easy to verify recovery correctness via `nokv stats`.
 
@@ -188,7 +188,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 ## 7. Observability & Tooling
 
 - `StatsSnapshot` publishes flush/compaction/WAL/VLog/raft/region/hot/cache metrics. `nokv stats` and the expvar endpoint expose the same data.
-- `nokv regions` inspects Manifest-backed Region metadata.
+- `nokv regions` inspects the local peer catalog.
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
 - Inspect scheduler/control-plane state via PD APIs/metrics.
 - Scripts:

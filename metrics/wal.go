@@ -5,7 +5,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/feichai0017/NoKV/manifest"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 )
 
 // WALRecordMetrics summarises counts per record type.
@@ -52,7 +52,7 @@ type WALBacklogAnalysis struct {
 
 // AnalyzeWALBacklog inspects WAL metrics, per-segment metrics, and raft pointers to
 // derive GC candidates and typed record ratios.
-func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordMetrics, ptrs map[uint64]manifest.RaftLogPointer) WALBacklogAnalysis {
+func AnalyzeWALBacklog(metrics *WALMetrics, segmentMetrics map[uint32]WALRecordMetrics, ptrs map[uint64]raftmeta.RaftLogPointer) WALBacklogAnalysis {
 	var analysis WALBacklogAnalysis
 	if metrics != nil {
 		analysis.ActiveSegment = metrics.ActiveSegment

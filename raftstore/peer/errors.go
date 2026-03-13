@@ -2,5 +2,5 @@ package peer
 
 import "errors"
 
-// ErrMissingManifestOrWAL indicates WAL and manifest must be provided together.
-var ErrMissingManifestOrWAL = errors.New("raftstore/peer: WAL and manifest must both be provided")
+// ErrMissingLocalMetaOrWAL indicates WAL and local raft metadata must be provided together.
+var ErrMissingLocalMetaOrWAL = errors.New("raftstore/peer: WAL and local metadata must both be provided")

@@ -10,17 +10,17 @@ func TestModesAndPredicates(t *testing.T) {
 	Set(None)
 	require.Equal(t, None, Current())
 	require.False(t, ShouldFailBeforeStorage())
-	require.False(t, ShouldSkipManifestUpdate())
+	require.False(t, ShouldSkipLocalMetaUpdate())
 
 	Set(BeforeStorage)
 	require.True(t, ShouldFailBeforeStorage())
-	require.False(t, ShouldSkipManifestUpdate())
+	require.False(t, ShouldSkipLocalMetaUpdate())
 
-	Set(SkipManifest)
+	Set(SkipLocalMeta)
 	require.False(t, ShouldFailBeforeStorage())
-	require.True(t, ShouldSkipManifestUpdate())
+	require.True(t, ShouldSkipLocalMetaUpdate())
 
-	Set(BeforeStorage | SkipManifest)
+	Set(BeforeStorage | SkipLocalMeta)
 	require.True(t, ShouldFailBeforeStorage())
-	require.True(t, ShouldSkipManifestUpdate())
+	require.True(t, ShouldSkipLocalMetaUpdate())
 }

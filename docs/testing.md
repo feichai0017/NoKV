@@ -77,7 +77,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Scenario | Coverage | Focus |
 | --- | --- | --- |
 | Crash recovery | `db_test.go` | WAL replay, missing SST cleanup, vlog GC restart, manifest rewrite safety. |
-| WAL pointer desync | `raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment` | Detects manifest pointer offsets beyond truncated WAL tails to avoid silent corruption. |
+| WAL pointer desync | `raftstore/engine/wal_storage_test.go::TestWALStorageDetectsTruncatedSegment` | Detects store-local raft pointer offsets beyond truncated WAL tails to avoid silent corruption. |
 | Distributed transaction contention | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `percolator/*_test.go` | Lock conflicts, retries, and 2PC sequencing under region routing. |
 | Value separation + GC | `vlog/manager_test.go`, `db_test.go::TestRecoveryRemovesStaleValueLogSegment` | GC correctness, manifest integration, iterator stability. |
 | Iterator consistency | `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |

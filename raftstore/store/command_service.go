@@ -4,36 +4,36 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"time"
 
-	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
-func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, manifest.RegionMeta, *pb.RaftCmdResponse, error) {
+func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, raftmeta.RegionMeta, *pb.RaftCmdResponse, error) {
 	if s == nil {
-		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
+		return nil, raftmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: store is nil")
 	}
 	if req == nil {
-		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
+		return nil, raftmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: command is nil")
 	}
 	if req.Header == nil {
 		req.Header = &pb.CmdHeader{}
 	}
 	regionID := req.Header.GetRegionId()
 	if regionID == 0 {
-		return nil, manifest.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
+		return nil, raftmeta.RegionMeta{}, nil, fmt.Errorf("raftstore: region id missing")
 	}
 	if requestStoreID := req.Header.GetStoreId(); requestStoreID != 0 && s.storeID != 0 && requestStoreID != s.storeID {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: storeNotMatchError(requestStoreID, s.storeID)}
-		return nil, manifest.RegionMeta{}, resp, nil
+		return nil, raftmeta.RegionMeta{}, resp, nil
 	}
 	meta, ok := s.RegionMetaByID(regionID)
 	if !ok {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
-		return nil, manifest.RegionMeta{}, resp, nil
+		return nil, raftmeta.RegionMeta{}, resp, nil
 	}
 	if err := validateRegionEpoch(req.Header.GetRegionEpoch(), meta); err != nil {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
@@ -167,7 +167,7 @@ func isReadOnlyRequest(req *pb.RaftCmdRequest) bool {
 	return true
 }
 
-func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta manifest.RegionMeta) *pb.RegionError {
+func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta raftmeta.RegionMeta) *pb.RegionError {
 	if reqEpoch == nil {
 		return epochNotMatchError(&meta)
 	}
@@ -177,7 +177,7 @@ func validateRegionEpoch(reqEpoch *pb.RegionEpoch, meta manifest.RegionMeta) *pb
 	return nil
 }
 
-func validateRequestKeys(meta manifest.RegionMeta, req *pb.RaftCmdRequest) *pb.RegionError {
+func validateRequestKeys(meta raftmeta.RegionMeta, req *pb.RaftCmdRequest) *pb.RegionError {
 	if req == nil {
 		return nil
 	}
@@ -236,7 +236,7 @@ func validateRequestKeys(meta manifest.RegionMeta, req *pb.RaftCmdRequest) *pb.R
 	return nil
 }
 
-func keyInRange(meta manifest.RegionMeta, key []byte) bool {
+func keyInRange(meta raftmeta.RegionMeta, key []byte) bool {
 	if len(key) == 0 {
 		return true
 	}
@@ -249,7 +249,7 @@ func keyInRange(meta manifest.RegionMeta, key []byte) bool {
 	return true
 }
 
-func trimScanResponse(meta manifest.RegionMeta, req *pb.RaftCmdRequest, resp *pb.RaftCmdResponse) {
+func trimScanResponse(meta raftmeta.RegionMeta, req *pb.RaftCmdRequest, resp *pb.RaftCmdResponse) {
 	if req == nil || resp == nil {
 		return
 	}
@@ -285,7 +285,7 @@ func trimScanResponse(meta manifest.RegionMeta, req *pb.RaftCmdRequest, resp *pb
 	}
 }
 
-func epochNotMatchError(meta *manifest.RegionMeta) *pb.RegionError {
+func epochNotMatchError(meta *raftmeta.RegionMeta) *pb.RegionError {
 	var current *pb.RegionEpoch
 	var regions []*pb.RegionMeta
 	if meta != nil {
@@ -303,7 +303,7 @@ func epochNotMatchError(meta *manifest.RegionMeta) *pb.RegionError {
 	}
 }
 
-func notLeaderError(meta manifest.RegionMeta, leaderPeerID uint64) *pb.RegionError {
+func notLeaderError(meta raftmeta.RegionMeta, leaderPeerID uint64) *pb.RegionError {
 	var leader *pb.RegionPeer
 	if leaderPeerID != 0 {
 		for _, p := range meta.Peers {
@@ -336,7 +336,7 @@ func regionNotFoundError(regionID uint64) *pb.RegionError {
 	}
 }
 
-func keyNotInRegionError(meta manifest.RegionMeta, key []byte) *pb.RegionError {
+func keyNotInRegionError(meta raftmeta.RegionMeta, key []byte) *pb.RegionError {
 	return &pb.RegionError{
 		KeyNotInRegion: &pb.KeyNotInRegion{
 			Key:      append([]byte(nil), key...),
