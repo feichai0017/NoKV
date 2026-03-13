@@ -67,14 +67,14 @@ iterator scan, distributed read/write via Raft apply), see
 - `CURRENT` provides crash-safe pointer updates; Region state is replicated through manifest edits.
 
 ### 2.4 LSM Compaction & Ingest Buffer
-- `compact.Manager` drives compaction cycles; `lsm.levelManager` supplies table metadata and executes the plan.
+- `compact.Manager` drives compaction cycles; `lsm.levelsRuntime` supplies table metadata and executes the plan.
 - Planning is split: `compact.PlanFor*` selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.
 - `compact.State` guards overlapping key ranges and tracks in-flight table IDs.
 - Ingest shard selection is policy-driven in `compact` (`PickShardOrder` / `PickShardByBacklog`) while the ingest buffer remains in `lsm`.
 
 ```mermaid
 flowchart TD
-  Manager["compact.Manager"] --> LSM["lsm.levelManager"]
+  Manager["compact.Manager"] --> LSM["lsm.levelsRuntime"]
   LSM -->|TableMeta snapshot| Planner["compact.PlanFor*"]
   Planner --> Plan["compact.Plan (fid+range)"]
   Plan -->|resolvePlanLocked| Exec["LSM executor"]

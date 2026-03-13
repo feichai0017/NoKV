@@ -20,7 +20,7 @@ type LSM struct {
 	lock       sync.RWMutex
 	memTable   *memTable
 	immutables []*memTable
-	levels     *levelManager
+	levels     *levelsRuntime
 	option     *Options
 	closer     *utils.Closer
 	wal        *wal.Manager
@@ -482,10 +482,10 @@ func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	lsm.walGCPolicy = normalizeWALGCPolicy(frozen.WALGCPolicy)
 	lsm.throttleFn = frozen.ThrottleCallback
 	lsm.flushQueue = newFlushRuntime()
-	// initialize levelManager
-	lm, err := lsm.initLevelManager(frozen)
+	// initialize levelsRuntime
+	lm, err := lsm.initLevelsRuntime(frozen)
 	if err != nil {
-		return nil, fmt.Errorf("lsm init level manager: %w", err)
+		return nil, fmt.Errorf("lsm init levels runtime: %w", err)
 	}
 	lsm.levels = lm
 	// Populate range tombstone collector from existing SSTables
@@ -692,7 +692,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 			entry.DecrRef()
 		}
 	}
-	// query from the level manager
+	// query from the levels runtime
 	entry, err := lsm.levels.Get(key)
 	if err != nil || entry == nil {
 		return entry, err
@@ -724,17 +724,6 @@ func (lsm *LSM) MemSize() int64 {
 // MemTableIsNil reports whether the active memtable pointer is unset.
 func (lsm *LSM) MemTableIsNil() bool {
 	return lsm.memTable == nil
-}
-
-// GetSkipListFromMemTable exposes the active memtable skiplist when that engine is used.
-func (lsm *LSM) GetSkipListFromMemTable() *utils.Skiplist {
-	if lsm == nil || lsm.memTable == nil || lsm.memTable.index == nil {
-		return nil
-	}
-	if sl, ok := lsm.memTable.index.(*utils.Skiplist); ok {
-		return sl
-	}
-	return nil
 }
 
 // Rotate seals the active memtable, creates a new one, and schedules flush.

@@ -8,85 +8,37 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// Iterator is a thin adapter around a set of LSM iterators.
-type Iterator struct {
-	iters []utils.Iterator
-}
+type emptyIterator struct{}
 
-// Item wraps a kv.Entry to satisfy utils.Item in this package.
-type Item struct {
-	e *kv.Entry
-}
+type entryItem struct{ e *kv.Entry }
 
-// Entry returns the underlying kv entry.
-func (it *Item) Entry() *kv.Entry {
-	return it.e
-}
+func (it *entryItem) Entry() *kv.Entry { return it.e }
+
+func (*emptyIterator) Next()            {}
+func (*emptyIterator) Rewind()          {}
+func (*emptyIterator) Seek([]byte)      {}
+func (*emptyIterator) Valid() bool      { return false }
+func (*emptyIterator) Item() utils.Item { return nil }
+func (*emptyIterator) Close() error     { return nil }
 
 // NewIterators builds iterators over mutable/immutable memtables and SST levels.
 func (lsm *LSM) NewIterators(opt *utils.Options) []utils.Iterator {
-	iter := &Iterator{}
-	iter.iters = make([]utils.Iterator, 0)
+	iters := make([]utils.Iterator, 0)
 	lsm.lock.RLock()
 	mem := lsm.memTable
 	immutables := append([]*memTable(nil), lsm.immutables...)
 	lsm.lock.RUnlock()
 	if mem != nil {
-		iter.iters = append(iter.iters, mem.NewIterator(opt))
+		iters = append(iters, mem.NewIterator(opt))
 	}
 	for _, imm := range immutables {
 		if imm == nil {
 			continue
 		}
-		iter.iters = append(iter.iters, imm.NewIterator(opt))
+		iters = append(iters, imm.NewIterator(opt))
 	}
-	iter.iters = append(iter.iters, lsm.levels.iterators(opt)...)
-	return iter.iters
-}
-
-// Next advances the first wrapped iterator.
-func (iter *Iterator) Next() {
-	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
-		return
-	}
-	iter.iters[0].Next()
-}
-
-// Valid reports whether the first wrapped iterator is valid.
-func (iter *Iterator) Valid() bool {
-	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
-		return false
-	}
-	return iter.iters[0].Valid()
-}
-
-// Rewind rewinds the first wrapped iterator.
-func (iter *Iterator) Rewind() {
-	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
-		return
-	}
-	iter.iters[0].Rewind()
-}
-
-// Item returns the current item from the first wrapped iterator.
-func (iter *Iterator) Item() utils.Item {
-	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
-		return nil
-	}
-	return iter.iters[0].Item()
-}
-
-// Close currently does nothing because child iterators are owned elsewhere.
-func (iter *Iterator) Close() error {
-	return nil
-}
-
-// Seek is currently a no-op on this adapter.
-func (iter *Iterator) Seek(key []byte) {
-	if iter == nil || len(iter.iters) == 0 || iter.iters[0] == nil {
-		return
-	}
-	iter.iters[0].Seek(key)
+	iters = append(iters, lsm.levels.iterators(opt)...)
+	return iters
 }
 
 // memtable iterator
@@ -152,11 +104,6 @@ func (iter *memIterator) Seek(key []byte) {
 		return
 	}
 	iter.innerIter.Seek(key)
-}
-
-// NewIterators returns iterators for every level managed by levelManager.
-func (lm *levelManager) NewIterators(options *utils.Options) []utils.Iterator {
-	return lm.iterators(options)
 }
 
 // ConcatIterator merge multiple iterators into one
@@ -539,7 +486,7 @@ func (mi *MergeIterator) Close() error {
 func NewMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
 	switch len(iters) {
 	case 0:
-		return &Iterator{}
+		return &emptyIterator{}
 	case 1:
 		return iters[0]
 	case 2:

@@ -1330,7 +1330,7 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 	}
 }
 
-func TestLevelManagerAdjustThrottleAndPointers(t *testing.T) {
+func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()

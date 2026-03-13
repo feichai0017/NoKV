@@ -28,7 +28,7 @@ var (
 )
 
 type table struct {
-	lm  *levelManager
+	lm  *levelsRuntime
 	fid uint64
 	ref atomic.Int32 // For file garbage collection. Atomic.
 	lvl atomic.Int32
@@ -51,7 +51,7 @@ type table struct {
 	pins int32
 }
 
-func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *table, err error) {
+func openTable(lm *levelsRuntime, tableName string, builder *tableBuilder) (out *table, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if out != nil && out.ss != nil {
