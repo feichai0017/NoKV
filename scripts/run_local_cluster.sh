@@ -75,6 +75,16 @@ mkdir -p "$BUILD_DIR"
 go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
 go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
 
+start_with_logs() {
+  local __pid_var=$1
+  local prefix=$2
+  local logfile=$3
+  shift 3
+
+  "$@" > >(sed -u "s/^/[$prefix] /" | tee "$logfile") 2>&1 &
+  printf -v "$__pid_var" '%s' "$!"
+}
+
 cleaned=0
 STORE_PIDS=()
 PD_PID=""
@@ -197,8 +207,8 @@ for idx in "${!STORE_IDS[@]}"; do
 done
 
 echo "Starting PD service on ${PD_LISTEN}"
-nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR" >"$WORKDIR/pd.log" 2>&1 &
-PD_PID=$!
+start_with_logs PD_PID "pd" "$WORKDIR/pd.log" \
+  nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR"
 
 serve_debug_args=()
 if [[ $RAFT_DEBUG -eq 1 ]]; then
@@ -216,10 +226,11 @@ for idx in "${!STORE_IDS[@]}"; do
     --pd-addr "$PD_LISTEN"
     "${serve_debug_args[@]}"
   )
-  scripts/serve_from_config.sh \
-    "${serve_args[@]}" >"$store_dir/server.log" 2>&1 &
-  STORE_PIDS+=($!)
+  start_with_logs store_pid "store-${store_id}" "$store_dir/server.log" \
+    scripts/serve_from_config.sh "${serve_args[@]}"
+  STORE_PIDS+=("$store_pid")
 done
 
 echo "Cluster running. PD available at ${PD_LISTEN}"
+echo "Logs are streaming to this terminal and saved under ${WORKDIR}"
 wait
