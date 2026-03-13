@@ -75,57 +75,37 @@ func New(cfg Config) (*Server, error) {
 		router = store.NewRouter()
 		storeCfg.Router = router
 	}
-	builder := storeCfg.PeerBuilder
-	var transportRef transport.Transport
-	if builder == nil {
-		builder = func(meta manifest.RegionMeta) (*peer.Config, error) {
-			if transportRef == nil {
-				return nil, fmt.Errorf("raftstore/server: transport not initialised")
-			}
-			var peerID uint64
-			for _, p := range meta.Peers {
-				if p.StoreID == storeCfg.StoreID {
-					peerID = p.PeerID
-					break
-				}
-			}
-			if peerID == 0 {
-				return nil, fmt.Errorf("raftstore/server: store %d missing peer in region %d", storeCfg.StoreID, meta.ID)
-			}
-			raftCfg := defaultRaftConfig(cfg.Raft, peerID)
-			return &peer.Config{
-				RaftConfig: raftCfg,
-				Transport:  transportRef,
-				Apply:      kv.NewEntryApplier(cfg.DB),
-				WAL:        cfg.DB.WAL(),
-				Manifest:   cfg.DB.Manifest(),
-				GroupID:    meta.ID,
-				Region:     manifest.CloneRegionMetaPtr(&meta),
-			}, nil
-		}
-	}
-	storeCfg.PeerBuilder = builder
 
 	if cfg.EnableRaftDebugLog {
 		enableRaftDebugLogging()
 	}
 
-	st := store.NewStoreWithConfig(storeCfg)
-	service := kv.NewService(st)
-
-	var opts []transport.GRPCOption
-	opts = append(opts, cfg.TransportOptions...)
-	opts = append(opts, transport.WithServerRegistrar(func(reg grpc.ServiceRegistrar) {
-		pb.RegisterNoKVServer(reg, service)
-	}))
-	tr, err := transport.NewGRPCTransport(storeCfg.StoreID, cfg.TransportAddr, opts...)
+	tr, err := transport.NewUnstartedGRPCTransport(storeCfg.StoreID, cfg.TransportAddr, cfg.TransportOptions...)
 	if err != nil {
 		return nil, err
 	}
-	transportRef = tr
+
+	builder := storeCfg.PeerBuilder
+	if builder == nil {
+		builder = defaultPeerBuilder(cfg.DB, storeCfg.StoreID, cfg.Raft, tr)
+	}
+	storeCfg.PeerBuilder = builder
+
+	st := store.NewStoreWithConfig(storeCfg)
+	service := kv.NewService(st)
+	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
+		pb.RegisterNoKVServer(reg, service)
+	}); err != nil {
+		_ = tr.Close()
+		return nil, err
+	}
 	tr.SetHandler(func(msg myraft.Message) error {
 		return st.Step(msg)
 	})
+	if err := tr.Start(); err != nil {
+		_ = tr.Close()
+		return nil, err
+	}
 
 	srv := &Server{
 		db:        cfg.DB,
@@ -139,6 +119,30 @@ func New(cfg Config) (*Server, error) {
 	}
 	srv.startRaftTickLoop(interval)
 	return srv, nil
+}
+
+func defaultPeerBuilder(db *NoKV.DB, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
+	return func(meta manifest.RegionMeta) (*peer.Config, error) {
+		var peerID uint64
+		for _, p := range meta.Peers {
+			if p.StoreID == storeID {
+				peerID = p.PeerID
+				break
+			}
+		}
+		if peerID == 0 {
+			return nil, fmt.Errorf("raftstore/server: store %d missing peer in region %d", storeID, meta.ID)
+		}
+		return &peer.Config{
+			RaftConfig: defaultRaftConfig(baseRaft, peerID),
+			Transport:  tr,
+			Apply:      kv.NewEntryApplier(db),
+			WAL:        db.WAL(),
+			Manifest:   db.Manifest(),
+			GroupID:    meta.ID,
+			Region:     manifest.CloneRegionMetaPtr(&meta),
+		}, nil
+	}
 }
 
 func defaultRaftConfig(base myraft.Config, peerID uint64) myraft.Config {
