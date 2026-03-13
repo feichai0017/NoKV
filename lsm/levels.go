@@ -1033,7 +1033,9 @@ func checkTablesOverlap(tables []*table) error {
 	return nil
 }
 
-func (lm *levelManager) checkTablesOverlapWithL0(tables []*table) error {
+// checkTablesOverlapWithL0Locked checks imported tables against existing L0
+// tables. Caller must hold l0.Lock().
+func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 	l0 := lm.levels[0]
 
 	for _, tbl := range tables {
@@ -1087,7 +1089,12 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 				File: meta,
 			}
 		}
-		_ = lm.manifestMgr.LogEdits(rollbackEdits...)
+		if len(rollbackEdits) == 0 {
+			return
+		}
+		if err := lm.manifestMgr.LogEdits(rollbackEdits...); err != nil {
+			lm.getLogger().Error("failed to log import rollback edits", "error", err, "files", len(rollbackEdits))
+		}
 	}
 
 	for _, path := range paths {
@@ -1136,7 +1143,7 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 	l0.Lock()
 	defer l0.Unlock()
 
-	if err := lm.checkTablesOverlapWithL0(importedTables); err != nil {
+	if err := lm.checkTablesOverlapWithL0Locked(importedTables); err != nil {
 		rollback()
 		return fmt.Errorf("overlap with L0: %w", err)
 	}
@@ -1186,7 +1193,6 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		l0.totalValueSize += int64(tbl.ValueSize())
 	}
 	l0.sortTablesLocked()
-	l0.ingest.sortShards()
 
 	return nil
 }
