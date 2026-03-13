@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-Compactions are orchestrated by `compact.Manager` with `lsm.levelManager` implementing the executor hooks. Each level owns two lists of tables:
+Compactions are orchestrated by `compact.Manager` with `lsm.levelsRuntime` implementing the executor hooks. Each level owns two lists of tables:
 
 - `tables` – the canonical sorted run for the level.
 - `ingest` – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.

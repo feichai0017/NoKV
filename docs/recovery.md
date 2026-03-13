@@ -23,7 +23,7 @@ flowchart TD
 
 1. **Pre-flight verification**: `DB.runRecoveryChecks` runs `manifest.Verify`, `wal.VerifyDir`, and per-bucket `vlog.VerifyDir`.
 2. **WAL manager reopen**: `wal.Open` reopens latest segment and rebuilds counters.
-3. **Manifest replay + SST load**: `levelManager.build` replays manifest version and opens SST files.
+3. **Manifest replay + SST load**: `levelsRuntime.build` replays manifest version and opens SST files.
 4. **Stale SST cleanup**: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (`EditDeleteFile`) so startup can continue.
 5. **WAL replay**: `lsm.recovery` replays post-checkpoint WAL records into memtables.
 6. **Flush backlog restore**: recovered immutable memtables are resubmitted to the flush queue.

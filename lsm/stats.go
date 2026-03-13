@@ -45,7 +45,7 @@ func countMemIndexEntries(idx memIndex) int64 {
 	return count
 }
 
-func (lm *levelManager) entryCount() int64 {
+func (lm *levelsRuntime) entryCount() int64 {
 	if lm == nil {
 		return 0
 	}
