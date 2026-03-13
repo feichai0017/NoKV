@@ -64,21 +64,21 @@ type Executor interface {
 // Manager coordinates background compaction workers.
 type Manager struct {
 	exec      Executor
-	policy    Policy
+	policy    *SchedulerPolicy
 	triggerCh chan struct{}
 	maxRuns   int
 	logger    *slog.Logger
 }
 
 // NewManager creates a compaction manager for the supplied executor.
-func NewManager(exec Executor, maxRuns int, policy Policy, logger *slog.Logger) *Manager {
+func NewManager(exec Executor, maxRuns int, policy *SchedulerPolicy, logger *slog.Logger) *Manager {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
 		maxRuns = 4
 	}
 	if policy == nil {
-		policy = LeveledPolicy{}
+		policy = NewSchedulerPolicy(PolicyLeveled)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -155,9 +155,7 @@ func (cm *Manager) runCycle(id int) {
 
 func (cm *Manager) runOnce(id int) bool {
 	prios := cm.exec.PickCompactLevels()
-	if cm.policy != nil {
-		prios = cm.policy.Arrange(id, prios)
-	}
+	prios = cm.policy.Arrange(id, prios)
 	for _, p := range prios {
 		if id == 0 && p.Level == 0 {
 			// keep scanning level zero first for worker #0
@@ -179,14 +177,12 @@ func (cm *Manager) RunOnce(id int) bool {
 func (cm *Manager) run(id int, p Priority) bool {
 	start := time.Now()
 	err := cm.exec.DoCompact(id, p)
-	if observer, ok := cm.policy.(FeedbackPolicy); ok {
-		observer.Observe(FeedbackEvent{
-			WorkerID: id,
-			Priority: p,
-			Err:      err,
-			Duration: time.Since(start),
-		})
-	}
+	cm.policy.Observe(FeedbackEvent{
+		WorkerID: id,
+		Priority: p,
+		Err:      err,
+		Duration: time.Since(start),
+	})
 	switch err {
 	case nil:
 		return true
