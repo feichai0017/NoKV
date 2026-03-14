@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/utils"
+	"github.com/pkg/errors"
 )
 
 // DBIterator wraps the merged LSM iterators and optionally resolves value-log pointers.
@@ -44,6 +45,7 @@ type DBIterator struct {
 	item     Item
 	valueBuf []byte
 	valid    bool
+	err      error // terminal error that stopped iteration
 }
 
 // Item is the user-facing iterator item backed by an entry and optional vlog reader.
@@ -236,6 +238,16 @@ func (iter *DBIterator) Close() error {
 	return err
 }
 
+// Err returns the error that stopped iteration, if any.
+// Returns nil if iteration completed successfully or is still in progress.
+// This method follows the pattern established by EntryIterator and RecordIterator.
+func (iter *DBIterator) Err() error {
+	if iter == nil {
+		return nil
+	}
+	return iter.err
+}
+
 func (iter *DBIterator) populate() {
 	if iter == nil || iter.iitr == nil {
 		return
@@ -285,7 +297,13 @@ func (iter *DBIterator) populateForward() {
 			return
 		}
 
-		if iter.materializeDecoded(entry, cf, userKey, ts) {
+		ok, err := iter.materializeDecoded(entry, cf, userKey, ts)
+		if err != nil {
+			iter.err = err
+			iter.valid = false
+			return
+		}
+		if ok {
 			iter.valid = true
 			iter.setLastUserKey(userKey)
 			return
@@ -366,7 +384,13 @@ func (iter *DBIterator) populateReverse() {
 			iter.iitr.Next()
 		}
 
-		if iter.materializeDecoded(latest, latestCF, iter.lastUserKey, latestTS) {
+		ok, err := iter.materializeDecoded(latest, latestCF, iter.lastUserKey, latestTS)
+		if err != nil {
+			iter.err = err
+			iter.valid = false
+			return
+		}
+		if ok {
 			iter.valid = true
 			return
 		}
@@ -383,6 +407,7 @@ func (iter *DBIterator) resetIterationState() {
 	iter.latestKey = iter.latestKey[:0]
 	iter.latestVal = iter.latestVal[:0]
 	iter.hasPending = false
+	iter.err = nil
 }
 
 func (iter *DBIterator) setLastUserKey(key []byte) {
@@ -448,21 +473,21 @@ func (iter *DBIterator) snapshotEntry(entry *kv.Entry) *kv.Entry {
 	return &iter.latest
 }
 
-func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, userKey []byte, ts uint64) bool {
+func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, userKey []byte, ts uint64) (bool, error) {
 	if iter == nil || src == nil {
-		return false
+		return false, nil
 	}
 	if src.IsDeletedOrExpired() {
-		return false
+		return false, nil
 	}
 	// Skip range tombstone entries themselves
 	if src.IsRangeDelete() {
-		return false
+		return false, nil
 	}
 	iter.entry = *src
 	// Check if this key is covered by a range tombstone.
 	if iter.rtCheck && iter.rtv != nil && iter.rtv.IsKeyCovered(cf, userKey, ts) {
-		return false
+		return false, nil
 	}
 	iter.entry.Key = userKey
 	iter.entry.CF = cf
@@ -482,7 +507,7 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 				defer kv.RunCallback(cb)
 			}
 			if err != nil {
-				return false
+				return false, errors.Wrapf(err, "value-log read failed for key %q", userKey)
 			}
 			iter.valueBuf = append(iter.valueBuf[:0], val...)
 			iter.entry.Value = iter.valueBuf
@@ -491,11 +516,11 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 		}
 	} else {
 		if src.Value == nil {
-			return false
+			return false, nil
 		}
 		iter.entry.Value = src.Value
 		iter.item.valueBuf = iter.entry.Value
 	}
 	iter.item.e = &iter.entry
-	return true
+	return true, nil
 }
