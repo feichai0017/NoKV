@@ -150,6 +150,9 @@ func NewAlwaysOffloadPolicy(cf ColumnFamily, keyPrefix string) *ValueSeparationP
 
 // NewThresholdBasedPolicy creates a policy that separates values based on threshold.
 func NewThresholdBasedPolicy(cf ColumnFamily, keyPrefix string, threshold int64) *ValueSeparationPolicy {
+	if threshold <= 0 {
+		panic("threshold must be positive")
+	}
 	prefixBytes := []byte(keyPrefix)
 	return &ValueSeparationPolicy{
 		CF:        cf,
