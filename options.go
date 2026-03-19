@@ -3,6 +3,7 @@ package NoKV
 import (
 	"time"
 
+	"github.com/feichai0017/NoKV/kv"
 	lsmpkg "github.com/feichai0017/NoKV/lsm"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/utils"
@@ -42,6 +43,7 @@ type Options struct {
 	// ValueLogHotKeyThreshold marks a key as hot once its HotRing counter reaches
 	// this value. Values <= 0 disable HotRing-based routing.
 	ValueLogHotKeyThreshold int32
+	ValueSeparationPolicies []*kv.ValueSeparationPolicy
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
 	// log garbage collection. Zero or negative values disable automatic GC.
