@@ -106,6 +106,7 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 	var stats map[string]int64
 
 	workDir, err := os.MkdirTemp("", "nokv-value-separation-test")
+	require.NoError(t, err)
 	defer func() {
 		err = os.RemoveAll(workDir)
 		require.NoError(t, err)
