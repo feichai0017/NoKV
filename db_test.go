@@ -474,6 +474,36 @@ func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	require.Equal(t, []byte("value-1"), again.Value)
 }
 
+func TestGetValueLogEntryIsDetached(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value []byte
+	}{
+		{name: "small", value: bytes.Repeat([]byte("s"), 64)},
+		{name: "large", value: bytes.Repeat([]byte("l"), valueLogSmallCopyThreshold+512)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := newTestOptions(t)
+			opt.ValueThreshold = 0
+			db := openTestDB(t, opt)
+			defer func() { _ = db.Close() }()
+
+			key := []byte("vlog-detached-" + tc.name)
+			require.NoError(t, db.Set(key, tc.value))
+
+			entry, err := db.Get(key)
+			require.NoError(t, err)
+			require.Equal(t, tc.value, entry.Value)
+			require.Zero(t, entry.Meta&kv.BitValuePointer)
+
+			entry.Value[0] ^= 0x1
+			again, err := db.Get(key)
+			require.NoError(t, err)
+			require.Equal(t, tc.value, again.Value)
+		})
+	}
+}
+
 func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	t.Run("inline", func(t *testing.T) {
 		opt := newTestOptions(t)
