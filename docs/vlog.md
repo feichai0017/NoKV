@@ -44,7 +44,7 @@ policy lives in the core package:
 * Files are named `%05d.vlog` and live under `workdir/vlog/bucket-XXX/` when `Options.ValueLogBucketCount > 1`. [`Manager.populate`](../vlog/manager.go) discovers existing segments at open.
 * `Manager` tracks the active file ID (`activeID`) and byte offset; [`Manager.Head`](../vlog/manager.go) exposes these so the manifest can checkpoint them (`manifest.EditValueLogHead`).
 * Files created after a crash but never linked in the manifest are removed during [`valueLog.reconcileManifest`](../vlog.go).
-* When HotRing routing is enabled (`ValueLogHotBucketCount` + `ValueLogHotKeyThreshold`), buckets are split into hot vs cold ranges to isolate update-heavy keys from GC pressure.
+* Production defaults keep ordinary hash bucketization enabled (`ValueLogBucketCount=16`). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.
 
 ---
 

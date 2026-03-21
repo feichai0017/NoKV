@@ -12,7 +12,7 @@
 | :-- | :-- | :-- | :-- |
 | KV 分离 | WiscKey | vlog + ValuePtr | LSM 更小、写入更顺序 |
 | 哈希分区 | HashKV | `ValueLogBucketCount` | 垃圾局部化 |
-| 热冷分流 | HashKV | HotRing 路由 | 热点不污染冷数据 |
+| 哈希分区 | HashKV | `ValueLogBucketCount` | 垃圾局部化 |
 | GC 并行 | 工程化 | `ValueLogGCParallelism` | 提升清理吞吐 |
 | 压力控制 | 工程化 | reduce/skip 阈值 | 不与 compaction 抢资源 |
 
@@ -164,23 +164,19 @@ flowchart LR
 
 ---
 
-## 6. 热冷分流（HotRing 驱动）
+## 6. 普通分桶（当前实现）
 
 热度统计只看写路径（写热点），避免读热点污染：
 
 ```mermaid
 flowchart TD
-  E["Entry 写入"] --> H["HotRing Touch"]
-  H -->|hot| B1["热桶 0..H-1"]
-  H -->|cold| B2["冷桶 H..N-1"]
-  B1 --> V["vlog append"]
-  B2 --> V
+  E["Entry 写入"] --> H["Hash(key)"]
+  H --> B["bucket 0..N-1"]
+  B --> V["vlog append"]
 ```
 
 默认配置（可调）：
 * `ValueLogBucketCount = 16`
-* `ValueLogHotBucketCount = 4`
-* `ValueLogHotKeyThreshold = 8`
 
 ---
 
@@ -245,7 +241,7 @@ flowchart LR
 | vlog 元数据 | 论文原型不强调 manifest | **manifest 记录 head/删除** |
 | GC 触发 | 依赖扫描与 stale ratio | **来自 LSM discard stats** |
 | GC 并行 | 未强调 | **多桶并行 + 压力控制** |
-| 热点处理 | 无显式热冷 | **HotRing 驱动热/冷桶** |
+| 热点处理 | 无显式热冷 | 普通 hash 多桶 |
 
 ### HashKV vs NoKV
 | 维度 | HashKV | NoKV |

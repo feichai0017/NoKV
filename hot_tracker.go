@@ -7,11 +7,8 @@ import (
 )
 
 type hotTracker interface {
-	Touch(key string) int32
-	Frequency(key string) int32
 	TouchAndClamp(key string, limit int32) (int32, bool)
 	TopN(n int) []hotring.Item
-	KeysAbove(threshold int32) []hotring.Item
 	Stats() hotring.Stats
 	Close()
 }
@@ -33,28 +30,14 @@ type hotRingConfig struct {
 	nodeSampleBits   uint8
 }
 
-func newHotTracker(opt *Options) hotTracker {
-	if opt == nil || !opt.HotRingEnabled {
-		return nil
-	}
-	return newHotTrackerFromConfig(hotRingConfigFromOptions(opt))
-}
-
 func newHotTrackerForWrite(opt *Options) hotTracker {
 	if opt == nil || !opt.HotRingEnabled {
 		return nil
 	}
-	if opt.WriteHotKeyLimit <= 0 && opt.HotWriteBurstThreshold <= 0 {
+	if opt.WriteHotKeyLimit <= 0 {
 		return nil
 	}
 	return newHotTrackerFromConfig(hotRingConfigFromOptions(opt))
-}
-
-func newHotTrackerForVLog(opt *Options) hotTracker {
-	if opt == nil || !opt.HotRingEnabled {
-		return nil
-	}
-	return newHotTrackerFromConfig(hotRingConfigForVLog(opt))
 }
 
 func newHotTrackerFromConfig(cfg hotRingConfig) hotTracker {
@@ -121,22 +104,5 @@ func hotRingConfigFromOptions(opt *Options) hotRingConfig {
 		decayShift:       opt.HotRingDecayShift,
 		nodeCap:          opt.HotRingNodeCap,
 		nodeSampleBits:   opt.HotRingNodeSampleBits,
-	}
-}
-
-func hotRingConfigForVLog(opt *Options) hotRingConfig {
-	base := hotRingConfigFromOptions(opt)
-	if opt == nil || !opt.ValueLogHotRingOverride {
-		return base
-	}
-	return hotRingConfig{
-		bits:             opt.ValueLogHotRingBits,
-		rotationInterval: opt.ValueLogHotRingRotationInterval,
-		windowSlots:      opt.ValueLogHotRingWindowSlots,
-		windowSlotDur:    opt.ValueLogHotRingWindowSlotDuration,
-		decayInterval:    opt.ValueLogHotRingDecayInterval,
-		decayShift:       opt.ValueLogHotRingDecayShift,
-		nodeCap:          opt.ValueLogHotRingNodeCap,
-		nodeSampleBits:   opt.ValueLogHotRingNodeSampleBits,
 	}
 }

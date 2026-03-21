@@ -150,8 +150,8 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 		}
 	}
 	_, _ = fmt.Fprintf(w, "Write.HotKeyThrottled  %d\n", snap.Write.HotKeyLimited)
-	if snap.Hot.ReadRing != nil {
-		hs := snap.Hot.ReadRing
+	if snap.Hot.WriteRing != nil {
+		hs := snap.Hot.WriteRing
 		_, _ = fmt.Fprintf(w, "HotRing.Buckets        %d\n", hs.Buckets)
 		_, _ = fmt.Fprintf(w, "HotRing.Nodes          %d (load=%.2f)\n", hs.Nodes, hs.LoadFactor)
 		_, _ = fmt.Fprintf(w, "HotRing.Touches        %d (clamps=%d inserts=%d removes=%d)\n",
@@ -226,9 +226,9 @@ func renderStats(w io.Writer, snap NoKV.StatsSnapshot, asJSON bool) error {
 			_, _ = fmt.Fprintln(w)
 		}
 	}
-	if len(snap.Hot.ReadKeys) > 0 {
-		_, _ = fmt.Fprintln(w, "HotKeys:")
-		for _, hk := range snap.Hot.ReadKeys {
+	if len(snap.Hot.WriteKeys) > 0 {
+		_, _ = fmt.Fprintln(w, "WriteHotKeys:")
+		for _, hk := range snap.Hot.WriteKeys {
 			_, _ = fmt.Fprintf(w, "  - key=%q count=%d\n", hk.Key, hk.Count)
 		}
 	}
