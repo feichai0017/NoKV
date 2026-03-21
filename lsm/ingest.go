@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -175,7 +174,7 @@ func (buf ingestBuffer) allTables() []*table {
 	return out
 }
 
-func (buf *ingestBuffer) allMeta() []compact.TableMeta {
+func (buf *ingestBuffer) allMeta() []TableMeta {
 	if buf == nil {
 		return nil
 	}
@@ -183,7 +182,7 @@ func (buf *ingestBuffer) allMeta() []compact.TableMeta {
 	return tableMetaSnapshot(buf.allTables())
 }
 
-func (buf *ingestBuffer) shardMetaByIndex(idx int) []compact.TableMeta {
+func (buf *ingestBuffer) shardMetaByIndex(idx int) []TableMeta {
 	if buf == nil {
 		return nil
 	}
@@ -211,10 +210,10 @@ func (buf *ingestBuffer) sortShards() {
 	}
 }
 
-func (buf ingestBuffer) shardViews() []compact.IngestShardView {
+func (buf ingestBuffer) shardViews() []IngestShardView {
 	buf.ensureInit()
 	now := time.Now()
-	var views []compact.IngestShardView
+	var views []IngestShardView
 	for i, sh := range buf.shards {
 		if len(sh.tables) == 0 {
 			continue
@@ -235,7 +234,7 @@ func (buf ingestBuffer) shardViews() []compact.IngestShardView {
 		if sh.size > 0 {
 			density = float64(sh.valueSize) / float64(sh.size)
 		}
-		views = append(views, compact.IngestShardView{
+		views = append(views, IngestShardView{
 			Index:        i,
 			TableCount:   len(sh.tables),
 			SizeBytes:    sh.size,
@@ -325,13 +324,13 @@ func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error
 func (buf ingestBuffer) shardOrderBySize() []int {
 	buf.ensureInit()
 	views := buf.shardViews()
-	return compact.PickShardOrder(compact.IngestPickInput{Shards: views})
+	return PickShardOrder(IngestPickInput{Shards: views})
 }
 
 func (lh *levelHandler) ingestShardByBacklog() int {
 	lh.ingest.ensureInit()
 	views := lh.ingest.shardViews()
-	return compact.PickShardByBacklog(compact.IngestPickInput{Shards: views})
+	return PickShardByBacklog(IngestPickInput{Shards: views})
 }
 
 func (buf ingestBuffer) maxAgeSeconds() float64 {

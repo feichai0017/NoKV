@@ -533,7 +533,7 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	}
 
 	head := db.vlog.managers[0].Head()
-	heads := db.lsm.Diagnostics().ValueLogHead
+	heads := db.getHeads()
 	meta, ok := heads[0]
 	if !ok {
 		t.Fatalf("expected manifest head")
