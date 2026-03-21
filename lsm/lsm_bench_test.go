@@ -146,6 +146,38 @@ func buildBenchLevelTables(b *testing.B, lsm *LSM, levelNum int, tableCount int)
 	return lh
 }
 
+func buildBenchLevelTablesWithInRangeGap(b *testing.B, lsm *LSM, levelNum int, tableCount int) *levelHandler {
+	b.Helper()
+	lh := lsm.levels.levels[levelNum]
+	for i := 0; i < tableCount; i++ {
+		builderOpt := *lsm.option
+		builderOpt.BlockSize = 4 << 10
+		builderOpt.BloomFalsePositive = 0.01
+		builder := newTableBuiler(&builderOpt)
+		left := benchUserKey(i * 4)
+		right := benchUserKey(i*4 + 2)
+		builder.AddKey(kv.NewEntry(
+			kv.InternalKey(kv.CFDefault, left, 1),
+			[]byte("value-left"),
+		))
+		builder.AddKey(kv.NewEntry(
+			kv.InternalKey(kv.CFDefault, right, 1),
+			[]byte("value-right"),
+		))
+		tableName := utils.FileNameSSTable(lsm.option.WorkDir, uint64(20000+i))
+		tbl, err := openTable(lsm.levels, tableName, builder)
+		if err != nil {
+			b.Fatalf("open bench table with gap: %v", err)
+		}
+		if tbl == nil {
+			b.Fatalf("expected bench table with gap")
+		}
+		lh.add(tbl)
+	}
+	lh.Sort()
+	return lh
+}
+
 func BenchmarkLevelPointMissPruning(b *testing.B) {
 	const tableCount = 2048
 	for _, useGuide := range []bool{false, true} {
@@ -204,6 +236,37 @@ func BenchmarkLevelPointHitPruning(b *testing.B) {
 					b.Fatalf("expected hit entry")
 				}
 				entry.DecrRef()
+			}
+		})
+	}
+}
+
+func BenchmarkLevelPointInRangeMissPruning(b *testing.B) {
+	const tableCount = 2048
+	for _, useGuide := range []bool{false, true} {
+		name := "linear"
+		if useGuide {
+			name = "range_filter"
+		}
+		b.Run(name, func(b *testing.B) {
+			lsm := newBenchLSM(b, 64<<20)
+			lh := buildBenchLevelTablesWithInRangeGap(b, lsm, 1, tableCount)
+			if !useGuide {
+				lh.Lock()
+				lh.filter = rangeFilter{}
+				lh.Unlock()
+			}
+			missKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount*2+1), kv.MaxVersion)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				entry, err := lh.Get(missKey)
+				if err != utils.ErrKeyNotFound {
+					b.Fatalf("expected in-range miss, got entry=%v err=%v", entry, err)
+				}
+				if entry != nil {
+					b.Fatalf("expected nil entry on in-range miss")
+				}
 			}
 		})
 	}

@@ -369,6 +369,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		maxVersion = &tmp
 	}
 	var best *kv.Entry
+	exactCandidate := lh.levelNum > 0 && lh.filter.nonOverlapping && len(tables) == 1
 	for _, table := range tables {
 		if table == nil {
 			continue
@@ -376,13 +377,23 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		if table.MaxVersionVal() <= *maxVersion {
 			continue
 		}
-		if entry, err := table.Search(key, maxVersion); err == nil {
+		var (
+			entry *kv.Entry
+			err   error
+		)
+		if exactCandidate {
+			entry, err = table.searchExactCandidate(key, maxVersion)
+		} else {
+			entry, err = table.Search(key, maxVersion)
+		}
+		if err == nil {
 			if best != nil {
 				best.DecrRef()
 			}
 			best = entry
 			continue
-		} else if err != utils.ErrKeyNotFound {
+		}
+		if err != utils.ErrKeyNotFound {
 			if best != nil {
 				best.DecrRef()
 			}
@@ -396,7 +407,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	tables := lh.getTablesForKeyUntracked(key)
+	tables := lh.selectTablesForKey(key, false)
 	if len(tables) == 0 {
 		return nil
 	}
@@ -407,10 +418,6 @@ func (lh *levelHandler) getTableForKey(key []byte) *table {
 // Tables are returned in min-key order.
 func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 	return lh.selectTablesForKey(key, true)
-}
-
-func (lh *levelHandler) getTablesForKeyUntracked(key []byte) []*table {
-	return lh.selectTablesForKey(key, false)
 }
 
 func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
