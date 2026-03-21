@@ -7,7 +7,7 @@ import (
 func TestEncodeDecodeColumnFamilyKey(t *testing.T) {
 	key := []byte("alpha")
 	encoded := append([]byte{cfMarker0, cfMarker1, cfMarker2, byte(CFWrite)}, key...)
-	cf, userKey, ok := DecodeKeyCF(encoded)
+	cf, userKey, ok := SplitBaseKey(encoded)
 	if !ok {
 		t.Fatalf("expected encoded key to carry marker")
 	}

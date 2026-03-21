@@ -265,7 +265,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 		utils.CondPanicFunc(len(key) <= 8, func() error {
 			return fmt.Errorf("table.Search expects internal key: %x", key)
 		})
-		probe := kv.StripTimestamp(key)
+		probe := kv.InternalToBaseKey(key)
 		if !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
@@ -326,7 +326,7 @@ func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv
 	if item == nil || item.Entry() == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-	if e := item.Entry(); kv.SameKey(key, e.Key) {
+	if e := item.Entry(); kv.SameBaseKey(key, e.Key) {
 		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
 			buf := make([]byte, len(e.Key)+len(e.Value))
@@ -446,7 +446,7 @@ func (t *table) prefetchBlockForKey(key []byte) bool {
 		if i == len(offsets) {
 			return true
 		}
-		return utils.CompareKeys(ko.GetKey(), key) > 0
+		return utils.CompareInternalKeys(ko.GetKey(), key) > 0
 	})
 	switch {
 	case idx <= 0:
@@ -745,7 +745,7 @@ func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if utils.CompareKeys(offsets[mid].GetKey(), key) > 0 {
+		if utils.CompareInternalKeys(offsets[mid].GetKey(), key) > 0 {
 			hi = mid
 		} else {
 			lo = mid + 1
@@ -754,11 +754,11 @@ func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
 	return lo
 }
 
-func searchFirstBlockWithBaseUserKeyGE(offsets []*pb.BlockOffset, userKey []byte) int {
+func searchFirstBlockWithBaseKeyGE(offsets []*pb.BlockOffset, baseKey []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if bytes.Compare(guideUserKey(offsets[mid].GetKey()), userKey) >= 0 {
+		if utils.CompareBaseKeys(offsets[mid].GetKey(), baseKey) >= 0 {
 			hi = mid
 		} else {
 			lo = mid + 1
@@ -780,22 +780,22 @@ func blockRangeForBounds(index *pb.TableIndex, lower, upper []byte) (int, int) {
 	end := len(offsets)
 
 	if len(lower) > 0 {
-		lower = guideUserKey(lower)
-		idx := searchFirstBlockWithBaseUserKeyGE(offsets, lower)
+		lower = guideBaseKey(lower)
+		idx := searchFirstBlockWithBaseKeyGE(offsets, lower)
 		switch {
 		case idx == 0:
 			start = 0
 		case idx >= len(offsets):
 			start = len(offsets) - 1
-		case bytes.Equal(guideUserKey(offsets[idx].GetKey()), lower):
+		case utils.CompareBaseKeys(offsets[idx].GetKey(), lower) == 0:
 			start = idx
 		default:
 			start = idx - 1
 		}
 	}
 	if len(upper) > 0 {
-		upper = guideUserKey(upper)
-		end = searchFirstBlockWithBaseUserKeyGE(offsets, upper)
+		upper = guideBaseKey(upper)
+		end = searchFirstBlockWithBaseKeyGE(offsets, upper)
 	}
 	if end < start {
 		end = start
@@ -872,7 +872,7 @@ func iteratorUserKey(key []byte) []byte {
 	if len(key) <= 8 {
 		return nil
 	}
-	_, userKey, ok := kv.DecodeKeyCF(kv.StripTimestamp(key))
+	_, userKey, ok := kv.SplitBaseKey(kv.InternalToBaseKey(key))
 	if !ok {
 		return nil
 	}

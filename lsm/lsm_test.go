@@ -1743,7 +1743,7 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	// 	}
 	// 	utils.CondPanic(len(retList) != len(caseList), fmt.Errorf("len(retList) != len(caseList)"))
 	// 	sort.Slice(retList, func(i, j int) bool {
-	// 		return utils.CompareKeys(retList[i].Key, retList[j].Key) > 1
+	// 		return utils.CompareInternalKeys(retList[i].Key, retList[j].Key) > 1
 	// 	})
 	// 	for i := 0; i < len(caseList); i++ {
 	// 		a, b := caseList[i], retList[i]

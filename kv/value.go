@@ -176,11 +176,11 @@ func RunCallback(cb func()) {
 	}
 }
 
-func DiscardEntry(vs *Entry) bool {
-	if vs.IsDeletedOrExpired() {
+func DiscardEntry(e *Entry) bool {
+	if e.IsDeletedOrExpired() {
 		return true
 	}
-	if (vs.Meta & BitValuePointer) == 0 {
+	if (e.Meta & BitValuePointer) == 0 {
 		return true
 	}
 	return false

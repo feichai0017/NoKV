@@ -476,13 +476,13 @@ func checkTablesOverlap(tables []*table) error {
 	copy(sorted, tables)
 
 	sort.Slice(sorted, func(i, j int) bool {
-		return utils.CompareUserKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
+		return utils.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
 	})
 
 	for i := 1; i < len(sorted); i++ {
 		prev := sorted[i-1]
 		curr := sorted[i]
-		if utils.CompareUserKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
+		if utils.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
 			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
 				prev.fid, curr.fid)
 		}
@@ -500,8 +500,8 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 			if existing == nil {
 				continue
 			}
-			if utils.CompareUserKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
-				utils.CompareUserKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
+			if utils.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
+				utils.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
 				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
 					tbl.fid, existing.fid)
 			}

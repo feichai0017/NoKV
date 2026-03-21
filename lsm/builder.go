@@ -88,7 +88,7 @@ func (tb *tableBuilder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		}
 	}
 	// record the hash value of the key
-	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.StripTimestamp(key)))
+	tb.keyHashes = append(tb.keyHashes, utils.Hash(kv.InternalToBaseKey(key)))
 
 	// update the maxVersion
 	if version := kv.Timestamp(key); version > tb.maxVersion {
@@ -174,7 +174,7 @@ func (tb *tableBuilder) tryFinishBlock(e *kv.Entry) bool {
 		8 + // Sum64 in checksum proto
 		4) // checksum length
 	tb.curBlock.estimateSz = int64(tb.curBlock.end) + int64(6 /*header size for entry*/) +
-		int64(len(e.Key)) + int64(e.EncodedSize()) + entriesOffsetsSize
+		int64(len(e.Key)) + int64(e.EncodedValueSize()) + entriesOffsetsSize
 
 	// Integer overflow check for table size.
 	utils.CondPanicFunc(uint64(tb.curBlock.end)+uint64(tb.curBlock.estimateSz) >= math.MaxUint32, func() error {
@@ -552,7 +552,7 @@ func (itr *blockIterator) seek(key []byte) {
 		for lo < hi {
 			mid := lo + (hi-lo)/2
 			itr.setIdx(mid)
-			if utils.CompareKeys(itr.key, key) >= 0 {
+			if utils.CompareInternalKeys(itr.key, key) >= 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -566,7 +566,7 @@ func (itr *blockIterator) seek(key []byte) {
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		itr.setIdx(mid)
-		if utils.CompareKeys(itr.key, key) > 0 {
+		if utils.CompareInternalKeys(itr.key, key) > 0 {
 			hi = mid
 		} else {
 			lo = mid + 1

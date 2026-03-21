@@ -1,7 +1,6 @@
 package kv
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -14,9 +13,14 @@ var EntryPool = sync.Pool{
 	},
 }
 
-// Entry represents the top-level mutation record stored in WAL/vlog segments.
+// Entry is the generic key/value mutation container used across the engine.
 //
-// Binary layout when encoded (via EncodeEntryTo):
+// It can hold:
+//   - fully encoded internal key/value payloads destined for WAL/vlog/SST paths
+//   - borrowed or detached results produced by iterators and table lookups
+//   - scratch entries used by tests and internal buffering
+//
+// When an Entry is serialized with EncodeEntryTo, the binary layout is:
 //
 //	+---------+------+--------+--------+
 //	| Header  | Key  | Value  | CRC32  |
@@ -24,10 +28,9 @@ var EntryPool = sync.Pool{
 //	| varints | raw  | raw    | 4 bytes|
 //	+---------+------+--------+--------+
 //
-// Header encodes KeyLen, ValueLen, Meta, ExpiresAt using Uvarint. Key and Value
-// are already in their internal encodings before hitting EncodeEntryTo:
-//   - Key must be an InternalKey (see key.go) with CF marker + user key + timestamp.
-//   - Value must be a ValueStruct encoding (meta + ExpiresAt + inline payload or ValuePtr).
+// Entry itself does not validate key/value semantics. Callers that persist
+// entries are responsible for ensuring Key and Value already use the expected
+// internal encodings for that path.
 type Entry struct {
 	Key       []byte
 	Value     []byte
@@ -165,8 +168,9 @@ func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	return e
 }
 
-// EncodedSize is the size of the Entry value when encoded.
-func (e *Entry) EncodedSize() uint32 {
+// EncodedValueSize reports the encoded size of the value payload stored in the
+// entry. It does not include entry header bytes, key bytes, or CRC32.
+func (e *Entry) EncodedValueSize() uint32 {
 	sz := len(e.Value)
 	enc := sizeVarint(uint64(e.Meta))
 	enc += sizeVarint(e.ExpiresAt)
@@ -189,9 +193,4 @@ func (e *Entry) IsRangeDelete() bool {
 // RangeEnd returns the end key from the Value field for range tombstones.
 func (e *Entry) RangeEnd() []byte {
 	return e.Value
-}
-
-// KeyInRange checks if key falls within [start, end).
-func KeyInRange(key, start, end []byte) bool {
-	return bytes.Compare(key, start) >= 0 && bytes.Compare(key, end) < 0
 }

@@ -57,7 +57,8 @@ Source: [`kv/key.go`](../kv/key.go)
 Helpers:
 
 * `SplitInternalKey(internal) -> (cf, userKey, ts, ok)`
-* `Timestamp(key)` / `StripTimestamp(key)` / `SameKey(a, b)`
+* `SplitBaseKey(base) -> (cf, userKey, ok)`
+* `Timestamp(key)` / `InternalToBaseKey(internal)` / `BaseKey(cf, userKey)` / `SameBaseKey(a, b)`
 
 ### 2.2 ValueStruct Encoding
 
