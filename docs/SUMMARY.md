@@ -18,6 +18,7 @@
 - [VFS](vfs.md)
 - [File](file.md)
 - [Cache](cache.md)
+- [Range Filter](range_filter.md)
 - [Hotring](hotring.md)
 - [Percolator](percolator.md)
 - [Raftstore](raftstore.md)
