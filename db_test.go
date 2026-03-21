@@ -2365,7 +2365,9 @@ func TestValueSeparationPolicyDecisionLogic(t *testing.T) {
 		ValueSeparationPolicies: policies,
 	}
 
-	db := Open(opt)
+	db, err := Open(opt)
+	require.NoError(t, err)
+	require.NotNil(t, db)
 	defer func() {
 		err = db.Close()
 		require.NoError(t, err)

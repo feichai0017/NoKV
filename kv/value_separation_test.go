@@ -160,7 +160,9 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 		SyncWrites:              true,
 	}
 
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	require.NotNil(t, db)
 	defer func() {
 		err = db.Close()
 		require.NoError(t, err)
