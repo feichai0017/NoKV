@@ -117,23 +117,7 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	if m.index != nil {
 		foundKey, vs = m.index.Search(key)
 	}
-	e := kv.EntryPool.Get().(*kv.Entry)
-	e.Key = foundKey
-	e.Value = vs.Value
-	e.ExpiresAt = vs.ExpiresAt
-	e.Meta = vs.Meta
-	e.CF = kv.CFDefault
-	e.Version = 0
-	e.Offset = 0
-	e.Hlen = 0
-	e.ValThreshold = 0
-	if cf, _, version, ok := kv.SplitInternalKey(foundKey); ok {
-		e.CF = cf
-		e.Version = version
-	}
-	_ = e.PopulateInternalMeta()
-	e.IncrRef()
-	return e, nil
+	return kv.NewValueStructEntry(foundKey, vs), nil
 }
 
 // Size returns the memory footprint reported by the backing mem index.
