@@ -84,6 +84,9 @@ func (m *ValueSeparationPolicyMatcher) MatchPolicy(e *Entry) *ValueSeparationPol
 	}
 
 	for i, p := range m.policies {
+		if p == nil {
+			continue
+		}
 		// Check CF match
 		if p.CF != cf {
 			continue
