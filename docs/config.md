@@ -33,7 +33,7 @@ Key option groups (see `options.go` for the full list):
   - `NumLevelZeroTables`, `IngestCompactBatchSize`, `IngestBacklogMergeScore`
   - `CompactionValueWeight`, `CompactionValueAlertThreshold`
 - **Caches**
-  - `BlockCacheBytes`, `IndexCacheBytes`, `BloomCacheBytes`
+  - `BlockCacheBytes`, `IndexCacheBytes`
 - **Hot key throttling**
   - `WriteHotKeyLimit`, `HotWriteBurstThreshold`, `HotWriteBatchMultiplier`
   - `HotRingEnabled`, `HotRingTopK`, `HotReadPrefetchThreshold`, `HotReadPrefetchCooldown`, decay/window settings
