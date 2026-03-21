@@ -37,7 +37,7 @@ Common fields:
 - `wal.active_segment`, `wal.segment_count`, `wal.typed_record_ratio`
 - `write.queue_depth`, `write.queue_entries`, `write.hot_key_limited`
 - `region.total`, `region.running`, `region.removing`
-- `hot.read_keys`, `hot.write_keys`
+- `hot.write_keys`
 - `lsm.levels`, `lsm.value_bytes_total`
 - `transport.*`, `redis.*`
 

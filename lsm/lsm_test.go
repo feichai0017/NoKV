@@ -1131,10 +1131,6 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 
-	lsm.levels.hotProvider = func() [][]byte {
-		return nil
-	}
-
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("diag-key"), 9, []byte("diag-value"), 0, 0)
 	defer entry.DecrRef()
 	requireNoError := func(err error) {
@@ -1398,19 +1394,6 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	min := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
 	max := kv.InternalKey(kv.CFDefault, []byte("z"), 1)
-	if baseKeyInRange(min, max, nil) {
-		t.Fatalf("expected nil key to be out of range")
-	}
-	if !baseKeyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("m"), 1)) {
-		t.Fatalf("expected key to be in range")
-	}
-	if baseKeyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("0"), 1)) {
-		t.Fatalf("expected key to be out of range")
-	}
-	if baseKeyInRange(min, max, kv.InternalKey(kv.CFWrite, []byte("m"), 1)) {
-		t.Fatalf("expected different CF key to be out of range")
-	}
-
 	lh := &levelHandler{levelNum: 2}
 	lh.tables = []*table{
 		{minKey: min, maxKey: max},
@@ -1422,21 +1405,6 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 		size:      50,
 		valueSize: 20,
 	})
-
-	hotKeys := [][]byte{
-		kv.InternalKey(kv.CFDefault, []byte("b"), 1),
-		kv.InternalKey(kv.CFDefault, []byte("k"), 1),
-		kv.InternalKey(kv.CFDefault, []byte("x"), 1),
-	}
-	score := lh.hotOverlapScore(hotKeys, false)
-	expected := float64(3) / float64(len(hotKeys))
-	if math.Abs(score-expected) > 1e-9 {
-		t.Fatalf("unexpected hot overlap score: %.2f", score)
-	}
-	ingestScore := lh.hotOverlapScore(hotKeys, true)
-	if math.Abs(ingestScore-(1.0/3.0)) > 1e-9 {
-		t.Fatalf("unexpected ingest overlap score: %.2f", ingestScore)
-	}
 
 	lh.totalSize = 100
 	lh.totalValueSize = 40

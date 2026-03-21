@@ -60,7 +60,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Module | Tests | Coverage Highlights | Gaps / Next Steps |
 | --- | --- | --- | --- |
 | WAL | `wal/manager_test.go` | Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap. | Add IO fault injection, concurrent append stress. |
-| LSM / Flush / Compaction | `lsm/lsm_test.go`, `lsm/picker_test.go`, `lsm/planner_test.go`, `lsm/compaction_test.go`, `lsm/flush_runtime_test.go` | Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling. | Extend backpressure assertions, test cache hot/cold split. |
+| LSM / Flush / Compaction | `lsm/lsm_test.go`, `lsm/picker_test.go`, `lsm/planner_test.go`, `lsm/compaction_test.go`, `lsm/flush_runtime_test.go` | Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling. | Extend backpressure assertions and workload-shape coverage. |
 | Manifest | `manifest/manager_test.go`, `lsm/manifest_test.go` | CURRENT swap safety, rewrite crash handling, vlog metadata persistence. | Simulate partial edit corruption, column family extensions. |
 | ValueLog | `vlog/manager_test.go`, `vlog/io_test.go`, `vlog_test.go` | ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety. | Long-running GC, discard-ratio edge cases. |
 | Percolator / Distributed Txn | `percolator/*_test.go`, `raftstore/client/client_test.go`, `stats_test.go` | Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting. | Mixed multi-region fuzzing with lock TTL and leader churn. |

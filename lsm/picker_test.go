@@ -59,7 +59,6 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 				Level:           0,
 				NumTables:       4,
 				TotalValueBytes: 100,
-				HotOverlap:      0.5,
 			},
 			{
 				Level:              1,
@@ -69,7 +68,6 @@ func TestBuildTargetsAndPickPriorities(t *testing.T) {
 				IngestValueDensity: 1.5,
 				IngestAgeSeconds:   200,
 				MainValueBytes:     30,
-				HotOverlapIngest:   0.7,
 			},
 		},
 		Targets:                 targets,

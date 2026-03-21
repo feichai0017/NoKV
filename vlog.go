@@ -34,7 +34,6 @@ type valueLog struct {
 	numActiveIterators atomic.Int32
 	db                 *DB
 	opt                Options
-	hot                hotTracker
 	gcTokens           chan struct{}
 	gcParallelism      int
 	gcBucketBusy       []atomic.Uint32
@@ -175,41 +174,7 @@ func (vlog *valueLog) bucketForEntry(e *kv.Entry) uint32 {
 	if buckets <= 1 {
 		return 0
 	}
-	hotBuckets := vlog.opt.ValueLogHotBucketCount
-	threshold := vlog.opt.ValueLogHotKeyThreshold
-	if hotBuckets <= 0 || threshold <= 0 || vlog.hot == nil {
-		return kv.ValueLogBucket(e.Key, buckets)
-	}
-	if uint32(hotBuckets) >= buckets {
-		hotBuckets = int(buckets) - 1
-		if hotBuckets <= 0 {
-			return kv.ValueLogBucket(e.Key, buckets)
-		}
-	}
-
-	parsedCF, userKey, _, ok := kv.SplitInternalKey(e.Key)
-	utils.CondPanicFunc(!ok, func() error {
-		return fmt.Errorf("valueLog bucketForEntry expects internal key: %x", e.Key)
-	})
-	cf := parsedCF
-	if !cf.Valid() {
-		cf = kv.CFDefault
-	}
-	skey := cfHotKey(cf, userKey)
-	if skey == "" {
-		return kv.ValueLogBucket(e.Key, buckets)
-	}
-
-	count := vlog.hot.Touch(skey)
-	hash := kv.ValueLogHash(e.Key)
-	if count >= threshold {
-		return hash % uint32(hotBuckets)
-	}
-	coldBuckets := buckets - uint32(hotBuckets)
-	if coldBuckets == 0 {
-		return kv.ValueLogBucketFromHash(hash, buckets)
-	}
-	return uint32(hotBuckets) + (hash % coldBuckets)
+	return kv.ValueLogBucket(e.Key, buckets)
 }
 
 func (vlog *valueLog) removeValueLogFile(bucket uint32, fid uint32) error {
@@ -452,9 +417,6 @@ func (vlog *valueLog) close() error {
 		return nil
 	}
 	<-vlog.lfDiscardStats.closer.Closed()
-	if vlog.hot != nil {
-		vlog.hot.Close()
-	}
 	var firstErr error
 	for _, mgr := range vlog.managers {
 		if mgr == nil {
@@ -481,13 +443,6 @@ func (db *DB) initVLog() {
 	}
 	if gcParallelism > bucketCount {
 		gcParallelism = bucketCount
-	}
-
-	var hot hotTracker
-	if db.opt.HotRingEnabled &&
-		db.opt.ValueLogHotBucketCount > 0 &&
-		db.opt.ValueLogHotKeyThreshold > 0 {
-		hot = newHotTrackerForVLog(db.opt)
 	}
 
 	managers := make([]*vlogpkg.Manager, bucketCount)
@@ -524,7 +479,6 @@ func (db *DB) initVLog() {
 		},
 		db:            db,
 		opt:           *db.opt,
-		hot:           hot,
 		gcTokens:      make(chan struct{}, gcParallelism),
 		gcParallelism: gcParallelism,
 		gcBucketBusy:  make([]atomic.Uint32, bucketCount),

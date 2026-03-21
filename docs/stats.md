@@ -68,7 +68,7 @@ Representative fields:
 - `raft.group_count`, `raft.lagging_groups`, `raft.max_lag_segments`
 - `write.queue_depth`, `write.avg_request_wait_ms`, `write.hot_key_limited`
 - `region.total`, `region.running`, `region.removing`, `region.tombstone`
-- `hot.read_keys`, `hot.write_keys`, `hot.read_ring`, `hot.write_ring`
+- `hot.write_keys`, `hot.write_ring`
 - `cache.block_l0_hit_rate`, `cache.bloom_hit_rate`, `cache.iterator_reused`
 - `lsm.levels`, `lsm.value_bytes_total`
 
@@ -109,7 +109,7 @@ Example:
     }
   },
   "hot": {
-    "read_keys": [
+    "write_keys": [
       {"key": "user:123", "count": 42}
     ]
   }

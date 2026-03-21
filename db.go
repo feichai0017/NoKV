@@ -51,41 +51,34 @@ type (
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
 		sync.RWMutex
-		opt               *Options
-		fs                vfs.FS
-		dirLock           io.Closer
-		lsm               *lsm.LSM
-		wal               *wal.Manager
-		walWatchdog       *wal.Watchdog
-		vlog              *valueLog
-		stats             *Stats
-		nonTxnVersion     atomic.Uint64
-		blockWrites       atomic.Int32
-		slowWrites        atomic.Int32
-		discardStatsCh    chan map[manifest.ValueLogID]int64
-		vheads            map[uint32]kv.ValuePtr
-		lastLoggedHeads   map[uint32]kv.ValuePtr
-		headLogDelta      uint32
-		isClosed          atomic.Uint32
-		closeOnce         sync.Once
-		closeErr          error
-		hotRead           hotTracker
-		hotWrite          hotTracker
-		writeMetrics      *metrics.WriteMetrics
-		commitQueue       commitQueue
-		commitWG          sync.WaitGroup
-		commitBatchPool   sync.Pool
-		syncQueue         chan *syncBatch
-		syncWG            sync.WaitGroup
-		iterPool          *iteratorPool
-		prefetchRing      *utils.Ring[prefetchRequest]
-		prefetchItems     chan struct{}
-		prefetchWG        sync.WaitGroup
-		prefetchState     atomic.Pointer[prefetchState]
-		prefetchThreshold int32
-		prefetchCooldown  time.Duration
-		hotWriteLimited   atomic.Uint64
-		policyMatcher     atomic.Pointer[kv.ValueSeparationPolicyMatcher]
+		opt             *Options
+		fs              vfs.FS
+		dirLock         io.Closer
+		lsm             *lsm.LSM
+		wal             *wal.Manager
+		walWatchdog     *wal.Watchdog
+		vlog            *valueLog
+		stats           *Stats
+		nonTxnVersion   atomic.Uint64
+		blockWrites     atomic.Int32
+		slowWrites      atomic.Int32
+		discardStatsCh  chan map[manifest.ValueLogID]int64
+		vheads          map[uint32]kv.ValuePtr
+		lastLoggedHeads map[uint32]kv.ValuePtr
+		headLogDelta    uint32
+		isClosed        atomic.Uint32
+		closeOnce       sync.Once
+		closeErr        error
+		hotWrite        hotTracker
+		writeMetrics    *metrics.WriteMetrics
+		commitQueue     commitQueue
+		commitWG        sync.WaitGroup
+		commitBatchPool sync.Pool
+		syncQueue       chan *syncBatch
+		syncWG          sync.WaitGroup
+		iterPool        *iteratorPool
+		hotWriteLimited atomic.Uint64
+		policyMatcher   atomic.Pointer[kv.ValueSeparationPolicyMatcher]
 	}
 
 	commitQueue struct {
@@ -104,7 +97,6 @@ type (
 		req        *request
 		entryCount int
 		size       int64
-		hot        bool
 	}
 
 	commitBatch struct {
@@ -144,7 +136,6 @@ func Open(opt *Options) (_ *DB, err error) {
 	}()
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
-	db.hotRead = newHotTracker(opt)
 	db.hotWrite = newHotTrackerForWrite(opt)
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {
@@ -220,7 +211,6 @@ func Open(opt *Options) (_ *DB, err error) {
 		BlockCacheBytes:               db.opt.BlockCacheBytes,
 		IndexCacheBytes:               db.opt.IndexCacheBytes,
 		DiscardStatsCh:                &db.discardStatsCh,
-		HotKeyProvider:                db.hotReadKeys,
 		ManifestSync:                  db.opt.ManifestSync,
 		ManifestRewriteThreshold:      db.opt.ManifestRewriteThreshold,
 		WALGCPolicy:                   newDBWALGCPolicy(db),
@@ -240,19 +230,6 @@ func Open(opt *Options) (_ *DB, err error) {
 	// Initialize value separation policy matcher if policies are configured
 	if len(opt.ValueSeparationPolicies) > 0 {
 		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(opt.ValueSeparationPolicies))
-	}
-
-	if db.hotRead != nil {
-		db.prefetchThreshold = opt.HotReadPrefetchThreshold
-		db.prefetchCooldown = opt.HotReadPrefetchCooldown
-		db.prefetchRing = utils.NewRing[prefetchRequest](256)
-		db.prefetchItems = make(chan struct{}, db.prefetchRing.Cap())
-		db.prefetchState.Store(&prefetchState{
-			pend:       make(map[string]struct{}),
-			prefetched: make(map[string]time.Time),
-		})
-		db.prefetchWG.Add(1)
-		go db.prefetchLoop()
 	}
 
 	// Start the SSTable compaction loop.
@@ -364,24 +341,8 @@ func (db *DB) closeInternal() error {
 		db.walWatchdog = nil
 	}
 
-	if db.hotRead != nil {
-		db.hotRead.Close()
-	}
 	if db.hotWrite != nil {
 		db.hotWrite.Close()
-	}
-
-	if db.prefetchRing != nil {
-		db.prefetchRing.Close()
-		if db.prefetchItems != nil {
-			select {
-			case db.prefetchItems <- struct{}{}:
-			default:
-			}
-		}
-		db.prefetchWG.Wait()
-		db.prefetchRing = nil
-		db.prefetchItems = nil
 	}
 
 	if db.lsm != nil {
@@ -611,7 +572,6 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	} else {
 		out = cloneEntry(entry)
 	}
-	db.recordRead(out.Key)
 	return out, nil
 }
 

@@ -42,9 +42,6 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 	}
 	lm.rtCollector = tombstone.NewCollector()
 	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
-	if opt != nil && opt.HotKeyProvider != nil {
-		lm.hotProvider = opt.HotKeyProvider
-	}
 	return lm, nil
 }
 
@@ -64,7 +61,6 @@ type levelManager struct {
 	compactionLastNs atomic.Int64
 	compactionMaxNs  atomic.Int64
 	compactionRuns   atomic.Uint64
-	hotProvider      func() [][]byte
 	rangeFilter      rangeFilterMetrics
 }
 

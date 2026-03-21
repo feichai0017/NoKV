@@ -219,7 +219,7 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 					"segments": float64(2),
 				},
 				"hot": map[string]any{
-					"read_keys": []any{
+					"write_keys": []any{
 						map[string]any{"key": "k1", "count": float64(3)},
 					},
 				},
@@ -240,8 +240,8 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(12), snap.Entries)
 	require.Equal(t, 2, snap.ValueLog.Segments)
-	require.Len(t, snap.Hot.ReadKeys, 1)
-	require.Equal(t, "k1", snap.Hot.ReadKeys[0].Key)
+	require.Len(t, snap.Hot.WriteKeys, 1)
+	require.Equal(t, "k1", snap.Hot.WriteKeys[0].Key)
 	require.Len(t, snap.LSM.Levels, 1)
 	require.Equal(t, 0, snap.LSM.Levels[0].Level)
 }
@@ -264,44 +264,44 @@ func TestFetchExpvarSnapshotWithPath(t *testing.T) {
 func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
 		"hot": map[string]any{
-			"read_keys": []any{
+			"write_keys": []any{
 				map[string]any{"key": "k2", "count": float64(4)},
 			},
 		},
 	})
-	require.Len(t, snap.Hot.ReadKeys, 1)
-	require.Equal(t, "k2", snap.Hot.ReadKeys[0].Key)
-	require.Equal(t, int32(4), snap.Hot.ReadKeys[0].Count)
+	require.Len(t, snap.Hot.WriteKeys, 1)
+	require.Equal(t, "k2", snap.Hot.WriteKeys[0].Key)
+	require.Equal(t, int32(4), snap.Hot.WriteKeys[0].Count)
 }
 
 func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
 		"NoKV.Stats": map[string]any{
 			"hot": map[string]any{
-				"read_keys": []any{
+				"write_keys": []any{
 					map[string]any{"key": "k3", "count": float64(7)},
 				},
 			},
 		},
 	})
-	require.Len(t, snap.Hot.ReadKeys, 1)
-	require.Equal(t, "k3", snap.Hot.ReadKeys[0].Key)
-	require.Equal(t, int32(7), snap.Hot.ReadKeys[0].Count)
+	require.Len(t, snap.Hot.WriteKeys, 1)
+	require.Equal(t, "k3", snap.Hot.WriteKeys[0].Key)
+	require.Equal(t, int32(7), snap.Hot.WriteKeys[0].Count)
 }
 
 func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
 		"NoKV.Stats": map[string]any{
 			"hot": map[string]any{
-				"read_keys": []any{
+				"write_keys": []any{
 					map[string]any{"key": "k4", "count": float64(3)},
 				},
 			},
 		},
 	})
-	require.Len(t, snap.Hot.ReadKeys, 1)
-	require.Equal(t, "k4", snap.Hot.ReadKeys[0].Key)
-	require.Equal(t, int32(3), snap.Hot.ReadKeys[0].Count)
+	require.Len(t, snap.Hot.WriteKeys, 1)
+	require.Equal(t, "k4", snap.Hot.WriteKeys[0].Key)
+	require.Equal(t, int32(3), snap.Hot.WriteKeys[0].Count)
 }
 
 func TestFormatHelpers(t *testing.T) {
@@ -598,7 +598,7 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 				"conflicts": float64(5),
 			},
 			"hot": map[string]any{
-				"read_keys": []any{
+				"write_keys": []any{
 					map[string]any{"key": "hot", "count": float64(9)},
 				},
 			},
@@ -608,7 +608,7 @@ func TestParseExpvarSnapshotFull(t *testing.T) {
 	require.Equal(t, int64(11), snap.Entries)
 	require.Equal(t, uint64(4), snap.Write.HotKeyLimited)
 	require.True(t, snap.LSM.ValueDensityAlert)
-	require.Len(t, snap.Hot.ReadKeys, 1)
+	require.Len(t, snap.Hot.WriteKeys, 1)
 	require.Len(t, snap.LSM.Levels, 1)
 }
 
@@ -691,14 +691,14 @@ func TestRenderStatsFull(t *testing.T) {
 			Other:     1,
 		},
 		Hot: NoKV.HotStatsSnapshot{
-			ReadKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
+			WriteKeys: []NoKV.HotKeyStat{{Key: "k", Count: 1}},
 		},
 	}
 	require.NoError(t, renderStats(&buf, snap, false))
 	out := buf.String()
 	require.Contains(t, out, "ValueLog.Head")
 	require.Contains(t, out, "LSM.Levels:")
-	require.Contains(t, out, "HotKeys:")
+	require.Contains(t, out, "WriteHotKeys:")
 }
 
 func TestLocalStatsSnapshotMissingWorkdir(t *testing.T) {

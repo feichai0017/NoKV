@@ -66,7 +66,7 @@ NoKV is designed for **modern hardware** and **distributed workloads**. It combi
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
     <h3 style="margin-top: 0;">🧠 Smart Caching</h3>
-    <p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches and <strong>HotRing</strong> keep hot working sets close to the read path.</p>
+    <p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches keep hot working sets close to the read path.</p>
   </div>
 
   <div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">

@@ -24,19 +24,17 @@ import (
 var (
 	// Test options for value log tests.
 	opt = &Options{
-		WorkDir:                 "./work_test",
-		SSTableMaxSz:            1 << 10,
-		MemTableSize:            1 << 10,
-		ValueLogFileSize:        1 << 20,
-		ValueThreshold:          0,
-		ValueLogBucketCount:     1,
-		ValueLogHotBucketCount:  0,
-		ValueLogHotKeyThreshold: 0,
-		MaxBatchCount:           10,
-		MaxBatchSize:            1 << 20,
-		HotRingEnabled:          true,
-		HotRingBits:             8,
-		HotRingTopK:             8,
+		WorkDir:             "./work_test",
+		SSTableMaxSz:        1 << 10,
+		MemTableSize:        1 << 10,
+		ValueLogFileSize:    1 << 20,
+		ValueThreshold:      0,
+		ValueLogBucketCount: 1,
+		MaxBatchCount:       10,
+		MaxBatchSize:        1 << 20,
+		HotRingEnabled:      true,
+		HotRingBits:         8,
+		HotRingTopK:         8,
 	}
 )
 
@@ -108,58 +106,6 @@ func TestVlogBase(t *testing.T) {
 	require.Equal(t, nonTxnMaxVersion, ts2)
 	require.Equal(t, []byte(val2), entry2.Value)
 	require.Equal(t, kvpkg.BitValuePointer, entry2.Meta)
-}
-
-func TestValueLogHotBucketRouting(t *testing.T) {
-	clearDir()
-
-	prevBucketCount := opt.ValueLogBucketCount
-	prevHotBucketCount := opt.ValueLogHotBucketCount
-	prevHotKeyThreshold := opt.ValueLogHotKeyThreshold
-	prevValueThreshold := opt.ValueThreshold
-	prevHotRingEnabled := opt.HotRingEnabled
-	prevHotRingBits := opt.HotRingBits
-	prevHotRingTopK := opt.HotRingTopK
-
-	opt.ValueLogBucketCount = 4
-	opt.ValueLogHotBucketCount = 2
-	opt.ValueLogHotKeyThreshold = 2
-	opt.ValueThreshold = 0
-	opt.HotRingEnabled = true
-	opt.HotRingBits = 8
-	opt.HotRingTopK = 8
-	defer func() {
-		opt.ValueLogBucketCount = prevBucketCount
-		opt.ValueLogHotBucketCount = prevHotBucketCount
-		opt.ValueLogHotKeyThreshold = prevHotKeyThreshold
-		opt.ValueThreshold = prevValueThreshold
-		opt.HotRingEnabled = prevHotRingEnabled
-		opt.HotRingBits = prevHotRingBits
-		opt.HotRingTopK = prevHotRingTopK
-	}()
-
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-	log := db.vlog
-
-	payload := bytes.Repeat([]byte("v"), 64)
-	hotBuckets := uint32(opt.ValueLogHotBucketCount)
-
-	e1 := newPointerEntry([]byte("hot-key"), payload)
-	req1 := &request{Entries: []*kvpkg.Entry{e1}}
-	require.NoError(t, log.write([]*request{req1}))
-	e1.DecrRef()
-
-	require.Len(t, req1.Ptrs, 1)
-	require.GreaterOrEqual(t, req1.Ptrs[0].Bucket, hotBuckets)
-
-	e2 := newPointerEntry([]byte("hot-key"), payload)
-	req2 := &request{Entries: []*kvpkg.Entry{e2}}
-	require.NoError(t, log.write([]*request{req2}))
-	e2.DecrRef()
-
-	require.Len(t, req2.Ptrs, 1)
-	require.Less(t, req2.Ptrs[0].Bucket, hotBuckets)
 }
 
 func TestVersionedEntryValueLogPointer(t *testing.T) {
@@ -312,8 +258,6 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 	cfg.WorkDir = t.TempDir()
 	cfg.ValueThreshold = 0
 	cfg.ValueLogBucketCount = 2
-	cfg.ValueLogHotBucketCount = 0
-	cfg.ValueLogHotKeyThreshold = 0
 	cfg.ValueLogFileSize = 4 << 10
 	cfg.ValueLogGCParallelism = 2
 	cfg.ValueLogGCInterval = 0

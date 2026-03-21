@@ -31,7 +31,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 
 	snap := db.Info().Snapshot()
 	require.Greater(t, snap.Entries, int64(0))
-	require.NotEmpty(t, snap.Hot.ReadKeys)
+	require.Empty(t, snap.Hot.WriteKeys)
 	require.Greater(t, snap.WAL.SegmentCount, int64(0))
 	require.Greater(t, snap.WAL.RecordCounts.Entries, uint64(0))
 	require.False(t, snap.WAL.TypedRecordWarning)

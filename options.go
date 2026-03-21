@@ -11,12 +11,10 @@ import (
 )
 
 const (
-	defaultWriteBatchMaxCount             = 64
-	defaultWriteBatchMaxSize        int64 = 1 << 20
-	defaultHotRingTopK                    = 16
-	defaultHotReadPrefetchThreshold int32 = 16
-	defaultHotReadPrefetchCooldown        = 15 * time.Second
-	defaultWALBufferSize                  = 4 << 20 // 4 MiB
+	defaultWriteBatchMaxCount       = 64
+	defaultWriteBatchMaxSize  int64 = 1 << 20
+	defaultHotRingTopK              = 16
+	defaultWALBufferSize            = 4 << 20 // 4 MiB
 )
 
 // Options holds the top-level database configuration.
@@ -36,13 +34,7 @@ type Options struct {
 	ValueLogMaxEntries uint32
 	// ValueLogBucketCount controls how many hash buckets the value log uses.
 	// Values <= 1 disable bucketization.
-	ValueLogBucketCount int
-	// ValueLogHotBucketCount reserves this many buckets for hot keys when
-	// HotRing-based routing is enabled. Values <= 0 disable hot/cold splitting.
-	ValueLogHotBucketCount int
-	// ValueLogHotKeyThreshold marks a key as hot once its HotRing counter reaches
-	// this value. Values <= 0 disable HotRing-based routing.
-	ValueLogHotKeyThreshold int32
+	ValueLogBucketCount     int
 	ValueSeparationPolicies []*kv.ValueSeparationPolicy
 
 	// ValueLogGCInterval specifies how frequently to trigger a check for value
@@ -82,12 +74,6 @@ type Options struct {
 	HotRingEnabled  bool
 	HotRingBits     uint8
 	HotRingTopK     int
-	// HotReadPrefetchThreshold enqueues async read prefetch once a key reaches
-	// this hot-read count. Values <= 0 fall back to the default threshold.
-	HotReadPrefetchThreshold int32
-	// HotReadPrefetchCooldown suppresses repeated prefetch for the same hot key
-	// during this interval. Values <= 0 fall back to the default cooldown.
-	HotReadPrefetchCooldown time.Duration
 	// HotRingRotationInterval enables dual-ring rotation for hotness tracking.
 	// Zero disables rotation.
 	HotRingRotationInterval time.Duration
@@ -106,30 +92,7 @@ type Options struct {
 	HotRingWindowSlots int
 	// HotRingWindowSlotDuration sets the duration of each sliding-window bucket.
 	HotRingWindowSlotDuration time.Duration
-	// ValueLogHotRingOverride uses the dedicated ValueLogHotRing* settings instead
-	// of the global HotRing configuration when routing hot value-log keys.
-	ValueLogHotRingOverride bool
-	// ValueLogHotRingBits controls the hash bucket count for the value-log ring.
-	// Zero uses the default HotRing bucket count.
-	ValueLogHotRingBits uint8
-	// ValueLogHotRingRotationInterval enables rotation for the value-log ring.
-	// Zero disables rotation.
-	ValueLogHotRingRotationInterval time.Duration
-	// ValueLogHotRingNodeCap caps the number of tracked keys per value-log ring.
-	ValueLogHotRingNodeCap uint64
-	// ValueLogHotRingNodeSampleBits controls stable sampling for value-log keys.
-	// A value of 0 enforces a strict cap; larger values sample 1/2^N keys.
-	ValueLogHotRingNodeSampleBits uint8
-	// ValueLogHotRingDecayInterval controls how often the value-log ring decays counters.
-	ValueLogHotRingDecayInterval time.Duration
-	// ValueLogHotRingDecayShift determines decay aggressiveness for the value-log ring.
-	ValueLogHotRingDecayShift uint32
-	// ValueLogHotRingWindowSlots controls the number of sliding-window buckets for the value-log ring.
-	ValueLogHotRingWindowSlots int
-	// ValueLogHotRingWindowSlotDuration sets the duration of each value-log window bucket.
-	ValueLogHotRingWindowSlotDuration time.Duration
-
-	SyncWrites bool
+	SyncWrites                bool
 	// SyncPipeline enables a dedicated sync worker goroutine that decouples
 	// WAL fsync from the commit pipeline. When false (the default), the commit
 	// worker performs fsync inline. Only effective when SyncWrites is true.
@@ -142,12 +105,6 @@ type Options struct {
 	// before the DB returns utils.ErrHotKeyWriteThrottle. Zero disables write-path
 	// throttling.
 	WriteHotKeyLimit int32
-	// HotWriteBurstThreshold marks a key as "hot" for batching when its write
-	// frequency exceeds this count; zero disables hot write batching.
-	HotWriteBurstThreshold int32
-	// HotWriteBatchMultiplier scales write batch limits when a hot key is
-	// detected, allowing short-term coalescing of repeated writes.
-	HotWriteBatchMultiplier int
 	// WriteBatchWait adds an optional coalescing delay when the commit queue is
 	// momentarily empty, letting small bursts share one WAL fsync/apply pass.
 	// Zero disables the delay.
@@ -272,31 +229,20 @@ const (
 // NewDefaultOptions returns the default option set.
 func NewDefaultOptions() *Options {
 	opt := &Options{
-		WorkDir:                           "./work_test",
-		MemTableSize:                      64 << 20,
-		MemTableEngine:                    MemTableEngineART,
-		SSTableMaxSz:                      256 << 20,
-		HotRingEnabled:                    true,
-		HotRingBits:                       12,
-		HotRingTopK:                       defaultHotRingTopK,
-		HotReadPrefetchThreshold:          defaultHotReadPrefetchThreshold,
-		HotReadPrefetchCooldown:           defaultHotReadPrefetchCooldown,
-		HotRingRotationInterval:           30 * time.Minute,
-		HotRingNodeCap:                    250_000,
-		HotRingNodeSampleBits:             0,
-		ValueLogHotRingOverride:           true,
-		ValueLogHotRingBits:               12,
-		ValueLogHotRingRotationInterval:   10 * time.Minute,
-		ValueLogHotRingNodeCap:            200_000,
-		ValueLogHotRingNodeSampleBits:     0,
-		ValueLogHotRingDecayInterval:      0,
-		ValueLogHotRingDecayShift:         0,
-		ValueLogHotRingWindowSlots:        6,
-		ValueLogHotRingWindowSlotDuration: 100 * time.Millisecond,
-		HotRingDecayInterval:              0,
-		HotRingDecayShift:                 0,
-		HotRingWindowSlots:                8,
-		HotRingWindowSlotDuration:         250 * time.Millisecond,
+		WorkDir:                   "./work_test",
+		MemTableSize:              64 << 20,
+		MemTableEngine:            MemTableEngineART,
+		SSTableMaxSz:              256 << 20,
+		HotRingEnabled:            false,
+		HotRingBits:               12,
+		HotRingTopK:               defaultHotRingTopK,
+		HotRingRotationInterval:   30 * time.Minute,
+		HotRingNodeCap:            250_000,
+		HotRingNodeSampleBits:     0,
+		HotRingDecayInterval:      0,
+		HotRingDecayShift:         0,
+		HotRingWindowSlots:        8,
+		HotRingWindowSlotDuration: 250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
 		WriteBatchMaxCount:            64,
 		WriteBatchMaxSize:             1 << 20,
@@ -306,8 +252,6 @@ func NewDefaultOptions() *Options {
 		ManifestSync:                  false,
 		ManifestRewriteThreshold:      64 << 20,
 		WriteHotKeyLimit:              128,
-		HotWriteBurstThreshold:        8,
-		HotWriteBatchMultiplier:       2,
 		WriteBatchWait:                200 * time.Microsecond,
 		WriteThrottleMinRate:          lsmpkg.DefaultWriteThrottleMinRate,
 		WriteThrottleMaxRate:          lsmpkg.DefaultWriteThrottleMaxRate,
@@ -331,8 +275,6 @@ func NewDefaultOptions() *Options {
 		ValueLogGCSampleSizeRatio:     0.10,
 		ValueLogGCSampleCountRatio:    0.01,
 		ValueLogBucketCount:           16,
-		ValueLogHotBucketCount:        4,
-		ValueLogHotKeyThreshold:       8,
 	}
 	opt.ValueThreshold = utils.DefaultValueThreshold
 
@@ -377,12 +319,6 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.HotRingTopK <= 0 {
 		opt.HotRingTopK = defaultHotRingTopK
-	}
-	if opt.HotReadPrefetchThreshold <= 0 {
-		opt.HotReadPrefetchThreshold = defaultHotReadPrefetchThreshold
-	}
-	if opt.HotReadPrefetchCooldown <= 0 {
-		opt.HotReadPrefetchCooldown = defaultHotReadPrefetchCooldown
 	}
 	if opt.WriteBatchMaxCount <= 0 {
 		opt.WriteBatchMaxCount = defaultWriteBatchMaxCount

@@ -27,7 +27,7 @@ Key option groups (see `options.go` for the full list):
   - `ValueLogGCReduceBacklog`, `ValueLogGCSkipBacklog`
   - `ValueLogGCSampleSizeRatio`, `ValueLogGCSampleCountRatio`,
     `ValueLogGCSampleFromHead`
-  - `ValueLogBucketCount`, `ValueLogHotBucketCount`, `ValueLogHotKeyThreshold`
+  - `ValueLogBucketCount`
 - **LSM & compaction**
   - `MemTableSize`, `MemTableEngine`, `SSTableMaxSz`, `NumCompactors`
   - `NumLevelZeroTables`, `IngestCompactBatchSize`, `IngestBacklogMergeScore`
@@ -35,10 +35,9 @@ Key option groups (see `options.go` for the full list):
 - **Caches**
   - `BlockCacheBytes`, `IndexCacheBytes`
 - **Hot key throttling**
-  - `WriteHotKeyLimit`, `HotWriteBurstThreshold`, `HotWriteBatchMultiplier`
-  - `HotRingEnabled`, `HotRingTopK`, `HotReadPrefetchThreshold`, `HotReadPrefetchCooldown`, decay/window settings
+  - `WriteHotKeyLimit`
+  - `HotRingEnabled`, `HotRingTopK`, decay/window settings
   - `HotRingNodeCap`, `HotRingNodeSampleBits`, `HotRingRotationInterval`
-  - `ValueLogHotRingOverride` + `ValueLogHotRing*` overrides
 - **WAL watchdog**
   - `EnableWALWatchdog`, `WALAutoGCInterval`
   - `WALAutoGCMinRemovable`, `WALAutoGCMaxBatch`
