@@ -16,6 +16,7 @@ type levelHandler struct {
 	sync.RWMutex
 	levelNum              int
 	tables                []*table
+	filter                rangeFilter
 	ingest                ingestBuffer
 	totalSize             int64
 	totalStaleSize        int64
@@ -67,6 +68,7 @@ func (lh *levelHandler) add(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
 	lh.totalValueSize += int64(t.ValueSize())
+	lh.rebuildRangeFilterLocked()
 }
 
 func (lh *levelHandler) getTotalSize() int64 {
@@ -302,6 +304,7 @@ func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
 	lh.sortTablesLocked()
+	lh.rebuildRangeFilterLocked()
 	lh.ingest.sortShards()
 }
 
@@ -326,7 +329,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		version uint64
 		best    *kv.Entry
 	)
-	for _, table := range lh.tables {
+	for _, table := range lh.getTablesForKey(key) {
 		if table == nil {
 			continue
 		}
@@ -406,7 +409,17 @@ func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
+	if len(lh.filter.spans) == 0 {
+		return lh.getTablesForKeyLinear(key)
+	}
+	return lh.filter.tablesForPoint(key)
+}
+
+func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
+	if len(lh.tables) == 0 {
+		return nil
+	}
+	if lh.levelNum > 0 && utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
 	out := make([]*table, 0, 1)
@@ -414,15 +427,29 @@ func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 		if t == nil {
 			continue
 		}
-		// Since min keys are sorted ascending, we can stop once min > key.
-		if utils.CompareUserKeys(t.MinKey(), key) > 0 {
+		if lh.levelNum > 0 && utils.CompareUserKeys(t.MinKey(), key) > 0 {
 			break
 		}
-		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 {
+		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 &&
+			utils.CompareUserKeys(key, t.MinKey()) >= 0 {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+func (lh *levelHandler) getTablesForBounds(lower, upper []byte) []*table {
+	if len(lh.tables) == 0 {
+		return nil
+	}
+	if len(lh.filter.spans) == 0 {
+		return filterTablesByBounds(lh.tables, lower, upper)
+	}
+	return lh.filter.tablesForBounds(lower, upper)
+}
+
+func (lh *levelHandler) rebuildRangeFilterLocked() {
+	lh.filter = buildRangeFilter(lh.levelNum, lh.tables)
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
@@ -462,6 +489,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	// Assign tables.
 	lh.tables = newTables
 	lh.sortTablesLocked()
+	lh.rebuildRangeFilterLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
@@ -488,6 +516,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
+	lh.rebuildRangeFilterLocked()
 
 	lh.ingest.remove(toDelMap)
 
@@ -577,14 +606,15 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 	}
 	lh.RLock()
 	defer lh.RUnlock()
+	mainTables := lh.getTablesForBounds(topt.LowerBound, topt.UpperBound)
 	if lh.levelNum == 0 {
-		return iteratorsReversed(lh.tables, topt)
+		return iteratorsReversed(mainTables, topt)
 	}
 
 	var itrs []utils.Iterator
-	itrs = append(itrs, lh.ingest.iterators(topt)...)
-	if len(lh.tables) > 0 {
-		itrs = append(itrs, NewConcatIterator(lh.tables, topt))
+	itrs = append(itrs, lh.ingest.iteratorsWithinBounds(topt)...)
+	if len(mainTables) > 0 {
+		itrs = append(itrs, NewConcatIterator(mainTables, topt))
 	}
 	return itrs
 }

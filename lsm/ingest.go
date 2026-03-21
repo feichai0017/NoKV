@@ -350,13 +350,17 @@ func (buf ingestBuffer) maxAgeSeconds() float64 {
 	return maxAge
 }
 
-func (buf ingestBuffer) iterators(topt *utils.Options) []utils.Iterator {
+func (buf ingestBuffer) iteratorsWithinBounds(topt *utils.Options) []utils.Iterator {
 	var itrs []utils.Iterator
 	for _, sh := range buf.shards {
 		if len(sh.tables) == 0 {
 			continue
 		}
-		itrs = append(itrs, iteratorsReversed(sh.tables, topt)...)
+		tables := filterTablesByBounds(sh.tables, topt.LowerBound, topt.UpperBound)
+		if len(tables) == 0 {
+			continue
+		}
+		itrs = append(itrs, iteratorsReversed(tables, topt)...)
 	}
 	return itrs
 }
