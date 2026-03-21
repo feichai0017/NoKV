@@ -109,6 +109,62 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	}
 }
 
+func TestLevelHandlerAddDefersRangeFilterRebuildUntilSort(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	lh := lsm.levels.levels[1]
+	tblB := buildTableWithEntry(t, lsm, 301, "b", 1, "vb")
+	tblA := buildTableWithEntry(t, lsm, 302, "a", 1, "va")
+
+	lh.add(tblB)
+	lh.add(tblA)
+	require.Empty(t, lh.filter.spans)
+
+	lh.Sort()
+	require.Len(t, lh.filter.spans, 2)
+	require.True(t, lh.filter.nonOverlapping)
+
+	for _, tbl := range []*table{tblA, tblB} {
+		require.NoError(t, tbl.DecrRef())
+	}
+}
+
+func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	lh := lsm.levels.levels[0]
+	tblA := buildTableWithEntry(t, lsm, 401, "a", 1, "va")
+	tblD := buildTableWithEntry(t, lsm, 402, "d", 1, "vd")
+	lh.tables = []*table{tblA, tblD}
+	lh.Sort()
+
+	iters := lh.iterators(&utils.Options{
+		IsAsc:      true,
+		LowerBound: []byte("b"),
+		UpperBound: []byte("e"),
+	})
+	for _, it := range iters {
+		require.NoError(t, it.Close())
+	}
+
+	diag := lsm.Diagnostics()
+	require.Equal(t, uint64(1), diag.RangeFilter.Fallbacks)
+
+	for _, tbl := range []*table{tblA, tblD} {
+		require.NoError(t, tbl.DecrRef())
+	}
+}
+
 func TestLevelHandlerIteratorsRespectBoundsWithIngest(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()

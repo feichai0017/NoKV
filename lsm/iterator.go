@@ -155,6 +155,9 @@ func (s *ConcatIterator) Rewind() {
 	} else {
 		s.setIdx(len(s.tables) - 1)
 	}
+	if s.cur == nil {
+		return
+	}
 	s.cur.Rewind()
 }
 
@@ -181,7 +184,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareKeys(s.tables[mid].MaxKey(), key) >= 0 {
+			if utils.CompareInternalKeys(s.tables[mid].MaxKey(), key) >= 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -193,7 +196,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareKeys(s.tables[mid].MinKey(), key) > 0 {
+			if utils.CompareInternalKeys(s.tables[mid].MinKey(), key) > 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -208,6 +211,9 @@ func (s *ConcatIterator) Seek(key []byte) {
 	// For reversed=false, we know s.tables[i-1].Biggest() < key. Thus, the
 	// previous table cannot possibly contain key.
 	s.setIdx(idx)
+	if s.cur == nil {
+		return
+	}
 	s.cur.Seek(key)
 }
 
@@ -379,7 +385,7 @@ func (mi *MergeIterator) fix() {
 		mi.swapSmall()
 		return
 	}
-	cmp := utils.CompareKeys(mi.small.entry.Key, mi.bigger().entry.Key)
+	cmp := utils.CompareInternalKeys(mi.small.entry.Key, mi.bigger().entry.Key)
 	switch {
 	case cmp == 0: // Both the keys are equal.
 		// In case of same keys, move the right iterator ahead.

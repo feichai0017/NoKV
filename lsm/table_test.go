@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -287,6 +288,25 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 		require.Equal(t, "k059", keys[0])
 		require.Equal(t, "k050", keys[len(keys)-1])
 	})
+}
+
+func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
+	index := &pb.TableIndex{
+		Offsets: []*pb.BlockOffset{
+			{Key: kv.InternalKey(kv.CFDefault, []byte("z"), 5)},
+			{Key: kv.InternalKey(kv.CFLock, []byte("a"), 5)},
+			{Key: kv.InternalKey(kv.CFWrite, []byte("b"), 5)},
+			{Key: kv.InternalKey(kv.CFWrite, []byte("f"), 5)},
+		},
+	}
+
+	start, end := blockRangeForBounds(
+		index,
+		kv.InternalKey(kv.CFWrite, []byte("a"), kv.MaxVersion),
+		kv.InternalKey(kv.CFWrite, []byte("e"), kv.MaxVersion),
+	)
+	require.Equal(t, 1, start)
+	require.Equal(t, 3, end)
 }
 
 func TestLevelGetHandlesOverlappingRanges(t *testing.T) {

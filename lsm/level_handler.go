@@ -68,7 +68,6 @@ func (lh *levelHandler) add(t *table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
 	lh.totalValueSize += int64(t.ValueSize())
-	lh.rebuildRangeFilterLocked()
 }
 
 func (lh *levelHandler) getTotalSize() int64 {
@@ -279,8 +278,8 @@ func (lh *levelHandler) prefetch(key []byte) bool {
 			if table == nil {
 				continue
 			}
-			if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
-				utils.CompareUserKeys(key, table.MaxKey()) > 0 {
+			if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
+				utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
 			if table.prefetchBlockForKey(key) {
@@ -320,7 +319,7 @@ func (lh *levelHandler) sortTablesLocked() {
 	}
 	// L1+ tables are non-overlapping by key range.
 	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+		return utils.CompareInternalKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 	})
 }
 
@@ -333,8 +332,8 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		if table == nil {
 			continue
 		}
-		if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
-			utils.CompareUserKeys(key, table.MaxKey()) > 0 {
+		if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
+			utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
 			continue
 		}
 		if table.MaxVersionVal() <= version {
@@ -456,7 +455,7 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if lh.levelNum > 0 && utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
+	if lh.levelNum > 0 && utils.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
 	out := make([]*table, 0, 1)
@@ -464,11 +463,11 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 		if t == nil {
 			continue
 		}
-		if lh.levelNum > 0 && utils.CompareUserKeys(t.MinKey(), key) > 0 {
+		if lh.levelNum > 0 && utils.CompareBaseKeys(t.MinKey(), key) > 0 {
 			break
 		}
-		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 &&
-			utils.CompareUserKeys(key, t.MinKey()) >= 0 {
+		if utils.CompareBaseKeys(key, t.MaxKey()) <= 0 &&
+			utils.CompareBaseKeys(key, t.MinKey()) >= 0 {
 			out = append(out, t)
 		}
 	}
@@ -662,7 +661,7 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 	mainTables := lh.selectTablesForBounds(topt.LowerBound, topt.UpperBound, false)
 	if lh.levelNum == 0 {
 		if bounded && lh.lm != nil {
-			lh.lm.recordRangeFilterBounded(len(lh.tables), len(mainTables), len(lh.filter.spans) == 0)
+			lh.lm.recordRangeFilterBounded(len(lh.tables), len(mainTables), true)
 		}
 		return iteratorsReversed(mainTables, topt)
 	}
