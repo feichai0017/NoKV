@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-34cfd482.js";
+            window.path_to_searchindex_js = "../searchindex-4a2244d7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5ff2b812.js"></script>
@@ -236,7 +236,7 @@
 <li><strong>计算 (Compute)</strong>：HotRing 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
 <li><strong>反馈 (Feedback)</strong>：
 <ul>
-<li><strong>Compaction 评分</strong>：<code>lsm/compact</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
+<li><strong>Compaction 评分</strong>：<code>lsm/picker.go</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
 <li><strong>缓存预取 (Prefetch)</strong>：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。</li>
 <li><strong>写入限流</strong>：对于写频率过高的 Key，<code>TouchAndClamp</code> 会触发限流保护。</li>
 </ul>

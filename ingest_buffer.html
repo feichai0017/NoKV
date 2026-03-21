@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-34cfd482.js";
+            window.path_to_searchindex_js = "searchindex-4a2244d7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -195,14 +195,14 @@
 <li><strong>Snapshot-friendly reads</strong>: ingest tables are read under the level <code>RLock</code>, and iterators hold table refs so mmap-backed data stays valid without additional snapshots.</li>
 <li><strong>Two ingest paths</strong>:
 <ul>
-<li><em>Ingest-only compaction</em>: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by <code>compact.State</code>.</li>
+<li><em>Ingest-only compaction</em>: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by <code>State</code>.</li>
 <li><em>Ingest-merge</em>: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.</li>
 </ul>
 </li>
 <li><strong>IngestMode enum</strong>: plans carry an <code>IngestMode</code> with <code>IngestNone</code>, <code>IngestDrain</code>, and <code>IngestKeep</code>. <code>IngestDrain</code> corresponds to ingest-only (drain into main tables), while <code>IngestKeep</code> corresponds to ingest-merge (compact within ingest).</li>
 <li><strong>Adaptive scheduling</strong>:
 <ul>
-<li>Shard selection is driven by <code>compact.PickShardOrder</code> / <code>compact.PickShardByBacklog</code> using per-shard size, age, and density.</li>
+<li>Shard selection is driven by <code>PickShardOrder</code> / <code>PickShardByBacklog</code> using per-shard size, age, and density.</li>
 <li>Shard parallelism scales with backlog score (based on shard size/target file size) bounded by <code>IngestShardParallelism</code>.</li>
 <li>Batch size scales with shard backlog to drain faster under pressure.</li>
 <li>Ingest-merge triggers when backlog score exceeds <code>IngestBacklogMergeScore</code> (default 2.0), with dynamic lowering under extreme backlog/age.</li>
@@ -219,7 +219,7 @@
 <h2 id="benefits"><a class="header" href="#benefits">Benefits</a></h2>
 <ul>
 <li><strong>Lower write amplification</strong>: bursty L0 SSTables land in ingest first; <code>IngestKeep</code>/ingest-merge prunes duplicates before full compaction.</li>
-<li><strong>Reduced contention</strong>: sharding + <code>compact.State</code> allow parallel ingest drain with minimal overlap.</li>
+<li><strong>Reduced contention</strong>: sharding + <code>State</code> allow parallel ingest drain with minimal overlap.</li>
 <li><strong>Predictable reads</strong>: ingest is part of the read snapshot, so moving tables in/out does not change read semantics.</li>
 <li><strong>Tunable and observable</strong>: knobs for parallelism and merge aggressiveness, with per-path metrics to guide tuning.</li>
 </ul>

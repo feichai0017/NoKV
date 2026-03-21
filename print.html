@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-34cfd482.js";
+            window.path_to_searchindex_js = "searchindex-4a2244d7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -478,17 +478,17 @@ iterator scan, distributed read/write via Raft apply), see
 </ul>
 <h3 id="24-lsm-compaction--ingest-buffer"><a class="header" href="#24-lsm-compaction--ingest-buffer">2.4 LSM Compaction &amp; Ingest Buffer</a></h3>
 <ul>
-<li><code>compact.Manager</code> drives compaction cycles; <code>lsm.levelManager</code> supplies table metadata and executes the plan.</li>
-<li>Planning is split: <code>compact.PlanFor*</code> selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.</li>
-<li><code>compact.State</code> guards overlapping key ranges and tracks in-flight table IDs.</li>
-<li>Ingest shard selection is policy-driven in <code>compact</code> (<code>PickShardOrder</code> / <code>PickShardByBacklog</code>) while the ingest buffer remains in <code>lsm</code>.</li>
+<li><code>lsm.compaction</code> drives compaction cycles; <code>lsm.levelManager</code> supplies table metadata and executes the plan.</li>
+<li>Planning is split inside <code>lsm</code>: <code>PlanFor*</code> selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.</li>
+<li><code>lsm.State</code> guards overlapping key ranges and tracks in-flight table IDs.</li>
+<li>Ingest shard selection is policy-driven in <code>lsm</code> (<code>PickShardOrder</code> / <code>PickShardByBacklog</code>) while the ingest buffer remains in <code>lsm</code>.</li>
 </ul>
 <pre class="mermaid">flowchart TD
-  Manager["compact.Manager"] --&gt; LSM["lsm.levelManager"]
-  LSM --&gt;|TableMeta snapshot| Planner["compact.PlanFor*"]
-  Planner --&gt; Plan["compact.Plan (fid+range)"]
+  Manager["lsm.compaction"] --&gt; LSM["lsm.levelManager"]
+  LSM --&gt;|TableMeta snapshot| Planner["PlanFor*"]
+  Planner --&gt; Plan["lsm.Plan (fid+range)"]
   Plan --&gt;|resolvePlanLocked| Exec["LSM executor"]
-  Exec --&gt; State["compact.State guard"]
+  Exec --&gt; State["lsm.State guard"]
   Exec --&gt; Build["subcompact/build SST"]
   Build --&gt; Manifest["manifest edits"]
   L0["L0 tables"] --&gt;|moveToIngest| Ingest["ingest buffer shards"]
@@ -916,7 +916,7 @@ key/value validation errors, throttling, and lifecycle guards.</li>
 <ul>
 <li><code>kv/entry_codec.go</code>: <code>ErrBadChecksum</code>, <code>ErrPartialEntry</code></li>
 <li><code>vfs/vfs.go</code>: <code>ErrRenameNoReplaceUnsupported</code></li>
-<li><code>lsm/compact/errors.go</code>: compaction planner/runtime domain errors</li>
+<li><code>/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/compaction.go</code>: compaction planner/runtime domain errors</li>
 <li><code>raftstore/peer/errors.go</code>: peer lifecycle/state errors</li>
 <li><code>pb/errorpb.proto</code>: region/store routing protobuf errors (<code>RegionError</code>,
 <code>StoreNotMatch</code>, <code>RegionNotFound</code>, <code>KeyNotInRegion</code>, …)</li>
@@ -1681,19 +1681,19 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 </blockquote>
 <hr>
 <h2 id="1-overview"><a class="header" href="#1-overview">1. Overview</a></h2>
-<p>Compactions are orchestrated by <code>compact.Manager</code> with <code>lsm.levelManager</code> implementing the executor hooks. Each level owns two lists of tables:</p>
+<p>Compactions are orchestrated by <code>lsm.compaction</code> with <code>lsm.levelManager</code> supplying scheduling input and executing the plan. Each level owns two lists of tables:</p>
 <ul>
 <li><code>tables</code> – the canonical sorted run for the level.</li>
 <li><code>ingest</code> – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.</li>
 </ul>
-<p>The compaction manager periodically calls into the executor to build a list of <code>compact.Priority</code> entries.  The priorities consider three signals:</p>
+<p>The compaction runtime periodically calls into the picker to build a list of <code>Priority</code> entries. The priorities consider three signals:</p>
 <ol>
 <li><strong>L0 table count</strong> – loosely capped by <code>Options.NumLevelZeroTables</code>.</li>
 <li><strong>Level size vs target</strong> – computed by <code>levelTargets()</code>, which dynamically adjusts the “base” level depending on total data volume.</li>
 <li><strong>Ingest buffer backlog</strong> – if a level’s <code>ingest</code> shards have data, they receive elevated scores so staged tables are merged promptly.</li>
 </ol>
 <p>The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.</p>
-<p>Planning now happens via <code>compact.Plan</code>: LSM snapshots table metadata into <code>compact.TableMeta</code>, <code>compact.PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
+<p>Planning now happens via <code>Plan</code>: LSM snapshots table metadata into <code>TableMeta</code>, <code>PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
 <hr>
 <h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
 <p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
@@ -1708,9 +1708,9 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
 <ul>
-<li><code>compact.State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
+<li><code>State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
 <li>Attempts to register a compaction whose ranges intersect an existing one are rejected.</li>
-<li>When a compaction finishes, <code>compact.State.Delete</code> removes the ranges and table IDs from the guard.</li>
+<li>When a compaction finishes, <code>State.Delete</code> removes the ranges and table IDs from the guard.</li>
 </ul>
 <p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
 <hr>
@@ -1787,14 +1787,14 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <li><strong>Snapshot-friendly reads</strong>: ingest tables are read under the level <code>RLock</code>, and iterators hold table refs so mmap-backed data stays valid without additional snapshots.</li>
 <li><strong>Two ingest paths</strong>:
 <ul>
-<li><em>Ingest-only compaction</em>: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by <code>compact.State</code>.</li>
+<li><em>Ingest-only compaction</em>: drain ingest → main level (or next level) with optional multi-shard parallelism guarded by <code>State</code>.</li>
 <li><em>Ingest-merge</em>: compact ingest tables back into ingest (stay in-place) to drop superseded versions before promoting, reducing downstream write amplification.</li>
 </ul>
 </li>
 <li><strong>IngestMode enum</strong>: plans carry an <code>IngestMode</code> with <code>IngestNone</code>, <code>IngestDrain</code>, and <code>IngestKeep</code>. <code>IngestDrain</code> corresponds to ingest-only (drain into main tables), while <code>IngestKeep</code> corresponds to ingest-merge (compact within ingest).</li>
 <li><strong>Adaptive scheduling</strong>:
 <ul>
-<li>Shard selection is driven by <code>compact.PickShardOrder</code> / <code>compact.PickShardByBacklog</code> using per-shard size, age, and density.</li>
+<li>Shard selection is driven by <code>PickShardOrder</code> / <code>PickShardByBacklog</code> using per-shard size, age, and density.</li>
 <li>Shard parallelism scales with backlog score (based on shard size/target file size) bounded by <code>IngestShardParallelism</code>.</li>
 <li>Batch size scales with shard backlog to drain faster under pressure.</li>
 <li>Ingest-merge triggers when backlog score exceeds <code>IngestBacklogMergeScore</code> (default 2.0), with dynamic lowering under extreme backlog/age.</li>
@@ -1811,7 +1811,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <h2 id="benefits"><a class="header" href="#benefits">Benefits</a></h2>
 <ul>
 <li><strong>Lower write amplification</strong>: bursty L0 SSTables land in ingest first; <code>IngestKeep</code>/ingest-merge prunes duplicates before full compaction.</li>
-<li><strong>Reduced contention</strong>: sharding + <code>compact.State</code> allow parallel ingest drain with minimal overlap.</li>
+<li><strong>Reduced contention</strong>: sharding + <code>State</code> allow parallel ingest drain with minimal overlap.</li>
 <li><strong>Predictable reads</strong>: ingest is part of the read snapshot, so moving tables in/out does not change read semantics.</li>
 <li><strong>Tunable and observable</strong>: knobs for parallelism and merge aggressiveness, with per-path metrics to guide tuning.</li>
 </ul>
@@ -3551,7 +3551,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/compact/*_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
 <tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
 <tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
 <tr><td>Percolator / Distributed Txn</td><td><code>percolator/*_test.go</code>, <code>raftstore/client/client_test.go</code>, <code>stats_test.go</code></td><td>Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting.</td><td>Mixed multi-region fuzzing with lock TTL and leader churn.</td></tr>
@@ -3955,7 +3955,7 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <li><strong>计算 (Compute)</strong>：HotRing 内部利用<strong>滑动窗口</strong>算法计算实时 QPS。</li>
 <li><strong>反馈 (Feedback)</strong>：
 <ul>
-<li><strong>Compaction 评分</strong>：<code>lsm/compact</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
+<li><strong>Compaction 评分</strong>：<code>lsm/picker.go</code> 在选择压缩层级时，会参考 <code>HotRing.TopN</code>。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。</li>
 <li><strong>缓存预取 (Prefetch)</strong>：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。</li>
 <li><strong>写入限流</strong>：对于写频率过高的 Key，<code>TouchAndClamp</code> 会触发限流保护。</li>
 </ul>

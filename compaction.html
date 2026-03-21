@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-34cfd482.js";
+            window.path_to_searchindex_js = "searchindex-4a2244d7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -184,19 +184,19 @@
 </blockquote>
 <hr>
 <h2 id="1-overview"><a class="header" href="#1-overview">1. Overview</a></h2>
-<p>Compactions are orchestrated by <code>compact.Manager</code> with <code>lsm.levelManager</code> implementing the executor hooks. Each level owns two lists of tables:</p>
+<p>Compactions are orchestrated by <code>lsm.compaction</code> with <code>lsm.levelManager</code> supplying scheduling input and executing the plan. Each level owns two lists of tables:</p>
 <ul>
 <li><code>tables</code> – the canonical sorted run for the level.</li>
 <li><code>ingest</code> – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.</li>
 </ul>
-<p>The compaction manager periodically calls into the executor to build a list of <code>compact.Priority</code> entries.  The priorities consider three signals:</p>
+<p>The compaction runtime periodically calls into the picker to build a list of <code>Priority</code> entries. The priorities consider three signals:</p>
 <ol>
 <li><strong>L0 table count</strong> – loosely capped by <code>Options.NumLevelZeroTables</code>.</li>
 <li><strong>Level size vs target</strong> – computed by <code>levelTargets()</code>, which dynamically adjusts the “base” level depending on total data volume.</li>
 <li><strong>Ingest buffer backlog</strong> – if a level’s <code>ingest</code> shards have data, they receive elevated scores so staged tables are merged promptly.</li>
 </ol>
 <p>The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.</p>
-<p>Planning now happens via <code>compact.Plan</code>: LSM snapshots table metadata into <code>compact.TableMeta</code>, <code>compact.PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
+<p>Planning now happens via <code>Plan</code>: LSM snapshots table metadata into <code>TableMeta</code>, <code>PlanFor*</code> selects table IDs + key ranges, and LSM resolves the plan back to <code>*table</code> before executing.</p>
 <hr>
 <h2 id="2-ingest-buffer"><a class="header" href="#2-ingest-buffer">2. Ingest Buffer</a></h2>
 <p><code>moveToIngest</code> (see <code>lsm/executor.go</code>) performs a metadata-only migration:</p>
@@ -211,9 +211,9 @@
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
 <p>To prevent overlapping compactions:</p>
 <ul>
-<li><code>compact.State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
+<li><code>State.CompareAndAdd</code> tracks the key range of each in-flight compaction per level.</li>
 <li>Attempts to register a compaction whose ranges intersect an existing one are rejected.</li>
-<li>When a compaction finishes, <code>compact.State.Delete</code> removes the ranges and table IDs from the guard.</li>
+<li>When a compaction finishes, <code>State.Delete</code> removes the ranges and table IDs from the guard.</li>
 </ul>
 <p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
 <hr>
