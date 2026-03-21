@@ -241,7 +241,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 
 	builder := newTableBuiler(opt)
 	for i := range 200 {
-		key := []byte(fmt.Sprintf("k%03d", i))
+		key := fmt.Appendf(nil, "k%03d", i)
 		builder.AddKey(kv.NewEntry(
 			kv.InternalKey(kv.CFDefault, key, 1),
 			[]byte("value-with-more-data"),

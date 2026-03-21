@@ -110,8 +110,8 @@ func (iter *memIterator) Seek(key []byte) {
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
 	cur     utils.Iterator
-	tables  []*table         // Disregarding reversed, this is in ascending order.
-	options *utils.Options   // Valid options are REVERSED and NOCACHE.
+	tables  []*table       // Disregarding reversed, this is in ascending order.
+	options *utils.Options // Valid options are REVERSED and NOCACHE.
 }
 
 // NewConcatIterator creates a new concatenated iterator

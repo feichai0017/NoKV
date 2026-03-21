@@ -117,7 +117,7 @@ func BenchmarkLSMRotateFlush(b *testing.B) {
 }
 
 func benchUserKey(i int) []byte {
-	return []byte(fmt.Sprintf("k%08d", i))
+	return fmt.Appendf(nil, "k%08d", i)
 }
 
 func buildBenchLevelTables(b *testing.B, lsm *LSM, levelNum int, tableCount int) *levelHandler {
@@ -128,7 +128,7 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 	b.Helper()
 	lh := lsm.levels.levels[levelNum]
 	fidBase := uint64(levelNum*1_000_000 + start + 10_000)
-	for i := 0; i < tableCount; i++ {
+	for i := range tableCount {
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.0
@@ -160,7 +160,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 	b.Helper()
 	lh := lsm.levels.levels[levelNum]
 	fidBase := uint64(levelNum*1_000_000 + start + 20_000)
-	for i := 0; i < tableCount; i++ {
+	for i := range tableCount {
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
@@ -192,7 +192,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHandler {
 	b.Helper()
 	lh := lsm.levels.levels[0]
-	for i := 0; i < tableCount; i++ {
+	for i := range tableCount {
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
@@ -377,8 +377,8 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 	const totalKeys = 4096
 	for _, width := range []int{8, 64, 256} {
-		lower := []byte(fmt.Sprintf("k%06d", totalKeys/2))
-		upper := []byte(fmt.Sprintf("k%06d", totalKeys/2+width))
+		lower := fmt.Appendf(nil, "k%06d", totalKeys/2)
+		upper := fmt.Appendf(nil, "k%06d", totalKeys/2+width)
 		b.Run(fmt.Sprintf("width_%d", width), func(b *testing.B) {
 			for _, bounded := range []bool{false, true} {
 				name := "manual_seek_break"
@@ -392,7 +392,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 					builderOpt.BloomFalsePositive = 0.0
 					builder := newTableBuiler(&builderOpt)
 					for i := range totalKeys {
-						key := []byte(fmt.Sprintf("k%06d", i))
+						key := fmt.Appendf(nil, "k%06d", i)
 						builder.AddKey(kv.NewEntry(
 							kv.InternalKey(kv.CFDefault, key, 1),
 							[]byte("value-with-more-data"),
