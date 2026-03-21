@@ -337,7 +337,12 @@ func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
 		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
-			clone := kv.NewEntry(kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
+			buf := make([]byte, len(e.Key)+len(e.Value))
+			keyCopy := buf[:len(e.Key)]
+			copy(keyCopy, e.Key)
+			valueCopy := buf[len(e.Key):]
+			copy(valueCopy, e.Value)
+			clone := kv.NewEntry(keyCopy, valueCopy)
 			clone.ExpiresAt = e.ExpiresAt
 			clone.Meta = e.Meta
 			_ = clone.PopulateInternalMeta()
