@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6fdcf697.js";
+            window.path_to_searchindex_js = "searchindex-34cfd482.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -250,7 +250,7 @@
 <h2 id="5-recovery-notes"><a class="header" href="#5-recovery-notes">5. Recovery Notes</a></h2>
 <ul>
 <li>Startup rebuild (<code>levelManager.build</code>) validates manifest SST entries against disk.</li>
-<li>Missing or unreadable SSTs are treated as stale and removed from manifest via <code>EditDeleteFile</code>, allowing startup to continue.</li>
+<li>Missing or unreadable SSTs fail startup; normal restart does not repair manifest state by deleting referenced files.</li>
 <li>Temp SST names are only used in strict mode and are created in <code>WorkDir</code> with suffix <code>.tmp.&lt;pid&gt;.&lt;ns&gt;</code> (not a dedicated <code>tmp/</code> directory).</li>
 </ul>
 <hr>
@@ -270,7 +270,7 @@
 <ul>
 <li><code>lsm/flush_runtime_test.go</code>: queue lifecycle and timing counters.</li>
 <li><code>db_test.go::TestRecoveryWALReplayRestoresData</code>: replay still restores data after crash before flush completion.</li>
-<li><code>db_test.go::TestRecoveryCleansMissingSSTFromManifest</code> and <code>db_test.go::TestRecoveryCleansCorruptSSTFromManifest</code>: stale manifest SST cleanup on startup.</li>
+<li><code>db_test.go::TestRecoveryFailsOnMissingSST</code> and <code>db_test.go::TestRecoveryFailsOnCorruptSST</code>: startup fails when manifest SSTs are missing or corrupt.</li>
 </ul>
 <p>See also <a href="recovery.html">recovery.md</a>, <a href="memtable.html">memtable.md</a>, and <a href="wal.html">wal.md</a>.</p>
 

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6fdcf697.js";
+            window.path_to_searchindex_js = "searchindex-34cfd482.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -188,7 +188,7 @@
 <hr>
 <h2 id="1-runtime-options-embedded-engine"><a class="header" href="#1-runtime-options-embedded-engine">1. Runtime Options (Embedded Engine)</a></h2>
 <p><code>NoKV.NewDefaultOptions()</code> returns a tuned baseline. Override fields before
-calling <code>NoKV.Open(opt)</code>.</p>
+calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>.</p>
 <p>Key option groups (see <code>options.go</code> for the full list):</p>
 <ul>
 <li><strong>Paths &amp; durability</strong>
@@ -252,7 +252,10 @@ opt.WorkDir = "./data"
 opt.SyncWrites = true
 opt.ValueThreshold = 1024
 opt.WriteBatchMaxCount = 128
-db := NoKV.Open(opt)
+db, err := NoKV.Open(opt)
+if err != nil {
+	log.Fatalf("open failed: %v", err)
+}
 defer db.Close()
 </code></pre>
 <p>Notes:</p>
@@ -271,7 +274,10 @@ fields keep their defaults from <code>NewDefaultOptions</code>.</p>
 if err != nil {
     log.Fatal(err)
 }
-db := NoKV.Open(opt)
+db, err := NoKV.Open(opt)
+if err != nil {
+	log.Fatalf("open failed: %v", err)
+}
 defer db.Close()
 </code></pre>
 <p>Example (TOML):</p>

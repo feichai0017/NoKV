@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6fdcf697.js";
+            window.path_to_searchindex_js = "searchindex-34cfd482.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5ff2b812.js"></script>
@@ -200,7 +200,7 @@
 <li><strong>Pre-flight verification</strong>: <code>DB.runRecoveryChecks</code> runs <code>manifest.Verify</code>, <code>wal.VerifyDir</code>, and per-bucket <code>vlog.VerifyDir</code>.</li>
 <li><strong>WAL manager reopen</strong>: <code>wal.Open</code> reopens latest segment and rebuilds counters.</li>
 <li><strong>Manifest replay + SST load</strong>: <code>levelManager.build</code> replays manifest version and opens SST files.</li>
-<li><strong>Stale SST cleanup</strong>: if a manifest SST is missing or unreadable/corrupt, it is marked stale and removed from manifest (<code>EditDeleteFile</code>) so startup can continue.</li>
+<li><strong>Strict SST validation</strong>: if a manifest SST is missing or unreadable/corrupt, startup fails and manifest state is left unchanged.</li>
 <li><strong>WAL replay</strong>: <code>lsm.recovery</code> replays post-checkpoint WAL records into memtables.</li>
 <li><strong>Flush backlog restore</strong>: recovered immutable memtables are resubmitted to the flush queue.</li>
 <li><strong>ValueLog recovery</strong>: value-log managers reconcile on-disk files with manifest metadata, trim torn tails, and drop stale/orphan segments.</li>
