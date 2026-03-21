@@ -77,7 +77,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
 	defer func() {
 		_ = db.Close()
 	}()

@@ -70,7 +70,7 @@ This is the durability ordering used by current code.
 ## 5. Recovery Notes
 
 - Startup rebuild (`levelManager.build`) validates manifest SST entries against disk.
-- Missing or unreadable SSTs are treated as stale and removed from manifest via `EditDeleteFile`, allowing startup to continue.
+- Missing or unreadable SSTs fail startup; normal restart does not repair manifest state by deleting referenced files.
 - Temp SST names are only used in strict mode and are created in `WorkDir` with suffix `.tmp.<pid>.<ns>` (not a dedicated `tmp/` directory).
 
 ---
@@ -97,6 +97,6 @@ to inspect flush backlog and latency.
 
 - `lsm/flush_runtime_test.go`: queue lifecycle and timing counters.
 - `db_test.go::TestRecoveryWALReplayRestoresData`: replay still restores data after crash before flush completion.
-- `db_test.go::TestRecoveryCleansMissingSSTFromManifest` and `db_test.go::TestRecoveryCleansCorruptSSTFromManifest`: stale manifest SST cleanup on startup.
+- `db_test.go::TestRecoveryFailsOnMissingSST` and `db_test.go::TestRecoveryFailsOnCorruptSST`: startup fails when manifest SSTs are missing or corrupt.
 
 See also [recovery.md](recovery.md), [memtable.md](memtable.md), and [wal.md](wal.md).

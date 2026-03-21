@@ -21,7 +21,8 @@ func newTestEmbeddedBackend(t *testing.T) *embeddedBackend {
 	if opt.MaxBatchSize <= 0 {
 		opt.MaxBatchSize = 16 << 20
 	}
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return newEmbeddedBackend(db)
 }

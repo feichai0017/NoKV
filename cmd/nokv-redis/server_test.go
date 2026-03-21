@@ -24,7 +24,8 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	opt.MaxBatchCount = 1024
 	opt.MaxBatchSize = 16 << 20
 
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -6,12 +6,12 @@
 
 ## 1. Overview
 
-Compactions are orchestrated by `compact.Manager` with `lsm.levelManager` implementing the executor hooks. Each level owns two lists of tables:
+Compactions are orchestrated by `lsm.compaction` with `lsm.levelManager` supplying scheduling input and executing the plan. Each level owns two lists of tables:
 
 - `tables` – the canonical sorted run for the level.
 - `ingest` – a staging buffer that temporarily holds SSTables moved from the level above when there is not yet enough work (or bandwidth) to do a full merge.
 
-The compaction manager periodically calls into the executor to build a list of `compact.Priority` entries.  The priorities consider three signals:
+The compaction runtime periodically calls into the picker to build a list of `Priority` entries. The priorities consider three signals:
 
 1. **L0 table count** – loosely capped by `Options.NumLevelZeroTables`.
 2. **Level size vs target** – computed by `levelTargets()`, which dynamically adjusts the “base” level depending on total data volume.
@@ -19,7 +19,7 @@ The compaction manager periodically calls into the executor to build a list of `
 
 The highest adjusted score is processed first.  L0 compactions can either move tables into the ingest buffer of the base level (cheap re‑parenting) or compact directly into a lower level when the overlap warrants it.
 
-Planning now happens via `compact.Plan`: LSM snapshots table metadata into `compact.TableMeta`, `compact.PlanFor*` selects table IDs + key ranges, and LSM resolves the plan back to `*table` before executing.
+Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, `PlanFor*` selects table IDs + key ranges, and LSM resolves the plan back to `*table` before executing.
 
 ---
 
@@ -41,9 +41,9 @@ Compaction tests (`lsm/compaction_test.go`) assert that after calling `moveToIng
 
 To prevent overlapping compactions:
 
-- `compact.State.CompareAndAdd` tracks the key range of each in-flight compaction per level.
+- `State.CompareAndAdd` tracks the key range of each in-flight compaction per level.
 - Attempts to register a compaction whose ranges intersect an existing one are rejected.
-- When a compaction finishes, `compact.State.Delete` removes the ranges and table IDs from the guard.
+- When a compaction finishes, `State.Delete` removes the ranges and table IDs from the guard.
 
 This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (`TestCompactStatusGuards`) that simulate back‑to‑back registrations on the same key range.
 

@@ -524,7 +524,10 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
 	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
-	db := NoKV.Open(opts)
+	db, err := NoKV.Open(opts)
+	if err != nil {
+		return NoKV.StatsSnapshot{}, fmt.Errorf("open db for offline stats: %w", err)
+	}
 	defer func() {
 		_ = db.Close()
 	}()
