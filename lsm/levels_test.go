@@ -1,9 +1,12 @@
 package lsm
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
+	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,4 +61,82 @@ func TestL0ReplaceTablesOrdering(t *testing.T) {
 
 	require.NoError(t, t1.DecrRef())
 	require.NoError(t, t4.DecrRef())
+}
+
+func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	lh := lsm.levels.levels[1]
+	tblA := buildTableWithEntry(t, lsm, 101, "a", 1, "va")
+	tblD := buildTableWithEntry(t, lsm, 102, "d", 1, "vd")
+	tblG := buildTableWithEntry(t, lsm, 103, "g", 1, "vg")
+
+	lh.tables = []*table{tblG, tblA, tblD}
+	lh.Sort()
+
+	require.Len(t, lh.filter.spans, 3)
+
+	point := lh.getTablesForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 5))
+	require.Len(t, point, 1)
+	require.Equal(t, uint64(102), point[0].fid)
+
+	bounded := lh.getTablesForBounds([]byte("c"), []byte("f"))
+	require.Len(t, bounded, 1)
+	require.Equal(t, uint64(102), bounded[0].fid)
+
+	miss := lh.getTablesForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 5))
+	require.Empty(t, miss)
+
+	for _, tbl := range []*table{tblA, tblD, tblG} {
+		require.NoError(t, tbl.DecrRef())
+	}
+}
+
+func TestLevelHandlerIteratorsRespectBoundsWithIngest(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	lh := lsm.levels.levels[1]
+	tblA := buildTableWithEntry(t, lsm, 201, "a", 1, "va")
+	tblD := buildTableWithEntry(t, lsm, 202, "d", 1, "vd")
+	tblG := buildTableWithEntry(t, lsm, 203, "g", 1, "vg")
+	ingestB := buildTableWithEntry(t, lsm, 204, "b", 1, "vb")
+	ingestE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
+
+	lh.tables = []*table{tblA, tblD, tblG}
+	lh.ingest.addBatch([]*table{ingestB, ingestE})
+	lh.Sort()
+
+	iters := lh.iterators(&utils.Options{
+		IsAsc:      true,
+		LowerBound: []byte("c"),
+		UpperBound: []byte("f"),
+	})
+	merge := NewMergeIterator(iters, false)
+	defer func() { require.NoError(t, merge.Close()) }()
+
+	var keys [][]byte
+	for merge.Rewind(); merge.Valid(); merge.Next() {
+		entry := merge.Item().Entry()
+		_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
+		keys = append(keys, append([]byte(nil), userKey...))
+	}
+	require.Len(t, keys, 2)
+	require.True(t, bytes.Equal(keys[0], []byte("d")) || bytes.Equal(keys[0], []byte("e")))
+	require.True(t, bytes.Equal(keys[1], []byte("d")) || bytes.Equal(keys[1], []byte("e")))
+	require.NotEqual(t, string(keys[0]), string(keys[1]))
+
+	for _, tbl := range []*table{tblA, tblD, tblG, ingestB, ingestE} {
+		require.NoError(t, tbl.DecrRef())
+	}
 }
