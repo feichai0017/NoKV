@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,15 +65,15 @@ func (rt *flushRuntime) close() error {
 
 func (rt *flushRuntime) enqueue(mt *memTable) error {
 	if rt == nil {
-		return errors.New("flush runtime is nil")
+		return ErrFlushRuntimeNil
 	}
 	if mt == nil {
-		return errors.New("flush runtime: nil memtable")
+		return ErrFlushRuntimeNilMemtable
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if rt.closed {
-		return errors.New("flush runtime closed")
+		return ErrFlushRuntimeClosed
 	}
 	rt.queue = append(rt.queue, &flushTask{
 		memTable: mt,

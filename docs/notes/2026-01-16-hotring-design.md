@@ -60,7 +60,7 @@ graph TD
     *   **写路径**：只有当启用了限流（`WriteHotKeyLimit`）或突发检测时，才会调用 `TouchAndClamp`。
 2.  **计算 (Compute)**：HotRing 内部利用**滑动窗口**算法计算实时 QPS。
 3.  **反馈 (Feedback)**：
-    *   **Compaction 评分**：`lsm/compact` 在选择压缩层级时，会参考 `HotRing.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
+    *   **Compaction 评分**：`lsm/picker.go` 在选择压缩层级时，会参考 `HotRing.TopN`。如果某一层包含大量热点 Key，会优先压缩该层（Hot Overlap Score），减少热点数据的读放大。
     *   **缓存预取 (Prefetch)**：DB 层会根据 TopN 结果触发预取逻辑。虽然 HotRing 不直接控制 Cache，但它提供的热点名单是预取策略的重要输入。
     *   **写入限流**：对于写频率过高的 Key，`TouchAndClamp` 会触发限流保护。
 
