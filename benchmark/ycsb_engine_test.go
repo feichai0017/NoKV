@@ -101,15 +101,13 @@ func TestBuildNoKVBenchmarkOptions(t *testing.T) {
 	require.Equal(t, ycsbNoKVWriteBatchMaxCount, opts.WriteBatchMaxCount)
 	require.Equal(t, int64(ycsbNoKVWriteBatchMaxCount), opts.MaxBatchCount)
 	require.Equal(t, int64(384)<<20, opts.BlockCacheBytes)
-	require.Equal(t, int64(96)<<20, opts.IndexCacheBytes)
-	require.Equal(t, int64(32)<<20, opts.BloomCacheBytes)
+	require.Equal(t, int64(128)<<20, opts.IndexCacheBytes)
 }
 
 func TestBuildNoKVBenchmarkOptionsExplicitCacheOverrides(t *testing.T) {
 	opts := buildNoKVBenchmarkOptions(t.TempDir(), ycsbEngineOptions{
 		BlockCacheMB:         512,
 		NoKVIndexCacheMB:     64,
-		NoKVBloomCacheMB:     32,
 		ValueThreshold:       1024,
 		MemtableMB:           64,
 		SSTableMB:            512,
@@ -118,9 +116,8 @@ func TestBuildNoKVBenchmarkOptionsExplicitCacheOverrides(t *testing.T) {
 		NoKVCompactionPolicy: "leveled",
 	}, NoKV.MemTableEngineART)
 
-	require.Equal(t, int64(416)<<20, opts.BlockCacheBytes)
+	require.Equal(t, int64(448)<<20, opts.BlockCacheBytes)
 	require.Equal(t, int64(64)<<20, opts.IndexCacheBytes)
-	require.Equal(t, int64(32)<<20, opts.BloomCacheBytes)
 }
 
 func TestBuildBadgerBenchmarkOptions(t *testing.T) {

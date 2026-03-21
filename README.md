@@ -213,7 +213,7 @@ Dive deeper in [docs/architecture.md](docs/architecture.md).
 | Module | Responsibilities | Source | Docs |
 | --- | --- | --- | --- |
 | WAL | Append-only segments with CRC, rotation, replay (`wal.Manager`). | [`wal/`](./wal) | [WAL internals](docs/wal.md) |
-| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md) |
+| LSM | MemTable, flush pipeline, leveled compactions, iterator merging. | [`lsm/`](./lsm) | [Memtable](docs/memtable.md)<br>[Flush pipeline](docs/flush.md)<br>[Cache](docs/cache.md)<br>[Range filter](docs/range_filter.md) |
 | Manifest | VersionEdit log + CURRENT handling, WAL/vlog checkpoints, Region metadata. | [`manifest/`](./manifest) | [Manifest semantics](docs/manifest.md) |
 | ValueLog | Large value storage, GC, discard stats integration. | [`vlog.go`](./vlog.go), [`vlog/`](./vlog) | [Value log design](docs/vlog.md) |
 | Percolator | Distributed MVCC 2PC primitives (prewrite/commit/rollback/resolve/status). | [`percolator/`](./percolator) | [Percolator transactions](docs/percolator.md) |

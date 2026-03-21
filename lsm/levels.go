@@ -65,6 +65,49 @@ type levelManager struct {
 	compactionMaxNs  atomic.Int64
 	compactionRuns   atomic.Uint64
 	hotProvider      func() [][]byte
+	rangeFilter      rangeFilterMetrics
+}
+
+type rangeFilterMetrics struct {
+	pointCandidates   atomic.Uint64
+	pointPruned       atomic.Uint64
+	boundedCandidates atomic.Uint64
+	boundedPruned     atomic.Uint64
+	fallbacks         atomic.Uint64
+}
+
+func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
+	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
+	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
 }
 
 // LevelMetrics aliases the shared metrics package model to keep the lsm API stable.
@@ -433,13 +476,13 @@ func checkTablesOverlap(tables []*table) error {
 	copy(sorted, tables)
 
 	sort.Slice(sorted, func(i, j int) bool {
-		return utils.CompareUserKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
+		return utils.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
 	})
 
 	for i := 1; i < len(sorted); i++ {
 		prev := sorted[i-1]
 		curr := sorted[i]
-		if utils.CompareUserKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
+		if utils.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
 			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
 				prev.fid, curr.fid)
 		}
@@ -457,8 +500,8 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 			if existing == nil {
 				continue
 			}
-			if utils.CompareUserKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
-				utils.CompareUserKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
+			if utils.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
+				utils.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
 				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
 					tbl.fid, existing.fid)
 			}
@@ -607,6 +650,7 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		l0.totalValueSize += int64(tbl.ValueSize())
 	}
 	l0.sortTablesLocked()
+	l0.rebuildRangeFilterLocked()
 
 	return nil
 }

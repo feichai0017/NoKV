@@ -650,10 +650,10 @@ func (r *KeyRange) Extend(kr KeyRange) {
 	if r.IsEmpty() {
 		*r = kr
 	}
-	if len(r.Left) == 0 || utils.CompareKeys(kr.Left, r.Left) < 0 {
+	if len(r.Left) == 0 || utils.CompareInternalKeys(kr.Left, r.Left) < 0 {
 		r.Left = kr.Left
 	}
-	if len(r.Right) == 0 || utils.CompareKeys(kr.Right, r.Right) > 0 {
+	if len(r.Right) == 0 || utils.CompareInternalKeys(kr.Right, r.Right) > 0 {
 		r.Right = kr.Right
 	}
 	if kr.Inf {
@@ -675,11 +675,11 @@ func (r KeyRange) OverlapsWith(dst KeyRange) bool {
 	}
 
 	// [dst.left, dst.right] ... [r.left, r.right]
-	if utils.CompareKeys(r.Left, dst.Right) > 0 {
+	if utils.CompareInternalKeys(r.Left, dst.Right) > 0 {
 		return false
 	}
 	// [r.left, r.right] ... [dst.left, dst.right]
-	if utils.CompareKeys(r.Right, dst.Left) < 0 {
+	if utils.CompareInternalKeys(r.Right, dst.Left) < 0 {
 		return false
 	}
 	return true

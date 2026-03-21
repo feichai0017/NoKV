@@ -162,7 +162,7 @@ func TestEntryHelpers(t *testing.T) {
 		t.Fatalf("expected ttl to set expiresAt")
 	}
 
-	if e2.EncodedSize() == 0 {
+	if e2.EncodedValueSize() == 0 {
 		t.Fatalf("expected encoded size > 0")
 	}
 

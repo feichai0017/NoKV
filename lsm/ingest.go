@@ -40,12 +40,12 @@ func (sh *ingestShard) rebuildRanges() {
 	}
 	if len(sh.ranges) > 1 {
 		sort.Slice(sh.ranges, func(i, j int) bool {
-			return utils.CompareKeys(sh.ranges[i].min, sh.ranges[j].min) < 0
+			return utils.CompareInternalKeys(sh.ranges[i].min, sh.ranges[j].min) < 0
 		})
 	}
 	var max []byte
 	for _, rng := range sh.ranges {
-		if max == nil || utils.CompareUserKeys(rng.max, max) > 0 {
+		if max == nil || utils.CompareBaseKeys(rng.max, max) > 0 {
 			max = rng.max
 		}
 		sh.prefixMax = append(sh.prefixMax, max)
@@ -203,7 +203,7 @@ func (buf *ingestBuffer) sortShards() {
 		sh := &buf.shards[i]
 		if len(sh.tables) > 1 {
 			sort.Slice(sh.tables, func(a, b int) bool {
-				return utils.CompareKeys(sh.tables[a].MinKey(), sh.tables[b].MinKey()) < 0
+				return utils.CompareInternalKeys(sh.tables[a].MinKey(), sh.tables[b].MinKey()) < 0
 			})
 		}
 		sh.rebuildRanges()
@@ -252,8 +252,8 @@ func (buf ingestBuffer) prefetch(key []byte) bool {
 			if table == nil {
 				continue
 			}
-			if utils.CompareKeys(key, table.MinKey()) < 0 ||
-				utils.CompareKeys(key, table.MaxKey()) > 0 {
+			if utils.CompareInternalKeys(key, table.MinKey()) < 0 ||
+				utils.CompareInternalKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
 			if table.prefetchBlockForKey(key) {
@@ -281,21 +281,21 @@ func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error
 		lo, hi := 0, len(ranges)
 		for lo < hi {
 			mid := (lo + hi) / 2
-			if utils.CompareUserKeys(key, ranges[mid].min) >= 0 {
+			if utils.CompareBaseKeys(key, ranges[mid].min) >= 0 {
 				lo = mid + 1
 			} else {
 				hi = mid
 			}
 		}
 		for i := lo - 1; i >= 0; i-- {
-			if i < len(sh.prefixMax) && utils.CompareUserKeys(key, sh.prefixMax[i]) > 0 {
+			if i < len(sh.prefixMax) && utils.CompareBaseKeys(key, sh.prefixMax[i]) > 0 {
 				break
 			}
 			rng := ranges[i]
 			if rng.tbl == nil {
 				continue
 			}
-			if utils.CompareUserKeys(key, rng.max) > 0 {
+			if utils.CompareBaseKeys(key, rng.max) > 0 {
 				continue
 			}
 			if rng.tbl.MaxVersionVal() <= *maxVersion {
@@ -350,15 +350,19 @@ func (buf ingestBuffer) maxAgeSeconds() float64 {
 	return maxAge
 }
 
-func (buf ingestBuffer) iterators(topt *utils.Options) []utils.Iterator {
-	var itrs []utils.Iterator
+func (buf ingestBuffer) tablesWithinBounds(lower, upper []byte) []*table {
+	var tables []*table
 	for _, sh := range buf.shards {
 		if len(sh.tables) == 0 {
 			continue
 		}
-		itrs = append(itrs, iteratorsReversed(sh.tables, topt)...)
+		matched := filterTablesByBounds(sh.tables, lower, upper)
+		if len(matched) == 0 {
+			continue
+		}
+		tables = append(tables, matched...)
 	}
-	return itrs
+	return tables
 }
 
 // ---- levelHandler helpers that wrap the buffer ----

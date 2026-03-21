@@ -328,12 +328,12 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	// Some planning paths may preserve selection order but not strict key order.
 	if len(topTables) > 1 {
 		sort.Slice(topTables, func(i, j int) bool {
-			return utils.CompareKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
+			return utils.CompareInternalKeys(topTables[i].MinKey(), topTables[j].MinKey()) < 0
 		})
 	}
 	if len(botTables) > 1 {
 		sort.Slice(botTables, func(i, j int) bool {
-			return utils.CompareKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
+			return utils.CompareInternalKeys(botTables[i].MinKey(), botTables[j].MinKey()) < 0
 		})
 	}
 	iterOpt := &utils.Options{
@@ -406,7 +406,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	}
 
 	sort.Slice(newTables, func(i, j int) bool {
-		return utils.CompareKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
+		return utils.CompareInternalKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
 	})
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
@@ -435,8 +435,8 @@ func tablesStrictlyOrdered(tables []*table) bool {
 		if cur == nil {
 			return false
 		}
-		// Non-overlap requires prev.max user key < cur.min user key.
-		if utils.CompareUserKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
+		// Non-overlap requires prev.max base key < cur.min base key.
+		if utils.CompareBaseKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
 			return false
 		}
 		prev = cur
@@ -511,8 +511,8 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr KeyRange, cd compactDef
 				}
 				rtTracker.Add(rt)
 			}
-			if !kv.SameKey(key, lastKey) {
-				if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
+			if !kv.SameBaseKey(key, lastKey) {
+				if len(kr.Right) > 0 && utils.CompareInternalKeys(key, kr.Right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
@@ -557,7 +557,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr KeyRange, cd compactDef
 	}
 	for it.Valid() {
 		key := it.Item().Entry().Key
-		if len(kr.Right) > 0 && utils.CompareKeys(key, kr.Right) >= 0 {
+		if len(kr.Right) > 0 && utils.CompareInternalKeys(key, kr.Right) >= 0 {
 			break
 		}
 		// Copy Options so background tuning does not affect the active compaction.
