@@ -211,7 +211,6 @@ type HotStatsSnapshot struct {
 type CacheStatsSnapshot struct {
 	BlockL0HitRate float64 `json:"block_l0_hit_rate"`
 	BlockL1HitRate float64 `json:"block_l1_hit_rate"`
-	BloomHitRate   float64 `json:"bloom_hit_rate"`
 	IndexHitRate   float64 `json:"index_hit_rate"`
 	IteratorReused uint64  `json:"iterator_reused"`
 }
@@ -416,9 +415,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		}
 		if total := cm.L1Hits + cm.L1Misses; total > 0 {
 			snap.Cache.BlockL1HitRate = float64(cm.L1Hits) / float64(total)
-		}
-		if total := cm.BloomHits + cm.BloomMisses; total > 0 {
-			snap.Cache.BloomHitRate = float64(cm.BloomHits) / float64(total)
 		}
 		if total := cm.IndexHits + cm.IndexMisses; total > 0 {
 			snap.Cache.IndexHitRate = float64(cm.IndexHits) / float64(total)

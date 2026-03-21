@@ -8,8 +8,6 @@ type CacheSnapshot struct {
 	L0Misses    uint64
 	L1Hits      uint64
 	L1Misses    uint64
-	BloomHits   uint64
-	BloomMisses uint64
 	IndexHits   uint64
 	IndexMisses uint64
 }
@@ -20,8 +18,6 @@ type CacheCounters struct {
 	l0Misses    atomic.Uint64
 	l1Hits      atomic.Uint64
 	l1Misses    atomic.Uint64
-	bloomHits   atomic.Uint64
-	bloomMisses atomic.Uint64
 	indexHits   atomic.Uint64
 	indexMisses atomic.Uint64
 }
@@ -47,14 +43,6 @@ func (m *CacheCounters) RecordBlock(level int, hit bool) {
 	}
 }
 
-func (m *CacheCounters) RecordBloom(hit bool) {
-	if hit {
-		m.bloomHits.Add(1)
-		return
-	}
-	m.bloomMisses.Add(1)
-}
-
 func (m *CacheCounters) RecordIndex(hit bool) {
 	if hit {
 		m.indexHits.Add(1)
@@ -72,8 +60,6 @@ func (m *CacheCounters) Snapshot() CacheSnapshot {
 		L0Misses:    m.l0Misses.Load(),
 		L1Hits:      m.l1Hits.Load(),
 		L1Misses:    m.l1Misses.Load(),
-		BloomHits:   m.bloomHits.Load(),
-		BloomMisses: m.bloomMisses.Load(),
 		IndexHits:   m.indexHits.Load(),
 		IndexMisses: m.indexMisses.Load(),
 	}

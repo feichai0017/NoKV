@@ -7,8 +7,6 @@ const (
 	DefaultBlockCacheBytes int64 = 16 << 20
 	// DefaultIndexCacheBytes is the default budget for decoded SSTable indexes.
 	DefaultIndexCacheBytes int64 = 32 << 20
-	// DefaultBloomCacheBytes is the default budget for cached bloom filters.
-	DefaultBloomCacheBytes int64 = 8 << 20
 	// DefaultNumLevelZeroTables is the default L0 table budget before throttling starts.
 	DefaultNumLevelZeroTables = 32
 	// DefaultCompactionSlowdownTrigger starts write pacing once max score reaches this value.
@@ -123,9 +121,6 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.IndexCacheBytes < 0 {
 		opt.IndexCacheBytes = 0
-	}
-	if opt.BloomCacheBytes < 0 {
-		opt.BloomCacheBytes = 0
 	}
 }
 

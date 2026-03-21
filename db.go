@@ -218,7 +218,6 @@ func Open(opt *Options) (_ *DB, err error) {
 		CompactionValueAlertThreshold: db.opt.CompactionValueAlertThreshold,
 		BlockCacheBytes:               db.opt.BlockCacheBytes,
 		IndexCacheBytes:               db.opt.IndexCacheBytes,
-		BloomCacheBytes:               db.opt.BloomCacheBytes,
 		DiscardStatsCh:                &db.discardStatsCh,
 		HotKeyProvider:                db.hotReadKeys,
 		ManifestSync:                  db.opt.ManifestSync,
