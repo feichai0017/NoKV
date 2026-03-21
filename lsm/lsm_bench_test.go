@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -365,6 +366,81 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 						}
 						if err := merge.Close(); err != nil {
 							b.Fatalf("close merge iterator: %v", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkTableIteratorBlockBounds(b *testing.B) {
+	const totalKeys = 4096
+	for _, width := range []int{8, 64, 256} {
+		lower := []byte(fmt.Sprintf("k%06d", totalKeys/2))
+		upper := []byte(fmt.Sprintf("k%06d", totalKeys/2+width))
+		b.Run(fmt.Sprintf("width_%d", width), func(b *testing.B) {
+			for _, bounded := range []bool{false, true} {
+				name := "manual_seek_break"
+				if bounded {
+					name = "block_range"
+				}
+				b.Run(name, func(b *testing.B) {
+					lsm := newBenchLSM(b, 64<<20)
+					builderOpt := *lsm.option
+					builderOpt.BlockSize = 128
+					builderOpt.BloomFalsePositive = 0.0
+					builder := newTableBuiler(&builderOpt)
+					for i := range totalKeys {
+						key := []byte(fmt.Sprintf("k%06d", i))
+						builder.AddKey(kv.NewEntry(
+							kv.InternalKey(kv.CFDefault, key, 1),
+							[]byte("value-with-more-data"),
+						))
+					}
+					tableName := utils.FileNameSSTable(lsm.option.WorkDir, uint64(90000+width))
+					tbl, err := openTable(lsm.levels, tableName, builder)
+					if err != nil {
+						b.Fatalf("open bench multi-block table: %v", err)
+					}
+					if tbl == nil {
+						b.Fatalf("expected bench multi-block table")
+					}
+					defer func() { _ = tbl.DecrRef() }()
+
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						var it utils.Iterator
+						if bounded {
+							it = tbl.NewIterator(&utils.Options{
+								IsAsc:      true,
+								LowerBound: lower,
+								UpperBound: upper,
+							})
+							it.Rewind()
+						} else {
+							it = tbl.NewIterator(&utils.Options{IsAsc: true})
+							it.Seek(kv.InternalKey(kv.CFDefault, lower, kv.MaxVersion))
+						}
+
+						count := 0
+						for ; it.Valid(); it.Next() {
+							entry := it.Item().Entry()
+							_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+							if !ok {
+								b.Fatalf("expected internal key")
+							}
+							if bytes.Compare(userKey, upper) >= 0 {
+								break
+							}
+							count++
+						}
+						if count != width {
+							b.Fatalf("expected %d items in bounded table scan, got %d", width, count)
+						}
+						if err := it.Close(); err != nil {
+							b.Fatalf("close table iterator: %v", err)
 						}
 					}
 				})
