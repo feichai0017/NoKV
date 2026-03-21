@@ -140,6 +140,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 	return out, nil
 }
 
+// Metadata accessors and cached table metadata.
 func (t *table) index() *pb.TableIndex {
 	if t == nil {
 		return nil
@@ -173,130 +174,82 @@ func (t *table) index() *pb.TableIndex {
 	return idx
 }
 
-// shouldPinHandleLocked reports handle policy; caller must hold t.mu.
-func (t *table) shouldPinHandleLocked() bool {
-	if t == nil {
-		return false
+// MinKey returns the smallest user key stored in this SSTable.
+func (t *table) MinKey() []byte { return t.minKey }
+
+// MaxKey returns the largest user key stored in this SSTable.
+func (t *table) MaxKey() []byte { return t.maxKey }
+
+// KeyCount returns the approximate number of keys indexed by this table.
+func (t *table) KeyCount() uint32 {
+	if t.keyCount != 0 {
+		return t.keyCount
 	}
-	// keep SSTable handles pinned for the
-	// lifetime of the table to avoid invalidating mmap-backed blocks cached
-	// elsewhere. This prevents close/reopen races that can invalidate slices.
-	return true
-}
-
-func (t *table) refreshHandlePolicy() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.pins == 0 && !t.shouldPinHandleLocked() {
-		t.closeSSTableLocked()
+	if idx := t.index(); idx != nil {
+		t.keyCount = idx.GetKeyCount()
+		return t.keyCount
 	}
+	return 0
 }
 
-func (t *table) setLevel(level int) {
-	t.lvl.Store(int32(level))
-	t.refreshHandlePolicy()
+// MaxVersionVal returns the maximum MVCC version recorded in this table index.
+func (t *table) MaxVersionVal() uint64 {
+	if t.maxVersion != 0 {
+		return t.maxVersion
+	}
+	if idx := t.index(); idx != nil {
+		t.maxVersion = idx.GetMaxVersion()
+		return t.maxVersion
+	}
+	return 0
 }
 
-func (t *table) level() int {
-	return int(t.lvl.Load())
+// HasBloomFilter reports whether this table carries a bloom filter in its index.
+func (t *table) HasBloomFilter() bool {
+	if t.hasBloom {
+		return true
+	}
+	if idx := t.index(); idx != nil && len(idx.BloomFilter) > 0 {
+		t.hasBloom = true
+		return true
+	}
+	return false
 }
 
-// openSSTableLocked opens the SSTable handle; caller must hold t.mu.
-func (t *table) openSSTableLocked(loadIndex bool) error {
-	if t.ss != nil {
+func (t *table) blockOffset(i int) (*pb.BlockOffset, bool) {
+	index := t.index()
+	if index == nil {
+		return nil, false
+	}
+	offsets := index.GetOffsets()
+	if i < 0 || i > len(offsets) {
+		return nil, false
+	}
+	if i == len(offsets) {
+		return nil, true
+	}
+	return offsets[i], true
+}
+
+// Size is its file size in bytes
+func (t *table) Size() int64 { return t.size }
+
+// GetCreatedAt
+func (t *table) GetCreatedAt() *time.Time {
+	if t.createdAt.IsZero() {
 		return nil
 	}
-	opt := &file.Options{
-		FileName: utils.FileNameSSTable(t.lm.opt.WorkDir, t.fid),
-		Dir:      t.lm.opt.WorkDir,
-		Flag:     os.O_RDONLY,
-		MaxSz:    int(t.size),
-		FS:       t.lm.opt.FS,
-	}
-	if opt.MaxSz <= 0 {
-		opt.MaxSz = int(t.lm.opt.SSTableMaxSz)
-	}
-	ss := file.OpenSStable(opt)
-	if loadIndex {
-		if err := ss.Init(); err != nil {
-			return err
-		}
-		idx := ss.Indexs()
-		if idx != nil {
-			t.idx.Store(idx)
-			t.keyCount = idx.GetKeyCount()
-			t.maxVersion = idx.GetMaxVersion()
-			t.staleDataSize = idx.GetStaleDataSize()
-			t.valueSize = idx.GetValueSize()
-			t.lm.cache.addIndex(t.fid, idx)
-		}
-		t.hasBloom = ss.HasBloomFilter()
-		t.size = ss.Size()
-		if created := ss.GetCreatedAt(); created != nil {
-			t.createdAt = *created
-		}
-		if len(t.minKey) == 0 {
-			t.minKey = kv.SafeCopy(nil, ss.MinKey())
-		}
-		if len(t.maxKey) == 0 {
-			t.maxKey = kv.SafeCopy(nil, ss.MaxKey())
-		}
-	}
-	t.ss = ss
-	return nil
+	created := t.createdAt
+	return &created
 }
 
-// closeSSTableLocked closes the SSTable handle; caller must hold t.mu.
-func (t *table) closeSSTableLocked() {
-	if t.ss == nil {
-		return
-	}
-	_ = t.ss.Close()
-	t.ss = nil
-}
+// StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
+func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
 
-func (t *table) closeHandle() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.ss == nil {
-		return nil
-	}
-	err := t.ss.Close()
-	t.ss = nil
-	return err
-}
+// ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
+func (t *table) ValueSize() uint64 { return t.valueSize }
 
-func (t *table) pinSSTable() (*file.SSTable, func(), error) {
-	if t == nil {
-		return nil, nil, errors.New("nil table")
-	}
-	t.mu.Lock()
-	if t.ss == nil {
-		if err := t.openSSTableLocked(false); err != nil {
-			t.mu.Unlock()
-			return nil, nil, err
-		}
-	}
-	ss := t.ss
-	t.pins++
-	t.mu.Unlock()
-
-	var once sync.Once
-	release := func() {
-		once.Do(func() {
-			t.mu.Lock()
-			if t.pins > 0 {
-				t.pins--
-			}
-			if t.pins == 0 && !t.shouldPinHandleLocked() {
-				t.closeSSTableLocked()
-			}
-			t.mu.Unlock()
-		})
-	}
-	return ss, release, nil
-}
-
+// Point-read and block lookup path.
 // Search search for a key in the table
 func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
@@ -488,48 +441,6 @@ func (t *table) blockCacheKey(idx int) uint64 {
 	return (t.fid << 32) | uint64(uint32(idx))
 }
 
-// MinKey returns the smallest user key stored in this SSTable.
-func (t *table) MinKey() []byte { return t.minKey }
-
-// MaxKey returns the largest user key stored in this SSTable.
-func (t *table) MaxKey() []byte { return t.maxKey }
-
-// KeyCount returns the approximate number of keys indexed by this table.
-func (t *table) KeyCount() uint32 {
-	if t.keyCount != 0 {
-		return t.keyCount
-	}
-	if idx := t.index(); idx != nil {
-		t.keyCount = idx.GetKeyCount()
-		return t.keyCount
-	}
-	return 0
-}
-
-// MaxVersionVal returns the maximum MVCC version recorded in this table index.
-func (t *table) MaxVersionVal() uint64 {
-	if t.maxVersion != 0 {
-		return t.maxVersion
-	}
-	if idx := t.index(); idx != nil {
-		t.maxVersion = idx.GetMaxVersion()
-		return t.maxVersion
-	}
-	return 0
-}
-
-// HasBloomFilter reports whether this table carries a bloom filter in its index.
-func (t *table) HasBloomFilter() bool {
-	if t.hasBloom {
-		return true
-	}
-	if idx := t.index(); idx != nil && len(idx.BloomFilter) > 0 {
-		t.hasBloom = true
-		return true
-	}
-	return false
-}
-
 type tableIterator struct {
 	it           utils.Item
 	opt          *utils.Options
@@ -545,6 +456,7 @@ type tableIterator struct {
 	prefetchPool *utils.Pool
 }
 
+// Iteration and prefetch path.
 func (it *tableIterator) fetchBlock(idx int) (*block, error) {
 	return it.t.loadBlock(idx)
 }
@@ -865,31 +777,129 @@ func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 	it.it = it.bi.Item()
 }
 
-func (t *table) blockOffset(i int) (*pb.BlockOffset, bool) {
-	index := t.index()
-	if index == nil {
-		return nil, false
+// Handle lifecycle and reference tracking.
+// shouldPinHandleLocked reports handle policy; caller must hold t.mu.
+func (t *table) shouldPinHandleLocked() bool {
+	if t == nil {
+		return false
 	}
-	offsets := index.GetOffsets()
-	if i < 0 || i > len(offsets) {
-		return nil, false
-	}
-	if i == len(offsets) {
-		return nil, true
-	}
-	return offsets[i], true
+	// keep SSTable handles pinned for the
+	// lifetime of the table to avoid invalidating mmap-backed blocks cached
+	// elsewhere. This prevents close/reopen races that can invalidate slices.
+	return true
 }
 
-// Size is its file size in bytes
-func (t *table) Size() int64 { return t.size }
+func (t *table) refreshHandlePolicy() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pins == 0 && !t.shouldPinHandleLocked() {
+		t.closeSSTableLocked()
+	}
+}
 
-// GetCreatedAt
-func (t *table) GetCreatedAt() *time.Time {
-	if t.createdAt.IsZero() {
+func (t *table) setLevel(level int) {
+	t.lvl.Store(int32(level))
+	t.refreshHandlePolicy()
+}
+
+func (t *table) level() int {
+	return int(t.lvl.Load())
+}
+
+// openSSTableLocked opens the SSTable handle; caller must hold t.mu.
+func (t *table) openSSTableLocked(loadIndex bool) error {
+	if t.ss != nil {
 		return nil
 	}
-	created := t.createdAt
-	return &created
+	opt := &file.Options{
+		FileName: utils.FileNameSSTable(t.lm.opt.WorkDir, t.fid),
+		Dir:      t.lm.opt.WorkDir,
+		Flag:     os.O_RDONLY,
+		MaxSz:    int(t.size),
+		FS:       t.lm.opt.FS,
+	}
+	if opt.MaxSz <= 0 {
+		opt.MaxSz = int(t.lm.opt.SSTableMaxSz)
+	}
+	ss := file.OpenSStable(opt)
+	if loadIndex {
+		if err := ss.Init(); err != nil {
+			return err
+		}
+		idx := ss.Indexs()
+		if idx != nil {
+			t.idx.Store(idx)
+			t.keyCount = idx.GetKeyCount()
+			t.maxVersion = idx.GetMaxVersion()
+			t.staleDataSize = idx.GetStaleDataSize()
+			t.valueSize = idx.GetValueSize()
+			t.lm.cache.addIndex(t.fid, idx)
+		}
+		t.hasBloom = ss.HasBloomFilter()
+		t.size = ss.Size()
+		if created := ss.GetCreatedAt(); created != nil {
+			t.createdAt = *created
+		}
+		if len(t.minKey) == 0 {
+			t.minKey = kv.SafeCopy(nil, ss.MinKey())
+		}
+		if len(t.maxKey) == 0 {
+			t.maxKey = kv.SafeCopy(nil, ss.MaxKey())
+		}
+	}
+	t.ss = ss
+	return nil
+}
+
+// closeSSTableLocked closes the SSTable handle; caller must hold t.mu.
+func (t *table) closeSSTableLocked() {
+	if t.ss == nil {
+		return
+	}
+	_ = t.ss.Close()
+	t.ss = nil
+}
+
+func (t *table) closeHandle() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ss == nil {
+		return nil
+	}
+	err := t.ss.Close()
+	t.ss = nil
+	return err
+}
+
+func (t *table) pinSSTable() (*file.SSTable, func(), error) {
+	if t == nil {
+		return nil, nil, errors.New("nil table")
+	}
+	t.mu.Lock()
+	if t.ss == nil {
+		if err := t.openSSTableLocked(false); err != nil {
+			t.mu.Unlock()
+			return nil, nil, err
+		}
+	}
+	ss := t.ss
+	t.pins++
+	t.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			t.mu.Lock()
+			if t.pins > 0 {
+				t.pins--
+			}
+			if t.pins == 0 && !t.shouldPinHandleLocked() {
+				t.closeSSTableLocked()
+			}
+			t.mu.Unlock()
+		})
+	}
+	return ss, release, nil
 }
 
 // Delete removes the backing SST file and cache metadata for this table.
@@ -911,12 +921,6 @@ func (t *table) Delete() error {
 	t.ss = nil
 	return nil
 }
-
-// StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
-func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
-
-// ValueSize reports total value bytes referenced by this table (inline + vlog pointers).
-func (t *table) ValueSize() uint64 { return t.valueSize }
 
 // DecrRef decrements the refcount and possibly deletes the table
 func (t *table) DecrRef() error {

@@ -691,7 +691,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return utils.ErrInvalidRequest
 	}
-	heads := db.lsm.Diagnostics().ValueLogHead
+	heads := db.lsm.ValueLogHeadSnapshot()
 	if len(heads) == 0 {
 		db.RLock()
 		if len(db.vheads) > 0 {

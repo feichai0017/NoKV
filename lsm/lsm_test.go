@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
@@ -1159,10 +1158,8 @@ func TestLSMMetricsAPIs(t *testing.T) {
 	}
 	requireNoError(lsm.LogValueLogHead(&kv.ValuePtr{Bucket: 0, Fid: 1, Offset: 2}))
 	requireNoError(lsm.LogValueLogUpdate(&manifest.ValueLogMeta{Bucket: 0, FileID: 1, Offset: 5, Valid: true}))
-	diag = lsm.Diagnostics()
-	_ = diag.ValueLogHead
-	_ = diag.ValueLogStatus
-	_ = diag.CurrentVersion
+	_ = lsm.ValueLogHeadSnapshot()
+	_ = lsm.ValueLogStatusSnapshot()
 	requireNoError(lsm.LogValueLogDelete(0, 1))
 }
 
@@ -1544,9 +1541,9 @@ func TestCompact(t *testing.T) {
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		if !ok && lsm.levels.levels[6].numIngestTables() > 0 {
-			pri := compact.Priority{
+			pri := Priority{
 				Level:      6,
-				IngestMode: compact.IngestDrain,
+				IngestMode: IngestDrain,
 				Target:     lsm.levels.levelTargets(),
 				Score:      2,
 				Adjusted:   2,
@@ -1647,12 +1644,12 @@ func TestIngestMergeStaysInIngest(t *testing.T) {
 	}
 	beforeMain := target.numTables()
 
-	pri := compact.Priority{
+	pri := Priority{
 		Level:      6,
 		Score:      5.0,
 		Adjusted:   5.0,
 		Target:     lsm.levels.levelTargets(),
-		IngestMode: compact.IngestKeep,
+		IngestMode: IngestKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("ingest merge compact failed: %v", err)
@@ -1693,12 +1690,12 @@ func TestIngestShardParallelSafety(t *testing.T) {
 	}
 
 	// Trigger parallel ingest-only compactions across shards.
-	pri := compact.Priority{
+	pri := Priority{
 		Level:      6,
 		Score:      6.0,
 		Adjusted:   6.0,
 		Target:     lsm.levels.levelTargets(),
-		IngestMode: compact.IngestDrain,
+		IngestMode: IngestDrain,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel ingest compaction failed: %v", err)
@@ -1789,7 +1786,7 @@ func runTest(n int, testFunList ...func()) {
 
 // buildCompactDef constructs a compaction definition for tests.
 func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
-	t := compact.Targets{
+	t := Targets{
 		TargetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
 		FileSz:    []int64{1024, 2097152, 2097152, 2097152, 2097152, 2097152, 2097152},
 		BaseLevel: nextLevel,
@@ -1808,7 +1805,7 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 		compactorId: id,
 		thisLevel:   lsm.levels.levels[thisLevel],
 		nextLevel:   lsm.levels.levels[nextLevel],
-		plan: compact.Plan{
+		plan: Plan{
 			ThisLevel:    thisLevel,
 			NextLevel:    nextLevel,
 			ThisFileSize: levelFileSize(thisLevel),
@@ -1820,8 +1817,8 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 }
 
 // buildCompactionPriority constructs a compaction priority for tests.
-func buildCompactionPriority(lsm *LSM, thisLevel int, t compact.Targets) compact.Priority {
-	return compact.Priority{
+func buildCompactionPriority(lsm *LSM, thisLevel int, t Targets) Priority {
+	return Priority{
 		Level:    thisLevel,
 		Score:    8.6,
 		Adjusted: 860,

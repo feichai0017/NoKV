@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/pb"
@@ -20,7 +19,7 @@ import (
 )
 
 // doCompact selects tables from a level and merges them into the target level.
-func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
+func (lm *levelManager) doCompact(id int, p Priority) (retErr error) {
 	l := p.Level
 	utils.CondPanicFunc(l >= lm.opt.MaxLevelNum, func() error { return errors.New("[doCompact] Sanity check. l >= lm.opt.MaxLevelNum") }) // Sanity check.
 	t := p.Target
@@ -30,7 +29,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 	// Build the concrete compaction plan.
 	cd := compactDef{
 		compactorId: id,
-		plan: compact.Plan{
+		plan: Plan{
 			ThisLevel:    l,
 			ThisFileSize: lm.targetFileSizeForLevel(t, l),
 			IngestMode:   p.IngestMode,
@@ -55,7 +54,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 		cd.setNextLevel(lm, t, cd.thisLevel)
 		order := cd.thisLevel.ingest.shardOrderBySize()
 		if len(order) == 0 {
-			return compact.ErrFillTables
+			return ErrFillTables
 		}
 		baseLimit := lm.opt.IngestShardParallelism
 		if baseLimit <= 0 {
@@ -94,7 +93,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 			lm.getLogger().Info("ingest compaction complete", "worker", id, "level", sub.thisLevel.levelNum, "shard", order[i])
 		}
 		if !ran {
-			return compact.ErrFillTables
+			return ErrFillTables
 		}
 		return nil
 	}
@@ -103,7 +102,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 	if l == 0 {
 		cd.setNextLevel(lm, t, lm.levels[t.BaseLevel])
 		if !lm.fillTablesL0(&cd) {
-			return compact.ErrFillTables
+			return ErrFillTables
 		}
 		cleanup = true
 		if cd.nextLevel.levelNum != 0 {
@@ -121,7 +120,7 @@ func (lm *levelManager) doCompact(id int, p compact.Priority) (retErr error) {
 			cd.setNextLevel(lm, t, lm.levels[l+1])
 		}
 		if !lm.fillTables(&cd) {
-			return compact.ErrFillTables
+			return ErrFillTables
 		}
 		cleanup = true
 		// Continue with the normal merge path.
@@ -160,7 +159,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	// Append an empty range placeholder when no split is found.
 	if len(cd.splits) == 0 {
-		cd.splits = append(cd.splits, compact.KeyRange{})
+		cd.splits = append(cd.splits, KeyRange{})
 	}
 
 	newTables, decr, err := lm.compactBuildTables(l, cd)
@@ -205,7 +204,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 					CreatedAt: uint64(time.Now().Unix()),
 					ValueSize: tbl.ValueSize(),
-					Ingest:    cd.plan.IngestMode == compact.IngestKeep,
+					Ingest:    cd.plan.IngestMode == IngestKeep,
 				},
 			}
 			manifestEdits = append(manifestEdits, add)
@@ -223,7 +222,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	}
 	cleanupNeeded = false
 
-	if cd.plan.IngestMode == compact.IngestKeep {
+	if cd.plan.IngestMode == IngestKeep {
 		if err := thisLevel.replaceIngestTables(cd.top, newTables); err != nil {
 			return err
 		}
@@ -235,7 +234,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			return err
 		}
 		switch cd.plan.IngestMode {
-		case compact.IngestDrain:
+		case IngestDrain:
 			if err := thisLevel.deleteIngestTables(cd.top); err != nil {
 				return err
 			}
@@ -268,7 +267,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	// Record ingest metrics if applicable.
 	if cd.plan.IngestMode.UsesIngest() {
 		tablesCompacted := len(cd.top) + len(cd.bot)
-		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMode == compact.IngestKeep, time.Since(timeStart), tablesCompacted)
+		cd.thisLevel.recordIngestMetrics(cd.plan.IngestMode == IngestKeep, time.Since(timeStart), tablesCompacted)
 	}
 	lm.recordCompactionMetrics(time.Since(timeStart))
 	// After max-level compaction, range tombstone layout may change.
@@ -460,7 +459,7 @@ func (lm *levelManager) updateDiscardStats(discardStats map[manifest.ValueLogID]
 }
 
 // subcompact runs a single parallel compaction over a key range.
-func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd compactDef,
+func (lm *levelManager) subcompact(it utils.Iterator, kr KeyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	var lastKey []byte
 	// Track discardStats for value log GC.
@@ -488,7 +487,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr compact.KeyRange, cd co
 	rtTracker := tombstone.NewCompactionTracker()
 
 	addKeys := func(builder *tableBuilder) {
-		var tableKr compact.KeyRange
+		var tableKr KeyRange
 
 		for ; it.Valid(); it.Next() {
 			entry := it.Item().Entry()

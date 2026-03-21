@@ -91,7 +91,7 @@ func (m *memTable) close() error {
 // Set inserts one entry into the memtable and appends it to WAL.
 func (m *memTable) Set(entry *kv.Entry) error {
 	if m == nil {
-		return errors.New("lsm: memtable not initialized")
+		return ErrMemtableNotInitialized
 	}
 	if entry == nil || len(entry.Key) == 0 {
 		return utils.ErrEmptyKey
