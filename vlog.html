@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -217,7 +217,7 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
 <li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
-<li>When HotRing routing is enabled (<code>ValueLogHotBucketCount</code> + <code>ValueLogHotKeyThreshold</code>), buckets are split into hot vs cold ranges to isolate update-heavy keys from GC pressure.</li>
+<li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.</li>
 </ul>
 <hr>
 <h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>

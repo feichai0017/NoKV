@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -237,7 +237,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions and workload-shape coverage.</td></tr>
 <tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
 <tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
 <tr><td>Percolator / Distributed Txn</td><td><code>percolator/*_test.go</code>, <code>raftstore/client/client_test.go</code>, <code>stats_test.go</code></td><td>Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting.</td><td>Mixed multi-region fuzzing with lock TTL and leader churn.</td></tr>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "../searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-2499ba20.js"></script>
@@ -191,7 +191,7 @@
 <tbody>
 <tr><td style="text-align: left">KV 分离</td><td style="text-align: left">WiscKey</td><td style="text-align: left">vlog + ValuePtr</td><td style="text-align: left">LSM 更小、写入更顺序</td></tr>
 <tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
-<tr><td style="text-align: left">热冷分流</td><td style="text-align: left">HashKV</td><td style="text-align: left">HotRing 路由</td><td style="text-align: left">热点不污染冷数据</td></tr>
+<tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
 <tr><td style="text-align: left">GC 并行</td><td style="text-align: left">工程化</td><td style="text-align: left"><code>ValueLogGCParallelism</code></td><td style="text-align: left">提升清理吞吐</td></tr>
 <tr><td style="text-align: left">压力控制</td><td style="text-align: left">工程化</td><td style="text-align: left">reduce/skip 阈值</td><td style="text-align: left">不与 compaction 抢资源</td></tr>
 </tbody>
@@ -315,21 +315,17 @@
 
 <p>读路径的代价在于一次额外的 vlog 定位，但换来更小的 LSM 与更顺序的写入。</p>
 <hr>
-<h2 id="6-热冷分流hotring-驱动"><a class="header" href="#6-热冷分流hotring-驱动">6. 热冷分流（HotRing 驱动）</a></h2>
+<h2 id="6-普通分桶当前实现"><a class="header" href="#6-普通分桶当前实现">6. 普通分桶（当前实现）</a></h2>
 <p>热度统计只看写路径（写热点），避免读热点污染：</p>
 <pre class="mermaid">flowchart TD
-  E["Entry 写入"] --&gt; H["HotRing Touch"]
-  H --&gt;|hot| B1["热桶 0..H-1"]
-  H --&gt;|cold| B2["冷桶 H..N-1"]
-  B1 --&gt; V["vlog append"]
-  B2 --&gt; V
+  E["Entry 写入"] --&gt; H["Hash(key)"]
+  H --&gt; B["bucket 0..N-1"]
+  B --&gt; V["vlog append"]
 </pre>
 
 <p>默认配置（可调）：</p>
 <ul>
 <li><code>ValueLogBucketCount = 16</code></li>
-<li><code>ValueLogHotBucketCount = 4</code></li>
-<li><code>ValueLogHotKeyThreshold = 8</code></li>
 </ul>
 <hr>
 <h2 id="7-gc-机制采样--重写"><a class="header" href="#7-gc-机制采样--重写">7. GC 机制（采样 + 重写）</a></h2>
@@ -391,7 +387,7 @@
 <tr><td style="text-align: left">vlog 元数据</td><td style="text-align: left">论文原型不强调 manifest</td><td style="text-align: left"><strong>manifest 记录 head/删除</strong></td></tr>
 <tr><td style="text-align: left">GC 触发</td><td style="text-align: left">依赖扫描与 stale ratio</td><td style="text-align: left"><strong>来自 LSM discard stats</strong></td></tr>
 <tr><td style="text-align: left">GC 并行</td><td style="text-align: left">未强调</td><td style="text-align: left"><strong>多桶并行 + 压力控制</strong></td></tr>
-<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left"><strong>HotRing 驱动热/冷桶</strong></td></tr>
+<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left">普通 hash 多桶</td></tr>
 </tbody>
 </table>
 </div>

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -257,7 +257,7 @@
 <h3 style="margin-top: 0;">🧠 Smart Caching</h3>
 
     
-<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches and <strong>HotRing</strong> keep hot working sets close to the read path.</p>
+<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches keep hot working sets close to the read path.</p>
 
   </div>
 
@@ -1220,7 +1220,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <li><code>ValueLogGCReduceBacklog</code>, <code>ValueLogGCSkipBacklog</code></li>
 <li><code>ValueLogGCSampleSizeRatio</code>, <code>ValueLogGCSampleCountRatio</code>,
 <code>ValueLogGCSampleFromHead</code></li>
-<li><code>ValueLogBucketCount</code>, <code>ValueLogHotBucketCount</code>, <code>ValueLogHotKeyThreshold</code></li>
+<li><code>ValueLogBucketCount</code></li>
 </ul>
 </li>
 <li><strong>LSM &amp; compaction</strong>
@@ -1237,10 +1237,9 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 </li>
 <li><strong>Hot key throttling</strong>
 <ul>
-<li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
-<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, <code>HotReadPrefetchThreshold</code>, <code>HotReadPrefetchCooldown</code>, decay/window settings</li>
+<li><code>WriteHotKeyLimit</code></li>
+<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
 <li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
-<li><code>ValueLogHotRingOverride</code> + <code>ValueLogHotRing*</code> overrides</li>
 </ul>
 </li>
 <li><strong>WAL watchdog</strong>
@@ -1407,7 +1406,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 <li><code>wal.active_segment</code>, <code>wal.segment_count</code>, <code>wal.typed_record_ratio</code></li>
 <li><code>write.queue_depth</code>, <code>write.queue_entries</code>, <code>write.hot_key_limited</code></li>
 <li><code>region.total</code>, <code>region.running</code>, <code>region.removing</code></li>
-<li><code>hot.read_keys</code>, <code>hot.write_keys</code></li>
+<li><code>hot.write_keys</code></li>
 <li><code>lsm.levels</code>, <code>lsm.value_bytes_total</code></li>
 <li><code>transport.*</code>, <code>redis.*</code></li>
 </ul>
@@ -1980,7 +1979,7 @@ read/write, read-only remap) shared by WAL/vlog/SST. Vlog currently uses
 <li>Files are named <code>%05d.vlog</code> and live under <code>workdir/vlog/bucket-XXX/</code> when <code>Options.ValueLogBucketCount &gt; 1</code>. <a href="../vlog/manager.go"><code>Manager.populate</code></a> discovers existing segments at open.</li>
 <li><code>Manager</code> tracks the active file ID (<code>activeID</code>) and byte offset; <a href="../vlog/manager.go"><code>Manager.Head</code></a> exposes these so the manifest can checkpoint them (<code>manifest.EditValueLogHead</code>).</li>
 <li>Files created after a crash but never linked in the manifest are removed during <a href="../vlog.go"><code>valueLog.reconcileManifest</code></a>.</li>
-<li>When HotRing routing is enabled (<code>ValueLogHotBucketCount</code> + <code>ValueLogHotKeyThreshold</code>), buckets are split into hot vs cold ranges to isolate update-heavy keys from GC pressure.</li>
+<li>Production defaults keep ordinary hash bucketization enabled (<code>ValueLogBucketCount=16</code>). Bucket selection is plain hash routing; it no longer depends on HotRing-based hot/cold classification.</li>
 </ul>
 <hr>
 <h2 id="3-record-format"><a class="header" href="#3-record-format">3. Record Format</a></h2>
@@ -2413,12 +2412,13 @@ Deeper levels rely on OS page cache + mmap readahead
 <p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
 <hr>
 <h2 id="5-hotring-integration"><a class="header" href="#5-hotring-integration">5. HotRing Integration</a></h2>
+<p>HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:</p>
 <ul>
-<li>Hot detection: HotRing counts on read/write paths and triggers targeted prefetch for hot keys.</li>
-<li>Cache warmup: prefetch loads target blocks into the normal L0/L1 block cache path.</li>
-<li>Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.</li>
-<li>Tuning: Hot thresholds come from HotRing options (window/decay configurable).</li>
+<li>iterator/table prefetch settings</li>
+<li>block/index cache budgets</li>
+<li>normal read traffic</li>
 </ul>
+<p>The only remaining HotRing integration is optional write throttling.</p>
 <hr>
 <h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
 <ul>
@@ -2630,224 +2630,71 @@ Deeper levels rely on OS page cache + mmap readahead
 <li><a href="../lsm/lsm_bench_test.go"><code>lsm/lsm_bench_test.go</code></a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="hotring--hot-key-tracking"><a class="header" href="#hotring--hot-key-tracking">HotRing – Hot Key Tracking</a></h1>
-<p><code>hotring</code> is NoKV’s hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in <a href="../hotring"><code>hotring/</code></a> inside this repository.</p>
-<hr>
-<h2 id="1-motivation"><a class="header" href="#1-motivation">1. Motivation</a></h2>
+<h1 id="hotring"><a class="header" href="#hotring">HotRing</a></h1>
+<p><code>hotring</code> is NoKV’s optional internal hotspot detector. The package lives in <a href="../hotring"><code>hotring/</code></a> and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.</p>
+<h2 id="current-role"><a class="header" href="#current-role">Current Role</a></h2>
+<p>The production role is deliberately narrow:</p>
 <ul>
-<li><strong>Cache hints</strong> – <code>DB.prefetchLoop</code> (see <a href="../db.go"><code>db.go</code></a>) consumes hot keys to schedule asynchronous reads into the block cache.</li>
-<li><strong>Operational insight</strong> – <code>StatsSnapshot.Hot.ReadKeys</code> and <code>nokv stats --json</code> surface the hottest keys, aiding debugging of traffic hotspots.</li>
-<li><strong>Throttling</strong> – <code>HotRing.TouchAndClamp</code> enables simple rate caps: once a key crosses a threshold, callers can back off or log alerts.</li>
+<li>detect write-hot keys when <code>Options.HotRingEnabled</code> is enabled</li>
+<li>enforce <code>Options.WriteHotKeyLimit</code> via <code>HotRing.TouchAndClamp</code></li>
+<li>publish write-hot snapshots through <code>StatsSnapshot.Hot.WriteKeys</code> and <code>StatsSnapshot.Hot.WriteRing</code></li>
 </ul>
-<p>Compared with RocksDB (which exposes block access stats via <code>perf_context</code>) and Badger (which lacks built-in hot-key reporting), NoKV offers a lightweight but concurrent-friendly tracker out of the box.</p>
-<hr>
-<h2 id="2-data-structure"><a class="header" href="#2-data-structure">2. Data Structure</a></h2>
-<pre><code class="language-text">HotRing
-  buckets[] -&gt; per-bucket lock-free linked list (Node)
-  hashFn   -&gt; hash(key) -&gt; uint32
-  hashMask -&gt; selects bucket (power of two size)
-</code></pre>
+<p>If <code>HotRingEnabled=false</code>, the DB runs without HotRing tracking on the hot path.</p>
+<h2 id="what-hotring-does-not-control-anymore"><a class="header" href="#what-hotring-does-not-control-anymore">What HotRing Does Not Control Anymore</a></h2>
+<p>These integrations were intentionally removed from the default engine path:</p>
 <ul>
-<li>Each bucket stores a sorted linked list of <a href="../hotring/node.go"><code>Node</code></a> ordered by <code>(tag, key)</code>, where <code>tag</code> is derived from the upper bits of the hash. Head pointers are <code>atomic.Pointer[Node]</code>, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.</li>
-<li><code>defaultTableBits = 12</code> → 4096 buckets by default (<code>NewHotRing</code>). The mask ensures cheap modulo operations.</li>
-<li>Nodes keep a <code>count</code> (int32) updated atomically and a <code>next</code> pointer stored via <code>unsafe.Pointer</code>. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.</li>
+<li>read-path hot tracking and asynchronous read prefetch</li>
+<li>LSM compaction scoring based on hot-key overlap</li>
+<li>value-log hot/cold bucket routing</li>
+<li>hot-write batch enlargement heuristics</li>
 </ul>
-<pre class="mermaid">flowchart LR
-  Key(key) --&gt;|hash| Bucket["buckets[index] (atomic head)"]
-  Bucket --&gt; Node1
-  Node1 --&gt; Node2
-  Node2 --&gt; Node3
-  Node3 --&gt; Nil[(nil)]
-</pre>
-
-<hr>
-<h2 id="3-core-operations"><a class="header" href="#3-core-operations">3. Core Operations</a></h2>
+<p>The default value-log configuration keeps ordinary hash bucketization enabled through <code>ValueLogBucketCount</code>, but bucket selection no longer depends on HotRing.</p>
+<h2 id="data-structure"><a class="header" href="#data-structure">Data Structure</a></h2>
+<p>HotRing remains a concurrent in-memory frequency tracker with:</p>
+<ul>
+<li>sharded hash buckets</li>
+<li>lock-free bucket lists for lookup/insert</li>
+<li>atomic counters per node</li>
+<li>optional sliding-window and rotation support</li>
+</ul>
+<p>These capabilities are still useful for optional write throttling and operational diagnostics, even though they are no longer wired into unrelated subsystems.</p>
+<h2 id="relevant-options"><a class="header" href="#relevant-options">Relevant Options</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Behaviour</th><th>Notes</th></tr>
+<tr><th>Option</th><th>Meaning</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="../hotring/hotring.go"><code>Touch</code></a></td><td>Insert or increment key’s counter.</td><td>CAS-splices a new node if missing, then increments (window-aware when enabled).</td></tr>
-<tr><td><a href="../hotring/hotring.go"><code>Frequency</code></a></td><td>Read-only counter lookup.</td><td>Lock-free lookup; uses sliding-window totals when configured.</td></tr>
-<tr><td><a href="../hotring/hotring.go"><code>TouchAndClamp</code></a></td><td>Increment unless <code>count &gt;= limit</code>, returning <code>(count, limited)</code>.</td><td>Throttling follows sliding-window totals so hot bursts clamp quickly.</td></tr>
-<tr><td><a href="../hotring/hotring.go"><code>TopN</code></a></td><td>Snapshot hottest keys sorted by count desc.</td><td>Walks buckets without locks, then sorts a copy.</td></tr>
-<tr><td><a href="../hotring/hotring.go"><code>KeysAbove</code></a></td><td>Return all keys with counters ≥ threshold.</td><td>Handy for targeted throttling or debugging hot shards.</td></tr>
+<tr><td><code>HotRingEnabled</code></td><td>Master switch for write-hot tracking.</td></tr>
+<tr><td><code>WriteHotKeyLimit</code></td><td>Reject writes once a single key exceeds the configured threshold.</td></tr>
+<tr><td><code>HotRingBits</code></td><td>Bucket count (<code>2^bits</code>) for the tracker.</td></tr>
+<tr><td><code>HotRingTopK</code></td><td>Number of hot keys exported in stats.</td></tr>
+<tr><td><code>HotRingRotationInterval</code></td><td>Optional dual-ring rotation.</td></tr>
+<tr><td><code>HotRingWindowSlots</code> / <code>HotRingWindowSlotDuration</code></td><td>Optional sliding-window tracking.</td></tr>
+<tr><td><code>HotRingNodeCap</code> / <code>HotRingNodeSampleBits</code></td><td>Bound in-memory growth.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Bucket ordering is preserved by <code>findOrInsert</code>, which CASes either the bucket head or the predecessor’s <code>next</code> pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.</p>
-<hr>
-<h2 id="4-integration-points-1"><a class="header" href="#4-integration-points-1">4. Integration Points</a></h2>
+<h2 id="write-throttling"><a class="header" href="#write-throttling">Write Throttling</a></h2>
+<p>When both <code>HotRingEnabled</code> and <code>WriteHotKeyLimit &gt; 0</code> are set, NoKV records write frequency by <code>CF + UserKey</code> and returns <code>utils.ErrHotKeyWriteThrottle</code> once the limit is reached.</p>
+<p>This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming, compaction, and value-log routing.</p>
+<h2 id="stats"><a class="header" href="#stats">Stats</a></h2>
+<p>HotRing contributes only write-side observability:</p>
 <ul>
-<li><strong>DB reads</strong> – <code>DB.Get*</code> and iterators call <code>db.recordRead</code>, which invokes <code>HotRing.Touch</code> on a <strong>read-only ring</strong> for every successful lookup.</li>
-<li><strong>Write throttling &amp; hot batching</strong> – writes are tracked by a <strong>write-only ring</strong>. When <code>Options.WriteHotKeyLimit &gt; 0</code>, writes use <code>TouchAndClamp</code> to enforce throttling; when throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, writes still <code>Touch</code> so hot batching can trigger.</li>
-<li><strong>Stats</strong> – <code>StatsSnapshot.Hot.ReadKeys</code> and <code>StatsSnapshot.Hot.WriteKeys</code> publish read/write hot keys. <code>expvar</code> exposes these under <code>NoKV.Stats.hot.read_keys</code> and <code>NoKV.Stats.hot.write_keys</code>.</li>
-<li><strong>Caching</strong> – hot reads trigger asynchronous prefetch into the normal L0/L1 block cache path.</li>
-<li><strong>Value log routing</strong> – a dedicated HotRing instance powers <strong>vlog hot/cold bucket routing</strong>. It tracks <em>write</em> hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (<code>ValueLogHotBucketCount</code>) once <code>ValueLogHotKeyThreshold</code> is reached; cold keys go to the cold range.</li>
+<li><code>StatsSnapshot.Hot.WriteKeys</code></li>
+<li><code>StatsSnapshot.Hot.WriteRing</code></li>
+<li><code>StatsSnapshot.Write.HotKeyLimited</code></li>
 </ul>
-<hr>
-<h2 id="5-comparisons"><a class="header" href="#5-comparisons">5. Comparisons</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Engine</th><th>Approach</th></tr>
-</thead>
-<tbody>
-<tr><td>RocksDB</td><td>External – <code>TRACE</code> / <code>perf_context</code> requires manual sampling.</td></tr>
-<tr><td>Badger</td><td>None built-in.</td></tr>
-<tr><td>NoKV</td><td>In-process ring with expvar/CLI export and throttling helpers.</td></tr>
-</tbody>
-</table>
-</div>
-<p>The HotRing emphasises simplicity: lock-free bucket lists with atomic counters (plus optional per-node window tracking), avoiding sketches while staying light enough for hundreds of thousands of hot keys.</p>
-<hr>
-<h2 id="6-operational-tips"><a class="header" href="#6-operational-tips">6. Operational Tips</a></h2>
+<p>The CLI surfaces the same data under <code>nokv stats</code>.</p>
+<h2 id="design-position"><a class="header" href="#design-position">Design Position</a></h2>
+<p>HotRing should be understood as:</p>
 <ul>
-<li><code>Options.HotRingTopK</code> controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.</li>
-<li><code>Options.HotReadPrefetchThreshold</code> and <code>Options.HotReadPrefetchCooldown</code> control when hot reads trigger async cache prefetch and how quickly the same key can be prefetched again.</li>
-<li>Combine <code>TouchAndClamp</code> with request middleware to detect abusive tenants: when <code>limited</code> is true, log the key and latency impact.</li>
-<li>Resetting the ring is as simple as instantiating a new <code>HotRing</code>—useful for benchmarks that require clean counters between phases.</li>
+<li>an optional internal detector</li>
+<li>an optional write throttling tool</li>
+<li>not a required performance feature</li>
+<li>not a default read-path or value-log optimization</li>
 </ul>
-<p>For end-to-end examples see <a href="#hot-key-export"><code>docs/stats.md</code></a> and the CLI walkthrough in <a href="#hot-key-output"><code>docs/cli.md</code></a>.</p>
-<hr>
-<h2 id="61-default-configuration"><a class="header" href="#61-default-configuration">6.1 Default Configuration</a></h2>
-<p>Global HotRing defaults (<code>NewDefaultOptions</code>):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Default value</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>HotRingEnabled</code></td><td><code>true</code></td><td>Master switch for DB hot tracking.</td></tr>
-<tr><td><code>HotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
-<tr><td><code>HotRingTopK</code></td><td><code>16</code></td><td>Top-K hot keys for stats/CLI.</td></tr>
-<tr><td><code>HotReadPrefetchThreshold</code></td><td><code>16</code></td><td>Async prefetch starts once a key reaches this read count.</td></tr>
-<tr><td><code>HotReadPrefetchCooldown</code></td><td><code>15s</code></td><td>Suppress repeated prefetch for the same hot key.</td></tr>
-<tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
-<tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
-<tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Sliding window enabled.</td></tr>
-<tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>~2s window.</td></tr>
-<tr><td><code>HotRingRotationInterval</code></td><td><code>30m</code></td><td>Dual-ring rotation enabled.</td></tr>
-<tr><td><code>HotRingNodeCap</code></td><td><code>250,000</code></td><td>Strict cap per ring.</td></tr>
-<tr><td><code>HotRingNodeSampleBits</code></td><td><code>0</code></td><td>Strict cap (no sampling).</td></tr>
-</tbody>
-</table>
-</div>
-<p>Value-log override defaults (<code>ValueLogHotRing*</code>):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Default value</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>ValueLogHotRingOverride</code></td><td><code>true</code></td><td>Use dedicated VLog settings.</td></tr>
-<tr><td><code>ValueLogHotRingBits</code></td><td><code>12</code></td><td>4096 buckets.</td></tr>
-<tr><td><code>ValueLogHotRingRotationInterval</code></td><td><code>10m</code></td><td>Faster rotation for write-hotness.</td></tr>
-<tr><td><code>ValueLogHotRingNodeCap</code></td><td><code>200,000</code></td><td>Strict cap per ring.</td></tr>
-<tr><td><code>ValueLogHotRingNodeSampleBits</code></td><td><code>0</code></td><td>Strict cap (no sampling).</td></tr>
-<tr><td><code>ValueLogHotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled (window handles recency).</td></tr>
-<tr><td><code>ValueLogHotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled.</td></tr>
-<tr><td><code>ValueLogHotRingWindowSlots</code></td><td><code>6</code></td><td>~600ms window.</td></tr>
-<tr><td><code>ValueLogHotRingWindowSlotDuration</code></td><td><code>100ms</code></td><td>Shorter write-hotness window.</td></tr>
-</tbody>
-</table>
-</div>
-<p>When <code>ValueLogHotRingOverride=false</code>, the value-log ring inherits the global HotRing
-settings. When override is enabled, <strong>zeros disable features</strong> (except <code>bits=0</code>,
-which falls back to the ring default).</p>
-<hr>
-<h2 id="7-write-path-throttling"><a class="header" href="#7-write-path-throttling">7. Write-Path Throttling</a></h2>
-<p><code>Options.WriteHotKeyLimit</code> wires the write-only HotRing into the write path. When set to a positive integer, user writes (<code>DB.Set</code>, <code>DB.SetBatch</code>, <code>DB.SetWithTTL</code>, <code>DB.Del</code>, <code>DB.DeleteRange</code>) and internal writes (<code>DB.ApplyInternalEntries</code>) invoke <code>HotRing.TouchAndClamp</code> with the limit. Once a key (optionally scoped by column family via <code>cfHotKey</code>) reaches the limit, the write is rejected with <code>utils.ErrHotKeyWriteThrottle</code>. If throttling is disabled but <code>HotWriteBurstThreshold &gt; 0</code>, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.</p>
-<p>Operational hints:</p>
-<ul>
-<li><code>StatsSnapshot.Write.HotKeyLimited</code> and the CLI line <code>Write.HotKeyThrottled</code> expose how many writes were rejected since the process started.</li>
-<li>Applications should surface <code>utils.ErrHotKeyWriteThrottle</code> to callers (e.g. HTTP 429) so clients can back off.</li>
-<li>Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.</li>
-<li>Set the limit conservatively (e.g. a few dozen) and pair it with richer <code>HotRing</code> analytics (top-K stats, expvar export) to identify outliers before tuning.</li>
-</ul>
-<hr>
-<h2 id="8-time-based-decay--sliding-window"><a class="header" href="#8-time-based-decay--sliding-window">8. Time-Based Decay &amp; Sliding Window</a></h2>
-<p>HotRing now exposes two complementary controls so “old” hotspots fade away automatically:</p>
-<ol>
-<li><strong>Periodic decay (<code>Options.HotRingDecayInterval</code> + <code>HotRingDecayShift</code>)</strong><br>Every <code>interval</code> the global counters are right-shifted (<code>count &gt;&gt;= shift</code>). This keeps <code>TopN</code> and stats output focused on recent traffic even if writes stop abruptly.</li>
-<li><strong>Sliding window (<code>Options.HotRingWindowSlots</code> + <code>HotRingWindowSlotDuration</code>)</strong><br>Per-key windows split time into <code>slots</code>, each lasting <code>slotDuration</code>. <code>Touch</code> only accumulates inside the current slot; once the window slides past, the stale contribution is dropped. <code>TouchAndClamp</code> and <code>Frequency</code> use the sliding-window total, so write throttling reflects short-term pressure instead of lifetime counts.</li>
-</ol>
-<p>Disable either mechanism by setting the interval/durations to zero. Typical starting points:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Default value</th><th>Effect</th></tr>
-</thead>
-<tbody>
-<tr><td><code>HotRingDecayInterval</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
-<tr><td><code>HotRingDecayShift</code></td><td><code>0</code></td><td>Decay disabled by default.</td></tr>
-<tr><td><code>HotRingWindowSlots</code></td><td><code>8</code></td><td>Keep ~8 buckets of recency data.</td></tr>
-<tr><td><code>HotRingWindowSlotDuration</code></td><td><code>250ms</code></td><td>Roughly 2s window for throttling.</td></tr>
-</tbody>
-</table>
-</div>
-<p>With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.</p>
-<p>Note: in NoKV, configuration normalization treats the sliding window as higher
-priority. If a window is enabled, decay is automatically disabled to avoid
-redundant background work.</p>
-<hr>
-<h2 id="9-bounding-growth-node-cap--rotation"><a class="header" href="#9-bounding-growth-node-cap--rotation">9. Bounding Growth (Node Cap &amp; Rotation)</a></h2>
-<p>HotRing does not automatically evict keys. To keep memory predictable in high-cardinality
-workloads, use a <strong>node cap</strong> (with optional sampling) and/or <strong>ring rotation</strong>.</p>
-<h3 id="node-cap--sampling"><a class="header" href="#node-cap--sampling">Node cap + sampling</a></h3>
-<ul>
-<li><code>Options.HotRingNodeCap</code> sets a per-ring upper bound on tracked keys.</li>
-<li><code>Options.HotRingNodeSampleBits</code> controls stable sampling once the cap is hit:
-<ul>
-<li><code>0</code> = strict cap (no new keys after the cap).</li>
-<li><code>N</code> = allow roughly <code>1/2^N</code> of new keys (soft cap).</li>
-<li>When <code>HotRingNodeCap = 0</code>, sampling is disabled.</li>
-</ul>
-</li>
-</ul>
-<h3 id="dual-ring-rotation"><a class="header" href="#dual-ring-rotation">Dual-ring rotation</a></h3>
-<ul>
-<li><code>Options.HotRingRotationInterval</code> enables dual-ring rotation:
-<ul>
-<li><strong>active</strong> ring receives new touches</li>
-<li><strong>warm</strong> ring keeps the previous generation to avoid sudden drops</li>
-</ul>
-</li>
-<li>Merge semantics:
-<ul>
-<li><code>Frequency</code> / <code>TouchAndClamp</code> → <code>max(active, warm)</code></li>
-<li><code>TopN</code> / <code>KeysAbove</code> → <code>sum(active, warm)</code></li>
-</ul>
-</li>
-</ul>
-<p><strong>Memory note:</strong> rotation keeps two rings, so the upper bound is roughly
-<code>2 × HotRingNodeCap</code>. If you have a fixed budget, halve the per-ring cap.</p>
-<p>Suggested starting points:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Effect</th></tr>
-</thead>
-<tbody>
-<tr><td><code>HotRingNodeCap</code></td><td>Hard cap per ring (0 disables).</td></tr>
-<tr><td><code>HotRingNodeSampleBits</code></td><td>Soft cap sampling rate.</td></tr>
-<tr><td><code>HotRingRotationInterval</code></td><td>Rotation period (0 disables).</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="10-value-log-overrides"><a class="header" href="#10-value-log-overrides">10. Value Log Overrides</a></h2>
-<p>NoKV maintains a <strong>value-log HotRing</strong> dedicated to hot/cold routing. By
-default this override is enabled so the write-only ring can use faster rotation
-and a shorter window. You can disable it to inherit the global HotRing config:</p>
-<ul>
-<li><code>Options.ValueLogHotRingOverride = false</code> (inherit global settings)</li>
-<li>Or keep it enabled and tune <code>ValueLogHotRing*</code> fields explicitly.</li>
-</ul>
-<p>When override is enabled, <strong>the value-log ring uses the override values verbatim</strong>;
-zeros disable a feature (for example, rotation). If override is disabled, it
-inherits the global <code>HotRing*</code> configuration.</p>
+<p>That narrower scope keeps the core engine path simpler and makes HotRing easier to reason about.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="percolator-distributed-transaction-design"><a class="header" href="#percolator-distributed-transaction-design">Percolator Distributed Transaction Design</a></h1>
 <p>This document explains NoKV’s distributed transaction path implemented by <code>percolator/</code> and executed through <code>raftstore</code>.</p>
@@ -3602,7 +3449,7 @@ go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFro
 <li><code>raft.group_count</code>, <code>raft.lagging_groups</code>, <code>raft.max_lag_segments</code></li>
 <li><code>write.queue_depth</code>, <code>write.avg_request_wait_ms</code>, <code>write.hot_key_limited</code></li>
 <li><code>region.total</code>, <code>region.running</code>, <code>region.removing</code>, <code>region.tombstone</code></li>
-<li><code>hot.read_keys</code>, <code>hot.write_keys</code>, <code>hot.read_ring</code>, <code>hot.write_ring</code></li>
+<li><code>hot.write_keys</code>, <code>hot.write_ring</code></li>
 <li><code>cache.block_l0_hit_rate</code>, <code>cache.bloom_hit_rate</code>, <code>cache.iterator_reused</code></li>
 <li><code>lsm.levels</code>, <code>lsm.value_bytes_total</code></li>
 </ul>
@@ -3636,7 +3483,7 @@ go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFro
     }
   },
   "hot": {
-    "read_keys": [
+    "write_keys": [
       {"key": "user:123", "count": 42}
     ]
   }
@@ -3730,7 +3577,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 </thead>
 <tbody>
 <tr><td>WAL</td><td><code>wal/manager_test.go</code></td><td>Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap.</td><td>Add IO fault injection, concurrent append stress.</td></tr>
-<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions, test cache hot/cold split.</td></tr>
+<tr><td>LSM / Flush / Compaction</td><td><code>lsm/lsm_test.go</code>, <code>lsm/picker_test.go</code>, <code>lsm/planner_test.go</code>, <code>lsm/compaction_test.go</code>, <code>lsm/flush_runtime_test.go</code></td><td>Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling.</td><td>Extend backpressure assertions and workload-shape coverage.</td></tr>
 <tr><td>Manifest</td><td><code>manifest/manager_test.go</code>, <code>lsm/manifest_test.go</code></td><td>CURRENT swap safety, rewrite crash handling, vlog metadata persistence.</td><td>Simulate partial edit corruption, column family extensions.</td></tr>
 <tr><td>ValueLog</td><td><code>vlog/manager_test.go</code>, <code>vlog/io_test.go</code>, <code>vlog_test.go</code></td><td>ValuePtr encoding/decoding, GC rewrite/rewind, concurrent iterator safety.</td><td>Long-running GC, discard-ratio edge cases.</td></tr>
 <tr><td>Percolator / Distributed Txn</td><td><code>percolator/*_test.go</code>, <code>raftstore/client/client_test.go</code>, <code>stats_test.go</code></td><td>Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting.</td><td>Mixed multi-region fuzzing with lock TTL and leader churn.</td></tr>
@@ -4077,7 +3924,7 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 <p>理解这些权衡，是掌握存储引擎底层性能优化的关键。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-01-16-hotring-design"><a class="header" href="#2026-01-16-hotring-design">2026-01-16 hotring design</a></h1>
-<p>本文档详细记录了 NoKV 中 <code>hotring</code> 模块的设计灵感、架构定位、核心实现以及未来展望。这是一个从学术论文汲取灵感，并转化为工业级“热点探测器”的典型案例。</p>
+<p>本文档记录 <code>hotring</code> 的原始设计思路。需要注意：当前生产实现已经收口，HotRing 只保留为可选的内部热点检测器和写热点限流工具；文中关于读预取、compaction hint 和 value-log 热冷路由的设想不再代表当前默认实现。</p>
 <p>当前实现已并入 NoKV 仓库，位于 <code>hotring/</code> 包。</p>
 <hr>
 <h2 id="1-设计灵感取其神而弃其形"><a class="header" href="#1-设计灵感取其神而弃其形">1. 设计灵感：取其神而弃其形</a></h2>
@@ -4445,7 +4292,7 @@ type ingestShard struct {
 <tbody>
 <tr><td style="text-align: left">KV 分离</td><td style="text-align: left">WiscKey</td><td style="text-align: left">vlog + ValuePtr</td><td style="text-align: left">LSM 更小、写入更顺序</td></tr>
 <tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
-<tr><td style="text-align: left">热冷分流</td><td style="text-align: left">HashKV</td><td style="text-align: left">HotRing 路由</td><td style="text-align: left">热点不污染冷数据</td></tr>
+<tr><td style="text-align: left">哈希分区</td><td style="text-align: left">HashKV</td><td style="text-align: left"><code>ValueLogBucketCount</code></td><td style="text-align: left">垃圾局部化</td></tr>
 <tr><td style="text-align: left">GC 并行</td><td style="text-align: left">工程化</td><td style="text-align: left"><code>ValueLogGCParallelism</code></td><td style="text-align: left">提升清理吞吐</td></tr>
 <tr><td style="text-align: left">压力控制</td><td style="text-align: left">工程化</td><td style="text-align: left">reduce/skip 阈值</td><td style="text-align: left">不与 compaction 抢资源</td></tr>
 </tbody>
@@ -4569,21 +4416,17 @@ type ingestShard struct {
 
 <p>读路径的代价在于一次额外的 vlog 定位，但换来更小的 LSM 与更顺序的写入。</p>
 <hr>
-<h2 id="6-热冷分流hotring-驱动"><a class="header" href="#6-热冷分流hotring-驱动">6. 热冷分流（HotRing 驱动）</a></h2>
+<h2 id="6-普通分桶当前实现"><a class="header" href="#6-普通分桶当前实现">6. 普通分桶（当前实现）</a></h2>
 <p>热度统计只看写路径（写热点），避免读热点污染：</p>
 <pre class="mermaid">flowchart TD
-  E["Entry 写入"] --&gt; H["HotRing Touch"]
-  H --&gt;|hot| B1["热桶 0..H-1"]
-  H --&gt;|cold| B2["冷桶 H..N-1"]
-  B1 --&gt; V["vlog append"]
-  B2 --&gt; V
+  E["Entry 写入"] --&gt; H["Hash(key)"]
+  H --&gt; B["bucket 0..N-1"]
+  B --&gt; V["vlog append"]
 </pre>
 
 <p>默认配置（可调）：</p>
 <ul>
 <li><code>ValueLogBucketCount = 16</code></li>
-<li><code>ValueLogHotBucketCount = 4</code></li>
-<li><code>ValueLogHotKeyThreshold = 8</code></li>
 </ul>
 <hr>
 <h2 id="7-gc-机制采样--重写"><a class="header" href="#7-gc-机制采样--重写">7. GC 机制（采样 + 重写）</a></h2>
@@ -4645,7 +4488,7 @@ type ingestShard struct {
 <tr><td style="text-align: left">vlog 元数据</td><td style="text-align: left">论文原型不强调 manifest</td><td style="text-align: left"><strong>manifest 记录 head/删除</strong></td></tr>
 <tr><td style="text-align: left">GC 触发</td><td style="text-align: left">依赖扫描与 stale ratio</td><td style="text-align: left"><strong>来自 LSM discard stats</strong></td></tr>
 <tr><td style="text-align: left">GC 并行</td><td style="text-align: left">未强调</td><td style="text-align: left"><strong>多桶并行 + 压力控制</strong></td></tr>
-<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left"><strong>HotRing 驱动热/冷桶</strong></td></tr>
+<tr><td style="text-align: left">热点处理</td><td style="text-align: left">无显式热冷</td><td style="text-align: left">普通 hash 多桶</td></tr>
 </tbody>
 </table>
 </div>
@@ -4853,11 +4696,8 @@ if backlog &gt; limitCount {
 }
 </code></pre>
 <p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
-<h3 id="22-热点感知倍率-hot-aware"><a class="header" href="#22-热点感知倍率-hot-aware">2.2 热点感知倍率 (Hot-Aware)</a></h3>
-<p>如果 Batch 中包含由 <code>hotTracker</code> 识别出的热点写 Key，系统会应用 <code>HotWriteBatchMultiplier</code>。</p>
-<ul>
-<li><strong>原理</strong>：对于热点 Key，多次写入往往可以合并。通过扩大 Batch，我们让热点请求在进入 WAL 之前有更多机会在内存中被“折叠”，极大减轻了物理磁盘的带宽压力。</li>
-</ul>
+<h3 id="22-现状"><a class="header" href="#22-现状">2.2 现状</a></h3>
+<p>当前实现不再基于 HotRing 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
 <h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
 <p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
 <hr>
@@ -4914,7 +4754,6 @@ for i, cr := range batch.reqs {
 <tr><td style="text-align: left"><code>WriteBatchMaxCount</code></td><td style="text-align: left">64</td><td style="text-align: left">聚合深度。提高可增加吞吐，但会拉长 P99 延迟。</td></tr>
 <tr><td style="text-align: left"><code>WriteBatchWait</code></td><td style="text-align: left">200us</td><td style="text-align: left">聚合等待时间。Sync 写场景下建议保留，非 Sync 场景可设为 0。</td></tr>
 <tr><td style="text-align: left"><code>SyncWrites</code></td><td style="text-align: left">false</td><td style="text-align: left">是否每次 Batch 都调用 <code>fsync</code>。设为 true 会让吞吐下降一个数量级，但保证强持久性。</td></tr>
-<tr><td style="text-align: left"><code>HotWriteMultiplier</code></td><td style="text-align: left">2</td><td style="text-align: left">热点聚合倍率。对于倾斜严重的负载，可设为 4。</td></tr>
 </tbody>
 </table>
 </div>

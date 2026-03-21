@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -241,7 +241,7 @@
 <li><code>raft.group_count</code>, <code>raft.lagging_groups</code>, <code>raft.max_lag_segments</code></li>
 <li><code>write.queue_depth</code>, <code>write.avg_request_wait_ms</code>, <code>write.hot_key_limited</code></li>
 <li><code>region.total</code>, <code>region.running</code>, <code>region.removing</code>, <code>region.tombstone</code></li>
-<li><code>hot.read_keys</code>, <code>hot.write_keys</code>, <code>hot.read_ring</code>, <code>hot.write_ring</code></li>
+<li><code>hot.write_keys</code>, <code>hot.write_ring</code></li>
 <li><code>cache.block_l0_hit_rate</code>, <code>cache.bloom_hit_rate</code>, <code>cache.iterator_reused</code></li>
 <li><code>lsm.levels</code>, <code>lsm.value_bytes_total</code></li>
 </ul>
@@ -275,7 +275,7 @@
     }
   },
   "hot": {
-    "read_keys": [
+    "write_keys": [
       {"key": "user:123", "count": 42}
     ]
   }

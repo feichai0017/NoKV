@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -210,7 +210,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <li><code>ValueLogGCReduceBacklog</code>, <code>ValueLogGCSkipBacklog</code></li>
 <li><code>ValueLogGCSampleSizeRatio</code>, <code>ValueLogGCSampleCountRatio</code>,
 <code>ValueLogGCSampleFromHead</code></li>
-<li><code>ValueLogBucketCount</code>, <code>ValueLogHotBucketCount</code>, <code>ValueLogHotKeyThreshold</code></li>
+<li><code>ValueLogBucketCount</code></li>
 </ul>
 </li>
 <li><strong>LSM &amp; compaction</strong>
@@ -227,10 +227,9 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 </li>
 <li><strong>Hot key throttling</strong>
 <ul>
-<li><code>WriteHotKeyLimit</code>, <code>HotWriteBurstThreshold</code>, <code>HotWriteBatchMultiplier</code></li>
-<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, <code>HotReadPrefetchThreshold</code>, <code>HotReadPrefetchCooldown</code>, decay/window settings</li>
+<li><code>WriteHotKeyLimit</code></li>
+<li><code>HotRingEnabled</code>, <code>HotRingTopK</code>, decay/window settings</li>
 <li><code>HotRingNodeCap</code>, <code>HotRingNodeSampleBits</code>, <code>HotRingRotationInterval</code></li>
-<li><code>ValueLogHotRingOverride</code> + <code>ValueLogHotRing*</code> overrides</li>
 </ul>
 </li>
 <li><strong>WAL watchdog</strong>

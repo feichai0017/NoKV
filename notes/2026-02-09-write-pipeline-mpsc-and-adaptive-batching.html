@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "../searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-2499ba20.js"></script>
@@ -208,11 +208,8 @@ if backlog &gt; limitCount {
 }
 </code></pre>
 <p><strong>设计价值</strong>：这利用了批处理的规模效应。压力越大，聚合度越高，单次磁盘 I/O 摊薄的成本就越低，从而在高压下实现吞吐量的“逆增长”。</p>
-<h3 id="22-热点感知倍率-hot-aware"><a class="header" href="#22-热点感知倍率-hot-aware">2.2 热点感知倍率 (Hot-Aware)</a></h3>
-<p>如果 Batch 中包含由 <code>hotTracker</code> 识别出的热点写 Key，系统会应用 <code>HotWriteBatchMultiplier</code>。</p>
-<ul>
-<li><strong>原理</strong>：对于热点 Key，多次写入往往可以合并。通过扩大 Batch，我们让热点请求在进入 WAL 之前有更多机会在内存中被“折叠”，极大减轻了物理磁盘的带宽压力。</li>
-</ul>
+<h3 id="22-现状"><a class="header" href="#22-现状">2.2 现状</a></h3>
+<p>当前实现不再基于 HotRing 放大写批次。批处理大小只由队列压力和显式批次限制决定。</p>
 <h3 id="23-coalesce-等待机制"><a class="header" href="#23-coalesce-等待机制">2.3 Coalesce 等待机制</a></h3>
 <p>在队列瞬时为空时，Worker 不会立即触发提交，而是会短暂等待一个 <code>WriteBatchWait</code>（默认 200us）。这个微小的停顿是低延迟与高吞吐之间的微妙平衡点，它能让微量的突发流量共享一次 <code>fsync</code> 成本。</p>
 <hr>
@@ -269,7 +266,6 @@ for i, cr := range batch.reqs {
 <tr><td style="text-align: left"><code>WriteBatchMaxCount</code></td><td style="text-align: left">64</td><td style="text-align: left">聚合深度。提高可增加吞吐，但会拉长 P99 延迟。</td></tr>
 <tr><td style="text-align: left"><code>WriteBatchWait</code></td><td style="text-align: left">200us</td><td style="text-align: left">聚合等待时间。Sync 写场景下建议保留，非 Sync 场景可设为 0。</td></tr>
 <tr><td style="text-align: left"><code>SyncWrites</code></td><td style="text-align: left">false</td><td style="text-align: left">是否每次 Batch 都调用 <code>fsync</code>。设为 true 会让吞吐下降一个数量级，但保证强持久性。</td></tr>
-<tr><td style="text-align: left"><code>HotWriteMultiplier</code></td><td style="text-align: left">2</td><td style="text-align: left">热点聚合倍率。对于倾斜严重的负载，可设为 4。</td></tr>
 </tbody>
 </table>
 </div>

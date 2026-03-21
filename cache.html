@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
+            window.path_to_searchindex_js = "searchindex-bf39add2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -240,12 +240,13 @@ Deeper levels rely on OS page cache + mmap readahead
 <p><code>Stats.Snapshot</code> converts these into hit rates. Monitor them alongside the block cache sizes to decide when to scale memory.</p>
 <hr>
 <h2 id="5-hotring-integration"><a class="header" href="#5-hotring-integration">5. HotRing Integration</a></h2>
+<p>HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:</p>
 <ul>
-<li>Hot detection: HotRing counts on read/write paths and triggers targeted prefetch for hot keys.</li>
-<li>Cache warmup: prefetch loads target blocks into the normal L0/L1 block cache path.</li>
-<li>Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.</li>
-<li>Tuning: Hot thresholds come from HotRing options (window/decay configurable).</li>
+<li>iterator/table prefetch settings</li>
+<li>block/index cache budgets</li>
+<li>normal read traffic</li>
 </ul>
+<p>The only remaining HotRing integration is optional write throttling.</p>
 <hr>
 <h2 id="6-interaction-with-value-log"><a class="header" href="#6-interaction-with-value-log">6. Interaction with Value Log</a></h2>
 <ul>
