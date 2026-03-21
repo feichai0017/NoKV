@@ -621,7 +621,7 @@ func (a *ART) Search(key []byte) ([]byte, kv.ValueStruct) {
 	if len(foundKey) == 0 {
 		return nil, kv.ValueStruct{}
 	}
-	if !kv.SameKey(key, foundKey) {
+	if !kv.SameBaseKey(key, foundKey) {
 		return nil, kv.ValueStruct{}
 	}
 	return foundKey, vs

@@ -64,11 +64,8 @@ func LoadIDMap(fs vfs.FS, dir string) map[uint64]struct{} {
 	return idMap
 }
 
-// CompareKeys checks the key without timestamp and checks the timestamp if keyNoTs
-// is same.
-// a<timestamp> would be sorted higher than aa<timestamp> if we use bytes.compare
-// All keys should have timestamp.
-func CompareKeys(key1, key2 []byte) int {
+// CompareInternalKeys compares two canonical internal keys.
+func CompareInternalKeys(key1, key2 []byte) int {
 	if len(key1) <= 8 || len(key2) <= 8 {
 		CondPanicFunc(true, func() error {
 			return fmt.Errorf("%s,%s < 8", string(key1), string(key2))
@@ -80,7 +77,12 @@ func CompareKeys(key1, key2 []byte) int {
 	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
 }
 
-// CompareUserKeys compares user-key portions of two internal keys.
+// CompareBaseKeys compares the CF+user-key portions of two keys, ignoring MVCC timestamp.
+func CompareBaseKeys(key1, key2 []byte) int {
+	return bytes.Compare(kv.InternalToBaseKey(key1), kv.InternalToBaseKey(key2))
+}
+
+// CompareUserKeys compares pure user-key portions of two internal keys.
 // Both inputs must use the InternalKey layout.
 func CompareUserKeys(key1, key2 []byte) int {
 	if len(key1) == 0 || len(key2) == 0 {

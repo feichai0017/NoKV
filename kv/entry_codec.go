@@ -138,10 +138,8 @@ func (h *EntryHeader) Decode(buf []byte) (int, error) {
 	return idx, nil
 }
 
-// EncodeEntry is a convenience function that encodes to a buffer.
-// It uses EncodeEntryTo internally to encode an Entry into a bytes.Buffer and returns the resulting byte slice.
-// This is suitable for cases where the encoded []byte is needed directly.
-// The encoded layout is the same as EncodeEntryTo.
+// EncodeEntry is a convenience wrapper around EncodeEntryTo that returns the
+// encoded record bytes from a buffer.
 func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 	if buf == nil {
 		buf = &bytes.Buffer{}
@@ -161,8 +159,10 @@ func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 }
 
 // EncodeEntryTo is the core streaming encoder.
-// It serializes an Entry object and writes it directly to an io.Writer,
-// making it suitable for scenarios where allocating a large buffer is undesirable.
+// It serializes the entry fields currently stored in e and writes them directly
+// to w. The encoder does not validate whether Key is an internal key or whether
+// Value already uses ValueStruct/ValuePtr layout; callers that persist entries
+// are responsible for supplying bytes in the correct internal format.
 //
 // The encoded layout is: | header | key | value | crc32 |
 // - header: Varint-encoded, contains Key/Value lengths, Meta, and ExpiresAt.
@@ -238,8 +238,9 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 }
 
 // DecodeEntryFrom is the core streaming decoder.
-// It reads from an io.Reader and deserializes the data into an Entry object.
-// This function performs a full CRC32 checksum verification to ensure data integrity.
+// It reads one encoded entry record from r into an Entry object and performs a
+// full CRC32 checksum verification. The decoder restores raw Key/Value bytes;
+// callers that require richer semantics must interpret them separately.
 //
 // It expects the data stream to have the layout: | header | key | value | crc32 |
 //

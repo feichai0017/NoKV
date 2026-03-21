@@ -8,8 +8,8 @@ import (
 )
 
 type rangeFilterSpan struct {
-	minUser []byte
-	maxUser []byte
+	minBase []byte
+	maxBase []byte
 	tbl     *table
 }
 
@@ -33,21 +33,31 @@ func buildRangeFilter(levelNum int, tables []*table) rangeFilter {
 			continue
 		}
 		filter.spans = append(filter.spans, rangeFilterSpan{
-			minUser: guideUserKey(tbl.MinKey()),
-			maxUser: guideUserKey(tbl.MaxKey()),
+			minBase: guideBaseKey(tbl.MinKey()),
+			maxBase: guideBaseKey(tbl.MaxKey()),
 			tbl:     tbl,
 		})
 	}
 	for i := 1; i < len(filter.spans); i++ {
 		prev := filter.spans[i-1]
 		cur := filter.spans[i]
-		if bytes.Compare(prev.minUser, cur.minUser) > 0 ||
-			bytes.Compare(prev.maxUser, cur.minUser) >= 0 {
+		if bytes.Compare(prev.minBase, cur.minBase) > 0 ||
+			bytes.Compare(prev.maxBase, cur.minBase) >= 0 {
 			filter.nonOverlapping = false
 			break
 		}
 	}
 	return filter
+}
+
+func guideBaseKey(key []byte) []byte {
+	if len(key) == 0 {
+		return nil
+	}
+	if _, _, _, ok := kv.SplitInternalKey(key); ok {
+		return kv.InternalToBaseKey(key)
+	}
+	return kv.BaseKey(kv.CFDefault, key)
 }
 
 func guideUserKey(key []byte) []byte {
@@ -64,21 +74,21 @@ func (filter rangeFilter) tablesForPoint(key []byte) []*table {
 	if len(filter.spans) == 0 || len(key) == 0 {
 		return nil
 	}
-	userKey := guideUserKey(key)
-	if len(userKey) == 0 {
+	baseKey := guideBaseKey(key)
+	if len(baseKey) == 0 {
 		return nil
 	}
 	if !filter.nonOverlapping {
 		out := make([]*table, 0, len(filter.spans))
 		for _, span := range filter.spans {
-			if span.tbl == nil || !span.covers(userKey) {
+			if span.tbl == nil || !span.covers(baseKey) {
 				continue
 			}
 			out = append(out, span.tbl)
 		}
 		return out
 	}
-	tbl := filter.tableForPointUserKey(userKey)
+	tbl := filter.tableForPointBaseKey(baseKey)
 	if tbl == nil {
 		return nil
 	}
@@ -89,22 +99,22 @@ func (filter rangeFilter) tableForPoint(key []byte) *table {
 	if len(filter.spans) == 0 || len(key) == 0 {
 		return nil
 	}
-	userKey := guideUserKey(key)
-	if len(userKey) == 0 || !filter.nonOverlapping {
+	baseKey := guideBaseKey(key)
+	if len(baseKey) == 0 || !filter.nonOverlapping {
 		return nil
 	}
-	return filter.tableForPointUserKey(userKey)
+	return filter.tableForPointBaseKey(baseKey)
 }
 
-func (filter rangeFilter) tableForPointUserKey(userKey []byte) *table {
+func (filter rangeFilter) tableForPointBaseKey(baseKey []byte) *table {
 	idx := sort.Search(len(filter.spans), func(i int) bool {
-		return bytes.Compare(filter.spans[i].maxUser, userKey) >= 0
+		return bytes.Compare(filter.spans[i].maxBase, baseKey) >= 0
 	})
 	if idx >= len(filter.spans) {
 		return nil
 	}
 	span := filter.spans[idx]
-	if !span.covers(userKey) || span.tbl == nil {
+	if !span.covers(baseKey) || span.tbl == nil {
 		return nil
 	}
 	return span.tbl
@@ -114,8 +124,8 @@ func (filter rangeFilter) tablesForBounds(lower, upper []byte) []*table {
 	if len(filter.spans) == 0 {
 		return nil
 	}
-	lower = guideUserKey(lower)
-	upper = guideUserKey(upper)
+	lower = guideBaseKey(lower)
+	upper = guideBaseKey(upper)
 	if len(lower) == 0 && len(upper) == 0 {
 		out := make([]*table, 0, len(filter.spans))
 		for _, span := range filter.spans {
@@ -131,13 +141,13 @@ func (filter rangeFilter) tablesForBounds(lower, upper []byte) []*table {
 	start := 0
 	if len(lower) > 0 {
 		start = sort.Search(len(filter.spans), func(i int) bool {
-			return bytes.Compare(filter.spans[i].maxUser, lower) >= 0
+			return bytes.Compare(filter.spans[i].maxBase, lower) >= 0
 		})
 	}
 	end := len(filter.spans)
 	if len(upper) > 0 {
 		end = sort.Search(len(filter.spans), func(i int) bool {
-			return bytes.Compare(filter.spans[i].minUser, upper) >= 0
+			return bytes.Compare(filter.spans[i].minBase, upper) >= 0
 		})
 	}
 	if start >= end {
@@ -164,29 +174,29 @@ func (filter rangeFilter) filterLinear(lower, upper []byte) []*table {
 	return out
 }
 
-func (span rangeFilterSpan) covers(userKey []byte) bool {
-	if len(userKey) == 0 || len(span.minUser) == 0 || len(span.maxUser) == 0 {
+func (span rangeFilterSpan) covers(baseKey []byte) bool {
+	if len(baseKey) == 0 || len(span.minBase) == 0 || len(span.maxBase) == 0 {
 		return false
 	}
-	return bytes.Compare(userKey, span.minUser) >= 0 && bytes.Compare(userKey, span.maxUser) <= 0
+	return bytes.Compare(baseKey, span.minBase) >= 0 && bytes.Compare(baseKey, span.maxBase) <= 0
 }
 
 func (span rangeFilterSpan) overlaps(lower, upper []byte) bool {
-	if len(span.minUser) == 0 || len(span.maxUser) == 0 {
+	if len(span.minBase) == 0 || len(span.maxBase) == 0 {
 		return true
 	}
-	if len(lower) > 0 && bytes.Compare(span.maxUser, lower) < 0 {
+	if len(lower) > 0 && bytes.Compare(span.maxBase, lower) < 0 {
 		return false
 	}
-	if len(upper) > 0 && bytes.Compare(span.minUser, upper) >= 0 {
+	if len(upper) > 0 && bytes.Compare(span.minBase, upper) >= 0 {
 		return false
 	}
 	return true
 }
 
 func filterTablesByBounds(tables []*table, lower, upper []byte) []*table {
-	lower = guideUserKey(lower)
-	upper = guideUserKey(upper)
+	lower = guideBaseKey(lower)
+	upper = guideBaseKey(upper)
 	if len(tables) == 0 {
 		return nil
 	}
@@ -205,8 +215,8 @@ func filterTablesByBounds(tables []*table, lower, upper []byte) []*table {
 			continue
 		}
 		span := rangeFilterSpan{
-			minUser: guideUserKey(tbl.MinKey()),
-			maxUser: guideUserKey(tbl.MaxKey()),
+			minBase: guideBaseKey(tbl.MinKey()),
+			maxBase: guideBaseKey(tbl.MaxKey()),
 			tbl:     tbl,
 		}
 		if span.overlaps(lower, upper) {

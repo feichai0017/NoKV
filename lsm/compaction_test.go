@@ -123,7 +123,7 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 				continue
 			}
 			cur := item.Entry().Key
-			if prev != nil && utils.CompareKeys(prev, cur) > 0 {
+			if prev != nil && utils.CompareInternalKeys(prev, cur) > 0 {
 				_ = it.Close()
 				t.Fatalf("output table out of order: prev=%q cur=%q", prev, cur)
 			}
