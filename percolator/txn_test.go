@@ -29,7 +29,8 @@ func testOptionsForDir(dir string) *NoKV.Options {
 
 func openTestDB(t *testing.T) *NoKV.DB {
 	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -258,7 +259,8 @@ func TestResolveLockCommitTsExpired(t *testing.T) {
 
 func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "db")
-	db := NoKV.Open(testOptionsForDir(workDir))
+	db, err := NoKV.Open(testOptionsForDir(workDir))
+	require.NoError(t, err)
 	latches := latch.NewManager(16)
 	key := []byte("prewrite-corrupt")
 	startTs := uint64(101)
@@ -280,7 +282,8 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 	walPath := latestWALPath(t, workDir)
 	truncateTail(t, walPath, 2)
 
-	db2 := NoKV.Open(testOptionsForDir(workDir))
+	db2, err := NoKV.Open(testOptionsForDir(workDir))
+	require.NoError(t, err)
 	defer func() { _ = db2.Close() }()
 	reader := NewReader(db2)
 
@@ -294,7 +297,8 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 
 func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "db")
-	db := NoKV.Open(testOptionsForDir(workDir))
+	db, err := NoKV.Open(testOptionsForDir(workDir))
+	require.NoError(t, err)
 	latches := latch.NewManager(16)
 	key := []byte("commit-corrupt")
 	startTs := uint64(201)
@@ -324,7 +328,8 @@ func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	walPath := latestWALPath(t, workDir)
 	truncateTail(t, walPath, 2)
 
-	db2 := NoKV.Open(testOptionsForDir(workDir))
+	db2, err := NoKV.Open(testOptionsForDir(workDir))
+	require.NoError(t, err)
 	defer func() { _ = db2.Close() }()
 	reader := NewReader(db2)
 

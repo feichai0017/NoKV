@@ -32,7 +32,8 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	t.Cleanup(func() { _ = localMeta.Close() })
 	return db, localMeta
@@ -133,7 +134,8 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		localMeta, err := raftmeta.OpenLocalStore(workDir, nil)
 		require.NoError(t, err)
 		opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-		db := NoKV.Open(opt)
+		db, err := NoKV.Open(opt)
+		require.NoError(t, err)
 		nodes[i].db = db
 		nodes[i].localMeta = localMeta
 

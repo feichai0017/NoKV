@@ -64,7 +64,10 @@ func main() {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = "./workdir-demo"
 
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		log.Fatalf("open failed: %v", err)
+	}
 	defer db.Close()
 
 	key := []byte("hello")

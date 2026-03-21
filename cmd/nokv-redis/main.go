@@ -64,7 +64,11 @@ func main() {
 			fatalf("raft backend init: %v", err)
 		}
 	} else {
-		db = NoKV.Open(opt)
+		var err error
+		db, err = NoKV.Open(opt)
+		if err != nil {
+			fatalf("open embedded db: %v", err)
+		}
 		backend = newEmbeddedBackend(db)
 	}
 	defer func() {

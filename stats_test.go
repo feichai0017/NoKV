@@ -16,7 +16,7 @@ import (
 func TestStatsCollectSnapshots(t *testing.T) {
 	clearDir()
 	opt.DetectConflicts = true
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	rm := metrics.NewRegionMetrics()
@@ -66,7 +66,7 @@ func TestStatsCollectSnapshots(t *testing.T) {
 func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	clearDir()
 	opt.DetectConflicts = true
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	require.NoError(t, db.Set([]byte("wal-metrics"), []byte("value")))

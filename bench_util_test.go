@@ -4,7 +4,16 @@ import (
 	"encoding/binary"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+func openTestDB(t testing.TB, opt *Options) *DB {
+	t.Helper()
+	db, err := Open(opt)
+	require.NoError(t, err)
+	return db
+}
 
 func newBenchDB(b *testing.B, optFn func(*Options)) *DB {
 	b.Helper()
@@ -18,7 +27,7 @@ func newBenchDB(b *testing.B, optFn func(*Options)) *DB {
 	if optFn != nil {
 		optFn(opt)
 	}
-	db := Open(opt)
+	db := openTestDB(b, opt)
 	b.Cleanup(func() {
 		_ = db.Close()
 	})
