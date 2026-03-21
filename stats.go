@@ -218,10 +218,20 @@ type CacheStatsSnapshot struct {
 
 // LSMStatsSnapshot summarizes per-level storage shape and value-density signals.
 type LSMStatsSnapshot struct {
-	Levels            []LSMLevelStats `json:"levels,omitempty"`
-	ValueBytesTotal   int64           `json:"value_bytes_total"`
-	ValueDensityMax   float64         `json:"value_density_max"`
-	ValueDensityAlert bool            `json:"value_density_alert"`
+	Levels            []LSMLevelStats          `json:"levels,omitempty"`
+	ValueBytesTotal   int64                    `json:"value_bytes_total"`
+	ValueDensityMax   float64                  `json:"value_density_max"`
+	ValueDensityAlert bool                     `json:"value_density_alert"`
+	RangeFilter       RangeFilterStatsSnapshot `json:"range_filter"`
+}
+
+// RangeFilterStatsSnapshot summarizes range-filter pruning activity on read paths.
+type RangeFilterStatsSnapshot struct {
+	PointCandidates   uint64 `json:"point_candidates"`
+	PointPruned       uint64 `json:"point_pruned"`
+	BoundedCandidates uint64 `json:"bounded_candidates"`
+	BoundedPruned     uint64 `json:"bounded_pruned"`
+	Fallbacks         uint64 `json:"fallbacks"`
 }
 
 func newStats(db *DB) *Stats {
@@ -388,6 +398,13 @@ func (s *Stats) Snapshot() StatsSnapshot {
 				totalValue += lvl.ValueBytes + lvl.IngestValueBytes
 			}
 			snap.LSM.ValueBytesTotal = totalValue
+		}
+		snap.LSM.RangeFilter = RangeFilterStatsSnapshot{
+			PointCandidates:   diag.RangeFilter.PointCandidates,
+			PointPruned:       diag.RangeFilter.PointPruned,
+			BoundedCandidates: diag.RangeFilter.BoundedCandidates,
+			BoundedPruned:     diag.RangeFilter.BoundedPruned,
+			Fallbacks:         diag.RangeFilter.Fallbacks,
 		}
 		snap.Entries = diag.Entries
 		snap.Compaction.LastDurationMs = diag.Compaction.LastDurationMs

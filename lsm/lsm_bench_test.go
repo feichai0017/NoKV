@@ -177,10 +177,8 @@ func BenchmarkLevelPointMissPruning(b *testing.B) {
 	}
 }
 
-func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
+func BenchmarkLevelPointHitPruning(b *testing.B) {
 	const tableCount = 2048
-	lower := benchUserKey(tableCount / 2)
-	upper := benchUserKey(tableCount/2 + 1)
 	for _, useGuide := range []bool{false, true} {
 		name := "linear"
 		if useGuide {
@@ -194,27 +192,66 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 				lh.filter = rangeFilter{}
 				lh.Unlock()
 			}
-			opt := &utils.Options{
-				IsAsc:      true,
-				LowerBound: lower,
-				UpperBound: upper,
-			}
+			hitKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount/2), kv.MaxVersion)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				iters := lh.iterators(opt)
-				merge := NewMergeIterator(iters, false)
-				merge.Rewind()
-				count := 0
-				for ; merge.Valid(); merge.Next() {
-					count++
+				entry, err := lh.Get(hitKey)
+				if err != nil {
+					b.Fatalf("expected hit, got err=%v", err)
 				}
-				if count != 1 {
-					b.Fatalf("expected exactly one item in bounded scan, got %d", count)
+				if entry == nil {
+					b.Fatalf("expected hit entry")
 				}
-				if err := merge.Close(); err != nil {
-					b.Fatalf("close merge iterator: %v", err)
+				entry.DecrRef()
+			}
+		})
+	}
+}
+
+func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
+	const tableCount = 2048
+	start := tableCount / 2
+	for _, width := range []int{1, 8, 64} {
+		lower := benchUserKey(start)
+		upper := benchUserKey(start + width)
+		b.Run(fmt.Sprintf("width_%d", width), func(b *testing.B) {
+			for _, useGuide := range []bool{false, true} {
+				name := "linear"
+				if useGuide {
+					name = "range_filter"
 				}
+				b.Run(name, func(b *testing.B) {
+					lsm := newBenchLSM(b, 64<<20)
+					lh := buildBenchLevelTables(b, lsm, 1, tableCount)
+					if !useGuide {
+						lh.Lock()
+						lh.filter = rangeFilter{}
+						lh.Unlock()
+					}
+					opt := &utils.Options{
+						IsAsc:      true,
+						LowerBound: lower,
+						UpperBound: upper,
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						iters := lh.iterators(opt)
+						merge := NewMergeIterator(iters, false)
+						merge.Rewind()
+						count := 0
+						for ; merge.Valid(); merge.Next() {
+							count++
+						}
+						if count != width {
+							b.Fatalf("expected %d items in bounded scan, got %d", width, count)
+						}
+						if err := merge.Close(); err != nil {
+							b.Fatalf("close merge iterator: %v", err)
+						}
+					}
+				})
 			}
 		})
 	}
