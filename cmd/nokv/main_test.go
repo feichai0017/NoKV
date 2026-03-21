@@ -27,7 +27,8 @@ func TestRunManifestCmd(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	if err := db.Set([]byte("cli-manifest"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -61,7 +62,8 @@ func TestRunStatsCmd(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	if err := db.Set([]byte("cli-stats"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -102,7 +104,8 @@ func TestRunVlogCmd(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	if err := db.Set([]byte("cli-vlog"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -182,7 +185,8 @@ func TestRunRegionsCmd(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	if err := db.Set([]byte("cli-region"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -832,7 +836,8 @@ func prepareDBWorkdir(t *testing.T) string {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	require.NoError(t, db.Set([]byte("seed"), []byte("value")))
 	require.NoError(t, db.Close())
 	return dir

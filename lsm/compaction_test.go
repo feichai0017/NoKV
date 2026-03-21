@@ -2,10 +2,10 @@ package lsm
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -91,8 +91,8 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 		nextLevel: lsm.levels.levels[6],
 		top:       []*table{top},
 		bot:       []*table{botA, botB},
-		splits:    []compact.KeyRange{{}},
-		plan: compact.Plan{
+		splits:    []KeyRange{{}},
+		plan: Plan{
 			NextFileSize: 1 << 20,
 		},
 	}
@@ -165,7 +165,7 @@ func TestCompactStatusGuards(t *testing.T) {
 		thisLevel: l0,
 		nextLevel: l0,
 		top:       []*table{tbl},
-		plan: compact.Plan{
+		plan: Plan{
 			ThisLevel:    0,
 			NextLevel:    0,
 			ThisRange:    getKeyRange(tbl),
@@ -176,16 +176,210 @@ func TestCompactStatusGuards(t *testing.T) {
 		thisSize: tbl.Size(),
 	}
 	cs := lsm.newCompactStatus()
-	if !cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
+	if !cs.CompareAndAdd(LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected first compareAndAdd to succeed")
 	}
-	if cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
+	if cs.CompareAndAdd(LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected overlapping compaction to be rejected")
 	}
 	require.Nil(t, cs.Delete(cd.stateEntry()))
-	if !cs.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry()) {
+	if !cs.CompareAndAdd(LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected compareAndAdd to succeed after delete")
 	}
+}
+
+func TestStateCompareAndDelete(t *testing.T) {
+	state := NewState(2)
+	entry := StateEntry{
+		ThisLevel: 0,
+		NextLevel: 1,
+		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
+		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
+		ThisSize:  128,
+		TableIDs:  []uint64{1, 2},
+	}
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
+	require.True(t, state.HasRanges())
+	require.True(t, state.HasTable(1))
+	require.Equal(t, int64(128), state.DelSize(0))
+	require.True(t, state.Overlaps(0, entry.ThisRange))
+
+	overlap := entry
+	overlap.ThisRange = KeyRange{Left: ikey("a", 9), Right: ikey("b", 0)}
+	require.False(t, state.CompareAndAdd(LevelsLocked{}, overlap))
+
+	require.Nil(t, state.Delete(entry))
+	require.False(t, state.HasRanges())
+	require.False(t, state.HasTable(1))
+	require.Zero(t, state.DelSize(0))
+}
+
+func TestStateCompareAndDeleteIfKeyNotInRange(t *testing.T) {
+	state := NewState(2)
+	entry := StateEntry{
+		ThisLevel: 0,
+		NextLevel: 1,
+		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
+		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
+		ThisSize:  128,
+		TableIDs:  []uint64{1, 2},
+	}
+	require.NotNil(t, state.Delete(entry))
+}
+
+func TestStateDeleteErrorIsAtomic(t *testing.T) {
+	state := NewState(2)
+	entry := StateEntry{
+		ThisLevel: 0,
+		NextLevel: 1,
+		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
+		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
+		ThisSize:  128,
+		TableIDs:  []uint64{1, 2},
+	}
+	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
+
+	missing := entry
+	missing.ThisRange = KeyRange{Left: ikey("x", 10), Right: ikey("y", 1)}
+	err := state.Delete(missing)
+	require.Error(t, err)
+	require.Equal(t, int64(128), state.DelSize(0))
+	require.True(t, state.HasRanges())
+	require.True(t, state.HasTable(1))
+	require.True(t, state.Overlaps(0, entry.ThisRange))
+
+	require.NoError(t, state.Delete(entry))
+	require.Zero(t, state.DelSize(0))
+	require.False(t, state.HasRanges())
+	require.False(t, state.HasTable(1))
+}
+
+func TestStateAddRangeAndDebug(t *testing.T) {
+	state := NewState(1)
+	kr := KeyRange{Left: ikey("a", 1), Right: ikey("b", 1)}
+	state.AddRangeWithTables(0, kr, []uint64{10, 20})
+	require.True(t, state.HasTable(10))
+	require.Contains(t, kr.String(), "left=")
+	require.NotEmpty(t, state.levels[0].debug())
+}
+
+func TestNewSchedulerPolicy(t *testing.T) {
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy("").mode)
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy("unknown").mode)
+	require.Equal(t, PolicyLeveled, NewSchedulerPolicy(PolicyLeveled).mode)
+	require.Equal(t, PolicyTiered, NewSchedulerPolicy(PolicyTiered).mode)
+	require.Equal(t, PolicyHybrid, NewSchedulerPolicy(PolicyHybrid).mode)
+}
+
+func TestSchedulerPolicyArrangeLeveled(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyLeveled)
+	in := []Priority{
+		{Level: 1, Adjusted: 2},
+		{Level: 0, Adjusted: 1},
+		{Level: 2, Adjusted: 0.5},
+	}
+
+	forWorker0 := p.Arrange(0, in)
+	require.Equal(t, 0, forWorker0[0].Level)
+	require.Equal(t, 1, forWorker0[1].Level)
+
+	forWorker1 := p.Arrange(1, in)
+	require.Equal(t, 1, forWorker1[0].Level)
+	require.Equal(t, 0, forWorker1[1].Level)
+}
+
+func TestSchedulerPolicyArrangeTieredPrefersIngest(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyTiered)
+	in := []Priority{
+		{Level: 0, Adjusted: 9, IngestMode: IngestNone},
+		{Level: 3, Adjusted: 2, IngestMode: IngestKeep},
+		{Level: 2, Adjusted: 5, IngestMode: IngestDrain},
+		{Level: 1, Adjusted: 8, IngestMode: IngestNone},
+	}
+	out := p.Arrange(0, in)
+	require.Len(t, out, 4)
+	require.Equal(t, 0, out[0].Level)
+	require.Equal(t, IngestKeep, out[1].IngestMode)
+	require.Equal(t, IngestDrain, out[2].IngestMode)
+	require.Equal(t, 1, out[3].Level)
+}
+
+func TestSchedulerPolicyArrangeHybridSwitchesByIngestPressure(t *testing.T) {
+	p := NewSchedulerPolicy(PolicyHybrid)
+	withMildIngest := []Priority{
+		{Level: 1, Adjusted: 2, IngestMode: IngestNone},
+		{Level: 2, Adjusted: 1.5, IngestMode: IngestDrain},
+	}
+	out := p.Arrange(0, withMildIngest)
+	require.Equal(t, 1, out[0].Level)
+
+	noIngest := []Priority{
+		{Level: 2, Adjusted: 2, IngestMode: IngestNone},
+		{Level: 0, Adjusted: 1.5, IngestMode: IngestNone},
+	}
+	out = p.Arrange(0, noIngest)
+	require.Equal(t, 0, out[0].Level)
+
+	withHeavyIngest := []Priority{
+		{Level: 1, Adjusted: 1.2, IngestMode: IngestNone},
+		{Level: 2, Adjusted: 4.5, IngestMode: IngestDrain},
+		{Level: 3, Adjusted: 3.5, IngestMode: IngestKeep},
+	}
+	out = p.Arrange(0, withHeavyIngest)
+	require.Equal(t, IngestKeep, out[0].IngestMode)
+	require.Equal(t, IngestDrain, out[1].IngestMode)
+}
+
+func TestSchedulerPolicyTieredFeedbackAdjustsQuota(t *testing.T) {
+	baseInput := []Priority{
+		{Level: 0, Adjusted: 3.0, IngestMode: IngestNone},
+		{Level: 6, Adjusted: 6.0, IngestMode: IngestKeep},
+		{Level: 6, Adjusted: 5.9, IngestMode: IngestKeep},
+		{Level: 6, Adjusted: 5.8, IngestMode: IngestKeep},
+		{Level: 6, Adjusted: 5.7, IngestMode: IngestKeep},
+		{Level: 5, Adjusted: 6.5, IngestMode: IngestDrain},
+		{Level: 5, Adjusted: 6.4, IngestMode: IngestDrain},
+		{Level: 5, Adjusted: 6.3, IngestMode: IngestDrain},
+		{Level: 5, Adjusted: 6.2, IngestMode: IngestDrain},
+		{Level: 2, Adjusted: 5.5, IngestMode: IngestNone},
+		{Level: 2, Adjusted: 5.4, IngestMode: IngestNone},
+	}
+
+	normal := NewSchedulerPolicy(PolicyTiered)
+	normalOut := normal.Arrange(0, baseInput)
+	normalIdx := firstRegularNonL0(normalOut)
+	require.Greater(t, normalIdx, 0)
+
+	failed := NewSchedulerPolicy(PolicyTiered)
+	for range 3 {
+		failed.Observe(FeedbackEvent{
+			Priority: Priority{IngestMode: IngestDrain},
+			Err:      errors.New("injected ingest failure"),
+		})
+	}
+	failedOut := failed.Arrange(0, baseInput)
+	failedIdx := firstRegularNonL0(failedOut)
+	require.Less(t, failedIdx, normalIdx, "ingest failures should shift quota toward regular progress")
+
+	success := NewSchedulerPolicy(PolicyTiered)
+	for range 3 {
+		success.Observe(FeedbackEvent{
+			Priority: Priority{IngestMode: IngestKeep},
+			Err:      nil,
+		})
+	}
+	successOut := success.Arrange(0, baseInput)
+	successIdx := firstRegularNonL0(successOut)
+	require.Greater(t, successIdx, normalIdx, "ingest successes should increase ingest scheduling share")
+}
+
+func firstRegularNonL0(prios []Priority) int {
+	for i, p := range prios {
+		if p.IngestMode == IngestNone && p.Level != 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func tableRefSnapshot(tables []*table) map[*table]int32 {
@@ -238,7 +432,7 @@ func TestRunCompactDefIngestNoneDecrementsTopOnce(t *testing.T) {
 	if ok := lsm.levels.fillTables(cd); !ok {
 		t.Fatalf("fillTables failed for ingest-none path")
 	}
-	if cd.plan.IngestMode != compact.IngestNone {
+	if cd.plan.IngestMode != IngestNone {
 		t.Fatalf("expected ingest-none plan, got %v", cd.plan.IngestMode)
 	}
 	before := tableRefSnapshot(cd.top)
@@ -280,7 +474,7 @@ func TestRunCompactDefIngestDrainDecrementsTopOnce(t *testing.T) {
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = compact.IngestDrain
+	cd.plan.IngestMode = IngestDrain
 	cd.plan.StatsTag = "test-ingest-drain"
 	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
 		t.Fatalf("fillTablesIngestShard failed for ingest-drain path")
@@ -331,7 +525,7 @@ func TestRunCompactDefIngestKeepDecrementsTopOnce(t *testing.T) {
 	}
 
 	cd := buildCompactDef(lsm, 0, 6, 6)
-	cd.plan.IngestMode = compact.IngestKeep
+	cd.plan.IngestMode = IngestKeep
 	cd.plan.StatsTag = "test-ingest-keep"
 	if ok := lsm.levels.fillTablesIngestShard(cd, -1); !ok {
 		t.Fatalf("fillTablesIngestShard failed for ingest-keep path")

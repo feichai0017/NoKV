@@ -127,10 +127,21 @@ type (
 	}
 )
 
-// Open DB
-func Open(opt *Options) *DB {
+// Open constructs the database and returns initialization errors instead of panicking.
+func Open(opt *Options) (_ *DB, err error) {
+	if opt == nil {
+		return nil, stderrors.New("open db: nil options")
+	}
 	opt = opt.normalized()
+	if opt == nil {
+		return nil, stderrors.New("open db: normalized options are nil")
+	}
 	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
+	defer func() {
+		if err != nil {
+			err = stderrors.Join(err, db.closeInternal())
+		}
+	}()
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
 	db.hotRead = newHotTracker(opt)
@@ -141,12 +152,18 @@ func Open(opt *Options) *DB {
 		return &batch
 	}
 
-	utils.Panic(db.fs.MkdirAll(opt.WorkDir, os.ModePerm))
+	if err := db.fs.MkdirAll(opt.WorkDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("open db: create workdir %q: %w", opt.WorkDir, err)
+	}
 	lock, err := db.fs.Lock(filepath.Join(opt.WorkDir, "LOCK"))
-	utils.Panic(err)
+	if err != nil {
+		return nil, fmt.Errorf("open db: acquire workdir lock %q: %w", opt.WorkDir, err)
+	}
 	db.dirLock = lock
 
-	utils.Panic(db.runRecoveryChecks())
+	if err := db.runRecoveryChecks(); err != nil {
+		return nil, fmt.Errorf("open db: recovery checks: %w", err)
+	}
 
 	wlog, err := wal.Open(wal.Config{
 		Dir:         opt.WorkDir,
@@ -154,7 +171,9 @@ func Open(opt *Options) *DB {
 		BufferSize:  opt.WALBufferSize,
 		FS:          db.fs,
 	})
-	utils.Panic(err)
+	if err != nil {
+		return nil, fmt.Errorf("open db: wal open: %w", err)
+	}
 	db.wal = wlog
 
 	baseTableSize := opt.MemTableSize
@@ -208,7 +227,9 @@ func Open(opt *Options) *DB {
 		WALGCPolicy:                   newDBWALGCPolicy(db),
 		ThrottleCallback:              db.applyThrottle,
 	}, wlog)
-	utils.Panic(err)
+	if err != nil {
+		return nil, fmt.Errorf("open db: lsm init: %w", err)
+	}
 	db.lsm = lsmCore
 	seed := db.lsm.Diagnostics().MaxVersion
 	db.nonTxnVersion.Store(seed)
@@ -269,7 +290,7 @@ func Open(opt *Options) *DB {
 			go db.runValueLogGCPeriodically()
 		}
 	}
-	return db
+	return db, nil
 }
 
 func (db *DB) runRecoveryChecks() error {
@@ -332,8 +353,11 @@ func (db *DB) closeInternal() error {
 	db.stopCommitWorkers()
 
 	var errs []error
-	if err := db.stats.close(); err != nil {
-		errs = append(errs, fmt.Errorf("stats close: %w", err))
+	if db.stats != nil {
+		if err := db.stats.close(); err != nil {
+			errs = append(errs, fmt.Errorf("stats close: %w", err))
+		}
+		db.stats = nil
 	}
 
 	if db.walWatchdog != nil {
@@ -361,16 +385,25 @@ func (db *DB) closeInternal() error {
 		db.prefetchItems = nil
 	}
 
-	if err := db.lsm.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("lsm close: %w", err))
+	if db.lsm != nil {
+		if err := db.lsm.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("lsm close: %w", err))
+		}
+		db.lsm = nil
 	}
 
-	if err := db.vlog.close(); err != nil {
-		errs = append(errs, fmt.Errorf("vlog close: %w", err))
+	if db.vlog != nil {
+		if err := db.vlog.close(); err != nil {
+			errs = append(errs, fmt.Errorf("vlog close: %w", err))
+		}
+		db.vlog = nil
 	}
 
-	if err := db.wal.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("wal close: %w", err))
+	if db.wal != nil {
+		if err := db.wal.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("wal close: %w", err))
+		}
+		db.wal = nil
 	}
 
 	if db.dirLock != nil {
@@ -663,7 +696,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return utils.ErrInvalidRequest
 	}
-	heads := db.lsm.Diagnostics().ValueLogHead
+	heads := db.lsm.ValueLogHeadSnapshot()
 	if len(heads) == 0 {
 		db.RLock()
 		if len(db.vheads) > 0 {

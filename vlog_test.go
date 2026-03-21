@@ -48,7 +48,7 @@ func TestVlogBase(t *testing.T) {
 	// Clean work directory.
 	clearDir()
 	// Open DB.
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	log := db.vlog
 	var err error
@@ -134,7 +134,7 @@ func TestValueLogHotBucketRouting(t *testing.T) {
 		opt.HotRingTopK = prevHotRingTopK
 	}()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	log := db.vlog
 
@@ -169,7 +169,7 @@ func TestVersionedEntryValueLogPointer(t *testing.T) {
 		opt.ValueLogFileSize = prevFileSize
 	}()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-vlog")
@@ -203,7 +203,7 @@ func TestVlogSyncWritesCoversAllSegments(t *testing.T) {
 		opt.ValueLogFileSize = prevFileSize
 	}()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	log := db.vlog
 
@@ -260,7 +260,7 @@ func TestValueGC(t *testing.T) {
 	opt.NumCompactors = 0
 	opt.MemTableSize = 8 << 20
 	opt.SSTableMaxSz = 8 << 20
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	defer func() {
 		opt.NumCompactors = origCompactors
@@ -315,7 +315,7 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 	cfg.ValueLogGCInterval = 0
 	cfg.NumCompactors = 2
 
-	db := Open(&cfg)
+	db := openTestDB(t, &cfg)
 	defer func() { _ = db.Close() }()
 
 	key0 := keyForBucket(t, 0, cfg.ValueLogBucketCount)
@@ -352,7 +352,7 @@ func TestValueLogGCParallelScheduling(t *testing.T) {
 
 func TestValueLogIterateReleasesEntries(t *testing.T) {
 	clearDir()
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	val := bytes.Repeat([]byte("x"), 128)
@@ -403,7 +403,7 @@ func TestValueLogWriteAppendFailureRewinds(t *testing.T) {
 	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
 	))
-	db := Open(&cfg)
+	db := openTestDB(t, &cfg)
 	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
@@ -434,7 +434,7 @@ func TestValueLogWriteRotateFailureRewinds(t *testing.T) {
 	cfg.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
 		vfs.FailOnceRule(vfs.OpOpenFile, rotatePath, injected),
 	))
-	db := Open(&cfg)
+	db := openTestDB(t, &cfg)
 	defer func() { _ = db.Close() }()
 
 	head := db.vlog.managers[0].Head()
@@ -462,7 +462,7 @@ func TestValueLogWriteInlineRequestSkipsPtrs(t *testing.T) {
 	opt.ValueThreshold = 1 << 20
 	defer func() { opt.ValueThreshold = prevThreshold }()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	req := requestPool.Get().(*request)
@@ -484,7 +484,7 @@ func TestValueLogReadCopiesSmallValue(t *testing.T) {
 	opt.ValueThreshold = 0
 	defer func() { opt.ValueThreshold = prevThreshold }()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	entry := kvpkg.NewInternalEntry(kvpkg.CFDefault, []byte("small-read"), nonTxnMaxVersion, []byte("v"), 0, 0)
@@ -523,7 +523,7 @@ func getItemValue(t *testing.T, item *kvpkg.Entry) (val []byte) {
 func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	clearDir()
 	opt.ValueThreshold = 0
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	entry := kvpkg.NewEntry([]byte("manifest-head"), []byte("value"))
@@ -533,7 +533,7 @@ func TestManifestHeadMatchesValueLogHead(t *testing.T) {
 	}
 
 	head := db.vlog.managers[0].Head()
-	heads := db.lsm.Diagnostics().ValueLogHead
+	heads := db.getHeads()
 	meta, ok := heads[0]
 	if !ok {
 		t.Fatalf("expected manifest head")
@@ -573,7 +573,7 @@ func TestValueLogGCSkipBlocked(t *testing.T) {
 	opt := NewDefaultOptions()
 	opt.ValueLogFileSize = 1 << 20
 	opt.NumCompactors = 0
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	e := kvpkg.NewEntry([]byte("gc-skip"), []byte("v"))

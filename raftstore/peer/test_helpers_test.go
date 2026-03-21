@@ -26,7 +26,10 @@ func openDBAt(t *testing.T, dir string) (*NoKV.DB, *raftmeta.Store) {
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	opt.RaftLagWarnSegments = 1
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		t.Fatalf("open db %s: %v", dir, err)
+	}
 	t.Cleanup(func() { _ = localMeta.Close() })
 	return db, localMeta
 }

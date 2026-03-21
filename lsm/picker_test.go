@@ -1,4 +1,4 @@
-package compact
+package lsm
 
 import (
 	"testing"

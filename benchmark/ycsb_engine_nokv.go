@@ -62,7 +62,11 @@ func (e *nokvEngine) Open(clean bool) error {
 		return fmt.Errorf("nokv: mkdir: %w", err)
 	}
 	opt := buildNoKVBenchmarkOptions(dir, e.opts, e.memtableEngine)
-	e.db = NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		return fmt.Errorf("nokv: open db: %w", err)
+	}
+	e.db = db
 	e.valueSize = e.opts.ValueSize
 	if e.valueSize <= 0 {
 		e.valueSize = 1

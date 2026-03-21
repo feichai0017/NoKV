@@ -357,14 +357,14 @@ func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
 // NewLSM constructs the LSM core and returns initialization errors.
 func NewLSM(opt *Options, walMgr *wal.Manager) (*LSM, error) {
 	if opt == nil {
-		return nil, errors.New("lsm: nil options")
+		return nil, ErrLSMNilOptions
 	}
 	if walMgr == nil {
-		return nil, errors.New("lsm: nil wal manager")
+		return nil, ErrLSMNilWALManager
 	}
 	frozen := opt.normalized()
 	if frozen == nil {
-		return nil, errors.New("lsm: nil cloned options")
+		return nil, ErrLSMNilClonedOptions
 	}
 	lsm := &LSM{
 		option: frozen,
@@ -457,7 +457,7 @@ func (lsm *LSM) Set(entry *kv.Entry) (err error) {
 		mt := lsm.memTable
 		if mt == nil {
 			lsm.lock.RUnlock()
-			return errors.New("lsm: memtable not initialized")
+			return ErrMemtableNotInitialized
 		}
 		if mt.tryReserve(estimate, lsm.option.MemTableSize) {
 			err = mt.Set(entry)
@@ -513,7 +513,7 @@ func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
 		mt := lsm.memTable
 		if mt == nil {
 			lsm.lock.RUnlock()
-			return errors.New("lsm: memtable not initialized")
+			return ErrMemtableNotInitialized
 		}
 		if mt.tryReserve(totalEstimate, lsm.option.MemTableSize) {
 			err := mt.setBatch(entries)
@@ -725,10 +725,10 @@ func (lsm *LSM) startFlushWorkers(n int) {
 
 func (lsm *LSM) ImportExternalSST(paths []string) error {
 	if lsm == nil {
-		return errors.New("nil LSM")
+		return ErrLSMNil
 	}
 	if lsm.closed.Load() {
-		return errors.New("LSM is closed")
+		return ErrLSMClosed
 	}
 	if len(paths) == 0 {
 		return nil

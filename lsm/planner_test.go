@@ -1,4 +1,4 @@
-package compact
+package lsm
 
 import (
 	"bytes"
@@ -45,72 +45,6 @@ func TestKeyRangeOperations(t *testing.T) {
 	require.True(t, ext.Equals(r))
 	ext.Extend(r3)
 	require.True(t, ext.OverlapsWith(r3))
-}
-
-func TestStateCompareAndDelete(t *testing.T) {
-	state := NewState(2)
-	entry := StateEntry{
-		ThisLevel: 0,
-		NextLevel: 1,
-		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
-		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
-		ThisSize:  128,
-		TableIDs:  []uint64{1, 2},
-	}
-	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
-	require.True(t, state.HasRanges())
-	require.True(t, state.HasTable(1))
-	require.Equal(t, int64(128), state.DelSize(0))
-	require.True(t, state.Overlaps(0, entry.ThisRange))
-
-	overlap := entry
-	overlap.ThisRange = KeyRange{Left: ikey("a", 9), Right: ikey("b", 0)}
-	require.False(t, state.CompareAndAdd(LevelsLocked{}, overlap))
-
-	require.Nil(t, state.Delete(entry))
-	require.False(t, state.HasRanges())
-	require.False(t, state.HasTable(1))
-	require.Zero(t, state.DelSize(0))
-}
-
-func TestStateCompareAndDeleteIfKeyNotInRange(t *testing.T) {
-	state := NewState(2)
-	entry := StateEntry{
-		ThisLevel: 0,
-		NextLevel: 1,
-		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
-		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
-		ThisSize:  128,
-		TableIDs:  []uint64{1, 2},
-	}
-	require.NotNil(t, state.Delete(entry))
-}
-
-func TestStateDeleteErrorIsAtomic(t *testing.T) {
-	state := NewState(2)
-	entry := StateEntry{
-		ThisLevel: 0,
-		NextLevel: 1,
-		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
-		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
-		ThisSize:  128,
-		TableIDs:  []uint64{1, 2},
-	}
-	require.True(t, state.CompareAndAdd(LevelsLocked{}, entry))
-
-	missing := entry
-	missing.ThisRange = KeyRange{Left: ikey("x", 10), Right: ikey("y", 1)}
-	err := state.Delete(missing)
-	require.Error(t, err)
-	require.Equal(t, int64(128), state.DelSize(0))
-	require.True(t, state.HasRanges())
-	require.True(t, state.HasTable(1))
-	require.True(t, state.Overlaps(0, entry.ThisRange))
-
-	require.NoError(t, state.Delete(entry))
-	require.Zero(t, state.DelSize(0))
-	require.False(t, state.HasRanges())
-	require.False(t, state.HasTable(1))
 }
 
 func TestPlanStateEntry(t *testing.T) {
@@ -189,15 +123,6 @@ func TestPlanBuilderSelections(t *testing.T) {
 	plan, ok = PlanForL0ToL0(0, l0, 90<<20, NewState(1), time.Now())
 	require.True(t, ok)
 	require.Equal(t, 4, len(plan.TopIDs))
-}
-
-func TestStateAddRangeAndDebug(t *testing.T) {
-	state := NewState(1)
-	kr := KeyRange{Left: ikey("a", 1), Right: ikey("b", 1)}
-	state.AddRangeWithTables(0, kr, []uint64{10, 20})
-	require.True(t, state.HasTable(10))
-	require.Contains(t, kr.String(), "left=")
-	require.NotEmpty(t, state.levels[0].debug())
 }
 
 func TestTableHelpers(t *testing.T) {
