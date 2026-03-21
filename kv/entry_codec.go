@@ -160,19 +160,20 @@ func EncodeEntry(buf *bytes.Buffer, e *Entry) ([]byte, error) {
 
 // EncodeEntryTo is the core streaming encoder.
 // It serializes the entry fields currently stored in e and writes them directly
-// to w. The encoder does not validate whether Key is an internal key or whether
-// Value already uses ValueStruct/ValuePtr layout; callers that persist entries
-// are responsible for supplying bytes in the correct internal format.
+// to w. The encoder treats e.Key and e.Value as raw bytes and does not validate
+// whether e.Key is a user key, base key, or internal key, nor whether e.Value
+// already uses ValueStruct/ValuePtr layout; callers that persist entries are
+// responsible for supplying bytes in the correct internal format.
 //
 // The encoded layout is: | header | key | value | crc32 |
 // - header: Varint-encoded, contains Key/Value lengths, Meta, and ExpiresAt.
 // - crc32: 4 bytes, BigEndian, checksums the header, key, and value.
-func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
+func EncodeEntryTo(w io.Writer, entry *Entry) (int, error) {
 	header := EntryHeader{
-		KeyLen:    uint32(len(e.Key)),
-		ValueLen:  uint32(len(e.Value)),
-		Meta:      e.Meta,
-		ExpiresAt: e.ExpiresAt,
+		KeyLen:    uint32(len(entry.Key)),
+		ValueLen:  uint32(len(entry.Value)),
+		Meta:      entry.Meta,
+		ExpiresAt: entry.ExpiresAt,
 	}
 
 	baseHeaderBuf := headerPool.Get().(*[]byte)
@@ -180,7 +181,7 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 	sz := header.Encode(headerBuf)
 	if sz > len(headerBuf) {
 		headerPool.Put(baseHeaderBuf)
-		return 0, fmt.Errorf("entry header overflow: sz=%d cap=%d key=%d val=%d meta=%d expires=%d", sz, len(headerBuf), len(e.Key), len(e.Value), header.Meta, header.ExpiresAt)
+		return 0, fmt.Errorf("entry header overflow: sz=%d cap=%d key=%d val=%d meta=%d expires=%d", sz, len(headerBuf), len(entry.Key), len(entry.Value), header.Meta, header.ExpiresAt)
 	}
 	headerBuf = headerBuf[:sz]
 
@@ -221,10 +222,10 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 		return 0, err
 	}
 	headerPool.Put(baseHeaderBuf)
-	if err := writeSection(e.Key); err != nil {
+	if err := writeSection(entry.Key); err != nil {
 		return 0, err
 	}
-	if err := writeSection(e.Value); err != nil {
+	if err := writeSection(entry.Value); err != nil {
 		return 0, err
 	}
 
@@ -240,7 +241,8 @@ func EncodeEntryTo(w io.Writer, e *Entry) (int, error) {
 // DecodeEntryFrom is the core streaming decoder.
 // It reads one encoded entry record from r into an Entry object and performs a
 // full CRC32 checksum verification. The decoder restores raw Key/Value bytes;
-// callers that require richer semantics must interpret them separately.
+// callers that require richer semantics must interpret whether Entry.Key is a
+// user key, base key, or internal key separately.
 //
 // It expects the data stream to have the layout: | header | key | value | crc32 |
 //
@@ -278,8 +280,7 @@ func DecodeEntryFrom(r io.Reader) (*Entry, uint32, error) {
 		return nil, 0, ErrPartialEntry
 	}
 
-	entry := EntryPool.Get().(*Entry)
-	entry.IncrRef()
+	entry := acquireEntry()
 	entry.CF = CFDefault
 	entry.Version = 0
 	entry.ValThreshold = 0

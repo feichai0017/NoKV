@@ -230,22 +230,6 @@ func TestValueHelpers(t *testing.T) {
 	back := BytesToU32Slice(raw)
 	require.Equal(t, u32s, back)
 
-	called := false
-	RunCallback(nil)
-	RunCallback(func() { called = true })
-	if !called {
-		t.Fatalf("expected callback to run")
-	}
-
-	vs := &Entry{Meta: BitValuePointer, Value: []byte("vp"), ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}
-	if DiscardEntry(vs) {
-		t.Fatalf("expected pointer entry to be retained")
-	}
-	vs.Meta = 0
-	if !DiscardEntry(vs) {
-		t.Fatalf("expected inline entry to be discarded")
-	}
-
 	var nilEntry *Entry
 	if !nilEntry.IsDeletedOrExpired() {
 		t.Fatalf("expected nil entry to be treated as deleted")
@@ -265,6 +249,23 @@ func TestValueHelpers(t *testing.T) {
 	if (&Entry{Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())}).IsDeletedOrExpired() {
 		t.Fatalf("expected future expiry entry to be live")
 	}
+}
+
+func TestNewValueStructEntry(t *testing.T) {
+	key := InternalKey(CFWrite, []byte("user-key"), 42)
+	vs := ValueStruct{
+		Meta:      BitValuePointer,
+		Value:     []byte("value"),
+		ExpiresAt: 123,
+	}
+	e := NewValueStructEntry(key, vs)
+	t.Cleanup(func() { e.DecrRef() })
+	require.Equal(t, key, e.Key)
+	require.Equal(t, vs.Value, e.Value)
+	require.Equal(t, vs.Meta, e.Meta)
+	require.Equal(t, vs.ExpiresAt, e.ExpiresAt)
+	require.Equal(t, CFWrite, e.CF)
+	require.Equal(t, uint64(42), e.Version)
 }
 
 func encodeValueStruct(v ValueStruct) []byte {

@@ -652,7 +652,7 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	vp.Decode(entry.Value)
 	result, cb, readErr := db.vlog.read(&vp)
 	if cb != nil {
-		defer kv.RunCallback(cb)
+		defer cb()
 	}
 	if readErr != nil {
 		entry.DecrRef()
@@ -722,7 +722,7 @@ func (db *DB) detachValuePointerEntry(src *kv.Entry) (*kv.Entry, error) {
 	vp.Decode(src.Value)
 	result, cb, err := db.vlog.read(&vp)
 	if cb != nil {
-		defer kv.RunCallback(cb)
+		defer cb()
 	}
 	if err != nil {
 		return nil, err

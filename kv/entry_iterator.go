@@ -11,7 +11,9 @@ import (
 //	| header(varint fields) | key bytes | value bytes | crc32 (4B) |
 //
 // The header encodes key length, value length, meta, and expiresAt via
-// uvarint encoding (see EntryHeader).
+// uvarint encoding (see EntryHeader). Entry.Key is returned as raw bytes; the
+// caller is responsible for knowing whether a given stream stores user keys,
+// base keys, or internal keys.
 type EntryIterator struct {
 	reader    *bufio.Reader
 	current   *Entry

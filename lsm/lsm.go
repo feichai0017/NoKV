@@ -123,7 +123,7 @@ type Options struct {
 	DiscardStatsCh *chan map[manifest.ValueLogID]int64
 
 	// HotKeyProvider optionally surfaces hottest keys as InternalKey values so
-	// compaction can prioritise ranges with heavy access.
+	// compaction can prioritise CF+user-key ranges with heavy access.
 	HotKeyProvider func() [][]byte
 
 	// ManifestSync controls whether manifest edits are fsynced immediately.

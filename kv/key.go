@@ -21,55 +21,56 @@ const MaxVersion uint64 = math.MaxUint64
 func memhash(p unsafe.Pointer, h, s uintptr) uintptr
 
 // InternalToBaseKey removes the trailing 8-byte MVCC timestamp suffix from an
-// internal key. For non-internal keys it returns the input unchanged.
-func InternalToBaseKey(key []byte) []byte {
-	if len(key) < 8 {
-		return key
+// canonical internal key and returns the corresponding base key (CF+userKey).
+// For non-internal keys it returns the input unchanged.
+func InternalToBaseKey(internalKey []byte) []byte {
+	if len(internalKey) < 8 {
+		return internalKey
 	}
-	base := key[:len(key)-8]
+	base := internalKey[:len(internalKey)-8]
 	if _, _, ok := SplitBaseKey(base); ok {
 		return base
 	}
-	return key
+	return internalKey
 }
 
 // BaseKey assembles a base key from (column family, user key) without an MVCC
 // timestamp suffix.
-func BaseKey(cf ColumnFamily, key []byte) []byte {
+func BaseKey(cf ColumnFamily, userKey []byte) []byte {
 	if !cf.Valid() {
 		cf = CFDefault
 	}
-	out := make([]byte, cfHeaderSize+len(key))
+	out := make([]byte, cfHeaderSize+len(userKey))
 	out[0] = cfMarker0
 	out[1] = cfMarker1
 	out[2] = cfMarker2
 	out[3] = byte(cf)
-	copy(out[cfHeaderSize:], key)
+	copy(out[cfHeaderSize:], userKey)
 	return out
 }
 
 // SplitBaseKey returns the column family and user key from a base key
 // (CF marker + user key, without MVCC timestamp).
-func SplitBaseKey(key []byte) (ColumnFamily, []byte, bool) {
-	if len(key) >= cfHeaderSize &&
-		key[0] == cfMarker0 &&
-		key[1] == cfMarker1 &&
-		key[2] == cfMarker2 {
-		cf := ColumnFamily(key[3])
+func SplitBaseKey(baseKey []byte) (ColumnFamily, []byte, bool) {
+	if len(baseKey) >= cfHeaderSize &&
+		baseKey[0] == cfMarker0 &&
+		baseKey[1] == cfMarker1 &&
+		baseKey[2] == cfMarker2 {
+		cf := ColumnFamily(baseKey[3])
 		if cf.Valid() {
-			return cf, key[cfHeaderSize:], true
+			return cf, baseKey[cfHeaderSize:], true
 		}
 	}
-	return CFDefault, key, false
+	return CFDefault, baseKey, false
 }
 
 // Timestamp decodes the MVCC timestamp from the trailing 8-byte suffix.
 // It returns 0 when the key is too short to carry a timestamp.
-func Timestamp(key []byte) uint64 {
-	if len(key) <= 8 {
+func Timestamp(internalKey []byte) uint64 {
+	if len(internalKey) <= 8 {
 		return 0
 	}
-	return math.MaxUint64 - binary.BigEndian.Uint64(key[len(key)-8:])
+	return math.MaxUint64 - binary.BigEndian.Uint64(internalKey[len(internalKey)-8:])
 }
 
 // SameBaseKey checks for key equality ignoring the MVCC timestamp suffix.
@@ -77,7 +78,7 @@ func SameBaseKey(src, dst []byte) bool {
 	return bytes.Equal(InternalToBaseKey(src), InternalToBaseKey(dst))
 }
 
-// InternalKey encodes (column family, user key, timestamp) into the canonical
+// InternalKey encodes (column family, user key, version) into the canonical
 // on-disk layout used by the LSM:
 //
 //	+------------+----------+----------------------+
@@ -88,29 +89,29 @@ func SameBaseKey(src, dst []byte) bool {
 //
 // CF marker uses 3 fixed bytes (0xFF,'C','F') plus the CF byte. Timestamp is
 // bitwise inverted (^ts) so that newer versions sort before older ones.
-func InternalKey(cf ColumnFamily, key []byte, ts uint64) []byte {
+func InternalKey(cf ColumnFamily, userKey []byte, version uint64) []byte {
 	if !cf.Valid() {
 		cf = CFDefault
 	}
-	out := make([]byte, cfHeaderSize+len(key)+8)
+	out := make([]byte, cfHeaderSize+len(userKey)+8)
 	out[0] = cfMarker0
 	out[1] = cfMarker1
 	out[2] = cfMarker2
 	out[3] = byte(cf)
-	copy(out[cfHeaderSize:], key)
-	binary.BigEndian.PutUint64(out[len(out)-8:], math.MaxUint64-ts)
+	copy(out[cfHeaderSize:], userKey)
+	binary.BigEndian.PutUint64(out[len(out)-8:], math.MaxUint64-version)
 	return out
 }
 
 // SplitInternalKey decodes an internal key into (cf, userKey, ts).
 // It returns ok=false when the key does not carry a valid CF marker + timestamp layout.
-func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64, bool) {
-	if len(internal) <= 8 {
+func SplitInternalKey(internalKey []byte) (ColumnFamily, []byte, uint64, bool) {
+	if len(internalKey) <= 8 {
 		return CFDefault, nil, 0, false
 	}
-	base := InternalToBaseKey(internal)
-	ts := Timestamp(internal)
-	cf, userKey, ok := SplitBaseKey(base)
+	baseKey := InternalToBaseKey(internalKey)
+	ts := Timestamp(internalKey)
+	cf, userKey, ok := SplitBaseKey(baseKey)
 	if !ok {
 		return CFDefault, nil, 0, false
 	}
@@ -131,25 +132,26 @@ func SafeCopy(a, src []byte) []byte {
 
 // ValueLogBucket returns the hash bucket for a key when using a bucketed value log.
 // The hash is computed on the key without the MVCC timestamp suffix, so all
-// versions of a key land in the same bucket.
-func ValueLogBucket(key []byte, buckets uint32) uint32 {
+// versions of the same base key land in the same bucket.
+func ValueLogBucket(keyBytes []byte, buckets uint32) uint32 {
 	if buckets <= 1 {
 		return 0
 	}
-	return ValueLogBucketFromHash(ValueLogHash(key), buckets)
+	return ValueLogBucketFromHash(ValueLogHash(keyBytes), buckets)
 }
 
 // ValueLogHash returns the stable hash used for value-log bucket routing.
-// The hash is computed on the key without the MVCC timestamp suffix.
-func ValueLogHash(key []byte) uint32 {
-	if len(key) == 0 {
+// keyBytes may be an internal key or a base key; internal keys are normalized to
+// their base-key form before hashing.
+func ValueLogHash(keyBytes []byte) uint32 {
+	if len(keyBytes) == 0 {
 		return 0
 	}
-	base := InternalToBaseKey(key)
-	if len(base) == 0 {
+	baseKey := InternalToBaseKey(keyBytes)
+	if len(baseKey) == 0 {
 		return 0
 	}
-	return crc32.Checksum(base, CastagnoliCrcTable)
+	return crc32.Checksum(baseKey, CastagnoliCrcTable)
 }
 
 // ValueLogBucketFromHash maps a precomputed hash to a bucket index.

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var EntryPool = sync.Pool{
+var entryPool = sync.Pool{
 	New: func() any {
 		return &Entry{}
 	},
@@ -30,7 +30,10 @@ var EntryPool = sync.Pool{
 //
 // Entry itself does not validate key/value semantics. Callers that persist
 // entries are responsible for ensuring Key and Value already use the expected
-// internal encodings for that path.
+// bytes for that path:
+//   - public APIs usually start from user keys
+//   - engine-internal storage paths usually carry internal keys
+//   - range/filter helpers often operate on base keys
 type Entry struct {
 	Key       []byte
 	Value     []byte
@@ -72,7 +75,7 @@ func (e *Entry) DecrRef() {
 		}
 		if current == 1 {
 			e.reset()
-			EntryPool.Put(e)
+			entryPool.Put(e)
 		}
 		return
 	}
@@ -91,38 +94,64 @@ func (e *Entry) reset() {
 	e.ref = 0
 }
 
-// NewEntry creates a lightweight entry from the provided key/value.
-//
-// It does not parse or validate key layout. CF is initialized to CFDefault and
-// Version remains unset (0) until filled by a caller that knows version context.
-func NewEntry(key, value []byte) *Entry {
-	e := EntryPool.Get().(*Entry)
-	e.Key = key
-	e.Value = value
-	e.CF = CFDefault
+func acquireEntry() *Entry {
+	e := entryPool.Get().(*Entry)
 	e.IncrRef()
 	return e
 }
 
-// NewInternalEntry creates an Entry whose key is encoded as an internal key.
+// NewEntry creates a lightweight entry from arbitrary key/value bytes.
+//
+// It does not parse or validate key layout; keyBytes may be a user key, base
+// key, internal key, or path-local scratch bytes. CF is initialized to
+// CFDefault and Version remains unset (0) until filled by a caller that knows
+// MVCC context.
+func NewEntry(keyBytes, valueBytes []byte) *Entry {
+	e := acquireEntry()
+	e.Key = keyBytes
+	e.Value = valueBytes
+	e.CF = CFDefault
+	return e
+}
+
+// NewInternalEntry creates an Entry whose Key is encoded from the supplied
+// userKey into canonical internal-key layout.
 //
 // Ownership note: userKey is encoded into a newly allocated internal-key buffer,
 // while value is referenced directly (no deep copy). Callers must keep value
 // immutable until the entry is no longer used.
 //
 // This helper also sets CF and Version to the supplied MVCC context.
-func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, value []byte, meta byte, expiresAt uint64) *Entry {
+func NewInternalEntry(cf ColumnFamily, userKey []byte, version uint64, valueBytes []byte, meta byte, expiresAt uint64) *Entry {
 	if !cf.Valid() {
 		cf = CFDefault
 	}
-	e := EntryPool.Get().(*Entry)
+	e := acquireEntry()
 	e.Key = InternalKey(cf, userKey, version)
-	e.Value = value
+	e.Value = valueBytes
 	e.CF = cf
 	e.Version = version
 	e.Meta = meta
 	e.ExpiresAt = expiresAt
-	e.IncrRef()
+	return e
+}
+
+// NewValueStructEntry wraps an internal-key/value-struct lookup result in a
+// pooled Entry. internalKey is expected to already use canonical internal-key
+// layout; CF and Version are derived when parsing succeeds and left at defaults
+// otherwise.
+func NewValueStructEntry(internalKey []byte, vs ValueStruct) *Entry {
+	e := acquireEntry()
+	e.Key = internalKey
+	e.Value = vs.Value
+	e.ExpiresAt = vs.ExpiresAt
+	e.Meta = vs.Meta
+	e.CF = CFDefault
+	e.Version = 0
+	if cf, _, version, ok := SplitInternalKey(internalKey); ok {
+		e.CF = cf
+		e.Version = version
+	}
 	return e
 }
 

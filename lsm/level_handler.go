@@ -161,17 +161,14 @@ func (lh *levelHandler) densityLocked() float64 {
 	return float64(lh.totalValueSize) / float64(lh.totalSize)
 }
 
-func keyInRange(min, max, key []byte) bool {
+func baseKeyInRange(min, max, key []byte) bool {
 	if len(min) == 0 || len(max) == 0 || len(key) == 0 {
 		return false
 	}
-	_, minUser, _, minOK := kv.SplitInternalKey(min)
-	_, maxUser, _, maxOK := kv.SplitInternalKey(max)
-	_, keyUser, _, keyOK := kv.SplitInternalKey(key)
-	if !minOK || !maxOK || !keyOK {
-		return false
-	}
-	return bytes.Compare(keyUser, minUser) >= 0 && bytes.Compare(keyUser, maxUser) <= 0
+	minBase := kv.InternalToBaseKey(min)
+	maxBase := kv.InternalToBaseKey(max)
+	keyBase := kv.InternalToBaseKey(key)
+	return bytes.Compare(keyBase, minBase) >= 0 && bytes.Compare(keyBase, maxBase) <= 0
 }
 
 // hotOverlapScore returns the fraction of hotKeys overlapping this level.
@@ -188,7 +185,7 @@ func (lh *levelHandler) hotOverlapScore(hotKeys [][]byte, ingestOnly bool) float
 			if t == nil {
 				continue
 			}
-			if keyInRange(t.MinKey(), t.MaxKey(), key) {
+			if baseKeyInRange(t.MinKey(), t.MaxKey(), key) {
 				return true
 			}
 		}
@@ -197,7 +194,7 @@ func (lh *levelHandler) hotOverlapScore(hotKeys [][]byte, ingestOnly bool) float
 	checkIngest := func(key []byte) bool {
 		for _, sh := range lh.ingest.shards {
 			for _, rng := range sh.ranges {
-				if keyInRange(rng.min, rng.max, key) {
+				if baseKeyInRange(rng.min, rng.max, key) {
 					return true
 				}
 			}
