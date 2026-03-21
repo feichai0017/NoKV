@@ -329,7 +329,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		version uint64
 		best    *kv.Entry
 	)
-	for _, table := range lh.getTablesForKey(key) {
+	for _, table := range lh.selectTablesForKey(key, true) {
 		if table == nil {
 			continue
 		}
@@ -360,16 +360,33 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 }
 
 func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	tables := lh.getTablesForKey(key)
-	if len(tables) == 0 {
-		return nil, utils.ErrKeyNotFound
-	}
 	if maxVersion == nil {
 		var tmp uint64
 		maxVersion = &tmp
 	}
+	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
+		total := len(lh.tables)
+		table := lh.filter.tableForPoint(key)
+		if lh.lm != nil {
+			candidates := 0
+			if table != nil {
+				candidates = 1
+			}
+			lh.lm.recordRangeFilterPoint(total, candidates, false)
+		}
+		if table == nil {
+			return nil, utils.ErrKeyNotFound
+		}
+		if table.MaxVersionVal() <= *maxVersion {
+			return nil, utils.ErrKeyNotFound
+		}
+		return table.searchExactCandidate(key, maxVersion)
+	}
+	tables := lh.selectTablesForKey(key, true)
+	if len(tables) == 0 {
+		return nil, utils.ErrKeyNotFound
+	}
 	var best *kv.Entry
-	exactCandidate := lh.levelNum > 0 && lh.filter.nonOverlapping && len(tables) == 1
 	for _, table := range tables {
 		if table == nil {
 			continue
@@ -381,11 +398,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 			entry *kv.Entry
 			err   error
 		)
-		if exactCandidate {
-			entry, err = table.searchExactCandidate(key, maxVersion)
-		} else {
-			entry, err = table.Search(key, maxVersion)
-		}
+		entry, err = table.Search(key, maxVersion)
 		if err == nil {
 			if best != nil {
 				best.DecrRef()
@@ -407,17 +420,14 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table {
+	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
+		return lh.filter.tableForPoint(key)
+	}
 	tables := lh.selectTablesForKey(key, false)
 	if len(tables) == 0 {
 		return nil
 	}
 	return tables[0]
-}
-
-// getTablesForKey returns every table in this level whose user-key range covers key.
-// Tables are returned in min-key order.
-func (lh *levelHandler) getTablesForKey(key []byte) []*table {
-	return lh.selectTablesForKey(key, true)
 }
 
 func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
@@ -427,7 +437,7 @@ func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 	total := len(lh.tables)
 	fallback := false
 	var tables []*table
-	if len(lh.filter.spans) == 0 {
+	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
 		fallback = true
 		tables = lh.getTablesForKeyLinear(key)
 	} else {
@@ -465,10 +475,6 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 	return out
 }
 
-func (lh *levelHandler) getTablesForBounds(lower, upper []byte) []*table {
-	return lh.selectTablesForBounds(lower, upper, true)
-}
-
 func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) []*table {
 	if len(lh.tables) == 0 {
 		if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
@@ -479,7 +485,7 @@ func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) 
 	total := len(lh.tables)
 	fallback := false
 	var tables []*table
-	if len(lh.filter.spans) == 0 {
+	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
 		fallback = true
 		tables = filterTablesByBounds(lh.tables, lower, upper)
 	} else {
@@ -664,7 +670,9 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 	var itrs []utils.Iterator
 	ingestTables := lh.ingest.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
 	itrs = append(itrs, iteratorsReversed(ingestTables, topt)...)
-	if len(mainTables) > 0 {
+	if len(mainTables) == 1 {
+		itrs = append(itrs, mainTables[0].NewIterator(topt))
+	} else if len(mainTables) > 1 {
 		itrs = append(itrs, NewConcatIterator(mainTables, topt))
 	}
 	if bounded && lh.lm != nil {

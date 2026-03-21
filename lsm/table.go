@@ -278,19 +278,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}
-	offsets := idx.GetOffsets()
-	if len(offsets) == 0 {
-		return nil, utils.ErrKeyNotFound
-	}
-	blockIdx := searchFirstBlockWithBaseKeyGT(offsets, key)
-	if blockIdx == 0 {
-		return t.searchPointInBlock(0, key, maxVs)
-	}
-	entry, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
-	if err == nil || err != utils.ErrKeyNotFound || blockIdx >= len(offsets) {
-		return entry, err
-	}
-	return t.searchPointInBlock(blockIdx, key, maxVs)
+	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
 func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
@@ -302,6 +290,10 @@ func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry
 	if idx == nil {
 		return nil, errors.New("table index missing")
 	}
+	return t.searchPointWithIndex(idx, key, maxVs)
+}
+
+func (t *table) searchPointWithIndex(idx *pb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	offsets := idx.GetOffsets()
 	if len(offsets) == 0 {
 		return nil, utils.ErrKeyNotFound
@@ -547,11 +539,10 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	}
 
 	it := &tableIterator{
-		opt:     options,
-		t:       t,
-		bi:      getBlockIterator(),
-		index:   t.index(),
-		closeCh: make(chan struct{}),
+		opt:   options,
+		t:     t,
+		bi:    getBlockIterator(),
+		index: t.index(),
 	}
 
 	// Initialize prefetch optimization if requested
@@ -565,6 +556,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		// 1. prefetchNext only prefetches forward (idx + n, not idx - n)
 		// 2. Reverse access patterns are already handled by madvise Random hint
 		if options.IsAsc {
+			it.closeCh = make(chan struct{})
 			it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
 			workers := options.PrefetchWorkers
 			if workers <= 0 {

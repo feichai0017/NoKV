@@ -178,19 +178,26 @@ func TestLSMNewIterators(t *testing.T) {
 }
 
 func TestConcatIteratorSeekAndNext(t *testing.T) {
-	tbl := &table{
-		minKey: kv.InternalKey(kv.CFDefault, []byte("a"), 1),
-		maxKey: kv.InternalKey(kv.CFDefault, []byte("z"), 1),
+	dir := t.TempDir()
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          4 << 10,
+		BloomFalsePositive: 0.01,
 	}
-	entries := []*kv.Entry{
-		{Key: kv.InternalKey(kv.CFDefault, []byte("b"), 1), Value: []byte("vb")},
-		{Key: kv.InternalKey(kv.CFDefault, []byte("d"), 1), Value: []byte("vd")},
-	}
-	iter := &sliceIterator{entries: entries}
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("vb")))
+	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("d"), 1), []byte("vd")))
+	tbl, err := openTable(lsm.levels, utils.FileNameSSTable(dir, 100), builder)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
 
 	ci := NewConcatIterator([]*table{tbl}, &utils.Options{IsAsc: true})
-	ci.iters[0] = iter
-	ci.setIdx(0)
 
 	ci.Rewind()
 	if !ci.Valid() {
