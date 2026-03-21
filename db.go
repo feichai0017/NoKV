@@ -85,6 +85,7 @@ type (
 		prefetchThreshold int32
 		prefetchCooldown  time.Duration
 		hotWriteLimited   atomic.Uint64
+		policyMatcher     atomic.Pointer[kv.ValueSeparationPolicyMatcher]
 	}
 
 	commitQueue struct {
@@ -237,6 +238,10 @@ func Open(opt *Options) (_ *DB, err error) {
 	db.initVLog()
 	// Initialize stats tracking.
 	db.stats = newStats(db)
+	// Initialize value separation policy matcher if policies are configured
+	if len(opt.ValueSeparationPolicies) > 0 {
+		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(opt.ValueSeparationPolicies))
+	}
 
 	if db.hotRead != nil {
 		db.prefetchThreshold = opt.HotReadPrefetchThreshold
@@ -746,7 +751,38 @@ func (db *DB) runValueLogGCPeriodically() {
 }
 
 func (db *DB) shouldWriteValueToLSM(e *kv.Entry) bool {
-	return e.IsRangeDelete() || int64(len(e.Value)) < db.opt.ValueThreshold
+	// Range deletes always stay in LSM
+	if e.IsRangeDelete() {
+		return true
+	}
+
+	// Check if we have policy-based separation enabled
+	matcher := db.policyMatcher.Load()
+	if matcher != nil {
+		if policy := matcher.MatchPolicy(e); policy != nil {
+			switch policy.Strategy {
+			case kv.AlwaysInline:
+				return true
+			case kv.AlwaysOffload:
+				return false
+			case kv.ThresholdBased:
+				return int64(len(e.Value)) < policy.Threshold
+			}
+		}
+	}
+
+	// Fall back to global threshold
+	return int64(len(e.Value)) < db.opt.ValueThreshold
+}
+
+// GetValueSeparationPolicyStats returns the current value separation policy statistics.
+// Returns nil if no policies are configured.
+func (db *DB) GetValueSeparationPolicyStats() map[string]int64 {
+	matcher := db.policyMatcher.Load()
+	if matcher == nil {
+		return nil
+	}
+	return matcher.GetStats()
 }
 
 // SetRegionMetrics attaches region metrics recorder so Stats snapshot and expvar
