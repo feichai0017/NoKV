@@ -67,18 +67,18 @@ iterator scan, distributed read/write via Raft apply), see
 - `CURRENT` provides crash-safe pointer updates for storage-engine metadata. Region descriptors are no longer stored in the storage manifest.
 
 ### 2.4 LSM Compaction & Ingest Buffer
-- `compact.Manager` drives compaction cycles; `lsm.levelManager` supplies table metadata and executes the plan.
-- Planning is split: `compact.PlanFor*` selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.
-- `compact.State` guards overlapping key ranges and tracks in-flight table IDs.
-- Ingest shard selection is policy-driven in `compact` (`PickShardOrder` / `PickShardByBacklog`) while the ingest buffer remains in `lsm`.
+- `lsm.compaction` drives compaction cycles; `lsm.levelManager` supplies table metadata and executes the plan.
+- Planning is split inside `lsm`: `PlanFor*` selects table IDs + key ranges, then LSM resolves IDs back to tables and runs the merge.
+- `lsm.State` guards overlapping key ranges and tracks in-flight table IDs.
+- Ingest shard selection is policy-driven in `lsm` (`PickShardOrder` / `PickShardByBacklog`) while the ingest buffer remains in `lsm`.
 
 ```mermaid
 flowchart TD
-  Manager["compact.Manager"] --> LSM["lsm.levelManager"]
-  LSM -->|TableMeta snapshot| Planner["compact.PlanFor*"]
-  Planner --> Plan["compact.Plan (fid+range)"]
+  Manager["lsm.compaction"] --> LSM["lsm.levelManager"]
+  LSM -->|TableMeta snapshot| Planner["PlanFor*"]
+  Planner --> Plan["lsm.Plan (fid+range)"]
   Plan -->|resolvePlanLocked| Exec["LSM executor"]
-  Exec --> State["compact.State guard"]
+  Exec --> State["lsm.State guard"]
   Exec --> Build["subcompact/build SST"]
   Build --> Manifest["manifest edits"]
   L0["L0 tables"] -->|moveToIngest| Ingest["ingest buffer shards"]

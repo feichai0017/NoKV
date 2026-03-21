@@ -24,15 +24,12 @@ type CompactionDiagnostics struct {
 // observability code. It keeps runtime metrics grouped behind one API instead
 // of leaking internal structures through many top-level getters.
 type Diagnostics struct {
-	Entries        int64
-	Flush          metrics.FlushMetrics
-	Compaction     CompactionDiagnostics
-	Levels         []LevelMetrics
-	Cache          CacheMetrics
-	ValueLogHead   map[uint32]kv.ValuePtr
-	ValueLogStatus map[manifest.ValueLogID]manifest.ValueLogMeta
-	CurrentVersion manifest.Version
-	MaxVersion     uint64
+	Entries    int64
+	Flush      metrics.FlushMetrics
+	Compaction CompactionDiagnostics
+	Levels     []LevelMetrics
+	Cache      CacheMetrics
+	MaxVersion uint64
 }
 
 // Diagnostics returns a point-in-time snapshot of LSM diagnostic state.
@@ -67,30 +64,42 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		diag.Levels = lm.levelMetricsSnapshot()
 		diag.Cache = lm.cacheMetrics()
 		diag.Entries += lm.entryCount()
-		if heads := lm.ValueLogHead(); len(heads) > 0 {
-			diag.ValueLogHead = make(map[uint32]kv.ValuePtr, len(heads))
-			for bucket, meta := range heads {
-				if !meta.Valid {
-					continue
-				}
-				diag.ValueLogHead[bucket] = kv.ValuePtr{
-					Bucket: bucket,
-					Fid:    meta.FileID,
-					Offset: uint32(meta.Offset),
-				}
-			}
-			if len(diag.ValueLogHead) == 0 {
-				diag.ValueLogHead = nil
-			}
-		}
-		if status := lm.ValueLogStatus(); len(status) > 0 {
-			diag.ValueLogStatus = status
-		}
-		if lm.manifestMgr != nil {
-			diag.CurrentVersion = lm.manifestMgr.Current()
-		}
 	}
 	return diag
+}
+
+// ValueLogHeadSnapshot returns the persisted per-bucket vlog head pointers.
+func (lsm *LSM) ValueLogHeadSnapshot() map[uint32]kv.ValuePtr {
+	if lsm == nil || lsm.levels == nil {
+		return nil
+	}
+	heads := lsm.levels.ValueLogHead()
+	if len(heads) == 0 {
+		return nil
+	}
+	out := make(map[uint32]kv.ValuePtr, len(heads))
+	for bucket, meta := range heads {
+		if !meta.Valid {
+			continue
+		}
+		out[bucket] = kv.ValuePtr{
+			Bucket: bucket,
+			Fid:    meta.FileID,
+			Offset: uint32(meta.Offset),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ValueLogStatusSnapshot returns persisted metadata for all known vlog files.
+func (lsm *LSM) ValueLogStatusSnapshot() map[manifest.ValueLogID]manifest.ValueLogMeta {
+	if lsm == nil || lsm.levels == nil {
+		return nil
+	}
+	return lsm.levels.ValueLogStatus()
 }
 
 func countMemIndexEntries(idx memIndex) int64 {
