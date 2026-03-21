@@ -30,7 +30,6 @@ var (
 	ycsbRocksCompression  = flag.String("ycsb_rocks_compression", "none", "RocksDB compression codec: none|snappy|zstd")
 	ycsbBlockCacheMB      = flag.Int("ycsb_block_cache_mb", 512, "Total cache budget (MB) used as the default fair baseline across engines")
 	ycsbNoKVIndexCacheMB  = flag.Int("ycsb_nokv_index_cache_mb", -1, "NoKV index cache budget (MB); <=0 uses the default fair split from the total cache budget")
-	ycsbNoKVBloomCacheMB  = flag.Int("ycsb_nokv_bloom_cache_mb", -1, "NoKV bloom cache budget (MB); <=0 uses the default fair split from the total cache budget")
 	ycsbNoKVCompaction    = flag.String("ycsb_nokv_compaction_policy", "leveled", "NoKV compaction policy: leveled|tiered|hybrid")
 	ycsbMemtableMB        = flag.Int("ycsb_memtable_mb", 64, "Memtable size (MB) for LSM engines (NoKV/RocksDB where applicable)")
 	ycsbSSTableMB         = flag.Int("ycsb_sstable_mb", 512, "Target SST size (MB) for LSM engines (NoKV/RocksDB where applicable)")

@@ -7,11 +7,11 @@ func TestKeyHelpers(t *testing.T) {
 	k1 := InternalKey(CFDefault, key, 1)
 	k2 := InternalKey(CFDefault, key, 2)
 
-	if !SameKey(k1, k2) {
-		t.Fatalf("expected SameKey for different versions")
+	if !SameBaseKey(k1, k2) {
+		t.Fatalf("expected SameBaseKey for different versions")
 	}
-	if SameKey(k1, InternalKey(CFDefault, []byte("beta"), 1)) {
-		t.Fatalf("unexpected SameKey for different user keys")
+	if SameBaseKey(k1, InternalKey(CFDefault, []byte("beta"), 1)) {
+		t.Fatalf("unexpected SameBaseKey for different user keys")
 	}
 
 	if Timestamp(k1) != 1 {
@@ -51,14 +51,24 @@ func TestSplitInternalKeyStrict(t *testing.T) {
 	}
 }
 
-func TestStripTimestampSplitInternalKeyAndSafeCopy(t *testing.T) {
-	if got := StripTimestamp([]byte("raw")); string(got) != "raw" {
+func TestBaseKeySplitInternalKeyAndSafeCopy(t *testing.T) {
+	if got := InternalToBaseKey([]byte("raw")); string(got) != "raw" {
 		t.Fatalf("expected raw key unchanged, got %q", got)
 	}
 	internal := InternalKey(CFLock, []byte("hello"), 5)
+	base := InternalToBaseKey(internal)
+	cf, decodedUserKey, ok := SplitBaseKey(base)
+	if !ok || cf != CFLock || string(decodedUserKey) != "hello" {
+		t.Fatalf("expected base key for CFLock/hello, got ok=%v cf=%v key=%q", ok, cf, decodedUserKey)
+	}
 	_, userKey, _, ok := SplitInternalKey(internal)
 	if !ok || string(userKey) != "hello" {
 		t.Fatalf("expected split user key hello, got ok=%v key=%q", ok, userKey)
+	}
+	encoded := BaseKey(CFWrite, []byte("world"))
+	cf, decodedUserKey, ok = SplitBaseKey(encoded)
+	if !ok || cf != CFWrite || string(decodedUserKey) != "world" {
+		t.Fatalf("expected encoded base key for CFWrite/world, got ok=%v cf=%v key=%q", ok, cf, decodedUserKey)
 	}
 	orig := []byte("copy")
 	out := SafeCopy(nil, orig)

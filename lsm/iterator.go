@@ -110,43 +110,53 @@ func (iter *memIterator) Seek(key []byte) {
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
 	cur     utils.Iterator
-	iters   []utils.Iterator // Corresponds to tables.
-	tables  []*table         // Disregarding reversed, this is in ascending order.
-	options *utils.Options   // Valid options are REVERSED and NOCACHE.
+	tables  []*table       // Disregarding reversed, this is in ascending order.
+	options *utils.Options // Valid options are REVERSED and NOCACHE.
 }
 
 // NewConcatIterator creates a new concatenated iterator
 func NewConcatIterator(tbls []*table, opt *utils.Options) *ConcatIterator {
-	iters := make([]utils.Iterator, len(tbls))
 	return &ConcatIterator{
 		options: opt,
-		iters:   iters,
 		tables:  tbls,
 		idx:     -1, // Not really necessary because s.it.Valid()=false, but good to have.
 	}
 }
 
 func (s *ConcatIterator) setIdx(idx int) {
+	if idx == s.idx && s.cur != nil {
+		return
+	}
+	_ = s.closeCurrent()
 	s.idx = idx
-	if idx < 0 || idx >= len(s.iters) {
+	if idx < 0 || idx >= len(s.tables) {
 		s.cur = nil
 		return
 	}
-	if s.iters[idx] == nil {
-		s.iters[idx] = s.tables[idx].NewIterator(s.options)
+	s.cur = s.tables[idx].NewIterator(s.options)
+}
+
+func (s *ConcatIterator) closeCurrent() error {
+	if s.cur == nil {
+		return nil
 	}
-	s.cur = s.iters[s.idx]
+	err := s.cur.Close()
+	s.cur = nil
+	return err
 }
 
 // Rewind implements Interface
 func (s *ConcatIterator) Rewind() {
-	if len(s.iters) == 0 {
+	if len(s.tables) == 0 {
 		return
 	}
 	if s.options.IsAsc {
 		s.setIdx(0)
 	} else {
-		s.setIdx(len(s.iters) - 1)
+		s.setIdx(len(s.tables) - 1)
+	}
+	if s.cur == nil {
+		return
 	}
 	s.cur.Rewind()
 }
@@ -174,7 +184,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareKeys(s.tables[mid].MaxKey(), key) >= 0 {
+			if utils.CompareInternalKeys(s.tables[mid].MaxKey(), key) >= 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -186,7 +196,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		lo, hi := 0, n
 		for lo < hi {
 			mid := lo + (hi-lo)/2
-			if utils.CompareKeys(s.tables[mid].MinKey(), key) > 0 {
+			if utils.CompareInternalKeys(s.tables[mid].MinKey(), key) > 0 {
 				hi = mid
 			} else {
 				lo = mid + 1
@@ -201,6 +211,9 @@ func (s *ConcatIterator) Seek(key []byte) {
 	// For reversed=false, we know s.tables[i-1].Biggest() < key. Thus, the
 	// previous table cannot possibly contain key.
 	s.setIdx(idx)
+	if s.cur == nil {
+		return
+	}
 	s.cur.Seek(key)
 }
 
@@ -230,13 +243,8 @@ func (s *ConcatIterator) Next() {
 
 // Close implements y.Interface.
 func (s *ConcatIterator) Close() error {
-	for _, it := range s.iters {
-		if it == nil {
-			continue
-		}
-		if err := it.Close(); err != nil {
-			return fmt.Errorf("ConcatIterator:%+v", err)
-		}
+	if err := s.closeCurrent(); err != nil {
+		return fmt.Errorf("ConcatIterator:%+v", err)
 	}
 	return nil
 }
@@ -377,7 +385,7 @@ func (mi *MergeIterator) fix() {
 		mi.swapSmall()
 		return
 	}
-	cmp := utils.CompareKeys(mi.small.entry.Key, mi.bigger().entry.Key)
+	cmp := utils.CompareInternalKeys(mi.small.entry.Key, mi.bigger().entry.Key)
 	switch {
 	case cmp == 0: // Both the keys are equal.
 		// In case of same keys, move the right iterator ahead.
@@ -484,6 +492,16 @@ func (mi *MergeIterator) Close() error {
 
 // NewMergeIterator creates a merge iterator.
 func NewMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
+	filtered := iters[:0]
+	for _, it := range iters {
+		if it != nil {
+			filtered = append(filtered, it)
+		}
+	}
+	return newMergeIterator(filtered, reverse)
+}
+
+func newMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
 	switch len(iters) {
 	case 0:
 		return &emptyIterator{}
@@ -500,9 +518,11 @@ func NewMergeIterator(iters []utils.Iterator, reverse bool) utils.Iterator {
 		return mi
 	}
 	mid := len(iters) / 2
-	return NewMergeIterator(
-		[]utils.Iterator{
-			NewMergeIterator(iters[:mid], reverse),
-			NewMergeIterator(iters[mid:], reverse),
-		}, reverse)
+	mi := &MergeIterator{
+		reverse: reverse,
+	}
+	mi.left.setIterator(newMergeIterator(iters[:mid], reverse))
+	mi.right.setIterator(newMergeIterator(iters[mid:], reverse))
+	mi.small = &mi.left
+	return mi
 }

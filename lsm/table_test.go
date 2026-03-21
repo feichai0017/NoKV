@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -221,6 +222,91 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 		require.Equal(t, uint64(i+1), maxVs)
 		entry.DecrRef()
 	}
+}
+
+func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-table-bounds")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          128,
+		BloomFalsePositive: 0.0,
+	}
+
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	for i := range 200 {
+		key := fmt.Appendf(nil, "k%03d", i)
+		builder.AddKey(kv.NewEntry(
+			kv.InternalKey(kv.CFDefault, key, 1),
+			[]byte("value-with-more-data"),
+		))
+	}
+
+	tableName := utils.FileNameSSTable(dir, 4)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	t.Run("forward bounded range", func(t *testing.T) {
+		it := tbl.NewIterator(&utils.Options{
+			IsAsc:      true,
+			LowerBound: []byte("k050"),
+			UpperBound: []byte("k060"),
+		})
+		defer func() { _ = it.Close() }()
+
+		var keys []string
+		for it.Rewind(); it.Valid(); it.Next() {
+			keys = append(keys, string(splitTableUserKey(t, it.Item().Entry().Key)))
+		}
+		require.Len(t, keys, 10)
+		require.Equal(t, "k050", keys[0])
+		require.Equal(t, "k059", keys[len(keys)-1])
+	})
+
+	t.Run("reverse bounded range", func(t *testing.T) {
+		it := tbl.NewIterator(&utils.Options{
+			IsAsc:      false,
+			LowerBound: []byte("k050"),
+			UpperBound: []byte("k060"),
+		})
+		defer func() { _ = it.Close() }()
+
+		var keys []string
+		for it.Rewind(); it.Valid(); it.Next() {
+			keys = append(keys, string(splitTableUserKey(t, it.Item().Entry().Key)))
+		}
+		require.Len(t, keys, 10)
+		require.Equal(t, "k059", keys[0])
+		require.Equal(t, "k050", keys[len(keys)-1])
+	})
+}
+
+func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
+	index := &pb.TableIndex{
+		Offsets: []*pb.BlockOffset{
+			{Key: kv.InternalKey(kv.CFDefault, []byte("z"), 5)},
+			{Key: kv.InternalKey(kv.CFLock, []byte("a"), 5)},
+			{Key: kv.InternalKey(kv.CFWrite, []byte("b"), 5)},
+			{Key: kv.InternalKey(kv.CFWrite, []byte("f"), 5)},
+		},
+	}
+
+	start, end := blockRangeForBounds(
+		index,
+		kv.InternalKey(kv.CFWrite, []byte("a"), kv.MaxVersion),
+		kv.InternalKey(kv.CFWrite, []byte("e"), kv.MaxVersion),
+	)
+	require.Equal(t, 1, start)
+	require.Equal(t, 3, end)
 }
 
 func TestLevelGetHandlesOverlappingRanges(t *testing.T) {

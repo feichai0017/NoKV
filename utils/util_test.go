@@ -10,9 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompareUserKeysAndChecksum(t *testing.T) {
+func TestCompareBaseAndUserKeysAndChecksum(t *testing.T) {
 	k1 := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
 	k2 := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
+	k3 := kv.InternalKey(kv.CFWrite, []byte("a"), 1)
+	require.Less(t, CompareBaseKeys(k1, k2), 0)
+	require.Less(t, CompareBaseKeys(k1, k3), 0)
+	require.Equal(t, 0, CompareBaseKeys(
+		kv.InternalKey(kv.CFDefault, []byte("c"), 10),
+		kv.InternalKey(kv.CFDefault, []byte("c"), 1),
+	))
 	require.Less(t, CompareUserKeys(k1, k2), 0)
 	require.Equal(t, 0, CompareUserKeys(
 		kv.InternalKey(kv.CFDefault, []byte("c"), 10),

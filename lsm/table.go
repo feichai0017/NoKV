@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"expvar"
 	"fmt"
 	"io"
@@ -256,45 +257,84 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	defer func() {
 		_ = t.DecrRef()
 	}()
-	// get the index
 	idx := t.index()
 	if idx == nil {
 		return nil, errors.New("table index missing")
 	}
-	if t.hasBloom || len(idx.BloomFilter) > 0 {
-		var bloomFilter utils.Filter
-		if cached, ok := t.lm.cache.getBloom(t.fid); ok {
-			bloomFilter = cached
-		} else {
-			bloomFilter = utils.Filter(idx.BloomFilter)
-			if len(bloomFilter) > 0 {
-				t.lm.cache.addBloom(t.fid, bloomFilter)
-			}
-		}
+	if bloomFilter := utils.Filter(idx.BloomFilter); len(bloomFilter) > 0 {
 		utils.CondPanicFunc(len(key) <= 8, func() error {
 			return fmt.Errorf("table.Search expects internal key: %x", key)
 		})
-		probe := kv.StripTimestamp(key)
-		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(probe) {
+		probe := kv.InternalToBaseKey(key)
+		if !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}
-	iter := t.NewIterator(&utils.Options{IsAsc: true})
-	defer func() { _ = iter.Close() }()
+	return t.searchPointWithIndex(idx, key, maxVs)
+}
 
-	iter.Seek(key)
-	if !iter.Valid() {
+func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+	t.IncrRef()
+	defer func() {
+		_ = t.DecrRef()
+	}()
+	idx := t.index()
+	if idx == nil {
+		return nil, errors.New("table index missing")
+	}
+	return t.searchPointWithIndex(idx, key, maxVs)
+}
+
+func (t *table) searchPointWithIndex(idx *pb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+	offsets := idx.GetOffsets()
+	if len(offsets) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
-	item := iter.Item()
+	blockIdx := searchFirstBlockWithBaseKeyGT(offsets, key)
+	if blockIdx == 0 {
+		return t.searchPointInBlock(0, key, maxVs)
+	}
+	entry, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
+	if err == nil || err != utils.ErrKeyNotFound || blockIdx >= len(offsets) {
+		return entry, err
+	}
+	return t.searchPointInBlock(blockIdx, key, maxVs)
+}
+
+func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
+	block, err := t.loadBlock(blockIdx)
+	if err != nil {
+		return nil, err
+	}
+	bi := getBlockIterator()
+	defer func() {
+		_ = bi.Close()
+		putBlockIterator(bi)
+	}()
+	bi.tableID = t.fid
+	bi.blockID = blockIdx
+	bi.isAsc = true
+	bi.setBlock(block)
+	bi.seek(key)
+	if !bi.Valid() {
+		if err := bi.Error(); err != nil && err != io.EOF {
+			return nil, err
+		}
+		return nil, utils.ErrKeyNotFound
+	}
+	item := bi.Item()
 	if item == nil || item.Entry() == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-
-	if e := item.Entry(); kv.SameKey(key, e.Key) {
+	if e := item.Entry(); kv.SameBaseKey(key, e.Key) {
 		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
-			clone := kv.NewEntry(kv.SafeCopy(nil, e.Key), kv.SafeCopy(nil, e.Value))
+			buf := make([]byte, len(e.Key)+len(e.Value))
+			keyCopy := buf[:len(e.Key)]
+			copy(keyCopy, e.Key)
+			valueCopy := buf[len(e.Key):]
+			copy(valueCopy, e.Value)
+			clone := kv.NewEntry(keyCopy, valueCopy)
 			clone.ExpiresAt = e.ExpiresAt
 			clone.Meta = e.Meta
 			_ = clone.PopulateInternalMeta()
@@ -406,7 +446,7 @@ func (t *table) prefetchBlockForKey(key []byte) bool {
 		if i == len(offsets) {
 			return true
 		}
-		return utils.CompareKeys(ko.GetKey(), key) > 0
+		return utils.CompareInternalKeys(ko.GetKey(), key) > 0
 	})
 	switch {
 	case idx <= 0:
@@ -446,6 +486,10 @@ type tableIterator struct {
 	opt          *utils.Options
 	t            *table
 	blockPos     int
+	blockStart   int
+	blockEnd     int
+	lowerUser    []byte
+	upperUser    []byte
 	bi           *blockIterator
 	err          error
 	index        *pb.TableIndex
@@ -461,14 +505,22 @@ func (it *tableIterator) fetchBlock(idx int) (*block, error) {
 	return it.t.loadBlock(idx)
 }
 
+func (it *tableIterator) hasBlockRange() bool {
+	return it.index != nil && it.blockEnd > it.blockStart
+}
+
+func (it *tableIterator) inBlockRange(idx int) bool {
+	return idx >= it.blockStart && idx < it.blockEnd
+}
+
 func (it *tableIterator) prefetchNext(idx int) {
 	if it.opt == nil || !it.opt.IsAsc || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
 		return
 	}
-	if it.index == nil {
+	if !it.hasBlockRange() {
 		return
 	}
-	limit := len(it.index.GetOffsets())
+	limit := it.blockEnd
 	for n := 1; n <= it.opt.PrefetchBlocks; n++ {
 		next := idx + n
 		if next >= limit {
@@ -494,13 +546,18 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 	if options == nil {
 		options = &utils.Options{IsAsc: true}
 	}
+	index := t.index()
+	blockStart, blockEnd := blockRangeForBounds(index, options.LowerBound, options.UpperBound)
 
 	it := &tableIterator{
-		opt:     options,
-		t:       t,
-		bi:      getBlockIterator(),
-		index:   t.index(),
-		closeCh: make(chan struct{}),
+		opt:        options,
+		t:          t,
+		bi:         getBlockIterator(),
+		index:      index,
+		blockStart: blockStart,
+		blockEnd:   blockEnd,
+		lowerUser:  guideUserKey(options.LowerBound),
+		upperUser:  guideUserKey(options.UpperBound),
 	}
 
 	// Initialize prefetch optimization if requested
@@ -514,6 +571,7 @@ func (t *table) NewIterator(options *utils.Options) utils.Iterator {
 		// 1. prefetchNext only prefetches forward (idx + n, not idx - n)
 		// 2. Reverse access patterns are already handled by madvise Random hint
 		if options.IsAsc {
+			it.closeCh = make(chan struct{})
 			it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
 			workers := options.PrefetchWorkers
 			if workers <= 0 {
@@ -575,45 +633,21 @@ func (t *table) adviseIterator(options *utils.Options) {
 
 // Next advances to the next key within the current block or next block.
 func (it *tableIterator) Next() {
-	it.err = nil
-
-	if it.index == nil || (it.opt.IsAsc && it.blockPos >= len(it.index.GetOffsets())) || (!it.opt.IsAsc && it.blockPos < 0) {
+	if !it.hasBlockRange() {
+		it.it = nil
 		it.err = io.EOF
 		return
 	}
-
 	if len(it.bi.data) == 0 {
-		block, err := it.fetchBlock(it.blockPos)
-		if err != nil {
-			it.err = err
-			return
-		}
-		it.prefetchNext(it.blockPos)
-		it.bi.tableID = it.t.fid
-		it.bi.blockID = it.blockPos
-		it.bi.isAsc = it.opt.IsAsc
-		it.bi.setBlock(block)
 		if it.opt.IsAsc {
-			it.bi.seekToFirst()
+			it.seekToFirst()
 		} else {
-			it.bi.seekToLast()
+			it.seekToLast()
 		}
-		it.err = it.bi.Error()
 		return
 	}
-
 	it.bi.Next()
-	if !it.bi.Valid() {
-		if it.opt.IsAsc {
-			it.blockPos++
-		} else {
-			it.blockPos--
-		}
-		it.bi.data = nil
-		it.Next()
-		return
-	}
-	it.it = it.bi.it
+	it.advanceToBoundedValid()
 }
 
 // Valid reports whether table iterator has a readable current item.
@@ -655,19 +689,16 @@ func (it *tableIterator) Close() error {
 	return it.t.DecrRef()
 }
 func (it *tableIterator) seekToFirst() {
-	if it.index == nil {
+	if !it.hasBlockRange() {
 		it.err = io.EOF
+		it.it = nil
 		return
 	}
-	numBlocks := len(it.index.GetOffsets())
-	if numBlocks == 0 {
-		it.err = io.EOF
-		return
-	}
-	it.blockPos = 0
+	it.blockPos = it.blockStart
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
+		it.it = nil
 		return
 	}
 	it.prefetchNext(it.blockPos)
@@ -675,34 +706,37 @@ func (it *tableIterator) seekToFirst() {
 	it.bi.blockID = it.blockPos
 	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
-	it.bi.seekToFirst()
-	it.it = it.bi.Item()
-	it.err = it.bi.Error()
+	if len(it.lowerUser) > 0 {
+		it.bi.seek(kv.InternalKey(kv.CFDefault, it.lowerUser, kv.MaxVersion))
+	} else {
+		it.bi.seekToFirst()
+	}
+	it.advanceToBoundedValid()
 }
 
 func (it *tableIterator) seekToLast() {
-	if it.index == nil {
+	if !it.hasBlockRange() {
 		it.err = io.EOF
+		it.it = nil
 		return
 	}
-	numBlocks := len(it.index.GetOffsets())
-	if numBlocks == 0 {
-		it.err = io.EOF
-		return
-	}
-	it.blockPos = numBlocks - 1
+	it.blockPos = it.blockEnd - 1
 	block, err := it.fetchBlock(it.blockPos)
 	if err != nil {
 		it.err = err
+		it.it = nil
 		return
 	}
 	it.bi.tableID = it.t.fid
 	it.bi.blockID = it.blockPos
 	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
-	it.bi.seekToLast()
-	it.it = it.bi.Item()
-	it.err = it.bi.Error()
+	if len(it.upperUser) > 0 {
+		it.bi.seek(kv.InternalKey(kv.CFDefault, it.upperUser, 0))
+	} else {
+		it.bi.seekToLast()
+	}
+	it.advanceToBoundedValid()
 }
 
 // searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
@@ -711,7 +745,7 @@ func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if utils.CompareKeys(offsets[mid].GetKey(), key) > 0 {
+		if utils.CompareInternalKeys(offsets[mid].GetKey(), key) > 0 {
 			hi = mid
 		} else {
 			lo = mid + 1
@@ -720,18 +754,69 @@ func searchFirstBlockWithBaseKeyGT(offsets []*pb.BlockOffset, key []byte) int {
 	return lo
 }
 
+func searchFirstBlockWithBaseKeyGE(offsets []*pb.BlockOffset, baseKey []byte) int {
+	lo, hi := 0, len(offsets)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if utils.CompareBaseKeys(offsets[mid].GetKey(), baseKey) >= 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo
+}
+
+func blockRangeForBounds(index *pb.TableIndex, lower, upper []byte) (int, int) {
+	if index == nil {
+		return 0, 0
+	}
+	offsets := index.GetOffsets()
+	if len(offsets) == 0 {
+		return 0, 0
+	}
+
+	start := 0
+	end := len(offsets)
+
+	if len(lower) > 0 {
+		lower = guideBaseKey(lower)
+		idx := searchFirstBlockWithBaseKeyGE(offsets, lower)
+		switch {
+		case idx == 0:
+			start = 0
+		case idx >= len(offsets):
+			start = len(offsets) - 1
+		case utils.CompareBaseKeys(offsets[idx].GetKey(), lower) == 0:
+			start = idx
+		default:
+			start = idx - 1
+		}
+	}
+	if len(upper) > 0 {
+		upper = guideBaseKey(upper)
+		end = searchFirstBlockWithBaseKeyGE(offsets, upper)
+	}
+	if end < start {
+		end = start
+	}
+	return start, end
+}
+
 // Seek positions the iterator at the appropriate entry for the given key.
 // Both modes first locate the block that could contain the key (last block where baseKey <= key).
 // Forward (IsAsc=true): within the block, seeks to the first entry >= key.
 // Reverse (IsAsc=false): within the block, seeks to the last entry <= key.
 func (it *tableIterator) Seek(key []byte) {
-	if it.index == nil {
+	if !it.hasBlockRange() {
 		it.err = io.EOF
+		it.it = nil
 		return
 	}
-	offsets := it.index.GetOffsets()
+	offsets := it.index.GetOffsets()[it.blockStart:it.blockEnd]
 	if len(offsets) == 0 {
 		it.err = io.EOF
+		it.it = nil
 		return
 	}
 	// idx is the first block where baseKey > key. Candidate block is idx-1.
@@ -740,31 +825,38 @@ func (it *tableIterator) Seek(key []byte) {
 	if it.opt.IsAsc {
 		if idx == 0 {
 			// All blocks have baseKey > key, start from first block
-			it.seekHelper(0, key)
+			it.seekHelper(it.blockStart, key)
 			return
 		}
-		it.seekHelper(idx-1, key)
+		it.seekHelper(it.blockStart+idx-1, key)
 		// Internal-key ordering is (userKey ASC, ts DESC). For point-lookups we seek
 		// with ts=MaxVersion, which can place idx-1 on a previous block whose largest
 		// key is still < target. When that happens, retry the next block once.
 		if it.err == io.EOF && idx < len(offsets) {
-			it.seekHelper(idx, key)
+			it.seekHelper(it.blockStart+idx, key)
 		}
 		return
 	}
 	// Reverse mode: if every base key is > target, there is no <= target entry.
 	if idx == 0 {
 		it.err = io.EOF
+		it.it = nil
 		return
 	}
-	it.seekHelper(idx-1, key)
+	it.seekHelper(it.blockStart+idx-1, key)
 }
 
 func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
+	if !it.inBlockRange(blockIdx) {
+		it.err = io.EOF
+		it.it = nil
+		return
+	}
 	it.blockPos = blockIdx
 	block, err := it.fetchBlock(blockIdx)
 	if err != nil {
 		it.err = err
+		it.it = nil
 		return
 	}
 	it.prefetchNext(blockIdx)
@@ -773,8 +865,98 @@ func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
 	it.bi.isAsc = it.opt.IsAsc
 	it.bi.setBlock(block)
 	it.bi.seek(key)
-	it.err = it.bi.Error()
-	it.it = it.bi.Item()
+	it.advanceToBoundedValid()
+}
+
+func iteratorUserKey(key []byte) []byte {
+	if len(key) <= 8 {
+		return nil
+	}
+	_, userKey, ok := kv.SplitBaseKey(kv.InternalToBaseKey(key))
+	if !ok {
+		return nil
+	}
+	return userKey
+}
+
+func (it *tableIterator) advanceToBoundedValid() {
+	for {
+		if !it.inBlockRange(it.blockPos) {
+			it.err = io.EOF
+			it.it = nil
+			return
+		}
+		if !it.bi.Valid() {
+			if err := it.bi.Error(); err != nil && err != io.EOF {
+				it.err = err
+				it.it = nil
+				return
+			}
+			if it.opt.IsAsc {
+				it.blockPos++
+			} else {
+				it.blockPos--
+			}
+			if !it.inBlockRange(it.blockPos) {
+				it.err = io.EOF
+				it.it = nil
+				return
+			}
+			block, err := it.fetchBlock(it.blockPos)
+			if err != nil {
+				it.err = err
+				it.it = nil
+				return
+			}
+			it.prefetchNext(it.blockPos)
+			it.bi.tableID = it.t.fid
+			it.bi.blockID = it.blockPos
+			it.bi.isAsc = it.opt.IsAsc
+			it.bi.setBlock(block)
+			if it.opt.IsAsc {
+				it.bi.seekToFirst()
+			} else {
+				it.bi.seekToLast()
+			}
+			continue
+		}
+
+		item := it.bi.Item()
+		if item == nil || item.Entry() == nil {
+			it.err = io.EOF
+			it.it = nil
+			return
+		}
+		userKey := iteratorUserKey(item.Entry().Key)
+		if len(userKey) == 0 {
+			it.err = io.EOF
+			it.it = nil
+			return
+		}
+		if it.opt.IsAsc && len(it.upperUser) > 0 && bytes.Compare(userKey, it.upperUser) >= 0 {
+			it.err = io.EOF
+			it.it = nil
+			return
+		}
+		if !it.opt.IsAsc && len(it.lowerUser) > 0 && bytes.Compare(userKey, it.lowerUser) < 0 {
+			it.err = io.EOF
+			it.it = nil
+			return
+		}
+		if len(it.lowerUser) > 0 && bytes.Compare(userKey, it.lowerUser) < 0 {
+			it.bi.Next()
+			continue
+		}
+		if len(it.upperUser) > 0 && bytes.Compare(userKey, it.upperUser) >= 0 {
+			it.bi.Next()
+			continue
+		}
+		{
+			it.it = item
+			it.err = nil
+			return
+		}
+	}
 }
 
 // Handle lifecycle and reference tracking.

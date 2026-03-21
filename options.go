@@ -164,8 +164,6 @@ type Options struct {
 	BlockCacheBytes int64
 	// IndexCacheBytes bounds the in-memory budget for decoded SSTable indexes.
 	IndexCacheBytes int64
-	// BloomCacheBytes bounds the in-memory budget for cached bloom filters.
-	BloomCacheBytes int64
 
 	// RaftLagWarnSegments determines how many WAL segments a follower can lag
 	// behind the active segment before stats surfaces a warning. Zero disables
@@ -304,7 +302,6 @@ func NewDefaultOptions() *Options {
 		WriteBatchMaxSize:             1 << 20,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
 		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
-		BloomCacheBytes:               lsmpkg.DefaultBloomCacheBytes,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
 		ManifestRewriteThreshold:      64 << 20,
@@ -416,9 +413,6 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.IndexCacheBytes < 0 {
 		opt.IndexCacheBytes = 0
-	}
-	if opt.BloomCacheBytes < 0 {
-		opt.BloomCacheBytes = 0
 	}
 	if opt.NumCompactors <= 0 {
 		opt.NumCompactors = lsmpkg.DefaultNumCompactors()

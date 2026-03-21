@@ -20,13 +20,47 @@ const MaxVersion uint64 = math.MaxUint64
 //go:linkname memhash runtime.memhash
 func memhash(p unsafe.Pointer, h, s uintptr) uintptr
 
-// StripTimestamp removes the trailing 8-byte timestamp suffix from an internal key.
-// For non-internal keys (len<8) it returns the input unchanged.
-func StripTimestamp(key []byte) []byte {
+// InternalToBaseKey removes the trailing 8-byte MVCC timestamp suffix from an
+// internal key. For non-internal keys it returns the input unchanged.
+func InternalToBaseKey(key []byte) []byte {
 	if len(key) < 8 {
 		return key
 	}
-	return key[:len(key)-8]
+	base := key[:len(key)-8]
+	if _, _, ok := SplitBaseKey(base); ok {
+		return base
+	}
+	return key
+}
+
+// BaseKey assembles a base key from (column family, user key) without an MVCC
+// timestamp suffix.
+func BaseKey(cf ColumnFamily, key []byte) []byte {
+	if !cf.Valid() {
+		cf = CFDefault
+	}
+	out := make([]byte, cfHeaderSize+len(key))
+	out[0] = cfMarker0
+	out[1] = cfMarker1
+	out[2] = cfMarker2
+	out[3] = byte(cf)
+	copy(out[cfHeaderSize:], key)
+	return out
+}
+
+// SplitBaseKey returns the column family and user key from a base key
+// (CF marker + user key, without MVCC timestamp).
+func SplitBaseKey(key []byte) (ColumnFamily, []byte, bool) {
+	if len(key) >= cfHeaderSize &&
+		key[0] == cfMarker0 &&
+		key[1] == cfMarker1 &&
+		key[2] == cfMarker2 {
+		cf := ColumnFamily(key[3])
+		if cf.Valid() {
+			return cf, key[cfHeaderSize:], true
+		}
+	}
+	return CFDefault, key, false
 }
 
 // Timestamp decodes the MVCC timestamp from the trailing 8-byte suffix.
@@ -38,12 +72,9 @@ func Timestamp(key []byte) uint64 {
 	return math.MaxUint64 - binary.BigEndian.Uint64(key[len(key)-8:])
 }
 
-// SameKey checks for key equality ignoring the version timestamp suffix.
-func SameKey(src, dst []byte) bool {
-	if len(src) != len(dst) {
-		return false
-	}
-	return bytes.Equal(StripTimestamp(src), StripTimestamp(dst))
+// SameBaseKey checks for key equality ignoring the MVCC timestamp suffix.
+func SameBaseKey(src, dst []byte) bool {
+	return bytes.Equal(InternalToBaseKey(src), InternalToBaseKey(dst))
 }
 
 // InternalKey encodes (column family, user key, timestamp) into the canonical
@@ -77,9 +108,9 @@ func SplitInternalKey(internal []byte) (ColumnFamily, []byte, uint64, bool) {
 	if len(internal) <= 8 {
 		return CFDefault, nil, 0, false
 	}
-	base := StripTimestamp(internal)
+	base := InternalToBaseKey(internal)
 	ts := Timestamp(internal)
-	cf, userKey, ok := DecodeKeyCF(base)
+	cf, userKey, ok := SplitBaseKey(base)
 	if !ok {
 		return CFDefault, nil, 0, false
 	}
@@ -114,7 +145,7 @@ func ValueLogHash(key []byte) uint32 {
 	if len(key) == 0 {
 		return 0
 	}
-	base := StripTimestamp(key)
+	base := InternalToBaseKey(key)
 	if len(base) == 0 {
 		return 0
 	}
