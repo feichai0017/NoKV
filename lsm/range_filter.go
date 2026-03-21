@@ -19,6 +19,9 @@ type rangeFilter struct {
 	nonOverlapping bool
 }
 
+// Small and overlapping levels rarely amortize the extra pruning work.
+const rangeFilterMinSpanCount = 8
+
 func buildRangeFilter(levelNum int, tables []*table) rangeFilter {
 	filter := rangeFilter{
 		levelNum:       levelNum,
@@ -75,6 +78,25 @@ func (filter rangeFilter) tablesForPoint(key []byte) []*table {
 		}
 		return out
 	}
+	tbl := filter.tableForPointUserKey(userKey)
+	if tbl == nil {
+		return nil
+	}
+	return []*table{tbl}
+}
+
+func (filter rangeFilter) tableForPoint(key []byte) *table {
+	if len(filter.spans) == 0 || len(key) == 0 {
+		return nil
+	}
+	userKey := guideUserKey(key)
+	if len(userKey) == 0 || !filter.nonOverlapping {
+		return nil
+	}
+	return filter.tableForPointUserKey(userKey)
+}
+
+func (filter rangeFilter) tableForPointUserKey(userKey []byte) *table {
 	idx := sort.Search(len(filter.spans), func(i int) bool {
 		return bytes.Compare(filter.spans[i].maxUser, userKey) >= 0
 	})
@@ -85,7 +107,7 @@ func (filter rangeFilter) tablesForPoint(key []byte) []*table {
 	if !span.covers(userKey) || span.tbl == nil {
 		return nil
 	}
-	return []*table{span.tbl}
+	return span.tbl
 }
 
 func (filter rangeFilter) tablesForBounds(lower, upper []byte) []*table {
