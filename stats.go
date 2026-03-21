@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/hotring"
-
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/metrics"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
@@ -199,10 +198,8 @@ type RegionStatsSnapshot struct {
 	Other     int64 `json:"other"`
 }
 
-// HotStatsSnapshot contains top read/write keys and optional ring internals.
+// HotStatsSnapshot contains write-hot keys and optional ring internals.
 type HotStatsSnapshot struct {
-	ReadKeys  []HotKeyStat   `json:"read_keys,omitempty"`
-	ReadRing  *hotring.Stats `json:"read_ring,omitempty"`
 	WriteKeys []HotKeyStat   `json:"write_keys,omitempty"`
 	WriteRing *hotring.Stats `json:"write_ring,omitempty"`
 }
@@ -564,13 +561,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.ValueLog.PendingDeletes = stats.PendingDeletes
 		snap.ValueLog.DiscardQueue = stats.DiscardQueue
 		snap.ValueLog.Heads = stats.Heads
-	}
-	if s.db != nil && s.db.hotRead != nil {
-		for _, item := range s.db.hotRead.TopN(s.db.opt.HotRingTopK) {
-			snap.Hot.ReadKeys = append(snap.Hot.ReadKeys, HotKeyStat{Key: item.Key, Count: item.Count})
-		}
-		hotStats := s.db.hotRead.Stats()
-		snap.Hot.ReadRing = &hotStats
 	}
 	if s.db != nil && s.db.hotWrite != nil {
 		for _, item := range s.db.hotWrite.TopN(s.db.opt.HotRingTopK) {

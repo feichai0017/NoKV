@@ -74,10 +74,13 @@ type CacheMetrics struct {
 
 ## 5. HotRing Integration
 
-* Hot detection: HotRing counts on read/write paths and triggers targeted prefetch for hot keys.
-* Cache warmup: prefetch loads target blocks into the normal L0/L1 block cache path.
-* Compaction coupling: HotRing top-k feeds compaction scoring; levels/ingest shards covering hot ranges get higher scores to trim overlap sooner.
-* Tuning: Hot thresholds come from HotRing options (window/decay configurable).
+HotRing is no longer part of cache warmup or read-path prefetch. Cache behavior is now independent of HotRing and driven only by:
+
+* iterator/table prefetch settings
+* block/index cache budgets
+* normal read traffic
+
+The only remaining HotRing integration is optional write throttling.
 
 ---
 

@@ -8,8 +8,9 @@ import (
 const (
 	// MaxLevelNum _
 	MaxLevelNum = 7
-	// DefaultValueThreshold _
-	DefaultValueThreshold = 1024
+	// DefaultValueThreshold is the default cutoff for inlining values into the LSM.
+	// Values with len(value) >= threshold are written to the value log.
+	DefaultValueThreshold = 2048
 )
 
 // file

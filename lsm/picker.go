@@ -3,7 +3,6 @@ package lsm
 import (
 	"math"
 	"sort"
-	"strings"
 )
 
 // needsCompaction reports whether any level currently exceeds compaction thresholds.
@@ -24,10 +23,6 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 	if lm == nil || lm.opt == nil {
 		return PickerInput{}
 	}
-	var hotKeys [][]byte
-	if lm.hotProvider != nil {
-		hotKeys = lm.hotProvider()
-	}
 	levels := make([]LevelInput, len(lm.levels))
 	for i, lvl := range lm.levels {
 		if lvl == nil {
@@ -47,10 +42,6 @@ func (lm *levelManager) buildPickerInput() PickerInput {
 		}
 		if lm.compactState != nil {
 			li.DelSize = lm.compactState.DelSize(i)
-		}
-		if len(hotKeys) > 0 {
-			li.HotOverlap = lvl.hotOverlapScore(hotKeys, false)
-			li.HotOverlapIngest = lvl.hotOverlapScore(hotKeys, true)
 		}
 		levels[i] = li
 	}
@@ -314,8 +305,6 @@ type LevelInput struct {
 	IngestValueBytes   int64
 	IngestValueDensity float64
 	IngestAgeSeconds   float64
-	HotOverlap         float64
-	HotOverlapIngest   float64
 	DelSize            int64
 }
 
@@ -383,14 +372,6 @@ func PickPriorities(in PickerInput) []Priority {
 				valueScore = lvl.IngestValueDensity
 			}
 			pri.ApplyValueWeight(in.CompactionValueWeight, valueScore)
-		}
-		hotScore := lvlHotOverlap(in.Levels[level], ingest)
-		if hotScore > 0 {
-			pri.Score += hotScore
-			pri.Adjusted += hotScore * 2
-			if !strings.Contains(pri.StatsTag, "hot") {
-				pri.StatsTag = "hot-" + pri.StatsTag
-			}
 		}
 		if merge {
 			extras = append(extras, pri)
@@ -482,11 +463,4 @@ func PickPriorities(in PickerInput) []Priority {
 		return prios[i].Adjusted > prios[j].Adjusted
 	})
 	return prios
-}
-
-func lvlHotOverlap(lvl LevelInput, ingest bool) float64 {
-	if ingest {
-		return lvl.HotOverlapIngest
-	}
-	return lvl.HotOverlap
 }

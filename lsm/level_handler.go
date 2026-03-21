@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"errors"
 	"sort"
 	"sync"
@@ -159,63 +158,6 @@ func (lh *levelHandler) densityLocked() float64 {
 		return 0
 	}
 	return float64(lh.totalValueSize) / float64(lh.totalSize)
-}
-
-func baseKeyInRange(min, max, key []byte) bool {
-	if len(min) == 0 || len(max) == 0 || len(key) == 0 {
-		return false
-	}
-	minBase := kv.InternalToBaseKey(min)
-	maxBase := kv.InternalToBaseKey(max)
-	keyBase := kv.InternalToBaseKey(key)
-	return bytes.Compare(keyBase, minBase) >= 0 && bytes.Compare(keyBase, maxBase) <= 0
-}
-
-// hotOverlapScore returns the fraction of hotKeys overlapping this level.
-// When ingestOnly is true, only ingest buffers are considered.
-func (lh *levelHandler) hotOverlapScore(hotKeys [][]byte, ingestOnly bool) float64 {
-	if lh == nil || len(hotKeys) == 0 {
-		return 0
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	hit := 0
-	checkMain := func(key []byte) bool {
-		for _, t := range lh.tables {
-			if t == nil {
-				continue
-			}
-			if baseKeyInRange(t.MinKey(), t.MaxKey(), key) {
-				return true
-			}
-		}
-		return false
-	}
-	checkIngest := func(key []byte) bool {
-		for _, sh := range lh.ingest.shards {
-			for _, rng := range sh.ranges {
-				if baseKeyInRange(rng.min, rng.max, key) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	for _, hk := range hotKeys {
-		if len(hk) == 0 {
-			continue
-		}
-		if ingestOnly {
-			if checkIngest(hk) {
-				hit++
-			}
-			continue
-		}
-		if checkMain(hk) || checkIngest(hk) {
-			hit++
-		}
-	}
-	return float64(hit) / float64(len(hotKeys))
 }
 
 func (lh *levelHandler) numTables() int {

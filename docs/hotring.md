@@ -1,212 +1,74 @@
-# HotRing – Hot Key Tracking
+# HotRing
 
-`hotring` is NoKV's hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in [`hotring/`](../hotring) inside this repository.
+`hotring` is NoKV's optional internal hotspot detector. The package lives in [`hotring/`](../hotring) and is no longer part of the default read path, LSM compaction planning, or value-log bucket routing.
 
----
+## Current Role
 
-## 1. Motivation
+The production role is deliberately narrow:
 
-* **Cache hints** – `DB.prefetchLoop` (see [`db.go`](../db.go)) consumes hot keys to schedule asynchronous reads into the block cache.
-* **Operational insight** – `StatsSnapshot.Hot.ReadKeys` and `nokv stats --json` surface the hottest keys, aiding debugging of traffic hotspots.
-* **Throttling** – `HotRing.TouchAndClamp` enables simple rate caps: once a key crosses a threshold, callers can back off or log alerts.
+- detect write-hot keys when `Options.HotRingEnabled` is enabled
+- enforce `Options.WriteHotKeyLimit` via `HotRing.TouchAndClamp`
+- publish write-hot snapshots through `StatsSnapshot.Hot.WriteKeys` and `StatsSnapshot.Hot.WriteRing`
 
-Compared with RocksDB (which exposes block access stats via `perf_context`) and Badger (which lacks built-in hot-key reporting), NoKV offers a lightweight but concurrent-friendly tracker out of the box.
+If `HotRingEnabled=false`, the DB runs without HotRing tracking on the hot path.
 
----
+## What HotRing Does Not Control Anymore
 
-## 2. Data Structure
+These integrations were intentionally removed from the default engine path:
 
-```text
-HotRing
-  buckets[] -> per-bucket lock-free linked list (Node)
-  hashFn   -> hash(key) -> uint32
-  hashMask -> selects bucket (power of two size)
-```
+- read-path hot tracking and asynchronous read prefetch
+- LSM compaction scoring based on hot-key overlap
+- value-log hot/cold bucket routing
+- hot-write batch enlargement heuristics
 
-* Each bucket stores a sorted linked list of [`Node`](../hotring/node.go) ordered by `(tag, key)`, where `tag` is derived from the upper bits of the hash. Head pointers are `atomic.Pointer[Node]`, so readers walk the list without taking locks; writers use CAS to splice nodes while preserving order.
-* `defaultTableBits = 12` → 4096 buckets by default (`NewHotRing`). The mask ensures cheap modulo operations.
-* Nodes keep a `count` (int32) updated atomically and a `next` pointer stored via `unsafe.Pointer`. Sliding-window state is guarded by a tiny per-node spin lock instead of a process-wide mutex.
+The default value-log configuration keeps ordinary hash bucketization enabled through `ValueLogBucketCount`, but bucket selection no longer depends on HotRing.
 
-```mermaid
-flowchart LR
-  Key(key) -->|hash| Bucket["buckets[index] (atomic head)"]
-  Bucket --> Node1
-  Node1 --> Node2
-  Node2 --> Node3
-  Node3 --> Nil[(nil)]
-```
+## Data Structure
 
----
+HotRing remains a concurrent in-memory frequency tracker with:
 
-## 3. Core Operations
+- sharded hash buckets
+- lock-free bucket lists for lookup/insert
+- atomic counters per node
+- optional sliding-window and rotation support
 
-| Method | Behaviour | Notes |
-| --- | --- | --- |
-| [`Touch`](../hotring/hotring.go) | Insert or increment key's counter. | CAS-splices a new node if missing, then increments (window-aware when enabled). |
-| [`Frequency`](../hotring/hotring.go) | Read-only counter lookup. | Lock-free lookup; uses sliding-window totals when configured. |
-| [`TouchAndClamp`](../hotring/hotring.go) | Increment unless `count >= limit`, returning `(count, limited)`. | Throttling follows sliding-window totals so hot bursts clamp quickly. |
-| [`TopN`](../hotring/hotring.go) | Snapshot hottest keys sorted by count desc. | Walks buckets without locks, then sorts a copy. |
-| [`KeysAbove`](../hotring/hotring.go) | Return all keys with counters ≥ threshold. | Handy for targeted throttling or debugging hot shards.
+These capabilities are still useful for optional write throttling and operational diagnostics, even though they are no longer wired into unrelated subsystems.
 
-Bucket ordering is preserved by `findOrInsert`, which CASes either the bucket head or the predecessor’s `next` pointer to splice new nodes. Reads never take locks; only per-node sliding-window updates spin briefly to avoid data races.
+## Relevant Options
 
----
-
-## 4. Integration Points
-
-* **DB reads** – `DB.Get*` and iterators call `db.recordRead`, which invokes `HotRing.Touch` on a **read-only ring** for every successful lookup.
-* **Write throttling & hot batching** – writes are tracked by a **write-only ring**. When `Options.WriteHotKeyLimit > 0`, writes use `TouchAndClamp` to enforce throttling; when throttling is disabled but `HotWriteBurstThreshold > 0`, writes still `Touch` so hot batching can trigger.
-* **Stats** – `StatsSnapshot.Hot.ReadKeys` and `StatsSnapshot.Hot.WriteKeys` publish read/write hot keys. `expvar` exposes these under `NoKV.Stats.hot.read_keys` and `NoKV.Stats.hot.write_keys`.
-* **Caching** – hot reads trigger asynchronous prefetch into the normal L0/L1 block cache path.
-* **Value log routing** – a dedicated HotRing instance powers **vlog hot/cold bucket routing**. It tracks *write* hotness only (no read signal) to avoid polluting bucket selection. Hot keys are routed to hot buckets (`ValueLogHotBucketCount`) once `ValueLogHotKeyThreshold` is reached; cold keys go to the cold range.
-
----
-
-## 5. Comparisons
-
-| Engine | Approach |
+| Option | Meaning |
 | --- | --- |
-| RocksDB | External – `TRACE` / `perf_context` requires manual sampling. |
-| Badger | None built-in. |
-| NoKV | In-process ring with expvar/CLI export and throttling helpers. |
+| `HotRingEnabled` | Master switch for write-hot tracking. |
+| `WriteHotKeyLimit` | Reject writes once a single key exceeds the configured threshold. |
+| `HotRingBits` | Bucket count (`2^bits`) for the tracker. |
+| `HotRingTopK` | Number of hot keys exported in stats. |
+| `HotRingRotationInterval` | Optional dual-ring rotation. |
+| `HotRingWindowSlots` / `HotRingWindowSlotDuration` | Optional sliding-window tracking. |
+| `HotRingNodeCap` / `HotRingNodeSampleBits` | Bound in-memory growth. |
 
-The HotRing emphasises simplicity: lock-free bucket lists with atomic counters (plus optional per-node window tracking), avoiding sketches while staying light enough for hundreds of thousands of hot keys.
+## Write Throttling
 
----
+When both `HotRingEnabled` and `WriteHotKeyLimit > 0` are set, NoKV records write frequency by `CF + UserKey` and returns `utils.ErrHotKeyWriteThrottle` once the limit is reached.
 
-## 6. Operational Tips
+This path exists to protect the engine from pathological skew. It is intentionally independent from cache warming, compaction, and value-log routing.
 
-* `Options.HotRingTopK` controls how many keys show up in stats; default 16. Increase it when investigating workloads with broad hot sets.
-* `Options.HotReadPrefetchThreshold` and `Options.HotReadPrefetchCooldown` control when hot reads trigger async cache prefetch and how quickly the same key can be prefetched again.
-* Combine `TouchAndClamp` with request middleware to detect abusive tenants: when `limited` is true, log the key and latency impact.
-* Resetting the ring is as simple as instantiating a new `HotRing`—useful for benchmarks that require clean counters between phases.
+## Stats
 
-For end-to-end examples see [`docs/stats.md`](stats.md#hot-key-export) and the CLI walkthrough in [`docs/cli.md`](cli.md#hot-key-output).
+HotRing contributes only write-side observability:
 
----
+- `StatsSnapshot.Hot.WriteKeys`
+- `StatsSnapshot.Hot.WriteRing`
+- `StatsSnapshot.Write.HotKeyLimited`
 
-## 6.1 Default Configuration
+The CLI surfaces the same data under `nokv stats`.
 
-Global HotRing defaults (`NewDefaultOptions`):
+## Design Position
 
-| Option | Default value | Notes |
-| --- | --- | --- |
-| `HotRingEnabled` | `true` | Master switch for DB hot tracking. |
-| `HotRingBits` | `12` | 4096 buckets. |
-| `HotRingTopK` | `16` | Top-K hot keys for stats/CLI. |
-| `HotReadPrefetchThreshold` | `16` | Async prefetch starts once a key reaches this read count. |
-| `HotReadPrefetchCooldown` | `15s` | Suppress repeated prefetch for the same hot key. |
-| `HotRingDecayInterval` | `0` | Decay disabled by default. |
-| `HotRingDecayShift` | `0` | Decay disabled by default. |
-| `HotRingWindowSlots` | `8` | Sliding window enabled. |
-| `HotRingWindowSlotDuration` | `250ms` | ~2s window. |
-| `HotRingRotationInterval` | `30m` | Dual-ring rotation enabled. |
-| `HotRingNodeCap` | `250,000` | Strict cap per ring. |
-| `HotRingNodeSampleBits` | `0` | Strict cap (no sampling). |
+HotRing should be understood as:
 
-Value-log override defaults (`ValueLogHotRing*`):
+- an optional internal detector
+- an optional write throttling tool
+- not a required performance feature
+- not a default read-path or value-log optimization
 
-| Option | Default value | Notes |
-| --- | --- | --- |
-| `ValueLogHotRingOverride` | `true` | Use dedicated VLog settings. |
-| `ValueLogHotRingBits` | `12` | 4096 buckets. |
-| `ValueLogHotRingRotationInterval` | `10m` | Faster rotation for write-hotness. |
-| `ValueLogHotRingNodeCap` | `200,000` | Strict cap per ring. |
-| `ValueLogHotRingNodeSampleBits` | `0` | Strict cap (no sampling). |
-| `ValueLogHotRingDecayInterval` | `0` | Decay disabled (window handles recency). |
-| `ValueLogHotRingDecayShift` | `0` | Decay disabled. |
-| `ValueLogHotRingWindowSlots` | `6` | ~600ms window. |
-| `ValueLogHotRingWindowSlotDuration` | `100ms` | Shorter write-hotness window. |
-
-When `ValueLogHotRingOverride=false`, the value-log ring inherits the global HotRing
-settings. When override is enabled, **zeros disable features** (except `bits=0`,
-which falls back to the ring default).
-
----
-
-## 7. Write-Path Throttling
-
-`Options.WriteHotKeyLimit` wires the write-only HotRing into the write path. When set to a positive integer, user writes (`DB.Set`, `DB.SetBatch`, `DB.SetWithTTL`, `DB.Del`, `DB.DeleteRange`) and internal writes (`DB.ApplyInternalEntries`) invoke `HotRing.TouchAndClamp` with the limit. Once a key (optionally scoped by column family via `cfHotKey`) reaches the limit, the write is rejected with `utils.ErrHotKeyWriteThrottle`. If throttling is disabled but `HotWriteBurstThreshold > 0`, the write ring still tracks frequency to enable hot write batching. This keeps pathological tenants or hot shards from overwhelming a single Raft group without adding heavyweight rate-limiters to the client stack.
-
-Operational hints:
-
-* `StatsSnapshot.Write.HotKeyLimited` and the CLI line `Write.HotKeyThrottled` expose how many writes were rejected since the process started.
-* Applications should surface `utils.ErrHotKeyWriteThrottle` to callers (e.g. HTTP 429) so clients can back off.
-* Prefetching continues to run independently—only writes are rejected; reads still register hotness so the cache layer knows what to prefetch.
-* Set the limit conservatively (e.g. a few dozen) and pair it with richer `HotRing` analytics (top-K stats, expvar export) to identify outliers before tuning.
-
----
-
-## 8. Time-Based Decay & Sliding Window
-
-HotRing now exposes two complementary controls so “old” hotspots fade away automatically:
-
-1. **Periodic decay (`Options.HotRingDecayInterval` + `HotRingDecayShift`)**  
-   Every `interval` the global counters are right-shifted (`count >>= shift`). This keeps `TopN` and stats output focused on recent traffic even if writes stop abruptly.
-2. **Sliding window (`Options.HotRingWindowSlots` + `HotRingWindowSlotDuration`)**  
-   Per-key windows split time into `slots`, each lasting `slotDuration`. `Touch` only accumulates inside the current slot; once the window slides past, the stale contribution is dropped. `TouchAndClamp` and `Frequency` use the sliding-window total, so write throttling reflects short-term pressure instead of lifetime counts.
-
-Disable either mechanism by setting the interval/durations to zero. Typical starting points:
-
-| Option | Default value | Effect |
-| --- | --- | --- |
-| `HotRingDecayInterval` | `0` | Decay disabled by default. |
-| `HotRingDecayShift` | `0` | Decay disabled by default. |
-| `HotRingWindowSlots` | `8` | Keep ~8 buckets of recency data. |
-| `HotRingWindowSlotDuration` | `250ms` | Roughly 2s window for throttling. |
-
-With both enabled, the decay loop keeps background stats tidy while the sliding window powers precise, short-term throttling logic.
-
-Note: in NoKV, configuration normalization treats the sliding window as higher
-priority. If a window is enabled, decay is automatically disabled to avoid
-redundant background work.
-
----
-
-## 9. Bounding Growth (Node Cap & Rotation)
-
-HotRing does not automatically evict keys. To keep memory predictable in high-cardinality
-workloads, use a **node cap** (with optional sampling) and/or **ring rotation**.
-
-### Node cap + sampling
-
-* `Options.HotRingNodeCap` sets a per-ring upper bound on tracked keys.
-* `Options.HotRingNodeSampleBits` controls stable sampling once the cap is hit:
-  * `0` = strict cap (no new keys after the cap).
-  * `N` = allow roughly `1/2^N` of new keys (soft cap).
-  * When `HotRingNodeCap = 0`, sampling is disabled.
-
-### Dual-ring rotation
-
-* `Options.HotRingRotationInterval` enables dual-ring rotation:
-  * **active** ring receives new touches
-  * **warm** ring keeps the previous generation to avoid sudden drops
-* Merge semantics:
-  * `Frequency` / `TouchAndClamp` → `max(active, warm)`
-  * `TopN` / `KeysAbove` → `sum(active, warm)`
-
-**Memory note:** rotation keeps two rings, so the upper bound is roughly
-`2 × HotRingNodeCap`. If you have a fixed budget, halve the per-ring cap.
-
-Suggested starting points:
-
-| Option | Effect |
-| --- | --- |
-| `HotRingNodeCap` | Hard cap per ring (0 disables). |
-| `HotRingNodeSampleBits` | Soft cap sampling rate. |
-| `HotRingRotationInterval` | Rotation period (0 disables). |
-
----
-
-## 10. Value Log Overrides
-
-NoKV maintains a **value-log HotRing** dedicated to hot/cold routing. By
-default this override is enabled so the write-only ring can use faster rotation
-and a shorter window. You can disable it to inherit the global HotRing config:
-
-* `Options.ValueLogHotRingOverride = false` (inherit global settings)
-* Or keep it enabled and tune `ValueLogHotRing*` fields explicitly.
-
-When override is enabled, **the value-log ring uses the override values verbatim**;
-zeros disable a feature (for example, rotation). If override is disabled, it
-inherits the global `HotRing*` configuration.
+That narrower scope keeps the core engine path simpler and makes HotRing easier to reason about.

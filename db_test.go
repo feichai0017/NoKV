@@ -196,8 +196,6 @@ func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
 	opt.CompactionValueWeight = 0
 	opt.CompactionValueAlertThreshold = 0
 	opt.HotRingTopK = 0
-	opt.HotReadPrefetchThreshold = 0
-	opt.HotReadPrefetchCooldown = 0
 
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
@@ -208,8 +206,6 @@ func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Zero(t, opt.L0StopWritesTrigger)
 	require.Zero(t, opt.CompactionStopTrigger)
 	require.Zero(t, opt.HotRingTopK)
-	require.Zero(t, opt.HotReadPrefetchThreshold)
-	require.Zero(t, opt.HotReadPrefetchCooldown)
 
 	require.Greater(t, db.opt.WriteBatchMaxCount, 0)
 	require.Greater(t, db.opt.WriteBatchMaxSize, int64(0))
@@ -231,8 +227,6 @@ func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
 	require.Greater(t, db.opt.HotRingTopK, 0)
-	require.Greater(t, db.opt.HotReadPrefetchThreshold, int32(0))
-	require.Greater(t, db.opt.HotReadPrefetchCooldown, time.Duration(0))
 }
 
 func newTestOptions(t *testing.T) *Options {
@@ -1278,36 +1272,15 @@ func TestCFHotKey(t *testing.T) {
 func TestHotWriteAndThrottle(t *testing.T) {
 	db := &DB{
 		opt: &Options{
-			HotWriteBurstThreshold: 1,
-			WriteHotKeyLimit:       1,
+			WriteHotKeyLimit: 1,
 		},
 		hotWrite: hotring.NewHotRing(8, nil),
 	}
 
 	userKey := []byte("hot")
-	entry := kv.NewInternalEntry(kv.CFDefault, userKey, nonTxnMaxVersion, []byte("v"), 0, 0)
-	defer entry.DecrRef()
 	err := db.maybeThrottleWrite(kv.CFDefault, userKey)
 	require.ErrorIs(t, err, utils.ErrHotKeyWriteThrottle)
-	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
 	require.Equal(t, uint64(1), db.hotWriteLimited.Load())
-}
-
-func TestIsHotWriteUsesUserKeyForInternalEntries(t *testing.T) {
-	db := &DB{
-		opt: &Options{
-			HotWriteBurstThreshold: 1,
-			WriteHotKeyLimit:       0,
-		},
-		hotWrite: hotring.NewHotRing(8, nil),
-	}
-
-	userKey := []byte("hot-user-key")
-	require.NoError(t, db.maybeThrottleWrite(kv.CFDefault, userKey))
-
-	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, userKey, nonTxnMaxVersion), []byte("v"))
-	defer entry.DecrRef()
-	require.True(t, db.isHotWrite([]*kv.Entry{entry}))
 }
 
 func TestApplyRequestsFailureIndex(t *testing.T) {
@@ -1398,105 +1371,6 @@ func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 
 	require.NoError(t, req1.Err)
 	require.ErrorIs(t, req2.Err, reqErr)
-}
-
-func TestRecordReadEnqueuesPrefetch(t *testing.T) {
-	db := &DB{
-		opt:               &Options{},
-		hotRead:           hotring.NewHotRing(8, nil),
-		prefetchRing:      utils.NewRing[prefetchRequest](2),
-		prefetchThreshold: 1,
-	}
-	db.prefetchState.Store(&prefetchState{
-		pend:       make(map[string]struct{}),
-		prefetched: make(map[string]time.Time),
-	})
-
-	db.recordRead([]byte("k1"))
-	req, ok := db.prefetchRing.Pop()
-	require.True(t, ok)
-	require.Equal(t, "k1", req.key)
-}
-
-func TestEnqueuePrefetchRingFull(t *testing.T) {
-	db := &DB{
-		opt:          &Options{},
-		prefetchRing: utils.NewRing[prefetchRequest](2),
-	}
-	db.prefetchState.Store(&prefetchState{
-		pend:       make(map[string]struct{}),
-		prefetched: make(map[string]time.Time),
-	})
-
-	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-1"}))
-	require.True(t, db.prefetchRing.Push(prefetchRequest{key: "filled-2"}))
-
-	db.enqueuePrefetch("blocked")
-	state := db.prefetchState.Load()
-	_, pending := state.pend["blocked"]
-	require.False(t, pending)
-}
-
-func TestExecutePrefetchUpdatesState(t *testing.T) {
-	db := &DB{
-		opt:              &Options{},
-		prefetchCooldown: 10 * time.Millisecond,
-	}
-	state := &prefetchState{
-		pend:       map[string]struct{}{"k1": {}},
-		prefetched: make(map[string]time.Time),
-	}
-	db.prefetchState.Store(state)
-
-	db.executePrefetch(prefetchRequest{key: "k1"})
-	next := db.prefetchState.Load()
-	_, pending := next.pend["k1"]
-	require.False(t, pending)
-	expiry, ok := next.prefetched["k1"]
-	require.True(t, ok)
-	require.True(t, expiry.After(time.Now().Add(-time.Millisecond)))
-
-	db.prefetchCooldown = 0
-	next.pend["k2"] = struct{}{}
-	db.prefetchState.Store(next)
-	db.executePrefetch(prefetchRequest{key: "k2"})
-	final := db.prefetchState.Load()
-	_, pending = final.pend["k2"]
-	require.False(t, pending)
-	_, ok = final.prefetched["k2"]
-	require.False(t, ok)
-}
-
-func TestPrefetchLoopDrainsRing(t *testing.T) {
-	db := &DB{
-		opt:           &Options{},
-		prefetchRing:  utils.NewRing[prefetchRequest](2),
-		prefetchItems: make(chan struct{}, 2),
-	}
-	db.prefetchState.Store(&prefetchState{
-		pend:       make(map[string]struct{}),
-		prefetched: make(map[string]time.Time),
-	})
-
-	db.prefetchWG.Add(1)
-	go db.prefetchLoop()
-
-	db.enqueuePrefetch("k")
-	require.Eventually(t, func() bool {
-		state := db.prefetchState.Load()
-		_, pending := state.pend["k"]
-		return !pending
-	}, time.Second, 5*time.Millisecond)
-	db.prefetchRing.Close()
-	select {
-	case db.prefetchItems <- struct{}{}:
-	default:
-	}
-	db.prefetchWG.Wait()
-
-	state := db.prefetchState.Load()
-	_, pending := state.pend["k"]
-	require.False(t, pending)
 }
 
 func TestCloseWithErrors(t *testing.T) {
