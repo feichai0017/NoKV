@@ -256,7 +256,6 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	defer func() {
 		_ = t.DecrRef()
 	}()
-	// get the index
 	idx := t.index()
 	if idx == nil {
 		return nil, errors.New("table index missing")
@@ -279,18 +278,70 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}
-	iter := t.NewIterator(&utils.Options{IsAsc: true})
-	defer func() { _ = iter.Close() }()
-
-	iter.Seek(key)
-	if !iter.Valid() {
+	offsets := idx.GetOffsets()
+	if len(offsets) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
-	item := iter.Item()
+	blockIdx := searchFirstBlockWithBaseKeyGT(offsets, key)
+	if blockIdx == 0 {
+		return t.searchPointInBlock(0, key, maxVs)
+	}
+	entry, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
+	if err == nil || err != utils.ErrKeyNotFound || blockIdx >= len(offsets) {
+		return entry, err
+	}
+	return t.searchPointInBlock(blockIdx, key, maxVs)
+}
+
+func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+	t.IncrRef()
+	defer func() {
+		_ = t.DecrRef()
+	}()
+	idx := t.index()
+	if idx == nil {
+		return nil, errors.New("table index missing")
+	}
+	offsets := idx.GetOffsets()
+	if len(offsets) == 0 {
+		return nil, utils.ErrKeyNotFound
+	}
+	blockIdx := searchFirstBlockWithBaseKeyGT(offsets, key)
+	if blockIdx == 0 {
+		return t.searchPointInBlock(0, key, maxVs)
+	}
+	entry, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
+	if err == nil || err != utils.ErrKeyNotFound || blockIdx >= len(offsets) {
+		return entry, err
+	}
+	return t.searchPointInBlock(blockIdx, key, maxVs)
+}
+
+func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
+	block, err := t.loadBlock(blockIdx)
+	if err != nil {
+		return nil, err
+	}
+	bi := getBlockIterator()
+	defer func() {
+		_ = bi.Close()
+		putBlockIterator(bi)
+	}()
+	bi.tableID = t.fid
+	bi.blockID = blockIdx
+	bi.isAsc = true
+	bi.setBlock(block)
+	bi.seek(key)
+	if !bi.Valid() {
+		if err := bi.Error(); err != nil && err != io.EOF {
+			return nil, err
+		}
+		return nil, utils.ErrKeyNotFound
+	}
+	item := bi.Item()
 	if item == nil || item.Entry() == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-
 	if e := item.Entry(); kv.SameKey(key, e.Key) {
 		if version := kv.Timestamp(e.Key); *maxVs < version {
 			*maxVs = version
