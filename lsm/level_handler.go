@@ -396,7 +396,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	tables := lh.getTablesForKey(key)
+	tables := lh.getTablesForKeyUntracked(key)
 	if len(tables) == 0 {
 		return nil
 	}
@@ -406,13 +406,33 @@ func (lh *levelHandler) getTableForKey(key []byte) *table {
 // getTablesForKey returns every table in this level whose user-key range covers key.
 // Tables are returned in min-key order.
 func (lh *levelHandler) getTablesForKey(key []byte) []*table {
+	return lh.selectTablesForKey(key, true)
+}
+
+func (lh *levelHandler) getTablesForKeyUntracked(key []byte) []*table {
+	return lh.selectTablesForKey(key, false)
+}
+
+func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
+	total := len(lh.tables)
+	fallback := false
+	var tables []*table
 	if len(lh.filter.spans) == 0 {
-		return lh.getTablesForKeyLinear(key)
+		fallback = true
+		tables = lh.getTablesForKeyLinear(key)
+	} else {
+		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		tables = lh.filter.tablesForPoint(key)
 	}
-	return lh.filter.tablesForPoint(key)
+	if record && lh.lm != nil {
+		lh.lm.recordRangeFilterPoint(total, len(tables), fallback)
+	}
+	return tables
 }
 
 func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
@@ -439,13 +459,32 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 }
 
 func (lh *levelHandler) getTablesForBounds(lower, upper []byte) []*table {
+	return lh.selectTablesForBounds(lower, upper, true)
+}
+
+func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) []*table {
 	if len(lh.tables) == 0 {
+		if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
+			lh.lm.recordRangeFilterBounded(0, 0, false)
+		}
 		return nil
 	}
+	total := len(lh.tables)
+	fallback := false
+	var tables []*table
 	if len(lh.filter.spans) == 0 {
-		return filterTablesByBounds(lh.tables, lower, upper)
+		fallback = true
+		tables = filterTablesByBounds(lh.tables, lower, upper)
+	} else {
+		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		tables = lh.filter.tablesForBounds(lower, upper)
 	}
-	return lh.filter.tablesForBounds(lower, upper)
+	if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
+		lh.lm.recordRangeFilterBounded(total, len(tables), fallback)
+	}
+	return tables
 }
 
 func (lh *levelHandler) rebuildRangeFilterLocked() {
@@ -606,15 +645,29 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	mainTables := lh.getTablesForBounds(topt.LowerBound, topt.UpperBound)
+	bounded := len(topt.LowerBound) > 0 || len(topt.UpperBound) > 0
+	mainTables := lh.selectTablesForBounds(topt.LowerBound, topt.UpperBound, false)
 	if lh.levelNum == 0 {
+		if bounded && lh.lm != nil {
+			lh.lm.recordRangeFilterBounded(len(lh.tables), len(mainTables), len(lh.filter.spans) == 0)
+		}
 		return iteratorsReversed(mainTables, topt)
 	}
 
 	var itrs []utils.Iterator
-	itrs = append(itrs, lh.ingest.iteratorsWithinBounds(topt)...)
+	ingestTables := lh.ingest.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
+	itrs = append(itrs, iteratorsReversed(ingestTables, topt)...)
 	if len(mainTables) > 0 {
 		itrs = append(itrs, NewConcatIterator(mainTables, topt))
+	}
+	if bounded && lh.lm != nil {
+		total := len(lh.tables) + lh.ingest.tableCount()
+		candidates := len(mainTables) + len(ingestTables)
+		fallback := len(lh.filter.spans) == 0
+		if lh.levelNum > 0 && len(lh.filter.spans) > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		lh.lm.recordRangeFilterBounded(total, candidates, fallback)
 	}
 	return itrs
 }

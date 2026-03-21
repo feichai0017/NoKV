@@ -92,6 +92,13 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	miss := lh.getTablesForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 5))
 	require.Empty(t, miss)
 
+	diag := lsm.Diagnostics()
+	require.Equal(t, uint64(1), diag.RangeFilter.PointCandidates)
+	require.Equal(t, uint64(5), diag.RangeFilter.PointPruned)
+	require.Equal(t, uint64(1), diag.RangeFilter.BoundedCandidates)
+	require.Equal(t, uint64(2), diag.RangeFilter.BoundedPruned)
+	require.Equal(t, uint64(0), diag.RangeFilter.Fallbacks)
+
 	for _, tbl := range []*table{tblA, tblD, tblG} {
 		require.NoError(t, tbl.DecrRef())
 	}

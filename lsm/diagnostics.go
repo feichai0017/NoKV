@@ -20,16 +20,25 @@ type CompactionDiagnostics struct {
 	AlertThreshold float64
 }
 
+type RangeFilterDiagnostics struct {
+	PointCandidates   uint64
+	PointPruned       uint64
+	BoundedCandidates uint64
+	BoundedPruned     uint64
+	Fallbacks         uint64
+}
+
 // Diagnostics exposes a stable read-only snapshot of LSM internals for
 // observability code. It keeps runtime metrics grouped behind one API instead
 // of leaking internal structures through many top-level getters.
 type Diagnostics struct {
-	Entries    int64
-	Flush      metrics.FlushMetrics
-	Compaction CompactionDiagnostics
-	Levels     []LevelMetrics
-	Cache      CacheMetrics
-	MaxVersion uint64
+	Entries     int64
+	Flush       metrics.FlushMetrics
+	Compaction  CompactionDiagnostics
+	RangeFilter RangeFilterDiagnostics
+	Levels      []LevelMetrics
+	Cache       CacheMetrics
+	MaxVersion  uint64
 }
 
 // Diagnostics returns a point-in-time snapshot of LSM diagnostic state.
@@ -61,11 +70,25 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 	if lm := lsm.levels; lm != nil {
 		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactionStats()
 		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactionDurations()
+		diag.RangeFilter = lm.rangeFilterDiagnostics()
 		diag.Levels = lm.levelMetricsSnapshot()
 		diag.Cache = lm.cacheMetrics()
 		diag.Entries += lm.entryCount()
 	}
 	return diag
+}
+
+func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
+	if lm == nil {
+		return RangeFilterDiagnostics{}
+	}
+	return RangeFilterDiagnostics{
+		PointCandidates:   lm.rangeFilter.pointCandidates.Load(),
+		PointPruned:       lm.rangeFilter.pointPruned.Load(),
+		BoundedCandidates: lm.rangeFilter.boundedCandidates.Load(),
+		BoundedPruned:     lm.rangeFilter.boundedPruned.Load(),
+		Fallbacks:         lm.rangeFilter.fallbacks.Load(),
+	}
 }
 
 // ValueLogHeadSnapshot returns the persisted per-bucket vlog head pointers.
