@@ -299,7 +299,7 @@ func (vlog *valueLog) doRunGC(bucket uint32, fid uint32, discardRatio float64) (
 			return false, err
 		}
 		defer entry.DecrRef()
-		if kv.DiscardEntry(entry) {
+		if shouldSkipValueLogRewrite(entry) {
 			return true, nil
 		}
 
@@ -382,7 +382,7 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return utils.ErrNoRewrite
 		}
 		defer entry.DecrRef()
-		if kv.DiscardEntry(entry) {
+		if shouldSkipValueLogRewrite(entry) {
 			return nil
 		}
 
@@ -403,12 +403,9 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 			return nil
 		}
 
-		ne := kv.EntryPool.Get().(*kv.Entry)
-		ne.IncrRef()
+		ne := kv.NewEntry(append([]byte(nil), e.Key...), append([]byte(nil), e.Value...))
 		ne.Meta = 0
 		ne.ExpiresAt = e.ExpiresAt
-		ne.Key = append(ne.Key[:0], e.Key...)
-		ne.Value = append(ne.Value[:0], e.Value...)
 
 		es := int64(ne.EstimateSize(vlog.db.opt.ValueLogFileSize))
 		es += int64(len(e.Value))
@@ -432,7 +429,6 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		}
 		return err
 	}
-
 	batchSize := 1024
 	for i := 0; i < len(wb); {
 		end := min(i+batchSize, len(wb))
@@ -477,6 +473,16 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 		}
 	}
 	return nil
+}
+
+func shouldSkipValueLogRewrite(e *kv.Entry) bool {
+	if e == nil {
+		return true
+	}
+	if e.IsDeletedOrExpired() {
+		return true
+	}
+	return !kv.IsValuePtr(e)
 }
 
 func (vlog *valueLog) iteratorCount() int {
@@ -644,7 +650,9 @@ func (vlog *valueLog) populateDiscardStats() error {
 		vp.Decode(val)
 		result, cb, err := vlog.read(&vp)
 		val = kv.SafeCopy(nil, result)
-		kv.RunCallback(cb)
+		if cb != nil {
+			cb()
+		}
 		if err != nil {
 			return err
 		}

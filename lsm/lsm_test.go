@@ -1398,14 +1398,17 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	min := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
 	max := kv.InternalKey(kv.CFDefault, []byte("z"), 1)
-	if keyInRange(min, max, nil) {
+	if baseKeyInRange(min, max, nil) {
 		t.Fatalf("expected nil key to be out of range")
 	}
-	if !keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("m"), 1)) {
+	if !baseKeyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("m"), 1)) {
 		t.Fatalf("expected key to be in range")
 	}
-	if keyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("0"), 1)) {
+	if baseKeyInRange(min, max, kv.InternalKey(kv.CFDefault, []byte("0"), 1)) {
 		t.Fatalf("expected key to be out of range")
+	}
+	if baseKeyInRange(min, max, kv.InternalKey(kv.CFWrite, []byte("m"), 1)) {
+		t.Fatalf("expected different CF key to be out of range")
 	}
 
 	lh := &levelHandler{levelNum: 2}

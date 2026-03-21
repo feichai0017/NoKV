@@ -75,7 +75,7 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		vp.Decode(val)
 		fetched, cb, err := it.vlog.read(&vp)
 		if cb != nil {
-			defer kv.RunCallback(cb)
+			defer cb()
 		}
 		if err != nil {
 			return nil, err
@@ -504,7 +504,7 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 			vp.Decode(src.Value)
 			val, cb, err := iter.vlog.read(&vp)
 			if cb != nil {
-				defer kv.RunCallback(cb)
+				defer cb()
 			}
 			if err != nil {
 				return false, errors.Wrapf(err, "value-log read failed for key %q", userKey)

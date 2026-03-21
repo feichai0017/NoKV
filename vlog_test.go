@@ -81,8 +81,12 @@ func TestVlogBase(t *testing.T) {
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	// Release callbacks.
-	defer kvpkg.RunCallback(unlock1)
-	defer kvpkg.RunCallback(unlock2)
+	if unlock1 != nil {
+		defer unlock1()
+	}
+	if unlock2 != nil {
+		defer unlock2()
+	}
 	entry1, err := kvpkg.DecodeEntry(payload1)
 	require.NoError(t, err)
 	defer entry1.DecrRef()

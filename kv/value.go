@@ -168,20 +168,3 @@ func BytesToU32Slice(b []byte) []uint32 {
 	}
 	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
-
-// RunCallback runs callback if not nil.
-func RunCallback(cb func()) {
-	if cb != nil {
-		cb()
-	}
-}
-
-func DiscardEntry(e *Entry) bool {
-	if e.IsDeletedOrExpired() {
-		return true
-	}
-	if (e.Meta & BitValuePointer) == 0 {
-		return true
-	}
-	return false
-}
