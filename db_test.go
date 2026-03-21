@@ -29,7 +29,7 @@ import (
 
 func TestAPI(t *testing.T) {
 	clearDir()
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	// Write entries.
 	for i := range 50 {
@@ -86,7 +86,7 @@ func TestAPI(t *testing.T) {
 
 func TestColumnFamilies(t *testing.T) {
 	clearDir()
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("user-key")
@@ -143,7 +143,7 @@ func TestColumnFamilies(t *testing.T) {
 
 func TestSetBatch(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	require.NoError(t, db.SetBatch([]BatchSetItem{
@@ -162,7 +162,7 @@ func TestSetBatch(t *testing.T) {
 
 func TestSetBatchValidation(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	require.NoError(t, db.SetBatch(nil))
@@ -199,7 +199,7 @@ func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
 	opt.HotReadPrefetchThreshold = 0
 	opt.HotReadPrefetchCooldown = 0
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	require.Zero(t, opt.WriteBatchMaxCount)
@@ -256,7 +256,7 @@ func applyVersionedEntryForTest(t *testing.T, db *DB, cf kv.ColumnFamily, key []
 
 func TestVersionedEntryRoundTrip(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-key")
@@ -279,7 +279,7 @@ func TestVersionedEntryRoundTrip(t *testing.T) {
 
 func TestGetInternalEntryPopulatesInternalFieldsFromHitVersion(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-hit")
@@ -302,7 +302,7 @@ func TestGetInternalEntryPopulatesInternalFieldsFromHitVersion(t *testing.T) {
 
 func TestVersionedEntryDeleteTombstone(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("versioned-delete")
@@ -327,7 +327,7 @@ func TestVersionedEntryDeleteTombstone(t *testing.T) {
 
 func TestApplyEntriesWritesBatch(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("batch-key")
@@ -354,7 +354,7 @@ func TestApplyEntriesWritesBatch(t *testing.T) {
 
 func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	entry := kv.NewEntry(nil, []byte("value"))
@@ -367,7 +367,7 @@ func TestApplyEntriesRejectsEmptyKey(t *testing.T) {
 
 func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	entry := kv.NewEntry([]byte("plain-user-key"), []byte("value"))
@@ -379,7 +379,7 @@ func TestApplyEntriesRejectsNonInternalKey(t *testing.T) {
 
 func TestSetRejectsNilValueAndAllowsEmptyValue(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	nilKey := []byte("nil-value")
@@ -411,7 +411,7 @@ func TestSetRejectsNilValueAndAllowsEmptyValue(t *testing.T) {
 
 func TestSetAfterCloseDoesNotPanic(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NoError(t, db.Close())
 
 	var err error
@@ -423,7 +423,7 @@ func TestSetAfterCloseDoesNotPanic(t *testing.T) {
 
 func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NoError(t, db.Close())
 
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
@@ -438,7 +438,7 @@ func TestApplyEntriesAfterCloseDoesNotPanicAndCallerCanRelease(t *testing.T) {
 func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MaxBatchCount = 1
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("k"), 1, []byte("v"), 0, 0)
@@ -452,7 +452,7 @@ func TestApplyEntriesErrTxnTooBigDoesNotPanicAndCallerCanRelease(t *testing.T) {
 
 func TestGetEntryIsDetachedFromPool(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("detached-key")
@@ -477,7 +477,7 @@ func TestGetEntryIsDetachedFromPool(t *testing.T) {
 func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	t.Run("inline", func(t *testing.T) {
 		opt := newTestOptions(t)
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		require.NoError(t, db.Set([]byte("a"), []byte("va")))
@@ -498,7 +498,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 	t.Run("value-pointer", func(t *testing.T) {
 		opt := newTestOptions(t)
 		opt.ValueThreshold = 0
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		value := bytes.Repeat([]byte("p"), 64)
@@ -519,7 +519,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 func TestDBIteratorUserView(t *testing.T) {
 	t.Run("filters-non-default-cf", func(t *testing.T) {
 		opt := newTestOptions(t)
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("k1"), nonTxnMaxVersion, []byte("default"), 0)
@@ -542,7 +542,7 @@ func TestDBIteratorUserView(t *testing.T) {
 
 	t.Run("returns-latest-version-only", func(t *testing.T) {
 		opt := newTestOptions(t)
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		key := []byte("k")
@@ -567,7 +567,7 @@ func TestDBIteratorUserView(t *testing.T) {
 func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.MemTableEngine = MemTableEngineART
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	for _, k := range []string{"a", "b", "c", "d"} {
@@ -586,7 +586,7 @@ func TestDBIteratorReverseWithARTMemtable(t *testing.T) {
 
 func TestDBIteratorReverseLatestVersion(t *testing.T) {
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	applyVersionedEntryForTest(t, db, kv.CFDefault, []byte("a"), 1, []byte("va"), 0)
@@ -614,7 +614,7 @@ func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
 	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
 		opt := newTestOptions(t)
 		opt.MemTableEngine = engine
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		require.NoError(t, db.Set([]byte("k"), []byte("v")))
@@ -674,23 +674,14 @@ func TestDirectoryLockPreventsConcurrentOpen(t *testing.T) {
 		MaxBatchSize:     1 << 20,
 	}
 
-	db := Open(opt)
-
-	didPanic := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				didPanic = true
-			}
-		}()
-		Open(opt)
-	}()
-
-	require.True(t, didPanic, "expected second Open to panic due to directory lock")
+	db := openTestDB(t, opt)
+	_, err := Open(opt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already held")
 
 	require.NoError(t, db.Close())
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	require.NoError(t, db2.Close())
 }
 
@@ -702,7 +693,7 @@ func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {
 		opt.WriteHotKeyLimit = prev
 	}()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("throttle-key")
@@ -742,7 +733,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 		MaxBatchSize:        1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 
 	for i := range 48 {
 		val := make([]byte, 512)
@@ -762,7 +753,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	defer func() { _ = db2.Close() }()
 
 	_, err := os.Stat(stalePath)
@@ -770,7 +761,7 @@ func TestRecoveryRemovesStaleValueLogSegment(t *testing.T) {
 	removed := os.IsNotExist(err)
 	require.True(t, removed, "expected stale value log file to be deleted on recovery")
 
-	status := db2.lsm.Diagnostics().ValueLogStatus
+	status := db2.valueLogStatusSnapshot()
 	meta, ok := status[manifest.ValueLogID{Bucket: 0, FileID: staleFID}]
 	if ok {
 		require.False(t, meta.Valid)
@@ -798,7 +789,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 		MaxBatchSize:        1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	key := []byte("orphan-key")
 	val := make([]byte, 512)
 	require.NoError(t, db.Set(key, val))
@@ -807,7 +798,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	require.False(t, headPtr.IsZero(), "expected value log head to be initialized")
 	headCopy := headPtr
 	require.NoError(t, db.lsm.LogValueLogHead(&headCopy))
-	before := db.lsm.Diagnostics().ValueLogStatus
+	before := db.valueLogStatusSnapshot()
 	beforeInfo := make(map[manifest.ValueLogID]bool, len(before))
 	for id, meta := range before {
 		beforeInfo[id] = meta.Valid
@@ -818,12 +809,12 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	orphanPath := filepath.Join(dir, "vlog", "bucket-000", fmt.Sprintf("%05d.vlog", orphanFID))
 	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o666))
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	defer func() { _ = db2.Close() }()
 
-	diag := db2.lsm.Diagnostics()
-	headMeta, hasHead := diag.ValueLogHead[0]
-	status := diag.ValueLogStatus
+	heads := db2.getHeads()
+	headMeta, hasHead := heads[0]
+	status := db2.valueLogStatusSnapshot()
 	statusInfo := make(map[manifest.ValueLogID]bool, len(status))
 	for id, meta := range status {
 		statusInfo[id] = meta.Valid
@@ -849,7 +840,7 @@ func TestRecoveryRemovesOrphanValueLogSegment(t *testing.T) {
 	})
 }
 
-func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
+func TestRecoveryFailsOnMissingSST(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
 		WorkDir:          dir,
@@ -861,7 +852,7 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 		MaxBatchSize:     1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	for i := range 256 {
 		key := fmt.Appendf(nil, "sst-crash-%03d", i)
 		val := make([]byte, 128)
@@ -875,28 +866,40 @@ func TestRecoveryCleansMissingSSTFromManifest(t *testing.T) {
 
 	removed := files[0]
 	require.NoError(t, os.Remove(removed))
+	removedFID := utils.FID(removed)
 
-	db2 := Open(opt)
-	defer func() { _ = db2.Close() }()
+	db2, openErr := Open(opt)
+	require.Error(t, openErr)
+	require.Nil(t, db2)
+	require.Contains(t, openErr.Error(), "missing sstable")
 
-	version := db2.lsm.Diagnostics().CurrentVersion
-	levelFiles := version.Levels[0]
-	fileIDs := make([]uint64, 0, len(levelFiles))
-	for _, meta := range levelFiles {
-		fileIDs = append(fileIDs, meta.FileID)
-		path := utils.FileNameSSTable(opt.WorkDir, meta.FileID)
-		require.NotEqual(t, removed, path)
-		_, err := os.Stat(path)
-		require.NoError(t, err)
+	mgr, err := manifest.Open(dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mgr.Close()) }()
+
+	version := mgr.Current()
+	var found bool
+	for _, metas := range version.Levels {
+		for _, meta := range metas {
+			if meta.FileID == removedFID {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
 	}
-	logRecoveryMetric(t, "sst_manifest_cleanup", map[string]any{
-		"removed_path":      removed,
-		"level0_file_count": len(levelFiles),
-		"level0_file_ids":   fileIDs,
+	require.True(t, found, "expected missing sstable to remain referenced in manifest after failed startup")
+
+	logRecoveryMetric(t, "sst_missing_startup_failure", map[string]any{
+		"removed_path": removed,
+		"removed_fid":  removedFID,
+		"open_error":   openErr.Error(),
 	})
 }
 
-func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
+func TestRecoveryFailsOnCorruptSST(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
 		WorkDir:          dir,
@@ -908,7 +911,7 @@ func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
 		MaxBatchSize:     1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	for i := range 256 {
 		key := fmt.Appendf(nil, "sst-corrupt-%03d", i)
 		val := make([]byte, 128)
@@ -924,10 +927,16 @@ func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
 	corruptFID := utils.FID(corruptPath)
 	require.NoError(t, os.WriteFile(corruptPath, []byte("bad-sst"), 0o666))
 
-	db2 := Open(opt)
-	defer func() { _ = db2.Close() }()
+	db2, openErr := Open(opt)
+	require.Error(t, openErr)
+	require.Nil(t, db2)
+	require.Contains(t, openErr.Error(), "open sstable")
 
-	version := db2.lsm.Diagnostics().CurrentVersion
+	mgr, err := manifest.Open(dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mgr.Close()) }()
+
+	version := mgr.Current()
 	var found bool
 	for _, metas := range version.Levels {
 		for _, meta := range metas {
@@ -940,12 +949,13 @@ func TestRecoveryCleansCorruptSSTFromManifest(t *testing.T) {
 			break
 		}
 	}
-	require.False(t, found, "expected corrupt sstable to be removed from manifest view")
+	require.True(t, found, "expected corrupt sstable to remain referenced in manifest after failed startup")
 
-	logRecoveryMetric(t, "sst_manifest_corrupt_cleanup", map[string]any{
+	logRecoveryMetric(t, "sst_corrupt_startup_failure", map[string]any{
 		"corrupt_path": corruptPath,
 		"corrupt_fid":  corruptFID,
 		"levels":       len(version.Levels),
+		"open_error":   openErr.Error(),
 	})
 }
 
@@ -961,7 +971,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 		MaxBatchSize:     1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NoError(t, db.Set([]byte("rewrite-key"), []byte("rewrite-val")))
 	require.NoError(t, db.Close())
 
@@ -973,7 +983,7 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	tmp := filepath.Join(dir, "CURRENT.tmp")
 	require.NoError(t, os.WriteFile(tmp, []byte("MANIFEST-999999"), 0o666))
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	defer func() { _ = db2.Close() }()
 
 	name, err := os.ReadFile(current)
@@ -1086,7 +1096,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 		MaxBatchSize:        1 << 20,
 	}
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	key := []byte("wal-crash-key")
 	val := []byte("wal-crash-value")
 	require.NoError(t, db.Set(key, val))
@@ -1094,7 +1104,7 @@ func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	// Simulate crash: close WAL/ValueLog handles without flushing LSM.
 	drSimulateCrash(t, db)
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	defer func() { _ = db2.Close() }()
 
 	item, err := db2.Get(key)
@@ -1125,7 +1135,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	defer func() { _ = localMeta.Close() }()
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	walMgr := db.WAL()
@@ -1189,7 +1199,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	opt.EnableWALWatchdog = false
 	opt.ValueLogGCInterval = 0
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 
 	userKey := []byte("vlog-replay-key")
 	internalKey := kv.InternalKey(kv.CFDefault, userKey, math.MaxUint64)
@@ -1200,7 +1210,7 @@ func TestRecoverySkipsValueLogReplay(t *testing.T) {
 	require.NoError(t, db.vlog.managers[0].SyncActive())
 	require.NoError(t, db.Close())
 
-	db2 := Open(opt)
+	db2 := openTestDB(t, opt)
 	defer func() { _ = db2.Close() }()
 
 	_, err = db2.Get(userKey)
@@ -1215,7 +1225,7 @@ func TestWriteHotKeyThrottleBlocksSet(t *testing.T) {
 		opt.WriteHotKeyLimit = prev
 	}()
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
 	key := []byte("txn-hot-key")
@@ -1277,7 +1287,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	local.ValueLogGCInterval = 0
 	local.WriteBatchWait = 0
 
-	db := Open(local)
+	db := openTestDB(t, local)
 	defer func() { _ = db.Close() }()
 
 	good := kv.NewInternalEntry(kv.CFDefault, []byte("good"), nonTxnMaxVersion, []byte("v1"), 0, 0)
@@ -1314,7 +1324,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	local.WriteBatchWait = 0
 	local.ValueThreshold = 1 << 20
 
-	db := Open(local)
+	db := openTestDB(t, local)
 	defer func() { _ = db.Close() }()
 
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("inline-fast-path"), nonTxnMaxVersion, []byte("v1"), 0, 0)
@@ -1464,7 +1474,7 @@ func TestCloseWithErrors(t *testing.T) {
 	local.WorkDir = t.TempDir()
 	dirLockErr := errors.New("dir lock release error")
 
-	db := Open(&local)
+	db := openTestDB(t, &local)
 	realLock := db.dirLock
 	db.dirLock = closeFunc(func() error {
 		if realLock != nil {
@@ -1491,7 +1501,7 @@ func (fn closeFunc) Close() error {
 func TestCloseConcurrent(t *testing.T) {
 	local := *opt
 	local.WorkDir = t.TempDir()
-	db := Open(&local)
+	db := openTestDB(t, &local)
 
 	var wg sync.WaitGroup
 	const workers = 16
@@ -1631,7 +1641,7 @@ func drAppendPartialWALTail(t *testing.T, path string) {
 // empty ranges, and write-after-delete scenarios.
 func TestDeleteRangeCore(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	// Test 1: Basic deletion with [start, end) semantics
@@ -1702,7 +1712,7 @@ func TestDeleteRangeCore(t *testing.T) {
 // TestDeleteRangeValidation tests error handling for invalid inputs.
 func TestDeleteRangeValidation(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	// Inverted range
@@ -1724,7 +1734,7 @@ func TestDeleteRangeValidation(t *testing.T) {
 // TestDeleteRangeIsolation tests that default-CF DeleteRange does not affect other CFs.
 func TestDeleteRangeIsolation(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	defaultEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key1"), db.nextNonTxnVersion(), []byte("val1"), 0, 0)
@@ -1753,7 +1763,7 @@ func TestDeleteRangeIsolation(t *testing.T) {
 // TestDeleteRangeComplex tests overlapping ranges and interaction with point deletes.
 func TestDeleteRangeComplex(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	// Test 1: Overlapping ranges
@@ -1804,7 +1814,7 @@ func TestDeleteRangeComplex(t *testing.T) {
 func TestDeleteRangeWithCompaction(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
 	opt.MemTableSize = 1024
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	for i := range 100 {
@@ -1834,14 +1844,14 @@ func TestDeleteRangeWALRecovery(t *testing.T) {
 	dir := t.TempDir()
 	opt := drTestOptions(dir)
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	drMustSet(t, db, []byte("key1"), []byte("val1"))
 	drMustSet(t, db, []byte("key2"), []byte("val2"))
 	drMustSet(t, db, []byte("key3"), []byte("val3"))
 	drMustDeleteRange(t, db, []byte("key1"), []byte("key3"))
 	drMustClose(t, db)
 
-	db = Open(opt)
+	db = openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	if _, err := db.Get([]byte("key1")); err != utils.ErrKeyNotFound {
@@ -1859,7 +1869,7 @@ func TestDeleteRangeWALRecovery(t *testing.T) {
 // an earlier range tombstone.
 func TestDeleteRangeVisibilityBug(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	drMustSet(t, db, []byte("a1"), []byte("old"))
@@ -1881,7 +1891,7 @@ func TestDeleteRangePersistsAfterFlushAndReopen(t *testing.T) {
 	opt.MemTableSize = 512
 	opt.NumLevelZeroTables = 1000
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	drMustSet(t, db, []byte("b"), []byte("old"))
 	drMustDeleteRange(t, db, []byte("a"), []byte("z"))
 	drMustSet(t, db, []byte("y"), []byte("new"))
@@ -1894,7 +1904,7 @@ func TestDeleteRangePersistsAfterFlushAndReopen(t *testing.T) {
 	drWaitForFlushedSST(t, db)
 	drMustClose(t, db)
 
-	db = Open(opt)
+	db = openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	_, err := db.Get([]byte("b"))
@@ -1906,7 +1916,7 @@ func TestDeleteRangePersistsAfterFlushAndReopen(t *testing.T) {
 
 func TestDeleteRangeBatchOrdering(t *testing.T) {
 	opt := drTestOptions(t.TempDir())
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	defer func() { drMustClose(t, db) }()
 
 	// point then range tombstone in one batch: point should be hidden.
@@ -1937,7 +1947,7 @@ func TestDBIteratorBoundsAndOutOfRangeSeekContract(t *testing.T) {
 	drForEachMemTableEngine(t, func(t *testing.T, engine MemTableEngine) {
 		opt := newTestOptions(t)
 		opt.MemTableEngine = engine
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		for _, k := range []string{"a", "b", "c", "d"} {
@@ -2006,7 +2016,7 @@ func TestAPIMixedOpsPersistAcrossFlushCompactionAndReopen(t *testing.T) {
 		opt.MemTableSize = 512
 		opt.NumLevelZeroTables = 2
 
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		require.NoError(t, db.SetBatch([]BatchSetItem{
 			{Key: []byte("k1"), Value: []byte("v1")},
 			{Key: []byte("k2"), Value: []byte("v2")},
@@ -2029,7 +2039,7 @@ func TestAPIMixedOpsPersistAcrossFlushCompactionAndReopen(t *testing.T) {
 		drWaitForFlushedSST(t, db)
 
 		drMustClose(t, db)
-		db = Open(opt)
+		db = openTestDB(t, opt)
 		defer func() { drMustClose(t, db) }()
 
 		drRequireNotFound(t, db, []byte("k1"))
@@ -2051,7 +2061,7 @@ func TestRecoveryWALReplayMixedBatchDeleteAndRangeDelete(t *testing.T) {
 		opt.ValueLogFileSize = 1 << 20
 		opt.ValueThreshold = 1 << 20
 
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		require.NoError(t, db.SetBatch([]BatchSetItem{
 			{Key: []byte("a"), Value: []byte("va")},
 			{Key: []byte("b"), Value: []byte("vb")},
@@ -2067,7 +2077,7 @@ func TestRecoveryWALReplayMixedBatchDeleteAndRangeDelete(t *testing.T) {
 
 		drSimulateCrash(t, db)
 
-		db2 := Open(opt)
+		db2 := openTestDB(t, opt)
 		defer func() { _ = db2.Close() }()
 		drRequireNotFound(t, db2, []byte("a"))
 		drRequireNotFound(t, db2, []byte("b"))
@@ -2085,7 +2095,7 @@ func TestRecoveryWALReplayIdempotentAcrossRepeatedReopen(t *testing.T) {
 		opt.MemTableEngine = engine
 		opt.MemTableSize = 1 << 16
 
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		require.NoError(t, db.SetBatch([]BatchSetItem{
 			{Key: []byte("k1"), Value: []byte("v1")},
 			{Key: []byte("k2"), Value: []byte("v2")},
@@ -2094,13 +2104,13 @@ func TestRecoveryWALReplayIdempotentAcrossRepeatedReopen(t *testing.T) {
 		require.NoError(t, db.Set([]byte("k2"), []byte("v2-new")))
 		drSimulateCrash(t, db)
 
-		db2 := Open(opt)
+		db2 := openTestDB(t, opt)
 		drRequireValue(t, db2, []byte("k1"), []byte("v1"))
 		drRequireValue(t, db2, []byte("k2"), []byte("v2-new"))
 		// Replay same WAL one more time (without clean close) and verify no semantic drift.
 		drSimulateCrash(t, db2)
 
-		db3 := Open(opt)
+		db3 := openTestDB(t, opt)
 		defer func() { _ = db3.Close() }()
 		drRequireValue(t, db3, []byte("k1"), []byte("v1"))
 		drRequireValue(t, db3, []byte("k2"), []byte("v2-new"))
@@ -2114,7 +2124,7 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 		opt.WorkDir = dir
 		opt.MemTableEngine = engine
 
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
 		require.NoError(t, db.SetBatch([]BatchSetItem{
 			{Key: []byte("b1"), Value: []byte("v1")},
@@ -2129,7 +2139,7 @@ func TestRecoveryWALReplayTruncatedTailBatchIsNotPartiallyApplied(t *testing.T) 
 		require.Greater(t, fi.Size(), int64(8))
 		require.NoError(t, os.Truncate(seg, fi.Size()-3))
 
-		db2 := Open(opt)
+		db2 := openTestDB(t, opt)
 		defer func() { _ = db2.Close() }()
 		drRequireValue(t, db2, []byte("anchor"), []byte("ok"))
 
@@ -2154,12 +2164,12 @@ func TestRecoveryVlogPointerRoundTripAfterReopen(t *testing.T) {
 
 		v1 := bytes.Repeat([]byte("A"), 1024)
 		v2 := bytes.Repeat([]byte("B"), 1536)
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		require.NoError(t, db.Set([]byte("vp-1"), v1))
 		require.NoError(t, db.Set([]byte("vp-2"), v2))
 		require.NoError(t, db.Close())
 
-		db = Open(opt)
+		db = openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 		drRequireValue(t, db, []byte("vp-1"), v1)
 		drRequireValue(t, db, []byte("vp-2"), v2)
@@ -2190,7 +2200,7 @@ func TestCloseAggregatesWalAndDirLockErrors(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
 	opt.FS = fs
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NoError(t, db.Set([]byte("k"), []byte("v")))
 
 	realLock := db.dirLock
@@ -2221,7 +2231,7 @@ func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	opt.FS = fs
 	opt.WALBufferSize = 256 << 10 // Force large write to hit injected error.
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	// Use a large payload to force bufio flush and hit underlying file Write.
 	big := bytes.Repeat([]byte("w"), 512<<10)
 	err := db.Set([]byte("first"), big)
@@ -2231,7 +2241,7 @@ func TestFaultFSWriteFailureThenRecoverableReopen(t *testing.T) {
 	err = db.Close()
 	require.ErrorIs(t, err, injected)
 
-	db = Open(opt)
+	db = openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	_, err = db.Get([]byte("first"))
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
@@ -2244,7 +2254,7 @@ func TestRecoveryTruncateFailureThenSucceedsWithHealthyFS(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.WorkDir = dir
 
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NoError(t, db.Set([]byte("anchor"), []byte("ok")))
 	require.NoError(t, db.Close())
 
@@ -2258,7 +2268,7 @@ func TestRecoveryTruncateFailureThenSucceedsWithHealthyFS(t *testing.T) {
 	err := wal.VerifyDir(dir, faultFS)
 	require.ErrorIs(t, err, truncErr)
 
-	db = Open(opt)
+	db = openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 	drRequireValue(t, db, []byte("anchor"), []byte("ok"))
 }
@@ -2271,7 +2281,7 @@ func TestConcurrentReadWriteFlushCompactionStress(t *testing.T) {
 		opt.NumLevelZeroTables = 8
 		opt.NumCompactors = 2
 		opt.WriteHotKeyLimit = 0
-		db := Open(opt)
+		db := openTestDB(t, opt)
 		defer func() { _ = db.Close() }()
 
 		const (

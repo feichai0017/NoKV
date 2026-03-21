@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
@@ -21,8 +20,13 @@ import (
 )
 
 // initLevelManager initialize the levels runtime
-func (lsm *LSM) initLevelManager(opt *Options) (*levelManager, error) {
+func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 	lm := &levelManager{lsm: lsm} // attach lsm owner
+	defer func() {
+		if err != nil {
+			_ = lm.close()
+		}
+	}()
 	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
 	// read the manifest file to build the levels runtime
@@ -51,7 +55,7 @@ type levelManager struct {
 	manifestMgr      *manifest.Manager
 	levels           []*levelHandler
 	lsm              *LSM
-	compactState     *compact.State
+	compactState     *State
 	compaction       *compaction
 	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex
@@ -139,28 +143,14 @@ func (lm *levelManager) build() error {
 	lm.setLogPointer(version.LogSegment, version.LogOffset)
 	lm.cache = newCache(lm.opt)
 	var maxFID uint64
-	var stale []manifest.FileMeta
 	for level, files := range version.Levels {
 		for _, meta := range files {
-			fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
-			if _, err := fs.Stat(fileName); err != nil {
-				slog.Default().Error("missing sstable", "path", fileName, "error", err)
-				stale = append(stale, meta)
-				continue
+			t, err := lm.openManifestTable(fs, level, meta)
+			if err != nil {
+				return err
 			}
 			if meta.FileID > maxFID {
 				maxFID = meta.FileID
-			}
-			t, err := openTable(lm, fileName, nil)
-			if err != nil {
-				slog.Default().Error("failed to open sstable", "path", fileName, "error", err)
-				stale = append(stale, meta)
-				continue
-			}
-			if t == nil {
-				slog.Default().Error("failed to open sstable", "path", fileName, "error", "nil table")
-				stale = append(stale, meta)
-				continue
 			}
 			if meta.Ingest {
 				lm.levels[level].addIngest(t)
@@ -175,15 +165,22 @@ func (lm *levelManager) build() error {
 	}
 	// get the maximum fid value
 	lm.maxFID.Store(maxFID)
-
-	for _, meta := range stale {
-		metaCopy := meta
-		_ = lm.manifestMgr.LogEdit(manifest.Edit{
-			Type: manifest.EditDeleteFile,
-			File: &metaCopy,
-		})
-	}
 	return nil
+}
+
+func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.FileMeta) (*table, error) {
+	fileName := utils.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
+	if _, err := fs.Stat(fileName); err != nil {
+		return nil, fmt.Errorf("lsm startup: manifest references missing sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
+	}
+	t, err := openTable(lm, fileName, nil)
+	if err != nil {
+		return nil, fmt.Errorf("lsm startup: open sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
+	}
+	if t == nil {
+		return nil, fmt.Errorf("lsm startup: open sstable L%d F%d (%s): nil table", level, meta.FileID, fileName)
+	}
+	return t, nil
 }
 
 // flush a sstable to L0 layer

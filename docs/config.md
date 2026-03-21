@@ -11,7 +11,7 @@ NoKV exposes two configuration surfaces:
 ## 1. Runtime Options (Embedded Engine)
 
 `NoKV.NewDefaultOptions()` returns a tuned baseline. Override fields before
-calling `NoKV.Open(opt)`.
+calling `NoKV.Open(opt)`, which now returns `(*DB, error)`.
 
 Key option groups (see `options.go` for the full list):
 
@@ -54,7 +54,10 @@ opt.WorkDir = "./data"
 opt.SyncWrites = true
 opt.ValueThreshold = 1024
 opt.WriteBatchMaxCount = 128
-db := NoKV.Open(opt)
+db, err := NoKV.Open(opt)
+if err != nil {
+	log.Fatalf("open failed: %v", err)
+}
 defer db.Close()
 ```
 
@@ -76,7 +79,10 @@ opt, err := NoKV.LoadOptionsFile("nokv.options.toml")
 if err != nil {
     log.Fatal(err)
 }
-db := NoKV.Open(opt)
+db, err := NoKV.Open(opt)
+if err != nil {
+	log.Fatalf("open failed: %v", err)
+}
 defer db.Close()
 ```
 

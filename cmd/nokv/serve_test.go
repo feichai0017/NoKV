@@ -219,7 +219,8 @@ func newTestDBWithDir(t *testing.T, dir string) *NoKV.DB {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	return db
 }
 

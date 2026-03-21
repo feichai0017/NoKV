@@ -22,7 +22,8 @@ func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.Colum
 func TestNewEntryApplierAppliesEntries(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	applier := NewEntryApplier(db)
@@ -46,7 +47,8 @@ func TestNewEntryApplierAppliesEntries(t *testing.T) {
 func TestNewEntryApplierRejectsLegacyPayload(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	applier := NewEntryApplier(db)
@@ -90,7 +92,8 @@ func TestLockedErrorMapping(t *testing.T) {
 func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	key := []byte("short-ttl")
@@ -122,7 +125,8 @@ func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	key := []byte("short-expired")

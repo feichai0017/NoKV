@@ -46,7 +46,7 @@ Examples:
 
 - `kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
 - `vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
-- `lsm/compact/errors.go`: compaction planner/runtime domain errors
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/compaction.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
 - `pb/errorpb.proto`: region/store routing protobuf errors (`RegionError`,
   `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
