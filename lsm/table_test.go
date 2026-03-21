@@ -223,6 +223,72 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 	}
 }
 
+func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-table-bounds")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          128,
+		BloomFalsePositive: 0.0,
+	}
+
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	for i := range 200 {
+		key := []byte(fmt.Sprintf("k%03d", i))
+		builder.AddKey(kv.NewEntry(
+			kv.InternalKey(kv.CFDefault, key, 1),
+			[]byte("value-with-more-data"),
+		))
+	}
+
+	tableName := utils.FileNameSSTable(dir, 4)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	t.Run("forward bounded range", func(t *testing.T) {
+		it := tbl.NewIterator(&utils.Options{
+			IsAsc:      true,
+			LowerBound: []byte("k050"),
+			UpperBound: []byte("k060"),
+		})
+		defer func() { _ = it.Close() }()
+
+		var keys []string
+		for it.Rewind(); it.Valid(); it.Next() {
+			keys = append(keys, string(splitTableUserKey(t, it.Item().Entry().Key)))
+		}
+		require.Len(t, keys, 10)
+		require.Equal(t, "k050", keys[0])
+		require.Equal(t, "k059", keys[len(keys)-1])
+	})
+
+	t.Run("reverse bounded range", func(t *testing.T) {
+		it := tbl.NewIterator(&utils.Options{
+			IsAsc:      false,
+			LowerBound: []byte("k050"),
+			UpperBound: []byte("k060"),
+		})
+		defer func() { _ = it.Close() }()
+
+		var keys []string
+		for it.Rewind(); it.Valid(); it.Next() {
+			keys = append(keys, string(splitTableUserKey(t, it.Item().Entry().Key)))
+		}
+		require.Len(t, keys, 10)
+		require.Equal(t, "k059", keys[0])
+		require.Equal(t, "k050", keys[len(keys)-1])
+	})
+}
+
 func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-level-overlap")
 	require.NoError(t, err)
