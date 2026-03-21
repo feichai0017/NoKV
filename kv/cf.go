@@ -39,17 +39,3 @@ func (cf ColumnFamily) String() string {
 func (cf ColumnFamily) Valid() bool {
 	return cf <= maxColumnFamily
 }
-
-// DecodeKeyCF returns the column family and user key for an encoded key without timestamp.
-func DecodeKeyCF(key []byte) (ColumnFamily, []byte, bool) {
-	if len(key) >= cfHeaderSize &&
-		key[0] == cfMarker0 &&
-		key[1] == cfMarker1 &&
-		key[2] == cfMarker2 {
-		cf := ColumnFamily(key[3])
-		if cf.Valid() {
-			return cf, key[cfHeaderSize:], true
-		}
-	}
-	return CFDefault, key, false
-}

@@ -47,29 +47,25 @@ func normalizeTotalCacheMB(totalMB int) int {
 	return totalMB
 }
 
-func defaultNoKVCacheBudgetMB(totalMB int) (blockMB, indexMB, bloomMB int) {
+func defaultNoKVCacheBudgetMB(totalMB int) (blockMB, indexMB int) {
 	totalMB = normalizeTotalCacheMB(totalMB)
-	indexMB = totalMB * 3 / 16
-	bloomMB = totalMB / 16
-	blockMB = totalMB - indexMB - bloomMB
-	return blockMB, indexMB, bloomMB
+	indexMB = totalMB / 4
+	blockMB = totalMB - indexMB
+	return blockMB, indexMB
 }
 
-func resolveNoKVCacheBudgetMB(totalMB, explicitIndexMB, explicitBloomMB int) (blockMB, indexMB, bloomMB int) {
-	blockMB, indexMB, bloomMB = defaultNoKVCacheBudgetMB(totalMB)
+func resolveNoKVCacheBudgetMB(totalMB, explicitIndexMB int) (blockMB, indexMB int) {
+	blockMB, indexMB = defaultNoKVCacheBudgetMB(totalMB)
 	if explicitIndexMB > 0 {
 		indexMB = explicitIndexMB
 	}
-	if explicitBloomMB > 0 {
-		bloomMB = explicitBloomMB
-	}
-	if explicitIndexMB > 0 || explicitBloomMB > 0 {
-		blockMB = normalizeTotalCacheMB(totalMB) - indexMB - bloomMB
+	if explicitIndexMB > 0 {
+		blockMB = normalizeTotalCacheMB(totalMB) - indexMB
 		if blockMB < 0 {
 			blockMB = 0
 		}
 	}
-	return blockMB, indexMB, bloomMB
+	return blockMB, indexMB
 }
 
 func defaultBadgerCacheBudgetMB(totalMB int) (blockMB, indexMB int) {
@@ -91,7 +87,7 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 		compactionPolicy = NoKV.CompactionPolicyLeveled
 	}
 	totalCacheMB := normalizeTotalCacheMB(opts.BlockCacheMB)
-	blockCacheMB, indexCacheMB, bloomCacheMB := resolveNoKVCacheBudgetMB(totalCacheMB, opts.NoKVIndexCacheMB, opts.NoKVBloomCacheMB)
+	blockCacheMB, indexCacheMB := resolveNoKVCacheBudgetMB(totalCacheMB, opts.NoKVIndexCacheMB)
 	return &NoKV.Options{
 		WorkDir:                  dir,
 		MemTableSize:             int64(opts.MemtableMB) << 20,
@@ -108,7 +104,6 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV
 		SyncWrites:               opts.SyncWrites,
 		BlockCacheBytes:          cacheBudgetBytes(blockCacheMB),
 		IndexCacheBytes:          cacheBudgetBytes(indexCacheMB),
-		BloomCacheBytes:          cacheBudgetBytes(bloomCacheMB),
 		CompactionPolicy:         compactionPolicy,
 		HotRingEnabled:           false,
 		ValueLogHotRingOverride:  false,

@@ -73,7 +73,6 @@ type Options struct {
 	// Cache budgets. Zero disables the corresponding user-space cache.
 	BlockCacheBytes int64
 	IndexCacheBytes int64
-	BloomCacheBytes int64
 
 	// compact
 	NumCompactors       int

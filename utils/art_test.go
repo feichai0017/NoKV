@@ -72,7 +72,7 @@ func TestARTIteratorOrder(t *testing.T) {
 		if entry == nil {
 			t.Fatalf("nil entry")
 		}
-		if last != nil && CompareKeys(last, entry.Key) > 0 {
+		if last != nil && CompareInternalKeys(last, entry.Key) > 0 {
 			t.Fatalf("iterator out of order: %q before %q", last, entry.Key)
 		}
 		last = entry.Key
@@ -84,7 +84,7 @@ func TestARTIteratorOrder(t *testing.T) {
 		t.Fatalf("expected seek to be valid")
 	}
 	entry := it.Item().Entry()
-	if entry == nil || !kv.SameKey(seek, entry.Key) {
+	if entry == nil || !kv.SameBaseKey(seek, entry.Key) {
 		t.Fatalf("seek mismatch: got %v", entry)
 	}
 }
@@ -167,7 +167,7 @@ func TestARTPrefixAdjacentInternalKeys(t *testing.T) {
 		entry := it.Item().Entry()
 		require.NotNil(t, entry)
 		if last != nil {
-			require.LessOrEqual(t, CompareKeys(last, entry.Key), 0)
+			require.LessOrEqual(t, CompareInternalKeys(last, entry.Key), 0)
 		}
 		last = entry.Key
 	}
@@ -177,13 +177,13 @@ func TestARTPrefixAdjacentInternalKeys(t *testing.T) {
 
 		foundKey, vs := art.Search(seek)
 		require.NotEmpty(t, vs.Value)
-		require.True(t, kv.SameKey(seek, foundKey))
+		require.True(t, kv.SameBaseKey(seek, foundKey))
 
 		it.Seek(seek)
 		require.True(t, it.Valid())
 		item := it.Item().Entry()
 		require.NotNil(t, item)
-		require.True(t, kv.SameKey(seek, item.Key))
+		require.True(t, kv.SameBaseKey(seek, item.Key))
 	}
 }
 

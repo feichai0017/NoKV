@@ -219,7 +219,6 @@ func Open(opt *Options) (_ *DB, err error) {
 		CompactionValueAlertThreshold: db.opt.CompactionValueAlertThreshold,
 		BlockCacheBytes:               db.opt.BlockCacheBytes,
 		IndexCacheBytes:               db.opt.IndexCacheBytes,
-		BloomCacheBytes:               db.opt.BloomCacheBytes,
 		DiscardStatsCh:                &db.discardStatsCh,
 		HotKeyProvider:                db.hotReadKeys,
 		ManifestSync:                  db.opt.ManifestSync,
@@ -589,15 +588,29 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	}
 	// Non-transactional API: use the max sentinel timestamp (not for MVCC).
 	internalKey := kv.InternalKey(kv.CFDefault, key, nonTxnMaxVersion)
-	entry, err := db.loadBorrowedEntry(internalKey)
+	entry, err := db.lsm.Get(internalKey)
 	if err != nil {
 		return nil, err
 	}
+	if entry == nil {
+		return nil, utils.ErrKeyNotFound
+	}
 	defer entry.DecrRef()
+	if entry.IsRangeDelete() {
+		return nil, utils.ErrKeyNotFound
+	}
 	if entry.IsDeletedOrExpired() {
 		return nil, utils.ErrKeyNotFound
 	}
-	out := cloneEntry(entry)
+	var out *kv.Entry
+	if kv.IsValuePtr(entry) {
+		out, err = db.detachValuePointerEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		out = cloneEntry(entry)
+	}
 	db.recordRead(out.Key)
 	return out, nil
 }
@@ -672,9 +685,14 @@ func cloneEntry(src *kv.Entry) *kv.Entry {
 	if ts != 0 {
 		version = ts
 	}
+	buf := make([]byte, len(userKeySrc)+len(src.Value))
+	keyCopy := buf[:len(userKeySrc)]
+	copy(keyCopy, userKeySrc)
+	valueCopy := buf[len(userKeySrc):]
+	copy(valueCopy, src.Value)
 	return &kv.Entry{
-		Key:          kv.SafeCopy(nil, userKeySrc),
-		Value:        kv.SafeCopy(nil, src.Value),
+		Key:          keyCopy,
+		Value:        valueCopy,
 		ExpiresAt:    src.ExpiresAt,
 		CF:           cf,
 		Meta:         src.Meta,
@@ -683,6 +701,52 @@ func cloneEntry(src *kv.Entry) *kv.Entry {
 		Hlen:         src.Hlen,
 		ValThreshold: src.ValThreshold,
 	}
+}
+
+func (db *DB) detachValuePointerEntry(src *kv.Entry) (*kv.Entry, error) {
+	if src == nil {
+		return nil, utils.ErrKeyNotFound
+	}
+	if !kv.IsValuePtr(src) {
+		return cloneEntry(src), nil
+	}
+	cf, userKeySrc, ts, ok := kv.SplitInternalKey(src.Key)
+	if !ok {
+		return nil, utils.ErrInvalidRequest
+	}
+	version := src.Version
+	if ts != 0 {
+		version = ts
+	}
+	var vp kv.ValuePtr
+	vp.Decode(src.Value)
+	result, cb, err := db.vlog.read(&vp)
+	if cb != nil {
+		defer kv.RunCallback(cb)
+	}
+	if err != nil {
+		return nil, err
+	}
+	keyCopy := kv.SafeCopy(nil, userKeySrc)
+	value := result
+	if cb != nil {
+		buf := make([]byte, len(userKeySrc)+len(result))
+		keyCopy = buf[:len(userKeySrc)]
+		copy(keyCopy, userKeySrc)
+		value = buf[len(userKeySrc):]
+		copy(value, result)
+	}
+	return &kv.Entry{
+		Key:          keyCopy,
+		Value:        value,
+		ExpiresAt:    src.ExpiresAt,
+		CF:           cf,
+		Meta:         src.Meta &^ kv.BitValuePointer,
+		Version:      version,
+		Offset:       src.Offset,
+		Hlen:         src.Hlen,
+		ValThreshold: src.ValThreshold,
+	}, nil
 }
 
 // Info returns the live stats collector for snapshot/diagnostic access.

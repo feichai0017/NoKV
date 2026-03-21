@@ -41,8 +41,6 @@ func TestCacheCountersSnapshot(t *testing.T) {
 	counters.RecordBlock(0, false)
 	counters.RecordBlock(1, true)
 	counters.RecordBlock(1, false)
-	counters.RecordBloom(true)
-	counters.RecordBloom(false)
 	counters.RecordIndex(true)
 	counters.RecordIndex(false)
 
@@ -52,9 +50,6 @@ func TestCacheCountersSnapshot(t *testing.T) {
 	}
 	if snap.L1Hits != 1 || snap.L1Misses != 1 {
 		t.Fatalf("unexpected L1 counters: %+v", snap)
-	}
-	if snap.BloomHits != 1 || snap.BloomMisses != 1 {
-		t.Fatalf("unexpected bloom counters: %+v", snap)
 	}
 	if snap.IndexHits != 1 || snap.IndexMisses != 1 {
 		t.Fatalf("unexpected index counters: %+v", snap)

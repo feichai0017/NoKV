@@ -16,6 +16,7 @@ type levelHandler struct {
 	sync.RWMutex
 	levelNum              int
 	tables                []*table
+	filter                rangeFilter
 	ingest                ingestBuffer
 	totalSize             int64
 	totalStaleSize        int64
@@ -277,8 +278,8 @@ func (lh *levelHandler) prefetch(key []byte) bool {
 			if table == nil {
 				continue
 			}
-			if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
-				utils.CompareUserKeys(key, table.MaxKey()) > 0 {
+			if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
+				utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
 				continue
 			}
 			if table.prefetchBlockForKey(key) {
@@ -302,6 +303,7 @@ func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
 	lh.sortTablesLocked()
+	lh.rebuildRangeFilterLocked()
 	lh.ingest.sortShards()
 }
 
@@ -317,7 +319,7 @@ func (lh *levelHandler) sortTablesLocked() {
 	}
 	// L1+ tables are non-overlapping by key range.
 	sort.Slice(lh.tables, func(i, j int) bool {
-		return utils.CompareKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
+		return utils.CompareInternalKeys(lh.tables[i].MinKey(), lh.tables[j].MinKey()) < 0
 	})
 }
 
@@ -326,12 +328,12 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		version uint64
 		best    *kv.Entry
 	)
-	for _, table := range lh.tables {
+	for _, table := range lh.selectTablesForKey(key, true) {
 		if table == nil {
 			continue
 		}
-		if utils.CompareUserKeys(key, table.MinKey()) < 0 ||
-			utils.CompareUserKeys(key, table.MaxKey()) > 0 {
+		if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
+			utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
 			continue
 		}
 		if table.MaxVersionVal() <= version {
@@ -357,13 +359,31 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 }
 
 func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	tables := lh.getTablesForKey(key)
-	if len(tables) == 0 {
-		return nil, utils.ErrKeyNotFound
-	}
 	if maxVersion == nil {
 		var tmp uint64
 		maxVersion = &tmp
+	}
+	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
+		total := len(lh.tables)
+		table := lh.filter.tableForPoint(key)
+		if lh.lm != nil {
+			candidates := 0
+			if table != nil {
+				candidates = 1
+			}
+			lh.lm.recordRangeFilterPoint(total, candidates, false)
+		}
+		if table == nil {
+			return nil, utils.ErrKeyNotFound
+		}
+		if table.MaxVersionVal() <= *maxVersion {
+			return nil, utils.ErrKeyNotFound
+		}
+		return table.searchExactCandidate(key, maxVersion)
+	}
+	tables := lh.selectTablesForKey(key, true)
+	if len(tables) == 0 {
+		return nil, utils.ErrKeyNotFound
 	}
 	var best *kv.Entry
 	for _, table := range tables {
@@ -373,13 +393,19 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		if table.MaxVersionVal() <= *maxVersion {
 			continue
 		}
-		if entry, err := table.Search(key, maxVersion); err == nil {
+		var (
+			entry *kv.Entry
+			err   error
+		)
+		entry, err = table.Search(key, maxVersion)
+		if err == nil {
 			if best != nil {
 				best.DecrRef()
 			}
 			best = entry
 			continue
-		} else if err != utils.ErrKeyNotFound {
+		}
+		if err != utils.ErrKeyNotFound {
 			if best != nil {
 				best.DecrRef()
 			}
@@ -393,20 +419,43 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	tables := lh.getTablesForKey(key)
+	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
+		return lh.filter.tableForPoint(key)
+	}
+	tables := lh.selectTablesForKey(key, false)
 	if len(tables) == 0 {
 		return nil
 	}
 	return tables[0]
 }
 
-// getTablesForKey returns every table in this level whose user-key range covers key.
-// Tables are returned in min-key order.
-func (lh *levelHandler) getTablesForKey(key []byte) []*table {
+func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if utils.CompareUserKeys(key, lh.tables[0].MinKey()) < 0 {
+	total := len(lh.tables)
+	fallback := false
+	var tables []*table
+	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
+		fallback = true
+		tables = lh.getTablesForKeyLinear(key)
+	} else {
+		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		tables = lh.filter.tablesForPoint(key)
+	}
+	if record && lh.lm != nil {
+		lh.lm.recordRangeFilterPoint(total, len(tables), fallback)
+	}
+	return tables
+}
+
+func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
+	if len(lh.tables) == 0 {
+		return nil
+	}
+	if lh.levelNum > 0 && utils.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
 	out := make([]*table, 0, 1)
@@ -414,15 +463,44 @@ func (lh *levelHandler) getTablesForKey(key []byte) []*table {
 		if t == nil {
 			continue
 		}
-		// Since min keys are sorted ascending, we can stop once min > key.
-		if utils.CompareUserKeys(t.MinKey(), key) > 0 {
+		if lh.levelNum > 0 && utils.CompareBaseKeys(t.MinKey(), key) > 0 {
 			break
 		}
-		if utils.CompareUserKeys(key, t.MaxKey()) <= 0 {
+		if utils.CompareBaseKeys(key, t.MaxKey()) <= 0 &&
+			utils.CompareBaseKeys(key, t.MinKey()) >= 0 {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) []*table {
+	if len(lh.tables) == 0 {
+		if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
+			lh.lm.recordRangeFilterBounded(0, 0, false)
+		}
+		return nil
+	}
+	total := len(lh.tables)
+	fallback := false
+	var tables []*table
+	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
+		fallback = true
+		tables = filterTablesByBounds(lh.tables, lower, upper)
+	} else {
+		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		tables = lh.filter.tablesForBounds(lower, upper)
+	}
+	if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
+		lh.lm.recordRangeFilterBounded(total, len(tables), fallback)
+	}
+	return tables
+}
+
+func (lh *levelHandler) rebuildRangeFilterLocked() {
+	lh.filter = buildRangeFilter(lh.levelNum, lh.tables)
 }
 func (lh *levelHandler) isLastLevel() bool {
 	return lh.levelNum == lh.lm.opt.MaxLevelNum-1
@@ -462,6 +540,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	// Assign tables.
 	lh.tables = newTables
 	lh.sortTablesLocked()
+	lh.rebuildRangeFilterLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
 	return decrRefs(removed)
 }
@@ -488,6 +567,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 		lh.subtractSize(t)
 	}
 	lh.tables = newTables
+	lh.rebuildRangeFilterLocked()
 
 	lh.ingest.remove(toDelMap)
 
@@ -577,14 +657,31 @@ func (lh *levelHandler) iterators(opt *utils.Options) []utils.Iterator {
 	}
 	lh.RLock()
 	defer lh.RUnlock()
+	bounded := len(topt.LowerBound) > 0 || len(topt.UpperBound) > 0
+	mainTables := lh.selectTablesForBounds(topt.LowerBound, topt.UpperBound, false)
 	if lh.levelNum == 0 {
-		return iteratorsReversed(lh.tables, topt)
+		if bounded && lh.lm != nil {
+			lh.lm.recordRangeFilterBounded(len(lh.tables), len(mainTables), true)
+		}
+		return iteratorsReversed(mainTables, topt)
 	}
 
 	var itrs []utils.Iterator
-	itrs = append(itrs, lh.ingest.iterators(topt)...)
-	if len(lh.tables) > 0 {
-		itrs = append(itrs, NewConcatIterator(lh.tables, topt))
+	ingestTables := lh.ingest.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
+	itrs = append(itrs, iteratorsReversed(ingestTables, topt)...)
+	if len(mainTables) == 1 {
+		itrs = append(itrs, mainTables[0].NewIterator(topt))
+	} else if len(mainTables) > 1 {
+		itrs = append(itrs, NewConcatIterator(mainTables, topt))
+	}
+	if bounded && lh.lm != nil {
+		total := len(lh.tables) + lh.ingest.tableCount()
+		candidates := len(mainTables) + len(ingestTables)
+		fallback := len(lh.filter.spans) == 0
+		if lh.levelNum > 0 && len(lh.filter.spans) > 0 && !lh.filter.nonOverlapping {
+			fallback = true
+		}
+		lh.lm.recordRangeFilterBounded(total, candidates, fallback)
 	}
 	return itrs
 }
