@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4a2244d7.js";
+            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5ff2b812.js"></script>
+        <script src="toc-2499ba20.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="cache--bloom-filters"><a class="header" href="#cache--bloom-filters">Cache &amp; Bloom Filters</a></h1>
-<p>NoKV’s LSM tier layers a multi-level block cache with bloom filter caching to accelerate lookups. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
+<p>NoKV’s LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from <code>pb.TableIndex</code>. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
 <hr>
 <h2 id="1-components"><a class="header" href="#1-components">1. Components</a></h2>
 <div class="table-wrapper">
@@ -190,12 +190,11 @@
 <tbody>
 <tr><td><code>cache.indexes</code></td><td>Byte-budgeted W-TinyLFU cache for decoded table indexes (<code>fid</code> → <code>*pb.TableIndex</code>).</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
 <tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>bloomCache</code></td><td>Budgeted LRU for bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
+<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and indexes.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block/index/bloom caches distinct, but all three now use byte budgets so memory planning stays explicit.</p>
+<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block and index caches explicit; bloom filters piggyback on the decoded table index already held by each live SST.</p>
 <hr>
 <h3 id="11-index-cache--handles"><a class="header" href="#11-index-cache--handles">1.1 Index Cache &amp; Handles</a></h3>
 <ul>
@@ -223,13 +222,11 @@ Deeper levels rely on OS page cache + mmap readahead
 
 <p>By default only L0 and L1 blocks are cached (<code>level &gt; 1</code> short-circuits), reflecting the higher re-use for top levels.</p>
 <hr>
-<h2 id="3-bloom-cache"><a class="header" href="#3-bloom-cache">3. Bloom Cache</a></h2>
+<h2 id="3-bloom-filters"><a class="header" href="#3-bloom-filters">3. Bloom Filters</a></h2>
 <ul>
-<li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
-<li>Cache policy is LRU.</li>
-<li>Capacity is controlled by <code>Options.BloomCacheBytes</code>.</li>
+<li>Bloom filters are stored inside <code>pb.TableIndex</code> and probed directly from the decoded index already held by <code>table.idx</code>.</li>
+<li>There is no separate bloom-filter cache layer; this avoids a redundant hot-path mutex/LRU hop on every point lookup.</li>
 <li><code>indexCache</code> keeps the existing W-TinyLFU admission path and budgets decoded <code>pb.TableIndex</code> payloads using the protobuf-encoded size (<code>proto.Size</code>).</li>
-<li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
 <h2 id="4-metrics--observability"><a class="header" href="#4-metrics--observability">4. Metrics &amp; Observability</a></h2>
@@ -237,7 +234,6 @@ Deeper levels rely on OS page cache + mmap readahead
 <pre><code class="language-go">type CacheMetrics struct {
     L0Hits, L0Misses uint64
     L1Hits, L1Misses uint64
-    BloomHits, BloomMisses uint64
     IndexHits, IndexMisses uint64
 }
 </code></pre>
@@ -265,7 +261,7 @@ Deeper levels rely on OS page cache + mmap readahead
 </thead>
 <tbody>
 <tr><td>Block cache policy</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto for L0/L1 + OS page cache for deeper levels</td></tr>
-<tr><td>Bloom cache</td><td>Enabled per table, no explicit cache</td><td>Optional</td><td>Dedicated LRU storing filters</td></tr>
+<tr><td>Bloom filter storage</td><td>Per table</td><td>Per table</td><td>Embedded in decoded table indexes</td></tr>
 <tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.cache.*</code> hit rates</td></tr>
 </tbody>
 </table>
@@ -273,7 +269,7 @@ Deeper levels rely on OS page cache + mmap readahead
 <hr>
 <h2 id="8-operational-tips"><a class="header" href="#8-operational-tips">8. Operational Tips</a></h2>
 <ul>
-<li>If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.</li>
+<li>If point-read false positives become expensive, tune bloom bits-per-key at SST build time rather than adding another filter cache layer.</li>
 <li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
 <li>Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.</li>
 </ul>
@@ -287,7 +283,7 @@ Deeper levels rely on OS page cache + mmap readahead
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="hotring.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="range_filter.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -301,7 +297,7 @@ Deeper levels rely on OS page cache + mmap readahead
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="hotring.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="range_filter.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

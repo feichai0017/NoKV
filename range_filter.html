@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>File - NoKV Docs</title>
+        <title>Range Filter - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -178,91 +178,197 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="file-abstractions"><a class="header" href="#file-abstractions">File Abstractions</a></h1>
-<p>The <code>file</code> package encapsulates direct file-system interaction for WAL, SST, and value-log files. It provides portable mmap helpers, allocation primitives, and log file wrappers.</p>
-<hr>
-<h2 id="1-core-types"><a class="header" href="#1-core-types">1. Core Types</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Type</th><th>Purpose</th><th>Key Methods</th></tr>
-</thead>
-<tbody>
-<tr><td><a href="../file/file.go#L5-L16"><code>Options</code></a></td><td>Parameter bag for opening files (FID, path, size).</td><td>Used by WAL/vlog managers.</td></tr>
-<tr><td><a href="../file/mmap_linux.go#L12-L98"><code>MmapFile</code></a></td><td>Cross-platform mmap wrapper.</td><td><code>OpenMmapFile</code>, <code>AppendBuffer</code>, <code>Truncate</code>, <code>Sync</code>.</td></tr>
-<tr><td><a href="../file/vlog.go#L17-L223"><code>LogFile</code></a></td><td>Value-log specific helper built on <code>MmapFile</code>.</td><td><code>Open</code>, <code>Write</code>, <code>Read</code>, <code>DoneWriting</code>, <code>Truncate</code>, <code>Bootstrap</code>.</td></tr>
-</tbody>
-</table>
-</div>
-<p>Darwin-specific builds live alongside (<code>mmap_darwin.go</code>, <code>sstable_darwin.go</code>) ensuring the package compiles on macOS without manual tuning.</p>
-<hr>
-<h2 id="2-mmap-management"><a class="header" href="#2-mmap-management">2. Mmap Management</a></h2>
+                        <h1 id="range-filter"><a class="header" href="#range-filter">Range Filter</a></h1>
+<p>NoKV’s range filter is a read-path pruning layer for the LSM tree. It is inspired by the paper <a href="https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf">GRF: A Global Range Filter for LSM-Trees with Shape Encoding</a>, but it is deliberately more conservative and much simpler.</p>
+<p>The current implementation is best described as:</p>
 <ul>
-<li><code>OpenMmapFile</code> opens or creates a file, optionally extending it to <code>maxSz</code>, then mmaps it. The returned <code>MmapFile</code> exposes <code>Data []byte</code> and the underlying <code>*os.File</code> handle.</li>
-<li>Writes grow the map on demand: <code>AppendBuffer</code> checks if the write would exceed the current mapping and calls <code>Truncate</code> to expand (doubling up to 1 GiB increments).</li>
-<li><code>Sync</code> flushes dirty pages (<code>mmap.Msync</code>), while <code>Delete</code> unmaps, truncates, closes, and removes the file—used when dropping SSTs or value-log segments.</li>
+<li>in-memory only</li>
+<li>correctness-first</li>
+<li>advisory pruning, not a source of truth</li>
+<li>table-level pruning plus table-internal block-range pruning</li>
 </ul>
-<p>RocksDB relies on custom Env implementations for portability; NoKV keeps the logic in Go, relying on build tags for OS differences.</p>
+<p>It is designed to reduce unnecessary SST and block probes on point lookups and narrow bounded scans without changing recovery or manifest semantics.</p>
 <hr>
-<h2 id="3-logfile-semantics"><a class="header" href="#3-logfile-semantics">3. LogFile Semantics</a></h2>
-<p><code>LogFile</code> wraps <code>MmapFile</code> to simplify value-log operations:</p>
-<pre><code class="language-go">lf := &amp;file.LogFile{}
-_ = lf.Open(&amp;file.Options{FID: 1, FileName: "00001.vlog", MaxSz: 1&lt;&lt;29})
-var buf bytes.Buffer
-payload, _ := kv.EncodeEntry(&amp;buf, entry)
-_ = lf.Write(offset, payload)
-_ = lf.DoneWriting(offset + uint32(len(payload)))
-</code></pre>
+<h2 id="1-goals"><a class="header" href="#1-goals">1. Goals</a></h2>
+<p>The range filter exists to cut down the part of the read path that answers:</p>
 <ul>
-<li><code>Open</code> mmaps the file and records current size (guarded to <code>&lt; 4 GiB</code>).</li>
-<li><code>Read</code> validates offsets against both the mmap length and tracked size, preventing partial reads when GC or drop operations shrink the file.</li>
-<li>Entry encoding uses shared helpers in <code>kv</code> (<code>kv.EncodeEntry</code> / <code>kv.EncodeEntryTo</code>); <code>LogFile</code> focuses on write/read/truncate + durability semantics.</li>
-<li><code>DoneWriting</code> guarantees durability for both data bytes <code>[0, offset)</code> and the file metadata (size).
+<li>which SSTs are even worth probing</li>
+<li>which block range inside a chosen SST is even worth scanning</li>
+</ul>
+<p>This is most valuable for:</p>
 <ul>
-<li>Sequence: It flushes dirty pages (<code>msync</code>), truncates the file to <code>offset</code>, and performs a file-descriptor level sync (<code>fsync</code>) to ensure the new file size is persisted on disk before returning.</li>
-<li>Contract: Success implies that after a crash, the file size will not exceed <code>offset</code>, and all data prior to <code>offset</code> is safe.</li>
-<li>After syncing, it reinitializes the mmap and keeps the file open in read-write mode for potential subsequent appends (if logic allows) or prepares it for read-only consumption.</li>
+<li>point misses</li>
+<li>point hits on non-overlapping levels with many SSTs</li>
+<li>narrow bounded iterators</li>
+</ul>
+<p>It is not intended to change write behavior, compaction policy, or persistence format.</p>
+<hr>
+<h2 id="2-inspiration"><a class="header" href="#2-inspiration">2. Inspiration</a></h2>
+<p>The design direction comes from the SIGMOD 2024 GRF paper:</p>
+<ul>
+<li><a href="https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf">GRF: A Global Range Filter for LSM-Trees with Shape Encoding</a></li>
+</ul>
+<p>The paper’s main idea is stronger than what NoKV currently implements:</p>
+<ul>
+<li>a true global range filter</li>
+<li>shape encoding tied to LSM shape and run IDs</li>
+<li>version/snapshot-aware maintenance</li>
+<li>maintenance rules that assume more deterministic compaction behavior</li>
+</ul>
+<p>NoKV does <strong>not</strong> implement full GRF or Shape Encoding. The current design only borrows the high-level idea:</p>
+<ul>
+<li>do pruning before expensive per-run / per-table probes</li>
+<li>keep the pruning layer global enough to matter</li>
+<li>preserve correctness by falling back when uncertain</li>
+</ul>
+<hr>
+<h2 id="3-current-design"><a class="header" href="#3-current-design">3. Current Design</a></h2>
+<h3 id="31-per-level-table-spans"><a class="header" href="#31-per-level-table-spans">3.1 Per-level table spans</a></h3>
+<p>Each <code>levelHandler</code> maintains a <code>rangeFilter</code> built from its current table set:</p>
+<ul>
+<li>source: <a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
+<li>owner: <a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>Each span records:</p>
+<ul>
+<li>minimum user key</li>
+<li>maximum user key</li>
+<li>table pointer</li>
+</ul>
+<p>For non-overlapping levels, the filter supports binary-search candidate lookup. For overlapping or small levels, it falls back to a conservative linear filter.</p>
+<h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
+<p>Point lookups first prune candidate tables:</p>
+<ul>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>If a non-overlapping level collapses to a single exact candidate, NoKV uses a thinner point-read path:</p>
+<ul>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+</ul>
+<p>This avoids the heavier generic iterator-style path for the common “one table could contain this key” case.</p>
+<h3 id="33-bounded-iterator-pruning"><a class="header" href="#33-bounded-iterator-pruning">3.3 Bounded iterator pruning</a></h3>
+<p>Bounded iterators use the same per-level filter to prune whole tables before iterator assembly:</p>
+<ul>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>Inside a table, NoKV then uses SST block base keys from the decoded table index to shrink the block range that the iterator needs to touch:</p>
+<ul>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+</ul>
+<p>This is the current “table-internal” stage of the design.</p>
+<h3 id="34-rebuild-behavior"><a class="header" href="#34-rebuild-behavior">3.4 Rebuild behavior</a></h3>
+<p>The filter is rebuilt when a level’s table set changes, for example after:</p>
+<ul>
+<li>sort/install</li>
+<li>compaction replacement</li>
+<li>table deletion</li>
+</ul>
+<p>The filter is not updated on every write. It is rebuilt on table-set changes under the existing level ownership rules.</p>
+<hr>
+<h2 id="4-correctness-model"><a class="header" href="#4-correctness-model">4. Correctness Model</a></h2>
+<p>The range filter is intentionally <strong>not authoritative</strong>.</p>
+<p>Rules:</p>
+<ul>
+<li>if the filter is unsure, fall back</li>
+<li>if the level overlaps, fall back</li>
+<li>if the level is too small to amortize pruning overhead, fall back</li>
+<li>never allow false-negative pruning</li>
+</ul>
+<p>This is why the design is safe to deploy without changing startup, manifest, or recovery behavior.</p>
+<p><code>L0</code> is handled conservatively:</p>
+<ul>
+<li>it remains overlap-first</li>
+<li>it does not use the non-overlapping exact-candidate fast path</li>
+</ul>
+<p>That choice trades peak possible speed for simpler correctness.</p>
+<hr>
+<h2 id="5-what-this-is-not"><a class="header" href="#5-what-this-is-not">5. What This Is Not</a></h2>
+<p>This document describes a practical NoKV optimization, not a claim of full GRF compatibility.</p>
+<p>NoKV currently does <strong>not</strong> implement:</p>
+<ul>
+<li>Shape Encoding</li>
+<li>a persisted global range filter</li>
+<li>run-ID encoding</li>
+<li>snapshot/version-aware filter state</li>
+<li>compaction-policy constraints required by full GRF</li>
+</ul>
+<p>This is deliberate. Those features would couple the filter much more tightly to compaction scheduling, version management, and recovery semantics.</p>
+<hr>
+<h2 id="6-observability"><a class="header" href="#6-observability">6. Observability</a></h2>
+<p>Range-filter behavior is exported through LSM diagnostics and top-level stats:</p>
+<ul>
+<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../stats.go"><code>stats.go</code></a></li>
+</ul>
+<p>Current counters include:</p>
+<ul>
+<li><code>PointCandidates</code></li>
+<li><code>PointPruned</code></li>
+<li><code>BoundedCandidates</code></li>
+<li><code>BoundedPruned</code></li>
+<li><code>Fallbacks</code></li>
+</ul>
+<p>These counters are useful for deciding whether a workload is actually benefiting from pruning or mostly falling back.</p>
+<hr>
+<h2 id="7-performance-notes"><a class="header" href="#7-performance-notes">7. Performance Notes</a></h2>
+<p>Microbenchmarks show strong gains when candidate-pruning is the dominant cost:</p>
+<ul>
+<li>point misses</li>
+<li>point hits on many-table non-overlapping levels</li>
+<li>narrow bounded scans</li>
+</ul>
+<p>System-level YCSB behavior is more nuanced:</p>
+<ul>
+<li>read-heavy workloads benefit more clearly</li>
+<li>mixed read/write workloads depend more on L0 shape, block loads, flush, and compaction pressure</li>
+</ul>
+<p>This is expected. The range filter optimizes query planning and table/block selection. It does not remove the rest of the read path.</p>
+<hr>
+<h2 id="8-why-nokv-stops-short-of-full-grf"><a class="header" href="#8-why-nokv-stops-short-of-full-grf">8. Why NoKV Stops Short of Full GRF</a></h2>
+<p>Full paper alignment is not the current goal.</p>
+<p>Reasons:</p>
+<ol>
+<li>NoKV’s current compaction and level behavior does not naturally satisfy the paper’s stronger deterministic requirements.</li>
+<li>A persisted global filter would add metadata, rebuild, and recovery complexity.</li>
+<li>The current implementation already captures the most practical early win:
+<ul>
+<li>prune whole tables first</li>
+<li>then prune block ranges inside the chosen table</li>
 </ul>
 </li>
-<li><code>Rewind</code> (via <code>vlog.Manager.Rewind</code>) leverages <code>LogFile.Truncate</code> and <code>Init</code> to roll back partial batches after errors.</li>
-</ul>
-<hr>
-<h2 id="4-sst-helpers"><a class="header" href="#4-sst-helpers">4. SST Helpers</a></h2>
-<p>While SSTable builders/readers live under <code>lsm/table.go</code>, they rely on <code>file</code> helpers to map index/data blocks efficiently. The build tags (<code>sstable_linux.go</code>, <code>sstable_darwin.go</code>) provide OS-specific tuning for direct I/O hints or mmap flags.</p>
-<hr>
-<h2 id="5-comparison"><a class="header" href="#5-comparison">5. Comparison</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Engine</th><th>Approach</th></tr>
-</thead>
-<tbody>
-<tr><td>RocksDB</td><td>C++ Env &amp; random-access file wrappers.</td></tr>
-<tr><td>Badger</td><td><code>y.File</code> abstraction with mmap.</td></tr>
-<tr><td>NoKV</td><td>Go-native mmap wrappers with explicit log helpers.</td></tr>
-</tbody>
-</table>
-</div>
-<p>By keeping all filesystem primitives in one package, NoKV ensures WAL, vlog, and SST layers share consistent behaviour (sync semantics, truncation rules) and simplifies testing (<code>file/mmap_linux_test.go</code>).</p>
-<hr>
-<h2 id="6-operational-notes"><a class="header" href="#6-operational-notes">6. Operational Notes</a></h2>
+<li>Current bottlenecks for read-heavy workloads are now more visible in:
 <ul>
-<li><code>DoneWriting</code> provides strong crash-consistency guarantees. Even on filesystems where <code>ftruncate</code> metadata persistence is asynchronous, the explicit post-truncate <code>fsync</code> ensures the file size is durable upon success.</li>
-<li>Value-log and WAL segments rely on <code>DoneWriting</code>/<code>Truncate</code> to seal files; avoid manipulating files externally or mmap metadata may desynchronise.</li>
-<li><code>LogFile</code> updates cached size internally on <code>Write</code>/<code>Truncate</code>, so read bounds stay consistent during rewrite/rewind flows.</li>
-<li><code>vfs.SyncDir</code> is used by strict durability flows to persist directory entry changes (create/rename/remove). For example, strict SST flush calls <code>SyncDir(workdir)</code> before manifest publication.</li>
+<li><code>L0</code> overlap handling</li>
+<li>block loading</li>
+<li>remaining table probe cost</li>
 </ul>
-<p>For more on how these primitives plug into higher layers, see <a href="wal.html"><code>docs/wal.md</code></a> and <a href="vlog.html"><code>docs/vlog.md</code></a>.</p>
+</li>
+</ol>
+<p>For NoKV, this simpler design is a better engineering tradeoff today.</p>
+<hr>
+<h2 id="9-source-map"><a class="header" href="#9-source-map">9. Source Map</a></h2>
+<p>Primary implementation files:</p>
+<ul>
+<li><a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../stats.go"><code>stats.go</code></a></li>
+</ul>
+<p>Related benchmark coverage:</p>
+<ul>
+<li><a href="../lsm/lsm_bench_test.go"><code>lsm/lsm_bench_test.go</code></a></li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="vfs.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="cache.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="cache.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="hotring.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -272,11 +378,11 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="vfs.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="cache.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="cache.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="hotring.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

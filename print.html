@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4a2244d7.js";
+            window.path_to_searchindex_js = "searchindex-42fc7a1f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5ff2b812.js"></script>
+        <script src="toc-2499ba20.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -997,7 +997,8 @@ WAL/value-log codecs, memtable indexes, SST blocks, and iterators.</p>
 <p>Helpers:</p>
 <ul>
 <li><code>SplitInternalKey(internal) -&gt; (cf, userKey, ts, ok)</code></li>
-<li><code>Timestamp(key)</code> / <code>StripTimestamp(key)</code> / <code>SameKey(a, b)</code></li>
+<li><code>SplitBaseKey(base) -&gt; (cf, userKey, ok)</code></li>
+<li><code>Timestamp(key)</code> / <code>InternalToBaseKey(internal)</code> / <code>BaseKey(cf, userKey)</code> / <code>SameBaseKey(a, b)</code></li>
 </ul>
 <h3 id="22-valuestruct-encoding"><a class="header" href="#22-valuestruct-encoding">2.2 ValueStruct Encoding</a></h3>
 <p>Source: <a href="../kv/value.go"><code>kv/value.go</code></a></p>
@@ -1231,7 +1232,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 </li>
 <li><strong>Caches</strong>
 <ul>
-<li><code>BlockCacheBytes</code>, <code>IndexCacheBytes</code>, <code>BloomCacheBytes</code></li>
+<li><code>BlockCacheBytes</code>, <code>IndexCacheBytes</code></li>
 </ul>
 </li>
 <li><strong>Hot key throttling</strong>
@@ -2351,7 +2352,7 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 <p>For more on how these primitives plug into higher layers, see <a href="#wal-subsystem"><code>docs/wal.md</code></a> and <a href="#value-log-vlog-design"><code>docs/vlog.md</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="cache--bloom-filters"><a class="header" href="#cache--bloom-filters">Cache &amp; Bloom Filters</a></h1>
-<p>NoKV’s LSM tier layers a multi-level block cache with bloom filter caching to accelerate lookups. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
+<p>NoKV’s LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from <code>pb.TableIndex</code>. The implementation is in <a href="../lsm/cache.go"><code>lsm/cache.go</code></a>.</p>
 <hr>
 <h2 id="1-components"><a class="header" href="#1-components">1. Components</a></h2>
 <div class="table-wrapper">
@@ -2362,12 +2363,11 @@ _ = lf.DoneWriting(offset + uint32(len(payload)))
 <tbody>
 <tr><td><code>cache.indexes</code></td><td>Byte-budgeted W-TinyLFU cache for decoded table indexes (<code>fid</code> → <code>*pb.TableIndex</code>).</td><td><a href="../utils/cache"><code>utils/cache</code></a></td></tr>
 <tr><td><code>blockCache</code></td><td>Ristretto-based block cache (L0/L1 only) with per-table direct slots.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>bloomCache</code></td><td>Budgeted LRU for bloom filter bitsets per SST.</td><td><a href="../lsm/cache.go"><code>lsm/cache.go</code></a></td></tr>
-<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and blooms.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
+<tr><td><code>cacheMetrics</code></td><td>Atomic hit/miss counters for L0/L1 blocks and indexes.</td><td><a href="../lsm/cache.go#L30-L110"><code>lsm/cache.go#L30-L110</code></a></td></tr>
 </tbody>
 </table>
 </div>
-<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block/index/bloom caches distinct, but all three now use byte budgets so memory planning stays explicit.</p>
+<p>Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block and index caches explicit; bloom filters piggyback on the decoded table index already held by each live SST.</p>
 <hr>
 <h3 id="11-index-cache--handles"><a class="header" href="#11-index-cache--handles">1.1 Index Cache &amp; Handles</a></h3>
 <ul>
@@ -2395,13 +2395,11 @@ Deeper levels rely on OS page cache + mmap readahead
 
 <p>By default only L0 and L1 blocks are cached (<code>level &gt; 1</code> short-circuits), reflecting the higher re-use for top levels.</p>
 <hr>
-<h2 id="3-bloom-cache"><a class="header" href="#3-bloom-cache">3. Bloom Cache</a></h2>
+<h2 id="3-bloom-filters"><a class="header" href="#3-bloom-filters">3. Bloom Filters</a></h2>
 <ul>
-<li><code>bloomCache</code> stores the raw filter bitset (<code>utils.Filter</code>) per table ID. Entries are deep-copied (<code>SafeCopy</code>) to avoid sharing memory with mmaps.</li>
-<li>Cache policy is LRU.</li>
-<li>Capacity is controlled by <code>Options.BloomCacheBytes</code>.</li>
+<li>Bloom filters are stored inside <code>pb.TableIndex</code> and probed directly from the decoded index already held by <code>table.idx</code>.</li>
+<li>There is no separate bloom-filter cache layer; this avoids a redundant hot-path mutex/LRU hop on every point lookup.</li>
 <li><code>indexCache</code> keeps the existing W-TinyLFU admission path and budgets decoded <code>pb.TableIndex</code> payloads using the protobuf-encoded size (<code>proto.Size</code>).</li>
-<li>Bloom hits/misses are recorded via <code>cacheMetrics.recordBloom</code>, feeding into <code>StatsSnapshot.Cache.BloomHitRate</code>.</li>
 </ul>
 <hr>
 <h2 id="4-metrics--observability"><a class="header" href="#4-metrics--observability">4. Metrics &amp; Observability</a></h2>
@@ -2409,7 +2407,6 @@ Deeper levels rely on OS page cache + mmap readahead
 <pre><code class="language-go">type CacheMetrics struct {
     L0Hits, L0Misses uint64
     L1Hits, L1Misses uint64
-    BloomHits, BloomMisses uint64
     IndexHits, IndexMisses uint64
 }
 </code></pre>
@@ -2437,7 +2434,7 @@ Deeper levels rely on OS page cache + mmap readahead
 </thead>
 <tbody>
 <tr><td>Block cache policy</td><td>Configurable multiple caches</td><td>Single cache</td><td>Ristretto for L0/L1 + OS page cache for deeper levels</td></tr>
-<tr><td>Bloom cache</td><td>Enabled per table, no explicit cache</td><td>Optional</td><td>Dedicated LRU storing filters</td></tr>
+<tr><td>Bloom filter storage</td><td>Per table</td><td>Per table</td><td>Embedded in decoded table indexes</td></tr>
 <tr><td>Metrics</td><td>Block cache stats via <code>GetAggregatedIntProperty</code></td><td>Limited</td><td><code>NoKV.Stats.cache.*</code> hit rates</td></tr>
 </tbody>
 </table>
@@ -2445,11 +2442,193 @@ Deeper levels rely on OS page cache + mmap readahead
 <hr>
 <h2 id="8-operational-tips-1"><a class="header" href="#8-operational-tips-1">8. Operational Tips</a></h2>
 <ul>
-<li>If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.</li>
+<li>If point-read false positives become expensive, tune bloom bits-per-key at SST build time rather than adding another filter cache layer.</li>
 <li>Track <code>nokv stats --json</code> cache metrics over time; drops often indicate iterator misuse or working-set shifts.</li>
 <li>Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.</li>
 </ul>
 <p>More on SST layout lives in <a href="#manifest--version-management"><code>docs/manifest.md</code></a> and <a href="#4-read-path--iterators"><code>docs/architecture.md</code></a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="range-filter"><a class="header" href="#range-filter">Range Filter</a></h1>
+<p>NoKV’s range filter is a read-path pruning layer for the LSM tree. It is inspired by the paper <a href="https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf">GRF: A Global Range Filter for LSM-Trees with Shape Encoding</a>, but it is deliberately more conservative and much simpler.</p>
+<p>The current implementation is best described as:</p>
+<ul>
+<li>in-memory only</li>
+<li>correctness-first</li>
+<li>advisory pruning, not a source of truth</li>
+<li>table-level pruning plus table-internal block-range pruning</li>
+</ul>
+<p>It is designed to reduce unnecessary SST and block probes on point lookups and narrow bounded scans without changing recovery or manifest semantics.</p>
+<hr>
+<h2 id="1-goals"><a class="header" href="#1-goals">1. Goals</a></h2>
+<p>The range filter exists to cut down the part of the read path that answers:</p>
+<ul>
+<li>which SSTs are even worth probing</li>
+<li>which block range inside a chosen SST is even worth scanning</li>
+</ul>
+<p>This is most valuable for:</p>
+<ul>
+<li>point misses</li>
+<li>point hits on non-overlapping levels with many SSTs</li>
+<li>narrow bounded iterators</li>
+</ul>
+<p>It is not intended to change write behavior, compaction policy, or persistence format.</p>
+<hr>
+<h2 id="2-inspiration"><a class="header" href="#2-inspiration">2. Inspiration</a></h2>
+<p>The design direction comes from the SIGMOD 2024 GRF paper:</p>
+<ul>
+<li><a href="https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf">GRF: A Global Range Filter for LSM-Trees with Shape Encoding</a></li>
+</ul>
+<p>The paper’s main idea is stronger than what NoKV currently implements:</p>
+<ul>
+<li>a true global range filter</li>
+<li>shape encoding tied to LSM shape and run IDs</li>
+<li>version/snapshot-aware maintenance</li>
+<li>maintenance rules that assume more deterministic compaction behavior</li>
+</ul>
+<p>NoKV does <strong>not</strong> implement full GRF or Shape Encoding. The current design only borrows the high-level idea:</p>
+<ul>
+<li>do pruning before expensive per-run / per-table probes</li>
+<li>keep the pruning layer global enough to matter</li>
+<li>preserve correctness by falling back when uncertain</li>
+</ul>
+<hr>
+<h2 id="3-current-design"><a class="header" href="#3-current-design">3. Current Design</a></h2>
+<h3 id="31-per-level-table-spans"><a class="header" href="#31-per-level-table-spans">3.1 Per-level table spans</a></h3>
+<p>Each <code>levelHandler</code> maintains a <code>rangeFilter</code> built from its current table set:</p>
+<ul>
+<li>source: <a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
+<li>owner: <a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>Each span records:</p>
+<ul>
+<li>minimum user key</li>
+<li>maximum user key</li>
+<li>table pointer</li>
+</ul>
+<p>For non-overlapping levels, the filter supports binary-search candidate lookup. For overlapping or small levels, it falls back to a conservative linear filter.</p>
+<h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
+<p>Point lookups first prune candidate tables:</p>
+<ul>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>If a non-overlapping level collapses to a single exact candidate, NoKV uses a thinner point-read path:</p>
+<ul>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+</ul>
+<p>This avoids the heavier generic iterator-style path for the common “one table could contain this key” case.</p>
+<h3 id="33-bounded-iterator-pruning"><a class="header" href="#33-bounded-iterator-pruning">3.3 Bounded iterator pruning</a></h3>
+<p>Bounded iterators use the same per-level filter to prune whole tables before iterator assembly:</p>
+<ul>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+</ul>
+<p>Inside a table, NoKV then uses SST block base keys from the decoded table index to shrink the block range that the iterator needs to touch:</p>
+<ul>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+</ul>
+<p>This is the current “table-internal” stage of the design.</p>
+<h3 id="34-rebuild-behavior"><a class="header" href="#34-rebuild-behavior">3.4 Rebuild behavior</a></h3>
+<p>The filter is rebuilt when a level’s table set changes, for example after:</p>
+<ul>
+<li>sort/install</li>
+<li>compaction replacement</li>
+<li>table deletion</li>
+</ul>
+<p>The filter is not updated on every write. It is rebuilt on table-set changes under the existing level ownership rules.</p>
+<hr>
+<h2 id="4-correctness-model"><a class="header" href="#4-correctness-model">4. Correctness Model</a></h2>
+<p>The range filter is intentionally <strong>not authoritative</strong>.</p>
+<p>Rules:</p>
+<ul>
+<li>if the filter is unsure, fall back</li>
+<li>if the level overlaps, fall back</li>
+<li>if the level is too small to amortize pruning overhead, fall back</li>
+<li>never allow false-negative pruning</li>
+</ul>
+<p>This is why the design is safe to deploy without changing startup, manifest, or recovery behavior.</p>
+<p><code>L0</code> is handled conservatively:</p>
+<ul>
+<li>it remains overlap-first</li>
+<li>it does not use the non-overlapping exact-candidate fast path</li>
+</ul>
+<p>That choice trades peak possible speed for simpler correctness.</p>
+<hr>
+<h2 id="5-what-this-is-not"><a class="header" href="#5-what-this-is-not">5. What This Is Not</a></h2>
+<p>This document describes a practical NoKV optimization, not a claim of full GRF compatibility.</p>
+<p>NoKV currently does <strong>not</strong> implement:</p>
+<ul>
+<li>Shape Encoding</li>
+<li>a persisted global range filter</li>
+<li>run-ID encoding</li>
+<li>snapshot/version-aware filter state</li>
+<li>compaction-policy constraints required by full GRF</li>
+</ul>
+<p>This is deliberate. Those features would couple the filter much more tightly to compaction scheduling, version management, and recovery semantics.</p>
+<hr>
+<h2 id="6-observability"><a class="header" href="#6-observability">6. Observability</a></h2>
+<p>Range-filter behavior is exported through LSM diagnostics and top-level stats:</p>
+<ul>
+<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../stats.go"><code>stats.go</code></a></li>
+</ul>
+<p>Current counters include:</p>
+<ul>
+<li><code>PointCandidates</code></li>
+<li><code>PointPruned</code></li>
+<li><code>BoundedCandidates</code></li>
+<li><code>BoundedPruned</code></li>
+<li><code>Fallbacks</code></li>
+</ul>
+<p>These counters are useful for deciding whether a workload is actually benefiting from pruning or mostly falling back.</p>
+<hr>
+<h2 id="7-performance-notes"><a class="header" href="#7-performance-notes">7. Performance Notes</a></h2>
+<p>Microbenchmarks show strong gains when candidate-pruning is the dominant cost:</p>
+<ul>
+<li>point misses</li>
+<li>point hits on many-table non-overlapping levels</li>
+<li>narrow bounded scans</li>
+</ul>
+<p>System-level YCSB behavior is more nuanced:</p>
+<ul>
+<li>read-heavy workloads benefit more clearly</li>
+<li>mixed read/write workloads depend more on L0 shape, block loads, flush, and compaction pressure</li>
+</ul>
+<p>This is expected. The range filter optimizes query planning and table/block selection. It does not remove the rest of the read path.</p>
+<hr>
+<h2 id="8-why-nokv-stops-short-of-full-grf"><a class="header" href="#8-why-nokv-stops-short-of-full-grf">8. Why NoKV Stops Short of Full GRF</a></h2>
+<p>Full paper alignment is not the current goal.</p>
+<p>Reasons:</p>
+<ol>
+<li>NoKV’s current compaction and level behavior does not naturally satisfy the paper’s stronger deterministic requirements.</li>
+<li>A persisted global filter would add metadata, rebuild, and recovery complexity.</li>
+<li>The current implementation already captures the most practical early win:
+<ul>
+<li>prune whole tables first</li>
+<li>then prune block ranges inside the chosen table</li>
+</ul>
+</li>
+<li>Current bottlenecks for read-heavy workloads are now more visible in:
+<ul>
+<li><code>L0</code> overlap handling</li>
+<li>block loading</li>
+<li>remaining table probe cost</li>
+</ul>
+</li>
+</ol>
+<p>For NoKV, this simpler design is a better engineering tradeoff today.</p>
+<hr>
+<h2 id="9-source-map"><a class="header" href="#9-source-map">9. Source Map</a></h2>
+<p>Primary implementation files:</p>
+<ul>
+<li><a href="../lsm/range_filter.go"><code>lsm/range_filter.go</code></a></li>
+<li><a href="../lsm/level_handler.go"><code>lsm/level_handler.go</code></a></li>
+<li><a href="../lsm/table.go"><code>lsm/table.go</code></a></li>
+<li><a href="../lsm/diagnostics.go"><code>lsm/diagnostics.go</code></a></li>
+<li><a href="../stats.go"><code>stats.go</code></a></li>
+</ul>
+<p>Related benchmark coverage:</p>
+<ul>
+<li><a href="../lsm/lsm_bench_test.go"><code>lsm/lsm_bench_test.go</code></a></li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="hotring--hot-key-tracking"><a class="header" href="#hotring--hot-key-tracking">HotRing – Hot Key Tracking</a></h1>
 <p><code>hotring</code> is NoKV’s hot-key tracker. It samples read/write access frequency per key and exposes the hottest entries to the stats subsystem and CLI. The implementation lives in <a href="../hotring"><code>hotring/</code></a> inside this repository.</p>
