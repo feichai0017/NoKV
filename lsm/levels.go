@@ -607,6 +607,7 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		l0.totalValueSize += int64(tbl.ValueSize())
 	}
 	l0.sortTablesLocked()
+	l0.rebuildRangeFilterLocked()
 
 	return nil
 }
