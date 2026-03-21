@@ -1,6 +1,6 @@
 # Cache & Bloom Filters
 
-NoKV's LSM tier layers a multi-level block cache with bloom filter caching to accelerate lookups. The implementation is in [`lsm/cache.go`](../lsm/cache.go).
+NoKV's LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from `pb.TableIndex`. The implementation is in [`lsm/cache.go`](../lsm/cache.go).
 
 ---
 
@@ -10,10 +10,9 @@ NoKV's LSM tier layers a multi-level block cache with bloom filter caching to ac
 | --- | --- | --- |
 | `cache.indexes` | Byte-budgeted W-TinyLFU cache for decoded table indexes (`fid` → `*pb.TableIndex`). | [`utils/cache`](../utils/cache) |
 | `blockCache` | Ristretto-based block cache (L0/L1 only) with per-table direct slots. | [`lsm/cache.go`](../lsm/cache.go) |
-| `bloomCache` | Budgeted LRU for bloom filter bitsets per SST. | [`lsm/cache.go`](../lsm/cache.go) |
-| `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and blooms. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
+| `cacheMetrics` | Atomic hit/miss counters for L0/L1 blocks and indexes. | [`lsm/cache.go#L30-L110`](../lsm/cache.go#L30-L110) |
 
-Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block/index/bloom caches distinct, but all three now use byte budgets so memory planning stays explicit.
+Badger exposes separate block/index cache budgets while Pebble uses a unified cache budget. NoKV keeps block and index caches explicit; bloom filters piggyback on the decoded table index already held by each live SST.
 
 ---
 
@@ -49,13 +48,11 @@ By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflec
 
 ---
 
-## 3. Bloom Cache
+## 3. Bloom Filters
 
-* `bloomCache` stores the raw filter bitset (`utils.Filter`) per table ID. Entries are deep-copied (`SafeCopy`) to avoid sharing memory with mmaps.
-* Cache policy is LRU.
-* Capacity is controlled by `Options.BloomCacheBytes`.
+* Bloom filters are stored inside `pb.TableIndex` and probed directly from the decoded index already held by `table.idx`.
+* There is no separate bloom-filter cache layer; this avoids a redundant hot-path mutex/LRU hop on every point lookup.
 * `indexCache` keeps the existing W-TinyLFU admission path and budgets decoded `pb.TableIndex` payloads using the protobuf-encoded size (`proto.Size`).
-* Bloom hits/misses are recorded via `cacheMetrics.recordBloom`, feeding into `StatsSnapshot.Cache.BloomHitRate`.
 
 ---
 
@@ -67,7 +64,6 @@ By default only L0 and L1 blocks are cached (`level > 1` short-circuits), reflec
 type CacheMetrics struct {
     L0Hits, L0Misses uint64
     L1Hits, L1Misses uint64
-    BloomHits, BloomMisses uint64
     IndexHits, IndexMisses uint64
 }
 ```
@@ -97,14 +93,14 @@ type CacheMetrics struct {
 | Feature | RocksDB | BadgerDB | NoKV |
 | --- | --- | --- | --- |
 | Block cache policy | Configurable multiple caches | Single cache | Ristretto for L0/L1 + OS page cache for deeper levels |
-| Bloom cache | Enabled per table, no explicit cache | Optional | Dedicated LRU storing filters |
+| Bloom filter storage | Per table | Per table | Embedded in decoded table indexes |
 | Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Stats.cache.*` hit rates |
 
 ---
 
 ## 8. Operational Tips
 
-* If bloom hit rate falls below ~60%, consider increasing bits-per-key or Bloom cache size.
+* If point-read false positives become expensive, tune bloom bits-per-key at SST build time rather than adding another filter cache layer.
 * Track `nokv stats --json` cache metrics over time; drops often indicate iterator misuse or working-set shifts.
 * Benchmark tooling accepts cache sizes in MB and converts them into these byte-budget fields before opening the engine.
 

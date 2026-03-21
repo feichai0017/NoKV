@@ -261,21 +261,12 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	if idx == nil {
 		return nil, errors.New("table index missing")
 	}
-	if t.hasBloom || len(idx.BloomFilter) > 0 {
-		var bloomFilter utils.Filter
-		if cached, ok := t.lm.cache.getBloom(t.fid); ok {
-			bloomFilter = cached
-		} else {
-			bloomFilter = utils.Filter(idx.BloomFilter)
-			if len(bloomFilter) > 0 {
-				t.lm.cache.addBloom(t.fid, bloomFilter)
-			}
-		}
+	if bloomFilter := utils.Filter(idx.BloomFilter); len(bloomFilter) > 0 {
 		utils.CondPanicFunc(len(key) <= 8, func() error {
 			return fmt.Errorf("table.Search expects internal key: %x", key)
 		})
 		probe := kv.StripTimestamp(key)
-		if len(bloomFilter) > 0 && !bloomFilter.MayContainKey(probe) {
+		if !bloomFilter.MayContainKey(probe) {
 			return nil, utils.ErrKeyNotFound
 		}
 	}
@@ -965,7 +956,6 @@ func (it *tableIterator) advanceToBoundedValid() {
 			it.err = nil
 			return
 		}
-		it.bi.Next()
 	}
 }
 
