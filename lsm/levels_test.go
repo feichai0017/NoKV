@@ -75,31 +75,36 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	tblA := buildTableWithEntry(t, lsm, 101, "a", 1, "va")
 	tblD := buildTableWithEntry(t, lsm, 102, "d", 1, "vd")
 	tblG := buildTableWithEntry(t, lsm, 103, "g", 1, "vg")
+	tblJ := buildTableWithEntry(t, lsm, 104, "j", 1, "vj")
+	tblM := buildTableWithEntry(t, lsm, 105, "m", 1, "vm")
+	tblP := buildTableWithEntry(t, lsm, 106, "p", 1, "vp")
+	tblS := buildTableWithEntry(t, lsm, 107, "s", 1, "vs")
+	tblV := buildTableWithEntry(t, lsm, 108, "v", 1, "vv")
 
-	lh.tables = []*table{tblG, tblA, tblD}
+	lh.tables = []*table{tblV, tblG, tblA, tblP, tblD, tblS, tblJ, tblM}
 	lh.Sort()
 
-	require.Len(t, lh.filter.spans, 3)
+	require.Len(t, lh.filter.spans, 8)
 
-	point := lh.getTablesForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 5))
+	point := lh.selectTablesForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 5), true)
 	require.Len(t, point, 1)
 	require.Equal(t, uint64(102), point[0].fid)
 
-	bounded := lh.getTablesForBounds([]byte("c"), []byte("f"))
+	bounded := lh.selectTablesForBounds([]byte("c"), []byte("f"), true)
 	require.Len(t, bounded, 1)
 	require.Equal(t, uint64(102), bounded[0].fid)
 
-	miss := lh.getTablesForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 5))
+	miss := lh.selectTablesForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 5), true)
 	require.Empty(t, miss)
 
 	diag := lsm.Diagnostics()
 	require.Equal(t, uint64(1), diag.RangeFilter.PointCandidates)
-	require.Equal(t, uint64(5), diag.RangeFilter.PointPruned)
+	require.Equal(t, uint64(15), diag.RangeFilter.PointPruned)
 	require.Equal(t, uint64(1), diag.RangeFilter.BoundedCandidates)
-	require.Equal(t, uint64(2), diag.RangeFilter.BoundedPruned)
+	require.Equal(t, uint64(7), diag.RangeFilter.BoundedPruned)
 	require.Equal(t, uint64(0), diag.RangeFilter.Fallbacks)
 
-	for _, tbl := range []*table{tblA, tblD, tblG} {
+	for _, tbl := range []*table{tblA, tblD, tblG, tblJ, tblM, tblP, tblS, tblV} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
