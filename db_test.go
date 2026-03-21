@@ -2322,3 +2322,77 @@ func TestConcurrentReadWriteFlushCompactionStress(t *testing.T) {
 		drRequireValue(t, db, []byte("tail"), []byte("ok"))
 	})
 }
+
+func TestValueSeparationPolicyDecisionLogic(t *testing.T) {
+	var err error
+
+	workDir, err := os.MkdirTemp("", "nokv-value-separation-test")
+	require.NoError(t, err)
+	defer func() {
+		err = os.RemoveAll(workDir)
+		require.NoError(t, err)
+	}()
+
+	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	require.NoError(t, err)
+	require.NotNil(t, inlinePolicy)
+	offloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	require.NoError(t, err)
+	require.NotNil(t, offloadPolicy)
+	thresholdPolicy, err := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 32)
+	require.NoError(t, err)
+	require.NotNil(t, thresholdPolicy)
+	policies := []*kv.ValueSeparationPolicy{
+		inlinePolicy,
+		offloadPolicy,
+		thresholdPolicy,
+	}
+	opt := &Options{
+		WorkDir:                 workDir,
+		MaxBatchCount:           3,
+		MaxBatchSize:            1024,
+		ValueThreshold:          32, // Global fallback threshold
+		ValueSeparationPolicies: policies,
+	}
+
+	db := Open(opt)
+	defer func() {
+		err = db.Close()
+		require.NoError(t, err)
+	}()
+
+	largeValue := make([]byte, 128) // Larger than both thresholds
+	for i := range largeValue {
+		largeValue[i] = byte(i % 256)
+	}
+
+	// Test meta_ prefix (should be inlined regardless of size)
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("meta_test"), nonTxnMaxVersion, largeValue, 0, 0)
+	require.True(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+
+	// Test large_ prefix (should be offloaded regardless of size)
+	entry = kv.NewInternalEntry(kv.CFDefault, []byte("large_test"), nonTxnMaxVersion, []byte("small"), 0, 0)
+	require.False(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+
+	// Test medium_ prefix with small value (should be inlined due to threshold)
+	entry = kv.NewInternalEntry(kv.CFDefault, []byte("medium_test1"), nonTxnMaxVersion, []byte("small"), 0, 0)
+	require.True(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+
+	// Test medium_ prefix with large value (should be offloaded due to threshold)
+	entry = kv.NewInternalEntry(kv.CFDefault, []byte("medium_test2"), nonTxnMaxVersion, largeValue, 0, 0)
+	require.False(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+
+	// Test unmatched key with small value (should use global threshold)
+	entry = kv.NewInternalEntry(kv.CFDefault, []byte("regular_test1"), nonTxnMaxVersion, []byte("small"), 0, 0)
+	require.True(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+
+	// Test unmatched key with large value (should use global threshold)
+	entry = kv.NewInternalEntry(kv.CFDefault, []byte("regular_test2"), nonTxnMaxVersion, largeValue, 0, 0)
+	require.False(t, db.shouldWriteValueToLSM(entry))
+	entry.DecrRef()
+}

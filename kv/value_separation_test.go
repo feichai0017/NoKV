@@ -10,17 +10,23 @@ import (
 )
 
 func TestValueSeparationPolicy(t *testing.T) {
-	inlinePolicy := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	require.NoError(t, err)
+	require.NotNil(t, inlinePolicy)
 	require.Equal(t, kv.CFDefault, inlinePolicy.CF)
 	require.Equal(t, []byte("meta_"), inlinePolicy.KeyPrefix)
 	require.Equal(t, kv.AlwaysInline, inlinePolicy.Strategy)
 
-	offloadPolicy := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	offloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	require.NoError(t, err)
+	require.NotNil(t, offloadPolicy)
 	require.Equal(t, kv.CFDefault, offloadPolicy.CF)
 	require.Equal(t, []byte("large_"), offloadPolicy.KeyPrefix)
 	require.Equal(t, kv.AlwaysOffload, offloadPolicy.Strategy)
 
-	thresholdPolicy := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 2048)
+	thresholdPolicy, err := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 2048)
+	require.NoError(t, err)
+	require.NotNil(t, thresholdPolicy)
 	require.Equal(t, kv.CFDefault, thresholdPolicy.CF)
 	require.Equal(t, []byte("medium_"), thresholdPolicy.KeyPrefix)
 	require.Equal(t, kv.ThresholdBased, thresholdPolicy.Strategy)
@@ -28,11 +34,23 @@ func TestValueSeparationPolicy(t *testing.T) {
 }
 
 func TestValueSeparationPolicyMatcher(t *testing.T) {
+	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	require.NoError(t, err)
+	require.NotNil(t, inlinePolicy)
+	alwaysOffloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	require.NoError(t, err)
+	require.NotNil(t, alwaysOffloadPolicy)
+	thresholdPolicy, err := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 1024)
+	require.NoError(t, err)
+	require.NotNil(t, thresholdPolicy)
+	lockPolicy, err := kv.NewAlwaysInlinePolicy(kv.CFLock, "")
+	require.NoError(t, err)
+	require.NotNil(t, lockPolicy)
 	policies := []*kv.ValueSeparationPolicy{
-		kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_"),
-		kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_"),
-		kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 1024),
-		kv.NewAlwaysInlinePolicy(kv.CFLock, ""),
+		inlinePolicy,
+		alwaysOffloadPolicy,
+		thresholdPolicy,
+		lockPolicy,
 	}
 
 	matcher := kv.NewValueSeparationPolicyMatcher(policies)
@@ -74,9 +92,15 @@ func TestValueSeparationPolicyMatcher(t *testing.T) {
 }
 
 func TestValueSeparationPolicyStats(t *testing.T) {
+	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	require.NoError(t, err)
+	require.NotNil(t, inlinePolicy)
+	offloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	require.NoError(t, err)
+	require.NotNil(t, offloadPolicy)
 	policies := []*kv.ValueSeparationPolicy{
-		kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_"),
-		kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_"),
+		inlinePolicy,
+		offloadPolicy,
 	}
 
 	matcher := kv.NewValueSeparationPolicyMatcher(policies)
@@ -112,10 +136,19 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
+	inlinePolicy, err := kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_")
+	require.NoError(t, err)
+	require.NotNil(t, inlinePolicy)
+	offloadPolicy, err := kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_")
+	require.NoError(t, err)
+	require.NotNil(t, offloadPolicy)
+	thresholdPolicy, err := kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 32)
+	require.NoError(t, err)
+	require.NotNil(t, thresholdPolicy)
 	policies := []*kv.ValueSeparationPolicy{
-		kv.NewAlwaysInlinePolicy(kv.CFDefault, "meta_"),
-		kv.NewAlwaysOffloadPolicy(kv.CFDefault, "large_"),
-		kv.NewThresholdBasedPolicy(kv.CFDefault, "medium_", 64),
+		inlinePolicy,
+		offloadPolicy,
+		thresholdPolicy,
 	}
 	opt := &NoKV.Options{
 		WorkDir:                 workDir,
@@ -124,6 +157,7 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 		MemTableSize:            1024,
 		ValueThreshold:          32, // Global fallback threshold
 		ValueSeparationPolicies: policies,
+		SyncWrites:              true,
 	}
 
 	db := NoKV.Open(opt)
@@ -140,6 +174,9 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 	// Test meta_ prefix (should be inlined regardless of size)
 	err = db.Set([]byte("meta_test"), largeValue)
 	require.NoError(t, err)
+	value, err := db.Get([]byte("meta_test"))
+	require.NoError(t, err)
+	require.Equal(t, largeValue, value.Value)
 	stats = db.GetValueSeparationPolicyStats()
 	require.Equal(t, int64(1), stats["_total_decisions"])
 	require.Equal(t, int64(1), stats["default:meta_:always_inline"])
@@ -147,23 +184,54 @@ func TestValueSeparationPolicyIntegration(t *testing.T) {
 	// Test large_ prefix (should be offloaded regardless of size)
 	err = db.Set([]byte("large_test"), []byte("small"))
 	require.NoError(t, err)
+	value, err = db.Get([]byte("large_test"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("small"), value.Value)
 	stats = db.GetValueSeparationPolicyStats()
 	require.Equal(t, int64(2), stats["_total_decisions"])
 	require.Equal(t, int64(1), stats["default:large_:always_offload"])
 
 	// Test medium_ prefix with small value (should be inlined due to threshold)
-	err = db.Set([]byte("medium_test"), []byte("small"))
+	err = db.Set([]byte("medium_test1"), []byte("small"))
 	require.NoError(t, err)
+	value, err = db.Get([]byte("medium_test1"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("small"), value.Value)
 	stats = db.GetValueSeparationPolicyStats()
 	require.Equal(t, int64(3), stats["_total_decisions"])
 	require.Equal(t, int64(1), stats["default:medium_:threshold_based"])
 
-	// Test unmatched key with small value (should use global threshold)
-	err = db.Set([]byte("regular_test"), []byte("small"))
+	// Test medium_ prefix with large value (should be offloaded due to threshold)
+	err = db.Set([]byte("medium_test2"), largeValue)
 	require.NoError(t, err)
+	value, err = db.Get([]byte("medium_test2"))
+	require.NoError(t, err)
+	require.Equal(t, largeValue, value.Value)
 	stats = db.GetValueSeparationPolicyStats()
 	require.Equal(t, int64(4), stats["_total_decisions"])
+	require.Equal(t, int64(2), stats["default:medium_:threshold_based"])
+
+	// Test unmatched key with small value (should use global threshold)
+	err = db.Set([]byte("regular_test1"), []byte("small"))
+	require.NoError(t, err)
+	value, err = db.Get([]byte("regular_test1"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("small"), value.Value)
+	stats = db.GetValueSeparationPolicyStats()
+	require.Equal(t, int64(5), stats["_total_decisions"])
 	require.Equal(t, int64(1), stats["default:meta_:always_inline"])
 	require.Equal(t, int64(1), stats["default:large_:always_offload"])
-	require.Equal(t, int64(1), stats["default:medium_:threshold_based"])
+	require.Equal(t, int64(2), stats["default:medium_:threshold_based"])
+
+	// Test unmatched key with large value (should use global threshold)
+	err = db.Set([]byte("regular_test2"), largeValue)
+	require.NoError(t, err)
+	value, err = db.Get([]byte("regular_test2"))
+	require.NoError(t, err)
+	require.Equal(t, largeValue, value.Value)
+	stats = db.GetValueSeparationPolicyStats()
+	require.Equal(t, int64(6), stats["_total_decisions"])
+	require.Equal(t, int64(1), stats["default:meta_:always_inline"])
+	require.Equal(t, int64(1), stats["default:large_:always_offload"])
+	require.Equal(t, int64(2), stats["default:medium_:threshold_based"])
 }
