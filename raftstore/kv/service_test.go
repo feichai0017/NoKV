@@ -31,7 +31,8 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	localMeta, err := raftmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db := NoKV.Open(opt)
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	t.Cleanup(func() { _ = localMeta.Close() })
 	return db, localMeta

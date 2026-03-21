@@ -40,7 +40,7 @@ func TestSyncPipelineWALConsistency(t *testing.T) {
 		opts.ValueThreshold = 1 << 20 // all values inline, no vlog pointers
 		opts.WriteBatchWait = 0
 
-		db := Open(opts)
+		db := openTestDB(t, opts)
 		for i := range numKeys {
 			key := fmt.Appendf(nil, "key-%04d", i)
 			require.NoError(t, db.Set(key, value))

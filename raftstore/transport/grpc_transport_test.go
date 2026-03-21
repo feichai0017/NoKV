@@ -512,7 +512,9 @@ func openDBAt(t *testing.T, dir string) (*NoKV.DB, *raftmeta.Store) {
 	opt.ValueThreshold = utils.DefaultValueThreshold
 	opt.RaftLagWarnSegments = 1
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	return NoKV.Open(opt), localMeta
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	return db, localMeta
 }
 
 func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {

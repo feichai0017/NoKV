@@ -78,7 +78,7 @@ func TestDBIteratorErrorClearedOnRewind(t *testing.T) {
 func TestDBIteratorLegitimateFilteringNoError(t *testing.T) {
 	clearDir()
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NotNil(t, db)
 	defer func() { _ = db.Close() }()
 
@@ -132,7 +132,7 @@ func TestDBIteratorSeekClearsError(t *testing.T) {
 func TestDBIteratorEmptyDatabaseNoError(t *testing.T) {
 	clearDir()
 	opt := newTestOptions(t)
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NotNil(t, db)
 	defer func() { _ = db.Close() }()
 
@@ -152,7 +152,7 @@ func setupDBWithVLogEntries(t *testing.T, numEntries int) (*DB, *Options) {
 	clearDir()
 	opt := newTestOptions(t)
 	opt.ValueThreshold = 0 // Force all values to vlog
-	db := Open(opt)
+	db := openTestDB(t, opt)
 	require.NotNil(t, db)
 
 	// Write entries with large values to ensure they go to vlog
@@ -207,7 +207,7 @@ func corruptVLogByTruncation(t *testing.T, db *DB, opt *Options, truncateDivisor
 	require.NoError(t, f.Close())
 
 	// Reopen DB
-	db = Open(opt)
+	db = openTestDB(t, opt)
 	require.NotNil(t, db)
 	return db
 }
