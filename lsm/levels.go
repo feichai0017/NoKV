@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/lsm/tombstone"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
@@ -56,7 +55,7 @@ type levelManager struct {
 	manifestMgr      *manifest.Manager
 	levels           []*levelHandler
 	lsm              *LSM
-	compactState     *compact.State
+	compactState     *State
 	compaction       *compaction
 	rtCollector      *tombstone.Collector
 	logPtrMu         sync.RWMutex

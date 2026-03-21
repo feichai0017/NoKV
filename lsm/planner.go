@@ -5,24 +5,24 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm/compact"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/utils"
 )
 
 type compactDef struct {
 	compactorId int
-	plan        compact.Plan
+	plan        Plan
 	thisLevel   *levelHandler
 	nextLevel   *levelHandler
 
 	top []*table
 	bot []*table
 
-	splits []compact.KeyRange
+	splits []KeyRange
 
 	thisSize int64
 
@@ -46,11 +46,11 @@ func (cd *compactDef) fileSize(level int) int64 {
 	}
 }
 
-func (cd *compactDef) stateEntry() compact.StateEntry {
+func (cd *compactDef) stateEntry() StateEntry {
 	return cd.plan.StateEntry(cd.thisSize)
 }
 
-func (cd *compactDef) setNextLevel(lm *levelManager, t compact.Targets, next *levelHandler) {
+func (cd *compactDef) setNextLevel(lm *levelManager, t Targets, next *levelHandler) {
 	cd.nextLevel = next
 	if next == nil {
 		return
@@ -59,7 +59,7 @@ func (cd *compactDef) setNextLevel(lm *levelManager, t compact.Targets, next *le
 	cd.plan.NextFileSize = lm.targetFileSizeForLevel(t, next.levelNum)
 }
 
-func (cd *compactDef) applyPlan(plan compact.Plan) {
+func (cd *compactDef) applyPlan(plan Plan) {
 	plan.ThisFileSize = cd.plan.ThisFileSize
 	plan.NextFileSize = cd.plan.NextFileSize
 	plan.IngestMode = cd.plan.IngestMode
@@ -117,16 +117,16 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 			if len(meta) == 0 {
 				return false
 			}
-			plan, ok := compact.PlanForIngestFallback(cd.thisLevel.levelNum, meta)
+			plan, ok := PlanForIngestFallback(cd.thisLevel.levelNum, meta)
 			if !ok {
 				return false
 			}
-			cd.plan.IngestMode = compact.IngestKeep
+			cd.plan.IngestMode = IngestKeep
 			cd.applyPlan(plan)
 			if !lm.resolvePlanLocked(cd) {
 				return false
 			}
-			return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+			return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 		}
 		return false
 	}
@@ -136,7 +136,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	if cd.thisLevel.isLastLevel() {
 		return lm.fillMaxLevelTables(tables, cd)
 	}
-	plan, ok := compact.PlanForRegular(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
+	plan, ok := PlanForRegular(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
 	if !ok {
 		return false
 	}
@@ -144,7 +144,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
 func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool {
@@ -166,7 +166,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	if len(shMeta) == 0 {
 		return false
 	}
-	plan, ok := compact.PlanForIngestShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
+	plan, ok := PlanForIngestShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
 	if !ok {
 		return false
 	}
@@ -174,7 +174,7 @@ func (lm *levelManager) fillTablesIngestShard(cd *compactDef, shardIdx int) bool
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
 // resolveTablesLocked maps IDs to tables; caller must hold lh lock.
@@ -208,16 +208,16 @@ func resolveTablesLocked(lh *levelHandler, ids []uint64, ingest bool) []*table {
 	return out
 }
 
-func tableMetaSnapshot(tables []*table) []compact.TableMeta {
+func tableMetaSnapshot(tables []*table) []TableMeta {
 	if len(tables) == 0 {
 		return nil
 	}
-	out := make([]compact.TableMeta, 0, len(tables))
+	out := make([]TableMeta, 0, len(tables))
 	for _, t := range tables {
 		if t == nil {
 			continue
 		}
-		meta := compact.TableMeta{
+		meta := TableMeta{
 			ID:         t.fid,
 			MinKey:     t.MinKey(),
 			MaxKey:     t.MaxKey(),
@@ -282,7 +282,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 
 // fillMaxLevelTables handles max-level compaction.
 func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool {
-	plan, ok := compact.PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
+	plan, ok := PlanForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.plan.ThisFileSize, lm.compactState, time.Now())
 	if !ok {
 		return false
 	}
@@ -290,7 +290,7 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
 // fillTablesL0 tries L0->Lbase first, then falls back to L0->L0.
@@ -397,7 +397,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if len(top) == 0 {
 		return false
 	}
-	plan, ok := compact.PlanForL0ToLbase(tableMetaSnapshot(top), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
+	plan, ok := PlanForL0ToLbase(tableMetaSnapshot(top), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
 	if !ok {
 		return false
 	}
@@ -405,7 +405,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(compact.LevelsLocked{}, cd.stateEntry())
+	return lm.compactState.CompareAndAdd(LevelsLocked{}, cd.stateEntry())
 }
 
 // fillTablesL0ToL0 performs L0->L0 compaction.
@@ -418,7 +418,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	cd.nextLevel = lm.levels[0]
 	cd.plan.NextLevel = cd.plan.ThisLevel
 	cd.plan.NextFileSize = cd.plan.ThisFileSize
-	cd.plan.NextRange = compact.KeyRange{}
+	cd.plan.NextRange = KeyRange{}
 	cd.bot = nil
 
 	// We intentionally avoid calling compactDef.lockLevels here. Both thisLevel and nextLevel
@@ -432,7 +432,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 
 	top := cd.thisLevel.tables
 	now := time.Now()
-	plan, ok := compact.PlanForL0ToL0(cd.thisLevel.levelNum, tableMetaSnapshot(top), cd.plan.ThisFileSize, lm.compactState, now)
+	plan, ok := PlanForL0ToL0(cd.thisLevel.levelNum, tableMetaSnapshot(top), cd.plan.ThisFileSize, lm.compactState, now)
 	if !ok {
 		// Skip when fewer than four tables qualify.
 		return false
@@ -443,7 +443,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	}
 
 	// Avoid L0->other-level compactions during this phase.
-	lm.compactState.AddRangeWithTables(cd.thisLevel.levelNum, compact.InfRange, cd.plan.TopIDs)
+	lm.compactState.AddRangeWithTables(cd.thisLevel.levelNum, InfRange, cd.plan.TopIDs)
 
 	// L0->L0 compaction collapses into a single file, reducing L0 count and read amplification.
 	cd.plan.ThisFileSize = math.MaxUint32
@@ -452,9 +452,9 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 }
 
 // getKeyRange returns the merged min/max key range for a set of tables.
-func getKeyRange(tables ...*table) compact.KeyRange {
+func getKeyRange(tables ...*table) KeyRange {
 	if len(tables) == 0 {
-		return compact.KeyRange{}
+		return KeyRange{}
 	}
 	minKey := tables[0].MinKey()
 	maxKey := tables[0].MaxKey()
@@ -477,8 +477,336 @@ func getKeyRange(tables ...*table) compact.KeyRange {
 	utils.CondPanicFunc(!rightOK, func() error {
 		return fmt.Errorf("getKeyRange expects internal max key: %x", maxKey)
 	})
-	return compact.KeyRange{
+	return KeyRange{
 		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
 		Right: kv.InternalKey(rightCF, rightUserKey, 0),
 	}
+}
+
+// Plan captures a compaction plan without tying it to in-memory tables.
+type Plan struct {
+	ThisLevel    int
+	NextLevel    int
+	TopIDs       []uint64
+	BotIDs       []uint64
+	ThisRange    KeyRange
+	NextRange    KeyRange
+	ThisFileSize int64
+	NextFileSize int64
+	IngestMode   IngestMode
+	DropPrefixes [][]byte
+	StatsTag     string
+}
+
+// StateEntry creates a compaction state entry for this plan.
+func (p Plan) StateEntry(thisSize int64) StateEntry {
+	entry := StateEntry{
+		ThisLevel: p.ThisLevel,
+		NextLevel: p.NextLevel,
+		ThisRange: p.ThisRange,
+		NextRange: p.NextRange,
+		ThisSize:  thisSize,
+	}
+	if len(p.TopIDs) == 0 && len(p.BotIDs) == 0 {
+		return entry
+	}
+	entry.TableIDs = make([]uint64, 0, len(p.TopIDs)+len(p.BotIDs))
+	entry.TableIDs = append(entry.TableIDs, p.TopIDs...)
+	entry.TableIDs = append(entry.TableIDs, p.BotIDs...)
+	return entry
+}
+
+// TableMeta captures the metadata needed to plan a compaction (no table refs).
+type TableMeta struct {
+	ID         uint64
+	MinKey     []byte
+	MaxKey     []byte
+	Size       int64
+	StaleSize  int64
+	CreatedAt  time.Time
+	MaxVersion uint64
+}
+
+// RangeForTables returns the combined key span for a set of tables.
+func RangeForTables(tables []TableMeta) KeyRange {
+	if len(tables) == 0 {
+		return KeyRange{}
+	}
+	minKey := tables[0].MinKey
+	maxKey := tables[0].MaxKey
+	for i := 1; i < len(tables); i++ {
+		if utils.CompareKeys(tables[i].MinKey, minKey) < 0 {
+			minKey = tables[i].MinKey
+		}
+		if utils.CompareKeys(tables[i].MaxKey, maxKey) > 0 {
+			maxKey = tables[i].MaxKey
+		}
+	}
+	leftCF, leftUserKey, _, leftOK := kv.SplitInternalKey(minKey)
+	utils.CondPanicFunc(!leftOK, func() error {
+		return fmt.Errorf("RangeForTables expects internal min key: %x", minKey)
+	})
+	rightCF, rightUserKey, _, rightOK := kv.SplitInternalKey(maxKey)
+	utils.CondPanicFunc(!rightOK, func() error {
+		return fmt.Errorf("RangeForTables expects internal max key: %x", maxKey)
+	})
+	return KeyRange{
+		Left:  kv.InternalKey(leftCF, leftUserKey, math.MaxUint64),
+		Right: kv.InternalKey(rightCF, rightUserKey, 0),
+	}
+}
+
+// OverlappingTables returns the half-interval of tables overlapping with kr.
+func OverlappingTables(tables []TableMeta, kr KeyRange) (int, int) {
+	if len(kr.Left) == 0 || len(kr.Right) == 0 {
+		return 0, 0
+	}
+	left := sort.Search(len(tables), func(i int) bool {
+		return utils.CompareKeys(kr.Left, tables[i].MaxKey) <= 0
+	})
+	right := sort.Search(len(tables), func(i int) bool {
+		return utils.CompareKeys(kr.Right, tables[i].MaxKey) < 0
+	})
+	return left, right
+}
+
+// PlanForIngestFallback builds a plan when only ingest tables are available.
+func PlanForIngestFallback(level int, tables []TableMeta) (Plan, bool) {
+	if len(tables) == 0 {
+		return Plan{}, false
+	}
+	kr := RangeForTables(tables)
+	return Plan{
+		ThisLevel: level,
+		NextLevel: level,
+		TopIDs:    tableIDsFromMeta(tables),
+		ThisRange: kr,
+		NextRange: kr,
+	}, true
+}
+
+// PlanForRegular selects tables for a standard compaction.
+func PlanForRegular(level int, tables []TableMeta, nextLevel int, next []TableMeta, state *State) (Plan, bool) {
+	if len(tables) == 0 {
+		return Plan{}, false
+	}
+	sorted := append([]TableMeta(nil), tables...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].MaxVersion < sorted[j].MaxVersion
+	})
+	for _, t := range sorted {
+		kr := RangeForTables([]TableMeta{t})
+		if state != nil && state.Overlaps(level, kr) {
+			continue
+		}
+		left, right := OverlappingTables(next, kr)
+		bot := next[left:right]
+		nextRange := kr
+		if len(bot) > 0 {
+			nextRange = RangeForTables(bot)
+			if state != nil && state.Overlaps(nextLevel, nextRange) {
+				continue
+			}
+		}
+		return Plan{
+			ThisLevel: level,
+			NextLevel: nextLevel,
+			TopIDs:    []uint64{t.ID},
+			BotIDs:    tableIDsFromMeta(bot),
+			ThisRange: kr,
+			NextRange: nextRange,
+		}, true
+	}
+	return Plan{}, false
+}
+
+// PlanForMaxLevel selects tables to rewrite stale data in the max level.
+func PlanForMaxLevel(level int, tables []TableMeta, targetFileSize int64, state *State, now time.Time) (Plan, bool) {
+	if len(tables) == 0 {
+		return Plan{}, false
+	}
+	sorted := append([]TableMeta(nil), tables...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].StaleSize > sorted[j].StaleSize
+	})
+	if sorted[0].StaleSize == 0 {
+		return Plan{}, false
+	}
+	for _, t := range sorted {
+		if !t.CreatedAt.IsZero() && now.Sub(t.CreatedAt) < time.Hour {
+			continue
+		}
+		if t.StaleSize < 10<<20 {
+			continue
+		}
+		kr := RangeForTables([]TableMeta{t})
+		if state != nil && state.Overlaps(level, kr) {
+			continue
+		}
+		top := []TableMeta{t}
+		bot := collectBotTables(t, tables, targetFileSize)
+		nextRange := kr
+		if len(bot) > 0 {
+			nextRange.Extend(RangeForTables(bot))
+		}
+		return Plan{
+			ThisLevel: level,
+			NextLevel: level,
+			TopIDs:    tableIDsFromMeta(top),
+			BotIDs:    tableIDsFromMeta(bot),
+			ThisRange: kr,
+			NextRange: nextRange,
+		}, true
+	}
+	return Plan{}, false
+}
+
+// PlanForIngestShard builds a plan for a single ingest shard.
+func PlanForIngestShard(level int, shardTables []TableMeta, nextLevel int, next []TableMeta, targetFileSize int64, batchSize int, state *State) (Plan, bool) {
+	if len(shardTables) == 0 {
+		return Plan{}, false
+	}
+	if batchSize <= 0 {
+		batchSize = len(shardTables)
+	}
+	shardSize := int64(0)
+	for _, t := range shardTables {
+		shardSize += t.Size
+	}
+	if targetFileSize > 0 {
+		score := float64(shardSize) / float64(targetFileSize)
+		if score > 1.0 {
+			boost := int(math.Ceil(score))
+			if boost > 1 {
+				batchSize *= boost
+			}
+		}
+	}
+	if batchSize > len(shardTables) {
+		batchSize = len(shardTables)
+	}
+	top := shardTables[:batchSize]
+	kr := RangeForTables(top)
+	if state != nil && state.Overlaps(level, kr) {
+		return Plan{}, false
+	}
+	left, right := OverlappingTables(next, kr)
+	bot := next[left:right]
+	nextRange := kr
+	if len(bot) > 0 {
+		nextRange = RangeForTables(bot)
+		if state != nil && state.Overlaps(nextLevel, nextRange) {
+			return Plan{}, false
+		}
+	}
+	return Plan{
+		ThisLevel: level,
+		NextLevel: nextLevel,
+		TopIDs:    tableIDsFromMeta(top),
+		BotIDs:    tableIDsFromMeta(bot),
+		ThisRange: kr,
+		NextRange: nextRange,
+	}, true
+}
+
+// PlanForL0ToLbase builds a plan for L0 -> base level compaction.
+func PlanForL0ToLbase(l0 []TableMeta, nextLevel int, next []TableMeta, state *State) (Plan, bool) {
+	if len(l0) == 0 {
+		return Plan{}, false
+	}
+	var out []TableMeta
+	var kr KeyRange
+	for _, t := range l0 {
+		dkr := RangeForTables([]TableMeta{t})
+		if kr.OverlapsWith(dkr) {
+			out = append(out, t)
+			kr.Extend(dkr)
+		} else {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return Plan{}, false
+	}
+	thisRange := RangeForTables(out)
+	if state != nil && state.Overlaps(0, thisRange) {
+		return Plan{}, false
+	}
+	left, right := OverlappingTables(next, thisRange)
+	bot := next[left:right]
+	nextRange := thisRange
+	if len(bot) > 0 {
+		nextRange = RangeForTables(bot)
+		if state != nil && state.Overlaps(nextLevel, nextRange) {
+			return Plan{}, false
+		}
+	}
+	return Plan{
+		ThisLevel: 0,
+		NextLevel: nextLevel,
+		TopIDs:    tableIDsFromMeta(out),
+		BotIDs:    tableIDsFromMeta(bot),
+		ThisRange: thisRange,
+		NextRange: nextRange,
+	}, true
+}
+
+// PlanForL0ToL0 builds a plan for L0 -> L0 compaction.
+func PlanForL0ToL0(level int, tables []TableMeta, fileSize int64, state *State, now time.Time) (Plan, bool) {
+	var out []TableMeta
+	for _, t := range tables {
+		if fileSize > 0 && t.Size >= 2*fileSize {
+			continue
+		}
+		if !t.CreatedAt.IsZero() && now.Sub(t.CreatedAt) < 10*time.Second {
+			continue
+		}
+		if state != nil && state.HasTable(t.ID) {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) < 4 {
+		return Plan{}, false
+	}
+	return Plan{
+		ThisLevel: level,
+		NextLevel: level,
+		TopIDs:    tableIDsFromMeta(out),
+		ThisRange: InfRange,
+		NextRange: InfRange,
+	}, true
+}
+
+func tableIDsFromMeta(tables []TableMeta) []uint64 {
+	if len(tables) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(tables))
+	for _, t := range tables {
+		ids = append(ids, t.ID)
+	}
+	return ids
+}
+
+func collectBotTables(seed TableMeta, tables []TableMeta, needSz int64) []TableMeta {
+	j := sort.Search(len(tables), func(i int) bool {
+		return utils.CompareKeys(tables[i].MinKey, seed.MinKey) >= 0
+	})
+	if j >= len(tables) || tables[j].ID != seed.ID {
+		return nil
+	}
+	j++
+	totalSize := seed.Size
+	var bot []TableMeta
+	for j < len(tables) {
+		newT := tables[j]
+		totalSize += newT.Size
+		if totalSize >= needSz {
+			break
+		}
+		bot = append(bot, newT)
+		j++
+	}
+	return bot
 }
