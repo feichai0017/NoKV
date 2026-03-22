@@ -21,7 +21,7 @@ func TestPoolSubmitAndSize(t *testing.T) {
 	}
 
 	require.Equal(t, 1, pool.Size())
-	require.NotNil(t, GetOrCreateInt("NoKV.Pool.test.Submit"))
+	require.NotNil(t, getOrCreateInt("NoKV.Pool.test.Submit"))
 	require.NoError(t, pool.Submit(nil))
 	pool.Release()
 }

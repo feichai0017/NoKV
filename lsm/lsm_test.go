@@ -389,7 +389,7 @@ func TestIngestBufferAccounting(t *testing.T) {
 	}
 }
 
-func TestTableIteratorSeekAndPrefetch(t *testing.T) {
+func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -427,11 +427,6 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	tbl.maxVersion = 0
 	tbl.hasBloom = false
 
-	seekKey := kv.InternalKey(kv.CFDefault, []byte("k10"), 1)
-	if !tbl.prefetchBlockForKey(seekKey) {
-		t.Fatalf("expected prefetch to load block")
-	}
-
 	if tbl.KeyCount() == 0 {
 		t.Fatalf("expected key count to be available")
 	}
@@ -462,6 +457,7 @@ func TestTableIteratorSeekAndPrefetch(t *testing.T) {
 	if tblIter.bi != nil {
 		_ = tblIter.bi.Rewind()
 	}
+	seekKey := kv.InternalKey(kv.CFDefault, []byte("k10"), 1)
 	tblIter.Seek(seekKey)
 	if tblIter.Valid() {
 		_ = tblIter.Item()
@@ -866,7 +862,7 @@ func tableContainsRangeDelete(tbl *table) bool {
 	return false
 }
 
-func TestIngestSearchAndPrefetch(t *testing.T) {
+func TestIngestSearch(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
@@ -891,10 +887,6 @@ func TestIngestSearchAndPrefetch(t *testing.T) {
 		t.Fatalf("expected key %q, got %q", key, found.Key)
 	}
 	found.DecrRef()
-
-	if !buf.prefetch(key) {
-		t.Fatalf("expected prefetch hit")
-	}
 
 	_, err = buf.search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
 	if err != utils.ErrKeyNotFound {
@@ -1038,7 +1030,7 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 
 	lh := &levelHandler{levelNum: 3}
 	lh.ingest.add(tbl)
-	found, err := lh.searchIngestSST(key, nil)
+	found, err := lh.ingest.search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("ingest search err=%v entry=%v", err, found)
 	}
@@ -1060,9 +1052,6 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 		t.Fatalf("level get err=%v entry=%v", err, ingestHit)
 	}
 	ingestHit.DecrRef()
-	if !lh.prefetch(key) {
-		t.Fatalf("expected level prefetch hit")
-	}
 
 	l0 := &levelHandler{levelNum: 0, tables: []*table{tbl}}
 	l0Hit, err := l0.Get(key)
@@ -1070,9 +1059,6 @@ func TestLevelSearchIngestAndLN(t *testing.T) {
 		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
 	}
 	l0Hit.DecrRef()
-	if !l0.prefetch(key) {
-		t.Fatalf("expected l0 prefetch hit")
-	}
 
 	lsm.levels.levels[0].tables = []*table{tbl}
 	lmHit, err := lsm.levels.Get(key)
@@ -1200,9 +1186,6 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	if count := lsm.Diagnostics().Entries; count <= 0 {
 		t.Fatalf("expected entry count > 0, got %d", count)
 	}
-
-	lsm.Prefetch(entries[0].Key)
-	lsm.Prefetch(nil)
 }
 
 func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {

@@ -60,8 +60,3 @@ func getOrCreateInt(name string) *expvar.Int {
 	}
 	return expvar.NewInt(name)
 }
-
-// GetOrCreateInt is exported for reuse.
-func GetOrCreateInt(name string) *expvar.Int {
-	return getOrCreateInt(name)
-}

@@ -8,9 +8,9 @@ import (
 )
 
 // UpdateRegion persists the region metadata in the local peer catalog and
-// updates the in-memory catalog plus the running peer's
-// snapshot, if any. Callers can use this to refresh epoch information,
-// peer memberships, or lifecycle state transitions.
+// updates the in-memory catalog plus the running peer snapshot, if any.
+// This is a local catalog hook for bootstrap/tests; consensus-changing
+// metadata must still flow through raft apply paths.
 func (s *Store) UpdateRegion(meta raftmeta.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
@@ -19,8 +19,8 @@ func (s *Store) UpdateRegion(meta raftmeta.RegionMeta) error {
 }
 
 // RemoveRegion tombstones the region metadata from the local peer catalog and
-// evicts it from the in-memory catalog. It is intended to be invoked after the
-// corresponding peer has been stopped.
+// evicts it from the in-memory catalog. It is intended for local cleanup after
+// the corresponding peer has already been stopped.
 func (s *Store) RemoveRegion(regionID uint64) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
@@ -28,14 +28,24 @@ func (s *Store) RemoveRegion(regionID uint64) error {
 	return s.regions.removeRegion(regionID)
 }
 
-// UpdateRegionState loads the currently known metadata and advances the state
-// machine to the requested value (Running/Removing/Tombstone) while validating
-// legal transitions.
+// UpdateRegionState loads the currently known metadata and advances the local
+// catalog state machine to the requested value (Running/Removing/Tombstone)
+// while validating legal transitions.
 func (s *Store) UpdateRegionState(regionID uint64, state raftmeta.RegionState) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
 	return s.regions.updateRegionState(regionID, state)
+}
+
+// LoadRegionSnapshot replaces the in-memory region snapshot from a trusted
+// bootstrap source such as local metadata recovery. It is intended for startup
+// and tests, not arbitrary runtime mutation.
+func (s *Store) LoadRegionSnapshot(snapshot map[uint64]raftmeta.RegionMeta) {
+	if s == nil || s.regions == nil {
+		return
+	}
+	s.regions.loadSnapshot(snapshot)
 }
 
 // RegionMetas collects the known raftmeta.RegionMeta entries from registered
