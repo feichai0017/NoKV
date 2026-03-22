@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/hotring"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
@@ -69,7 +70,7 @@ type (
 		isClosed        atomic.Uint32
 		closeOnce       sync.Once
 		closeErr        error
-		hotWrite        hotTracker
+		hotWrite        *hotring.RotatingHotRing
 		writeMetrics    *metrics.WriteMetrics
 		commitQueue     commitQueue
 		commitWG        sync.WaitGroup
@@ -136,7 +137,7 @@ func Open(opt *Options) (_ *DB, err error) {
 	}()
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
-	db.hotWrite = newHotTrackerForWrite(opt)
+	db.hotWrite = newHotWriteRing(opt)
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {
 		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)

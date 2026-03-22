@@ -94,7 +94,7 @@ func TestStartStorePeersSkipsMissing(t *testing.T) {
 		Peers: []raftmeta.PeerMeta{{StoreID: 2, PeerID: 200}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
-	require.NoError(t, server.Store().UpdateRegion(meta))
+	server.Store().LoadRegionSnapshot(map[uint64]raftmeta.RegionMeta{meta.ID: meta})
 
 	started, total, err := startStorePeers(server, db, localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
-	require.NoError(t, server.Store().UpdateRegion(meta))
+	server.Store().LoadRegionSnapshot(map[uint64]raftmeta.RegionMeta{meta.ID: meta})
 
 	started, total, err := startStorePeers(server, db, localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
