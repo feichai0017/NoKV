@@ -333,20 +333,26 @@ func (lsm *LSM) MaxVersion() uint64 {
 
 // LogValueLogHead persists value log head pointer via manifest.
 func (lsm *LSM) LogValueLogHead(ptr *kv.ValuePtr) error {
-	return lsm.levels.LogValueLogHead(ptr)
+	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil || ptr == nil {
+		return nil
+	}
+	return lsm.levels.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
 }
 
 // LogValueLogDelete records removal of a value log segment.
 func (lsm *LSM) LogValueLogDelete(bucket uint32, fid uint32) error {
-	return lsm.levels.LogValueLogDelete(bucket, fid)
+	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil {
+		return nil
+	}
+	return lsm.levels.manifestMgr.LogValueLogDelete(bucket, fid)
 }
 
 // LogValueLogUpdate restores or amends metadata for a value log segment.
 func (lsm *LSM) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
-	if lsm.levels == nil {
+	if lsm == nil || lsm.levels == nil || lsm.levels.manifestMgr == nil || meta == nil {
 		return nil
 	}
-	return lsm.levels.LogValueLogUpdate(meta)
+	return lsm.levels.manifestMgr.LogValueLogUpdate(*meta)
 }
 
 // NewLSM constructs the LSM core and returns initialization errors.
@@ -596,18 +602,6 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	return entry, nil
-}
-
-// Prefetch warms cache layers for the key by issuing targeted block loads.
-// key must be an InternalKey.
-func (lsm *LSM) Prefetch(key []byte) {
-	if len(key) == 0 {
-		return
-	}
-	if lsm == nil || lsm.levels == nil {
-		return
-	}
-	lsm.levels.prefetch(key)
 }
 
 // MemSize returns the current active memtable memory usage.

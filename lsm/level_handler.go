@@ -183,7 +183,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 		best   *kv.Entry
 		maxVer uint64
 	)
-	if entry, err := lh.searchIngestSST(key, &maxVer); err == nil {
+	if entry, err := lh.ingest.search(key, &maxVer); err == nil {
 		best = entry
 	} else if err != utils.ErrKeyNotFound {
 		return nil, err
@@ -203,38 +203,6 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 		return best, nil
 	}
 	return nil, utils.ErrKeyNotFound
-}
-
-func (lh *levelHandler) prefetch(key []byte) bool {
-	if lh == nil || len(key) == 0 {
-		return false
-	}
-	lh.RLock()
-	defer lh.RUnlock()
-	if lh.levelNum == 0 {
-		var hit bool
-		for _, table := range lh.tables {
-			if table == nil {
-				continue
-			}
-			if utils.CompareBaseKeys(key, table.MinKey()) < 0 ||
-				utils.CompareBaseKeys(key, table.MaxKey()) > 0 {
-				continue
-			}
-			if table.prefetchBlockForKey(key) {
-				hit = true
-			}
-		}
-		return hit
-	}
-	if lh.ingest.prefetch(key) {
-		return true
-	}
-	table := lh.getTableForKey(key)
-	if table == nil {
-		return false
-	}
-	return table.prefetchBlockForKey(key)
 }
 
 // Sort orders tables for lookup/compaction; L0 by file id, Ln by key range.

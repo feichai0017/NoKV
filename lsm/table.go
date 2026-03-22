@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -416,51 +415,6 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	t.lm.cache.addBlock(lvl, t, key, b)
 
 	return b, nil
-}
-
-func (t *table) prefetchBlockForKey(key []byte) bool {
-	if t == nil || len(key) == 0 {
-		return false
-	}
-	t.IncrRef()
-	defer func() {
-		_ = t.DecrRef()
-	}()
-
-	index := t.index()
-	if index == nil {
-		return false
-	}
-	offsets := index.GetOffsets()
-	if len(offsets) == 0 {
-		return false
-	}
-	var idx int
-	var ko *pb.BlockOffset
-	idx = sort.Search(len(offsets), func(i int) bool {
-		var ok bool
-		ko, ok = t.blockOffset(i)
-		utils.CondPanicFunc(!ok, func() error {
-			return fmt.Errorf("table.prefetch idx=%d", i)
-		})
-		if i == len(offsets) {
-			return true
-		}
-		return utils.CompareInternalKeys(ko.GetKey(), key) > 0
-	})
-	switch {
-	case idx <= 0:
-		idx = 0
-	case idx >= len(offsets):
-		idx = len(offsets) - 1
-	default:
-		idx = idx - 1
-	}
-	if idx < 0 || idx >= len(offsets) {
-		return false
-	}
-	_, err := t.loadBlock(idx)
-	return err == nil
 }
 
 func (t *table) read(off, sz int) ([]byte, error) {

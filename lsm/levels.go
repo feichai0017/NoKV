@@ -315,27 +315,6 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	return nil
 }
 
-// LogValueLogHead persists the latest value-log head pointer into manifest state.
-func (lm *levelManager) LogValueLogHead(ptr *kv.ValuePtr) error {
-	if ptr == nil {
-		return nil
-	}
-	return lm.manifestMgr.LogValueLogHead(ptr.Bucket, ptr.Fid, uint64(ptr.Offset))
-}
-
-// LogValueLogDelete records a value-log file deletion in the manifest.
-func (lm *levelManager) LogValueLogDelete(bucket uint32, fid uint32) error {
-	return lm.manifestMgr.LogValueLogDelete(bucket, fid)
-}
-
-// LogValueLogUpdate updates value-log metadata for an existing file.
-func (lm *levelManager) LogValueLogUpdate(meta *manifest.ValueLogMeta) error {
-	if meta == nil {
-		return nil
-	}
-	return lm.manifestMgr.LogValueLogUpdate(*meta)
-}
-
 // ValueLogHead returns manifest-tracked per-bucket active value-log heads.
 func (lm *levelManager) ValueLogHead() map[uint32]manifest.ValueLogMeta {
 	return lm.manifestMgr.ValueLogHead()
@@ -448,22 +427,6 @@ func (lm *levelManager) canRemoveWalSegment(id uint32) bool {
 		return true
 	}
 	return lm.lsm.canRemoveWalSegment(id)
-}
-
-func (lm *levelManager) prefetch(key []byte) {
-	if lm == nil || len(key) == 0 {
-		return
-	}
-	if len(lm.levels) == 0 {
-		return
-	}
-	// Always probe L0 because ranges may overlap.
-	_ = lm.levels[0].prefetch(key)
-	for level := 1; level < len(lm.levels); level++ {
-		if lm.levels[level].prefetch(key) {
-			break
-		}
-	}
 }
 
 // --------- levelHandler ---------

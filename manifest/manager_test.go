@@ -33,7 +33,7 @@ func TestManagerCreateAndRecover(t *testing.T) {
 			CreatedAt: 1,
 		},
 	}
-	if err := mgr.LogEdit(edit); err != nil {
+	if err := mgr.LogEdits(edit); err != nil {
 		t.Fatalf("log edit: %v", err)
 	}
 	if err := mgr.Close(); err != nil {
@@ -66,7 +66,7 @@ func TestManagerLogPointer(t *testing.T) {
 		LogSeg:    5,
 		LogOffset: 1024,
 	}
-	if err := mgr.LogEdit(edit); err != nil {
+	if err := mgr.LogEdits(edit); err != nil {
 		t.Fatalf("log pointer: %v", err)
 	}
 	version := mgr.Current()
@@ -233,7 +233,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := mgr.LogEdit(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 11}}); err != nil {
+	if err := mgr.LogEdits(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 11}}); err != nil {
 		t.Fatalf("log edit: %v", err)
 	}
 	if err := mgr.Close(); err != nil {
@@ -292,13 +292,13 @@ func TestManagerRewrite(t *testing.T) {
 
 	mgr.SetRewriteThreshold(1)
 
-	if err := mgr.LogEdit(manifest.Edit{
+	if err := mgr.LogEdits(manifest.Edit{
 		Type: manifest.EditAddFile,
 		File: &manifest.FileMeta{Level: 0, FileID: 10, Size: 1},
 	}); err != nil {
 		t.Fatalf("log edit: %v", err)
 	}
-	if err := mgr.LogEdit(manifest.Edit{
+	if err := mgr.LogEdits(manifest.Edit{
 		Type:      manifest.EditLogPointer,
 		LogSeg:    3,
 		LogOffset: 128,
@@ -404,7 +404,7 @@ func TestManagerLogEditSyncFailureDoesNotApplyVersion(t *testing.T) {
 		Type: manifest.EditAddFile,
 		File: &manifest.FileMeta{Level: 0, FileID: 99, Size: 1},
 	}
-	err = mgr.LogEdit(edit)
+	err = mgr.LogEdits(edit)
 	if !errors.Is(err, injected) {
 		t.Fatalf("expected sync failure, got %v", err)
 	}
@@ -461,7 +461,7 @@ func TestVerifyPropagatesTruncateFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := mgr.LogEdit(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 7}}); err != nil {
+	if err := mgr.LogEdits(manifest.Edit{Type: manifest.EditAddFile, File: &manifest.FileMeta{FileID: 7}}); err != nil {
 		t.Fatalf("log edit: %v", err)
 	}
 	require.NoError(t, mgr.Close())

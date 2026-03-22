@@ -1274,7 +1274,7 @@ func TestHotWriteAndThrottle(t *testing.T) {
 		opt: &Options{
 			WriteHotKeyLimit: 1,
 		},
-		hotWrite: hotring.NewHotRing(8, nil),
+		hotWrite: hotring.NewRotatingHotRing(8, nil),
 	}
 
 	userKey := []byte("hot")

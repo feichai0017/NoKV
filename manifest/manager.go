@@ -196,11 +196,6 @@ func (m *Manager) apply(edit Edit) {
 	}
 }
 
-// LogEdit appends an edit to manifest and updates current version.
-func (m *Manager) LogEdit(edit Edit) error {
-	return m.LogEdits(edit)
-}
-
 // SetSync configures whether manifest edits are synchronously flushed to disk.
 func (m *Manager) SetSync(sync bool) {
 	m.mu.Lock()
@@ -509,7 +504,7 @@ func (m *Manager) LogValueLogHead(bucket uint32, fid uint32, offset uint64) erro
 		Offset: offset,
 		Valid:  true,
 	}
-	return m.LogEdit(Edit{Type: EditValueLogHead, ValueLog: meta})
+	return m.LogEdits(Edit{Type: EditValueLogHead, ValueLog: meta})
 }
 
 // LogValueLogDelete records value log segment deletion.
@@ -519,13 +514,13 @@ func (m *Manager) LogValueLogDelete(bucket uint32, fid uint32) error {
 		FileID: fid,
 		Valid:  false,
 	}
-	return m.LogEdit(Edit{Type: EditDeleteValueLog, ValueLog: meta})
+	return m.LogEdits(Edit{Type: EditDeleteValueLog, ValueLog: meta})
 }
 
 // LogValueLogUpdate records an updated value log metadata entry.
 func (m *Manager) LogValueLogUpdate(meta ValueLogMeta) error {
 	cp := meta
-	return m.LogEdit(Edit{Type: EditUpdateValueLog, ValueLog: &cp})
+	return m.LogEdits(Edit{Type: EditUpdateValueLog, ValueLog: &cp})
 }
 
 // ValueLogHead returns the latest persisted value log head.

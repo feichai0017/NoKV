@@ -246,24 +246,6 @@ func (buf ingestBuffer) shardViews() []IngestShardView {
 	return views
 }
 
-func (buf ingestBuffer) prefetch(key []byte) bool {
-	for _, sh := range buf.shards {
-		for _, table := range sh.tables {
-			if table == nil {
-				continue
-			}
-			if utils.CompareInternalKeys(key, table.MinKey()) < 0 ||
-				utils.CompareInternalKeys(key, table.MaxKey()) > 0 {
-				continue
-			}
-			if table.prefetchBlockForKey(key) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (buf ingestBuffer) search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
 	if maxVersion == nil {
 		var tmp uint64
@@ -425,8 +407,4 @@ func (lh *levelHandler) ingestDataSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
 	return lh.ingest.totalSize()
-}
-
-func (lh *levelHandler) searchIngestSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	return lh.ingest.search(key, maxVersion)
 }
