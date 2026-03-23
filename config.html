@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf39add2.js";
+            window.path_to_searchindex_js = "searchindex-bd28ccbb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -249,7 +249,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <pre><code class="language-go">opt := NoKV.NewDefaultOptions()
 opt.WorkDir = "./data"
 opt.SyncWrites = true
-opt.ValueThreshold = 1024
+opt.ValueThreshold = 2048
 opt.WriteBatchMaxCount = 128
 db, err := NoKV.Open(opt)
 if err != nil {
@@ -282,7 +282,7 @@ defer db.Close()
 <p>Example (TOML):</p>
 <pre><code class="language-toml">work_dir = "./data"
 mem_table_engine = "art"
-value_threshold = 1024
+value_threshold = 2048
 write_hot_key_limit = 128
 value_log_gc_interval = "30s"
 </code></pre>

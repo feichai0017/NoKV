@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf39add2.js";
+            window.path_to_searchindex_js = "searchindex-bd28ccbb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -270,7 +270,7 @@ iterator scan, distributed read/write via Raft apply), see
 <ul>
 <li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
-<li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
+<li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
 <h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>

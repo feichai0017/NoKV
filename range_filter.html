@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf39add2.js";
+            window.path_to_searchindex_js = "searchindex-bd28ccbb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -231,11 +231,14 @@
 </ul>
 <p>Each span records:</p>
 <ul>
-<li>minimum user key</li>
-<li>maximum user key</li>
+<li>minimum base key (<code>CF + user key</code>)</li>
+<li>maximum base key (<code>CF + user key</code>)</li>
 <li>table pointer</li>
 </ul>
 <p>For non-overlapping levels, the filter supports binary-search candidate lookup. For overlapping or small levels, it falls back to a conservative linear filter.</p>
+<p>The implementation deliberately works on base-key semantics rather than pure
+user-key semantics so different column families are never collapsed into the
+same pruning range.</p>
 <h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
 <p>Point lookups first prune candidate tables:</p>
 <ul>

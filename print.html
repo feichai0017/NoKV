@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf39add2.js";
+            window.path_to_searchindex_js = "searchindex-bd28ccbb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -506,7 +506,7 @@ iterator scan, distributed read/write via Raft apply), see
 <ul>
 <li>Writes enqueue into a commit queue (<code>db_write.go</code>) where requests are coalesced into batches before a commit worker drains them.</li>
 <li>The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; <code>SyncWrites</code> adds a WAL fsync step.</li>
-<li>Batch sizing adapts to backlog (<code>WriteBatchMaxCount/Size</code>, <code>WriteBatchWait</code>) and hot-key pressure can expand batch limits temporarily to drain spikes.</li>
+<li>Batch sizing adapts to backlog through <code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, and <code>WriteBatchWait</code>.</li>
 <li>Backpressure is enforced in two places: LSM throttling toggles <code>db.blockWrites</code> when L0 backlog grows, and HotRing can reject hot keys via <code>WriteHotKeyLimit</code>.</li>
 </ul>
 <h3 id="27-ref-count-lifecycle-contracts"><a class="header" href="#27-ref-count-lifecycle-contracts">2.7 Ref-Count Lifecycle Contracts</a></h3>
@@ -1259,7 +1259,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <pre><code class="language-go">opt := NoKV.NewDefaultOptions()
 opt.WorkDir = "./data"
 opt.SyncWrites = true
-opt.ValueThreshold = 1024
+opt.ValueThreshold = 2048
 opt.WriteBatchMaxCount = 128
 db, err := NoKV.Open(opt)
 if err != nil {
@@ -1292,7 +1292,7 @@ defer db.Close()
 <p>Example (TOML):</p>
 <pre><code class="language-toml">work_dir = "./data"
 mem_table_engine = "art"
-value_threshold = 1024
+value_threshold = 2048
 write_hot_key_limit = 128
 value_log_gc_interval = "30s"
 </code></pre>
@@ -1702,7 +1702,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <li>Logs a new <code>manifest.EditAddFile</code> targeting the destination level.</li>
 <li>Removes the table from <code>thisLevel.tables</code> and appends it to <code>nextLevel.ingest</code>.</li>
 </ol>
-<p>This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because <code>levelHandler.searchIngestSST</code> checks <code>ingest</code> before consulting <code>tables</code>.</p>
+<p>This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because <code>levelHandler.searchLNSST</code> checks the ingest buffer before consulting the canonical level tables.</p>
 <p>Compaction tests (<code>lsm/compaction_test.go</code>) assert that after calling <code>moveToIngest</code> the table disappears from the source level and shows up in the ingest buffer.</p>
 <hr>
 <h2 id="3-concurrency-guards"><a class="header" href="#3-concurrency-guards">3. Concurrency Guards</a></h2>
@@ -1715,7 +1715,7 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <p>This mechanism is intentionally simple—just a mutex‐protected slice—yet effective in tests (<code>TestCompactStatusGuards</code>) that simulate back‑to‑back registrations on the same key range.</p>
 <hr>
 <h2 id="4-cache-telemetry"><a class="header" href="#4-cache-telemetry">4. Cache Telemetry</a></h2>
-<p>NoKV’s cache is split into three parts (<code>lsm/cache.go</code>):</p>
+<p>NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (<code>lsm/cache.go</code>):</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -1724,11 +1724,11 @@ reachable from those regions (using <code>scripts/serve_from_config.sh</code> av
 <tbody>
 <tr><td>Block cache</td><td>Ristretto cache for L0/L1 blocks.</td><td><code>cacheMetrics.recordBlock(level, hit)</code></td></tr>
 <tr><td>OS page cache path</td><td>Deeper levels bypass user-space cache and rely on mmap + kernel page cache.</td><td>Same as above</td></tr>
-<tr><td>Bloom cache</td><td>Stores decoded bloom filters to reduce disk touches.</td><td><code>recordBloom(hit)</code></td></tr>
+<tr><td>Bloom filters</td><td>Embedded in <code>pb.TableIndex</code> and probed directly from the decoded index.</td><td>no separate cache layer</td></tr>
 </tbody>
 </table>
 </div>
-<p>Cache hit/miss signals are exported through <code>StatsSnapshot.Cache</code> (and surfaced by <code>nokv stats</code> / expvar), which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
+<p>Cache hit/miss signals are exported through <code>StatsSnapshot.Cache</code> (and surfaced by <code>nokv stats</code> / expvar), which is especially helpful when tuning ingest behaviour. If L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. <code>TestCacheHotColdMetrics</code> verifies cache hit accounting.</p>
 <hr>
 <h2 id="5-interaction-with-value-log"><a class="header" href="#5-interaction-with-value-log">5. Interaction with Value Log</a></h2>
 <p>Compaction informs value‑log GC via discard statistics:</p>
@@ -2501,11 +2501,14 @@ Deeper levels rely on OS page cache + mmap readahead
 </ul>
 <p>Each span records:</p>
 <ul>
-<li>minimum user key</li>
-<li>maximum user key</li>
+<li>minimum base key (<code>CF + user key</code>)</li>
+<li>maximum base key (<code>CF + user key</code>)</li>
 <li>table pointer</li>
 </ul>
 <p>For non-overlapping levels, the filter supports binary-search candidate lookup. For overlapping or small levels, it falls back to a conservative linear filter.</p>
+<p>The implementation deliberately works on base-key semantics rather than pure
+user-key semantics so different column families are never collapsed into the
+same pruning range.</p>
 <h3 id="32-point-read-pruning"><a class="header" href="#32-point-read-pruning">3.2 Point-read pruning</a></h3>
 <p>Point lookups first prune candidate tables:</p>
 <ul>
