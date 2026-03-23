@@ -62,11 +62,15 @@ Each `levelHandler` maintains a `rangeFilter` built from its current table set:
 
 Each span records:
 
-- minimum user key
-- maximum user key
+- minimum base key (`CF + user key`)
+- maximum base key (`CF + user key`)
 - table pointer
 
 For non-overlapping levels, the filter supports binary-search candidate lookup. For overlapping or small levels, it falls back to a conservative linear filter.
+
+The implementation deliberately works on base-key semantics rather than pure
+user-key semantics so different column families are never collapsed into the
+same pruning range.
 
 ### 3.2 Point-read pruning
 
@@ -211,4 +215,3 @@ Primary implementation files:
 Related benchmark coverage:
 
 - [`lsm/lsm_bench_test.go`](../lsm/lsm_bench_test.go)
-

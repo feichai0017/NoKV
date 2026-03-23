@@ -52,7 +52,11 @@ Key components:
   keeps benchmark semantics stable across runtime default changes. The default
   profile uses a 512MB total cache budget and splits it explicitly per engine:
   Pebble uses a single 512MB cache, Badger defaults to 256MB block + 256MB
-  index, and NoKV defaults to 384MB block + 96MB index + 32MB bloom.
+  index, and NoKV defaults to 384MB block + 128MB index.
+- Benchmark script defaults now pass `value_threshold=2048` unless overridden
+  through `YCSB_VALUE_THRESHOLD`; `ycsb_value_size` remains `1000` by default,
+  so the stock CI run still measures inline values unless the value size or
+  threshold is changed explicitly.
 - Workload model: `benchmark/ycsb_runner.go` defines YCSB A/B/C/D/E/F mixes,
   request ratios, and key distributions (zipfian/uniform/latest).
 - Official-aligned defaults: insert order uses `hashed`, workload E uses

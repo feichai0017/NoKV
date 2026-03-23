@@ -31,7 +31,7 @@ Planning now happens via `Plan`: LSM snapshots table metadata into `TableMeta`, 
 2. Logs a new `manifest.EditAddFile` targeting the destination level.
 3. Removes the table from `thisLevel.tables` and appends it to `nextLevel.ingest`.
 
-This keeps write amplification low when many small L0 tables arrive at once.  Reads still see the newest data because `levelHandler.searchIngestSST` checks `ingest` before consulting `tables`.
+This keeps write amplification low when many small L0 tables arrive at once. Reads still see the newest data because `levelHandler.searchLNSST` checks the ingest buffer before consulting the canonical level tables.
 
 Compaction tests (`lsm/compaction_test.go`) assert that after calling `moveToIngest` the table disappears from the source level and shows up in the ingest buffer.
 
@@ -51,15 +51,15 @@ This mechanism is intentionally simple—just a mutex‐protected slice—yet ef
 
 ## 4. Cache Telemetry
 
-NoKV’s cache is split into three parts (`lsm/cache.go`):
+NoKV’s cache strategy has two explicit user-space caches plus direct bloom probing from decoded table indexes (`lsm/cache.go`):
 
 | Component | Purpose | Metrics hook |
 | --- | --- | --- |
 | Block cache | Ristretto cache for L0/L1 blocks. | `cacheMetrics.recordBlock(level, hit)` |
 | OS page cache path | Deeper levels bypass user-space cache and rely on mmap + kernel page cache. | Same as above |
-| Bloom cache | Stores decoded bloom filters to reduce disk touches. | `recordBloom(hit)` |
+| Bloom filters | Embedded in `pb.TableIndex` and probed directly from the decoded index. | no separate cache layer |
 
-Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced by `nokv stats` / expvar), which is especially helpful when tuning ingest behaviour—if L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
+Cache hit/miss signals are exported through `StatsSnapshot.Cache` (and surfaced by `nokv stats` / expvar), which is especially helpful when tuning ingest behaviour. If L0/L1 cache misses spike, the ingest buffer likely needs to be drained faster. `TestCacheHotColdMetrics` verifies cache hit accounting.
 
 ---
 

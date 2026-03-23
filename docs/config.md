@@ -51,7 +51,7 @@ Example:
 opt := NoKV.NewDefaultOptions()
 opt.WorkDir = "./data"
 opt.SyncWrites = true
-opt.ValueThreshold = 1024
+opt.ValueThreshold = 2048
 opt.WriteBatchMaxCount = 128
 db, err := NoKV.Open(opt)
 if err != nil {
@@ -90,7 +90,7 @@ Example (TOML):
 ```toml
 work_dir = "./data"
 mem_table_engine = "art"
-value_threshold = 1024
+value_threshold = 2048
 write_hot_key_limit = 128
 value_log_gc_interval = "30s"
 ```

@@ -94,7 +94,7 @@ flowchart TD
 ### 2.6 Write Pipeline & Backpressure
 - Writes enqueue into a commit queue (`db_write.go`) where requests are coalesced into batches before a commit worker drains them.
 - The commit worker always writes the value log first (when needed), then applies WAL/LSM updates; `SyncWrites` adds a WAL fsync step.
-- Batch sizing adapts to backlog (`WriteBatchMaxCount/Size`, `WriteBatchWait`) and hot-key pressure can expand batch limits temporarily to drain spikes.
+- Batch sizing adapts to backlog through `WriteBatchMaxCount`, `WriteBatchMaxSize`, and `WriteBatchWait`.
 - Backpressure is enforced in two places: LSM throttling toggles `db.blockWrites` when L0 backlog grows, and HotRing can reject hot keys via `WriteHotKeyLimit`.
 
 ### 2.7 Ref-Count Lifecycle Contracts
