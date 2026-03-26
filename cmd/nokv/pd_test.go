@@ -108,6 +108,67 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.Equal(t, uint64(20), meta.ID)
 }
 
+func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
+	origNotify := pdNotifyContext
+	pdNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pdNotifyContext = origNotify })
+
+	dir := t.TempDir()
+	store, err := pdstorage.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
+		ID:       31,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 1},
+	}))
+	require.NoError(t, store.SaveRegion(raftmeta.RegionMeta{
+		ID:       32,
+		StartKey: []byte("m"),
+		EndKey:   nil,
+		Epoch:    raftmeta.RegionEpoch{Version: 3, ConfVersion: 2},
+	}))
+	require.NoError(t, store.Close())
+
+	var buf bytes.Buffer
+	require.NoError(t, runPDCmd(&buf, []string{
+		"-addr", "127.0.0.1:0",
+		"-workdir", dir,
+	}))
+	require.Contains(t, buf.String(), "PD restored 2 region(s) from local storage")
+}
+
+func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
+	cluster := core.NewCluster()
+	snapshot := map[uint64]raftmeta.RegionMeta{
+		10: {
+			ID:       10,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		},
+		20: {
+			ID:       20,
+			StartKey: []byte("l"),
+			EndKey:   []byte("z"),
+			Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		},
+	}
+
+	loaded, err := restorePDRegions(cluster, snapshot)
+	require.Error(t, err)
+	require.Equal(t, 1, loaded)
+	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	require.True(t, ok)
+	require.Equal(t, uint64(10), meta.ID)
+	_, ok = cluster.GetRegionByKey([]byte("x"))
+	require.False(t, ok)
+}
+
 func TestPDLocalStoreSaveAndLoadAllocatorState(t *testing.T) {
 	store, err := pdstorage.OpenLocalStore(t.TempDir(), nil)
 	require.NoError(t, err)

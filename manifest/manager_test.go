@@ -489,3 +489,28 @@ func TestVerifyPropagatesTruncateFailure(t *testing.T) {
 	err = manifest.Verify(dir, fs)
 	require.ErrorIs(t, err, injected)
 }
+
+func TestManagerOpenFailsWhenCurrentTempSyncFails(t *testing.T) {
+	dir := t.TempDir()
+	tmpPath := filepath.Join(dir, "CURRENT.tmp")
+	injected := errors.New("current temp sync failed")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileSync, tmpPath, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	_, err := manifest.Open(dir, fs)
+	require.ErrorIs(t, err, injected)
+	_, statErr := os.Stat(filepath.Join(dir, "CURRENT"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestManagerOpenFailsWhenCurrentDirSyncFails(t *testing.T) {
+	dir := t.TempDir()
+	injected := errors.New("current dir sync failed")
+	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpFileSync, dir, injected))
+	fs := vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
+
+	_, err := manifest.Open(dir, fs)
+	require.ErrorIs(t, err, injected)
+	_, statErr := os.Stat(filepath.Join(dir, "CURRENT"))
+	require.NoError(t, statErr)
+}

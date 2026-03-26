@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -190,7 +191,7 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.
 	if server == nil || db == nil || localMeta == nil {
 		return nil, 0, fmt.Errorf("raftstore: server, db, or local metadata is nil")
 	}
-	snapshot := server.Store().RegionSnapshot().Regions
+	snapshot := localMeta.Snapshot()
 	total := len(snapshot)
 	if total == 0 {
 		return nil, 0, nil
@@ -198,8 +199,17 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.
 
 	store := server.Store()
 	transport := server.Transport()
+	ids := make([]uint64, 0, len(snapshot))
+	for id := range snapshot {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+
 	var started []raftmeta.RegionMeta
-	for _, meta := range snapshot {
+	for _, id := range ids {
+		meta := snapshot[id]
 		var peerID uint64
 		for _, p := range meta.Peers {
 			if p.StoreID == storeID {

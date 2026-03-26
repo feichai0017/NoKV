@@ -57,7 +57,7 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	}
 
 	if regionMeta != nil {
-		if err := s.UpdateRegion(*regionMeta); err != nil {
+		if err := s.updateRegion(*regionMeta); err != nil {
 			s.router.remove(id)
 			s.regions.setPeer(regionMeta.ID, nil)
 			_ = p.Close()
@@ -87,7 +87,7 @@ func (s *Store) StopPeer(id uint64) {
 	}
 	if regionID != 0 {
 		s.regions.setPeer(regionID, nil)
-		_ = s.UpdateRegionState(regionID, raftmeta.RegionStateRemoving)
+		_ = s.updateRegionState(regionID, raftmeta.RegionStateRemoving)
 	}
 	if p != nil {
 		_ = p.Close()

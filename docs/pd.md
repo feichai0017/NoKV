@@ -46,10 +46,11 @@ Core implementation units:
 
 ## 3. Persistence (`--workdir`)
 
-When `--workdir` is provided, PD-lite persists control-plane state:
+When `--workdir` is provided, PD-lite persists control-plane state in
+`PD_STATE.json`:
 
-- **Region catalog** via manifest edits.
-- **Allocator checkpoints** via `PD_STATE.json`:
+- **Region catalog** for route recovery.
+- **Allocator checkpoints**:
   - `id_current`
   - `ts_current`
 
@@ -61,6 +62,21 @@ Startup flow:
 4. Replay region snapshot into `pd/core.Cluster`.
 
 This avoids allocator rollback after restart and keeps route metadata stable.
+
+### Region Truth Hierarchy
+
+NoKV intentionally keeps three region views with different authority:
+
+- **PD region catalog**: cluster routing truth. Clients and stores must treat
+  PD as the authoritative key-to-region source.
+- **`raftstore/meta` local catalog**: store-local recovery truth. It exists so
+  one store can restart hosted peers and replay raft WAL checkpoints even if
+  PD is temporarily unavailable.
+- **`Store.regions` runtime catalog**: in-memory cache/view rebuilt from local
+  metadata at startup and then advanced by peer lifecycle plus raft apply.
+
+These layers are not interchangeable. Local metadata is recovery state, not
+cluster routing authority.
 
 ---
 

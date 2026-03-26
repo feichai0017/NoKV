@@ -109,14 +109,30 @@ func (m *Manager) createNew() error {
 
 func (m *Manager) writeCurrent() error {
 	tmp := filepath.Join(m.dir, manifestTempCurrentName)
-	if err := m.fs.WriteFile(tmp, []byte(m.current), manifestFilePermissions); err != nil {
+	f, err := m.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, manifestFilePermissions)
+	if err != nil {
 		return err
+	}
+	writeErr := writeAll(f, []byte(m.current))
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = m.fs.Remove(tmp)
+		return writeErr
+	}
+	if syncErr != nil {
+		_ = m.fs.Remove(tmp)
+		return syncErr
+	}
+	if closeErr != nil {
+		_ = m.fs.Remove(tmp)
+		return closeErr
 	}
 	dst := filepath.Join(m.dir, currentFileName)
 	if err := m.fs.Rename(tmp, dst); err != nil {
 		return err
 	}
-	return nil
+	return vfs.SyncDir(m.fs, m.dir)
 }
 
 func (m *Manager) replay() error {
@@ -451,6 +467,17 @@ func parseManifestFileID(name string) uint64 {
 		return 0
 	}
 	return id
+}
+
+func writeAll(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
 }
 
 // Current returns a snapshot of the current version.
