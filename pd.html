@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bd28ccbb.js";
+            window.path_to_searchindex_js = "searchindex-5ba349cf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -213,10 +213,11 @@ routing source of truth.</p>
 </ul>
 <hr>
 <h2 id="3-persistence---workdir"><a class="header" href="#3-persistence---workdir">3. Persistence (<code>--workdir</code>)</a></h2>
-<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state:</p>
+<p>When <code>--workdir</code> is provided, PD-lite persists control-plane state in
+<code>PD_STATE.json</code>:</p>
 <ul>
-<li><strong>Region catalog</strong> via manifest edits.</li>
-<li><strong>Allocator checkpoints</strong> via <code>PD_STATE.json</code>:
+<li><strong>Region catalog</strong> for route recovery.</li>
+<li><strong>Allocator checkpoints</strong>:
 <ul>
 <li><code>id_current</code></li>
 <li><code>ts_current</code></li>
@@ -231,6 +232,19 @@ routing source of truth.</p>
 <li>Replay region snapshot into <code>pd/core.Cluster</code>.</li>
 </ol>
 <p>This avoids allocator rollback after restart and keeps route metadata stable.</p>
+<h3 id="region-truth-hierarchy"><a class="header" href="#region-truth-hierarchy">Region Truth Hierarchy</a></h3>
+<p>NoKV intentionally keeps three region views with different authority:</p>
+<ul>
+<li><strong>PD region catalog</strong>: cluster routing truth. Clients and stores must treat
+PD as the authoritative key-to-region source.</li>
+<li><strong><code>raftstore/meta</code> local catalog</strong>: store-local recovery truth. It exists so
+one store can restart hosted peers and replay raft WAL checkpoints even if
+PD is temporarily unavailable.</li>
+<li><strong><code>Store.regions</code> runtime catalog</strong>: in-memory cache/view rebuilt from local
+metadata at startup and then advanced by peer lifecycle plus raft apply.</li>
+</ul>
+<p>These layers are not interchangeable. Local metadata is recovery state, not
+cluster routing authority.</p>
 <hr>
 <h2 id="4-config-integration"><a class="header" href="#4-config-integration">4. Config Integration</a></h2>
 <p><code>raft_config.json</code> supports PD endpoint + workdir defaults:</p>
