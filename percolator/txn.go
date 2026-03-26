@@ -335,12 +335,21 @@ func rollbackKey(db NoKV.MVCCStore, reader *Reader, key []byte, startTs uint64) 
 	if write != nil {
 		return nil
 	}
+
+	lock, err := reader.GetLock(key)
+	if err != nil {
+		return keyErrorRetryable(err)
+	}
+
 	rollback := EncodeWrite(Write{Kind: pb.Mutation_Rollback, StartTs: startTs})
-	if err := applyVersionedOps(db,
-		versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
-		versionedOp{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete},
-		versionedOp{cf: kv.CFWrite, key: key, version: startTs, value: rollback},
-	); err != nil {
+	ops := []versionedOp{
+		{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete},
+		{cf: kv.CFWrite, key: key, version: startTs, value: rollback},
+	}
+	if lock != nil && lock.Ts == startTs {
+		ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete})
+	}
+	if err := applyVersionedOps(db, ops...); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
