@@ -1,4 +1,4 @@
-package store_test
+package store
 
 import (
 	"bytes"
@@ -12,21 +12,16 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
+	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/store"
 )
-
-type noopTransport struct{}
-
-func (noopTransport) Send(myraft.Message) {}
 
 type testSchedulerSink struct {
 	mu      sync.RWMutex
 	regions map[uint64]regionHeartbeat
-	stores  map[uint64]store.StoreStats
+	stores  map[uint64]StoreStats
 }
 
 type regionHeartbeat struct {
@@ -37,7 +32,7 @@ type regionHeartbeat struct {
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
-		stores:  make(map[uint64]store.StoreStats),
+		stores:  make(map[uint64]StoreStats),
 	}
 }
 
@@ -62,7 +57,7 @@ func (s *testSchedulerSink) RemoveRegion(id uint64) {
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) StoreHeartbeat(stats store.StoreStats) []store.Operation {
+func (s *testSchedulerSink) StoreHeartbeat(stats StoreStats) []Operation {
 	if s == nil || stats.StoreID == 0 {
 		return nil
 	}
@@ -73,8 +68,8 @@ func (s *testSchedulerSink) StoreHeartbeat(stats store.StoreStats) []store.Opera
 	return nil
 }
 
-func (s *testSchedulerSink) Status() store.SchedulerStatus {
-	return store.SchedulerStatus{}
+func (s *testSchedulerSink) Status() SchedulerStatus {
+	return SchedulerStatus{}
 }
 
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
@@ -93,12 +88,12 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	return out
 }
 
-func (s *testSchedulerSink) StoreSnapshot() []store.StoreStats {
+func (s *testSchedulerSink) StoreSnapshot() []StoreStats {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]store.StoreStats, 0, len(s.stores))
+	out := make([]StoreStats, 0, len(s.stores))
 	for _, st := range s.stores {
 		out = append(out, st)
 	}
@@ -123,7 +118,7 @@ func (s *testSchedulerSink) Close() error {
 	return nil
 }
 
-func testPeerBuilder(storeID uint64) store.PeerBuilder {
+func testPeerBuilder(storeID uint64) PeerBuilder {
 	return func(meta raftmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, peerMeta := range meta.Peers {
@@ -166,9 +161,32 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	return db, localMeta
 }
 
+func newTestMVCCApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	latches := latch.NewManager(512)
+	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+		resp := &pb.RaftCmdResponse{Header: req.GetHeader()}
+		for _, r := range req.GetRequests() {
+			if r == nil {
+				continue
+			}
+			switch r.GetCmdType() {
+			case pb.CmdType_CMD_PREWRITE:
+				result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
+				resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
+			case pb.CmdType_CMD_COMMIT:
+				err := percolator.Commit(db, latches, r.GetCommit())
+				resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
+			default:
+				return nil, fmt.Errorf("unsupported test command %v", r.GetCmdType())
+			}
+		}
+		return resp, nil
+	}
+}
+
 func TestStorePeerLifecycle(t *testing.T) {
-	router := store.NewRouter()
-	rs := store.NewStore(router)
+	router := NewRouter()
+	rs := NewStore(router)
 
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -205,7 +223,7 @@ func TestStorePeerLifecycle(t *testing.T) {
 }
 
 func TestStoreDuplicatePeer(t *testing.T) {
-	rs := store.NewStore(nil)
+	rs := NewStore(nil)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
@@ -229,8 +247,8 @@ func TestStoreDuplicatePeer(t *testing.T) {
 }
 
 func TestStorePeersSnapshot(t *testing.T) {
-	router := store.NewRouter()
-	rs := store.NewStoreWithConfig(store.Config{
+	router := NewRouter()
+	rs := NewStoreWithConfig(Config{
 		Router: router,
 	})
 
@@ -272,7 +290,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = metaStore.Close() })
 
-	rs := store.NewStoreWithConfig(store.Config{
+	rs := NewStoreWithConfig(Config{
 		LocalMeta: metaStore,
 	})
 
@@ -326,7 +344,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 			{StoreID: 2, PeerID: 22},
 		},
 	}
-	require.NoError(t, rs.UpdateRegion(updated))
+	require.NoError(t, rs.updateRegion(updated))
 
 	peerMeta := p.RegionMeta()
 	require.NotNil(t, peerMeta)
@@ -349,7 +367,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Equal(t, uint64(4), meta.Epoch.Version)
 	require.Len(t, meta.Peers, 2)
 
-	require.NoError(t, rs.UpdateRegionState(500, raftmeta.RegionStateRemoving))
+	require.NoError(t, rs.updateRegionState(500, raftmeta.RegionStateRemoving))
 
 	metas = rs.RegionMetas()
 	require.Equal(t, raftmeta.RegionStateRemoving, metas[0].State)
@@ -367,7 +385,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, raftmeta.RegionStateRemoving, meta.State)
 
-	require.NoError(t, rs.UpdateRegionState(500, raftmeta.RegionStateTombstone))
+	require.NoError(t, rs.updateRegionState(500, raftmeta.RegionStateTombstone))
 
 	metas = rs.RegionMetas()
 	require.Equal(t, raftmeta.RegionStateTombstone, metas[0].State)
@@ -379,10 +397,10 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, raftmeta.RegionStateTombstone, meta.State)
 
-	err = rs.UpdateRegionState(500, raftmeta.RegionStateRunning)
+	err = rs.updateRegionState(500, raftmeta.RegionStateRunning)
 	require.Error(t, err)
 
-	require.NoError(t, rs.RemoveRegion(500))
+	require.NoError(t, rs.removeRegion(500))
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 0)
@@ -404,8 +422,8 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 		EndKey:   []byte("m"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	require.NoError(t, rs.UpdateRegion(parent))
-	require.NoError(t, rs.UpdateRegion(child))
+	require.NoError(t, rs.updateRegion(parent))
+	require.NoError(t, rs.updateRegion(child))
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 2)
@@ -416,7 +434,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	sink := newTestSchedulerSink()
-	rs := store.NewStoreWithConfig(store.Config{Scheduler: sink, StoreID: 1})
+	rs := NewStoreWithConfig(Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
 
 	cfg := &peer.Config{
@@ -445,19 +463,19 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	require.Equal(t, uint64(42), snapshot[0].Meta.ID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
-	require.NoError(t, rs.UpdateRegionState(42, raftmeta.RegionStateRemoving))
+	require.NoError(t, rs.updateRegionState(42, raftmeta.RegionStateRemoving))
 	snapshot = sink.RegionSnapshot()
 	require.Len(t, snapshot, 1)
 	require.Equal(t, raftmeta.RegionStateRemoving, snapshot[0].Meta.State)
 
-	require.NoError(t, rs.RemoveRegion(42))
+	require.NoError(t, rs.removeRegion(42))
 	snapshot = sink.RegionSnapshot()
 	require.Empty(t, snapshot)
 }
 
 func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	coord := newTestSchedulerSink()
-	rs := store.NewStoreWithConfig(store.Config{
+	rs := NewStoreWithConfig(Config{
 		Scheduler:         coord,
 		StoreID:           9,
 		PeerBuilder:       testPeerBuilder(9),
@@ -506,22 +524,62 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	require.False(t, regionSnap[0].LastHeartbeat.IsZero())
 }
 
+func TestStoreLoadsLocalMetaSnapshotWithoutScheduler(t *testing.T) {
+	dir := t.TempDir()
+	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = metaStore.Close() })
+
+	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+		ID:       901,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		State:    raftmeta.RegionStateRunning,
+		Epoch:    raftmeta.RegionEpoch{Version: 2, ConfVersion: 3},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 11}},
+	}))
+	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+		ID:       902,
+		StartKey: []byte("m"),
+		EndKey:   nil,
+		State:    raftmeta.RegionStateRunning,
+		Epoch:    raftmeta.RegionEpoch{Version: 5, ConfVersion: 8},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 12}},
+	}))
+
+	rs := NewStoreWithConfig(Config{
+		StoreID:   1,
+		LocalMeta: metaStore,
+	})
+	defer rs.Close()
+
+	metas := rs.RegionMetas()
+	require.Len(t, metas, 2)
+
+	meta901, ok := rs.RegionMetaByID(901)
+	require.True(t, ok)
+	require.Equal(t, []byte("a"), meta901.StartKey)
+	require.Equal(t, uint64(2), meta901.Epoch.Version)
+
+	meta902, ok := rs.RegionMetaByID(902)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), meta902.StartKey)
+	require.Equal(t, uint64(8), meta902.Epoch.ConfVersion)
+}
+
 func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := newTestSchedulerSink()
-	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
+	applier := newTestMVCCApplier(db)
+	st := NewStoreWithConfig(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
 	region := &raftmeta.RegionMeta{
 		ID:       101,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: raftmeta.RegionEpoch{
-			Version:     1,
-			ConfVersion: 1,
-		},
-		Peers: []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -604,7 +662,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 			Header: req.GetHeader(),
 		}, nil
 	}
-	st := store.NewStoreWithConfig(store.Config{
+	st := NewStoreWithConfig(Config{
 		StoreID:        1,
 		CommandApplier: applier,
 		CommandTimeout: time.Second,
@@ -684,8 +742,8 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 
 func TestStoreProposeCommandNotLeader(t *testing.T) {
 	db, localMeta := openStoreDB(t)
-	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
+	applier := newTestMVCCApplier(db)
+	st := NewStoreWithConfig(Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &raftmeta.RegionMeta{
 		ID:       202,
@@ -727,8 +785,8 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 
 func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	db, localMeta := openStoreDB(t)
-	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{StoreID: 3, CommandApplier: applier})
+	applier := newTestMVCCApplier(db)
+	st := NewStoreWithConfig(Config{StoreID: 3, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &raftmeta.RegionMeta{
 		ID:       303,
@@ -768,7 +826,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 
 func TestStoreProposeSplitApplies(t *testing.T) {
 	storeID := uint64(11)
-	rs := store.NewStoreWithConfig(store.Config{
+	rs := NewStoreWithConfig(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -812,7 +870,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 
 func TestStoreProposeMergeApplies(t *testing.T) {
 	storeID := uint64(12)
-	rs := store.NewStoreWithConfig(store.Config{
+	rs := NewStoreWithConfig(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -865,7 +923,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 
 func TestStoreSplitMergeLifecycle(t *testing.T) {
 	storeID := uint64(13)
-	rs := store.NewStoreWithConfig(store.Config{
+	rs := NewStoreWithConfig(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 15 * time.Millisecond,
@@ -909,4 +967,71 @@ func TestStoreSplitMergeLifecycle(t *testing.T) {
 	if peer, exists := rs.Peer(childMeta.Peers[0].PeerID); exists {
 		rs.StopPeer(peer.ID())
 	}
+}
+
+func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
+	storeID := uint64(21)
+	dir := t.TempDir()
+	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { _ = localMeta.Close() }()
+
+	rs := NewStoreWithConfig(Config{
+		PeerBuilder: testPeerBuilder(storeID),
+		StoreID:     storeID,
+		LocalMeta:   localMeta,
+	})
+
+	parentMeta := raftmeta.RegionMeta{
+		ID:       7000,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 71}},
+	}
+	parentCfg, err := testPeerBuilder(storeID)(parentMeta)
+	require.NoError(t, err)
+	parentPeer, err := rs.StartPeer(parentCfg, []myraft.Peer{{ID: 71}})
+	require.NoError(t, err)
+	require.NoError(t, parentPeer.Campaign())
+
+	childMeta := raftmeta.RegionMeta{
+		ID:       7001,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 72}},
+	}
+	require.NoError(t, rs.ProposeSplit(parentMeta.ID, childMeta, childMeta.StartKey))
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(childMeta.ID)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, rs.ProposeMerge(parentMeta.ID, childMeta.ID))
+	require.Eventually(t, func() bool {
+		_, ok := rs.RegionMetaByID(childMeta.ID)
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+
+	rs.Close()
+	require.NoError(t, localMeta.Close())
+
+	reopenedMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { _ = reopenedMeta.Close() }()
+
+	reopened := NewStoreWithConfig(Config{
+		PeerBuilder: testPeerBuilder(storeID),
+		StoreID:     storeID,
+		LocalMeta:   reopenedMeta,
+	})
+	defer reopened.Close()
+
+	metas := reopened.RegionMetas()
+	require.Len(t, metas, 1)
+	require.Equal(t, uint64(7000), metas[0].ID)
+	require.Equal(t, []byte("z"), metas[0].EndKey)
+	_, ok := reopened.RegionMetaByID(childMeta.ID)
+	require.False(t, ok)
 }
