@@ -189,6 +189,55 @@ func TestBatchRollbackRemovesLock(t *testing.T) {
 	require.Equal(t, uint64(8), commitTs)
 }
 
+func TestBatchRollbackDoesNotDeleteOtherTransactionLock(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("rk-other-lock")
+
+	prewrite := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 20,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, prewrite))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, uint64(20), lock.Ts)
+
+	rollback := &pb.BatchRollbackRequest{Keys: [][]byte{key}, StartVersion: 10}
+	require.Nil(t, BatchRollback(db, latches, rollback))
+
+	lock, err = reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, uint64(20), lock.Ts)
+
+	write, commitTs, err := reader.GetWriteByStartTs(key, 10)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, pb.Mutation_Rollback, write.Kind)
+	require.Equal(t, uint64(10), commitTs)
+
+	commit := &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  20,
+		CommitVersion: 30,
+	}
+	require.Nil(t, Commit(db, latches, commit))
+
+	value, _, err := reader.GetValue(key, 40)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), value)
+}
+
 func TestResolveLockCommit(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
