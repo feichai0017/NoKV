@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 
 type adminTestTransport struct{}
 
-func (adminTestTransport) Send(myraft.Message) {}
+func (adminTestTransport) Send(context.Context, myraft.Message) {}
 
 func adminTestPeerBuilder(storeID uint64) PeerBuilder {
 	return func(region raftmeta.RegionMeta) (*peer.Config, error) {

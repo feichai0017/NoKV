@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"expvar"
 	"flag"
 	"fmt"
@@ -56,10 +57,12 @@ func main() {
 		db      *NoKV.DB
 		backend redisBackend
 	)
+	backendCtx, cancelBackend := context.WithCancel(context.Background())
+	defer cancelBackend()
 
 	if *raftConfig != "" {
 		var err error
-		backend, err = newRaftBackend(*raftConfig, *pdAddr, *addrScope)
+		backend, err = newRaftBackend(backendCtx, *raftConfig, *pdAddr, *addrScope)
 		if err != nil {
 			fatalf("raft backend init: %v", err)
 		}
@@ -118,6 +121,7 @@ func main() {
 			log.Printf("serve loop exited: %v", err)
 		}
 	}
+	cancelBackend()
 
 	if err := ln.Close(); err != nil {
 		log.Printf("listener close: %v", err)

@@ -24,7 +24,7 @@ import (
 
 type noopTransport struct{}
 
-func (noopTransport) Send(myraft.Message) {}
+func (noopTransport) Send(context.Context, myraft.Message) {}
 
 func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	opt := NoKV.NewDefaultOptions()

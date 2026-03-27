@@ -1,6 +1,7 @@
 package transport_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -229,7 +230,7 @@ func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 	transport.SetPeer(2, "127.0.0.1:65535")
 	msg := myraft.Message{To: 2}
 	for range 3 {
-		transport.Send(msg)
+		transport.Send(context.Background(), msg)
 	}
 
 	snap := transportpkg.GRPCMetricsSnapshot()
@@ -249,7 +250,7 @@ func TestGRPCTransportMetricsWatchdog(t *testing.T) {
 	defer func() { _ = peer.Close() }()
 
 	transport.SetPeer(2, peer.Addr())
-	transport.Send(msg)
+	transport.Send(context.Background(), msg)
 
 	snap = transportpkg.GRPCMetricsSnapshot()
 	require.False(t, snap.WatchdogActive)

@@ -37,7 +37,7 @@ func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetRes
 			Cmd:     &pb.Request_Get{Get: readReq},
 		}},
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -76,7 +76,7 @@ func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*p
 		Header:   header,
 		Requests: requests,
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -122,7 +122,7 @@ func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScan
 			Cmd:     &pb.Request_Scan{Scan: scanReq},
 		}},
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -141,7 +141,7 @@ func (s *Service) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*p
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "prewrite request missing payload")
 	}
-	resp, err := s.propose(&pb.RaftCmdRequest{
+	resp, err := s.propose(ctx, &pb.RaftCmdRequest{
 		Header: header,
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_PREWRITE,
@@ -166,7 +166,7 @@ func (s *Service) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.Kv
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "commit request missing payload")
 	}
-	resp, err := s.propose(&pb.RaftCmdRequest{
+	resp, err := s.propose(ctx, &pb.RaftCmdRequest{
 		Header: header,
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_COMMIT,
@@ -191,7 +191,7 @@ func (s *Service) KvBatchRollback(ctx context.Context, req *pb.KvBatchRollbackRe
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "rollback request missing payload")
 	}
-	resp, err := s.propose(&pb.RaftCmdRequest{
+	resp, err := s.propose(ctx, &pb.RaftCmdRequest{
 		Header: header,
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_BATCH_ROLLBACK,
@@ -216,7 +216,7 @@ func (s *Service) KvResolveLock(ctx context.Context, req *pb.KvResolveLockReques
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resolve lock request missing payload")
 	}
-	resp, err := s.propose(&pb.RaftCmdRequest{
+	resp, err := s.propose(ctx, &pb.RaftCmdRequest{
 		Header: header,
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_RESOLVE_LOCK,
@@ -241,7 +241,7 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatus
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "check txn status request missing payload")
 	}
-	resp, err := s.propose(&pb.RaftCmdRequest{
+	resp, err := s.propose(ctx, &pb.RaftCmdRequest{
 		Header: header,
 		Requests: []*pb.Request{{
 			CmdType: pb.CmdType_CMD_CHECK_TXN_STATUS,
@@ -258,18 +258,18 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatus
 	return out, nil
 }
 
-func (s *Service) read(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Service) read(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("raftstore: store not initialized")
 	}
-	return s.store.ReadCommand(req)
+	return s.store.ReadCommand(ctx, req)
 }
 
-func (s *Service) propose(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Service) propose(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("raftstore: store not initialized")
 	}
-	return s.store.ProposeCommand(req)
+	return s.store.ProposeCommand(ctx, req)
 }
 
 func buildHeader(ctx *pb.Context) (*pb.CmdHeader, error) {

@@ -404,38 +404,43 @@ func (t *GRPCTransport) UnblockPeer(id uint64) {
 }
 
 // Send forwards the message to the remote peer using gRPC.
-func (t *GRPCTransport) Send(msg myraft.Message) {
+func (t *GRPCTransport) Send(ctx context.Context, msg myraft.Message) {
 	if msg.To == 0 {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	attempts := t.maxRetries + 1
 	if attempts <= 0 {
 		attempts = 1
 	}
 	for attempt := 0; attempt < attempts; attempt++ {
-		client, err := t.getClient(msg.To)
+		client, err := t.getClient(ctx, msg.To)
 		if err != nil {
 			if errors.Is(err, errPeerBlocked) || errors.Is(err, errPeerUnknown) {
 				return
 			}
 			if attempt < attempts-1 {
-				t.backoff()
+				if err := t.backoff(ctx); err != nil {
+					return
+				}
 			}
 			continue
 		}
 		metrics := grpcMetrics()
 		metrics.recordSendAttempt(attempt > 0)
 		var (
-			ctx    context.Context
-			cancel context.CancelFunc
+			sendCtx context.Context
+			cancel  context.CancelFunc
 		)
 		if t.sendTimeout > 0 {
-			ctx, cancel = context.WithTimeout(context.Background(), t.sendTimeout)
+			sendCtx, cancel = context.WithTimeout(ctx, t.sendTimeout)
 		} else {
-			ctx, cancel = context.WithCancel(context.Background())
+			sendCtx, cancel = context.WithCancel(ctx)
 		}
 		pbMsg := raftpb.Message(msg)
-		_, err = client.Step(ctx, &pbMsg)
+		_, err = client.Step(sendCtx, &pbMsg)
 		cancel()
 		if err == nil {
 			metrics.recordSendSuccess()
@@ -446,11 +451,13 @@ func (t *GRPCTransport) Send(msg myraft.Message) {
 		if attempt == attempts-1 {
 			return
 		}
-		t.backoff()
+		if err := t.backoff(ctx); err != nil {
+			return
+		}
 	}
 }
 
-func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
+func (t *GRPCTransport) getClient(ctx context.Context, id uint64) (raftServiceClient, error) {
 	t.mu.RLock()
 	addr, ok := t.peers[id]
 	if ok {
@@ -467,10 +474,12 @@ func (t *GRPCTransport) getClient(id uint64) (raftServiceClient, error) {
 	if !ok || addr == "" {
 		return nil, errPeerUnknown
 	}
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cancel := func() {}
 	if t.dialTimeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), t.dialTimeout)
+		ctx, cancel = context.WithTimeout(ctx, t.dialTimeout)
 	}
 	defer cancel()
 	metrics := grpcMetrics()
@@ -504,11 +513,22 @@ func (t *GRPCTransport) handleSendError(id uint64, err error) {
 	t.mu.Unlock()
 }
 
-func (t *GRPCTransport) backoff() {
+func (t *GRPCTransport) backoff(ctx context.Context) error {
 	if t.retryBackoff <= 0 {
-		return
+		return nil
 	}
-	time.Sleep(t.retryBackoff)
+	if ctx == nil {
+		time.Sleep(t.retryBackoff)
+		return nil
+	}
+	timer := time.NewTimer(t.retryBackoff)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (t *GRPCTransport) waitForClientReady(ctx context.Context, conn *grpc.ClientConn) error {

@@ -107,13 +107,14 @@ func (s *Store) sendHeartbeats() {
 	if s == nil || s.schedulerClient() == nil {
 		return
 	}
+	ctx := s.runtimeContext()
 	for _, meta := range s.RegionMetas() {
-		s.schedulerClient().PublishRegion(meta)
+		s.schedulerClient().PublishRegion(ctx, meta)
 	}
 	if s.storeID == 0 {
 		return
 	}
-	for _, op := range s.schedulerClient().StoreHeartbeat(s.storeStatsSnapshot()) {
+	for _, op := range s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot()) {
 		s.enqueueOperation(op)
 	}
 }

@@ -458,7 +458,7 @@ func (p *Peer) sendMessages(msgs []myraft.Message) {
 				q.record(msg)
 			}
 		}
-		p.transport.Send(msg)
+		p.transport.Send(p.stopCtx, msg)
 	}
 }
 
@@ -600,7 +600,7 @@ func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("raftstore: peer is nil")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = p.stopCtx
 	}
 	select {
 	case <-p.stopCtx.Done():
@@ -724,7 +724,7 @@ func (p *Peer) ResendSnapshot(to uint64) bool {
 	if !ok {
 		return false
 	}
-	p.transport.Send(msg)
+	p.transport.Send(p.stopCtx, msg)
 	return true
 }
 
@@ -733,6 +733,6 @@ func (p *Peer) resendPendingSnapshots() {
 		return
 	}
 	p.snapshotQueue.forEach(func(msg myraft.Message) {
-		p.transport.Send(msg)
+		p.transport.Send(p.stopCtx, msg)
 	})
 }

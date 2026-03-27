@@ -41,6 +41,7 @@ type RegionResolver interface {
 
 // Config configures the NoKV distributed client.
 type Config struct {
+	Context            context.Context
 	Stores             []StoreEndpoint
 	RegionResolver     RegionResolver
 	RouteLookupTimeout time.Duration
@@ -100,7 +101,7 @@ func New(cfg Config) (*Client, error) {
 		if endpoint.StoreID == 0 || endpoint.Addr == "" {
 			return nil, fmt.Errorf("client: invalid store endpoint %+v", endpoint)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		ctx, cancel := contextWithTimeout(cfg.Context, dialTimeout)
 		conn, err := dialStore(ctx, endpoint.Addr, dialOpts...)
 		cancel()
 		if err != nil {
@@ -168,7 +169,7 @@ func (c *Client) Close() error {
 func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		region, err := c.regionForKey(key)
+		region, err := c.regionForKey(ctx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -213,7 +214,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	for attempt := 0; attempt < c.maxRetries && len(pending) > 0; attempt++ {
 		groups := make(map[uint64]*regionBatch)
 		for keyID, key := range pending {
-			region, err := c.regionForKey(key)
+			region, err := c.regionForKey(ctx, key)
 			if err != nil {
 				return nil, err
 			}
@@ -330,7 +331,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	currentKey := append([]byte(nil), startKey...)
 	remaining := limit
 	for remaining > 0 {
-		region, err := c.regionForKey(currentKey)
+		region, err := c.regionForKey(ctx, currentKey)
 		if err != nil {
 			return nil, err
 		}
@@ -444,14 +445,14 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		if mut == nil {
 			continue
 		}
-		region, err := c.regionForKey(mut.GetKey())
+		region, err := c.regionForKey(ctx, mut.GetKey())
 		if err != nil {
 			return err
 		}
 		id := region.meta.GetId()
 		grouped[id] = append(grouped[id], cloneMutation(mut))
 	}
-	primaryRegion, err := c.regionForKey(primary)
+	primaryRegion, err := c.regionForKey(ctx, primary)
 	if err != nil {
 		return err
 	}
@@ -581,7 +582,7 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*pb.CheckTxnStatusResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		region, err := c.regionForKey(primary)
+		region, err := c.regionForKey(ctx, primary)
 		if err != nil {
 			return nil, err
 		}
@@ -631,7 +632,7 @@ func (c *Client) ResolveLocks(ctx context.Context, startVersion, commitVersion u
 	}
 	grouped := make(map[uint64][][]byte)
 	for _, key := range keys {
-		region, err := c.regionForKey(key)
+		region, err := c.regionForKey(ctx, key)
 		if err != nil {
 			return 0, err
 		}
@@ -723,11 +724,11 @@ func (c *Client) regionSnapshot(regionID uint64) (regionSnapshot, bool) {
 	}, true
 }
 
-func (c *Client) regionForKey(key []byte) (regionSnapshot, error) {
+func (c *Client) regionForKey(ctx context.Context, key []byte) (regionSnapshot, error) {
 	if region, ok := c.regionForKeyFromCache(key); ok {
 		return region, nil
 	}
-	return c.regionForKeyFromResolver(key)
+	return c.regionForKeyFromResolver(ctx, key)
 }
 
 // regionForKeyFromCache scans cached Region state and returns a snapshot when
@@ -751,8 +752,8 @@ func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {
 
 // regionForKeyFromResolver requests Region metadata from the external resolver,
 // then caches the result for subsequent lookups.
-func (c *Client) regionForKeyFromResolver(key []byte) (regionSnapshot, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.routeLookupTimeout)
+func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regionSnapshot, error) {
+	ctx, cancel := contextWithTimeout(ctx, c.routeLookupTimeout)
 	defer cancel()
 	resp, err := c.regionResolver.GetRegionByKey(ctx, &pb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
 	if err != nil {
@@ -785,6 +786,16 @@ func (c *Client) regionForKeyFromResolver(key []byte) (regionSnapshot, error) {
 		meta:   meta,
 		leader: leader,
 	}, nil
+}
+
+func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }
 
 func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
