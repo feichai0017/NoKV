@@ -18,6 +18,7 @@ import (
 )
 
 type raftBackend struct {
+	ctx    context.Context
 	client raftClient
 	ts     timestampAllocator
 }
@@ -39,15 +40,17 @@ type raftClient interface {
 }
 
 type pdTSOAllocator struct {
+	ctx     context.Context
 	client  pdTSOClient
 	timeout time.Duration
 }
 
-func newPDTSOAllocator(client pdTSOClient, timeout time.Duration) *pdTSOAllocator {
+func newPDTSOAllocator(ctx context.Context, client pdTSOClient, timeout time.Duration) *pdTSOAllocator {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
 	return &pdTSOAllocator{
+		ctx:     ctx,
 		client:  client,
 		timeout: timeout,
 	}
@@ -60,7 +63,7 @@ func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	if p == nil || p.client == nil {
 		return 0, fmt.Errorf("tso reserve: allocator not initialized")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	ctx, cancel := contextWithTimeout(p.ctx, p.timeout)
 	defer cancel()
 	resp, err := p.client.Tso(ctx, &pb.TsoRequest{Count: n})
 	if err != nil {
@@ -75,7 +78,7 @@ func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	return resp.GetTimestamp(), nil
 }
 
-func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
+func newRaftBackend(ctx context.Context, cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	cfgFile, err := config.LoadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("raft backend: read config: %w", err)
@@ -84,6 +87,7 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 		return nil, fmt.Errorf("raft backend: config invalid: %w", err)
 	}
 	cfg := client.Config{
+		Context:    ctx,
 		MaxRetries: cfgFile.MaxRetries,
 	}
 	for _, st := range cfgFile.Stores {
@@ -105,7 +109,7 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	if pdAddr == "" {
 		return nil, fmt.Errorf("raft backend: pd-addr is required in raft mode (flag or config.pd)")
 	}
-	dialCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	dialCtx, cancel := contextWithTimeout(ctx, 3*time.Second)
 	pdCli, err := pdclient.NewGRPCClient(dialCtx, pdAddr)
 	cancel()
 	if err != nil {
@@ -119,8 +123,9 @@ func newRaftBackend(cfgPath, pdAddr, addrScope string) (*raftBackend, error) {
 	}
 
 	return &raftBackend{
+		ctx:    ctx,
 		client: cl,
-		ts:     newPDTSOAllocator(pdCli, 3*time.Second),
+		ts:     newPDTSOAllocator(ctx, pdCli, 3*time.Second),
 	}, nil
 }
 
@@ -142,7 +147,17 @@ func decodeKey(val string) []byte {
 }
 
 func (b *raftBackend) context() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 3*time.Second)
+	return contextWithTimeout(b.ctx, 3*time.Second)
+}
+
+func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }
 
 func (b *raftBackend) Close() error {

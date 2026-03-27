@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
@@ -52,7 +53,7 @@ type recordingTransport struct {
 	messages []myraft.Message
 }
 
-func (rt *recordingTransport) Send(msg myraft.Message) {
+func (rt *recordingTransport) Send(_ context.Context, msg myraft.Message) {
 	rt.messages = append(rt.messages, msg)
 }
 

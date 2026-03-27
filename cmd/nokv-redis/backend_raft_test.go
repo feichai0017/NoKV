@@ -247,7 +247,7 @@ func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
 	_, pd, stopPD := startStubPD(t, nil)
 	defer stopPD()
 
-	alloc := newPDTSOAllocator(pd, time.Second)
+	alloc := newPDTSOAllocator(context.Background(), pd, time.Second)
 	first, err := alloc.Reserve(3)
 	require.NoError(t, err)
 	second, err := alloc.Reserve(2)
@@ -296,7 +296,7 @@ func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	backend, err := newRaftBackend(cfgPath, pdAddr, "docker")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "docker")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestNewRaftBackendRequiresPDAddr(t *testing.T) {
 	defer stopStore()
 
 	cfgPath := writeBackendConfig(t, storeAddr)
-	_, err := newRaftBackend(cfgPath, "", "host")
+	_, err := newRaftBackend(context.Background(), cfgPath, "", "host")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pd-addr is required")
 }
@@ -372,7 +372,7 @@ func TestNewRaftBackendReadsPDAddrFromConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, "", "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
@@ -420,7 +420,7 @@ func TestNewRaftBackendRoutingUsesPDResolver(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
-	backend, err := newRaftBackend(cfgPath, "", "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, "", "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
@@ -469,7 +469,7 @@ func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
-	backend, err := newRaftBackend(cfgPath, validPDAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, validPDAddr, "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 
@@ -517,7 +517,7 @@ func TestRaftBackendResolveLockConflict(t *testing.T) {
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
 
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	cfgPath := writeBackendConfig(t, storeAddr)
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 	cfgPath := writeBackendConfig(t, storeAddr)
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -633,7 +633,7 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 	cfgPath := writeBackendConfig(t, storeAddr)
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -678,7 +678,7 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	cfgPath := writeBackendConfig(t, storeAddr)
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -740,7 +740,7 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 	cfgPath := writeBackendConfig(t, storeAddr)
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	if err != nil {
 		t.Fatalf("new raft backend: %v", err)
 	}
@@ -924,14 +924,14 @@ func newStubBackend() (*raftBackend, *stubRaftClient, *stubTSO) {
 }
 
 func TestPDTSOAllocatorErrors(t *testing.T) {
-	alloc := newPDTSOAllocator(nil, time.Second)
+	alloc := newPDTSOAllocator(context.Background(), nil, time.Second)
 	_, err := alloc.Reserve(1)
 	require.Error(t, err)
 
 	_, pd, stopPD := startStubPD(t, nil)
 	defer stopPD()
 	pd.tsoErr = errors.New("boom")
-	alloc = newPDTSOAllocator(pd, time.Second)
+	alloc = newPDTSOAllocator(context.Background(), pd, time.Second)
 	_, err = alloc.Reserve(1)
 	require.Error(t, err)
 
@@ -941,7 +941,7 @@ func TestPDTSOAllocatorErrors(t *testing.T) {
 }
 
 func TestNewRaftBackendErrors(t *testing.T) {
-	_, err := newRaftBackend(filepath.Join(t.TempDir(), "missing.json"), "127.0.0.1:1", "host")
+	_, err := newRaftBackend(context.Background(), filepath.Join(t.TempDir(), "missing.json"), "127.0.0.1:1", "host")
 	require.Error(t, err)
 
 	cfg := config.File{
@@ -967,7 +967,7 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
-	_, err = newRaftBackend(cfgPath, "127.0.0.1:1", "host")
+	_, err = newRaftBackend(context.Background(), cfgPath, "127.0.0.1:1", "host")
 	require.Error(t, err)
 
 	storeAddr, _, stopStore := startStubNoKV(t)
@@ -988,14 +988,14 @@ func TestNewRaftBackendErrors(t *testing.T) {
 	cfgPath = filepath.Join(dir, "cfg2.json")
 	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
 
-	_, err = newRaftBackend(cfgPath, "", "host")
+	_, err = newRaftBackend(context.Background(), cfgPath, "", "host")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pd-addr is required")
 
 	pdAddr, _, stopPD := startStubPD(t, defaultPDRegionMeta())
 	defer stopPD()
 
-	backend, err := newRaftBackend(cfgPath, pdAddr, "host")
+	backend, err := newRaftBackend(context.Background(), cfgPath, pdAddr, "host")
 	require.NoError(t, err)
 	defer func() { _ = backend.Close() }()
 	_, ok := backend.ts.(*pdTSOAllocator)
@@ -1009,7 +1009,7 @@ func TestNewRaftBackendInvalidPDAddress(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
 	cfgPath := writeBackendConfig(t, storeAddr)
-	_, err := newRaftBackend(cfgPath, "127.0.0.1:0", "host")
+	_, err := newRaftBackend(context.Background(), cfgPath, "127.0.0.1:0", "host")
 	require.Error(t, err)
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
-	rm := newRegionManager(nil, nil, nil)
+	rm := newRegionManager(context.Background(), nil, nil, nil)
 	snapshot := map[uint64]raftmeta.RegionMeta{
 		1: {
 			ID:       1,
@@ -32,7 +33,7 @@ func TestRegionManagerLoadAndMeta(t *testing.T) {
 }
 
 func TestRegionManagerPeerTracking(t *testing.T) {
-	rm := newRegionManager(nil, nil, nil)
+	rm := newRegionManager(context.Background(), nil, nil, nil)
 	fakePeer := &peer.Peer{}
 	rm.setPeer(2, fakePeer)
 	if got := rm.peer(2); got != fakePeer {
@@ -46,7 +47,7 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 }
 
 func TestRegionManagerRemove(t *testing.T) {
-	rm := newRegionManager(nil, nil, nil)
+	rm := newRegionManager(context.Background(), nil, nil, nil)
 	requireNoError(t, rm.updateRegion(raftmeta.RegionMeta{ID: 3}))
 	rm.setPeer(3, &peer.Peer{})
 
@@ -60,7 +61,7 @@ func TestRegionManagerRemove(t *testing.T) {
 }
 
 func TestRegionManagerListMetas(t *testing.T) {
-	rm := newRegionManager(nil, nil, nil)
+	rm := newRegionManager(context.Background(), nil, nil, nil)
 	rm.loadSnapshot(map[uint64]raftmeta.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
@@ -113,12 +114,12 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 func TestStoreReadCommandValidation(t *testing.T) {
 	store := NewStore(nil)
 
-	if _, err := store.ReadCommand(&pb.RaftCmdRequest{}); err == nil {
+	if _, err := store.ReadCommand(context.Background(), &pb.RaftCmdRequest{}); err == nil {
 		t.Fatalf("expected missing region id error")
 	}
 
 	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}
-	resp, err := store.ReadCommand(req)
+	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestStoreReadCommandStoreNotMatch(t *testing.T) {
 	store := NewStoreWithConfig(Config{StoreID: 7})
 
 	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
-	resp, err := store.ReadCommand(req)
+	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

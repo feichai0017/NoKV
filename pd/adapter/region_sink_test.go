@@ -95,8 +95,8 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		},
 		Peers: []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
-	sink.PublishRegion(meta)
-	ops := sink.StoreHeartbeat(storepkg.StoreStats{
+	sink.PublishRegion(context.Background(), meta)
+	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
 		StoreID:   1,
 		RegionNum: 3,
 		LeaderNum: 1,
@@ -132,8 +132,8 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 		},
 	})
 
-	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegion(raftmeta.RegionMeta{ID: 9})
+	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
+	sink.PublishRegion(context.Background(), raftmeta.RegionMeta{ID: 9})
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -148,9 +148,9 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
-	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 0})
-	sink.PublishRegion(raftmeta.RegionMeta{ID: 0})
-	sink.RemoveRegion(0)
+	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
+	sink.PublishRegion(context.Background(), raftmeta.RegionMeta{ID: 0})
+	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
 	require.Empty(t, pd.removeReqs)
@@ -176,9 +176,9 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 			ConfVersion: 1,
 		},
 	}
-	sink.PublishRegion(meta)
+	sink.PublishRegion(context.Background(), meta)
 
-	sink.RemoveRegion(100)
+	sink.RemoveRegion(context.Background(), 100)
 	require.Len(t, pd.removeReqs, 1)
 	require.Equal(t, uint64(100), pd.removeReqs[0].GetRegionId())
 	require.Len(t, got, 1)
@@ -190,11 +190,11 @@ func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
 	pd := &fakePDClient{storeErr: errors.New("heartbeat failed")}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 
-	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
+	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
 	require.True(t, sink.Status().Degraded)
 
 	pd.storeErr = nil
-	sink.StoreHeartbeat(storepkg.StoreStats{StoreID: 7})
+	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
 	status := sink.Status()
 	require.False(t, status.Degraded)
 	require.Contains(t, status.LastError, "StoreHeartbeat")
