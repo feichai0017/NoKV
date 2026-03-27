@@ -204,6 +204,159 @@ func TestCommitMissingLock(t *testing.T) {
 	require.Contains(t, err.GetAbort(), "lock not found")
 }
 
+func TestCommitNilRequestReturnsNil(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	require.Nil(t, Commit(db, latches, nil))
+}
+
+func TestCommitRejectsEmptyKey(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+
+	err := Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{nil},
+		StartVersion:  3,
+		CommitVersion: 6,
+	})
+	require.NotNil(t, err)
+	require.Contains(t, err.GetAbort(), "empty key in commit")
+}
+
+func TestCommitRejectsCommitVersionEarlierThanStartVersion(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("mvcc-order")
+	startTs := uint64(20)
+	commitTs := uint64(10)
+	readTs := uint64(15)
+
+	prewrite := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, prewrite))
+
+	keyErr := Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	if keyErr == nil {
+		t.Errorf("Commit accepted commitVersion=%d earlier than startVersion=%d", commitTs, startTs)
+	}
+
+	reader := NewReader(db)
+	val, _, err := reader.GetValue(key, readTs)
+	if !errors.Is(err, utils.ErrKeyNotFound) {
+		t.Fatalf("read at ts=%d unexpectedly observed value %q, err=%v", readTs, val, err)
+	}
+}
+
+func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("rolled-back")
+	startTs := uint64(18)
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, startTs, EncodeWrite(Write{
+		Kind:    pb.Mutation_Rollback,
+		StartTs: startTs,
+	}), 0)
+
+	err := Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: 30,
+	})
+	require.NotNil(t, err)
+	require.NotEmpty(t, err.GetAbort())
+}
+
+func TestCommitReturnsRetryableOnLockLookupError(t *testing.T) {
+	latches := latch.NewManager(32)
+	store := rollbackTestStore{
+		getInternalEntry: func(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+			return nil, errors.New("lock lookup failed")
+		},
+	}
+
+	err := Commit(store, latches, &pb.CommitRequest{
+		Keys:          [][]byte{[]byte("retry-lock")},
+		StartVersion:  9,
+		CommitVersion: 18,
+	})
+	require.NotNil(t, err)
+	require.Contains(t, err.GetRetryable(), "lock lookup failed")
+}
+
+func TestCommitReturnsRetryableOnWriteLookupErrorWhenLockMissing(t *testing.T) {
+	badEntry := kv.NewEntry([]byte("bad-key"), nil)
+	t.Cleanup(badEntry.DecrRef)
+
+	latches := latch.NewManager(32)
+	store := rollbackTestStore{
+		newInternalIterator: func(opt *utils.Options) utils.Iterator {
+			return &testIterator{items: []utils.Item{badEntry}}
+		},
+	}
+
+	err := Commit(store, latches, &pb.CommitRequest{
+		Keys:          [][]byte{[]byte("retry-write")},
+		StartVersion:  9,
+		CommitVersion: 18,
+	})
+	require.NotNil(t, err)
+	require.Contains(t, err.GetRetryable(), "scanWrites expects internal key")
+}
+
+func TestCommitMissingLockWithExistingWriteIsIdempotent(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("already-committed")
+	startTs := uint64(12)
+	commitTs := uint64(22)
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, commitTs, EncodeWrite(Write{
+		Kind:    pb.Mutation_Put,
+		StartTs: startTs,
+	}), 0)
+
+	err := Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	require.Nil(t, err)
+}
+
+func TestCommitReturnsLockedOnDifferentTransactionLock(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("locked-by-other")
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+		Primary: key,
+		Ts:      30,
+		Kind:    pb.Mutation_Put,
+	}), 0)
+
+	err := Commit(db, latches, &pb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  20,
+		CommitVersion: 40,
+	})
+	require.NotNil(t, err)
+	require.NotNil(t, err.GetLocked())
+	require.Equal(t, uint64(30), err.GetLocked().GetLockVersion())
+}
+
 func TestReaderMostRecentWriteSkipsOtherCF(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, db.Set([]byte("b"), []byte("vb")))
@@ -322,6 +475,165 @@ func TestResolveLockCommit(t *testing.T) {
 	val, _, err := reader.GetValue([]byte("res"), 60)
 	require.NoError(t, err)
 	require.Equal(t, []byte("val"), val)
+}
+
+func TestResolveLockNilRequest(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+
+	var (
+		count  uint64
+		keyErr *pb.KeyError
+	)
+	require.NotPanics(t, func() {
+		count, keyErr = ResolveLock(db, latches, nil)
+	})
+	require.Zero(t, count)
+	require.Nil(t, keyErr)
+}
+
+func TestResolveLockSkipsEmptyAndMismatchedKeys(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("other-lock")
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFLock, key, lockColumnTs, EncodeLock(Lock{
+		Primary: key,
+		Ts:      55,
+		Kind:    pb.Mutation_Put,
+	}), 0)
+
+	count, keyErr := ResolveLock(db, latches, &pb.ResolveLockRequest{
+		Keys:          [][]byte{nil, key},
+		StartVersion:  40,
+		CommitVersion: 60,
+	})
+	require.Zero(t, count)
+	require.Nil(t, keyErr)
+}
+
+func TestResolveLockReturnsRetryableOnLockLookupError(t *testing.T) {
+	latches := latch.NewManager(16)
+	store := rollbackTestStore{
+		getInternalEntry: func(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+			return nil, errors.New("lock lookup failed")
+		},
+	}
+
+	count, keyErr := ResolveLock(store, latches, &pb.ResolveLockRequest{
+		Keys:          [][]byte{[]byte("retry-lock")},
+		StartVersion:  40,
+		CommitVersion: 50,
+	})
+	require.Zero(t, count)
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetRetryable(), "lock lookup failed")
+}
+
+func TestResolveLockRollback(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("resolve-rollback")
+	startTs := uint64(40)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("val"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	count, keyErr := ResolveLock(db, latches, &pb.ResolveLockRequest{
+		Keys:         [][]byte{key},
+		StartVersion: startTs,
+	})
+	require.Equal(t, uint64(1), count)
+	require.Nil(t, keyErr)
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	write, commitTs, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, pb.Mutation_Rollback, write.Kind)
+	require.Equal(t, startTs, commitTs)
+}
+
+func TestResolveLockRollbackReturnsError(t *testing.T) {
+	key := []byte("resolve-rollback-error")
+	startTs := uint64(40)
+	latches := latch.NewManager(16)
+	store := rollbackTestStore{
+		getInternalEntry: func(cf kv.ColumnFamily, gotKey []byte, version uint64) (*kv.Entry, error) {
+			if cf == kv.CFLock && string(gotKey) == string(key) && version == lockColumnTs {
+				entry := kv.NewInternalEntry(cf, gotKey, version, EncodeLock(Lock{
+					Primary: key,
+					Ts:      startTs,
+					Kind:    pb.Mutation_Put,
+				}), 0, 0)
+				return entry, nil
+			}
+			return nil, utils.ErrKeyNotFound
+		},
+		applyInternalEntries: func(entries []*kv.Entry) error {
+			return errors.New("apply failed")
+		},
+	}
+
+	count, keyErr := ResolveLock(store, latches, &pb.ResolveLockRequest{
+		Keys:         [][]byte{key},
+		StartVersion: startTs,
+	})
+	require.Zero(t, count)
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetRetryable(), "apply failed")
+}
+
+func TestResolveLockRejectsCommitVersionEarlierThanStartVersion(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("res-order")
+	startTs := uint64(40)
+	commitTs := uint64(30)
+	readTs := uint64(35)
+
+	pre := &pb.PrewriteRequest{
+		Mutations: []*pb.Mutation{{
+			Op:    pb.Mutation_Put,
+			Key:   key,
+			Value: []byte("val"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	count, keyErr := ResolveLock(db, latches, &pb.ResolveLockRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	if keyErr == nil {
+		t.Errorf("ResolveLock accepted commitVersion=%d earlier than startVersion=%d", commitTs, startTs)
+	}
+	if count != 0 {
+		t.Errorf("ResolveLock resolved %d locks with invalid commitVersion=%d", count, commitTs)
+	}
+
+	reader := NewReader(db)
+	val, _, err := reader.GetValue(key, readTs)
+	if !errors.Is(err, utils.ErrKeyNotFound) {
+		t.Fatalf("read at ts=%d unexpectedly observed value %q, err=%v", readTs, val, err)
+	}
 }
 
 func TestResolveLockCommitTsExpired(t *testing.T) {

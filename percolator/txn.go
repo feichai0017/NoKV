@@ -82,11 +82,21 @@ func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *pb.PrewriteRequest
 	return nil
 }
 
+func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *pb.KeyError {
+	if CommitVersion < StartVersion {
+		return keyErrorAbort("commit version is earlier than start version")
+	}
+	return nil
+}
+
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
 func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CommitRequest) *pb.KeyError {
 	if req == nil {
 		return nil
+	}
+	if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
+		return err
 	}
 	guard := latches.Acquire(req.Keys)
 	defer guard.Release()
@@ -106,6 +116,9 @@ func Commit(db NoKV.MVCCStore, latches *latch.Manager, req *pb.CommitRequest) *p
 				return keyErrorRetryable(err)
 			}
 			if write != nil {
+				if write.Kind == pb.Mutation_Rollback {
+					return keyErrorAbort("transaction already rolled back")
+				}
 				continue
 			}
 			return keyErrorAbort("lock not found")
@@ -144,6 +157,11 @@ func BatchRollback(db NoKV.MVCCStore, latches *latch.Manager, req *pb.BatchRollb
 func ResolveLock(db NoKV.MVCCStore, latches *latch.Manager, req *pb.ResolveLockRequest) (uint64, *pb.KeyError) {
 	if req == nil {
 		return 0, nil
+	}
+	if req.CommitVersion != 0 {
+		if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
+			return 0, err
+		}
 	}
 	guard := latches.Acquire(req.Keys)
 	defer guard.Release()
