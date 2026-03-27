@@ -53,13 +53,13 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 		return nil, err
 	}
 	if regionMeta != nil && regionMeta.ID != 0 {
-		s.regions.setPeer(regionMeta.ID, p)
+		s.regionMgr().setPeer(regionMeta.ID, p)
 	}
 
 	if regionMeta != nil {
 		if err := s.updateRegion(*regionMeta); err != nil {
 			s.router.remove(id)
-			s.regions.setPeer(regionMeta.ID, nil)
+			s.regionMgr().setPeer(regionMeta.ID, nil)
 			_ = p.Close()
 			return nil, err
 		}
@@ -86,7 +86,7 @@ func (s *Store) StopPeer(id uint64) {
 		}
 	}
 	if regionID != 0 {
-		s.regions.setPeer(regionID, nil)
+		s.regionMgr().setPeer(regionID, nil)
 		_ = s.updateRegionState(regionID, raftmeta.RegionStateRemoving)
 	}
 	if p != nil {
@@ -101,8 +101,8 @@ func (s *Store) Close() {
 	}
 	s.stopHeartbeatLoop()
 	s.stopOperationLoop()
-	if s.scheduler != nil {
-		_ = s.scheduler.Close()
+	if s.schedulerClient() != nil {
+		_ = s.schedulerClient().Close()
 	}
 }
 

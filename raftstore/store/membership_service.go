@@ -47,7 +47,7 @@ func (s *Store) ProposeAddPeer(regionID uint64, meta raftmeta.PeerMeta) error {
 	if meta.PeerID == 0 {
 		return fmt.Errorf("raftstore: peer id is zero")
 	}
-	peerRef := s.regions.peer(regionID)
+	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}
@@ -72,7 +72,7 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 	if regionID == 0 || peerID == 0 {
 		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, peerID)
 	}
-	peerRef := s.regions.peer(regionID)
+	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}
@@ -103,7 +103,7 @@ func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
 	if regionID == 0 || targetPeerID == 0 {
 		return fmt.Errorf("raftstore: invalid region (%d) or peer (%d) id", regionID, targetPeerID)
 	}
-	peerRef := s.regions.peer(regionID)
+	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}

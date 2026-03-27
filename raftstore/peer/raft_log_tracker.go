@@ -5,12 +5,10 @@ import (
 	"sync"
 
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
-	"github.com/feichai0017/NoKV/wal"
 )
 
 type raftLogTracker struct {
 	mu      sync.Mutex
-	wal     *wal.Manager
 	groupID uint64
 
 	lastPointer raftmeta.RaftLogPointer
@@ -18,11 +16,8 @@ type raftLogTracker struct {
 	injected    bool
 }
 
-func newRaftLogTracker(walMgr *wal.Manager, groupID uint64) *raftLogTracker {
-	if walMgr == nil {
-		return nil
-	}
-	return &raftLogTracker{wal: walMgr, groupID: groupID}
+func newRaftLogTracker(groupID uint64) *raftLogTracker {
+	return &raftLogTracker{groupID: groupID}
 }
 
 func (r *raftLogTracker) capturePointer(ptr raftmeta.RaftLogPointer) {
