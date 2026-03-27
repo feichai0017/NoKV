@@ -3,7 +3,6 @@ package NoKV
 import (
 	"log/slog"
 	"math"
-	"runtime"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ func (cq *commitQueue) init(capacity int) {
 	cq.items = make(chan struct{}, cap)
 	cq.spaces = make(chan struct{}, cap)
 	cq.closeCh = make(chan struct{})
+	cq.drainCh = make(chan struct{})
 	for range cap {
 		cq.spaces <- struct{}{}
 	}
@@ -44,7 +44,20 @@ func (cq *commitQueue) close() bool {
 	if cq.closeCh != nil {
 		close(cq.closeCh)
 	}
+	cq.signalDrainedIfDone()
 	return true
+}
+
+func (cq *commitQueue) signalDrainedIfDone() {
+	if cq == nil || cq.closed.Load() == 0 || cq.drainCh == nil {
+		return
+	}
+	if cq.queueLen.Load() != 0 || cq.inflight.Load() != 0 {
+		return
+	}
+	cq.drainOnce.Do(func() {
+		close(cq.drainCh)
+	})
 }
 
 func (cq *commitQueue) acquireSpace() bool {
@@ -77,36 +90,39 @@ func (cq *commitQueue) tryAcquireItem() bool {
 
 func (cq *commitQueue) acquireItem() bool {
 	for {
-		if cq.tryAcquireItem() {
-			return true
-		}
-		if cq.closed.Load() == 1 {
-			if cq.queueLen.Load() == 0 && cq.inflight.Load() == 0 {
-				return false
-			}
-			time.Sleep(100 * time.Microsecond)
-			continue
-		}
 		select {
 		case <-cq.items:
 			return true
-		case <-cq.closeCh:
+		case <-cq.drainCh:
+			return false
 		}
 	}
 }
 
 func (cq *commitQueue) pop() *commitRequest {
-	for {
-		if cr, ok := cq.ring.Pop(); ok {
-			cq.queueLen.Add(-1)
-			cq.releaseSpace()
-			return cr
-		}
-		if cq.closed.Load() == 1 && cq.queueLen.Load() == 0 {
-			return nil
-		}
-		runtime.Gosched()
+	cr, ok := cq.ring.Pop()
+	if !ok {
+		panic("commitQueue.pop: item token without queued request")
 	}
+	cq.queueLen.Add(-1)
+	cq.releaseSpace()
+	cq.signalDrainedIfDone()
+	return cr
+}
+
+func (db *DB) throttleSignal() <-chan struct{} {
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleMu.Unlock()
+	return ch
+}
+
+func (db *DB) notifyThrottleWaiters() {
+	db.throttleMu.Lock()
+	ch := db.throttleCh
+	db.throttleCh = make(chan struct{})
+	db.throttleMu.Unlock()
+	close(ch)
 }
 
 func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
@@ -124,6 +140,7 @@ func (db *DB) applyThrottle(state lsm.WriteThrottleState) {
 	if prevStop == stop && prevSlow == slow {
 		return
 	}
+	db.notifyThrottleWaiters()
 	switch state {
 	case lsm.WriteThrottleStop:
 		slog.Default().Warn("write stop enabled due to compaction backlog")
@@ -155,7 +172,15 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 		if db.isClosed.Load() == 1 || db.commitQueue.closed.Load() == 1 {
 			return nil, utils.ErrBlockedWrites
 		}
-		time.Sleep(200 * time.Microsecond)
+		ch := db.throttleSignal()
+		if db.blockWrites.Load() == 0 {
+			break
+		}
+		select {
+		case <-ch:
+		case <-db.commitQueue.closeCh:
+			return nil, utils.ErrBlockedWrites
+		}
 	}
 
 	req := requestPool.Get().(*request)
@@ -233,12 +258,15 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	}
 	cq := &db.commitQueue
 
-	if cq.ring == nil || cq.items == nil || cq.spaces == nil {
+	if cq.ring == nil || cq.items == nil || cq.spaces == nil || cq.drainCh == nil {
 		return utils.ErrBlockedWrites
 	}
 
 	cq.inflight.Add(1)
-	defer cq.inflight.Add(-1)
+	defer func() {
+		cq.inflight.Add(-1)
+		cq.signalDrainedIfDone()
+	}()
 	if cq.closed.Load() == 1 {
 		return utils.ErrBlockedWrites
 	}
@@ -258,10 +286,12 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	}
 	if cq.closed.Load() == 1 {
 		cq.releaseSpace()
+		cq.signalDrainedIfDone()
 		return utils.ErrBlockedWrites
 	}
 	if !cq.ring.Push(cr) {
 		cq.releaseSpace()
+		cq.signalDrainedIfDone()
 		return utils.ErrBlockedWrites
 	}
 	cq.queueLen.Add(1)
@@ -309,9 +339,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 		pendingBytes += cr.size
 	}
 
-	if cr := cq.pop(); cr != nil {
-		addToBatch(cr)
-	}
+	addToBatch(cq.pop())
 	if coalesceWait > 0 && cq.queueLen.Load() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
 		// Allow a brief coalescing window when the queue is momentarily empty.
 		time.Sleep(coalesceWait)
@@ -320,9 +348,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 		if !cq.tryAcquireItem() {
 			break
 		}
-		if cr := cq.pop(); cr != nil {
-			addToBatch(cr)
-		}
+		addToBatch(cq.pop())
 	}
 
 	cq.pendingEntries.Add(-pendingEntries)

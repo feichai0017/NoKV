@@ -77,6 +77,8 @@ type (
 		isClosed        atomic.Uint32
 		closeOnce       sync.Once
 		closeErr        error
+		throttleMu      sync.Mutex
+		throttleCh      chan struct{}
 		hotWrite        *hotring.RotatingHotRing
 		writeMetrics    *metrics.WriteMetrics
 		commitQueue     commitQueue
@@ -94,6 +96,8 @@ type (
 		items          chan struct{}
 		spaces         chan struct{}
 		closeCh        chan struct{}
+		drainCh        chan struct{}
+		drainOnce      sync.Once
 		queueLen       atomic.Int64
 		inflight       atomic.Int64
 		pendingBytes   atomic.Int64
@@ -135,6 +139,7 @@ func newDB(opt *Options) *DB {
 	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
+	db.throttleCh = make(chan struct{})
 	db.hotWrite = newHotWriteRing(opt)
 	db.discardStatsCh = make(chan map[manifest.ValueLogID]int64, 16)
 	db.commitBatchPool.New = func() any {
