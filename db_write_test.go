@@ -5,7 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,4 +67,74 @@ func TestSyncPipelineWALConsistency(t *testing.T) {
 	require.NotEmpty(t, walPipeline, "pipeline WAL should not be empty")
 	require.Equal(t, walInline, walPipeline,
 		"WAL file contents should be identical between SyncPipeline=false and SyncPipeline=true")
+}
+
+func TestSendToWriteChWaitsForThrottleClear(t *testing.T) {
+	opts := newTestOptions(t)
+	opts.WriteBatchWait = 0
+	db := openTestDB(t, opts)
+	defer func() { _ = db.Close() }()
+
+	db.applyThrottle(lsm.WriteThrottleStop)
+	defer db.applyThrottle(lsm.WriteThrottleNone)
+
+	done := make(chan error, 1)
+	go func() {
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte("throttle-clear"), 1, []byte("value"), 0, 0)
+		req, err := db.sendToWriteCh([]*kv.Entry{entry}, true)
+		if err != nil {
+			entry.DecrRef()
+			done <- err
+			return
+		}
+		done <- req.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("write finished before throttle cleared: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	db.applyThrottle(lsm.WriteThrottleNone)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("write did not resume after throttle cleared")
+	}
+}
+
+func TestSendToWriteChReturnsBlockedWritesWhenClosedWhileThrottled(t *testing.T) {
+	opts := newTestOptions(t)
+	opts.WriteBatchWait = 0
+	db := openTestDB(t, opts)
+
+	db.applyThrottle(lsm.WriteThrottleStop)
+
+	done := make(chan error, 1)
+	go func() {
+		entry := kv.NewInternalEntry(kv.CFDefault, []byte("throttle-close"), 1, []byte("value"), 0, 0)
+		_, err := db.sendToWriteCh([]*kv.Entry{entry}, true)
+		if err != nil {
+			entry.DecrRef()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("write finished before db close: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.NoError(t, db.Close())
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, utils.ErrBlockedWrites)
+	case <-time.After(2 * time.Second):
+		t.Fatal("throttled write did not return after db close")
+	}
 }
