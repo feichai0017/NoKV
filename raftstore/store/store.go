@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ type Store struct {
 	peerBuilder PeerBuilder
 	workDir     string
 	storeID     uint64
+	ctx         context.Context
+	cancel      context.CancelFunc
 	regions     *regionRuntime
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
@@ -86,6 +89,7 @@ func NewStore(router *Router) *Store {
 // peer construction, region tracking, and scheduler heartbeats explicit rather
 // than routing them through callback chains.
 func NewStoreWithConfig(cfg Config) *Store {
+	ctx, cancel := context.WithCancel(context.Background())
 	router := cfg.Router
 	if router == nil {
 		router = NewRouter()
@@ -116,9 +120,11 @@ func NewStoreWithConfig(cfg Config) *Store {
 		peerBuilder: cfg.PeerBuilder,
 		workDir:     cfg.WorkDir,
 		storeID:     cfg.StoreID,
+		ctx:         ctx,
+		cancel:      cancel,
 		regions: &regionRuntime{
 			metrics: regionMetrics,
-			mgr:     newRegionManager(cfg.LocalMeta, regionMetrics, cfg.Scheduler),
+			mgr:     newRegionManager(ctx, cfg.LocalMeta, regionMetrics, cfg.Scheduler),
 		},
 		sched: &schedulerRuntime{
 			client:    cfg.Scheduler,
@@ -222,4 +228,11 @@ func (s *Store) commandWait() time.Duration {
 		return 0
 	}
 	return s.cmds.timeout
+}
+
+func (s *Store) runtimeContext() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }

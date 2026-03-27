@@ -38,7 +38,7 @@ func (n *memoryNetwork) Register(peer *peerpkg.Peer) {
 	n.peers[peer.ID()] = peer
 }
 
-func (n *memoryNetwork) Send(msg myraft.Message) {
+func (n *memoryNetwork) Send(_ context.Context, msg myraft.Message) {
 	if msg.To == 0 {
 		return
 	}

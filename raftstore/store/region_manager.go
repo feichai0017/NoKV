@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 
 type regionManager struct {
 	mu            sync.RWMutex
+	ctx           context.Context
 	metaByID      map[uint64]raftmeta.RegionMeta
 	peers         map[uint64]*peer.Peer
 	localMeta     *raftmeta.Store
@@ -18,8 +20,9 @@ type regionManager struct {
 	scheduler     SchedulerClient
 }
 
-func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
+func newRegionManager(ctx context.Context, localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
 	return &regionManager{
+		ctx:           ctx,
 		metaByID:      make(map[uint64]raftmeta.RegionMeta),
 		peers:         make(map[uint64]*peer.Peer),
 		localMeta:     localMeta,
@@ -135,7 +138,7 @@ func (rm *regionManager) updateRegion(meta raftmeta.RegionMeta) error {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
 	if rm.scheduler != nil {
-		rm.scheduler.PublishRegion(metaCopy)
+		rm.scheduler.PublishRegion(rm.runtimeContext(), metaCopy)
 	}
 	return nil
 }
@@ -182,9 +185,16 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 		rm.regionMetrics.RecordRemove(regionID)
 	}
 	if rm.scheduler != nil {
-		rm.scheduler.RemoveRegion(regionID)
+		rm.scheduler.RemoveRegion(rm.runtimeContext(), regionID)
 	}
 	return nil
+}
+
+func (rm *regionManager) runtimeContext() context.Context {
+	if rm == nil || rm.ctx == nil {
+		return context.Background()
+	}
+	return rm.ctx
 }
 
 func validRegionStateTransition(current, next raftmeta.RegionState) bool {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 
 type noopTransport struct{}
 
-func (noopTransport) Send(myraft.Message) {}
+func (noopTransport) Send(context.Context, myraft.Message) {}
 
 func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	rs := NewStore(nil)

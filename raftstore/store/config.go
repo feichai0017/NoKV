@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -60,9 +61,9 @@ type SchedulerStatus struct {
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
-	PublishRegion(raftmeta.RegionMeta)
-	RemoveRegion(uint64)
-	StoreHeartbeat(StoreStats) []Operation
+	PublishRegion(context.Context, raftmeta.RegionMeta)
+	RemoveRegion(context.Context, uint64)
+	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus
 	Close() error
 }

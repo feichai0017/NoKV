@@ -99,6 +99,9 @@ func (s *Store) Close() {
 	if s == nil {
 		return
 	}
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.stopHeartbeatLoop()
 	s.stopOperationLoop()
 	if s.schedulerClient() != nil {

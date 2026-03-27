@@ -51,11 +51,11 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 }
 
 // PublishRegion publishes region metadata to PD.
-func (s *SchedulerClient) PublishRegion(meta raftmeta.RegionMeta) {
+func (s *SchedulerClient) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {
 	if s == nil || meta.ID == 0 || s.pd == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{Region: toPBRegionMeta(meta)})
 	if err != nil {
@@ -66,11 +66,11 @@ func (s *SchedulerClient) PublishRegion(meta raftmeta.RegionMeta) {
 }
 
 // RemoveRegion removes region metadata from PD.
-func (s *SchedulerClient) RemoveRegion(regionID uint64) {
+func (s *SchedulerClient) RemoveRegion(ctx context.Context, regionID uint64) {
 	if s == nil || regionID == 0 || s.pd == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	_, err := s.pd.RemoveRegion(ctx, &pb.RemoveRegionRequest{RegionId: regionID})
 	if err != nil {
@@ -82,11 +82,11 @@ func (s *SchedulerClient) RemoveRegion(regionID uint64) {
 
 // StoreHeartbeat publishes store stats to PD and returns any operations PD
 // wants the store to apply.
-func (s *SchedulerClient) StoreHeartbeat(stats storepkg.StoreStats) []storepkg.Operation {
+func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.StoreStats) []storepkg.Operation {
 	if s == nil || stats.StoreID == 0 || s.pd == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
 	resp, err := s.pd.StoreHeartbeat(ctx, &pb.StoreHeartbeatRequest{
 		StoreId:   stats.StoreID,
@@ -178,6 +178,16 @@ func (s *SchedulerClient) markHealthy() {
 	s.mu.Lock()
 	s.status.Degraded = false
 	s.mu.Unlock()
+}
+
+func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }
 
 func toPBRegionMeta(meta raftmeta.RegionMeta) *pb.RegionMeta {

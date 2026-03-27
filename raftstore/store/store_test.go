@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -37,7 +38,7 @@ func newTestSchedulerSink() *testSchedulerSink {
 	}
 }
 
-func (s *testSchedulerSink) PublishRegion(meta raftmeta.RegionMeta) {
+func (s *testSchedulerSink) PublishRegion(_ context.Context, meta raftmeta.RegionMeta) {
 	if s == nil || meta.ID == 0 {
 		return
 	}
@@ -49,7 +50,7 @@ func (s *testSchedulerSink) PublishRegion(meta raftmeta.RegionMeta) {
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) RemoveRegion(id uint64) {
+func (s *testSchedulerSink) RemoveRegion(_ context.Context, id uint64) {
 	if s == nil || id == 0 {
 		return
 	}
@@ -58,7 +59,7 @@ func (s *testSchedulerSink) RemoveRegion(id uint64) {
 	s.mu.Unlock()
 }
 
-func (s *testSchedulerSink) StoreHeartbeat(stats StoreStats) []Operation {
+func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) []Operation {
 	if s == nil || stats.StoreID == 0 {
 		return nil
 	}
@@ -625,7 +626,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 			}},
 		}},
 	}
-	resp, err := st.ProposeCommand(prewrite)
+	resp, err := st.ProposeCommand(context.Background(), prewrite)
 	require.NoError(t, err)
 	require.Nil(t, resp.GetRegionError())
 	require.Len(t, resp.GetResponses(), 1)
@@ -643,7 +644,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 			}},
 		}},
 	}
-	resp, err = st.ProposeCommand(commit)
+	resp, err = st.ProposeCommand(context.Background(), commit)
 	require.NoError(t, err)
 	require.Nil(t, resp.GetRegionError())
 	require.Len(t, resp.GetResponses(), 1)
@@ -720,7 +721,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := st.ProposeCommand(req())
+		_, err := st.ProposeCommand(context.Background(), req())
 		firstDone <- err
 	}()
 
@@ -731,7 +732,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err = st.ProposeCommand(req())
+	_, err = st.ProposeCommand(context.Background(), req())
 	elapsed := time.Since(start)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate proposal id")
@@ -782,7 +783,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 			Cmd:     &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{StartVersion: 1}},
 		}},
 	}
-	resp, err := st.ProposeCommand(req)
+	resp, err := st.ProposeCommand(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetRegionError())
 	require.NotNil(t, resp.GetRegionError().GetNotLeader())
@@ -822,7 +823,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 		Header:   &pb.CmdHeader{RegionId: region.ID, RegionEpoch: &pb.RegionEpoch{Version: 1, ConfVer: 1}},
 		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_PREWRITE}},
 	}
-	resp, err := st.ProposeCommand(badReq)
+	resp, err := st.ProposeCommand(context.Background(), badReq)
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetRegionError())
 	require.NotNil(t, resp.GetRegionError().GetEpochNotMatch())

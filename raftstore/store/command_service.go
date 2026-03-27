@@ -60,7 +60,7 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, raftmeta.Re
 // ProposeCommand submits a raft command to the leader hosting the target
 // region. When the store is not leader or the request header is invalid the
 // returned response includes an appropriate RegionError.
-func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) ProposeCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	peer, _, resp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
@@ -83,8 +83,15 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		s.commandPipe().removeProposal(id)
 		return nil, err
 	}
-	timer := time.NewTimer(s.commandWait())
-	defer timer.Stop()
+	if ctx == nil {
+		ctx = s.runtimeContext()
+	}
+	timeout := s.commandWait()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	select {
 	case result := <-prop.ch:
 		if result.err != nil {
@@ -94,16 +101,16 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 			return &pb.RaftCmdResponse{Header: req.Header}, nil
 		}
 		return result.resp, nil
-	case <-timer.C:
+	case <-ctx.Done():
 		s.commandPipe().removeProposal(id)
-		return nil, fmt.Errorf("raftstore: command %d timed out", id)
+		return nil, fmt.Errorf("raftstore: command %d failed while waiting: %w", id, ctx.Err())
 	}
 }
 
 // ReadCommand executes the provided read-only raft command locally on the
 // leader. The command must only include read operations (Get/Scan). The method
 // returns a RegionError when the store is not leader for the target region.
-func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) ReadCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	peer, meta, regionResp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
@@ -130,7 +137,11 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if ctx == nil {
+		ctx = s.runtimeContext()
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
 	index, err := peer.LinearizableRead(ctx)
 	if err != nil {
