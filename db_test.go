@@ -174,7 +174,7 @@ func TestSetBatchValidation(t *testing.T) {
 	}))
 }
 
-func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
+func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	opt := newTestOptions(t)
 	opt.WriteBatchMaxCount = 0
 	opt.WriteBatchMaxSize = 0
@@ -227,6 +227,20 @@ func TestOpenNormalizesFallbackFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.CompactionValueWeight, 0.0)
 	require.Greater(t, db.opt.CompactionValueAlertThreshold, 0.0)
 	require.Greater(t, db.opt.HotRingTopK, 0)
+}
+
+func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
+	opt := NewDefaultOptions()
+
+	require.Greater(t, opt.NumLevelZeroTables, 0)
+	require.Greater(t, opt.L0SlowdownWritesTrigger, 0)
+	require.Greater(t, opt.L0StopWritesTrigger, opt.L0SlowdownWritesTrigger)
+	require.Less(t, opt.L0ResumeWritesTrigger, opt.L0SlowdownWritesTrigger)
+	require.Greater(t, opt.CompactionSlowdownTrigger, 0.0)
+	require.GreaterOrEqual(t, opt.CompactionStopTrigger, opt.CompactionSlowdownTrigger)
+	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
+	require.Greater(t, opt.IngestCompactBatchSize, 0)
+	require.Greater(t, opt.IngestBacklogMergeScore, 0.0)
 }
 
 func newTestOptions(t *testing.T) *Options {

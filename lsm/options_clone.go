@@ -56,45 +56,8 @@ func (opt *Options) normalizeInPlace() {
 	if opt.NumCompactors <= 0 {
 		opt.NumCompactors = DefaultNumCompactors()
 	}
-	if opt.NumLevelZeroTables <= 0 {
-		opt.NumLevelZeroTables = DefaultNumLevelZeroTables
-	}
-	if opt.L0SlowdownWritesTrigger <= 0 {
-		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
-	}
-	if opt.L0StopWritesTrigger <= 0 {
-		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
-	}
-	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
-		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
-	}
-	if opt.L0ResumeWritesTrigger <= 0 {
-		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
-	}
-	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
-		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
-	}
-	if opt.CompactionSlowdownTrigger <= 0 {
-		opt.CompactionSlowdownTrigger = DefaultCompactionSlowdownTrigger
-	}
-	if opt.CompactionStopTrigger <= 0 {
-		opt.CompactionStopTrigger = DefaultCompactionStopTrigger
-	}
-	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
-		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
-	}
-	if opt.CompactionResumeTrigger <= 0 {
-		opt.CompactionResumeTrigger = DefaultCompactionResumeTrigger
-	}
-	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
-		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
-	}
-	if opt.IngestCompactBatchSize <= 0 {
-		opt.IngestCompactBatchSize = DefaultIngestCompactBatchSize
-	}
-	if opt.IngestBacklogMergeScore <= 0 {
-		opt.IngestBacklogMergeScore = DefaultIngestBacklogMergeScore
-	}
+	opt.fillLegacyCompactionDefaults()
+	opt.clampCompactionOptions()
 	if opt.IngestShardParallelism <= 0 {
 		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
 	}
@@ -121,6 +84,51 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.IndexCacheBytes < 0 {
 		opt.IndexCacheBytes = 0
+	}
+}
+
+func (opt *Options) fillLegacyCompactionDefaults() {
+	if opt.NumLevelZeroTables <= 0 {
+		opt.NumLevelZeroTables = DefaultNumLevelZeroTables
+	}
+	if opt.L0SlowdownWritesTrigger <= 0 {
+		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
+	}
+	if opt.L0StopWritesTrigger <= 0 {
+		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
+	}
+	if opt.L0ResumeWritesTrigger <= 0 {
+		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
+	}
+	if opt.CompactionSlowdownTrigger <= 0 {
+		opt.CompactionSlowdownTrigger = DefaultCompactionSlowdownTrigger
+	}
+	if opt.CompactionStopTrigger <= 0 {
+		opt.CompactionStopTrigger = DefaultCompactionStopTrigger
+	}
+	if opt.CompactionResumeTrigger <= 0 {
+		opt.CompactionResumeTrigger = DefaultCompactionResumeTrigger
+	}
+	if opt.IngestCompactBatchSize <= 0 {
+		opt.IngestCompactBatchSize = DefaultIngestCompactBatchSize
+	}
+	if opt.IngestBacklogMergeScore <= 0 {
+		opt.IngestBacklogMergeScore = DefaultIngestBacklogMergeScore
+	}
+}
+
+func (opt *Options) clampCompactionOptions() {
+	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
+		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
+	}
+	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
+		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
+	}
+	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
+		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
+	}
+	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
+		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
 	}
 }
 
