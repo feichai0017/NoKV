@@ -99,7 +99,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	})
 
 	server, err := serverpkg.New(serverpkg.Config{
-		DB: db,
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
 		Store: storepkg.Config{
 			StoreID:   *storeID,
 			LocalMeta: localMeta,
@@ -146,7 +149,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		transport.SetPeer(id, parts[1])
 	}
 
-	startedRegions, totalRegions, err := startStorePeers(server, db, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
+	startedRegions, totalRegions, err := startStorePeers(server, serverpkg.Storage{MVCC: db, Raft: db.RaftLog()}, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
 	if err != nil {
 		return err
 	}
@@ -187,9 +190,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	return nil
 }
 
-func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]raftmeta.RegionMeta, int, error) {
-	if server == nil || db == nil || localMeta == nil {
-		return nil, 0, fmt.Errorf("raftstore: server, db, or local metadata is nil")
+func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localMeta *raftmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]raftmeta.RegionMeta, int, error) {
+	if server == nil || storage.MVCC == nil || storage.Raft == nil || localMeta == nil {
+		return nil, 0, fmt.Errorf("raftstore: server, storage, or local metadata is nil")
 	}
 	snapshot := localMeta.Snapshot()
 	total := len(snapshot)
@@ -220,6 +223,10 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.
 		if peerID == 0 {
 			continue
 		}
+		peerStorage, err := storage.Raft.Open(meta.ID, localMeta)
+		if err != nil {
+			return nil, total, fmt.Errorf("raftstore: open peer storage for region %d: %w", meta.ID, err)
+		}
 		cfg := &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              peerID,
@@ -230,9 +237,8 @@ func startStorePeers(server *serverpkg.Server, db *NoKV.DB, localMeta *raftmeta.
 				PreVote:         true,
 			},
 			Transport: transport,
-			Apply:     kv.NewEntryApplier(db),
-			WAL:       db.WAL(),
-			LocalMeta: localMeta,
+			Apply:     kv.NewEntryApplier(storage.MVCC),
+			Storage:   peerStorage,
 			GroupID:   meta.ID,
 			Region:    raftmeta.CloneRegionMetaPtr(&meta),
 		}

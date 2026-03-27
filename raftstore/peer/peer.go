@@ -107,7 +107,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		apply:            cfg.Apply,
 		adminApply:       cfg.AdminApply,
 		confChangeHook:   cfg.ConfChange,
-		raftLog:          newRaftLogTracker(cfg.WAL, nonZeroGroupID(cfg.GroupID)),
+		raftLog:          newRaftLogTracker(nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
 		logRetainEntries: cfg.LogRetainEntries,
 		applyCloser:      utils.NewCloserInitial(1),

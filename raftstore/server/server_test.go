@@ -42,7 +42,10 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 func TestServerStartsNoKVService(t *testing.T) {
 	db, _ := openTestDB(t)
 	srv, err := serverpkg.New(serverpkg.Config{
-		DB: db,
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
 		Store: storepkg.Config{
 			StoreID: 1,
 		},
@@ -140,7 +143,10 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 		nodes[i].localMeta = localMeta
 
 		srv, err := serverpkg.New(serverpkg.Config{
-			DB: db,
+			Storage: serverpkg.Storage{
+				MVCC: db,
+				Raft: db.RaftLog(),
+			},
 			Store: storepkg.Config{
 				StoreID:   nodes[i].storeID,
 				LocalMeta: localMeta,
@@ -227,6 +233,8 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 
 func startRegionPeer(t *testing.T, n testNode) {
 	store := n.srv.Store()
+	peerStorage, err := n.db.RaftLog().Open(n.region.ID, n.localMeta)
+	require.NoError(t, err)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              n.peerID,
@@ -238,8 +246,7 @@ func startRegionPeer(t *testing.T, n testNode) {
 		},
 		Transport: n.srv.Transport(),
 		Apply:     kv.NewEntryApplier(n.db),
-		WAL:       n.db.WAL(),
-		LocalMeta: n.localMeta,
+		Storage:   peerStorage,
 		GroupID:   n.region.ID,
 		Region:    raftmeta.CloneRegionMetaPtr(&n.region),
 	}

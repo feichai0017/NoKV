@@ -21,8 +21,8 @@ import (
 // Config wires together the dependencies required to expose the NoKV RPC
 // service backed by a raftstore Store.
 type Config struct {
-	// DB provides the underlying storage engine.
-	DB *NoKV.DB
+	// Storage provides the narrow storage capabilities needed by raftstore.
+	Storage Storage
 	// Store describes how the raftstore should be constructed. StoreID must be
 	// populated; Router and PeerBuilder are optional.
 	Store store.Config
@@ -42,10 +42,15 @@ type Config struct {
 	EnableRaftDebugLog bool
 }
 
+// Storage captures the engine capabilities raftstore needs.
+type Storage struct {
+	MVCC NoKV.MVCCStore
+	Raft NoKV.RaftLog
+}
+
 // Server bundles the components required to serve NoKV RPCs backed by a
 // raftstore Store.
 type Server struct {
-	db        *NoKV.DB
 	store     *store.Store
 	service   *kv.Service
 	transport *transport.GRPCTransport
@@ -60,15 +65,15 @@ var raftDebugLoggerOnce sync.Once
 
 // New constructs a Server using the provided configuration.
 func New(cfg Config) (*Server, error) {
-	if cfg.DB == nil {
-		return nil, fmt.Errorf("raftstore/server: DB is required")
+	if cfg.Storage.MVCC == nil {
+		return nil, fmt.Errorf("raftstore/server: MVCC storage is required")
 	}
 	if cfg.Store.StoreID == 0 {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
 	}
 	storeCfg := cfg.Store
 	if storeCfg.CommandApplier == nil {
-		storeCfg.CommandApplier = kv.NewApplier(cfg.DB, nil)
+		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil)
 	}
 	router := storeCfg.Router
 	if router == nil {
@@ -87,7 +92,11 @@ func New(cfg Config) (*Server, error) {
 
 	builder := storeCfg.PeerBuilder
 	if builder == nil {
-		builder = defaultPeerBuilder(cfg.DB, storeCfg.LocalMeta, storeCfg.StoreID, cfg.Raft, tr)
+		if cfg.Storage.Raft == nil {
+			_ = tr.Close()
+			return nil, fmt.Errorf("raftstore/server: raft log storage is required")
+		}
+		builder = defaultPeerBuilder(cfg.Storage, storeCfg.LocalMeta, storeCfg.StoreID, cfg.Raft, tr)
 	}
 	storeCfg.PeerBuilder = builder
 
@@ -108,7 +117,6 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	srv := &Server{
-		db:        cfg.DB,
 		store:     st,
 		service:   service,
 		transport: tr,
@@ -121,7 +129,7 @@ func New(cfg Config) (*Server, error) {
 	return srv, nil
 }
 
-func defaultPeerBuilder(db *NoKV.DB, localMeta *raftmeta.Store, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
+func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint64, baseRaft myraft.Config, tr transport.Transport) store.PeerBuilder {
 	return func(meta raftmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
 		for _, p := range meta.Peers {
@@ -133,12 +141,15 @@ func defaultPeerBuilder(db *NoKV.DB, localMeta *raftmeta.Store, storeID uint64, 
 		if peerID == 0 {
 			return nil, fmt.Errorf("raftstore/server: store %d missing peer in region %d", storeID, meta.ID)
 		}
+		peerStorage, err := storage.Raft.Open(meta.ID, localMeta)
+		if err != nil {
+			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
+		}
 		return &peer.Config{
 			RaftConfig: defaultRaftConfig(baseRaft, peerID),
 			Transport:  tr,
-			Apply:      kv.NewEntryApplier(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Apply:      kv.NewEntryApplier(storage.MVCC),
+			Storage:    peerStorage,
 			GroupID:    meta.ID,
 			Region:     raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil

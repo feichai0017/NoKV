@@ -11,21 +11,21 @@ func (s *Store) updateRegion(meta raftmeta.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regions.updateRegion(meta)
+	return s.regionMgr().updateRegion(meta)
 }
 
 func (s *Store) removeRegion(regionID uint64) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regions.removeRegion(regionID)
+	return s.regionMgr().removeRegion(regionID)
 }
 
 func (s *Store) updateRegionState(regionID uint64, state raftmeta.RegionState) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regions.updateRegionState(regionID, state)
+	return s.regionMgr().updateRegionState(regionID, state)
 }
 
 // RegionMetas collects the known raftmeta.RegionMeta entries from registered
@@ -35,10 +35,10 @@ func (s *Store) RegionMetas() []raftmeta.RegionMeta {
 	if s == nil {
 		return nil
 	}
-	if s.regions == nil {
+	if s.regionMgr() == nil {
 		return nil
 	}
-	return s.regions.listMetas()
+	return s.regionMgr().listMetas()
 }
 
 // RegionMetaByID returns the stored metadata for the provided region, along
@@ -47,10 +47,10 @@ func (s *Store) RegionMetaByID(regionID uint64) (raftmeta.RegionMeta, bool) {
 	if s == nil || regionID == 0 {
 		return raftmeta.RegionMeta{}, false
 	}
-	if s.regions == nil {
+	if s.regionMgr() == nil {
 		return raftmeta.RegionMeta{}, false
 	}
-	return s.regions.meta(regionID)
+	return s.regionMgr().meta(regionID)
 }
 
 // RegionSnapshot returns a snapshot containing all region metadata currently
@@ -64,5 +64,5 @@ func (s *Store) RegionMetrics() *metrics.RegionMetrics {
 	if s == nil {
 		return nil
 	}
-	return s.regionMetrics
+	return s.regionMetrics()
 }

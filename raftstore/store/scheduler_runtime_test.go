@@ -9,15 +9,17 @@ import (
 
 func TestStoreOperationCooldown(t *testing.T) {
 	st := &Store{
-		operationInput:     make(chan Operation, 8),
-		operationStop:      make(chan struct{}),
-		operationInterval:  20 * time.Millisecond,
-		operationCooldown:  80 * time.Millisecond,
-		operationBurst:     1,
-		operationPending:   make(map[operationKey]struct{}),
-		operationLastApply: make(map[operationKey]time.Time),
+		sched: &schedulerRuntime{
+			input:     make(chan Operation, 8),
+			stop:      make(chan struct{}),
+			interval:  20 * time.Millisecond,
+			cooldown:  80 * time.Millisecond,
+			burst:     1,
+			pending:   make(map[operationKey]struct{}),
+			lastApply: make(map[operationKey]time.Time),
+		},
 	}
-	st.operationWG.Add(1)
+	st.sched.wg.Add(1)
 	go st.runOperationLoop()
 	defer st.stopOperationLoop()
 
@@ -26,35 +28,37 @@ func TestStoreOperationCooldown(t *testing.T) {
 
 	st.enqueueOperation(op)
 	require.Eventually(t, func() bool {
-		st.operationMu.Lock()
-		defer st.operationMu.Unlock()
-		return !st.operationLastApply[key].IsZero()
+		st.sched.mu.Lock()
+		defer st.sched.mu.Unlock()
+		return !st.sched.lastApply[key].IsZero()
 	}, time.Second, 10*time.Millisecond)
 
-	st.operationMu.Lock()
-	first := st.operationLastApply[key]
-	st.operationMu.Unlock()
+	st.sched.mu.Lock()
+	first := st.sched.lastApply[key]
+	st.sched.mu.Unlock()
 
 	st.enqueueOperation(op)
 	require.Eventually(t, func() bool {
-		st.operationMu.Lock()
-		defer st.operationMu.Unlock()
-		return st.operationLastApply[key].After(first)
+		st.sched.mu.Lock()
+		defer st.sched.mu.Unlock()
+		return st.sched.lastApply[key].After(first)
 	}, time.Second, 10*time.Millisecond)
 
-	st.operationMu.Lock()
-	second := st.operationLastApply[key]
-	st.operationMu.Unlock()
+	st.sched.mu.Lock()
+	second := st.sched.lastApply[key]
+	st.sched.mu.Unlock()
 	require.GreaterOrEqual(t, second.Sub(first), 60*time.Millisecond)
 }
 
 func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 	st := &Store{
-		operationInput:     make(chan Operation, 1),
-		operationPending:   make(map[operationKey]struct{}),
-		operationLastApply: make(map[operationKey]time.Time),
+		sched: &schedulerRuntime{
+			input:     make(chan Operation, 1),
+			pending:   make(map[operationKey]struct{}),
+			lastApply: make(map[operationKey]time.Time),
+		},
 	}
-	st.operationInput <- Operation{Type: OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}
+	st.sched.input <- Operation{Type: OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}
 
 	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
 
@@ -63,7 +67,7 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 	require.Equal(t, uint64(1), status.DroppedOperations)
 	require.Contains(t, status.LastError, "scheduler queue full")
 
-	<-st.operationInput
+	<-st.sched.input
 	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
 
 	status = st.SchedulerStatus()

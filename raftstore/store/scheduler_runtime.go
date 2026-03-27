@@ -33,10 +33,10 @@ func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	if s.command == nil {
+	if s.commandPipe() == nil {
 		return fmt.Errorf("raftstore: command apply without handler")
 	}
-	return s.command.applyEntries(entries)
+	return s.commandPipe().applyEntries(entries)
 }
 
 func (s *Store) enqueueOperation(op Operation) {
@@ -46,90 +46,90 @@ func (s *Store) enqueueOperation(op Operation) {
 	if op.Type == OperationNone || op.Region == 0 {
 		return
 	}
-	if s.operationInput == nil {
+	if s.sched == nil || s.sched.input == nil {
 		s.clearLocalSchedulerDegraded()
 		s.applyOperation(op)
 		return
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.operationMu.Lock()
-	if _, exists := s.operationPending[key]; exists {
-		s.operationMu.Unlock()
+	s.sched.mu.Lock()
+	if _, exists := s.sched.pending[key]; exists {
+		s.sched.mu.Unlock()
 		return
 	}
-	s.operationPending[key] = struct{}{}
-	s.operationMu.Unlock()
+	s.sched.pending[key] = struct{}{}
+	s.sched.mu.Unlock()
 	select {
-	case s.operationInput <- op:
+	case s.sched.input <- op:
 		s.clearLocalSchedulerDegraded()
 	default:
-		s.operationMu.Lock()
-		delete(s.operationPending, key)
-		s.operationMu.Unlock()
+		s.sched.mu.Lock()
+		delete(s.sched.pending, key)
+		s.sched.mu.Unlock()
 		s.recordLocalSchedulerDrop(op)
 	}
 }
 
 func (s *Store) startHeartbeatLoop() {
-	if s == nil || s.scheduler == nil || s.heartbeatInterval <= 0 || s.heartbeatStop != nil {
+	if s == nil || s.schedulerClient() == nil || s.sched == nil || s.sched.heartbeat <= 0 || s.sched.heartbeatStop != nil {
 		return
 	}
-	s.heartbeatStop = make(chan struct{})
+	s.sched.heartbeatStop = make(chan struct{})
 	s.sendHeartbeats()
-	s.heartbeatWG.Add(1)
+	s.sched.heartbeatWG.Add(1)
 	go s.runHeartbeatLoop()
 }
 
 func (s *Store) stopHeartbeatLoop() {
-	if s == nil || s.heartbeatStop == nil {
+	if s == nil || s.sched == nil || s.sched.heartbeatStop == nil {
 		return
 	}
-	close(s.heartbeatStop)
-	s.heartbeatWG.Wait()
-	s.heartbeatStop = nil
+	close(s.sched.heartbeatStop)
+	s.sched.heartbeatWG.Wait()
+	s.sched.heartbeatStop = nil
 }
 
 func (s *Store) runHeartbeatLoop() {
-	defer s.heartbeatWG.Done()
-	ticker := time.NewTicker(s.heartbeatInterval)
+	defer s.sched.heartbeatWG.Done()
+	ticker := time.NewTicker(s.sched.heartbeat)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			s.sendHeartbeats()
-		case <-s.heartbeatStop:
+		case <-s.sched.heartbeatStop:
 			return
 		}
 	}
 }
 
 func (s *Store) sendHeartbeats() {
-	if s == nil || s.scheduler == nil {
+	if s == nil || s.schedulerClient() == nil {
 		return
 	}
 	for _, meta := range s.RegionMetas() {
-		s.scheduler.PublishRegion(meta)
+		s.schedulerClient().PublishRegion(meta)
 	}
 	if s.storeID == 0 {
 		return
 	}
-	for _, op := range s.scheduler.StoreHeartbeat(s.storeStatsSnapshot()) {
+	for _, op := range s.schedulerClient().StoreHeartbeat(s.storeStatsSnapshot()) {
 		s.enqueueOperation(op)
 	}
 }
 
 func (s *Store) stopOperationLoop() {
-	if s == nil || s.operationStop == nil {
+	if s == nil || s.sched == nil || s.sched.stop == nil {
 		return
 	}
-	close(s.operationStop)
-	s.operationWG.Wait()
-	s.operationStop = nil
+	close(s.sched.stop)
+	s.sched.wg.Wait()
+	s.sched.stop = nil
 }
 
 func (s *Store) runOperationLoop() {
-	defer s.operationWG.Done()
-	interval := s.operationInterval
+	defer s.sched.wg.Done()
+	interval := s.sched.interval
 	if interval <= 0 {
 		interval = 200 * time.Millisecond
 	}
@@ -142,13 +142,13 @@ func (s *Store) runOperationLoop() {
 	var pending []scheduledOp
 	for {
 		select {
-		case <-s.operationStop:
+		case <-s.sched.stop:
 			return
-		case op := <-s.operationInput:
+		case op := <-s.sched.input:
 			pending = append(pending, scheduledOp{op: op, ready: s.nextOperationReadyTime(op)})
 		case <-ticker.C:
 			now := time.Now()
-			limit := s.operationBurst
+			limit := s.sched.burst
 			if limit <= 0 {
 				limit = len(pending)
 			}
@@ -176,17 +176,17 @@ func (s *Store) runOperationLoop() {
 }
 
 func (s *Store) nextOperationReadyTime(op Operation) time.Time {
-	if s == nil || s.operationCooldown <= 0 {
+	if s == nil || s.sched == nil || s.sched.cooldown <= 0 {
 		return time.Time{}
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	last := s.operationLastApply[key]
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	last := s.sched.lastApply[key]
 	if last.IsZero() {
 		return time.Time{}
 	}
-	return last.Add(s.operationCooldown)
+	return last.Add(s.sched.cooldown)
 }
 
 func (s *Store) markOperationApplied(op Operation, ts time.Time) {
@@ -194,23 +194,23 @@ func (s *Store) markOperationApplied(op Operation, ts time.Time) {
 		return
 	}
 	key := operationKey{region: op.Region, typeID: op.Type}
-	s.operationMu.Lock()
+	s.sched.mu.Lock()
 	if ts.IsZero() {
-		delete(s.operationLastApply, key)
+		delete(s.sched.lastApply, key)
 	} else {
-		s.operationLastApply[key] = ts
+		s.sched.lastApply[key] = ts
 	}
-	delete(s.operationPending, key)
-	s.operationMu.Unlock()
+	delete(s.sched.pending, key)
+	s.sched.mu.Unlock()
 }
 
 func (s *Store) clearLocalSchedulerDegraded() {
 	if s == nil {
 		return
 	}
-	s.operationMu.Lock()
-	s.schedulerDegraded = false
-	s.operationMu.Unlock()
+	s.sched.mu.Lock()
+	s.sched.degraded = false
+	s.sched.mu.Unlock()
 }
 
 func (s *Store) recordLocalSchedulerDrop(op Operation) {
@@ -219,12 +219,12 @@ func (s *Store) recordLocalSchedulerDrop(op Operation) {
 	}
 	msg := fmt.Sprintf("scheduler queue full: dropped %s for region %d", op.Type.String(), op.Region)
 	now := time.Now()
-	s.operationMu.Lock()
-	s.schedulerDropped++
-	s.schedulerDegraded = true
-	s.schedulerLastError = msg
-	s.schedulerLastAt = now
-	s.operationMu.Unlock()
+	s.sched.mu.Lock()
+	s.sched.dropped++
+	s.sched.degraded = true
+	s.sched.lastError = msg
+	s.sched.lastErrorAt = now
+	s.sched.mu.Unlock()
 	slog.Default().Warn(msg)
 }
 

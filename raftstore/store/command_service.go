@@ -43,7 +43,7 @@ func (s *Store) validateCommand(req *pb.RaftCmdRequest) (*peer.Peer, raftmeta.Re
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: err}
 		return nil, meta, resp, nil
 	}
-	peer := s.regions.peer(regionID)
+	peer := s.regionMgr().peer(regionID)
 	if peer == nil {
 		resp := &pb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		return nil, meta, resp, nil
@@ -69,10 +69,10 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		return resp, nil
 	}
 	if req.Header.RequestId == 0 {
-		req.Header.RequestId = s.command.nextProposalID()
+		req.Header.RequestId = s.commandPipe().nextProposalID()
 	}
 	id := req.Header.RequestId
-	prop, err := s.command.registerProposal(id)
+	prop, err := s.commandPipe().registerProposal(id)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +80,10 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		return nil, fmt.Errorf("raftstore: command pipeline unavailable")
 	}
 	if err := s.router.SendCommand(peer.ID(), req); err != nil {
-		s.command.removeProposal(id)
+		s.commandPipe().removeProposal(id)
 		return nil, err
 	}
-	timer := time.NewTimer(s.commandTimeout)
+	timer := time.NewTimer(s.commandWait())
 	defer timer.Stop()
 	select {
 	case result := <-prop.ch:
@@ -95,7 +95,7 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 		}
 		return result.resp, nil
 	case <-timer.C:
-		s.command.removeProposal(id)
+		s.commandPipe().removeProposal(id)
 		return nil, fmt.Errorf("raftstore: command %d timed out", id)
 	}
 }
@@ -117,16 +117,16 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if !isReadOnlyRequest(req) {
 		return nil, fmt.Errorf("raftstore: read command must be read-only")
 	}
-	if s.commandApplier == nil {
+	if s.commandApply() == nil {
 		return nil, fmt.Errorf("raftstore: command apply without handler")
 	}
 	if req.Header == nil {
 		req.Header = &pb.CmdHeader{}
 	}
-	if s.command != nil && req.Header.GetRequestId() == 0 {
-		req.Header.RequestId = s.command.nextProposalID()
+	if s.commandPipe() != nil && req.Header.GetRequestId() == 0 {
+		req.Header.RequestId = s.commandPipe().nextProposalID()
 	}
-	timeout := s.commandTimeout
+	timeout := s.commandWait()
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
@@ -139,7 +139,7 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if err := peer.WaitApplied(ctx, index); err != nil {
 		return nil, err
 	}
-	out, err := s.commandApplier(req)
+	out, err := s.commandApply()(req)
 	if err != nil {
 		return nil, err
 	}

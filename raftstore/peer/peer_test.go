@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
@@ -118,6 +119,13 @@ func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {
 	}
 }
 
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+	t.Helper()
+	storage, err := db.RaftLog().Open(groupID, localMeta)
+	require.NoError(t, err)
+	return storage
+}
+
 func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) []byte {
 	t.Helper()
 	req := &pb.RaftCmdRequest{
@@ -191,8 +199,7 @@ func TestRaftStoreReplicatesProposals(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, 11),
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -254,8 +261,7 @@ func TestPeerPrewriteCommit(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, 11),
 			GroupID:    11,
 			Region:     &raftmeta.RegionMeta{ID: 11},
 		})
@@ -338,8 +344,7 @@ func TestPeerAutoCompactionUpdatesManifest(t *testing.T) {
 		RaftConfig:       rc,
 		Transport:        net,
 		Apply:            applyToDB(db),
-		WAL:              db.WAL(),
-		LocalMeta:        localMeta,
+		Storage:          mustPeerStorage(t, db, localMeta, 1),
 		GroupID:          1,
 		LogRetainEntries: 1,
 	})
@@ -396,8 +401,7 @@ func TestPeerTransferLeader(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, 1),
 			GroupID:    1,
 		})
 		require.NoError(t, err)
@@ -462,8 +466,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, raftGroupID),
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -513,8 +516,7 @@ func TestRaftStoreRecoverFromDisk(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net2,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, raftGroupID),
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -594,8 +596,7 @@ func TestRaftStoreSlowFollowerRetention(t *testing.T) {
 			RaftConfig: rc,
 			Transport:  net,
 			Apply:      applyToDB(db),
-			WAL:        db.WAL(),
-			LocalMeta:  localMeta,
+			Storage:    mustPeerStorage(t, db, localMeta, raftGroupID),
 			GroupID:    raftGroupID,
 		})
 		require.NoError(t, err)
@@ -677,8 +678,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		RaftConfig: rc,
 		Transport:  net,
 		Apply:      applyToDB(db),
-		WAL:        db.WAL(),
-		LocalMeta:  localMeta,
+		Storage:    mustPeerStorage(t, db, localMeta, 1),
 		GroupID:    raftGroupID,
 	})
 	require.NoError(t, err)
@@ -742,8 +742,7 @@ func TestRaftStoreReadyFailpointRecovery(t *testing.T) {
 		RaftConfig: rc2,
 		Transport:  netRestart,
 		Apply:      applyToDB(dbRestart),
-		WAL:        dbRestart.WAL(),
-		LocalMeta:  localMetaRestart,
+		Storage:    mustPeerStorage(t, dbRestart, localMetaRestart, raftGroupID),
 		GroupID:    raftGroupID,
 	})
 	require.NoError(t, err)
@@ -797,8 +796,7 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 		RaftConfig: rc,
 		Transport:  net,
 		Apply:      applyFn,
-		WAL:        db.WAL(),
-		LocalMeta:  localMeta,
+		Storage:    mustPeerStorage(t, db, localMeta, 1),
 		GroupID:    1,
 	})
 	require.NoError(t, err)

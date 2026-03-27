@@ -19,6 +19,8 @@ import (
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/engine"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -47,6 +49,11 @@ type (
 		// DecrRef exactly once.
 		GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
 		NewInternalIterator(opt *utils.Options) utils.Iterator
+	}
+
+	// RaftLog opens raft peer storage without exposing the underlying WAL manager.
+	RaftLog interface {
+		Open(groupID uint64, meta *raftmeta.Store) (engine.PeerStorage, error)
 	}
 
 	// DB is the global handle for the engine and owns shared resources.
@@ -120,21 +127,12 @@ type (
 	}
 )
 
-// Open constructs the database and returns initialization errors instead of panicking.
-func Open(opt *Options) (_ *DB, err error) {
-	if opt == nil {
-		return nil, stderrors.New("open db: nil options")
-	}
-	opt = opt.normalized()
-	if opt == nil {
-		return nil, stderrors.New("open db: normalized options are nil")
-	}
+type dbRaftLog struct {
+	db *DB
+}
+
+func newDB(opt *Options) *DB {
 	db := &DB{opt: opt, writeMetrics: metrics.NewWriteMetrics()}
-	defer func() {
-		if err != nil {
-			err = stderrors.Join(err, db.closeInternal())
-		}
-	}()
 	db.fs = vfs.Ensure(opt.FS)
 	db.headLogDelta = valueLogHeadLogInterval
 	db.hotWrite = newHotWriteRing(opt)
@@ -143,70 +141,65 @@ func Open(opt *Options) (_ *DB, err error) {
 		batch := make([]*commitRequest, 0, db.opt.WriteBatchMaxCount)
 		return &batch
 	}
+	return db
+}
 
-	if err := db.fs.MkdirAll(opt.WorkDir, os.ModePerm); err != nil {
-		return nil, fmt.Errorf("open db: create workdir %q: %w", opt.WorkDir, err)
+func (db *DB) openDurability() error {
+	if err := db.fs.MkdirAll(db.opt.WorkDir, os.ModePerm); err != nil {
+		return fmt.Errorf("open db: create workdir %q: %w", db.opt.WorkDir, err)
 	}
-	lock, err := db.fs.Lock(filepath.Join(opt.WorkDir, "LOCK"))
+	lock, err := db.fs.Lock(filepath.Join(db.opt.WorkDir, "LOCK"))
 	if err != nil {
-		return nil, fmt.Errorf("open db: acquire workdir lock %q: %w", opt.WorkDir, err)
+		return fmt.Errorf("open db: acquire workdir lock %q: %w", db.opt.WorkDir, err)
 	}
 	db.dirLock = lock
 
 	if err := db.runRecoveryChecks(); err != nil {
-		return nil, fmt.Errorf("open db: recovery checks: %w", err)
+		return fmt.Errorf("open db: recovery checks: %w", err)
 	}
 
 	wlog, err := wal.Open(wal.Config{
-		Dir:         opt.WorkDir,
+		Dir:         db.opt.WorkDir,
 		SyncOnWrite: false,
-		BufferSize:  opt.WALBufferSize,
+		BufferSize:  db.opt.WALBufferSize,
 		FS:          db.fs,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open db: wal open: %w", err)
+		return fmt.Errorf("open db: wal open: %w", err)
 	}
 	db.wal = wlog
+	return nil
+}
 
-	baseTableSize := opt.MemTableSize
-	if baseTableSize <= 0 {
-		baseTableSize = 8 << 20
-	}
-	if baseTableSize < 8<<20 {
-		baseTableSize = 8 << 20
-	}
-	if opt.SSTableMaxSz > 0 && baseTableSize > opt.SSTableMaxSz {
-		baseTableSize = opt.SSTableMaxSz
-	}
-	baseLevelSize := max(baseTableSize*4, 32<<20)
-	// Initialize the LSM tree.
+func (db *DB) openEngine() error {
+	baseTableSize, baseLevelSize := db.levelSizes()
 	lsmCore, err := lsm.NewLSM(&lsm.Options{
 		FS:                            db.fs,
-		WorkDir:                       opt.WorkDir,
-		MemTableSize:                  opt.MemTableSize,
-		MemTableEngine:                string(opt.MemTableEngine),
-		SSTableMaxSz:                  opt.SSTableMaxSz,
+		WorkDir:                       db.opt.WorkDir,
+		MemTableSize:                  db.opt.MemTableSize,
+		MemTableEngine:                string(db.opt.MemTableEngine),
+		SSTableMaxSz:                  db.opt.SSTableMaxSz,
 		BlockSize:                     8 * 1024,
 		BloomFalsePositive:            0.01,
 		BaseLevelSize:                 baseLevelSize,
 		LevelSizeMultiplier:           8,
 		BaseTableSize:                 baseTableSize,
 		TableSizeMultiplier:           2,
-		NumLevelZeroTables:            opt.NumLevelZeroTables,
-		L0SlowdownWritesTrigger:       opt.L0SlowdownWritesTrigger,
-		L0StopWritesTrigger:           opt.L0StopWritesTrigger,
-		L0ResumeWritesTrigger:         opt.L0ResumeWritesTrigger,
-		CompactionSlowdownTrigger:     opt.CompactionSlowdownTrigger,
-		CompactionStopTrigger:         opt.CompactionStopTrigger,
-		CompactionResumeTrigger:       opt.CompactionResumeTrigger,
+		NumLevelZeroTables:            db.opt.NumLevelZeroTables,
+		L0SlowdownWritesTrigger:       db.opt.L0SlowdownWritesTrigger,
+		L0StopWritesTrigger:           db.opt.L0StopWritesTrigger,
+		L0ResumeWritesTrigger:         db.opt.L0ResumeWritesTrigger,
+		CompactionSlowdownTrigger:     db.opt.CompactionSlowdownTrigger,
+		CompactionStopTrigger:         db.opt.CompactionStopTrigger,
+		CompactionResumeTrigger:       db.opt.CompactionResumeTrigger,
 		MaxLevelNum:                   utils.MaxLevelNum,
-		NumCompactors:                 opt.NumCompactors,
-		CompactionPolicy:              string(opt.CompactionPolicy),
-		IngestCompactBatchSize:        opt.IngestCompactBatchSize,
-		IngestBacklogMergeScore:       opt.IngestBacklogMergeScore,
-		IngestShardParallelism:        opt.IngestShardParallelism,
-		WriteThrottleMinRate:          opt.WriteThrottleMinRate,
-		WriteThrottleMaxRate:          opt.WriteThrottleMaxRate,
+		NumCompactors:                 db.opt.NumCompactors,
+		CompactionPolicy:              string(db.opt.CompactionPolicy),
+		IngestCompactBatchSize:        db.opt.IngestCompactBatchSize,
+		IngestBacklogMergeScore:       db.opt.IngestBacklogMergeScore,
+		IngestShardParallelism:        db.opt.IngestShardParallelism,
+		WriteThrottleMinRate:          db.opt.WriteThrottleMinRate,
+		WriteThrottleMaxRate:          db.opt.WriteThrottleMaxRate,
 		CompactionValueWeight:         db.opt.CompactionValueWeight,
 		CompactionValueAlertThreshold: db.opt.CompactionValueAlertThreshold,
 		BlockCacheBytes:               db.opt.BlockCacheBytes,
@@ -216,27 +209,23 @@ func Open(opt *Options) (_ *DB, err error) {
 		ManifestRewriteThreshold:      db.opt.ManifestRewriteThreshold,
 		WALGCPolicy:                   newDBWALGCPolicy(db),
 		ThrottleCallback:              db.applyThrottle,
-	}, wlog)
+	}, db.wal)
 	if err != nil {
-		return nil, fmt.Errorf("open db: lsm init: %w", err)
+		return fmt.Errorf("open db: lsm init: %w", err)
 	}
 	db.lsm = lsmCore
-	seed := db.lsm.Diagnostics().MaxVersion
-	db.nonTxnVersion.Store(seed)
+	db.nonTxnVersion.Store(db.lsm.Diagnostics().MaxVersion)
 	db.iterPool = newIteratorPool()
-	// Initialize the value log.
 	db.initVLog()
-	// Initialize stats tracking.
 	db.stats = newStats(db)
-	// Initialize value separation policy matcher if policies are configured
-	if len(opt.ValueSeparationPolicies) > 0 {
-		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(opt.ValueSeparationPolicies))
+	if len(db.opt.ValueSeparationPolicies) > 0 {
+		db.policyMatcher.Store(kv.NewValueSeparationPolicyMatcher(db.opt.ValueSeparationPolicies))
 	}
+	return nil
+}
 
-	// Start the SSTable compaction loop.
-	db.lsm.StartCompacter()
-	// Initialize the commit queue and GC plumbing.
-	queueCap := max(opt.WriteBatchMaxCount*8, 1024)
+func (db *DB) startWriteRuntime() {
+	queueCap := max(db.opt.WriteBatchMaxCount*8, 1024)
 	db.commitQueue.init(queueCap)
 	if db.opt.SyncWrites && db.opt.SyncPipeline {
 		db.syncQueue = make(chan *syncBatch, 128)
@@ -245,6 +234,10 @@ func Open(opt *Options) (_ *DB, err error) {
 	}
 	db.commitWG.Add(1)
 	go db.commitWorker()
+}
+
+func (db *DB) startServices() {
+	db.lsm.StartCompacter()
 	if db.opt.EnableWALWatchdog {
 		db.walWatchdog = wal.NewWatchdog(wal.WatchdogConfig{
 			Manager:      db.wal,
@@ -259,7 +252,6 @@ func Open(opt *Options) (_ *DB, err error) {
 			db.walWatchdog.Start()
 		}
 	}
-	// Start periodic stats collection.
 	db.stats.StartStats()
 	if db.opt.ValueLogGCInterval > 0 {
 		if db.vlog != nil && db.vlog.lfDiscardStats != nil && db.vlog.lfDiscardStats.closer != nil {
@@ -267,6 +259,62 @@ func Open(opt *Options) (_ *DB, err error) {
 			go db.runValueLogGCPeriodically()
 		}
 	}
+}
+
+func (db *DB) levelSizes() (int64, int64) {
+	baseTableSize := db.opt.MemTableSize
+	if baseTableSize <= 0 {
+		baseTableSize = 8 << 20
+	}
+	if baseTableSize < 8<<20 {
+		baseTableSize = 8 << 20
+	}
+	if db.opt.SSTableMaxSz > 0 && baseTableSize > db.opt.SSTableMaxSz {
+		baseTableSize = db.opt.SSTableMaxSz
+	}
+	baseLevelSize := max(baseTableSize*4, 32<<20)
+	return baseTableSize, baseLevelSize
+}
+
+func (l dbRaftLog) Open(groupID uint64, meta *raftmeta.Store) (engine.PeerStorage, error) {
+	return engine.OpenWALStorage(engine.WALStorageConfig{
+		GroupID:   groupID,
+		WAL:       l.db.wal,
+		LocalMeta: meta,
+	})
+}
+
+// RaftLog returns the raft peer-storage capability backed by the DB WAL.
+func (db *DB) RaftLog() RaftLog {
+	if db == nil || db.wal == nil {
+		return nil
+	}
+	return dbRaftLog{db: db}
+}
+
+// Open constructs the database and returns initialization errors instead of panicking.
+func Open(opt *Options) (_ *DB, err error) {
+	if opt == nil {
+		return nil, stderrors.New("open db: nil options")
+	}
+	opt = opt.normalized()
+	if opt == nil {
+		return nil, stderrors.New("open db: normalized options are nil")
+	}
+	db := newDB(opt)
+	defer func() {
+		if err != nil {
+			err = stderrors.Join(err, db.closeInternal())
+		}
+	}()
+	if err := db.openDurability(); err != nil {
+		return nil, err
+	}
+	if err := db.openEngine(); err != nil {
+		return nil, err
+	}
+	db.startWriteRuntime()
+	db.startServices()
 	return db, nil
 }
 

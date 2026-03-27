@@ -23,6 +23,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
@@ -64,6 +65,13 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 	payload, err := command.Encode(req)
 	require.NoError(t, err)
 	return payload
+}
+
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+	t.Helper()
+	storage, err := db.RaftLog().Open(groupID, localMeta)
+	require.NoError(t, err)
+	return storage
 }
 
 func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
@@ -357,8 +365,7 @@ func newGRPCTestCluster(t *testing.T, ids []uint64, cfg peerpkg.Config, opts ...
 		transport := cluster.transports[id]
 		config := cfg
 		config.Transport = transport
-		config.WAL = db.WAL()
-		config.LocalMeta = localMeta
+		config.Storage = mustPeerStorage(t, db, localMeta, cluster.groupID)
 		config.Apply = applyToDB(db)
 		config.GroupID = cluster.groupID
 		config.RaftConfig.ID = id

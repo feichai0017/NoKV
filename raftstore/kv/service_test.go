@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -36,6 +37,13 @@ func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	t.Cleanup(func() { _ = db.Close() })
 	t.Cleanup(func() { _ = localMeta.Close() })
 	return db, localMeta
+}
+
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+	t.Helper()
+	storage, err := db.RaftLog().Open(groupID, localMeta)
+	require.NoError(t, err)
+	return storage
 }
 
 func applyVersionedEntryForServiceTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
@@ -131,8 +139,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 			PreVote:         true,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, cfg.regionID),
 		GroupID:   cfg.regionID,
 		Region:    meta,
 		Apply:     applyToDB(db),
@@ -223,8 +230,7 @@ func TestServicePrewriteCommit(t *testing.T) {
 			PreVote:         true,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, 501),
 		GroupID:   501,
 		Region:    region,
 		Apply:     applyToDB(db),
@@ -349,8 +355,7 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 			MaxInflightMsgs: 256,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, 601),
 		GroupID:   601,
 		Region:    region,
 		Apply:     applyToDB(db),

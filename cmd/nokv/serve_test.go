@@ -19,6 +19,16 @@ import (
 	"google.golang.org/grpc"
 )
 
+func testStorage(db *NoKV.DB) serverpkg.Storage {
+	if db == nil {
+		return serverpkg.Storage{}
+	}
+	return serverpkg.Storage{
+		MVCC: db,
+		Raft: db.RaftLog(),
+	}
+}
+
 func TestRunServeCmdErrors(t *testing.T) {
 	var buf bytes.Buffer
 	require.Error(t, runServeCmd(&buf, nil))
@@ -47,7 +57,7 @@ func TestRunServeCmdInvalidMetricsAddr(t *testing.T) {
 }
 
 func TestStartStorePeersNil(t *testing.T) {
-	_, _, err := startStorePeers(nil, nil, nil, 1, 1, 1, 1, 1)
+	_, _, err := startStorePeers(nil, serverpkg.Storage{}, nil, 1, 1, 1, 1, 1)
 	require.Error(t, err)
 }
 
@@ -59,7 +69,7 @@ func TestStartStorePeersManifestMissing(t *testing.T) {
 		_ = realDB.Close()
 	}()
 
-	_, _, err := startStorePeers(server, &NoKV.DB{}, nil, 1, 10, 1, 1, 1)
+	_, _, err := startStorePeers(server, testStorage(&NoKV.DB{}), nil, 1, 10, 1, 1, 1)
 	require.Error(t, err)
 }
 
@@ -72,7 +82,7 @@ func TestStartStorePeersEmpty(t *testing.T) {
 	}()
 
 	localMeta := openLocalMetaStore(t, db.WorkDir())
-	started, total, err := startStorePeers(server, db, localMeta, 1, 10, 1, 1, 1)
+	started, total, err := startStorePeers(server, testStorage(db), localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
 	require.Equal(t, 0, total)
 	require.Empty(t, started)
@@ -95,7 +105,7 @@ func TestStartStorePeersSkipsMissing(t *testing.T) {
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
 
-	started, total, err := startStorePeers(server, db, localMeta, 1, 10, 1, 1, 1)
+	started, total, err := startStorePeers(server, testStorage(db), localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Empty(t, started)
@@ -122,7 +132,7 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 	require.NoError(t, server.Close())
 	server = newTestServerWithMeta(t, db, 1, localMeta)
 
-	started, total, err := startStorePeers(server, db, localMeta, 1, 10, 1, 1, 1)
+	started, total, err := startStorePeers(server, testStorage(db), localMeta, 1, 10, 1, 1, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Len(t, started, 1)
@@ -239,7 +249,10 @@ func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Server 
 func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *raftmeta.Store) *serverpkg.Server {
 	t.Helper()
 	server, err := serverpkg.New(serverpkg.Config{
-		DB: db,
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
 		Store: storepkg.Config{
 			StoreID:   storeID,
 			LocalMeta: localMeta,
