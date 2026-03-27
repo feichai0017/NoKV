@@ -59,6 +59,65 @@ func truncateTail(t *testing.T, path string, trim int64) {
 	require.NoError(t, os.Truncate(path, info.Size()-trim))
 }
 
+type rollbackTestStore struct {
+	applyInternalEntries func(entries []*kv.Entry) error
+	getInternalEntry     func(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
+	newInternalIterator  func(opt *utils.Options) utils.Iterator
+}
+
+func (s rollbackTestStore) ApplyInternalEntries(entries []*kv.Entry) error {
+	if s.applyInternalEntries != nil {
+		return s.applyInternalEntries(entries)
+	}
+	return nil
+}
+
+func (s rollbackTestStore) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+	if s.getInternalEntry != nil {
+		return s.getInternalEntry(cf, key, version)
+	}
+	return nil, utils.ErrKeyNotFound
+}
+
+func (s rollbackTestStore) NewInternalIterator(opt *utils.Options) utils.Iterator {
+	if s.newInternalIterator != nil {
+		return s.newInternalIterator(opt)
+	}
+	return &testIterator{}
+}
+
+type testIterator struct {
+	items []utils.Item
+	idx   int
+}
+
+func (it *testIterator) Next() {
+	it.idx++
+}
+
+func (it *testIterator) Valid() bool {
+	return it != nil && it.idx < len(it.items)
+}
+
+func (it *testIterator) Rewind() {
+	it.idx = 0
+}
+
+func (it *testIterator) Item() utils.Item {
+	if !it.Valid() {
+		return nil
+	}
+	return it.items[it.idx]
+}
+
+func (it *testIterator) Close() error {
+	return nil
+}
+
+func (it *testIterator) Seek(key []byte) {
+	it.idx = 0
+}
+
 func TestPrewriteAndCommitPut(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -615,6 +674,66 @@ func TestRollbackKeyCreatesRollbackWrite(t *testing.T) {
 	require.NotNil(t, write)
 	require.Equal(t, pb.Mutation_Rollback, write.Kind)
 	require.Equal(t, startTs, commitTs)
+}
+
+func TestRollbackKeyReturnsNilWhenWriteAlreadyExists(t *testing.T) {
+	db := openTestDB(t)
+	reader := NewReader(db)
+	key := []byte("rb-existing")
+	startTs := uint64(17)
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 25, EncodeWrite(Write{
+		Kind:    pb.Mutation_Put,
+		StartTs: startTs,
+	}), 0)
+
+	rollbackErr := rollbackKey(db, reader, key, startTs)
+	require.Nil(t, rollbackErr)
+
+	write, commitTs, readErr := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, readErr)
+	require.NotNil(t, write)
+	require.Equal(t, pb.Mutation_Put, write.Kind)
+	require.Equal(t, uint64(25), commitTs)
+}
+
+func TestRollbackKeyReturnsRetryableWhenWriteLookupFails(t *testing.T) {
+	badEntry := kv.NewEntry([]byte("bad-key"), nil)
+	t.Cleanup(badEntry.DecrRef)
+
+	store := rollbackTestStore{
+		newInternalIterator: func(opt *utils.Options) utils.Iterator {
+			return &testIterator{items: []utils.Item{badEntry}}
+		},
+	}
+
+	rollbackErr := rollbackKey(store, NewReader(store), []byte("rb-write-err"), 9)
+	require.NotNil(t, rollbackErr)
+	require.Contains(t, rollbackErr.GetRetryable(), "scanWrites expects internal key")
+}
+
+func TestRollbackKeyReturnsRetryableWhenLockLookupFails(t *testing.T) {
+	store := rollbackTestStore{
+		getInternalEntry: func(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+			return nil, errors.New("lock lookup failed")
+		},
+	}
+
+	rollbackErr := rollbackKey(store, NewReader(store), []byte("rb-lock-err"), 9)
+	require.NotNil(t, rollbackErr)
+	require.Contains(t, rollbackErr.GetRetryable(), "lock lookup failed")
+}
+
+func TestRollbackKeyReturnsRetryableWhenApplyFails(t *testing.T) {
+	store := rollbackTestStore{
+		applyInternalEntries: func(entries []*kv.Entry) error {
+			return errors.New("apply failed")
+		},
+	}
+
+	rollbackErr := rollbackKey(store, NewReader(store), []byte("rb-apply-err"), 9)
+	require.NotNil(t, rollbackErr)
+	require.Contains(t, rollbackErr.GetRetryable(), "apply failed")
 }
 
 func TestIsLockExpired(t *testing.T) {
