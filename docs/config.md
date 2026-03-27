@@ -61,9 +61,9 @@ defer db.Close()
 ```
 
 Notes:
-- `Open()` normalizes legacy fallback fields once at the option boundary. The
-  DB and LSM layers then consume the resolved values directly instead of
-  re-applying defaults internally.
+- `NewDefaultOptions()` populates concrete compaction/ingest defaults up front.
+  `Open()` only backfills zero-valued legacy fields for compatibility, then the
+  DB and LSM layers consume the resolved values directly.
 - Write slowdown is bandwidth-driven: `WriteThrottleMaxRate` applies when
   slowdown first becomes active, and pressure lowers the target rate toward
   `WriteThrottleMinRate` as compaction debt approaches the stop threshold.

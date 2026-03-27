@@ -168,31 +168,40 @@ type Options struct {
 	// Supported values: leveled, tiered, hybrid.
 	CompactionPolicy CompactionPolicy
 	// NumLevelZeroTables controls when write throttling kicks in and feeds into
-	// the compaction priority calculation. Zero falls back to the legacy default.
+	// the compaction priority calculation. NewDefaultOptions populates a concrete
+	// default; normalizeInPlace only backfills zero-valued legacy configs.
 	NumLevelZeroTables int
 	// L0SlowdownWritesTrigger starts write pacing when L0 table count reaches
-	// this threshold. Zero falls back to NumLevelZeroTables.
+	// this threshold. Defaults are populated up front; zero is only interpreted
+	// as a legacy unset value during normalization.
 	L0SlowdownWritesTrigger int
 	// L0StopWritesTrigger blocks writes when L0 table count reaches this
-	// threshold. Zero falls back to 3*NumLevelZeroTables.
+	// threshold. Defaults are populated up front; zero is only interpreted as a
+	// legacy unset value during normalization.
 	L0StopWritesTrigger int
 	// L0ResumeWritesTrigger clears throttling only when L0 table count drops to
-	// this threshold or lower. Zero falls back to ~75% of slowdown threshold.
+	// this threshold or lower. Defaults are populated up front; zero is only
+	// interpreted as a legacy unset value during normalization.
 	L0ResumeWritesTrigger int
 	// CompactionSlowdownTrigger starts write pacing when max compaction score
-	// reaches this value. Zero falls back to 4.0.
+	// reaches this value. Defaults are populated up front; zero is only
+	// interpreted as a legacy unset value during normalization.
 	CompactionSlowdownTrigger float64
 	// CompactionStopTrigger blocks writes when max compaction score reaches this
-	// value. Zero falls back to 12.0.
+	// value. Defaults are populated up front; zero is only interpreted as a
+	// legacy unset value during normalization.
 	CompactionStopTrigger float64
 	// CompactionResumeTrigger clears throttling only when max compaction score
-	// drops to this value or lower. Zero falls back to 2.0.
+	// drops to this value or lower. Defaults are populated up front; zero is only
+	// interpreted as a legacy unset value during normalization.
 	CompactionResumeTrigger float64
 	// IngestCompactBatchSize decides how many L0 tables to promote into the
-	// ingest buffer per compaction cycle. Zero falls back to the legacy default.
+	// ingest buffer per compaction cycle. NewDefaultOptions populates a concrete
+	// default; normalizeInPlace only backfills zero-valued legacy configs.
 	IngestCompactBatchSize int
 	// IngestBacklogMergeScore triggers an ingest-merge task when the ingest
-	// backlog score exceeds this threshold. Zero keeps the default (2.0).
+	// backlog score exceeds this threshold. Defaults are populated up front; zero
+	// is only interpreted as a legacy unset value during normalization.
 	IngestBacklogMergeScore float64
 
 	// CompactionValueWeight adjusts how aggressively the scheduler prioritises
@@ -297,7 +306,8 @@ func NewDefaultOptions() *Options {
 
 // normalized returns a shallow copy with runtime defaults resolved once at the
 // DB boundary. Zero remains meaningful for settings that explicitly use zero to
-// disable a feature; only legacy "fallback" fields are filled here.
+// disable a feature; only legacy unset fields are backfilled here for
+// compatibility with manually constructed zero-value configs.
 func (opt *Options) normalized() *Options {
 	if opt == nil {
 		return nil
@@ -353,45 +363,8 @@ func (opt *Options) normalizeInPlace() {
 	if opt.NumCompactors <= 0 {
 		opt.NumCompactors = lsmpkg.DefaultNumCompactors()
 	}
-	if opt.NumLevelZeroTables <= 0 {
-		opt.NumLevelZeroTables = lsmpkg.DefaultNumLevelZeroTables
-	}
-	if opt.L0SlowdownWritesTrigger <= 0 {
-		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
-	}
-	if opt.L0StopWritesTrigger <= 0 {
-		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
-	}
-	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
-		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
-	}
-	if opt.L0ResumeWritesTrigger <= 0 {
-		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
-	}
-	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
-		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
-	}
-	if opt.CompactionSlowdownTrigger <= 0 {
-		opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
-	}
-	if opt.CompactionStopTrigger <= 0 {
-		opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
-	}
-	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
-		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
-	}
-	if opt.CompactionResumeTrigger <= 0 {
-		opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
-	}
-	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
-		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
-	}
-	if opt.IngestCompactBatchSize <= 0 {
-		opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
-	}
-	if opt.IngestBacklogMergeScore <= 0 {
-		opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
-	}
+	opt.fillLegacyCompactionDefaults()
+	opt.clampCompactionOptions()
 	if opt.IngestShardParallelism <= 0 {
 		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
 	}
@@ -406,5 +379,50 @@ func (opt *Options) normalizeInPlace() {
 	}
 	if opt.WALBufferSize <= 0 {
 		opt.WALBufferSize = defaultWALBufferSize
+	}
+}
+
+func (opt *Options) fillLegacyCompactionDefaults() {
+	if opt.NumLevelZeroTables <= 0 {
+		opt.NumLevelZeroTables = lsmpkg.DefaultNumLevelZeroTables
+	}
+	if opt.L0SlowdownWritesTrigger <= 0 {
+		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
+	}
+	if opt.L0StopWritesTrigger <= 0 {
+		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
+	}
+	if opt.L0ResumeWritesTrigger <= 0 {
+		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
+	}
+	if opt.CompactionSlowdownTrigger <= 0 {
+		opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
+	}
+	if opt.CompactionStopTrigger <= 0 {
+		opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
+	}
+	if opt.CompactionResumeTrigger <= 0 {
+		opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
+	}
+	if opt.IngestCompactBatchSize <= 0 {
+		opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
+	}
+	if opt.IngestBacklogMergeScore <= 0 {
+		opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
+	}
+}
+
+func (opt *Options) clampCompactionOptions() {
+	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
+		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
+	}
+	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
+		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
+	}
+	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
+		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
+	}
+	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
+		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
 	}
 }
