@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -159,6 +160,13 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	t.Cleanup(func() { _ = db.Close() })
 	t.Cleanup(func() { _ = localMeta.Close() })
 	return db, localMeta
+}
+
+func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *raftmeta.Store, groupID uint64) engine.PeerStorage {
+	t.Helper()
+	storage, err := db.RaftLog().Open(groupID, localMeta)
+	require.NoError(t, err)
+	return storage
 }
 
 func newTestMVCCApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
@@ -591,8 +599,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 			PreVote:         true,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, 101),
 		GroupID:   101,
 		Region:    region,
 	}
@@ -686,8 +693,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 			PreVote:         true,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
 		GroupID:   region.ID,
 		Region:    region,
 	}
@@ -761,8 +767,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 			MaxInflightMsgs: 256,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, 202),
 		GroupID:   202,
 		Region:    region,
 	}
@@ -804,8 +809,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 			MaxInflightMsgs: 256,
 		},
 		Transport: noopTransport{},
-		WAL:       db.WAL(),
-		LocalMeta: localMeta,
+		Storage:   mustPeerStorage(t, db, localMeta, 303),
 		GroupID:   303,
 		Region:    region,
 	}

@@ -70,7 +70,7 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta raftmeta.RegionMeta, spl
 	if parentID == 0 || childMeta.ID == 0 {
 		return fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	parentPeer := s.regions.peer(parentID)
+	parentPeer := s.regionMgr().peer(parentID)
 	if parentPeer == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", parentID)
 	}
@@ -100,7 +100,7 @@ func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
 	if targetRegionID == 0 || sourceRegionID == 0 {
 		return fmt.Errorf("raftstore: invalid region identifiers")
 	}
-	peer := s.regions.peer(targetRegionID)
+	peer := s.regionMgr().peer(targetRegionID)
 	if peer == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", targetRegionID)
 	}
@@ -189,7 +189,7 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 	if err := s.updateRegion(updated); err != nil {
 		return err
 	}
-	if peer := s.regions.peer(sourceMeta.ID); peer != nil {
+	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())
 	}
 	if err := s.removeRegion(sourceMeta.ID); err != nil {

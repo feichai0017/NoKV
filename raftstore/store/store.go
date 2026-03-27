@@ -14,39 +14,51 @@ import (
 // used by raftstore. It owns peer registration, region metadata, optional
 // control-plane heartbeats, and command application.
 type Store struct {
-	router         *Router
-	peerBuilder    PeerBuilder
-	regionMetrics  *metrics.RegionMetrics
-	regions        *regionManager
-	scheduler      SchedulerClient
-	workDir        string
-	storeID        uint64
-	commandApplier func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	command        *commandPipeline
-	commandTimeout time.Duration
-
-	operationInput     chan Operation
-	operationStop      chan struct{}
-	operationWG        sync.WaitGroup
-	operationCooldown  time.Duration
-	operationInterval  time.Duration
-	operationBurst     int
-	operationMu        sync.Mutex
-	operationPending   map[operationKey]struct{}
-	operationLastApply map[operationKey]time.Time
-	schedulerDropped   uint64
-	schedulerDegraded  bool
-	schedulerLastError string
-	schedulerLastAt    time.Time
-
-	heartbeatInterval time.Duration
-	heartbeatStop     chan struct{}
-	heartbeatWG       sync.WaitGroup
+	router      *Router
+	peerBuilder PeerBuilder
+	workDir     string
+	storeID     uint64
+	regions     *regionRuntime
+	sched       *schedulerRuntime
+	cmds        *commandRuntime
 }
 
 type operationKey struct {
 	region uint64
 	typeID OperationType
+}
+
+type regionRuntime struct {
+	metrics *metrics.RegionMetrics
+	mgr     *regionManager
+}
+
+type schedulerRuntime struct {
+	client SchedulerClient
+
+	input    chan Operation
+	stop     chan struct{}
+	wg       sync.WaitGroup
+	cooldown time.Duration
+	interval time.Duration
+	burst    int
+
+	mu            sync.Mutex
+	pending       map[operationKey]struct{}
+	lastApply     map[operationKey]time.Time
+	dropped       uint64
+	degraded      bool
+	lastError     string
+	lastErrorAt   time.Time
+	heartbeat     time.Duration
+	heartbeatStop chan struct{}
+	heartbeatWG   sync.WaitGroup
+}
+
+type commandRuntime struct {
+	apply   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	pipe    *commandPipeline
+	timeout time.Duration
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -100,38 +112,44 @@ func NewStoreWithConfig(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:             router,
-		peerBuilder:        cfg.PeerBuilder,
-		regionMetrics:      regionMetrics,
-		scheduler:          cfg.Scheduler,
-		workDir:            cfg.WorkDir,
-		storeID:            cfg.StoreID,
-		commandApplier:     cfg.CommandApplier,
-		commandTimeout:     commandTimeout,
-		operationCooldown:  operationCooldown,
-		operationInterval:  operationInterval,
-		operationBurst:     operationBurst,
-		operationPending:   make(map[operationKey]struct{}),
-		operationLastApply: make(map[operationKey]time.Time),
+		router:      router,
+		peerBuilder: cfg.PeerBuilder,
+		workDir:     cfg.WorkDir,
+		storeID:     cfg.StoreID,
+		regions: &regionRuntime{
+			metrics: regionMetrics,
+			mgr:     newRegionManager(cfg.LocalMeta, regionMetrics, cfg.Scheduler),
+		},
+		sched: &schedulerRuntime{
+			client:    cfg.Scheduler,
+			cooldown:  operationCooldown,
+			interval:  operationInterval,
+			burst:     operationBurst,
+			pending:   make(map[operationKey]struct{}),
+			lastApply: make(map[operationKey]time.Time),
+		},
+		cmds: &commandRuntime{
+			apply:   cfg.CommandApplier,
+			pipe:    newCommandPipeline(cfg.CommandApplier),
+			timeout: commandTimeout,
+		},
 	}
 	if s.workDir == "" && cfg.LocalMeta != nil {
 		s.workDir = cfg.LocalMeta.WorkDir()
 	}
-	s.regions = newRegionManager(cfg.LocalMeta, regionMetrics, cfg.Scheduler)
-	s.command = newCommandPipeline(cfg.CommandApplier)
 	if queueSize > 0 {
-		s.operationInput = make(chan Operation, queueSize)
-		s.operationStop = make(chan struct{})
-		s.operationWG.Add(1)
+		s.sched.input = make(chan Operation, queueSize)
+		s.sched.stop = make(chan struct{})
+		s.sched.wg.Add(1)
 		go s.runOperationLoop()
 	}
 	if cfg.LocalMeta != nil {
-		s.regions.loadSnapshot(cfg.LocalMeta.Snapshot())
+		s.regionMgr().loadSnapshot(cfg.LocalMeta.Snapshot())
 	}
-	if s.scheduler != nil {
-		s.heartbeatInterval = cfg.HeartbeatInterval
-		if s.heartbeatInterval <= 0 {
-			s.heartbeatInterval = 3 * time.Second
+	if s.schedulerClient() != nil {
+		s.sched.heartbeat = cfg.HeartbeatInterval
+		if s.sched.heartbeat <= 0 {
+			s.sched.heartbeat = 3 * time.Second
 		}
 		s.startHeartbeatLoop()
 	}
@@ -145,18 +163,63 @@ func (s *Store) SchedulerStatus() SchedulerStatus {
 		return SchedulerStatus{}
 	}
 	status := SchedulerStatus{}
-	if s.scheduler != nil {
-		status = s.scheduler.Status()
+	if s.schedulerClient() != nil {
+		status = s.schedulerClient().Status()
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	status.DroppedOperations += s.schedulerDropped
-	if s.schedulerDegraded {
+	if s.sched == nil {
+		return status
+	}
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	status.DroppedOperations += s.sched.dropped
+	if s.sched.degraded {
 		status.Degraded = true
-		if status.LastErrorAt.Before(s.schedulerLastAt) || status.LastError == "" {
-			status.LastError = s.schedulerLastError
-			status.LastErrorAt = s.schedulerLastAt
+		if status.LastErrorAt.Before(s.sched.lastErrorAt) || status.LastError == "" {
+			status.LastError = s.sched.lastError
+			status.LastErrorAt = s.sched.lastErrorAt
 		}
 	}
 	return status
+}
+
+func (s *Store) regionMgr() *regionManager {
+	if s == nil || s.regions == nil {
+		return nil
+	}
+	return s.regions.mgr
+}
+
+func (s *Store) regionMetrics() *metrics.RegionMetrics {
+	if s == nil || s.regions == nil {
+		return nil
+	}
+	return s.regions.metrics
+}
+
+func (s *Store) schedulerClient() SchedulerClient {
+	if s == nil || s.sched == nil {
+		return nil
+	}
+	return s.sched.client
+}
+
+func (s *Store) commandPipe() *commandPipeline {
+	if s == nil || s.cmds == nil {
+		return nil
+	}
+	return s.cmds.pipe
+}
+
+func (s *Store) commandApply() func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	if s == nil || s.cmds == nil {
+		return nil
+	}
+	return s.cmds.apply
+}
+
+func (s *Store) commandWait() time.Duration {
+	if s == nil || s.cmds == nil {
+		return 0
+	}
+	return s.cmds.timeout
 }
