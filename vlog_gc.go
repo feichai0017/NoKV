@@ -409,7 +409,8 @@ func (vlog *valueLog) rewrite(bucket uint32, fid uint32) error {
 
 		es := int64(ne.EstimateSize(vlog.db.opt.ValueLogFileSize))
 		es += int64(len(e.Value))
-		if int64(len(wb)+1) >= vlog.opt.MaxBatchCount || size+es >= vlog.opt.MaxBatchSize {
+		limitCount, limitSize := vlog.opt.MaxBatchCount, vlog.opt.MaxBatchSize
+		if int64(len(wb)+1) >= limitCount || size+es >= limitSize {
 			if err := vlog.db.batchSet(wb); err != nil {
 				return err
 			}

@@ -1,6 +1,12 @@
 package lsm
 
-import "runtime"
+import (
+	"log/slog"
+	"runtime"
+
+	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/vfs"
+)
 
 const (
 	// DefaultBlockCacheBytes is the default budget for cached L0/L1 blocks.
@@ -29,6 +35,90 @@ const (
 	DefaultWriteThrottleMaxRate int64 = 1 << 30
 )
 
+// Options captures LSM-local runtime configuration derived from the top-level
+// DB options before the storage engine starts.
+type Options struct {
+	// FS provides the filesystem implementation for manifest operations.
+	FS vfs.FS
+	// Logger handles background/storage logs for the LSM subsystem.
+	Logger *slog.Logger
+
+	WorkDir        string
+	MemTableSize   int64
+	MemTableEngine string
+	SSTableMaxSz   int64
+	// BlockSize is the size of each block inside SSTable in bytes.
+	BlockSize int
+	// BloomFalsePositive is the false positive probabiltiy of bloom filter.
+	BloomFalsePositive float64
+
+	// Cache budgets. Zero disables the corresponding user-space cache.
+	BlockCacheBytes int64
+	IndexCacheBytes int64
+
+	// compact
+	NumCompactors       int
+	CompactionPolicy    string
+	BaseLevelSize       int64
+	LevelSizeMultiplier int // Target size ratio between levels.
+	TableSizeMultiplier int
+	BaseTableSize       int64
+	NumLevelZeroTables  int
+	MaxLevelNum         int
+	// L0SlowdownWritesTrigger starts write pacing when L0 table count reaches
+	// this threshold. Values <= 0 disable L0-based slowdown.
+	L0SlowdownWritesTrigger int
+	// L0StopWritesTrigger blocks writes when L0 table count reaches this
+	// threshold. Values <= 0 disable L0-based hard stop.
+	L0StopWritesTrigger int
+	// L0ResumeWritesTrigger clears slowdown/stop only when L0 table count drops
+	// to this threshold or lower, providing hysteresis and reducing oscillation.
+	L0ResumeWritesTrigger int
+	// CompactionSlowdownTrigger starts write pacing when max compaction score
+	// reaches this value. Values <= 0 disable score-based slowdown.
+	CompactionSlowdownTrigger float64
+	// CompactionStopTrigger blocks writes when max compaction score reaches this
+	// value. Values <= 0 disable score-based hard stop.
+	CompactionStopTrigger float64
+	// CompactionResumeTrigger clears throttling only when max compaction score
+	// drops to this value or lower, providing hysteresis.
+	CompactionResumeTrigger float64
+	// WriteThrottleMinRate is the target write admission rate in bytes/sec when
+	// slowdown pressure approaches the stop threshold.
+	WriteThrottleMinRate int64
+	// WriteThrottleMaxRate is the target write admission rate in bytes/sec when
+	// slowdown first becomes active.
+	WriteThrottleMaxRate int64
+
+	IngestCompactBatchSize  int
+	IngestBacklogMergeScore float64
+	IngestShardParallelism  int
+
+	// CompactionValueWeight increases the priority of levels containing a high
+	// proportion of ValueLog-backed payloads. Must be non-negative.
+	CompactionValueWeight float64
+
+	// CompactionValueAlertThreshold triggers stats alerts when value density
+	// exceeds this ratio.
+	CompactionValueAlertThreshold float64
+
+	DiscardStatsCh *chan map[manifest.ValueLogID]int64
+
+	// ManifestSync controls whether manifest edits are fsynced immediately.
+	ManifestSync bool
+	// ManifestRewriteThreshold triggers a manifest rewrite when the manifest
+	// grows beyond this size (bytes). Values <= 0 disable rewrites.
+	ManifestRewriteThreshold int64
+
+	// WALGCPolicy controls whether old WAL segments can be deleted.
+	// Nil defaults to AllowAllWALGCPolicy.
+	WALGCPolicy WALGCPolicy
+
+	// ThrottleCallback receives write admission changes after the LSM updates its
+	// internal throttle state.
+	ThrottleCallback func(WriteThrottleState)
+}
+
 // Clone returns a shallow copy of the LSM options. It is used when background
 // workers (e.g. compaction) need an immutable view of the configuration while
 // the user may continue tweaking the top-level DB options.
@@ -40,24 +130,16 @@ func (opt *Options) Clone() *Options {
 	return &clone
 }
 
-func (opt *Options) normalized() *Options {
-	if opt == nil {
-		return nil
-	}
-	clone := *opt
-	clone.normalizeInPlace()
-	return &clone
-}
-
-func (opt *Options) normalizeInPlace() {
+// NormalizeInPlace resolves constructor defaults and clamps invalid
+// compaction/throttle settings in place.
+func (opt *Options) NormalizeInPlace() {
 	if opt == nil {
 		return
 	}
 	if opt.NumCompactors <= 0 {
 		opt.NumCompactors = DefaultNumCompactors()
 	}
-	opt.fillLegacyCompactionDefaults()
-	opt.clampCompactionOptions()
+	opt.normalizeCompactionOptions()
 	if opt.IngestShardParallelism <= 0 {
 		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
 	}
@@ -87,7 +169,7 @@ func (opt *Options) normalizeInPlace() {
 	}
 }
 
-func (opt *Options) fillLegacyCompactionDefaults() {
+func (opt *Options) normalizeCompactionOptions() {
 	if opt.NumLevelZeroTables <= 0 {
 		opt.NumLevelZeroTables = DefaultNumLevelZeroTables
 	}
@@ -115,9 +197,6 @@ func (opt *Options) fillLegacyCompactionDefaults() {
 	if opt.IngestBacklogMergeScore <= 0 {
 		opt.IngestBacklogMergeScore = DefaultIngestBacklogMergeScore
 	}
-}
-
-func (opt *Options) clampCompactionOptions() {
 	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
 		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
 	}
