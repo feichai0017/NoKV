@@ -204,12 +204,14 @@ func TestCommitMissingLock(t *testing.T) {
 	require.Contains(t, err.GetAbort(), "lock not found")
 }
 
+// TestCommitNilRequestReturnsNil verifies Commit ignores nil requests.
 func TestCommitNilRequestReturnsNil(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
 	require.Nil(t, Commit(db, latches, nil))
 }
 
+// TestCommitRejectsEmptyKey verifies Commit rejects empty keys.
 func TestCommitRejectsEmptyKey(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -223,6 +225,7 @@ func TestCommitRejectsEmptyKey(t *testing.T) {
 	require.Contains(t, err.GetAbort(), "empty key in commit")
 }
 
+// TestCommitRejectsCommitVersionEarlierThanStartVersion preserves MVCC ordering.
 func TestCommitRejectsCommitVersionEarlierThanStartVersion(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -259,6 +262,7 @@ func TestCommitRejectsCommitVersionEarlierThanStartVersion(t *testing.T) {
 	}
 }
 
+// TestCommitMissingLockWithRollbackWriteAborts rejects commits after rollback.
 func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -279,6 +283,7 @@ func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
 	require.NotEmpty(t, err.GetAbort())
 }
 
+// TestCommitReturnsRetryableOnLockLookupError surfaces lock read failures.
 func TestCommitReturnsRetryableOnLockLookupError(t *testing.T) {
 	latches := latch.NewManager(32)
 	store := rollbackTestStore{
@@ -296,6 +301,7 @@ func TestCommitReturnsRetryableOnLockLookupError(t *testing.T) {
 	require.Contains(t, err.GetRetryable(), "lock lookup failed")
 }
 
+// TestCommitReturnsRetryableOnWriteLookupErrorWhenLockMissing surfaces write scan failures.
 func TestCommitReturnsRetryableOnWriteLookupErrorWhenLockMissing(t *testing.T) {
 	badEntry := kv.NewEntry([]byte("bad-key"), nil)
 	t.Cleanup(badEntry.DecrRef)
@@ -316,6 +322,7 @@ func TestCommitReturnsRetryableOnWriteLookupErrorWhenLockMissing(t *testing.T) {
 	require.Contains(t, err.GetRetryable(), "scanWrites expects internal key")
 }
 
+// TestCommitMissingLockWithExistingWriteIsIdempotent preserves idempotent commits.
 func TestCommitMissingLockWithExistingWriteIsIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -336,6 +343,7 @@ func TestCommitMissingLockWithExistingWriteIsIdempotent(t *testing.T) {
 	require.Nil(t, err)
 }
 
+// TestCommitReturnsLockedOnDifferentTransactionLock rejects foreign locks.
 func TestCommitReturnsLockedOnDifferentTransactionLock(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -477,6 +485,7 @@ func TestResolveLockCommit(t *testing.T) {
 	require.Equal(t, []byte("val"), val)
 }
 
+// TestResolveLockNilRequest verifies ResolveLock ignores nil requests.
 func TestResolveLockNilRequest(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
@@ -492,6 +501,7 @@ func TestResolveLockNilRequest(t *testing.T) {
 	require.Nil(t, keyErr)
 }
 
+// TestResolveLockSkipsEmptyAndMismatchedKeys ignores non-matching locks.
 func TestResolveLockSkipsEmptyAndMismatchedKeys(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
@@ -512,6 +522,7 @@ func TestResolveLockSkipsEmptyAndMismatchedKeys(t *testing.T) {
 	require.Nil(t, keyErr)
 }
 
+// TestResolveLockReturnsRetryableOnLockLookupError surfaces lock read failures.
 func TestResolveLockReturnsRetryableOnLockLookupError(t *testing.T) {
 	latches := latch.NewManager(16)
 	store := rollbackTestStore{
@@ -530,6 +541,7 @@ func TestResolveLockReturnsRetryableOnLockLookupError(t *testing.T) {
 	require.Contains(t, keyErr.GetRetryable(), "lock lookup failed")
 }
 
+// TestResolveLockRollback keeps commitVersion==0 on the rollback path.
 func TestResolveLockRollback(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
@@ -567,6 +579,7 @@ func TestResolveLockRollback(t *testing.T) {
 	require.Equal(t, startTs, commitTs)
 }
 
+// TestResolveLockRollbackReturnsError propagates rollback apply failures.
 func TestResolveLockRollbackReturnsError(t *testing.T) {
 	key := []byte("resolve-rollback-error")
 	startTs := uint64(40)
@@ -597,6 +610,7 @@ func TestResolveLockRollbackReturnsError(t *testing.T) {
 	require.Contains(t, keyErr.GetRetryable(), "apply failed")
 }
 
+// TestResolveLockRejectsCommitVersionEarlierThanStartVersion preserves MVCC ordering.
 func TestResolveLockRejectsCommitVersionEarlierThanStartVersion(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
