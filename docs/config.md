@@ -19,6 +19,7 @@ Key option groups (see `options.go` for the full list):
   - `WorkDir`, `SyncWrites`, `ManifestSync`, `ManifestRewriteThreshold`
 - **Write pipeline**
   - `WriteBatchMaxCount`, `WriteBatchMaxSize`, `WriteBatchWait`
+  - `MaxBatchCount`, `MaxBatchSize`
   - `WriteThrottleMinRate`, `WriteThrottleMaxRate`
 - **Value log**
   - `ValueThreshold`, `ValueLogFileSize`, `ValueLogMaxEntries`
@@ -64,6 +65,15 @@ Notes:
 - `NewDefaultOptions()` populates concrete compaction/ingest defaults up front.
   `Open()` only backfills zero-valued legacy fields for compatibility, then the
   DB and LSM layers consume the resolved values directly.
+- `WriteBatchMaxCount`, `WriteBatchMaxSize`, `MaxBatchCount`, `MaxBatchSize`,
+  `WriteThrottleMinRate`, `WriteThrottleMaxRate`, and `WALBufferSize` now also
+  expose concrete defaults through `NewDefaultOptions()`. Zero remains a legacy
+  unset value only for manually constructed configs.
+- Batch knobs are split by owner:
+  - `WriteBatchMaxCount` / `WriteBatchMaxSize` bound commit-worker request
+    coalescing.
+  - `MaxBatchCount` / `MaxBatchSize` bound internal apply/rewrite batches such
+    as `batchSet` and value-log GC rewrites.
 - Write slowdown is bandwidth-driven: `WriteThrottleMaxRate` applies when
   slowdown first becomes active, and pressure lowers the target rate toward
   `WriteThrottleMinRate` as compaction debt approaches the stop threshold.

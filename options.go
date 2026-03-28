@@ -8,13 +8,13 @@ import (
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
+	"github.com/feichai0017/NoKV/wal"
 )
 
 const (
 	defaultWriteBatchMaxCount       = 64
 	defaultWriteBatchMaxSize  int64 = 1 << 20
 	defaultHotRingTopK              = 16
-	defaultWALBufferSize            = 4 << 20 // 4 MiB
 )
 
 // Options holds the top-level database configuration.
@@ -23,13 +23,19 @@ type Options struct {
 	// Nil defaults to vfs.OSFS.
 	FS vfs.FS
 
-	ValueThreshold     int64
-	WorkDir            string
-	MemTableSize       int64
-	MemTableEngine     MemTableEngine
-	SSTableMaxSz       int64
-	MaxBatchCount      int64
-	MaxBatchSize       int64 // max batch size in bytes
+	ValueThreshold int64
+	WorkDir        string
+	MemTableSize   int64
+	MemTableEngine MemTableEngine
+	SSTableMaxSz   int64
+	// MaxBatchCount bounds the number of entries grouped into one internal
+	// write batch. NewDefaultOptions exposes a concrete default; zero is only
+	// interpreted as a legacy unset value during normalization.
+	MaxBatchCount int64
+	// MaxBatchSize bounds the size in bytes of one internal write batch.
+	// NewDefaultOptions exposes a concrete default; zero is only interpreted as
+	// a legacy unset value during normalization.
+	MaxBatchSize       int64
 	ValueLogFileSize   int
 	ValueLogMaxEntries uint32
 	// ValueLogBucketCount controls how many hash buckets the value log uses.
@@ -67,8 +73,14 @@ type Options struct {
 	// ValueLogVerbose enables verbose logging across value-log operations.
 	ValueLogVerbose bool
 
+	// WriteBatchMaxCount bounds how many requests the commit worker coalesces in
+	// one pass. NewDefaultOptions exposes a concrete default; zero is only
+	// interpreted as a legacy unset value during normalization.
 	WriteBatchMaxCount int
-	WriteBatchMaxSize  int64
+	// WriteBatchMaxSize bounds the byte size the commit worker coalesces in one
+	// pass. NewDefaultOptions exposes a concrete default; zero is only
+	// interpreted as a legacy unset value during normalization.
+	WriteBatchMaxSize int64
 
 	DetectConflicts bool
 	HotRingEnabled  bool
@@ -110,10 +122,14 @@ type Options struct {
 	// Zero disables the delay.
 	WriteBatchWait time.Duration
 	// WriteThrottleMinRate is the target write admission rate in bytes/sec when
-	// slowdown pressure approaches the stop threshold.
+	// slowdown pressure approaches the stop threshold. NewDefaultOptions
+	// exposes a concrete default; zero is only interpreted as a legacy unset
+	// value during normalization.
 	WriteThrottleMinRate int64
 	// WriteThrottleMaxRate is the target write admission rate in bytes/sec when
-	// slowdown first becomes active.
+	// slowdown first becomes active. NewDefaultOptions exposes a concrete
+	// default; zero is only interpreted as a legacy unset value during
+	// normalization.
 	WriteThrottleMaxRate int64
 
 	// BlockCacheBytes bounds the in-memory budget for cached L0/L1 data blocks.
@@ -132,7 +148,8 @@ type Options struct {
 	EnableWALWatchdog bool
 	// WALBufferSize controls the size of the in-memory write buffer used by
 	// the WAL manager. Larger buffers reduce syscall frequency at the cost of
-	// memory. Values <= 0 fall back to the default (4 MiB).
+	// memory. NewDefaultOptions exposes a concrete default; zero is only
+	// interpreted as a legacy unset value during normalization.
 	WALBufferSize int
 	// WALAutoGCInterval controls how frequently the watchdog evaluates WAL
 	// backlog for automated garbage collection.
@@ -253,8 +270,10 @@ func NewDefaultOptions() *Options {
 		HotRingWindowSlots:        8,
 		HotRingWindowSlotDuration: 250 * time.Millisecond,
 		// Conservative defaults to avoid long batch-induced pauses.
-		WriteBatchMaxCount:            64,
-		WriteBatchMaxSize:             1 << 20,
+		WriteBatchMaxCount:            defaultWriteBatchMaxCount,
+		WriteBatchMaxSize:             defaultWriteBatchMaxSize,
+		MaxBatchCount:                 defaultWriteBatchMaxCount,
+		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
 		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
 		SyncWrites:                    false,
@@ -266,7 +285,7 @@ func NewDefaultOptions() *Options {
 		WriteThrottleMaxRate:          lsmpkg.DefaultWriteThrottleMaxRate,
 		RaftLagWarnSegments:           8,
 		EnableWALWatchdog:             true,
-		WALBufferSize:                 defaultWALBufferSize,
+		WALBufferSize:                 wal.DefaultBufferSize,
 		WALAutoGCInterval:             15 * time.Second,
 		WALAutoGCMinRemovable:         1,
 		WALAutoGCMaxBatch:             4,
@@ -308,15 +327,6 @@ func NewDefaultOptions() *Options {
 // DB boundary. Zero remains meaningful for settings that explicitly use zero to
 // disable a feature; only legacy unset fields are backfilled here for
 // compatibility with manually constructed zero-value configs.
-func (opt *Options) normalized() *Options {
-	if opt == nil {
-		return nil
-	}
-	clone := *opt
-	clone.normalizeInPlace()
-	return &clone
-}
-
 func (opt *Options) normalizeInPlace() {
 	if opt == nil {
 		return
@@ -345,84 +355,48 @@ func (opt *Options) normalizeInPlace() {
 	if opt.WriteBatchWait < 0 {
 		opt.WriteBatchWait = 0
 	}
-	if opt.WriteThrottleMinRate <= 0 {
-		opt.WriteThrottleMinRate = lsmpkg.DefaultWriteThrottleMinRate
-	}
-	if opt.WriteThrottleMaxRate <= 0 {
-		opt.WriteThrottleMaxRate = lsmpkg.DefaultWriteThrottleMaxRate
-	}
-	if opt.WriteThrottleMaxRate < opt.WriteThrottleMinRate {
-		opt.WriteThrottleMaxRate = opt.WriteThrottleMinRate
-	}
-	if opt.BlockCacheBytes < 0 {
-		opt.BlockCacheBytes = 0
-	}
-	if opt.IndexCacheBytes < 0 {
-		opt.IndexCacheBytes = 0
-	}
-	if opt.NumCompactors <= 0 {
-		opt.NumCompactors = lsmpkg.DefaultNumCompactors()
-	}
-	opt.fillLegacyCompactionDefaults()
-	opt.clampCompactionOptions()
-	if opt.IngestShardParallelism <= 0 {
-		opt.IngestShardParallelism = max(opt.NumCompactors/2, 2)
-	}
-	if opt.CompactionValueWeight < 0 {
-		opt.CompactionValueWeight = 0
-	}
-	if opt.CompactionValueWeight == 0 {
-		opt.CompactionValueWeight = lsmpkg.DefaultCompactionValueWeight
-	}
-	if opt.CompactionValueAlertThreshold <= 0 {
-		opt.CompactionValueAlertThreshold = lsmpkg.DefaultCompactionValueAlertThreshold
-	}
+	opt.normalizeLSMOptions()
 	if opt.WALBufferSize <= 0 {
-		opt.WALBufferSize = defaultWALBufferSize
+		opt.WALBufferSize = wal.DefaultBufferSize
 	}
 }
 
-func (opt *Options) fillLegacyCompactionDefaults() {
-	if opt.NumLevelZeroTables <= 0 {
-		opt.NumLevelZeroTables = lsmpkg.DefaultNumLevelZeroTables
+func (opt *Options) normalizeLSMOptions() {
+	cfg := &lsmpkg.Options{
+		NumCompactors:                 opt.NumCompactors,
+		NumLevelZeroTables:            opt.NumLevelZeroTables,
+		L0SlowdownWritesTrigger:       opt.L0SlowdownWritesTrigger,
+		L0StopWritesTrigger:           opt.L0StopWritesTrigger,
+		L0ResumeWritesTrigger:         opt.L0ResumeWritesTrigger,
+		CompactionSlowdownTrigger:     opt.CompactionSlowdownTrigger,
+		CompactionStopTrigger:         opt.CompactionStopTrigger,
+		CompactionResumeTrigger:       opt.CompactionResumeTrigger,
+		WriteThrottleMinRate:          opt.WriteThrottleMinRate,
+		WriteThrottleMaxRate:          opt.WriteThrottleMaxRate,
+		IngestCompactBatchSize:        opt.IngestCompactBatchSize,
+		IngestBacklogMergeScore:       opt.IngestBacklogMergeScore,
+		IngestShardParallelism:        opt.IngestShardParallelism,
+		CompactionValueWeight:         opt.CompactionValueWeight,
+		CompactionValueAlertThreshold: opt.CompactionValueAlertThreshold,
+		BlockCacheBytes:               opt.BlockCacheBytes,
+		IndexCacheBytes:               opt.IndexCacheBytes,
 	}
-	if opt.L0SlowdownWritesTrigger <= 0 {
-		opt.L0SlowdownWritesTrigger = opt.NumLevelZeroTables
-	}
-	if opt.L0StopWritesTrigger <= 0 {
-		opt.L0StopWritesTrigger = opt.NumLevelZeroTables * 3
-	}
-	if opt.L0ResumeWritesTrigger <= 0 {
-		opt.L0ResumeWritesTrigger = max(1, int(float64(opt.L0SlowdownWritesTrigger)*0.75))
-	}
-	if opt.CompactionSlowdownTrigger <= 0 {
-		opt.CompactionSlowdownTrigger = lsmpkg.DefaultCompactionSlowdownTrigger
-	}
-	if opt.CompactionStopTrigger <= 0 {
-		opt.CompactionStopTrigger = lsmpkg.DefaultCompactionStopTrigger
-	}
-	if opt.CompactionResumeTrigger <= 0 {
-		opt.CompactionResumeTrigger = lsmpkg.DefaultCompactionResumeTrigger
-	}
-	if opt.IngestCompactBatchSize <= 0 {
-		opt.IngestCompactBatchSize = lsmpkg.DefaultIngestCompactBatchSize
-	}
-	if opt.IngestBacklogMergeScore <= 0 {
-		opt.IngestBacklogMergeScore = lsmpkg.DefaultIngestBacklogMergeScore
-	}
-}
-
-func (opt *Options) clampCompactionOptions() {
-	if opt.L0StopWritesTrigger <= opt.L0SlowdownWritesTrigger {
-		opt.L0StopWritesTrigger = opt.L0SlowdownWritesTrigger + 1
-	}
-	if opt.L0ResumeWritesTrigger >= opt.L0SlowdownWritesTrigger {
-		opt.L0ResumeWritesTrigger = max(1, opt.L0SlowdownWritesTrigger-1)
-	}
-	if opt.CompactionStopTrigger < opt.CompactionSlowdownTrigger {
-		opt.CompactionStopTrigger = opt.CompactionSlowdownTrigger
-	}
-	if opt.CompactionResumeTrigger > opt.CompactionSlowdownTrigger {
-		opt.CompactionResumeTrigger = opt.CompactionSlowdownTrigger
-	}
+	cfg.NormalizeInPlace()
+	opt.NumCompactors = cfg.NumCompactors
+	opt.NumLevelZeroTables = cfg.NumLevelZeroTables
+	opt.L0SlowdownWritesTrigger = cfg.L0SlowdownWritesTrigger
+	opt.L0StopWritesTrigger = cfg.L0StopWritesTrigger
+	opt.L0ResumeWritesTrigger = cfg.L0ResumeWritesTrigger
+	opt.CompactionSlowdownTrigger = cfg.CompactionSlowdownTrigger
+	opt.CompactionStopTrigger = cfg.CompactionStopTrigger
+	opt.CompactionResumeTrigger = cfg.CompactionResumeTrigger
+	opt.WriteThrottleMinRate = cfg.WriteThrottleMinRate
+	opt.WriteThrottleMaxRate = cfg.WriteThrottleMaxRate
+	opt.IngestCompactBatchSize = cfg.IngestCompactBatchSize
+	opt.IngestBacklogMergeScore = cfg.IngestBacklogMergeScore
+	opt.IngestShardParallelism = cfg.IngestShardParallelism
+	opt.CompactionValueWeight = cfg.CompactionValueWeight
+	opt.CompactionValueAlertThreshold = cfg.CompactionValueAlertThreshold
+	opt.BlockCacheBytes = cfg.BlockCacheBytes
+	opt.IndexCacheBytes = cfg.IndexCacheBytes
 }

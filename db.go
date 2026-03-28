@@ -302,11 +302,9 @@ func Open(opt *Options) (_ *DB, err error) {
 	if opt == nil {
 		return nil, stderrors.New("open db: nil options")
 	}
-	opt = opt.normalized()
-	if opt == nil {
-		return nil, stderrors.New("open db: normalized options are nil")
-	}
-	db := newDB(opt)
+	frozen := *opt
+	frozen.normalizeInPlace()
+	db := newDB(&frozen)
 	defer func() {
 		if err != nil {
 			err = stderrors.Join(err, db.closeInternal())

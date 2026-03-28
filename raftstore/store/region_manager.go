@@ -21,6 +21,9 @@ type regionManager struct {
 }
 
 func newRegionManager(ctx context.Context, localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &regionManager{
 		ctx:           ctx,
 		metaByID:      make(map[uint64]raftmeta.RegionMeta),
@@ -191,7 +194,7 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 }
 
 func (rm *regionManager) runtimeContext() context.Context {
-	if rm == nil || rm.ctx == nil {
+	if rm == nil {
 		return context.Background()
 	}
 	return rm.ctx

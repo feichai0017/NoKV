@@ -231,7 +231,7 @@ func (s *Store) commandWait() time.Duration {
 }
 
 func (s *Store) runtimeContext() context.Context {
-	if s == nil || s.ctx == nil {
+	if s == nil {
 		return context.Background()
 	}
 	return s.ctx
