@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-5ba349cf.js";
+            window.path_to_searchindex_js = "searchindex-501b1cb7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -199,6 +199,7 @@ calling <code>NoKV.Open(opt)</code>, which now returns <code>(*DB, error)</code>
 <li><strong>Write pipeline</strong>
 <ul>
 <li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>WriteBatchWait</code></li>
+<li><code>MaxBatchCount</code>, <code>MaxBatchSize</code></li>
 <li><code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code></li>
 </ul>
 </li>
@@ -259,9 +260,21 @@ defer db.Close()
 </code></pre>
 <p>Notes:</p>
 <ul>
-<li><code>Open()</code> normalizes legacy fallback fields once at the option boundary. The
-DB and LSM layers then consume the resolved values directly instead of
-re-applying defaults internally.</li>
+<li><code>NewDefaultOptions()</code> populates concrete compaction/ingest defaults up front.
+<code>Open()</code> only backfills zero-valued legacy fields for compatibility, then the
+DB and LSM layers consume the resolved values directly.</li>
+<li><code>WriteBatchMaxCount</code>, <code>WriteBatchMaxSize</code>, <code>MaxBatchCount</code>, <code>MaxBatchSize</code>,
+<code>WriteThrottleMinRate</code>, <code>WriteThrottleMaxRate</code>, and <code>WALBufferSize</code> now also
+expose concrete defaults through <code>NewDefaultOptions()</code>. Zero remains a legacy
+unset value only for manually constructed configs.</li>
+<li>Batch knobs are split by owner:
+<ul>
+<li><code>WriteBatchMaxCount</code> / <code>WriteBatchMaxSize</code> bound commit-worker request
+coalescing.</li>
+<li><code>MaxBatchCount</code> / <code>MaxBatchSize</code> bound internal apply/rewrite batches such
+as <code>batchSet</code> and value-log GC rewrites.</li>
+</ul>
+</li>
 <li>Write slowdown is bandwidth-driven: <code>WriteThrottleMaxRate</code> applies when
 slowdown first becomes active, and pressure lowers the target rate toward
 <code>WriteThrottleMinRate</code> as compaction debt approaches the stop threshold.</li>
