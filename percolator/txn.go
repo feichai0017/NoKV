@@ -82,6 +82,7 @@ func prewriteMutation(db NoKV.MVCCStore, reader *Reader, req *pb.PrewriteRequest
 	return nil
 }
 
+// validateCommitVersion rejects commits that would violate MVCC ordering.
 func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *pb.KeyError {
 	if CommitVersion < StartVersion {
 		return keyErrorAbort("commit version is earlier than start version")
