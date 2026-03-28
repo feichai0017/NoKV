@@ -157,7 +157,8 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 	for _, e := range entries {
 		size += int64(e.EstimateSize(int(db.opt.ValueThreshold)))
 	}
-	if count >= db.opt.MaxBatchCount || size >= db.opt.MaxBatchSize {
+	limitCount, limitSize := db.opt.MaxBatchCount, db.opt.MaxBatchSize
+	if count >= limitCount || size >= limitSize {
 		return nil, utils.ErrTxnTooBig
 	}
 	if db.slowWrites.Load() == 1 {
@@ -320,8 +321,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 	// Adapt batch size to current backlog to drain the queue faster under load
 	// and reduce wake/sleep churn on the condition variable. Caps keep the batch
 	// from growing without bound to avoid long pauses.
-	limitCount := db.opt.WriteBatchMaxCount
-	limitSize := db.opt.WriteBatchMaxSize
+	limitCount, limitSize := db.opt.WriteBatchMaxCount, db.opt.WriteBatchMaxSize
 	backlog := int(cq.queueLen.Load())
 	if backlog > limitCount && limitCount > 0 {
 		factor := min(max(backlog/limitCount, 1), 4)

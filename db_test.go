@@ -182,6 +182,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	opt.MaxBatchSize = 0
 	opt.WriteThrottleMinRate = 0
 	opt.WriteThrottleMaxRate = 0
+	opt.WALBufferSize = 0
 	opt.NumCompactors = 0
 	opt.NumLevelZeroTables = 0
 	opt.L0SlowdownWritesTrigger = 0
@@ -213,6 +214,7 @@ func TestOpenNormalizesLegacyUnsetFieldsWithoutMutatingCaller(t *testing.T) {
 	require.Greater(t, db.opt.MaxBatchSize, int64(0))
 	require.Greater(t, db.opt.WriteThrottleMinRate, int64(0))
 	require.GreaterOrEqual(t, db.opt.WriteThrottleMaxRate, db.opt.WriteThrottleMinRate)
+	require.Greater(t, db.opt.WALBufferSize, 0)
 	require.Greater(t, db.opt.NumCompactors, 0)
 	require.Greater(t, db.opt.NumLevelZeroTables, 0)
 	require.Greater(t, db.opt.L0SlowdownWritesTrigger, 0)
@@ -241,6 +243,18 @@ func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
 	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
 	require.Greater(t, opt.IngestCompactBatchSize, 0)
 	require.Greater(t, opt.IngestBacklogMergeScore, 0.0)
+}
+
+func TestNewDefaultOptionsExposeConcreteBatchDefaults(t *testing.T) {
+	opt := NewDefaultOptions()
+
+	require.Greater(t, opt.WriteBatchMaxCount, 0)
+	require.Greater(t, opt.WriteBatchMaxSize, int64(0))
+	require.Equal(t, int64(opt.WriteBatchMaxCount), opt.MaxBatchCount)
+	require.Equal(t, opt.WriteBatchMaxSize, opt.MaxBatchSize)
+	require.Greater(t, opt.WriteThrottleMinRate, int64(0))
+	require.GreaterOrEqual(t, opt.WriteThrottleMaxRate, opt.WriteThrottleMinRate)
+	require.Greater(t, opt.WALBufferSize, 0)
 }
 
 func newTestOptions(t *testing.T) *Options {

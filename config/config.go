@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	scopeHost   = "host"
+	scopeDocker = "docker"
+)
+
 // File models the raft topology configuration shared by CLIs and gateways.
 type File struct {
 	MaxRetries                 int      `json:"max_retries"`
@@ -121,12 +126,7 @@ func (f *File) ResolvePDAddr(scope string) string {
 	if f == nil || f.PD == nil {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(scope), "docker") {
-		if v := strings.TrimSpace(f.PD.DockerAddr); v != "" {
-			return v
-		}
-	}
-	return strings.TrimSpace(f.PD.Addr)
+	return resolveScopedValue(f.PD.Addr, f.PD.DockerAddr, scope)
 }
 
 // ResolvePDWorkDir resolves the PD work directory for the provided scope.
@@ -137,12 +137,7 @@ func (f *File) ResolvePDWorkDir(scope string) string {
 	if f == nil || f.PD == nil {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(scope), "docker") {
-		if v := strings.TrimSpace(f.PD.DockerWorkDir); v != "" {
-			return v
-		}
-	}
-	return strings.TrimSpace(f.PD.WorkDir)
+	return resolveScopedValue(f.PD.WorkDir, f.PD.DockerWorkDir, scope)
 }
 
 // ResolveStoreWorkDir resolves the work directory for the given store and scope.
@@ -167,23 +162,15 @@ func (f *File) ResolveStoreWorkDir(storeID uint64, scope string) string {
 	if store == nil {
 		return ""
 	}
-	scopeNorm := strings.ToLower(strings.TrimSpace(scope))
-	if scopeNorm == "docker" {
-		if v := strings.TrimSpace(store.DockerWorkDir); v != "" {
+	if normalizedScope(scope) == scopeDocker {
+		if v := resolveScopedValue(store.WorkDir, store.DockerWorkDir, scopeDocker); v != "" {
 			return v
 		}
-		if v := strings.TrimSpace(store.WorkDir); v != "" {
-			return v
-		}
-		if v := strings.TrimSpace(f.StoreDockerWorkDirTemplate); v != "" {
-			return resolveStoreDirTemplate(v, storeID)
-		}
-		if v := strings.TrimSpace(f.StoreWorkDirTemplate); v != "" {
+		if v := resolveScopedValue(f.StoreWorkDirTemplate, f.StoreDockerWorkDirTemplate, scopeDocker); v != "" {
 			return resolveStoreDirTemplate(v, storeID)
 		}
 		return ""
 	}
-
 	if v := strings.TrimSpace(store.WorkDir); v != "" {
 		return v
 	}
@@ -199,4 +186,20 @@ func resolveStoreDirTemplate(template string, storeID uint64) string {
 		return ""
 	}
 	return strings.ReplaceAll(template, "{id}", fmt.Sprintf("%d", storeID))
+}
+
+func normalizedScope(scope string) string {
+	if strings.EqualFold(strings.TrimSpace(scope), scopeDocker) {
+		return scopeDocker
+	}
+	return scopeHost
+}
+
+func resolveScopedValue(host, docker, scope string) string {
+	if normalizedScope(scope) == scopeDocker {
+		if v := strings.TrimSpace(docker); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(host)
 }

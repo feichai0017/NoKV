@@ -202,6 +202,9 @@ func TestResolvePDAddrFallbackAndNil(t *testing.T) {
 	if got := cfg.ResolvePDAddr("docker"); got != "127.0.0.1:2379" {
 		t.Fatalf("expected docker fallback to host addr, got %q", got)
 	}
+	if got := cfg.ResolvePDAddr("weird"); got != "127.0.0.1:2379" {
+		t.Fatalf("expected unknown scope fallback to host addr, got %q", got)
+	}
 }
 
 func TestResolvePDWorkDir(t *testing.T) {
@@ -228,6 +231,9 @@ func TestResolvePDWorkDirFallbackAndNil(t *testing.T) {
 	cfg := &File{PD: &PD{WorkDir: "/var/lib/nokv-pd"}}
 	if got := cfg.ResolvePDWorkDir("docker"); got != "/var/lib/nokv-pd" {
 		t.Fatalf("expected docker fallback to host work dir, got %q", got)
+	}
+	if got := cfg.ResolvePDWorkDir("weird"); got != "/var/lib/nokv-pd" {
+		t.Fatalf("expected unknown scope fallback to host work dir, got %q", got)
 	}
 }
 

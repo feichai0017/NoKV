@@ -26,16 +26,16 @@ type dbWALGCPolicy struct {
 // newDBWALGCPolicy builds the default DB-backed WAL GC policy.
 //
 // The adapter reads raft checkpoints from the top-level DB options callback and
-// record counters from WAL(). It is injected into LSM so LSM core stays
+// record counters from the DB WAL manager. It is injected into LSM so LSM core stays
 // decoupled from store-local raft metadata and WAL typed-record details.
 func newDBWALGCPolicy(db *DB) lsm.WALGCPolicy {
 	if db == nil {
 		return &dbWALGCPolicy{}
 	}
+	w := db.wal
 	return &dbWALGCPolicy{
 		raftPointers: db.opt.RaftPointerSnapshot,
 		segmentMetrics: func(segmentID uint32) wal.RecordMetrics {
-			w := db.WAL()
 			if w == nil {
 				return wal.RecordMetrics{}
 			}

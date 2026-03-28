@@ -68,12 +68,7 @@ func TestMainSignalBranch(t *testing.T) {
 		origOptions := newDefaultOptions
 		defer func() { newDefaultOptions = origOptions }()
 		newDefaultOptions = func() *NoKV.Options {
-			opt := NoKV.NewDefaultOptions()
-			opt.MaxBatchCount = 0
-			opt.MaxBatchSize = 0
-			opt.WriteBatchMaxCount = 0
-			opt.WriteBatchMaxSize = 0
-			return opt
+			return NoKV.NewDefaultOptions()
 		}
 
 		origExit := exit

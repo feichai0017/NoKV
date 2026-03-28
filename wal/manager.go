@@ -24,6 +24,8 @@ const (
 	defaultSegmentSize = 64 << 20 // 64 MiB
 	minSegmentSize     = 64 << 10 // 64 KiB
 	defaultBufferSize  = 4 << 20  // 4 MiB
+	// DefaultBufferSize is the default in-memory WAL writer buffer size.
+	DefaultBufferSize = defaultBufferSize
 )
 
 // Config controls WAL manager behaviour.

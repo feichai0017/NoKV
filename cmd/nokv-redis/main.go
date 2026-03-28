@@ -40,18 +40,6 @@ func main() {
 
 	opt := newDefaultOptions()
 	opt.WorkDir = *workDir
-	if opt.MaxBatchCount <= 0 {
-		opt.MaxBatchCount = int64(opt.WriteBatchMaxCount)
-		if opt.MaxBatchCount <= 0 {
-			opt.MaxBatchCount = 1024
-		}
-	}
-	if opt.MaxBatchSize <= 0 {
-		opt.MaxBatchSize = opt.WriteBatchMaxSize
-		if opt.MaxBatchSize <= 0 {
-			opt.MaxBatchSize = 16 << 20
-		}
-	}
 
 	var (
 		db      *NoKV.DB

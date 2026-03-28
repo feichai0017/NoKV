@@ -21,8 +21,6 @@ func TestRedisGatewayBasicCommands(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ValueThreshold = 0
-	opt.MaxBatchCount = 1024
-	opt.MaxBatchSize = 16 << 20
 
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
