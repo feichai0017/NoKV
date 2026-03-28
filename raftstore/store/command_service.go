@@ -103,7 +103,7 @@ func (s *Store) ProposeCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, err
 // ReadCommand executes the provided read-only raft command locally on the
 // leader. The command must only include read operations (Get/Scan). The method
 // returns a RegionError when the store is not leader for the target region.
-func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Store) ReadCommand(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	peer, meta, regionResp, err := s.validateCommand(req)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func (s *Store) ReadCommand(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	index, err := peer.LinearizableRead(ctx)
 	if err != nil {

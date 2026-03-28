@@ -37,7 +37,7 @@ func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetRes
 			Cmd:     &pb.Request_Get{Get: readReq},
 		}},
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -76,7 +76,7 @@ func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*p
 		Header:   header,
 		Requests: requests,
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -122,7 +122,7 @@ func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScan
 			Cmd:     &pb.Request_Scan{Scan: scanReq},
 		}},
 	}
-	result, err := s.read(cmd)
+	result, err := s.read(ctx, cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -258,11 +258,11 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatus
 	return out, nil
 }
 
-func (s *Service) read(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func (s *Service) read(ctx context.Context, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("raftstore: store not initialized")
 	}
-	return s.store.ReadCommand(req)
+	return s.store.ReadCommand(ctx, req)
 }
 
 func (s *Service) propose(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {

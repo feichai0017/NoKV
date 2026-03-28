@@ -1,8 +1,10 @@
 package store
 
 import (
-	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"context"
 	"testing"
+
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -113,12 +115,12 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 func TestStoreReadCommandValidation(t *testing.T) {
 	store := NewStore(nil)
 
-	if _, err := store.ReadCommand(&pb.RaftCmdRequest{}); err == nil {
+	if _, err := store.ReadCommand(context.Background(), &pb.RaftCmdRequest{}); err == nil {
 		t.Fatalf("expected missing region id error")
 	}
 
 	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1}}
-	resp, err := store.ReadCommand(req)
+	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +133,7 @@ func TestStoreReadCommandStoreNotMatch(t *testing.T) {
 	store := NewStoreWithConfig(Config{StoreID: 7})
 
 	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
-	resp, err := store.ReadCommand(req)
+	resp, err := store.ReadCommand(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
