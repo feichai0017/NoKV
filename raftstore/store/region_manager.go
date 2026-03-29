@@ -18,6 +18,15 @@ type regionManager struct {
 	notify        func(regionEvent)
 }
 
+// syncPeerMirror updates a peer's in-memory region snapshot after the local
+// region truth has already been persisted and applied to the catalog.
+func (rm *regionManager) syncPeerMirror(p *peer.Peer, meta raftmeta.RegionMeta) {
+	if p == nil {
+		return
+	}
+	p.ApplyRegionMetaMirror(meta)
+}
+
 func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, notify func(regionEvent)) *regionManager {
 	return &regionManager{
 		metaByID:      make(map[uint64]raftmeta.RegionMeta),
@@ -128,9 +137,7 @@ func (rm *regionManager) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	p := rm.peers[metaCopy.ID]
 	rm.mu.Unlock()
 
-	if p != nil {
-		p.SetRegionMeta(metaCopy)
-	}
+	rm.syncPeerMirror(p, metaCopy)
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
