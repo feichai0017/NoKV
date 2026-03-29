@@ -6,6 +6,11 @@ import (
 	"sync/atomic"
 )
 
+const (
+	mpscQueueSpinCount   = 32
+	mpscQueueCacheLineSz = 64
+)
+
 // MPSCQueue is a bounded multi-producer, single-consumer queue.
 //
 // It uses a per-slot sequence protocol so producers can reserve and publish
@@ -15,8 +20,11 @@ type MPSCQueue[T any] struct {
 	buf       []mpscSlot[T]
 	mask      uint64
 	capacity  uint64
+	_         [mpscQueueCacheLineSz]byte
 	head      atomic.Uint64
+	_         [mpscQueueCacheLineSz]byte
 	tail      atomic.Uint64
+	_         [mpscQueueCacheLineSz]byte
 	closed    atomic.Bool
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -57,6 +65,7 @@ func (q *MPSCQueue[T]) Push(v T) bool {
 	if q == nil {
 		return false
 	}
+retry:
 	for {
 		if q.closed.Load() {
 			return false
@@ -69,13 +78,28 @@ func (q *MPSCQueue[T]) Push(v T) bool {
 			if q.tail.CompareAndSwap(pos, pos+1) {
 				slot.val = v
 				slot.seq.Store(pos + 1)
-				q.notEmpty.Signal()
+				if pos == q.head.Load() {
+					q.notEmpty.Signal()
+				}
 				return true
 			}
 			runtime.Gosched()
 			continue
 		}
 		if diff < 0 {
+			for range mpscQueueSpinCount {
+				if q.closed.Load() {
+					return false
+				}
+				pos = q.tail.Load()
+				slot = &q.buf[pos&q.mask]
+				seq = slot.seq.Load()
+				diff = int64(seq) - int64(pos)
+				if diff >= 0 {
+					continue retry
+				}
+				runtime.Gosched()
+			}
 			q.mu.Lock()
 			for !q.closed.Load() {
 				pos = q.tail.Load()
@@ -100,6 +124,7 @@ func (q *MPSCQueue[T]) TryPop() (T, bool) {
 		return zero, false
 	}
 	pos := q.head.Load()
+	tail := q.tail.Load()
 	slot := &q.buf[pos&q.mask]
 	seq := slot.seq.Load()
 	diff := int64(seq) - int64(pos+1)
@@ -110,7 +135,10 @@ func (q *MPSCQueue[T]) TryPop() (T, bool) {
 	slot.val = zero
 	q.head.Store(pos + 1)
 	slot.seq.Store(pos + q.capacity)
-	q.notFull.Signal()
+	// Only wake a blocked producer on the full->non-full edge.
+	if tail-pos == q.capacity {
+		q.notFull.Signal()
+	}
 	return val, true
 }
 
@@ -128,6 +156,15 @@ func (q *MPSCQueue[T]) Pop() (T, bool) {
 		}
 		if q.drained() {
 			return zero, false
+		}
+		for range mpscQueueSpinCount {
+			if val, ok := q.TryPop(); ok {
+				return val, true
+			}
+			if q.drained() {
+				return zero, false
+			}
+			runtime.Gosched()
 		}
 		q.mu.Lock()
 		for {
