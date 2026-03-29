@@ -384,8 +384,13 @@ func (b *raftBackend) retryWithConflictResolution(fn func() error) error {
 		}
 
 		var conflicts *client.KeyConflictError
-		if errors.As(err, &conflicts) && b.resolveKeyConflicts(conflicts) {
-			continue // Retry after resolving locks
+		if errors.As(err, &conflicts) {
+			if resolveErr := b.resolveKeyConflicts(conflicts); resolveErr == nil {
+				continue // Retry after resolving locks
+			} else {
+				lastErr = resolveErr
+				break
+			}
 		}
 		lastErr = err
 		// Non-conflict error or failed to resolve, stop retrying
@@ -431,13 +436,13 @@ func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[stri
 
 // resolveLocks attempts to resolve all given locks.
 // Returns true if all locks were resolved successfully.
-func (b *raftBackend) resolveLocks(locks []*pb.Locked) bool {
+func (b *raftBackend) resolveLocks(locks []*pb.Locked) error {
 	for _, lock := range locks {
-		if !b.resolveSingleLock(lock) {
-			return false
+		if err := b.resolveSingleLock(lock); err != nil {
+			return err
 		}
 	}
-	return true
+	return nil
 }
 
 func (b *raftBackend) buildValueAtVersion(key []byte, valueResp *pb.GetResponse) (*redisValue, error) {
@@ -491,13 +496,13 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	return nil
 }
 
-func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) bool {
+func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) error {
 	if conflicts == nil || len(conflicts.Errors) == 0 {
-		return false
+		return fmt.Errorf("raft backend: conflict set empty")
 	}
 	locks := b.extractLocksFromKeyErrors(conflicts.Errors)
 	if len(locks) == 0 {
-		return true // No locks to resolve
+		return nil // No locks to resolve
 	}
 	return b.resolveLocks(locks)
 }
@@ -516,9 +521,9 @@ func (b *raftBackend) extractLocksFromKeyErrors(keyErrors []*pb.KeyError) []*pb.
 	return locks
 }
 
-func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
+func (b *raftBackend) resolveSingleLock(lock *pb.Locked) error {
 	if lock == nil {
-		return true
+		return nil
 	}
 	currentTs, err := b.reserveTimestamp(1)
 	if err != nil {
@@ -527,8 +532,11 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
 	ctx, cancel := b.context()
 	resp, err := b.client.CheckTxnStatus(ctx, lock.GetPrimaryLock(), lock.GetLockVersion(), currentTs)
 	cancel()
-	if err != nil || resp == nil {
-		return false
+	if err != nil {
+		return translateRaftClientError("lock status check", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("raft backend: empty lock status response")
 	}
 	if resp.GetCommitVersion() > 0 {
 		return b.resolveLocksWithKey(lock.GetLockVersion(), resp.GetCommitVersion(), lock.GetKey())
@@ -539,16 +547,19 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) bool {
 		return b.resolveLocksWithKey(lock.GetLockVersion(), 0, lock.GetKey())
 	case pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
 		pb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed:
-		return false
+		return fmt.Errorf("raft backend: lock resolution deferred")
 	default:
-		return false
+		return fmt.Errorf("raft backend: unsupported lock status action %s", resp.GetAction().String())
 	}
 }
 
-func (b *raftBackend) resolveLocksWithKey(lockVersion, commitVersion uint64, key []byte) bool {
+func (b *raftBackend) resolveLocksWithKey(lockVersion, commitVersion uint64, key []byte) error {
 	keys := [][]byte{append([]byte(nil), key...)}
 	ctx, cancel := b.context()
 	defer cancel()
 	_, err := b.client.ResolveLocks(ctx, lockVersion, commitVersion, keys)
-	return err == nil
+	if err != nil {
+		return translateRaftClientError("lock resolve", err)
+	}
+	return nil
 }
