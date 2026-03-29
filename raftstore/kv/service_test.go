@@ -119,7 +119,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 
 	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
+	st := store.NewStore(store.Config{StoreID: cfg.storeID, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
 	meta := &raftmeta.RegionMeta{
@@ -210,7 +210,7 @@ func commitKey(t *testing.T, service *kv.Service, ctx *pb.Context, key []byte, s
 func TestServicePrewriteCommit(t *testing.T) {
 	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{StoreID: 1, CommandApplier: applier})
+	st := store.NewStore(store.Config{StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
 	region := &raftmeta.RegionMeta{
@@ -337,7 +337,7 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 func TestServiceRegionEpochMismatch(t *testing.T) {
 	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)
-	st := store.NewStoreWithConfig(store.Config{StoreID: 2, CommandApplier: applier})
+	st := store.NewStore(store.Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &raftmeta.RegionMeta{
 		ID:       601,

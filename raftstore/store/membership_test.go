@@ -17,7 +17,7 @@ type noopTransport struct{}
 func (noopTransport) Send(context.Context, myraft.Message) {}
 
 func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
-	rs := NewStore(nil)
+	rs := NewStore(Config{})
 
 	const regionID = uint64(101)
 

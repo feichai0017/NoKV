@@ -764,7 +764,7 @@ func TestRunManifestCmdMissingManifest(t *testing.T) {
 
 func TestFirstRegionMetricsFound(t *testing.T) {
 	withStoreRegistry(t, func() {
-		store := storepkg.NewStoreWithConfig(storepkg.Config{})
+		store := storepkg.NewStore(storepkg.Config{})
 		defer store.Close()
 		registerRuntimeStore(store)
 		defer unregisterRuntimeStore(store)
@@ -774,7 +774,7 @@ func TestFirstRegionMetricsFound(t *testing.T) {
 
 func TestLocalStatsSnapshotWithMetrics(t *testing.T) {
 	withStoreRegistry(t, func() {
-		store := storepkg.NewStoreWithConfig(storepkg.Config{})
+		store := storepkg.NewStore(storepkg.Config{})
 		defer store.Close()
 		registerRuntimeStore(store)
 		defer unregisterRuntimeStore(store)
