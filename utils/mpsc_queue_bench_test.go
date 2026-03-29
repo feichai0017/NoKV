@@ -11,10 +11,9 @@ func BenchmarkMPSCQueuePushPop(b *testing.B) {
 		b.Run("producers="+itoa(producers), func(b *testing.B) {
 			q := NewMPSCQueue[int](1024)
 			var next atomic.Int64
-			stop := make(chan struct{})
 			var wg sync.WaitGroup
 			wg.Add(producers)
-			for i := 0; i < producers; i++ {
+			for range producers {
 				go func() {
 					defer wg.Done()
 					for {
@@ -37,17 +36,68 @@ func BenchmarkMPSCQueuePushPop(b *testing.B) {
 				count++
 			}
 			b.StopTimer()
-			close(stop)
-			_ = stop
 			q.Close()
 			wg.Wait()
 		})
 	}
 }
 
-func BenchmarkMPSCQueueTryPopBurst(b *testing.B) {
+func BenchmarkMPSCQueuePushOnlyContention(b *testing.B) {
+	for _, producers := range []int{1, 4, 8, 16} {
+		b.Run("producers="+itoa(producers), func(b *testing.B) {
+			q := NewMPSCQueue[int](1024)
+			done := make(chan struct{})
+			go func() {
+				for {
+					if _, ok := q.Pop(); !ok {
+						return
+					}
+					select {
+					case <-done:
+						return
+					default:
+					}
+				}
+			}()
+
+			var next atomic.Int64
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(producers)
+			for range producers {
+				go func() {
+					defer wg.Done()
+					<-start
+					for {
+						n := int(next.Add(1))
+						if n > b.N {
+							return
+						}
+						if !q.Push(n) {
+							return
+						}
+					}
+				}()
+			}
+
+			b.ResetTimer()
+			close(start)
+			wg.Wait()
+			b.StopTimer()
+			close(done)
+			q.Close()
+			for {
+				if _, ok := q.TryPop(); !ok {
+					break
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkMPSCQueuePopOnlyReady(b *testing.B) {
 	q := NewMPSCQueue[int](1024)
-	for i := 0; i < q.Cap()/2; i++ {
+	for i := 0; i < q.Cap(); i++ {
 		if !q.Push(i) {
 			b.Fatalf("prefill push failed")
 		}
@@ -60,6 +110,73 @@ func BenchmarkMPSCQueueTryPopBurst(b *testing.B) {
 		if !q.Push(i) {
 			b.Fatalf("push failed")
 		}
+	}
+}
+
+func BenchmarkMPSCQueueFullQueueWake(b *testing.B) {
+	q := NewMPSCQueue[int](1)
+	if !q.Push(1) {
+		b.Fatalf("initial push failed")
+	}
+	start := make(chan struct{})
+	ready := make(chan struct{}, 1)
+	done := make(chan struct{}, 1)
+	go func() {
+		ready <- struct{}{}
+		<-start
+		for range b.N {
+			if !q.Push(1) {
+				done <- struct{}{}
+				return
+			}
+		}
+		done <- struct{}{}
+	}()
+	<-ready
+	b.ResetTimer()
+	close(start)
+	for range b.N {
+		if _, ok := q.Pop(); !ok {
+			b.Fatalf("pop failed")
+		}
+	}
+	<-done
+	b.StopTimer()
+	q.Close()
+	for {
+		if _, ok := q.TryPop(); !ok {
+			break
+		}
+	}
+}
+
+func BenchmarkMPSCQueueCloseDrain(b *testing.B) {
+	for _, producers := range []int{4, 16} {
+		b.Run("producers="+itoa(producers), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				q := NewMPSCQueue[int](64)
+				for j := 0; j < q.Cap(); j++ {
+					if !q.Push(j) {
+						b.Fatalf("prefill push failed")
+					}
+				}
+				var wg sync.WaitGroup
+				wg.Add(producers)
+				for range producers {
+					go func() {
+						defer wg.Done()
+						_ = q.Push(1)
+					}()
+				}
+				q.Close()
+				for {
+					if _, ok := q.TryPop(); !ok {
+						break
+					}
+				}
+				wg.Wait()
+			}
+		})
 	}
 }
 
