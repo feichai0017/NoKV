@@ -7,25 +7,25 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 )
 
-func (s *Store) updateRegion(meta raftmeta.RegionMeta) error {
+func (s *Store) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regionMgr().updateRegion(meta)
+	return s.regionMgr().applyRegionMeta(meta)
 }
 
-func (s *Store) removeRegion(regionID uint64) error {
+func (s *Store) applyRegionRemoval(regionID uint64) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regionMgr().removeRegion(regionID)
+	return s.regionMgr().applyRegionRemoval(regionID)
 }
 
-func (s *Store) updateRegionState(regionID uint64, state raftmeta.RegionState) error {
+func (s *Store) applyRegionState(regionID uint64, state raftmeta.RegionState) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}
-	return s.regionMgr().updateRegionState(regionID, state)
+	return s.regionMgr().applyRegionState(regionID, state)
 }
 
 // RegionMetas collects the known raftmeta.RegionMeta entries from registered

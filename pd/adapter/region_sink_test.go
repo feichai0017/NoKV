@@ -139,6 +139,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	require.Contains(t, got[1], "RegionHeartbeat")
 	status := sink.Status()
 	require.True(t, status.Degraded)
+	require.Equal(t, storepkg.SchedulerModeUnavailable, status.Mode)
 	require.Contains(t, status.LastError, "RegionHeartbeat")
 	require.False(t, status.LastErrorAt.IsZero())
 	require.NoError(t, sink.Close())
@@ -184,6 +185,7 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Contains(t, got[0], "RemoveRegion")
 	require.True(t, sink.Status().Degraded)
+	require.Equal(t, storepkg.SchedulerModeUnavailable, sink.Status().Mode)
 }
 
 func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
@@ -197,6 +199,7 @@ func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
 	status := sink.Status()
 	require.False(t, status.Degraded)
+	require.Equal(t, storepkg.SchedulerModeHealthy, status.Mode)
 	require.Contains(t, status.LastError, "StoreHeartbeat")
 }
 

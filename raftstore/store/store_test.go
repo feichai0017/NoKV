@@ -26,6 +26,12 @@ type testSchedulerSink struct {
 	stores  map[uint64]StoreStats
 }
 
+type slowSchedulerSink struct {
+	testSchedulerSink
+	publishDelay time.Duration
+	removeDelay  time.Duration
+}
+
 type regionHeartbeat struct {
 	Meta          raftmeta.RegionMeta
 	LastHeartbeat time.Time
@@ -118,6 +124,28 @@ func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
 
 func (s *testSchedulerSink) Close() error {
 	return nil
+}
+
+func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {
+	if s.publishDelay > 0 {
+		select {
+		case <-time.After(s.publishDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+	s.testSchedulerSink.PublishRegion(ctx, meta)
+}
+
+func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
+	if s.removeDelay > 0 {
+		select {
+		case <-time.After(s.removeDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+	s.testSchedulerSink.RemoveRegion(ctx, id)
 }
 
 func testPeerBuilder(storeID uint64) PeerBuilder {
@@ -353,7 +381,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 			{StoreID: 2, PeerID: 22},
 		},
 	}
-	require.NoError(t, rs.updateRegion(updated))
+	require.NoError(t, rs.applyRegionMeta(updated))
 
 	peerMeta := p.RegionMeta()
 	require.NotNil(t, peerMeta)
@@ -376,7 +404,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.Equal(t, uint64(4), meta.Epoch.Version)
 	require.Len(t, meta.Peers, 2)
 
-	require.NoError(t, rs.updateRegionState(500, raftmeta.RegionStateRemoving))
+	require.NoError(t, rs.applyRegionState(500, raftmeta.RegionStateRemoving))
 
 	metas = rs.RegionMetas()
 	require.Equal(t, raftmeta.RegionStateRemoving, metas[0].State)
@@ -394,7 +422,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, raftmeta.RegionStateRemoving, meta.State)
 
-	require.NoError(t, rs.updateRegionState(500, raftmeta.RegionStateTombstone))
+	require.NoError(t, rs.applyRegionState(500, raftmeta.RegionStateTombstone))
 
 	metas = rs.RegionMetas()
 	require.Equal(t, raftmeta.RegionStateTombstone, metas[0].State)
@@ -406,10 +434,10 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, raftmeta.RegionStateTombstone, meta.State)
 
-	err = rs.updateRegionState(500, raftmeta.RegionStateRunning)
+	err = rs.applyRegionState(500, raftmeta.RegionStateRunning)
 	require.Error(t, err)
 
-	require.NoError(t, rs.removeRegion(500))
+	require.NoError(t, rs.applyRegionRemoval(500))
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 0)
@@ -431,8 +459,8 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 		EndKey:   []byte("m"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	require.NoError(t, rs.updateRegion(parent))
-	require.NoError(t, rs.updateRegion(child))
+	require.NoError(t, rs.applyRegionMeta(parent))
+	require.NoError(t, rs.applyRegionMeta(child))
 
 	metas = rs.RegionMetas()
 	require.Len(t, metas, 2)
@@ -467,19 +495,62 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
 
-	snapshot := sink.RegionSnapshot()
-	require.Len(t, snapshot, 1)
+	var snapshot []regionHeartbeat
+	require.Eventually(t, func() bool {
+		snapshot = sink.RegionSnapshot()
+		return len(snapshot) == 1
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(42), snapshot[0].Meta.ID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
-	require.NoError(t, rs.updateRegionState(42, raftmeta.RegionStateRemoving))
-	snapshot = sink.RegionSnapshot()
-	require.Len(t, snapshot, 1)
+	require.NoError(t, rs.applyRegionState(42, raftmeta.RegionStateRemoving))
+	require.Eventually(t, func() bool {
+		snapshot = sink.RegionSnapshot()
+		return len(snapshot) == 1 && snapshot[0].Meta.State == raftmeta.RegionStateRemoving
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, raftmeta.RegionStateRemoving, snapshot[0].Meta.State)
 
-	require.NoError(t, rs.removeRegion(42))
-	snapshot = sink.RegionSnapshot()
-	require.Empty(t, snapshot)
+	require.NoError(t, rs.applyRegionRemoval(42))
+	require.Eventually(t, func() bool {
+		return len(sink.RegionSnapshot()) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
+	sink := &slowSchedulerSink{
+		testSchedulerSink: *newTestSchedulerSink(),
+		publishDelay:      200 * time.Millisecond,
+	}
+	rs := NewStoreWithConfig(Config{Scheduler: sink, StoreID: 1})
+	defer rs.Close()
+
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &raftmeta.RegionMeta{
+			ID:       88,
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
+		},
+	}
+
+	start := time.Now()
+	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	defer rs.StopPeer(peer.ID())
+	require.Less(t, elapsed, sink.publishDelay/2, "region apply path should not block on slow PD publish")
+	require.Eventually(t, func() bool {
+		snapshot := sink.RegionSnapshot()
+		return len(snapshot) == 1 && snapshot[0].Meta.ID == 88
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {

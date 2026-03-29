@@ -164,6 +164,7 @@ func (s *SchedulerClient) recordError(op string, err error) {
 	msg := op + ": " + err.Error()
 	now := time.Now()
 	s.mu.Lock()
+	s.status.Mode = storepkg.SchedulerModeUnavailable
 	s.status.Degraded = true
 	s.status.LastError = msg
 	s.status.LastErrorAt = now
@@ -176,6 +177,7 @@ func (s *SchedulerClient) markHealthy() {
 		return
 	}
 	s.mu.Lock()
+	s.status.Mode = storepkg.SchedulerModeHealthy
 	s.status.Degraded = false
 	s.mu.Unlock()
 }
