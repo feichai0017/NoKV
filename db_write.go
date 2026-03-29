@@ -3,6 +3,7 @@ package NoKV
 import (
 	"log/slog"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -100,14 +101,21 @@ func (cq *commitQueue) acquireItem() bool {
 }
 
 func (cq *commitQueue) pop() *commitRequest {
-	cr, ok := cq.ring.Pop()
-	if !ok {
-		panic("commitQueue.pop: item token without queued request")
+	for {
+		cr, ok := cq.ring.Pop()
+		if ok {
+			cq.queueLen.Add(-1)
+			cq.releaseSpace()
+			cq.signalDrainedIfDone()
+			return cr
+		}
+		// The ring is MPMC and reserves tail positions before publishing them.
+		// Another producer can publish a later slot and release an item token
+		// while the current head slot is still being filled. Once a consumer has
+		// acquired an item token, it must wait for the head slot to become
+		// visible instead of assuming Pop succeeds immediately.
+		runtime.Gosched()
 	}
-	cq.queueLen.Add(-1)
-	cq.releaseSpace()
-	cq.signalDrainedIfDone()
-	return cr
 }
 
 func (db *DB) throttleSignal() <-chan struct{} {
