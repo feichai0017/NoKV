@@ -51,11 +51,20 @@ func (t OperationType) String() string {
 
 // SchedulerStatus captures local/control-plane scheduler health. It is a
 // diagnostic view only; stores must not treat it as routing authority.
+type SchedulerMode string
+
+const (
+	SchedulerModeHealthy     SchedulerMode = "healthy"
+	SchedulerModeDegraded    SchedulerMode = "degraded"
+	SchedulerModeUnavailable SchedulerMode = "unavailable"
+)
+
 type SchedulerStatus struct {
-	Degraded          bool      `json:"degraded"`
-	LastError         string    `json:"last_error,omitempty"`
-	LastErrorAt       time.Time `json:"last_error_at"`
-	DroppedOperations uint64    `json:"dropped_operations"`
+	Mode              SchedulerMode `json:"mode"`
+	Degraded          bool          `json:"degraded"`
+	LastError         string        `json:"last_error,omitempty"`
+	LastErrorAt       time.Time     `json:"last_error_at"`
+	DroppedOperations uint64        `json:"dropped_operations"`
 }
 
 // SchedulerClient publishes store state to the control plane and returns any

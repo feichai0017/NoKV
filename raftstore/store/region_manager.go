@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -12,29 +11,24 @@ import (
 
 type regionManager struct {
 	mu            sync.RWMutex
-	ctx           context.Context
 	metaByID      map[uint64]raftmeta.RegionMeta
 	peers         map[uint64]*peer.Peer
 	localMeta     *raftmeta.Store
 	regionMetrics *metrics.RegionMetrics
-	scheduler     SchedulerClient
+	notify        func(regionEvent)
 }
 
-func newRegionManager(ctx context.Context, localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, scheduler SchedulerClient) *regionManager {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func newRegionManager(localMeta *raftmeta.Store, regionMetrics *metrics.RegionMetrics, notify func(regionEvent)) *regionManager {
 	return &regionManager{
-		ctx:           ctx,
 		metaByID:      make(map[uint64]raftmeta.RegionMeta),
 		peers:         make(map[uint64]*peer.Peer),
 		localMeta:     localMeta,
 		regionMetrics: regionMetrics,
-		scheduler:     scheduler,
+		notify:        notify,
 	}
 }
 
-func (rm *regionManager) loadSnapshot(snapshot map[uint64]raftmeta.RegionMeta) {
+func (rm *regionManager) loadBootstrapSnapshot(snapshot map[uint64]raftmeta.RegionMeta) {
 	if rm == nil || len(snapshot) == 0 {
 		return
 	}
@@ -98,7 +92,7 @@ func (rm *regionManager) listMetas() []raftmeta.RegionMeta {
 	return out
 }
 
-func (rm *regionManager) updateRegion(meta raftmeta.RegionMeta) error {
+func (rm *regionManager) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -140,13 +134,17 @@ func (rm *regionManager) updateRegion(meta raftmeta.RegionMeta) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
-	if rm.scheduler != nil {
-		rm.scheduler.PublishRegion(rm.runtimeContext(), metaCopy)
+	if rm.notify != nil {
+		rm.notify(regionEvent{
+			kind:     regionEventApply,
+			regionID: metaCopy.ID,
+			meta:     metaCopy,
+		})
 	}
 	return nil
 }
 
-func (rm *regionManager) updateRegionState(regionID uint64, state raftmeta.RegionState) error {
+func (rm *regionManager) applyRegionState(regionID uint64, state raftmeta.RegionState) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -155,10 +153,10 @@ func (rm *regionManager) updateRegionState(regionID uint64, state raftmeta.Regio
 		return fmt.Errorf("raftstore: region %d not found", regionID)
 	}
 	meta.State = state
-	return rm.updateRegion(meta)
+	return rm.applyRegionMeta(meta)
 }
 
-func (rm *regionManager) removeRegion(regionID uint64) error {
+func (rm *regionManager) applyRegionRemoval(regionID uint64) error {
 	if rm == nil {
 		return fmt.Errorf("raftstore: region manager nil")
 	}
@@ -171,7 +169,7 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 	}
 	if meta.State != raftmeta.RegionStateTombstone {
 		meta.State = raftmeta.RegionStateTombstone
-		if err := rm.updateRegion(meta); err != nil {
+		if err := rm.applyRegionMeta(meta); err != nil {
 			return err
 		}
 	}
@@ -187,17 +185,13 @@ func (rm *regionManager) removeRegion(regionID uint64) error {
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordRemove(regionID)
 	}
-	if rm.scheduler != nil {
-		rm.scheduler.RemoveRegion(rm.runtimeContext(), regionID)
+	if rm.notify != nil {
+		rm.notify(regionEvent{
+			kind:     regionEventRemove,
+			regionID: regionID,
+		})
 	}
 	return nil
-}
-
-func (rm *regionManager) runtimeContext() context.Context {
-	if rm == nil {
-		return context.Background()
-	}
-	return rm.ctx
 }
 
 func validRegionStateTransition(current, next raftmeta.RegionState) bool {

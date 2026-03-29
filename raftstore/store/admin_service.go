@@ -42,7 +42,7 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta raftmeta.RegionMeta)
 	newParent := parentMeta
 	newParent.EndKey = append([]byte(nil), childMeta.StartKey...)
 	newParent.Epoch.Version++
-	if err := s.updateRegion(newParent); err != nil {
+	if err := s.applyRegionMeta(newParent); err != nil {
 		return nil, err
 	}
 	if childMeta.State == 0 {
@@ -50,12 +50,12 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta raftmeta.RegionMeta)
 	}
 	cfg, bootstrapPeers, err := s.buildChildPeerConfig(childMeta)
 	if err != nil {
-		_ = s.updateRegion(originalParent)
+		_ = s.applyRegionMeta(originalParent)
 		return nil, err
 	}
 	childPeer, err := s.StartPeer(cfg, bootstrapPeers)
 	if err != nil {
-		_ = s.updateRegion(originalParent)
+		_ = s.applyRegionMeta(originalParent)
 		return nil, err
 	}
 	return childPeer, nil
@@ -186,13 +186,13 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 	if len(sourceMeta.EndKey) == 0 || bytes.Compare(sourceMeta.EndKey, updated.EndKey) > 0 {
 		updated.EndKey = append([]byte(nil), sourceMeta.EndKey...)
 	}
-	if err := s.updateRegion(updated); err != nil {
+	if err := s.applyRegionMeta(updated); err != nil {
 		return err
 	}
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())
 	}
-	if err := s.removeRegion(sourceMeta.ID); err != nil {
+	if err := s.applyRegionRemoval(sourceMeta.ID); err != nil {
 		return err
 	}
 	return nil
