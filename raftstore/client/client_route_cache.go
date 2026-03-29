@@ -48,6 +48,27 @@ func (c *Client) regionForKey(ctx context.Context, key []byte) (regionSnapshot, 
 	return c.regionForKeyFromResolver(ctx, key)
 }
 
+func (c *Client) routeKeyWithRetry(ctx context.Context, key []byte) (regionSnapshot, error) {
+	var lastErr error
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		region, err := c.regionForKey(ctx, key)
+		if err == nil {
+			return region, nil
+		}
+		if !IsRouteUnavailable(err) {
+			return regionSnapshot{}, err
+		}
+		lastErr = err
+		if err := c.waitRetry(ctx, attempt, retryRouteUnavailable); err != nil {
+			return regionSnapshot{}, err
+		}
+	}
+	if lastErr != nil {
+		return regionSnapshot{}, lastErr
+	}
+	return regionSnapshot{}, fmt.Errorf("client: route retries exhausted for key %q", key)
+}
+
 // regionForKeyFromCache returns a cached Region snapshot when the key is
 // covered by an indexed Region range.
 func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {

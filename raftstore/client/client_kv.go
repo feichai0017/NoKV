@@ -76,15 +76,10 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts && len(pending) > 0; attempt++ {
 		groups := make(map[uint64]*regionBatch)
-		buildRetry := false
 		for keyID, key := range pending {
-			region, err := c.regionForKey(ctx, key)
+			region, err := c.routeKeyWithRetry(ctx, key)
 			if err != nil {
-				if IsRouteUnavailable(err) {
-					lastErr = err
-					buildRetry = true
-					break
-				}
+				lastErr = err
 				return nil, err
 			}
 			regionID := region.meta.GetId()
@@ -95,12 +90,6 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			}
 			group.keys = append(group.keys, key)
 			group.ids = append(group.ids, keyID)
-		}
-		if buildRetry {
-			if err := c.waitRetry(ctx, attempt, retryRouteUnavailable); err != nil {
-				return nil, err
-			}
-			continue
 		}
 		var completed []string
 		for regionID, group := range groups {
@@ -345,14 +334,14 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		if mut == nil {
 			continue
 		}
-		region, err := c.regionForKey(ctx, mut.GetKey())
+		region, err := c.routeKeyWithRetry(ctx, mut.GetKey())
 		if err != nil {
 			return err
 		}
 		id := region.meta.GetId()
 		grouped[id] = append(grouped[id], cloneMutation(mut))
 	}
-	primaryRegion, err := c.regionForKey(ctx, primary)
+	primaryRegion, err := c.routeKeyWithRetry(ctx, primary)
 	if err != nil {
 		return err
 	}
@@ -569,7 +558,7 @@ func (c *Client) ResolveLocks(ctx context.Context, startVersion, commitVersion u
 	}
 	grouped := make(map[uint64][][]byte)
 	for _, key := range keys {
-		region, err := c.regionForKey(ctx, key)
+		region, err := c.routeKeyWithRetry(ctx, key)
 		if err != nil {
 			return 0, err
 		}

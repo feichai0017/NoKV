@@ -855,6 +855,99 @@ func TestClientRetriesTransportUnavailable(t *testing.T) {
 	require.Equal(t, []byte("value-a"), resp.GetValue())
 }
 
+func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	resolver := resolverFromCluster(cluster)
+	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		Retry: RetryPolicy{
+			MaxAttempts:             3,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*pb.Mutation{
+		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
+	}, 10, 20, 3000)
+	require.NoError(t, err)
+
+	resolver.mu.Lock()
+	require.GreaterOrEqual(t, resolver.calls, 2)
+	resolver.mu.Unlock()
+}
+
+func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	resolver := resolverFromCluster(cluster)
+	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		Retry: RetryPolicy{
+			MaxAttempts:             3,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resolved, err := cli.ResolveLocks(context.Background(), 1, 0, [][]byte{[]byte("alfa")})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), resolved)
+
+	resolver.mu.Lock()
+	require.GreaterOrEqual(t, resolver.calls, 2)
+	resolver.mu.Unlock()
+}
+
 func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
