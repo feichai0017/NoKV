@@ -682,6 +682,59 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 
 	_, err = cli.Get(context.Background(), []byte("key"), 1)
 	require.Error(t, err)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+func TestClientRegionResolverLookupErrors(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("m"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	makeClient := func(resolver *mockRegionResolver) *Client {
+		cli, err := New(Config{
+			Stores: []StoreEndpoint{
+				{StoreID: 1, Addr: addr},
+			},
+			RegionResolver: resolver,
+			DialOptions: []grpc.DialOption{
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = cli.Close() })
+		return cli
+	}
+
+	t.Run("not found", func(t *testing.T) {
+		cli := makeClient(&mockRegionResolver{})
+		_, err := cli.Get(context.Background(), []byte("zulu"), 1)
+		require.Error(t, err)
+		var notFound *RegionNotFoundError
+		require.ErrorAs(t, err, &notFound)
+	})
+
+	t.Run("resolver unavailable", func(t *testing.T) {
+		cli := makeClient(&mockRegionResolver{err: status.Error(codes.Unavailable, "pd down")})
+		_, err := cli.Get(context.Background(), []byte("alfa"), 1)
+		require.Error(t, err)
+		var routeErr *RouteUnavailableError
+		require.ErrorAs(t, err, &routeErr)
+		require.Equal(t, codes.Unavailable, status.Code(routeErr.Err))
+	})
 }
 
 // Utility helpers
