@@ -11,6 +11,49 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+func (s *Store) schedulerClient() SchedulerClient {
+	if s == nil || s.sched == nil {
+		return nil
+	}
+	return s.sched.client
+}
+
+// SchedulerStatus returns the current scheduler health view by combining the
+// local queue state with the control-plane client status.
+func (s *Store) SchedulerStatus() SchedulerStatus {
+	if s == nil {
+		return SchedulerStatus{}
+	}
+	status := SchedulerStatus{Mode: SchedulerModeHealthy}
+	if s.schedulerClient() != nil {
+		status = s.schedulerClient().Status()
+		if status.Mode == "" {
+			if status.Degraded {
+				status.Mode = SchedulerModeUnavailable
+			} else {
+				status.Mode = SchedulerModeHealthy
+			}
+		}
+	}
+	if s.sched == nil {
+		return status
+	}
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	status.DroppedOperations += s.sched.dropped
+	if s.sched.degraded {
+		status.Degraded = true
+		if status.Mode != SchedulerModeUnavailable {
+			status.Mode = SchedulerModeDegraded
+		}
+		if status.LastErrorAt.Before(s.sched.lastErrorAt) || status.LastError == "" {
+			status.LastError = s.sched.lastError
+			status.LastErrorAt = s.sched.lastErrorAt
+		}
+	}
+	return status
+}
+
 func (s *Store) applyOperation(op Operation) bool {
 	if s == nil {
 		return false

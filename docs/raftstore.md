@@ -172,7 +172,49 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a loc
 
 ---
 
-## 10. Current Boundaries and Guarantees
+## 10. Region Truth and Persistence Roles
+
+NoKV intentionally keeps three different region views, and they do not have
+equal authority:
+
+1. **Store-local region truth**
+   - Advanced only through raft apply paths and bootstrap/restart loading.
+   - Owned by [`region_manager.go`](../raftstore/store/region_manager.go) via:
+     - `applyRegionMeta`
+     - `applyRegionState`
+     - `applyRegionRemoval`
+     - `loadBootstrapSnapshot`
+   - This is the runtime source of truth for what a store currently hosts.
+
+2. **Store-local persistent mirror**
+   - Owned by [`raftstore/meta`](../raftstore/meta).
+   - Persists:
+     - local region catalog entries for restart
+     - local raft WAL replay checkpoints
+   - This mirror exists for local recovery only. It is not cluster routing
+     authority and must not be treated as consensus truth outside the store.
+
+3. **PD control-plane view**
+   - Owned by PD and persisted through [`pd/storage`](../pd/storage).
+   - Built from region/store heartbeats and allocator durability checkpoints.
+   - Used for:
+     - route lookup
+     - scheduler decisions
+     - allocator durability
+   - PD is not allowed to overwrite local raftstore truth directly.
+
+The resulting rule is simple:
+
+- `raft apply/bootstrap` advances local truth
+- `raftstore/meta` mirrors that truth for restart
+- `PD` observes and schedules from heartbeats
+
+This separation is what prevents parallel truth sources from creeping back into
+the design.
+
+---
+
+## 11. Current Boundaries and Guarantees
 
 - Reads served through `ReadCommand` are leader-strong and pass a Raft
   linearizability barrier (`LinearizableRead` + `WaitApplied`).

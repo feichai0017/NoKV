@@ -1296,11 +1296,11 @@ func TestMutatePaths(t *testing.T) {
 
 func TestResolveKeyConflictsAndLocks(t *testing.T) {
 	backend, stub, _ := newStubBackend()
-	require.False(t, backend.resolveKeyConflicts(nil))
-	require.False(t, backend.resolveKeyConflicts(&client.KeyConflictError{}))
+	require.Error(t, backend.resolveKeyConflicts(nil))
+	require.Error(t, backend.resolveKeyConflicts(&client.KeyConflictError{}))
 
 	conflicts := &client.KeyConflictError{Errors: []*pb.KeyError{nil, {}}}
-	require.True(t, backend.resolveKeyConflicts(conflicts))
+	require.NoError(t, backend.resolveKeyConflicts(conflicts))
 
 	lock := &pb.Locked{
 		PrimaryLock: []byte("p"),
@@ -1308,23 +1308,40 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 		LockVersion: 1,
 	}
 	stub.checkErr = errors.New("check")
-	require.False(t, backend.resolveSingleLock(lock))
+	require.Error(t, backend.resolveSingleLock(lock))
 
 	stub.checkErr = nil
 	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: 1}
 	// The primary is committed, the lock should be resolved successfully
-	require.True(t, backend.resolveSingleLock(lock))
+	require.NoError(t, backend.resolveSingleLock(lock))
 
 	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
-	require.False(t, backend.resolveSingleLock(lock))
+	require.Error(t, backend.resolveSingleLock(lock))
 
 	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
 	stub.resolveErr = errors.New("resolve")
-	require.False(t, backend.resolveSingleLock(lock))
+	require.Error(t, backend.resolveSingleLock(lock))
 
 	stub.resolveErr = nil
-	require.True(t, backend.resolveSingleLock(lock))
+	require.NoError(t, backend.resolveSingleLock(lock))
 	require.NotEmpty(t, stub.resolveKeys)
+}
+
+func TestResolveSingleLockTranslatesRouteUnavailable(t *testing.T) {
+	backend, stub, _ := newStubBackend()
+	lock := &pb.Locked{
+		PrimaryLock: []byte("p"),
+		Key:         []byte("k"),
+		LockVersion: 1,
+	}
+
+	stub.checkErr = &client.RouteUnavailableError{
+		Key: []byte("k"),
+		Err: errors.New("pd unavailable"),
+	}
+	err := backend.resolveSingleLock(lock)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TRYAGAIN")
 }
 
 // TestConflictingTransactionWithCommittedPrimary simulates a complete scenario:
