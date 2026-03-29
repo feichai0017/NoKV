@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-501b1cb7.js";
+            window.path_to_searchindex_js = "searchindex-9ff4e25f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -3180,7 +3180,65 @@ size/traffic heuristics.</li>
 </table>
 </div>
 <hr>
-<h2 id="10-current-boundaries-and-guarantees"><a class="header" href="#10-current-boundaries-and-guarantees">10. Current Boundaries and Guarantees</a></h2>
+<h2 id="10-region-truth-and-persistence-roles"><a class="header" href="#10-region-truth-and-persistence-roles">10. Region Truth and Persistence Roles</a></h2>
+<p>NoKV intentionally keeps three different region views, and they do not have
+equal authority:</p>
+<ol>
+<li>
+<p><strong>Store-local region truth</strong></p>
+<ul>
+<li>Advanced only through raft apply paths and bootstrap/restart loading.</li>
+<li>Owned by <a href="../raftstore/store/region_manager.go"><code>region_manager.go</code></a> via:
+<ul>
+<li><code>applyRegionMeta</code></li>
+<li><code>applyRegionState</code></li>
+<li><code>applyRegionRemoval</code></li>
+<li><code>loadBootstrapSnapshot</code></li>
+</ul>
+</li>
+<li>This is the runtime source of truth for what a store currently hosts.</li>
+</ul>
+</li>
+<li>
+<p><strong>Store-local persistent mirror</strong></p>
+<ul>
+<li>Owned by <a href="../raftstore/meta"><code>raftstore/meta</code></a>.</li>
+<li>Persists:
+<ul>
+<li>local region catalog entries for restart</li>
+<li>local raft WAL replay checkpoints</li>
+</ul>
+</li>
+<li>This mirror exists for local recovery only. It is not cluster routing
+authority and must not be treated as consensus truth outside the store.</li>
+</ul>
+</li>
+<li>
+<p><strong>PD control-plane view</strong></p>
+<ul>
+<li>Owned by PD and persisted through <a href="../pd/storage"><code>pd/storage</code></a>.</li>
+<li>Built from region/store heartbeats and allocator durability checkpoints.</li>
+<li>Used for:
+<ul>
+<li>route lookup</li>
+<li>scheduler decisions</li>
+<li>allocator durability</li>
+</ul>
+</li>
+<li>PD is not allowed to overwrite local raftstore truth directly.</li>
+</ul>
+</li>
+</ol>
+<p>The resulting rule is simple:</p>
+<ul>
+<li><code>raft apply/bootstrap</code> advances local truth</li>
+<li><code>raftstore/meta</code> mirrors that truth for restart</li>
+<li><code>PD</code> observes and schedules from heartbeats</li>
+</ul>
+<p>This separation is what prevents parallel truth sources from creeping back into
+the design.</p>
+<hr>
+<h2 id="11-current-boundaries-and-guarantees"><a class="header" href="#11-current-boundaries-and-guarantees">11. Current Boundaries and Guarantees</a></h2>
 <ul>
 <li>Reads served through <code>ReadCommand</code> are leader-strong and pass a Raft
 linearizability barrier (<code>LinearizableRead</code> + <code>WaitApplied</code>).</li>
@@ -3322,6 +3380,15 @@ cluster routing authority.</p>
 <li>Sufficient for local clusters, testing, and architecture iteration.</li>
 <li>API shape intentionally aligned with a PD-style control plane so migration to
 stronger HA semantics is incremental.</li>
+<li>PD persistence is intentionally limited to control-plane state:
+<ul>
+<li>region catalog snapshots learned from heartbeats</li>
+<li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
+</ul>
+</li>
+<li>PD is not the durable owner of a store’s local raft/region truth. Store
+restart truth remains in <code>raftstore/meta</code>, while PD keeps the routing and
+scheduling view.</li>
 </ul>
 <hr>
 <h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>

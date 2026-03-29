@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-501b1cb7.js";
+            window.path_to_searchindex_js = "searchindex-9ff4e25f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -308,6 +308,15 @@ cluster routing authority.</p>
 <li>Sufficient for local clusters, testing, and architecture iteration.</li>
 <li>API shape intentionally aligned with a PD-style control plane so migration to
 stronger HA semantics is incremental.</li>
+<li>PD persistence is intentionally limited to control-plane state:
+<ul>
+<li>region catalog snapshots learned from heartbeats</li>
+<li>allocator durability (<code>AllocID</code>, <code>TSO</code>)</li>
+</ul>
+</li>
+<li>PD is not the durable owner of a store’s local raft/region truth. Store
+restart truth remains in <code>raftstore/meta</code>, while PD keeps the routing and
+scheduling view.</li>
 </ul>
 <hr>
 <h2 id="8-current-limitations--next-steps"><a class="header" href="#8-current-limitations--next-steps">8. Current Limitations / Next Steps</a></h2>
