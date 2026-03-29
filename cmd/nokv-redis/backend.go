@@ -10,6 +10,30 @@ var (
 	errUnsupported     = errors.New("redis feature unsupported for current backend")
 )
 
+type temporaryBackendError struct {
+	msg string
+	err error
+}
+
+func (e *temporaryBackendError) Error() string {
+	if e == nil {
+		return "TRYAGAIN backend unavailable"
+	}
+	return e.msg
+}
+
+func (e *temporaryBackendError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func isTemporaryBackendError(err error) bool {
+	var target *temporaryBackendError
+	return errors.As(err, &target)
+}
+
 type redisValue struct {
 	Value     []byte
 	ExpiresAt uint64

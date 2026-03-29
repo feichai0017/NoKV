@@ -610,6 +610,12 @@ func TestWriteHelpersErrors(t *testing.T) {
 	require.NoError(t, writeError(writer, "WRONG nope"))
 	require.NoError(t, writer.Flush())
 	require.Equal(t, "-WRONG nope\r\n", buf.String())
+
+	buf.Reset()
+	writer.Reset(&buf)
+	require.NoError(t, writeError(writer, "TRYAGAIN route unavailable"))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, "-TRYAGAIN route unavailable\r\n", buf.String())
 }
 
 type errorListener struct {
