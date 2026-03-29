@@ -11,6 +11,25 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
+type operationKey struct {
+	region uint64
+	typeID OperationType
+}
+
+type regionEventKind uint8
+
+const (
+	regionEventNone regionEventKind = iota
+	regionEventApply
+	regionEventRemove
+)
+
+type regionEvent struct {
+	kind     regionEventKind
+	regionID uint64
+	meta     raftmeta.RegionMeta
+}
+
 func (s *Store) schedulerClient() SchedulerClient {
 	if s == nil || s.sched == nil {
 		return nil

@@ -15,15 +15,9 @@ import (
 func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		region, err := c.regionForKey(ctx, key)
+		region, err := c.routeKeyWithRetry(ctx, key)
 		if err != nil {
-			if IsRouteUnavailable(err) {
-				lastErr = err
-				if err := c.waitRetry(ctx, attempt, retryRouteUnavailable); err != nil {
-					return nil, err
-				}
-				continue
-			}
+			lastErr = err
 			return nil, err
 		}
 		resp, regionErr, err := c.callGet(ctx, region, key, version)
@@ -205,14 +199,8 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	currentKey := append([]byte(nil), startKey...)
 	remaining := limit
 	for remaining > 0 {
-		region, err := c.regionForKey(ctx, currentKey)
+		region, err := c.routeKeyWithRetry(ctx, currentKey)
 		if err != nil {
-			if IsRouteUnavailable(err) {
-				if err := c.waitRetry(ctx, 0, retryRouteUnavailable); err != nil {
-					return nil, err
-				}
-				continue
-			}
 			return nil, err
 		}
 		resp, regionErr, err := c.callScan(ctx, region, currentKey, remaining, version)
@@ -491,15 +479,9 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*pb.CheckTxnStatusResponse, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		region, err := c.regionForKey(ctx, primary)
+		region, err := c.routeKeyWithRetry(ctx, primary)
 		if err != nil {
-			if IsRouteUnavailable(err) {
-				lastErr = err
-				if err := c.waitRetry(ctx, attempt, retryRouteUnavailable); err != nil {
-					return nil, err
-				}
-				continue
-			}
+			lastErr = err
 			return nil, err
 		}
 		cl, err := c.storeClient(ctx, region.leader)
