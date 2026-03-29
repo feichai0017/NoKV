@@ -48,6 +48,11 @@ func (e *RouteUnavailableError) Unwrap() error {
 	return e.Err
 }
 
+func IsRouteUnavailable(err error) bool {
+	var target *RouteUnavailableError
+	return errors.As(err, &target)
+}
+
 // RegionNotFoundError indicates that no region metadata currently covers the
 // requested key.
 type RegionNotFoundError struct {
@@ -59,6 +64,11 @@ func (e *RegionNotFoundError) Error() string {
 		return "client: region not found"
 	}
 	return fmt.Sprintf("client: region not found for key %q", e.Key)
+}
+
+func IsRegionNotFound(err error) bool {
+	var target *RegionNotFoundError
+	return errors.As(err, &target)
 }
 
 // StoreEndpoint describes a reachable store in the cluster.
