@@ -44,33 +44,33 @@ NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline 
 
 Latest public benchmark snapshot currently checked into the repository, taken
 from the latest successful `main` CI YCSB run available at the time of update
-([run #314](https://github.com/feichai0017/NoKV/actions/runs/23393350444)).
+([run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757)).
 This snapshot used the then-current benchmark profile:
 `A-F`, `records=1,000,000`, `ops=1,000,000`, `value_size=1000`,
-`value_threshold=1024`, `conc=16`.
+`value_threshold=2048`, `conc=16`.
 
 Methodology and harness details live in [`benchmark/README.md`](./benchmark/README.md).
 
 | Engine | Workload | Mode | Ops/s | Avg Latency | P95 | P99 |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| NoKV | YCSB-A | 50/50 read/update | 163,798 | 6.105µs | 292.906µs | 515.926µs |
-| NoKV | YCSB-B | 95/5 read/update | 556,189 | 1.797µs | 13.966µs | 28.292µs |
-| NoKV | YCSB-C | 100% read | 434,281 | 2.302µs | 14.217µs | 22.262µs |
-| NoKV | YCSB-D | 95% read, 5% insert (latest) | 637,162 | 1.569µs | 12.235µs | 27.1µs |
-| NoKV | YCSB-E | 95% scan, 5% insert | 53,174 | 18.806µs | 105.387µs | 166.3µs |
-| NoKV | YCSB-F | read-modify-write | 151,063 | 6.619µs | 328.164µs | 688.678µs |
-| Badger | YCSB-A | 50/50 read/update | 88,957 | 11.241µs | 396.923µs | 638.214µs |
-| Badger | YCSB-B | 95/5 read/update | 178,449 | 5.603µs | 323.102µs | 694.409µs |
-| Badger | YCSB-C | 100% read | 203,481 | 4.914µs | 52.698µs | 2.22693ms |
-| Badger | YCSB-D | 95% read, 5% insert (latest) | 210,475 | 4.751µs | 270.033µs | 604.131µs |
-| Badger | YCSB-E | 95% scan, 5% insert | 15,249 | 65.578µs | 3.929808ms | 7.265708ms |
-| Badger | YCSB-F | read-modify-write | 71,885 | 13.911µs | 494.737µs | 839.982µs |
-| Pebble | YCSB-A | 50/50 read/update | 182,451 | 5.48µs | 442.877µs | 1.568458ms |
-| Pebble | YCSB-B | 95/5 read/update | 151,214 | 6.613µs | 600.575µs | 1.27692ms |
-| Pebble | YCSB-C | 100% read | 101,625 | 9.84µs | 796.221µs | 1.617434ms |
-| Pebble | YCSB-D | 95% read, 5% insert (latest) | 214,067 | 4.671µs | 454.498µs | 1.169641ms |
-| Pebble | YCSB-E | 95% scan, 5% insert | 44,210 | 22.619µs | 1.238978ms | 2.135797ms |
-| Pebble | YCSB-F | read-modify-write | 132,530 | 7.545µs | 701.732µs | 1.589012ms |
+| NoKV | YCSB-A | 50/50 read/update | 175,905 | 5.684µs | 204.039µs | 307.851µs |
+| NoKV | YCSB-B | 95/5 read/update | 525,631 | 1.902µs | 24.115µs | 750.413µs |
+| NoKV | YCSB-C | 100% read | 409,136 | 2.444µs | 15.077µs | 25.658µs |
+| NoKV | YCSB-D | 95% read, 5% insert (latest) | 632,031 | 1.582µs | 21.811µs | 638.457µs |
+| NoKV | YCSB-E | 95% scan, 5% insert | 45,620 | 21.92µs | 139.449µs | 9.203945ms |
+| NoKV | YCSB-F | read-modify-write | 157,732 | 6.339µs | 232.743µs | 371.209µs |
+| Badger | YCSB-A | 50/50 read/update | 108,232 | 9.239µs | 285.74µs | 483.139µs |
+| Badger | YCSB-B | 95/5 read/update | 188,893 | 5.294µs | 274.549µs | 566.042µs |
+| Badger | YCSB-C | 100% read | 242,463 | 4.124µs | 36.549µs | 1.862803ms |
+| Badger | YCSB-D | 95% read, 5% insert (latest) | 284,205 | 3.518µs | 233.414µs | 479.801µs |
+| Badger | YCSB-E | 95% scan, 5% insert | 15,027 | 66.547µs | 4.064653ms | 7.534558ms |
+| Badger | YCSB-F | read-modify-write | 84,601 | 11.82µs | 407.624µs | 645.491µs |
+| Pebble | YCSB-A | 50/50 read/update | 169,792 | 5.889µs | 491.322µs | 1.65907ms |
+| Pebble | YCSB-B | 95/5 read/update | 137,483 | 7.273µs | 658.763µs | 1.415039ms |
+| Pebble | YCSB-C | 100% read | 90,474 | 11.052µs | 878.733µs | 1.817526ms |
+| Pebble | YCSB-D | 95% read, 5% insert (latest) | 198,139 | 5.046µs | 491.515µs | 1.282231ms |
+| Pebble | YCSB-E | 95% scan, 5% insert | 40,793 | 24.513µs | 1.332974ms | 2.301008ms |
+| Pebble | YCSB-F | read-modify-write | 122,192 | 8.183µs | 760.934µs | 1.71655ms |
 
 ## 🚦 Quick Start
 
