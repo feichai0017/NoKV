@@ -34,7 +34,7 @@
 
 2. **Start local peers**
    - CLI (`nokv serve`) loads the local peer catalog and calls `Store.StartPeer` for every region that includes the local store.
-   - Each `peer.Config` carries raft parameters, the transport reference, `kv.NewEntryApplier`, WAL/manifest handles, and Region metadata.
+   - Each `peer.Config` carries raft parameters, the transport reference, `kv.NewEntryApplier`, peer storage, and Region metadata.
    - `StartPeer` registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.
 
 3. **Peer connectivity**

@@ -29,12 +29,15 @@ Core entry points:
 
 1. `DB.Set` / `DB.SetBatch` / `DB.SetWithTTL` / `DB.Del` / `DB.DeleteRange` allocates monotonic non-transactional versions and creates internal-key entries via `kv.NewInternalEntry`.
 2. `DB.ApplyInternalEntries` validates each internal key via `kv.SplitInternalKey`, then calls `batchSet`.
-3. `batchSet` enqueues request (`sendToWriteCh` -> commit queue).
-4. `commitWorker` drains a batch:
+3. `batchSet` enqueues request (`sendToWriteCh` -> `enqueueCommitRequest` -> bounded MPSC commit queue).
+4. `commitWorker` acquires a long-lived `utils.MPSCConsumer[*commitRequest]` and drains a batch:
    - `vlog.write(requests)` writes large values first and produces `ValuePtr`.
    - `applyRequests` -> `writeToLSM` -> `lsm.SetBatch`.
-5. `lsm.SetBatch` writes one atomic batch:
-   - `memTable.setBatch`
+   - if `SyncWrites` uses the dedicated sync pipeline, committed-but-unsynced
+     batches are handed off to `syncWorker`; otherwise `commitWorker` performs
+     `wal.Sync()` inline when required.
+5. `lsm.SetBatch` writes one atomic batch by delegating to `memTable.setBatch`;
+   inside that step:
    - `wal.AppendEntryBatch`
    - mem index insert.
 
@@ -44,7 +47,7 @@ Core entry points:
 sequenceDiagram
     participant U as User API
     participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
-    participant Q as commitQueue
+    participant Q as "commitQueue (MPSCQueue)"
     participant W as commitWorker
     participant V as vlog.write
     participant L as lsm.SetBatch
@@ -185,7 +188,8 @@ sequenceDiagram
    - build entries via `kv.NewInternalEntry`
    - call `db.ApplyInternalEntries`
    - release refs (`DecrRef`).
-6. Storage then follows the same embedded write pipeline (vlog -> LSM/WAL).
+6. Storage then follows the same embedded write pipeline (MPSC commit queue ->
+   vlog -> LSM/WAL, with optional sync handoff).
 
 ### 6.2 Sequence Diagram
 

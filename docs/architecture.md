@@ -116,7 +116,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 
 | Package | Responsibility |
 | --- | --- |
-| [`store`](../raftstore/store) | Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as `StartPeer` / `SplitRegion`. |
+| [`store`](../raftstore/store) | Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as `StartPeer` / `SplitRegion`. |
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, handles Ready pipeline, snapshot resend queue, backlog instrumentation. |
 | [`engine`](../raftstore/engine) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
 | [`transport`](../raftstore/transport) | gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC. |
@@ -126,7 +126,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 ### 3.1 Bootstrap Sequence
 1. `server.New` wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets `transport.SetHandler(store.Step)`.
 2. CLI (`nokv serve`) or application enumerates the local peer catalog and calls `Store.StartPeer` for every Region containing the local store:
-   - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, WAL/Manifest handles, Region metadata.
+   - `peer.Config` includes Raft params, transport, `kv.NewEntryApplier`, peer storage, and Region metadata.
    - Router registration, regionManager bookkeeping, optional `Peer.Bootstrap` with initial peer list, leader campaign.
 3. Peers from other stores can be configured through `transport.SetPeer(peerID, addr)` (raft peer ID). In cluster mode, runtime routing/control-plane decisions come from PD.
 
