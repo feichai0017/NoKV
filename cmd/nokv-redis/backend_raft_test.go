@@ -22,6 +22,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -475,6 +477,71 @@ func TestNewRaftBackendCLIAddrOverridesConfigPD(t *testing.T) {
 
 	_, err = backend.reserveTimestamp(1)
 	require.NoError(t, err)
+}
+
+func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	pdAddr, pd, stopPD := startStubPD(t, defaultPDRegionMeta())
+	defer stopPD()
+
+	cfg := config.File{
+		PD:     &config.PD{Addr: pdAddr},
+		Stores: []config.Store{{StoreID: 1, Addr: storeAddr}},
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(context.Background(), cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	pd.mu.Lock()
+	pd.routeErr = status.Error(codes.Unavailable, "pd down")
+	pd.mu.Unlock()
+
+	_, err = backend.Get([]byte("route-unavailable"))
+	require.Error(t, err)
+	require.True(t, isTemporaryBackendError(err))
+	require.Contains(t, err.Error(), "TRYAGAIN")
+}
+
+func TestRaftBackendTranslatesRegionNotFound(t *testing.T) {
+	storeAddr, _, stopStore := startStubNoKV(t)
+	defer stopStore()
+	pdAddr, _, stopPD := startStubPD(t, &pb.RegionMeta{
+		Id:               1,
+		StartKey:         []byte("a"),
+		EndKey:           []byte("m"),
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	})
+	defer stopPD()
+
+	cfg := config.File{
+		PD:     &config.PD{Addr: pdAddr},
+		Stores: []config.Store{{StoreID: 1, Addr: storeAddr}},
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "raft_config.json")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+
+	backend, err := newRaftBackend(context.Background(), cfgPath, "", "host")
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	_, err = backend.Get([]byte("zulu"))
+	require.Error(t, err)
+	require.False(t, isTemporaryBackendError(err))
+	require.Contains(t, err.Error(), "ERR region route not found during read")
 }
 
 func TestRaftBackendResolveLockConflict(t *testing.T) {

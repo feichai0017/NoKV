@@ -725,6 +725,8 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 		require.Error(t, err)
 		var notFound *RegionNotFoundError
 		require.ErrorAs(t, err, &notFound)
+		require.True(t, IsRegionNotFound(err))
+		require.False(t, IsRouteUnavailable(err))
 	})
 
 	t.Run("resolver unavailable", func(t *testing.T) {
@@ -733,6 +735,8 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 		require.Error(t, err)
 		var routeErr *RouteUnavailableError
 		require.ErrorAs(t, err, &routeErr)
+		require.True(t, IsRouteUnavailable(err))
+		require.False(t, IsRegionNotFound(err))
 		require.Equal(t, codes.Unavailable, status.Code(routeErr.Err))
 	})
 }

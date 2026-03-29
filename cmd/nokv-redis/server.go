@@ -563,7 +563,10 @@ func writeArray(w *bufio.Writer, values [][]byte) error {
 }
 
 func writeError(w *bufio.Writer, msg string) error {
-	if !strings.HasPrefix(msg, "ERR") && !strings.HasPrefix(msg, "WRONG") {
+	if !strings.HasPrefix(msg, "ERR") &&
+		!strings.HasPrefix(msg, "WRONG") &&
+		!strings.HasPrefix(msg, "TRYAGAIN") &&
+		!strings.HasPrefix(msg, "CLUSTERDOWN") {
 		msg = "ERR " + msg
 	}
 	_, err := w.WriteString("-" + msg + "\r\n")

@@ -395,6 +395,23 @@ func (b *raftBackend) retryWithConflictResolution(fn func() error) error {
 	return fmt.Errorf("raft backend: retries exhausted")
 }
 
+func translateRaftClientError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case client.IsRouteUnavailable(err):
+		return &temporaryBackendError{
+			msg: fmt.Sprintf("TRYAGAIN route unavailable during %s", op),
+			err: err,
+		}
+	case client.IsRegionNotFound(err):
+		return fmt.Errorf("ERR region route not found during %s: %w", op, err)
+	default:
+		return fmt.Errorf("raft backend: %s failed: %w", op, err)
+	}
+}
+
 func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
 	var resps map[string]*pb.GetResponse
 	err := b.retryWithConflictResolution(func() error {
@@ -405,7 +422,7 @@ func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[stri
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("raft backend: read failed: %w", err)
+		return nil, translateRaftClientError("read", err)
 	}
 	return resps, nil
 }
@@ -450,7 +467,7 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 	if len(mutations) == 0 {
 		return nil
 	}
-	return b.retryWithConflictResolution(func() error {
+	err := b.retryWithConflictResolution(func() error {
 		start, err := b.reserveTimestamp(2)
 		if err != nil {
 			return err
@@ -466,6 +483,10 @@ func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
 			defaultLockTTL,
 		)
 	})
+	if err != nil {
+		return translateRaftClientError("write", err)
+	}
+	return nil
 }
 
 func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) bool {
