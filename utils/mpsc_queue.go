@@ -34,6 +34,10 @@ type MPSCQueue[T any] struct {
 	notFull   *sync.Cond
 }
 
+type MPSCConsumer[T any] struct {
+	q *MPSCQueue[T]
+}
+
 type mpscSlot[T any] struct {
 	seq atomic.Uint64
 	val T
@@ -122,12 +126,15 @@ func (q *MPSCQueue[T]) TryPop() (T, bool) {
 	if q == nil {
 		return zero, false
 	}
-	q.acquireConsumer()
-	defer q.releaseConsumer()
-	return q.tryPop()
+	c := q.AcquireConsumer()
+	if c == nil {
+		return zero, false
+	}
+	defer c.Close()
+	return c.TryPop()
 }
 
-func (q *MPSCQueue[T]) tryPop() (T, bool) {
+func (q *MPSCQueue[T]) popReady(signalNotFull bool) (T, bool) {
 	var zero T
 	if q == nil {
 		return zero, false
@@ -143,7 +150,9 @@ func (q *MPSCQueue[T]) tryPop() (T, bool) {
 	slot.val = zero
 	q.head.Store(pos + 1)
 	slot.seq.Store(pos + q.capacity)
-	q.signalNotFull()
+	if signalNotFull {
+		q.signalNotFull()
+	}
 	return val, true
 }
 
@@ -155,17 +164,83 @@ func (q *MPSCQueue[T]) Pop() (T, bool) {
 	if q == nil {
 		return zero, false
 	}
+	c := q.AcquireConsumer()
+	if c == nil {
+		return zero, false
+	}
+	defer c.Close()
+	return c.Pop()
+}
+
+// AcquireConsumer reserves the queue's single-consumer slot for a hot loop.
+// Call Close on the returned consumer when done.
+func (q *MPSCQueue[T]) AcquireConsumer() *MPSCConsumer[T] {
+	if q == nil {
+		return nil
+	}
 	q.acquireConsumer()
-	defer q.releaseConsumer()
+	return &MPSCConsumer[T]{q: q}
+}
+
+// Close releases the reserved single-consumer slot.
+func (c *MPSCConsumer[T]) Close() {
+	if c == nil || c.q == nil {
+		return
+	}
+	c.q.releaseConsumer()
+	c.q = nil
+}
+
+// TryPop returns the next published item without blocking.
+func (c *MPSCConsumer[T]) TryPop() (T, bool) {
+	var zero T
+	if c == nil || c.q == nil {
+		return zero, false
+	}
+	return c.q.popReady(true)
+}
+
+// DrainReady drains up to max currently published items and calls fn for each.
+// The callback return value is ignored for queue ownership; every popped item is
+// already consumed from the queue when fn runs. Returning false stops the drain.
+func (c *MPSCConsumer[T]) DrainReady(max int, fn func(T) bool) int {
+	if c == nil || c.q == nil || max <= 0 || fn == nil {
+		return 0
+	}
+	drained := 0
+	for drained < max {
+		val, ok := c.q.popReady(false)
+		if !ok {
+			break
+		}
+		drained++
+		if !fn(val) {
+			break
+		}
+	}
+	if drained > 0 {
+		c.q.signalNotFull()
+	}
+	return drained
+}
+
+// Pop waits for the next published item. It returns ok=false only after Close
+// has been called and the queue has been fully drained.
+func (c *MPSCConsumer[T]) Pop() (T, bool) {
+	var zero T
+	if c == nil || c.q == nil {
+		return zero, false
+	}
+	q := c.q
 	for {
-		if val, ok := q.tryPop(); ok {
+		if val, ok := q.popReady(true); ok {
 			return val, true
 		}
 		if q.drained() {
 			return zero, false
 		}
 		for range mpscQueueSpinCount {
-			if val, ok := q.tryPop(); ok {
+			if val, ok := q.popReady(true); ok {
 				return val, true
 			}
 			if q.drained() {
