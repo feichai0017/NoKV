@@ -80,7 +80,7 @@ func requireNoError(t *testing.T, err error) {
 }
 
 func TestStoreAndRouterHelpers(t *testing.T) {
-	store := NewStore(nil)
+	store := NewStore(Config{})
 	if store.Router() == nil {
 		t.Fatalf("expected router to be non-nil")
 	}
@@ -112,7 +112,7 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 }
 
 func TestStoreReadCommandValidation(t *testing.T) {
-	store := NewStore(nil)
+	store := NewStore(Config{})
 
 	if _, err := store.ReadCommand(context.Background(), &pb.RaftCmdRequest{}); err == nil {
 		t.Fatalf("expected missing region id error")
@@ -129,7 +129,7 @@ func TestStoreReadCommandValidation(t *testing.T) {
 }
 
 func TestStoreReadCommandStoreNotMatch(t *testing.T) {
-	store := NewStoreWithConfig(Config{StoreID: 7})
+	store := NewStore(Config{StoreID: 7})
 
 	req := &pb.RaftCmdRequest{Header: &pb.CmdHeader{RegionId: 1, StoreId: 9}}
 	resp, err := store.ReadCommand(context.Background(), req)
@@ -150,7 +150,7 @@ func TestStoreStepErrors(t *testing.T) {
 		t.Fatalf("expected error for nil store")
 	}
 
-	store := NewStore(nil)
+	store := NewStore(Config{})
 	if err := store.Step(myraft.Message{}); err == nil {
 		t.Fatalf("expected error for missing recipient")
 	}

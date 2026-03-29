@@ -100,7 +100,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	storeCfg.PeerBuilder = builder
 
-	st := store.NewStoreWithConfig(storeCfg)
+	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
