@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -59,12 +58,6 @@ type schedulerRuntime struct {
 	heartbeat     time.Duration
 	heartbeatStop chan struct{}
 	heartbeatWG   sync.WaitGroup
-}
-
-type commandRuntime struct {
-	apply   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
-	pipe    *commandPipeline
-	timeout time.Duration
 }
 
 type regionEventKind uint8
@@ -178,89 +171,4 @@ func NewStoreWithConfig(cfg Config) *Store {
 		s.startHeartbeatLoop()
 	}
 	return s
-}
-
-// SchedulerStatus returns the current scheduler health view by combining the
-// local queue state with the control-plane client status.
-func (s *Store) SchedulerStatus() SchedulerStatus {
-	if s == nil {
-		return SchedulerStatus{}
-	}
-	status := SchedulerStatus{Mode: SchedulerModeHealthy}
-	if s.schedulerClient() != nil {
-		status = s.schedulerClient().Status()
-		if status.Mode == "" {
-			if status.Degraded {
-				status.Mode = SchedulerModeUnavailable
-			} else {
-				status.Mode = SchedulerModeHealthy
-			}
-		}
-	}
-	if s.sched == nil {
-		return status
-	}
-	s.sched.mu.Lock()
-	defer s.sched.mu.Unlock()
-	status.DroppedOperations += s.sched.dropped
-	if s.sched.degraded {
-		status.Degraded = true
-		if status.Mode != SchedulerModeUnavailable {
-			status.Mode = SchedulerModeDegraded
-		}
-		if status.LastErrorAt.Before(s.sched.lastErrorAt) || status.LastError == "" {
-			status.LastError = s.sched.lastError
-			status.LastErrorAt = s.sched.lastErrorAt
-		}
-	}
-	return status
-}
-
-func (s *Store) regionMgr() *regionManager {
-	if s == nil || s.regions == nil {
-		return nil
-	}
-	return s.regions.mgr
-}
-
-func (s *Store) regionMetrics() *metrics.RegionMetrics {
-	if s == nil || s.regions == nil {
-		return nil
-	}
-	return s.regions.metrics
-}
-
-func (s *Store) schedulerClient() SchedulerClient {
-	if s == nil || s.sched == nil {
-		return nil
-	}
-	return s.sched.client
-}
-
-func (s *Store) commandPipe() *commandPipeline {
-	if s == nil || s.cmds == nil {
-		return nil
-	}
-	return s.cmds.pipe
-}
-
-func (s *Store) commandApply() func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
-	if s == nil || s.cmds == nil {
-		return nil
-	}
-	return s.cmds.apply
-}
-
-func (s *Store) commandWait() time.Duration {
-	if s == nil || s.cmds == nil {
-		return 0
-	}
-	return s.cmds.timeout
-}
-
-func (s *Store) runtimeContext() context.Context {
-	if s == nil {
-		return context.Background()
-	}
-	return s.ctx
 }

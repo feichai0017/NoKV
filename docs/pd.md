@@ -153,6 +153,12 @@ Related CLI behavior:
 - Sufficient for local clusters, testing, and architecture iteration.
 - API shape intentionally aligned with a PD-style control plane so migration to
   stronger HA semantics is incremental.
+- PD persistence is intentionally limited to control-plane state:
+  - region catalog snapshots learned from heartbeats
+  - allocator durability (`AllocID`, `TSO`)
+- PD is not the durable owner of a store's local raft/region truth. Store
+  restart truth remains in `raftstore/meta`, while PD keeps the routing and
+  scheduling view.
 
 ---
 

@@ -28,6 +28,20 @@ func (s *Store) applyRegionState(regionID uint64, state raftmeta.RegionState) er
 	return s.regionMgr().applyRegionState(regionID, state)
 }
 
+func (s *Store) regionMgr() *regionManager {
+	if s == nil || s.regions == nil {
+		return nil
+	}
+	return s.regions.mgr
+}
+
+func (s *Store) regionMetrics() *metrics.RegionMetrics {
+	if s == nil || s.regions == nil {
+		return nil
+	}
+	return s.regions.metrics
+}
+
 // RegionMetas collects the known raftmeta.RegionMeta entries from registered
 // peers. This mirrors the TinyKV store exposing region layout information to
 // schedulers and debugging endpoints.
