@@ -78,6 +78,7 @@ type mockRegionResolver struct {
 	region   *pb.RegionMeta
 	regions  []*pb.RegionMeta
 	err      error
+	errs     []error
 	calls    int
 	closed   bool
 	closeErr error
@@ -87,6 +88,13 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegio
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 	mr.calls++
+	if len(mr.errs) > 0 {
+		err := mr.errs[0]
+		mr.errs = mr.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if mr.err != nil {
 		return nil, mr.err
 	}
@@ -654,6 +662,38 @@ func startErrorStore(t *testing.T) (string, func()) {
 	}
 }
 
+type flakyGetService struct {
+	pb.UnimplementedNoKVServer
+	mu       sync.Mutex
+	failures int
+	resp     *pb.KvGetResponse
+}
+
+func (s *flakyGetService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failures > 0 {
+		s.failures--
+		return nil, status.Error(codes.Unavailable, "boom")
+	}
+	return proto.Clone(s.resp).(*pb.KvGetResponse), nil
+}
+
+func startFlakyGetStore(t *testing.T, failures int, resp *pb.KvGetResponse) (string, func()) {
+	t.Helper()
+	srv := grpc.NewServer()
+	pb.RegisterNoKVServer(srv, &flakyGetService{failures: failures, resp: resp})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	return lis.Addr().String(), func() {
+		srv.Stop()
+		_ = lis.Close()
+	}
+}
+
 func TestNormalizeRPCErrorOnGet(t *testing.T) {
 	addr, stop := startErrorStore(t)
 	defer stop()
@@ -739,6 +779,246 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 		require.False(t, IsRegionNotFound(err))
 		require.Equal(t, codes.Unavailable, status.Code(routeErr.Err))
 	})
+}
+
+func TestClientRetriesRouteUnavailable(t *testing.T) {
+	meta := &pb.RegionMeta{
+		Id:               1,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	}
+	addr, stop := startFlakyGetStore(t, 0, &pb.KvGetResponse{
+		Response: &pb.GetResponse{Value: []byte("value-a")},
+	})
+	defer stop()
+
+	resolver := &mockRegionResolver{
+		region: meta,
+		errs:   []error{status.Error(codes.Unavailable, "pd down")},
+	}
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		Retry: RetryPolicy{
+			MaxAttempts:             3,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	resolver.mu.Lock()
+	require.Equal(t, 2, resolver.calls)
+	resolver.mu.Unlock()
+}
+
+func TestClientRetriesTransportUnavailable(t *testing.T) {
+	meta := &pb.RegionMeta{
+		Id:               1,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	}
+	addr, stop := startFlakyGetStore(t, 1, &pb.KvGetResponse{
+		Response: &pb.GetResponse{Value: []byte("value-a")},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: &mockRegionResolver{region: meta},
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		Retry: RetryPolicy{
+			MaxAttempts:                 3,
+			TransportUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+}
+
+func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("z"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores: []StoreEndpoint{
+			{StoreID: 1, Addr: addr},
+			{StoreID: 2, Addr: "127.0.0.1:1"},
+		},
+		RegionResolver: &mockRegionResolver{region: cluster.regions[1].meta},
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	cli.mu.RLock()
+	require.NotNil(t, cli.stores[1].conn)
+	require.Nil(t, cli.stores[2].conn, "unused store should not be dialed eagerly")
+	cli.mu.RUnlock()
+}
+
+func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("m"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"alfa": {value: []byte("value-a"), commitVersion: 10},
+			},
+		},
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               2,
+				StartKey:         []byte("m"),
+				EndKey:           []byte("z"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 201},
+				},
+			},
+			leaderStore: 1,
+			committed: map[string]clusterValue{
+				"omega": {value: []byte("value-z"), commitVersion: 10},
+			},
+		},
+	)
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	resolver := resolverFromCluster(cluster)
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	resp, err = cli.Get(context.Background(), []byte("omega"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-z"), resp.GetValue())
+
+	resp, err = cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), resp.GetValue())
+
+	resolver.mu.Lock()
+	require.Equal(t, 2, resolver.calls, "subsequent indexed cache lookup should not hit resolver")
+	resolver.mu.Unlock()
+	require.Len(t, cli.regionIndex, 2)
+	require.Equal(t, uint64(1), cli.regionIndex[0].regionID)
+	require.Equal(t, uint64(2), cli.regionIndex[1].regionID)
+}
+
+func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
+	cli := &Client{
+		regions: make(map[uint64]*regionState),
+	}
+	cli.upsertRegionLocked(&pb.RegionMeta{
+		Id:               1,
+		StartKey:         []byte("a"),
+		EndKey:           []byte("z"),
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+		},
+	}, 1)
+
+	err := cli.handleRegionError(1, &pb.RegionError{
+		EpochNotMatch: &pb.EpochNotMatch{
+			Regions: []*pb.RegionMeta{
+				{
+					Id:               11,
+					StartKey:         []byte("a"),
+					EndKey:           []byte("m"),
+					EpochVersion:     2,
+					EpochConfVersion: 1,
+					Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 111}},
+				},
+				{
+					Id:               12,
+					StartKey:         []byte("m"),
+					EndKey:           []byte("z"),
+					EpochVersion:     2,
+					EpochConfVersion: 1,
+					Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 121}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, cli.regions, uint64(1))
+	require.Contains(t, cli.regions, uint64(11))
+	require.Contains(t, cli.regions, uint64(12))
+	require.Len(t, cli.regionIndex, 2)
+
+	got, ok := cli.regionForKeyFromCache([]byte("beta"))
+	require.True(t, ok)
+	require.Equal(t, uint64(11), got.meta.GetId())
+
+	got, ok = cli.regionForKeyFromCache([]byte("omega"))
+	require.True(t, ok)
+	require.Equal(t, uint64(12), got.meta.GetId())
 }
 
 // Utility helpers

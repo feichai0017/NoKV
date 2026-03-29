@@ -87,8 +87,10 @@ func newRaftBackend(ctx context.Context, cfgPath, pdAddr, addrScope string) (*ra
 		return nil, fmt.Errorf("raft backend: config invalid: %w", err)
 	}
 	cfg := client.Config{
-		Context:    ctx,
-		MaxRetries: cfgFile.MaxRetries,
+		Context: ctx,
+		Retry: client.RetryPolicy{
+			MaxAttempts: cfgFile.MaxRetries,
+		},
 	}
 	for _, st := range cfgFile.Stores {
 		addr := strings.TrimSpace(st.Addr)
