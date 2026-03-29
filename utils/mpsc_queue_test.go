@@ -46,11 +46,11 @@ func TestMPSCQueueConcurrent(t *testing.T) {
 	var consumed atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(producers)
-	for p := 0; p < producers; p++ {
+	for p := range producers {
 		go func(id int) {
 			defer wg.Done()
 			base := id * perProd
-			for i := 0; i < perProd; i++ {
+			for i := range perProd {
 				if !q.Push(base + i) {
 					t.Errorf("push failed before close")
 					return
@@ -90,7 +90,7 @@ func TestMPSCQueueCloseUnblocksFullProducer(t *testing.T) {
 	go func() {
 		done <- q.Push(3)
 	}()
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		runtime.Gosched()
 	}
 	if !q.Close() {

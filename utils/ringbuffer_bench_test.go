@@ -14,7 +14,7 @@ func BenchmarkRingPushPop(b *testing.B) {
 			var next atomic.Int64
 			var wg sync.WaitGroup
 			wg.Add(producers)
-			for i := 0; i < producers; i++ {
+			for range producers {
 				go func() {
 					defer wg.Done()
 					for {
