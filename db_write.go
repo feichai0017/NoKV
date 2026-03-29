@@ -3,7 +3,6 @@ package NoKV
 import (
 	"log/slog"
 	"math"
-	"runtime"
 	"sync"
 	"time"
 
@@ -18,104 +17,62 @@ var commitReqPool = sync.Pool{
 }
 
 func (cq *commitQueue) init(capacity int) {
-	if capacity < 2 {
-		capacity = 2
-	}
-	cq.ring = utils.NewRing[*commitRequest](capacity)
-	cap := cq.ring.Cap()
-	cq.items = make(chan struct{}, cap)
-	cq.spaces = make(chan struct{}, cap)
-	cq.closeCh = make(chan struct{})
-	cq.drainCh = make(chan struct{})
-	for range cap {
-		cq.spaces <- struct{}{}
-	}
+	cq.q = utils.NewMPSCQueue[*commitRequest](capacity)
 }
 
 func (cq *commitQueue) close() bool {
 	if cq == nil {
 		return false
 	}
-	if !cq.closed.CompareAndSwap(0, 1) {
+	if cq.q == nil {
 		return false
 	}
-	if cq.ring != nil {
-		cq.ring.Close()
-	}
-	if cq.closeCh != nil {
-		close(cq.closeCh)
-	}
-	cq.signalDrainedIfDone()
-	return true
+	return cq.q.Close()
 }
 
-func (cq *commitQueue) signalDrainedIfDone() {
-	if cq == nil || cq.closed.Load() == 0 || cq.drainCh == nil {
-		return
+func (cq *commitQueue) closed() bool {
+	return cq == nil || cq.q == nil || cq.q.Closed()
+}
+
+func (cq *commitQueue) closeCh() <-chan struct{} {
+	if cq == nil || cq.q == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
 	}
-	if cq.queueLen.Load() != 0 || cq.inflight.Load() != 0 {
-		return
+	return cq.q.CloseCh()
+}
+
+func (cq *commitQueue) len() int {
+	if cq == nil || cq.q == nil {
+		return 0
 	}
-	cq.drainOnce.Do(func() {
-		close(cq.drainCh)
-	})
+	return cq.q.Len()
 }
 
-func (cq *commitQueue) acquireSpace() bool {
-	for {
-		select {
-		case <-cq.spaces:
-			return true
-		case <-cq.closeCh:
-			return false
-		}
-	}
-}
-
-func (cq *commitQueue) releaseSpace() {
-	cq.spaces <- struct{}{}
-}
-
-func (cq *commitQueue) releaseItem() {
-	cq.items <- struct{}{}
-}
-
-func (cq *commitQueue) tryAcquireItem() bool {
-	select {
-	case <-cq.items:
-		return true
-	default:
+func (cq *commitQueue) push(cr *commitRequest) bool {
+	if cq == nil || cq.q == nil {
 		return false
 	}
-}
-
-func (cq *commitQueue) acquireItem() bool {
-	for {
-		select {
-		case <-cq.items:
-			return true
-		case <-cq.drainCh:
-			return false
-		}
-	}
+	return cq.q.Push(cr)
 }
 
 func (cq *commitQueue) pop() *commitRequest {
-	for {
-		cr, ok := cq.ring.Pop()
-		if ok {
-			cq.queueLen.Add(-1)
-			cq.releaseSpace()
-			cq.signalDrainedIfDone()
-			return cr
-		}
-		// The ring is MPMC and reserves tail positions before publishing them.
-		// Another producer can publish a later slot and release an item token
-		// while the current head slot is still being filled. Once a consumer has
-		// acquired an item token, it must wait for the head slot to become
-		// visible instead of assuming Pop succeeds immediately.
-		runtime.Gosched()
+	if cq == nil || cq.q == nil {
+		return nil
 	}
+	cr, ok := cq.q.Pop()
+	if !ok {
+		return nil
+	}
+	return cr
+}
+
+func (cq *commitQueue) tryPop() (*commitRequest, bool) {
+	if cq == nil || cq.q == nil {
+		return nil, false
+	}
+	return cq.q.TryPop()
 }
 
 func (db *DB) throttleSignal() <-chan struct{} {
@@ -178,7 +135,7 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 		if !waitOnThrottle {
 			return nil, utils.ErrBlockedWrites
 		}
-		if db.isClosed.Load() == 1 || db.commitQueue.closed.Load() == 1 {
+		if db.isClosed.Load() == 1 || db.commitQueue.closed() {
 			return nil, utils.ErrBlockedWrites
 		}
 		ch := db.throttleSignal()
@@ -187,7 +144,7 @@ func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*request,
 		}
 		select {
 		case <-ch:
-		case <-db.commitQueue.closeCh:
+		case <-db.commitQueue.closeCh():
 			return nil, utils.ErrBlockedWrites
 		}
 	}
@@ -267,16 +224,11 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	}
 	cq := &db.commitQueue
 
-	if cq.ring == nil || cq.items == nil || cq.spaces == nil || cq.drainCh == nil {
+	if cq.q == nil {
 		return utils.ErrBlockedWrites
 	}
 
-	cq.inflight.Add(1)
-	defer func() {
-		cq.inflight.Add(-1)
-		cq.signalDrainedIfDone()
-	}()
-	if cq.closed.Load() == 1 {
+	if cq.closed() {
 		return utils.ErrBlockedWrites
 	}
 
@@ -290,24 +242,12 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 		}
 	}()
 
-	if !cq.acquireSpace() {
+	if !cq.push(cr) {
 		return utils.ErrBlockedWrites
 	}
-	if cq.closed.Load() == 1 {
-		cq.releaseSpace()
-		cq.signalDrainedIfDone()
-		return utils.ErrBlockedWrites
-	}
-	if !cq.ring.Push(cr) {
-		cq.releaseSpace()
-		cq.signalDrainedIfDone()
-		return utils.ErrBlockedWrites
-	}
-	cq.queueLen.Add(1)
-	cq.releaseItem()
 	queued = true
 
-	qLen := int(cq.queueLen.Load())
+	qLen := cq.len()
 	qEntries := cq.pendingEntries.Load()
 	qBytes := cq.pendingBytes.Load()
 	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
@@ -316,7 +256,8 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 
 func (db *DB) nextCommitBatch() *commitBatch {
 	cq := &db.commitQueue
-	if !cq.acquireItem() {
+	first := cq.pop()
+	if first == nil {
 		return nil
 	}
 
@@ -330,7 +271,7 @@ func (db *DB) nextCommitBatch() *commitBatch {
 	// and reduce wake/sleep churn on the condition variable. Caps keep the batch
 	// from growing without bound to avoid long pauses.
 	limitCount, limitSize := db.opt.WriteBatchMaxCount, db.opt.WriteBatchMaxSize
-	backlog := int(cq.queueLen.Load())
+	backlog := cq.len()
 	if backlog > limitCount && limitCount > 0 {
 		factor := min(max(backlog/limitCount, 1), 4)
 		if scaled := limitCount * factor; scaled > 0 {
@@ -347,21 +288,22 @@ func (db *DB) nextCommitBatch() *commitBatch {
 		pendingBytes += cr.size
 	}
 
-	addToBatch(cq.pop())
-	if coalesceWait > 0 && cq.queueLen.Load() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
+	addToBatch(first)
+	if coalesceWait > 0 && cq.len() == 0 && len(batch) < limitCount && pendingBytes < limitSize {
 		// Allow a brief coalescing window when the queue is momentarily empty.
 		time.Sleep(coalesceWait)
 	}
 	for len(batch) < limitCount && pendingBytes < limitSize {
-		if !cq.tryAcquireItem() {
+		cr, ok := cq.tryPop()
+		if !ok {
 			break
 		}
-		addToBatch(cq.pop())
+		addToBatch(cr)
 	}
 
 	cq.pendingEntries.Add(-pendingEntries)
 	cq.pendingBytes.Add(-pendingBytes)
-	qLen := int(cq.queueLen.Load())
+	qLen := cq.len()
 	qEntries := cq.pendingEntries.Load()
 	qBytes := cq.pendingBytes.Load()
 	db.writeMetrics.UpdateQueue(qLen, int(qEntries), qBytes)
