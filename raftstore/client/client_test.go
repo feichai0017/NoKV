@@ -948,6 +948,51 @@ func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	resolver.mu.Unlock()
 }
 
+func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers: []*pb.RegionPeer{
+					{StoreId: 1, PeerId: 101},
+				},
+			},
+			leaderStore: 1,
+		},
+	)
+
+	addr, stop := startMockStore(t, cluster, 1)
+	defer stop()
+
+	resolver := resolverFromCluster(cluster)
+	resolver.errs = []error{status.Error(codes.Unavailable, "pd down")}
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolver,
+		DialOptions: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		Retry: RetryPolicy{
+			MaxAttempts:             3,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, err = cli.CheckTxnStatus(context.Background(), []byte("alfa"), 1, 2)
+	require.NoError(t, err)
+
+	resolver.mu.Lock()
+	require.GreaterOrEqual(t, resolver.calls, 2)
+	resolver.mu.Unlock()
+}
+
 func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{

@@ -25,11 +25,6 @@ type Store struct {
 	cmds        *commandRuntime
 }
 
-type operationKey struct {
-	region uint64
-	typeID OperationType
-}
-
 type regionRuntime struct {
 	metrics *metrics.RegionMetrics
 	mgr     *regionManager
@@ -58,20 +53,6 @@ type schedulerRuntime struct {
 	heartbeat     time.Duration
 	heartbeatStop chan struct{}
 	heartbeatWG   sync.WaitGroup
-}
-
-type regionEventKind uint8
-
-const (
-	regionEventNone regionEventKind = iota
-	regionEventApply
-	regionEventRemove
-)
-
-type regionEvent struct {
-	kind     regionEventKind
-	regionID uint64
-	meta     raftmeta.RegionMeta
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
