@@ -159,6 +159,7 @@ func (s *ConcatIterator) Rewind() {
 		return
 	}
 	s.cur.Rewind()
+	s.advanceToValidCurrent()
 }
 
 // Valid implements y.Interface
@@ -215,6 +216,7 @@ func (s *ConcatIterator) Seek(key []byte) {
 		return
 	}
 	s.cur.Seek(key)
+	s.advanceToValidCurrent()
 }
 
 // Next advances our concat iterator.
@@ -238,6 +240,20 @@ func (s *ConcatIterator) Next() {
 		if s.cur.Valid() {
 			break
 		}
+	}
+}
+
+func (s *ConcatIterator) advanceToValidCurrent() {
+	for s.cur != nil && !s.cur.Valid() {
+		if s.options.IsAsc {
+			s.setIdx(s.idx + 1)
+		} else {
+			s.setIdx(s.idx - 1)
+		}
+		if s.cur == nil {
+			return
+		}
+		s.cur.Rewind()
 	}
 }
 

@@ -309,6 +309,48 @@ func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
 	require.Equal(t, 3, end)
 }
 
+func TestTableIteratorSingleKeyRespectsForwardBounds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "nokv-table-single-bound")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+
+	opt := &Options{
+		WorkDir:            dir,
+		MemTableSize:       1 << 20,
+		SSTableMaxSz:       1 << 20,
+		BlockSize:          4 << 10,
+		BloomFalsePositive: 0.0,
+	}
+
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	builder := newTableBuiler(opt)
+	builder.AddKey(kv.NewEntry(
+		kv.InternalKey(kv.CFDefault, []byte("k00000010"), 1),
+		[]byte("value"),
+	))
+
+	tableName := utils.FileNameSSTable(dir, 40)
+	tbl, err := openTable(lsm.levels, tableName, builder)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	defer func() { _ = tbl.DecrRef() }()
+
+	it := tbl.NewIterator(&utils.Options{
+		IsAsc:      true,
+		LowerBound: []byte("k00000010"),
+		UpperBound: []byte("k00000011"),
+	})
+	defer func() { _ = it.Close() }()
+
+	it.Rewind()
+	require.True(t, it.Valid())
+	require.Equal(t, []byte("k00000010"), splitTableUserKey(t, it.Item().Entry().Key))
+	it.Next()
+	require.False(t, it.Valid())
+}
+
 func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-level-overlap")
 	require.NoError(t, err)

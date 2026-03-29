@@ -47,7 +47,7 @@ func (cq *commitQueue) len() int {
 	if cq == nil || cq.q == nil {
 		return 0
 	}
-	return cq.q.Len()
+	return cq.q.ReservedLen()
 }
 
 func (cq *commitQueue) push(cr *commitRequest) bool {
