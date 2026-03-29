@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9ff4e25f.js";
+            window.path_to_searchindex_js = "searchindex-ab5a6d1e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -208,16 +208,19 @@ to concrete functions in the codebase.</p>
 <ol>
 <li><code>DB.Set</code> / <code>DB.SetBatch</code> / <code>DB.SetWithTTL</code> / <code>DB.Del</code> / <code>DB.DeleteRange</code> allocates monotonic non-transactional versions and creates internal-key entries via <code>kv.NewInternalEntry</code>.</li>
 <li><code>DB.ApplyInternalEntries</code> validates each internal key via <code>kv.SplitInternalKey</code>, then calls <code>batchSet</code>.</li>
-<li><code>batchSet</code> enqueues request (<code>sendToWriteCh</code> -&gt; commit queue).</li>
-<li><code>commitWorker</code> drains a batch:
+<li><code>batchSet</code> enqueues request (<code>sendToWriteCh</code> -&gt; <code>enqueueCommitRequest</code> -&gt; bounded MPSC commit queue).</li>
+<li><code>commitWorker</code> acquires a long-lived <code>utils.MPSCConsumer[*commitRequest]</code> and drains a batch:
 <ul>
 <li><code>vlog.write(requests)</code> writes large values first and produces <code>ValuePtr</code>.</li>
 <li><code>applyRequests</code> -&gt; <code>writeToLSM</code> -&gt; <code>lsm.SetBatch</code>.</li>
+<li>if <code>SyncWrites</code> uses the dedicated sync pipeline, committed-but-unsynced
+batches are handed off to <code>syncWorker</code>; otherwise <code>commitWorker</code> performs
+<code>wal.Sync()</code> inline when required.</li>
 </ul>
 </li>
-<li><code>lsm.SetBatch</code> writes one atomic batch:
+<li><code>lsm.SetBatch</code> writes one atomic batch by delegating to <code>memTable.setBatch</code>;
+inside that step:
 <ul>
-<li><code>memTable.setBatch</code></li>
 <li><code>wal.AppendEntryBatch</code></li>
 <li>mem index insert.</li>
 </ul>
@@ -227,7 +230,7 @@ to concrete functions in the codebase.</p>
 <pre class="mermaid">sequenceDiagram
     participant U as User API
     participant DB as DB.Set/SetBatch/SetWithTTL/Del/DeleteRange
-    participant Q as commitQueue
+    participant Q as "commitQueue (MPSCQueue)"
     participant W as commitWorker
     participant V as vlog.write
     participant L as lsm.SetBatch
@@ -367,7 +370,8 @@ to concrete functions in the codebase.</p>
 <li>release refs (<code>DecrRef</code>).</li>
 </ul>
 </li>
-<li>Storage then follows the same embedded write pipeline (vlog -&gt; LSM/WAL).</li>
+<li>Storage then follows the same embedded write pipeline (MPSC commit queue -&gt;
+vlog -&gt; LSM/WAL, with optional sync handoff).</li>
 </ol>
 <h3 id="62-sequence-diagram"><a class="header" href="#62-sequence-diagram">6.2 Sequence Diagram</a></h3>
 <pre class="mermaid">sequenceDiagram

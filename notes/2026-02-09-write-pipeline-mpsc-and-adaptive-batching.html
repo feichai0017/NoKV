@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9ff4e25f.js";
+            window.path_to_searchindex_js = "../searchindex-ab5a6d1e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-2499ba20.js"></script>
@@ -187,23 +187,32 @@
 <p>在 LSM 引擎中，WAL (预写日志) 的写入必须是严格顺序的。如果让 1000 个用户协程并发地调用 <code>write()</code> 系统调用，内核态的上下文切换和文件锁竞争会瞬间压垮系统。
 NoKV 通过 MPSC 模型，将数千个前台并发压力汇聚到一个后台 <code>commitWorker</code> 中，将随机小写入转化为大块的顺序磁盘 IO。</p>
 <h3 id="12-核心组件commitqueue"><a class="header" href="#12-核心组件commitqueue">1.2 核心组件：commitQueue</a></h3>
-<p><code>commitQueue</code>（位于 <code>db_write.go</code>）并不是一个简单的 Channel，它是由三部分构成的协同系统：</p>
+<p><code>commitQueue</code>（位于 <code>db_write.go</code>）现在是一个围绕
+<code>utils.MPSCQueue[*commitRequest]</code> 封装的专用写入队列，而不是旧的
+RingBuffer + 双 channel 协议。当前实现由三部分组成：</p>
 <ul>
-<li><strong>RingBuffer</strong>：基于原子序列号的无锁循环队列，负责极速的数据传递。</li>
-<li><strong>Spaces Channel</strong>：作为“票据”系统，控制队列的硬上限，形成天然的 <strong>Backpressure (背压)</strong>。</li>
-<li><strong>Items Channel</strong>：作为“唤醒”信号，通知后台 Worker 有新数据到达，避免 Worker 空转浪费 CPU。</li>
+<li><strong>Bounded MPSC queue</strong>：基于每槽位 sequence 的 bounded
+multi-producer/single-consumer 队列，提供严格单 consumer 语义和显式
+shutdown。</li>
+<li><strong>Long-lived consumer session</strong>：<code>commitWorker</code> 启动后只获取一次
+<code>MPSCConsumer</code>，通过 <code>Pop</code>/<code>DrainReady</code> 批量取请求，减少热路径上的重复
+acquire/release 开销。</li>
+<li><strong>队列外统计与背压</strong>：<code>pendingEntries</code>、<code>pendingBytes</code> 和
+<code>ReservedLen()</code> 共同决定积压观测与批次放大；队列满时由 <code>MPSCQueue</code>
+自身阻塞 producer，而不是依赖额外 “spaces/items” channel。</li>
 </ul>
 <hr>
 <h2 id="2-自适应批处理算法-adaptive-coalescing"><a class="header" href="#2-自适应批处理算法-adaptive-coalescing">2. 自适应批处理算法 (Adaptive Coalescing)</a></h2>
 <p><code>nextCommitBatch</code> 是整个流水线的灵魂。它不是死板地按照固定大小打包，而是能够根据系统负载动态调整其“吞吐模式”。</p>
 <h3 id="21-积压驱动的动态上限"><a class="header" href="#21-积压驱动的动态上限">2.1 积压驱动的动态上限</a></h3>
-<p>系统实时监控队列积压程度 (<code>queueLen</code>)。当积压严重时，Worker 会自动“变强”：</p>
+<p>系统实时监控队列积压程度（<code>commitQueue.len()</code>，底层是
+<code>MPSCQueue.ReservedLen()</code>）。当积压严重时，Worker 会自动“变强”：</p>
 <pre><code class="language-go">// 动态调整 Batch 限制
-backlog := int(cq.queueLen.Load())
+backlog := cq.len()
 if backlog &gt; limitCount {
     // 如果队列积压，按比例放大 Batch 大小，最高 4 倍
     factor := min(max(backlog/limitCount, 1), 4)
-    limitCount = min(limitCount * factor, hardLimit)
+    limitCount = min(limitCount*factor, backlog)
     limitSize *= int64(factor)
 }
 </code></pre>
@@ -218,11 +227,11 @@ if backlog &gt; limitCount {
     A[User db.Set/Apply] --&gt; B{L0 Throttle Check?}
     B -- Blocked --&gt; A
     B -- Pass --&gt; C[Encode Internal Key]
-    C --&gt; D[Push to RingBuffer]
+    C --&gt; D["Push to MPSC commit queue"]
     D --&gt; E[Wait for Request.WaitGroup]
     
     subgraph "commitWorker (Background)"
-        F[nextCommitBatch: Collect Requests] --&gt; G[vlog.write: Value Separation]
+        F["nextCommitBatch: Pop + DrainReady"] --&gt; G[vlog.write: Value Separation]
         G --&gt; H[wal.Append: Durability]
         H --&gt; I[lsm.SetBatch: Index Apply]
         I --&gt; J{SyncWrites Enabled?}
@@ -269,7 +278,9 @@ for i, cr := range batch.reqs {
 </tbody>
 </table>
 </div>
-<p><strong>总结</strong>：NoKV 的写路径通过“牺牲”极微小的入队延迟，换取了极其稳健的磁盘顺序写入带宽。这种 <strong>“漏斗式”</strong> 的设计配合 <strong>自适应调节算法</strong>，是 NoKV 能够从容应对分布式环境下突发写潮汐的关键所在。</p>
+<p><strong>总结</strong>：NoKV 的写路径通过 bounded MPSC 聚合、批量 <code>DrainReady</code> 和
+显式的 value-log / LSM / sync 分段，避免前台协程直接竞争底层持久化路径。
+这种“漏斗式”设计配合自适应批处理，是当前写入吞吐和尾延迟控制的关键。</p>
 
                     </main>
 

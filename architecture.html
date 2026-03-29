@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9ff4e25f.js";
+            window.path_to_searchindex_js = "searchindex-ab5a6d1e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -298,7 +298,7 @@ iterator scan, distributed read/write via Raft apply), see
 <tr><th>Package</th><th>Responsibility</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog, router, RegionMetrics, Region hooks, manifest integration, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
+<tr><td><a href="../raftstore/store"><code>store</code></a></td><td>Region catalog/runtime root, router, RegionMetrics, scheduler + command runtimes, helpers such as <code>StartPeer</code> / <code>SplitRegion</code>.</td></tr>
 <tr><td><a href="../raftstore/peer"><code>peer</code></a></td><td>Wraps etcd/raft <code>RawNode</code>, handles Ready pipeline, snapshot resend queue, backlog instrumentation.</td></tr>
 <tr><td><a href="../raftstore/engine"><code>engine</code></a></td><td>WALStorage/DiskStorage/MemoryStorage, reusing the DB’s WAL while keeping store-local raft replay metadata in sync.</td></tr>
 <tr><td><a href="../raftstore/transport"><code>transport</code></a></td><td>gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for NoKV RPC.</td></tr>
@@ -312,7 +312,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li><code>server.New</code> wires DB, store configuration (StoreID, hooks, scheduler), Raft config, and transport address. It registers NoKV RPC on the shared gRPC server and sets <code>transport.SetHandler(store.Step)</code>.</li>
 <li>CLI (<code>nokv serve</code>) or application enumerates the local peer catalog and calls <code>Store.StartPeer</code> for every Region containing the local store:
 <ul>
-<li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, WAL/Manifest handles, Region metadata.</li>
+<li><code>peer.Config</code> includes Raft params, transport, <code>kv.NewEntryApplier</code>, peer storage, and Region metadata.</li>
 <li>Router registration, regionManager bookkeeping, optional <code>Peer.Bootstrap</code> with initial peer list, leader campaign.</li>
 </ul>
 </li>

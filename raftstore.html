@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9ff4e25f.js";
+            window.path_to_searchindex_js = "searchindex-ab5a6d1e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2499ba20.js"></script>
@@ -219,7 +219,7 @@
 <p><strong>Start local peers</strong></p>
 <ul>
 <li>CLI (<code>nokv serve</code>) loads the local peer catalog and calls <code>Store.StartPeer</code> for every region that includes the local store.</li>
-<li>Each <code>peer.Config</code> carries raft parameters, the transport reference, <code>kv.NewEntryApplier</code>, WAL/manifest handles, and Region metadata.</li>
+<li>Each <code>peer.Config</code> carries raft parameters, the transport reference, <code>kv.NewEntryApplier</code>, peer storage, and Region metadata.</li>
 <li><code>StartPeer</code> registers the peer through the peer-set/routing layer and may bootstrap or campaign for leadership.</li>
 </ul>
 </li>
