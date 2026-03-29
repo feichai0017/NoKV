@@ -30,6 +30,7 @@ func BenchmarkDBBatchSet(b *testing.B) {
 		b.Run(mode.name, func(b *testing.B) {
 			db := newBenchDB(b, func(opt *Options) {
 				opt.WriteBatchMaxCount = 128
+				opt.MaxBatchCount = 128
 				opt.SyncWrites = mode.sync
 				opt.SyncPipeline = mode.pipeline
 			})
