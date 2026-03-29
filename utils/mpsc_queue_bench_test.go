@@ -47,7 +47,9 @@ func BenchmarkMPSCQueuePushOnlyContention(b *testing.B) {
 		b.Run("producers="+itoa(producers), func(b *testing.B) {
 			q := NewMPSCQueue[int](1024)
 			done := make(chan struct{})
+			consumerDone := make(chan struct{})
 			go func() {
+				defer close(consumerDone)
 				for {
 					if _, ok := q.Pop(); !ok {
 						return
@@ -86,11 +88,7 @@ func BenchmarkMPSCQueuePushOnlyContention(b *testing.B) {
 			b.StopTimer()
 			close(done)
 			q.Close()
-			for {
-				if _, ok := q.TryPop(); !ok {
-					break
-				}
-			}
+			<-consumerDone
 		})
 	}
 }

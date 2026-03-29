@@ -712,13 +712,20 @@ func searchFirstBlockWithBaseKeyGE(offsets []*pb.BlockOffset, baseKey []byte) in
 	lo, hi := 0, len(offsets)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if utils.CompareBaseKeys(offsets[mid].GetKey(), baseKey) >= 0 {
+		if compareOffsetBaseKey(offsets[mid].GetKey(), baseKey) >= 0 {
 			hi = mid
 		} else {
 			lo = mid + 1
 		}
 	}
 	return lo
+}
+
+func compareOffsetBaseKey(internalKey, baseKey []byte) int {
+	if len(internalKey) > 8 {
+		internalKey = internalKey[:len(internalKey)-8]
+	}
+	return bytes.Compare(internalKey, baseKey)
 }
 
 func blockRangeForBounds(index *pb.TableIndex, lower, upper []byte) (int, int) {
@@ -741,7 +748,7 @@ func blockRangeForBounds(index *pb.TableIndex, lower, upper []byte) (int, int) {
 			start = 0
 		case idx >= len(offsets):
 			start = len(offsets) - 1
-		case utils.CompareBaseKeys(offsets[idx].GetKey(), lower) == 0:
+		case compareOffsetBaseKey(offsets[idx].GetKey(), lower) == 0:
 			start = idx
 		default:
 			start = idx - 1

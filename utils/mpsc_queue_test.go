@@ -12,8 +12,8 @@ func TestMPSCQueueBasic(t *testing.T) {
 	if !q.Push(1) || !q.Push(2) || !q.Push(3) || !q.Push(4) {
 		t.Fatalf("expected pushes to succeed")
 	}
-	if q.Len() != 4 || q.Cap() < 4 {
-		t.Fatalf("unexpected len/cap %d/%d", q.Len(), q.Cap())
+	if q.ReservedLen() != 4 || q.Cap() < 4 {
+		t.Fatalf("unexpected len/cap %d/%d", q.ReservedLen(), q.Cap())
 	}
 	for i := 1; i <= 4; i++ {
 		v, ok := q.TryPop()
@@ -99,4 +99,153 @@ func TestMPSCQueueCloseUnblocksFullProducer(t *testing.T) {
 	if ok := <-done; ok {
 		t.Fatalf("expected blocked producer to fail after close")
 	}
+}
+
+func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
+	q := NewMPSCQueue[int](64)
+	const (
+		producers = 8
+		perProd   = 1000
+		total     = producers * perProd
+	)
+
+	var (
+		wg       sync.WaitGroup
+		consumed atomic.Int64
+		seenMu   sync.Mutex
+		seen     = make(map[int]struct{}, total)
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			v, ok := q.Pop()
+			if !ok {
+				return
+			}
+			seenMu.Lock()
+			if _, exists := seen[v]; exists {
+				seenMu.Unlock()
+				t.Errorf("duplicate value %d", v)
+				return
+			}
+			seen[v] = struct{}{}
+			seenMu.Unlock()
+			consumed.Add(1)
+		}
+	}()
+
+	wg.Add(producers)
+	for p := range producers {
+		go func(id int) {
+			defer wg.Done()
+			base := id * perProd
+			for i := range perProd {
+				if !q.Push(base + i) {
+					return
+				}
+				if i%97 == 0 {
+					runtime.Gosched()
+				}
+			}
+		}(p)
+	}
+
+	go func() {
+		for range 200 {
+			runtime.Gosched()
+		}
+		q.Close()
+	}()
+
+	wg.Wait()
+	q.Close()
+	<-done
+
+	seenMu.Lock()
+	defer seenMu.Unlock()
+	if got := consumed.Load(); got != int64(len(seen)) {
+		t.Fatalf("consumed=%d seen=%d mismatch", got, len(seen))
+	}
+	if len(seen) == 0 {
+		t.Fatalf("expected some drained items")
+	}
+}
+
+func TestMPSCQueueExactlyOnceDrain(t *testing.T) {
+	const (
+		producers = 6
+		perProd   = 1500
+		total     = producers * perProd
+	)
+	q := NewMPSCQueue[int](total)
+
+	var wg sync.WaitGroup
+	wg.Add(producers)
+	for p := range producers {
+		go func(id int) {
+			defer wg.Done()
+			base := id * perProd
+			for i := range perProd {
+				if !q.Push(base + i) {
+					t.Errorf("unexpected push failure before close")
+					return
+				}
+			}
+		}(p)
+	}
+
+	wg.Wait()
+	q.Close()
+
+	seen := make([]bool, total)
+	count := 0
+	for {
+		v, ok := q.Pop()
+		if !ok {
+			break
+		}
+		if v < 0 || v >= total {
+			t.Fatalf("value out of range: %d", v)
+		}
+		if seen[v] {
+			t.Fatalf("duplicate value: %d", v)
+		}
+		seen[v] = true
+		count++
+	}
+	if count != total {
+		t.Fatalf("count=%d want=%d", count, total)
+	}
+	for i, ok := range seen {
+		if !ok {
+			t.Fatalf("missing value: %d", i)
+		}
+	}
+}
+
+func TestMPSCQueueRejectsConcurrentConsumers(t *testing.T) {
+	q := NewMPSCQueue[int](2)
+	if !q.Push(1) {
+		t.Fatalf("push failed")
+	}
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		q.acquireConsumer()
+		close(started)
+		<-release
+		q.releaseConsumer()
+	}()
+	<-started
+
+	defer close(release)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected concurrent consumer panic")
+		}
+	}()
+	_, _ = q.TryPop()
 }

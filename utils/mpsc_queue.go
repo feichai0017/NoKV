@@ -26,6 +26,7 @@ type MPSCQueue[T any] struct {
 	tail      atomic.Uint64
 	_         [mpscQueueCacheLineSz]byte
 	closed    atomic.Bool
+	consuming atomic.Bool
 	closeOnce sync.Once
 	closeCh   chan struct{}
 	mu        sync.Mutex
@@ -78,9 +79,7 @@ retry:
 			if q.tail.CompareAndSwap(pos, pos+1) {
 				slot.val = v
 				slot.seq.Store(pos + 1)
-				if pos == q.head.Load() {
-					q.notEmpty.Signal()
-				}
+				q.signalNotEmpty()
 				return true
 			}
 			runtime.Gosched()
@@ -123,8 +122,17 @@ func (q *MPSCQueue[T]) TryPop() (T, bool) {
 	if q == nil {
 		return zero, false
 	}
+	q.acquireConsumer()
+	defer q.releaseConsumer()
+	return q.tryPop()
+}
+
+func (q *MPSCQueue[T]) tryPop() (T, bool) {
+	var zero T
+	if q == nil {
+		return zero, false
+	}
 	pos := q.head.Load()
-	tail := q.tail.Load()
 	slot := &q.buf[pos&q.mask]
 	seq := slot.seq.Load()
 	diff := int64(seq) - int64(pos+1)
@@ -135,10 +143,7 @@ func (q *MPSCQueue[T]) TryPop() (T, bool) {
 	slot.val = zero
 	q.head.Store(pos + 1)
 	slot.seq.Store(pos + q.capacity)
-	// Only wake a blocked producer on the full->non-full edge.
-	if tail-pos == q.capacity {
-		q.notFull.Signal()
-	}
+	q.signalNotFull()
 	return val, true
 }
 
@@ -150,15 +155,17 @@ func (q *MPSCQueue[T]) Pop() (T, bool) {
 	if q == nil {
 		return zero, false
 	}
+	q.acquireConsumer()
+	defer q.releaseConsumer()
 	for {
-		if val, ok := q.TryPop(); ok {
+		if val, ok := q.tryPop(); ok {
 			return val, true
 		}
 		if q.drained() {
 			return zero, false
 		}
 		for range mpscQueueSpinCount {
-			if val, ok := q.TryPop(); ok {
+			if val, ok := q.tryPop(); ok {
 				return val, true
 			}
 			if q.drained() {
@@ -192,8 +199,10 @@ func (q *MPSCQueue[T]) Close() bool {
 	q.closeOnce.Do(func() {
 		q.closed.Store(true)
 		close(q.closeCh)
+		q.mu.Lock()
 		q.notEmpty.Broadcast()
 		q.notFull.Broadcast()
+		q.mu.Unlock()
 		swapped = true
 	})
 	return swapped
@@ -217,8 +226,11 @@ func (q *MPSCQueue[T]) CloseCh() <-chan struct{} {
 	return q.closeCh
 }
 
-// Len returns the number of currently reserved-but-not-consumed items.
-func (q *MPSCQueue[T]) Len() int {
+// ReservedLen returns the number of currently reserved-but-not-consumed items.
+//
+// This is not the same as "published and ready"; producers may have reserved a
+// slot before publishing it.
+func (q *MPSCQueue[T]) ReservedLen() int {
 	if q == nil {
 		return 0
 	}
@@ -244,4 +256,32 @@ func (q *MPSCQueue[T]) drained() bool {
 	}
 	head := q.head.Load()
 	return q.tail.Load() == head
+}
+
+func (q *MPSCQueue[T]) acquireConsumer() {
+	if q == nil {
+		return
+	}
+	if !q.consuming.CompareAndSwap(false, true) {
+		panic("MPSCQueue: concurrent consumers are not supported")
+	}
+}
+
+func (q *MPSCQueue[T]) releaseConsumer() {
+	if q == nil {
+		return
+	}
+	q.consuming.Store(false)
+}
+
+func (q *MPSCQueue[T]) signalNotEmpty() {
+	q.mu.Lock()
+	q.notEmpty.Signal()
+	q.mu.Unlock()
+}
+
+func (q *MPSCQueue[T]) signalNotFull() {
+	q.mu.Lock()
+	q.notFull.Signal()
+	q.mu.Unlock()
 }

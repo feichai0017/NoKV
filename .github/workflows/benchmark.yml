@@ -10,6 +10,7 @@ on:
 jobs:
   micro-bench:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -23,7 +24,7 @@ jobs:
 
       - name: Run micro benchmarks
         run: |
-          go test -bench=. -run=^$ ./... -count=1 | tee benchmark.txt
+          go test -bench=. -run=^$ -benchtime=100ms -count=1 ./... | tee benchmark.txt
 
       - name: Track benchmark results
         uses: benchmark-action/github-action-benchmark@v1
@@ -39,6 +40,7 @@ jobs:
   ycsb-bench:
     if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-benchmark')
     runs-on: ubuntu-latest
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v6
 
