@@ -50,6 +50,13 @@ func (cq *commitQueue) len() int {
 	return cq.q.ReservedLen()
 }
 
+func (cq *commitQueue) consumer() *utils.MPSCConsumer[*commitRequest] {
+	if cq == nil || cq.q == nil {
+		return nil
+	}
+	return cq.q.AcquireConsumer()
+}
+
 func (cq *commitQueue) push(cr *commitRequest) bool {
 	if cq == nil || cq.q == nil {
 		return false
@@ -57,22 +64,22 @@ func (cq *commitQueue) push(cr *commitRequest) bool {
 	return cq.q.Push(cr)
 }
 
-func (cq *commitQueue) pop() *commitRequest {
-	if cq == nil || cq.q == nil {
+func (cq *commitQueue) pop(c *utils.MPSCConsumer[*commitRequest]) *commitRequest {
+	if cq == nil || cq.q == nil || c == nil {
 		return nil
 	}
-	cr, ok := cq.q.Pop()
+	cr, ok := c.Pop()
 	if !ok {
 		return nil
 	}
 	return cr
 }
 
-func (cq *commitQueue) tryPop() (*commitRequest, bool) {
-	if cq == nil || cq.q == nil {
-		return nil, false
+func (cq *commitQueue) drainReady(c *utils.MPSCConsumer[*commitRequest], max int, fn func(*commitRequest) bool) int {
+	if cq == nil || cq.q == nil || c == nil {
+		return 0
 	}
-	return cq.q.TryPop()
+	return c.DrainReady(max, fn)
 }
 
 func (db *DB) throttleSignal() <-chan struct{} {
@@ -254,9 +261,9 @@ func (db *DB) enqueueCommitRequest(cr *commitRequest) error {
 	return nil
 }
 
-func (db *DB) nextCommitBatch() *commitBatch {
+func (db *DB) nextCommitBatch(consumer *utils.MPSCConsumer[*commitRequest]) *commitBatch {
 	cq := &db.commitQueue
-	first := cq.pop()
+	first := cq.pop(consumer)
 	if first == nil {
 		return nil
 	}
@@ -293,12 +300,12 @@ func (db *DB) nextCommitBatch() *commitBatch {
 		// Allow a brief coalescing window when the queue is momentarily empty.
 		time.Sleep(coalesceWait)
 	}
-	for len(batch) < limitCount && pendingBytes < limitSize {
-		cr, ok := cq.tryPop()
-		if !ok {
-			break
-		}
-		addToBatch(cr)
+	remaining := limitCount - len(batch)
+	if remaining > 0 && pendingBytes < limitSize {
+		cq.drainReady(consumer, remaining, func(cr *commitRequest) bool {
+			addToBatch(cr)
+			return pendingBytes < limitSize
+		})
 	}
 
 	cq.pendingEntries.Add(-pendingEntries)
@@ -312,8 +319,13 @@ func (db *DB) nextCommitBatch() *commitBatch {
 
 func (db *DB) commitWorker() {
 	defer db.commitWG.Done()
+	consumer := db.commitQueue.consumer()
+	if consumer == nil {
+		return
+	}
+	defer consumer.Close()
 	for {
-		batch := db.nextCommitBatch()
+		batch := db.nextCommitBatch(consumer)
 		if batch == nil {
 			return
 		}

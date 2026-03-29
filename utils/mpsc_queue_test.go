@@ -249,3 +249,57 @@ func TestMPSCQueueRejectsConcurrentConsumers(t *testing.T) {
 	}()
 	_, _ = q.TryPop()
 }
+
+func TestMPSCQueueDrainReady(t *testing.T) {
+	q := NewMPSCQueue[int](8)
+	for i := 1; i <= 4; i++ {
+		if !q.Push(i) {
+			t.Fatalf("push %d failed", i)
+		}
+	}
+	c := q.AcquireConsumer()
+	defer c.Close()
+
+	var got []int
+	n := c.DrainReady(3, func(v int) bool {
+		got = append(got, v)
+		return true
+	})
+	if n != 3 {
+		t.Fatalf("drained %d, want 3", n)
+	}
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("unexpected drain order: %v", got)
+	}
+	v, ok := c.Pop()
+	if !ok || v != 4 {
+		t.Fatalf("pop after drain got %v %v", v, ok)
+	}
+}
+
+func TestMPSCQueueDrainReadyStopsWhenCallbackStops(t *testing.T) {
+	q := NewMPSCQueue[int](8)
+	for i := 1; i <= 4; i++ {
+		if !q.Push(i) {
+			t.Fatalf("push %d failed", i)
+		}
+	}
+	c := q.AcquireConsumer()
+	defer c.Close()
+
+	var got []int
+	n := c.DrainReady(4, func(v int) bool {
+		got = append(got, v)
+		return v < 2
+	})
+	if n != 2 {
+		t.Fatalf("drained %d, want 2", n)
+	}
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("unexpected drained values: %v", got)
+	}
+	v, ok := c.Pop()
+	if !ok || v != 3 {
+		t.Fatalf("pop after callback stop got %v %v", v, ok)
+	}
+}
