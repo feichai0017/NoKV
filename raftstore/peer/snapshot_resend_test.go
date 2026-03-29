@@ -152,7 +152,7 @@ func TestPeerRegionMetaSetters(t *testing.T) {
 	meta2 := peer.RegionMeta()
 	require.Equal(t, byte('a'), meta2.StartKey[0])
 
-	peer.SetRegionMeta(raftmeta.RegionMeta{ID: 2, StartKey: []byte("c")})
+	peer.ApplyRegionMetaMirror(raftmeta.RegionMeta{ID: 2, StartKey: []byte("c")})
 	meta3 := peer.RegionMeta()
 	require.Equal(t, uint64(2), meta3.ID)
 }
