@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -163,9 +164,7 @@ func (c *Client) Close() error {
 	var first error
 	c.mu.RLock()
 	stores := make(map[uint64]*storeConn, len(c.stores))
-	for id, st := range c.stores {
-		stores[id] = st
-	}
+	maps.Copy(stores, c.stores)
 	resolver := c.regionResolver
 	c.mu.RUnlock()
 	for id, st := range stores {
