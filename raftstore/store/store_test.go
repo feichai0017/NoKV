@@ -223,7 +223,7 @@ func newTestMVCCApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmd
 
 func TestStorePeerLifecycle(t *testing.T) {
 	router := NewRouter()
-	rs := NewStore(router)
+	rs := NewStore(Config{Router: router})
 
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -260,7 +260,7 @@ func TestStorePeerLifecycle(t *testing.T) {
 }
 
 func TestStoreDuplicatePeer(t *testing.T) {
-	rs := NewStore(nil)
+	rs := NewStore(Config{})
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
 			ID:              1,
@@ -285,7 +285,7 @@ func TestStoreDuplicatePeer(t *testing.T) {
 
 func TestStorePeersSnapshot(t *testing.T) {
 	router := NewRouter()
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		Router: router,
 	})
 
@@ -327,7 +327,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = metaStore.Close() })
 
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		LocalMeta: metaStore,
 	})
 
@@ -471,7 +471,7 @@ func TestStorePersistsRegionMetadata(t *testing.T) {
 
 func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 	sink := newTestSchedulerSink()
-	rs := NewStoreWithConfig(Config{Scheduler: sink, StoreID: 1})
+	rs := NewStore(Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
 
 	cfg := &peer.Config{
@@ -521,7 +521,7 @@ func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
 		testSchedulerSink: *newTestSchedulerSink(),
 		publishDelay:      200 * time.Millisecond,
 	}
-	rs := NewStoreWithConfig(Config{Scheduler: sink, StoreID: 1})
+	rs := NewStore(Config{Scheduler: sink, StoreID: 1})
 	defer rs.Close()
 
 	cfg := &peer.Config{
@@ -555,7 +555,7 @@ func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
 
 func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	coord := newTestSchedulerSink()
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		Scheduler:         coord,
 		StoreID:           9,
 		PeerBuilder:       testPeerBuilder(9),
@@ -627,7 +627,7 @@ func TestStoreLoadsLocalMetaSnapshotWithoutScheduler(t *testing.T) {
 		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 12}},
 	}))
 
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		StoreID:   1,
 		LocalMeta: metaStore,
 	})
@@ -651,7 +651,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := newTestSchedulerSink()
 	applier := newTestMVCCApplier(db)
-	st := NewStoreWithConfig(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
+	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 
 	region := &raftmeta.RegionMeta{
@@ -741,7 +741,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 			Header: req.GetHeader(),
 		}, nil
 	}
-	st := NewStoreWithConfig(Config{
+	st := NewStore(Config{
 		StoreID:        1,
 		CommandApplier: applier,
 		CommandTimeout: time.Second,
@@ -821,7 +821,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 func TestStoreProposeCommandNotLeader(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	applier := newTestMVCCApplier(db)
-	st := NewStoreWithConfig(Config{StoreID: 2, CommandApplier: applier})
+	st := NewStore(Config{StoreID: 2, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &raftmeta.RegionMeta{
 		ID:       202,
@@ -863,7 +863,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	applier := newTestMVCCApplier(db)
-	st := NewStoreWithConfig(Config{StoreID: 3, CommandApplier: applier})
+	st := NewStore(Config{StoreID: 3, CommandApplier: applier})
 	t.Cleanup(func() { st.Close() })
 	region := &raftmeta.RegionMeta{
 		ID:       303,
@@ -902,7 +902,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 
 func TestStoreProposeSplitApplies(t *testing.T) {
 	storeID := uint64(11)
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -946,7 +946,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 
 func TestStoreProposeMergeApplies(t *testing.T) {
 	storeID := uint64(12)
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -999,7 +999,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 
 func TestStoreSplitMergeLifecycle(t *testing.T) {
 	storeID := uint64(13)
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 15 * time.Millisecond,
@@ -1052,7 +1052,7 @@ func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
 
-	rs := NewStoreWithConfig(Config{
+	rs := NewStore(Config{
 		PeerBuilder: testPeerBuilder(storeID),
 		StoreID:     storeID,
 		LocalMeta:   localMeta,
@@ -1097,7 +1097,7 @@ func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = reopenedMeta.Close() }()
 
-	reopened := NewStoreWithConfig(Config{
+	reopened := NewStore(Config{
 		PeerBuilder: testPeerBuilder(storeID),
 		StoreID:     storeID,
 		LocalMeta:   reopenedMeta,

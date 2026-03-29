@@ -69,17 +69,10 @@ type RegionSnapshot struct {
 	Regions []raftmeta.RegionMeta `json:"regions"`
 }
 
-// NewStore creates a Store with the provided router. When router is nil a new
-// instance is allocated implicitly so callers can skip the explicit
-// construction in tests.
-func NewStore(router *Router) *Store {
-	return NewStoreWithConfig(Config{Router: router})
-}
-
-// NewStoreWithConfig constructs a Store using concrete dependencies. It keeps
-// peer construction, region tracking, and scheduler heartbeats explicit rather
-// than routing them through callback chains.
-func NewStoreWithConfig(cfg Config) *Store {
+// NewStore constructs a Store using concrete dependencies. It keeps peer
+// construction, region tracking, and scheduler heartbeats explicit rather than
+// routing them through callback chains.
+func NewStore(cfg Config) *Store {
 	ctx, cancel := context.WithCancel(context.Background())
 	router := cfg.Router
 	if router == nil {

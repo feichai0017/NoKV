@@ -35,7 +35,7 @@ func adminTestPeerBuilder(storeID uint64) PeerBuilder {
 func TestStoreLocalSplitStartsChildPeer(t *testing.T) {
 	storeID := uint64(1)
 	peerBuilder := adminTestPeerBuilder(storeID)
-	rs := NewStoreWithConfig(Config{PeerBuilder: peerBuilder, StoreID: storeID})
+	rs := NewStore(Config{PeerBuilder: peerBuilder, StoreID: storeID})
 	defer rs.Close()
 
 	parentMeta := raftmeta.RegionMeta{
