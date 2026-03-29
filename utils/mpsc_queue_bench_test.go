@@ -42,6 +42,45 @@ func BenchmarkMPSCQueuePushPop(b *testing.B) {
 	}
 }
 
+func BenchmarkMPSCQueueConsumerSessionPushPop(b *testing.B) {
+	for _, producers := range []int{1, 4, 8, 16} {
+		b.Run("producers="+itoa(producers), func(b *testing.B) {
+			q := NewMPSCQueue[int](1024)
+			c := q.AcquireConsumer()
+			defer c.Close()
+
+			var next atomic.Int64
+			var wg sync.WaitGroup
+			wg.Add(producers)
+			for range producers {
+				go func() {
+					defer wg.Done()
+					for {
+						n := int(next.Add(1))
+						if n > b.N {
+							return
+						}
+						if !q.Push(n) {
+							return
+						}
+					}
+				}()
+			}
+			b.ResetTimer()
+			count := 0
+			for count < b.N {
+				if _, ok := c.Pop(); !ok {
+					break
+				}
+				count++
+			}
+			b.StopTimer()
+			q.Close()
+			wg.Wait()
+		})
+	}
+}
+
 func BenchmarkMPSCQueuePushOnlyContention(b *testing.B) {
 	for _, producers := range []int{1, 4, 8, 16} {
 		b.Run("producers="+itoa(producers), func(b *testing.B) {

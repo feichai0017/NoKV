@@ -6,7 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 )
 
-// BenchmarkDBBatchSet compares write throughput under three sync modes:
+// BenchmarkDBBatchSet compares end-to-end batch write throughput under three sync modes:
 //
 //	Async          – SyncWrites=false (no fsync, baseline)
 //	SyncInline     – SyncWrites=true, SyncPipeline=false (commit worker fsync inline)
@@ -43,8 +43,12 @@ func BenchmarkDBBatchSet(b *testing.B) {
 					key := makeBenchKey(i*batchSize + j)
 					entries[j] = kv.NewInternalEntry(kv.CFDefault, key, nonTxnMaxVersion, value, 0, 0)
 				}
-				if _, err := db.sendToWriteCh(entries, true); err != nil {
+				req, err := db.sendToWriteCh(entries, true)
+				if err != nil {
 					b.Fatalf("batchSet: %v", err)
+				}
+				if err := req.Wait(); err != nil {
+					b.Fatalf("wait batchSet: %v", err)
 				}
 			}
 		})
