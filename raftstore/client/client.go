@@ -26,6 +26,41 @@ func (e *KeyConflictError) Error() string {
 	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
 }
 
+// RouteUnavailableError indicates that the client could not resolve a route
+// for the requested key because the external resolver was unavailable or the
+// lookup timed out. Callers may retry once control-plane connectivity recovers.
+type RouteUnavailableError struct {
+	Key []byte
+	Err error
+}
+
+func (e *RouteUnavailableError) Error() string {
+	if e == nil {
+		return "client: route unavailable"
+	}
+	return fmt.Sprintf("client: route unavailable for key %q: %v", e.Key, e.Err)
+}
+
+func (e *RouteUnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// RegionNotFoundError indicates that no region metadata currently covers the
+// requested key.
+type RegionNotFoundError struct {
+	Key []byte
+}
+
+func (e *RegionNotFoundError) Error() string {
+	if e == nil {
+		return "client: region not found"
+	}
+	return fmt.Sprintf("client: region not found for key %q", e.Key)
+}
+
 // StoreEndpoint describes a reachable store in the cluster.
 type StoreEndpoint struct {
 	StoreID uint64
@@ -757,10 +792,13 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	defer cancel()
 	resp, err := c.regionResolver.GetRegionByKey(ctx, &pb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
 	if err != nil {
-		return regionSnapshot{}, fmt.Errorf("client: resolve region for key %q: %w", key, normalizeRPCError(err))
+		return regionSnapshot{}, &RouteUnavailableError{
+			Key: append([]byte(nil), key...),
+			Err: normalizeRPCError(err),
+		}
 	}
 	if resp == nil || resp.GetNotFound() || resp.GetRegion() == nil {
-		return regionSnapshot{}, fmt.Errorf("client: region not found for key %q", key)
+		return regionSnapshot{}, &RegionNotFoundError{Key: append([]byte(nil), key...)}
 	}
 	meta := cloneRegionMeta(resp.GetRegion())
 	if meta.GetId() == 0 {
