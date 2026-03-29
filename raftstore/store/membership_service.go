@@ -31,7 +31,7 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if len(ev.ConfChange.Changes) > 0 {
 		meta.Epoch.ConfVersion += uint64(len(ev.ConfChange.Changes))
 	}
-	return s.updateRegion(meta)
+	return s.applyRegionMeta(meta)
 }
 
 // ProposeAddPeer issues a configuration change to add the provided peer to the

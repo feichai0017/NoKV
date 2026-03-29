@@ -7,6 +7,7 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -75,6 +76,7 @@ func (s *Store) startHeartbeatLoop() {
 		return
 	}
 	s.sched.heartbeatStop = make(chan struct{})
+	s.sched.regionSignal = make(chan struct{}, 1)
 	s.sendHeartbeats()
 	s.sched.heartbeatWG.Add(1)
 	go s.runHeartbeatLoop()
@@ -87,6 +89,7 @@ func (s *Store) stopHeartbeatLoop() {
 	close(s.sched.heartbeatStop)
 	s.sched.heartbeatWG.Wait()
 	s.sched.heartbeatStop = nil
+	s.sched.regionSignal = nil
 }
 
 func (s *Store) runHeartbeatLoop() {
@@ -97,6 +100,8 @@ func (s *Store) runHeartbeatLoop() {
 		select {
 		case <-ticker.C:
 			s.sendHeartbeats()
+		case <-s.sched.regionSignal:
+			s.flushRegionUpdates()
 		case <-s.sched.heartbeatStop:
 			return
 		}
@@ -116,6 +121,67 @@ func (s *Store) sendHeartbeats() {
 	}
 	for _, op := range s.schedulerClient().StoreHeartbeat(ctx, s.storeStatsSnapshot()) {
 		s.enqueueOperation(op)
+	}
+}
+
+func (s *Store) enqueueRegionEvent(ev regionEvent) {
+	if s == nil || s.schedulerClient() == nil || s.sched == nil {
+		return
+	}
+	switch ev.kind {
+	case regionEventApply:
+		if ev.meta.ID == 0 {
+			return
+		}
+		ev.regionID = ev.meta.ID
+		ev.meta = raftmeta.CloneRegionMeta(ev.meta)
+	case regionEventRemove:
+		if ev.regionID == 0 {
+			return
+		}
+	default:
+		return
+	}
+	s.sched.mu.Lock()
+	if s.sched.regionUpdates == nil {
+		s.sched.regionUpdates = make(map[uint64]regionEvent)
+	}
+	s.sched.regionUpdates[ev.regionID] = ev
+	signal := s.sched.regionSignal
+	s.sched.mu.Unlock()
+	if signal == nil {
+		return
+	}
+	select {
+	case signal <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Store) flushRegionUpdates() {
+	if s == nil || s.schedulerClient() == nil || s.sched == nil {
+		return
+	}
+	s.sched.mu.Lock()
+	if len(s.sched.regionUpdates) == 0 {
+		s.sched.mu.Unlock()
+		return
+	}
+	pending := make([]regionEvent, 0, len(s.sched.regionUpdates))
+	for _, ev := range s.sched.regionUpdates {
+		pending = append(pending, ev)
+	}
+	clear(s.sched.regionUpdates)
+	s.sched.mu.Unlock()
+
+	ctx := s.runtimeContext()
+	for _, ev := range pending {
+		switch ev.kind {
+		case regionEventApply:
+			s.schedulerClient().PublishRegion(ctx, ev.meta)
+		case regionEventRemove:
+			s.schedulerClient().RemoveRegion(ctx, ev.regionID)
+		}
 	}
 }
 
@@ -211,6 +277,9 @@ func (s *Store) clearLocalSchedulerDegraded() {
 	}
 	s.sched.mu.Lock()
 	s.sched.degraded = false
+	if s.sched.lastError == "" {
+		s.sched.lastErrorAt = time.Time{}
+	}
 	s.sched.mu.Unlock()
 }
 

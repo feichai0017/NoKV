@@ -46,9 +46,12 @@ type schedulerRuntime struct {
 	interval time.Duration
 	burst    int
 
+	regionSignal chan struct{}
+
 	mu            sync.Mutex
 	pending       map[operationKey]struct{}
 	lastApply     map[operationKey]time.Time
+	regionUpdates map[uint64]regionEvent
 	dropped       uint64
 	degraded      bool
 	lastError     string
@@ -62,6 +65,20 @@ type commandRuntime struct {
 	apply   func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
 	pipe    *commandPipeline
 	timeout time.Duration
+}
+
+type regionEventKind uint8
+
+const (
+	regionEventNone regionEventKind = iota
+	regionEventApply
+	regionEventRemove
+)
+
+type regionEvent struct {
+	kind     regionEventKind
+	regionID uint64
+	meta     raftmeta.RegionMeta
 }
 
 // PeerHandle is a lightweight view of a peer registered with the store. It is
@@ -122,23 +139,24 @@ func NewStoreWithConfig(cfg Config) *Store {
 		storeID:     cfg.StoreID,
 		ctx:         ctx,
 		cancel:      cancel,
-		regions: &regionRuntime{
-			metrics: regionMetrics,
-			mgr:     newRegionManager(ctx, cfg.LocalMeta, regionMetrics, cfg.Scheduler),
-		},
 		sched: &schedulerRuntime{
-			client:    cfg.Scheduler,
-			cooldown:  operationCooldown,
-			interval:  operationInterval,
-			burst:     operationBurst,
-			pending:   make(map[operationKey]struct{}),
-			lastApply: make(map[operationKey]time.Time),
+			client:        cfg.Scheduler,
+			cooldown:      operationCooldown,
+			interval:      operationInterval,
+			burst:         operationBurst,
+			pending:       make(map[operationKey]struct{}),
+			lastApply:     make(map[operationKey]time.Time),
+			regionUpdates: make(map[uint64]regionEvent),
 		},
 		cmds: &commandRuntime{
 			apply:   cfg.CommandApplier,
 			pipe:    newCommandPipeline(cfg.CommandApplier),
 			timeout: commandTimeout,
 		},
+	}
+	s.regions = &regionRuntime{
+		metrics: regionMetrics,
+		mgr:     newRegionManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionEvent),
 	}
 	if s.workDir == "" && cfg.LocalMeta != nil {
 		s.workDir = cfg.LocalMeta.WorkDir()
@@ -150,7 +168,7 @@ func NewStoreWithConfig(cfg Config) *Store {
 		go s.runOperationLoop()
 	}
 	if cfg.LocalMeta != nil {
-		s.regionMgr().loadSnapshot(cfg.LocalMeta.Snapshot())
+		s.regionMgr().loadBootstrapSnapshot(cfg.LocalMeta.Snapshot())
 	}
 	if s.schedulerClient() != nil {
 		s.sched.heartbeat = cfg.HeartbeatInterval
@@ -168,9 +186,16 @@ func (s *Store) SchedulerStatus() SchedulerStatus {
 	if s == nil {
 		return SchedulerStatus{}
 	}
-	status := SchedulerStatus{}
+	status := SchedulerStatus{Mode: SchedulerModeHealthy}
 	if s.schedulerClient() != nil {
 		status = s.schedulerClient().Status()
+		if status.Mode == "" {
+			if status.Degraded {
+				status.Mode = SchedulerModeUnavailable
+			} else {
+				status.Mode = SchedulerModeHealthy
+			}
+		}
 	}
 	if s.sched == nil {
 		return status
@@ -180,6 +205,9 @@ func (s *Store) SchedulerStatus() SchedulerStatus {
 	status.DroppedOperations += s.sched.dropped
 	if s.sched.degraded {
 		status.Degraded = true
+		if status.Mode != SchedulerModeUnavailable {
+			status.Mode = SchedulerModeDegraded
+		}
 		if status.LastErrorAt.Before(s.sched.lastErrorAt) || status.LastError == "" {
 			status.LastError = s.sched.lastError
 			status.LastErrorAt = s.sched.lastErrorAt

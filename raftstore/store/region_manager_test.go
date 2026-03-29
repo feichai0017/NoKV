@@ -11,7 +11,7 @@ import (
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
-	rm := newRegionManager(context.Background(), nil, nil, nil)
+	rm := newRegionManager(nil, nil, nil)
 	snapshot := map[uint64]raftmeta.RegionMeta{
 		1: {
 			ID:       1,
@@ -19,7 +19,7 @@ func TestRegionManagerLoadAndMeta(t *testing.T) {
 			EndKey:   []byte("b"),
 		},
 	}
-	rm.loadSnapshot(snapshot)
+	rm.loadBootstrapSnapshot(snapshot)
 
 	meta, ok := rm.meta(1)
 	if !ok {
@@ -33,7 +33,7 @@ func TestRegionManagerLoadAndMeta(t *testing.T) {
 }
 
 func TestRegionManagerPeerTracking(t *testing.T) {
-	rm := newRegionManager(context.Background(), nil, nil, nil)
+	rm := newRegionManager(nil, nil, nil)
 	fakePeer := &peer.Peer{}
 	rm.setPeer(2, fakePeer)
 	if got := rm.peer(2); got != fakePeer {
@@ -47,11 +47,11 @@ func TestRegionManagerPeerTracking(t *testing.T) {
 }
 
 func TestRegionManagerRemove(t *testing.T) {
-	rm := newRegionManager(context.Background(), nil, nil, nil)
-	requireNoError(t, rm.updateRegion(raftmeta.RegionMeta{ID: 3}))
+	rm := newRegionManager(nil, nil, nil)
+	requireNoError(t, rm.applyRegionMeta(raftmeta.RegionMeta{ID: 3}))
 	rm.setPeer(3, &peer.Peer{})
 
-	requireNoError(t, rm.removeRegion(3))
+	requireNoError(t, rm.applyRegionRemoval(3))
 	if _, ok := rm.meta(3); ok {
 		t.Fatalf("meta should be removed")
 	}
@@ -61,8 +61,8 @@ func TestRegionManagerRemove(t *testing.T) {
 }
 
 func TestRegionManagerListMetas(t *testing.T) {
-	rm := newRegionManager(context.Background(), nil, nil, nil)
-	rm.loadSnapshot(map[uint64]raftmeta.RegionMeta{
+	rm := newRegionManager(nil, nil, nil)
+	rm.loadBootstrapSnapshot(map[uint64]raftmeta.RegionMeta{
 		4: {ID: 4},
 		5: {ID: 5},
 	})

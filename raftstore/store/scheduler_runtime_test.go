@@ -64,6 +64,7 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
+	require.Equal(t, SchedulerModeDegraded, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 	require.Contains(t, status.LastError, "scheduler queue full")
 
@@ -72,5 +73,6 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 
 	status = st.SchedulerStatus()
 	require.False(t, status.Degraded)
+	require.Equal(t, SchedulerModeHealthy, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 }
