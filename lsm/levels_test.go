@@ -208,3 +208,42 @@ func TestLevelHandlerIteratorsRespectBoundsWithIngest(t *testing.T) {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
+
+func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	lh := lsm.levels.levels[1]
+	tblA := buildTableWithEntry(t, lsm, 501, "a", 1, "va")
+	tblB := buildTableWithEntry(t, lsm, 502, "b", 1, "vb")
+	tblC := buildTableWithEntry(t, lsm, 503, "c", 1, "vc")
+	tblD := buildTableWithEntry(t, lsm, 504, "d", 1, "vd")
+
+	lh.tables = []*table{tblA, tblB, tblC, tblD}
+	lh.Sort()
+
+	iters := lh.iterators(&utils.Options{
+		IsAsc:      true,
+		LowerBound: []byte("c"),
+		UpperBound: []byte("e"),
+	})
+	merge := NewMergeIterator(iters, false)
+	defer func() { require.NoError(t, merge.Close()) }()
+
+	var keys []string
+	for merge.Rewind(); merge.Valid(); merge.Next() {
+		entry := merge.Item().Entry()
+		_, userKey, _, ok := kv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
+		keys = append(keys, string(userKey))
+	}
+	require.Equal(t, []string{"c", "d"}, keys)
+
+	for _, tbl := range []*table{tblA, tblB, tblC, tblD} {
+		require.NoError(t, tbl.DecrRef())
+	}
+}
