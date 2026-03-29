@@ -17,7 +17,6 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, key)
 		if err != nil {
-			lastErr = err
 			return nil, err
 		}
 		resp, regionErr, err := c.callGet(ctx, region, key, version)
@@ -73,7 +72,6 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 		for keyID, key := range pending {
 			region, err := c.routeKeyWithRetry(ctx, key)
 			if err != nil {
-				lastErr = err
 				return nil, err
 			}
 			regionID := region.meta.GetId()
@@ -481,7 +479,6 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, primary)
 		if err != nil {
-			lastErr = err
 			return nil, err
 		}
 		cl, err := c.storeClient(ctx, region.leader)
