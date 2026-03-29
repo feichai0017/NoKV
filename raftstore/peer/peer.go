@@ -144,10 +144,11 @@ func (p *Peer) RegionMeta() *raftmeta.RegionMeta {
 	return raftmeta.CloneRegionMetaPtr(p.region)
 }
 
-// SetRegionMeta replaces the in-memory region metadata with the provided
-// snapshot. It mirrors TinyKV's behaviour where raftstore updates peer state
-// based on scheduler decisions (splits, epoch bumps, membership changes).
-func (p *Peer) SetRegionMeta(meta raftmeta.RegionMeta) {
+// ApplyRegionMetaMirror replaces the peer's in-memory region metadata mirror.
+// It exists only so raftstore can synchronize peer-local snapshots after
+// apply/bootstrap has already advanced the store-local region truth. It must
+// not be treated as a consensus state mutation entrypoint.
+func (p *Peer) ApplyRegionMetaMirror(meta raftmeta.RegionMeta) {
 	if p == nil {
 		return
 	}
