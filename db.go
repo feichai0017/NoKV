@@ -92,17 +92,9 @@ type (
 	}
 
 	commitQueue struct {
-		ring           *utils.Ring[*commitRequest]
-		items          chan struct{}
-		spaces         chan struct{}
-		closeCh        chan struct{}
-		drainCh        chan struct{}
-		drainOnce      sync.Once
-		queueLen       atomic.Int64
-		inflight       atomic.Int64
+		q              *utils.MPSCQueue[*commitRequest]
 		pendingBytes   atomic.Int64
 		pendingEntries atomic.Int64
-		closed         atomic.Uint32
 	}
 
 	commitRequest struct {
