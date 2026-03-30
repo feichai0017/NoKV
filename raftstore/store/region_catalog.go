@@ -15,6 +15,8 @@ type RegionRuntimeStatus struct {
 	LocalPeerID  uint64
 	LeaderPeerID uint64
 	Leader       bool
+	AppliedIndex uint64
+	AppliedTerm  uint64
 }
 
 func (s *Store) applyRegionMeta(meta raftmeta.RegionMeta) error {
@@ -99,6 +101,12 @@ func (s *Store) RegionRuntimeStatus(regionID uint64) (RegionRuntimeStatus, bool)
 	status.LocalPeerID = peerRef.ID()
 	status.LeaderPeerID = raftStatus.Lead
 	status.Leader = raftStatus.RaftState == myraft.StateLeader
+	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
+		if ptr, ok := rm.localMeta.RaftPointer(regionID); ok {
+			status.AppliedIndex = ptr.AppliedIndex
+			status.AppliedTerm = ptr.AppliedTerm
+		}
+	}
 	return status, true
 }
 

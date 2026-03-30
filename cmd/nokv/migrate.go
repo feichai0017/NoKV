@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 )
 
 var runExpand = migratepkg.Expand
+var runExpandMany = migratepkg.ExpandMany
+var runRemovePeer = migratepkg.RemovePeer
+var runTransferLeader = migratepkg.TransferLeader
 
 func runMigrateCmd(w io.Writer, args []string) error {
 	if len(args) == 0 {
@@ -31,6 +35,10 @@ func runMigrateCmd(w io.Writer, args []string) error {
 		return runMigrateStatusCmd(w, subargs)
 	case "expand":
 		return runMigrateExpandCmd(w, subargs)
+	case "remove-peer":
+		return runMigrateRemovePeerCmd(w, subargs)
+	case "transfer-leader":
+		return runMigrateTransferLeaderCmd(w, subargs)
 	case "help", "-h", "--help":
 		printMigrateUsage(w)
 		return nil
@@ -46,7 +54,60 @@ func printMigrateUsage(w io.Writer) {
 	  plan     Inspect whether a standalone workdir can be seeded for cluster mode
 	  init     Convert a standalone workdir into a single-store cluster seed
 	  status   Show migration mode for one workdir
-	  expand   Expand a single-store seed into a replicated region`)
+	  expand   Expand a single-store seed into a replicated region
+	  remove-peer      Remove one peer from a replicated region
+	  transfer-leader  Transfer region leadership to a specific peer`)
+}
+
+type peerTargetsFlag []migratepkg.PeerTarget
+
+func (f *peerTargetsFlag) String() string {
+	if f == nil || len(*f) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(*f))
+	for _, target := range *f {
+		part := fmt.Sprintf("%d:%d", target.StoreID, target.PeerID)
+		if target.TargetAddr != "" {
+			part += "@" + target.TargetAddr
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f *peerTargetsFlag) Set(value string) error {
+	target, err := parsePeerTarget(value)
+	if err != nil {
+		return err
+	}
+	*f = append(*f, target)
+	return nil
+}
+
+func parsePeerTarget(value string) (migratepkg.PeerTarget, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return migratepkg.PeerTarget{}, fmt.Errorf("empty peer target")
+	}
+	addr := ""
+	if at := strings.IndexByte(value, '@'); at >= 0 {
+		addr = strings.TrimSpace(value[at+1:])
+		value = strings.TrimSpace(value[:at])
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return migratepkg.PeerTarget{}, fmt.Errorf("invalid peer target %q, want <store>:<peer>[@addr]", value)
+	}
+	storeID, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil || storeID == 0 {
+		return migratepkg.PeerTarget{}, fmt.Errorf("invalid store id in %q", value)
+	}
+	peerID, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil || peerID == 0 {
+		return migratepkg.PeerTarget{}, fmt.Errorf("invalid peer id in %q", value)
+	}
+	return migratepkg.PeerTarget{StoreID: storeID, PeerID: peerID, TargetAddr: addr}, nil
 }
 
 func runMigratePlanCmd(w io.Writer, args []string) error {
@@ -164,6 +225,8 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	regionID := fs.Uint64("region", 0, "region id")
 	storeID := fs.Uint64("store", 0, "target store id")
 	peerID := fs.Uint64("peer", 0, "target peer id")
+	var targets peerTargetsFlag
+	fs.Var(&targets, "target", "peer rollout target in <store>:<peer>[@addr] form; may be repeated")
 	waitTimeout := fs.Duration("wait", 30*time.Second, "how long to wait for peer publication/hosting; 0 disables waiting")
 	pollInterval := fs.Duration("poll-interval", 200*time.Millisecond, "poll interval while waiting")
 	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
@@ -173,7 +236,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	}
 
 	ctx := context.Background()
-	result, err := runExpand(ctx, migratepkg.ExpandConfig{
+	cfg := migratepkg.ExpandConfig{
 		Addr:         strings.TrimSpace(*addr),
 		TargetAddr:   strings.TrimSpace(*targetAddr),
 		RegionID:     *regionID,
@@ -181,7 +244,30 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 		PeerID:       *peerID,
 		WaitTimeout:  *waitTimeout,
 		PollInterval: *pollInterval,
-	})
+		Targets:      targets,
+	}
+	if len(targets) > 0 {
+		if *storeID != 0 || *peerID != 0 || strings.TrimSpace(*targetAddr) != "" {
+			return fmt.Errorf("--target cannot be combined with --store/--peer/--target-addr")
+		}
+		result, err := runExpandMany(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+		_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
+		_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
+		for i, step := range result.Results {
+			_, _ = fmt.Fprintf(w, "Step[%d]           store=%d peer=%d hosted=%t applied=%d\n",
+				i, step.StoreID, step.PeerID, step.TargetHosted, step.TargetAppliedIdx)
+		}
+		return nil
+	}
+	result, err := runExpand(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -203,5 +289,87 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	if result.TargetLocalPeerID != 0 {
 		_, _ = fmt.Fprintf(w, "TargetLocalPeer   %d\n", result.TargetLocalPeerID)
 	}
+	return nil
+}
+
+func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("migrate remove-peer", flag.ContinueOnError)
+	addr := fs.String("addr", "", "leader store admin address")
+	targetAddr := fs.String("target-addr", "", "target store admin address for removal wait checks")
+	regionID := fs.Uint64("region", 0, "region id")
+	peerID := fs.Uint64("peer", 0, "peer id to remove")
+	waitTimeout := fs.Duration("wait", 30*time.Second, "how long to wait for peer removal; 0 disables waiting")
+	pollInterval := fs.Duration("poll-interval", 200*time.Millisecond, "poll interval while waiting")
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	result, err := runRemovePeer(context.Background(), migratepkg.RemovePeerConfig{
+		Addr:         strings.TrimSpace(*addr),
+		TargetAddr:   strings.TrimSpace(*targetAddr),
+		RegionID:     *regionID,
+		PeerID:       *peerID,
+		WaitTimeout:  *waitTimeout,
+		PollInterval: *pollInterval,
+	})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
+	if result.TargetAddr != "" {
+		_, _ = fmt.Fprintf(w, "TargetAddr        %s\n", result.TargetAddr)
+	}
+	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
+	_, _ = fmt.Fprintf(w, "Peer              %d\n", result.PeerID)
+	_, _ = fmt.Fprintf(w, "LeaderKnown       %t\n", result.LeaderKnown)
+	_, _ = fmt.Fprintf(w, "TargetKnown       %t\n", result.TargetKnown)
+	_, _ = fmt.Fprintf(w, "TargetHosted      %t\n", result.TargetHosted)
+	return nil
+}
+
+func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("migrate transfer-leader", flag.ContinueOnError)
+	addr := fs.String("addr", "", "leader store admin address")
+	targetAddr := fs.String("target-addr", "", "target store admin address for leader wait checks")
+	regionID := fs.Uint64("region", 0, "region id")
+	peerID := fs.Uint64("peer", 0, "target peer id")
+	waitTimeout := fs.Duration("wait", 30*time.Second, "how long to wait for leader transfer; 0 disables waiting")
+	pollInterval := fs.Duration("poll-interval", 200*time.Millisecond, "poll interval while waiting")
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	result, err := runTransferLeader(context.Background(), migratepkg.TransferLeaderConfig{
+		Addr:         strings.TrimSpace(*addr),
+		TargetAddr:   strings.TrimSpace(*targetAddr),
+		RegionID:     *regionID,
+		PeerID:       *peerID,
+		WaitTimeout:  *waitTimeout,
+		PollInterval: *pollInterval,
+	})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
+	if result.TargetAddr != "" {
+		_, _ = fmt.Fprintf(w, "TargetAddr        %s\n", result.TargetAddr)
+	}
+	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
+	_, _ = fmt.Fprintf(w, "TargetPeer        %d\n", result.PeerID)
+	_, _ = fmt.Fprintf(w, "LeaderKnown       %t\n", result.LeaderKnown)
+	_, _ = fmt.Fprintf(w, "LeaderPeer        %d\n", result.LeaderPeerID)
+	_, _ = fmt.Fprintf(w, "TargetLeader      %t\n", result.TargetLeader)
 	return nil
 }

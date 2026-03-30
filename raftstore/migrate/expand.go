@@ -6,11 +6,16 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const defaultExpandPollInterval = 200 * time.Millisecond
+
+// PeerTarget describes one peer to add during migration rollout.
+type PeerTarget struct {
+	StoreID    uint64 `json:"store_id"`
+	PeerID     uint64 `json:"peer_id"`
+	TargetAddr string `json:"target_addr,omitempty"`
+}
 
 // ExpandConfig defines one seed-region expansion request.
 type ExpandConfig struct {
@@ -21,6 +26,7 @@ type ExpandConfig struct {
 	PeerID       uint64
 	WaitTimeout  time.Duration
 	PollInterval time.Duration
+	Targets      []PeerTarget
 
 	Dial DialFunc
 }
@@ -37,37 +43,16 @@ type ExpandResult struct {
 	TargetKnown       bool           `json:"target_known"`
 	TargetHosted      bool           `json:"target_hosted"`
 	TargetLocalPeerID uint64         `json:"target_local_peer_id,omitempty"`
+	TargetAppliedIdx  uint64         `json:"target_applied_index,omitempty"`
+	TargetAppliedTerm uint64         `json:"target_applied_term,omitempty"`
 	Waited            bool           `json:"waited"`
 }
 
-// AdminClient captures the admin control-plane calls used by migration.
-type AdminClient interface {
-	AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error)
-	RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error)
-}
-
-// DialFunc connects one admin client to one store address.
-type DialFunc func(ctx context.Context, addr string) (AdminClient, func() error, error)
-
-type grpcAdminClient struct {
-	client pb.RaftAdminClient
-}
-
-func (c *grpcAdminClient) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error) {
-	return c.client.AddPeer(ctx, req)
-}
-
-func (c *grpcAdminClient) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error) {
-	return c.client.RegionStatus(ctx, req)
-}
-
-func defaultDial(ctx context.Context, addr string) (AdminClient, func() error, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, nil, err
-	}
-	closeFn := func() error { return conn.Close() }
-	return &grpcAdminClient{client: pb.NewRaftAdminClient(conn)}, closeFn, nil
+// ExpandManyResult reports one sequential multi-peer rollout.
+type ExpandManyResult struct {
+	Addr     string         `json:"addr"`
+	RegionID uint64         `json:"region_id"`
+	Results  []ExpandResult `json:"results"`
 }
 
 // Expand adds one peer to one seeded region and, when requested, waits until
@@ -95,7 +80,57 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResult, error) {
 			_ = closeLeader()
 		}
 	}()
+	return expandWithLeaderClient(ctx, leaderClient, cfg)
+}
 
+// ExpandMany performs one sequential add-peer rollout against a single region.
+func ExpandMany(ctx context.Context, cfg ExpandConfig) (ExpandManyResult, error) {
+	if cfg.Addr == "" {
+		return ExpandManyResult{}, fmt.Errorf("migrate: leader addr is required")
+	}
+	if cfg.RegionID == 0 {
+		return ExpandManyResult{}, fmt.Errorf("migrate: region id is required")
+	}
+	if len(cfg.Targets) == 0 {
+		if cfg.StoreID == 0 || cfg.PeerID == 0 {
+			return ExpandManyResult{}, fmt.Errorf("migrate: at least one peer target is required")
+		}
+		cfg.Targets = []PeerTarget{{StoreID: cfg.StoreID, PeerID: cfg.PeerID, TargetAddr: cfg.TargetAddr}}
+	}
+	if cfg.Dial == nil {
+		cfg.Dial = defaultDial
+	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = defaultExpandPollInterval
+	}
+
+	leaderClient, closeLeader, err := cfg.Dial(ctx, cfg.Addr)
+	if err != nil {
+		return ExpandManyResult{}, fmt.Errorf("migrate: dial leader admin %s: %w", cfg.Addr, err)
+	}
+	defer func() {
+		if closeLeader != nil {
+			_ = closeLeader()
+		}
+	}()
+
+	result := ExpandManyResult{Addr: cfg.Addr, RegionID: cfg.RegionID, Results: make([]ExpandResult, 0, len(cfg.Targets))}
+	for _, target := range cfg.Targets {
+		stepCfg := cfg
+		stepCfg.StoreID = target.StoreID
+		stepCfg.PeerID = target.PeerID
+		stepCfg.TargetAddr = target.TargetAddr
+		stepCfg.Targets = nil
+		step, err := expandWithLeaderClient(ctx, leaderClient, stepCfg)
+		result.Results = append(result.Results, step)
+		if err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func expandWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg ExpandConfig) (ExpandResult, error) {
 	addResp, err := leaderClient.AddPeer(ctx, &pb.AddPeerRequest{
 		RegionId: cfg.RegionID,
 		StoreId:  cfg.StoreID,
@@ -181,8 +216,10 @@ func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peer
 			result.TargetKnown = status.GetKnown()
 			result.TargetHosted = status.GetHosted()
 			result.TargetLocalPeerID = status.GetLocalPeerId()
+			result.TargetAppliedIdx = status.GetAppliedIndex()
+			result.TargetAppliedTerm = status.GetAppliedTerm()
 		}
-		if status.GetKnown() && status.GetHosted() && status.GetLocalPeerId() == peerID {
+		if status.GetKnown() && status.GetHosted() && status.GetLocalPeerId() == peerID && status.GetAppliedIndex() > 0 {
 			return nil
 		}
 		select {
