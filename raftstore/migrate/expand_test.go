@@ -15,7 +15,7 @@ type fakeAdminClient struct {
 	removeErr   error
 	transferErr error
 
-	statuses []*pb.RegionStatusResponse
+	statuses []*pb.RegionRuntimeStatusResponse
 	calls    int
 }
 
@@ -43,9 +43,9 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{}, nil
 }
 
-func (f *fakeAdminClient) RegionStatus(context.Context, *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error) {
+func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
 	if len(f.statuses) == 0 {
-		return &pb.RegionStatusResponse{}, nil
+		return &pb.RegionRuntimeStatusResponse{}, nil
 	}
 	if f.calls >= len(f.statuses) {
 		return f.statuses[len(f.statuses)-1], nil
@@ -55,18 +55,18 @@ func (f *fakeAdminClient) RegionStatus(context.Context, *pb.RegionStatusRequest)
 	return resp, nil
 }
 
-func TestExpandManyWaitsForTargetHosted(t *testing.T) {
+func TestExpandWaitsForTargetHosted(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{
 			Region: &pb.RegionMeta{Id: 8},
 		},
-		statuses: []*pb.RegionStatusResponse{
+		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Region: &pb.RegionMeta{Id: 8}},
 			{Known: true, Region: &pb.RegionMeta{Id: 8, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{
-		statuses: []*pb.RegionStatusResponse{
+		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: false},
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1},
 		},
@@ -83,14 +83,14 @@ func TestExpandManyWaitsForTargetHosted(t *testing.T) {
 		}
 	}
 
-	result, err := ExpandMany(context.Background(), ExpandConfig{
+	result, err := Expand(context.Background(), ExpandConfig{
 		Addr:         "leader",
 		RegionID:     8,
 		WaitTimeout:  time.Second,
 		PollInterval: time.Millisecond,
 		Dial:         dial,
 		Targets: []PeerTarget{
-			{StoreID: 2, PeerID: 22, TargetAddr: "target"},
+			{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"},
 		},
 	})
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestExpandManyWaitsForTargetHosted(t *testing.T) {
 	require.Equal(t, uint64(1), result.Results[0].TargetAppliedIdx)
 }
 
-func TestExpandManyWithoutWaitReturnsAfterAddPeer(t *testing.T) {
+func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{
 			Region: &pb.RegionMeta{Id: 9, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 33}}},
@@ -113,7 +113,7 @@ func TestExpandManyWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 		return leader, func() error { return nil }, nil
 	}
 
-	result, err := ExpandMany(context.Background(), ExpandConfig{
+	result, err := Expand(context.Background(), ExpandConfig{
 		Addr:        "leader",
 		RegionID:    9,
 		WaitTimeout: 0,
@@ -129,16 +129,16 @@ func TestExpandManyWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 	require.Zero(t, leader.calls)
 }
 
-func TestExpandManyRollsTargetsSequentially(t *testing.T) {
+func TestExpandRollsTargetsSequentially(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 11}},
-		statuses: []*pb.RegionStatusResponse{
+		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Region: &pb.RegionMeta{Id: 11, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 			{Known: true, Region: &pb.RegionMeta{Id: 11, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}, {StoreId: 3, PeerId: 33}}}},
 		},
 	}
-	target2 := &fakeAdminClient{statuses: []*pb.RegionStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1}}}
-	target3 := &fakeAdminClient{statuses: []*pb.RegionStatusResponse{{Known: true, Hosted: true, LocalPeerId: 33, AppliedIndex: 1, AppliedTerm: 1}}}
+	target2 := &fakeAdminClient{statuses: []*pb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1}}}
+	target3 := &fakeAdminClient{statuses: []*pb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 33, AppliedIndex: 1, AppliedTerm: 1}}}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
 		switch addr {
 		case "leader":
@@ -153,15 +153,15 @@ func TestExpandManyRollsTargetsSequentially(t *testing.T) {
 		}
 	}
 
-	result, err := ExpandMany(context.Background(), ExpandConfig{
+	result, err := Expand(context.Background(), ExpandConfig{
 		Addr:         "leader",
 		RegionID:     11,
 		WaitTimeout:  time.Second,
 		PollInterval: time.Millisecond,
 		Dial:         dial,
 		Targets: []PeerTarget{
-			{StoreID: 2, PeerID: 22, TargetAddr: "target2"},
-			{StoreID: 3, PeerID: 33, TargetAddr: "target3"},
+			{StoreID: 2, PeerID: 22, TargetAdminAddr: "target2"},
+			{StoreID: 3, PeerID: 33, TargetAdminAddr: "target3"},
 		},
 	})
 	require.NoError(t, err)

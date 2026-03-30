@@ -21,10 +21,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftAdmin_AddPeer_FullMethodName        = "/pb.RaftAdmin/AddPeer"
-	RaftAdmin_RemovePeer_FullMethodName     = "/pb.RaftAdmin/RemovePeer"
-	RaftAdmin_TransferLeader_FullMethodName = "/pb.RaftAdmin/TransferLeader"
-	RaftAdmin_RegionStatus_FullMethodName   = "/pb.RaftAdmin/RegionStatus"
+	RaftAdmin_AddPeer_FullMethodName             = "/pb.RaftAdmin/AddPeer"
+	RaftAdmin_RemovePeer_FullMethodName          = "/pb.RaftAdmin/RemovePeer"
+	RaftAdmin_TransferLeader_FullMethodName      = "/pb.RaftAdmin/TransferLeader"
+	RaftAdmin_RegionRuntimeStatus_FullMethodName = "/pb.RaftAdmin/RegionRuntimeStatus"
 )
 
 // RaftAdminClient is the client API for RaftAdmin service.
@@ -34,7 +34,7 @@ type RaftAdminClient interface {
 	AddPeer(ctx context.Context, in *AddPeerRequest, opts ...grpc.CallOption) (*AddPeerResponse, error)
 	RemovePeer(ctx context.Context, in *RemovePeerRequest, opts ...grpc.CallOption) (*RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, in *TransferLeaderRequest, opts ...grpc.CallOption) (*TransferLeaderResponse, error)
-	RegionStatus(ctx context.Context, in *RegionStatusRequest, opts ...grpc.CallOption) (*RegionStatusResponse, error)
+	RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error)
 }
 
 type raftAdminClient struct {
@@ -75,10 +75,10 @@ func (c *raftAdminClient) TransferLeader(ctx context.Context, in *TransferLeader
 	return out, nil
 }
 
-func (c *raftAdminClient) RegionStatus(ctx context.Context, in *RegionStatusRequest, opts ...grpc.CallOption) (*RegionStatusResponse, error) {
+func (c *raftAdminClient) RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RegionStatusResponse)
-	err := c.cc.Invoke(ctx, RaftAdmin_RegionStatus_FullMethodName, in, out, cOpts...)
+	out := new(RegionRuntimeStatusResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_RegionRuntimeStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ type RaftAdminServer interface {
 	AddPeer(context.Context, *AddPeerRequest) (*AddPeerResponse, error)
 	RemovePeer(context.Context, *RemovePeerRequest) (*RemovePeerResponse, error)
 	TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error)
-	RegionStatus(context.Context, *RegionStatusRequest) (*RegionStatusResponse, error)
+	RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error)
 }
 
 // UnimplementedRaftAdminServer should be embedded to have
@@ -111,8 +111,8 @@ func (UnimplementedRaftAdminServer) RemovePeer(context.Context, *RemovePeerReque
 func (UnimplementedRaftAdminServer) TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TransferLeader not implemented")
 }
-func (UnimplementedRaftAdminServer) RegionStatus(context.Context, *RegionStatusRequest) (*RegionStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegionStatus not implemented")
+func (UnimplementedRaftAdminServer) RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegionRuntimeStatus not implemented")
 }
 func (UnimplementedRaftAdminServer) testEmbeddedByValue() {}
 
@@ -188,20 +188,20 @@ func _RaftAdmin_TransferLeader_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RaftAdmin_RegionStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegionStatusRequest)
+func _RaftAdmin_RegionRuntimeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegionRuntimeStatusRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RaftAdminServer).RegionStatus(ctx, in)
+		return srv.(RaftAdminServer).RegionRuntimeStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RaftAdmin_RegionStatus_FullMethodName,
+		FullMethod: RaftAdmin_RegionRuntimeStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftAdminServer).RegionStatus(ctx, req.(*RegionStatusRequest))
+		return srv.(RaftAdminServer).RegionRuntimeStatus(ctx, req.(*RegionRuntimeStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -226,8 +226,8 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RaftAdmin_TransferLeader_Handler,
 		},
 		{
-			MethodName: "RegionStatus",
-			Handler:    _RaftAdmin_RegionStatus_Handler,
+			MethodName: "RegionRuntimeStatus",
+			Handler:    _RaftAdmin_RegionRuntimeStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
