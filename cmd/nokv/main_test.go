@@ -955,6 +955,50 @@ func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 	require.Equal(t, "seeded", payload["mode"])
 }
 
+func TestRunMigrateExpandCmd(t *testing.T) {
+	orig := runExpand
+	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResult, error) {
+		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
+		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, uint64(2), cfg.StoreID)
+		require.Equal(t, uint64(22), cfg.PeerID)
+		require.Equal(t, 5*time.Second, cfg.WaitTimeout)
+		require.Equal(t, 100*time.Millisecond, cfg.PollInterval)
+		return migratepkg.ExpandResult{
+			Addr:              cfg.Addr,
+			TargetAddr:        cfg.TargetAddr,
+			RegionID:          cfg.RegionID,
+			StoreID:           cfg.StoreID,
+			PeerID:            cfg.PeerID,
+			LeaderKnown:       true,
+			TargetKnown:       true,
+			TargetHosted:      true,
+			TargetLocalPeerID: cfg.PeerID,
+		}, nil
+	}
+	t.Cleanup(func() { runExpand = orig })
+
+	var buf bytes.Buffer
+	err := runMigrateExpandCmd(&buf, []string{
+		"-addr", "127.0.0.1:20160",
+		"-target-addr", "127.0.0.1:20161",
+		"-region", "9",
+		"-store", "2",
+		"-peer", "22",
+		"-wait", "5s",
+		"-poll-interval", "100ms",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, true, payload["leader_known"])
+	require.Equal(t, true, payload["target_hosted"])
+	require.Equal(t, float64(22), payload["target_local_peer_id"])
+}
+
 func TestFirstRegionMetricsFound(t *testing.T) {
 	withStoreRegistry(t, func() {
 		store := storepkg.NewStore(storepkg.Config{})
