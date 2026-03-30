@@ -7,7 +7,7 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 ## 1. High-Level Layout
 
 ```
-┌─────────────────────────┐   NoKV gRPC   ┌─────────────────────────┐
+┌─────────────────────────┐   NoKV gRPC     ┌─────────────────────────┐
 │ raftstore Service       │◀──────────────▶ │ raftstore/client        │
 └───────────┬─────────────┘                 │  (Get / Scan / Mutate)  │
             │                               └─────────────────────────┘
