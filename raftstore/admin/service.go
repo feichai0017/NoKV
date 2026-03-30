@@ -82,8 +82,8 @@ func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
-// RegionStatus returns store-local runtime information for one region.
-func (s *Service) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error) {
+// RegionRuntimeStatus returns store-local runtime information for one region.
+func (s *Service) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -93,9 +93,9 @@ func (s *Service) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
-		return &pb.RegionStatusResponse{}, nil
+		return &pb.RegionRuntimeStatusResponse{}, nil
 	}
-	return &pb.RegionStatusResponse{
+	return &pb.RegionRuntimeStatusResponse{
 		Known:        true,
 		Hosted:       runtime.Hosted,
 		LocalPeerId:  runtime.LocalPeerID,

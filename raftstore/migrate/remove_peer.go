@@ -10,12 +10,12 @@ import (
 
 // RemovePeerConfig defines one explicit peer-removal request.
 type RemovePeerConfig struct {
-	Addr         string
-	TargetAddr   string
-	RegionID     uint64
-	PeerID       uint64
-	WaitTimeout  time.Duration
-	PollInterval time.Duration
+	Addr            string
+	TargetAdminAddr string
+	RegionID        uint64
+	PeerID          uint64
+	WaitTimeout     time.Duration
+	PollInterval    time.Duration
 
 	Dial DialFunc
 }
@@ -23,7 +23,7 @@ type RemovePeerConfig struct {
 // RemovePeerResult reports the observed state after one remove-peer request.
 type RemovePeerResult struct {
 	Addr             string         `json:"addr"`
-	TargetAddr       string         `json:"target_addr,omitempty"`
+	TargetAdminAddr  string         `json:"target_admin_addr,omitempty"`
 	RegionID         uint64         `json:"region_id"`
 	PeerID           uint64         `json:"peer_id"`
 	LeaderKnown      bool           `json:"leader_known"`
@@ -66,12 +66,12 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 		return RemovePeerResult{}, err
 	}
 	result := RemovePeerResult{
-		Addr:         cfg.Addr,
-		TargetAddr:   cfg.TargetAddr,
-		RegionID:     cfg.RegionID,
-		PeerID:       cfg.PeerID,
-		LeaderKnown:  resp.GetRegion() != nil,
-		LeaderRegion: resp.GetRegion(),
+		Addr:            cfg.Addr,
+		TargetAdminAddr: cfg.TargetAdminAddr,
+		RegionID:        cfg.RegionID,
+		PeerID:          cfg.PeerID,
+		LeaderKnown:     resp.GetRegion() != nil,
+		LeaderRegion:    resp.GetRegion(),
 	}
 	if cfg.WaitTimeout <= 0 {
 		return result, nil
@@ -83,13 +83,13 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 	if err := waitForLeaderPeerRemoval(waitCtx, leaderClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
 	}
-	if cfg.TargetAddr == "" {
+	if cfg.TargetAdminAddr == "" {
 		return result, nil
 	}
 
-	targetClient, closeTarget, err := cfg.Dial(waitCtx, cfg.TargetAddr)
+	targetClient, closeTarget, err := cfg.Dial(waitCtx, cfg.TargetAdminAddr)
 	if err != nil {
-		return result, fmt.Errorf("migrate: dial target admin %s: %w", cfg.TargetAddr, err)
+		return result, fmt.Errorf("migrate: dial target admin %s: %w", cfg.TargetAdminAddr, err)
 	}
 	defer func() {
 		if closeTarget != nil {
@@ -106,7 +106,7 @@ func waitForLeaderPeerRemoval(ctx context.Context, client AdminClient, regionID,
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll leader region status after remove: %w", err)
 		}
@@ -129,7 +129,7 @@ func waitForTargetRemoval(ctx context.Context, client AdminClient, regionID, pee
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status after remove: %w", err)
 		}
