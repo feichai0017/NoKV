@@ -8,11 +8,13 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"google.golang.org/grpc"
@@ -145,13 +147,32 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if err != nil {
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
+		var snapshotExport peer.SnapshotExportFunc
+		if src, ok := storage.MVCC.(interface {
+			NoKV.MVCCStore
+			MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
+		}); ok {
+			snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
+				payload, _, err := snapshotpkg.ExportPayload(src, region)
+				return payload, err
+			}
+		}
+		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+			result, err := snapshotpkg.ImportPayload(storage.MVCC, payload)
+			if err != nil {
+				return raftmeta.RegionMeta{}, err
+			}
+			return result.Manifest.Region, nil
+		}
 		return &peer.Config{
-			RaftConfig: defaultRaftConfig(baseRaft, peerID),
-			Transport:  tr,
-			Apply:      kv.NewEntryApplier(storage.MVCC),
-			Storage:    peerStorage,
-			GroupID:    meta.ID,
-			Region:     raftmeta.CloneRegionMetaPtr(&meta),
+			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
+			Transport:      tr,
+			Apply:          kv.NewEntryApplier(storage.MVCC),
+			SnapshotExport: snapshotExport,
+			SnapshotApply:  snapshotApply,
+			Storage:        peerStorage,
+			GroupID:        meta.ID,
+			Region:         raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 }

@@ -68,6 +68,15 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Verifies manifest, WAL, and value-log structure without repairing tails
 - Reports current mode, local catalog occupancy, blockers, and next step
 
+### `nokv migrate init`
+
+- Converts a standalone workdir into a single-store seeded cluster directory
+- Writes `MODE.json`, the full-range local region catalog entry, and the initial
+  raft durable metadata
+- Exports a logical seed snapshot under `RAFTSTORE_SNAPSHOTS/region-<id>`
+- After `init`, ordinary standalone opens must reject the workdir unless the
+  caller explicitly opts into distributed modes
+
 ### `nokv migrate status`
 
 - Reads `MODE.json` when present and otherwise reports `standalone`

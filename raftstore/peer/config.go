@@ -21,6 +21,8 @@ type Config struct {
 	Apply            ApplyFunc
 	AdminApply       AdminApplyFunc
 	ConfChange       ConfChangeHandler
+	SnapshotExport   SnapshotExportFunc
+	SnapshotApply    SnapshotApplyFunc
 	Storage          engine.PeerStorage
 	StorageDir       string
 	GroupID          uint64

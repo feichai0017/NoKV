@@ -14,19 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/wal"
 )
 
-// Mode describes the migration state of one workdir.
-type Mode string
-
-const (
-	ModeStandalone Mode = "standalone"
-	ModePreparing  Mode = "preparing"
-	ModeSeeded     Mode = "seeded"
-	ModeCluster    Mode = "cluster"
-)
-
-// ModeFileName stores the explicit migration state for one workdir.
-const ModeFileName = "MODE.json"
-
 // PlanResult is the read-only migration preflight result for one workdir.
 type PlanResult struct {
 	WorkDir             string   `json:"workdir"`

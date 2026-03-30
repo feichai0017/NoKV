@@ -16,8 +16,10 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -98,6 +100,20 @@ func TestRunStatsCmd(t *testing.T) {
 	if snap.LSM.ValueDensityMax < 0 {
 		t.Fatalf("expected non-negative value density max")
 	}
+}
+
+func TestLocalStatsSnapshotAllowsSeededWorkdir(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	require.NoError(t, raftmode.Write(dir, raftmode.State{
+		Mode:     raftmode.ModeSeeded,
+		StoreID:  1,
+		RegionID: 2,
+		PeerID:   3,
+	}))
+
+	snap, err := localStatsSnapshot(dir, false)
+	require.NoError(t, err)
+	require.Greater(t, snap.ValueLog.Segments, 0)
 }
 
 func TestRunVlogCmd(t *testing.T) {
@@ -867,6 +883,76 @@ func TestRunMigrateStatusCmdSeeded(t *testing.T) {
 	require.Equal(t, float64(1), payload["store_id"])
 	require.Equal(t, float64(2), payload["region_id"])
 	require.Equal(t, float64(3), payload["peer_id"])
+}
+
+func TestRunMigrateInitCmd(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+
+	var buf bytes.Buffer
+	err := runMigrateInitCmd(&buf, []string{
+		"-workdir", dir,
+		"-store", "1",
+		"-region", "2",
+		"-peer", "3",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "seeded", payload["mode"])
+	require.Equal(t, float64(1), payload["store_id"])
+	require.Equal(t, float64(2), payload["region_id"])
+	require.Equal(t, float64(3), payload["peer_id"])
+
+	status, err := migratepkg.ReadStatus(dir)
+	require.NoError(t, err)
+	require.Equal(t, migratepkg.ModeSeeded, status.Mode)
+
+	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { _ = metaStore.Close() }()
+	snapshot := metaStore.Snapshot()
+	require.Len(t, snapshot, 1)
+	meta := snapshot[2]
+	require.Equal(t, uint64(2), meta.ID)
+	require.Len(t, meta.Peers, 1)
+	require.Equal(t, uint64(1), meta.Peers[0].StoreID)
+	require.Equal(t, uint64(3), meta.Peers[0].PeerID)
+
+	ptr, ok := metaStore.RaftPointer(2)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), ptr.SnapshotIndex)
+	require.Equal(t, uint64(1), ptr.SnapshotTerm)
+	require.Equal(t, uint64(1), ptr.Committed)
+
+	manifest, err := snapshotpkg.ReadManifest(migratepkg.SeedSnapshotDir(dir, 2), nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), manifest.Region.ID)
+	require.Greater(t, manifest.EntryCount, uint64(0))
+}
+
+func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	require.NoError(t, runMigrateInitCmd(&buf, []string{
+		"-workdir", dir,
+		"-store", "1",
+		"-region", "2",
+		"-peer", "3",
+		"-json",
+	}))
+	buf.Reset()
+	require.NoError(t, runMigrateInitCmd(&buf, []string{
+		"-workdir", dir,
+		"-store", "1",
+		"-region", "2",
+		"-peer", "3",
+		"-json",
+	}))
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "seeded", payload["mode"])
 }
 
 func TestFirstRegionMetricsFound(t *testing.T) {
