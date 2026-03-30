@@ -23,6 +23,7 @@
 - [Percolator](percolator.md)
 - [Raftstore](raftstore.md)
 - [PD-lite](pd.md)
+- [Migration](migration.md)
 - [Recovery](recovery.md)
 - [Stats](stats.md)
 - [Testing](testing.md)

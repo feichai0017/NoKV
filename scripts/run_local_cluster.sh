@@ -202,7 +202,7 @@ for idx in "${!STORE_IDS[@]}"; do
         args+=(--peer "$peer")
       fi
     done
-    nokv-config manifest "${args[@]}"
+    nokv-config catalog "${args[@]}"
   done
 done
 

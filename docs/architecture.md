@@ -167,7 +167,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use PD-lite (`nokv pd`) to obtain globally increasing values before calling `TwoPhaseCommit`.
-- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config manifest`, launches PD-lite, and starts the stores declared in the config.
+- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches PD-lite, and starts the stores declared in the config.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.

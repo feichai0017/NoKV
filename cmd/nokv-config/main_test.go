@@ -104,7 +104,7 @@ func TestRunPDJSONFormat(t *testing.T) {
 	require.Equal(t, "/var/lib/nokv-pd", endpoint.DockerWorkDir)
 }
 
-func TestRunManifestWritesRegion(t *testing.T) {
+func TestRunRegionCatalogWritesRegion(t *testing.T) {
 	dir := t.TempDir()
 	manifestDir := filepath.Join(dir, "manifest")
 	args := []string{
@@ -119,7 +119,7 @@ func TestRunManifestWritesRegion(t *testing.T) {
 	}
 
 	output, err := captureStdout(t, func() error {
-		return runManifest(args)
+		return runCatalog(args)
 	})
 	require.NoError(t, err)
 	require.Contains(t, output, "stored region 99 in local peer catalog")
@@ -161,14 +161,14 @@ func TestMainStoresCommand(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMainManifestCommand(t *testing.T) {
+func TestMainRegionCatalogCommand(t *testing.T) {
 	dir := t.TempDir()
 	manifestDir := filepath.Join(dir, "manifest")
 	origArgs := os.Args
 	defer func() { os.Args = origArgs }()
 	os.Args = []string{
 		"nokv-config",
-		"manifest",
+		"catalog",
 		"--workdir",
 		manifestDir,
 		"--region-id",
@@ -418,18 +418,18 @@ func TestLoadConfigInvalid(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRunManifestErrors(t *testing.T) {
-	require.Error(t, runManifest([]string{}))
-	require.Error(t, runManifest([]string{"--workdir", t.TempDir()}))
-	require.Error(t, runManifest([]string{"--workdir", t.TempDir(), "--region-id", "1"}))
-	require.Error(t, runManifest([]string{"--workdir", t.TempDir(), "--region-id", "1", "--peer", "bad"}))
+func TestRunRegionCatalogErrors(t *testing.T) {
+	require.Error(t, runCatalog([]string{}))
+	require.Error(t, runCatalog([]string{"--workdir", t.TempDir()}))
+	require.Error(t, runCatalog([]string{"--workdir", t.TempDir(), "--region-id", "1"}))
+	require.Error(t, runCatalog([]string{"--workdir", t.TempDir(), "--region-id", "1", "--peer", "bad"}))
 
 	tmpFile := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o600))
-	require.Error(t, runManifest([]string{"--workdir", tmpFile, "--region-id", "1", "--peer", "1:1"}))
+	require.Error(t, runCatalog([]string{"--workdir", tmpFile, "--region-id", "1", "--peer", "1:1"}))
 }
 
-func TestRunManifestDefaults(t *testing.T) {
+func TestRunRegionCatalogDefaults(t *testing.T) {
 	dir := t.TempDir()
 	args := []string{
 		"--workdir", filepath.Join(dir, "manifest"),
@@ -441,7 +441,7 @@ func TestRunManifestDefaults(t *testing.T) {
 		"--peer", "2:22",
 	}
 	output, err := captureStdout(t, func() error {
-		return runManifest(args)
+		return runCatalog(args)
 	})
 	require.NoError(t, err)
 	require.Contains(t, output, "stored region 10 in local peer catalog")
