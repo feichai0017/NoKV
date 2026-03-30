@@ -33,8 +33,8 @@ func main() {
 		err = runRegions(args)
 	case "pd":
 		err = runPD(args)
-	case "manifest":
-		err = runManifest(args)
+	case "catalog":
+		err = runCatalog(args)
 	default:
 		printUsage()
 		exit(1)
@@ -220,7 +220,7 @@ Commands:
   stores   Print store endpoints from the raft configuration
   regions  Print region metadata from the raft configuration
   pd       Print PD-lite endpoint from the raft configuration
-  manifest Write region metadata into the raftstore local peer catalog
+  catalog  Write region metadata into the raftstore local peer catalog
 
 Flags:
   --config <path>   Path to raft_config JSON (defaults to ./raft_config.example.json)
@@ -228,8 +228,8 @@ Flags:
   --field <name>    For "pd --format simple": addr|workdir`)
 }
 
-func runManifest(args []string) error {
-	fs := flag.NewFlagSet("manifest", flag.ExitOnError)
+func runCatalog(args []string) error {
+	fs := flag.NewFlagSet("catalog", flag.ExitOnError)
 	workdir := fs.String("workdir", "", "work directory containing the local peer catalog")
 	regionID := fs.Uint64("region-id", 0, "region identifier")
 	startKey := fs.String("start-key", "", "region start key (plain or hex:<bytes>)")
