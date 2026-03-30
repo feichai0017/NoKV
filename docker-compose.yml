@@ -6,7 +6,7 @@ services:
   bootstrap:
     <<: *nokv-image
     container_name: nokv-bootstrap
-    entrypoint: ["/usr/local/bin/bootstrap_from_config.sh"]
+    entrypoint: ["/usr/local/bin/bootstrap.sh"]
     command:
       [
         "--config",
@@ -51,7 +51,7 @@ services:
   node1:
     image: nokv:latest
     container_name: nokv-node1
-    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
       [
         "--config",
@@ -80,7 +80,7 @@ services:
   node2:
     image: nokv:latest
     container_name: nokv-node2
-    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
       [
         "--config",
@@ -109,7 +109,7 @@ services:
   node3:
     image: nokv:latest
     container_name: nokv-node3
-    entrypoint: ["/usr/local/bin/serve_from_config.sh"]
+    entrypoint: ["/usr/local/bin/serve-store.sh"]
     command:
       [
         "--config",

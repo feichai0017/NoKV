@@ -27,7 +27,7 @@ Validate with `redis-cli -p 6380 ping`. Metrics are exposed at `http://127.0.0.1
 1. Start NoKV and PD-lite using the helper script or Docker Compose. Both consume `raft_config.example.json`, initialise manifests for each store, and launch `nokv pd` automatically:
 
    ```bash
-   ./scripts/run_local_cluster.sh
+   ./scripts/dev/cluster.sh
    # or: docker compose up --build
    ```
 
@@ -55,7 +55,7 @@ In both modes write commands are atomic. The Raft backend batches multi-key upda
 
 ## Configuration file
 
-`raft_config.example.json` is shared by `scripts/run_local_cluster.sh`, Docker Compose, and the Redis gateway. Important fields:
+`raft_config.example.json` is shared by `scripts/dev/cluster.sh`, Docker Compose, and the Redis gateway. Important fields:
 
 - `stores` – store ID, gRPC address, and optional container listen/advertise addresses
 - `regions` – region ID, start/end keys (use `hex:<bytes>` for binary data), epoch, peer list, leader store ID

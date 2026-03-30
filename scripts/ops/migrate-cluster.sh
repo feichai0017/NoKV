@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
+source "$SCRIPT_DIR/../lib/workdir.sh"
+
 usage() {
   cat <<'USAGE'
-Usage: scripts/migrate_to_cluster.sh [options]
+Usage: scripts/ops/migrate-cluster.sh [options]
 
 Options:
   --config PATH            Raft configuration file (default: ./raft_config.example.json)
@@ -30,7 +35,7 @@ Notes:
 USAGE
 }
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT_DIR=$NOKV_ROOT_DIR
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
 SEED_STORE_ID=""
@@ -110,7 +115,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "unknown option: $1" >&2
+      echo "migrate-cluster.sh: unknown option: $1" >&2
       usage
       exit 1
       ;;
@@ -118,89 +123,39 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$WORKDIR" || -z "$SEED_STORE_ID" || -z "$SEED_REGION_ID" || -z "$SEED_PEER_ID" ]]; then
-  echo "migrate_to_cluster: --workdir, --seed-store, --seed-region, and --seed-peer are required" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: --workdir, --seed-store, --seed-region, and --seed-peer are required"
 fi
 if [[ ${#TARGET_SPECS[@]} -eq 0 ]]; then
-  echo "migrate_to_cluster: at least one --target <store>:<peer>[@addr] is required" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: at least one --target <store>:<peer>[@addr] is required"
 fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  echo "migrate_to_cluster: configuration file not found: $CONFIG_PATH" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: configuration file not found: $CONFIG_PATH"
 fi
 if [[ ! -d "$WORKDIR" ]]; then
-  echo "migrate_to_cluster: seed workdir not found: $WORKDIR" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: seed workdir not found: $WORKDIR"
 fi
 if [[ ! -f "$WORKDIR/CURRENT" ]]; then
-  echo "migrate_to_cluster: seed workdir does not look like a standalone NoKV directory (missing CURRENT): $WORKDIR" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: seed workdir does not look like a standalone NoKV directory (missing CURRENT): $WORKDIR"
 fi
 
-CONFIG_DIR=$(cd "$(dirname "$CONFIG_PATH")" && pwd)
-BUILD_DIR="$ROOT_DIR/build"
-mkdir -p "$BUILD_DIR"
-
-go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
-go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
-PATH="$BUILD_DIR:$PATH"
+CONFIG_DIR=$(nokv_config_dir "$CONFIG_PATH")
+nokv_build_cli_binaries
+nokv_prepend_build_path
 
 if [[ $PD_LISTEN_SET -eq 0 ]]; then
-  if pd_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple 2>/dev/null); then
-    PD_LISTEN=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
-  fi
+  PD_LISTEN=$(nokv_config_pd_addr "$CONFIG_PATH" host)
 fi
 if [[ -z "$PD_LISTEN" ]]; then
   PD_LISTEN="127.0.0.1:2379"
 fi
 
-PD_WORKDIR=""
-if pd_workdir_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple --field workdir 2>/dev/null); then
-  PD_WORKDIR=$(echo "$pd_workdir_from_config" | tr -d '\r' | sed -n '1p')
-fi
+PD_WORKDIR=$(nokv_config_pd_workdir "$CONFIG_PATH")
 if [[ -z "$PD_WORKDIR" ]]; then
   PD_WORKDIR="$ROOT_DIR/artifacts/migration/pd"
-elif [[ "$PD_WORKDIR" != /* ]]; then
-  PD_WORKDIR="$CONFIG_DIR/$PD_WORKDIR"
+else
+  PD_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$PD_WORKDIR")
 fi
 mkdir -p "$PD_WORKDIR"
-
-split_addr() {
-  local addr=$1
-  local host=${addr%:*}
-  local port=${addr##*:}
-  if [[ -z "$host" || -z "$port" || "$host" == "$addr" ]]; then
-    return 1
-  fi
-  printf '%s\n%s\n' "$host" "$port"
-}
-
-wait_for_tcp() {
-  local addr=$1
-  local timeout_s=${2:-30}
-  local parsed host port deadline now
-  if ! parsed=$(split_addr "$addr"); then
-    echo "migrate_to_cluster: invalid address for readiness check: $addr" >&2
-    return 1
-  fi
-  host=$(echo "$parsed" | sed -n '1p')
-  port=$(echo "$parsed" | sed -n '2p')
-  deadline=$((SECONDS + timeout_s))
-  while (( SECONDS < deadline )); do
-    if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "migrate_to_cluster: timed out waiting for $addr" >&2
-  return 1
-}
-
-workdir_has_unexpected_entries() {
-  local dir=$1
-  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
-}
 
 run_cmd() {
   echo "+ $*"
@@ -227,10 +182,9 @@ declare -A STORE_LISTEN_ADDR
 declare -A STORE_ADMIN_ADDR
 declare -A STORE_WORKDIR
 STORE_LINES=()
-while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv_config_store_lines "$CONFIG_PATH")
 if [[ ${#STORE_LINES[@]} -eq 0 ]]; then
-  echo "migrate_to_cluster: no stores defined in $CONFIG_PATH" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: no stores defined in $CONFIG_PATH"
 fi
 for line in "${STORE_LINES[@]}"; do
   read -r store_id listen_addr advertise_addr docker_listen docker_addr store_workdir docker_workdir <<<"$line"
@@ -240,17 +194,12 @@ for line in "${STORE_LINES[@]}"; do
   STORE_LISTEN_ADDR["$store_id"]="$listen_addr"
   STORE_ADMIN_ADDR["$store_id"]="$advertise_addr"
   if [[ -n "${store_workdir:-}" && "$store_workdir" != "-" ]]; then
-    if [[ "$store_workdir" == /* ]]; then
-      STORE_WORKDIR["$store_id"]="$store_workdir"
-    else
-      STORE_WORKDIR["$store_id"]="$CONFIG_DIR/$store_workdir"
-    fi
+    STORE_WORKDIR["$store_id"]="$(nokv_resolve_path "$CONFIG_DIR" "$store_workdir")"
   fi
 done
 
 if [[ -z "${STORE_ADMIN_ADDR[$SEED_STORE_ID]:-}" || -z "${STORE_LISTEN_ADDR[$SEED_STORE_ID]:-}" ]]; then
-  echo "migrate_to_cluster: seed store $SEED_STORE_ID not found in config" >&2
-  exit 1
+  nokv_die "migrate-cluster.sh: seed store $SEED_STORE_ID not found in config"
 fi
 
 parse_target() {
@@ -264,8 +213,7 @@ parse_target() {
   local store=${base%%:*}
   local peer=${base##*:}
   if [[ -z "$store" || -z "$peer" || "$store" == "$base" ]]; then
-    echo "migrate_to_cluster: invalid target $value, want <store>:<peer>[@addr]" >&2
-    exit 1
+    nokv_die "migrate-cluster.sh: invalid target $value, want <store>:<peer>[@addr]"
   fi
   printf '%s\n%s\n%s\n' "$store" "$peer" "$addr"
 }
@@ -282,12 +230,10 @@ for spec in "${TARGET_SPECS[@]}"; do
   target_peer=$(echo "$parsed" | sed -n '2p')
   target_addr=$(echo "$parsed" | sed -n '3p')
   if [[ "$target_store" == "$SEED_STORE_ID" ]]; then
-    echo "migrate_to_cluster: target store $target_store matches seed store" >&2
-    exit 1
+    nokv_die "migrate-cluster.sh: target store $target_store matches seed store"
   fi
   if [[ -z "${STORE_ADMIN_ADDR[$target_store]:-}" || -z "${STORE_LISTEN_ADDR[$target_store]:-}" ]]; then
-    echo "migrate_to_cluster: target store $target_store not found in config" >&2
-    exit 1
+    nokv_die "migrate-cluster.sh: target store $target_store not found in config"
   fi
   if [[ -z "$target_addr" ]]; then
     target_addr=${STORE_ADMIN_ADDR[$target_store]}
@@ -297,18 +243,9 @@ for spec in "${TARGET_SPECS[@]}"; do
     target_dir="$ROOT_DIR/artifacts/cluster/store-$target_store"
   fi
   if [[ "$target_dir" == "$WORKDIR" ]]; then
-    echo "migrate_to_cluster: target store $target_store reuses the seed workdir: $target_dir" >&2
-    exit 1
+    nokv_die "migrate-cluster.sh: target store $target_store reuses the seed workdir: $target_dir"
   fi
-  mkdir -p "$target_dir"
-  lock_path="$target_dir/LOCK"
-  if [[ -f "$lock_path" ]]; then
-    rm -f "$lock_path"
-  fi
-  if workdir_has_unexpected_entries "$target_dir"; then
-    echo "migrate_to_cluster: target store $target_store workdir is not empty enough for fresh peer bootstrap: $target_dir" >&2
-    exit 1
-  fi
+  nokv_assert_fresh_workdir "$target_dir" "migrate-cluster.sh: target store $target_store workdir is not empty enough for fresh peer bootstrap"
   TARGET_STORE_IDS+=("$target_store")
   TARGET_ADMIN_ADDR_BY_STORE["$target_store"]="$target_addr"
   PEER_TO_ADMIN_ADDR["$target_peer"]="$target_addr"
@@ -365,7 +302,7 @@ start_with_logs PD_PID "pd" "$ROOT_DIR/artifacts/migration/pd.log" \
 seed_log="$WORKDIR/server.log"
 echo "Starting seed store ${SEED_STORE_ID} (workdir=${WORKDIR})"
 start_with_logs seed_pid "store-${SEED_STORE_ID}" "$seed_log" \
-  "$ROOT_DIR/scripts/serve_from_config.sh" \
+  "$ROOT_DIR/scripts/dev/serve-store.sh" \
   --config "$CONFIG_PATH" \
   --store-id "$SEED_STORE_ID" \
   --workdir "$WORKDIR" \
@@ -377,7 +314,7 @@ for target_store in "${TARGET_STORE_IDS[@]}"; do
   target_dir=${STORE_WORKDIR[$target_store]:-"$ROOT_DIR/artifacts/cluster/store-$target_store"}
   echo "Starting target store ${target_store} (workdir=${target_dir})"
   start_with_logs store_pid "store-${target_store}" "$target_dir/server.log" \
-    "$ROOT_DIR/scripts/serve_from_config.sh" \
+    "$ROOT_DIR/scripts/dev/serve-store.sh" \
     --config "$CONFIG_PATH" \
     --store-id "$target_store" \
     --workdir "$target_dir" \
@@ -387,10 +324,10 @@ for target_store in "${TARGET_STORE_IDS[@]}"; do
 done
 
 if [[ $DRY_RUN -eq 0 ]]; then
-  wait_for_tcp "$PD_LISTEN" 30
-  wait_for_tcp "$leader_admin_addr" 30
+  nokv_wait_for_tcp "$PD_LISTEN" 30
+  nokv_wait_for_tcp "$leader_admin_addr" 30
   for target_store in "${TARGET_STORE_IDS[@]}"; do
-    wait_for_tcp "${TARGET_ADMIN_ADDR_BY_STORE[$target_store]}" 30
+    nokv_wait_for_tcp "${TARGET_ADMIN_ADDR_BY_STORE[$target_store]}" 30
   done
 fi
 

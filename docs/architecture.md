@@ -153,7 +153,7 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 | `KvResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
 | `KvCheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
 
-`nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/run_local_cluster.sh` builds the CLI, writes a minimal local peer catalog, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
+`nokv serve` is the CLI entry point—open the DB, construct `raftstore.Server`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/dev/cluster.sh` builds the CLI, writes a minimal local peer catalog, launches multiple `nokv serve` processes on localhost, and handles cleanup on Ctrl+C.
 
 The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is `pb.NoKV`.
 
@@ -167,7 +167,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - **Reads**: `Get` and `Scan` pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.
 - **Writes**: `Mutate` bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); `Put` and `Delete` are convenience wrappers using the same 2PC path.
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use PD-lite (`nokv pd`) to obtain globally increasing values before calling `TwoPhaseCommit`.
-- **Bootstrap helpers**: `scripts/run_local_cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches PD-lite, and starts the stores declared in the config.
+- **Bootstrap helpers**: `scripts/dev/cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches PD-lite, and starts the stores declared in the config.
 
 **Example (two regions)**
 1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
@@ -192,7 +192,7 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - `nokv serve` advertises Region samples on startup (ID, key range, peers) for quick verification.
 - Inspect scheduler/control-plane state via PD APIs/metrics.
 - Scripts:
-  - `scripts/run_local_cluster.sh` – launch a multi-node NoKV cluster locally.
+  - `scripts/dev/cluster.sh` – launch a multi-node NoKV cluster locally.
   - `RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v` – crash-recovery validation.
   - `CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport` – inject network faults and observe transport metrics.
 

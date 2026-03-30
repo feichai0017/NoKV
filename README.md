@@ -80,7 +80,7 @@ Start an end-to-end playground with either the local script or Docker Compose. B
 
 ```bash
 # Option A: local processes
-./scripts/run_local_cluster.sh --config ./raft_config.example.json
+./scripts/dev/cluster.sh --config ./raft_config.example.json
 # In another shell: launch the Redis gateway on top of the running cluster
 go run ./cmd/nokv-redis \
   --addr 127.0.0.1:6380 \
@@ -146,7 +146,7 @@ func main() {
 > - `DB.SetWithTTL` accepts `time.Duration` (relative TTL). `DB.Set`/`DB.SetBatch`/`DB.SetWithTTL` reject `nil` values; use `DB.Del` or `DB.DeleteRange(start,end)` for deletes.
 > - `DB.NewIterator` exposes user-facing entries, while `DB.NewInternalIterator` scans raw internal keys (`cf+user_key+ts`).
 
-> ℹ️ `run_local_cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config catalog`, starts PD-lite (`nokv pd`), streams PD/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/pd.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
+> ℹ️ `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/scripts/dev/cluster.sh` rebuilds `nokv` and `nokv-config`, seeds local peer catalogs via `nokv-config catalog`, starts PD-lite (`nokv pd`), streams PD/store logs to the current terminal, and also writes them under `artifacts/cluster/store-<id>/server.log` and `artifacts/cluster/pd.log`. Use `Ctrl+C` to exit cleanly; if the process crashes, wipe the workdir (`rm -rf ./artifacts/cluster`) before restarting to avoid WAL replay errors.
 
 ---
 
@@ -167,7 +167,7 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 ]
 ```
 
-- **Local scripts** (`run_local_cluster.sh`, `serve_from_config.sh`, `bootstrap_from_config.sh`) ingest the same JSON, so local runs match production layouts.
+- **Local scripts** (`scripts/dev/cluster.sh`, `scripts/dev/serve-store.sh`, `scripts/dev/bootstrap.sh`) ingest the same JSON, so local runs match production layouts.
 - **Docker Compose** mounts the file into each container; manifests, transports, and Redis gateway all stay in sync.
 - Need more stores or regions? Update the JSON and re-run the script/Compose—no code changes required.
 - Programmatic access: import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` for a single source of truth across tools.
@@ -250,7 +250,7 @@ More in [docs/cli.md](docs/cli.md) and [docs/testing.md](docs/testing.md#4-obser
 - `cmd/nokv-redis` exposes a RESP-compatible endpoint. In embedded mode (`--workdir`) commands execute through regular DB APIs; in distributed mode (`--raft-config`) calls are routed through `raftstore/client` and committed with TwoPhaseCommit.
 - In raft mode, TTL is persisted directly in each value entry (`expires_at`) through the same 2PC write path as the value payload.
 - `--metrics-addr` exposes Redis gateway metrics under `NoKV.Stats.redis` via expvar. In raft mode, `--pd-addr` can override `config.pd` when you need a non-default PD endpoint.
-- A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/run_local_cluster.sh` and the Docker Compose setup.
+- A ready-to-use cluster configuration is available at `raft_config.example.json`, matching both `scripts/dev/cluster.sh` and the Docker Compose setup.
 
 > For the complete command matrix, configuration and deployment guides, see [docs/nokv-redis.md](docs/nokv-redis.md).
 

@@ -185,5 +185,5 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 ```
 
 Related tools:
-- `scripts/run_local_cluster.sh --config raft_config.example.json`
+- `scripts/dev/cluster.sh --config raft_config.example.json`
 - `go run ./cmd/nokv-redis --raft-config raft_config.example.json`
