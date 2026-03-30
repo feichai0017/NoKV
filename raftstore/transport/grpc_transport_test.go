@@ -25,6 +25,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
@@ -212,6 +213,41 @@ func TestGRPCTransportHandlesPartition(t *testing.T) {
 	ptr, ok := cluster.localMeta(followerID).RaftPointer(cluster.groupID)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, ptr.AppliedIndex, uint64(2))
+}
+
+func TestGRPCTransportFailpointBeforeSendRPCRecoversAfterClear(t *testing.T) {
+	transportpkg.ResetGRPCMetricsForTesting()
+	cluster := newGRPCTestCluster(
+		t,
+		[]uint64{1, 2, 3},
+		peerpkg.Config{},
+		transportpkg.WithRetry(0, 0),
+		transportpkg.WithSendTimeout(750*time.Millisecond),
+	)
+	require.NoError(t, cluster.campaign(1))
+	cluster.tickMany(3)
+	cluster.flush()
+
+	leader, ok := cluster.leader()
+	require.True(t, ok)
+
+	failpoints.Set(failpoints.BeforeTransportSendRPC)
+	t.Cleanup(func() { failpoints.Set(failpoints.None) })
+
+	payload := mustEncodePutCommand(t, []byte("transport-failpoint"), []byte("delayed"), 40)
+	require.NoError(t, cluster.propose(leader, payload))
+	cluster.tickMany(6)
+	cluster.flush()
+
+	requireMissingValue(t, cluster.db(2), []byte("transport-failpoint"))
+	requireMissingValue(t, cluster.db(3), []byte("transport-failpoint"))
+
+	failpoints.Set(failpoints.None)
+	cluster.tickMany(12)
+	cluster.flush()
+
+	requireVisibleValue(t, cluster.db(2), []byte("transport-failpoint"), []byte("delayed"))
+	requireVisibleValue(t, cluster.db(3), []byte("transport-failpoint"), []byte("delayed"))
 }
 
 func TestGRPCTransportMetricsWatchdog(t *testing.T) {

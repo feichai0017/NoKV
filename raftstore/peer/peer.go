@@ -391,6 +391,10 @@ func (p *Peer) processReady() error {
 		p.mu.Lock()
 		p.node.Advance(rd)
 		p.mu.Unlock()
+		if failpoints.ShouldFailAfterReadyAdvanceBeforeSend() {
+			p.readyMu.Unlock()
+			return fmt.Errorf("raftstore: failpoint after ready advance before send")
+		}
 
 		p.readyMu.Unlock()
 		p.sendMessages(msgs)

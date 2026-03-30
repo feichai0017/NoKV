@@ -28,6 +28,12 @@ const (
 	// AfterInitSeedSnapshot simulates a crash after the seed logical snapshot has
 	// been exported but before raft seed state and MODE=seeded are finalized.
 	AfterInitSeedSnapshot
+	// AfterReadyAdvanceBeforeSend simulates a crash after a peer has advanced one
+	// Ready batch but before it sends the outbound raft messages derived from it.
+	AfterReadyAdvanceBeforeSend
+	// BeforeTransportSendRPC simulates one transport-side drop after the send
+	// context has been prepared but before the outbound gRPC Step RPC is issued.
+	BeforeTransportSendRPC
 )
 
 var currentMode atomic.Uint32
@@ -77,4 +83,16 @@ func ShouldFailAfterInitCatalogPersist() bool {
 // after exporting the seed logical snapshot but before seeded finalization.
 func ShouldFailAfterInitSeedSnapshot() bool {
 	return Current()&AfterInitSeedSnapshot != 0
+}
+
+// ShouldFailAfterReadyAdvanceBeforeSend reports whether peer Ready processing
+// should stop after Advance but before outbound message publication.
+func ShouldFailAfterReadyAdvanceBeforeSend() bool {
+	return Current()&AfterReadyAdvanceBeforeSend != 0
+}
+
+// ShouldFailBeforeTransportSendRPC reports whether the transport should drop an
+// outbound Step RPC just before issuing it.
+func ShouldFailBeforeTransportSendRPC() bool {
+	return Current()&BeforeTransportSendRPC != 0
 }

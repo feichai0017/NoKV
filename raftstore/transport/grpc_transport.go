@@ -9,6 +9,7 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -440,6 +441,18 @@ func (t *GRPCTransport) Send(ctx context.Context, msg myraft.Message) {
 			sendCtx, cancel = context.WithCancel(ctx)
 		}
 		pbMsg := raftpb.Message(msg)
+		if failpoints.ShouldFailBeforeTransportSendRPC() {
+			cancel()
+			err = status.Error(codes.Unavailable, "raftstore: failpoint before transport send rpc")
+			metrics.recordSendFailure(err, attempt == attempts-1)
+			if attempt == attempts-1 {
+				return
+			}
+			if err := t.backoff(ctx); err != nil {
+				return
+			}
+			continue
+		}
 		_, err = client.Step(sendCtx, &pbMsg)
 		cancel()
 		if err == nil {
