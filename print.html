@@ -510,7 +510,7 @@ func main() {
 <p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed NoKV service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV’s own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
 <hr>
 <h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
-<pre><code>┌─────────────────────────┐   NoKV gRPC   ┌─────────────────────────┐
+<pre><code>┌─────────────────────────┐   NoKV gRPC     ┌─────────────────────────┐
 │ raftstore Service       │◀──────────────▶ │ raftstore/client        │
 └───────────┬─────────────┘                 │  (Get / Scan / Mutate)  │
             │                               └─────────────────────────┘
