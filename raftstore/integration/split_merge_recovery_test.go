@@ -13,8 +13,6 @@ import (
 )
 
 func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
-	t.Skip("TODO: multi-store split/merge restart currently exposes a Ready/Advance lifecycle bug in live runtime; keep store-local coverage until runtime sequencing is fixed")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

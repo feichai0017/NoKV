@@ -165,6 +165,9 @@ func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
 	if len(childMeta.StartKey) == 0 {
 		childMeta.StartKey = append([]byte(nil), split.GetSplitKey()...)
 	}
+	if s.splitCommandAlreadyApplied(split.GetParentRegionId(), childMeta) {
+		return nil
+	}
 	_, err := s.splitRegionLocal(split.GetParentRegionId(), childMeta)
 	return err
 }
@@ -179,7 +182,13 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 	}
 	sourceMeta, ok := s.RegionMetaByID(merge.GetSourceRegionId())
 	if !ok {
-		return fmt.Errorf("raftstore: source region %d not found", merge.GetSourceRegionId())
+		// Merge apply must be replay-safe across restart. Once the source region
+		// has already been removed locally, replaying the committed merge is a
+		// no-op instead of a fatal state divergence.
+		return nil
+	}
+	if sourceMeta.State == raftmeta.RegionStateTombstone {
+		return nil
 	}
 	updated := parentMeta
 	updated.Epoch.Version++
@@ -196,6 +205,39 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) splitCommandAlreadyApplied(parentID uint64, childMeta raftmeta.RegionMeta) bool {
+	if s == nil || parentID == 0 || childMeta.ID == 0 {
+		return false
+	}
+	parentMeta, ok := s.RegionMetaByID(parentID)
+	if !ok {
+		return false
+	}
+	existingChild, ok := s.RegionMetaByID(childMeta.ID)
+	if !ok {
+		return false
+	}
+	if !bytes.Equal(parentMeta.EndKey, childMeta.StartKey) {
+		return false
+	}
+	if !bytes.Equal(existingChild.StartKey, childMeta.StartKey) || !bytes.Equal(existingChild.EndKey, childMeta.EndKey) {
+		return false
+	}
+	return regionPeersEqual(existingChild.Peers, childMeta.Peers)
+}
+
+func regionPeersEqual(a, b []raftmeta.PeerMeta) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func regionMetaToPB(meta raftmeta.RegionMeta) *pb.RegionMeta {

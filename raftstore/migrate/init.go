@@ -7,6 +7,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -67,6 +68,9 @@ func Init(cfg InitConfig) (InitResult, error) {
 		}); err != nil {
 			return InitResult{}, err
 		}
+		if failpoints.ShouldFailAfterInitModePreparing() {
+			return InitResult{}, fmt.Errorf("migrate: failpoint after init mode preparing")
+		}
 	case ModePreparing:
 		if state.StoreID != 0 && state.StoreID != cfg.StoreID {
 			return InitResult{}, fmt.Errorf("migrate: preparing state store mismatch want=%d got=%d", cfg.StoreID, state.StoreID)
@@ -125,6 +129,9 @@ func Init(cfg InitConfig) (InitResult, error) {
 	if err := localMeta.SaveRegion(region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: save local catalog: %w", err)
 	}
+	if failpoints.ShouldFailAfterInitCatalogPersist() {
+		return InitResult{}, fmt.Errorf("migrate: failpoint after init catalog persist")
+	}
 
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
@@ -147,6 +154,9 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}
 	if _, err := snapshotpkg.Export(db, snapshotDir, region, nil); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
+	}
+	if failpoints.ShouldFailAfterInitSeedSnapshot() {
+		return InitResult{}, fmt.Errorf("migrate: failpoint after init seed snapshot")
 	}
 
 	storage, err := db.RaftLog().Open(cfg.RegionID, localMeta)

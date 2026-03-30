@@ -19,6 +19,15 @@ const (
 	// been applied to local durable state but before the store publishes the new
 	// peer/runtime into its router and region catalog.
 	AfterSnapshotApplyBeforePublish
+	// AfterInitModePreparing simulates a crash after migration init has written
+	// MODE=preparing but before any local catalog or snapshot state is published.
+	AfterInitModePreparing
+	// AfterInitCatalogPersist simulates a crash after migration init has written
+	// local region catalog state but before seed snapshot export and seeded mode.
+	AfterInitCatalogPersist
+	// AfterInitSeedSnapshot simulates a crash after the seed logical snapshot has
+	// been exported but before raft seed state and MODE=seeded are finalized.
+	AfterInitSeedSnapshot
 )
 
 var currentMode atomic.Uint32
@@ -50,4 +59,22 @@ func ShouldSkipLocalMetaUpdate() bool {
 // snapshot install should fail after local apply but before peer publication.
 func ShouldFailAfterSnapshotApplyBeforePublish() bool {
 	return Current()&AfterSnapshotApplyBeforePublish != 0
+}
+
+// ShouldFailAfterInitModePreparing reports whether migration init should stop
+// immediately after persisting MODE=preparing.
+func ShouldFailAfterInitModePreparing() bool {
+	return Current()&AfterInitModePreparing != 0
+}
+
+// ShouldFailAfterInitCatalogPersist reports whether migration init should stop
+// immediately after persisting local region catalog state.
+func ShouldFailAfterInitCatalogPersist() bool {
+	return Current()&AfterInitCatalogPersist != 0
+}
+
+// ShouldFailAfterInitSeedSnapshot reports whether migration init should stop
+// after exporting the seed logical snapshot but before seeded finalization.
+func ShouldFailAfterInitSeedSnapshot() bool {
+	return Current()&AfterInitSeedSnapshot != 0
 }
