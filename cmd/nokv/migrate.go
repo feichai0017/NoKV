@@ -13,7 +13,6 @@ import (
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 )
 
-var runExpand = migratepkg.Expand
 var runExpandMany = migratepkg.ExpandMany
 var runRemovePeer = migratepkg.RemovePeer
 var runTransferLeader = migratepkg.TransferLeader
@@ -221,10 +220,7 @@ func runMigrateInitCmd(w io.Writer, args []string) error {
 func runMigrateExpandCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate expand", flag.ContinueOnError)
 	addr := fs.String("addr", "", "leader store admin address")
-	targetAddr := fs.String("target-addr", "", "target store admin address for hosted-peer wait checks")
 	regionID := fs.Uint64("region", 0, "region id")
-	storeID := fs.Uint64("store", 0, "target store id")
-	peerID := fs.Uint64("peer", 0, "target peer id")
 	var targets peerTargetsFlag
 	fs.Var(&targets, "target", "peer rollout target in <store>:<peer>[@addr] form; may be repeated")
 	waitTimeout := fs.Duration("wait", 30*time.Second, "how long to wait for peer publication/hosting; 0 disables waiting")
@@ -238,36 +234,15 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	ctx := context.Background()
 	cfg := migratepkg.ExpandConfig{
 		Addr:         strings.TrimSpace(*addr),
-		TargetAddr:   strings.TrimSpace(*targetAddr),
 		RegionID:     *regionID,
-		StoreID:      *storeID,
-		PeerID:       *peerID,
 		WaitTimeout:  *waitTimeout,
 		PollInterval: *pollInterval,
 		Targets:      targets,
 	}
-	if len(targets) > 0 {
-		if *storeID != 0 || *peerID != 0 || strings.TrimSpace(*targetAddr) != "" {
-			return fmt.Errorf("--target cannot be combined with --store/--peer/--target-addr")
-		}
-		result, err := runExpandMany(ctx, cfg)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result)
-		}
-		_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
-		_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
-		for i, step := range result.Results {
-			_, _ = fmt.Fprintf(w, "Step[%d]           store=%d peer=%d hosted=%t applied=%d\n",
-				i, step.StoreID, step.PeerID, step.TargetHosted, step.TargetAppliedIdx)
-		}
-		return nil
+	if len(targets) == 0 {
+		return fmt.Errorf("at least one --target <store>:<peer>[@addr] is required")
 	}
-	result, err := runExpand(ctx, cfg)
+	result, err := runExpandMany(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -277,17 +252,10 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 		return enc.Encode(result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
-	if result.TargetAddr != "" {
-		_, _ = fmt.Fprintf(w, "TargetAddr        %s\n", result.TargetAddr)
-	}
 	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
-	_, _ = fmt.Fprintf(w, "TargetStore       %d\n", result.StoreID)
-	_, _ = fmt.Fprintf(w, "TargetPeer        %d\n", result.PeerID)
-	_, _ = fmt.Fprintf(w, "LeaderKnown       %t\n", result.LeaderKnown)
-	_, _ = fmt.Fprintf(w, "TargetKnown       %t\n", result.TargetKnown)
-	_, _ = fmt.Fprintf(w, "TargetHosted      %t\n", result.TargetHosted)
-	if result.TargetLocalPeerID != 0 {
-		_, _ = fmt.Fprintf(w, "TargetLocalPeer   %d\n", result.TargetLocalPeerID)
+	for i, step := range result.Results {
+		_, _ = fmt.Fprintf(w, "Step[%d]           store=%d peer=%d hosted=%t applied=%d\n",
+			i, step.StoreID, step.PeerID, step.TargetHosted, step.TargetAppliedIdx)
 	}
 	return nil
 }
