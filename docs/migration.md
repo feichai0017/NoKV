@@ -35,7 +35,6 @@ The first version does not attempt:
 
 - online migration
 - dual-write cutover
-- automatic multi-peer expansion
 - automatic region split / rebalance
 - compatibility with partially migrated normal service
 
@@ -142,6 +141,8 @@ The first version should use these commands:
 - `nokv migrate init`
 - `nokv migrate status`
 - `nokv migrate expand`
+- `nokv migrate remove-peer`
+- `nokv migrate transfer-leader`
 
 ### `nokv migrate plan`
 
@@ -182,8 +183,8 @@ Returns the current migration mode and seed identifiers.
 
 ### `nokv migrate expand`
 
-Expands the single-store seed region into a replicated region by driving one
-peer addition and snapshot catch-up through the leader store's admin RPC.
+Expands the seeded region into a replicated region by driving one or more peer
+additions and snapshot catch-up through the leader store's admin RPC.
 
 Input:
 
@@ -191,9 +192,20 @@ Input:
 - `--region`
 - `--store`
 - `--peer`
+- repeated `--target <store>:<peer>[@addr]`
 - optional `--target-addr`
 - optional `--wait`
 - optional `--poll-interval`
+
+### `nokv migrate remove-peer`
+
+Removes one peer from a replicated region through the leader store's admin RPC
+and optionally waits until the target store no longer hosts it.
+
+### `nokv migrate transfer-leader`
+
+Transfers region leadership to a specific peer and optionally waits until that
+peer becomes leader.
 
 ---
 
@@ -336,11 +348,11 @@ This phase reuses:
 - unknown-peer snapshot bootstrap in `raftstore/store/peer_lifecycle.go`
 - normal raft snapshot delivery
 
-The first implementation is intentionally narrow:
+The current implementation keeps orchestration explicit:
 
-- one `AddPeer` at a time
-- no automatic multi-peer rollout
-- no automatic leader transfer
+- sequential `AddPeer` rollout through repeated `expand` targets
+- explicit `remove-peer`
+- explicit `transfer-leader`
 - no automatic split or rebalance
 
 ---
@@ -406,6 +418,8 @@ To keep the surface clean:
   - `init`
   - `status`
   - `expand`
+  - `remove-peer`
+  - `transfer-leader`
 
 This keeps the CLI precise without leaking implementation detail into every
 command name.

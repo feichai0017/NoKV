@@ -127,6 +127,198 @@ func (x *AddPeerResponse) GetRegion() *RegionMeta {
 	return nil
 }
 
+type RemovePeerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	PeerId        uint64                 `protobuf:"varint,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemovePeerRequest) Reset() {
+	*x = RemovePeerRequest{}
+	mi := &file_adminpb_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemovePeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemovePeerRequest) ProtoMessage() {}
+
+func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_adminpb_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemovePeerRequest.ProtoReflect.Descriptor instead.
+func (*RemovePeerRequest) Descriptor() ([]byte, []int) {
+	return file_adminpb_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RemovePeerRequest) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *RemovePeerRequest) GetPeerId() uint64 {
+	if x != nil {
+		return x.PeerId
+	}
+	return 0
+}
+
+type RemovePeerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Region        *RegionMeta            `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemovePeerResponse) Reset() {
+	*x = RemovePeerResponse{}
+	mi := &file_adminpb_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemovePeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemovePeerResponse) ProtoMessage() {}
+
+func (x *RemovePeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_adminpb_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemovePeerResponse.ProtoReflect.Descriptor instead.
+func (*RemovePeerResponse) Descriptor() ([]byte, []int) {
+	return file_adminpb_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RemovePeerResponse) GetRegion() *RegionMeta {
+	if x != nil {
+		return x.Region
+	}
+	return nil
+}
+
+type TransferLeaderRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	PeerId        uint64                 `protobuf:"varint,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferLeaderRequest) Reset() {
+	*x = TransferLeaderRequest{}
+	mi := &file_adminpb_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferLeaderRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferLeaderRequest) ProtoMessage() {}
+
+func (x *TransferLeaderRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_adminpb_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferLeaderRequest.ProtoReflect.Descriptor instead.
+func (*TransferLeaderRequest) Descriptor() ([]byte, []int) {
+	return file_adminpb_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TransferLeaderRequest) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *TransferLeaderRequest) GetPeerId() uint64 {
+	if x != nil {
+		return x.PeerId
+	}
+	return 0
+}
+
+type TransferLeaderResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Region        *RegionMeta            `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferLeaderResponse) Reset() {
+	*x = TransferLeaderResponse{}
+	mi := &file_adminpb_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferLeaderResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferLeaderResponse) ProtoMessage() {}
+
+func (x *TransferLeaderResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_adminpb_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferLeaderResponse.ProtoReflect.Descriptor instead.
+func (*TransferLeaderResponse) Descriptor() ([]byte, []int) {
+	return file_adminpb_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TransferLeaderResponse) GetRegion() *RegionMeta {
+	if x != nil {
+		return x.Region
+	}
+	return nil
+}
+
 type RegionStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
@@ -136,7 +328,7 @@ type RegionStatusRequest struct {
 
 func (x *RegionStatusRequest) Reset() {
 	*x = RegionStatusRequest{}
-	mi := &file_adminpb_proto_msgTypes[2]
+	mi := &file_adminpb_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -148,7 +340,7 @@ func (x *RegionStatusRequest) String() string {
 func (*RegionStatusRequest) ProtoMessage() {}
 
 func (x *RegionStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_adminpb_proto_msgTypes[2]
+	mi := &file_adminpb_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -161,7 +353,7 @@ func (x *RegionStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionStatusRequest.ProtoReflect.Descriptor instead.
 func (*RegionStatusRequest) Descriptor() ([]byte, []int) {
-	return file_adminpb_proto_rawDescGZIP(), []int{2}
+	return file_adminpb_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegionStatusRequest) GetRegionId() uint64 {
@@ -179,13 +371,15 @@ type RegionStatusResponse struct {
 	LeaderPeerId  uint64                 `protobuf:"varint,4,opt,name=leader_peer_id,json=leaderPeerId,proto3" json:"leader_peer_id,omitempty"`
 	Leader        bool                   `protobuf:"varint,5,opt,name=leader,proto3" json:"leader,omitempty"`
 	Region        *RegionMeta            `protobuf:"bytes,6,opt,name=region,proto3" json:"region,omitempty"`
+	AppliedIndex  uint64                 `protobuf:"varint,7,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
+	AppliedTerm   uint64                 `protobuf:"varint,8,opt,name=applied_term,json=appliedTerm,proto3" json:"applied_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegionStatusResponse) Reset() {
 	*x = RegionStatusResponse{}
-	mi := &file_adminpb_proto_msgTypes[3]
+	mi := &file_adminpb_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -197,7 +391,7 @@ func (x *RegionStatusResponse) String() string {
 func (*RegionStatusResponse) ProtoMessage() {}
 
 func (x *RegionStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_adminpb_proto_msgTypes[3]
+	mi := &file_adminpb_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -210,7 +404,7 @@ func (x *RegionStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionStatusResponse.ProtoReflect.Descriptor instead.
 func (*RegionStatusResponse) Descriptor() ([]byte, []int) {
-	return file_adminpb_proto_rawDescGZIP(), []int{3}
+	return file_adminpb_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RegionStatusResponse) GetKnown() bool {
@@ -255,6 +449,20 @@ func (x *RegionStatusResponse) GetRegion() *RegionMeta {
 	return nil
 }
 
+func (x *RegionStatusResponse) GetAppliedIndex() uint64 {
+	if x != nil {
+		return x.AppliedIndex
+	}
+	return 0
+}
+
+func (x *RegionStatusResponse) GetAppliedTerm() uint64 {
+	if x != nil {
+		return x.AppliedTerm
+	}
+	return 0
+}
+
 var File_adminpb_proto protoreflect.FileDescriptor
 
 const file_adminpb_proto_rawDesc = "" +
@@ -265,18 +473,33 @@ const file_adminpb_proto_rawDesc = "" +
 	"\bstore_id\x18\x02 \x01(\x04R\astoreId\x12\x17\n" +
 	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\"9\n" +
 	"\x0fAddPeerResponse\x12&\n" +
+	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"I\n" +
+	"\x11RemovePeerRequest\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x17\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"<\n" +
+	"\x12RemovePeerResponse\x12&\n" +
+	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"M\n" +
+	"\x15TransferLeaderRequest\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x17\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"@\n" +
+	"\x16TransferLeaderResponse\x12&\n" +
 	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"2\n" +
 	"\x13RegionStatusRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\xce\x01\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x96\x02\n" +
 	"\x14RegionStatusResponse\x12\x14\n" +
 	"\x05known\x18\x01 \x01(\bR\x05known\x12\x16\n" +
 	"\x06hosted\x18\x02 \x01(\bR\x06hosted\x12\"\n" +
 	"\rlocal_peer_id\x18\x03 \x01(\x04R\vlocalPeerId\x12$\n" +
 	"\x0eleader_peer_id\x18\x04 \x01(\x04R\fleaderPeerId\x12\x16\n" +
 	"\x06leader\x18\x05 \x01(\bR\x06leader\x12&\n" +
-	"\x06region\x18\x06 \x01(\v2\x0e.pb.RegionMetaR\x06region2\x82\x01\n" +
+	"\x06region\x18\x06 \x01(\v2\x0e.pb.RegionMetaR\x06region\x12#\n" +
+	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12!\n" +
+	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm2\x88\x02\n" +
 	"\tRaftAdmin\x122\n" +
-	"\aAddPeer\x12\x12.pb.AddPeerRequest\x1a\x13.pb.AddPeerResponse\x12A\n" +
+	"\aAddPeer\x12\x12.pb.AddPeerRequest\x1a\x13.pb.AddPeerResponse\x12;\n" +
+	"\n" +
+	"RemovePeer\x12\x15.pb.RemovePeerRequest\x1a\x16.pb.RemovePeerResponse\x12G\n" +
+	"\x0eTransferLeader\x12\x19.pb.TransferLeaderRequest\x1a\x1a.pb.TransferLeaderResponse\x12A\n" +
 	"\fRegionStatus\x12\x17.pb.RegionStatusRequest\x1a\x18.pb.RegionStatusResponseB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
 
 var (
@@ -291,26 +514,36 @@ func file_adminpb_proto_rawDescGZIP() []byte {
 	return file_adminpb_proto_rawDescData
 }
 
-var file_adminpb_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_adminpb_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_adminpb_proto_goTypes = []any{
-	(*AddPeerRequest)(nil),       // 0: pb.AddPeerRequest
-	(*AddPeerResponse)(nil),      // 1: pb.AddPeerResponse
-	(*RegionStatusRequest)(nil),  // 2: pb.RegionStatusRequest
-	(*RegionStatusResponse)(nil), // 3: pb.RegionStatusResponse
-	(*RegionMeta)(nil),           // 4: pb.RegionMeta
+	(*AddPeerRequest)(nil),         // 0: pb.AddPeerRequest
+	(*AddPeerResponse)(nil),        // 1: pb.AddPeerResponse
+	(*RemovePeerRequest)(nil),      // 2: pb.RemovePeerRequest
+	(*RemovePeerResponse)(nil),     // 3: pb.RemovePeerResponse
+	(*TransferLeaderRequest)(nil),  // 4: pb.TransferLeaderRequest
+	(*TransferLeaderResponse)(nil), // 5: pb.TransferLeaderResponse
+	(*RegionStatusRequest)(nil),    // 6: pb.RegionStatusRequest
+	(*RegionStatusResponse)(nil),   // 7: pb.RegionStatusResponse
+	(*RegionMeta)(nil),             // 8: pb.RegionMeta
 }
 var file_adminpb_proto_depIdxs = []int32{
-	4, // 0: pb.AddPeerResponse.region:type_name -> pb.RegionMeta
-	4, // 1: pb.RegionStatusResponse.region:type_name -> pb.RegionMeta
-	0, // 2: pb.RaftAdmin.AddPeer:input_type -> pb.AddPeerRequest
-	2, // 3: pb.RaftAdmin.RegionStatus:input_type -> pb.RegionStatusRequest
-	1, // 4: pb.RaftAdmin.AddPeer:output_type -> pb.AddPeerResponse
-	3, // 5: pb.RaftAdmin.RegionStatus:output_type -> pb.RegionStatusResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8, // 0: pb.AddPeerResponse.region:type_name -> pb.RegionMeta
+	8, // 1: pb.RemovePeerResponse.region:type_name -> pb.RegionMeta
+	8, // 2: pb.TransferLeaderResponse.region:type_name -> pb.RegionMeta
+	8, // 3: pb.RegionStatusResponse.region:type_name -> pb.RegionMeta
+	0, // 4: pb.RaftAdmin.AddPeer:input_type -> pb.AddPeerRequest
+	2, // 5: pb.RaftAdmin.RemovePeer:input_type -> pb.RemovePeerRequest
+	4, // 6: pb.RaftAdmin.TransferLeader:input_type -> pb.TransferLeaderRequest
+	6, // 7: pb.RaftAdmin.RegionStatus:input_type -> pb.RegionStatusRequest
+	1, // 8: pb.RaftAdmin.AddPeer:output_type -> pb.AddPeerResponse
+	3, // 9: pb.RaftAdmin.RemovePeer:output_type -> pb.RemovePeerResponse
+	5, // 10: pb.RaftAdmin.TransferLeader:output_type -> pb.TransferLeaderResponse
+	7, // 11: pb.RaftAdmin.RegionStatus:output_type -> pb.RegionStatusResponse
+	8, // [8:12] is the sub-list for method output_type
+	4, // [4:8] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_adminpb_proto_init() }
@@ -325,7 +558,7 @@ func file_adminpb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_adminpb_proto_rawDesc), len(file_adminpb_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
