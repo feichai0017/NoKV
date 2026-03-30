@@ -89,6 +89,12 @@ type blockingRegionResolver struct {
 	started chan struct{}
 }
 
+type keyedBlockingResolver struct {
+	started     chan struct{}
+	blockedKeys map[string]struct{}
+	regions     []*pb.RegionMeta
+}
+
 func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
@@ -141,6 +147,29 @@ func (br *blockingRegionResolver) GetRegionByKey(ctx context.Context, req *pb.Ge
 }
 
 func (br *blockingRegionResolver) Close() error { return nil }
+
+func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+	if req != nil {
+		if _, blocked := kr.blockedKeys[string(req.GetKey())]; blocked {
+			if kr.started != nil {
+				select {
+				case kr.started <- struct{}{}:
+				default:
+				}
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		for _, meta := range kr.regions {
+			if meta != nil && containsKey(meta, req.GetKey()) {
+				return &pb.GetRegionByKeyResponse{Region: protoClone(meta)}, nil
+			}
+		}
+	}
+	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+}
+
+func (kr *keyedBlockingResolver) Close() error { return nil }
 
 func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
 	cluster.mu.Lock()
@@ -326,7 +355,23 @@ type blockingService struct {
 	started chan struct{}
 }
 
+type regionBlockingService struct {
+	mockService
+	started            chan struct{}
+	blockPrewriteOn    uint64
+	blockResolveLockOn uint64
+}
+
 func (s *blockingService) signal() {
+	if s.started != nil {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (s *regionBlockingService) signal() {
 	if s.started != nil {
 		select {
 		case s.started <- struct{}{}:
@@ -430,6 +475,24 @@ func (s *blockingService) KvCommit(ctx context.Context, req *pb.KvCommitRequest)
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
+}
+
+func (s *regionBlockingService) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockPrewriteOn {
+		s.signal()
+		<-ctx.Done()
+		return nil, status.Error(codes.Canceled, ctx.Err().Error())
+	}
+	return s.mockService.KvPrewrite(ctx, req)
+}
+
+func (s *regionBlockingService) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
+	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockResolveLockOn {
+		s.signal()
+		<-ctx.Done()
+		return nil, status.Error(codes.Canceled, ctx.Err().Error())
+	}
+	return s.mockService.KvResolveLock(ctx, req)
 }
 
 func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string, func()) {
@@ -1528,5 +1591,214 @@ func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
 		require.Equal(t, codes.Canceled, status.Code(err))
 	case <-time.After(time.Second):
 		t.Fatal("client put rpc did not return after context cancellation")
+	}
+}
+
+func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t *testing.T) {
+	metaA := &pb.RegionMeta{
+		Id:               1,
+		StartKey:         []byte("a"),
+		EndKey:           []byte("m"),
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	}
+	metaB := &pb.RegionMeta{
+		Id:               2,
+		StartKey:         []byte("m"),
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+	}
+	resolver := &keyedBlockingResolver{
+		started:     make(chan struct{}, 1),
+		blockedKeys: map[string]struct{}{"omega": {}},
+		regions:     []*pb.RegionMeta{metaA, metaB},
+	}
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		RegionResolver: resolver,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:             1,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*pb.Mutation{
+			{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+			{Op: pb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+		}, 10, 11, 3000)
+	}()
+
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("resolver was not invoked for second region")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, IsRouteUnavailable(err))
+		require.True(t, errors.Is(err, context.Canceled))
+	case <-time.After(time.Second):
+		t.Fatal("two-phase commit did not return after context cancellation")
+	}
+}
+
+func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("m"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               2,
+				StartKey:         []byte("m"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	service := &regionBlockingService{
+		mockService:        mockService{storeID: 1, cluster: cluster},
+		started:            make(chan struct{}, 1),
+		blockPrewriteOn:    2,
+		blockResolveLockOn: 0,
+	}
+	addr, stop := startBlockingStore(t, service)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			RouteUnavailableBackoff:     0,
+			TransportUnavailableBackoff: 0,
+			RegionErrorBackoff:          0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*pb.Mutation{
+			{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+			{Op: pb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+		}, 20, 21, 3000)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-service.started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Equal(t, codes.Canceled, status.Code(err))
+	case <-time.After(time.Second):
+		t.Fatal("two-phase commit rpc did not return after context cancellation")
+	}
+}
+
+func TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               1,
+				StartKey:         []byte("a"),
+				EndKey:           []byte("m"),
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &pb.RegionMeta{
+				Id:               2,
+				StartKey:         []byte("m"),
+				EndKey:           nil,
+				EpochVersion:     1,
+				EpochConfVersion: 1,
+				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	service := &regionBlockingService{
+		mockService:        mockService{storeID: 1, cluster: cluster},
+		started:            make(chan struct{}, 1),
+		blockResolveLockOn: 2,
+	}
+	addr, stop := startBlockingStore(t, service)
+	defer stop()
+
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			RouteUnavailableBackoff:     0,
+			TransportUnavailableBackoff: 0,
+			RegionErrorBackoff:          0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := cli.ResolveLocks(ctx, 30, 0, [][]byte{[]byte("alfa"), []byte("omega")})
+		done <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-service.started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Equal(t, codes.Canceled, status.Code(err))
+	case <-time.After(time.Second):
+		t.Fatal("resolve locks rpc did not return after context cancellation")
 	}
 }

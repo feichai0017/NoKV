@@ -829,3 +829,70 @@ func TestPeerWaitAppliedTracksCommittedIndex(t *testing.T) {
 	defer cancel()
 	require.NoError(t, peer.WaitApplied(ctx, appliedIdx))
 }
+
+func TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks(t *testing.T) {
+	net := newMemoryNetwork()
+	var peers []*peerpkg.Peer
+	var dbs []*NoKV.DB
+	peerList := []myraft.Peer{{ID: 1}, {ID: 2}, {ID: 3}}
+
+	for id := uint64(1); id <= 3; id++ {
+		dbDir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", id))
+		db, localMeta := openDBAt(t, dbDir)
+		t.Cleanup(func(db *NoKV.DB) func() {
+			return func() { _ = db.Close() }
+		}(db))
+		rc := myraft.Config{
+			ID:              id,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   math.MaxUint64,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		}
+		peer, err := peerpkg.NewPeer(&peerpkg.Config{
+			RaftConfig: rc,
+			Transport:  net,
+			Apply:      applyToDB(db),
+			Storage:    mustPeerStorage(t, db, localMeta, 91),
+			GroupID:    91,
+		})
+		require.NoError(t, err)
+		net.Register(peer)
+		t.Cleanup(func(p *peerpkg.Peer) func() {
+			return func() { _ = p.Close() }
+		}(peer))
+		peers = append(peers, peer)
+		dbs = append(dbs, db)
+	}
+
+	for _, peer := range peers {
+		require.NoError(t, peer.Bootstrap(peerList))
+	}
+	require.NoError(t, net.Campaign(1))
+	net.Flush()
+
+	leader, ok := net.Leader()
+	require.True(t, ok)
+	require.Equal(t, uint64(1), leader)
+
+	payload := mustEncodePutCommand(t, []byte("advance-before-send"), []byte("recovered"), 210)
+	failpoints.Set(failpoints.AfterReadyAdvanceBeforeSend)
+	t.Cleanup(func() { failpoints.Set(failpoints.None) })
+	err := net.Propose(leader, payload)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "after ready advance before send")
+
+	requireMissingValue(t, dbs[1], []byte("advance-before-send"))
+	requireMissingValue(t, dbs[2], []byte("advance-before-send"))
+
+	failpoints.Set(failpoints.None)
+	for range 12 {
+		net.Tick()
+		net.Flush()
+	}
+
+	for _, db := range dbs {
+		requireVisibleValue(t, db, []byte("advance-before-send"), []byte("recovered"))
+	}
+}

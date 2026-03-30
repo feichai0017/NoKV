@@ -45,6 +45,9 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 	if lastErr != nil {
 		return nil, lastErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("client: kv get retries exhausted for key %q", key)
 }
 
@@ -130,6 +133,9 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	if len(pending) > 0 {
 		if lastErr != nil {
 			return nil, lastErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return nil, fmt.Errorf("client: kv batch get retries exhausted")
 	}
@@ -414,6 +420,9 @@ func (c *Client) prewriteRegion(ctx context.Context, regionID uint64, primary []
 	if lastErr != nil {
 		return lastErr
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return fmt.Errorf("client: prewrite retries exhausted for region %d", regionID)
 }
 
@@ -468,6 +477,9 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 	}
 	if lastErr != nil {
 		return lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return fmt.Errorf("client: commit retries exhausted for region %d", regionID)
 }
@@ -525,6 +537,9 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 	}
 	if lastErr != nil {
 		return nil, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return nil, fmt.Errorf("client: check txn status retries exhausted")
 }
@@ -609,6 +624,9 @@ func (c *Client) resolveRegionLocks(ctx context.Context, regionID uint64, startV
 	}
 	if lastErr != nil {
 		return 0, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	return 0, fmt.Errorf("client: resolve lock retries exhausted for region %d", regionID)
 }
