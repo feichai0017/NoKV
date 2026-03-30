@@ -84,15 +84,38 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 
 ### `nokv migrate expand`
 
-- Sends one `AddPeer` request to the leader store's admin gRPC endpoint
-- Optionally polls leader and target stores until the new peer is published and
-  hosted
+- Sends one or more `AddPeer` requests to the leader store's admin gRPC endpoint
+- Supports sequential rollout with repeated `--target <store>:<peer>[@addr]`
+- Optionally polls leader and target stores until each new peer is published,
+  hosted, and has applied at least one raft index
 - Common flags:
   - `--addr` leader store admin address
   - `--target-addr` target store admin address for hosted-peer wait checks
   - `--region`, `--store`, `--peer`
+  - `--target <store>:<peer>[@addr]` (repeatable)
   - `--wait` overall wait timeout (`0` disables waiting)
   - `--poll-interval`
+
+### `nokv migrate remove-peer`
+
+- Sends one `RemovePeer` request to the leader store's admin gRPC endpoint
+- Optionally waits until the leader metadata drops the peer and the target store
+  no longer reports it as hosted
+- Common flags:
+  - `--addr` leader store admin address
+  - `--target-addr` target store admin address for removal wait checks
+  - `--region`, `--peer`
+  - `--wait`, `--poll-interval`
+
+### `nokv migrate transfer-leader`
+
+- Sends one `TransferLeader` request to the leader store's admin gRPC endpoint
+- Optionally waits until the target peer becomes the observed region leader
+- Common flags:
+  - `--addr` current leader store admin address
+  - `--target-addr` target store admin address for leader wait checks
+  - `--region`, `--peer`
+  - `--wait`, `--poll-interval`
 
 ### `nokv serve`
 

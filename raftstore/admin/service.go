@@ -44,6 +44,44 @@ func (s *Service) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddP
 	return &pb.AddPeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
+// RemovePeer issues one raft configuration change removing the specified peer.
+func (s *Service) RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error) {
+	_ = ctx
+	if s == nil || s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+	}
+	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
+	}
+	if err := s.store.ProposeRemovePeer(req.GetRegionId(), req.GetPeerId()); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
+	if !ok {
+		return &pb.RemovePeerResponse{}, nil
+	}
+	return &pb.RemovePeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+}
+
+// TransferLeader requests leader transfer on the specified region.
+func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
+	_ = ctx
+	if s == nil || s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+	}
+	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
+	}
+	if err := s.store.TransferLeader(req.GetRegionId(), req.GetPeerId()); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
+	if !ok {
+		return &pb.TransferLeaderResponse{}, nil
+	}
+	return &pb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+}
+
 // RegionStatus returns store-local runtime information for one region.
 func (s *Service) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error) {
 	_ = ctx
@@ -64,6 +102,8 @@ func (s *Service) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest)
 		LeaderPeerId: runtime.LeaderPeerID,
 		Leader:       runtime.Leader,
 		Region:       regionMetaToPB(runtime.Meta),
+		AppliedIndex: runtime.AppliedIndex,
+		AppliedTerm:  runtime.AppliedTerm,
 	}, nil
 }
 

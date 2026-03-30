@@ -127,6 +127,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.True(t, statusResp.GetHosted())
 	require.True(t, statusResp.GetLeader())
 	require.Equal(t, uint64(101), statusResp.GetLocalPeerId())
+	require.GreaterOrEqual(t, statusResp.GetAppliedIndex(), uint64(0))
 
 	addResp, err := adminClient.AddPeer(ctx, &pb.AddPeerRequest{
 		RegionId: region.ID,
@@ -140,6 +141,18 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, statusResp.GetKnown())
 	require.Len(t, statusResp.GetRegion().GetPeers(), 2)
+
+	_, err = adminClient.TransferLeader(ctx, &pb.TransferLeaderRequest{
+		RegionId: region.ID,
+		PeerId:   101,
+	})
+	require.NoError(t, err)
+
+	_, err = adminClient.RemovePeer(ctx, &pb.RemovePeerRequest{
+		RegionId: region.ID,
+		PeerId:   202,
+	})
+	require.NoError(t, err)
 }
 
 type testNode struct {

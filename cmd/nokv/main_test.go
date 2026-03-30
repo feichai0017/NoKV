@@ -957,6 +957,7 @@ func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 
 func TestRunMigrateExpandCmd(t *testing.T) {
 	orig := runExpand
+	origMany := runExpandMany
 	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResult, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
@@ -977,7 +978,14 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 			TargetLocalPeerID: cfg.PeerID,
 		}, nil
 	}
-	t.Cleanup(func() { runExpand = orig })
+	runExpandMany = func(context.Context, migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
+		t.Fatalf("unexpected runExpandMany call")
+		return migratepkg.ExpandManyResult{}, nil
+	}
+	t.Cleanup(func() {
+		runExpand = orig
+		runExpandMany = origMany
+	})
 
 	var buf bytes.Buffer
 	err := runMigrateExpandCmd(&buf, []string{
@@ -997,6 +1005,119 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 	require.Equal(t, true, payload["leader_known"])
 	require.Equal(t, true, payload["target_hosted"])
 	require.Equal(t, float64(22), payload["target_local_peer_id"])
+}
+
+func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
+	orig := runExpand
+	origMany := runExpandMany
+	runExpand = func(context.Context, migratepkg.ExpandConfig) (migratepkg.ExpandResult, error) {
+		t.Fatalf("unexpected runExpand call")
+		return migratepkg.ExpandResult{}, nil
+	}
+	runExpandMany = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
+		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Len(t, cfg.Targets, 2)
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAddr: "127.0.0.1:20161"}, cfg.Targets[0])
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 3, PeerID: 33, TargetAddr: "127.0.0.1:20162"}, cfg.Targets[1])
+		return migratepkg.ExpandManyResult{
+			Addr:     cfg.Addr,
+			RegionID: cfg.RegionID,
+			Results: []migratepkg.ExpandResult{
+				{StoreID: 2, PeerID: 22, TargetHosted: true, TargetAppliedIdx: 1},
+				{StoreID: 3, PeerID: 33, TargetHosted: true, TargetAppliedIdx: 1},
+			},
+		}, nil
+	}
+	t.Cleanup(func() {
+		runExpand = orig
+		runExpandMany = origMany
+	})
+
+	var buf bytes.Buffer
+	err := runMigrateExpandCmd(&buf, []string{
+		"-addr", "127.0.0.1:20160",
+		"-region", "9",
+		"-target", "2:22@127.0.0.1:20161",
+		"-target", "3:33@127.0.0.1:20162",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	results := payload["results"].([]any)
+	require.Len(t, results, 2)
+}
+
+func TestRunMigrateRemovePeerCmd(t *testing.T) {
+	orig := runRemovePeer
+	runRemovePeer = func(ctx context.Context, cfg migratepkg.RemovePeerConfig) (migratepkg.RemovePeerResult, error) {
+		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
+		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, uint64(22), cfg.PeerID)
+		return migratepkg.RemovePeerResult{
+			Addr:         cfg.Addr,
+			TargetAddr:   cfg.TargetAddr,
+			RegionID:     cfg.RegionID,
+			PeerID:       cfg.PeerID,
+			LeaderKnown:  true,
+			TargetKnown:  false,
+			TargetHosted: false,
+		}, nil
+	}
+	t.Cleanup(func() { runRemovePeer = orig })
+
+	var buf bytes.Buffer
+	err := runMigrateRemovePeerCmd(&buf, []string{
+		"-addr", "127.0.0.1:20160",
+		"-target-addr", "127.0.0.1:20161",
+		"-region", "9",
+		"-peer", "22",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, true, payload["leader_known"])
+	require.Equal(t, false, payload["target_hosted"])
+}
+
+func TestRunMigrateTransferLeaderCmd(t *testing.T) {
+	orig := runTransferLeader
+	runTransferLeader = func(ctx context.Context, cfg migratepkg.TransferLeaderConfig) (migratepkg.TransferLeaderResult, error) {
+		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
+		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, uint64(22), cfg.PeerID)
+		return migratepkg.TransferLeaderResult{
+			Addr:         cfg.Addr,
+			TargetAddr:   cfg.TargetAddr,
+			RegionID:     cfg.RegionID,
+			PeerID:       cfg.PeerID,
+			LeaderKnown:  true,
+			LeaderPeerID: cfg.PeerID,
+			TargetLeader: true,
+		}, nil
+	}
+	t.Cleanup(func() { runTransferLeader = orig })
+
+	var buf bytes.Buffer
+	err := runMigrateTransferLeaderCmd(&buf, []string{
+		"-addr", "127.0.0.1:20160",
+		"-target-addr", "127.0.0.1:20161",
+		"-region", "9",
+		"-peer", "22",
+		"-json",
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, true, payload["target_leader"])
+	require.Equal(t, float64(22), payload["leader_peer_id"])
 }
 
 func TestFirstRegionMetricsFound(t *testing.T) {
