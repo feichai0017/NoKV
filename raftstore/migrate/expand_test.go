@@ -199,3 +199,128 @@ func TestExpandRollsTargetsSequentially(t *testing.T) {
 	require.Equal(t, uint64(33), result.Results[1].PeerID)
 	require.True(t, result.Results[1].TargetHosted)
 }
+
+func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:           &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 12}},
+		exportSnapshotErr: context.DeadlineExceeded,
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 12, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+		},
+	}
+	target := &fakeAdminClient{}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:         "leader",
+		RegionID:     12,
+		WaitTimeout:  time.Second,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets:      []PeerTarget{{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "export region 12 snapshot")
+	require.Empty(t, target.installSnapshotReqs)
+}
+
+func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 13}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-13")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 13, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+		},
+	}
+	target := &fakeAdminClient{installSnapshotErr: context.DeadlineExceeded}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:         "leader",
+		RegionID:     13,
+		WaitTimeout:  time.Second,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets:      []PeerTarget{{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "install region 13 snapshot")
+	require.Len(t, target.installSnapshotReqs, 1)
+}
+
+func TestExpandTimesOutWhenLeaderNeverPublishesPeer(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp: &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 14}},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 14}},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		require.Equal(t, "leader", addr)
+		return leader, func() error { return nil }, nil
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:         "leader",
+		RegionID:     14,
+		WaitTimeout:  5 * time.Millisecond,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets:      []PeerTarget{{StoreID: 2, PeerID: 22}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "waiting for leader region 14 to publish peer 22")
+}
+
+func TestExpandTimesOutWhenTargetNeverHostsPeer(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 15}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-15")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 15, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+		},
+	}
+	target := &fakeAdminClient{statuses: []*pb.RegionRuntimeStatusResponse{{Known: true, Hosted: false}}}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:         "leader",
+		RegionID:     15,
+		WaitTimeout:  5 * time.Millisecond,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets:      []PeerTarget{{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "waiting for target store to host peer 22")
+}
