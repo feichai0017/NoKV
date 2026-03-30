@@ -55,7 +55,7 @@ func (f *fakeAdminClient) RegionStatus(context.Context, *pb.RegionStatusRequest)
 	return resp, nil
 }
 
-func TestExpandWaitsForTargetHosted(t *testing.T) {
+func TestExpandManyWaitsForTargetHosted(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{
 			Region: &pb.RegionMeta{Id: 8},
@@ -83,25 +83,26 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 		}
 	}
 
-	result, err := Expand(context.Background(), ExpandConfig{
+	result, err := ExpandMany(context.Background(), ExpandConfig{
 		Addr:         "leader",
-		TargetAddr:   "target",
 		RegionID:     8,
-		StoreID:      2,
-		PeerID:       22,
 		WaitTimeout:  time.Second,
 		PollInterval: time.Millisecond,
 		Dial:         dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 22, TargetAddr: "target"},
+		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.LeaderKnown)
-	require.True(t, result.TargetKnown)
-	require.True(t, result.TargetHosted)
-	require.Equal(t, uint64(22), result.TargetLocalPeerID)
-	require.Equal(t, uint64(1), result.TargetAppliedIdx)
+	require.Len(t, result.Results, 1)
+	require.True(t, result.Results[0].LeaderKnown)
+	require.True(t, result.Results[0].TargetKnown)
+	require.True(t, result.Results[0].TargetHosted)
+	require.Equal(t, uint64(22), result.Results[0].TargetLocalPeerID)
+	require.Equal(t, uint64(1), result.Results[0].TargetAppliedIdx)
 }
 
-func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
+func TestExpandManyWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{
 			Region: &pb.RegionMeta{Id: 9, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 33}}},
@@ -112,17 +113,19 @@ func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 		return leader, func() error { return nil }, nil
 	}
 
-	result, err := Expand(context.Background(), ExpandConfig{
+	result, err := ExpandMany(context.Background(), ExpandConfig{
 		Addr:        "leader",
 		RegionID:    9,
-		StoreID:     2,
-		PeerID:      33,
 		WaitTimeout: 0,
 		Dial:        dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 33},
+		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.LeaderKnown)
-	require.False(t, result.Waited)
+	require.Len(t, result.Results, 1)
+	require.True(t, result.Results[0].LeaderKnown)
+	require.False(t, result.Results[0].Waited)
 	require.Zero(t, leader.calls)
 }
 
