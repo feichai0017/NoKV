@@ -2,12 +2,14 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -19,11 +21,16 @@ import (
 )
 
 type staticResolver struct {
-	region *pb.RegionMeta
+	regions []*pb.RegionMeta
 }
 
 func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
-	return &pb.GetRegionByKeyResponse{Region: cloneRegionMeta(r.region)}, nil
+	for _, region := range r.regions {
+		if region != nil && containsRegionKey(region, req.GetKey()) {
+			return &pb.GetRegionByKeyResponse{Region: cloneRegionMeta(region)}, nil
+		}
+	}
+	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticResolver) Close() error { return nil }
@@ -50,6 +57,34 @@ func cloneRegionMeta(meta *pb.RegionMeta) *pb.RegionMeta {
 		})
 	}
 	return out
+}
+
+func regionMetaWithLeaderFirst(meta *pb.RegionMeta, leaderStoreID uint64) *pb.RegionMeta {
+	out := cloneRegionMeta(meta)
+	if out == nil || leaderStoreID == 0 || len(out.Peers) < 2 {
+		return out
+	}
+	for i, peer := range out.Peers {
+		if peer.GetStoreId() != leaderStoreID {
+			continue
+		}
+		out.Peers[0], out.Peers[i] = out.Peers[i], out.Peers[0]
+		break
+	}
+	return out
+}
+
+func containsRegionKey(meta *pb.RegionMeta, key []byte) bool {
+	if meta == nil {
+		return false
+	}
+	if len(meta.GetStartKey()) > 0 && string(key) < string(meta.GetStartKey()) {
+		return false
+	}
+	if len(meta.GetEndKey()) > 0 && string(key) >= string(meta.GetEndKey()) {
+		return false
+	}
+	return true
 }
 
 func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
@@ -97,7 +132,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{region: leaderStatus.GetRegion()},
+		RegionResolver: &staticResolver{regions: []*pb.RegionMeta{leaderStatus.GetRegion()}},
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
 			MaxAttempts:                 1,
@@ -153,5 +188,116 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 		defer cancel()
 		resp, err := cli.Get(testCtx, key, 4)
 		return err == nil && string(resp.GetValue()) == string(value)
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	seedDir := t.TempDir()
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, nil)
+	require.NoError(t, standalone.Close())
+
+	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 91, PeerID: 101})
+	require.NoError(t, err)
+
+	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
+	defer seed.Close(t)
+	defer target.Close(t)
+
+	wireAll := func() {
+		seed.WirePeers(map[uint64]string{201: target.Addr(), 202: target.Addr()})
+		target.WirePeers(map[uint64]string{101: seed.Addr(), 102: seed.Addr()})
+	}
+	wireAll()
+	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 91, 101)
+
+	_, err = migrate.Expand(ctx, migrate.ExpandConfig{
+		Addr:         seed.Addr(),
+		RegionID:     91,
+		WaitTimeout:  5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Targets: []migrate.PeerTarget{
+			{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()},
+		},
+	})
+	require.NoError(t, err)
+
+	parentLeader, _ := testcluster.FindLeader(t, ctx, 91, seed, target)
+	childMeta := raftmeta.RegionMeta{
+		ID:       92,
+		StartKey: []byte("m"),
+		EndKey:   nil,
+		Epoch: raftmeta.RegionEpoch{
+			Version:     1,
+			ConfVersion: 1,
+		},
+		Peers: []raftmeta.PeerMeta{
+			{StoreID: 1, PeerID: 102},
+			{StoreID: 2, PeerID: 202},
+		},
+	}
+	require.NoError(t, parentLeader.Server.Store().ProposeSplit(91, childMeta, childMeta.StartKey))
+	require.Eventually(t, func() bool {
+		a := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
+		b := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 92)
+		return a.GetKnown() && a.GetHosted() && b.GetKnown() && b.GetHosted()
+	}, 5*time.Second, 20*time.Millisecond, testcluster.DumpStatus(t, ctx, 92, seed, target))
+
+	parentStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 91)
+	childSeedStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
+	childTargetStatus := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 92)
+	parentLeaderNode, _ := testcluster.FindLeader(t, ctx, 91, seed, target)
+	childLeaderNode, _ := testcluster.FindLeader(t, ctx, 92, seed, target)
+
+	cli, err := client.New(client.Config{
+		Stores: []client.StoreEndpoint{
+			{StoreID: 1, Addr: seed.Addr()},
+			{StoreID: 2, Addr: target.Addr()},
+		},
+		RegionResolver: &staticResolver{regions: []*pb.RegionMeta{
+			regionMetaWithLeaderFirst(parentStatus.GetRegion(), parentLeaderNode.StoreID),
+			regionMetaWithLeaderFirst(childSeedStatus.GetRegion(), childLeaderNode.StoreID),
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: client.RetryPolicy{
+			MaxAttempts:                 1,
+			RouteUnavailableBackoff:     0,
+			TransportUnavailableBackoff: 0,
+			RegionErrorBackoff:          0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	seed.BlockPeer(childTargetStatus.GetLocalPeerId())
+	target.BlockPeer(childSeedStatus.GetLocalPeerId())
+	defer func() {
+		seed.UnblockPeer(childTargetStatus.GetLocalPeerId())
+		target.UnblockPeer(childSeedStatus.GetLocalPeerId())
+	}()
+
+	txnCtx, txnCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer txnCancel()
+	err = cli.TwoPhaseCommit(txnCtx, []byte("bravo"), []*pb.Mutation{
+		{Op: pb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v1")},
+		{Op: pb.Mutation_Put, Key: []byte("tango"), Value: []byte("v2")},
+	}, 100, 101, 3000)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded, "expected deadline propagation, got %v", err)
+
+	seed.UnblockPeer(childTargetStatus.GetLocalPeerId())
+	target.UnblockPeer(childSeedStatus.GetLocalPeerId())
+
+	require.Eventually(t, func() bool {
+		testCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := cli.TwoPhaseCommit(testCtx, []byte("charlie"), []*pb.Mutation{
+			{Op: pb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
+			{Op: pb.Mutation_Put, Key: []byte("yankee"), Value: []byte("ok2")},
+		}, 200, 201, 3000)
+		return err == nil
 	}, 5*time.Second, 50*time.Millisecond)
 }

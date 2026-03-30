@@ -66,6 +66,9 @@ func (c *Client) routeKeyWithRetry(ctx context.Context, key []byte) (regionSnaps
 	if lastErr != nil {
 		return regionSnapshot{}, lastErr
 	}
+	if err := ctx.Err(); err != nil {
+		return regionSnapshot{}, err
+	}
 	return regionSnapshot{}, fmt.Errorf("client: route retries exhausted for key %q", key)
 }
 
