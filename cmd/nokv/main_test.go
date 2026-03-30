@@ -16,6 +16,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/wal"
@@ -440,6 +441,17 @@ func TestMainRegionsCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
+func TestMainMigratePlanCommand(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	code := captureExitCode(t, func() {
+		oldArgs := os.Args
+		os.Args = []string{"nokv", "migrate", "plan", "-workdir", dir}
+		defer func() { os.Args = oldArgs }()
+		main()
+	})
+	require.Equal(t, 0, code)
+}
+
 func TestMainServeCommand(t *testing.T) {
 	origNotify := notifyContext
 	notifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
@@ -760,6 +772,101 @@ func TestRunManifestCmdMissingManifest(t *testing.T) {
 	var buf bytes.Buffer
 	err := runManifestCmd(&buf, []string{"-workdir", t.TempDir()})
 	require.Error(t, err)
+}
+
+func TestRunMigratePlanCmd(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	err := runMigratePlanCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, true, payload["eligible"])
+	require.Equal(t, "standalone", payload["mode"])
+}
+
+func TestRunMigratePlanCmdBlocksNonEmptyCatalog(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	require.NoError(t, metaStore.SaveRegion(raftmeta.RegionMeta{
+		ID:       1,
+		State:    raftmeta.RegionStateRunning,
+		StartKey: []byte(""),
+		EndKey:   nil,
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 10}},
+	}))
+	require.NoError(t, metaStore.Close())
+
+	var buf bytes.Buffer
+	err = runMigratePlanCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, false, payload["eligible"])
+	require.Equal(t, float64(1), payload["local_catalog_regions"])
+}
+
+func TestRunMigratePlanCmdBlocksModeFile(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, migratepkg.ModeFileName),
+		[]byte(`{"mode":"seeded","store_id":1,"region_id":1,"peer_id":10}`),
+		0o644,
+	))
+
+	var buf bytes.Buffer
+	err := runMigratePlanCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, false, payload["eligible"])
+	require.Equal(t, "seeded", payload["mode"])
+}
+
+func TestRunMigrateCmdMissingSubcommand(t *testing.T) {
+	var buf bytes.Buffer
+	require.Error(t, runMigrateCmd(&buf, nil))
+}
+
+func TestRunMigrateCmdUnknownSubcommand(t *testing.T) {
+	var buf bytes.Buffer
+	require.Error(t, runMigrateCmd(&buf, []string{"nope"}))
+}
+
+func TestRunMigrateStatusCmdStandalone(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	var buf bytes.Buffer
+	err := runMigrateStatusCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "standalone", payload["mode"])
+}
+
+func TestRunMigrateStatusCmdSeeded(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, migratepkg.ModeFileName),
+		[]byte(`{"mode":"seeded","store_id":1,"region_id":2,"peer_id":3}`),
+		0o644,
+	))
+
+	var buf bytes.Buffer
+	err := runMigrateStatusCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "seeded", payload["mode"])
+	require.Equal(t, float64(1), payload["store_id"])
+	require.Equal(t, float64(2), payload["region_id"])
+	require.Equal(t, float64(3), payload["peer_id"])
 }
 
 func TestFirstRegionMetricsFound(t *testing.T) {

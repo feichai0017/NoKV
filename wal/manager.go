@@ -530,6 +530,26 @@ func VerifyDir(dir string, fs vfs.FS) error {
 	return nil
 }
 
+// CheckDir scans WAL segments in the provided directory without mutating them.
+// Nil fs defaults to OSFS.
+func CheckDir(dir string, fs vfs.FS) error {
+	if dir == "" {
+		return fmt.Errorf("wal: directory required")
+	}
+	fs = vfs.Ensure(fs)
+	files, err := fs.Glob(filepath.Join(dir, "*.wal"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		if err := checkSegment(fs, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func verifySegment(fs vfs.FS, path string) error {
 	f, err := fs.OpenFileHandle(path, os.O_RDWR, 0)
 	if err != nil {
@@ -553,6 +573,36 @@ func verifySegment(fs vfs.FS, path string) error {
 		return nil
 	case ErrPartialRecord:
 		return f.Truncate(offset)
+	case kv.ErrBadChecksum:
+		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
+	default:
+		return err
+	}
+}
+
+func checkSegment(fs vfs.FS, path string) error {
+	f, err := fs.OpenFileHandle(path, os.O_RDONLY, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	reIter := NewRecordIterator(f, defaultBufferSize)
+	defer func() { _ = reIter.Close() }()
+
+	var offset int64
+	for reIter.Next() {
+		offset += int64(reIter.Length()) + 8
+	}
+
+	switch err := reIter.Err(); err {
+	case nil, io.EOF:
+		return nil
+	case ErrPartialRecord:
+		return fmt.Errorf("wal: partial record verifying %s at offset %d", filepath.Base(path), offset)
 	case kv.ErrBadChecksum:
 		return fmt.Errorf("wal: checksum mismatch verifying %s at offset %d", filepath.Base(path), offset)
 	default:

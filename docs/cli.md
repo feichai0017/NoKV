@@ -62,6 +62,17 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Dumps the local peer catalog used for store recovery (state/range/epoch/peers)
 - Supports `--json`
 
+### `nokv migrate plan`
+
+- Runs a read-only preflight check for standalone -> cluster-seed migration
+- Verifies manifest, WAL, and value-log structure without repairing tails
+- Reports current mode, local catalog occupancy, blockers, and next step
+
+### `nokv migrate status`
+
+- Reads `MODE.json` when present and otherwise reports `standalone`
+- Shows current mode plus seed identifiers (`store`, `region`, `peer`)
+
 ### `nokv serve`
 
 - Starts NoKV gRPC service backed by local `raftstore`

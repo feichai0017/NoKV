@@ -42,6 +42,8 @@ func main() {
 		err = runVlogCmd(os.Stdout, args)
 	case "regions":
 		err = runRegionsCmd(os.Stdout, args)
+	case "migrate":
+		err = runMigrateCmd(os.Stdout, args)
 	case "serve":
 		err = runServeCmd(os.Stdout, args)
 	case "pd":
@@ -66,6 +68,7 @@ func printUsage(w io.Writer) {
 	  manifest  Inspect manifest state, levels, and value log metadata
 	  vlog      List value log segments and active head
 	  regions   Show the local peer catalog used for store recovery
+	  migrate   Inspect or convert a standalone workdir for distributed mode
 	  serve     Start NoKV gRPC service backed by a local raftstore
 	  pd        Start PD-lite gRPC service (control plane)
 
