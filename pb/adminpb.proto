@@ -35,11 +35,11 @@ message TransferLeaderResponse {
   RegionMeta region = 1;
 }
 
-message RegionStatusRequest {
+message RegionRuntimeStatusRequest {
   uint64 region_id = 1;
 }
 
-message RegionStatusResponse {
+message RegionRuntimeStatusResponse {
   bool known = 1;
   bool hosted = 2;
   uint64 local_peer_id = 3;
@@ -54,5 +54,5 @@ service RaftAdmin {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
   rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
-  rpc RegionStatus(RegionStatusRequest) returns (RegionStatusResponse);
+  rpc RegionRuntimeStatus(RegionRuntimeStatusRequest) returns (RegionRuntimeStatusResponse);
 }

@@ -10,31 +10,31 @@ import (
 
 // TransferLeaderConfig defines one leader-transfer request.
 type TransferLeaderConfig struct {
-	Addr         string
-	TargetAddr   string
-	RegionID     uint64
-	PeerID       uint64
-	WaitTimeout  time.Duration
-	PollInterval time.Duration
+	Addr            string
+	TargetAdminAddr string
+	RegionID        uint64
+	PeerID          uint64
+	WaitTimeout     time.Duration
+	PollInterval    time.Duration
 
 	Dial DialFunc
 }
 
 // TransferLeaderResult reports the observed state after one leader transfer.
 type TransferLeaderResult struct {
-	Addr          string         `json:"addr"`
-	TargetAddr    string         `json:"target_addr,omitempty"`
-	RegionID      uint64         `json:"region_id"`
-	PeerID        uint64         `json:"peer_id"`
-	LeaderKnown   bool           `json:"leader_known"`
-	LeaderRegion  *pb.RegionMeta `json:"leader_region,omitempty"`
-	LeaderPeerID  uint64         `json:"leader_peer_id,omitempty"`
-	TargetKnown   bool           `json:"target_known"`
-	TargetHosted  bool           `json:"target_hosted"`
-	TargetLeader  bool           `json:"target_leader"`
-	TargetLocalID uint64         `json:"target_local_peer_id,omitempty"`
-	TargetApplied uint64         `json:"target_applied_index,omitempty"`
-	Waited        bool           `json:"waited"`
+	Addr            string         `json:"addr"`
+	TargetAdminAddr string         `json:"target_admin_addr,omitempty"`
+	RegionID        uint64         `json:"region_id"`
+	PeerID          uint64         `json:"peer_id"`
+	LeaderKnown     bool           `json:"leader_known"`
+	LeaderRegion    *pb.RegionMeta `json:"leader_region,omitempty"`
+	LeaderPeerID    uint64         `json:"leader_peer_id,omitempty"`
+	TargetKnown     bool           `json:"target_known"`
+	TargetHosted    bool           `json:"target_hosted"`
+	TargetLeader    bool           `json:"target_leader"`
+	TargetLocalID   uint64         `json:"target_local_peer_id,omitempty"`
+	TargetApplied   uint64         `json:"target_applied_index,omitempty"`
+	Waited          bool           `json:"waited"`
 }
 
 // TransferLeader requests leadership transfer and optionally waits until the
@@ -68,12 +68,12 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		return TransferLeaderResult{}, err
 	}
 	result := TransferLeaderResult{
-		Addr:         cfg.Addr,
-		TargetAddr:   cfg.TargetAddr,
-		RegionID:     cfg.RegionID,
-		PeerID:       cfg.PeerID,
-		LeaderKnown:  resp.GetRegion() != nil,
-		LeaderRegion: resp.GetRegion(),
+		Addr:            cfg.Addr,
+		TargetAdminAddr: cfg.TargetAdminAddr,
+		RegionID:        cfg.RegionID,
+		PeerID:          cfg.PeerID,
+		LeaderKnown:     resp.GetRegion() != nil,
+		LeaderRegion:    resp.GetRegion(),
 	}
 	if cfg.WaitTimeout <= 0 {
 		return result, nil
@@ -85,13 +85,13 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 	if err := waitForLeaderTransfer(waitCtx, leaderClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
 	}
-	if cfg.TargetAddr == "" {
+	if cfg.TargetAdminAddr == "" {
 		return result, nil
 	}
 
-	targetClient, closeTarget, err := cfg.Dial(waitCtx, cfg.TargetAddr)
+	targetClient, closeTarget, err := cfg.Dial(waitCtx, cfg.TargetAdminAddr)
 	if err != nil {
-		return result, fmt.Errorf("migrate: dial target admin %s: %w", cfg.TargetAddr, err)
+		return result, fmt.Errorf("migrate: dial target admin %s: %w", cfg.TargetAdminAddr, err)
 	}
 	defer func() {
 		if closeTarget != nil {
@@ -108,7 +108,7 @@ func waitForLeaderTransfer(ctx context.Context, client AdminClient, regionID, pe
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll leader region status after transfer: %w", err)
 		}
@@ -132,7 +132,7 @@ func waitForTargetLeader(ctx context.Context, client AdminClient, regionID, peer
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status after transfer: %w", err)
 		}

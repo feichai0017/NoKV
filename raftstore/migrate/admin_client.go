@@ -13,7 +13,7 @@ type AdminClient interface {
 	AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error)
 	RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error)
-	RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error)
+	RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error)
 }
 
 // DialFunc connects one admin client to one store address.
@@ -35,8 +35,8 @@ func (c *grpcAdminClient) TransferLeader(ctx context.Context, req *pb.TransferLe
 	return c.client.TransferLeader(ctx, req)
 }
 
-func (c *grpcAdminClient) RegionStatus(ctx context.Context, req *pb.RegionStatusRequest) (*pb.RegionStatusResponse, error) {
-	return c.client.RegionStatus(ctx, req)
+func (c *grpcAdminClient) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
+	return c.client.RegionRuntimeStatus(ctx, req)
 }
 
 func defaultDial(ctx context.Context, addr string) (AdminClient, func() error, error) {

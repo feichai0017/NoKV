@@ -11,13 +11,13 @@ import (
 
 func TestRemovePeerWaitsForTargetDrop(t *testing.T) {
 	leader := &fakeAdminClient{
-		statuses: []*pb.RegionStatusResponse{
+		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Region: &pb.RegionMeta{Id: 8, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 			{Known: true, Region: &pb.RegionMeta{Id: 8}},
 		},
 	}
 	target := &fakeAdminClient{
-		statuses: []*pb.RegionStatusResponse{
+		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1},
 			{},
 		},
@@ -35,13 +35,13 @@ func TestRemovePeerWaitsForTargetDrop(t *testing.T) {
 	}
 
 	result, err := RemovePeer(context.Background(), RemovePeerConfig{
-		Addr:         "leader",
-		TargetAddr:   "target",
-		RegionID:     8,
-		PeerID:       22,
-		WaitTimeout:  time.Second,
-		PollInterval: time.Millisecond,
-		Dial:         dial,
+		Addr:            "leader",
+		TargetAdminAddr: "target",
+		RegionID:        8,
+		PeerID:          22,
+		WaitTimeout:     time.Second,
+		PollInterval:    time.Millisecond,
+		Dial:            dial,
 	})
 	require.NoError(t, err)
 	require.False(t, result.TargetHosted)

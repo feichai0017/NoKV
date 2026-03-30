@@ -319,27 +319,27 @@ func (x *TransferLeaderResponse) GetRegion() *RegionMeta {
 	return nil
 }
 
-type RegionStatusRequest struct {
+type RegionRuntimeStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RegionStatusRequest) Reset() {
-	*x = RegionStatusRequest{}
+func (x *RegionRuntimeStatusRequest) Reset() {
+	*x = RegionRuntimeStatusRequest{}
 	mi := &file_adminpb_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RegionStatusRequest) String() string {
+func (x *RegionRuntimeStatusRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RegionStatusRequest) ProtoMessage() {}
+func (*RegionRuntimeStatusRequest) ProtoMessage() {}
 
-func (x *RegionStatusRequest) ProtoReflect() protoreflect.Message {
+func (x *RegionRuntimeStatusRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_adminpb_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -351,19 +351,19 @@ func (x *RegionStatusRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RegionStatusRequest.ProtoReflect.Descriptor instead.
-func (*RegionStatusRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegionRuntimeStatusRequest.ProtoReflect.Descriptor instead.
+func (*RegionRuntimeStatusRequest) Descriptor() ([]byte, []int) {
 	return file_adminpb_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *RegionStatusRequest) GetRegionId() uint64 {
+func (x *RegionRuntimeStatusRequest) GetRegionId() uint64 {
 	if x != nil {
 		return x.RegionId
 	}
 	return 0
 }
 
-type RegionStatusResponse struct {
+type RegionRuntimeStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Known         bool                   `protobuf:"varint,1,opt,name=known,proto3" json:"known,omitempty"`
 	Hosted        bool                   `protobuf:"varint,2,opt,name=hosted,proto3" json:"hosted,omitempty"`
@@ -377,20 +377,20 @@ type RegionStatusResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RegionStatusResponse) Reset() {
-	*x = RegionStatusResponse{}
+func (x *RegionRuntimeStatusResponse) Reset() {
+	*x = RegionRuntimeStatusResponse{}
 	mi := &file_adminpb_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RegionStatusResponse) String() string {
+func (x *RegionRuntimeStatusResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RegionStatusResponse) ProtoMessage() {}
+func (*RegionRuntimeStatusResponse) ProtoMessage() {}
 
-func (x *RegionStatusResponse) ProtoReflect() protoreflect.Message {
+func (x *RegionRuntimeStatusResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_adminpb_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -402,61 +402,61 @@ func (x *RegionStatusResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RegionStatusResponse.ProtoReflect.Descriptor instead.
-func (*RegionStatusResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegionRuntimeStatusResponse.ProtoReflect.Descriptor instead.
+func (*RegionRuntimeStatusResponse) Descriptor() ([]byte, []int) {
 	return file_adminpb_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *RegionStatusResponse) GetKnown() bool {
+func (x *RegionRuntimeStatusResponse) GetKnown() bool {
 	if x != nil {
 		return x.Known
 	}
 	return false
 }
 
-func (x *RegionStatusResponse) GetHosted() bool {
+func (x *RegionRuntimeStatusResponse) GetHosted() bool {
 	if x != nil {
 		return x.Hosted
 	}
 	return false
 }
 
-func (x *RegionStatusResponse) GetLocalPeerId() uint64 {
+func (x *RegionRuntimeStatusResponse) GetLocalPeerId() uint64 {
 	if x != nil {
 		return x.LocalPeerId
 	}
 	return 0
 }
 
-func (x *RegionStatusResponse) GetLeaderPeerId() uint64 {
+func (x *RegionRuntimeStatusResponse) GetLeaderPeerId() uint64 {
 	if x != nil {
 		return x.LeaderPeerId
 	}
 	return 0
 }
 
-func (x *RegionStatusResponse) GetLeader() bool {
+func (x *RegionRuntimeStatusResponse) GetLeader() bool {
 	if x != nil {
 		return x.Leader
 	}
 	return false
 }
 
-func (x *RegionStatusResponse) GetRegion() *RegionMeta {
+func (x *RegionRuntimeStatusResponse) GetRegion() *RegionMeta {
 	if x != nil {
 		return x.Region
 	}
 	return nil
 }
 
-func (x *RegionStatusResponse) GetAppliedIndex() uint64 {
+func (x *RegionRuntimeStatusResponse) GetAppliedIndex() uint64 {
 	if x != nil {
 		return x.AppliedIndex
 	}
 	return 0
 }
 
-func (x *RegionStatusResponse) GetAppliedTerm() uint64 {
+func (x *RegionRuntimeStatusResponse) GetAppliedTerm() uint64 {
 	if x != nil {
 		return x.AppliedTerm
 	}
@@ -483,10 +483,10 @@ const file_adminpb_proto_rawDesc = "" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"@\n" +
 	"\x16TransferLeaderResponse\x12&\n" +
-	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"2\n" +
-	"\x13RegionStatusRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x96\x02\n" +
-	"\x14RegionStatusResponse\x12\x14\n" +
+	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"9\n" +
+	"\x1aRegionRuntimeStatusRequest\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x9d\x02\n" +
+	"\x1bRegionRuntimeStatusResponse\x12\x14\n" +
 	"\x05known\x18\x01 \x01(\bR\x05known\x12\x16\n" +
 	"\x06hosted\x18\x02 \x01(\bR\x06hosted\x12\"\n" +
 	"\rlocal_peer_id\x18\x03 \x01(\x04R\vlocalPeerId\x12$\n" +
@@ -494,13 +494,13 @@ const file_adminpb_proto_rawDesc = "" +
 	"\x06leader\x18\x05 \x01(\bR\x06leader\x12&\n" +
 	"\x06region\x18\x06 \x01(\v2\x0e.pb.RegionMetaR\x06region\x12#\n" +
 	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12!\n" +
-	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm2\x88\x02\n" +
+	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm2\x9d\x02\n" +
 	"\tRaftAdmin\x122\n" +
 	"\aAddPeer\x12\x12.pb.AddPeerRequest\x1a\x13.pb.AddPeerResponse\x12;\n" +
 	"\n" +
 	"RemovePeer\x12\x15.pb.RemovePeerRequest\x1a\x16.pb.RemovePeerResponse\x12G\n" +
-	"\x0eTransferLeader\x12\x19.pb.TransferLeaderRequest\x1a\x1a.pb.TransferLeaderResponse\x12A\n" +
-	"\fRegionStatus\x12\x17.pb.RegionStatusRequest\x1a\x18.pb.RegionStatusResponseB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x0eTransferLeader\x12\x19.pb.TransferLeaderRequest\x1a\x1a.pb.TransferLeaderResponse\x12V\n" +
+	"\x13RegionRuntimeStatus\x12\x1e.pb.RegionRuntimeStatusRequest\x1a\x1f.pb.RegionRuntimeStatusResponseB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
 
 var (
 	file_adminpb_proto_rawDescOnce sync.Once
@@ -516,29 +516,29 @@ func file_adminpb_proto_rawDescGZIP() []byte {
 
 var file_adminpb_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_adminpb_proto_goTypes = []any{
-	(*AddPeerRequest)(nil),         // 0: pb.AddPeerRequest
-	(*AddPeerResponse)(nil),        // 1: pb.AddPeerResponse
-	(*RemovePeerRequest)(nil),      // 2: pb.RemovePeerRequest
-	(*RemovePeerResponse)(nil),     // 3: pb.RemovePeerResponse
-	(*TransferLeaderRequest)(nil),  // 4: pb.TransferLeaderRequest
-	(*TransferLeaderResponse)(nil), // 5: pb.TransferLeaderResponse
-	(*RegionStatusRequest)(nil),    // 6: pb.RegionStatusRequest
-	(*RegionStatusResponse)(nil),   // 7: pb.RegionStatusResponse
-	(*RegionMeta)(nil),             // 8: pb.RegionMeta
+	(*AddPeerRequest)(nil),              // 0: pb.AddPeerRequest
+	(*AddPeerResponse)(nil),             // 1: pb.AddPeerResponse
+	(*RemovePeerRequest)(nil),           // 2: pb.RemovePeerRequest
+	(*RemovePeerResponse)(nil),          // 3: pb.RemovePeerResponse
+	(*TransferLeaderRequest)(nil),       // 4: pb.TransferLeaderRequest
+	(*TransferLeaderResponse)(nil),      // 5: pb.TransferLeaderResponse
+	(*RegionRuntimeStatusRequest)(nil),  // 6: pb.RegionRuntimeStatusRequest
+	(*RegionRuntimeStatusResponse)(nil), // 7: pb.RegionRuntimeStatusResponse
+	(*RegionMeta)(nil),                  // 8: pb.RegionMeta
 }
 var file_adminpb_proto_depIdxs = []int32{
 	8, // 0: pb.AddPeerResponse.region:type_name -> pb.RegionMeta
 	8, // 1: pb.RemovePeerResponse.region:type_name -> pb.RegionMeta
 	8, // 2: pb.TransferLeaderResponse.region:type_name -> pb.RegionMeta
-	8, // 3: pb.RegionStatusResponse.region:type_name -> pb.RegionMeta
+	8, // 3: pb.RegionRuntimeStatusResponse.region:type_name -> pb.RegionMeta
 	0, // 4: pb.RaftAdmin.AddPeer:input_type -> pb.AddPeerRequest
 	2, // 5: pb.RaftAdmin.RemovePeer:input_type -> pb.RemovePeerRequest
 	4, // 6: pb.RaftAdmin.TransferLeader:input_type -> pb.TransferLeaderRequest
-	6, // 7: pb.RaftAdmin.RegionStatus:input_type -> pb.RegionStatusRequest
+	6, // 7: pb.RaftAdmin.RegionRuntimeStatus:input_type -> pb.RegionRuntimeStatusRequest
 	1, // 8: pb.RaftAdmin.AddPeer:output_type -> pb.AddPeerResponse
 	3, // 9: pb.RaftAdmin.RemovePeer:output_type -> pb.RemovePeerResponse
 	5, // 10: pb.RaftAdmin.TransferLeader:output_type -> pb.TransferLeaderResponse
-	7, // 11: pb.RaftAdmin.RegionStatus:output_type -> pb.RegionStatusResponse
+	7, // 11: pb.RaftAdmin.RegionRuntimeStatus:output_type -> pb.RegionRuntimeStatusResponse
 	8, // [8:12] is the sub-list for method output_type
 	4, // [4:8] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name

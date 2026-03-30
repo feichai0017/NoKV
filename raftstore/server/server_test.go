@@ -121,7 +121,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	statusResp, err := adminClient.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: region.ID})
+	statusResp, err := adminClient.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: region.ID})
 	require.NoError(t, err)
 	require.True(t, statusResp.GetKnown())
 	require.True(t, statusResp.GetHosted())
@@ -137,7 +137,7 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, addResp.GetRegion().GetPeers(), 2)
 
-	statusResp, err = adminClient.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: region.ID})
+	statusResp, err = adminClient.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: region.ID})
 	require.NoError(t, err)
 	require.True(t, statusResp.GetKnown())
 	require.Len(t, statusResp.GetRegion().GetPeers(), 2)

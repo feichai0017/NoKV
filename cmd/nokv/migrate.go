@@ -13,7 +13,7 @@ import (
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 )
 
-var runExpandMany = migratepkg.ExpandMany
+var runExpand = migratepkg.Expand
 var runRemovePeer = migratepkg.RemovePeer
 var runTransferLeader = migratepkg.TransferLeader
 
@@ -67,8 +67,8 @@ func (f *peerTargetsFlag) String() string {
 	parts := make([]string, 0, len(*f))
 	for _, target := range *f {
 		part := fmt.Sprintf("%d:%d", target.StoreID, target.PeerID)
-		if target.TargetAddr != "" {
-			part += "@" + target.TargetAddr
+		if target.TargetAdminAddr != "" {
+			part += "@" + target.TargetAdminAddr
 		}
 		parts = append(parts, part)
 	}
@@ -106,7 +106,7 @@ func parsePeerTarget(value string) (migratepkg.PeerTarget, error) {
 	if err != nil || peerID == 0 {
 		return migratepkg.PeerTarget{}, fmt.Errorf("invalid peer id in %q", value)
 	}
-	return migratepkg.PeerTarget{StoreID: storeID, PeerID: peerID, TargetAddr: addr}, nil
+	return migratepkg.PeerTarget{StoreID: storeID, PeerID: peerID, TargetAdminAddr: addr}, nil
 }
 
 func runMigratePlanCmd(w io.Writer, args []string) error {
@@ -242,7 +242,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("at least one --target <store>:<peer>[@addr] is required")
 	}
-	result, err := runExpandMany(ctx, cfg)
+	result, err := runExpand(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -274,12 +274,12 @@ func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 		return err
 	}
 	result, err := runRemovePeer(context.Background(), migratepkg.RemovePeerConfig{
-		Addr:         strings.TrimSpace(*addr),
-		TargetAddr:   strings.TrimSpace(*targetAddr),
-		RegionID:     *regionID,
-		PeerID:       *peerID,
-		WaitTimeout:  *waitTimeout,
-		PollInterval: *pollInterval,
+		Addr:            strings.TrimSpace(*addr),
+		TargetAdminAddr: strings.TrimSpace(*targetAddr),
+		RegionID:        *regionID,
+		PeerID:          *peerID,
+		WaitTimeout:     *waitTimeout,
+		PollInterval:    *pollInterval,
 	})
 	if err != nil {
 		return err
@@ -290,8 +290,8 @@ func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 		return enc.Encode(result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
-	if result.TargetAddr != "" {
-		_, _ = fmt.Fprintf(w, "TargetAddr        %s\n", result.TargetAddr)
+	if result.TargetAdminAddr != "" {
+		_, _ = fmt.Fprintf(w, "TargetAdminAddr   %s\n", result.TargetAdminAddr)
 	}
 	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
 	_, _ = fmt.Fprintf(w, "Peer              %d\n", result.PeerID)
@@ -315,12 +315,12 @@ func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
 		return err
 	}
 	result, err := runTransferLeader(context.Background(), migratepkg.TransferLeaderConfig{
-		Addr:         strings.TrimSpace(*addr),
-		TargetAddr:   strings.TrimSpace(*targetAddr),
-		RegionID:     *regionID,
-		PeerID:       *peerID,
-		WaitTimeout:  *waitTimeout,
-		PollInterval: *pollInterval,
+		Addr:            strings.TrimSpace(*addr),
+		TargetAdminAddr: strings.TrimSpace(*targetAddr),
+		RegionID:        *regionID,
+		PeerID:          *peerID,
+		WaitTimeout:     *waitTimeout,
+		PollInterval:    *pollInterval,
 	})
 	if err != nil {
 		return err
@@ -331,8 +331,8 @@ func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
 		return enc.Encode(result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
-	if result.TargetAddr != "" {
-		_, _ = fmt.Fprintf(w, "TargetAddr        %s\n", result.TargetAddr)
+	if result.TargetAdminAddr != "" {
+		_, _ = fmt.Fprintf(w, "TargetAdminAddr   %s\n", result.TargetAdminAddr)
 	}
 	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
 	_, _ = fmt.Fprintf(w, "TargetPeer        %d\n", result.PeerID)

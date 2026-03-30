@@ -956,15 +956,15 @@ func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 }
 
 func TestRunMigrateExpandCmd(t *testing.T) {
-	origMany := runExpandMany
-	runExpandMany = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
+	origExpand := runExpand
+	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResultSet, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Equal(t, 5*time.Second, cfg.WaitTimeout)
 		require.Equal(t, 100*time.Millisecond, cfg.PollInterval)
 		require.Len(t, cfg.Targets, 1)
-		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAddr: "127.0.0.1:20161"}, cfg.Targets[0])
-		return migratepkg.ExpandManyResult{
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAdminAddr: "127.0.0.1:20161"}, cfg.Targets[0])
+		return migratepkg.ExpandResultSet{
 			Addr:     cfg.Addr,
 			RegionID: cfg.RegionID,
 			Results: []migratepkg.ExpandResult{
@@ -980,7 +980,7 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 		}, nil
 	}
 	t.Cleanup(func() {
-		runExpandMany = origMany
+		runExpand = origExpand
 	})
 
 	var buf bytes.Buffer
@@ -1005,14 +1005,14 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 }
 
 func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
-	origMany := runExpandMany
-	runExpandMany = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
+	origExpand := runExpand
+	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResultSet, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Len(t, cfg.Targets, 2)
-		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAddr: "127.0.0.1:20161"}, cfg.Targets[0])
-		require.Equal(t, migratepkg.PeerTarget{StoreID: 3, PeerID: 33, TargetAddr: "127.0.0.1:20162"}, cfg.Targets[1])
-		return migratepkg.ExpandManyResult{
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAdminAddr: "127.0.0.1:20161"}, cfg.Targets[0])
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 3, PeerID: 33, TargetAdminAddr: "127.0.0.1:20162"}, cfg.Targets[1])
+		return migratepkg.ExpandResultSet{
 			Addr:     cfg.Addr,
 			RegionID: cfg.RegionID,
 			Results: []migratepkg.ExpandResult{
@@ -1022,7 +1022,7 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 		}, nil
 	}
 	t.Cleanup(func() {
-		runExpandMany = origMany
+		runExpand = origExpand
 	})
 
 	var buf bytes.Buffer
@@ -1045,17 +1045,17 @@ func TestRunMigrateRemovePeerCmd(t *testing.T) {
 	orig := runRemovePeer
 	runRemovePeer = func(ctx context.Context, cfg migratepkg.RemovePeerConfig) (migratepkg.RemovePeerResult, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
-		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
+		require.Equal(t, "127.0.0.1:20161", cfg.TargetAdminAddr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Equal(t, uint64(22), cfg.PeerID)
 		return migratepkg.RemovePeerResult{
-			Addr:         cfg.Addr,
-			TargetAddr:   cfg.TargetAddr,
-			RegionID:     cfg.RegionID,
-			PeerID:       cfg.PeerID,
-			LeaderKnown:  true,
-			TargetKnown:  false,
-			TargetHosted: false,
+			Addr:            cfg.Addr,
+			TargetAdminAddr: cfg.TargetAdminAddr,
+			RegionID:        cfg.RegionID,
+			PeerID:          cfg.PeerID,
+			LeaderKnown:     true,
+			TargetKnown:     false,
+			TargetHosted:    false,
 		}, nil
 	}
 	t.Cleanup(func() { runRemovePeer = orig })
@@ -1080,17 +1080,17 @@ func TestRunMigrateTransferLeaderCmd(t *testing.T) {
 	orig := runTransferLeader
 	runTransferLeader = func(ctx context.Context, cfg migratepkg.TransferLeaderConfig) (migratepkg.TransferLeaderResult, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
-		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
+		require.Equal(t, "127.0.0.1:20161", cfg.TargetAdminAddr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Equal(t, uint64(22), cfg.PeerID)
 		return migratepkg.TransferLeaderResult{
-			Addr:         cfg.Addr,
-			TargetAddr:   cfg.TargetAddr,
-			RegionID:     cfg.RegionID,
-			PeerID:       cfg.PeerID,
-			LeaderKnown:  true,
-			LeaderPeerID: cfg.PeerID,
-			TargetLeader: true,
+			Addr:            cfg.Addr,
+			TargetAdminAddr: cfg.TargetAdminAddr,
+			RegionID:        cfg.RegionID,
+			PeerID:          cfg.PeerID,
+			LeaderKnown:     true,
+			LeaderPeerID:    cfg.PeerID,
+			TargetLeader:    true,
 		}, nil
 	}
 	t.Cleanup(func() { runTransferLeader = orig })
