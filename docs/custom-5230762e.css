@@ -38,6 +38,7 @@ body {
     radial-gradient(circle at top left, rgba(0, 87, 255, 0.06), transparent 24%),
     radial-gradient(circle at top right, rgba(17, 163, 106, 0.06), transparent 22%),
     var(--bg);
+  font-size: 17px;
 }
 
 .content {
@@ -56,13 +57,13 @@ body {
 .content main > p,
 .content main > ul,
 .content main > ol {
-  font-size: 1.02rem;
+  font-size: 1.08rem;
   line-height: 1.74;
 }
 
 .chapter-lead {
   color: var(--nokv-ink-soft);
-  font-size: 1.12rem;
+  font-size: 1.18rem;
   line-height: 1.8;
   margin: 0 0 24px;
   max-width: 900px;
@@ -206,7 +207,7 @@ body {
 }
 
 .hero-lead {
-  font-size: 1.18rem;
+  font-size: 1.24rem;
   line-height: 1.6;
   margin: 16px 0 0;
   max-width: 760px;
@@ -556,7 +557,20 @@ body {
 
 .sidebar .chapter-item a {
   border-radius: 10px;
+  font-size: 1rem;
+  line-height: 1.45;
   transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.sidebar-scrollbox,
+.sidebar {
+  font-size: 0.98rem;
+}
+
+.menu-bar,
+.right-buttons,
+#searchbar {
+  font-size: 0.98rem;
 }
 
 .sidebar .chapter-item a:hover,
@@ -668,6 +682,12 @@ body {
 
   .content main > h1:first-child {
     font-size: 2rem;
+  }
+
+  .content main > p,
+  .content main > ul,
+  .content main > ol {
+    font-size: 1.04rem;
   }
 
   .back-to-top {
