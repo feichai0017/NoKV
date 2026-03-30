@@ -206,6 +206,22 @@ and optionally waits until the target store no longer hosts it.
 Transfers region leadership to a specific peer and optionally waits until that
 peer becomes leader.
 
+### `scripts/migrate_to_cluster.sh`
+
+For local operator workflows, `scripts/migrate_to_cluster.sh` wraps the full
+happy-path sequence:
+
+1. `nokv migrate plan`
+2. `nokv migrate init`
+3. start PD-lite and the seed/target stores
+4. `nokv migrate expand`
+5. optional `nokv migrate transfer-leader`
+6. optional `nokv migrate remove-peer`
+
+The script is intentionally conservative. It only accepts a standalone seed
+workdir plus fresh target store workdirs and delegates all state transitions to
+the migration CLI.
+
 ---
 
 ## 8. Phase 1: `plan`

@@ -118,7 +118,8 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	defer cancel()
 	result.Waited = true
 
-	if err := waitForLeaderPeer(waitCtx, leaderClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
+	leaderRegion, err := waitForLeaderPeer(waitCtx, leaderClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result)
+	if err != nil {
 		return result, err
 	}
 	if target.TargetAdminAddr == "" {
@@ -134,19 +135,35 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 			_ = closeTarget()
 		}
 	}()
+	if leaderRegion == nil {
+		return result, fmt.Errorf("migrate: leader region %d missing published metadata for peer %d", cfg.RegionID, target.PeerID)
+	}
+	snapshotResp, err := leaderClient.ExportRegionSnapshot(waitCtx, &pb.ExportRegionSnapshotRequest{RegionId: cfg.RegionID})
+	if err != nil {
+		return result, fmt.Errorf("migrate: export region %d snapshot from %s: %w", cfg.RegionID, cfg.Addr, err)
+	}
+	if len(snapshotResp.GetSnapshot()) == 0 {
+		return result, fmt.Errorf("migrate: exported region %d snapshot from %s is empty", cfg.RegionID, cfg.Addr)
+	}
+	if snapshotResp.GetRegion() != nil {
+		result.LeaderRegion = snapshotResp.GetRegion()
+	}
+	if _, err := targetClient.InstallRegionSnapshot(waitCtx, &pb.InstallRegionSnapshotRequest{Snapshot: snapshotResp.GetSnapshot()}); err != nil {
+		return result, fmt.Errorf("migrate: install region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
+	}
 	if err := waitForTargetHosted(waitCtx, targetClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
-func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) error {
+func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*pb.RegionMeta, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
-			return fmt.Errorf("migrate: poll leader region status: %w", err)
+			return nil, fmt.Errorf("migrate: poll leader region status: %w", err)
 		}
 		if result != nil {
 			result.LeaderKnown = status.GetKnown()
@@ -155,11 +172,11 @@ func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID
 			}
 		}
 		if status.GetKnown() && regionContainsPeer(status.GetRegion(), peerID) {
-			return nil
+			return status.GetRegion(), nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("migrate: timed out waiting for leader region %d to publish peer %d: %w", regionID, peerID, ctx.Err())
+			return nil, fmt.Errorf("migrate: timed out waiting for leader region %d to publish peer %d: %w", regionID, peerID, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -168,11 +185,13 @@ func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID
 func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	var lastStatus *pb.RegionRuntimeStatusResponse
 	for {
 		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status: %w", err)
 		}
+		lastStatus = status
 		if result != nil {
 			result.TargetKnown = status.GetKnown()
 			result.TargetHosted = status.GetHosted()
@@ -185,6 +204,19 @@ func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peer
 		}
 		select {
 		case <-ctx.Done():
+			if lastStatus != nil {
+				return fmt.Errorf(
+					"migrate: timed out waiting for target store to host peer %d for region %d: known=%t hosted=%t local_peer=%d applied=%d term=%d err=%w",
+					peerID,
+					regionID,
+					lastStatus.GetKnown(),
+					lastStatus.GetHosted(),
+					lastStatus.GetLocalPeerId(),
+					lastStatus.GetAppliedIndex(),
+					lastStatus.GetAppliedTerm(),
+					ctx.Err(),
+				)
+			}
 			return fmt.Errorf("migrate: timed out waiting for target store to host peer %d for region %d: %w", peerID, regionID, ctx.Err())
 		case <-ticker.C:
 		}

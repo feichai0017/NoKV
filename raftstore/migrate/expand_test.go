@@ -10,10 +10,14 @@ import (
 )
 
 type fakeAdminClient struct {
-	addResp     *pb.AddPeerResponse
-	addErr      error
-	removeErr   error
-	transferErr error
+	addResp             *pb.AddPeerResponse
+	addErr              error
+	removeErr           error
+	transferErr         error
+	exportSnapshotResp  *pb.ExportRegionSnapshotResponse
+	exportSnapshotErr   error
+	installSnapshotErr  error
+	installSnapshotReqs []*pb.InstallRegionSnapshotRequest
 
 	statuses []*pb.RegionRuntimeStatusResponse
 	calls    int
@@ -43,6 +47,24 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{}, nil
 }
 
+func (f *fakeAdminClient) ExportRegionSnapshot(context.Context, *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+	if f.exportSnapshotErr != nil {
+		return nil, f.exportSnapshotErr
+	}
+	if f.exportSnapshotResp == nil {
+		return &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot")}, nil
+	}
+	return f.exportSnapshotResp, nil
+}
+
+func (f *fakeAdminClient) InstallRegionSnapshot(_ context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
+	f.installSnapshotReqs = append(f.installSnapshotReqs, req)
+	if f.installSnapshotErr != nil {
+		return nil, f.installSnapshotErr
+	}
+	return &pb.InstallRegionSnapshotResponse{}, nil
+}
+
 func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
 	if len(f.statuses) == 0 {
 		return &pb.RegionRuntimeStatusResponse{}, nil
@@ -59,6 +81,10 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &pb.AddPeerResponse{
 			Region: &pb.RegionMeta{Id: 8},
+		},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{
+			Snapshot: []byte("snapshot-8"),
+			Region:   &pb.RegionMeta{Id: 8, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}},
 		},
 		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Region: &pb.RegionMeta{Id: 8}},
@@ -100,6 +126,8 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 	require.True(t, result.Results[0].TargetHosted)
 	require.Equal(t, uint64(22), result.Results[0].TargetLocalPeerID)
 	require.Equal(t, uint64(1), result.Results[0].TargetAppliedIdx)
+	require.Len(t, target.installSnapshotReqs, 1)
+	require.Equal(t, []byte("snapshot-8"), target.installSnapshotReqs[0].GetSnapshot())
 }
 
 func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
@@ -131,7 +159,8 @@ func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 
 func TestExpandRollsTargetsSequentially(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp: &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 11}},
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 11}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-11")},
 		statuses: []*pb.RegionRuntimeStatusResponse{
 			{Known: true, Region: &pb.RegionMeta{Id: 11, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 			{Known: true, Region: &pb.RegionMeta{Id: 11, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}, {StoreId: 3, PeerId: 33}}}},

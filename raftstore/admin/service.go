@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/pb"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/store"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -80,6 +81,67 @@ func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequ
 		return &pb.TransferLeaderResponse{}, nil
 	}
 	return &pb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+}
+
+// ExportRegionSnapshot returns the current region snapshot from the leader,
+// including the logical region payload used for snapshot install.
+func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+	_ = ctx
+	if s == nil || s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+	}
+	if req.GetRegionId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "region_id is required")
+	}
+	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
+	if !ok || !runtime.Hosted {
+		return nil, status.Errorf(codes.NotFound, "region %d is not hosted on this store", req.GetRegionId())
+	}
+	if !runtime.Leader {
+		return nil, status.Errorf(codes.FailedPrecondition, "region %d is not led by this store", req.GetRegionId())
+	}
+	peerRef, ok := s.store.Peer(runtime.LocalPeerID)
+	if !ok || peerRef == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "leader peer %d is not registered", runtime.LocalPeerID)
+	}
+	snap, err := peerRef.Snapshot()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "export region snapshot: %v", err)
+	}
+	pbSnap := raftpb.Snapshot(snap)
+	data, err := (&pbSnap).Marshal()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
+	}
+	return &pb.ExportRegionSnapshotResponse{
+		Snapshot: data,
+		Region:   regionMetaToPB(runtime.Meta),
+	}, nil
+}
+
+// InstallRegionSnapshot installs one leader-exported region snapshot on the
+// local store. The local peer is bootstrapped on demand from the payload.
+func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
+	_ = ctx
+	if s == nil || s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+	}
+	if len(req.GetSnapshot()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "snapshot is required")
+	}
+	var snap raftpb.Snapshot
+	if err := snap.Unmarshal(req.GetSnapshot()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "unmarshal region snapshot: %v", err)
+	}
+	meta, err := s.store.InstallRegionSnapshot(raftpb.Snapshot(snap))
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	runtime, ok := s.store.RegionRuntimeStatus(meta.ID)
+	if !ok {
+		return &pb.InstallRegionSnapshotResponse{}, nil
+	}
+	return &pb.InstallRegionSnapshotResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
 // RegionRuntimeStatus returns store-local runtime information for one region.

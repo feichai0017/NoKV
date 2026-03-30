@@ -13,6 +13,8 @@ type AdminClient interface {
 	AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error)
 	RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error)
+	ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error)
+	InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error)
 	RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error)
 }
 
@@ -33,6 +35,14 @@ func (c *grpcAdminClient) RemovePeer(ctx context.Context, req *pb.RemovePeerRequ
 
 func (c *grpcAdminClient) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
 	return c.client.TransferLeader(ctx, req)
+}
+
+func (c *grpcAdminClient) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+	return c.client.ExportRegionSnapshot(ctx, req)
+}
+
+func (c *grpcAdminClient) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
+	return c.client.InstallRegionSnapshot(ctx, req)
 }
 
 func (c *grpcAdminClient) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {

@@ -320,6 +320,46 @@ func (p *Peer) Status() myraft.Status {
 	return p.node.Status()
 }
 
+// Snapshot returns the current raft snapshot enriched with the logical region
+// payload when snapshot export is configured.
+func (p *Peer) Snapshot() (myraft.Snapshot, error) {
+	if p == nil || p.storage == nil {
+		return myraft.Snapshot{}, fmt.Errorf("raftstore: peer snapshot requires storage")
+	}
+	snap, err := p.storage.Snapshot()
+	if err != nil {
+		return myraft.Snapshot{}, err
+	}
+	meta := p.RegionMeta()
+	if meta != nil {
+		voters := make([]uint64, 0, len(meta.Peers))
+		for _, peerMeta := range meta.Peers {
+			if peerMeta.PeerID != 0 {
+				voters = append(voters, peerMeta.PeerID)
+			}
+		}
+		snap.Metadata.ConfState = raftpb.ConfState{Voters: voters}
+	}
+	if last, err := p.storage.LastIndex(); err == nil && last > snap.Metadata.Index {
+		if term, termErr := p.storage.Term(last); termErr == nil {
+			snap.Metadata.Index = last
+			snap.Metadata.Term = term
+		}
+	}
+	if myraft.IsEmptySnap(snap) || len(snap.Data) > 0 || p.snapshotExport == nil {
+		return snap, nil
+	}
+	if meta == nil {
+		return myraft.Snapshot{}, fmt.Errorf("raftstore: snapshot export requires region metadata")
+	}
+	payload, err := p.snapshotExport(*meta)
+	if err != nil {
+		return myraft.Snapshot{}, fmt.Errorf("raftstore: export logical snapshot payload: %w", err)
+	}
+	snap.Data = payload
+	return snap, nil
+}
+
 func (p *Peer) processReady() error {
 	p.readyMu.Lock()
 	for {

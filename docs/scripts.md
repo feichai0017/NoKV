@@ -37,6 +37,23 @@ When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls 
   ```
   `--scope` decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from `config.pd` unless `--pd-addr` explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs `nokv serve`.
 
+### `scripts/migrate_to_cluster.sh`
+- **Purpose** – one-shot local operator wrapper for the standalone-to-cluster migration path. It runs `nokv migrate plan`, `nokv migrate init`, starts PD-lite plus the seed/target stores, rolls out `nokv migrate expand`, and can optionally finish with `transfer-leader` and `remove-peer`.
+- **Usage**
+  ```bash
+  ./scripts/migrate_to_cluster.sh \
+      --config ./raft_config.example.json \
+      --workdir ./artifacts/standalone \
+      --seed-store 1 \
+      --seed-region 1 \
+      --seed-peer 101 \
+      --target 2:201 \
+      --target 3:301 \
+      --transfer-leader 201 \
+      --remove-peer 101
+  ```
+  The script is intentionally strict: the seed workdir must already contain standalone data, target store workdirs must be fresh, and the script uses the migration CLI as the only source of truth. It keeps PD/store logs attached in the foreground; press `Ctrl+C` to stop everything.
+
 ---
 
 ## Diagnostics & benchmarking
