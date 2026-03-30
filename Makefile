@@ -140,7 +140,7 @@ clean:
 # Start local cluster (without Docker)
 local-cluster:
 	@echo "Starting local cluster..."
-	./scripts/run_local_cluster.sh --config ./raft_config.example.json
+	./scripts/dev/cluster.sh --config ./raft_config.example.json
 
 # Stop local cluster
 local-cluster-stop:

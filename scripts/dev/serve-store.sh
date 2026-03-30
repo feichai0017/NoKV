@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
+
 usage() {
   cat <<'USAGE'
-Usage: serve_from_config.sh --config <config> --store-id <id> --workdir <dir> [options]
+Usage: scripts/dev/serve-store.sh --config <config> --store-id <id> --workdir <dir> [options]
 
 Options:
   --scope <local|docker>   Select which addresses to use (default: local)
@@ -74,13 +78,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$CONFIG" || -z "$STORE_ID" || -z "$WORKDIR" ]]; then
-  echo "serve_from_config: --config, --store-id, and --workdir are required" >&2
-  exit 1
+  nokv_die "serve-store.sh: --config, --store-id, and --workdir are required"
 fi
 
 if [[ "$SCOPE" != "local" && "$SCOPE" != "docker" ]]; then
-  echo "serve_from_config: --scope must be local or docker" >&2
-  exit 1
+  nokv_die "serve-store.sh: --scope must be local or docker"
 fi
 
 if [[ -z "$PD_ADDR" ]]; then
@@ -88,16 +90,13 @@ if [[ -z "$PD_ADDR" ]]; then
   if [[ "$SCOPE" == "docker" ]]; then
     pd_scope="docker"
   fi
-  if pd_from_config=$(nokv-config pd --config "$CONFIG" --scope "$pd_scope" --format simple 2>/dev/null); then
-    PD_ADDR=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
-  fi
+  PD_ADDR=$(nokv_config_pd_addr "$CONFIG" "$pd_scope")
 fi
 
 STORE_LINES=()
-while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG" --format simple)
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv_config_store_lines "$CONFIG")
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
-  echo "serve_from_config: no stores defined in $CONFIG" >&2
-  exit 1
+  nokv_die "serve-store.sh: no stores defined in $CONFIG"
 fi
 
 TARGET_LISTEN=""
@@ -124,12 +123,11 @@ for line in "${STORE_LINES[@]}"; do
 done
 
 if [[ -z "$TARGET_LISTEN" ]]; then
-  echo "serve_from_config: store $STORE_ID not found in $CONFIG" >&2
-  exit 1
+  nokv_die "serve-store.sh: store $STORE_ID not found in $CONFIG"
 fi
 
 REGION_LINES=()
-while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG" --format simple)
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv_config_region_lines "$CONFIG")
 for region_line in "${REGION_LINES[@]}"; do
   read -r _ start_key end_key _ _ peer_str _ <<<"$region_line"
   IFS=',' read -ra peers <<<"$peer_str"

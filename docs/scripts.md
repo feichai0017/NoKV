@@ -1,70 +1,127 @@
 # Scripts Overview
 
-NoKV ships a small collection of helper scripts to streamline local experimentation, demos, diagnostics, and automation. This page summarises what each script does, how to use it, and which shared configuration it consumes.
+NoKV now groups shell entrypoints by role instead of keeping every helper flat under `scripts/`.
 
----
+## Layout
 
-## Cluster helpers
+| Path | Role |
+| --- | --- |
+| `scripts/dev` | Local development and bootstrap helpers for running a cluster from `raft_config*.json`. |
+| `scripts/ops` | Operator-style workflows that drive the formal migration CLI. |
+| `scripts/lib` | Shared shell helpers for config lookup, workdir hygiene, and build/bootstrap rules. |
+| `scripts/*.sh` | Tooling or benchmark entrypoints that are still intentionally top-level. |
 
-### `scripts/run_local_cluster.sh`
-- **Purpose** – builds `nokv` and `nokv-config`, reads `raft_config.json`, seeds local peer catalogs, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a local peer catalog, the seeding step is skipped so previously bootstrapped data is reused.
-- **Usage**
+This split is deliberate:
+- `dev` scripts are allowed to help with local experiments and smoke tests.
+- `ops` scripts must treat the migration CLI as source of truth and stay stricter.
+- `lib` is where shared rules live, so shell semantics do not drift across scripts.
+
+## Development Scripts
+
+### `scripts/dev/cluster.sh`
+- Purpose: build `nokv` and `nokv-config`, read `raft_config.json`, seed local peer catalogs, start PD-lite, then start the configured stores.
+- Uses shared rules from:
+  - `scripts/lib/common.sh`
+  - `scripts/lib/config.sh`
+  - `scripts/lib/workdir.sh`
+- Example:
   ```bash
-  ./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
+  ./scripts/dev/cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
   ```
-`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config catalog`, then launches `nokv pd` and the store processes. `nokv-config catalog` now writes the local peer catalog used by `nokv serve` recovery; PD state is persisted under `pd.work_dir` (or `<workdir>/pd` when config omits it), so control-plane routing metadata survives restarts. Relative `pd.work_dir` is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as `--pd-addr` (explicit `--pd-listen` overrides config/default resolution). PD/store logs are streamed to the terminal with `[pd]` / `[store-<id>]` prefixes and are still written to `pd.log` / `server.log`. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
-When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls back to `127.0.0.1:2379`.
+- Notes:
+  - `--config` defaults to `./raft_config.example.json`
+  - `--workdir` defaults to `./artifacts/cluster`
+  - store workdirs are rejected if they contain unexpected files
+  - logs stream with `[pd]` / `[store-<id>]` prefixes and are still written to `pd.log` / `server.log`
 
-> ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, stop the script with `Ctrl+C` and wait for child processes to exit. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
-
-### `scripts/bootstrap_from_config.sh`
-- **Purpose** – local-peer-catalog bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a local peer catalog are detected and skipped.
-- **Usage**
+### `scripts/dev/bootstrap.sh`
+- Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.
+- Intended for:
+  - Docker Compose bootstrap
+  - local static-topology experiments
+- Example:
   ```bash
-  ./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+  ./scripts/dev/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
   ```
-  The script iterates over every store in the config and writes local peer catalog metadata via `nokv-config catalog` into the provided path template.
+- Notes:
+  - skips stores that already contain `CURRENT`
+  - refuses to seed into dirty directories
 
-### `scripts/serve_from_config.sh`
-- **Purpose** – translate `raft_config.json` into a `nokv serve` command, avoiding manual `--peer` lists. It resolves peer IDs from the region metadata and maps every peer (other than the local store) to its advertised address so that gRPC transport works out of the box.
-- **Usage**
+### `scripts/dev/serve-store.sh`
+- Purpose: convert `raft_config.json` into a concrete `nokv serve` invocation for one store.
+- Example:
   ```bash
-  ./scripts/serve_from_config.sh \
-      --config ./raft_config.json \
-      --store-id 1 \
-      --workdir ./artifacts/cluster/store-1 \
-      --scope local   # use --scope docker inside containers
+  ./scripts/dev/serve-store.sh \
+    --config ./raft_config.example.json \
+    --store-id 1 \
+    --workdir ./artifacts/cluster/store-1 \
+    --scope local
   ```
-  `--scope` decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from `config.pd` unless `--pd-addr` explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs `nokv serve`.
+- Notes:
+  - resolves peer transport addresses from config
+  - resolves PD address from config unless `--pd-addr` overrides it
+  - `--scope docker` selects container-friendly addresses
 
-### `scripts/migrate_to_cluster.sh`
-- **Purpose** – one-shot local operator wrapper for the standalone-to-cluster migration path. It runs `nokv migrate plan`, `nokv migrate init`, starts PD-lite plus the seed/target stores, rolls out `nokv migrate expand`, and can optionally finish with `transfer-leader` and `remove-peer`.
-- **Usage**
+## Operator Script
+
+### `scripts/ops/migrate-cluster.sh`
+- Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.
+- Drives:
+  - `nokv migrate plan`
+  - `nokv migrate init`
+  - `nokv migrate expand`
+  - optional `transfer-leader`
+  - optional `remove-peer`
+- Example:
   ```bash
-  ./scripts/migrate_to_cluster.sh \
-      --config ./raft_config.example.json \
-      --workdir ./artifacts/standalone \
-      --seed-store 1 \
-      --seed-region 1 \
-      --seed-peer 101 \
-      --target 2:201 \
-      --target 3:301 \
-      --transfer-leader 201 \
-      --remove-peer 101
+  ./scripts/ops/migrate-cluster.sh \
+    --config ./raft_config.example.json \
+    --workdir ./artifacts/standalone \
+    --seed-store 1 \
+    --seed-region 1 \
+    --seed-peer 101 \
+    --target 2:201 \
+    --target 3:301 \
+    --transfer-leader 201 \
+    --remove-peer 101
   ```
-  The script is intentionally strict: the seed workdir must already contain standalone data, target store workdirs must be fresh, and the script uses the migration CLI as the only source of truth. It keeps PD/store logs attached in the foreground; press `Ctrl+C` to stop everything.
+- Notes:
+  - seed workdir must already contain standalone data
+  - target store workdirs must be fresh
+  - uses the migration CLI as the only source of truth
 
----
+## Shared Shell Rules
 
-## Diagnostics & benchmarking
+### `scripts/lib/common.sh`
+- shared repo-root detection
+- shared build helpers for `nokv` and `nokv-config`
+- shared TCP readiness helper
+
+### `scripts/lib/config.sh`
+- shared `nokv-config` lookups for:
+  - store lines
+  - region lines
+  - PD address
+  - PD workdir
+
+### `scripts/lib/workdir.sh`
+- shared workdir hygiene rules:
+  - remove stale `LOCK`
+  - reject unexpected directory contents
+  - assert a directory is fresh before seeding or bootstrap
+
+This is where shell-level correctness rules should keep living. New scripts should reuse these helpers instead of open-coding workdir or config parsing logic again.
+
+## Tooling & Benchmarks
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/run_benchmarks.sh` | Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-F; optional RocksDB via build tags). |
-| `scripts/debug.sh` | Convenience wrapper around `dlv test` for targeted debugging. |
-| `scripts/gen.sh` | Generates protobuf Go bindings through Buf with pinned remote plugin versions. |
+| `scripts/run_benchmarks.sh` | Execute YCSB benchmarks (default engines: NoKV/Badger/Pebble, optional RocksDB). |
+| `scripts/build_rocksdb.sh` | Build local RocksDB artifacts used by benchmark comparisons. |
+| `scripts/debug.sh` | Wrap `dlv test` for focused debugging. |
+| `scripts/gen.sh` | Format protobufs and regenerate Go bindings through Buf. |
 
-For recovery and transport fault validation, use direct Go test commands instead of shell wrappers:
+For recovery and transport fault validation, use direct Go tests instead of shell wrappers:
 
 ```bash
 RECOVERY_TRACE_METRICS=1 \
@@ -74,28 +131,11 @@ CHAOS_TRACE_METRICS=1 \
 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 ```
 
----
-
-## Other helpers
-
-### `cmd/nokv pd`
-PD-lite service used by local scripts and compose for:
-- routing (`GetRegionByKey`)
-- ID allocation (`AllocID`)
-- timestamp allocation (`Tso`)
-
-Example:
-```bash
-go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
-```
-
----
-
 ## Relationship with `nokv-config`
 
-- `nokv-config stores` / `regions` / `pd` provide structured views over `raft_config.json`, making it easy for scripts and CI to query the topology.
-- `nokv-config catalog` writes Region metadata into the local peer catalog and replaces the historical `manifestctl` binary.
-- `cmd/nokv-redis` reads the same config and uses `config.pd` by default in raft mode (`--pd-addr` remains an override).
-- Go tools or custom scripts can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` to consume the same `raft_config.json`, avoiding divergent schemas.
+- `nokv-config stores` / `regions` / `pd` remain the structured topology source for shell scripts.
+- `nokv-config catalog` writes Region metadata into the local peer catalog.
+- `cmd/nokv-redis` uses the same `raft_config.json`, so local scripts and Redis gateway stay aligned.
+- Go tools can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` directly.
 
-Maintaining a single `raft_config.json` keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.
+Maintaining a single `raft_config.json` still keeps development scripts, Docker Compose, Redis gateway, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
+source "$SCRIPT_DIR/../lib/workdir.sh"
+
 usage() {
   cat <<'USAGE'
-Usage: bootstrap_from_config.sh --config <path> --path-template <template>
+Usage: scripts/dev/bootstrap.sh --config <path> --path-template <template>
 
 Options:
   --config PATH          Raft configuration file (default: ./raft_config.example.json)
@@ -35,55 +40,44 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "unknown option: $1" >&2
+      echo "bootstrap.sh: unknown option: $1" >&2
       usage
       exit 1
       ;;
   esac
 done
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT_DIR=$NOKV_ROOT_DIR
 if [[ -z "$CONFIG" ]]; then
   CONFIG="$ROOT_DIR/raft_config.example.json"
 fi
 
 if [[ ! -f "$CONFIG" ]]; then
-  echo "bootstrap_from_config: configuration not found: $CONFIG" >&2
-  exit 1
+  nokv_die "bootstrap.sh: configuration not found: $CONFIG"
 fi
 
 if [[ -z "$PATH_TEMPLATE" ]]; then
-  echo "bootstrap_from_config: --path-template is required" >&2
-  exit 1
+  nokv_die "bootstrap.sh: --path-template is required"
 fi
 
 if [[ "$PATH_TEMPLATE" != *"{id}"* ]]; then
-  echo "bootstrap_from_config: --path-template must contain '{id}' placeholder" >&2
-  exit 1
+  nokv_die "bootstrap.sh: --path-template must contain '{id}' placeholder"
 fi
 
 if ! command -v nokv-config >/dev/null 2>&1; then
-  echo "bootstrap_from_config: nokv-config binary not found in PATH" >&2
-  exit 1
+  nokv_die "bootstrap.sh: nokv-config binary not found in PATH"
 fi
 
-workdir_has_unexpected_entries() {
-  local dir=$1
-  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
-}
-
 STORE_LINES=()
-while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG" --format simple)
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv_config_store_lines "$CONFIG")
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
-  echo "bootstrap_from_config: no stores defined in $CONFIG" >&2
-  exit 1
+  nokv_die "bootstrap.sh: no stores defined in $CONFIG"
 fi
 
 REGION_LINES=()
-while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG" --format simple)
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv_config_region_lines "$CONFIG")
 if [[ "${#REGION_LINES[@]}" -eq 0 ]]; then
-  echo "bootstrap_from_config: no regions defined in $CONFIG" >&2
-  exit 1
+  nokv_die "bootstrap.sh: no regions defined in $CONFIG"
 fi
 
 for store_line in "${STORE_LINES[@]}"; do
@@ -93,18 +87,11 @@ for store_line in "${STORE_LINES[@]}"; do
   fi
   store_path=${PATH_TEMPLATE//\{id\}/$store_id}
   mkdir -p "$store_path"
-  lock_path="$store_path/LOCK"
-  if [[ -f "$lock_path" ]]; then
-    rm -f "$lock_path"
-  fi
   if [[ -f "$store_path/CURRENT" ]]; then
-    echo "bootstrap_from_config: store $store_id already bootstrapped; skipping"
+    echo "bootstrap.sh: store $store_id already bootstrapped; skipping"
     continue
   fi
-  if workdir_has_unexpected_entries "$store_path"; then
-    echo "bootstrap_from_config: store $store_id has stale files; refusing to seed into dirty directory: $store_path" >&2
-    exit 1
-  fi
+  nokv_assert_fresh_workdir "$store_path" "bootstrap.sh: store $store_id has stale files; refusing to seed into dirty directory"
   for region_line in "${REGION_LINES[@]}"; do
     read -r region_id start_key end_key epoch_ver epoch_conf peer_str _ <<<"$region_line"
     args=(--workdir "$store_path" --region-id "$region_id" --epoch-version "$epoch_ver" --epoch-conf-version "$epoch_conf" --state "$REGION_STATE")
@@ -122,5 +109,5 @@ for store_line in "${STORE_LINES[@]}"; do
     done
     nokv-config catalog "${args[@]}"
   done
-  echo "bootstrapped store ${store_id} at ${store_path}"
+  echo "bootstrap.sh: bootstrapped store ${store_id} at ${store_path}"
 done
