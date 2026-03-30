@@ -37,3 +37,7 @@
   - [2026-02-09 Memory Kernel: Arena & Adaptive Index](notes/2026-02-09-memory-kernel-arena-and-adaptive-index.md)
   - [2026-02-09 Write Pipeline: MPSC & Adaptive Batching](notes/2026-02-09-write-pipeline-mpsc-and-adaptive-batching.md)
   - [2026-02-15 VFS Abstraction: Deterministic Reliability](notes/2026-02-15-vfs-abstraction-and-deterministic-reliability.md)
+  - [2026-03-30 Standalone to Distributed Bridge](notes/2026-03-30-standalone-to-distributed-bridge.md)
+  - [2026-03-30 PD and RaftAdmin Layering](notes/2026-03-30-pd-and-raftadmin-layering.md)
+  - [2026-03-30 Migration Mode and Snapshot](notes/2026-03-30-migration-mode-and-snapshot.md)
+  - [2026-03-30 Distributed Testing and Failpoints](notes/2026-03-30-distributed-testing-and-failpoints.md)

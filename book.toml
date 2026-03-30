@@ -3,13 +3,17 @@ title = "NoKV Docs"
 authors = ["NoKV Contributors"]
 language = "en"
 src = "docs"
+description = "NoKV design, architecture, migration, and testing documentation."
 
 [output.html]
 site-url = "/NoKV/"
 git-repository-url = "https://github.com/feichai0017/NoKV"
 git-repository-icon = "fab-github"
 additional-css = ["docs/custom.css"]
-additional-js = ["docs/mermaid-init.js"]
+additional-js = ["docs/custom.js", "docs/mermaid-init.js"]
+default-theme = "light"
+preferred-dark-theme = "navy"
+smart-punctuation = true
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
