@@ -2,10 +2,20 @@ package store
 
 import (
 	"fmt"
+	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 
 	"github.com/feichai0017/NoKV/metrics"
 )
+
+// RegionRuntimeStatus captures store-local runtime state for one region.
+type RegionRuntimeStatus struct {
+	Meta         raftmeta.RegionMeta
+	Hosted       bool
+	LocalPeerID  uint64
+	LeaderPeerID uint64
+	Leader       bool
+}
 
 func (s *Store) applyRegionMeta(meta raftmeta.RegionMeta) error {
 	if s == nil {
@@ -71,6 +81,25 @@ func (s *Store) RegionMetaByID(regionID uint64) (raftmeta.RegionMeta, bool) {
 // known to the store. The resulting slice is safe for callers to modify.
 func (s *Store) RegionSnapshot() RegionSnapshot {
 	return RegionSnapshot{Regions: s.RegionMetas()}
+}
+
+// RegionRuntimeStatus returns the store-local runtime status for one region.
+func (s *Store) RegionRuntimeStatus(regionID uint64) (RegionRuntimeStatus, bool) {
+	meta, ok := s.RegionMetaByID(regionID)
+	if !ok {
+		return RegionRuntimeStatus{}, false
+	}
+	status := RegionRuntimeStatus{Meta: meta}
+	peerRef := s.regionMgr().peer(regionID)
+	if peerRef == nil {
+		return status, true
+	}
+	raftStatus := peerRef.Status()
+	status.Hosted = true
+	status.LocalPeerID = peerRef.ID()
+	status.LeaderPeerID = raftStatus.Lead
+	status.Leader = raftStatus.RaftState == myraft.StateLeader
+	return status, true
 }
 
 // RegionMetrics returns the metrics recorder tracking region state counts.

@@ -82,6 +82,18 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
 - Reads `MODE.json` when present and otherwise reports `standalone`
 - Shows current mode plus seed identifiers (`store`, `region`, `peer`)
 
+### `nokv migrate expand`
+
+- Sends one `AddPeer` request to the leader store's admin gRPC endpoint
+- Optionally polls leader and target stores until the new peer is published and
+  hosted
+- Common flags:
+  - `--addr` leader store admin address
+  - `--target-addr` target store admin address for hosted-peer wait checks
+  - `--region`, `--store`, `--peer`
+  - `--wait` overall wait timeout (`0` disables waiting)
+  - `--poll-interval`
+
 ### `nokv serve`
 
 - Starts NoKV gRPC service backed by local `raftstore`

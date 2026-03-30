@@ -74,6 +74,74 @@ func TestServerStartsNoKVService(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+func TestServerStartsRaftAdminService(t *testing.T) {
+	db, localMeta := openTestDB(t)
+	srv, err := serverpkg.New(serverpkg.Config{
+		Storage: serverpkg.Storage{
+			MVCC: db,
+			Raft: db.RaftLog(),
+		},
+		Store: storepkg.Config{
+			StoreID:   1,
+			LocalMeta: localMeta,
+		},
+		Raft: myraft.Config{
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		TransportAddr: "127.0.0.1:0",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	region := raftmeta.RegionMeta{
+		ID:       7,
+		StartKey: []byte("a"),
+		EndKey:   nil,
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+	}
+	startRegionPeer(t, testNode{
+		storeID:   1,
+		peerID:    101,
+		region:    region,
+		db:        db,
+		localMeta: localMeta,
+		srv:       srv,
+	})
+
+	conn, err := grpc.NewClient(srv.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	adminClient := pb.NewRaftAdminClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	statusResp, err := adminClient.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: region.ID})
+	require.NoError(t, err)
+	require.True(t, statusResp.GetKnown())
+	require.True(t, statusResp.GetHosted())
+	require.True(t, statusResp.GetLeader())
+	require.Equal(t, uint64(101), statusResp.GetLocalPeerId())
+
+	addResp, err := adminClient.AddPeer(ctx, &pb.AddPeerRequest{
+		RegionId: region.ID,
+		StoreId:  2,
+		PeerId:   202,
+	})
+	require.NoError(t, err)
+	require.Len(t, addResp.GetRegion().GetPeers(), 2)
+
+	statusResp, err = adminClient.RegionStatus(ctx, &pb.RegionStatusRequest{RegionId: region.ID})
+	require.NoError(t, err)
+	require.True(t, statusResp.GetKnown())
+	require.Len(t, statusResp.GetRegion().GetPeers(), 2)
+}
+
 type testNode struct {
 	storeID   uint64
 	peerID    uint64

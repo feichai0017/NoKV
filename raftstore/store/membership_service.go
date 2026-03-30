@@ -3,9 +3,10 @@ package store
 import (
 	"encoding/binary"
 	"fmt"
+	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
-
 	"github.com/feichai0017/NoKV/raftstore/peer"
+
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -51,6 +52,9 @@ func (s *Store) ProposeAddPeer(regionID uint64, meta raftmeta.PeerMeta) error {
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
+	}
 	cc := raftpb.ConfChangeV2{
 		Changes: []raftpb.ConfChangeSingle{
 			{
@@ -75,6 +79,9 @@ func (s *Store) ProposeRemovePeer(regionID, peerID uint64) error {
 	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
 	}
 	ctxMeta := raftmeta.PeerMeta{StoreID: peerID, PeerID: peerID}
 	if meta, ok := s.RegionMetaByID(regionID); ok {
@@ -106,6 +113,9 @@ func (s *Store) TransferLeader(regionID, targetPeerID uint64) error {
 	peerRef := s.regionMgr().peer(regionID)
 	if peerRef == nil {
 		return fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
+	}
+	if status := peerRef.Status(); status.RaftState != myraft.StateLeader {
+		return fmt.Errorf("raftstore: peer %d is not leader", peerRef.ID())
 	}
 	return peerRef.TransferLeader(targetPeerID)
 }
