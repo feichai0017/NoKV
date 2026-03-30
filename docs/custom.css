@@ -374,8 +374,8 @@ body {
 .cta-zone {
   align-items: center;
   backdrop-filter: blur(14px);
-  background: rgba(255, 255, 255, 0.56);
-  border: 1px solid rgba(0, 87, 255, 0.08);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(245, 249, 248, 0.78));
+  border: 1px solid rgba(48, 90, 138, 0.1);
   border-radius: 22px;
   box-shadow: var(--nokv-shadow-soft);
   display: flex;
@@ -420,6 +420,7 @@ body {
   border: 1px solid transparent;
   border-radius: 999px;
   display: inline-flex;
+  font-size: 0.98rem;
   font-weight: 700;
   gap: 8px;
   padding: 12px 18px;
@@ -432,20 +433,23 @@ body {
 }
 
 .cta-button.primary {
-  background: linear-gradient(135deg, var(--nokv-accent), #2a7cff);
-  box-shadow: 0 12px 26px rgba(0, 87, 255, 0.22);
+  background: linear-gradient(135deg, #0b5ec9, #0f6fb2);
+  box-shadow: 0 10px 22px rgba(12, 86, 170, 0.22);
   color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.16);
 }
 
 .cta-button.secondary {
-  background: rgba(255, 255, 255, 0.55);
-  border-color: rgba(0, 87, 255, 0.18);
-  color: inherit;
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(48, 90, 138, 0.18);
+  color: #17324d;
 }
 
 .ayu .cta-button.secondary,
 .navy .cta-button.secondary {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(129, 147, 196, 0.24);
+  color: #f2f6ff;
 }
 
 .hero-signal-panel {
@@ -555,8 +559,8 @@ body {
 
 .why-intro,
 .launchpad {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(245, 248, 255, 0.82));
-  border: 1px solid rgba(0, 87, 255, 0.1);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(246, 249, 248, 0.84));
+  border: 1px solid rgba(48, 90, 138, 0.1);
   border-radius: 22px;
   box-shadow: var(--nokv-shadow-soft);
 }
@@ -644,8 +648,8 @@ body {
 }
 
 .launch-step {
-  background: rgba(255, 255, 255, 0.66);
-  border: 1px solid rgba(0, 87, 255, 0.08);
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(48, 90, 138, 0.09);
   border-radius: 18px;
   display: grid;
   gap: 14px;
@@ -654,7 +658,7 @@ body {
 }
 
 .launch-step strong {
-  color: rgba(0, 87, 255, 0.9);
+  color: rgba(20, 101, 148, 0.82);
   font-size: 1.55rem;
   font-style: italic;
   font-weight: 800;
@@ -816,8 +820,8 @@ body {
 
 .ayu .tag-pill,
 .navy .tag-pill {
-  background: rgba(80, 134, 255, 0.12);
-  border-color: rgba(129, 147, 196, 0.2);
+  background: rgba(80, 134, 255, 0.08);
+  border-color: rgba(129, 147, 196, 0.18);
 }
 
 .benchmark-note {
@@ -834,9 +838,29 @@ body {
 }
 
 .arch-callout {
-  border-top: 1px solid var(--nokv-border);
-  margin-top: 30px;
-  padding-top: 18px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(246, 249, 248, 0.78));
+  border: 1px solid rgba(48, 90, 138, 0.1);
+  border-radius: 20px;
+  box-shadow: var(--nokv-shadow-soft);
+  margin-top: 18px;
+  padding: 16px 18px;
+}
+
+.is-overview-page pre.mermaid {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(247, 250, 249, 0.8));
+  border: 1px solid rgba(48, 90, 138, 0.1);
+  border-radius: 22px;
+  box-shadow: var(--nokv-shadow-soft);
+  margin: 18px 0 0;
+  padding: 22px 18px;
+}
+
+.ayu .is-overview-page pre.mermaid,
+.navy .is-overview-page pre.mermaid,
+.ayu .arch-callout,
+.navy .arch-callout {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.03));
+  border-color: rgba(129, 147, 196, 0.16);
 }
 
 .hero-footer {
