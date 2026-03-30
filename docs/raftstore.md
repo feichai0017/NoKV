@@ -2,6 +2,15 @@
 
 `raftstore` powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the `NoKV` gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.
 
+> Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.
+
+## Reader Map
+
+- Start with section 1 if you want package ownership.
+- Jump to section 3 if you want request execution.
+- Jump to section 8 if you care about split/merge and control-plane behavior.
+- Read this together with [`pd.md`](pd.md) and [`migration.md`](migration.md) if your focus is lifecycle rather than just request flow.
+
 ---
 
 ## 1. Package Structure
@@ -15,6 +24,28 @@
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
 | [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
 | [`server`](../raftstore/server) | `ServerConfig` + `New` that bind DB, Store, transport, and NoKV server into a reusable node primitive. |
+
+### Runtime ownership sketch
+
+```mermaid
+flowchart TD
+    Client["Client / Redis gateway / CLI"]
+    Client --> KV["kv.Service"]
+    Client --> PD["PD-lite"]
+
+    subgraph "Node runtime"
+        Server["server.Server"] --> Store["store.Store"]
+        Store --> Router["router"]
+        Store --> Peer["peer.Peer"]
+        Store --> Scheduler["scheduler runtime"]
+        Store --> Admin["admin service"]
+        Store --> Meta["raftstore/meta"]
+        Peer --> Engine["raftstore/engine"]
+        Peer --> Apply["kv.Apply"]
+    end
+
+    Apply --> DB["NoKV DB"]
+```
 
 ---
 
@@ -40,6 +71,14 @@
 3. **Peer connectivity**
    - `transport.SetPeer(peerID, addr)` defines outbound raft connections; the CLI exposes it via `--peer peerID=addr`.
    - Additional services can reuse the same gRPC server through `transport.WithServerRegistrar`.
+
+### Minimal mental model
+
+- `Server` is the node wiring root.
+- `Store` is the runtime owner for what this node hosts.
+- `Peer` is one region replica’s state machine and raft runtime.
+- `Meta` is a local recovery mirror, not cluster truth.
+- `PD` is control plane, not a writer of local truth.
 
 ---
 
@@ -136,6 +175,17 @@ The `cmd/nokv serve` command uses `raftstore.Server` internally and prints a loc
 - `raft_config` regions are treated as bootstrap/deployment metadata and are not
   the runtime source of truth once PD is available.
 - PD is the only control-plane source of truth for runtime scheduling/routing.
+
+### Why the layering matters
+
+The design rule is:
+
+- `RaftAdmin` executes membership operations against the current leader store.
+- `PD` decides and observes at the cluster level.
+- `Store/Peer` own local truth and apply.
+
+That split is what keeps migration and scheduling from becoming a second,
+parallel truth path.
 
 ### 8.2 Split / Merge
 - **Split**: leaders call `Store.ProposeSplit`, which writes a split

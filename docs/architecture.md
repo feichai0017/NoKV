@@ -2,6 +2,14 @@
 
 NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed NoKV service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV's own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.
 
+> Read this page if you want the shortest route from “what is NoKV” to “which package owns which part of the system”.
+
+## Reader Map
+
+- If you care about the embedded engine, focus on sections 2 and 5.
+- If you care about distributed runtime ownership, focus on sections 3, 4, and 5.
+- If you care about migration and recovery, read this page together with [`migration.md`](migration.md) and [`recovery.md`](recovery.md).
+
 ---
 
 ## 1. High-Level Layout
@@ -43,6 +51,29 @@ NoKV delivers a hybrid storage engine that can operate as a standalone embedded 
 - **Control plane split**: `raft_config` provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
+### Same system, two shapes
+
+```mermaid
+flowchart LR
+    App["App / CLI / Redis client"]
+    App --> Embedded["Embedded NoKV DB"]
+    App --> RPC["NoKV RPC / raftstore/client"]
+
+    subgraph "Standalone shape"
+        Embedded --> Core["WAL + LSM + VLog + MVCC"]
+    end
+
+    subgraph "Distributed shape"
+        RPC --> Server["server.Server"]
+        Server --> Store["store.Store"]
+        Store --> Peer["peer.Peer"]
+        Peer --> Core
+        Store --> PD["PD-lite"]
+    end
+
+    Embedded -. migrate init / seed .-> Store
+```
+
 ### Detailed Runtime Paths
 
 For function-level call chains with sequence diagrams (embedded write/read,
@@ -52,6 +83,33 @@ iterator scan, distributed read/write via Raft apply), see
 ---
 
 ## 2. Embedded Engine
+
+### Code entry points
+
+If you want to inspect the embedded side first, start here:
+
+```go
+opt := NoKV.NewDefaultOptions()
+opt.WorkDir = "./workdir"
+
+db, err := NoKV.Open(opt)
+if err != nil {
+    panic(err)
+}
+defer db.Close()
+
+_ = db.Set([]byte("hello"), []byte("world"))
+entry, _ := db.Get([]byte("hello"))
+fmt.Println(string(entry.Value))
+```
+
+Then read:
+
+- `db.go`
+- `db_write.go`
+- `lsm/`
+- `wal/`
+- `vlog.go`
 
 ### 2.1 WAL & MemTable
 - `wal.Manager` appends `[len|type|payload|crc]` records (typed WAL), rotates segments, and replays logs on crash.
@@ -113,6 +171,31 @@ NoKV uses fail-fast reference counting for internal pooled/owned objects. `DecrR
 ---
 
 ## 3. Replication Layer (raftstore)
+
+### Code entry points
+
+If you want to inspect the distributed side first, start here:
+
+```go
+srv, err := server.New(server.Config{
+    DB: db,
+    Store: store.Config{StoreID: 1},
+    Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
+    TransportAddr: "127.0.0.1:20160",
+})
+if err != nil {
+    panic(err)
+}
+defer srv.Close()
+```
+
+Then read:
+
+- `raftstore/server/server.go`
+- `raftstore/store/store.go`
+- `raftstore/peer/peer.go`
+- `raftstore/engine/wal_storage.go`
+- `raftstore/meta/store.go`
 
 | Package | Responsibility |
 | --- | --- |
