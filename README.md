@@ -1,4 +1,4 @@
-# 🚀 NoKV – High-Performance Distributed KV Engine
+# 🚀 NoKV – One Storage Core, Two Deployment Shapes
 
 <div align="center">
   <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
@@ -38,39 +38,22 @@
 </div>
 
 
-NoKV is a Go-native storage engine that mixes RocksDB-style manifest discipline with Badger-inspired value separation. You can embed it locally, drive it via multi-Raft regions, or front it with a Redis protocol gateway—all from a single topology file.
+NoKV is a Go-native storage system that starts as a serious standalone engine and grows into a multi-Raft distributed KV cluster without changing its underlying data plane.
 
-## 📊 CI Benchmark Snapshot
+The interesting part is not just that it has WAL, LSM, MVCC, Redis compatibility, or Raft. The interesting part is that these pieces are built as one system: a single storage substrate that can be embedded locally, migrated into a seeded distributed node, and then expanded into a replicated cluster with an explicit protocol.
 
-Latest public benchmark snapshot currently checked into the repository, taken
-from the latest successful `main` CI YCSB run available at the time of update
-([run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757)).
-This snapshot used the then-current benchmark profile:
-`A-F`, `records=1,000,000`, `ops=1,000,000`, `value_size=1000`,
-`value_threshold=2048`, `conc=16`.
+> NoKV is not trying to be "yet another KV". It is trying to make the path from standalone storage to distributed replication coherent, inspectable, and testable.
 
-Methodology and harness details live in [`benchmark/README.md`](./benchmark/README.md).
+## ✨ Why NoKV
 
-| Engine | Workload | Mode | Ops/s | Avg Latency | P95 | P99 |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| NoKV | YCSB-A | 50/50 read/update | 175,905 | 5.684µs | 204.039µs | 307.851µs |
-| NoKV | YCSB-B | 95/5 read/update | 525,631 | 1.902µs | 24.115µs | 750.413µs |
-| NoKV | YCSB-C | 100% read | 409,136 | 2.444µs | 15.077µs | 25.658µs |
-| NoKV | YCSB-D | 95% read, 5% insert (latest) | 632,031 | 1.582µs | 21.811µs | 638.457µs |
-| NoKV | YCSB-E | 95% scan, 5% insert | 45,620 | 21.92µs | 139.449µs | 9.203945ms |
-| NoKV | YCSB-F | read-modify-write | 157,732 | 6.339µs | 232.743µs | 371.209µs |
-| Badger | YCSB-A | 50/50 read/update | 108,232 | 9.239µs | 285.74µs | 483.139µs |
-| Badger | YCSB-B | 95/5 read/update | 188,893 | 5.294µs | 274.549µs | 566.042µs |
-| Badger | YCSB-C | 100% read | 242,463 | 4.124µs | 36.549µs | 1.862803ms |
-| Badger | YCSB-D | 95% read, 5% insert (latest) | 284,205 | 3.518µs | 233.414µs | 479.801µs |
-| Badger | YCSB-E | 95% scan, 5% insert | 15,027 | 66.547µs | 4.064653ms | 7.534558ms |
-| Badger | YCSB-F | read-modify-write | 84,601 | 11.82µs | 407.624µs | 645.491µs |
-| Pebble | YCSB-A | 50/50 read/update | 169,792 | 5.889µs | 491.322µs | 1.65907ms |
-| Pebble | YCSB-B | 95/5 read/update | 137,483 | 7.273µs | 658.763µs | 1.415039ms |
-| Pebble | YCSB-C | 100% read | 90,474 | 11.052µs | 878.733µs | 1.817526ms |
-| Pebble | YCSB-D | 95% read, 5% insert (latest) | 198,139 | 5.046µs | 491.515µs | 1.282231ms |
-| Pebble | YCSB-E | 95% scan, 5% insert | 40,793 | 24.513µs | 1.332974ms | 2.301008ms |
-| Pebble | YCSB-F | read-modify-write | 122,192 | 8.183µs | 760.934µs | 1.71655ms |
+- **Standalone to Cluster**  
+  Start with an embedded engine, keep the same workdir, then migrate into a distributed seed and expand into a replicated region.
+
+- **Correctness First**  
+  Mode gates, logical region snapshots, local recovery metadata, and a clean split between execution plane and control plane keep lifecycle semantics explicit.
+
+- **Tested as a System**  
+  The project is validated with migration flow tests, restart recovery, PD degradation, transport chaos, context propagation, and publish-boundary failpoints.
 
 ## 🚦 Quick Start
 
@@ -187,20 +170,77 @@ Everything hangs off a single file: [`raft_config.example.json`](./raft_config.e
 ## 🧱 Architecture Overview
 
 ```mermaid
-graph TD
-    Client[Client API] -->|Set/Get| DBCore
-    DBCore -->|Append| WAL
-    DBCore -->|Insert| MemTable
-    DBCore -->|ValuePtr| ValueLog
-    MemTable -->|Flush Task| FlushMgr
-    FlushMgr -->|Build SST| SSTBuilder
-    SSTBuilder -->|LogEdit| Manifest
-    Manifest -->|Version| LSMLevels
-    LSMLevels -->|Compaction| Compactor
-    FlushMgr -->|Discard Stats| ValueLog
-    ValueLog -->|GC updates| Manifest
-    DBCore -->|Stats/HotKeys| Observability
+%%{init: {
+  "themeVariables": { "fontSize": "17px" },
+  "flowchart": { "nodeSpacing": 42, "rankSpacing": 58, "curve": "basis" }
+}}%%
+flowchart TD
+    App["App / CLI / Redis Client"]
+
+    subgraph Standalone["Standalone Shape"]
+        Embedded["Embedded NoKV DB API"]
+    end
+
+    subgraph Distributed["Distributed Shape"]
+        Gateway["NoKV RPC / Redis Gateway"]
+        Client["raftstore/client"]
+        PD["PD-lite<br/>route / tso / heartbeats"]
+        Server["Node Server"]
+        Store["Store runtime root"]
+        Peer["Peer runtime"]
+        Admin["RaftAdmin<br/>execution plane"]
+        Meta["raftstore/meta<br/>local recovery metadata"]
+        RaftEngine["raftstore/engine<br/>raft durable state"]
+        Snap["logical region snapshot"]
+    end
+
+    subgraph DataPlane["Shared Storage Core"]
+        DB["NoKV DB"]
+        WAL["WAL"]
+        LSM["LSM + SST"]
+        VLog["ValueLog"]
+        MVCC["Percolator / MVCC"]
+        Manifest["Manifest"]
+    end
+
+    subgraph Migration["Standalone → Cluster Bridge"]
+        Plan["migrate plan"]
+        Init["migrate init"]
+        Seed["seeded workdir"]
+        Expand["expand / remove-peer / transfer-leader"]
+    end
+
+    App --> Embedded
+    App --> Gateway
+    Gateway --> Client
+    Client --> PD
+    Client --> Server
+    Server --> Store
+    Store --> Peer
+    Store --> Admin
+    Store --> Meta
+    Peer --> RaftEngine
+    Peer --> Snap
+    Embedded --> DB
+    Peer --> DB
+    Snap --> DB
+    DB --> WAL
+    DB --> LSM
+    DB --> VLog
+    DB --> MVCC
+    DB --> Manifest
+    Embedded -.same data plane.- DB
+    Plan --> Init
+    Init --> Seed
+    Seed --> Server
+    Seed --> Expand
 ```
+
+What makes this layout distinctive:
+- **One storage core, two deployment shapes** – embedded mode and raft mode both sit on the same `DB` substrate instead of splitting into separate engines.
+- **Migration is a protocol, not a dump/import hack** – `plan → init → seeded → expand` turns an existing standalone workdir into a replicated cluster path with explicit lifecycle state.
+- **Execution plane and control plane are split on purpose** – `RaftAdmin` executes leader-side membership changes, while `PD-lite` stays responsible for routing, allocation, timestamps, and cluster view.
+- **Recovery metadata is not mixed with engine metadata** – manifest, local recovery catalog, raft durable state, and logical region snapshots each have distinct ownership.
 
 Key ideas:
 - **Durability path** – WAL first, memtable second. ValueLog writes occur before WAL append so crash replay can fully rebuild state.
@@ -209,6 +249,42 @@ Key ideas:
 - **Distributed transactions** – Percolator 2PC runs in raft mode; embedded mode exposes non-transactional DB APIs.
 
 Dive deeper in [docs/architecture.md](docs/architecture.md).
+
+---
+
+## 📊 CI Benchmark Snapshot
+
+Benchmarks matter here, but they are not the whole story. NoKV is trying to be fast **and** structurally coherent: durability, migration, control-plane separation, and recovery semantics come first.
+
+Latest public benchmark snapshot currently checked into the repository, taken
+from the latest successful `main` CI YCSB run available at the time of update
+([run #23701742757](https://github.com/feichai0017/NoKV/actions/runs/23701742757)).
+This snapshot used the then-current benchmark profile:
+`A-F`, `records=1,000,000`, `ops=1,000,000`, `value_size=1000`,
+`value_threshold=2048`, `conc=16`.
+
+Methodology and harness details live in [`benchmark/README.md`](./benchmark/README.md).
+
+| Engine | Workload | Mode | Ops/s | Avg Latency | P95 | P99 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| NoKV | YCSB-A | 50/50 read/update | 175,905 | 5.684µs | 204.039µs | 307.851µs |
+| NoKV | YCSB-B | 95/5 read/update | 525,631 | 1.902µs | 24.115µs | 750.413µs |
+| NoKV | YCSB-C | 100% read | 409,136 | 2.444µs | 15.077µs | 25.658µs |
+| NoKV | YCSB-D | 95% read, 5% insert (latest) | 632,031 | 1.582µs | 21.811µs | 638.457µs |
+| NoKV | YCSB-E | 95% scan, 5% insert | 45,620 | 21.92µs | 139.449µs | 9.203945ms |
+| NoKV | YCSB-F | read-modify-write | 157,732 | 6.339µs | 232.743µs | 371.209µs |
+| Badger | YCSB-A | 50/50 read/update | 108,232 | 9.239µs | 285.74µs | 483.139µs |
+| Badger | YCSB-B | 95/5 read/update | 188,893 | 5.294µs | 274.549µs | 566.042µs |
+| Badger | YCSB-C | 100% read | 242,463 | 4.124µs | 36.549µs | 1.862803ms |
+| Badger | YCSB-D | 95% read, 5% insert (latest) | 284,205 | 3.518µs | 233.414µs | 479.801µs |
+| Badger | YCSB-E | 95% scan, 5% insert | 15,027 | 66.547µs | 4.064653ms | 7.534558ms |
+| Badger | YCSB-F | read-modify-write | 84,601 | 11.82µs | 407.624µs | 645.491µs |
+| Pebble | YCSB-A | 50/50 read/update | 169,792 | 5.889µs | 491.322µs | 1.65907ms |
+| Pebble | YCSB-B | 95/5 read/update | 137,483 | 7.273µs | 658.763µs | 1.415039ms |
+| Pebble | YCSB-C | 100% read | 90,474 | 11.052µs | 878.733µs | 1.817526ms |
+| Pebble | YCSB-D | 95% read, 5% insert (latest) | 198,139 | 5.046µs | 491.515µs | 1.282231ms |
+| Pebble | YCSB-E | 95% scan, 5% insert | 40,793 | 24.513µs | 1.332974ms | 2.301008ms |
+| Pebble | YCSB-F | read-modify-write | 122,192 | 8.183µs | 760.934µs | 1.71655ms |
 
 ---
 
