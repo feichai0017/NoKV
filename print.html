@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-81b84921.js";
+            window.path_to_searchindex_js = "searchindex-b6424906.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -206,11 +206,10 @@
 
   
 <p class="hero-lead">
-    NoKV is a storage system that starts as a serious standalone engine and grows into
-    a multi-Raft distributed key-value database without changing its underlying data
-    plane. The interesting part is not just the API surface. It is the bridge:
-    WAL, LSM, MVCC, control plane, migration, and replication all live in one coherent
-    design.
+    NoKV starts as a serious standalone engine and grows into a multi-Raft distributed
+    KV database without swapping out its storage core. That is the hook: WAL, LSM,
+    MVCC, migration, replication, and control-plane behavior are treated as one system,
+    not a pile of loosely connected features.
   </p>
 
   
@@ -327,6 +326,12 @@
 
 <p><span class="section-kicker">Read This Next</span></p>
 <h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
+<p>If you only read three pages, read these first:</p>
+<ol>
+<li><a href="#getting-started"><strong>Getting Started</strong></a> for the shortest path to a running cluster.</li>
+<li><a href="#raftstore-deep-dive"><strong>Raftstore</strong></a> for runtime ownership and distributed boundaries.</li>
+<li><a href="#standalone-to-cluster-migration"><strong>Migration</strong></a> for the standalone → cluster bridge that makes NoKV distinct.</li>
+</ol>
 <div class="doc-grid">
   
 <div class="doc-card">
