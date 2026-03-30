@@ -239,6 +239,15 @@ The initial state should be:
 This should be written through the existing raft durable storage path rather
 than via ad hoc files.
 
+Current code note:
+
+- `raftstore/engine/snapshot.go` only imports and exports raft snapshot
+  protobuf state
+- it does not yet serialize standalone `DB` state-machine contents
+
+So `init` cannot be completed safely until the project defines how a
+standalone workdir is materialized as an initial replicated state snapshot.
+
 ### Step 4: persist the local raft replay pointer
 
 Use `raftstore/meta` to persist the group-local replay pointer that corresponds

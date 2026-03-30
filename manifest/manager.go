@@ -569,6 +569,61 @@ func (m *Manager) ValueLogStatus() map[ValueLogID]ValueLogMeta {
 }
 
 // Internal encoding helpers
+// Check ensures the manifest CURRENT pointer and edit stream are well-formed
+// without mutating on-disk state. Nil fs defaults to OSFS.
+func Check(dir string, fs vfs.FS) error {
+	if dir == "" {
+		return fmt.Errorf("manifest: directory required")
+	}
+	fs = vfs.Ensure(fs)
+
+	currentPath := filepath.Join(dir, currentFileName)
+	data, err := fs.ReadFile(currentPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return fmt.Errorf("manifest: read CURRENT: %w", err)
+	}
+	name := strings.TrimSpace(string(data))
+	if name == "" {
+		return fmt.Errorf("manifest: CURRENT empty")
+	}
+	path := filepath.Join(dir, name)
+	f, err := fs.OpenFileHandle(path, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("manifest: open %s: %w", name, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader := bufio.NewReader(f)
+	var offset int64
+	for {
+		pos := offset
+		var length uint32
+		if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			if err == io.ErrUnexpectedEOF {
+				return fmt.Errorf("manifest: partial length at %d", pos)
+			}
+			return fmt.Errorf("manifest: read length at %d: %w", pos, err)
+		}
+		payload := make([]byte, length)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return fmt.Errorf("manifest: partial edit at %d", pos)
+			}
+			return fmt.Errorf("manifest: read payload at %d: %w", pos, err)
+		}
+		if _, err := decodeEdit(payload); err != nil {
+			return fmt.Errorf("manifest: invalid edit at %d: %w", pos, err)
+		}
+		offset = pos + int64(length) + 4
+	}
+}
+
 // Verify ensures manifest and CURRENT pointer are well-formed. It truncates any
 // partially written edits left at the end of the manifest file. Nil fs defaults
 // to OSFS.
