@@ -13,6 +13,14 @@ The design is intentionally conservative:
 The goal is to make an existing standalone workdir become a valid
 single-store cluster seed first, then expand it into a replicated cluster.
 
+> Read this page if the most interesting question in NoKV is not “how fast is it” but “how an existing standalone engine becomes a distributed system without switching data planes”.
+
+## Reader Map
+
+- Read sections 1 to 4 for the migration contract.
+- Read sections 5 to 9 for lifecycle and CLI flow.
+- Read this together with [`raftstore.md`](raftstore.md) and [`recovery.md`](recovery.md) if you want the runtime ownership behind the protocol.
+
 ---
 
 ## 1. Goals
@@ -86,6 +94,44 @@ flowchart LR
     E --> F["Single-store cluster seed"]
     F --> G["nokv migrate expand"]
     G --> H["Multi-peer cluster"]
+```
+
+### Minimal operator flow
+
+```bash
+# 1. Inspect a standalone workdir
+go run ./cmd/nokv migrate plan --workdir ./data/store-1
+
+# 2. Convert it into a single-store seed
+go run ./cmd/nokv migrate init \
+  --workdir ./data/store-1 \
+  --store 1 \
+  --region 1 \
+  --peer 101
+
+# 3. Start the seeded node in distributed mode
+go run ./cmd/nokv serve \
+  --workdir ./data/store-1 \
+  --store-id 1 \
+  --pd-addr 127.0.0.1:2379
+
+# 4. Expand the seed into more replicas
+go run ./cmd/nokv migrate expand \
+  --addr 127.0.0.1:20170 \
+  --region 1 \
+  --target 2:201@127.0.0.1:20171 \
+  --target 3:301@127.0.0.1:20172
+```
+
+### Lifecycle state sketch
+
+```mermaid
+stateDiagram-v2
+    [*] --> standalone
+    standalone --> preparing: migrate init
+    preparing --> seeded: catalog + seed snapshot + raft seed
+    seeded --> cluster: nokv serve
+    cluster --> cluster: expand / transfer-leader / remove-peer
 ```
 
 ---
@@ -221,6 +267,16 @@ happy-path sequence:
 The script is intentionally conservative. It only accepts a standalone seed
 workdir plus fresh target store workdirs and delegates all state transitions to
 the migration CLI.
+
+Typical local workflow:
+
+```bash
+./scripts/ops/migrate-cluster.sh \
+  --config ./raft_config.example.json \
+  --seed-workdir ./artifacts/migrate/seed \
+  --target-workdir ./artifacts/migrate/store-2 \
+  --target-workdir ./artifacts/migrate/store-3
+```
 
 ---
 
