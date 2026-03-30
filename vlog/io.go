@@ -449,6 +449,33 @@ func CheckDir(cfg Config) error {
 	return nil
 }
 
+// CheckHead verifies that the active value-log head recorded for one bucket is
+// readable up to endOffset without mutating on-disk state.
+func CheckHead(cfg Config, fid uint32, endOffset uint32) error {
+	var err error
+	cfg, err = cfg.normalized()
+	if err != nil {
+		return err
+	}
+	if endOffset == 0 {
+		return nil
+	}
+	path := filepath.Join(cfg.Dir, fmt.Sprintf("%05d.vlog", fid))
+	store, err := openLogFile(cfg.FS, fid, path, cfg.Dir, cfg.MaxSize, false)
+	if err != nil {
+		return err
+	}
+	_, checkErr := checkValueLogUntil(store, endOffset)
+	closeErr := store.Close()
+	if checkErr != nil {
+		return checkErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return nil
+}
+
 func extractFID(path string) uint64 {
 	var fid uint64
 	if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
@@ -509,6 +536,50 @@ func checkValueLog(store *file.LogFile) (uint32, error) {
 	switch err := eIter.Err(); err {
 	case nil, io.EOF:
 		return validEnd, nil
+	case kv.ErrPartialEntry:
+		return validEnd, fmt.Errorf("vlog: partial entry in %s at offset %d", filepath.Base(store.FileName()), validEnd)
+	case kv.ErrBadChecksum:
+		return validEnd, fmt.Errorf("vlog: checksum mismatch in %s at offset %d", filepath.Base(store.FileName()), validEnd)
+	default:
+		return validEnd, err
+	}
+}
+
+func checkValueLogUntil(store *file.LogFile, endOffset uint32) (uint32, error) {
+	start, err := firstNonZeroOffset(store)
+	if err != nil {
+		return 0, err
+	}
+	if endOffset < start {
+		return 0, fmt.Errorf("vlog: head offset %d precedes first entry offset %d in %s", endOffset, start, filepath.Base(store.FileName()))
+	}
+	if _, err := store.Seek(int64(start), io.SeekStart); err != nil {
+		return 0, err
+	}
+	eIter := kv.NewEntryIterator(store.File())
+	defer func() { _ = eIter.Close() }()
+
+	offset := start
+	validEnd := offset
+	for eIter.Next() {
+		recordLen := eIter.RecordLen()
+		nextEnd := offset + recordLen
+		if nextEnd > endOffset {
+			return validEnd, fmt.Errorf("vlog: head offset %d cuts through an entry in %s at offset %d", endOffset, filepath.Base(store.FileName()), offset)
+		}
+		validEnd = nextEnd
+		offset = nextEnd
+		if validEnd == endOffset {
+			return validEnd, nil
+		}
+	}
+
+	switch err := eIter.Err(); err {
+	case nil, io.EOF:
+		if validEnd == endOffset {
+			return validEnd, nil
+		}
+		return validEnd, fmt.Errorf("vlog: head offset %d exceeds valid data in %s (valid end %d)", endOffset, filepath.Base(store.FileName()), validEnd)
 	case kv.ErrPartialEntry:
 		return validEnd, fmt.Errorf("vlog: partial entry in %s at offset %d", filepath.Base(store.FileName()), validEnd)
 	case kv.ErrBadChecksum:
