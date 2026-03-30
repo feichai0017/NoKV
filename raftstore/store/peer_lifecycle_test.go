@@ -173,6 +173,53 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 	require.Equal(t, []byte("payload"), got.Value)
 }
 
+func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *testing.T) {
+	targetDB, targetMeta := openStoreDB(t)
+	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              22,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport: noopTransport{},
+			Apply:     func([]myraft.Entry) error { return nil },
+			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
+				result, err := snapshotpkg.ImportPayload(targetDB, payload)
+				if err != nil {
+					return raftmeta.RegionMeta{}, err
+				}
+				return result.Manifest.Region, nil
+			},
+			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID: meta.ID,
+			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+		}, nil
+	}
+	st := NewStore(Config{StoreID: 2, LocalMeta: targetMeta, PeerBuilder: builder})
+	t.Cleanup(st.Close)
+
+	_, err := st.InstallRegionSnapshot(myraft.Snapshot{
+		Data: []byte("broken-payload"),
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 5,
+			Term:  2,
+			ConfState: raftpb.ConfState{
+				Voters: []uint64{11, 22},
+			},
+		},
+	})
+	require.Error(t, err)
+	_, ok := st.RegionRuntimeStatus(0)
+	require.False(t, ok)
+	require.Empty(t, st.RegionMetas())
+	_, hosted := st.Peer(22)
+	require.False(t, hosted)
+}
+
 func TestStorePeerLifecycle(t *testing.T) {
 	router := NewRouter()
 	rs := NewStore(Config{Router: router})

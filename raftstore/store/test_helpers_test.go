@@ -34,6 +34,11 @@ type slowSchedulerSink struct {
 	removeDelay  time.Duration
 }
 
+type degradedSchedulerSink struct {
+	testSchedulerSink
+	status SchedulerStatus
+}
+
 type regionHeartbeat struct {
 	Meta          raftmeta.RegionMeta
 	LastHeartbeat time.Time
@@ -126,6 +131,10 @@ func (s *testSchedulerSink) LastUpdate(regionID uint64) (time.Time, bool) {
 
 func (s *testSchedulerSink) Close() error {
 	return nil
+}
+
+func (s *degradedSchedulerSink) Status() SchedulerStatus {
+	return s.status
 }
 
 func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta raftmeta.RegionMeta) {

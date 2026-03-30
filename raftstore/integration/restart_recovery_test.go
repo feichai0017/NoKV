@@ -152,7 +152,7 @@ func TestLeaderRestartStillAllowsMembershipChanges(t *testing.T) {
 		RegionID:     31,
 		WaitTimeout:  5 * time.Second,
 		PollInterval: 20 * time.Millisecond,
-		Targets: []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}, {StoreID: 3, PeerID: 301, TargetAdminAddr: target3.Addr()}},
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}, {StoreID: 3, PeerID: 301, TargetAdminAddr: target3.Addr()}},
 	})
 	require.NoError(t, err)
 
@@ -185,7 +185,7 @@ func TestLeaderRestartStillAllowsMembershipChanges(t *testing.T) {
 	}
 
 	opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer opCancel()
+	defer opCancel()
 	_, err = migrate.RemovePeer(opCtx, migrate.RemovePeerConfig{
 		Addr:            leaderNode.Addr(),
 		TargetAdminAddr: removeTarget.Addr(),

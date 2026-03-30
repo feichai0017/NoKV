@@ -117,4 +117,24 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 
 When adding new distributed tests, prefer reusing `raftstore/testcluster` instead of embedding cluster bootstrap helpers into feature-specific test files.
 
+## 7. Distributed Fault Matrix
+
+| Fault Class | Current Coverage | Primary Tests | Notes |
+| --- | --- | --- | --- |
+| Snapshot export/install failure | Covered | `raftstore/migrate/expand_test.go`, `raftstore/store/peer_lifecycle_test.go`, `raftstore/admin/service_test.go` | Covers leader export failure, target install failure, and corrupt payload rejection without partially hosted peers. |
+| Membership wait timeouts | Covered | `raftstore/migrate/expand_test.go`, `raftstore/migrate/remove_peer_test.go`, `raftstore/migrate/transfer_leader_test.go` | Verifies timeout surfaces when leader metadata does not publish, target never hosts, peer removal never converges, or leader transfer stalls. |
+| Follower restart after snapshot install | Covered | `raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData` | Ensures installed peer persists region metadata and data after restart. |
+| Removed peer restart | Covered | `raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost` | Ensures dehosted peers do not come back after restart. |
+| Leader restart with follow-up membership change | Covered | `raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges` | Exercises leadership churn before a later remove-peer operation. |
+| Control-plane degraded / PD unavailable | Partially covered | `pd/adapter/region_sink_test.go`, `raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable` | Confirms degraded scheduler status is visible and command path remains serviceable; missing full multi-node PD outage scenarios. |
+| Scheduler queue overflow / dropped operations | Covered | `raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop` | Validates local degraded status and dropped operation accounting. |
+| Split/merge restart safety | Partially covered | `raftstore/store/store_test.go::TestStoreRestartPreservesSplitMergeLocalMeta` | Store-local correctness exists; no multi-node split/merge restart suite yet. |
+
+Next fault-matrix additions should focus on:
+
+- PD unavailable after startup in a live multi-node cluster
+- snapshot install interrupted by process exit before publish
+- split/merge restart safety across multiple stores
+- request cancel/deadline propagation through client -> routing -> propose/read paths
+
 Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.
