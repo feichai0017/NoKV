@@ -20,10 +20,7 @@ type PeerTarget struct {
 // ExpandConfig defines one seed-region expansion request.
 type ExpandConfig struct {
 	Addr         string
-	TargetAddr   string
 	RegionID     uint64
-	StoreID      uint64
-	PeerID       uint64
 	WaitTimeout  time.Duration
 	PollInterval time.Duration
 	Targets      []PeerTarget
@@ -55,34 +52,6 @@ type ExpandManyResult struct {
 	Results  []ExpandResult `json:"results"`
 }
 
-// Expand adds one peer to one seeded region and, when requested, waits until
-// the target store reports the new peer as hosted.
-func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResult, error) {
-	if cfg.Addr == "" {
-		return ExpandResult{}, fmt.Errorf("migrate: leader addr is required")
-	}
-	if cfg.RegionID == 0 || cfg.StoreID == 0 || cfg.PeerID == 0 {
-		return ExpandResult{}, fmt.Errorf("migrate: region, store, and peer ids are required")
-	}
-	if cfg.Dial == nil {
-		cfg.Dial = defaultDial
-	}
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = defaultExpandPollInterval
-	}
-
-	leaderClient, closeLeader, err := cfg.Dial(ctx, cfg.Addr)
-	if err != nil {
-		return ExpandResult{}, fmt.Errorf("migrate: dial leader admin %s: %w", cfg.Addr, err)
-	}
-	defer func() {
-		if closeLeader != nil {
-			_ = closeLeader()
-		}
-	}()
-	return expandWithLeaderClient(ctx, leaderClient, cfg)
-}
-
 // ExpandMany performs one sequential add-peer rollout against a single region.
 func ExpandMany(ctx context.Context, cfg ExpandConfig) (ExpandManyResult, error) {
 	if cfg.Addr == "" {
@@ -92,10 +61,7 @@ func ExpandMany(ctx context.Context, cfg ExpandConfig) (ExpandManyResult, error)
 		return ExpandManyResult{}, fmt.Errorf("migrate: region id is required")
 	}
 	if len(cfg.Targets) == 0 {
-		if cfg.StoreID == 0 || cfg.PeerID == 0 {
-			return ExpandManyResult{}, fmt.Errorf("migrate: at least one peer target is required")
-		}
-		cfg.Targets = []PeerTarget{{StoreID: cfg.StoreID, PeerID: cfg.PeerID, TargetAddr: cfg.TargetAddr}}
+		return ExpandManyResult{}, fmt.Errorf("migrate: at least one peer target is required")
 	}
 	if cfg.Dial == nil {
 		cfg.Dial = defaultDial
@@ -116,12 +82,7 @@ func ExpandMany(ctx context.Context, cfg ExpandConfig) (ExpandManyResult, error)
 
 	result := ExpandManyResult{Addr: cfg.Addr, RegionID: cfg.RegionID, Results: make([]ExpandResult, 0, len(cfg.Targets))}
 	for _, target := range cfg.Targets {
-		stepCfg := cfg
-		stepCfg.StoreID = target.StoreID
-		stepCfg.PeerID = target.PeerID
-		stepCfg.TargetAddr = target.TargetAddr
-		stepCfg.Targets = nil
-		step, err := expandWithLeaderClient(ctx, leaderClient, stepCfg)
+		step, err := expandTargetWithLeaderClient(ctx, leaderClient, cfg, target)
 		result.Results = append(result.Results, step)
 		if err != nil {
 			return result, err
@@ -130,11 +91,11 @@ func ExpandMany(ctx context.Context, cfg ExpandConfig) (ExpandManyResult, error)
 	return result, nil
 }
 
-func expandWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg ExpandConfig) (ExpandResult, error) {
+func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg ExpandConfig, target PeerTarget) (ExpandResult, error) {
 	addResp, err := leaderClient.AddPeer(ctx, &pb.AddPeerRequest{
 		RegionId: cfg.RegionID,
-		StoreId:  cfg.StoreID,
-		PeerId:   cfg.PeerID,
+		StoreId:  target.StoreID,
+		PeerId:   target.PeerID,
 	})
 	if err != nil {
 		return ExpandResult{}, err
@@ -142,10 +103,10 @@ func expandWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg E
 
 	result := ExpandResult{
 		Addr:         cfg.Addr,
-		TargetAddr:   cfg.TargetAddr,
+		TargetAddr:   target.TargetAddr,
 		RegionID:     cfg.RegionID,
-		StoreID:      cfg.StoreID,
-		PeerID:       cfg.PeerID,
+		StoreID:      target.StoreID,
+		PeerID:       target.PeerID,
 		LeaderKnown:  addResp.GetRegion() != nil,
 		LeaderRegion: addResp.GetRegion(),
 	}
@@ -157,23 +118,23 @@ func expandWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg E
 	defer cancel()
 	result.Waited = true
 
-	if err := waitForLeaderPeer(waitCtx, leaderClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
+	if err := waitForLeaderPeer(waitCtx, leaderClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
 	}
-	if cfg.TargetAddr == "" {
+	if target.TargetAddr == "" {
 		return result, nil
 	}
 
-	targetClient, closeTarget, err := cfg.Dial(waitCtx, cfg.TargetAddr)
+	targetClient, closeTarget, err := cfg.Dial(waitCtx, target.TargetAddr)
 	if err != nil {
-		return result, fmt.Errorf("migrate: dial target admin %s: %w", cfg.TargetAddr, err)
+		return result, fmt.Errorf("migrate: dial target admin %s: %w", target.TargetAddr, err)
 	}
 	defer func() {
 		if closeTarget != nil {
 			_ = closeTarget()
 		}
 	}()
-	if err := waitForTargetHosted(waitCtx, targetClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
+	if err := waitForTargetHosted(waitCtx, targetClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
 	}
 	return result, nil

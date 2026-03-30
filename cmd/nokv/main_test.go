@@ -956,44 +956,38 @@ func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 }
 
 func TestRunMigrateExpandCmd(t *testing.T) {
-	orig := runExpand
 	origMany := runExpandMany
-	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResult, error) {
+	runExpandMany = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
-		require.Equal(t, "127.0.0.1:20161", cfg.TargetAddr)
 		require.Equal(t, uint64(9), cfg.RegionID)
-		require.Equal(t, uint64(2), cfg.StoreID)
-		require.Equal(t, uint64(22), cfg.PeerID)
 		require.Equal(t, 5*time.Second, cfg.WaitTimeout)
 		require.Equal(t, 100*time.Millisecond, cfg.PollInterval)
-		return migratepkg.ExpandResult{
-			Addr:              cfg.Addr,
-			TargetAddr:        cfg.TargetAddr,
-			RegionID:          cfg.RegionID,
-			StoreID:           cfg.StoreID,
-			PeerID:            cfg.PeerID,
-			LeaderKnown:       true,
-			TargetKnown:       true,
-			TargetHosted:      true,
-			TargetLocalPeerID: cfg.PeerID,
+		require.Len(t, cfg.Targets, 1)
+		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAddr: "127.0.0.1:20161"}, cfg.Targets[0])
+		return migratepkg.ExpandManyResult{
+			Addr:     cfg.Addr,
+			RegionID: cfg.RegionID,
+			Results: []migratepkg.ExpandResult{
+				{
+					StoreID:           2,
+					PeerID:            22,
+					LeaderKnown:       true,
+					TargetKnown:       true,
+					TargetHosted:      true,
+					TargetLocalPeerID: 22,
+				},
+			},
 		}, nil
 	}
-	runExpandMany = func(context.Context, migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
-		t.Fatalf("unexpected runExpandMany call")
-		return migratepkg.ExpandManyResult{}, nil
-	}
 	t.Cleanup(func() {
-		runExpand = orig
 		runExpandMany = origMany
 	})
 
 	var buf bytes.Buffer
 	err := runMigrateExpandCmd(&buf, []string{
 		"-addr", "127.0.0.1:20160",
-		"-target-addr", "127.0.0.1:20161",
 		"-region", "9",
-		"-store", "2",
-		"-peer", "22",
+		"-target", "2:22@127.0.0.1:20161",
 		"-wait", "5s",
 		"-poll-interval", "100ms",
 		"-json",
@@ -1002,18 +996,16 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
-	require.Equal(t, true, payload["leader_known"])
-	require.Equal(t, true, payload["target_hosted"])
-	require.Equal(t, float64(22), payload["target_local_peer_id"])
+	results := payload["results"].([]any)
+	require.Len(t, results, 1)
+	first := results[0].(map[string]any)
+	require.Equal(t, true, first["leader_known"])
+	require.Equal(t, true, first["target_hosted"])
+	require.Equal(t, float64(22), first["target_local_peer_id"])
 }
 
 func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
-	orig := runExpand
 	origMany := runExpandMany
-	runExpand = func(context.Context, migratepkg.ExpandConfig) (migratepkg.ExpandResult, error) {
-		t.Fatalf("unexpected runExpand call")
-		return migratepkg.ExpandResult{}, nil
-	}
 	runExpandMany = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandManyResult, error) {
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
@@ -1030,7 +1022,6 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 		}, nil
 	}
 	t.Cleanup(func() {
-		runExpand = orig
 		runExpandMany = origMany
 	})
 

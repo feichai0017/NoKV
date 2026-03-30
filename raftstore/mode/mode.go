@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -110,12 +111,7 @@ func Allowed(allow []Mode, actual Mode) bool {
 	if len(allow) == 0 {
 		return actual == ModeStandalone
 	}
-	for _, mode := range allow {
-		if mode == actual {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allow, actual)
 }
 
 func writeAll(w io.Writer, data []byte) error {

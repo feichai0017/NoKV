@@ -90,8 +90,7 @@ nokv stats --workdir ./testdata/db --json | jq '.flush.queue_length'
   hosted, and has applied at least one raft index
 - Common flags:
   - `--addr` leader store admin address
-  - `--target-addr` target store admin address for hosted-peer wait checks
-  - `--region`, `--store`, `--peer`
+  - `--region`
   - `--target <store>:<peer>[@addr]` (repeatable)
   - `--wait` overall wait timeout (`0` disables waiting)
   - `--poll-interval`

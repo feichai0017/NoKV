@@ -190,12 +190,11 @@ Input:
 
 - `--addr`
 - `--region`
-- `--store`
-- `--peer`
 - repeated `--target <store>:<peer>[@addr]`
-- optional `--target-addr`
 - optional `--wait`
 - optional `--poll-interval`
+
+The old single-target `--store/--peer/--target-addr` form has been removed.
 
 ### `nokv migrate remove-peer`
 
