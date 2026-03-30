@@ -1,0 +1,158 @@
+package store
+
+import (
+	"testing"
+
+	entrykv "github.com/feichai0017/NoKV/kv"
+	myraft "github.com/feichai0017/NoKV/raft"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	"github.com/feichai0017/NoKV/raftstore/peer"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	"github.com/stretchr/testify/require"
+	raftpb "go.etcd.io/raft/v3/raftpb"
+)
+
+func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
+	sourceDB, _ := openStoreDB(t)
+	value := entrykv.NewInternalEntry(entrykv.CFDefault, []byte("apple"), 5, []byte("value"), 0, 0)
+	t.Cleanup(func() { value.DecrRef() })
+	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{value}))
+
+	region := raftmeta.RegionMeta{
+		ID:       77,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 2},
+		Peers: []raftmeta.PeerMeta{
+			{StoreID: 1, PeerID: 11},
+			{StoreID: 2, PeerID: 22},
+		},
+		State: raftmeta.RegionStateRunning,
+	}
+	payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
+	require.NoError(t, err)
+
+	targetDB, targetMeta := openStoreDB(t)
+	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              22,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport: noopTransport{},
+			Apply:     func([]myraft.Entry) error { return nil },
+			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
+				result, err := snapshotpkg.ImportPayload(targetDB, payload)
+				if err != nil {
+					return raftmeta.RegionMeta{}, err
+				}
+				return result.Manifest.Region, nil
+			},
+			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID: meta.ID,
+			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+		}, nil
+	}
+	st := NewStore(Config{
+		StoreID:     2,
+		LocalMeta:   targetMeta,
+		PeerBuilder: builder,
+	})
+	t.Cleanup(st.Close)
+
+	msg := myraft.Message{
+		Type: myraft.MsgSnapshot,
+		From: 11,
+		To:   22,
+		Snapshot: &raftpb.Snapshot{
+			Data: payload,
+			Metadata: raftpb.SnapshotMetadata{
+				Index: 5,
+				Term:  2,
+				ConfState: raftpb.ConfState{
+					Voters: []uint64{11, 22},
+				},
+			},
+		},
+	}
+	require.NoError(t, st.Step(msg))
+
+	p, ok := st.Peer(22)
+	require.True(t, ok)
+	require.NotNil(t, p)
+	meta, ok := st.RegionMetaByID(region.ID)
+	require.True(t, ok)
+	require.Equal(t, uint64(22), meta.Peers[1].PeerID)
+
+	got, err := targetDB.GetInternalEntry(entrykv.CFDefault, []byte("apple"), 5)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	defer got.DecrRef()
+	require.Equal(t, []byte("value"), got.Value)
+}
+
+func TestStorePeerLifecycle(t *testing.T) {
+	router := NewRouter()
+	rs := NewStore(Config{Router: router})
+
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    10,
+			HeartbeatTick:   2,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		Region: &raftmeta.RegionMeta{
+			ID:       100,
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
+		},
+	}
+
+	peer, err := rs.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	require.NotNil(t, peer)
+
+	metas := rs.RegionMetas()
+	require.Len(t, metas, 1)
+	require.Equal(t, uint64(100), metas[0].ID)
+
+	require.NoError(t, router.SendTick(peer.ID()))
+	require.NoError(t, router.BroadcastTick())
+	require.NoError(t, router.BroadcastFlush())
+
+	rs.StopPeer(peer.ID())
+	_, ok := router.Peer(peer.ID())
+	require.False(t, ok)
+}
+
+func TestStoreDuplicatePeer(t *testing.T) {
+	rs := NewStore(Config{})
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              1,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+	}
+
+	peer, err := rs.StartPeer(cfg, nil)
+	require.NoError(t, err)
+	require.NotNil(t, peer)
+
+	defer rs.StopPeer(peer.ID())
+
+	_, err = rs.StartPeer(cfg, nil)
+	require.Error(t, err)
+}
