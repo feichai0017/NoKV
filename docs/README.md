@@ -14,11 +14,10 @@
   </div>
 
   <p class="hero-lead">
-    NoKV is a storage system that starts as a serious standalone engine and grows into
-    a multi-Raft distributed key-value database without changing its underlying data
-    plane. The interesting part is not just the API surface. It is the bridge:
-    WAL, LSM, MVCC, control plane, migration, and replication all live in one coherent
-    design.
+    NoKV starts as a serious standalone engine and grows into a multi-Raft distributed
+    KV database without swapping out its storage core. That is the hook: WAL, LSM,
+    MVCC, migration, replication, and control-plane behavior are treated as one system,
+    not a pile of loosely connected features.
   </p>
 
   <div class="hero-summary">
@@ -103,6 +102,12 @@
 <span class="section-kicker">Read This Next</span>
 
 ## Documentation Guide
+
+If you only read three pages, read these first:
+
+1. <a href="getting_started.html"><strong>Getting Started</strong></a> for the shortest path to a running cluster.
+2. <a href="raftstore.html"><strong>Raftstore</strong></a> for runtime ownership and distributed boundaries.
+3. <a href="migration.html"><strong>Migration</strong></a> for the standalone → cluster bridge that makes NoKV distinct.
 
 <div class="doc-grid">
   <div class="doc-card">
