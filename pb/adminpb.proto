@@ -1,0 +1,36 @@
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package pb;
+
+import "metapb.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb";
+
+message AddPeerRequest {
+  uint64 region_id = 1;
+  uint64 store_id = 2;
+  uint64 peer_id = 3;
+}
+
+message AddPeerResponse {
+  RegionMeta region = 1;
+}
+
+message RegionStatusRequest {
+  uint64 region_id = 1;
+}
+
+message RegionStatusResponse {
+  bool known = 1;
+  bool hosted = 2;
+  uint64 local_peer_id = 3;
+  uint64 leader_peer_id = 4;
+  bool leader = 5;
+  RegionMeta region = 6;
+}
+
+service RaftAdmin {
+  rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
+  rpc RegionStatus(RegionStatusRequest) returns (RegionStatusResponse);
+}

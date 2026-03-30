@@ -11,6 +11,7 @@ import (
 	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
+	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -104,8 +105,10 @@ func New(cfg Config) (*Server, error) {
 
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
+	adminService := adminsvc.NewService(st)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
+		pb.RegisterRaftAdminServer(reg, adminService)
 	}); err != nil {
 		_ = tr.Close()
 		return nil, err

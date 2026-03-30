@@ -182,9 +182,18 @@ Returns the current migration mode and seed identifiers.
 
 ### `nokv migrate expand`
 
-Expands the single-store seed region into a replicated region by driving peer
-addition and snapshot catch-up. This is explicitly phase two work, but the
-command name should be reserved now.
+Expands the single-store seed region into a replicated region by driving one
+peer addition and snapshot catch-up through the leader store's admin RPC.
+
+Input:
+
+- `--addr`
+- `--region`
+- `--store`
+- `--peer`
+- optional `--target-addr`
+- optional `--wait`
+- optional `--poll-interval`
 
 ---
 
@@ -311,13 +320,28 @@ Once the seed is healthy, normal distributed mechanisms should replicate it.
 The intended order is:
 
 1. start empty remote stores
-2. add one peer to the seed region
-3. install snapshot to the new peer
-4. wait for catch-up
-5. repeat until quorum is established
-6. later split and rebalance
+2. call `nokv migrate expand` against the current region leader
+3. leader issues `AddPeer`
+4. target store bootstraps an empty peer on `MsgSnapshot`
+5. target peer imports the logical region snapshot payload
+6. target peer applies the corresponding raft durable snapshot metadata
+7. wait until the target store reports the new peer as hosted
+8. repeat until quorum is established
+9. later split and rebalance
 
-This phase should reuse the existing membership, snapshot, and heartbeat paths.
+This phase reuses:
+
+- `Store.ProposeAddPeer(...)`
+- logical region snapshot export/import in `raftstore/snapshot`
+- unknown-peer snapshot bootstrap in `raftstore/store/peer_lifecycle.go`
+- normal raft snapshot delivery
+
+The first implementation is intentionally narrow:
+
+- one `AddPeer` at a time
+- no automatic multi-peer rollout
+- no automatic leader transfer
+- no automatic split or rebalance
 
 ---
 
