@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
+        <link rel="stylesheet" href="docs/custom-3b873ea0.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
+            window.path_to_searchindex_js = "searchindex-77e96ea9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -202,6 +202,33 @@
 
     </div>
 
+    
+<div class="hero-signal-panel">
+      <span class="hero-panel-kicker">Launch View</span>
+      
+<div class="hero-panel-grid">
+        
+<div class="hero-panel-metric">
+          <strong>Embedded</strong>
+          <span>Use <code>NoKV.Open</code> as a serious local engine.</span>
+        </div>
+
+        
+<div class="hero-panel-metric">
+          <strong>Seeded</strong>
+          <span>Promote an existing workdir into a distributed seed.</span>
+        </div>
+
+        
+<div class="hero-panel-metric">
+          <strong>Replicated</strong>
+          <span>Roll out peers, move leaders, and verify recovery.</span>
+        </div>
+
+      </div>
+
+    </div>
+
   </div>
 
   
@@ -257,10 +284,22 @@
   </div>
 
   
+<div class="cta-zone">
+    
+<div class="cta-copy">
+      <span class="cta-kicker">Start Here</span>
+      
+<p>Run a local cluster first, then follow the standalone → seeded → cluster path.</p>
+
+    </div>
+
+    
 <div class="cta-row">
-    <a class="cta-button primary" href="#getting-started">Quick Start</a>
-    <a class="cta-button secondary" href="#nokv-architecture-overview">Architecture</a>
-    <a class="cta-button secondary" href="#standalone-to-cluster-migration">Migration</a>
+      <a class="cta-button primary" href="#getting-started">Quick Start</a>
+      <a class="cta-button secondary" href="#nokv-architecture-overview">Architecture</a>
+      <a class="cta-button secondary" href="#standalone-to-cluster-migration">Migration</a>
+    </div>
+
   </div>
 
   
@@ -318,49 +357,81 @@
 
 <p><span class="section-kicker">What Matters</span></p>
 <h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
-<div class="feature-grid">
+<div class="why-layout">
   
-<div class="feature-card">
+<div class="why-intro">
+    <span class="why-kicker">Three reasons this project is interesting</span>
     
+<h3>NoKV is not trying to be a feature checklist.</h3>
+
+    
+<p>It is trying to answer a narrower and harder question well: can one storage core grow from an embedded engine into a distributed multi-Raft KV without turning migration, metadata, and recovery into glue code?</p>
+
+    
+<ul class="why-points">
+      
+<li>One storage substrate across standalone and distributed modes.</li>
+
+      
+<li>Explicit lifecycle and migration semantics instead of hidden bootstrap magic.</li>
+
+      
+<li>Verification aimed at restart, degraded control plane, and publish-boundary correctness.</li>
+
+    </ul>
+
+  </div>
+
+  
+<div class="feature-grid">
+    
+<div class="feature-card">
+      <span class="feature-eyebrow">Storage Story</span>
+      
 <h3>One data plane, two deployment shapes</h3>
 
-    
+      
 <p>NoKV does not fork into separate standalone and distributed engines. The distributed layer grows on top of the same underlying DB workdir.</p>
 
-    <small>That is why migration can be a protocol instead of a dump/import afterthought.</small>
-  </div>
+      <small>That is why migration can be a protocol instead of a dump/import afterthought.</small>
+    </div>
 
-  
-<div class="feature-card">
     
+<div class="feature-card">
+      <span class="feature-eyebrow">Runtime Ownership</span>
+      
 <h3>Replication with clear ownership</h3>
 
-    
+      
 <p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and PD stays in the control plane.</p>
 
-    <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
-  </div>
+      <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
+    </div>
 
-  
-<div class="feature-card">
     
+<div class="feature-card">
+      <span class="feature-eyebrow">Migration Primitive</span>
+      
 <h3>Logical region snapshots</h3>
 
-    
+      
 <p>Raft durable snapshot metadata is split from logical region state snapshots, which keeps migration, add-peer install, and recovery semantics clean.</p>
 
-    <small>This is a correctness-first design, not a one-shot performance shortcut.</small>
-  </div>
+      <small>This is a correctness-first design, not a one-shot performance shortcut.</small>
+    </div>
 
-  
-<div class="feature-card">
     
+<div class="feature-card">
+      <span class="feature-eyebrow">Validation Surface</span>
+      
 <h3>System-level validation</h3>
 
-    
+      
 <p>The project is tested beyond unit semantics: migration flow, restart safety, degraded PD behavior, transport chaos, and context propagation are all exercised.</p>
 
-    <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
+      <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
+    </div>
+
   </div>
 
 </div>
@@ -371,7 +442,76 @@
 
 <p><span class="section-kicker">Fastest Path</span></p>
 <h2 id="try-nokv-in-five-minutes"><a class="header" href="#try-nokv-in-five-minutes">Try NoKV In Five Minutes</a></h2>
-<p>If you only want one practical loop, use this:</p>
+<div class="launchpad">
+  
+<div class="launchpad-copy">
+    <span class="launchpad-kicker">Fastest Demo Loop</span>
+    
+<h3>Boot a cluster, front it with Redis, inspect the runtime.</h3>
+
+    
+<p>If you only want one practical path, this is the shortest route from clone to “I can see the system running”. It uses the local cluster helper, the Redis-compatible gateway, and the built-in runtime inspection commands.</p>
+
+    
+<div class="launchpad-tags">
+      <span class="tag-pill">local cluster</span>
+      <span class="tag-pill">redis gateway</span>
+      <span class="tag-pill">runtime inspect</span>
+    </div>
+
+  </div>
+
+  
+<div class="launchpad-steps">
+    
+<div class="launch-step">
+      <strong>01</strong>
+      
+<div>
+        
+<h4>Start the cluster</h4>
+
+        
+<p>Use the shared topology file and bring up the local PD + store layout.</p>
+
+      </div>
+
+    </div>
+
+    
+<div class="launch-step">
+      <strong>02</strong>
+      
+<div>
+        
+<h4>Expose a familiar interface</h4>
+
+        
+<p>Run the Redis-compatible gateway so you can talk to NoKV with an off-the-shelf client.</p>
+
+      </div>
+
+    </div>
+
+    
+<div class="launch-step">
+      <strong>03</strong>
+      
+<div>
+        
+<h4>Inspect the system</h4>
+
+        
+<p>Query stats and region ownership so the demo ends with visibility instead of blind writes.</p>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
 <pre><code class="language-bash"># 1. Start a local cluster from the shared topology file
 ./scripts/dev/cluster.sh --config ./raft_config.example.json
 
@@ -383,9 +523,9 @@ go run ./cmd/nokv-redis \
 # 3. Talk to NoKV with any Redis client
 redis-cli -p 6380 set hello world
 redis-cli -p 6380 get hello
-</code></pre>
-<p>Then inspect what is happening:</p>
-<pre><code class="language-bash">go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
+
+# 4. Inspect the running cluster
+go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
 go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1
 </code></pre>
 <p><span class="section-kicker">Read This Next</span></p>
