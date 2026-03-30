@@ -85,6 +85,11 @@ start_with_logs() {
   printf -v "$__pid_var" '%s' "$!"
 }
 
+workdir_has_unexpected_entries() {
+  local dir=$1
+  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
+}
+
 cleaned=0
 STORE_PIDS=()
 PD_PID=""
@@ -186,6 +191,10 @@ for idx in "${!STORE_IDS[@]}"; do
   if [[ -f "$store_dir/CURRENT" ]]; then
     echo "Store ${STORE_IDS[$idx]} already bootstrapped; skipping manifest seeding"
     continue
+  fi
+  if workdir_has_unexpected_entries "$store_dir"; then
+    echo "Store ${STORE_IDS[$idx]} has stale files; refusing to seed into dirty directory: $store_dir" >&2
+    exit 1
   fi
   for region_line in "${REGION_LINES[@]}"; do
     read -r region_id start_key end_key epoch_ver epoch_conf peer_str leader_store <<<"$region_line"

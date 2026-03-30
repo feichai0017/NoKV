@@ -1410,6 +1410,53 @@ func TestDefaultLeaderStoreID(t *testing.T) {
 	}))
 }
 
+func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
+	resolver := &mockRegionResolver{
+		region: &pb.RegionMeta{
+			Id:               1,
+			StartKey:         []byte("a"),
+			EndKey:           []byte("z"),
+			EpochVersion:     2,
+			EpochConfVersion: 2,
+			Peers: []*pb.RegionPeer{
+				{StoreId: 2, PeerId: 201},
+				{StoreId: 3, PeerId: 301},
+			},
+		},
+	}
+	cli, err := New(Config{
+		Stores: []StoreEndpoint{
+			{StoreID: 2, Addr: "127.0.0.1:2"},
+			{StoreID: 3, Addr: "127.0.0.1:3"},
+		},
+		RegionResolver: resolver,
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	cli.mu.Lock()
+	cli.upsertRegionLocked(&pb.RegionMeta{
+		Id:               1,
+		StartKey:         []byte("a"),
+		EndKey:           []byte("z"),
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers: []*pb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+			{StoreId: 2, PeerId: 201},
+		},
+	}, 1)
+	cli.mu.Unlock()
+
+	region, err := cli.regionForKeyFromResolver(context.Background(), []byte("m"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), region.leader)
+
+	cached, ok := cli.regionSnapshot(1)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), cached.leader)
+}
+
 func TestClientGetHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 	resolver := &blockingRegionResolver{started: make(chan struct{}, 1)}
 	cli, err := New(Config{

@@ -115,7 +115,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", meta.GetId())
 	}
 	leader := defaultLeaderStoreID(meta)
-	if old, ok := c.regionSnapshot(meta.GetId()); ok && old.leader != 0 {
+	if old, ok := c.regionSnapshot(meta.GetId()); ok && old.leader != 0 && regionHasStoreID(meta, old.leader) {
 		leader = old.leader
 	}
 	c.mu.Lock()
@@ -290,6 +290,18 @@ func defaultLeaderStoreID(meta *pb.RegionMeta) uint64 {
 		}
 	}
 	return 0
+}
+
+func regionHasStoreID(meta *pb.RegionMeta, storeID uint64) bool {
+	if meta == nil || storeID == 0 {
+		return false
+	}
+	for _, peer := range meta.GetPeers() {
+		if peer != nil && peer.GetStoreId() == storeID {
+			return true
+		}
+	}
+	return false
 }
 
 func containsKey(meta *pb.RegionMeta, key []byte) bool {

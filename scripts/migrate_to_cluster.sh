@@ -197,6 +197,11 @@ wait_for_tcp() {
   return 1
 }
 
+workdir_has_unexpected_entries() {
+  local dir=$1
+  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
+}
+
 run_cmd() {
   echo "+ $*"
   if [[ $DRY_RUN -eq 0 ]]; then
@@ -296,13 +301,13 @@ for spec in "${TARGET_SPECS[@]}"; do
     exit 1
   fi
   mkdir -p "$target_dir"
-  if [[ -f "$target_dir/CURRENT" || -f "$target_dir/RAFTSTORE_STATE.json" || -f "$target_dir/MODE.json" ]]; then
-    echo "migrate_to_cluster: target store $target_store workdir is not empty enough for fresh peer bootstrap: $target_dir" >&2
-    exit 1
-  fi
   lock_path="$target_dir/LOCK"
   if [[ -f "$lock_path" ]]; then
     rm -f "$lock_path"
+  fi
+  if workdir_has_unexpected_entries "$target_dir"; then
+    echo "migrate_to_cluster: target store $target_store workdir is not empty enough for fresh peer bootstrap: $target_dir" >&2
+    exit 1
   fi
   TARGET_STORE_IDS+=("$target_store")
   TARGET_ADMIN_ADDR_BY_STORE["$target_store"]="$target_addr"
