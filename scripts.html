@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0eaf04c4.js";
+            window.path_to_searchindex_js = "searchindex-ebd7c815.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f6004387.js"></script>
@@ -214,6 +214,23 @@ The script iterates over every store in the config and writes local peer catalog
     --scope local   # use --scope docker inside containers
 </code></pre>
 <code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from <code>config.pd</code> unless <code>--pd-addr</code> explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
+</ul>
+<h3 id="scriptsmigrate_to_clustersh"><a class="header" href="#scriptsmigrate_to_clustersh"><code>scripts/migrate_to_cluster.sh</code></a></h3>
+<ul>
+<li><strong>Purpose</strong> – one-shot local operator wrapper for the standalone-to-cluster migration path. It runs <code>nokv migrate plan</code>, <code>nokv migrate init</code>, starts PD-lite plus the seed/target stores, rolls out <code>nokv migrate expand</code>, and can optionally finish with <code>transfer-leader</code> and <code>remove-peer</code>.</li>
+<li><strong>Usage</strong>
+<pre><code class="language-bash">./scripts/migrate_to_cluster.sh \
+    --config ./raft_config.example.json \
+    --workdir ./artifacts/standalone \
+    --seed-store 1 \
+    --seed-region 1 \
+    --seed-peer 101 \
+    --target 2:201 \
+    --target 3:301 \
+    --transfer-leader 201 \
+    --remove-peer 101
+</code></pre>
+The script is intentionally strict: the seed workdir must already contain standalone data, target store workdirs must be fresh, and the script uses the migration CLI as the only source of truth. It keeps PD/store logs attached in the foreground; press <code>Ctrl+C</code> to stop everything.</li>
 </ul>
 <hr>
 <h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
