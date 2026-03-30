@@ -414,6 +414,41 @@ func VerifyDir(cfg Config) error {
 	return nil
 }
 
+// CheckDir scans all value log segments without mutating them. It validates
+// checksums and reports partial tails as errors.
+func CheckDir(cfg Config) error {
+	var err error
+	cfg, err = cfg.normalized()
+	if err != nil {
+		return err
+	}
+	fs := cfg.FS
+	files, err := fs.Glob(filepath.Join(cfg.Dir, "*.vlog"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		fid := uint32(extractFID(path))
+		store, err := openLogFile(fs, fid, path, cfg.Dir, cfg.MaxSize, false)
+		if err != nil {
+			if stderrors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		_, err = checkValueLog(store)
+		closeErr := store.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
 func extractFID(path string) uint64 {
 	var fid uint64
 	if _, err := fmt.Sscanf(filepath.Base(path), "%05d.vlog", &fid); err != nil {
@@ -447,6 +482,37 @@ func sanitizeValueLog(store *file.LogFile) (uint32, error) {
 		return validEnd, nil
 	case kv.ErrPartialEntry, kv.ErrBadChecksum:
 		return validEnd, utils.ErrTruncate
+	default:
+		return validEnd, err
+	}
+}
+
+func checkValueLog(store *file.LogFile) (uint32, error) {
+	start, err := firstNonZeroOffset(store)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := store.Seek(int64(start), io.SeekStart); err != nil {
+		return 0, err
+	}
+	eIter := kv.NewEntryIterator(store.File())
+	defer func() { _ = eIter.Close() }()
+
+	offset := start
+	validEnd := offset
+	for eIter.Next() {
+		recordLen := eIter.RecordLen()
+		validEnd = offset + recordLen
+		offset = validEnd
+	}
+
+	switch err := eIter.Err(); err {
+	case nil, io.EOF:
+		return validEnd, nil
+	case kv.ErrPartialEntry:
+		return validEnd, fmt.Errorf("vlog: partial entry in %s at offset %d", filepath.Base(store.FileName()), validEnd)
+	case kv.ErrBadChecksum:
+		return validEnd, fmt.Errorf("vlog: checksum mismatch in %s at offset %d", filepath.Base(store.FileName()), validEnd)
 	default:
 		return validEnd, err
 	}
