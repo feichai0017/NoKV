@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f3bd5eb3.js";
+            window.path_to_searchindex_js = "searchindex-0eaf04c4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f6004387.js"></script>
@@ -373,13 +373,11 @@ additions and snapshot catch-up through the leader store’s admin RPC.</p>
 <ul>
 <li><code>--addr</code></li>
 <li><code>--region</code></li>
-<li><code>--store</code></li>
-<li><code>--peer</code></li>
 <li>repeated <code>--target &lt;store&gt;:&lt;peer&gt;[@addr]</code></li>
-<li>optional <code>--target-addr</code></li>
 <li>optional <code>--wait</code></li>
 <li>optional <code>--poll-interval</code></li>
 </ul>
+<p>The old single-target <code>--store/--peer/--target-addr</code> form has been removed.</p>
 <h3 id="nokv-migrate-remove-peer"><a class="header" href="#nokv-migrate-remove-peer"><code>nokv migrate remove-peer</code></a></h3>
 <p>Removes one peer from a replicated region through the leader store’s admin RPC
 and optionally waits until the target store no longer hosts it.</p>
