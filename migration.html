@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-5230762e.css">
+        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b6424906.js";
+            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -190,6 +190,15 @@ standalone NoKV workdir into distributed mode.</p>
 </ul>
 <p>The goal is to make an existing standalone workdir become a valid
 single-store cluster seed first, then expand it into a replicated cluster.</p>
+<blockquote>
+<p>Read this page if the most interesting question in NoKV is not “how fast is it” but “how an existing standalone engine becomes a distributed system without switching data planes”.</p>
+</blockquote>
+<h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
+<ul>
+<li>Read sections 1 to 4 for the migration contract.</li>
+<li>Read sections 5 to 9 for lifecycle and CLI flow.</li>
+<li>Read this together with <a href="raftstore.html"><code>raftstore.md</code></a> and <a href="recovery.html"><code>recovery.md</code></a> if you want the runtime ownership behind the protocol.</li>
+</ul>
 <hr>
 <h2 id="1-goals"><a class="header" href="#1-goals">1. Goals</a></h2>
 <ol>
@@ -273,6 +282,39 @@ truth for the migrated directory.</li>
     E --&gt; F["Single-store cluster seed"]
     F --&gt; G["nokv migrate expand"]
     G --&gt; H["Multi-peer cluster"]
+</pre>
+
+<h3 id="minimal-operator-flow"><a class="header" href="#minimal-operator-flow">Minimal operator flow</a></h3>
+<pre><code class="language-bash"># 1. Inspect a standalone workdir
+go run ./cmd/nokv migrate plan --workdir ./data/store-1
+
+# 2. Convert it into a single-store seed
+go run ./cmd/nokv migrate init \
+  --workdir ./data/store-1 \
+  --store 1 \
+  --region 1 \
+  --peer 101
+
+# 3. Start the seeded node in distributed mode
+go run ./cmd/nokv serve \
+  --workdir ./data/store-1 \
+  --store-id 1 \
+  --pd-addr 127.0.0.1:2379
+
+# 4. Expand the seed into more replicas
+go run ./cmd/nokv migrate expand \
+  --addr 127.0.0.1:20170 \
+  --region 1 \
+  --target 2:201@127.0.0.1:20171 \
+  --target 3:301@127.0.0.1:20172
+</code></pre>
+<h3 id="lifecycle-state-sketch"><a class="header" href="#lifecycle-state-sketch">Lifecycle state sketch</a></h3>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; standalone
+    standalone --&gt; preparing: migrate init
+    preparing --&gt; seeded: catalog + seed snapshot + raft seed
+    seeded --&gt; cluster: nokv serve
+    cluster --&gt; cluster: expand / transfer-leader / remove-peer
 </pre>
 
 <hr>
@@ -398,6 +440,13 @@ happy-path sequence:</p>
 <p>The script is intentionally conservative. It only accepts a standalone seed
 workdir plus fresh target store workdirs and delegates all state transitions to
 the migration CLI.</p>
+<p>Typical local workflow:</p>
+<pre><code class="language-bash">./scripts/ops/migrate-cluster.sh \
+  --config ./raft_config.example.json \
+  --seed-workdir ./artifacts/migrate/seed \
+  --target-workdir ./artifacts/migrate/store-2 \
+  --target-workdir ./artifacts/migrate/store-3
+</code></pre>
 <hr>
 <h2 id="8-phase-1-plan"><a class="header" href="#8-phase-1-plan">8. Phase 1: <code>plan</code></a></h2>
 <p><code>nokv migrate plan --workdir &lt;dir&gt;</code></p>

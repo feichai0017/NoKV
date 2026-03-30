@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-5230762e.css">
+        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b6424906.js";
+            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -271,6 +271,51 @@
 
 </div>
 
+<div class="project-masthead">
+  
+<div class="masthead-panel">
+    <span class="masthead-kicker">What You Can Actually Do</span>
+    
+<h3>Use NoKV in three different ways</h3>
+
+    
+<ul>
+      
+<li>Embed it locally through <code>NoKV.Open</code>.</li>
+
+      
+<li>Start a multi-node cluster with <code>scripts/dev/cluster.sh</code>.</li>
+
+      
+<li>Take an existing standalone workdir and migrate it into a replicated region.</li>
+
+    </ul>
+
+  </div>
+
+  
+<div class="masthead-panel">
+    <span class="masthead-kicker">What To Look For</span>
+    
+<h3>What makes this project worth reading</h3>
+
+    
+<ul>
+      
+<li>One storage substrate instead of separate standalone and distributed engines.</li>
+
+      
+<li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
+
+      
+<li>System-level verification under restart, degraded PD, chaos, and failpoints.</li>
+
+    </ul>
+
+  </div>
+
+</div>
+
 <p><span class="section-kicker">What Matters</span></p>
 <h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
 <div class="feature-grid">
@@ -324,6 +369,25 @@
   Benchmark methodology and result snapshots live in <a href="../benchmark/README.html"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
 </div>
 
+<p><span class="section-kicker">Fastest Path</span></p>
+<h2 id="try-nokv-in-five-minutes"><a class="header" href="#try-nokv-in-five-minutes">Try NoKV In Five Minutes</a></h2>
+<p>If you only want one practical loop, use this:</p>
+<pre><code class="language-bash"># 1. Start a local cluster from the shared topology file
+./scripts/dev/cluster.sh --config ./raft_config.example.json
+
+# 2. In another terminal, front it with the Redis-compatible gateway
+go run ./cmd/nokv-redis \
+  --addr 127.0.0.1:6380 \
+  --raft-config ./raft_config.example.json
+
+# 3. Talk to NoKV with any Redis client
+redis-cli -p 6380 set hello world
+redis-cli -p 6380 get hello
+</code></pre>
+<p>Then inspect what is happening:</p>
+<pre><code class="language-bash">go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
+go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1
+</code></pre>
 <p><span class="section-kicker">Read This Next</span></p>
 <h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
 <p>If you only read three pages, read these first:</p>
@@ -370,6 +434,63 @@
 
     
 <p>See how deterministic integration, failpoints, restart recovery, and distributed fault matrix coverage are organized.</p>
+
+  </div>
+
+</div>
+
+<p><span class="section-kicker">Choose Your Route</span></p>
+<h2 id="read-by-interest"><a class="header" href="#read-by-interest">Read By Interest</a></h2>
+<div class="path-grid">
+  
+<div class="path-card">
+    
+<h3>Storage Engine</h3>
+
+    
+<p>Read this route if you care about WAL discipline, MemTable/flush, manifest semantics, and ValueLog GC.</p>
+
+    
+<p><a href="#nokv-architecture-overview">Architecture</a> · <a href="#wal-subsystem">WAL</a> · <a href="#memtable-flush-pipeline">Flush</a> · <a href="#value-log-vlog-design">Value Log</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Distributed Runtime</h3>
+
+    
+<p>Read this route if Store/Peer ownership, transport, snapshots, and PD-lite are the parts you want to reason about.</p>
+
+    
+<p><a href="#raftstore-deep-dive">Raftstore</a> · <a href="#pd-lite">PD-lite</a> · <a href="#runtime-call-chains-current">Runtime</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Migration &amp; Operations</h3>
+
+    
+<p>Read this route if the bridge from standalone workdir to replicated region is the part you want to demo or operate.</p>
+
+    
+<p><a href="#standalone-to-cluster-migration">Migration</a> · <a href="#scripts-overview">Scripts</a> · <a href="#cli-cmdnokv-reference">CLI</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Testing &amp; Validation</h3>
+
+    
+<p>Read this route if you want to see how NoKV verifies correctness under restart, degraded PD, chaos, and failpoint boundaries.</p>
+
+    
+<p><a href="#testing--validation-matrix">Testing</a> · <a href="notes/README.html">Notes</a></p>
 
   </div>
 
@@ -513,6 +634,15 @@ func main() {
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
 <p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed NoKV service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV’s own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
+<blockquote>
+<p>Read this page if you want the shortest route from “what is NoKV” to “which package owns which part of the system”.</p>
+</blockquote>
+<h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
+<ul>
+<li>If you care about the embedded engine, focus on sections 2 and 5.</li>
+<li>If you care about distributed runtime ownership, focus on sections 3, 4, and 5.</li>
+<li>If you care about migration and recovery, read this page together with <a href="#standalone-to-cluster-migration"><code>migration.md</code></a> and <a href="#crash-recovery-playbook"><code>recovery.md</code></a>.</li>
+</ul>
 <hr>
 <h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
 <pre><code>┌─────────────────────────┐   NoKV gRPC     ┌─────────────────────────┐
@@ -551,12 +681,56 @@ func main() {
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
+<h3 id="same-system-two-shapes"><a class="header" href="#same-system-two-shapes">Same system, two shapes</a></h3>
+<pre class="mermaid">flowchart LR
+    App["App / CLI / Redis client"]
+    App --&gt; Embedded["Embedded NoKV DB"]
+    App --&gt; RPC["NoKV RPC / raftstore/client"]
+
+    subgraph "Standalone shape"
+        Embedded --&gt; Core["WAL + LSM + VLog + MVCC"]
+    end
+
+    subgraph "Distributed shape"
+        RPC --&gt; Server["server.Server"]
+        Server --&gt; Store["store.Store"]
+        Store --&gt; Peer["peer.Peer"]
+        Peer --&gt; Core
+        Store --&gt; PD["PD-lite"]
+    end
+
+    Embedded -. migrate init / seed .-&gt; Store
+</pre>
+
 <h3 id="detailed-runtime-paths"><a class="header" href="#detailed-runtime-paths">Detailed Runtime Paths</a></h3>
 <p>For function-level call chains with sequence diagrams (embedded write/read,
 iterator scan, distributed read/write via Raft apply), see
 <a href="#runtime-call-chains-current"><code>docs/runtime.md</code></a>.</p>
 <hr>
 <h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
+<h3 id="code-entry-points"><a class="header" href="#code-entry-points">Code entry points</a></h3>
+<p>If you want to inspect the embedded side first, start here:</p>
+<pre><code class="language-go">opt := NoKV.NewDefaultOptions()
+opt.WorkDir = "./workdir"
+
+db, err := NoKV.Open(opt)
+if err != nil {
+    panic(err)
+}
+defer db.Close()
+
+_ = db.Set([]byte("hello"), []byte("world"))
+entry, _ := db.Get([]byte("hello"))
+fmt.Println(string(entry.Value))
+</code></pre>
+<p>Then read:</p>
+<ul>
+<li><code>db.go</code></li>
+<li><code>db_write.go</code></li>
+<li><code>lsm/</code></li>
+<li><code>wal/</code></li>
+<li><code>vlog.go</code></li>
+</ul>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
 <li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
@@ -625,6 +799,27 @@ iterator scan, distributed read/write via Raft apply), see
 </div>
 <hr>
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
+<h3 id="code-entry-points-1"><a class="header" href="#code-entry-points-1">Code entry points</a></h3>
+<p>If you want to inspect the distributed side first, start here:</p>
+<pre><code class="language-go">srv, err := server.New(server.Config{
+    DB: db,
+    Store: store.Config{StoreID: 1},
+    Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
+    TransportAddr: "127.0.0.1:20160",
+})
+if err != nil {
+    panic(err)
+}
+defer srv.Close()
+</code></pre>
+<p>Then read:</p>
+<ul>
+<li><code>raftstore/server/server.go</code></li>
+<li><code>raftstore/store/store.go</code></li>
+<li><code>raftstore/peer/peer.go</code></li>
+<li><code>raftstore/engine/wal_storage.go</code></li>
+<li><code>raftstore/meta/store.go</code></li>
+</ul>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -3161,6 +3356,16 @@ is not present.</li>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="raftstore-deep-dive"><a class="header" href="#raftstore-deep-dive">RaftStore Deep Dive</a></h1>
 <p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the <code>NoKV</code> gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
+<blockquote>
+<p>Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.</p>
+</blockquote>
+<h2 id="reader-map-1"><a class="header" href="#reader-map-1">Reader Map</a></h2>
+<ul>
+<li>Start with section 1 if you want package ownership.</li>
+<li>Jump to section 3 if you want request execution.</li>
+<li>Jump to section 8 if you care about split/merge and control-plane behavior.</li>
+<li>Read this together with <a href="#pd-lite"><code>pd.md</code></a> and <a href="#standalone-to-cluster-migration"><code>migration.md</code></a> if your focus is lifecycle rather than just request flow.</li>
+</ul>
 <hr>
 <h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
 <div class="table-wrapper">
@@ -3179,6 +3384,26 @@ is not present.</li>
 </tbody>
 </table>
 </div>
+<h3 id="runtime-ownership-sketch"><a class="header" href="#runtime-ownership-sketch">Runtime ownership sketch</a></h3>
+<pre class="mermaid">flowchart TD
+    Client["Client / Redis gateway / CLI"]
+    Client --&gt; KV["kv.Service"]
+    Client --&gt; PD["PD-lite"]
+
+    subgraph "Node runtime"
+        Server["server.Server"] --&gt; Store["store.Store"]
+        Store --&gt; Router["router"]
+        Store --&gt; Peer["peer.Peer"]
+        Store --&gt; Scheduler["scheduler runtime"]
+        Store --&gt; Admin["admin service"]
+        Store --&gt; Meta["raftstore/meta"]
+        Peer --&gt; Engine["raftstore/engine"]
+        Peer --&gt; Apply["kv.Apply"]
+    end
+
+    Apply --&gt; DB["NoKV DB"]
+</pre>
+
 <hr>
 <h2 id="2-boot-sequence"><a class="header" href="#2-boot-sequence">2. Boot Sequence</a></h2>
 <ol>
@@ -3212,6 +3437,14 @@ is not present.</li>
 </ul>
 </li>
 </ol>
+<h3 id="minimal-mental-model"><a class="header" href="#minimal-mental-model">Minimal mental model</a></h3>
+<ul>
+<li><code>Server</code> is the node wiring root.</li>
+<li><code>Store</code> is the runtime owner for what this node hosts.</li>
+<li><code>Peer</code> is one region replica’s state machine and raft runtime.</li>
+<li><code>Meta</code> is a local recovery mirror, not cluster truth.</li>
+<li><code>PD</code> is control plane, not a writer of local truth.</li>
+</ul>
 <hr>
 <h2 id="3-command-execution"><a class="header" href="#3-command-execution">3. Command Execution</a></h2>
 <h3 id="read-strong-leader-read"><a class="header" href="#read-strong-leader-read">Read (strong leader read)</a></h3>
@@ -3305,6 +3538,15 @@ reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.<
 the runtime source of truth once PD is available.</li>
 <li>PD is the only control-plane source of truth for runtime scheduling/routing.</li>
 </ul>
+<h3 id="why-the-layering-matters"><a class="header" href="#why-the-layering-matters">Why the layering matters</a></h3>
+<p>The design rule is:</p>
+<ul>
+<li><code>RaftAdmin</code> executes membership operations against the current leader store.</li>
+<li><code>PD</code> decides and observes at the cluster level.</li>
+<li><code>Store/Peer</code> own local truth and apply.</li>
+</ul>
+<p>That split is what keeps migration and scheduling from becoming a second,
+parallel truth path.</p>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
 <li><strong>Split</strong>: leaders call <code>Store.ProposeSplit</code>, which writes a split
@@ -3575,6 +3817,15 @@ standalone NoKV workdir into distributed mode.</p>
 </ul>
 <p>The goal is to make an existing standalone workdir become a valid
 single-store cluster seed first, then expand it into a replicated cluster.</p>
+<blockquote>
+<p>Read this page if the most interesting question in NoKV is not “how fast is it” but “how an existing standalone engine becomes a distributed system without switching data planes”.</p>
+</blockquote>
+<h2 id="reader-map-2"><a class="header" href="#reader-map-2">Reader Map</a></h2>
+<ul>
+<li>Read sections 1 to 4 for the migration contract.</li>
+<li>Read sections 5 to 9 for lifecycle and CLI flow.</li>
+<li>Read this together with <a href="#raftstore-deep-dive"><code>raftstore.md</code></a> and <a href="#crash-recovery-playbook"><code>recovery.md</code></a> if you want the runtime ownership behind the protocol.</li>
+</ul>
 <hr>
 <h2 id="1-goals-1"><a class="header" href="#1-goals-1">1. Goals</a></h2>
 <ol>
@@ -3658,6 +3909,39 @@ truth for the migrated directory.</li>
     E --&gt; F["Single-store cluster seed"]
     F --&gt; G["nokv migrate expand"]
     G --&gt; H["Multi-peer cluster"]
+</pre>
+
+<h3 id="minimal-operator-flow"><a class="header" href="#minimal-operator-flow">Minimal operator flow</a></h3>
+<pre><code class="language-bash"># 1. Inspect a standalone workdir
+go run ./cmd/nokv migrate plan --workdir ./data/store-1
+
+# 2. Convert it into a single-store seed
+go run ./cmd/nokv migrate init \
+  --workdir ./data/store-1 \
+  --store 1 \
+  --region 1 \
+  --peer 101
+
+# 3. Start the seeded node in distributed mode
+go run ./cmd/nokv serve \
+  --workdir ./data/store-1 \
+  --store-id 1 \
+  --pd-addr 127.0.0.1:2379
+
+# 4. Expand the seed into more replicas
+go run ./cmd/nokv migrate expand \
+  --addr 127.0.0.1:20170 \
+  --region 1 \
+  --target 2:201@127.0.0.1:20171 \
+  --target 3:301@127.0.0.1:20172
+</code></pre>
+<h3 id="lifecycle-state-sketch"><a class="header" href="#lifecycle-state-sketch">Lifecycle state sketch</a></h3>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; standalone
+    standalone --&gt; preparing: migrate init
+    preparing --&gt; seeded: catalog + seed snapshot + raft seed
+    seeded --&gt; cluster: nokv serve
+    cluster --&gt; cluster: expand / transfer-leader / remove-peer
 </pre>
 
 <hr>
@@ -3783,6 +4067,13 @@ happy-path sequence:</p>
 <p>The script is intentionally conservative. It only accepts a standalone seed
 workdir plus fresh target store workdirs and delegates all state transitions to
 the migration CLI.</p>
+<p>Typical local workflow:</p>
+<pre><code class="language-bash">./scripts/ops/migrate-cluster.sh \
+  --config ./raft_config.example.json \
+  --seed-workdir ./artifacts/migrate/seed \
+  --target-workdir ./artifacts/migrate/store-2 \
+  --target-workdir ./artifacts/migrate/store-3
+</code></pre>
 <hr>
 <h2 id="8-phase-1-plan"><a class="header" href="#8-phase-1-plan">8. Phase 1: <code>plan</code></a></h2>
 <p><code>nokv migrate plan --workdir &lt;dir&gt;</code></p>
@@ -4598,22 +4889,130 @@ nokv-config regions --config raft_config.json --format json | jq '.[] | {id:.id,
 </code></pre>
 <p>These counters are part of the process-wide expvar output and can be scraped alongside the rest of NoKV’s metrics.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="notes"><a class="header" href="#notes">Notes</a></h1>
-<p>Use this folder to capture per-debug or per-investigation notes. Keep entries short, factual, and easy to skim.</p>
-<h2 id="add-a-new-note"><a class="header" href="#add-a-new-note">Add a new note</a></h2>
+<h1 id="notes--essays"><a class="header" href="#notes--essays">Notes &amp; Essays</a></h1>
+<p>This section is the long-form writing side of NoKV.</p>
+<p>The main docs are a reference manual. The notes section is closer to an
+engineering blog: design tradeoffs, implementation lessons, debugging
+narratives, and the reasons behind the architectural boundaries in the code.</p>
+<div class="blog-hero">
+  
+<div class="blog-hero-copy">
+    <span class="masthead-kicker">Engineering Journal</span>
+    
+<h2>How NoKV is being built</h2>
+
+    
+<p>These posts explain why certain boundaries exist, what broke during implementation, what looked like an easy shortcut, and what the codebase learned from it.</p>
+
+  </div>
+
+  
+<div class="blog-hero-meta">
+    
+<div class="tag-pill">Design</div>
+
+    
+<div class="tag-pill">Implementation</div>
+
+    
+<div class="tag-pill">Distributed Systems</div>
+
+    
+<div class="tag-pill">Storage Internals</div>
+
+  </div>
+
+</div>
+
+<h2 id="featured-posts"><a class="header" href="#featured-posts">Featured Posts</a></h2>
+<div class="blog-grid">
+  
+<div class="blog-card">
+    <span class="blog-date">2026-03-30</span>
+    
+<h3><a href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">Standalone to Distributed Bridge</a></h3>
+
+    
+<p>Why NoKV treats standalone and distributed mode as one system, and why migration had to become a protocol instead of a dump/import tool.</p>
+
+  </div>
+
+  
+<div class="blog-card">
+    <span class="blog-date">2026-03-30</span>
+    
+<h3><a href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">PD and RaftAdmin Layering</a></h3>
+
+    
+<p>Why control plane and execution plane are deliberately separated, and why PD should not become a writer of local truth.</p>
+
+  </div>
+
+  
+<div class="blog-card">
+    <span class="blog-date">2026-03-30</span>
+    
+<h3><a href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">Migration Mode and Snapshot</a></h3>
+
+    
+<p>The migration story is really about lifecycle and snapshot semantics, not just adding more CLI commands.</p>
+
+  </div>
+
+  
+<div class="blog-card">
+    <span class="blog-date">2026-03-30</span>
+    
+<h3><a href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">Distributed Testing and Failpoints</a></h3>
+
+    
+<p>Why NoKV uses both live integration tests and narrow boundary failpoints, and how to keep failpoint usage disciplined.</p>
+
+  </div>
+
+</div>
+
+<h2 id="what-belongs-here"><a class="header" href="#what-belongs-here">What belongs here</a></h2>
+<ul>
+<li>design decisions that deserve more narrative than the reference docs</li>
+<li>debugging writeups with a concrete symptom, failed assumptions, and final fix</li>
+<li>performance investigations with benchmark setup and code-path analysis</li>
+<li>refactor notes that explain how package boundaries changed and why</li>
+</ul>
+<h2 id="writing-style"><a class="header" href="#writing-style">Writing style</a></h2>
+<p>Treat each note as a small technical blog post:</p>
 <ol>
-<li>Create a new file in <code>docs/notes/</code> named <code>YYYY-MM-DD-short-title.md</code>.</li>
-<li>Add it to <code>docs/SUMMARY.md</code> under Notes.</li>
-<li>Use the template below to keep entries consistent.</li>
+<li>Start with the concrete problem or design question.</li>
+<li>Show the system boundary involved.</li>
+<li>Explain the tradeoffs and rejected alternatives.</li>
+<li>Include diagrams, code references, and command snippets where useful.</li>
+<li>End with what changed in the codebase and what still remains open.</li>
 </ol>
-<h2 id="template"><a class="header" href="#template">Template</a></h2>
-<h3 id="context"><a class="header" href="#context">Context</a></h3>
-<h3 id="symptom"><a class="header" href="#symptom">Symptom</a></h3>
-<h3 id="repro"><a class="header" href="#repro">Repro</a></h3>
-<h3 id="investigation"><a class="header" href="#investigation">Investigation</a></h3>
-<h3 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h3>
-<h3 id="fix"><a class="header" href="#fix">Fix</a></h3>
-<h3 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h3>
+<h2 id="suggested-post-template"><a class="header" href="#suggested-post-template">Suggested post template</a></h2>
+<pre><code class="language-md"># Title
+
+## Why this matters
+
+## The system boundary
+
+## What looked easy but was wrong
+
+## The design we chose
+
+## Code path
+
+## Diagram
+
+## What this changes
+
+## What remains unsolved
+</code></pre>
+<h2 id="add-a-new-post"><a class="header" href="#add-a-new-post">Add a new post</a></h2>
+<ol>
+<li>Create <code>docs/notes/YYYY-MM-DD-short-title.md</code>.</li>
+<li>Add it to <code>docs/SUMMARY.md</code>.</li>
+<li>Prefer diagrams, code snippets, and explicit file references over generic prose.</li>
+</ol>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="2026-01-16-mmap-choice"><a class="header" href="#2026-01-16-mmap-choice">2026-01-16 mmap choice</a></h1>
 <p>本文档详细对比了主流文件 I/O 模型的差异，并解析 NoKV 在不同组件（SSTable, WAL, VLog）中做出不同 I/O 选择的深层原因与权衡。</p>
@@ -5646,7 +6045,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h1 id="2026-03-30-standalone-到-distributed-的桥接为什么值钱"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">2026-03-30 standalone 到 distributed 的桥接为什么值钱</a></h1>
 <p>这篇记录不是在描述某个单点实现，而是在解释 NoKV 目前最有产品价值的一条主线：<strong>单机和分布式不是两套割裂系统，而是同一套数据面在不同运行形态下的演进。</strong></p>
 <hr>
-<h2 id="context-1"><a class="header" href="#context-1">Context</a></h2>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
 <p>项目同时具备：</p>
 <ul>
 <li><code>DB</code> 单机数据面</li>
@@ -5655,7 +6054,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>migrate</code> 独立迁移协议</li>
 </ul>
 <p>看起来像是在做两个系统，但当前的设计目标不是“单机一个产品、分布式另一个产品”，而是让两者共享同一套底层状态。</p>
-<h2 id="symptom-1"><a class="header" href="#symptom-1">Symptom</a></h2>
+<h2 id="symptom"><a class="header" href="#symptom">Symptom</a></h2>
 <p>很多存储项目一旦走到分布式阶段，就会遇到一个非常实际的问题：</p>
 <ol>
 <li>单机阶段先跑得起来。</li>
@@ -5670,7 +6069,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>这会直接把“从小到大演进”的故事打断。</p>
-<h2 id="investigation-1"><a class="header" href="#investigation-1">Investigation</a></h2>
+<h2 id="investigation"><a class="header" href="#investigation">Investigation</a></h2>
 <p>NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为真：</p>
 <ol>
 <li>
@@ -5689,7 +6088,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <p><code>migrate</code> 把桥接过程显式化<br><code>plan -&gt; init -&gt; serve -&gt; expand</code> 不是脚本约定，而是正式控制流。</p>
 </li>
 </ol>
-<h2 id="root-cause-1"><a class="header" href="#root-cause-1">Root cause</a></h2>
+<h2 id="root-cause"><a class="header" href="#root-cause">Root cause</a></h2>
 <p>真正让单机和分布式难以衔接的，不是“技术栈不同”，而是<strong>状态语义不同</strong>。</p>
 <p>单机系统通常只需要：</p>
 <ul>
@@ -5707,7 +6106,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>control-plane view</li>
 </ul>
 <p>如果这些额外语义没有被设计成可提升、可恢复、可验证的状态层，那么单机到分布式就只剩下粗暴搬运数据。</p>
-<h2 id="fix-1"><a class="header" href="#fix-1">Fix</a></h2>
+<h2 id="fix"><a class="header" href="#fix">Fix</a></h2>
 <p>NoKV 当前的修法，本质上是把“增加 distributed identity”这件事协议化了：</p>
 <ol>
 <li>先用 <code>mode</code> 锁住 workdir 生命周期。</li>
@@ -5720,7 +6119,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>NoKV 的分布式能力不是独立产品，而是同一套系统的放大形态。</p>
 </blockquote>
-<h2 id="follow-ups-1"><a class="header" href="#follow-ups-1">Follow-ups</a></h2>
+<h2 id="follow-ups"><a class="header" href="#follow-ups">Follow-ups</a></h2>
 <ol>
 <li>后面如果继续推进，这条桥最该加强的是：
 <ul>
@@ -5735,7 +6134,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h1 id="2026-03-30-为什么-pd-和-raftadmin-不能混成一层"><a class="header" href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">2026-03-30 为什么 PD 和 RaftAdmin 不能混成一层</a></h1>
 <p>这篇记录当前 <code>PD</code> 与 <code>RaftAdmin</code> 的职责边界。这个边界看起来像“小命名问题”，实际上直接影响整个分布式系统的真相源和控制流是否会变脏。</p>
 <hr>
-<h2 id="context-2"><a class="header" href="#context-2">Context</a></h2>
+<h2 id="context-1"><a class="header" href="#context-1">Context</a></h2>
 <p>NoKV 现在同时有两层控制相关接口：</p>
 <ul>
 <li><code>pd</code></li>
@@ -5745,7 +6144,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>既然有 PD，为什么还需要 <code>RaftAdmin</code>？</p>
 </blockquote>
-<h2 id="symptom-2"><a class="header" href="#symptom-2">Symptom</a></h2>
+<h2 id="symptom-1"><a class="header" href="#symptom-1">Symptom</a></h2>
 <p>如果边界不清楚，系统很容易滑向两种坏形态：</p>
 <ol>
 <li>
@@ -5756,7 +6155,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>这两种都不是长期可维护的架构。</p>
-<h2 id="investigation-2"><a class="header" href="#investigation-2">Investigation</a></h2>
+<h2 id="investigation-1"><a class="header" href="#investigation-1">Investigation</a></h2>
 <p>当前 NoKV 的分层本质上是：</p>
 <h3 id="raftadmin"><a class="header" href="#raftadmin"><code>RaftAdmin</code></a></h3>
 <p>负责：</p>
@@ -5784,7 +6183,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p><strong>cluster 级 control plane</strong></p>
 </blockquote>
-<h2 id="root-cause-2"><a class="header" href="#root-cause-2">Root cause</a></h2>
+<h2 id="root-cause-1"><a class="header" href="#root-cause-1">Root cause</a></h2>
 <p>两者不能混成一层，根本原因是：</p>
 <h3 id="control-plane-不等于-execution-plane"><a class="header" href="#control-plane-不等于-execution-plane">control plane 不等于 execution plane</a></h3>
 <p>PD 最擅长的是：</p>
@@ -5807,7 +6206,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>恢复路径和正常执行路径不一致</li>
 <li>分布式错误难以收敛，因为调度器开始兼做执行器</li>
 </ol>
-<h2 id="fix-2"><a class="header" href="#fix-2">Fix</a></h2>
+<h2 id="fix-1"><a class="header" href="#fix-1">Fix</a></h2>
 <p>当前 NoKV 的正确做法是：</p>
 <ol>
 <li>保留 <code>RaftAdmin</code> 作为 execution plane。</li>
@@ -5820,7 +6219,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </li>
 </ol>
 <p>而不是让 <code>PD</code> 直接篡改本地运行时。</p>
-<h2 id="follow-ups-2"><a class="header" href="#follow-ups-2">Follow-ups</a></h2>
+<h2 id="follow-ups-1"><a class="header" href="#follow-ups-1">Follow-ups</a></h2>
 <ol>
 <li><code>RegionRuntimeStatus</code> 要保持克制<br>不要把它继续膨胀成万能 dump API。</li>
 <li><code>PD</code> 以后如果做 operator framework，应明确只编排，不直接改本地 truth。</li>
@@ -5835,7 +6234,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h1 id="2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 migration 设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
 <p>这篇记录 migration 主线真正值钱的地方。表面上看，我们只是补了 <code>plan</code>、<code>init</code>、<code>expand</code> 这些命令；但真正让迁移成立的不是命令名，而是背后的状态协议。</p>
 <hr>
-<h2 id="context-3"><a class="header" href="#context-3">Context</a></h2>
+<h2 id="context-2"><a class="header" href="#context-2">Context</a></h2>
 <p>NoKV 当前 migration 主线已经形成：</p>
 <ul>
 <li><code>plan</code></li>
@@ -5846,7 +6245,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li><code>transfer-leader</code></li>
 </ul>
 <p>但如果只从 CLI 角度理解这套功能，很容易误判成“就是几条方便的运维命令”。</p>
-<h2 id="symptom-3"><a class="header" href="#symptom-3">Symptom</a></h2>
+<h2 id="symptom-2"><a class="header" href="#symptom-2">Symptom</a></h2>
 <p>分布式迁移最容易犯的两个错误是：</p>
 <ol>
 <li><strong>把迁移做成脚本串联</strong></li>
@@ -5859,7 +6258,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>应用状态和 raft metadata 混在一起</li>
 <li>增副本靠碰运气，不靠协议</li>
 </ul>
-<h2 id="investigation-3"><a class="header" href="#investigation-3">Investigation</a></h2>
+<h2 id="investigation-2"><a class="header" href="#investigation-2">Investigation</a></h2>
 <p>当前 migration 真正成立，依赖两条主线：</p>
 <h3 id="1-workdir-mode-gate"><a class="header" href="#1-workdir-mode-gate">1. workdir mode gate</a></h3>
 <p><code>raftstore/mode</code> 现在有：</p>
@@ -5900,13 +6299,13 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <ul>
 <li>某个 region key range 内的真实状态机内容</li>
 </ul>
-<h2 id="root-cause-3"><a class="header" href="#root-cause-3">Root cause</a></h2>
+<h2 id="root-cause-2"><a class="header" href="#root-cause-2">Root cause</a></h2>
 <p>standalone 到 distributed 的桥接之所以难，不是因为“缺一个命令”，而是因为：</p>
 <blockquote>
 <p>系统缺少一种能把已有 workdir 正式提升成 region state 的语义。</p>
 </blockquote>
 <p>如果没有 mode gate，迁移中的 workdir 仍然可能被错误使用。<br>如果没有逻辑 region snapshot，<code>expand</code> 和 seed bootstrap 就只能建立在不干净的目录复制或隐式状态假设上。</p>
-<h2 id="fix-3"><a class="header" href="#fix-3">Fix</a></h2>
+<h2 id="fix-2"><a class="header" href="#fix-2">Fix</a></h2>
 <p>当前 NoKV 的迁移协议是成立的，因为它做了三件对的事情：</p>
 <ol>
 <li>用 <code>mode</code> 把 workdir 生命周期写死。</li>
@@ -5919,7 +6318,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>快照边界</li>
 <li>恢复边界</li>
 </ul>
-<h2 id="follow-ups-3"><a class="header" href="#follow-ups-3">Follow-ups</a></h2>
+<h2 id="follow-ups-2"><a class="header" href="#follow-ups-2">Follow-ups</a></h2>
 <ol>
 <li>下一阶段的提升不应该破坏这条分层<br>例如未来做 SST-based snapshot install，也应该继续保留：
 <ul>
@@ -5940,7 +6339,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h1 id="2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制"><a class="header" href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">2026-03-30 分布式测试为什么不能只靠黑盒，以及 failpoint 该怎么克制</a></h1>
 <p>这篇记录最近一轮分布式测试体系收口后的判断。重点不是“case 变多了”，而是测试开始按边界和故障模型分层，而不是只靠少量 happy-path integration。</p>
 <hr>
-<h2 id="context-4"><a class="header" href="#context-4">Context</a></h2>
+<h2 id="context-3"><a class="header" href="#context-3">Context</a></h2>
 <p>最近这轮测试增强之后，NoKV 现在已经有：</p>
 <ul>
 <li>package-level protocol tests</li>
@@ -5952,7 +6351,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>publish-boundary failpoints</li>
 <li><code>testcluster</code> 集群测试基础设施</li>
 </ul>
-<h2 id="symptom-4"><a class="header" href="#symptom-4">Symptom</a></h2>
+<h2 id="symptom-3"><a class="header" href="#symptom-3">Symptom</a></h2>
 <p>分布式系统如果只靠两类测试，很快就会失真：</p>
 <ol>
 <li><strong>只靠单测</strong>
@@ -5971,7 +6370,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>测试很多，但抓不到真实故障点</li>
 <li>或者为了命中中间态，把生产代码改得很脏</li>
 </ul>
-<h2 id="investigation-4"><a class="header" href="#investigation-4">Investigation</a></h2>
+<h2 id="investigation-3"><a class="header" href="#investigation-3">Investigation</a></h2>
 <p>当前 NoKV 的收法是两条线一起做：</p>
 <h3 id="1-testcluster"><a class="header" href="#1-testcluster">1. <code>testcluster</code></a></h3>
 <p><code>raftstore/testcluster</code> 解决的是：</p>
@@ -5997,7 +6396,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>都很难靠黑盒稳定命中</li>
 <li>一旦出错，最容易留下半状态</li>
 </ul>
-<h2 id="root-cause-4"><a class="header" href="#root-cause-4">Root cause</a></h2>
+<h2 id="root-cause-3"><a class="header" href="#root-cause-3">Root cause</a></h2>
 <p>很多人对 failpoint 的直觉是“侵入性太强”。这个担心没错，但问题不是“要不要 failpoint”，而是：</p>
 <blockquote>
 <p>failpoint 是否只打在真正高价值、黑盒难覆盖、资源注入又不够精确的边界上。</p>
@@ -6009,7 +6408,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <li>到处 scattered 的测试开关</li>
 </ul>
 <p>那它就会迅速退化成脏代码。</p>
-<h2 id="fix-4"><a class="header" href="#fix-4">Fix</a></h2>
+<h2 id="fix-3"><a class="header" href="#fix-3">Fix</a></h2>
 <p>当前 NoKV 的正确方向是：</p>
 <ol>
 <li>黑盒 cluster integration 负责系统级收敛。</li>
@@ -6020,7 +6419,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <blockquote>
 <p>不是“只靠 failpoint”，也不是“完全不用 failpoint”，而是分层使用。</p>
 </blockquote>
-<h2 id="follow-ups-4"><a class="header" href="#follow-ups-4">Follow-ups</a></h2>
+<h2 id="follow-ups-3"><a class="header" href="#follow-ups-3">Follow-ups</a></h2>
 <ol>
 <li>新增 failpoint 时必须回答三个问题：
 <ul>

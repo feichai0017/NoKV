@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-5230762e.css">
+        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b6424906.js";
+            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -270,6 +270,51 @@
 
 </div>
 
+<div class="project-masthead">
+  
+<div class="masthead-panel">
+    <span class="masthead-kicker">What You Can Actually Do</span>
+    
+<h3>Use NoKV in three different ways</h3>
+
+    
+<ul>
+      
+<li>Embed it locally through <code>NoKV.Open</code>.</li>
+
+      
+<li>Start a multi-node cluster with <code>scripts/dev/cluster.sh</code>.</li>
+
+      
+<li>Take an existing standalone workdir and migrate it into a replicated region.</li>
+
+    </ul>
+
+  </div>
+
+  
+<div class="masthead-panel">
+    <span class="masthead-kicker">What To Look For</span>
+    
+<h3>What makes this project worth reading</h3>
+
+    
+<ul>
+      
+<li>One storage substrate instead of separate standalone and distributed engines.</li>
+
+      
+<li>Formal lifecycle and migration protocol instead of dump/import glue.</li>
+
+      
+<li>System-level verification under restart, degraded PD, chaos, and failpoints.</li>
+
+    </ul>
+
+  </div>
+
+</div>
+
 <p><span class="section-kicker">What Matters</span></p>
 <h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
 <div class="feature-grid">
@@ -323,6 +368,25 @@
   Benchmark methodology and result snapshots live in <a href="../benchmark/README.html"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
 </div>
 
+<p><span class="section-kicker">Fastest Path</span></p>
+<h2 id="try-nokv-in-five-minutes"><a class="header" href="#try-nokv-in-five-minutes">Try NoKV In Five Minutes</a></h2>
+<p>If you only want one practical loop, use this:</p>
+<pre><code class="language-bash"># 1. Start a local cluster from the shared topology file
+./scripts/dev/cluster.sh --config ./raft_config.example.json
+
+# 2. In another terminal, front it with the Redis-compatible gateway
+go run ./cmd/nokv-redis \
+  --addr 127.0.0.1:6380 \
+  --raft-config ./raft_config.example.json
+
+# 3. Talk to NoKV with any Redis client
+redis-cli -p 6380 set hello world
+redis-cli -p 6380 get hello
+</code></pre>
+<p>Then inspect what is happening:</p>
+<pre><code class="language-bash">go run ./cmd/nokv stats --expvar http://127.0.0.1:9100
+go run ./cmd/nokv regions --workdir ./artifacts/cluster/store-1
+</code></pre>
 <p><span class="section-kicker">Read This Next</span></p>
 <h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
 <p>If you only read three pages, read these first:</p>
@@ -369,6 +433,63 @@
 
     
 <p>See how deterministic integration, failpoints, restart recovery, and distributed fault matrix coverage are organized.</p>
+
+  </div>
+
+</div>
+
+<p><span class="section-kicker">Choose Your Route</span></p>
+<h2 id="read-by-interest"><a class="header" href="#read-by-interest">Read By Interest</a></h2>
+<div class="path-grid">
+  
+<div class="path-card">
+    
+<h3>Storage Engine</h3>
+
+    
+<p>Read this route if you care about WAL discipline, MemTable/flush, manifest semantics, and ValueLog GC.</p>
+
+    
+<p><a href="architecture.html">Architecture</a> · <a href="wal.html">WAL</a> · <a href="flush.html">Flush</a> · <a href="vlog.html">Value Log</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Distributed Runtime</h3>
+
+    
+<p>Read this route if Store/Peer ownership, transport, snapshots, and PD-lite are the parts you want to reason about.</p>
+
+    
+<p><a href="raftstore.html">Raftstore</a> · <a href="pd.html">PD-lite</a> · <a href="runtime.html">Runtime</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Migration &amp; Operations</h3>
+
+    
+<p>Read this route if the bridge from standalone workdir to replicated region is the part you want to demo or operate.</p>
+
+    
+<p><a href="migration.html">Migration</a> · <a href="scripts.html">Scripts</a> · <a href="cli.html">CLI</a></p>
+
+  </div>
+
+  
+<div class="path-card">
+    
+<h3>Testing &amp; Validation</h3>
+
+    
+<p>Read this route if you want to see how NoKV verifies correctness under restart, degraded PD, chaos, and failpoint boundaries.</p>
+
+    
+<p><a href="testing.html">Testing</a> · <a href="notes/README.html">Notes</a></p>
 
   </div>
 

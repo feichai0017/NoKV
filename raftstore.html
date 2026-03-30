@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-5230762e.css">
+        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b6424906.js";
+            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -180,6 +180,16 @@
                     <main>
                         <h1 id="raftstore-deep-dive"><a class="header" href="#raftstore-deep-dive">RaftStore Deep Dive</a></h1>
 <p><code>raftstore</code> powers NoKV’s distributed mode by layering multi-Raft replication on top of the embedded storage engine. Its RPC surface is exposed as the <code>NoKV</code> gRPC service, while the command model still tracks the TinyKV/TiKV region + MVCC design. This note explains the major packages, the boot and command paths, how transport and storage interact, and the supporting tooling for observability and testing.</p>
+<blockquote>
+<p>Read this page if you want to answer one question precisely: which package owns which responsibility once NoKV leaves standalone mode and becomes a cluster.</p>
+</blockquote>
+<h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
+<ul>
+<li>Start with section 1 if you want package ownership.</li>
+<li>Jump to section 3 if you want request execution.</li>
+<li>Jump to section 8 if you care about split/merge and control-plane behavior.</li>
+<li>Read this together with <a href="pd.html"><code>pd.md</code></a> and <a href="migration.html"><code>migration.md</code></a> if your focus is lifecycle rather than just request flow.</li>
+</ul>
 <hr>
 <h2 id="1-package-structure"><a class="header" href="#1-package-structure">1. Package Structure</a></h2>
 <div class="table-wrapper">
@@ -198,6 +208,26 @@
 </tbody>
 </table>
 </div>
+<h3 id="runtime-ownership-sketch"><a class="header" href="#runtime-ownership-sketch">Runtime ownership sketch</a></h3>
+<pre class="mermaid">flowchart TD
+    Client["Client / Redis gateway / CLI"]
+    Client --&gt; KV["kv.Service"]
+    Client --&gt; PD["PD-lite"]
+
+    subgraph "Node runtime"
+        Server["server.Server"] --&gt; Store["store.Store"]
+        Store --&gt; Router["router"]
+        Store --&gt; Peer["peer.Peer"]
+        Store --&gt; Scheduler["scheduler runtime"]
+        Store --&gt; Admin["admin service"]
+        Store --&gt; Meta["raftstore/meta"]
+        Peer --&gt; Engine["raftstore/engine"]
+        Peer --&gt; Apply["kv.Apply"]
+    end
+
+    Apply --&gt; DB["NoKV DB"]
+</pre>
+
 <hr>
 <h2 id="2-boot-sequence"><a class="header" href="#2-boot-sequence">2. Boot Sequence</a></h2>
 <ol>
@@ -231,6 +261,14 @@
 </ul>
 </li>
 </ol>
+<h3 id="minimal-mental-model"><a class="header" href="#minimal-mental-model">Minimal mental model</a></h3>
+<ul>
+<li><code>Server</code> is the node wiring root.</li>
+<li><code>Store</code> is the runtime owner for what this node hosts.</li>
+<li><code>Peer</code> is one region replica’s state machine and raft runtime.</li>
+<li><code>Meta</code> is a local recovery mirror, not cluster truth.</li>
+<li><code>PD</code> is control plane, not a writer of local truth.</li>
+</ul>
 <hr>
 <h2 id="3-command-execution"><a class="header" href="#3-command-execution">3. Command Execution</a></h2>
 <h3 id="read-strong-leader-read"><a class="header" href="#read-strong-leader-read">Read (strong leader read)</a></h3>
@@ -324,6 +362,15 @@ reused by scripts, Docker Compose, and the Redis gateway as bootstrap metadata.<
 the runtime source of truth once PD is available.</li>
 <li>PD is the only control-plane source of truth for runtime scheduling/routing.</li>
 </ul>
+<h3 id="why-the-layering-matters"><a class="header" href="#why-the-layering-matters">Why the layering matters</a></h3>
+<p>The design rule is:</p>
+<ul>
+<li><code>RaftAdmin</code> executes membership operations against the current leader store.</li>
+<li><code>PD</code> decides and observes at the cluster level.</li>
+<li><code>Store/Peer</code> own local truth and apply.</li>
+</ul>
+<p>That split is what keeps migration and scheduling from becoming a second,
+parallel truth path.</p>
 <h3 id="82-split--merge"><a class="header" href="#82-split--merge">8.2 Split / Merge</a></h3>
 <ul>
 <li><strong>Split</strong>: leaders call <code>Store.ProposeSplit</code>, which writes a split

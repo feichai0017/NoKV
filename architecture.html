@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-5230762e.css">
+        <link rel="stylesheet" href="docs/custom-7b52d2bb.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b6424906.js";
+            window.path_to_searchindex_js = "searchindex-4e37aee7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-af56fb0e.js"></script>
@@ -180,6 +180,15 @@
                     <main>
                         <h1 id="nokv-architecture-overview"><a class="header" href="#nokv-architecture-overview">NoKV Architecture Overview</a></h1>
 <p>NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed NoKV service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV’s own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.</p>
+<blockquote>
+<p>Read this page if you want the shortest route from “what is NoKV” to “which package owns which part of the system”.</p>
+</blockquote>
+<h2 id="reader-map"><a class="header" href="#reader-map">Reader Map</a></h2>
+<ul>
+<li>If you care about the embedded engine, focus on sections 2 and 5.</li>
+<li>If you care about distributed runtime ownership, focus on sections 3, 4, and 5.</li>
+<li>If you care about migration and recovery, read this page together with <a href="migration.html"><code>migration.md</code></a> and <a href="recovery.html"><code>recovery.md</code></a>.</li>
+</ul>
 <hr>
 <h2 id="1-high-level-layout"><a class="header" href="#1-high-level-layout">1. High-Level Layout</a></h2>
 <pre><code>┌─────────────────────────┐   NoKV gRPC     ┌─────────────────────────┐
@@ -218,12 +227,56 @@
 <li><strong>Control plane split</strong>: <code>raft_config</code> provides bootstrap topology; PD provides runtime routing/TSO/control-plane state in cluster mode.</li>
 <li><strong>Clients</strong> obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.</li>
 </ul>
+<h3 id="same-system-two-shapes"><a class="header" href="#same-system-two-shapes">Same system, two shapes</a></h3>
+<pre class="mermaid">flowchart LR
+    App["App / CLI / Redis client"]
+    App --&gt; Embedded["Embedded NoKV DB"]
+    App --&gt; RPC["NoKV RPC / raftstore/client"]
+
+    subgraph "Standalone shape"
+        Embedded --&gt; Core["WAL + LSM + VLog + MVCC"]
+    end
+
+    subgraph "Distributed shape"
+        RPC --&gt; Server["server.Server"]
+        Server --&gt; Store["store.Store"]
+        Store --&gt; Peer["peer.Peer"]
+        Peer --&gt; Core
+        Store --&gt; PD["PD-lite"]
+    end
+
+    Embedded -. migrate init / seed .-&gt; Store
+</pre>
+
 <h3 id="detailed-runtime-paths"><a class="header" href="#detailed-runtime-paths">Detailed Runtime Paths</a></h3>
 <p>For function-level call chains with sequence diagrams (embedded write/read,
 iterator scan, distributed read/write via Raft apply), see
 <a href="runtime.html"><code>docs/runtime.md</code></a>.</p>
 <hr>
 <h2 id="2-embedded-engine"><a class="header" href="#2-embedded-engine">2. Embedded Engine</a></h2>
+<h3 id="code-entry-points"><a class="header" href="#code-entry-points">Code entry points</a></h3>
+<p>If you want to inspect the embedded side first, start here:</p>
+<pre><code class="language-go">opt := NoKV.NewDefaultOptions()
+opt.WorkDir = "./workdir"
+
+db, err := NoKV.Open(opt)
+if err != nil {
+    panic(err)
+}
+defer db.Close()
+
+_ = db.Set([]byte("hello"), []byte("world"))
+entry, _ := db.Get([]byte("hello"))
+fmt.Println(string(entry.Value))
+</code></pre>
+<p>Then read:</p>
+<ul>
+<li><code>db.go</code></li>
+<li><code>db_write.go</code></li>
+<li><code>lsm/</code></li>
+<li><code>wal/</code></li>
+<li><code>vlog.go</code></li>
+</ul>
 <h3 id="21-wal--memtable"><a class="header" href="#21-wal--memtable">2.1 WAL &amp; MemTable</a></h3>
 <ul>
 <li><code>wal.Manager</code> appends <code>[len|type|payload|crc]</code> records (typed WAL), rotates segments, and replays logs on crash.</li>
@@ -292,6 +345,27 @@ iterator scan, distributed read/write via Raft apply), see
 </div>
 <hr>
 <h2 id="3-replication-layer-raftstore"><a class="header" href="#3-replication-layer-raftstore">3. Replication Layer (raftstore)</a></h2>
+<h3 id="code-entry-points-1"><a class="header" href="#code-entry-points-1">Code entry points</a></h3>
+<p>If you want to inspect the distributed side first, start here:</p>
+<pre><code class="language-go">srv, err := server.New(server.Config{
+    DB: db,
+    Store: store.Config{StoreID: 1},
+    Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
+    TransportAddr: "127.0.0.1:20160",
+})
+if err != nil {
+    panic(err)
+}
+defer srv.Close()
+</code></pre>
+<p>Then read:</p>
+<ul>
+<li><code>raftstore/server/server.go</code></li>
+<li><code>raftstore/store/store.go</code></li>
+<li><code>raftstore/peer/peer.go</code></li>
+<li><code>raftstore/engine/wal_storage.go</code></li>
+<li><code>raftstore/meta/store.go</code></li>
+</ul>
 <div class="table-wrapper">
 <table>
 <thead>
