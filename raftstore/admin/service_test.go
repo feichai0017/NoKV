@@ -97,23 +97,23 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	defer sourceStore.Close()
 
 	sourcePeerCfg := &peer.Config{
-			RaftConfig: myraft.Config{
-				ID:              101,
-				ElectionTick:    5,
-				HeartbeatTick:   1,
-				MaxSizePerMsg:   1 << 20,
-				MaxInflightMsgs: 256,
-				PreVote:         true,
-			},
-			Transport: noopTransport{},
-			Apply:     func([]myraft.Entry) error { return nil },
-			SnapshotExport: func(region raftmeta.RegionMeta) ([]byte, error) {
-				payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
-				return payload, err
-			},
-			Storage: sourceStorage,
-			GroupID: region.ID,
-			Region:  raftmeta.CloneRegionMetaPtr(&region),
+		RaftConfig: myraft.Config{
+			ID:              101,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Apply:     func([]myraft.Entry) error { return nil },
+		SnapshotExport: func(region raftmeta.RegionMeta) ([]byte, error) {
+			payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
+			return payload, err
+		},
+		Storage: sourceStorage,
+		GroupID: region.ID,
+		Region:  raftmeta.CloneRegionMetaPtr(&region),
 	}
 	_, err = sourceStore.StartPeer(sourcePeerCfg, nil)
 	require.NoError(t, err)

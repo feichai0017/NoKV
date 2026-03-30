@@ -1,0 +1,309 @@
+package testcluster
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"slices"
+	"testing"
+	"time"
+
+	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/pb"
+	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/engine"
+	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/raftstore/peer"
+	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+type Node struct {
+	StoreID   uint64
+	WorkDir   string
+	DB        *NoKV.DB
+	LocalMeta *raftmeta.Store
+	Server    *serverpkg.Server
+}
+
+func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoKV.DB {
+	tb.Helper()
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	if tweak != nil {
+		tweak(opt)
+	}
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		tb.Fatalf("open standalone db: %v", err)
+	}
+	return db
+}
+
+func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmode.Mode, startPeers bool) *Node {
+	tb.Helper()
+	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
+	if err != nil {
+		tb.Fatalf("open local meta: %v", err)
+	}
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = dir
+	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	if allowedModes != nil {
+		opt.AllowedModes = allowedModes
+	}
+	db, err := NoKV.Open(opt)
+	if err != nil {
+		_ = localMeta.Close()
+		tb.Fatalf("open node db: %v", err)
+	}
+	srv, err := serverpkg.New(serverpkg.Config{
+		Storage: serverpkg.Storage{MVCC: db, Raft: db.RaftLog()},
+		Store:   storepkg.Config{StoreID: storeID, LocalMeta: localMeta},
+		Raft: myraft.Config{
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		TransportAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		_ = db.Close()
+		_ = localMeta.Close()
+		tb.Fatalf("new server: %v", err)
+	}
+	node := &Node{StoreID: storeID, WorkDir: dir, DB: db, LocalMeta: localMeta, Server: srv}
+	if startPeers {
+		StartPeers(tb, node)
+	}
+	return node
+}
+
+func StartPeers(tb testing.TB, node *Node) {
+	tb.Helper()
+	snapshot := node.LocalMeta.Snapshot()
+	ids := make([]uint64, 0, len(snapshot))
+	for id := range snapshot {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		meta := snapshot[id]
+		var peerID uint64
+		for _, p := range meta.Peers {
+			if p.StoreID == node.StoreID {
+				peerID = p.PeerID
+				break
+			}
+		}
+		if peerID == 0 {
+			continue
+		}
+		storage, err := node.DB.RaftLog().Open(meta.ID, node.LocalMeta)
+		if err != nil {
+			tb.Fatalf("open peer storage: %v", err)
+		}
+		cfg := peerConfig(node, meta, peerID, storage)
+		bootstrapPeers := make([]myraft.Peer, 0, len(meta.Peers))
+		for _, p := range meta.Peers {
+			bootstrapPeers = append(bootstrapPeers, myraft.Peer{ID: p.PeerID})
+		}
+		if _, err := node.Server.Store().StartPeer(cfg, bootstrapPeers); err != nil {
+			tb.Fatalf("start peer %d: %v", peerID, err)
+		}
+	}
+}
+
+func (n *Node) Addr() string {
+	return n.Server.Addr()
+}
+
+func (n *Node) WirePeers(peers map[uint64]string) {
+	for peerID, addr := range peers {
+		n.Server.Transport().SetPeer(peerID, addr)
+	}
+}
+
+func (n *Node) Restart(tb testing.TB, allowedModes []raftmode.Mode, startPeers bool) {
+	tb.Helper()
+	workDir := n.WorkDir
+	storeID := n.StoreID
+	n.Close(tb)
+	restarted := StartNode(tb, storeID, workDir, allowedModes, startPeers)
+	*n = *restarted
+}
+
+func (n *Node) Close(tb testing.TB) {
+	tb.Helper()
+	if n == nil {
+		return
+	}
+	if n.Server != nil {
+		if err := n.Server.Close(); err != nil {
+			tb.Fatalf("close server: %v", err)
+		}
+		n.Server = nil
+	}
+	if n.DB != nil {
+		if err := n.DB.Close(); err != nil {
+			tb.Fatalf("close db: %v", err)
+		}
+		n.DB = nil
+	}
+	if n.LocalMeta != nil {
+		if err := n.LocalMeta.Close(); err != nil {
+			tb.Fatalf("close local meta: %v", err)
+		}
+		n.LocalMeta = nil
+	}
+}
+
+func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *pb.RegionRuntimeStatusResponse {
+	tb.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		tb.Fatalf("dial admin %s: %v", addr, err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			tb.Fatalf("close admin conn: %v", err)
+		}
+	}()
+	client := pb.NewRaftAdminClient(conn)
+	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	if err != nil {
+		tb.Fatalf("region runtime status: %v", err)
+	}
+	return status
+}
+
+func WaitForLeaderPeer(tb testing.TB, ctx context.Context, addr string, regionID, peerID uint64) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status := FetchRuntimeStatus(tb, ctx, addr, regionID)
+		if status.GetKnown() && status.GetLeader() && status.GetLeaderPeerId() == peerID {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for leader peer %d on region %d at %s", peerID, regionID, addr)
+}
+
+func WaitForHostedPeer(tb testing.TB, ctx context.Context, addr string, regionID, peerID uint64) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status := FetchRuntimeStatus(tb, ctx, addr, regionID)
+		if status.GetKnown() && status.GetHosted() && status.GetLocalPeerId() == peerID && status.GetAppliedIndex() > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for hosted peer %d on region %d at %s", peerID, regionID, addr)
+}
+
+func WaitForNotHosted(tb testing.TB, ctx context.Context, addr string, regionID uint64) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status := FetchRuntimeStatus(tb, ctx, addr, regionID)
+		if !status.GetHosted() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for region %d at %s to become not hosted", regionID, addr)
+}
+
+func FindLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) (*Node, *pb.RegionRuntimeStatusResponse) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, node := range nodes {
+			status := FetchRuntimeStatus(tb, ctx, node.Addr(), regionID)
+			if status.GetKnown() && status.GetLeader() {
+				return node, status
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for any leader on region %d", regionID)
+	return nil, nil
+}
+
+func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
+	tb.Helper()
+	entry, err := db.Get(key)
+	if err != nil {
+		tb.Fatalf("get key %q: %v", key, err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		tb.Fatalf("value mismatch for key %q: got %q want %q", key, entry.Value, value)
+	}
+}
+
+func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
+	var snapshotExport peer.SnapshotExportFunc
+	if src, ok := any(node.DB).(interface {
+		NoKV.MVCCStore
+		MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
+	}); ok {
+		snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
+			payload, _, err := snapshotpkg.ExportPayload(src, region)
+			return payload, err
+		}
+	}
+	snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+		result, err := snapshotpkg.ImportPayload(node.DB, payload)
+		if err != nil {
+			return raftmeta.RegionMeta{}, err
+		}
+		return result.Manifest.Region, nil
+	}
+	return &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              peerID,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport:      node.Server.Transport(),
+		Apply:          raftkv.NewEntryApplier(node.DB),
+		SnapshotExport: snapshotExport,
+		SnapshotApply:  snapshotApply,
+		Storage:        storage,
+		GroupID:        meta.ID,
+		Region:         raftmeta.CloneRegionMetaPtr(&meta),
+	}
+}
+
+func EnsureRegionPeer(tb testing.TB, node *Node, regionID, peerID uint64) {
+	tb.Helper()
+	status := FetchRuntimeStatus(tb, context.Background(), node.Addr(), regionID)
+	if !status.GetKnown() || !status.GetHosted() || status.GetLocalPeerId() != peerID {
+		tb.Fatalf("region %d on store %d not hosted as peer %d: %+v", regionID, node.StoreID, peerID, status)
+	}
+}
+
+func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) string {
+	tb.Helper()
+	parts := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		status := FetchRuntimeStatus(tb, ctx, node.Addr(), regionID)
+		parts = append(parts, fmt.Sprintf("store=%d known=%v hosted=%v local=%d leader=%v leaderPeer=%d applied=%d", node.StoreID, status.GetKnown(), status.GetHosted(), status.GetLocalPeerId(), status.GetLeader(), status.GetLeaderPeerId(), status.GetAppliedIndex()))
+	}
+	return fmt.Sprint(parts)
+}
