@@ -326,6 +326,15 @@ type blockingService struct {
 	started chan struct{}
 }
 
+func (s *blockingService) signal() {
+	if s.started != nil {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *mockService) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
 	return s.cluster.get(s.storeID, req)
 }
@@ -406,12 +415,19 @@ func (s *mockService) KvCheckTxnStatus(context.Context, *pb.KvCheckTxnStatusRequ
 }
 
 func (s *blockingService) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
-	if s.started != nil {
-		select {
-		case s.started <- struct{}{}:
-		default:
-		}
-	}
+	s.signal()
+	<-ctx.Done()
+	return nil, status.Error(codes.Canceled, ctx.Err().Error())
+}
+
+func (s *blockingService) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+	s.signal()
+	<-ctx.Done()
+	return nil, status.Error(codes.Canceled, ctx.Err().Error())
+}
+
+func (s *blockingService) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
@@ -1421,5 +1437,96 @@ func TestClientGetHonorsCanceledContextDuringRPC(t *testing.T) {
 		require.Equal(t, codes.Canceled, status.Code(err))
 	case <-time.After(time.Second):
 		t.Fatal("client rpc did not return after context cancellation")
+	}
+}
+
+func TestClientPutHonorsCanceledContextDuringRouteLookup(t *testing.T) {
+	resolver := &blockingRegionResolver{started: make(chan struct{}, 1)}
+	cli, err := New(Config{
+		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		RegionResolver: resolver,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:             1,
+			RouteUnavailableBackoff: 0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- cli.Put(ctx, []byte("alpha"), []byte("beta"), 10, 11, 3000)
+	}()
+
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("resolver was not invoked")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, IsRouteUnavailable(err))
+		require.True(t, errors.Is(err, context.Canceled))
+	case <-time.After(time.Second):
+		t.Fatal("client put did not return after context cancellation")
+	}
+}
+
+func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
+	meta := &pb.RegionMeta{
+		Id:               1,
+		StartKey:         []byte("a"),
+		EndKey:           nil,
+		EpochVersion:     1,
+		EpochConfVersion: 1,
+		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	}
+	service := &blockingService{started: make(chan struct{}, 1)}
+	addr, stop := startBlockingStore(t, service)
+	defer stop()
+
+	resolver := &mockRegionResolver{region: meta}
+	cli, err := New(Config{
+		Stores:             []StoreEndpoint{{StoreID: 1, Addr: addr}},
+		RegionResolver:     resolver,
+		RouteLookupTimeout: time.Second,
+		DialOptions:        []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 1,
+			RouteUnavailableBackoff:     0,
+			TransportUnavailableBackoff: 0,
+			RegionErrorBackoff:          0,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- cli.Put(ctx, []byte("alpha"), []byte("beta"), 10, 11, 3000)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-service.started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Equal(t, codes.Canceled, status.Code(err))
+	case <-time.After(time.Second):
+		t.Fatal("client put rpc did not return after context cancellation")
 	}
 }

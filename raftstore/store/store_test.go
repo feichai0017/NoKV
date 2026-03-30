@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -356,4 +357,78 @@ func TestStoreRestartPreservesSplitMergeLocalMeta(t *testing.T) {
 	require.Equal(t, []byte("z"), metas[0].EndKey)
 	_, ok := reopened.RegionMetaByID(childMeta.ID)
 	require.False(t, ok)
+}
+
+func TestStoreHandleSplitCommandReplayIsIdempotent(t *testing.T) {
+	storeID := uint64(31)
+	rs := NewStore(Config{
+		PeerBuilder: testPeerBuilder(storeID),
+		StoreID:     storeID,
+	})
+	defer rs.Close()
+
+	parentMeta := raftmeta.RegionMeta{
+		ID:       8100,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 81}},
+	}
+	require.NoError(t, rs.applyRegionMeta(parentMeta))
+
+	childMeta := raftmeta.RegionMeta{
+		ID:       8101,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 82}},
+	}
+	_, err := rs.splitRegionLocal(parentMeta.ID, childMeta)
+	require.NoError(t, err)
+
+	cmd := &pb.SplitCommand{
+		ParentRegionId: parentMeta.ID,
+		SplitKey:       []byte("m"),
+		Child:          regionMetaToPB(childMeta),
+	}
+	require.NoError(t, rs.handleSplitCommand(cmd))
+
+	parentUpdated, ok := rs.RegionMetaByID(parentMeta.ID)
+	require.True(t, ok)
+	require.Equal(t, []byte("m"), parentUpdated.EndKey)
+	childUpdated, ok := rs.RegionMetaByID(childMeta.ID)
+	require.True(t, ok)
+	require.Equal(t, childMeta.Peers, childUpdated.Peers)
+}
+
+func TestStoreHandleMergeCommandReplayIsIdempotent(t *testing.T) {
+	storeID := uint64(32)
+	rs := NewStore(Config{
+		PeerBuilder: testPeerBuilder(storeID),
+		StoreID:     storeID,
+	})
+	defer rs.Close()
+
+	parentMeta := raftmeta.RegionMeta{
+		ID:       8200,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 91}},
+	}
+	sourceMeta := raftmeta.RegionMeta{
+		ID:       8201,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+		Peers:    []raftmeta.PeerMeta{{StoreID: storeID, PeerID: 92}},
+	}
+	require.NoError(t, rs.applyRegionMeta(parentMeta))
+	require.NoError(t, rs.applyRegionMeta(sourceMeta))
+	require.NoError(t, rs.applyRegionRemoval(sourceMeta.ID))
+
+	require.NoError(t, rs.handleMergeCommand(&pb.MergeCommand{
+		TargetRegionId: parentMeta.ID,
+		SourceRegionId: sourceMeta.ID,
+	}))
 }

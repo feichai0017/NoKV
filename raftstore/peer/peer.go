@@ -477,7 +477,9 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 					return err
 				}
 				ccV2 := cc.AsV2()
+				p.mu.Lock()
 				p.node.ApplyConfChange(ccV2)
+				p.mu.Unlock()
 				if err := p.handleConfChange(ccV2, entry); err != nil {
 					return err
 				}
@@ -486,7 +488,9 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				if err := cc.Unmarshal(entry.Data); err != nil {
 					return err
 				}
+				p.mu.Lock()
 				p.node.ApplyConfChange(cc)
+				p.mu.Unlock()
 				if err := p.handleConfChange(cc, entry); err != nil {
 					return err
 				}
