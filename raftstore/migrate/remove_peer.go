@@ -114,7 +114,7 @@ func waitForLeaderPeerRemoval(ctx context.Context, client AdminClient, regionID,
 			result.LeaderKnown = status.GetKnown()
 			result.LeaderRegion = status.GetRegion()
 		}
-		if status.GetKnown() && !regionContainsPeer(status.GetRegion(), peerID) {
+		if !status.GetKnown() || !regionContainsPeer(status.GetRegion(), peerID) {
 			return nil
 		}
 		select {

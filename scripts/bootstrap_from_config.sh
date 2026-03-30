@@ -67,6 +67,11 @@ if ! command -v nokv-config >/dev/null 2>&1; then
   exit 1
 fi
 
+workdir_has_unexpected_entries() {
+  local dir=$1
+  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
+}
+
 STORE_LINES=()
 while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG" --format simple)
 if [[ "${#STORE_LINES[@]}" -eq 0 ]]; then
@@ -88,9 +93,17 @@ for store_line in "${STORE_LINES[@]}"; do
   fi
   store_path=${PATH_TEMPLATE//\{id\}/$store_id}
   mkdir -p "$store_path"
+  lock_path="$store_path/LOCK"
+  if [[ -f "$lock_path" ]]; then
+    rm -f "$lock_path"
+  fi
   if [[ -f "$store_path/CURRENT" ]]; then
     echo "bootstrap_from_config: store $store_id already bootstrapped; skipping"
     continue
+  fi
+  if workdir_has_unexpected_entries "$store_path"; then
+    echo "bootstrap_from_config: store $store_id has stale files; refusing to seed into dirty directory: $store_path" >&2
+    exit 1
   fi
   for region_line in "${REGION_LINES[@]}"; do
     read -r region_id start_key end_key epoch_ver epoch_conf peer_str _ <<<"$region_line"
