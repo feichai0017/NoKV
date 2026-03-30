@@ -158,8 +158,15 @@ func TestTransferLeaderRecoversAfterPartitionedTargetReturns(t *testing.T) {
 	seed.UnblockPeer(201)
 	target2.UnblockPeer(101)
 
+	currentLeader, currentStatus := testcluster.FindLeader(t, ctx, 82, seed, target2, target3)
+	if currentStatus.GetLeaderPeerId() == 201 {
+		require.Equal(t, target2.Addr(), currentLeader.Addr())
+		require.True(t, currentStatus.GetLeader())
+		return
+	}
+
 	result, err := migrate.TransferLeader(ctx, migrate.TransferLeaderConfig{
-		Addr:            seed.Addr(),
+		Addr:            currentLeader.Addr(),
 		TargetAdminAddr: target2.Addr(),
 		RegionID:        82,
 		PeerID:          201,
