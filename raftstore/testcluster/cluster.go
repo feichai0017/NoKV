@@ -224,6 +224,20 @@ func (n *Node) WirePeers(peers map[uint64]string) {
 	}
 }
 
+func (n *Node) BlockPeer(peerID uint64) {
+	if n == nil || n.Server == nil || n.Server.Transport() == nil {
+		return
+	}
+	n.Server.Transport().BlockPeer(peerID)
+}
+
+func (n *Node) UnblockPeer(peerID uint64) {
+	if n == nil || n.Server == nil || n.Server.Transport() == nil {
+		return
+	}
+	n.Server.Transport().UnblockPeer(peerID)
+}
+
 func (n *Node) Restart(tb testing.TB, allowedModes []raftmode.Mode, startPeers bool) {
 	tb.Helper()
 	workDir := n.WorkDir

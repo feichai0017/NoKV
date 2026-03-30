@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -39,7 +40,7 @@ func (s *Service) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetRes
 	}
 	result, err := s.read(ctx, cmd)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	resp := &pb.KvGetResponse{RegionError: result.GetRegionError()}
 	if len(result.GetResponses()) > 0 && result.GetResponses()[0].GetGet() != nil {
@@ -78,7 +79,7 @@ func (s *Service) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*p
 	}
 	result, err := s.read(ctx, cmd)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	resp := &pb.KvBatchGetResponse{RegionError: result.GetRegionError()}
 	if result.GetRegionError() == nil {
@@ -124,7 +125,7 @@ func (s *Service) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScan
 	}
 	result, err := s.read(ctx, cmd)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	resp := &pb.KvScanResponse{RegionError: result.GetRegionError()}
 	if len(result.GetResponses()) > 0 && result.GetResponses()[0].GetScan() != nil {
@@ -149,7 +150,7 @@ func (s *Service) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*p
 		}},
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	out := &pb.KvPrewriteResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetPrewrite() != nil {
@@ -174,7 +175,7 @@ func (s *Service) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.Kv
 		}},
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	out := &pb.KvCommitResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetCommit() != nil {
@@ -199,7 +200,7 @@ func (s *Service) KvBatchRollback(ctx context.Context, req *pb.KvBatchRollbackRe
 		}},
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	out := &pb.KvBatchRollbackResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetBatchRollback() != nil {
@@ -224,7 +225,7 @@ func (s *Service) KvResolveLock(ctx context.Context, req *pb.KvResolveLockReques
 		}},
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	out := &pb.KvResolveLockResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetResolveLock() != nil {
@@ -249,7 +250,7 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatus
 		}},
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, rpcStatus(err)
 	}
 	out := &pb.KvCheckTxnStatusResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetCheckTxnStatus() != nil {
@@ -285,4 +286,21 @@ func buildHeader(ctx *pb.Context) (*pb.CmdHeader, error) {
 		header.StoreId = peer.GetStoreId()
 	}
 	return header, nil
+}
+
+func rpcStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
 }
