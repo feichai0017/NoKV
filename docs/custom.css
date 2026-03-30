@@ -231,7 +231,20 @@ body {
 }
 
 .masthead-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+.masthead-panel::after {
+  background: linear-gradient(90deg, rgba(0, 87, 255, 0.08), rgba(17, 163, 106, 0.06));
+  content: "";
+  height: 4px;
+  inset: auto 0 0 0;
+  position: absolute;
 }
 
 .masthead-panel h3 {
@@ -298,9 +311,7 @@ body {
 .cta-row,
 .quicklink-grid,
 .feature-grid,
-.doc-grid,
-.path-grid,
-.blog-grid {
+.doc-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -363,6 +374,16 @@ body {
 
 .feature-grid,
 .doc-grid {
+  align-items: stretch;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 18px 0 28px;
+}
+
+.path-grid,
+.blog-grid {
+  align-items: stretch;
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -384,11 +405,16 @@ body {
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
+.feature-card,
+.doc-card,
 .path-card,
 .blog-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 190px;
   padding: 18px 20px;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-  width: calc(50% - 6px);
 }
 
 .feature-card:hover,
@@ -416,7 +442,9 @@ body {
 }
 
 .feature-card p,
-.doc-card p {
+.doc-card p,
+.path-card p,
+.blog-card p {
   margin: 0;
 }
 
@@ -466,6 +494,18 @@ body {
   font-size: 0.88rem;
   font-weight: 700;
   margin-bottom: 8px;
+}
+
+.path-card p:last-child,
+.blog-card p:last-child,
+.doc-card p:last-child {
+  margin-top: auto;
+}
+
+.path-card a,
+.blog-card a,
+.doc-card a {
+  text-decoration: none;
 }
 
 .ayu .feature-card small,
@@ -751,18 +791,15 @@ body {
 
   .hero-summary,
   .feature-grid,
-  .doc-grid {
+  .doc-grid,
+  .path-grid,
+  .blog-grid {
     grid-template-columns: 1fr;
   }
 
   .project-masthead,
   .blog-hero {
     grid-template-columns: 1fr;
-  }
-
-  .path-card,
-  .blog-card {
-    width: 100%;
   }
 
   .mini-toc-list {
@@ -791,9 +828,7 @@ body {
 
   .cta-row,
   .badge-row,
-  .quicklink-grid,
-  .path-grid,
-  .blog-grid {
+  .quicklink-grid {
     flex-direction: column;
   }
 
