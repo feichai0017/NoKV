@@ -265,3 +265,69 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	require.NotNil(t, resp.GetRegionError())
 	require.NotNil(t, resp.GetRegionError().GetEpochNotMatch())
 }
+
+func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	coord := &degradedSchedulerSink{
+		testSchedulerSink: *newTestSchedulerSink(),
+		status: SchedulerStatus{
+			Mode:      SchedulerModeUnavailable,
+			Degraded:  true,
+			LastError: "pd unavailable",
+		},
+	}
+	applier := newTestMVCCApplier(db)
+	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+
+	region := &raftmeta.RegionMeta{
+		ID:       909,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []raftmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+	}
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{ID: 1, ElectionTick: 5, HeartbeatTick: 1, MaxSizePerMsg: 1 << 20, MaxInflightMsgs: 256, PreVote: true},
+		Transport:  noopTransport{},
+		Storage:    mustPeerStorage(t, db, localMeta, 909),
+		GroupID:    909,
+		Region:     region,
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 1}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+	require.NoError(t, p.Campaign())
+
+	epoch := &pb.RegionEpoch{Version: 1, ConfVer: 1}
+	prewrite := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_PREWRITE, Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
+			Mutations:   []*pb.Mutation{{Op: pb.Mutation_Put, Key: []byte("sched-key"), Value: []byte("sched-value")}},
+			PrimaryLock: []byte("sched-key"), StartVersion: 50, LockTtl: 3000,
+		}}}},
+	}
+	resp, err := st.ProposeCommand(context.Background(), prewrite)
+	require.NoError(t, err)
+	require.Nil(t, resp.GetRegionError())
+
+	commit := &pb.RaftCmdRequest{
+		Header: &pb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
+		Requests: []*pb.Request{{CmdType: pb.CmdType_CMD_COMMIT, Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+			Keys: [][]byte{[]byte("sched-key")}, StartVersion: 50, CommitVersion: 80,
+		}}}},
+	}
+	resp, err = st.ProposeCommand(context.Background(), commit)
+	require.NoError(t, err)
+	require.Nil(t, resp.GetRegionError())
+
+	status := st.SchedulerStatus()
+	require.True(t, status.Degraded)
+	require.Equal(t, SchedulerModeUnavailable, status.Mode)
+	require.Contains(t, status.LastError, "pd unavailable")
+
+	reader := percolator.NewReader(db)
+	val, _, err := reader.GetValue([]byte("sched-key"), 90)
+	require.NoError(t, err)
+	require.Equal(t, []byte("sched-value"), val)
+}

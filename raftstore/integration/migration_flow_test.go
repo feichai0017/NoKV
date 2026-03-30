@@ -55,7 +55,7 @@ func TestMigrationFlowEndToEnd(t *testing.T) {
 		RegionID:     1,
 		WaitTimeout:  5 * time.Second,
 		PollInterval: 20 * time.Millisecond,
-		Targets: []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}, {StoreID: 3, PeerID: 301, TargetAdminAddr: target3.Addr()}},
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}, {StoreID: 3, PeerID: 301, TargetAdminAddr: target3.Addr()}},
 	})
 	require.NoError(t, err)
 	require.Len(t, expandResult.Results, 2)
