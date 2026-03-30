@@ -206,9 +206,9 @@ and optionally waits until the target store no longer hosts it.
 Transfers region leadership to a specific peer and optionally waits until that
 peer becomes leader.
 
-### `scripts/migrate_to_cluster.sh`
+### `scripts/ops/migrate-cluster.sh`
 
-For local operator workflows, `scripts/migrate_to_cluster.sh` wraps the full
+For local operator workflows, `scripts/ops/migrate-cluster.sh` wraps the full
 happy-path sequence:
 
 1. `nokv migrate plan`

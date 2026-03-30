@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
+source "$SCRIPT_DIR/../lib/workdir.sh"
+
 usage() {
   cat <<'USAGE'
-Usage: scripts/run_local_cluster.sh [options]
+Usage: scripts/dev/cluster.sh [options]
 
 Options:
   --config PATH         Raft configuration file (default: ./raft_config.example.json)
@@ -14,7 +19,7 @@ Options:
 USAGE
 }
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT_DIR=$NOKV_ROOT_DIR
 CONFIG_PATH="$ROOT_DIR/raft_config.example.json"
 WORKDIR=""
 WORKDIR_SET=0
@@ -51,7 +56,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "unknown option: $1" >&2
+      echo "cluster.sh: unknown option: $1" >&2
       usage
       exit 1
       ;;
@@ -59,21 +64,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! [[ -f "$CONFIG_PATH" ]]; then
-  echo "configuration file not found: $CONFIG_PATH" >&2
-  exit 1
+  nokv_die "cluster.sh: configuration file not found: $CONFIG_PATH"
 fi
-CONFIG_DIR=$(cd "$(dirname "$CONFIG_PATH")" && pwd)
+CONFIG_DIR=$(nokv_config_dir "$CONFIG_PATH")
 
 if [ -z "$WORKDIR" ]; then
   WORKDIR="$ROOT_DIR/artifacts/cluster"
 fi
 mkdir -p "$WORKDIR"
 
-BUILD_DIR="$ROOT_DIR/build"
-mkdir -p "$BUILD_DIR"
-
-go build -o "$BUILD_DIR/nokv" "$ROOT_DIR/cmd/nokv"
-go build -o "$BUILD_DIR/nokv-config" "$ROOT_DIR/cmd/nokv-config"
+nokv_build_cli_binaries
 
 start_with_logs() {
   local __pid_var=$1
@@ -83,11 +83,6 @@ start_with_logs() {
 
   "$@" > >(sed -u "s/^/[$prefix] /" | tee "$logfile") 2>&1 &
   printf -v "$__pid_var" '%s' "$!"
-}
-
-workdir_has_unexpected_entries() {
-  local dir=$1
-  find "$dir" -mindepth 1 -maxdepth 1 ! -name 'LOCK' -print -quit | grep -q .
 }
 
 cleaned=0
@@ -124,33 +119,27 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 0' INT TERM
 
-PATH="$BUILD_DIR:$PATH"
+nokv_prepend_build_path
 
 if [[ $PD_LISTEN_SET -eq 0 ]]; then
-  if pd_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple 2>/dev/null); then
-    PD_LISTEN=$(echo "$pd_from_config" | tr -d '\r' | sed -n '1p')
-  fi
+  PD_LISTEN=$(nokv_config_pd_addr "$CONFIG_PATH" host)
 fi
 if [[ -z "$PD_LISTEN" ]]; then
   PD_LISTEN="127.0.0.1:2379"
 fi
 
-PD_WORKDIR=""
-if pd_workdir_from_config=$(nokv-config pd --config "$CONFIG_PATH" --scope host --format simple --field workdir 2>/dev/null); then
-  PD_WORKDIR=$(echo "$pd_workdir_from_config" | tr -d '\r' | sed -n '1p')
-fi
+PD_WORKDIR=$(nokv_config_pd_workdir "$CONFIG_PATH")
 if [[ -z "$PD_WORKDIR" ]]; then
   PD_WORKDIR="$WORKDIR/pd"
-elif [[ "$PD_WORKDIR" != /* ]]; then
-  PD_WORKDIR="$CONFIG_DIR/$PD_WORKDIR"
+else
+  PD_WORKDIR=$(nokv_resolve_path "$CONFIG_DIR" "$PD_WORKDIR")
 fi
 mkdir -p "$PD_WORKDIR"
 
 STORE_LINES=()
-while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv-config stores --config "$CONFIG_PATH" --format simple)
+while IFS= read -r _line; do STORE_LINES+=("$_line"); done < <(nokv_config_store_lines "$CONFIG_PATH")
 if [ "${#STORE_LINES[@]}" -eq 0 ]; then
-  echo "no stores defined in $CONFIG_PATH" >&2
-  exit 1
+  nokv_die "cluster.sh: no stores defined in $CONFIG_PATH"
 fi
 
 declare -a STORE_IDS STORE_WORKDIRS
@@ -161,11 +150,7 @@ for line in "${STORE_LINES[@]}"; do
   if [[ $WORKDIR_SET -eq 1 ]]; then
     store_dir="$WORKDIR/store-$store_id"
   elif [[ -n "${store_workdir:-}" && "$store_workdir" != "-" ]]; then
-    if [[ "$store_workdir" == /* ]]; then
-      store_dir="$store_workdir"
-    else
-      store_dir="$CONFIG_DIR/$store_workdir"
-    fi
+    store_dir=$(nokv_resolve_path "$CONFIG_DIR" "$store_workdir")
   fi
   if [[ -z "$store_dir" ]]; then
     store_dir="$WORKDIR/store-$store_id"
@@ -180,10 +165,9 @@ for line in "${STORE_LINES[@]}"; do
 done
 
 REGION_LINES=()
-while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv-config regions --config "$CONFIG_PATH" --format simple)
+while IFS= read -r _line; do REGION_LINES+=("$_line"); done < <(nokv_config_region_lines "$CONFIG_PATH")
 if [ "${#REGION_LINES[@]}" -eq 0 ]; then
-  echo "no regions defined in $CONFIG_PATH" >&2
-  exit 1
+  nokv_die "cluster.sh: no regions defined in $CONFIG_PATH"
 fi
 
 for idx in "${!STORE_IDS[@]}"; do
@@ -192,10 +176,7 @@ for idx in "${!STORE_IDS[@]}"; do
     echo "Store ${STORE_IDS[$idx]} already bootstrapped; skipping manifest seeding"
     continue
   fi
-  if workdir_has_unexpected_entries "$store_dir"; then
-    echo "Store ${STORE_IDS[$idx]} has stale files; refusing to seed into dirty directory: $store_dir" >&2
-    exit 1
-  fi
+  nokv_assert_fresh_workdir "$store_dir" "cluster.sh: store ${STORE_IDS[$idx]} has stale files; refusing to seed into dirty directory"
   for region_line in "${REGION_LINES[@]}"; do
     read -r region_id start_key end_key epoch_ver epoch_conf peer_str leader_store <<<"$region_line"
     args=(--workdir "$store_dir" --region-id "$region_id" --epoch-version "$epoch_ver" --epoch-conf-version "$epoch_conf")
@@ -236,7 +217,7 @@ for idx in "${!STORE_IDS[@]}"; do
     "${serve_debug_args[@]}"
   )
   start_with_logs store_pid "store-${store_id}" "$store_dir/server.log" \
-    scripts/serve_from_config.sh "${serve_args[@]}"
+    "$ROOT_DIR/scripts/dev/serve-store.sh" "${serve_args[@]}"
   STORE_PIDS+=("$store_pid")
 done
 

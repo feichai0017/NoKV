@@ -11,7 +11,7 @@ This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a
 This launches a 3-node Raft cluster plus a PD-lite service.
 
 ```bash
-./scripts/run_local_cluster.sh --config ./raft_config.example.json
+./scripts/dev/cluster.sh --config ./raft_config.example.json
 ```
 
 The launcher stays attached, streams PD/store logs to the terminal, and also writes them under `./artifacts/cluster/`.

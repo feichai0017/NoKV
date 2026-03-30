@@ -141,7 +141,7 @@ nokv serve \
 ```
 
 When a store hosts multiple regions, include mappings for every remote peer ID
-reachable from those regions (using `scripts/serve_from_config.sh` avoids manual drift).
+reachable from those regions (using `scripts/dev/serve-store.sh` avoids manual drift).
 
 ### `nokv pd`
 
