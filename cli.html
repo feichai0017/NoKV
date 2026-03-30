@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ab5a6d1e.js";
+            window.path_to_searchindex_js = "searchindex-f3bd5eb3.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-2499ba20.js"></script>
+        <script src="toc-f6004387.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -229,6 +229,70 @@
 <ul>
 <li>Dumps the local peer catalog used for store recovery (state/range/epoch/peers)</li>
 <li>Supports <code>--json</code></li>
+</ul>
+<h3 id="nokv-migrate-plan"><a class="header" href="#nokv-migrate-plan"><code>nokv migrate plan</code></a></h3>
+<ul>
+<li>Runs a read-only preflight check for standalone -&gt; cluster-seed migration</li>
+<li>Verifies manifest, WAL, and value-log structure without repairing tails</li>
+<li>Reports current mode, local catalog occupancy, blockers, and next step</li>
+</ul>
+<h3 id="nokv-migrate-init"><a class="header" href="#nokv-migrate-init"><code>nokv migrate init</code></a></h3>
+<ul>
+<li>Converts a standalone workdir into a single-store seeded cluster directory</li>
+<li>Writes <code>MODE.json</code>, the full-range local region catalog entry, and the initial
+raft durable metadata</li>
+<li>Exports a logical seed snapshot under <code>RAFTSTORE_SNAPSHOTS/region-&lt;id&gt;</code></li>
+<li>After <code>init</code>, ordinary standalone opens must reject the workdir unless the
+caller explicitly opts into distributed modes</li>
+</ul>
+<h3 id="nokv-migrate-status"><a class="header" href="#nokv-migrate-status"><code>nokv migrate status</code></a></h3>
+<ul>
+<li>Reads <code>MODE.json</code> when present and otherwise reports <code>standalone</code></li>
+<li>Shows current mode plus seed identifiers (<code>store</code>, <code>region</code>, <code>peer</code>)</li>
+</ul>
+<h3 id="nokv-migrate-expand"><a class="header" href="#nokv-migrate-expand"><code>nokv migrate expand</code></a></h3>
+<ul>
+<li>Sends one or more <code>AddPeer</code> requests to the leader store’s admin gRPC endpoint</li>
+<li>Supports sequential rollout with repeated <code>--target &lt;store&gt;:&lt;peer&gt;[@addr]</code></li>
+<li>Optionally polls leader and target stores until each new peer is published,
+hosted, and has applied at least one raft index</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> leader store admin address</li>
+<li><code>--target-addr</code> target store admin address for hosted-peer wait checks</li>
+<li><code>--region</code>, <code>--store</code>, <code>--peer</code></li>
+<li><code>--target &lt;store&gt;:&lt;peer&gt;[@addr]</code> (repeatable)</li>
+<li><code>--wait</code> overall wait timeout (<code>0</code> disables waiting)</li>
+<li><code>--poll-interval</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="nokv-migrate-remove-peer"><a class="header" href="#nokv-migrate-remove-peer"><code>nokv migrate remove-peer</code></a></h3>
+<ul>
+<li>Sends one <code>RemovePeer</code> request to the leader store’s admin gRPC endpoint</li>
+<li>Optionally waits until the leader metadata drops the peer and the target store
+no longer reports it as hosted</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> leader store admin address</li>
+<li><code>--target-addr</code> target store admin address for removal wait checks</li>
+<li><code>--region</code>, <code>--peer</code></li>
+<li><code>--wait</code>, <code>--poll-interval</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="nokv-migrate-transfer-leader"><a class="header" href="#nokv-migrate-transfer-leader"><code>nokv migrate transfer-leader</code></a></h3>
+<ul>
+<li>Sends one <code>TransferLeader</code> request to the leader store’s admin gRPC endpoint</li>
+<li>Optionally waits until the target peer becomes the observed region leader</li>
+<li>Common flags:
+<ul>
+<li><code>--addr</code> current leader store admin address</li>
+<li><code>--target-addr</code> target store admin address for leader wait checks</li>
+<li><code>--region</code>, <code>--peer</code></li>
+<li><code>--wait</code>, <code>--poll-interval</code></li>
+</ul>
+</li>
 </ul>
 <h3 id="nokv-serve"><a class="header" href="#nokv-serve"><code>nokv serve</code></a></h3>
 <ul>

@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Page not found - NoKV Docs</title>
-        <base href="/NoKV/">
+        <title>Migration - NoKV Docs</title>
 
 
         <!-- Custom HTML head -->
@@ -179,14 +178,406 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="document-not-found-404"><a class="header" href="#document-not-found-404">Document not found (404)</a></h1>
-<p>This URL is invalid, sorry. Please use the navigation bar or search to continue.</p>
+                        <h1 id="standalone-to-cluster-migration"><a class="header" href="#standalone-to-cluster-migration">Standalone to Cluster Migration</a></h1>
+<p>This document defines the first production-worthy migration path from a
+standalone NoKV workdir into distributed mode.</p>
+<p>The design is intentionally conservative:</p>
+<ul>
+<li>offline only</li>
+<li>one-shot bootstrap</li>
+<li>no dual-write</li>
+<li>no background auto-repair</li>
+</ul>
+<p>The goal is to make an existing standalone workdir become a valid
+single-store cluster seed first, then expand it into a replicated cluster.</p>
+<hr>
+<h2 id="1-goals"><a class="header" href="#1-goals">1. Goals</a></h2>
+<ol>
+<li>Reuse the existing standalone storage engine workdir as the distributed
+data plane.</li>
+<li>Convert one standalone workdir into:
+<ul>
+<li>one <code>Store</code></li>
+<li>one full-range <code>Region</code></li>
+<li>one local <code>Peer</code></li>
+<li>one valid raft durable state</li>
+</ul>
+</li>
+<li>Make the conversion explicit and recoverable.</li>
+<li>Avoid parallel truth sources during migration.</li>
+</ol>
+<hr>
+<h2 id="2-non-goals"><a class="header" href="#2-non-goals">2. Non-goals</a></h2>
+<p>The first version does not attempt:</p>
+<ul>
+<li>online migration</li>
+<li>dual-write cutover</li>
+<li>automatic region split / rebalance</li>
+<li>compatibility with partially migrated normal service</li>
+</ul>
+<hr>
+<h2 id="3-existing-building-blocks"><a class="header" href="#3-existing-building-blocks">3. Existing Building Blocks</a></h2>
+<p>The current codebase already provides most of the low-level pieces:</p>
+<ul>
+<li><code>cmd/nokv/serve</code>
+<ul>
+<li>opens the existing <code>DB</code> workdir and layers <code>raftstore</code> on top</li>
+</ul>
+</li>
+<li><code>raftstore/meta</code>
+<ul>
+<li>persists the store-local peer catalog and per-group raft replay pointers</li>
+</ul>
+</li>
+<li><code>raftstore/store/peer_lifecycle.go</code>
+<ul>
+<li>starts peers from local recovery metadata</li>
+</ul>
+</li>
+<li><code>raftstore/engine/wal_storage.go</code>
+<ul>
+<li>persists per-group raft durable state inside the shared WAL</li>
+</ul>
+</li>
+<li><code>raftstore/snapshot</code>
+<ul>
+<li>provides logical region snapshot export/import over internal entries</li>
+</ul>
+</li>
+<li><code>raftstore/store/membership_service.go</code>
+<ul>
+<li>provides the later path from seed region to multi-peer region</li>
+</ul>
+</li>
+</ul>
+<p>What is missing is the migration control protocol and a formal CLI.</p>
+<hr>
+<h2 id="4-core-invariants"><a class="header" href="#4-core-invariants">4. Core Invariants</a></h2>
+<p>The migration flow must preserve these invariants:</p>
+<ol>
+<li>Standalone writes must stop before migration starts.</li>
+<li>The migrated workdir must not silently return to standalone mode.</li>
+<li>Bootstrap is the only allowed non-apply path that can create initial region
+truth for the migrated directory.</li>
+<li>Engine manifest remains storage-engine metadata only.</li>
+<li>Store-local region metadata lives only in <code>raftstore/meta</code>.</li>
+<li>PD is not used to create local truth during bootstrap.</li>
+</ol>
+<hr>
+<h2 id="5-high-level-flow"><a class="header" href="#5-high-level-flow">5. High-Level Flow</a></h2>
+<pre class="mermaid">flowchart LR
+    A["Standalone workdir"] --&gt; B["nokv migrate plan"]
+    B --&gt; C["nokv migrate init"]
+    C --&gt; D["Seeded workdir"]
+    D --&gt; E["nokv serve --pd-addr ..."]
+    E --&gt; F["Single-store cluster seed"]
+    F --&gt; G["nokv migrate expand"]
+    G --&gt; H["Multi-peer cluster"]
+</pre>
+
+<hr>
+<h2 id="6-workdir-modes"><a class="header" href="#6-workdir-modes">6. Workdir Modes</a></h2>
+<p>The migrated workdir should expose one explicit mode file under
+<code>raftstore/meta</code>, for example <code>MODE.json</code>.</p>
+<p>Only four modes are needed:</p>
+<ul>
+<li><code>standalone</code></li>
+<li><code>preparing</code></li>
+<li><code>seeded</code></li>
+<li><code>cluster</code></li>
+</ul>
+<h3 id="semantics"><a class="header" href="#semantics">Semantics</a></h3>
+<ul>
+<li><code>standalone</code>
+<ul>
+<li>regular standalone engine directory</li>
+</ul>
+</li>
+<li><code>preparing</code>
+<ul>
+<li>migration is in progress; standalone service must refuse normal startup</li>
+</ul>
+</li>
+<li><code>seeded</code>
+<ul>
+<li>standalone data has been converted into a single-store cluster seed</li>
+</ul>
+</li>
+<li><code>cluster</code>
+<ul>
+<li>directory is operating in distributed mode</li>
+</ul>
+</li>
+</ul>
+<p>Library-level opens must treat these modes explicitly:</p>
+<ul>
+<li>ordinary standalone <code>NoKV.Open</code> accepts only <code>standalone</code></li>
+<li><code>nokv migrate init</code> explicitly opts into <code>preparing</code></li>
+<li><code>nokv serve</code> explicitly opts into <code>seeded</code> and <code>cluster</code></li>
+<li>offline diagnostics may opt into all modes deliberately</li>
+</ul>
+<p>The file only needs minimal state:</p>
+<pre><code class="language-json">{
+  "mode": "seeded",
+  "store_id": 1,
+  "region_id": 1,
+  "peer_id": 101
+}
+</code></pre>
+<hr>
+<h2 id="7-cli-shape"><a class="header" href="#7-cli-shape">7. CLI Shape</a></h2>
+<p>The first version should use these commands:</p>
+<ul>
+<li><code>nokv migrate plan</code></li>
+<li><code>nokv migrate init</code></li>
+<li><code>nokv migrate status</code></li>
+<li><code>nokv migrate expand</code></li>
+<li><code>nokv migrate remove-peer</code></li>
+<li><code>nokv migrate transfer-leader</code></li>
+</ul>
+<h3 id="nokv-migrate-plan"><a class="header" href="#nokv-migrate-plan"><code>nokv migrate plan</code></a></h3>
+<p>Read-only preflight check.</p>
+<p>Input:</p>
+<ul>
+<li><code>--workdir</code></li>
+</ul>
+<p>Output:</p>
+<ul>
+<li>current mode</li>
+<li>eligibility</li>
+<li>blockers</li>
+<li>warnings</li>
+<li>suggested next command</li>
+</ul>
+<h3 id="nokv-migrate-init"><a class="header" href="#nokv-migrate-init"><code>nokv migrate init</code></a></h3>
+<p>Performs standalone -&gt; seed conversion.</p>
+<p>Input:</p>
+<ul>
+<li><code>--workdir</code></li>
+<li><code>--store</code></li>
+<li><code>--region</code></li>
+<li><code>--peer</code></li>
+</ul>
+<p>Output:</p>
+<ul>
+<li>local catalog written</li>
+<li>initial raft state synthesized</li>
+<li>mode changed to <code>seeded</code></li>
+</ul>
+<h3 id="nokv-migrate-status"><a class="header" href="#nokv-migrate-status"><code>nokv migrate status</code></a></h3>
+<p>Returns the current migration mode and seed identifiers.</p>
+<h3 id="nokv-migrate-expand"><a class="header" href="#nokv-migrate-expand"><code>nokv migrate expand</code></a></h3>
+<p>Expands the seeded region into a replicated region by driving one or more peer
+additions and snapshot catch-up through the leader store’s admin RPC.</p>
+<p>Input:</p>
+<ul>
+<li><code>--addr</code></li>
+<li><code>--region</code></li>
+<li><code>--store</code></li>
+<li><code>--peer</code></li>
+<li>repeated <code>--target &lt;store&gt;:&lt;peer&gt;[@addr]</code></li>
+<li>optional <code>--target-addr</code></li>
+<li>optional <code>--wait</code></li>
+<li>optional <code>--poll-interval</code></li>
+</ul>
+<h3 id="nokv-migrate-remove-peer"><a class="header" href="#nokv-migrate-remove-peer"><code>nokv migrate remove-peer</code></a></h3>
+<p>Removes one peer from a replicated region through the leader store’s admin RPC
+and optionally waits until the target store no longer hosts it.</p>
+<h3 id="nokv-migrate-transfer-leader"><a class="header" href="#nokv-migrate-transfer-leader"><code>nokv migrate transfer-leader</code></a></h3>
+<p>Transfers region leadership to a specific peer and optionally waits until that
+peer becomes leader.</p>
+<hr>
+<h2 id="8-phase-1-plan"><a class="header" href="#8-phase-1-plan">8. Phase 1: <code>plan</code></a></h2>
+<p><code>nokv migrate plan --workdir &lt;dir&gt;</code></p>
+<p>This stage must verify:</p>
+<ol>
+<li>standalone manifest is readable</li>
+<li>WAL / vlog / SST recovery chain is consistent</li>
+<li>the workdir is not already seeded or clustered</li>
+<li>there is no local peer catalog that would conflict with migration</li>
+<li>the directory is not already poisoned or in fatal recovery state</li>
+</ol>
+<p>No state is modified.</p>
+<hr>
+<h2 id="9-phase-2-init"><a class="header" href="#9-phase-2-init">9. Phase 2: <code>init</code></a></h2>
+<p><code>nokv migrate init --workdir &lt;dir&gt; --store &lt;sid&gt; --region &lt;rid&gt; --peer &lt;pid&gt;</code></p>
+<p>This stage performs the actual standalone -&gt; seed conversion.</p>
+<h3 id="step-1-gate-the-directory"><a class="header" href="#step-1-gate-the-directory">Step 1: gate the directory</a></h3>
+<p>Write mode = <code>preparing</code>.</p>
+<p>From this point, ordinary standalone startup must reject the workdir.</p>
+<h3 id="step-2-create-the-initial-local-catalog-entry"><a class="header" href="#step-2-create-the-initial-local-catalog-entry">Step 2: create the initial local catalog entry</a></h3>
+<p>Write one full-range <code>RegionMeta</code> into <code>raftstore/meta</code>:</p>
+<ul>
+<li><code>ID = region</code></li>
+<li><code>StartKey = nil</code></li>
+<li><code>EndKey = nil</code></li>
+<li><code>Epoch.Version = 1</code></li>
+<li><code>Epoch.ConfVersion = 1</code></li>
+<li><code>Peers = [{StoreID: sid, PeerID: pid}]</code></li>
+<li><code>State = running</code></li>
+</ul>
+<p>This is the only bootstrap-time source of local region truth.</p>
+<h3 id="step-3-export-a-logical-region-snapshot"><a class="header" href="#step-3-export-a-logical-region-snapshot">Step 3: export a logical region snapshot</a></h3>
+<p>The current standalone keyspace must first be materialized into a formal region
+snapshot artifact. The artifact should be a directory containing:</p>
+<ul>
+<li><code>manifest.json</code></li>
+<li><code>entries.bin</code></li>
+</ul>
+<p>The seeded artifact lives under:</p>
+<ul>
+<li><code>RAFTSTORE_SNAPSHOTS/region-&lt;id&gt;</code></li>
+</ul>
+<p>The payload in <code>entries.bin</code> is a stream of encoded internal entries, not a raw
+copy of SST/WAL/value-log files. Value-log backed records must be materialized
+into inline values during export so the snapshot does not depend on source-side
+value-log offsets.</p>
+<p>This gives the system one reusable primitive for:</p>
+<ul>
+<li>standalone -&gt; seed bootstrap</li>
+<li>seed -&gt; add-peer snapshot install</li>
+<li>future restore/reseed flows</li>
+</ul>
+<h3 id="step-4-synthesize-initial-raft-durable-state"><a class="header" href="#step-4-synthesize-initial-raft-durable-state">Step 4: synthesize initial raft durable state</a></h3>
+<p>The exported snapshot artifact now defines the state machine contents of a
+valid single-node raft group.</p>
+<p>The initial raft state should be:</p>
+<ul>
+<li>snapshot index = 1</li>
+<li>snapshot term = 1</li>
+<li>hard state term = 1</li>
+<li>hard state commit = 1</li>
+<li>conf state voters = <code>[peer]</code></li>
+</ul>
+<p>The durable raft metadata should still be written through the existing raft
+storage path rather than via ad hoc files.</p>
+<h3 id="step-5-persist-the-local-raft-replay-pointer"><a class="header" href="#step-5-persist-the-local-raft-replay-pointer">Step 5: persist the local raft replay pointer</a></h3>
+<p>Use <code>raftstore/meta</code> to persist the group-local replay pointer that corresponds
+to the synthesized raft state.</p>
+<h3 id="step-6-finalize"><a class="header" href="#step-6-finalize">Step 6: finalize</a></h3>
+<p>Write mode = <code>seeded</code>.</p>
+<p>At this point the directory is ready for:</p>
+<pre><code class="language-bash">nokv serve --workdir &lt;dir&gt; --store-id &lt;sid&gt; --pd-addr &lt;pd&gt;
+</code></pre>
+<p>The first successful <code>nokv serve</code> over that directory must promote the mode to
+<code>cluster</code>.</p>
+<hr>
+<h2 id="10-phase-3-seed-startup"><a class="header" href="#10-phase-3-seed-startup">10. Phase 3: seed startup</a></h2>
+<p>After <code>init</code>, <code>cmd/nokv serve</code> should be able to:</p>
+<ol>
+<li>open the same engine workdir</li>
+<li>load the local peer catalog from <code>raftstore/meta</code></li>
+<li>open the group-local raft durable state</li>
+<li>start one local peer</li>
+<li>serve distributed traffic through the normal raftstore path</li>
+</ol>
+<p>No special startup fork should be added. The migrated seed should reuse the
+normal distributed startup path.</p>
+<hr>
+<h2 id="11-phase-4-expansion"><a class="header" href="#11-phase-4-expansion">11. Phase 4: expansion</a></h2>
+<p>Once the seed is healthy, normal distributed mechanisms should replicate it.</p>
+<p>The intended order is:</p>
+<ol>
+<li>start empty remote stores</li>
+<li>call <code>nokv migrate expand</code> against the current region leader</li>
+<li>leader issues <code>AddPeer</code></li>
+<li>target store bootstraps an empty peer on <code>MsgSnapshot</code></li>
+<li>target peer imports the logical region snapshot payload</li>
+<li>target peer applies the corresponding raft durable snapshot metadata</li>
+<li>wait until the target store reports the new peer as hosted</li>
+<li>repeat until quorum is established</li>
+<li>later split and rebalance</li>
+</ol>
+<p>This phase reuses:</p>
+<ul>
+<li><code>Store.ProposeAddPeer(...)</code></li>
+<li>logical region snapshot export/import in <code>raftstore/snapshot</code></li>
+<li>unknown-peer snapshot bootstrap in <code>raftstore/store/peer_lifecycle.go</code></li>
+<li>normal raft snapshot delivery</li>
+</ul>
+<p>The current implementation keeps orchestration explicit:</p>
+<ul>
+<li>sequential <code>AddPeer</code> rollout through repeated <code>expand</code> targets</li>
+<li>explicit <code>remove-peer</code></li>
+<li>explicit <code>transfer-leader</code></li>
+<li>no automatic split or rebalance</li>
+</ul>
+<hr>
+<h2 id="12-failure-handling"><a class="header" href="#12-failure-handling">12. Failure Handling</a></h2>
+<p>The migration flow must never silently repair or silently fall back.</p>
+<h3 id="during-plan"><a class="header" href="#during-plan">During <code>plan</code></a></h3>
+<ul>
+<li>read-only errors are returned directly</li>
+</ul>
+<h3 id="during-init"><a class="header" href="#during-init">During <code>init</code></a></h3>
+<p>If any step after <code>preparing</code> fails:</p>
+<ul>
+<li>keep mode as <code>preparing</code></li>
+<li>refuse normal standalone startup</li>
+<li>require explicit operator action:
+<ul>
+<li>retry <code>init</code>, or</li>
+<li>run a future rollback command</li>
+</ul>
+</li>
+</ul>
+<p>This is intentionally strict. Half-migrated state must not behave like a normal
+standalone database.</p>
+<hr>
+<h2 id="13-minimal-test-matrix"><a class="header" href="#13-minimal-test-matrix">13. Minimal Test Matrix</a></h2>
+<p>The first implementation should land with these tests:</p>
+<h3 id="preflight"><a class="header" href="#preflight">Preflight</a></h3>
+<ul>
+<li>plan rejects unreadable or inconsistent standalone state</li>
+<li>plan rejects already seeded workdir</li>
+</ul>
+<h3 id="init"><a class="header" href="#init">Init</a></h3>
+<ul>
+<li>init writes the full-range local catalog entry</li>
+<li>init writes initial raft durable state</li>
+<li>init is idempotent or explicitly rejected on rerun</li>
+</ul>
+<h3 id="startup"><a class="header" href="#startup">Startup</a></h3>
+<ul>
+<li>a seeded workdir starts successfully under <code>nokv serve</code></li>
+<li>reads and writes flow through the normal raft path</li>
+</ul>
+<h3 id="failure-semantics"><a class="header" href="#failure-semantics">Failure semantics</a></h3>
+<ul>
+<li>failure after mode=<code>preparing</code> prevents standalone startup</li>
+<li>failure before finalize does not silently produce <code>seeded</code></li>
+</ul>
+<hr>
+<h2 id="14-naming-rules"><a class="header" href="#14-naming-rules">14. Naming Rules</a></h2>
+<p>To keep the surface clean:</p>
+<ul>
+<li><code>manifest</code> remains reserved for storage-engine metadata</li>
+<li><code>catalog</code> is the <code>nokv-config</code> command for local peer catalog bootstrap</li>
+<li>migration commands stay short:
+<ul>
+<li><code>plan</code></li>
+<li><code>init</code></li>
+<li><code>status</code></li>
+<li><code>expand</code></li>
+<li><code>remove-peer</code></li>
+<li><code>transfer-leader</code></li>
+</ul>
+</li>
+</ul>
+<p>This keeps the CLI precise without leaking implementation detail into every
+command name.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="pd.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
+                            <a rel="next prefetch" href="recovery.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -194,7 +585,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="pd.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
+                    <a rel="next prefetch" href="recovery.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>
