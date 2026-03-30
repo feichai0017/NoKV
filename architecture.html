@@ -8,7 +8,7 @@
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-42a70426.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-66d74ddb.js";
+            window.path_to_searchindex_js = "searchindex-81b84921.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f6004387.js"></script>
+        <script src="toc-af56fb0e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -346,7 +346,7 @@ iterator scan, distributed read/write via Raft apply), see
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -356,7 +356,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches PD-lite, and starts the stores declared in the config.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches PD-lite, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -381,7 +381,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
 <ul>
-<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
+<li><code>scripts/dev/cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
 <li><code>RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v</code> – crash-recovery validation.</li>
 <li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> – inject network faults and observe transport metrics.</li>
 </ul>
@@ -447,6 +447,7 @@ iterator scan, distributed read/write via Raft apply), see
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
+        <script src="docs/custom-732fa610.js"></script>
         <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 

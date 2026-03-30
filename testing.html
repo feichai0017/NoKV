@@ -8,7 +8,7 @@
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-42a70426.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-66d74ddb.js";
+            window.path_to_searchindex_js = "searchindex-81b84921.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f6004387.js"></script>
+        <script src="toc-af56fb0e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -206,7 +206,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 
 # Local three-node cluster (includes catalog bootstrap + PD-lite)
-./scripts/run_local_cluster.sh --config ./raft_config.example.json
+./scripts/dev/cluster.sh --config ./raft_config.example.json
 # Tear down with Ctrl+C
 
 # Docker-compose sandbox (3 nodes + PD-lite)
@@ -247,7 +247,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, and throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
-<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
+<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>cluster.sh</code>.</td></tr>
 <tr><td>Distributed Migration &amp; Membership</td><td><code>raftstore/integration/*_test.go</code>, <code>raftstore/migrate/*_test.go</code>, <code>raftstore/admin/service_test.go</code></td><td>Standalone -&gt; seeded -&gt; cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, PD outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish.</td><td>Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings.</td></tr>
 <tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
@@ -377,6 +377,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
+        <script src="docs/custom-732fa610.js"></script>
         <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 

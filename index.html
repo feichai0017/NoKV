@@ -8,7 +8,7 @@
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-42a70426.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-66d74ddb.js";
+            window.path_to_searchindex_js = "searchindex-81b84921.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f6004387.js"></script>
+        <script src="toc-af56fb0e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,19 +179,63 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
-<div align="center">
-  <img src="https://raw.githubusercontent.com/feichai0017/NoKV/main/img/logo.svg" width="180" alt="NoKV Logo">
+<div class="hero">
   
+<div class="hero-top">
+    
+<div class="hero-brand">
+      
+<div class="hero-logo">
+        <img src="assets/logo.svg" alt="NoKV logo">
+      </div>
+
+      
+<div>
+        
+<p class="hero-kicker">Distributed KV, Built As One System</p>
+
+        
 <h1>NoKV</h1>
 
+      </div>
+
+    </div>
+
+  </div>
+
   
-<p style="font-size: 1.2em; color: #666;">
-    <strong>High-Performance, Cloud-Native Distributed Key-Value Database</strong>
+<p class="hero-lead">
+    NoKV is a storage system that starts as a serious standalone engine and grows into
+    a multi-Raft distributed key-value database without changing its underlying data
+    plane. The interesting part is not just the API surface. It is the bridge:
+    WAL, LSM, MVCC, control plane, migration, and replication all live in one coherent
+    design.
   </p>
 
   
-<p>
-    <!-- Build / Quality -->
+<div class="hero-summary">
+    
+<div class="hero-stat">
+      <strong>Standalone to Cluster</strong>
+      <span>Seed a distributed region from an existing workdir and keep the same storage substrate.</span>
+    </div>
+
+    
+<div class="hero-stat">
+      <strong>Correctness First</strong>
+      <span>Mode gates, logical region snapshots, recovery metadata, and execution/control-plane split.</span>
+    </div>
+
+    
+<div class="hero-stat">
+      <strong>Tested as a System</strong>
+      <span>Migration flow, restart recovery, PD degradation, transport chaos, and publish-boundary failpoints.</span>
+    </div>
+
+  </div>
+
+  
+<div class="badge-row">
     <a href="https://github.com/feichai0017/NoKV/actions">
       <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
     </a>
@@ -204,118 +248,166 @@
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
       <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&amp;logoColor=white" />
     </a>
-    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
-      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
-    </a>
     <a href="https://dbdb.io/db/nokv">
       <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
     </a>
-  </p>
-
-  
-<p>
-    <!-- Meta -->
-    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&amp;logoColor=white" />
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
     <a href="https://deepwiki.com/feichai0017/NoKV">
       <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
     </a>
-  </p>
+  </div>
 
   
-<p>
-    <a href="getting_started.html" style="text-decoration: none;">
-      <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
-    </a>
-      
-    <a href="architecture.html" style="text-decoration: none;">
-      <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
-    </a>
+<div class="cta-row">
+    <a class="cta-button primary" href="getting_started.html">Quick Start</a>
+    <a class="cta-button secondary" href="architecture.html">Architecture</a>
+    <a class="cta-button secondary" href="migration.html">Migration</a>
+  </div>
+
+  
+<p class="hero-footer">
+    Built around Go, WAL + LSM storage, Percolator-style MVCC, multi-Raft replication,
+    PD-lite control plane, and a formal standalone-to-cluster migration path.
   </p>
 
 </div>
 
-<br>
-<hr>
-<h2 id="-why-nokv"><a class="header" href="#-why-nokv">🔥 Why NoKV?</a></h2>
-<p>NoKV is designed for <strong>modern hardware</strong> and <strong>distributed workloads</strong>. It combines the best of academic research (WiscKey, W-TinyLFU) with industrial-grade engineering (Raft, Percolator).</p>
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;">
+<p><span class="section-kicker">What Matters</span></p>
+<h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
+<div class="feature-grid">
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="feature-card">
     
-<h3 style="margin-top: 0;">🏎️ Extreme Performance</h3>
+<h3>One data plane, two deployment shapes</h3>
 
     
-<p><strong>Lock-light</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs.</p>
+<p>NoKV does not fork into separate standalone and distributed engines. The distributed layer grows on top of the same underlying DB workdir.</p>
+
+    <small>That is why migration can be a protocol instead of a dump/import afterthought.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>Replication with clear ownership</h3>
+
+    
+<p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and PD stays in the control plane.</p>
+
+    <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>Logical region snapshots</h3>
+
+    
+<p>Raft durable snapshot metadata is split from logical region state snapshots, which keeps migration, add-peer install, and recovery semantics clean.</p>
+
+    <small>This is a correctness-first design, not a one-shot performance shortcut.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>System-level validation</h3>
+
+    
+<p>The project is tested beyond unit semantics: migration flow, restart safety, degraded PD behavior, transport chaos, and context propagation are all exercised.</p>
+
+    <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
+  </div>
+
+</div>
+
+<div class="benchmark-note">
+  Benchmark methodology and result snapshots live in <a href="../benchmark/README.html"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
+</div>
+
+<p><span class="section-kicker">Read This Next</span></p>
+<h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
+<div class="doc-grid">
+  
+<div class="doc-card">
+    
+<h3><a href="getting_started.html">Getting Started</a></h3>
+
+    
+<p>Run NoKV locally, understand the topology file, and boot your first store or local cluster.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🧠 Smart Caching</h3>
+<h3><a href="raftstore.html">Raftstore</a></h3>
 
     
-<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches keep hot working sets close to the read path.</p>
+<p>Read the distributed runtime layout: server wiring, store ownership, peer lifecycle, snapshots, and recovery surfaces.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🌐 Distributed Consistency</h3>
+<h3><a href="migration.html">Migration</a></h3>
 
     
-<p><strong>Multi-Raft</strong> replication for high availability. <strong>Percolator</strong> model for cross-row ACID transactions. Snapshot Isolation by default.</p>
+<p>Follow the standalone → seeded → cluster path, including logical snapshot export/install and membership rollout.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🔌 Redis Compatible</h3>
+<h3><a href="testing.html">Testing</a></h3>
 
     
-<p>Drop-in replacement for Redis. Supports the <strong>RESP protocol</strong> so you can use your existing tools and client libraries.</p>
+<p>See how deterministic integration, failpoints, restart recovery, and distributed fault matrix coverage are organized.</p>
 
   </div>
 
 </div>
 
-<br>
-<p>Benchmark methodology and result snapshots are maintained only in:
-<a href="../benchmark/README.html"><code>../benchmark/README.md</code></a></p>
-<br>
-<h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
+<p><span class="section-kicker">Common Paths</span></p>
+<h2 id="jump-points"><a class="header" href="#jump-points">Jump Points</a></h2>
+<div class="quicklink-grid">
+  <a class="quicklink" href="cli.html">CLI surface</a>
+  <a class="quicklink" href="config.html">Topology config</a>
+  <a class="quicklink" href="scripts.html">Scripts layout</a>
+  <a class="quicklink" href="pd.html">PD-lite</a>
+  <a class="quicklink" href="percolator.html">Percolator / MVCC</a>
+  <a class="quicklink" href="runtime.html">Runtime call chains</a>
+</div>
+
+<p><span class="section-kicker">Layer View</span></p>
+<h2 id="architecture-sketch"><a class="header" href="#architecture-sketch">Architecture Sketch</a></h2>
 <pre class="mermaid">%%{init: {
-  "themeVariables": { "fontSize": "20px" },
-  "flowchart": { "nodeSpacing": 55, "rankSpacing": 75, "curve": "basis" }
+  "themeVariables": { "fontSize": "18px" },
+  "flowchart": { "nodeSpacing": 45, "rankSpacing": 62, "curve": "basis" }
 }}%%
 graph TD
-    Client["Client / Redis"] --&gt;|RESP Protocol| Gateway["Redis Gateway"]
-    Gateway --&gt;|RaftCmd| RaftStore
-    
-    subgraph "RaftStore (Distributed Layer)"
-        RaftStore --&gt;|Propose| RaftLog["Raft Log (WAL)"]
-        RaftLog --&gt;|Consensus| Apply["Apply Worker"]
+    Client["Client / App / Redis"] --&gt;|RPC / RESP| Server["Node Server"]
+    Client --&gt;|Route / TSO / control queries| PD["PD-lite"]
+
+    subgraph "Distributed Runtime"
+        Server --&gt; Store["Store runtime root"]
+        Store --&gt; Peer["Peer runtime"]
+        Store --&gt; Admin["RaftAdmin"]
+        Store --&gt; Meta["Local recovery metadata"]
+        Peer --&gt; Raft["Raft durable state"]
+        Peer --&gt; Snap["Logical region snapshot"]
     end
-    
-    subgraph "Storage Engine (LSM)"
-        Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTable["SSTables (L0-L6)"]
-        SSTable --&gt;|Compact| SSTable
-        
-        Apply --&gt;|Large Value| VLog["Value Log"]
-    end
-    
-    subgraph "Cache Layer"
-        BlockCache["Block Cache (Ristretto)"] -.-&gt; SSTable
-        IndexCache["Index Cache (W-TinyLFU, byte budget)"] -.-&gt; SSTable
+
+    subgraph "Shared Data Plane"
+        Peer --&gt; DB["NoKV DB"]
+        Snap --&gt; DB
+        DB --&gt; LSM["LSM / WAL / VLog / MVCC"]
     end
 </pre>
 
-<div align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>
+<div class="arch-callout">
+  The central design choice is simple: NoKV is not a separate standalone engine and distributed product glued together later. The distributed system is built over the same storage core, with migration and snapshot semantics made explicit instead of implicit.
 </div>
 
 
@@ -364,6 +456,7 @@ graph TD
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
+        <script src="docs/custom-732fa610.js"></script>
         <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
 

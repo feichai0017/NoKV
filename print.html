@@ -9,7 +9,7 @@
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="NoKV design, architecture, migration, and testing documentation.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="docs/custom-7218a61a.css">
+        <link rel="stylesheet" href="docs/custom-42a70426.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-66d74ddb.js";
+            window.path_to_searchindex_js = "searchindex-81b84921.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f6004387.js"></script>
+        <script src="toc-af56fb0e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,19 +180,63 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
-<div align="center">
-  <img src="https://raw.githubusercontent.com/feichai0017/NoKV/main/img/logo.svg" width="180" alt="NoKV Logo">
+<div class="hero">
   
+<div class="hero-top">
+    
+<div class="hero-brand">
+      
+<div class="hero-logo">
+        <img src="assets/logo.svg" alt="NoKV logo">
+      </div>
+
+      
+<div>
+        
+<p class="hero-kicker">Distributed KV, Built As One System</p>
+
+        
 <h1>NoKV</h1>
 
+      </div>
+
+    </div>
+
+  </div>
+
   
-<p style="font-size: 1.2em; color: #666;">
-    <strong>High-Performance, Cloud-Native Distributed Key-Value Database</strong>
+<p class="hero-lead">
+    NoKV is a storage system that starts as a serious standalone engine and grows into
+    a multi-Raft distributed key-value database without changing its underlying data
+    plane. The interesting part is not just the API surface. It is the bridge:
+    WAL, LSM, MVCC, control plane, migration, and replication all live in one coherent
+    design.
   </p>
 
   
-<p>
-    <!-- Build / Quality -->
+<div class="hero-summary">
+    
+<div class="hero-stat">
+      <strong>Standalone to Cluster</strong>
+      <span>Seed a distributed region from an existing workdir and keep the same storage substrate.</span>
+    </div>
+
+    
+<div class="hero-stat">
+      <strong>Correctness First</strong>
+      <span>Mode gates, logical region snapshots, recovery metadata, and execution/control-plane split.</span>
+    </div>
+
+    
+<div class="hero-stat">
+      <strong>Tested as a System</strong>
+      <span>Migration flow, restart recovery, PD degradation, transport chaos, and publish-boundary failpoints.</span>
+    </div>
+
+  </div>
+
+  
+<div class="badge-row">
     <a href="https://github.com/feichai0017/NoKV/actions">
       <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" />
     </a>
@@ -205,118 +249,166 @@
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV">
       <img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&amp;logoColor=white" />
     </a>
-    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go">
-      <img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" />
-    </a>
     <a href="https://dbdb.io/db/nokv">
       <img alt="DBDB.io" src="https://img.shields.io/badge/dbdb.io-listed-2f80ed" />
     </a>
-  </p>
-
-  
-<p>
-    <!-- Meta -->
-    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&amp;logoColor=white" />
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
     <a href="https://deepwiki.com/feichai0017/NoKV">
       <img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" />
     </a>
-  </p>
+  </div>
 
   
-<p>
-    <a href="#getting-started" style="text-decoration: none;">
-      <button style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🚀 Quick Start</button>
-    </a>
-      
-    <a href="#nokv-architecture-overview" style="text-decoration: none;">
-      <button style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">🏗️ Architecture</button>
-    </a>
+<div class="cta-row">
+    <a class="cta-button primary" href="#getting-started">Quick Start</a>
+    <a class="cta-button secondary" href="#nokv-architecture-overview">Architecture</a>
+    <a class="cta-button secondary" href="#standalone-to-cluster-migration">Migration</a>
+  </div>
+
+  
+<p class="hero-footer">
+    Built around Go, WAL + LSM storage, Percolator-style MVCC, multi-Raft replication,
+    PD-lite control plane, and a formal standalone-to-cluster migration path.
   </p>
 
 </div>
 
-<br>
-<hr>
-<h2 id="-why-nokv"><a class="header" href="#-why-nokv">🔥 Why NoKV?</a></h2>
-<p>NoKV is designed for <strong>modern hardware</strong> and <strong>distributed workloads</strong>. It combines the best of academic research (WiscKey, W-TinyLFU) with industrial-grade engineering (Raft, Percolator).</p>
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;">
+<p><span class="section-kicker">What Matters</span></p>
+<h2 id="why-nokv"><a class="header" href="#why-nokv">Why NoKV</a></h2>
+<div class="feature-grid">
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="feature-card">
     
-<h3 style="margin-top: 0;">🏎️ Extreme Performance</h3>
+<h3>One data plane, two deployment shapes</h3>
 
     
-<p><strong>Lock-light</strong> commit queue and <strong>Batch WAL</strong> writing deliver write throughput that saturates NVMe SSDs.</p>
+<p>NoKV does not fork into separate standalone and distributed engines. The distributed layer grows on top of the same underlying DB workdir.</p>
+
+    <small>That is why migration can be a protocol instead of a dump/import afterthought.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>Replication with clear ownership</h3>
+
+    
+<p><code>Store</code> owns the node runtime, <code>Peer</code> owns a region replica runtime, <code>RaftAdmin</code> is the execution plane, and PD stays in the control plane.</p>
+
+    <small>The system avoids mixing local truth, local recovery metadata, and cluster control metadata.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>Logical region snapshots</h3>
+
+    
+<p>Raft durable snapshot metadata is split from logical region state snapshots, which keeps migration, add-peer install, and recovery semantics clean.</p>
+
+    <small>This is a correctness-first design, not a one-shot performance shortcut.</small>
+  </div>
+
+  
+<div class="feature-card">
+    
+<h3>System-level validation</h3>
+
+    
+<p>The project is tested beyond unit semantics: migration flow, restart safety, degraded PD behavior, transport chaos, and context propagation are all exercised.</p>
+
+    <small>The goal is to verify lifecycle and recovery behavior, not just happy-path RPCs.</small>
+  </div>
+
+</div>
+
+<div class="benchmark-note">
+  Benchmark methodology and result snapshots live in <a href="../benchmark/README.html"><code>../benchmark/README.md</code></a>. The docs site keeps architecture and operating guidance separate from benchmark storytelling.
+</div>
+
+<p><span class="section-kicker">Read This Next</span></p>
+<h2 id="documentation-guide"><a class="header" href="#documentation-guide">Documentation Guide</a></h2>
+<div class="doc-grid">
+  
+<div class="doc-card">
+    
+<h3><a href="#getting-started">Getting Started</a></h3>
+
+    
+<p>Run NoKV locally, understand the topology file, and boot your first store or local cluster.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🧠 Smart Caching</h3>
+<h3><a href="#raftstore-deep-dive">Raftstore</a></h3>
 
     
-<p>Built-in <strong>Ristretto</strong> block cache plus byte-budgeted index/bloom caches keep hot working sets close to the read path.</p>
+<p>Read the distributed runtime layout: server wiring, store ownership, peer lifecycle, snapshots, and recovery surfaces.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🌐 Distributed Consistency</h3>
+<h3><a href="#standalone-to-cluster-migration">Migration</a></h3>
 
     
-<p><strong>Multi-Raft</strong> replication for high availability. <strong>Percolator</strong> model for cross-row ACID transactions. Snapshot Isolation by default.</p>
+<p>Follow the standalone → seeded → cluster path, including logical snapshot export/install and membership rollout.</p>
 
   </div>
 
   
-<div style="border: 1px solid #e1e4e8; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: var(--bg);">
+<div class="doc-card">
     
-<h3 style="margin-top: 0;">🔌 Redis Compatible</h3>
+<h3><a href="#testing--validation-matrix">Testing</a></h3>
 
     
-<p>Drop-in replacement for Redis. Supports the <strong>RESP protocol</strong> so you can use your existing tools and client libraries.</p>
+<p>See how deterministic integration, failpoints, restart recovery, and distributed fault matrix coverage are organized.</p>
 
   </div>
 
 </div>
 
-<br>
-<p>Benchmark methodology and result snapshots are maintained only in:
-<a href="../benchmark/README.html"><code>../benchmark/README.md</code></a></p>
-<br>
-<h2 id="-architecture"><a class="header" href="#-architecture">🏗️ Architecture</a></h2>
+<p><span class="section-kicker">Common Paths</span></p>
+<h2 id="jump-points"><a class="header" href="#jump-points">Jump Points</a></h2>
+<div class="quicklink-grid">
+  <a class="quicklink" href="#cli-cmdnokv-reference">CLI surface</a>
+  <a class="quicklink" href="#configuration--options">Topology config</a>
+  <a class="quicklink" href="#scripts-overview">Scripts layout</a>
+  <a class="quicklink" href="#pd-lite">PD-lite</a>
+  <a class="quicklink" href="#percolator-distributed-transaction-design">Percolator / MVCC</a>
+  <a class="quicklink" href="#runtime-call-chains-current">Runtime call chains</a>
+</div>
+
+<p><span class="section-kicker">Layer View</span></p>
+<h2 id="architecture-sketch"><a class="header" href="#architecture-sketch">Architecture Sketch</a></h2>
 <pre class="mermaid">%%{init: {
-  "themeVariables": { "fontSize": "20px" },
-  "flowchart": { "nodeSpacing": 55, "rankSpacing": 75, "curve": "basis" }
+  "themeVariables": { "fontSize": "18px" },
+  "flowchart": { "nodeSpacing": 45, "rankSpacing": 62, "curve": "basis" }
 }}%%
 graph TD
-    Client["Client / Redis"] --&gt;|RESP Protocol| Gateway["Redis Gateway"]
-    Gateway --&gt;|RaftCmd| RaftStore
-    
-    subgraph "RaftStore (Distributed Layer)"
-        RaftStore --&gt;|Propose| RaftLog["Raft Log (WAL)"]
-        RaftLog --&gt;|Consensus| Apply["Apply Worker"]
+    Client["Client / App / Redis"] --&gt;|RPC / RESP| Server["Node Server"]
+    Client --&gt;|Route / TSO / control queries| PD["PD-lite"]
+
+    subgraph "Distributed Runtime"
+        Server --&gt; Store["Store runtime root"]
+        Store --&gt; Peer["Peer runtime"]
+        Store --&gt; Admin["RaftAdmin"]
+        Store --&gt; Meta["Local recovery metadata"]
+        Peer --&gt; Raft["Raft durable state"]
+        Peer --&gt; Snap["Logical region snapshot"]
     end
-    
-    subgraph "Storage Engine (LSM)"
-        Apply --&gt;|Batch Set| MemTable
-        MemTable --&gt;|Flush| SSTable["SSTables (L0-L6)"]
-        SSTable --&gt;|Compact| SSTable
-        
-        Apply --&gt;|Large Value| VLog["Value Log"]
-    end
-    
-    subgraph "Cache Layer"
-        BlockCache["Block Cache (Ristretto)"] -.-&gt; SSTable
-        IndexCache["Index Cache (W-TinyLFU, byte budget)"] -.-&gt; SSTable
+
+    subgraph "Shared Data Plane"
+        Peer --&gt; DB["NoKV DB"]
+        Snap --&gt; DB
+        DB --&gt; LSM["LSM / WAL / VLog / MVCC"]
     end
 </pre>
 
-<div align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/feichai0017">feichai0017</a> and contributors.</sub>
+<div class="arch-callout">
+  The central design choice is simple: NoKV is not a separate standalone engine and distributed product glued together later. The distributed system is built over the same storage core, with migration and snapshot semantics made explicit instead of implicit.
 </div>
 
 <div style="break-before: page; page-break-before: always;"></div>
@@ -330,7 +422,7 @@ graph TD
 </ul>
 <h2 id="option-a-local-cluster-recommended-for-dev"><a class="header" href="#option-a-local-cluster-recommended-for-dev">Option A: Local Cluster (recommended for dev)</a></h2>
 <p>This launches a 3-node Raft cluster plus a PD-lite service.</p>
-<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json
+<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json
 </code></pre>
 <p>The launcher stays attached, streams PD/store logs to the terminal, and also writes them under <code>./artifacts/cluster/</code>.</p>
 <p>Start the Redis-compatible gateway in another shell:</p>
@@ -582,7 +674,7 @@ iterator scan, distributed read/write via Raft apply), see
 </tbody>
 </table>
 </div>
-<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/run_local_cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
+<p><code>nokv serve</code> is the CLI entry point—open the DB, construct <code>raftstore.Server</code>, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). <code>scripts/dev/cluster.sh</code> builds the CLI, writes a minimal local peer catalog, launches multiple <code>nokv serve</code> processes on localhost, and handles cleanup on Ctrl+C.</p>
 <p>The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC and region semantics remain familiar, but the service name exposed on the wire is <code>pb.NoKV</code>.</p>
 <hr>
 <h2 id="5-client-workflow"><a class="header" href="#5-client-workflow">5. Client Workflow</a></h2>
@@ -592,7 +684,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li><strong>Reads</strong>: <code>Get</code> and <code>Scan</code> pick the leader store for a key range, issue NoKV RPCs, and retry on NotLeader/EpochNotMatch.</li>
 <li><strong>Writes</strong>: <code>Mutate</code> bundles operations per region and drives Prewrite/Commit (primary first, secondaries after); <code>Put</code> and <code>Delete</code> are convenience wrappers using the same 2PC path.</li>
 <li><strong>Timestamps</strong>: clients must supply <code>startVersion</code>/<code>commitVersion</code>. For distributed demos, use PD-lite (<code>nokv pd</code>) to obtain globally increasing values before calling <code>TwoPhaseCommit</code>.</li>
-<li><strong>Bootstrap helpers</strong>: <code>scripts/run_local_cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches PD-lite, and starts the stores declared in the config.</li>
+<li><strong>Bootstrap helpers</strong>: <code>scripts/dev/cluster.sh --config raft_config.example.json</code> builds the binaries, seeds local peer catalogs via <code>nokv-config catalog</code>, launches PD-lite, and starts the stores declared in the config.</li>
 </ul>
 <p><strong>Example (two regions)</strong></p>
 <ol>
@@ -617,7 +709,7 @@ iterator scan, distributed read/write via Raft apply), see
 <li>Inspect scheduler/control-plane state via PD APIs/metrics.</li>
 <li>Scripts:
 <ul>
-<li><code>scripts/run_local_cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
+<li><code>scripts/dev/cluster.sh</code> – launch a multi-node NoKV cluster locally.</li>
 <li><code>RECOVERY_TRACE_METRICS=1 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v</code> – crash-recovery validation.</li>
 <li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> – inject network faults and observe transport metrics.</li>
 </ul>
@@ -1389,7 +1481,7 @@ if err := cfg.Validate(); err != nil { /* handle */ }
 </code></pre>
 <p>Related tools:</p>
 <ul>
-<li><code>scripts/run_local_cluster.sh --config raft_config.example.json</code></li>
+<li><code>scripts/dev/cluster.sh --config raft_config.example.json</code></li>
 <li><code>go run ./cmd/nokv-redis --raft-config raft_config.example.json</code></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -1533,7 +1625,7 @@ no longer reports it as hosted</li>
   --peer 301=127.0.0.1:20172
 </code></pre>
 <p>When a store hosts multiple regions, include mappings for every remote peer ID
-reachable from those regions (using <code>scripts/serve_from_config.sh</code> avoids manual drift).</p>
+reachable from those regions (using <code>scripts/dev/serve-store.sh</code> avoids manual drift).</p>
 <h3 id="nokv-pd"><a class="header" href="#nokv-pd"><code>nokv pd</code></a></h3>
 <ul>
 <li>Starts the PD-lite gRPC service used by distributed mode.</li>
@@ -3224,7 +3316,7 @@ size/traffic heuristics.</li>
 <ul>
 <li><code>store.RegionMetrics()</code> feeds into <code>StatsSnapshot</code>, making region counts and backlog visible via expvar and <code>nokv stats</code>.</li>
 <li><code>nokv regions</code> shows the local peer catalog used for store recovery: ID, range, peers, state. It is a store-local recovery view, not cluster routing authority.</li>
-<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> exercises transport metrics under faults; <code>scripts/run_local_cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
+<li><code>CHAOS_TRACE_METRICS=1 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport</code> exercises transport metrics under faults; <code>scripts/dev/cluster.sh</code> spins up multi-node clusters for manual inspection.</li>
 </ul>
 <h3 id="store-internals-at-a-glance"><a class="header" href="#store-internals-at-a-glance">Store internals at a glance</a></h3>
 <div class="table-wrapper">
@@ -3672,8 +3764,8 @@ and optionally waits until the target store no longer hosts it.</p>
 <h3 id="nokv-migrate-transfer-leader-1"><a class="header" href="#nokv-migrate-transfer-leader-1"><code>nokv migrate transfer-leader</code></a></h3>
 <p>Transfers region leadership to a specific peer and optionally waits until that
 peer becomes leader.</p>
-<h3 id="scriptsmigrate_to_clustersh"><a class="header" href="#scriptsmigrate_to_clustersh"><code>scripts/migrate_to_cluster.sh</code></a></h3>
-<p>For local operator workflows, <code>scripts/migrate_to_cluster.sh</code> wraps the full
+<h3 id="scriptsopsmigrate-clustersh"><a class="header" href="#scriptsopsmigrate-clustersh"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
+<p>For local operator workflows, <code>scripts/ops/migrate-cluster.sh</code> wraps the full
 happy-path sequence:</p>
 <ol>
 <li><code>nokv migrate plan</code></li>
@@ -4111,7 +4203,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
 
 # Local three-node cluster (includes catalog bootstrap + PD-lite)
-./scripts/run_local_cluster.sh --config ./raft_config.example.json
+./scripts/dev/cluster.sh --config ./raft_config.example.json
 # Tear down with Ctrl+C
 
 # Docker-compose sandbox (3 nodes + PD-lite)
@@ -4152,7 +4244,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <tr><td>DB Integration</td><td><code>db_test.go</code>, <code>db_write_bench_test.go</code></td><td>End-to-end writes, recovery, and throttle behaviour.</td><td>Combine ValueLog GC + compaction stress, multi-DB interference.</td></tr>
 <tr><td>CLI &amp; Stats</td><td><code>cmd/nokv/main_test.go</code>, <code>stats_test.go</code></td><td>Golden JSON output, stats snapshot correctness, hot key ranking.</td><td>CLI error handling, expvar HTTP integration tests.</td></tr>
 <tr><td>Redis Gateway</td><td><code>cmd/nokv-redis/backend_embedded_test.go</code>, <code>cmd/nokv-redis/server_test.go</code>, <code>cmd/nokv-redis/backend_raft_test.go</code></td><td>Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery.</td><td>End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures.</td></tr>
-<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>run_local_cluster.sh</code>.</td></tr>
+<tr><td>Scripts &amp; Tooling</td><td><code>cmd/nokv-config/main_test.go</code>, <code>cmd/nokv/serve_test.go</code></td><td><code>nokv-config</code> JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior.</td><td>Add direct shell-script golden tests (currently not present) and failure-path diagnostics for <code>cluster.sh</code>.</td></tr>
 <tr><td>Distributed Migration &amp; Membership</td><td><code>raftstore/integration/*_test.go</code>, <code>raftstore/migrate/*_test.go</code>, <code>raftstore/admin/service_test.go</code></td><td>Standalone -&gt; seeded -&gt; cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, PD outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish.</td><td>Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings.</td></tr>
 <tr><td>Benchmark</td><td><code>benchmark/ycsb_test.go</code>, <code>benchmark/ycsb_runner.go</code></td><td>YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting.</td><td>Automate multi-node deployments and add longer-running, multi-GB stability baselines.</td></tr>
 </tbody>
@@ -4232,101 +4324,182 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 <p>Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="scripts-overview"><a class="header" href="#scripts-overview">Scripts Overview</a></h1>
-<p>NoKV ships a small collection of helper scripts to streamline local experimentation, demos, diagnostics, and automation. This page summarises what each script does, how to use it, and which shared configuration it consumes.</p>
-<hr>
-<h2 id="cluster-helpers"><a class="header" href="#cluster-helpers">Cluster helpers</a></h2>
-<h3 id="scriptsrun_local_clustersh"><a class="header" href="#scriptsrun_local_clustersh"><code>scripts/run_local_cluster.sh</code></a></h3>
+<p>NoKV now groups shell entrypoints by role instead of keeping every helper flat under <code>scripts/</code>.</p>
+<h2 id="layout"><a class="header" href="#layout">Layout</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Path</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>scripts/dev</code></td><td>Local development and bootstrap helpers for running a cluster from <code>raft_config*.json</code>.</td></tr>
+<tr><td><code>scripts/ops</code></td><td>Operator-style workflows that drive the formal migration CLI.</td></tr>
+<tr><td><code>scripts/lib</code></td><td>Shared shell helpers for config lookup, workdir hygiene, and build/bootstrap rules.</td></tr>
+<tr><td><code>scripts/*.sh</code></td><td>Tooling or benchmark entrypoints that are still intentionally top-level.</td></tr>
+</tbody>
+</table>
+</div>
+<p>This split is deliberate:</p>
 <ul>
-<li><strong>Purpose</strong> – builds <code>nokv</code> and <code>nokv-config</code>, reads <code>raft_config.json</code>, seeds local peer catalogs, starts PD-lite, and starts the NoKV nodes. If a store directory already contains a local peer catalog, the seeding step is skipped so previously bootstrapped data is reused.</li>
-<li><strong>Usage</strong>
-<pre><code class="language-bash">./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
+<li><code>dev</code> scripts are allowed to help with local experiments and smoke tests.</li>
+<li><code>ops</code> scripts must treat the migration CLI as source of truth and stay stricter.</li>
+<li><code>lib</code> is where shared rules live, so shell semantics do not drift across scripts.</li>
+</ul>
+<h2 id="development-scripts"><a class="header" href="#development-scripts">Development Scripts</a></h2>
+<h3 id="scriptsdevclustersh"><a class="header" href="#scriptsdevclustersh"><code>scripts/dev/cluster.sh</code></a></h3>
+<ul>
+<li>Purpose: build <code>nokv</code> and <code>nokv-config</code>, read <code>raft_config.json</code>, seed local peer catalogs, start PD-lite, then start the configured stores.</li>
+<li>Uses shared rules from:
+<ul>
+<li><code>scripts/lib/common.sh</code></li>
+<li><code>scripts/lib/config.sh</code></li>
+<li><code>scripts/lib/workdir.sh</code></li>
+</ul>
+</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/dev/cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
 </code></pre>
 </li>
-</ul>
-<p><code>--config</code> defaults to the repository’s <code>raft_config.example.json</code>; <code>--workdir</code> chooses the data root (<code>./artifacts/cluster</code> by default). For every entry under <code>stores</code> the script creates <code>store-&lt;id&gt;</code> and calls <code>nokv-config catalog</code>, then launches <code>nokv pd</code> and the store processes. <code>nokv-config catalog</code> now writes the local peer catalog used by <code>nokv serve</code> recovery; PD state is persisted under <code>pd.work_dir</code> (or <code>&lt;workdir&gt;/pd</code> when config omits it), so control-plane routing metadata survives restarts. Relative <code>pd.work_dir</code> is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as <code>--pd-addr</code> (explicit <code>--pd-listen</code> overrides config/default resolution). PD/store logs are streamed to the terminal with <code>[pd]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>pd.log</code> / <code>server.log</code>. The script runs in the foreground—press <code>Ctrl+C</code> to stop all spawned processes.
-When <code>--pd-listen</code> is omitted, the script reads <code>pd.addr</code> from config and falls back to <code>127.0.0.1:2379</code>.</p>
-<blockquote>
-<p>❗️ <strong>Shutdown / restart note</strong> — To avoid WAL/manifest mismatches, stop the script with <code>Ctrl+C</code> and wait for child processes to exit. If you crash the process or the host, clean the workdir (<code>rm -rf ./artifacts/cluster</code>) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.</p>
-</blockquote>
-<h3 id="scriptsbootstrap_from_configsh"><a class="header" href="#scriptsbootstrap_from_configsh"><code>scripts/bootstrap_from_config.sh</code></a></h3>
+<li>Notes:
 <ul>
-<li><strong>Purpose</strong> – local-peer-catalog bootstrap, typically used in Docker Compose before the nodes start. Stores that already hold a local peer catalog are detected and skipped.</li>
-<li><strong>Usage</strong>
-<pre><code class="language-bash">./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
-</code></pre>
-The script iterates over every store in the config and writes local peer catalog metadata via <code>nokv-config catalog</code> into the provided path template.</li>
+<li><code>--config</code> defaults to <code>./raft_config.example.json</code></li>
+<li><code>--workdir</code> defaults to <code>./artifacts/cluster</code></li>
+<li>store workdirs are rejected if they contain unexpected files</li>
+<li>logs stream with <code>[pd]</code> / <code>[store-&lt;id&gt;]</code> prefixes and are still written to <code>pd.log</code> / <code>server.log</code></li>
 </ul>
-<h3 id="scriptsserve_from_configsh"><a class="header" href="#scriptsserve_from_configsh"><code>scripts/serve_from_config.sh</code></a></h3>
+</li>
+</ul>
+<h3 id="scriptsdevbootstrapsh"><a class="header" href="#scriptsdevbootstrapsh"><code>scripts/dev/bootstrap.sh</code></a></h3>
 <ul>
-<li><strong>Purpose</strong> – translate <code>raft_config.json</code> into a <code>nokv serve</code> command, avoiding manual <code>--peer</code> lists. It resolves peer IDs from the region metadata and maps every peer (other than the local store) to its advertised address so that gRPC transport works out of the box.</li>
-<li><strong>Usage</strong>
-<pre><code class="language-bash">./scripts/serve_from_config.sh \
-    --config ./raft_config.json \
-    --store-id 1 \
-    --workdir ./artifacts/cluster/store-1 \
-    --scope local   # use --scope docker inside containers
-</code></pre>
-<code>--scope</code> decides whether to use the local addresses or the container-friendly ones. The script also resolves PD from <code>config.pd</code> unless <code>--pd-addr</code> explicitly overrides it. It assembles all peer mappings (excluding the local store) and execs <code>nokv serve</code>.</li>
-</ul>
-<h3 id="scriptsmigrate_to_clustersh-1"><a class="header" href="#scriptsmigrate_to_clustersh-1"><code>scripts/migrate_to_cluster.sh</code></a></h3>
+<li>Purpose: seed local peer catalog metadata into a set of store directories derived from a path template.</li>
+<li>Intended for:
 <ul>
-<li><strong>Purpose</strong> – one-shot local operator wrapper for the standalone-to-cluster migration path. It runs <code>nokv migrate plan</code>, <code>nokv migrate init</code>, starts PD-lite plus the seed/target stores, rolls out <code>nokv migrate expand</code>, and can optionally finish with <code>transfer-leader</code> and <code>remove-peer</code>.</li>
-<li><strong>Usage</strong>
-<pre><code class="language-bash">./scripts/migrate_to_cluster.sh \
-    --config ./raft_config.example.json \
-    --workdir ./artifacts/standalone \
-    --seed-store 1 \
-    --seed-region 1 \
-    --seed-peer 101 \
-    --target 2:201 \
-    --target 3:301 \
-    --transfer-leader 201 \
-    --remove-peer 101
-</code></pre>
-The script is intentionally strict: the seed workdir must already contain standalone data, target store workdirs must be fresh, and the script uses the migration CLI as the only source of truth. It keeps PD/store logs attached in the foreground; press <code>Ctrl+C</code> to stop everything.</li>
+<li>Docker Compose bootstrap</li>
+<li>local static-topology experiments</li>
 </ul>
-<hr>
-<h2 id="diagnostics--benchmarking"><a class="header" href="#diagnostics--benchmarking">Diagnostics &amp; benchmarking</a></h2>
+</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/dev/bootstrap.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li>skips stores that already contain <code>CURRENT</code></li>
+<li>refuses to seed into dirty directories</li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptsdevserve-storesh"><a class="header" href="#scriptsdevserve-storesh"><code>scripts/dev/serve-store.sh</code></a></h3>
+<ul>
+<li>Purpose: convert <code>raft_config.json</code> into a concrete <code>nokv serve</code> invocation for one store.</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/dev/serve-store.sh \
+  --config ./raft_config.example.json \
+  --store-id 1 \
+  --workdir ./artifacts/cluster/store-1 \
+  --scope local
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li>resolves peer transport addresses from config</li>
+<li>resolves PD address from config unless <code>--pd-addr</code> overrides it</li>
+<li><code>--scope docker</code> selects container-friendly addresses</li>
+</ul>
+</li>
+</ul>
+<h2 id="operator-script"><a class="header" href="#operator-script">Operator Script</a></h2>
+<h3 id="scriptsopsmigrate-clustersh-1"><a class="header" href="#scriptsopsmigrate-clustersh-1"><code>scripts/ops/migrate-cluster.sh</code></a></h3>
+<ul>
+<li>Purpose: one-shot local operator wrapper for the standalone-to-cluster migration path.</li>
+<li>Drives:
+<ul>
+<li><code>nokv migrate plan</code></li>
+<li><code>nokv migrate init</code></li>
+<li><code>nokv migrate expand</code></li>
+<li>optional <code>transfer-leader</code></li>
+<li>optional <code>remove-peer</code></li>
+</ul>
+</li>
+<li>Example:
+<pre><code class="language-bash">./scripts/ops/migrate-cluster.sh \
+  --config ./raft_config.example.json \
+  --workdir ./artifacts/standalone \
+  --seed-store 1 \
+  --seed-region 1 \
+  --seed-peer 101 \
+  --target 2:201 \
+  --target 3:301 \
+  --transfer-leader 201 \
+  --remove-peer 101
+</code></pre>
+</li>
+<li>Notes:
+<ul>
+<li>seed workdir must already contain standalone data</li>
+<li>target store workdirs must be fresh</li>
+<li>uses the migration CLI as the only source of truth</li>
+</ul>
+</li>
+</ul>
+<h2 id="shared-shell-rules"><a class="header" href="#shared-shell-rules">Shared Shell Rules</a></h2>
+<h3 id="scriptslibcommonsh"><a class="header" href="#scriptslibcommonsh"><code>scripts/lib/common.sh</code></a></h3>
+<ul>
+<li>shared repo-root detection</li>
+<li>shared build helpers for <code>nokv</code> and <code>nokv-config</code></li>
+<li>shared TCP readiness helper</li>
+</ul>
+<h3 id="scriptslibconfigsh"><a class="header" href="#scriptslibconfigsh"><code>scripts/lib/config.sh</code></a></h3>
+<ul>
+<li>shared <code>nokv-config</code> lookups for:
+<ul>
+<li>store lines</li>
+<li>region lines</li>
+<li>PD address</li>
+<li>PD workdir</li>
+</ul>
+</li>
+</ul>
+<h3 id="scriptslibworkdirsh"><a class="header" href="#scriptslibworkdirsh"><code>scripts/lib/workdir.sh</code></a></h3>
+<ul>
+<li>shared workdir hygiene rules:
+<ul>
+<li>remove stale <code>LOCK</code></li>
+<li>reject unexpected directory contents</li>
+<li>assert a directory is fresh before seeding or bootstrap</li>
+</ul>
+</li>
+</ul>
+<p>This is where shell-level correctness rules should keep living. New scripts should reuse these helpers instead of open-coding workdir or config parsing logic again.</p>
+<h2 id="tooling--benchmarks"><a class="header" href="#tooling--benchmarks">Tooling &amp; Benchmarks</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Script</th><th>Purpose</th></tr>
 </thead>
 <tbody>
-<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Executes YCSB benchmarks (default engines: NoKV/Badger/Pebble, workloads A-F; optional RocksDB via build tags).</td></tr>
-<tr><td><code>scripts/debug.sh</code></td><td>Convenience wrapper around <code>dlv test</code> for targeted debugging.</td></tr>
-<tr><td><code>scripts/gen.sh</code></td><td>Generates protobuf Go bindings through Buf with pinned remote plugin versions.</td></tr>
+<tr><td><code>scripts/run_benchmarks.sh</code></td><td>Execute YCSB benchmarks (default engines: NoKV/Badger/Pebble, optional RocksDB).</td></tr>
+<tr><td><code>scripts/build_rocksdb.sh</code></td><td>Build local RocksDB artifacts used by benchmark comparisons.</td></tr>
+<tr><td><code>scripts/debug.sh</code></td><td>Wrap <code>dlv test</code> for focused debugging.</td></tr>
+<tr><td><code>scripts/gen.sh</code></td><td>Format protobufs and regenerate Go bindings through Buf.</td></tr>
 </tbody>
 </table>
 </div>
-<p>For recovery and transport fault validation, use direct Go test commands instead of shell wrappers:</p>
+<p>For recovery and transport fault validation, use direct Go tests instead of shell wrappers:</p>
 <pre><code class="language-bash">RECOVERY_TRACE_METRICS=1 \
 go test ./... -run 'TestRecovery(RemovesStaleValueLogSegment|CleansMissingSSTFromManifest|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
 
 CHAOS_TRACE_METRICS=1 \
 go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedPeers)' -count=1 -v ./raftstore/transport
 </code></pre>
-<hr>
-<h2 id="other-helpers"><a class="header" href="#other-helpers">Other helpers</a></h2>
-<h3 id="cmdnokv-pd"><a class="header" href="#cmdnokv-pd"><code>cmd/nokv pd</code></a></h3>
-<p>PD-lite service used by local scripts and compose for:</p>
-<ul>
-<li>routing (<code>GetRegionByKey</code>)</li>
-<li>ID allocation (<code>AllocID</code>)</li>
-<li>timestamp allocation (<code>Tso</code>)</li>
-</ul>
-<p>Example:</p>
-<pre><code class="language-bash">go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir ./artifacts/pd
-</code></pre>
-<hr>
 <h2 id="relationship-with-nokv-config"><a class="header" href="#relationship-with-nokv-config">Relationship with <code>nokv-config</code></a></h2>
 <ul>
-<li><code>nokv-config stores</code> / <code>regions</code> / <code>pd</code> provide structured views over <code>raft_config.json</code>, making it easy for scripts and CI to query the topology.</li>
-<li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog and replaces the historical <code>manifestctl</code> binary.</li>
-<li><code>cmd/nokv-redis</code> reads the same config and uses <code>config.pd</code> by default in raft mode (<code>--pd-addr</code> remains an override).</li>
-<li>Go tools or custom scripts can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> to consume the same <code>raft_config.json</code>, avoiding divergent schemas.</li>
+<li><code>nokv-config stores</code> / <code>regions</code> / <code>pd</code> remain the structured topology source for shell scripts.</li>
+<li><code>nokv-config catalog</code> writes Region metadata into the local peer catalog.</li>
+<li><code>cmd/nokv-redis</code> uses the same <code>raft_config.json</code>, so local scripts and Redis gateway stay aligned.</li>
+<li>Go tools can import <code>github.com/feichai0017/NoKV/config</code> and call <code>config.LoadFile</code> / <code>Validate</code> directly.</li>
 </ul>
-<p>Maintaining a single <code>raft_config.json</code> keeps local scripts, Docker Compose, Redis gateway, and automated tests aligned.</p>
+<p>Maintaining a single <code>raft_config.json</code> still keeps development scripts, Docker Compose, Redis gateway, and automated tests aligned. The difference now is that shell behavior is shared and explicit instead of repeated across four separate entrypoints.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="redis-gateway"><a class="header" href="#redis-gateway">Redis Gateway</a></h1>
 <p><code>cmd/nokv-redis</code> exposes NoKV through a RESP-compatible endpoint and can operate in two modes:</p>
@@ -4354,7 +4527,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 <ol>
 <li>
 <p>Start NoKV and PD-lite using the helper script or Docker Compose. Both consume <code>raft_config.example.json</code>, initialise manifests for each store, and launch <code>nokv pd</code> automatically:</p>
-<pre><code class="language-bash">./scripts/run_local_cluster.sh
+<pre><code class="language-bash">./scripts/dev/cluster.sh
 # or: docker compose up --build
 </code></pre>
 </li>
@@ -4380,7 +4553,7 @@ go test -run 'TestGRPCTransport(HandlesPartition|MetricsWatchdog|MetricsBlockedP
 </ul>
 <p>In both modes write commands are atomic. The Raft backend batches multi-key updates (<code>MSET</code>, <code>DEL</code>, …) into a single TwoPhaseCommit, matching the embedded semantics. Reads use direct <code>DB.Get</code> locally and leader reads with TTL checks remotely.</p>
 <h2 id="configuration-file"><a class="header" href="#configuration-file">Configuration file</a></h2>
-<p><code>raft_config.example.json</code> is shared by <code>scripts/run_local_cluster.sh</code>, Docker Compose, and the Redis gateway. Important fields:</p>
+<p><code>raft_config.example.json</code> is shared by <code>scripts/dev/cluster.sh</code>, Docker Compose, and the Redis gateway. Important fields:</p>
 <ul>
 <li><code>stores</code> – store ID, gRPC address, and optional container listen/advertise addresses</li>
 <li><code>regions</code> – region ID, start/end keys (use <code>hex:&lt;bytes&gt;</code> for binary data), epoch, peer list, leader store ID</li>
@@ -5464,6 +5637,402 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 </table>
 </div>
 <p><strong>总结</strong>：VFS 并不是一种代码开销，它是 <strong>“对每一行磁盘操作负责”</strong> 的态度。通过 VFS，NoKV 将复杂的底层系统调用和不可预测的硬件故障，收敛为了一个可预测、可测试、可证明的确定性模型。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-03-30-standalone-到-distributed-的桥接为什么值钱"><a class="header" href="#2026-03-30-standalone-到-distributed-的桥接为什么值钱">2026-03-30 standalone 到 distributed 的桥接为什么值钱</a></h1>
+<p>这篇记录不是在描述某个单点实现，而是在解释 NoKV 目前最有产品价值的一条主线：<strong>单机和分布式不是两套割裂系统，而是同一套数据面在不同运行形态下的演进。</strong></p>
+<hr>
+<h2 id="context-1"><a class="header" href="#context-1">Context</a></h2>
+<p>项目同时具备：</p>
+<ul>
+<li><code>DB</code> 单机数据面</li>
+<li><code>raftstore</code> 分布式执行层</li>
+<li><code>pd</code> 控制面</li>
+<li><code>migrate</code> 独立迁移协议</li>
+</ul>
+<p>看起来像是在做两个系统，但当前的设计目标不是“单机一个产品、分布式另一个产品”，而是让两者共享同一套底层状态。</p>
+<h2 id="symptom-1"><a class="header" href="#symptom-1">Symptom</a></h2>
+<p>很多存储项目一旦走到分布式阶段，就会遇到一个非常实际的问题：</p>
+<ol>
+<li>单机阶段先跑得起来。</li>
+<li>后面需要扩展时，发现分布式实际上是另一套系统。</li>
+<li>最终只能：
+<ul>
+<li>重新建集群</li>
+<li>dump/import</li>
+<li>重新做工具链</li>
+<li>背一套新的运维心智</li>
+</ul>
+</li>
+</ol>
+<p>这会直接把“从小到大演进”的故事打断。</p>
+<h2 id="investigation-1"><a class="header" href="#investigation-1">Investigation</a></h2>
+<p>NoKV 当前这条桥接路径成立，核心靠的是几个设计决定同时为真：</p>
+<ol>
+<li>
+<p><code>DB</code> 仍然是底层共享数据面<br>不是把 standalone 数据导出后再导入另一种存储格式。</p>
+</li>
+<li>
+<p><code>raftstore/meta</code> 与 <code>manifest</code> 分开<br>引擎元数据和分布式恢复元数据没有继续混在一起。</p>
+</li>
+<li>
+<p><code>raftstore/snapshot</code> 引入了逻辑 region snapshot<br>把“应用状态快照”和“raft durable snapshot metadata”分层。</p>
+</li>
+<li>
+<p><code>raftstore/mode</code> 把 workdir lifecycle 写成协议<br><code>standalone</code>、<code>preparing</code>、<code>seeded</code>、<code>cluster</code> 不只是 CLI 状态，而是库级 gate。</p>
+</li>
+<li>
+<p><code>migrate</code> 把桥接过程显式化<br><code>plan -&gt; init -&gt; serve -&gt; expand</code> 不是脚本约定，而是正式控制流。</p>
+</li>
+</ol>
+<h2 id="root-cause-1"><a class="header" href="#root-cause-1">Root cause</a></h2>
+<p>真正让单机和分布式难以衔接的，不是“技术栈不同”，而是<strong>状态语义不同</strong>。</p>
+<p>单机系统通常只需要：</p>
+<ul>
+<li>engine manifest</li>
+<li>WAL</li>
+<li>SST</li>
+<li>VLog</li>
+</ul>
+<p>分布式系统还需要：</p>
+<ul>
+<li>region identity</li>
+<li>peer identity</li>
+<li>raft durable state</li>
+<li>local recovery metadata</li>
+<li>control-plane view</li>
+</ul>
+<p>如果这些额外语义没有被设计成可提升、可恢复、可验证的状态层，那么单机到分布式就只剩下粗暴搬运数据。</p>
+<h2 id="fix-1"><a class="header" href="#fix-1">Fix</a></h2>
+<p>NoKV 当前的修法，本质上是把“增加 distributed identity”这件事协议化了：</p>
+<ol>
+<li>先用 <code>mode</code> 锁住 workdir 生命周期。</li>
+<li>用 <code>migrate init</code> 为原 workdir 写入 seed region 语义。</li>
+<li>用逻辑 region snapshot 提供状态提升原语。</li>
+<li>用 <code>serve</code> 接管 seeded workdir 进入 cluster 语义。</li>
+<li>用 <code>expand/remove-peer/transfer-leader</code> 完成 membership reshape。</li>
+</ol>
+<p>这条线的意义是：</p>
+<blockquote>
+<p>NoKV 的分布式能力不是独立产品，而是同一套系统的放大形态。</p>
+</blockquote>
+<h2 id="follow-ups-1"><a class="header" href="#follow-ups-1">Follow-ups</a></h2>
+<ol>
+<li>后面如果继续推进，这条桥最该加强的是：
+<ul>
+<li>SST-based snapshot install</li>
+<li>更成熟的 PD orchestration</li>
+<li>更强的 migration observability</li>
+</ul>
+</li>
+<li>这条设计值得在项目介绍里长期突出，因为它比“又做了一个 KV”更有辨识度。</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-03-30-为什么-pd-和-raftadmin-不能混成一层"><a class="header" href="#2026-03-30-为什么-pd-和-raftadmin-不能混成一层">2026-03-30 为什么 PD 和 RaftAdmin 不能混成一层</a></h1>
+<p>这篇记录当前 <code>PD</code> 与 <code>RaftAdmin</code> 的职责边界。这个边界看起来像“小命名问题”，实际上直接影响整个分布式系统的真相源和控制流是否会变脏。</p>
+<hr>
+<h2 id="context-2"><a class="header" href="#context-2">Context</a></h2>
+<p>NoKV 现在同时有两层控制相关接口：</p>
+<ul>
+<li><code>pd</code></li>
+<li><code>raftstore/admin</code></li>
+</ul>
+<p>两者都和 region、membership、leader、路由有关，很容易让人产生一个问题：</p>
+<blockquote>
+<p>既然有 PD，为什么还需要 <code>RaftAdmin</code>？</p>
+</blockquote>
+<h2 id="symptom-2"><a class="header" href="#symptom-2">Symptom</a></h2>
+<p>如果边界不清楚，系统很容易滑向两种坏形态：</p>
+<ol>
+<li>
+<p><strong>PD 越界写本地 truth</strong><br>control plane 直接变成 local state 的执行者。</p>
+</li>
+<li>
+<p><strong>所有动作都塞进 store / CLI</strong><br>结果控制面、执行面、运维面全部混在一起。</p>
+</li>
+</ol>
+<p>这两种都不是长期可维护的架构。</p>
+<h2 id="investigation-2"><a class="header" href="#investigation-2">Investigation</a></h2>
+<p>当前 NoKV 的分层本质上是：</p>
+<h3 id="raftadmin"><a class="header" href="#raftadmin"><code>RaftAdmin</code></a></h3>
+<p>负责：</p>
+<ul>
+<li><code>AddPeer</code></li>
+<li><code>RemovePeer</code></li>
+<li><code>TransferLeader</code></li>
+<li><code>RegionRuntimeStatus</code></li>
+</ul>
+<p>也就是：</p>
+<blockquote>
+<p><strong>leader store 上的执行面</strong></p>
+</blockquote>
+<p>它的职责是把一个明确的 membership 操作落到真实的 region leader 上。</p>
+<h3 id="pd"><a class="header" href="#pd"><code>PD</code></a></h3>
+<p>负责：</p>
+<ul>
+<li>route lookup</li>
+<li>allocator / TSO</li>
+<li>heartbeat 聚合</li>
+<li>cluster 视图</li>
+<li>未来的调度和编排</li>
+</ul>
+<p>也就是：</p>
+<blockquote>
+<p><strong>cluster 级 control plane</strong></p>
+</blockquote>
+<h2 id="root-cause-2"><a class="header" href="#root-cause-2">Root cause</a></h2>
+<p>两者不能混成一层，根本原因是：</p>
+<h3 id="control-plane-不等于-execution-plane"><a class="header" href="#control-plane-不等于-execution-plane">control plane 不等于 execution plane</a></h3>
+<p>PD 最擅长的是：</p>
+<ul>
+<li>看全局</li>
+<li>做决策</li>
+<li>提供目录服务</li>
+<li>承担调度语义</li>
+</ul>
+<p>但真正执行：</p>
+<ul>
+<li>conf change</li>
+<li>leader transfer</li>
+<li>snapshot install</li>
+</ul>
+<p>这些动作的仍然是 region leader 所在的 store / peer runtime。</p>
+<p>如果让 PD 直接越过这些路径写本地 state，会有三个问题：</p>
+<ol>
+<li>本地 truth 被破坏</li>
+<li>恢复路径和正常执行路径不一致</li>
+<li>分布式错误难以收敛，因为调度器开始兼做执行器</li>
+</ol>
+<h2 id="fix-2"><a class="header" href="#fix-2">Fix</a></h2>
+<p>当前 NoKV 的正确做法是：</p>
+<ol>
+<li>保留 <code>RaftAdmin</code> 作为 execution plane。</li>
+<li>保留 <code>PD</code> 作为 control plane。</li>
+<li>未来如果要做更高级 orchestrator，也应该是：
+<ul>
+<li><code>PD</code> 决策</li>
+<li><code>RaftAdmin</code> 执行</li>
+</ul>
+</li>
+</ol>
+<p>而不是让 <code>PD</code> 直接篡改本地运行时。</p>
+<h2 id="follow-ups-2"><a class="header" href="#follow-ups-2">Follow-ups</a></h2>
+<ol>
+<li><code>RegionRuntimeStatus</code> 要保持克制<br>不要把它继续膨胀成万能 dump API。</li>
+<li><code>PD</code> 以后如果做 operator framework，应明确只编排，不直接改本地 truth。</li>
+<li>文档里应该长期强调：
+<ul>
+<li><code>PD</code> 是 control plane</li>
+<li><code>RaftAdmin</code> 是 execution plane</li>
+</ul>
+</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot"><a class="header" href="#2026-03-30-migration-设计里最关键的不是命令而是-mode-和-snapshot">2026-03-30 migration 设计里最关键的不是命令，而是 mode 和 snapshot</a></h1>
+<p>这篇记录 migration 主线真正值钱的地方。表面上看，我们只是补了 <code>plan</code>、<code>init</code>、<code>expand</code> 这些命令；但真正让迁移成立的不是命令名，而是背后的状态协议。</p>
+<hr>
+<h2 id="context-3"><a class="header" href="#context-3">Context</a></h2>
+<p>NoKV 当前 migration 主线已经形成：</p>
+<ul>
+<li><code>plan</code></li>
+<li><code>init</code></li>
+<li><code>serve</code></li>
+<li><code>expand</code></li>
+<li><code>remove-peer</code></li>
+<li><code>transfer-leader</code></li>
+</ul>
+<p>但如果只从 CLI 角度理解这套功能，很容易误判成“就是几条方便的运维命令”。</p>
+<h2 id="symptom-3"><a class="header" href="#symptom-3">Symptom</a></h2>
+<p>分布式迁移最容易犯的两个错误是：</p>
+<ol>
+<li><strong>把迁移做成脚本串联</strong></li>
+<li><strong>把 snapshot 当成一个模糊的大概念</strong></li>
+</ol>
+<p>结果通常是：</p>
+<ul>
+<li>目录状态不清楚</li>
+<li>半迁移目录还能被普通 DB 打开</li>
+<li>应用状态和 raft metadata 混在一起</li>
+<li>增副本靠碰运气，不靠协议</li>
+</ul>
+<h2 id="investigation-3"><a class="header" href="#investigation-3">Investigation</a></h2>
+<p>当前 migration 真正成立，依赖两条主线：</p>
+<h3 id="1-workdir-mode-gate"><a class="header" href="#1-workdir-mode-gate">1. workdir mode gate</a></h3>
+<p><code>raftstore/mode</code> 现在有：</p>
+<ul>
+<li><code>standalone</code></li>
+<li><code>preparing</code></li>
+<li><code>seeded</code></li>
+<li><code>cluster</code></li>
+</ul>
+<p>这不是 migration 私有状态，而是 workdir 运行形态协议。</p>
+<p>最关键的一步是：</p>
+<blockquote>
+<p><code>DB.Open()</code> 不再无条件认为目录永远是 standalone。</p>
+</blockquote>
+<p>也就是说，一旦 workdir 进入 <code>preparing/seeded/cluster</code>，普通单机路径就不能继续把它当成简单本地 DB 来写。</p>
+<h3 id="2-snapshot-分层"><a class="header" href="#2-snapshot-分层">2. snapshot 分层</a></h3>
+<p>NoKV 当前明确分成两种 snapshot：</p>
+<ul>
+<li><code>raftstore/engine/snapshot.go</code>
+<ul>
+<li>raft durable metadata snapshot</li>
+</ul>
+</li>
+<li><code>raftstore/snapshot/snapshot.go</code>
+<ul>
+<li>logical region state snapshot</li>
+</ul>
+</li>
+</ul>
+<p>这条分层非常关键。</p>
+<p>因为 migration 需要的不只是：</p>
+<ul>
+<li>index</li>
+<li>term</li>
+<li>conf state</li>
+</ul>
+<p>它还需要：</p>
+<ul>
+<li>某个 region key range 内的真实状态机内容</li>
+</ul>
+<h2 id="root-cause-3"><a class="header" href="#root-cause-3">Root cause</a></h2>
+<p>standalone 到 distributed 的桥接之所以难，不是因为“缺一个命令”，而是因为：</p>
+<blockquote>
+<p>系统缺少一种能把已有 workdir 正式提升成 region state 的语义。</p>
+</blockquote>
+<p>如果没有 mode gate，迁移中的 workdir 仍然可能被错误使用。<br>如果没有逻辑 region snapshot，<code>expand</code> 和 seed bootstrap 就只能建立在不干净的目录复制或隐式状态假设上。</p>
+<h2 id="fix-3"><a class="header" href="#fix-3">Fix</a></h2>
+<p>当前 NoKV 的迁移协议是成立的，因为它做了三件对的事情：</p>
+<ol>
+<li>用 <code>mode</code> 把 workdir 生命周期写死。</li>
+<li>用 logical region snapshot 提供状态提升原语。</li>
+<li>用 <code>RaftAdmin</code> + membership orchestration 把 seed 扩成 replicated region。</li>
+</ol>
+<p>换句话说，<code>migrate</code> 的命令只是入口，真正关键的是：</p>
+<ul>
+<li>状态边界</li>
+<li>快照边界</li>
+<li>恢复边界</li>
+</ul>
+<h2 id="follow-ups-3"><a class="header" href="#follow-ups-3">Follow-ups</a></h2>
+<ol>
+<li>下一阶段的提升不应该破坏这条分层<br>例如未来做 SST-based snapshot install，也应该继续保留：
+<ul>
+<li>raft metadata snapshot</li>
+<li>region state snapshot
+这两层语义分离。</li>
+</ul>
+</li>
+<li><code>mode</code> 不要继续塞杂项状态<br>保持它只是 workdir lifecycle contract。</li>
+<li>迁移文档里可以更明确强调：
+<ul>
+<li>CLI 是表层</li>
+<li>protocol 才是本体</li>
+</ul>
+</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制"><a class="header" href="#2026-03-30-分布式测试为什么不能只靠黑盒以及-failpoint-该怎么克制">2026-03-30 分布式测试为什么不能只靠黑盒，以及 failpoint 该怎么克制</a></h1>
+<p>这篇记录最近一轮分布式测试体系收口后的判断。重点不是“case 变多了”，而是测试开始按边界和故障模型分层，而不是只靠少量 happy-path integration。</p>
+<hr>
+<h2 id="context-4"><a class="header" href="#context-4">Context</a></h2>
+<p>最近这轮测试增强之后，NoKV 现在已经有：</p>
+<ul>
+<li>package-level protocol tests</li>
+<li>node-local integration tests</li>
+<li>multi-node deterministic integration</li>
+<li>restart / recovery tests</li>
+<li>transport chaos</li>
+<li>context propagation coverage</li>
+<li>publish-boundary failpoints</li>
+<li><code>testcluster</code> 集群测试基础设施</li>
+</ul>
+<h2 id="symptom-4"><a class="header" href="#symptom-4">Symptom</a></h2>
+<p>分布式系统如果只靠两类测试，很快就会失真：</p>
+<ol>
+<li><strong>只靠单测</strong>
+<ul>
+<li>证明不了系统路径成立</li>
+</ul>
+</li>
+<li><strong>只靠黑盒集成</strong>
+<ul>
+<li>很难稳定打中 publish / persist / send 这些真正危险的边界</li>
+</ul>
+</li>
+</ol>
+<p>如果没有中间层，最后通常会出现两种结果：</p>
+<ul>
+<li>测试很多，但抓不到真实故障点</li>
+<li>或者为了命中中间态，把生产代码改得很脏</li>
+</ul>
+<h2 id="investigation-4"><a class="header" href="#investigation-4">Investigation</a></h2>
+<p>当前 NoKV 的收法是两条线一起做：</p>
+<h3 id="1-testcluster"><a class="header" href="#1-testcluster">1. <code>testcluster</code></a></h3>
+<p><code>raftstore/testcluster</code> 解决的是：</p>
+<ul>
+<li>起 PD</li>
+<li>起多个节点</li>
+<li>block/unblock peer</li>
+<li>restart node</li>
+<li>wait leader / hosted / scheduler mode</li>
+</ul>
+<p>它的价值不是“让测试看起来优雅”，而是把多节点环境搭建从场景文件里抽出来，避免 migration test 变成脚本集合。</p>
+<h3 id="2-failpoint"><a class="header" href="#2-failpoint">2. failpoint</a></h3>
+<p><code>raftstore/failpoints</code> 现在打在这些地方：</p>
+<ul>
+<li><code>AfterReadyAdvanceBeforeSend</code></li>
+<li><code>BeforeTransportSendRPC</code></li>
+<li><code>AfterSnapshotApplyBeforePublish</code></li>
+<li>migration init 的 publish-boundary 阶段</li>
+</ul>
+<p>这些点的共同特点是：</p>
+<ul>
+<li>都是生命周期边界</li>
+<li>都很难靠黑盒稳定命中</li>
+<li>一旦出错，最容易留下半状态</li>
+</ul>
+<h2 id="root-cause-4"><a class="header" href="#root-cause-4">Root cause</a></h2>
+<p>很多人对 failpoint 的直觉是“侵入性太强”。这个担心没错，但问题不是“要不要 failpoint”，而是：</p>
+<blockquote>
+<p>failpoint 是否只打在真正高价值、黑盒难覆盖、资源注入又不够精确的边界上。</p>
+</blockquote>
+<p>只要打点开始进入：</p>
+<ul>
+<li>业务分支</li>
+<li>模糊条件</li>
+<li>到处 scattered 的测试开关</li>
+</ul>
+<p>那它就会迅速退化成脏代码。</p>
+<h2 id="fix-4"><a class="header" href="#fix-4">Fix</a></h2>
+<p>当前 NoKV 的正确方向是：</p>
+<ol>
+<li>黑盒 cluster integration 负责系统级收敛。</li>
+<li><code>testcluster</code> 负责多节点环境和干扰控制。</li>
+<li>failpoint 只负责命中高价值 publish / persist / send 边界。</li>
+</ol>
+<p>也就是说：</p>
+<blockquote>
+<p>不是“只靠 failpoint”，也不是“完全不用 failpoint”，而是分层使用。</p>
+</blockquote>
+<h2 id="follow-ups-4"><a class="header" href="#follow-ups-4">Follow-ups</a></h2>
+<ol>
+<li>新增 failpoint 时必须回答三个问题：
+<ul>
+<li>为什么黑盒 integration 打不到？</li>
+<li>为什么 transport / FS fault injection 不能替代？</li>
+<li>它命中的具体生命周期边界是什么？</li>
+</ul>
+</li>
+<li><code>testcluster</code> 要继续保持克制<br>它应该是 cluster harness，不要长成测试万能箱。</li>
+<li>后面可以继续补：
+<ul>
+<li>更随机化的 transport chaos</li>
+<li>更强的 invariant helper</li>
+<li>更深的 multi-region / lock recovery 交错场景</li>
+</ul>
+</li>
+</ol>
 
                     </main>
 
@@ -5504,6 +6073,7 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
+        <script src="docs/custom-732fa610.js"></script>
         <script src="docs/mermaid-init-8a66ee6c.js"></script>
 
         <script>
