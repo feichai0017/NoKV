@@ -37,29 +37,30 @@ type SnapshotApplyFunc func(payload []byte) (raftmeta.RegionMeta, error)
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
-	mu               sync.Mutex
-	readyMu          sync.Mutex
-	id               uint64
-	node             *myraft.RawNode
-	storage          engine.PeerStorage
-	transport        transport.Transport
-	apply            ApplyFunc
-	adminApply       AdminApplyFunc
-	raftLog          *raftLogTracker
-	snapshotQueue    *snapshotResendQueue
-	logRetainEntries uint64
-	confChangeHook   ConfChangeHandler
-	snapshotExport   SnapshotExportFunc
-	snapshotApply    SnapshotApplyFunc
-	applyMark        *utils.WaterMark
-	applyCloser      *utils.Closer
-	applyLimit       uint64
-	stopCtx          context.Context
-	stopCancel       context.CancelFunc
-	region           *raftmeta.RegionMeta
-	readSeq          atomic.Uint64
-	readMu           sync.Mutex
-	pendingReads     map[string]chan uint64
+	mu                        sync.Mutex
+	readyMu                   sync.Mutex
+	id                        uint64
+	node                      *myraft.RawNode
+	storage                   engine.PeerStorage
+	transport                 transport.Transport
+	apply                     ApplyFunc
+	adminApply                AdminApplyFunc
+	raftLog                   *raftLogTracker
+	snapshotQueue             *snapshotResendQueue
+	logRetainEntries          uint64
+	confChangeHook            ConfChangeHandler
+	snapshotExport            SnapshotExportFunc
+	snapshotApply             SnapshotApplyFunc
+	applyMark                 *utils.WaterMark
+	applyCloser               *utils.Closer
+	applyLimit                uint64
+	stopCtx                   context.Context
+	stopCancel                context.CancelFunc
+	region                    *raftmeta.RegionMeta
+	readSeq                   atomic.Uint64
+	readMu                    sync.Mutex
+	pendingReads              map[string]chan uint64
+	allowSnapshotInstallRetry bool
 }
 
 const defaultMaxInFlightApply = 8192
@@ -110,23 +111,24 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	}
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	peer := &Peer{
-		id:               raftCfg.ID,
-		node:             node,
-		storage:          storage,
-		transport:        cfg.Transport,
-		apply:            cfg.Apply,
-		adminApply:       cfg.AdminApply,
-		confChangeHook:   cfg.ConfChange,
-		snapshotExport:   cfg.SnapshotExport,
-		snapshotApply:    cfg.SnapshotApply,
-		raftLog:          newRaftLogTracker(nonZeroGroupID(cfg.GroupID)),
-		snapshotQueue:    newSnapshotResendQueue(),
-		logRetainEntries: cfg.LogRetainEntries,
-		applyCloser:      utils.NewCloserInitial(1),
-		stopCtx:          stopCtx,
-		stopCancel:       stopCancel,
-		region:           raftmeta.CloneRegionMetaPtr(cfg.Region),
-		pendingReads:     make(map[string]chan uint64),
+		id:                        raftCfg.ID,
+		node:                      node,
+		storage:                   storage,
+		transport:                 cfg.Transport,
+		apply:                     cfg.Apply,
+		adminApply:                cfg.AdminApply,
+		confChangeHook:            cfg.ConfChange,
+		snapshotExport:            cfg.SnapshotExport,
+		snapshotApply:             cfg.SnapshotApply,
+		raftLog:                   newRaftLogTracker(nonZeroGroupID(cfg.GroupID)),
+		snapshotQueue:             newSnapshotResendQueue(),
+		logRetainEntries:          cfg.LogRetainEntries,
+		applyCloser:               utils.NewCloserInitial(1),
+		stopCtx:                   stopCtx,
+		stopCancel:                stopCancel,
+		region:                    raftmeta.CloneRegionMetaPtr(cfg.Region),
+		pendingReads:              make(map[string]chan uint64),
+		allowSnapshotInstallRetry: cfg.AllowSnapshotInstallRetry,
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries
@@ -522,6 +524,9 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 
 func (p *Peer) ensureEmptyLogicalSnapshotTarget() error {
 	if p == nil || p.storage == nil {
+		return nil
+	}
+	if p.allowSnapshotInstallRetry {
 		return nil
 	}
 	hs, cs, err := p.storage.InitialState()
