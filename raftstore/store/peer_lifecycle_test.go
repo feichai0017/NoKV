@@ -95,6 +95,84 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 	require.Equal(t, []byte("value"), got.Value)
 }
 
+func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
+	sourceDB, _ := openStoreDB(t)
+	value := entrykv.NewInternalEntry(entrykv.CFDefault, []byte("banana"), 7, []byte("payload"), 0, 0)
+	t.Cleanup(func() { value.DecrRef() })
+	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{value}))
+
+	region := raftmeta.RegionMeta{
+		ID:       78,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 2},
+		Peers: []raftmeta.PeerMeta{
+			{StoreID: 1, PeerID: 11},
+			{StoreID: 2, PeerID: 22},
+		},
+		State: raftmeta.RegionStateRunning,
+	}
+	payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
+	require.NoError(t, err)
+
+	targetDB, targetMeta := openStoreDB(t)
+	builder := func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              22,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport: noopTransport{},
+			Apply:     func([]myraft.Entry) error { return nil },
+			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
+				result, err := snapshotpkg.ImportPayload(targetDB, payload)
+				if err != nil {
+					return raftmeta.RegionMeta{}, err
+				}
+				return result.Manifest.Region, nil
+			},
+			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID: meta.ID,
+			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+		}, nil
+	}
+	st := NewStore(Config{
+		StoreID:     2,
+		LocalMeta:   targetMeta,
+		PeerBuilder: builder,
+	})
+	t.Cleanup(st.Close)
+
+	installed, err := st.InstallRegionSnapshot(myraft.Snapshot{
+		Data: payload,
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 5,
+			Term:  2,
+			ConfState: raftpb.ConfState{
+				Voters: []uint64{11, 22},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, region.ID, installed.ID)
+
+	status, ok := st.RegionRuntimeStatus(region.ID)
+	require.True(t, ok)
+	require.True(t, status.Hosted)
+	require.Equal(t, uint64(22), status.LocalPeerID)
+	require.Equal(t, uint64(5), status.AppliedIndex)
+
+	got, err := targetDB.GetInternalEntry(entrykv.CFDefault, []byte("banana"), 7)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	defer got.DecrRef()
+	require.Equal(t, []byte("payload"), got.Value)
+}
+
 func TestStorePeerLifecycle(t *testing.T) {
 	router := NewRouter()
 	rs := NewStore(Config{Router: router})

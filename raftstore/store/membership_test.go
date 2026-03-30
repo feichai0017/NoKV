@@ -72,10 +72,8 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	}
 	require.NoError(t, rs.handlePeerConfChange(removeEvent))
 
-	meta, ok = rs.RegionMetaByID(regionID)
-	require.True(t, ok)
-	require.Len(t, meta.Peers, 1)
-	require.Equal(t, uint64(2), meta.Epoch.ConfVersion)
-	require.Equal(t, uint64(2), meta.Peers[0].PeerID)
-	require.Equal(t, uint64(2), meta.Peers[0].StoreID)
+	_, ok = rs.RegionMetaByID(regionID)
+	require.False(t, ok)
+	_, hosted := rs.Peer(1)
+	require.False(t, hosted)
 }
