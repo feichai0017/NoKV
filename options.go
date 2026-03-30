@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/kv"
 	lsmpkg "github.com/feichai0017/NoKV/lsm"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
@@ -22,6 +23,11 @@ type Options struct {
 	// FS provides the filesystem implementation used by DB runtime components.
 	// Nil defaults to vfs.OSFS.
 	FS vfs.FS
+
+	// AllowedModes limits which migration workdir modes Open accepts. An empty
+	// allow-list means standalone-only. Cluster runtime and offline diagnostics
+	// must opt into seeded/cluster directories explicitly.
+	AllowedModes []raftmode.Mode
 
 	ValueThreshold int64
 	WorkDir        string

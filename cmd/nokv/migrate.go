@@ -22,7 +22,7 @@ func runMigrateCmd(w io.Writer, args []string) error {
 	case "plan":
 		return runMigratePlanCmd(w, subargs)
 	case "init":
-		return fmt.Errorf("migrate init: not implemented")
+		return runMigrateInitCmd(w, subargs)
 	case "status":
 		return runMigrateStatusCmd(w, subargs)
 	case "expand":
@@ -116,5 +116,39 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 	if result.PeerID != 0 {
 		_, _ = fmt.Fprintf(w, "Peer     %d\n", result.PeerID)
 	}
+	return nil
+}
+
+func runMigrateInitCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("migrate init", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "database work directory")
+	storeID := fs.Uint64("store", 0, "seed store id")
+	regionID := fs.Uint64("region", 0, "seed region id")
+	peerID := fs.Uint64("peer", 0, "seed peer id")
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	result, err := migratepkg.Init(migratepkg.InitConfig{
+		WorkDir:  *workDir,
+		StoreID:  *storeID,
+		RegionID: *regionID,
+		PeerID:   *peerID,
+	})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	_, _ = fmt.Fprintf(w, "Workdir      %s\n", result.WorkDir)
+	_, _ = fmt.Fprintf(w, "Mode         %s\n", result.Mode)
+	_, _ = fmt.Fprintf(w, "Store        %d\n", result.StoreID)
+	_, _ = fmt.Fprintf(w, "Region       %d\n", result.RegionID)
+	_, _ = fmt.Fprintf(w, "Peer         %d\n", result.PeerID)
+	_, _ = fmt.Fprintf(w, "SnapshotDir  %s\n", result.SnapshotDir)
 	return nil
 }

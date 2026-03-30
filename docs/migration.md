@@ -53,8 +53,8 @@ The current codebase already provides most of the low-level pieces:
   - starts peers from local recovery metadata
 - `raftstore/engine/wal_storage.go`
   - persists per-group raft durable state inside the shared WAL
-- `raftstore/engine/snapshot.go`
-  - provides snapshot export/import primitives
+- `raftstore/snapshot`
+  - provides logical region snapshot export/import over internal entries
 - `raftstore/store/membership_service.go`
   - provides the later path from seed region to multi-peer region
 
@@ -113,6 +113,13 @@ Only four modes are needed:
   - standalone data has been converted into a single-store cluster seed
 - `cluster`
   - directory is operating in distributed mode
+
+Library-level opens must treat these modes explicitly:
+
+- ordinary standalone `NoKV.Open` accepts only `standalone`
+- `nokv migrate init` explicitly opts into `preparing`
+- `nokv serve` explicitly opts into `seeded` and `cluster`
+- offline diagnostics may opt into all modes deliberately
 
 The file only needs minimal state:
 
@@ -223,12 +230,35 @@ Write one full-range `RegionMeta` into `raftstore/meta`:
 
 This is the only bootstrap-time source of local region truth.
 
-### Step 3: synthesize initial raft durable state
+### Step 3: export a logical region snapshot
 
-The current standalone data must become the state machine contents of a valid
-single-node raft group.
+The current standalone keyspace must first be materialized into a formal region
+snapshot artifact. The artifact should be a directory containing:
 
-The initial state should be:
+- `manifest.json`
+- `entries.bin`
+
+The seeded artifact lives under:
+
+- `RAFTSTORE_SNAPSHOTS/region-<id>`
+
+The payload in `entries.bin` is a stream of encoded internal entries, not a raw
+copy of SST/WAL/value-log files. Value-log backed records must be materialized
+into inline values during export so the snapshot does not depend on source-side
+value-log offsets.
+
+This gives the system one reusable primitive for:
+
+- standalone -> seed bootstrap
+- seed -> add-peer snapshot install
+- future restore/reseed flows
+
+### Step 4: synthesize initial raft durable state
+
+The exported snapshot artifact now defines the state machine contents of a
+valid single-node raft group.
+
+The initial raft state should be:
 
 - snapshot index = 1
 - snapshot term = 1
@@ -236,24 +266,15 @@ The initial state should be:
 - hard state commit = 1
 - conf state voters = `[peer]`
 
-This should be written through the existing raft durable storage path rather
-than via ad hoc files.
+The durable raft metadata should still be written through the existing raft
+storage path rather than via ad hoc files.
 
-Current code note:
-
-- `raftstore/engine/snapshot.go` only imports and exports raft snapshot
-  protobuf state
-- it does not yet serialize standalone `DB` state-machine contents
-
-So `init` cannot be completed safely until the project defines how a
-standalone workdir is materialized as an initial replicated state snapshot.
-
-### Step 4: persist the local raft replay pointer
+### Step 5: persist the local raft replay pointer
 
 Use `raftstore/meta` to persist the group-local replay pointer that corresponds
 to the synthesized raft state.
 
-### Step 5: finalize
+### Step 6: finalize
 
 Write mode = `seeded`.
 
@@ -262,6 +283,9 @@ At this point the directory is ready for:
 ```bash
 nokv serve --workdir <dir> --store-id <sid> --pd-addr <pd>
 ```
+
+The first successful `nokv serve` over that directory must promote the mode to
+`cluster`.
 
 ---
 

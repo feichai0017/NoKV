@@ -17,6 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/manifest"
 	"github.com/feichai0017/NoKV/metrics"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
 )
 
@@ -527,6 +528,12 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (NoKV.StatsSnapshot,
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
 	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
+	opts.AllowedModes = []raftmode.Mode{
+		raftmode.ModeStandalone,
+		raftmode.ModePreparing,
+		raftmode.ModeSeeded,
+		raftmode.ModeCluster,
+	}
 	db, err := NoKV.Open(opts)
 	if err != nil {
 		return NoKV.StatsSnapshot{}, fmt.Errorf("open db for offline stats: %w", err)

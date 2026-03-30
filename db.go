@@ -21,6 +21,7 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	vlogpkg "github.com/feichai0017/NoKV/vlog"
@@ -168,6 +169,23 @@ func (db *DB) openDurability() error {
 	return nil
 }
 
+func (db *DB) checkWorkDirMode() error {
+	if db == nil || db.opt == nil {
+		return fmt.Errorf("open db: options not initialized")
+	}
+	mode, err := raftmode.ReadOnlyMode(db.opt.WorkDir)
+	if err != nil {
+		return fmt.Errorf("open db: read workdir mode: %w", err)
+	}
+	if raftmode.Allowed(db.opt.AllowedModes, mode) {
+		return nil
+	}
+	if len(db.opt.AllowedModes) == 0 {
+		return fmt.Errorf("open db: workdir mode %q requires explicit distributed open intent", mode)
+	}
+	return fmt.Errorf("open db: workdir mode %q is not allowed for this open intent", mode)
+}
+
 func (db *DB) openEngine() error {
 	baseTableSize, baseLevelSize := db.levelSizes()
 	lsmCore, err := lsm.NewLSM(&lsm.Options{
@@ -302,6 +320,9 @@ func Open(opt *Options) (_ *DB, err error) {
 			err = stderrors.Join(err, db.closeInternal())
 		}
 	}()
+	if err := db.checkWorkDirMode(); err != nil {
+		return nil, err
+	}
 	if err := db.openDurability(); err != nil {
 		return nil, err
 	}
@@ -584,6 +605,56 @@ func (db *DB) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (
 		return nil, err
 	}
 	return entry, nil
+}
+
+// MaterializeInternalEntry converts a borrowed internal entry into a detached
+// internal entry suitable for export or replay. The returned entry preserves
+// canonical internal-key layout and resolves any value-log indirection into
+// inline value bytes.
+func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db is nil")
+	}
+	if src == nil {
+		return nil, utils.ErrKeyNotFound
+	}
+	if !kv.IsValuePtr(src) {
+		keyCopy := kv.SafeCopy(nil, src.Key)
+		valueCopy := kv.SafeCopy(nil, src.Value)
+		return &kv.Entry{
+			Key:          keyCopy,
+			Value:        valueCopy,
+			ExpiresAt:    src.ExpiresAt,
+			CF:           src.CF,
+			Meta:         src.Meta,
+			Version:      src.Version,
+			Offset:       src.Offset,
+			Hlen:         src.Hlen,
+			ValThreshold: src.ValThreshold,
+		}, nil
+	}
+	var vp kv.ValuePtr
+	vp.Decode(src.Value)
+	result, cb, err := db.vlog.read(&vp)
+	if cb != nil {
+		defer cb()
+	}
+	if err != nil {
+		return nil, err
+	}
+	keyCopy := kv.SafeCopy(nil, src.Key)
+	valueCopy := kv.SafeCopy(nil, result)
+	return &kv.Entry{
+		Key:          keyCopy,
+		Value:        valueCopy,
+		ExpiresAt:    src.ExpiresAt,
+		CF:           src.CF,
+		Meta:         src.Meta &^ kv.BitValuePointer,
+		Version:      src.Version,
+		Offset:       src.Offset,
+		Hlen:         src.Hlen,
+		ValThreshold: src.ValThreshold,
+	}, nil
 }
 
 // Get reads the latest visible value for key from the default column family.
