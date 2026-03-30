@@ -2,8 +2,8 @@ package failpoints
 
 import "sync/atomic"
 
-// Mode configures different failure injection hooks for raft Ready processing.
-// Modes can be ORed together to simulate multiple failure points.
+// Mode configures different failure injection hooks for raftstore runtime
+// processing. Modes can be ORed together to simulate multiple failure points.
 type Mode uint32
 
 const (
@@ -15,6 +15,10 @@ const (
 	// SkipLocalMeta simulates a crash after WAL append but before local raft WAL
 	// pointers advance, allowing recovery tests to replay from WAL.
 	SkipLocalMeta
+	// AfterSnapshotApplyBeforePublish simulates a crash after a snapshot has
+	// been applied to local durable state but before the store publishes the new
+	// peer/runtime into its router and region catalog.
+	AfterSnapshotApplyBeforePublish
 )
 
 var currentMode atomic.Uint32
@@ -40,4 +44,10 @@ func ShouldFailBeforeStorage() bool {
 // should be skipped even though WAL data was appended.
 func ShouldSkipLocalMetaUpdate() bool {
 	return Current()&SkipLocalMeta != 0
+}
+
+// ShouldFailAfterSnapshotApplyBeforePublish reports whether store-level
+// snapshot install should fail after local apply but before peer publication.
+func ShouldFailAfterSnapshotApplyBeforePublish() bool {
+	return Current()&AfterSnapshotApplyBeforePublish != 0
 }

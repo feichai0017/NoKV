@@ -71,7 +71,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
 | Redis Gateway | `cmd/nokv-redis/backend_embedded_test.go`, `cmd/nokv-redis/server_test.go`, `cmd/nokv-redis/backend_raft_test.go` | Embedded backend semantics (NX/XX, TTL, counters), RESP parser, raft backend config wiring, and PD-backed routing/TSO discovery. | End-to-end multi-region CRUD with raft backend, TTL lock cleanup under failures. |
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `run_local_cluster.sh`. |
-| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery. | Add PD-unavailable scenarios, split/merge restart safety, and larger fault matrices around snapshot interruption. |
+| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, PD outage after startup, and snapshot-install interruption before publish. | Keep expanding split/merge recovery, deadline propagation deeper into propose/read hot paths, and larger fault matrices around runtime publish sequencing. |
 | Benchmark | `benchmark/ycsb_test.go`, `benchmark/ycsb_runner.go` | YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting. | Automate multi-node deployments and add longer-running, multi-GB stability baselines. |
 
 ---
@@ -87,7 +87,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Iterator consistency | `lsm/iterator_test.go` | Snapshot visibility, merging iterators across levels and memtables. |
 | Throttling / backpressure | `lsm/compaction_test.go`, `db_test.go::TestWriteThrottle` | L0 backlog triggers, flush queue growth, metrics observation. |
 | Distributed NoKV client | `raftstore/client/client_test.go::TestClientTwoPhaseCommitAndGet`, `raftstore/transport/grpc_transport_test.go::TestGRPCTransportManualTicksDriveElection` | Region-aware routing, NotLeader retries, manual tick-driven elections, cross-region 2PC sequencing. |
-| Migration & membership orchestration | `raftstore/integration/migration_flow_test.go`, `raftstore/integration/restart_recovery_test.go` | Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart. |
+| Migration & membership orchestration | `raftstore/integration/migration_flow_test.go`, `raftstore/integration/restart_recovery_test.go`, `raftstore/integration/pd_degraded_test.go`, `raftstore/integration/snapshot_interruption_test.go` | Seed bootstrap, multi-peer rollout, leader transfer, peer removal, restarted follower recovery, removed-peer dehost after restart, PD outage after startup, and snapshot-install interruption before publish. |
 | Performance regression | `benchmark` package | Compare NoKV vs Badger/Pebble by default (RocksDB optional), produce human-readable reports under `benchmark/benchmark_results`. |
 
 ---
@@ -114,6 +114,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **Node-local integration tests**: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.
 - **Multi-node deterministic integration tests**: `raftstore/integration` uses the shared `raftstore/testcluster` harness to boot real stores, wire transports, and drive migration/member flows against live runtimes.
 - **Restart and recovery suites**: `raftstore/integration/restart_recovery_test.go` covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.
+- **Control-plane degradation and publish-boundary tests**: `raftstore/integration/pd_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live PD outage after startup and failpoint-driven snapshot interruption before peer publication.
 
 When adding new distributed tests, prefer reusing `raftstore/testcluster` instead of embedding cluster bootstrap helpers into feature-specific test files.
 
@@ -126,15 +127,16 @@ When adding new distributed tests, prefer reusing `raftstore/testcluster` instea
 | Follower restart after snapshot install | Covered | `raftstore/integration/restart_recovery_test.go::TestExpandedPeerRestartPreservesRegionAndData` | Ensures installed peer persists region metadata and data after restart. |
 | Removed peer restart | Covered | `raftstore/integration/restart_recovery_test.go::TestRemovedPeerRestartDoesNotRehost` | Ensures dehosted peers do not come back after restart. |
 | Leader restart with follow-up membership change | Covered | `raftstore/integration/restart_recovery_test.go::TestLeaderRestartStillAllowsMembershipChanges` | Exercises leadership churn before a later remove-peer operation. |
-| Control-plane degraded / PD unavailable | Partially covered | `pd/adapter/region_sink_test.go`, `raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable` | Confirms degraded scheduler status is visible and command path remains serviceable; missing full multi-node PD outage scenarios. |
+| Control-plane degraded / PD unavailable | Covered | `pd/adapter/region_sink_test.go`, `raftstore/store/command_service_test.go::TestStoreProposeCommandSurvivesSchedulerUnavailable`, `raftstore/integration/pd_degraded_test.go::TestClusterSurvivesPDUnavailableAfterStartup` | Covers both local degraded scheduler semantics and live multi-node PD outage after route cache warmup; new cold-route misses still fail with `RouteUnavailable` as expected. |
 | Scheduler queue overflow / dropped operations | Covered | `raftstore/store/scheduler_runtime_test.go::TestStoreSchedulerStatusTracksQueueDrop` | Validates local degraded status and dropped operation accounting. |
-| Split/merge restart safety | Partially covered | `raftstore/store/store_test.go::TestStoreRestartPreservesSplitMergeLocalMeta` | Store-local correctness exists; no multi-node split/merge restart suite yet. |
+| Snapshot install interrupted before publish | Covered | `raftstore/integration/snapshot_interruption_test.go::TestExpandSnapshotInstallInterruptedBeforePublish`, `raftstore/store/peer_lifecycle_test.go::TestStoreInstallRegionSnapshotRejectsCorruptPayload` | Uses failpoint injection to verify target install aborts without leaving a hosted peer or polluted region metadata, then retries cleanly after restart. |
+| Request cancel / deadline propagation | Covered | `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRouteLookup`, `raftstore/client/client_test.go::TestClientGetHonorsCanceledContextDuringRPC` | Verifies route lookup and RPC layers surface caller cancellation instead of hiding it behind background contexts. |
+| Split/merge restart safety | Partially covered | `raftstore/store/store_test.go::TestStoreRestartPreservesSplitMergeLocalMeta` | Store-local correctness exists. A live multi-store split/merge recovery scenario currently exposes a `Ready`/`Advance` lifecycle bug in the runtime and remains intentionally excluded from the default integration suite until fixed. |
 
 Next fault-matrix additions should focus on:
 
-- PD unavailable after startup in a live multi-node cluster
-- snapshot install interrupted by process exit before publish
-- split/merge restart safety across multiple stores
-- request cancel/deadline propagation through client -> routing -> propose/read paths
+- fixing the live multi-store split/merge restart bug and promoting that scenario back into the default integration suite
+- extending context cancel/deadline coverage through full propose/read paths after routing succeeds
+- adding more publish-boundary failpoints around snapshot install and migration init
 
 Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.

@@ -11,6 +11,7 @@ func TestModesAndPredicates(t *testing.T) {
 	require.Equal(t, None, Current())
 	require.False(t, ShouldFailBeforeStorage())
 	require.False(t, ShouldSkipLocalMetaUpdate())
+	require.False(t, ShouldFailAfterSnapshotApplyBeforePublish())
 
 	Set(BeforeStorage)
 	require.True(t, ShouldFailBeforeStorage())
@@ -19,8 +20,15 @@ func TestModesAndPredicates(t *testing.T) {
 	Set(SkipLocalMeta)
 	require.False(t, ShouldFailBeforeStorage())
 	require.True(t, ShouldSkipLocalMetaUpdate())
+	require.False(t, ShouldFailAfterSnapshotApplyBeforePublish())
 
-	Set(BeforeStorage | SkipLocalMeta)
+	Set(AfterSnapshotApplyBeforePublish)
+	require.False(t, ShouldFailBeforeStorage())
+	require.False(t, ShouldSkipLocalMetaUpdate())
+	require.True(t, ShouldFailAfterSnapshotApplyBeforePublish())
+
+	Set(BeforeStorage | SkipLocalMeta | AfterSnapshotApplyBeforePublish)
 	require.True(t, ShouldFailBeforeStorage())
 	require.True(t, ShouldSkipLocalMetaUpdate())
+	require.True(t, ShouldFailAfterSnapshotApplyBeforePublish())
 }

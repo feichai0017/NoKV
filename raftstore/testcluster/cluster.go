@@ -3,7 +3,9 @@ package testcluster
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"testing"
 	"time"
@@ -11,6 +13,11 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
+	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
+	pdclient "github.com/feichai0017/NoKV/pd/client"
+	"github.com/feichai0017/NoKV/pd/core"
+	pdserver "github.com/feichai0017/NoKV/pd/server"
+	"github.com/feichai0017/NoKV/pd/tso"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
@@ -32,6 +39,19 @@ type Node struct {
 	Server    *serverpkg.Server
 }
 
+type NodeConfig struct {
+	AllowedModes      []raftmode.Mode
+	StartPeers        bool
+	Scheduler         storepkg.SchedulerClient
+	HeartbeatInterval time.Duration
+}
+
+type PD struct {
+	addr   string
+	lis    net.Listener
+	server *grpc.Server
+}
+
 func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoKV.DB {
 	tb.Helper()
 	opt := NoKV.NewDefaultOptions()
@@ -48,6 +68,14 @@ func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoK
 
 func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmode.Mode, startPeers bool) *Node {
 	tb.Helper()
+	return StartNodeWithConfig(tb, storeID, dir, NodeConfig{
+		AllowedModes: allowedModes,
+		StartPeers:   startPeers,
+	})
+}
+
+func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConfig) *Node {
+	tb.Helper()
 	localMeta, err := raftmeta.OpenLocalStore(dir, nil)
 	if err != nil {
 		tb.Fatalf("open local meta: %v", err)
@@ -55,8 +83,8 @@ func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmod
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	if allowedModes != nil {
-		opt.AllowedModes = allowedModes
+	if cfg.AllowedModes != nil {
+		opt.AllowedModes = cfg.AllowedModes
 	}
 	db, err := NoKV.Open(opt)
 	if err != nil {
@@ -65,7 +93,12 @@ func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmod
 	}
 	srv, err := serverpkg.New(serverpkg.Config{
 		Storage: serverpkg.Storage{MVCC: db, Raft: db.RaftLog()},
-		Store:   storepkg.Config{StoreID: storeID, LocalMeta: localMeta},
+		Store: storepkg.Config{
+			StoreID:           storeID,
+			LocalMeta:         localMeta,
+			Scheduler:         cfg.Scheduler,
+			HeartbeatInterval: cfg.HeartbeatInterval,
+		},
 		Raft: myraft.Config{
 			ElectionTick:    5,
 			HeartbeatTick:   1,
@@ -81,10 +114,67 @@ func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmod
 		tb.Fatalf("new server: %v", err)
 	}
 	node := &Node{StoreID: storeID, WorkDir: dir, DB: db, LocalMeta: localMeta, Server: srv}
-	if startPeers {
+	if cfg.StartPeers {
 		StartPeers(tb, node)
 	}
 	return node
+}
+
+func StartPD(tb testing.TB) *PD {
+	tb.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatalf("listen pd: %v", err)
+	}
+	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
+	grpcServer := grpc.NewServer()
+	pb.RegisterPDServer(grpcServer, svc)
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	return &PD{
+		addr:   lis.Addr().String(),
+		lis:    lis,
+		server: grpcServer,
+	}
+}
+
+func (pd *PD) Addr() string {
+	if pd == nil {
+		return ""
+	}
+	return pd.addr
+}
+
+func (pd *PD) Close(tb testing.TB) {
+	tb.Helper()
+	if pd == nil {
+		return
+	}
+	if pd.server != nil {
+		pd.server.Stop()
+		pd.server = nil
+	}
+	if pd.lis != nil {
+		if err := pd.lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			tb.Fatalf("close pd listener: %v", err)
+		}
+		pd.lis = nil
+	}
+}
+
+func NewScheduler(tb testing.TB, pdAddr string, timeout time.Duration) storepkg.SchedulerClient {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cli, err := pdclient.NewGRPCClient(ctx, pdAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		tb.Fatalf("dial pd client %s: %v", pdAddr, err)
+	}
+	return pdadapter.NewSchedulerClient(pdadapter.SchedulerClientConfig{
+		PD:      cli,
+		Timeout: timeout,
+	})
 }
 
 func StartPeers(tb testing.TB, node *Node) {
@@ -306,4 +396,17 @@ func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*N
 		parts = append(parts, fmt.Sprintf("store=%d known=%v hosted=%v local=%d leader=%v leaderPeer=%d applied=%d", node.StoreID, status.GetKnown(), status.GetHosted(), status.GetLocalPeerId(), status.GetLeader(), status.GetLeaderPeerId(), status.GetAppliedIndex()))
 	}
 	return fmt.Sprint(parts)
+}
+
+func WaitForSchedulerMode(tb testing.TB, node *Node, mode storepkg.SchedulerMode, degraded bool) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status := node.Server.Store().SchedulerStatus()
+		if status.Mode == mode && status.Degraded == degraded {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for scheduler mode=%s degraded=%v on store %d (last=%+v)", mode, degraded, node.StoreID, node.Server.Store().SchedulerStatus())
 }

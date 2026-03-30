@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -247,6 +248,7 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 	}
 	cfgCopy := *cfg
 	cfgCopy.ConfChange = s.handlePeerConfChange
+	cfgCopy.AllowSnapshotInstallRetry = true
 	if cfgCopy.AdminApply == nil {
 		cfgCopy.AdminApply = s.handleAdminCommand
 	}
@@ -261,6 +263,10 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 	if err := p.Step(msg); err != nil {
 		_ = p.Close()
 		return raftmeta.RegionMeta{}, err
+	}
+	if failpoints.ShouldFailAfterSnapshotApplyBeforePublish() {
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: failpoint after snapshot apply before publish")
 	}
 	if err := s.router.add(p); err != nil {
 		_ = p.Close()
