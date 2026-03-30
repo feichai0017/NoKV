@@ -20,6 +20,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/feichai0017/NoKV/wal"
@@ -735,6 +736,39 @@ func TestDirectoryLockPreventsConcurrentOpen(t *testing.T) {
 
 	db2 := openTestDB(t, opt)
 	require.NoError(t, db2.Close())
+}
+
+func TestOpenRejectsSeededWorkdirByDefault(t *testing.T) {
+	opt := newTestOptions(t)
+	db := openTestDB(t, opt)
+	require.NoError(t, db.Close())
+	require.NoError(t, raftmode.Write(opt.WorkDir, raftmode.State{
+		Mode:     raftmode.ModeSeeded,
+		StoreID:  1,
+		RegionID: 2,
+		PeerID:   3,
+	}))
+
+	_, err := Open(opt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `workdir mode "seeded"`)
+}
+
+func TestOpenAllowsSeededWorkdirWhenExplicitlyRequested(t *testing.T) {
+	opt := newTestOptions(t)
+	db := openTestDB(t, opt)
+	require.NoError(t, db.Close())
+	require.NoError(t, raftmode.Write(opt.WorkDir, raftmode.State{
+		Mode:     raftmode.ModeSeeded,
+		StoreID:  1,
+		RegionID: 2,
+		PeerID:   3,
+	}))
+
+	opt.AllowedModes = []raftmode.Mode{raftmode.ModeSeeded}
+	db, err := Open(opt)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 }
 
 func TestWriteHotKeyThrottleBlocksDB(t *testing.T) {

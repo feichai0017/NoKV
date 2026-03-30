@@ -13,6 +13,7 @@ import (
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -155,6 +156,10 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 		require.Contains(t, buf.String(), "Local peer catalog contains no regions")
 		require.Contains(t, buf.String(), "Serve metrics endpoint listening on http://")
 		require.Contains(t, buf.String(), "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
+		state, err := raftmode.Read(dir)
+		require.NoError(t, err)
+		require.Equal(t, raftmode.ModeCluster, state.Mode)
+		require.Equal(t, uint64(1), state.StoreID)
 	})
 }
 
@@ -197,6 +202,10 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Contains(t, out, "Configured peers:")
 		require.Contains(t, out, "Serve mode: cluster (PD enabled, addr="+pdAddr+")")
 		require.Contains(t, out, "PD heartbeat sink enabled: "+pdAddr)
+		state, err := raftmode.Read(dir)
+		require.NoError(t, err)
+		require.Equal(t, raftmode.ModeCluster, state.Mode)
+		require.Equal(t, uint64(1), state.StoreID)
 	})
 }
 

@@ -27,6 +27,14 @@ type ApplyFunc func(entries []myraft.Entry) error
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
 type AdminApplyFunc func(cmd *pb.AdminCommand) error
 
+// SnapshotExportFunc materializes logical region state for one outgoing raft
+// snapshot message.
+type SnapshotExportFunc func(region raftmeta.RegionMeta) ([]byte, error)
+
+// SnapshotApplyFunc imports logical region state from one incoming raft
+// snapshot payload and returns the region metadata carried by that payload.
+type SnapshotApplyFunc func(payload []byte) (raftmeta.RegionMeta, error)
+
 // Peer wraps a RawNode with simple storage and apply plumbing.
 type Peer struct {
 	mu               sync.Mutex
@@ -41,6 +49,8 @@ type Peer struct {
 	snapshotQueue    *snapshotResendQueue
 	logRetainEntries uint64
 	confChangeHook   ConfChangeHandler
+	snapshotExport   SnapshotExportFunc
+	snapshotApply    SnapshotApplyFunc
 	applyMark        *utils.WaterMark
 	applyCloser      *utils.Closer
 	applyLimit       uint64
@@ -107,6 +117,8 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		apply:            cfg.Apply,
 		adminApply:       cfg.AdminApply,
 		confChangeHook:   cfg.ConfChange,
+		snapshotExport:   cfg.SnapshotExport,
+		snapshotApply:    cfg.SnapshotApply,
 		raftLog:          newRaftLogTracker(nonZeroGroupID(cfg.GroupID)),
 		snapshotQueue:    newSnapshotResendQueue(),
 		logRetainEntries: cfg.LogRetainEntries,
@@ -196,6 +208,11 @@ func (p *Peer) Step(msg myraft.Message) error {
 	if msg.Type == myraft.MsgSnapshotStatus && !msg.Reject {
 		if q := p.snapshotQueue; q != nil {
 			q.drop(msg.From)
+		}
+	}
+	if msg.Type == myraft.MsgSnapshot && msg.Snapshot != nil && !myraft.IsEmptySnap(*msg.Snapshot) && len(msg.Snapshot.Data) > 0 {
+		if err := p.ensureEmptyLogicalSnapshotTarget(); err != nil {
+			return err
 		}
 	}
 	p.mu.Lock()
@@ -324,6 +341,10 @@ func (p *Peer) processReady() error {
 			p.readyMu.Unlock()
 			return err
 		}
+		if err := p.prepareMessages(msgs); err != nil {
+			p.readyMu.Unlock()
+			return err
+		}
 
 		p.mu.Lock()
 		p.node.Advance(rd)
@@ -356,6 +377,16 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	if !myraft.IsEmptySnap(rd.Snapshot) {
+		if len(rd.Snapshot.Data) > 0 && p.snapshotApply != nil {
+			if err := p.raftLog.injectFailure("before_snapshot_data"); err != nil {
+				return err
+			}
+			region, err := p.snapshotApply(rd.Snapshot.Data)
+			if err != nil {
+				return err
+			}
+			p.ApplyRegionMetaMirror(region)
+		}
 		if err := p.raftLog.injectFailure("before_snapshot"); err != nil {
 			return err
 		}
@@ -445,6 +476,49 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		if err := p.maybeCompact(lastApplied); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (p *Peer) ensureEmptyLogicalSnapshotTarget() error {
+	if p == nil || p.storage == nil {
+		return nil
+	}
+	hs, cs, err := p.storage.InitialState()
+	if err != nil {
+		return fmt.Errorf("raftstore: inspect snapshot target state: %w", err)
+	}
+	if !myraft.IsEmptyHardState(hs) || len(cs.Voters) > 0 || len(cs.Learners) > 0 {
+		return fmt.Errorf("raftstore: logical snapshot install requires empty peer state")
+	}
+	last, err := p.storage.LastIndex()
+	if err != nil {
+		return fmt.Errorf("raftstore: inspect snapshot target log: %w", err)
+	}
+	if last > 0 {
+		return fmt.Errorf("raftstore: logical snapshot install requires empty peer log")
+	}
+	return nil
+}
+
+func (p *Peer) prepareMessages(msgs []myraft.Message) error {
+	if p == nil || len(msgs) == 0 || p.snapshotExport == nil {
+		return nil
+	}
+	for i := range msgs {
+		msg := &msgs[i]
+		if msg.Type != myraft.MsgSnapshot || msg.Snapshot == nil || myraft.IsEmptySnap(*msg.Snapshot) || len(msg.Snapshot.Data) > 0 {
+			continue
+		}
+		meta := p.RegionMeta()
+		if meta == nil {
+			return fmt.Errorf("raftstore: snapshot payload export requires region metadata")
+		}
+		payload, err := p.snapshotExport(*meta)
+		if err != nil {
+			return fmt.Errorf("raftstore: export logical snapshot payload: %w", err)
+		}
+		msg.Snapshot.Data = payload
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -78,6 +79,11 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.AllowedModes = []raftmode.Mode{
+		raftmode.ModeStandalone,
+		raftmode.ModeSeeded,
+		raftmode.ModeCluster,
+	}
 	db, err := NoKV.Open(opt)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -153,6 +159,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := promoteClusterMode(*workDir, *storeID); err != nil {
+		return fmt.Errorf("persist cluster mode: %w", err)
+	}
 	if totalRegions == 0 {
 		_, _ = fmt.Fprintln(w, "Local peer catalog contains no regions; waiting for bootstrap")
 	} else {
@@ -188,6 +197,21 @@ func runServeCmd(w io.Writer, args []string) error {
 	<-ctx.Done()
 	_, _ = fmt.Fprintln(w, "\nShutting down...")
 	return nil
+}
+
+func promoteClusterMode(workDir string, storeID uint64) error {
+	state, err := raftmode.Read(workDir)
+	if err != nil {
+		return err
+	}
+	if state.Mode == raftmode.ModeCluster && state.StoreID == storeID {
+		return nil
+	}
+	state.Mode = raftmode.ModeCluster
+	if state.StoreID == 0 {
+		state.StoreID = storeID
+	}
+	return raftmode.Write(workDir, state)
 }
 
 func startStorePeers(server *serverpkg.Server, storage serverpkg.Storage, localMeta *raftmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]raftmeta.RegionMeta, int, error) {
