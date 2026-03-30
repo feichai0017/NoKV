@@ -21,10 +21,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftAdmin_AddPeer_FullMethodName             = "/pb.RaftAdmin/AddPeer"
-	RaftAdmin_RemovePeer_FullMethodName          = "/pb.RaftAdmin/RemovePeer"
-	RaftAdmin_TransferLeader_FullMethodName      = "/pb.RaftAdmin/TransferLeader"
-	RaftAdmin_RegionRuntimeStatus_FullMethodName = "/pb.RaftAdmin/RegionRuntimeStatus"
+	RaftAdmin_AddPeer_FullMethodName               = "/pb.RaftAdmin/AddPeer"
+	RaftAdmin_RemovePeer_FullMethodName            = "/pb.RaftAdmin/RemovePeer"
+	RaftAdmin_TransferLeader_FullMethodName        = "/pb.RaftAdmin/TransferLeader"
+	RaftAdmin_ExportRegionSnapshot_FullMethodName  = "/pb.RaftAdmin/ExportRegionSnapshot"
+	RaftAdmin_InstallRegionSnapshot_FullMethodName = "/pb.RaftAdmin/InstallRegionSnapshot"
+	RaftAdmin_RegionRuntimeStatus_FullMethodName   = "/pb.RaftAdmin/RegionRuntimeStatus"
 )
 
 // RaftAdminClient is the client API for RaftAdmin service.
@@ -34,6 +36,8 @@ type RaftAdminClient interface {
 	AddPeer(ctx context.Context, in *AddPeerRequest, opts ...grpc.CallOption) (*AddPeerResponse, error)
 	RemovePeer(ctx context.Context, in *RemovePeerRequest, opts ...grpc.CallOption) (*RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, in *TransferLeaderRequest, opts ...grpc.CallOption) (*TransferLeaderResponse, error)
+	ExportRegionSnapshot(ctx context.Context, in *ExportRegionSnapshotRequest, opts ...grpc.CallOption) (*ExportRegionSnapshotResponse, error)
+	InstallRegionSnapshot(ctx context.Context, in *InstallRegionSnapshotRequest, opts ...grpc.CallOption) (*InstallRegionSnapshotResponse, error)
 	RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error)
 }
 
@@ -75,6 +79,26 @@ func (c *raftAdminClient) TransferLeader(ctx context.Context, in *TransferLeader
 	return out, nil
 }
 
+func (c *raftAdminClient) ExportRegionSnapshot(ctx context.Context, in *ExportRegionSnapshotRequest, opts ...grpc.CallOption) (*ExportRegionSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportRegionSnapshotResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_ExportRegionSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftAdminClient) InstallRegionSnapshot(ctx context.Context, in *InstallRegionSnapshotRequest, opts ...grpc.CallOption) (*InstallRegionSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallRegionSnapshotResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_InstallRegionSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *raftAdminClient) RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegionRuntimeStatusResponse)
@@ -92,6 +116,8 @@ type RaftAdminServer interface {
 	AddPeer(context.Context, *AddPeerRequest) (*AddPeerResponse, error)
 	RemovePeer(context.Context, *RemovePeerRequest) (*RemovePeerResponse, error)
 	TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error)
+	ExportRegionSnapshot(context.Context, *ExportRegionSnapshotRequest) (*ExportRegionSnapshotResponse, error)
+	InstallRegionSnapshot(context.Context, *InstallRegionSnapshotRequest) (*InstallRegionSnapshotResponse, error)
 	RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error)
 }
 
@@ -110,6 +136,12 @@ func (UnimplementedRaftAdminServer) RemovePeer(context.Context, *RemovePeerReque
 }
 func (UnimplementedRaftAdminServer) TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TransferLeader not implemented")
+}
+func (UnimplementedRaftAdminServer) ExportRegionSnapshot(context.Context, *ExportRegionSnapshotRequest) (*ExportRegionSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExportRegionSnapshot not implemented")
+}
+func (UnimplementedRaftAdminServer) InstallRegionSnapshot(context.Context, *InstallRegionSnapshotRequest) (*InstallRegionSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallRegionSnapshot not implemented")
 }
 func (UnimplementedRaftAdminServer) RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegionRuntimeStatus not implemented")
@@ -188,6 +220,42 @@ func _RaftAdmin_TransferLeader_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftAdmin_ExportRegionSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportRegionSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftAdminServer).ExportRegionSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftAdmin_ExportRegionSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftAdminServer).ExportRegionSnapshot(ctx, req.(*ExportRegionSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RaftAdmin_InstallRegionSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallRegionSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftAdminServer).InstallRegionSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftAdmin_InstallRegionSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftAdminServer).InstallRegionSnapshot(ctx, req.(*InstallRegionSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RaftAdmin_RegionRuntimeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegionRuntimeStatusRequest)
 	if err := dec(in); err != nil {
@@ -224,6 +292,14 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TransferLeader",
 			Handler:    _RaftAdmin_TransferLeader_Handler,
+		},
+		{
+			MethodName: "ExportRegionSnapshot",
+			Handler:    _RaftAdmin_ExportRegionSnapshot_Handler,
+		},
+		{
+			MethodName: "InstallRegionSnapshot",
+			Handler:    _RaftAdmin_InstallRegionSnapshot_Handler,
 		},
 		{
 			MethodName: "RegionRuntimeStatus",

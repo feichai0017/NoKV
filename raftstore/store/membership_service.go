@@ -32,6 +32,13 @@ func (s *Store) handlePeerConfChange(ev peer.ConfChangeEvent) error {
 	if len(ev.ConfChange.Changes) > 0 {
 		meta.Epoch.ConfVersion += uint64(len(ev.ConfChange.Changes))
 	}
+	if ev.Peer != nil && peerIndexByID(meta.Peers, ev.Peer.ID()) == -1 {
+		if err := s.applyRegionRemoval(meta.ID); err != nil {
+			return err
+		}
+		s.StopPeer(ev.Peer.ID())
+		return nil
+	}
 	return s.applyRegionMeta(meta)
 }
 
