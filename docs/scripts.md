@@ -12,7 +12,7 @@ NoKV ships a small collection of helper scripts to streamline local experimentat
   ```bash
   ./scripts/run_local_cluster.sh --config ./raft_config.example.json --workdir ./artifacts/cluster
   ```
-`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config manifest`, then launches `nokv pd` and the store processes. `nokv-config manifest` now writes the local peer catalog used by `nokv serve` recovery; PD state is persisted under `pd.work_dir` (or `<workdir>/pd` when config omits it), so control-plane routing metadata survives restarts. Relative `pd.work_dir` is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as `--pd-addr` (explicit `--pd-listen` overrides config/default resolution). PD/store logs are streamed to the terminal with `[pd]` / `[store-<id>]` prefixes and are still written to `pd.log` / `server.log`. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
+`--config` defaults to the repository’s `raft_config.example.json`; `--workdir` chooses the data root (`./artifacts/cluster` by default). For every entry under `stores` the script creates `store-<id>` and calls `nokv-config catalog`, then launches `nokv pd` and the store processes. `nokv-config catalog` now writes the local peer catalog used by `nokv serve` recovery; PD state is persisted under `pd.work_dir` (or `<workdir>/pd` when config omits it), so control-plane routing metadata survives restarts. Relative `pd.work_dir` is resolved against the config file directory. The script always passes the resolved PD endpoint to store processes as `--pd-addr` (explicit `--pd-listen` overrides config/default resolution). PD/store logs are streamed to the terminal with `[pd]` / `[store-<id>]` prefixes and are still written to `pd.log` / `server.log`. The script runs in the foreground—press `Ctrl+C` to stop all spawned processes.
 When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls back to `127.0.0.1:2379`.
 
 > ❗️ **Shutdown / restart note** — To avoid WAL/manifest mismatches, stop the script with `Ctrl+C` and wait for child processes to exit. If you crash the process or the host, clean the workdir (`rm -rf ./artifacts/cluster`) before starting again; otherwise the replay step may panic when it encounters truncated WAL segments.
@@ -23,7 +23,7 @@ When `--pd-listen` is omitted, the script reads `pd.addr` from config and falls 
   ```bash
   ./scripts/bootstrap_from_config.sh --config /etc/nokv/raft_config.json --path-template /data/store-{id}
   ```
-  The script iterates over every store in the config and writes local peer catalog metadata via `nokv-config manifest` into the provided path template.
+  The script iterates over every store in the config and writes local peer catalog metadata via `nokv-config catalog` into the provided path template.
 
 ### `scripts/serve_from_config.sh`
 - **Purpose** – translate `raft_config.json` into a `nokv serve` command, avoiding manual `--peer` lists. It resolves peer IDs from the region metadata and maps every peer (other than the local store) to its advertised address so that gRPC transport works out of the box.
@@ -77,7 +77,7 @@ go run ./cmd/nokv pd --addr 127.0.0.1:2379 --id-start 1 --ts-start 100 --workdir
 ## Relationship with `nokv-config`
 
 - `nokv-config stores` / `regions` / `pd` provide structured views over `raft_config.json`, making it easy for scripts and CI to query the topology.
-- `nokv-config manifest` writes Region metadata into the local peer catalog and replaces the historical `manifestctl` binary.
+- `nokv-config catalog` writes Region metadata into the local peer catalog and replaces the historical `manifestctl` binary.
 - `cmd/nokv-redis` reads the same config and uses `config.pd` by default in raft mode (`--pd-addr` remains an override).
 - Go tools or custom scripts can import `github.com/feichai0017/NoKV/config` and call `config.LoadFile` / `Validate` to consume the same `raft_config.json`, avoiding divergent schemas.
 

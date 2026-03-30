@@ -107,7 +107,7 @@ for store_line in "${STORE_LINES[@]}"; do
         args+=(--peer "$peer")
       fi
     done
-    nokv-config manifest "${args[@]}"
+    nokv-config catalog "${args[@]}"
   done
   echo "bootstrapped store ${store_id} at ${store_path}"
 done
