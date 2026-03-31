@@ -2,18 +2,40 @@ package migrate
 
 import "fmt"
 
+type MembershipPeerSummary struct {
+	StoreID uint64 `json:"store_id"`
+	PeerID  uint64 `json:"peer_id"`
+}
+
+type ClusterSummary struct {
+	Source          string                  `json:"source"`
+	AdminAddr       string                  `json:"admin_addr"`
+	RegionID        uint64                  `json:"region_id"`
+	Known           bool                    `json:"known"`
+	Hosted          bool                    `json:"hosted"`
+	Leader          bool                    `json:"leader"`
+	LocalPeerID     uint64                  `json:"local_peer_id,omitempty"`
+	LeaderPeerID    uint64                  `json:"leader_peer_id,omitempty"`
+	LeaderStoreID   uint64                  `json:"leader_store_id,omitempty"`
+	MembershipPeers int                     `json:"membership_peers,omitempty"`
+	Membership      []MembershipPeerSummary `json:"membership,omitempty"`
+	AppliedIndex    uint64                  `json:"applied_index,omitempty"`
+	AppliedTerm     uint64                  `json:"applied_term,omitempty"`
+}
+
 // ReportResult combines migration preflight and local state into one operator
 // facing report for a single workdir.
 type ReportResult struct {
-	WorkDir       string       `json:"workdir"`
-	Mode          Mode         `json:"mode"`
-	Stage         string       `json:"stage"`
-	Summary       string       `json:"summary"`
-	ReadyForInit  bool         `json:"ready_for_init"`
-	ReadyForServe bool         `json:"ready_for_serve"`
-	NextSteps     []string     `json:"next_steps,omitempty"`
-	Plan          PlanResult   `json:"plan"`
-	Status        StatusResult `json:"status"`
+	WorkDir       string          `json:"workdir"`
+	Mode          Mode            `json:"mode"`
+	Stage         string          `json:"stage"`
+	Summary       string          `json:"summary"`
+	ReadyForInit  bool            `json:"ready_for_init"`
+	ReadyForServe bool            `json:"ready_for_serve"`
+	NextSteps     []string        `json:"next_steps,omitempty"`
+	Plan          PlanResult      `json:"plan"`
+	Status        StatusResult    `json:"status"`
+	Cluster       *ClusterSummary `json:"cluster,omitempty"`
 }
 
 // BuildReport returns one consolidated migration report for a local workdir.
@@ -40,6 +62,9 @@ func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {
 		Status:        status,
 		ReadyForInit:  status.Mode == ModeStandalone && plan.Eligible,
 		ReadyForServe: status.Mode == ModeSeeded && status.StoreID != 0 && status.SeedSnapshotPresent && status.LocalCatalogRegions > 0,
+	}
+	if status.Runtime != nil {
+		result.Cluster = buildClusterSummary(status.Runtime)
 	}
 
 	switch status.Mode {
@@ -80,4 +105,39 @@ func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {
 	}
 
 	return result, nil
+}
+
+func buildClusterSummary(runtime *RuntimeStatus) *ClusterSummary {
+	if runtime == nil {
+		return nil
+	}
+	summary := &ClusterSummary{
+		Source:          "single-admin-endpoint",
+		AdminAddr:       runtime.Addr,
+		RegionID:        runtime.RegionID,
+		Known:           runtime.Known,
+		Hosted:          runtime.Hosted,
+		Leader:          runtime.Leader,
+		LocalPeerID:     runtime.LocalPeerID,
+		LeaderPeerID:    runtime.LeaderPeerID,
+		MembershipPeers: runtime.MembershipPeers,
+		AppliedIndex:    runtime.AppliedIndex,
+		AppliedTerm:     runtime.AppliedTerm,
+	}
+	if runtime.Region != nil {
+		summary.Membership = make([]MembershipPeerSummary, 0, len(runtime.Region.GetPeers()))
+		for _, peer := range runtime.Region.GetPeers() {
+			if peer == nil {
+				continue
+			}
+			summary.Membership = append(summary.Membership, MembershipPeerSummary{
+				StoreID: peer.GetStoreId(),
+				PeerID:  peer.GetPeerId(),
+			})
+			if summary.LeaderPeerID != 0 && summary.LeaderPeerID == peer.GetPeerId() {
+				summary.LeaderStoreID = peer.GetStoreId()
+			}
+		}
+	}
+	return summary
 }

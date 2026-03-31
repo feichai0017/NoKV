@@ -269,6 +269,29 @@ func runMigrateReportCmd(w io.Writer, args []string) error {
 			_, _ = fmt.Fprintf(w, "  - %s\n", step)
 		}
 	}
+	if result.Cluster != nil {
+		_, _ = fmt.Fprintln(w, "Cluster")
+		_, _ = fmt.Fprintf(w, "  source=%s addr=%s region=%d known=%t hosted=%t leader=%t leader_store=%d leader_peer=%d local_peer=%d peers=%d applied_index=%d applied_term=%d\n",
+			result.Cluster.Source,
+			result.Cluster.AdminAddr,
+			result.Cluster.RegionID,
+			result.Cluster.Known,
+			result.Cluster.Hosted,
+			result.Cluster.Leader,
+			result.Cluster.LeaderStoreID,
+			result.Cluster.LeaderPeerID,
+			result.Cluster.LocalPeerID,
+			result.Cluster.MembershipPeers,
+			result.Cluster.AppliedIndex,
+			result.Cluster.AppliedTerm,
+		)
+		if len(result.Cluster.Membership) > 0 {
+			_, _ = fmt.Fprintln(w, "  membership")
+			for _, peer := range result.Cluster.Membership {
+				_, _ = fmt.Fprintf(w, "    - store=%d peer=%d\n", peer.StoreID, peer.PeerID)
+			}
+		}
+	}
 	if result.Status.Runtime != nil {
 		_, _ = fmt.Fprintln(w, "Runtime")
 		_, _ = fmt.Fprintf(w, "  addr=%s region=%d known=%t hosted=%t leader=%t leader_peer=%d local_peer=%d peers=%d applied_index=%d applied_term=%d\n",
