@@ -16,6 +16,8 @@ import (
 var runExpand = migratepkg.Expand
 var runRemovePeer = migratepkg.RemovePeer
 var runTransferLeader = migratepkg.TransferLeader
+var runReadStatus = migratepkg.ReadStatusWithConfig
+var runBuildReport = migratepkg.BuildReportWithConfig
 
 func runMigrateCmd(w io.Writer, args []string) error {
 	if len(args) == 0 {
@@ -32,6 +34,8 @@ func runMigrateCmd(w io.Writer, args []string) error {
 		return runMigrateInitCmd(w, subargs)
 	case "status":
 		return runMigrateStatusCmd(w, subargs)
+	case "report":
+		return runMigrateReportCmd(w, subargs)
 	case "expand":
 		return runMigrateExpandCmd(w, subargs)
 	case "remove-peer":
@@ -53,6 +57,7 @@ func printMigrateUsage(w io.Writer) {
 	  plan     Inspect whether a standalone workdir can be seeded for cluster mode
 	  init     Convert a standalone workdir into a single-store cluster seed
 	  status   Show migration mode for one workdir
+	  report   Combine preflight and local state into one migration report
 	  expand   Expand a single-store seed into a replicated region
 	  remove-peer      Remove one peer from a replicated region
 	  transfer-leader  Transfer region leadership to a specific peer`)
@@ -150,6 +155,9 @@ func runMigratePlanCmd(w io.Writer, args []string) error {
 func runMigrateStatusCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate status", flag.ContinueOnError)
 	workDir := fs.String("workdir", "", "database work directory")
+	adminAddr := fs.String("addr", "", "optional admin address to query remote region runtime status")
+	regionID := fs.Uint64("region", 0, "optional region id override for remote runtime status")
+	timeout := fs.Duration("timeout", 3*time.Second, "timeout for remote runtime status queries")
 	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
@@ -159,7 +167,12 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	result, err := migratepkg.ReadStatus(*workDir)
+	result, err := runReadStatus(migratepkg.StatusConfig{
+		WorkDir:   *workDir,
+		AdminAddr: strings.TrimSpace(*adminAddr),
+		RegionID:  *regionID,
+		Timeout:   *timeout,
+	})
 	if err != nil {
 		return err
 	}
@@ -192,6 +205,87 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 	}
 	if result.Next != "" {
 		_, _ = fmt.Fprintf(w, "Next     %s\n", result.Next)
+	}
+	if result.Runtime != nil {
+		_, _ = fmt.Fprintf(w, "Runtime  %s region=%d known=%t hosted=%t leader=%t\n", result.Runtime.Addr, result.Runtime.RegionID, result.Runtime.Known, result.Runtime.Hosted, result.Runtime.Leader)
+		if result.Runtime.MembershipPeers != 0 {
+			_, _ = fmt.Fprintf(w, "Peers    %d\n", result.Runtime.MembershipPeers)
+		}
+		if result.Runtime.LeaderPeerID != 0 {
+			_, _ = fmt.Fprintf(w, "Leader   %d\n", result.Runtime.LeaderPeerID)
+		}
+		if result.Runtime.LocalPeerID != 0 {
+			_, _ = fmt.Fprintf(w, "Local    %d\n", result.Runtime.LocalPeerID)
+		}
+		if result.Runtime.AppliedIndex != 0 || result.Runtime.AppliedTerm != 0 {
+			_, _ = fmt.Fprintf(w, "Applied  index=%d term=%d\n", result.Runtime.AppliedIndex, result.Runtime.AppliedTerm)
+		}
+	}
+	if result.RuntimeError != "" {
+		_, _ = fmt.Fprintf(w, "Remote   %s\n", result.RuntimeError)
+	}
+	return nil
+}
+
+func runMigrateReportCmd(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("migrate report", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "database work directory")
+	adminAddr := fs.String("addr", "", "optional admin address to query remote region runtime status")
+	regionID := fs.Uint64("region", 0, "optional region id override for remote runtime status")
+	timeout := fs.Duration("timeout", 3*time.Second, "timeout for remote runtime status queries")
+	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *workDir == "" {
+		return fmt.Errorf("--workdir is required")
+	}
+
+	result, err := runBuildReport(migratepkg.StatusConfig{
+		WorkDir:   *workDir,
+		AdminAddr: strings.TrimSpace(*adminAddr),
+		RegionID:  *regionID,
+		Timeout:   *timeout,
+	})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+
+	_, _ = fmt.Fprintf(w, "Workdir        %s\n", result.WorkDir)
+	_, _ = fmt.Fprintf(w, "Mode           %s\n", result.Mode)
+	_, _ = fmt.Fprintf(w, "Stage          %s\n", result.Stage)
+	_, _ = fmt.Fprintf(w, "Summary        %s\n", result.Summary)
+	_, _ = fmt.Fprintf(w, "ReadyForInit   %t\n", result.ReadyForInit)
+	_, _ = fmt.Fprintf(w, "ReadyForServe  %t\n", result.ReadyForServe)
+	if len(result.NextSteps) > 0 {
+		_, _ = fmt.Fprintln(w, "NextSteps")
+		for _, step := range result.NextSteps {
+			_, _ = fmt.Fprintf(w, "  - %s\n", step)
+		}
+	}
+	if result.Status.Runtime != nil {
+		_, _ = fmt.Fprintln(w, "Runtime")
+		_, _ = fmt.Fprintf(w, "  addr=%s region=%d known=%t hosted=%t leader=%t leader_peer=%d local_peer=%d peers=%d applied_index=%d applied_term=%d\n",
+			result.Status.Runtime.Addr,
+			result.Status.Runtime.RegionID,
+			result.Status.Runtime.Known,
+			result.Status.Runtime.Hosted,
+			result.Status.Runtime.Leader,
+			result.Status.Runtime.LeaderPeerID,
+			result.Status.Runtime.LocalPeerID,
+			result.Status.Runtime.MembershipPeers,
+			result.Status.Runtime.AppliedIndex,
+			result.Status.Runtime.AppliedTerm,
+		)
+	}
+	if result.Status.RuntimeError != "" {
+		_, _ = fmt.Fprintf(w, "RuntimeError   %s\n", result.Status.RuntimeError)
 	}
 	return nil
 }

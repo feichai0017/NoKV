@@ -960,6 +960,137 @@ func TestRunMigrateStatusCmdSeededJSONIncludesOperationalHints(t *testing.T) {
 	require.Contains(t, payload["next"], "nokv serve")
 }
 
+func TestRunMigrateReportCmdStandalone(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+
+	var buf bytes.Buffer
+	err := runMigrateReportCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "standalone", payload["mode"])
+	require.Equal(t, "standalone-ready", payload["stage"])
+	require.Equal(t, true, payload["ready_for_init"])
+	require.Equal(t, false, payload["ready_for_serve"])
+	nextSteps := payload["next_steps"].([]any)
+	require.NotEmpty(t, nextSteps)
+	require.Contains(t, nextSteps[0].(string), "nokv migrate init")
+}
+
+func TestRunMigrateReportCmdSeeded(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	require.NoError(t, runMigrateInitCmd(&bytes.Buffer{}, []string{
+		"-workdir", dir,
+		"-store", "1",
+		"-region", "9",
+		"-peer", "109",
+	}))
+
+	var buf bytes.Buffer
+	err := runMigrateReportCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "seeded", payload["mode"])
+	require.Equal(t, "seed-ready", payload["stage"])
+	require.Equal(t, false, payload["ready_for_init"])
+	require.Equal(t, true, payload["ready_for_serve"])
+	require.Contains(t, payload["summary"], "promoted into a seed")
+	status := payload["status"].(map[string]any)
+	require.Equal(t, true, status["seed_snapshot_present"])
+	nextSteps := payload["next_steps"].([]any)
+	require.Len(t, nextSteps, 2)
+	require.Contains(t, nextSteps[0].(string), "nokv serve")
+	require.Contains(t, nextSteps[1].(string), "nokv migrate expand")
+}
+
+func TestRunMigrateStatusCmdPassesRemoteViewFlags(t *testing.T) {
+	orig := runReadStatus
+	runReadStatus = func(cfg migratepkg.StatusConfig) (migratepkg.StatusResult, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
+		require.Equal(t, "127.0.0.1:20170", cfg.AdminAddr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, 2*time.Second, cfg.Timeout)
+		return migratepkg.StatusResult{
+			WorkDir: "/tmp/store-1",
+			Mode:    migratepkg.ModeCluster,
+			Runtime: &migratepkg.RuntimeStatus{
+				Addr:            cfg.AdminAddr,
+				RegionID:        cfg.RegionID,
+				Known:           true,
+				Hosted:          true,
+				Leader:          true,
+				LeaderPeerID:    201,
+				LocalPeerID:     201,
+				MembershipPeers: 3,
+				AppliedIndex:    7,
+				AppliedTerm:     1,
+			},
+		}, nil
+	}
+	t.Cleanup(func() { runReadStatus = orig })
+
+	var buf bytes.Buffer
+	err := runMigrateStatusCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
+		"-addr", "127.0.0.1:20170",
+		"-region", "9",
+		"-timeout", "2s",
+	})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Runtime")
+	require.Contains(t, buf.String(), "Peers    3")
+}
+
+func TestRunMigrateReportCmdPassesRemoteViewFlags(t *testing.T) {
+	orig := runBuildReport
+	runBuildReport = func(cfg migratepkg.StatusConfig) (migratepkg.ReportResult, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
+		require.Equal(t, "127.0.0.1:20170", cfg.AdminAddr)
+		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, 2*time.Second, cfg.Timeout)
+		return migratepkg.ReportResult{
+			WorkDir:       cfg.WorkDir,
+			Mode:          migratepkg.ModeCluster,
+			Stage:         "cluster-active",
+			Summary:       "cluster is active",
+			ReadyForInit:  false,
+			ReadyForServe: false,
+			NextSteps:     []string{"nokv migrate expand"},
+			Status: migratepkg.StatusResult{
+				WorkDir: cfg.WorkDir,
+				Mode:    migratepkg.ModeCluster,
+				Runtime: &migratepkg.RuntimeStatus{
+					Addr:            cfg.AdminAddr,
+					RegionID:        cfg.RegionID,
+					Known:           true,
+					Hosted:          true,
+					Leader:          true,
+					LeaderPeerID:    201,
+					LocalPeerID:     201,
+					MembershipPeers: 3,
+					AppliedIndex:    7,
+					AppliedTerm:     1,
+				},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { runBuildReport = orig })
+
+	var buf bytes.Buffer
+	err := runMigrateReportCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
+		"-addr", "127.0.0.1:20170",
+		"-region", "9",
+		"-timeout", "2s",
+	})
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Runtime")
+	require.Contains(t, buf.String(), "leader_peer=201")
+}
+
 func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 	dir := prepareDBWorkdir(t)
 	var buf bytes.Buffer

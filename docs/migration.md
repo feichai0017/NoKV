@@ -107,7 +107,24 @@ For local demos and operator workflows, the happy path is wrapped by:
 - `scripts/ops/migrate-cluster.sh`
 
 That wrapper intentionally delegates state transitions to the formal migration CLI instead of inventing a second control path.
-It now prints stage banners, shows the local migration status after promotion, and writes a final migration summary report under `artifacts/migration/summary.txt`.
+It now prints stage banners, shows the local migration status after promotion, and writes final migration reports under:
+
+- `artifacts/migration/summary.txt`
+- `artifacts/migration/summary.json`
+
+For local inspection and automation, the CLI also exposes:
+
+- `nokv migrate status --workdir ...`
+- `nokv migrate report --workdir ...`
+- `nokv migrate status --workdir ... --addr <leader-admin> --region <region>`
+- `nokv migrate report --workdir ... --addr <leader-admin> --region <region>`
+
+When `--addr` is set, the report includes a cluster-aware runtime view:
+
+- current leader peer
+- whether the local store is hosted
+- current membership size
+- applied index / term on that store
 
 ## Lifecycle States
 
@@ -348,8 +365,8 @@ The next round of work should not reinvent the protocol. It should productize an
 
 ### Near-term productization
 
-1. richer `migrate status` output
-2. migration summary/report output after happy-path operations
+1. richer cluster-aware migration status once the seed has booted
+2. structured machine-readable reports that can be consumed by demos and automation
 3. stronger stage-by-stage operator output in `scripts/ops/migrate-cluster.sh`
 4. clearer recovery guidance for `preparing`, interrupted install, and partial rollout
 
