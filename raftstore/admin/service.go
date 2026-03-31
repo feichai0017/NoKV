@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 
-	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/pb"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -18,11 +17,9 @@ import (
 // membership management.
 type Service struct {
 	pb.UnimplementedRaftAdminServer
-	store              *store.Store
-	snapshotSource     snapshotpkg.Source
-	snapshotSSTSink    snapshotpkg.SSTSink
-	snapshotLSMOptions *lsm.Options
-	snapshotFS         vfs.FS
+	store      *store.Store
+	snapshot   snapshotpkg.Engine
+	snapshotFS vfs.FS
 }
 
 // NewService constructs an admin service bound to one raftstore store.
@@ -30,15 +27,13 @@ func NewService(st *store.Store) *Service {
 	return &Service{store: st, snapshotFS: vfs.Ensure(nil)}
 }
 
-// NewServiceWithSnapshotIO constructs an admin service with direct access to
-// the region state source/sink needed for migration-only SST snapshots.
-func NewServiceWithSnapshotIO(st *store.Store, src snapshotpkg.Source, sstSink snapshotpkg.SSTSink, opt *lsm.Options, fs vfs.FS) *Service {
+// NewServiceWithSnapshot constructs an admin service with direct access to the
+// storage-side snapshot bridge needed for SST export/install.
+func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Engine, fs vfs.FS) *Service {
 	return &Service{
-		store:              st,
-		snapshotSource:     src,
-		snapshotSSTSink:    sstSink,
-		snapshotLSMOptions: opt,
-		snapshotFS:         vfs.Ensure(fs),
+		store:      st,
+		snapshot:   snapshot,
+		snapshotFS: vfs.Ensure(fs),
 	}
 }
 
@@ -128,13 +123,10 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 		return nil, status.Errorf(codes.Internal, "export region snapshot: %v", err)
 	}
 	pbSnap := raftpb.Snapshot(snap)
-	if s.snapshotSource == nil {
+	if s.snapshot == nil {
 		return nil, status.Error(codes.FailedPrecondition, "sst snapshot export is not configured")
 	}
-	if s.snapshotLSMOptions == nil {
-		return nil, status.Error(codes.FailedPrecondition, "sst snapshot export options are not configured")
-	}
-	payload, _, err := snapshotpkg.ExportSSTPayload(s.snapshotSource, s.store.WorkDir(), runtime.Meta, s.snapshotLSMOptions, s.snapshotFS)
+	payload, _, err := snapshotpkg.ExportSSTPayload(s.snapshot, s.store.WorkDir(), runtime.Meta, s.snapshot.SSTOptions(), s.snapshotFS)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
 	}
@@ -167,7 +159,7 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 		meta raftmeta.RegionMeta
 		err  error
 	)
-	if s.snapshotSSTSink == nil {
+	if s.snapshot == nil {
 		return nil, status.Error(codes.FailedPrecondition, "sst snapshot install is not configured")
 	}
 	metaFile, metaErr := snapshotpkg.ReadSSTPayloadMeta(snap.Data)
@@ -175,12 +167,12 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 		return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
 	}
 	meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), metaFile.Region, func() (func() error, error) {
-		result, importErr := snapshotpkg.ImportSSTPayload(s.snapshotSSTSink, s.store.WorkDir(), snap.Data, s.snapshotFS)
+		result, importErr := snapshotpkg.ImportSSTPayload(s.snapshot, s.store.WorkDir(), snap.Data, s.snapshotFS)
 		if importErr != nil {
 			return nil, importErr
 		}
 		if result != nil && len(result.ImportedFileIDs) > 0 {
-			return func() error { return result.Rollback(s.snapshotSSTSink) }, nil
+			return func() error { return result.Rollback(s.snapshot) }, nil
 		}
 		return nil, nil
 	})

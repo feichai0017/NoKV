@@ -11,7 +11,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -38,18 +37,13 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options
 
 func testSSTExport(db *NoKV.DB) peer.SnapshotExportFunc {
 	return func(region raftmeta.RegionMeta) ([]byte, error) {
-		payload, _, err := snapshotpkg.ExportSSTPayload(db, db.WorkDir(), region, db.SSTOptions(), nil)
-		return payload, err
+		return db.ExportSnapshot(region)
 	}
 }
 
 func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
 	return func(payload []byte) (raftmeta.RegionMeta, error) {
-		result, err := snapshotpkg.ImportSSTPayload(db, db.WorkDir(), payload, nil)
-		if err != nil {
-			return raftmeta.RegionMeta{}, err
-		}
-		return result.Meta.Region, nil
+		return db.InstallSnapshot(payload)
 	}
 }
 
@@ -178,8 +172,8 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewServiceWithSnapshotIO(sourceStore, sourceDB, sourceDB, sourceDB.SSTOptions(), nil)
-	targetSvc := NewServiceWithSnapshotIO(targetStore, targetDB, targetDB, targetDB.SSTOptions(), nil)
+	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB, nil)
+	targetSvc := NewServiceWithSnapshot(targetStore, targetDB, nil)
 
 	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
@@ -106,12 +105,8 @@ func New(cfg Config) (*Server, error) {
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
 	adminService := adminsvc.NewService(st)
-	if src, ok := cfg.Storage.MVCC.(snapshotpkg.Source); ok {
-		if sstSink, ok := cfg.Storage.MVCC.(snapshotpkg.SSTSink); ok {
-			if optProvider, ok := cfg.Storage.MVCC.(interface{ SSTOptions() *lsm.Options }); ok {
-				adminService = adminsvc.NewServiceWithSnapshotIO(st, src, sstSink, optProvider.SSTOptions(), nil)
-			}
-		}
+	if snapshotEngine, ok := cfg.Storage.MVCC.(snapshotpkg.Engine); ok {
+		adminService = adminsvc.NewServiceWithSnapshot(st, snapshotEngine, nil)
 	}
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
@@ -159,9 +154,9 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		}
 		var snapshotExport peer.SnapshotExportFunc
 		var snapshotApply peer.SnapshotApplyFunc
-		if payloadIO, ok := storage.MVCC.(snapshotpkg.PayloadIO); ok {
-			snapshotExport = payloadIO.ExportSSTPayload
-			snapshotApply = payloadIO.ImportSSTPayload
+		if snapshotIO, ok := storage.MVCC.(snapshotpkg.SnapshotIO); ok {
+			snapshotExport = snapshotIO.ExportSnapshot
+			snapshotApply = snapshotIO.InstallSnapshot
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
