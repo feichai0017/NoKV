@@ -29,7 +29,7 @@ type Config struct {
 	Region           *raftmeta.RegionMeta
 	LogRetainEntries uint64
 	MaxInFlightApply uint64
-	// AllowSnapshotInstallRetry permits logical snapshot install onto durable
+	// AllowSnapshotInstallRetry permits snapshot payload install onto durable
 	// state that was previously written by an unpublished install attempt. It is
 	// only intended for store-local install-before-publish retry paths.
 	AllowSnapshotInstallRetry bool
