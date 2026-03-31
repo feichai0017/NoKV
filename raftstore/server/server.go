@@ -158,28 +158,13 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
 		var snapshotExport peer.SnapshotExportFunc
-		if src, ok := storage.MVCC.(snapshotpkg.Source); ok {
-			if optProvider, ok := storage.MVCC.(interface {
-				SSTOptions() *lsm.Options
-				WorkDir() string
-			}); ok {
-				snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-					payload, _, err := snapshotpkg.ExportSSTPayload(src, optProvider.WorkDir(), region, optProvider.SSTOptions(), nil)
-					return payload, err
-				}
-			}
-		}
 		var snapshotApply peer.SnapshotApplyFunc
-		if sink, ok := storage.MVCC.(snapshotpkg.SSTSink); ok {
-			if dirProvider, ok := storage.MVCC.(interface{ WorkDir() string }); ok {
-				snapshotApply = func(payload []byte) (raftmeta.RegionMeta, error) {
-					result, err := snapshotpkg.ImportSSTPayload(sink, dirProvider.WorkDir(), payload, nil)
-					if err != nil {
-						return raftmeta.RegionMeta{}, err
-					}
-					return result.Manifest.Region, nil
-				}
-			}
+		if payloadIO, ok := storage.MVCC.(interface {
+			ExportSSTPayload(raftmeta.RegionMeta) ([]byte, error)
+			ImportSSTPayload([]byte) (raftmeta.RegionMeta, error)
+		}); ok {
+			snapshotExport = payloadIO.ExportSSTPayload
+			snapshotApply = payloadIO.ImportSSTPayload
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
