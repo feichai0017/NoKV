@@ -10,21 +10,20 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/feichai0017/NoKV/lsm"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
 // ExportSSTPayload materializes one SST snapshot and bundles it into
 // a transport-safe payload.
-func ExportSSTPayload(src Source, workDir string, region raftmeta.RegionMeta, opt *lsm.Options, fs vfs.FS) ([]byte, SSTMeta, error) {
+func ExportSSTPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, SSTMeta, error) {
 	dir, cleanup, err := prepareSnapshotTempDir(workDir, "sst-export-*", fs)
 	if err != nil {
 		return nil, SSTMeta{}, err
 	}
 	defer cleanup()
 	snapshotDir := filepath.Join(dir, "snapshot")
-	result, err := ExportSST(src, snapshotDir, region, opt, fs)
+	result, err := ExportSST(src, snapshotDir, region, fs)
 	if err != nil {
 		return nil, SSTMeta{}, err
 	}
@@ -37,7 +36,7 @@ func ExportSSTPayload(src Source, workDir string, region raftmeta.RegionMeta, op
 
 // ImportSSTPayload unpacks one SST snapshot payload into a temporary workdir
 // and installs it through the external SST ingest path.
-func ImportSSTPayload(dst SSTSink, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
+func ImportSSTPayload(dst installSink, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst payload requires sink")
 	}
@@ -55,6 +54,20 @@ func ImportSSTPayload(dst SSTSink, workDir string, payload []byte, fs vfs.FS) (*
 		return nil, err
 	}
 	return ImportSST(dst, snapshotDir, fs)
+}
+
+// StageSnapshot installs one snapshot payload through the engine's external
+// SST ingest path and returns import state that can be rolled back before
+// higher-level metadata is published.
+func StageSnapshot(bridge Bridge, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
+	if bridge == nil {
+		return nil, fmt.Errorf("snapshot: stage snapshot requires engine")
+	}
+	dst, ok := any(bridge).(installSink)
+	if !ok {
+		return nil, fmt.Errorf("snapshot: engine does not support staged snapshot install")
+	}
+	return ImportSSTPayload(dst, workDir, payload, fs)
 }
 
 // ReadSSTPayloadMeta decodes only the metadata embedded in one SST snapshot payload.

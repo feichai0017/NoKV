@@ -84,7 +84,7 @@ func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db: export snapshot requires open db")
 	}
-	payload, _, err := snapshotpkg.ExportSSTPayload(db, db.WorkDir(), region, db.SSTOptions(), nil)
+	payload, _, err := snapshotpkg.ExportSSTPayload(db, db.WorkDir(), region, nil)
 	return payload, err
 }
 
