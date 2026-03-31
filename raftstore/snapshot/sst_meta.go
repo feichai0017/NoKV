@@ -59,10 +59,19 @@ type SSTSink interface {
 	RollbackExternalSST(fileIDs []uint64) error
 }
 
-// PayloadIO exposes SST snapshot payload export/apply helpers for raftstore users.
-type PayloadIO interface {
-	ExportSSTPayload(region raftmeta.RegionMeta) ([]byte, error)
-	ImportSSTPayload(payload []byte) (raftmeta.RegionMeta, error)
+// SnapshotIO exposes region snapshot export/install helpers.
+type SnapshotIO interface {
+	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
+	InstallSnapshot(payload []byte) (raftmeta.RegionMeta, error)
+}
+
+// Engine is the full snapshot bridge exposed by the storage engine to
+// raftstore wiring.
+type Engine interface {
+	Source
+	SSTSink
+	SnapshotIO
+	SSTOptions() *lsm.Options
 }
 
 // SSTImportResult reports one successful SST snapshot install.
