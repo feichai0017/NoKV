@@ -147,7 +147,7 @@ func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
 	require.NotNil(t, got)
 	got.DecrRef()
 
-	require.NoError(t, imported.Rollback(dstLSM))
+	require.NoError(t, imported.Rollback())
 
 	got, err = dstLSM.Get(entries[0].Key)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)

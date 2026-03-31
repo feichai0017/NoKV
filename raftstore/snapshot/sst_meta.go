@@ -62,6 +62,7 @@ type ImportResult struct {
 	ImportedTables  uint64
 	ImportedBytes   uint64
 	ImportedFileIDs []uint64
+	rollback        func() error
 }
 
 // ReadMeta loads one SST snapshot metadata file from dir.
