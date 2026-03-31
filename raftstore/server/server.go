@@ -156,12 +156,12 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 			MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
 		}); ok {
 			snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-				payload, _, err := snapshotpkg.ExportPayload(src, region)
+				payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(src, region)
 				return payload, err
 			}
 		}
 		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-			result, err := snapshotpkg.ImportPayload(storage.MVCC, payload)
+			result, err := snapshotpkg.ImportLogicalSnapshotPayload(storage.MVCC, payload)
 			if err != nil {
 				return raftmeta.RegionMeta{}, err
 			}

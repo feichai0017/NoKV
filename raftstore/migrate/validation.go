@@ -27,7 +27,7 @@ func validateSeedArtifacts(workDir string, storeID, regionID, peerID uint64) err
 			regionID, region.Peers[0].StoreID, region.Peers[0].PeerID, storeID, peerID)
 	}
 
-	manifest, err := snapshotpkg.ReadManifest(SeedSnapshotDir(workDir, regionID), nil)
+	manifest, err := snapshotpkg.ReadLogicalSnapshotManifest(SeedSnapshotDir(workDir, regionID), nil)
 	if err != nil {
 		return fmt.Errorf("migrate: validate seed snapshot manifest: %w", err)
 	}

@@ -21,9 +21,9 @@ const (
 	// FormatVersion identifies the logical region snapshot artifact layout.
 	FormatVersion = 1
 
-	manifestName = "manifest.json"
-	entriesName  = "entries.bin"
-	payloadMagic = "NKVSNP1\x00"
+	logicalSnapshotName = "logical-snapshot.json"
+	entriesName         = "entries.bin"
+	payloadMagic        = "NKVSNP1\x00"
 )
 
 // Source exports detached internal entries over a bounded key range.
@@ -37,8 +37,8 @@ type Sink interface {
 	ApplyInternalEntries(entries []*kv.Entry) error
 }
 
-// Manifest describes one logical region snapshot artifact.
-type Manifest struct {
+// LogicalSnapshotManifest describes one logical region snapshot artifact.
+type LogicalSnapshotManifest struct {
 	FormatVersion uint32              `json:"format_version"`
 	Region        raftmeta.RegionMeta `json:"region"`
 	EntryCount    uint64              `json:"entry_count"`
@@ -47,38 +47,38 @@ type Manifest struct {
 	CreatedAt     time.Time           `json:"created_at"`
 }
 
-// ExportResult reports the persisted manifest after a successful export.
-type ExportResult struct {
-	Manifest Manifest
+// LogicalSnapshotExportResult reports the persisted manifest after a successful export.
+type LogicalSnapshotExportResult struct {
+	Manifest LogicalSnapshotManifest
 }
 
-// ImportResult reports the imported manifest and observed payload counters.
-type ImportResult struct {
-	Manifest     Manifest
+// LogicalSnapshotImportResult reports the imported manifest and observed payload counters.
+type LogicalSnapshotImportResult struct {
+	Manifest     LogicalSnapshotManifest
 	Imported     uint64
 	PayloadBytes uint64
 }
 
-// ExportPayload materializes one logical region snapshot into a transport-safe
+// ExportLogicalSnapshotPayload materializes one logical region snapshot into a transport-safe
 // in-memory payload suitable for raft snapshot Data.
-func ExportPayload(src Source, region raftmeta.RegionMeta) ([]byte, Manifest, error) {
+func ExportLogicalSnapshotPayload(src Source, region raftmeta.RegionMeta) ([]byte, LogicalSnapshotManifest, error) {
 	if src == nil {
-		return nil, Manifest{}, fmt.Errorf("snapshot: export requires source")
+		return nil, LogicalSnapshotManifest{}, fmt.Errorf("snapshot: export requires source")
 	}
 	var entries bytes.Buffer
 	manifest, err := exportEntriesToWriter(src, &entries, region)
 	if err != nil {
-		return nil, Manifest{}, err
+		return nil, LogicalSnapshotManifest{}, err
 	}
 	payload, err := encodePayload(*manifest, entries.Bytes())
 	if err != nil {
-		return nil, Manifest{}, err
+		return nil, LogicalSnapshotManifest{}, err
 	}
 	return payload, *manifest, nil
 }
 
-// ImportPayload replays one in-memory logical region snapshot payload.
-func ImportPayload(dst Sink, payload []byte) (*ImportResult, error) {
+// ImportLogicalSnapshotPayload replays one in-memory logical region snapshot payload.
+func ImportLogicalSnapshotPayload(dst Sink, payload []byte) (*LogicalSnapshotImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import requires sink")
 	}
@@ -89,17 +89,17 @@ func ImportPayload(dst Sink, payload []byte) (*ImportResult, error) {
 	return importEntries(dst, manifest, bytes.NewReader(payloadEntries))
 }
 
-// ReadPayloadManifest decodes only the manifest carried by one in-memory
+// ReadLogicalSnapshotPayloadManifest decodes only the manifest carried by one in-memory
 // logical region snapshot payload.
-func ReadPayloadManifest(payload []byte) (Manifest, error) {
+func ReadLogicalSnapshotPayloadManifest(payload []byte) (LogicalSnapshotManifest, error) {
 	manifest, _, err := decodePayload(payload)
 	return manifest, err
 }
 
-// Export persists one logical region snapshot artifact into dir.
+// ExportLogicalSnapshot persists one logical region snapshot artifact into dir.
 // The target is written into a sibling temporary directory and atomically
 // renamed into place on success.
-func Export(src Source, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
+func ExportLogicalSnapshot(src Source, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*LogicalSnapshotExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export requires source")
 	}
@@ -133,7 +133,7 @@ func Export(src Source, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*Exp
 	if err != nil {
 		return nil, err
 	}
-	if err := writeManifest(filepath.Join(tmpDir, manifestName), manifest, fs); err != nil {
+	if err := writeManifest(filepath.Join(tmpDir, logicalSnapshotName), manifest, fs); err != nil {
 		return nil, err
 	}
 	if err := vfs.SyncDir(fs, tmpDir); err != nil {
@@ -146,17 +146,17 @@ func Export(src Source, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*Exp
 		return nil, fmt.Errorf("snapshot: sync parent dir %s: %w", parent, err)
 	}
 	success = true
-	return &ExportResult{Manifest: *manifest}, nil
+	return &LogicalSnapshotExportResult{Manifest: *manifest}, nil
 }
 
-// Import replays one logical region snapshot artifact into dst using the
+// ImportLogicalSnapshot replays one logical region snapshot artifact into dst using the
 // engine's regular internal-entry apply path.
-func Import(dst Sink, dir string, fs vfs.FS) (*ImportResult, error) {
+func ImportLogicalSnapshot(dst Sink, dir string, fs vfs.FS) (*LogicalSnapshotImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import requires sink")
 	}
 	fs = vfs.Ensure(fs)
-	manifest, err := ReadManifest(dir, fs)
+	manifest, err := ReadLogicalSnapshotManifest(dir, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -169,24 +169,24 @@ func Import(dst Sink, dir string, fs vfs.FS) (*ImportResult, error) {
 	return importEntries(dst, manifest, f)
 }
 
-// ReadManifest loads one logical snapshot manifest from dir.
-func ReadManifest(dir string, fs vfs.FS) (Manifest, error) {
+// ReadLogicalSnapshotManifest loads one logical snapshot manifest from dir.
+func ReadLogicalSnapshotManifest(dir string, fs vfs.FS) (LogicalSnapshotManifest, error) {
 	fs = vfs.Ensure(fs)
-	data, err := fs.ReadFile(filepath.Join(dir, manifestName))
+	data, err := fs.ReadFile(filepath.Join(dir, logicalSnapshotName))
 	if err != nil {
-		return Manifest{}, fmt.Errorf("snapshot: read manifest %s: %w", filepath.Join(dir, manifestName), err)
+		return LogicalSnapshotManifest{}, fmt.Errorf("snapshot: read manifest %s: %w", filepath.Join(dir, logicalSnapshotName), err)
 	}
-	var manifest Manifest
+	var manifest LogicalSnapshotManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, fmt.Errorf("snapshot: decode manifest %s: %w", filepath.Join(dir, manifestName), err)
+		return LogicalSnapshotManifest{}, fmt.Errorf("snapshot: decode manifest %s: %w", filepath.Join(dir, logicalSnapshotName), err)
 	}
 	if manifest.FormatVersion != FormatVersion {
-		return Manifest{}, fmt.Errorf("snapshot: unsupported format version %d", manifest.FormatVersion)
+		return LogicalSnapshotManifest{}, fmt.Errorf("snapshot: unsupported format version %d", manifest.FormatVersion)
 	}
 	return manifest, nil
 }
 
-func exportEntries(src Source, path string, region raftmeta.RegionMeta, fs vfs.FS) (*Manifest, error) {
+func exportEntries(src Source, path string, region raftmeta.RegionMeta, fs vfs.FS) (*LogicalSnapshotManifest, error) {
 	f, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: create entries %s: %w", path, err)
@@ -203,7 +203,7 @@ func exportEntries(src Source, path string, region raftmeta.RegionMeta, fs vfs.F
 	return manifest, nil
 }
 
-func exportEntriesToWriter(src Source, writer io.Writer, region raftmeta.RegionMeta) (*Manifest, error) {
+func exportEntriesToWriter(src Source, writer io.Writer, region raftmeta.RegionMeta) (*LogicalSnapshotManifest, error) {
 	hasher := crc32.New(kv.CastagnoliCrcTable)
 	multiWriter := io.MultiWriter(writer, hasher)
 
@@ -243,7 +243,7 @@ func exportEntriesToWriter(src Source, writer io.Writer, region raftmeta.RegionM
 		entryCount++
 		payloadBytes += uint64(recordLen)
 	}
-	manifest := &Manifest{
+	manifest := &LogicalSnapshotManifest{
 		FormatVersion: FormatVersion,
 		Region:        raftmeta.CloneRegionMeta(region),
 		EntryCount:    entryCount,
@@ -254,7 +254,7 @@ func exportEntriesToWriter(src Source, writer io.Writer, region raftmeta.RegionM
 	return manifest, nil
 }
 
-func importEntries(dst Sink, manifest Manifest, r io.Reader) (*ImportResult, error) {
+func importEntries(dst Sink, manifest LogicalSnapshotManifest, r io.Reader) (*LogicalSnapshotImportResult, error) {
 	iter := kv.NewEntryIterator(r)
 	defer func() { _ = iter.Close() }()
 
@@ -335,14 +335,14 @@ func importEntries(dst Sink, manifest Manifest, r io.Reader) (*ImportResult, err
 	if sum := hasher.Sum32(); sum != manifest.PayloadCRC32 {
 		return nil, fmt.Errorf("snapshot: payload checksum mismatch manifest=%08x imported=%08x", manifest.PayloadCRC32, sum)
 	}
-	return &ImportResult{
+	return &LogicalSnapshotImportResult{
 		Manifest:     manifest,
 		Imported:     imported,
 		PayloadBytes: payloadBytes,
 	}, nil
 }
 
-func encodePayload(manifest Manifest, entries []byte) ([]byte, error) {
+func encodePayload(manifest LogicalSnapshotManifest, entries []byte) ([]byte, error) {
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: encode payload manifest: %w", err)
@@ -360,25 +360,25 @@ func encodePayload(manifest Manifest, entries []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decodePayload(payload []byte) (Manifest, []byte, error) {
+func decodePayload(payload []byte) (LogicalSnapshotManifest, []byte, error) {
 	if len(payload) < len(payloadMagic)+4 {
-		return Manifest{}, nil, fmt.Errorf("snapshot: payload too short")
+		return LogicalSnapshotManifest{}, nil, fmt.Errorf("snapshot: payload too short")
 	}
 	if string(payload[:len(payloadMagic)]) != payloadMagic {
-		return Manifest{}, nil, fmt.Errorf("snapshot: invalid payload magic")
+		return LogicalSnapshotManifest{}, nil, fmt.Errorf("snapshot: invalid payload magic")
 	}
 	payload = payload[len(payloadMagic):]
 	manifestLen := binary.BigEndian.Uint32(payload[:4])
 	payload = payload[4:]
 	if uint32(len(payload)) < manifestLen {
-		return Manifest{}, nil, fmt.Errorf("snapshot: truncated payload manifest")
+		return LogicalSnapshotManifest{}, nil, fmt.Errorf("snapshot: truncated payload manifest")
 	}
-	var manifest Manifest
+	var manifest LogicalSnapshotManifest
 	if err := json.Unmarshal(payload[:manifestLen], &manifest); err != nil {
-		return Manifest{}, nil, fmt.Errorf("snapshot: decode payload manifest: %w", err)
+		return LogicalSnapshotManifest{}, nil, fmt.Errorf("snapshot: decode payload manifest: %w", err)
 	}
 	if manifest.FormatVersion != FormatVersion {
-		return Manifest{}, nil, fmt.Errorf("snapshot: unsupported payload format version %d", manifest.FormatVersion)
+		return LogicalSnapshotManifest{}, nil, fmt.Errorf("snapshot: unsupported payload format version %d", manifest.FormatVersion)
 	}
 	return manifest, payload[manifestLen:], nil
 }
@@ -393,7 +393,7 @@ func keyInRegion(region raftmeta.RegionMeta, key []byte) bool {
 	return true
 }
 
-func writeManifest(path string, manifest *Manifest, fs vfs.FS) error {
+func writeManifest(path string, manifest *LogicalSnapshotManifest, fs vfs.FS) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("snapshot: encode manifest %s: %w", path, err)
