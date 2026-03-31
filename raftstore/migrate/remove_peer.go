@@ -10,6 +10,7 @@ import (
 
 // RemovePeerConfig defines one explicit peer-removal request.
 type RemovePeerConfig struct {
+	WorkDir         string
 	Addr            string
 	TargetAdminAddr string
 	RegionID        uint64
@@ -73,6 +74,15 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 		LeaderKnown:     resp.GetRegion() != nil,
 		LeaderRegion:    resp.GetRegion(),
 	}
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:        CheckpointRemoveStarted,
+			RegionID:     cfg.RegionID,
+			TargetPeerID: cfg.PeerID,
+		}); err != nil {
+			return result, err
+		}
+	}
 	if cfg.WaitTimeout <= 0 {
 		return result, nil
 	}
@@ -84,6 +94,9 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 		return result, err
 	}
 	if cfg.TargetAdminAddr == "" {
+		if err := validateRemovePeerResult(result); err != nil {
+			return result, err
+		}
 		return result, nil
 	}
 
@@ -98,6 +111,18 @@ func RemovePeer(ctx context.Context, cfg RemovePeerConfig) (RemovePeerResult, er
 	}()
 	if err := waitForTargetRemoval(waitCtx, targetClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
+	}
+	if err := validateRemovePeerResult(result); err != nil {
+		return result, err
+	}
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:        CheckpointRemoveFinished,
+			RegionID:     cfg.RegionID,
+			TargetPeerID: cfg.PeerID,
+		}); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

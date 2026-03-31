@@ -172,6 +172,35 @@ Minimal persisted state looks like this:
 
 That mode gate is one of the most important engineering choices in the feature. It prevents a half-migrated directory from being silently treated as a normal local database.
 
+### Local promotion checkpoint
+
+During `migrate init`, NoKV now persists a lightweight local checkpoint alongside the mode file.
+That checkpoint records which milestone of the standalone-to-seed promotion has already completed, for example:
+
+- `mode-preparing-written`
+- `local-catalog-persisted`
+- `seed-snapshot-exported`
+- `raft-seed-initialized`
+- `seeded-finalized`
+
+`nokv migrate status` and `nokv migrate report` surface this checkpoint together with a `resume_hint`, so interrupted promotion is no longer just “stuck in preparing” without context.
+
+When `nokv migrate expand`, `nokv migrate transfer-leader`, or `nokv migrate remove-peer` is invoked with `--workdir`, the same checkpoint file is also updated with operator progress:
+
+- which target store/peer is currently being rolled out
+- how many targets have already completed hosting
+- which leader transfer or peer removal step just completed
+- what migration command should be retried next after an interruption
+
+### Post-step validation
+
+Migration commands now also validate the state they just created instead of trusting only the immediate RPC return:
+
+- `migrate init` verifies the local catalog, seed snapshot manifest, and local raft pointer all agree on the promoted seed region
+- `migrate expand` verifies leader membership and target hosted state agree on the new peer
+- `migrate transfer-leader` verifies the elected leader and target runtime converge on the requested peer
+- `migrate remove-peer` verifies leader metadata and target runtime both stop advertising the removed peer
+
 ## What Actually Happens
 
 The migration path is easier to reason about if you separate the steps by ownership.
