@@ -41,3 +41,4 @@
   - [2026-03-30 PD and RaftAdmin Layering](notes/2026-03-30-pd-and-raftadmin-layering.md)
   - [2026-03-30 Migration Mode and Snapshot](notes/2026-03-30-migration-mode-and-snapshot.md)
   - [2026-03-30 Distributed Testing and Failpoints](notes/2026-03-30-distributed-testing-and-failpoints.md)
+  - [2026-03-31 SST Snapshot Install for Migration](notes/2026-03-31-sst-snapshot-install.md)
