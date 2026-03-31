@@ -10,6 +10,7 @@ import (
 
 // TransferLeaderConfig defines one leader-transfer request.
 type TransferLeaderConfig struct {
+	WorkDir         string
 	Addr            string
 	TargetAdminAddr string
 	RegionID        uint64
@@ -75,6 +76,15 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		LeaderKnown:     resp.GetRegion() != nil,
 		LeaderRegion:    resp.GetRegion(),
 	}
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:        CheckpointTransferStarted,
+			RegionID:     cfg.RegionID,
+			TargetPeerID: cfg.PeerID,
+		}); err != nil {
+			return result, err
+		}
+	}
 	if cfg.WaitTimeout <= 0 {
 		return result, nil
 	}
@@ -86,6 +96,9 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		return result, err
 	}
 	if cfg.TargetAdminAddr == "" {
+		if err := validateTransferLeaderResult(result); err != nil {
+			return result, err
+		}
 		return result, nil
 	}
 
@@ -100,6 +113,18 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 	}()
 	if err := waitForTargetLeader(waitCtx, targetClient, cfg.RegionID, cfg.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err
+	}
+	if err := validateTransferLeaderResult(result); err != nil {
+		return result, err
+	}
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:        CheckpointTransferReady,
+			RegionID:     cfg.RegionID,
+			TargetPeerID: cfg.PeerID,
+		}); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

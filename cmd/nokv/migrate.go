@@ -19,6 +19,12 @@ var runTransferLeader = migratepkg.TransferLeader
 var runReadStatus = migratepkg.ReadStatusWithConfig
 var runBuildReport = migratepkg.BuildReportWithConfig
 
+type migrateRuntimeFlags struct {
+	adminAddr *string
+	regionID  *uint64
+	timeout   *time.Duration
+}
+
 func runMigrateCmd(w io.Writer, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("migrate subcommand required")
@@ -61,6 +67,50 @@ func printMigrateUsage(w io.Writer) {
 	  expand   Expand a single-store seed into a replicated region
 	  remove-peer      Remove one peer from a replicated region
 	  transfer-leader  Transfer region leadership to a specific peer`)
+}
+
+func bindMigrateRuntimeFlags(fs *flag.FlagSet) migrateRuntimeFlags {
+	return migrateRuntimeFlags{
+		adminAddr: fs.String("addr", "", "optional admin address to query remote region runtime status"),
+		regionID:  fs.Uint64("region", 0, "optional region id override for remote region runtime status"),
+		timeout:   fs.Duration("timeout", 3*time.Second, "timeout for remote runtime status queries"),
+	}
+}
+
+func (f migrateRuntimeFlags) config(workDir string) migratepkg.StatusConfig {
+	return migratepkg.StatusConfig{
+		WorkDir:   workDir,
+		AdminAddr: strings.TrimSpace(valueString(f.adminAddr)),
+		RegionID:  valueUint64(f.regionID),
+		Timeout:   valueDuration(f.timeout),
+	}
+}
+
+func valueString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func valueUint64(v *uint64) uint64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueDuration(v *time.Duration) time.Duration {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func writeIndentedJSON(w io.Writer, payload any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(payload)
 }
 
 type peerTargetsFlag []migratepkg.PeerTarget
@@ -131,9 +181,7 @@ func runMigratePlanCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 
 	_, _ = fmt.Fprintf(w, "Workdir              %s\n", result.WorkDir)
@@ -155,9 +203,7 @@ func runMigratePlanCmd(w io.Writer, args []string) error {
 func runMigrateStatusCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate status", flag.ContinueOnError)
 	workDir := fs.String("workdir", "", "database work directory")
-	adminAddr := fs.String("addr", "", "optional admin address to query remote region runtime status")
-	regionID := fs.Uint64("region", 0, "optional region id override for remote runtime status")
-	timeout := fs.Duration("timeout", 3*time.Second, "timeout for remote runtime status queries")
+	runtimeFlags := bindMigrateRuntimeFlags(fs)
 	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
@@ -167,19 +213,12 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	result, err := runReadStatus(migratepkg.StatusConfig{
-		WorkDir:   *workDir,
-		AdminAddr: strings.TrimSpace(*adminAddr),
-		RegionID:  *regionID,
-		Timeout:   *timeout,
-	})
+	result, err := runReadStatus(runtimeFlags.config(*workDir))
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 
 	_, _ = fmt.Fprintf(w, "Workdir  %s\n", result.WorkDir)
@@ -206,6 +245,13 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 	if result.Next != "" {
 		_, _ = fmt.Fprintf(w, "Next     %s\n", result.Next)
 	}
+	if result.ResumeHint != "" {
+		_, _ = fmt.Fprintf(w, "Resume   %s\n", result.ResumeHint)
+	}
+	if result.Checkpoint != nil {
+		_, _ = fmt.Fprintf(w, "Phase    %s\n", result.Checkpoint.Stage)
+		_, _ = fmt.Fprintf(w, "Updated  %s\n", result.Checkpoint.UpdatedAt)
+	}
 	if result.Runtime != nil {
 		_, _ = fmt.Fprintf(w, "Runtime  %s region=%d known=%t hosted=%t leader=%t\n", result.Runtime.Addr, result.Runtime.RegionID, result.Runtime.Known, result.Runtime.Hosted, result.Runtime.Leader)
 		if result.Runtime.MembershipPeers != 0 {
@@ -230,9 +276,7 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 func runMigrateReportCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate report", flag.ContinueOnError)
 	workDir := fs.String("workdir", "", "database work directory")
-	adminAddr := fs.String("addr", "", "optional admin address to query remote region runtime status")
-	regionID := fs.Uint64("region", 0, "optional region id override for remote runtime status")
-	timeout := fs.Duration("timeout", 3*time.Second, "timeout for remote runtime status queries")
+	runtimeFlags := bindMigrateRuntimeFlags(fs)
 	asJSON := fs.Bool("json", false, "output JSON instead of plain text")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
@@ -242,19 +286,12 @@ func runMigrateReportCmd(w io.Writer, args []string) error {
 		return fmt.Errorf("--workdir is required")
 	}
 
-	result, err := runBuildReport(migratepkg.StatusConfig{
-		WorkDir:   *workDir,
-		AdminAddr: strings.TrimSpace(*adminAddr),
-		RegionID:  *regionID,
-		Timeout:   *timeout,
-	})
+	result, err := runBuildReport(runtimeFlags.config(*workDir))
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 
 	_, _ = fmt.Fprintf(w, "Workdir        %s\n", result.WorkDir)
@@ -263,6 +300,9 @@ func runMigrateReportCmd(w io.Writer, args []string) error {
 	_, _ = fmt.Fprintf(w, "Summary        %s\n", result.Summary)
 	_, _ = fmt.Fprintf(w, "ReadyForInit   %t\n", result.ReadyForInit)
 	_, _ = fmt.Fprintf(w, "ReadyForServe  %t\n", result.ReadyForServe)
+	if result.ResumeHint != "" {
+		_, _ = fmt.Fprintf(w, "ResumeHint     %s\n", result.ResumeHint)
+	}
 	if len(result.NextSteps) > 0 {
 		_, _ = fmt.Fprintln(w, "NextSteps")
 		for _, step := range result.NextSteps {
@@ -334,9 +374,7 @@ func runMigrateInitCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 	_, _ = fmt.Fprintf(w, "Workdir      %s\n", result.WorkDir)
 	_, _ = fmt.Fprintf(w, "Mode         %s\n", result.Mode)
@@ -349,6 +387,7 @@ func runMigrateInitCmd(w io.Writer, args []string) error {
 
 func runMigrateExpandCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate expand", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "optional seed workdir used to persist migration rollout checkpoints")
 	addr := fs.String("addr", "", "leader store admin address")
 	regionID := fs.Uint64("region", 0, "region id")
 	var targets peerTargetsFlag
@@ -363,6 +402,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 
 	ctx := context.Background()
 	cfg := migratepkg.ExpandConfig{
+		WorkDir:      strings.TrimSpace(*workDir),
 		Addr:         strings.TrimSpace(*addr),
 		RegionID:     *regionID,
 		WaitTimeout:  *waitTimeout,
@@ -377,9 +417,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
 	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
@@ -392,6 +430,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 
 func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate remove-peer", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "optional seed workdir used to persist migration rollout checkpoints")
 	addr := fs.String("addr", "", "leader store admin address")
 	targetAddr := fs.String("target-addr", "", "target store admin address for removal wait checks")
 	regionID := fs.Uint64("region", 0, "region id")
@@ -404,6 +443,7 @@ func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 		return err
 	}
 	result, err := runRemovePeer(context.Background(), migratepkg.RemovePeerConfig{
+		WorkDir:         strings.TrimSpace(*workDir),
 		Addr:            strings.TrimSpace(*addr),
 		TargetAdminAddr: strings.TrimSpace(*targetAddr),
 		RegionID:        *regionID,
@@ -415,9 +455,7 @@ func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
 	if result.TargetAdminAddr != "" {
@@ -433,6 +471,7 @@ func runMigrateRemovePeerCmd(w io.Writer, args []string) error {
 
 func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("migrate transfer-leader", flag.ContinueOnError)
+	workDir := fs.String("workdir", "", "optional seed workdir used to persist migration rollout checkpoints")
 	addr := fs.String("addr", "", "leader store admin address")
 	targetAddr := fs.String("target-addr", "", "target store admin address for leader wait checks")
 	regionID := fs.Uint64("region", 0, "region id")
@@ -445,6 +484,7 @@ func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
 		return err
 	}
 	result, err := runTransferLeader(context.Background(), migratepkg.TransferLeaderConfig{
+		WorkDir:         strings.TrimSpace(*workDir),
 		Addr:            strings.TrimSpace(*addr),
 		TargetAdminAddr: strings.TrimSpace(*targetAddr),
 		RegionID:        *regionID,
@@ -456,9 +496,7 @@ func runMigrateTransferLeaderCmd(w io.Writer, args []string) error {
 		return err
 	}
 	if *asJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(w, result)
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
 	if result.TargetAdminAddr != "" {

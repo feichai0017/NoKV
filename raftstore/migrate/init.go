@@ -68,6 +68,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 		}); err != nil {
 			return InitResult{}, err
 		}
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:    CheckpointPreparingWritten,
+			StoreID:  cfg.StoreID,
+			RegionID: cfg.RegionID,
+			PeerID:   cfg.PeerID,
+		}); err != nil {
+			return InitResult{}, err
+		}
 		if failpoints.ShouldFailAfterInitModePreparing() {
 			return InitResult{}, fmt.Errorf("migrate: failpoint after init mode preparing")
 		}
@@ -129,6 +137,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	if err := localMeta.SaveRegion(region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: save local catalog: %w", err)
 	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointCatalogPersisted,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
 	if failpoints.ShouldFailAfterInitCatalogPersist() {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init catalog persist")
 	}
@@ -154,6 +170,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}
 	if _, err := snapshotpkg.Export(db, snapshotDir, region, nil); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
+	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointSeedExported,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
 	}
 	if failpoints.ShouldFailAfterInitSeedSnapshot() {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init seed snapshot")
@@ -181,6 +205,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: set initial hard state: %w", err)
 	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointRaftSeeded,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
 	if err := writeState(cfg.WorkDir, stateFile{
 		Mode:     ModeSeeded,
 		StoreID:  cfg.StoreID,
@@ -188,6 +220,17 @@ func Init(cfg InitConfig) (InitResult, error) {
 		PeerID:   cfg.PeerID,
 	}); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: finalize seeded mode: %w", err)
+	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointSeededFinalized,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
+	if err := validateSeedArtifacts(cfg.WorkDir, cfg.StoreID, cfg.RegionID, cfg.PeerID); err != nil {
+		return InitResult{}, err
 	}
 	return InitResult{
 		WorkDir:     cfg.WorkDir,

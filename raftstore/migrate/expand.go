@@ -19,6 +19,7 @@ type PeerTarget struct {
 
 // ExpandConfig defines one seed-region expansion request.
 type ExpandConfig struct {
+	WorkDir      string
 	Addr         string
 	RegionID     uint64
 	WaitTimeout  time.Duration
@@ -81,11 +82,48 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 	}()
 
 	result := ExpandResultSet{Addr: cfg.Addr, RegionID: cfg.RegionID, Results: make([]ExpandResult, 0, len(cfg.Targets))}
-	for _, target := range cfg.Targets {
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:            CheckpointExpandStarted,
+			RegionID:         cfg.RegionID,
+			CompletedTargets: 0,
+			TotalTargets:     len(cfg.Targets),
+		}); err != nil {
+			return result, err
+		}
+	}
+	for i, target := range cfg.Targets {
+		if cfg.WorkDir != "" {
+			if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+				Stage:            CheckpointExpandTarget,
+				RegionID:         cfg.RegionID,
+				TargetStoreID:    target.StoreID,
+				TargetPeerID:     target.PeerID,
+				CompletedTargets: i,
+				TotalTargets:     len(cfg.Targets),
+			}); err != nil {
+				return result, err
+			}
+		}
 		step, err := expandTargetWithLeaderClient(ctx, leaderClient, cfg, target)
 		result.Results = append(result.Results, step)
 		if err != nil {
 			return result, err
+		}
+		if err := validateExpandResult(step); err != nil {
+			return result, err
+		}
+		if cfg.WorkDir != "" {
+			if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+				Stage:            CheckpointExpandHosted,
+				RegionID:         cfg.RegionID,
+				TargetStoreID:    target.StoreID,
+				TargetPeerID:     target.PeerID,
+				CompletedTargets: i + 1,
+				TotalTargets:     len(cfg.Targets),
+			}); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil

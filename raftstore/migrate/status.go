@@ -47,7 +47,9 @@ type StatusResult struct {
 	SeedSnapshotDir     string         `json:"seed_snapshot_dir,omitempty"`
 	SeedSnapshotPresent bool           `json:"seed_snapshot_present,omitempty"`
 	Next                string         `json:"next,omitempty"`
+	ResumeHint          string         `json:"resume_hint,omitempty"`
 	Warnings            []string       `json:"warnings,omitempty"`
+	Checkpoint          *Checkpoint    `json:"checkpoint,omitempty"`
 	Runtime             *RuntimeStatus `json:"runtime,omitempty"`
 	RuntimeError        string         `json:"runtime_error,omitempty"`
 }
@@ -95,6 +97,14 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 		}
 	}
 
+	checkpoint, err := readCheckpoint(workDir)
+	if err != nil {
+		result.Warnings = append(result.Warnings, err.Error())
+	} else {
+		result.Checkpoint = checkpoint
+		result.ResumeHint = resumeHint(result.Mode, checkpoint)
+	}
+
 	switch result.Mode {
 	case ModeStandalone:
 		result.Next = "nokv migrate plan"
@@ -107,10 +117,7 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 	}
 
 	if cfg.AdminAddr != "" {
-		regionID := cfg.RegionID
-		if regionID == 0 {
-			regionID = result.RegionID
-		}
+		regionID := effectiveStatusRegionID(cfg.RegionID, result.RegionID)
 		if regionID == 0 {
 			result.RuntimeError = "region id is required to query remote runtime status"
 			return result, nil
@@ -129,6 +136,13 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 	}
 
 	return result, nil
+}
+
+func effectiveStatusRegionID(requestedRegionID, fallbackRegionID uint64) uint64 {
+	if requestedRegionID != 0 {
+		return requestedRegionID
+	}
+	return fallbackRegionID
 }
 
 func queryRuntimeStatus(cfg StatusConfig) (*RuntimeStatus, error) {

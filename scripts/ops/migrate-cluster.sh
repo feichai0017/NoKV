@@ -433,7 +433,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
 fi
 
 stage "Expand Seed Region"
-expand_cmd=(nokv migrate expand --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --wait "$WAIT_TIMEOUT" --poll-interval "$POLL_INTERVAL")
+expand_cmd=(nokv migrate expand --workdir "$WORKDIR" --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --wait "$WAIT_TIMEOUT" --poll-interval "$POLL_INTERVAL")
 for target in "${EXPAND_TARGETS[@]}"; do
   expand_cmd+=(--target "$target")
 done
@@ -443,6 +443,7 @@ if [[ -n "$TRANSFER_LEADER_PEER" ]]; then
   stage "Transfer Leader"
   transfer_target_addr=${PEER_TO_ADMIN_ADDR[$TRANSFER_LEADER_PEER]:-}
   transfer_cmd=(nokv migrate transfer-leader
+    --workdir "$WORKDIR"
     --addr "$leader_admin_addr"
     --region "$SEED_REGION_ID"
     --peer "$TRANSFER_LEADER_PEER"
@@ -463,6 +464,7 @@ for remove_peer in "${REMOVE_PEERS[@]}"; do
   remove_target_addr=${PEER_TO_ADMIN_ADDR[$remove_peer]:-}
   if [[ -n "$remove_target_addr" ]]; then
     run_cmd nokv migrate remove-peer \
+      --workdir "$WORKDIR" \
       --addr "$leader_admin_addr" \
       --target-addr "$remove_target_addr" \
       --region "$SEED_REGION_ID" \
@@ -471,6 +473,7 @@ for remove_peer in "${REMOVE_PEERS[@]}"; do
       --poll-interval "$POLL_INTERVAL"
   else
     run_cmd nokv migrate remove-peer \
+      --workdir "$WORKDIR" \
       --addr "$leader_admin_addr" \
       --region "$SEED_REGION_ID" \
       --peer "$remove_peer" \

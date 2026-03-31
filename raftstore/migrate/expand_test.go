@@ -200,6 +200,59 @@ func TestExpandRollsTargetsSequentially(t *testing.T) {
 	require.True(t, result.Results[1].TargetHosted)
 }
 
+func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
+	workDir := prepareStandaloneWorkdir(t)
+	_, err := Init(InitConfig{WorkDir: workDir, StoreID: 1, RegionID: 15, PeerID: 115})
+	require.NoError(t, err)
+
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 15}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-15")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 15, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+		},
+	}
+	target := &fakeAdminClient{
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err = Expand(context.Background(), ExpandConfig{
+		WorkDir:      workDir,
+		Addr:         "leader",
+		RegionID:     15,
+		WaitTimeout:  time.Second,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"},
+		},
+	})
+	require.NoError(t, err)
+
+	status, err := ReadStatus(workDir)
+	require.NoError(t, err)
+	require.NotNil(t, status.Checkpoint)
+	require.Equal(t, CheckpointExpandHosted, status.Checkpoint.Stage)
+	require.Equal(t, uint64(2), status.Checkpoint.TargetStoreID)
+	require.Equal(t, uint64(22), status.Checkpoint.TargetPeerID)
+	require.Equal(t, 1, status.Checkpoint.CompletedTargets)
+	require.Equal(t, 1, status.Checkpoint.TotalTargets)
+	require.Contains(t, status.ResumeHint, "completed 1/1 target")
+}
+
 func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp:           &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 12}},

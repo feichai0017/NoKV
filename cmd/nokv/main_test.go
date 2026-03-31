@@ -957,6 +957,9 @@ func TestRunMigrateStatusCmdSeededJSONIncludesOperationalHints(t *testing.T) {
 	require.Equal(t, float64(1), payload["local_catalog_regions"])
 	require.Equal(t, true, payload["seed_snapshot_present"])
 	require.Contains(t, payload["seed_snapshot_dir"], "RAFTSTORE_SNAPSHOTS")
+	checkpoint := payload["checkpoint"].(map[string]any)
+	require.Equal(t, string(migratepkg.CheckpointSeededFinalized), checkpoint["stage"])
+	require.Contains(t, payload["resume_hint"], "promotion already completed")
 	require.Contains(t, payload["next"], "nokv serve")
 }
 
@@ -997,6 +1000,7 @@ func TestRunMigrateReportCmdSeeded(t *testing.T) {
 	require.Equal(t, "seed-ready", payload["stage"])
 	require.Equal(t, false, payload["ready_for_init"])
 	require.Equal(t, true, payload["ready_for_serve"])
+	require.Contains(t, payload["resume_hint"], "promotion already completed")
 	require.Contains(t, payload["summary"], "promoted into a seed")
 	status := payload["status"].(map[string]any)
 	require.Equal(t, true, status["seed_snapshot_present"])
@@ -1139,6 +1143,7 @@ func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {
 func TestRunMigrateExpandCmd(t *testing.T) {
 	origExpand := runExpand
 	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResultSet, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Equal(t, 5*time.Second, cfg.WaitTimeout)
@@ -1166,6 +1171,7 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := runMigrateExpandCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
 		"-addr", "127.0.0.1:20160",
 		"-region", "9",
 		"-target", "2:22@127.0.0.1:20161",
@@ -1188,6 +1194,7 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 	origExpand := runExpand
 	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResultSet, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
 		require.Len(t, cfg.Targets, 2)
@@ -1208,6 +1215,7 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := runMigrateExpandCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
 		"-addr", "127.0.0.1:20160",
 		"-region", "9",
 		"-target", "2:22@127.0.0.1:20161",
@@ -1225,6 +1233,7 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 func TestRunMigrateRemovePeerCmd(t *testing.T) {
 	orig := runRemovePeer
 	runRemovePeer = func(ctx context.Context, cfg migratepkg.RemovePeerConfig) (migratepkg.RemovePeerResult, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, "127.0.0.1:20161", cfg.TargetAdminAddr)
 		require.Equal(t, uint64(9), cfg.RegionID)
@@ -1243,6 +1252,7 @@ func TestRunMigrateRemovePeerCmd(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := runMigrateRemovePeerCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
 		"-addr", "127.0.0.1:20160",
 		"-target-addr", "127.0.0.1:20161",
 		"-region", "9",
@@ -1260,6 +1270,7 @@ func TestRunMigrateRemovePeerCmd(t *testing.T) {
 func TestRunMigrateTransferLeaderCmd(t *testing.T) {
 	orig := runTransferLeader
 	runTransferLeader = func(ctx context.Context, cfg migratepkg.TransferLeaderConfig) (migratepkg.TransferLeaderResult, error) {
+		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, "127.0.0.1:20161", cfg.TargetAdminAddr)
 		require.Equal(t, uint64(9), cfg.RegionID)
@@ -1278,6 +1289,7 @@ func TestRunMigrateTransferLeaderCmd(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := runMigrateTransferLeaderCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
 		"-addr", "127.0.0.1:20160",
 		"-target-addr", "127.0.0.1:20161",
 		"-region", "9",
