@@ -16,6 +16,7 @@ type fakeAdminClient struct {
 	transferErr         error
 	exportSnapshotResp  *pb.ExportRegionSnapshotResponse
 	exportSnapshotErr   error
+	exportSnapshotReqs  []*pb.ExportRegionSnapshotRequest
 	installSnapshotErr  error
 	installSnapshotReqs []*pb.InstallRegionSnapshotRequest
 
@@ -47,7 +48,8 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{}, nil
 }
 
-func (f *fakeAdminClient) ExportRegionSnapshot(context.Context, *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+func (f *fakeAdminClient) ExportRegionSnapshot(_ context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+	f.exportSnapshotReqs = append(f.exportSnapshotReqs, req)
 	if f.exportSnapshotErr != nil {
 		return nil, f.exportSnapshotErr
 	}
@@ -126,8 +128,11 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 	require.True(t, result.Results[0].TargetHosted)
 	require.Equal(t, uint64(22), result.Results[0].TargetLocalPeerID)
 	require.Equal(t, uint64(1), result.Results[0].TargetAppliedIdx)
+	require.Len(t, leader.exportSnapshotReqs, 1)
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, leader.exportSnapshotReqs[0].GetFormat())
 	require.Len(t, target.installSnapshotReqs, 1)
 	require.Equal(t, []byte("snapshot-8"), target.installSnapshotReqs[0].GetSnapshot())
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, target.installSnapshotReqs[0].GetFormat())
 }
 
 func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
@@ -251,6 +256,94 @@ func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
 	require.Equal(t, 1, status.Checkpoint.CompletedTargets)
 	require.Equal(t, 1, status.Checkpoint.TotalTargets)
 	require.Contains(t, status.ResumeHint, "completed 1/1 target")
+}
+
+func TestExpandRequestsSSTSnapshotFormat(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 18}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-18")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 18, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 28}}}},
+		},
+	}
+	target := &fakeAdminClient{
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Hosted: true, LocalPeerId: 28, AppliedIndex: 1, AppliedTerm: 1},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:              "leader",
+		RegionID:          18,
+		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
+		SnapshotFormatSet: true,
+		WaitTimeout:       time.Second,
+		PollInterval:      time.Millisecond,
+		Dial:              dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 28, TargetAdminAddr: "target"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, leader.exportSnapshotReqs, 1)
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, leader.exportSnapshotReqs[0].GetFormat())
+	require.Len(t, target.installSnapshotReqs, 1)
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, target.installSnapshotReqs[0].GetFormat())
+}
+
+func TestExpandRequestsLogicalSnapshotFormatWhenExplicit(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 19}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-19")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 19, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 29}}}},
+		},
+	}
+	target := &fakeAdminClient{
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Hosted: true, LocalPeerId: 29, AppliedIndex: 1, AppliedTerm: 1},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:              "leader",
+		RegionID:          19,
+		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_LOGICAL,
+		SnapshotFormatSet: true,
+		WaitTimeout:       time.Second,
+		PollInterval:      time.Millisecond,
+		Dial:              dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 29, TargetAdminAddr: "target"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, leader.exportSnapshotReqs, 1)
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_LOGICAL, leader.exportSnapshotReqs[0].GetFormat())
+	require.Len(t, target.installSnapshotReqs, 1)
+	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_LOGICAL, target.installSnapshotReqs[0].GetFormat())
 }
 
 func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {

@@ -1,10 +1,14 @@
 package snapshot
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/feichai0017/NoKV/kv"
@@ -48,16 +52,38 @@ type SSTExportResult struct {
 	Manifest SSTManifest
 }
 
-// SSTSink installs external SST files into the target engine.
+// SSTSink installs external SST files into the target engine and can roll back
+// a completed ingest before higher-level metadata is published.
 type SSTSink interface {
-	ImportExternalSST(paths []string) error
+	IngestExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
+	RollbackExternalSST(fileIDs []uint64) error
 }
 
 // SSTImportResult reports one successful SST artifact install.
 type SSTImportResult struct {
-	Manifest       SSTManifest
-	ImportedTables uint64
-	ImportedBytes  uint64
+	Manifest        SSTManifest
+	ImportedTables  uint64
+	ImportedBytes   uint64
+	ImportedFileIDs []uint64
+}
+
+// ExportSSTPayload materializes one SST snapshot artifact and bundles it into
+// a transport-safe payload.
+func ExportSSTPayload(src Source, workDir string, region raftmeta.RegionMeta, opt *lsm.Options, fs vfs.FS) ([]byte, SSTManifest, error) {
+	dir, cleanup, err := prepareSnapshotTempDir(workDir, "sst-export-*", fs)
+	if err != nil {
+		return nil, SSTManifest{}, err
+	}
+	defer cleanup()
+	result, err := ExportSST(src, filepath.Join(dir, "artifact"), region, opt, fs)
+	if err != nil {
+		return nil, SSTManifest{}, err
+	}
+	payload, err := bundleSSTArtifact(filepath.Join(dir, "artifact"), result.Manifest, fs)
+	if err != nil {
+		return nil, SSTManifest{}, err
+	}
+	return payload, result.Manifest, nil
 }
 
 // ExportSST persists one region snapshot artifact as one or more self-contained
@@ -190,14 +216,89 @@ func ImportSST(dst SSTSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
 	if len(paths) == 0 {
 		return &SSTImportResult{Manifest: manifest}, nil
 	}
-	if err := dst.ImportExternalSST(paths); err != nil {
-		return nil, fmt.Errorf("snapshot: import sst artifact from %s: %w", dir, err)
-	}
-	return &SSTImportResult{
+	result := &SSTImportResult{
 		Manifest:       manifest,
 		ImportedTables: uint64(len(paths)),
 		ImportedBytes:  importedBytes,
-	}, nil
+	}
+	imported, err := dst.IngestExternalSST(paths)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot: import sst artifact from %s: %w", dir, err)
+	}
+	if imported != nil {
+		result.ImportedFileIDs = append(result.ImportedFileIDs, imported.FileIDs...)
+		if imported.ImportedBytes != 0 {
+			result.ImportedBytes = imported.ImportedBytes
+		}
+	}
+	return result, nil
+}
+
+// ImportSSTPayload unpacks one SST artifact payload into a temporary workdir
+// and installs it through the external SST ingest path.
+func ImportSSTPayload(dst SSTSink, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
+	if dst == nil {
+		return nil, fmt.Errorf("snapshot: import sst payload requires sink")
+	}
+	manifest, err := ReadSSTPayloadManifest(payload)
+	if err != nil {
+		return nil, err
+	}
+	dir, cleanup, err := prepareSnapshotTempDir(workDir, "sst-import-*", fs)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	artifactDir := filepath.Join(dir, "artifact")
+	if err := unpackSSTArtifact(payload, artifactDir, manifest, fs); err != nil {
+		return nil, err
+	}
+	return ImportSST(dst, artifactDir, fs)
+}
+
+// ReadSSTPayloadManifest decodes only the manifest embedded in one SST
+// snapshot payload.
+func ReadSSTPayloadManifest(payload []byte) (SSTManifest, error) {
+	if len(payload) == 0 {
+		return SSTManifest{}, fmt.Errorf("snapshot: empty sst payload")
+	}
+	tr := tar.NewReader(bytes.NewReader(payload))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return SSTManifest{}, fmt.Errorf("snapshot: read sst payload tar: %w", err)
+		}
+		if filepath.Clean(hdr.Name) != sstSnapshotName {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return SSTManifest{}, fmt.Errorf("snapshot: read sst payload manifest: %w", err)
+		}
+		var manifest SSTManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return SSTManifest{}, fmt.Errorf("snapshot: decode sst payload manifest: %w", err)
+		}
+		if manifest.FormatVersion != sstFormatVersion {
+			return SSTManifest{}, fmt.Errorf("snapshot: unsupported sst format version %d", manifest.FormatVersion)
+		}
+		return manifest, nil
+	}
+	return SSTManifest{}, fmt.Errorf("snapshot: sst payload missing %s", sstSnapshotName)
+}
+
+// Rollback removes previously imported SST tables from the destination sink.
+func (r *SSTImportResult) Rollback(dst SSTSink) error {
+	if r == nil || len(r.ImportedFileIDs) == 0 {
+		return nil
+	}
+	if dst == nil {
+		return fmt.Errorf("snapshot: rollback sst import requires rollback sink")
+	}
+	return dst.RollbackExternalSST(r.ImportedFileIDs)
 }
 
 func collectMaterializedEntries(src Source, region raftmeta.RegionMeta) ([]*kv.Entry, error) {
@@ -255,4 +356,113 @@ func writeSSTManifest(path string, manifest *SSTManifest, fs vfs.FS) error {
 		return fmt.Errorf("snapshot: close sst manifest %s: %w", path, err)
 	}
 	return nil
+}
+
+func bundleSSTArtifact(dir string, manifest SSTManifest, fs vfs.FS) ([]byte, error) {
+	fs = vfs.Ensure(fs)
+	var payload bytes.Buffer
+	tw := tar.NewWriter(&payload)
+	writeFile := func(rel string) error {
+		path := filepath.Join(dir, rel)
+		info, err := fs.Stat(path)
+		if err != nil {
+			return fmt.Errorf("snapshot: stat sst artifact file %s: %w", path, err)
+		}
+		data, err := fs.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("snapshot: read sst artifact file %s: %w", path, err)
+		}
+		hdr := &tar.Header{
+			Name:    filepath.ToSlash(rel),
+			Mode:    0o600,
+			Size:    int64(len(data)),
+			ModTime: info.ModTime(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("snapshot: write sst artifact header %s: %w", rel, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return fmt.Errorf("snapshot: write sst artifact body %s: %w", rel, err)
+		}
+		return nil
+	}
+	if err := writeFile(sstSnapshotName); err != nil {
+		return nil, err
+	}
+	for _, table := range manifest.Tables {
+		if err := writeFile(table.RelativePath); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("snapshot: finalize sst artifact payload: %w", err)
+	}
+	return payload.Bytes(), nil
+}
+
+func unpackSSTArtifact(payload []byte, dir string, manifest SSTManifest, fs vfs.FS) error {
+	fs = vfs.Ensure(fs)
+	if err := fs.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("snapshot: create sst artifact dir %s: %w", dir, err)
+	}
+	tr := tar.NewReader(bytes.NewReader(payload))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("snapshot: read sst artifact payload: %w", err)
+		}
+		name := filepath.Clean(hdr.Name)
+		if name == "." || strings.HasPrefix(name, "..") {
+			return fmt.Errorf("snapshot: invalid sst artifact path %q", hdr.Name)
+		}
+		targetPath := filepath.Join(dir, name)
+		parent := filepath.Dir(targetPath)
+		if err := fs.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("snapshot: create sst artifact parent %s: %w", parent, err)
+		}
+		f, err := fs.OpenFileHandle(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("snapshot: create sst artifact file %s: %w", targetPath, err)
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("snapshot: write sst artifact file %s: %w", targetPath, err)
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("snapshot: sync sst artifact file %s: %w", targetPath, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("snapshot: close sst artifact file %s: %w", targetPath, err)
+		}
+	}
+	if _, err := ReadSSTManifest(dir, fs); err != nil {
+		return err
+	}
+	for _, table := range manifest.Tables {
+		if _, err := fs.Stat(filepath.Join(dir, table.RelativePath)); err != nil {
+			return fmt.Errorf("snapshot: unpacked sst artifact missing table %s: %w", table.RelativePath, err)
+		}
+	}
+	return nil
+}
+
+func prepareSnapshotTempDir(workDir, pattern string, fs vfs.FS) (string, func(), error) {
+	fs = vfs.Ensure(fs)
+	base := workDir
+	if base == "" {
+		base = os.TempDir()
+	}
+	if err := fs.MkdirAll(base, 0o755); err != nil {
+		return "", nil, fmt.Errorf("snapshot: create temp base %s: %w", base, err)
+	}
+	dir, err := os.MkdirTemp(base, pattern)
+	if err != nil {
+		return "", nil, fmt.Errorf("snapshot: create temp dir in %s: %w", base, err)
+	}
+	cleanup := func() { _ = fs.RemoveAll(dir) }
+	return dir, cleanup, nil
 }

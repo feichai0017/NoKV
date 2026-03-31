@@ -27,6 +27,13 @@ type ExternalSSTMeta struct {
 	ValueBytes  uint64 `json:"value_bytes"`
 }
 
+// ExternalSSTImportResult reports the live LSM state created by one successful
+// external SST ingest operation.
+type ExternalSSTImportResult struct {
+	FileIDs       []uint64 `json:"file_ids"`
+	ImportedBytes uint64   `json:"imported_bytes"`
+}
+
 // BuildExternalSST materializes one standalone SST file that can later be
 // imported through ImportExternalSST. Entries must already be detached and
 // sorted by internal key order.
@@ -129,20 +136,49 @@ func BuildExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Extern
 
 // ImportExternalSST ingests externally built SST files into the live LSM.
 func (lsm *LSM) ImportExternalSST(paths []string) error {
+	_, err := lsm.IngestExternalSST(paths)
+	return err
+}
+
+// IngestExternalSST ingests externally built SST files into the live LSM and
+// reports the file IDs created by the ingest. Callers can later use
+// RollbackExternalSST to roll back a completed ingest before the new state is
+// published.
+func (lsm *LSM) IngestExternalSST(paths []string) (*ExternalSSTImportResult, error) {
 	if lsm == nil {
-		return ErrLSMNil
+		return nil, ErrLSMNil
 	}
 	if lsm.closed.Load() {
-		return ErrLSMClosed
+		return nil, ErrLSMClosed
 	}
 	if len(paths) == 0 {
-		return nil
+		return &ExternalSSTImportResult{}, nil
 	}
 
 	lsm.closer.Add(1)
 	defer lsm.closer.Done()
 
 	return lsm.levels.importExternalSST(paths)
+}
+
+// RollbackExternalSST removes previously imported SST files from the live LSM.
+// This is intended for snapshot-install rollback before the imported tables are
+// published to higher-level runtime metadata.
+func (lsm *LSM) RollbackExternalSST(fileIDs []uint64) error {
+	if lsm == nil {
+		return ErrLSMNil
+	}
+	if lsm.closed.Load() {
+		return ErrLSMClosed
+	}
+	if len(fileIDs) == 0 {
+		return nil
+	}
+
+	lsm.closer.Add(1)
+	defer lsm.closer.Done()
+
+	return lsm.levels.removeExternalSST(fileIDs)
 }
 
 func checkTablesOverlap(tables []*table) error {
@@ -184,7 +220,7 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 	return nil
 }
 
-func (lm *levelManager) importExternalSST(paths []string) error {
+func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportResult, error) {
 	fs := vfs.Ensure(lm.opt.FS)
 	workDir := lm.opt.WorkDir
 	var (
@@ -232,15 +268,15 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		stat, err := fs.Stat(path)
 		if err != nil {
 			rollback()
-			return fmt.Errorf("invalid external SST: %s, err: %w", path, err)
+			return nil, fmt.Errorf("invalid external SST: %s, err: %w", path, err)
 		}
 		if stat.IsDir() {
 			rollback()
-			return fmt.Errorf("external SST is a directory: %s", path)
+			return nil, fmt.Errorf("external SST is a directory: %s", path)
 		}
 		if !strings.HasSuffix(path, ".sst") {
 			rollback()
-			return fmt.Errorf("external file is not an SST (missing .sst suffix): %s", path)
+			return nil, fmt.Errorf("external file is not an SST (missing .sst suffix): %s", path)
 		}
 
 		tempFID := lm.maxFID.Add(1)
@@ -249,25 +285,25 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 
 		if _, err := fs.Stat(targetPath); err == nil {
 			rollback()
-			return fmt.Errorf("target SST path already exists: %s", targetPath)
+			return nil, fmt.Errorf("target SST path already exists: %s", targetPath)
 		}
 		if err := fs.Rename(path, targetPath); err != nil {
 			rollback()
-			return fmt.Errorf("failed to move external SST: %s -> %s, err: %w", path, targetPath, err)
+			return nil, fmt.Errorf("failed to move external SST: %s -> %s, err: %w", path, targetPath, err)
 		}
 		pathMappings[path] = targetPath
 
 		tbl, err := openTable(lm, targetPath, nil)
 		if err != nil {
 			rollback()
-			return fmt.Errorf("open imported sst failed: %s, err: %w", targetPath, err)
+			return nil, fmt.Errorf("open imported sst failed: %s, err: %w", targetPath, err)
 		}
 		importedTables = append(importedTables, tbl)
 	}
 
 	if err := checkTablesOverlap(importedTables); err != nil {
 		rollback()
-		return fmt.Errorf("imported ssts overlap: %w", err)
+		return nil, fmt.Errorf("imported ssts overlap: %w", err)
 	}
 
 	l0 := lm.levels[0]
@@ -276,7 +312,7 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 
 	if err := lm.checkTablesOverlapWithL0Locked(importedTables); err != nil {
 		rollback()
-		return fmt.Errorf("overlap with L0: %w", err)
+		return nil, fmt.Errorf("overlap with L0: %w", err)
 	}
 
 	for _, tbl := range importedTables {
@@ -304,15 +340,16 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 	if lm.opt.ManifestSync {
 		if err := vfs.SyncDir(lm.opt.FS, workDir); err != nil {
 			rollback()
-			return fmt.Errorf("sync work dir failed: %w", err)
+			return nil, fmt.Errorf("sync work dir failed: %w", err)
 		}
 	}
 
 	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
 		rollback()
-		return fmt.Errorf("log manifest edits failed: %w", err)
+		return nil, fmt.Errorf("log manifest edits failed: %w", err)
 	}
 
+	result := &ExternalSSTImportResult{FileIDs: make([]uint64, 0, len(importedTables))}
 	for _, tbl := range importedTables {
 		if tbl == nil {
 			continue
@@ -322,9 +359,51 @@ func (lm *levelManager) importExternalSST(paths []string) error {
 		l0.totalSize += tbl.Size()
 		l0.totalStaleSize += int64(tbl.StaleDataSize())
 		l0.totalValueSize += int64(tbl.ValueSize())
+		result.FileIDs = append(result.FileIDs, tbl.fid)
+		result.ImportedBytes += uint64(tbl.Size())
 	}
 	l0.sortTablesLocked()
 	l0.rebuildRangeFilterLocked()
 
+	return result, nil
+}
+
+func (lm *levelManager) removeExternalSST(fileIDs []uint64) error {
+	if len(fileIDs) == 0 {
+		return nil
+	}
+
+	l0 := lm.levels[0]
+	l0.RLock()
+	tablesByID := make(map[uint64]*table, len(fileIDs))
+	for _, tbl := range l0.tables {
+		if tbl != nil {
+			tablesByID[tbl.fid] = tbl
+		}
+	}
+	toDelete := make([]*table, 0, len(fileIDs))
+	edits := make([]manifest.Edit, 0, len(fileIDs))
+	for _, fid := range fileIDs {
+		tbl, ok := tablesByID[fid]
+		if !ok {
+			continue
+		}
+		toDelete = append(toDelete, tbl)
+		edits = append(edits, manifest.Edit{
+			Type: manifest.EditDeleteFile,
+			File: &manifest.FileMeta{Level: 0, FileID: fid},
+		})
+	}
+	l0.RUnlock()
+
+	if len(toDelete) == 0 {
+		return nil
+	}
+	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
+		return fmt.Errorf("log external sst delete edits failed: %w", err)
+	}
+	if err := l0.deleteTables(toDelete); err != nil {
+		return fmt.Errorf("delete external sst tables: %w", err)
+	}
 	return nil
 }

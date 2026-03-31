@@ -18,6 +18,7 @@ Options:
   --seed-peer ID           Peer ID used during migrate init (required)
   --target SPEC            Target peer rollout in <store>:<peer>[@addr] form; may be repeated
   --pd-listen ADDR         PD gRPC listen/address override
+  --snapshot-format NAME   Snapshot transport used by migrate expand: sst or logical (default: sst)
   --wait DURATION          Wait timeout passed to migrate commands (default: 30s)
   --poll-interval DURATION Poll interval passed to migrate commands (default: 200ms)
   --transfer-leader PEER   Optional peer ID to transfer leadership to after expansion
@@ -45,6 +46,7 @@ PD_LISTEN=""
 PD_LISTEN_SET=0
 WAIT_TIMEOUT="30s"
 POLL_INTERVAL="200ms"
+SNAPSHOT_FORMAT="sst"
 DRY_RUN=0
 RAFT_DEBUG=1
 TRANSFER_LEADER_PEER=""
@@ -83,6 +85,10 @@ while [[ $# -gt 0 ]]; do
     --pd-listen)
       PD_LISTEN=$2
       PD_LISTEN_SET=1
+      shift 2
+      ;;
+    --snapshot-format)
+      SNAPSHOT_FORMAT=$2
       shift 2
       ;;
     --wait)
@@ -205,6 +211,7 @@ write_report() {
     echo "Seed peer:         $SEED_PEER_ID"
     echo "PD address:        $PD_LISTEN"
     echo "Leader admin:      $leader_admin_addr"
+    echo "Snapshot format:   $SNAPSHOT_FORMAT"
     echo "Wait timeout:      $WAIT_TIMEOUT"
     echo "Poll interval:     $POLL_INTERVAL"
     echo "Targets:"
@@ -384,6 +391,7 @@ mkdir -p "$ROOT_DIR/artifacts/migration"
 
 stage "Preflight"
 info "seed workdir: $WORKDIR"
+info "snapshot format: $SNAPSHOT_FORMAT"
 info "targets: ${EXPAND_TARGETS[*]}"
 run_cmd nokv migrate plan --workdir "$WORKDIR"
 
@@ -433,7 +441,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
 fi
 
 stage "Expand Seed Region"
-expand_cmd=(nokv migrate expand --workdir "$WORKDIR" --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --wait "$WAIT_TIMEOUT" --poll-interval "$POLL_INTERVAL")
+expand_cmd=(nokv migrate expand --workdir "$WORKDIR" --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --snapshot-format "$SNAPSHOT_FORMAT" --wait "$WAIT_TIMEOUT" --poll-interval "$POLL_INTERVAL")
 for target in "${EXPAND_TARGETS[@]}"; do
   expand_cmd+=(--target "$target")
 done

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/feichai0017/NoKV/pb"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 )
 
@@ -390,6 +391,7 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	workDir := fs.String("workdir", "", "optional seed workdir used to persist migration rollout checkpoints")
 	addr := fs.String("addr", "", "leader store admin address")
 	regionID := fs.Uint64("region", 0, "region id")
+	snapshotFormat := fs.String("snapshot-format", "sst", "snapshot transport format: sst or logical")
 	var targets peerTargetsFlag
 	fs.Var(&targets, "target", "peer rollout target in <store>:<peer>[@addr] form; may be repeated")
 	waitTimeout := fs.Duration("wait", 30*time.Second, "how long to wait for peer publication/hosting; 0 disables waiting")
@@ -402,12 +404,17 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 
 	ctx := context.Background()
 	cfg := migratepkg.ExpandConfig{
-		WorkDir:      strings.TrimSpace(*workDir),
-		Addr:         strings.TrimSpace(*addr),
-		RegionID:     *regionID,
-		WaitTimeout:  *waitTimeout,
-		PollInterval: *pollInterval,
-		Targets:      targets,
+		WorkDir:           strings.TrimSpace(*workDir),
+		Addr:              strings.TrimSpace(*addr),
+		RegionID:          *regionID,
+		SnapshotFormat:    parseRegionSnapshotFormat(strings.TrimSpace(*snapshotFormat)),
+		SnapshotFormatSet: true,
+		WaitTimeout:       *waitTimeout,
+		PollInterval:      *pollInterval,
+		Targets:           targets,
+	}
+	if cfg.SnapshotFormat == pb.RegionSnapshotFormat(-1) {
+		return fmt.Errorf("unsupported --snapshot-format %q", *snapshotFormat)
 	}
 	if len(targets) == 0 {
 		return fmt.Errorf("at least one --target <store>:<peer>[@addr] is required")
@@ -421,11 +428,23 @@ func runMigrateExpandCmd(w io.Writer, args []string) error {
 	}
 	_, _ = fmt.Fprintf(w, "LeaderAddr        %s\n", result.Addr)
 	_, _ = fmt.Fprintf(w, "Region            %d\n", result.RegionID)
+	_, _ = fmt.Fprintf(w, "SnapshotFormat    %s\n", strings.ToLower(cfg.SnapshotFormat.String()))
 	for i, step := range result.Results {
 		_, _ = fmt.Fprintf(w, "Step[%d]           store=%d peer=%d hosted=%t applied=%d\n",
 			i, step.StoreID, step.PeerID, step.TargetHosted, step.TargetAppliedIdx)
 	}
 	return nil
+}
+
+func parseRegionSnapshotFormat(raw string) pb.RegionSnapshotFormat {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "logical":
+		return pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_LOGICAL
+	case "sst":
+		return pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST
+	default:
+		return pb.RegionSnapshotFormat(-1)
+	}
 }
 
 func runMigrateRemovePeerCmd(w io.Writer, args []string) error {

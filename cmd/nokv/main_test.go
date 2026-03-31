@@ -16,6 +16,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
+	"github.com/feichai0017/NoKV/pb"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -1146,6 +1147,7 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, cfg.SnapshotFormat)
 		require.Equal(t, 5*time.Second, cfg.WaitTimeout)
 		require.Equal(t, 100*time.Millisecond, cfg.PollInterval)
 		require.Len(t, cfg.Targets, 1)
@@ -1175,6 +1177,7 @@ func TestRunMigrateExpandCmd(t *testing.T) {
 		"-addr", "127.0.0.1:20160",
 		"-region", "9",
 		"-target", "2:22@127.0.0.1:20161",
+		"-snapshot-format", "sst",
 		"-wait", "5s",
 		"-poll-interval", "100ms",
 		"-json",
@@ -1197,6 +1200,7 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 		require.Equal(t, "/tmp/store-1", cfg.WorkDir)
 		require.Equal(t, "127.0.0.1:20160", cfg.Addr)
 		require.Equal(t, uint64(9), cfg.RegionID)
+		require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, cfg.SnapshotFormat)
 		require.Len(t, cfg.Targets, 2)
 		require.Equal(t, migratepkg.PeerTarget{StoreID: 2, PeerID: 22, TargetAdminAddr: "127.0.0.1:20161"}, cfg.Targets[0])
 		require.Equal(t, migratepkg.PeerTarget{StoreID: 3, PeerID: 33, TargetAdminAddr: "127.0.0.1:20162"}, cfg.Targets[1])
@@ -1228,6 +1232,32 @@ func TestRunMigrateExpandCmdMultiTarget(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
 	results := payload["results"].([]any)
 	require.Len(t, results, 2)
+}
+
+func TestRunMigrateExpandCmdLogicalFallback(t *testing.T) {
+	origExpand := runExpand
+	runExpand = func(ctx context.Context, cfg migratepkg.ExpandConfig) (migratepkg.ExpandResultSet, error) {
+		require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_LOGICAL, cfg.SnapshotFormat)
+		require.True(t, cfg.SnapshotFormatSet)
+		return migratepkg.ExpandResultSet{
+			Addr:     cfg.Addr,
+			RegionID: cfg.RegionID,
+		}, nil
+	}
+	t.Cleanup(func() {
+		runExpand = origExpand
+	})
+
+	var buf bytes.Buffer
+	err := runMigrateExpandCmd(&buf, []string{
+		"-workdir", "/tmp/store-1",
+		"-addr", "127.0.0.1:20160",
+		"-region", "9",
+		"-target", "2:22@127.0.0.1:20161",
+		"-snapshot-format", "logical",
+		"-json",
+	})
+	require.NoError(t, err)
 }
 
 func TestRunMigrateRemovePeerCmd(t *testing.T) {

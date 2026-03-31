@@ -6,6 +6,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -101,5 +102,55 @@ func TestMigrationFlowEndToEnd(t *testing.T) {
 
 	seedStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 1)
 	require.False(t, seedStatus.GetHosted())
+	testcluster.AssertValue(t, target2.DB, largeKey, largeValue)
+}
+
+func TestMigrationExpandWithSSTSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	seedDir := t.TempDir()
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+		opt.ValueThreshold = 16
+	})
+	smallKey := []byte("sst-small")
+	smallValue := []byte("small-value")
+	largeKey := []byte("sst-large")
+	largeValue := make([]byte, 4096)
+	for i := range largeValue {
+		largeValue[i] = byte('k' + (i % 11))
+	}
+	require.NoError(t, standalone.Set(smallKey, smallValue))
+	require.NoError(t, standalone.Set(largeKey, largeValue))
+	require.NoError(t, standalone.Close())
+
+	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
+	require.NoError(t, err)
+
+	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
+	defer target2.Close(t)
+	defer seed.Close(t)
+
+	seed.WirePeers(map[uint64]string{201: target2.Addr()})
+	target2.WirePeers(map[uint64]string{101: seed.Addr()})
+
+	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 1, 101)
+
+	expandResult, err := migrate.Expand(ctx, migrate.ExpandConfig{
+		Addr:              seed.Addr(),
+		RegionID:          1,
+		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
+		SnapshotFormatSet: true,
+		WaitTimeout:       5 * time.Second,
+		PollInterval:      20 * time.Millisecond,
+		Targets:           []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}},
+	})
+	require.NoError(t, err)
+	require.Len(t, expandResult.Results, 1)
+	require.True(t, expandResult.Results[0].TargetHosted)
+	require.Greater(t, expandResult.Results[0].TargetAppliedIdx, uint64(0))
+
+	testcluster.AssertValue(t, target2.DB, smallKey, smallValue)
 	testcluster.AssertValue(t, target2.DB, largeKey, largeValue)
 }
