@@ -17,8 +17,8 @@ const (
 	sstTablesDirName = "tables"
 )
 
-// SSTTableMeta describes one SST file inside a region snapshot.
-type SSTTableMeta struct {
+// TableMeta describes one SST file inside a region snapshot.
+type TableMeta struct {
 	RelativePath string `json:"relative_path"`
 	SmallestKey  []byte `json:"smallest_key"`
 	LargestKey   []byte `json:"largest_key"`
@@ -27,55 +27,61 @@ type SSTTableMeta struct {
 	ValueBytes   uint64 `json:"value_bytes"`
 }
 
-// SSTMeta describes one region-scoped SST snapshot.
-type SSTMeta struct {
+// Meta describes one region-scoped SST snapshot.
+type Meta struct {
 	Version      uint32              `json:"version"`
 	Region       raftmeta.RegionMeta `json:"region"`
 	EntryCount   uint64              `json:"entry_count"`
 	TableCount   uint64              `json:"table_count"`
 	InlineValues bool                `json:"inline_values"`
-	Tables       []SSTTableMeta      `json:"tables"`
+	Tables       []TableMeta         `json:"tables"`
 	CreatedAt    time.Time           `json:"created_at"`
 }
 
-// SSTExportResult reports the persisted snapshot metadata after a successful export.
-type SSTExportResult struct {
-	Meta SSTMeta
+// ExportResult reports the persisted snapshot metadata after a successful export.
+type ExportResult struct {
+	Meta Meta
 }
 
-// Bridge is the high-level snapshot bridge exposed by the storage engine to
-// raftstore wiring.
+// Bridge is the high-level region-snapshot bridge exposed by the storage
+// engine to raftstore wiring.
+//
+// ImportSnapshot returns the full staged-import result so callers that need a
+// simple region metadata view can read result.Meta.Region, while install paths
+// can still roll back imported SST files before peer publish completes.
 type Bridge interface {
 	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
-	InstallSnapshot(payload []byte) (raftmeta.RegionMeta, error)
+	ImportSnapshot(payload []byte) (*ImportResult, error)
 }
 
-// SSTImportResult reports one successful SST snapshot install.
-type SSTImportResult struct {
-	Meta            SSTMeta
+// ImportResult reports one successful staged SST snapshot import.
+// The caller may still need to publish higher-level peer metadata before the
+// install becomes visible as one hosted raft peer.
+type ImportResult struct {
+	Meta            Meta
 	ImportedTables  uint64
 	ImportedBytes   uint64
 	ImportedFileIDs []uint64
 }
 
-// ReadSSTMeta loads one SST snapshot metadata file from dir.
-func ReadSSTMeta(dir string, fs vfs.FS) (SSTMeta, error) {
+// ReadMeta loads one SST snapshot metadata file from dir.
+func ReadMeta(dir string, fs vfs.FS) (Meta, error) {
 	fs = vfs.Ensure(fs)
 	data, err := fs.ReadFile(filepath.Join(dir, sstSnapshotName))
 	if err != nil {
-		return SSTMeta{}, fmt.Errorf("snapshot: read sst meta %s: %w", filepath.Join(dir, sstSnapshotName), err)
+		return Meta{}, fmt.Errorf("snapshot: read sst meta %s: %w", filepath.Join(dir, sstSnapshotName), err)
 	}
-	var meta SSTMeta
+	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return SSTMeta{}, fmt.Errorf("snapshot: decode sst meta %s: %w", filepath.Join(dir, sstSnapshotName), err)
+		return Meta{}, fmt.Errorf("snapshot: decode sst meta %s: %w", filepath.Join(dir, sstSnapshotName), err)
 	}
 	if meta.Version != sstVersion {
-		return SSTMeta{}, fmt.Errorf("snapshot: unsupported sst version %d", meta.Version)
+		return Meta{}, fmt.Errorf("snapshot: unsupported sst version %d", meta.Version)
 	}
 	return meta, nil
 }
 
-func writeSSTMeta(path string, meta *SSTMeta, fs vfs.FS) error {
+func writeMeta(path string, meta *Meta, fs vfs.FS) error {
 	fs = vfs.Ensure(fs)
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

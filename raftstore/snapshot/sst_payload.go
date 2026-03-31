@@ -16,31 +16,31 @@ import (
 
 // ExportSSTPayload materializes one SST snapshot and bundles it into
 // a transport-safe payload.
-func ExportSSTPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, SSTMeta, error) {
+func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, Meta, error) {
 	dir, cleanup, err := prepareSnapshotTempDir(workDir, "sst-export-*", fs)
 	if err != nil {
-		return nil, SSTMeta{}, err
+		return nil, Meta{}, err
 	}
 	defer cleanup()
 	snapshotDir := filepath.Join(dir, "snapshot")
-	result, err := ExportSST(src, snapshotDir, region, fs)
+	result, err := ExportFiles(src, snapshotDir, region, fs)
 	if err != nil {
-		return nil, SSTMeta{}, err
+		return nil, Meta{}, err
 	}
 	payload, err := bundleSSTPayload(snapshotDir, result.Meta, fs)
 	if err != nil {
-		return nil, SSTMeta{}, err
+		return nil, Meta{}, err
 	}
 	return payload, result.Meta, nil
 }
 
 // ImportSSTPayload unpacks one SST snapshot payload into a temporary workdir
 // and installs it through the external SST ingest path.
-func ImportSSTPayload(dst installSink, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
+func ImportPayload(dst installSink, workDir string, payload []byte, fs vfs.FS) (*ImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst payload requires sink")
 	}
-	meta, err := ReadSSTPayloadMeta(payload)
+	meta, err := ReadPayloadMeta(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -53,27 +53,13 @@ func ImportSSTPayload(dst installSink, workDir string, payload []byte, fs vfs.FS
 	if err := unpackSSTPayload(payload, snapshotDir, meta, fs); err != nil {
 		return nil, err
 	}
-	return ImportSST(dst, snapshotDir, fs)
-}
-
-// StageSnapshot installs one snapshot payload through the engine's external
-// SST ingest path and returns import state that can be rolled back before
-// higher-level metadata is published.
-func StageSnapshot(bridge Bridge, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
-	if bridge == nil {
-		return nil, fmt.Errorf("snapshot: stage snapshot requires bridge")
-	}
-	dst, ok := any(bridge).(installSink)
-	if !ok {
-		return nil, fmt.Errorf("snapshot: bridge does not support staged snapshot install")
-	}
-	return ImportSSTPayload(dst, workDir, payload, fs)
+	return ImportFiles(dst, snapshotDir, fs)
 }
 
 // ReadSSTPayloadMeta decodes only the metadata embedded in one SST snapshot payload.
-func ReadSSTPayloadMeta(payload []byte) (SSTMeta, error) {
+func ReadPayloadMeta(payload []byte) (Meta, error) {
 	if len(payload) == 0 {
-		return SSTMeta{}, fmt.Errorf("snapshot: empty sst payload")
+		return Meta{}, fmt.Errorf("snapshot: empty sst payload")
 	}
 	tr := tar.NewReader(bytes.NewReader(payload))
 	for {
@@ -82,28 +68,28 @@ func ReadSSTPayloadMeta(payload []byte) (SSTMeta, error) {
 			break
 		}
 		if err != nil {
-			return SSTMeta{}, fmt.Errorf("snapshot: read sst payload tar: %w", err)
+			return Meta{}, fmt.Errorf("snapshot: read sst payload tar: %w", err)
 		}
 		if filepath.Clean(hdr.Name) != sstSnapshotName {
 			continue
 		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
-			return SSTMeta{}, fmt.Errorf("snapshot: read sst payload meta: %w", err)
+			return Meta{}, fmt.Errorf("snapshot: read sst payload meta: %w", err)
 		}
-		var meta SSTMeta
+		var meta Meta
 		if err := json.Unmarshal(data, &meta); err != nil {
-			return SSTMeta{}, fmt.Errorf("snapshot: decode sst payload meta: %w", err)
+			return Meta{}, fmt.Errorf("snapshot: decode sst payload meta: %w", err)
 		}
 		if meta.Version != sstVersion {
-			return SSTMeta{}, fmt.Errorf("snapshot: unsupported sst version %d", meta.Version)
+			return Meta{}, fmt.Errorf("snapshot: unsupported sst version %d", meta.Version)
 		}
 		return meta, nil
 	}
-	return SSTMeta{}, fmt.Errorf("snapshot: sst payload missing %s", sstSnapshotName)
+	return Meta{}, fmt.Errorf("snapshot: sst payload missing %s", sstSnapshotName)
 }
 
-func bundleSSTPayload(dir string, meta SSTMeta, fs vfs.FS) ([]byte, error) {
+func bundleSSTPayload(dir string, meta Meta, fs vfs.FS) ([]byte, error) {
 	fs = vfs.Ensure(fs)
 	var payload bytes.Buffer
 	tw := tar.NewWriter(&payload)
@@ -145,7 +131,7 @@ func bundleSSTPayload(dir string, meta SSTMeta, fs vfs.FS) ([]byte, error) {
 	return payload.Bytes(), nil
 }
 
-func unpackSSTPayload(payload []byte, dir string, meta SSTMeta, fs vfs.FS) error {
+func unpackSSTPayload(payload []byte, dir string, meta Meta, fs vfs.FS) error {
 	fs = vfs.Ensure(fs)
 	if err := fs.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("snapshot: create sst snapshot dir %s: %w", dir, err)
@@ -184,7 +170,7 @@ func unpackSSTPayload(payload []byte, dir string, meta SSTMeta, fs vfs.FS) error
 			return fmt.Errorf("snapshot: close sst snapshot file %s: %w", targetPath, err)
 		}
 	}
-	if _, err := ReadSSTMeta(dir, fs); err != nil {
+	if _, err := ReadMeta(dir, fs); err != nil {
 		return err
 	}
 	for _, table := range meta.Tables {

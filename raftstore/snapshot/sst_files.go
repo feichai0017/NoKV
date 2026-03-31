@@ -17,7 +17,7 @@ import (
 type exportSource interface {
 	NewInternalIterator(opt *utils.Options) utils.Iterator
 	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
-	SSTOptions() *lsm.Options
+	ExternalSSTOptions() *lsm.Options
 }
 
 type installSink interface {
@@ -27,14 +27,14 @@ type installSink interface {
 
 // ExportSST persists one region snapshot as one or more self-contained
 // SST files. Phase one emits a single table with inline values only.
-func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*SSTExportResult, error) {
+func ExportFiles(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires source")
 	}
 	if dir == "" {
 		return nil, fmt.Errorf("snapshot: export sst requires dir")
 	}
-	opt := src.SSTOptions()
+	opt := src.ExternalSSTOptions()
 	if opt == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires lsm options")
 	}
@@ -64,7 +64,7 @@ func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.
 	if err != nil {
 		return nil, err
 	}
-	meta := SSTMeta{
+	meta := Meta{
 		Version:      sstVersion,
 		Region:       raftmeta.CloneRegionMeta(region),
 		InlineValues: true,
@@ -83,7 +83,7 @@ func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.
 		}
 		meta.EntryCount = tableMeta.EntryCount
 		meta.TableCount = 1
-		meta.Tables = []SSTTableMeta{{
+		meta.Tables = []TableMeta{{
 			RelativePath: filepath.Join(sstTablesDirName, filepath.Base(tableMeta.Path)),
 			SmallestKey:  kv.SafeCopy(nil, tableMeta.SmallestKey),
 			LargestKey:   kv.SafeCopy(nil, tableMeta.LargestKey),
@@ -93,7 +93,7 @@ func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.
 		}}
 	}
 
-	if err := writeSSTMeta(filepath.Join(tmpDir, sstSnapshotName), &meta, fs); err != nil {
+	if err := writeMeta(filepath.Join(tmpDir, sstSnapshotName), &meta, fs); err != nil {
 		return nil, err
 	}
 	if err := vfs.SyncDir(fs, tmpDir); err != nil {
@@ -106,17 +106,17 @@ func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.
 		return nil, fmt.Errorf("snapshot: sync export sst parent %s: %w", parent, err)
 	}
 	success = true
-	return &SSTExportResult{Meta: meta}, nil
+	return &ExportResult{Meta: meta}, nil
 }
 
 // ImportSST installs one SST snapshot directory through the engine's external
 // table ingest path.
-func ImportSST(dst installSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
+func ImportFiles(dst installSink, dir string, fs vfs.FS) (*ImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst requires sink")
 	}
 	fs = vfs.Ensure(fs)
-	meta, err := ReadSSTMeta(dir, fs)
+	meta, err := ReadMeta(dir, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -135,9 +135,9 @@ func ImportSST(dst installSink, dir string, fs vfs.FS) (*SSTImportResult, error)
 		importedBytes += uint64(stat.Size())
 	}
 	if len(paths) == 0 {
-		return &SSTImportResult{Meta: meta}, nil
+		return &ImportResult{Meta: meta}, nil
 	}
-	result := &SSTImportResult{
+	result := &ImportResult{
 		Meta:           meta,
 		ImportedTables: uint64(len(paths)),
 		ImportedBytes:  importedBytes,
@@ -156,7 +156,7 @@ func ImportSST(dst installSink, dir string, fs vfs.FS) (*SSTImportResult, error)
 }
 
 // Rollback removes previously imported SST tables from the destination engine.
-func (r *SSTImportResult) Rollback(dst any) error {
+func (r *ImportResult) Rollback(dst any) error {
 	if r == nil || len(r.ImportedFileIDs) == 0 {
 		return nil
 	}

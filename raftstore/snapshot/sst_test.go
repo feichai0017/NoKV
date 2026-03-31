@@ -39,13 +39,13 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 		State:    raftmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
-	result, err := snapshot.ExportSST(srcDB, snapshotDir, region, nil)
+	result, err := srcDB.ExportFiles(snapshotDir, region)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), result.Meta.EntryCount)
 	require.Equal(t, uint64(1), result.Meta.TableCount)
 	require.True(t, result.Meta.InlineValues)
 
-	meta, err := snapshot.ReadSSTMeta(snapshotDir, nil)
+	meta, err := snapshot.ReadMeta(snapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, result.Meta.EntryCount, meta.EntryCount)
 	require.Len(t, meta.Tables, 1)
@@ -53,7 +53,7 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportSST(dstLSM, snapshotDir, nil)
+	imported, err := snapshot.ImportFiles(dstLSM, snapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
 	require.NotZero(t, imported.ImportedBytes)
@@ -89,19 +89,18 @@ func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	payload, meta, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, nil)
+	payload, err := srcDB.ExportSnapshot(region)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
-	require.Equal(t, uint64(2), meta.EntryCount)
 
-	readMeta, err := snapshot.ReadSSTPayloadMeta(payload)
+	readMeta, err := snapshot.ReadPayloadMeta(payload)
 	require.NoError(t, err)
-	require.Equal(t, meta.EntryCount, readMeta.EntryCount)
-	require.Equal(t, meta.Region.ID, readMeta.Region.ID)
+	require.Equal(t, uint64(2), readMeta.EntryCount)
+	require.Equal(t, region.ID, readMeta.Region.ID)
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload, nil)
+	imported, err := snapshot.ImportPayload(dstLSM, t.TempDir(), payload, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
 	for _, entry := range entries {
@@ -134,12 +133,12 @@ func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	payload, _, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, nil)
+	payload, err := srcDB.ExportSnapshot(region)
 	require.NoError(t, err)
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload, nil)
+	imported, err := snapshot.ImportPayload(dstLSM, t.TempDir(), payload, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, imported.ImportedFileIDs)
 
@@ -167,13 +166,13 @@ func TestReadSSTPayloadMetaRejectsMissingMeta(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tw.Close())
 
-	_, err = snapshot.ReadSSTPayloadMeta(payload.Bytes())
+	_, err = snapshot.ReadPayloadMeta(payload.Bytes())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing sst-snapshot.json")
 }
 
 func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
-	meta := snapshot.SSTMeta{
+	meta := snapshot.Meta{
 		Version: 1,
 		Region: raftmeta.RegionMeta{
 			ID:       41,
@@ -184,7 +183,7 @@ func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
 		EntryCount:   1,
 		TableCount:   1,
 		InlineValues: true,
-		Tables: []snapshot.SSTTableMeta{{
+		Tables: []snapshot.TableMeta{{
 			RelativePath: "tables/000001.sst",
 			SmallestKey:  []byte("a"),
 			LargestKey:   []byte("z"),
@@ -210,13 +209,13 @@ func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
 
-	_, err = snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
+	_, err = snapshot.ImportPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing table")
 }
 
 func TestImportSSTPayloadRejectsAbsolutePath(t *testing.T) {
-	meta := snapshot.SSTMeta{
+	meta := snapshot.Meta{
 		Version: 1,
 		Region: raftmeta.RegionMeta{
 			ID:       42,
@@ -249,7 +248,7 @@ func TestImportSSTPayloadRejectsAbsolutePath(t *testing.T) {
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
 
-	_, err = snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
+	_, err = snapshot.ImportPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid sst snapshot path")
 }
@@ -268,7 +267,7 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires open db")
 
-	_, err = db.InstallSnapshot([]byte("not-a-real-payload"))
+	_, err = db.ImportSnapshot([]byte("not-a-real-payload"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires open db")
 }

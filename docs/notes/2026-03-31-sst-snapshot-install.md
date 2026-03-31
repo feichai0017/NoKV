@@ -48,12 +48,12 @@ The current implementation is split across:
 - `raftstore/migrate/expand.go`
 - `raftstore/store/peer_lifecycle.go`
 - `lsm/external_sst.go`
-- `db_external_sst.go`
+- `db_snapshot.go`
 
 The raftstore wiring now talks to a narrow snapshot bridge:
 
 - `ExportSnapshot(...)`
-- `InstallSnapshot(...)`
+- `ImportSnapshot(...)`
 
 That bridge keeps peer/admin wiring at the region-snapshot level while the LSM
 layer continues to own raw `ExportExternalSST(...)`,
@@ -121,6 +121,27 @@ The first SST-based migration snapshot should be:
 The implemented snapshot SST export materializes values inline inside the exported snapshot tables, even if the source DB currently stores some values behind `ValuePtr`.
 
 This avoids dragging value-log replication into phase one.
+
+## Why `ImportSnapshot` Returns A Rich Result
+
+`ImportSnapshot(...)` intentionally returns the full staged-import result, not
+just region metadata.
+
+The admin/install path needs to:
+
+1. import SST files into the target engine
+2. attempt peer publish / hosting
+3. if publish fails, roll back the imported SST files
+
+So the single import primitive must surface:
+
+- `result.Meta.Region`
+- `result.ImportedFileIDs`
+- `result.Rollback(...)`
+
+This keeps rollback state available without re-exposing raw external-SST
+details to raftstore wiring, while simple callers can still just read
+`result.Meta.Region`.
 
 ## What looked easy but is wrong
 
