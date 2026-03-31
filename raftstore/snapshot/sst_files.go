@@ -14,12 +14,20 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
+// exportSource is the minimal data-source view needed to build one region
+// snapshot on disk. It lets the snapshot code:
+// 1. scan the region's internal entries,
+// 2. materialize separated values back into inline values, and
+// 3. reuse the live engine's external-SST-compatible table options.
 type exportSource interface {
 	NewInternalIterator(opt *utils.Options) utils.Iterator
 	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
 	ExternalSSTOptions() *lsm.Options
 }
 
+// installSink is the minimal install target needed to ingest one prepared
+// snapshot directory. Export is intentionally absent here because import and
+// rollback are the only destination-side actions.
 type installSink interface {
 	ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
 	RollbackExternalSST(fileIDs []uint64) error
