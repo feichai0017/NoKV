@@ -19,14 +19,12 @@ type PeerTarget struct {
 
 // ExpandConfig defines one seed-region expansion request.
 type ExpandConfig struct {
-	WorkDir           string
-	Addr              string
-	RegionID          uint64
-	SnapshotFormat    pb.RegionSnapshotFormat
-	SnapshotFormatSet bool
-	WaitTimeout       time.Duration
-	PollInterval      time.Duration
-	Targets           []PeerTarget
+	WorkDir      string
+	Addr         string
+	RegionID     uint64
+	WaitTimeout  time.Duration
+	PollInterval time.Duration
+	Targets      []PeerTarget
 
 	Dial DialFunc
 }
@@ -68,9 +66,6 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 	}
 	if cfg.Dial == nil {
 		cfg.Dial = defaultDial
-	}
-	if !cfg.SnapshotFormatSet {
-		cfg.SnapshotFormat = pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultExpandPollInterval
@@ -183,7 +178,6 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	}
 	snapshotResp, err := leaderClient.ExportRegionSnapshot(waitCtx, &pb.ExportRegionSnapshotRequest{
 		RegionId: cfg.RegionID,
-		Format:   cfg.SnapshotFormat,
 	})
 	if err != nil {
 		return result, fmt.Errorf("migrate: export region %d snapshot from %s: %w", cfg.RegionID, cfg.Addr, err)
@@ -196,7 +190,6 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	}
 	if _, err := targetClient.InstallRegionSnapshot(waitCtx, &pb.InstallRegionSnapshotRequest{
 		Snapshot: snapshotResp.GetSnapshot(),
-		Format:   cfg.SnapshotFormat,
 	}); err != nil {
 		return result, fmt.Errorf("migrate: install region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
 	}

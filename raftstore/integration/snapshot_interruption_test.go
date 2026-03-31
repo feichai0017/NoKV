@@ -6,7 +6,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -114,13 +113,11 @@ func TestExpandSSTSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 	defer failpoints.Set(failpoints.None)
 
 	_, err = migrate.Expand(ctx, migrate.ExpandConfig{
-		Addr:              seed.Addr(),
-		RegionID:          61,
-		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
-		SnapshotFormatSet: true,
-		WaitTimeout:       2 * time.Second,
-		PollInterval:      20 * time.Millisecond,
-		Targets:           []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
+		Addr:         seed.Addr(),
+		RegionID:     61,
+		WaitTimeout:  2 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "after snapshot apply before publish")
@@ -138,13 +135,11 @@ func TestExpandSSTSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 
 	failpoints.Set(failpoints.None)
 	result, err := migrate.Expand(ctx, migrate.ExpandConfig{
-		Addr:              seed.Addr(),
-		RegionID:          61,
-		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
-		SnapshotFormatSet: true,
-		WaitTimeout:       5 * time.Second,
-		PollInterval:      20 * time.Millisecond,
-		Targets:           []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
+		Addr:         seed.Addr(),
+		RegionID:     61,
+		WaitTimeout:  5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
