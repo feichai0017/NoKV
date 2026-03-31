@@ -14,7 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
-// ExportSSTPayload materializes one SST snapshot and bundles it into
+// ExportPayload materializes one SST snapshot and bundles it into
 // a transport-safe payload.
 func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, Meta, error) {
 	dir, cleanup, err := prepareSnapshotTempDir(workDir, "sst-export-*", fs)
@@ -34,8 +34,8 @@ func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta,
 	return payload, result.Meta, nil
 }
 
-// ImportSSTPayload unpacks one SST snapshot payload into a temporary workdir
-// and installs it through the external SST ingest path.
+// ImportPayload unpacks one SST snapshot payload into a temporary workdir and
+// installs it through the external SST ingest path.
 func ImportPayload(dst installSink, workDir string, payload []byte, fs vfs.FS) (*ImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst payload requires sink")
@@ -56,7 +56,7 @@ func ImportPayload(dst installSink, workDir string, payload []byte, fs vfs.FS) (
 	return ImportFiles(dst, snapshotDir, fs)
 }
 
-// ReadSSTPayloadMeta decodes only the metadata embedded in one SST snapshot payload.
+// ReadPayloadMeta decodes only the metadata embedded in one snapshot payload.
 func ReadPayloadMeta(payload []byte) (Meta, error) {
 	if len(payload) == 0 {
 		return Meta{}, fmt.Errorf("snapshot: empty sst payload")

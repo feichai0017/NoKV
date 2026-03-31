@@ -25,7 +25,7 @@ type installSink interface {
 	RollbackExternalSST(fileIDs []uint64) error
 }
 
-// ExportSST persists one region snapshot as one or more self-contained
+// ExportFiles persists one region snapshot as one or more self-contained
 // SST files. Phase one emits a single table with inline values only.
 func ExportFiles(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
 	if src == nil {
@@ -109,7 +109,7 @@ func ExportFiles(src exportSource, dir string, region raftmeta.RegionMeta, fs vf
 	return &ExportResult{Meta: meta}, nil
 }
 
-// ImportSST installs one SST snapshot directory through the engine's external
+// ImportFiles installs one snapshot directory through the engine's external
 // table ingest path.
 func ImportFiles(dst installSink, dir string, fs vfs.FS) (*ImportResult, error) {
 	if dst == nil {
@@ -152,22 +152,24 @@ func ImportFiles(dst installSink, dir string, fs vfs.FS) (*ImportResult, error) 
 			result.ImportedBytes = imported.ImportedBytes
 		}
 	}
+	if len(result.ImportedFileIDs) > 0 {
+		result.rollback = func() error {
+			return dst.RollbackExternalSST(result.ImportedFileIDs)
+		}
+	}
 	return result, nil
 }
 
-// Rollback removes previously imported SST tables from the destination engine.
-func (r *ImportResult) Rollback(dst any) error {
+// Rollback removes previously imported SST tables through the rollback
+// capability captured when the snapshot was imported.
+func (r *ImportResult) Rollback() error {
 	if r == nil || len(r.ImportedFileIDs) == 0 {
 		return nil
 	}
-	if dst == nil {
-		return fmt.Errorf("snapshot: rollback sst import requires rollback target")
+	if r.rollback == nil {
+		return fmt.Errorf("snapshot: rollback is unavailable for imported files")
 	}
-	sink, ok := dst.(installSink)
-	if !ok {
-		return fmt.Errorf("snapshot: rollback target does not support external sst rollback")
-	}
-	return sink.RollbackExternalSST(r.ImportedFileIDs)
+	return r.rollback()
 }
 
 func collectMaterializedEntries(src exportSource, region raftmeta.RegionMeta) ([]*kv.Entry, error) {
