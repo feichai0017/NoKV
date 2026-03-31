@@ -929,7 +929,7 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	require.Equal(t, uint64(1), ptr.SnapshotTerm)
 	require.Equal(t, uint64(1), ptr.Committed)
 
-	manifest, err := snapshotpkg.ReadLogicalSnapshotManifest(migratepkg.SeedSnapshotDir(dir, 2), nil)
+	manifest, err := snapshotpkg.ReadSSTManifest(migratepkg.SeedSnapshotDir(dir, 2), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), manifest.Region.ID)
 	require.Greater(t, manifest.EntryCount, uint64(0))
