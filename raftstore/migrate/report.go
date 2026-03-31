@@ -33,6 +33,7 @@ type ReportResult struct {
 	ReadyForInit  bool            `json:"ready_for_init"`
 	ReadyForServe bool            `json:"ready_for_serve"`
 	NextSteps     []string        `json:"next_steps,omitempty"`
+	ResumeHint    string          `json:"resume_hint,omitempty"`
 	Plan          PlanResult      `json:"plan"`
 	Status        StatusResult    `json:"status"`
 	Cluster       *ClusterSummary `json:"cluster,omitempty"`
@@ -62,6 +63,7 @@ func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {
 		Status:        status,
 		ReadyForInit:  status.Mode == ModeStandalone && plan.Eligible,
 		ReadyForServe: status.Mode == ModeSeeded && status.StoreID != 0 && status.SeedSnapshotPresent && status.LocalCatalogRegions > 0,
+		ResumeHint:    status.ResumeHint,
 	}
 	if status.Runtime != nil {
 		result.Cluster = buildClusterSummary(status.Runtime)
