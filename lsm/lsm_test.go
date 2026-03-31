@@ -1854,7 +1854,8 @@ func TestImportExternalSST(t *testing.T) {
 	require.NoError(t, testTable.closeHandle())
 	builder.Close()
 
-	require.NoError(t, lsm.ImportExternalSST([]string{testFilePath}))
+	_, err = lsm.ImportExternalSST([]string{testFilePath})
+	require.NoError(t, err)
 	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
 	require.NoError(t, err)
 	require.NotNil(t, entry)
@@ -1883,20 +1884,20 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	// Test 1: Import file without .sst suffix (invalid file type)
 	nonSSTFile := workDir + "/99999.txt"
 	require.NoError(t, os.WriteFile(nonSSTFile, []byte("test"), 0644))
-	err = lsm.ImportExternalSST([]string{nonSSTFile})
+	_, err = lsm.ImportExternalSST([]string{nonSSTFile})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing .sst suffix")
 
 	// Test 2: Import directory path (not a file)
 	dirPath := workDir + "/test_dir"
 	require.NoError(t, os.Mkdir(dirPath, 0755))
-	err = lsm.ImportExternalSST([]string{dirPath})
+	_, err = lsm.ImportExternalSST([]string{dirPath})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "is a directory")
 
 	// Test 3: Import non-existent SST file
 	nonExistFile := workDir + "/99998.sst"
-	err = lsm.ImportExternalSST([]string{nonExistFile})
+	_, err = lsm.ImportExternalSST([]string{nonExistFile})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid external SST")
 
@@ -1923,7 +1924,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	require.NoError(t, tbl2.closeHandle())
 	builder2.Close()
 
-	err = lsm.ImportExternalSST([]string{sst1Path, sst2Path})
+	_, err = lsm.ImportExternalSST([]string{sst1Path, sst2Path})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "imported SSTs have key range overlap")
 
@@ -1938,7 +1939,8 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tblValid.closeHandle())
 	builderValid.Close()
-	require.NoError(t, lsm.ImportExternalSST([]string{validSSTPath}))
+	_, err = lsm.ImportExternalSST([]string{validSSTPath})
+	require.NoError(t, err)
 	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, []byte("b"), 1))
 	require.NoError(t, err)
 	require.NotNil(t, entry)
@@ -1957,7 +1959,7 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 	require.NoError(t, tblOverlap.closeHandle())
 	builderOverlap.Close()
 
-	err = lsm.ImportExternalSST([]string{overlapSSTPath})
+	_, err = lsm.ImportExternalSST([]string{overlapSSTPath})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "overlaps with L0 existing table")
 }
@@ -2002,7 +2004,7 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	require.NoError(t, tbl.closeHandle())
 	builder.Close()
 
-	err = lsm1.ImportExternalSST([]string{testSSTPath})
+	_, err = lsm1.ImportExternalSST([]string{testSSTPath})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "log manifest edits failed")
 
@@ -2032,7 +2034,8 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 
 	// Verify SST can be imported successfully after crash recovery
-	require.NoError(t, lsm2.ImportExternalSST([]string{testSSTPath}))
+	_, err = lsm2.ImportExternalSST([]string{testSSTPath})
+	require.NoError(t, err)
 	entry, err = lsm2.Get(kv.InternalKey(kv.CFDefault, []byte("key"), 1))
 	require.NoError(t, err)
 	require.NotNil(t, entry)
@@ -2071,7 +2074,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	builder.Close()
 
 	// Test 1: First import should succeed and key should be accessible
-	err = lsm.ImportExternalSST([]string{testSSTPath})
+	_, err = lsm.ImportExternalSST([]string{testSSTPath})
 	require.NoError(t, err)
 
 	entry, err := lsm.Get(kv.InternalKey(kv.CFDefault, testKey, 1))
@@ -2081,7 +2084,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	entry.DecrRef()
 
 	// Test 2: Re-importing the same SST file should fail
-	err = lsm.ImportExternalSST([]string{testSSTPath})
+	_, err = lsm.ImportExternalSST([]string{testSSTPath})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid external SST")
 
@@ -2092,7 +2095,7 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(dupSSTPath, content, 0644))
 
-	err = lsm.ImportExternalSST([]string{dupSSTPath})
+	_, err = lsm.ImportExternalSST([]string{dupSSTPath})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "overlaps with L0 existing table")
 }
