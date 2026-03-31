@@ -108,7 +108,7 @@ func New(cfg Config) (*Server, error) {
 
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
-	adminService := adminsvc.NewServiceWithSnapshot(st, snapshotBridge, nil)
+	adminService := adminsvc.NewServiceWithSnapshot(st, snapshotBridge)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
 		pb.RegisterRaftAdminServer(reg, adminService)
@@ -157,12 +157,19 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if !ok {
 			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 		}
+		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+			result, err := snapshotBridge.ImportSnapshot(payload)
+			if err != nil {
+				return raftmeta.RegionMeta{}, err
+			}
+			return result.Meta.Region, nil
+		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
 			Transport:      tr,
 			Apply:          kv.NewEntryApplier(storage.MVCC),
 			SnapshotExport: snapshotBridge.ExportSnapshot,
-			SnapshotApply:  snapshotBridge.InstallSnapshot,
+			SnapshotApply:  snapshotApply,
 			Storage:        peerStorage,
 			GroupID:        meta.ID,
 			Region:         raftmeta.CloneRegionMetaPtr(&meta),

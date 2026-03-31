@@ -162,7 +162,7 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 	if _, ok := s.router.Peer(msg.To); ok {
 		return nil
 	}
-	metaFile, err := snapshotpkg.ReadSSTPayloadMeta(msg.Snapshot.Data)
+	metaFile, err := snapshotpkg.ReadPayloadMeta(msg.Snapshot.Data)
 	if err != nil {
 		return fmt.Errorf("raftstore: decode sst snapshot payload meta: %w", err)
 	}
@@ -212,7 +212,7 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 	if len(snap.Data) == 0 {
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires snapshot payload")
 	}
-	metaFile, err := snapshotpkg.ReadSSTPayloadMeta(snap.Data)
+	metaFile, err := snapshotpkg.ReadPayloadMeta(snap.Data)
 	if err != nil {
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: decode install sst snapshot payload: %w", err)
 	}

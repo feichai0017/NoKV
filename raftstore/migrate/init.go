@@ -10,7 +10,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -168,7 +167,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := snapshotpkg.ExportSST(db, snapshotDir, region, nil); err != nil {
+	if _, err := db.ExportFiles(snapshotDir, region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
 	}
 	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{

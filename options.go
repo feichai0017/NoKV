@@ -361,48 +361,61 @@ func (opt *Options) normalizeInPlace() {
 	if opt.WriteBatchWait < 0 {
 		opt.WriteBatchWait = 0
 	}
-	opt.normalizeLSMOptions()
+	opt.normalizeLSMSharedOptions()
 	if opt.WALBufferSize <= 0 {
 		opt.WALBufferSize = wal.DefaultBufferSize
 	}
 }
 
-func (opt *Options) normalizeLSMOptions() {
-	cfg := &lsmpkg.Options{
-		NumCompactors:                 opt.NumCompactors,
-		NumLevelZeroTables:            opt.NumLevelZeroTables,
-		L0SlowdownWritesTrigger:       opt.L0SlowdownWritesTrigger,
-		L0StopWritesTrigger:           opt.L0StopWritesTrigger,
-		L0ResumeWritesTrigger:         opt.L0ResumeWritesTrigger,
-		CompactionSlowdownTrigger:     opt.CompactionSlowdownTrigger,
-		CompactionStopTrigger:         opt.CompactionStopTrigger,
-		CompactionResumeTrigger:       opt.CompactionResumeTrigger,
-		WriteThrottleMinRate:          opt.WriteThrottleMinRate,
-		WriteThrottleMaxRate:          opt.WriteThrottleMaxRate,
-		IngestCompactBatchSize:        opt.IngestCompactBatchSize,
-		IngestBacklogMergeScore:       opt.IngestBacklogMergeScore,
-		IngestShardParallelism:        opt.IngestShardParallelism,
-		CompactionValueWeight:         opt.CompactionValueWeight,
-		CompactionValueAlertThreshold: opt.CompactionValueAlertThreshold,
-		BlockCacheBytes:               opt.BlockCacheBytes,
-		IndexCacheBytes:               opt.IndexCacheBytes,
-	}
+func (opt *Options) normalizeLSMSharedOptions() {
+	cfg := &lsmpkg.Options{}
+	opt.applyLSMSharedOptions(cfg)
 	cfg.NormalizeInPlace()
-	opt.NumCompactors = cfg.NumCompactors
-	opt.NumLevelZeroTables = cfg.NumLevelZeroTables
-	opt.L0SlowdownWritesTrigger = cfg.L0SlowdownWritesTrigger
-	opt.L0StopWritesTrigger = cfg.L0StopWritesTrigger
-	opt.L0ResumeWritesTrigger = cfg.L0ResumeWritesTrigger
-	opt.CompactionSlowdownTrigger = cfg.CompactionSlowdownTrigger
-	opt.CompactionStopTrigger = cfg.CompactionStopTrigger
-	opt.CompactionResumeTrigger = cfg.CompactionResumeTrigger
-	opt.WriteThrottleMinRate = cfg.WriteThrottleMinRate
-	opt.WriteThrottleMaxRate = cfg.WriteThrottleMaxRate
-	opt.IngestCompactBatchSize = cfg.IngestCompactBatchSize
-	opt.IngestBacklogMergeScore = cfg.IngestBacklogMergeScore
-	opt.IngestShardParallelism = cfg.IngestShardParallelism
-	opt.CompactionValueWeight = cfg.CompactionValueWeight
-	opt.CompactionValueAlertThreshold = cfg.CompactionValueAlertThreshold
-	opt.BlockCacheBytes = cfg.BlockCacheBytes
-	opt.IndexCacheBytes = cfg.IndexCacheBytes
+	opt.copyNormalizedLSMOptions(cfg)
+}
+
+func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
+	if opt == nil || dst == nil {
+		return
+	}
+	dst.NumCompactors = opt.NumCompactors
+	dst.NumLevelZeroTables = opt.NumLevelZeroTables
+	dst.L0SlowdownWritesTrigger = opt.L0SlowdownWritesTrigger
+	dst.L0StopWritesTrigger = opt.L0StopWritesTrigger
+	dst.L0ResumeWritesTrigger = opt.L0ResumeWritesTrigger
+	dst.CompactionSlowdownTrigger = opt.CompactionSlowdownTrigger
+	dst.CompactionStopTrigger = opt.CompactionStopTrigger
+	dst.CompactionResumeTrigger = opt.CompactionResumeTrigger
+	dst.WriteThrottleMinRate = opt.WriteThrottleMinRate
+	dst.WriteThrottleMaxRate = opt.WriteThrottleMaxRate
+	dst.IngestCompactBatchSize = opt.IngestCompactBatchSize
+	dst.IngestBacklogMergeScore = opt.IngestBacklogMergeScore
+	dst.IngestShardParallelism = opt.IngestShardParallelism
+	dst.CompactionValueWeight = opt.CompactionValueWeight
+	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
+	dst.BlockCacheBytes = opt.BlockCacheBytes
+	dst.IndexCacheBytes = opt.IndexCacheBytes
+}
+
+func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
+	if opt == nil || src == nil {
+		return
+	}
+	opt.NumCompactors = src.NumCompactors
+	opt.NumLevelZeroTables = src.NumLevelZeroTables
+	opt.L0SlowdownWritesTrigger = src.L0SlowdownWritesTrigger
+	opt.L0StopWritesTrigger = src.L0StopWritesTrigger
+	opt.L0ResumeWritesTrigger = src.L0ResumeWritesTrigger
+	opt.CompactionSlowdownTrigger = src.CompactionSlowdownTrigger
+	opt.CompactionStopTrigger = src.CompactionStopTrigger
+	opt.CompactionResumeTrigger = src.CompactionResumeTrigger
+	opt.WriteThrottleMinRate = src.WriteThrottleMinRate
+	opt.WriteThrottleMaxRate = src.WriteThrottleMaxRate
+	opt.IngestCompactBatchSize = src.IngestCompactBatchSize
+	opt.IngestBacklogMergeScore = src.IngestBacklogMergeScore
+	opt.IngestShardParallelism = src.IngestShardParallelism
+	opt.CompactionValueWeight = src.CompactionValueWeight
+	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
+	opt.BlockCacheBytes = src.BlockCacheBytes
+	opt.IndexCacheBytes = src.IndexCacheBytes
 }

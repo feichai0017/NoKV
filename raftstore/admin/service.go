@@ -7,7 +7,6 @@ import (
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,23 +16,21 @@ import (
 // membership management.
 type Service struct {
 	pb.UnimplementedRaftAdminServer
-	store      *store.Store
-	snapshot   snapshotpkg.Bridge
-	snapshotFS vfs.FS
+	store    *store.Store
+	snapshot snapshotpkg.Bridge
 }
 
 // NewService constructs an admin service bound to one raftstore store.
 func NewService(st *store.Store) *Service {
-	return &Service{store: st, snapshotFS: vfs.Ensure(nil)}
+	return &Service{store: st}
 }
 
 // NewServiceWithSnapshot constructs an admin service with direct access to the
 // storage-side snapshot bridge needed for SST export/install.
-func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Bridge, fs vfs.FS) *Service {
+func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Bridge) *Service {
 	return &Service{
-		store:      st,
-		snapshot:   snapshot,
-		snapshotFS: vfs.Ensure(fs),
+		store:    st,
+		snapshot: snapshot,
 	}
 }
 
@@ -143,6 +140,10 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 
 // InstallRegionSnapshot installs one leader-exported region snapshot on the
 // local store. The local peer is bootstrapped on demand from the payload.
+//
+// The snapshot bridge returns rollback-capable import state before peer
+// publish so imported tables can still be removed if publish fails inside the
+// raftstore lifecycle.
 func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
@@ -162,12 +163,12 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 	if s.snapshot == nil {
 		return nil, status.Error(codes.FailedPrecondition, "sst snapshot install is not configured")
 	}
-	metaFile, metaErr := snapshotpkg.ReadSSTPayloadMeta(snap.Data)
+	metaFile, metaErr := snapshotpkg.ReadPayloadMeta(snap.Data)
 	if metaErr != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
 	}
 	meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), metaFile.Region, func() (func() error, error) {
-		result, importErr := snapshotpkg.StageSnapshot(s.snapshot, s.store.WorkDir(), snap.Data, s.snapshotFS)
+		result, importErr := s.snapshot.ImportSnapshot(snap.Data)
 		if importErr != nil {
 			return nil, importErr
 		}

@@ -9,6 +9,14 @@ import (
 )
 
 const (
+	// DefaultBlockSize is the default SST block size in bytes.
+	DefaultBlockSize = 8 << 10
+	// DefaultBloomFalsePositive is the default bloom filter false positive rate.
+	DefaultBloomFalsePositive = 0.01
+	// DefaultLevelSizeMultiplier is the default leveled target size ratio between levels.
+	DefaultLevelSizeMultiplier = 8
+	// DefaultTableSizeMultiplier is the default target size ratio between adjacent tables.
+	DefaultTableSizeMultiplier = 2
 	// DefaultBlockCacheBytes is the default budget for cached L0/L1 blocks.
 	DefaultBlockCacheBytes int64 = 16 << 20
 	// DefaultIndexCacheBytes is the default budget for decoded SSTable indexes.

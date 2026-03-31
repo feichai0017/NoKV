@@ -43,7 +43,11 @@ func testSSTExport(db *NoKV.DB) peer.SnapshotExportFunc {
 
 func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
 	return func(payload []byte) (raftmeta.RegionMeta, error) {
-		return db.InstallSnapshot(payload)
+		result, err := db.ImportSnapshot(payload)
+		if err != nil {
+			return raftmeta.RegionMeta{}, err
+		}
+		return result.Meta.Region, nil
 	}
 }
 
@@ -172,8 +176,8 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB, nil)
-	targetSvc := NewServiceWithSnapshot(targetStore, targetDB, nil)
+	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
+	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
 
 	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,
