@@ -1075,6 +1075,25 @@ func TestRunMigrateReportCmdPassesRemoteViewFlags(t *testing.T) {
 					AppliedTerm:     1,
 				},
 			},
+			Cluster: &migratepkg.ClusterSummary{
+				Source:          "single-admin-endpoint",
+				AdminAddr:       cfg.AdminAddr,
+				RegionID:        cfg.RegionID,
+				Known:           true,
+				Hosted:          true,
+				Leader:          true,
+				LeaderStoreID:   2,
+				LeaderPeerID:    201,
+				LocalPeerID:     201,
+				MembershipPeers: 3,
+				Membership: []migratepkg.MembershipPeerSummary{
+					{StoreID: 1, PeerID: 101},
+					{StoreID: 2, PeerID: 201},
+					{StoreID: 3, PeerID: 301},
+				},
+				AppliedIndex: 7,
+				AppliedTerm:  1,
+			},
 		}, nil
 	}
 	t.Cleanup(func() { runBuildReport = orig })
@@ -1087,6 +1106,9 @@ func TestRunMigrateReportCmdPassesRemoteViewFlags(t *testing.T) {
 		"-timeout", "2s",
 	})
 	require.NoError(t, err)
+	require.Contains(t, buf.String(), "Cluster")
+	require.Contains(t, buf.String(), "leader_store=2")
+	require.Contains(t, buf.String(), "store=3 peer=301")
 	require.Contains(t, buf.String(), "Runtime")
 	require.Contains(t, buf.String(), "leader_peer=201")
 }
