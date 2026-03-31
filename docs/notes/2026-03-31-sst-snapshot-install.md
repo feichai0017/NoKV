@@ -137,7 +137,7 @@ So the single import primitive must surface:
 
 - `result.Meta.Region`
 - `result.ImportedFileIDs`
-- `result.Rollback(...)`
+- `result.Rollback()`
 
 This keeps rollback state available without re-exposing raw external-SST
 details to raftstore wiring, while simple callers can still just read

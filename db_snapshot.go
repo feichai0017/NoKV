@@ -95,7 +95,7 @@ func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
 // DB and returns the full staged-import result.
 //
 // Callers that only need the region metadata can read result.Meta.Region.
-// Callers that publish peer metadata later can use result.Rollback(...) if the
+// Callers that publish peer metadata later can use result.Rollback() if the
 // higher-level install lifecycle fails after SST import completes.
 func (db *DB) ImportSnapshot(payload []byte) (*snapshotpkg.ImportResult, error) {
 	dst, err := db.snapshotTarget()

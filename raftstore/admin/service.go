@@ -173,7 +173,7 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 			return nil, importErr
 		}
 		if result != nil && len(result.ImportedFileIDs) > 0 {
-			return func() error { return result.Rollback(s.snapshot) }, nil
+			return result.Rollback, nil
 		}
 		return nil, nil
 	})
