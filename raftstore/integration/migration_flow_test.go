@@ -6,7 +6,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -138,13 +137,11 @@ func TestMigrationExpandWithSSTSnapshot(t *testing.T) {
 	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 1, 101)
 
 	expandResult, err := migrate.Expand(ctx, migrate.ExpandConfig{
-		Addr:              seed.Addr(),
-		RegionID:          1,
-		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
-		SnapshotFormatSet: true,
-		WaitTimeout:       5 * time.Second,
-		PollInterval:      20 * time.Millisecond,
-		Targets:           []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}},
+		Addr:         seed.Addr(),
+		RegionID:     1,
+		WaitTimeout:  5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target2.Addr()}},
 	})
 	require.NoError(t, err)
 	require.Len(t, expandResult.Results, 1)

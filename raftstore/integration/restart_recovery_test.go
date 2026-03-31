@@ -6,7 +6,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -89,13 +88,11 @@ func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
 	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 19, 101)
 
 	_, err = migrate.Expand(ctx, migrate.ExpandConfig{
-		Addr:              seed.Addr(),
-		RegionID:          19,
-		SnapshotFormat:    pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
-		SnapshotFormatSet: true,
-		WaitTimeout:       5 * time.Second,
-		PollInterval:      20 * time.Millisecond,
-		Targets:           []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
+		Addr:         seed.Addr(),
+		RegionID:     19,
+		WaitTimeout:  5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Targets:      []migrate.PeerTarget{{StoreID: 2, PeerID: 201, TargetAdminAddr: target.Addr()}},
 	})
 	require.NoError(t, err)
 	testcluster.AssertValue(t, target.DB, key, value)
