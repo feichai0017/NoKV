@@ -57,3 +57,38 @@ func TestBuildExternalSSTRejectsUnsortedEntries(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not strictly increasing")
 }
+
+func TestIngestExternalSSTRollback(t *testing.T) {
+	dir := t.TempDir()
+	opt := newTestLSMOptions(dir, nil)
+	lsm := buildTestLSM(t, opt)
+	defer func() { require.NoError(t, lsm.Close()) }()
+
+	entries := []*kv.Entry{
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("alpha"), 3), []byte("a")),
+		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("beta"), 2), []byte("b")),
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return utils.CompareInternalKeys(entries[i].Key, entries[j].Key) < 0
+	})
+
+	sstPath := filepath.Join(t.TempDir(), "external.sst")
+	_, err := BuildExternalSST(sstPath, entries, opt)
+	require.NoError(t, err)
+
+	result, err := lsm.IngestExternalSST([]string{sstPath})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.FileIDs, 1)
+
+	got, err := lsm.Get(entries[0].Key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	got.DecrRef()
+
+	require.NoError(t, lsm.RollbackExternalSST(result.FileIDs))
+
+	got, err = lsm.Get(entries[0].Key)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	require.Nil(t, got)
+}
