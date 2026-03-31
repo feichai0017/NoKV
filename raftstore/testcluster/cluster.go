@@ -364,8 +364,8 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 
 func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
-	if payloadIO, ok := any(node.DB).(snapshotpkg.PayloadIO); ok {
-		snapshotExport = payloadIO.ExportSSTPayload
+	if snapshotIO, ok := any(node.DB).(snapshotpkg.SnapshotIO); ok {
+		snapshotExport = snapshotIO.ExportSnapshot
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              peerID,
@@ -378,7 +378,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			Transport:      node.Server.Transport(),
 			Apply:          raftkv.NewEntryApplier(node.DB),
 			SnapshotExport: snapshotExport,
-			SnapshotApply:  payloadIO.ImportSSTPayload,
+			SnapshotApply:  snapshotIO.InstallSnapshot,
 			Storage:        storage,
 			GroupID:        meta.ID,
 			Region:         raftmeta.CloneRegionMetaPtr(&meta),

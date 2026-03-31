@@ -78,21 +78,21 @@ func (db *DB) RollbackExternalSST(fileIDs []uint64) error {
 	return db.lsm.RollbackExternalSST(fileIDs)
 }
 
-// ExportSSTPayload materializes one region-scoped SST snapshot payload using
-// the current DB's storage format and workdir.
-func (db *DB) ExportSSTPayload(region raftmeta.RegionMeta) ([]byte, error) {
+// ExportSnapshot materializes one region-scoped snapshot payload using the
+// current DB's storage format and workdir.
+func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
 	if db == nil {
-		return nil, fmt.Errorf("db: export sst payload requires open db")
+		return nil, fmt.Errorf("db: export snapshot requires open db")
 	}
 	payload, _, err := snapshotpkg.ExportSSTPayload(db, db.WorkDir(), region, db.SSTOptions(), nil)
 	return payload, err
 }
 
-// ImportSSTPayload installs one region-scoped SST snapshot payload into the
-// current DB and returns the region metadata carried by that payload.
-func (db *DB) ImportSSTPayload(payload []byte) (raftmeta.RegionMeta, error) {
+// InstallSnapshot installs one region-scoped snapshot payload into the current
+// DB and returns the region metadata carried by that payload.
+func (db *DB) InstallSnapshot(payload []byte) (raftmeta.RegionMeta, error) {
 	if db == nil {
-		return raftmeta.RegionMeta{}, fmt.Errorf("db: import sst payload requires open db")
+		return raftmeta.RegionMeta{}, fmt.Errorf("db: install snapshot requires open db")
 	}
 	result, err := snapshotpkg.ImportSSTPayload(db, db.WorkDir(), payload, nil)
 	if err != nil {
