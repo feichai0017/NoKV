@@ -34,6 +34,17 @@ type ExternalSSTImportResult struct {
 	ImportedBytes uint64   `json:"imported_bytes"`
 }
 
+// ExternalSSTOptions returns a normalized clone of the live LSM configuration
+// for building external SST files compatible with this instance.
+func (lsm *LSM) ExternalSSTOptions() *Options {
+	if lsm == nil || lsm.option == nil || lsm.closed.Load() {
+		return nil
+	}
+	opt := lsm.option.Clone()
+	opt.NormalizeInPlace()
+	return opt
+}
+
 // ExportExternalSST materializes one standalone SST file that can later be
 // imported through ImportExternalSST. Entries must already be detached and
 // sorted by internal key order.

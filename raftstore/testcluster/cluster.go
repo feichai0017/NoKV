@@ -366,6 +366,13 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 	var snapshotExport peer.SnapshotExportFunc
 	if snapshotBridge, ok := any(node.DB).(snapshotpkg.Bridge); ok {
 		snapshotExport = snapshotBridge.ExportSnapshot
+		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+			result, err := snapshotBridge.ImportSnapshot(payload)
+			if err != nil {
+				return raftmeta.RegionMeta{}, err
+			}
+			return result.Meta.Region, nil
+		}
 		return &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              peerID,
@@ -378,7 +385,7 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			Transport:      node.Server.Transport(),
 			Apply:          raftkv.NewEntryApplier(node.DB),
 			SnapshotExport: snapshotExport,
-			SnapshotApply:  snapshotBridge.InstallSnapshot,
+			SnapshotApply:  snapshotApply,
 			Storage:        storage,
 			GroupID:        meta.ID,
 			Region:         raftmeta.CloneRegionMetaPtr(&meta),

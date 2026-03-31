@@ -15,7 +15,11 @@ import (
 func testSSTApply(t *testing.T, db *NoKV.DB) peer.SnapshotApplyFunc {
 	t.Helper()
 	return func(payload []byte) (raftmeta.RegionMeta, error) {
-		return db.InstallSnapshot(payload)
+		result, err := db.ImportSnapshot(payload)
+		if err != nil {
+			return raftmeta.RegionMeta{}, err
+		}
+		return result.Meta.Region, nil
 	}
 }
 
