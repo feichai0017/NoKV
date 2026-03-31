@@ -3,9 +3,12 @@ package admin
 import (
 	"context"
 
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/pb"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -15,12 +18,28 @@ import (
 // membership management.
 type Service struct {
 	pb.UnimplementedRaftAdminServer
-	store *store.Store
+	store              *store.Store
+	snapshotSource     snapshotpkg.Source
+	snapshotSSTSink    snapshotpkg.SSTSink
+	snapshotLSMOptions *lsm.Options
+	snapshotFS         vfs.FS
 }
 
 // NewService constructs an admin service bound to one raftstore store.
 func NewService(st *store.Store) *Service {
-	return &Service{store: st}
+	return &Service{store: st, snapshotFS: vfs.Ensure(nil)}
+}
+
+// NewServiceWithSnapshotIO constructs an admin service with direct access to
+// the region state source/sink needed for migration-only SST snapshots.
+func NewServiceWithSnapshotIO(st *store.Store, src snapshotpkg.Source, sstSink snapshotpkg.SSTSink, opt *lsm.Options, fs vfs.FS) *Service {
+	return &Service{
+		store:              st,
+		snapshotSource:     src,
+		snapshotSSTSink:    sstSink,
+		snapshotLSMOptions: opt,
+		snapshotFS:         vfs.Ensure(fs),
+	}
 }
 
 // AddPeer issues one raft configuration change on the region leader.
@@ -109,6 +128,22 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 		return nil, status.Errorf(codes.Internal, "export region snapshot: %v", err)
 	}
 	pbSnap := raftpb.Snapshot(snap)
+	switch req.GetFormat() {
+	case pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST:
+		if s.snapshotSource == nil {
+			return nil, status.Error(codes.FailedPrecondition, "sst snapshot export is not configured")
+		}
+		if s.snapshotLSMOptions == nil {
+			return nil, status.Error(codes.FailedPrecondition, "sst snapshot export options are not configured")
+		}
+		payload, _, err := snapshotpkg.ExportSSTPayload(s.snapshotSource, s.store.WorkDir(), runtime.Meta, s.snapshotLSMOptions, s.snapshotFS)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
+		}
+		pbSnap.Data = payload
+	default:
+		// Keep logical snapshot as the compatibility fallback path.
+	}
 	data, err := (&pbSnap).Marshal()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
@@ -116,6 +151,7 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 	return &pb.ExportRegionSnapshotResponse{
 		Snapshot: data,
 		Region:   regionMetaToPB(runtime.Meta),
+		Format:   req.GetFormat(),
 	}, nil
 }
 
@@ -133,7 +169,32 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 	if err := snap.Unmarshal(req.GetSnapshot()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "unmarshal region snapshot: %v", err)
 	}
-	meta, err := s.store.InstallRegionSnapshot(raftpb.Snapshot(snap))
+	var (
+		meta raftmeta.RegionMeta
+		err  error
+	)
+	switch req.GetFormat() {
+	case pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST:
+		if s.snapshotSSTSink == nil {
+			return nil, status.Error(codes.FailedPrecondition, "sst snapshot install is not configured")
+		}
+		manifest, manifestErr := snapshotpkg.ReadSSTPayloadManifest(snap.Data)
+		if manifestErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", manifestErr)
+		}
+		meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), manifest.Region, func() (func() error, error) {
+			result, importErr := snapshotpkg.ImportSSTPayload(s.snapshotSSTSink, s.store.WorkDir(), snap.Data, s.snapshotFS)
+			if importErr != nil {
+				return nil, importErr
+			}
+			if result != nil && len(result.ImportedFileIDs) > 0 {
+				return func() error { return result.Rollback(s.snapshotSSTSink) }, nil
+			}
+			return nil, nil
+		})
+	default:
+		meta, err = s.store.InstallRegionSnapshot(raftpb.Snapshot(snap))
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}

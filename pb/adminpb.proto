@@ -35,17 +35,25 @@ message TransferLeaderResponse {
   RegionMeta region = 1;
 }
 
+enum RegionSnapshotFormat {
+  REGION_SNAPSHOT_FORMAT_LOGICAL = 0;
+  REGION_SNAPSHOT_FORMAT_SST = 1;
+}
+
 message ExportRegionSnapshotRequest {
   uint64 region_id = 1;
+  RegionSnapshotFormat format = 2;
 }
 
 message ExportRegionSnapshotResponse {
   bytes snapshot = 1;
   RegionMeta region = 2;
+  RegionSnapshotFormat format = 3;
 }
 
 message InstallRegionSnapshotRequest {
   bytes snapshot = 1;
+  RegionSnapshotFormat format = 2;
 }
 
 message InstallRegionSnapshotResponse {

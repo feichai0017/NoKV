@@ -9,6 +9,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
+	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
@@ -106,6 +107,13 @@ func New(cfg Config) (*Server, error) {
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
 	adminService := adminsvc.NewService(st)
+	if src, ok := cfg.Storage.MVCC.(snapshotpkg.Source); ok {
+		if sstSink, ok := cfg.Storage.MVCC.(snapshotpkg.SSTSink); ok {
+			if optProvider, ok := cfg.Storage.MVCC.(interface{ SSTOptions() *lsm.Options }); ok {
+				adminService = adminsvc.NewServiceWithSnapshotIO(st, src, sstSink, optProvider.SSTOptions(), nil)
+			}
+		}
+	}
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
 		pb.RegisterRaftAdminServer(reg, adminService)

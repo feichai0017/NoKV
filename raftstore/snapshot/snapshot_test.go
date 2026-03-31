@@ -174,6 +174,92 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 	}
 }
 
+func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
+	srcDB := openSnapshotDB(t)
+	defer func() { _ = srcDB.Close() }()
+
+	valueBacked := bytes.Repeat([]byte("w"), 4096)
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, []byte("alpha"), 3, []byte("a"), 0, 0),
+		kv.NewInternalEntry(kv.CFDefault, []byte("beta"), 2, valueBacked, 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	require.NoError(t, srcDB.ApplyInternalEntries(entries))
+
+	region := raftmeta.RegionMeta{
+		ID:       19,
+		StartKey: []byte("alpha"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	payload, manifest, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, payload)
+	require.Equal(t, uint64(2), manifest.EntryCount)
+
+	readManifest, err := snapshot.ReadSSTPayloadManifest(payload)
+	require.NoError(t, err)
+	require.Equal(t, manifest.EntryCount, readManifest.EntryCount)
+	require.Equal(t, manifest.Region.ID, readManifest.Region.ID)
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+	imported, err := snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), imported.ImportedTables)
+	for _, entry := range entries {
+		expected, err := srcDB.MaterializeInternalEntry(entry)
+		require.NoError(t, err)
+		got, err := dstLSM.Get(entry.Key)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, expected.Value, got.Value)
+		got.DecrRef()
+	}
+}
+
+func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
+	srcDB := openSnapshotDB(t)
+	defer func() { _ = srcDB.Close() }()
+
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, []byte("alpha"), 3, []byte("a"), 0, 0),
+		kv.NewInternalEntry(kv.CFDefault, []byte("beta"), 2, bytes.Repeat([]byte("r"), 1024), 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	require.NoError(t, srcDB.ApplyInternalEntries(entries))
+
+	region := raftmeta.RegionMeta{
+		ID:       29,
+		StartKey: []byte("alpha"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	payload, _, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
+	require.NoError(t, err)
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+	imported, err := snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, imported.ImportedFileIDs)
+
+	got, err := dstLSM.Get(entries[0].Key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	got.DecrRef()
+
+	require.NoError(t, imported.Rollback(dstLSM))
+
+	got, err = dstLSM.Get(entries[0].Key)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	require.Nil(t, got)
+}
+
 func openSnapshotDB(t testing.TB) *NoKV.DB {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()
