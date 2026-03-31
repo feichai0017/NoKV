@@ -274,21 +274,27 @@ func (n *Node) Close(tb testing.TB) {
 
 func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *pb.RegionRuntimeStatusResponse {
 	tb.Helper()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		tb.Fatalf("dial admin %s: %v", addr, err)
-	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			tb.Fatalf("close admin conn: %v", err)
-		}
-	}()
-	client := pb.NewRaftAdminClient(conn)
-	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	status, err := TryFetchRuntimeStatus(ctx, addr, regionID)
 	if err != nil {
 		tb.Fatalf("region runtime status: %v", err)
 	}
 	return status
+}
+
+func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*pb.RegionRuntimeStatusResponse, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("dial admin %s: %w", addr, err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
+	client := pb.NewRaftAdminClient(conn)
+	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	if err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
 func WaitForLeaderPeer(tb testing.TB, ctx context.Context, addr string, regionID, peerID uint64) {
@@ -364,12 +370,12 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 		MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
 	}); ok {
 		snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-			payload, _, err := snapshotpkg.ExportPayload(src, region)
+			payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(src, region)
 			return payload, err
 		}
 	}
 	snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-		result, err := snapshotpkg.ImportPayload(node.DB, payload)
+		result, err := snapshotpkg.ImportLogicalSnapshotPayload(node.DB, payload)
 		if err != nil {
 			return raftmeta.RegionMeta{}, err
 		}

@@ -66,7 +66,7 @@ func TestInitFailpointAfterCatalogPersist(t *testing.T) {
 	snapshotMap := metaStore.Snapshot()
 	require.Contains(t, snapshotMap, uint64(12))
 
-	_, err = snapshot.ReadManifest(SeedSnapshotDir(dir, 12), nil)
+	_, err = snapshot.ReadLogicalSnapshotManifest(SeedSnapshotDir(dir, 12), nil)
 	require.Error(t, err)
 }
 
@@ -92,7 +92,7 @@ func TestInitFailpointAfterSeedSnapshot(t *testing.T) {
 	snapshotMap := metaStore.Snapshot()
 	require.Contains(t, snapshotMap, uint64(13))
 
-	manifest, err := snapshot.ReadManifest(SeedSnapshotDir(dir, 13), nil)
+	manifest, err := snapshot.ReadLogicalSnapshotManifest(SeedSnapshotDir(dir, 13), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(13), manifest.Region.ID)
 
