@@ -149,3 +149,31 @@ func TestTransferLeaderWritesWorkdirCheckpoint(t *testing.T) {
 	require.Equal(t, uint64(22), status.Checkpoint.TargetPeerID)
 	require.Contains(t, status.ResumeHint, "leader transfer toward peer=22 completed")
 }
+
+func TestTransferLeaderNoWaitDoesNotLeaveStartedCheckpoint(t *testing.T) {
+	workDir := prepareStandaloneWorkdir(t)
+	_, err := Init(InitConfig{WorkDir: workDir, StoreID: 1, RegionID: 8, PeerID: 11})
+	require.NoError(t, err)
+	require.NoError(t, mode.Write(workDir, mode.State{Mode: mode.ModeCluster, StoreID: 1, RegionID: 8, PeerID: 11}))
+
+	leader := &fakeAdminClient{}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		require.Equal(t, "leader", addr)
+		return leader, func() error { return nil }, nil
+	}
+
+	_, err = TransferLeader(context.Background(), TransferLeaderConfig{
+		WorkDir:     workDir,
+		Addr:        "leader",
+		RegionID:    8,
+		PeerID:      22,
+		WaitTimeout: 0,
+		Dial:        dial,
+	})
+	require.NoError(t, err)
+
+	status, err := ReadStatus(workDir)
+	require.NoError(t, err)
+	require.NotNil(t, status.Checkpoint)
+	require.NotEqual(t, CheckpointTransferStarted, status.Checkpoint.Stage)
+}

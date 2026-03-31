@@ -70,6 +70,10 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Storage.MVCC == nil {
 		return nil, fmt.Errorf("raftstore/server: MVCC storage is required")
 	}
+	snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.Bridge)
+	if !ok {
+		return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
+	}
 	if cfg.Store.StoreID == 0 {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
 	}
@@ -104,10 +108,7 @@ func New(cfg Config) (*Server, error) {
 
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
-	adminService := adminsvc.NewService(st)
-	if snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.Bridge); ok {
-		adminService = adminsvc.NewServiceWithSnapshot(st, snapshotBridge, nil)
-	}
+	adminService := adminsvc.NewServiceWithSnapshot(st, snapshotBridge, nil)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
 		pb.RegisterRaftAdminServer(reg, adminService)
@@ -152,18 +153,16 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if err != nil {
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
-		var snapshotExport peer.SnapshotExportFunc
-		var snapshotApply peer.SnapshotApplyFunc
-		if snapshotBridge, ok := storage.MVCC.(snapshotpkg.Bridge); ok {
-			snapshotExport = snapshotBridge.ExportSnapshot
-			snapshotApply = snapshotBridge.InstallSnapshot
+		snapshotBridge, ok := storage.MVCC.(snapshotpkg.Bridge)
+		if !ok {
+			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
 			Transport:      tr,
 			Apply:          kv.NewEntryApplier(storage.MVCC),
-			SnapshotExport: snapshotExport,
-			SnapshotApply:  snapshotApply,
+			SnapshotExport: snapshotBridge.ExportSnapshot,
+			SnapshotApply:  snapshotBridge.InstallSnapshot,
 			Storage:        peerStorage,
 			GroupID:        meta.ID,
 			Region:         raftmeta.CloneRegionMetaPtr(&meta),

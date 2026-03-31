@@ -215,6 +215,64 @@ func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
 	require.Contains(t, err.Error(), "missing table")
 }
 
+func TestImportSSTPayloadRejectsAbsolutePath(t *testing.T) {
+	meta := snapshot.SSTMeta{
+		Version: 1,
+		Region: raftmeta.RegionMeta{
+			ID:       42,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			State:    raftmeta.RegionStateRunning,
+		},
+	}
+	metaBytes, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	var payload bytes.Buffer
+	tw := tar.NewWriter(&payload)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "sst-snapshot.json",
+		Mode: 0o600,
+		Size: int64(len(metaBytes)),
+	}))
+	_, err = tw.Write(metaBytes)
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "/tmp/escape.sst",
+		Mode: 0o600,
+		Size: 4,
+	}))
+	_, err = tw.Write([]byte("fake"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+
+	_, err = snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid sst snapshot path")
+}
+
+func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
+	db := openSnapshotDB(t)
+	region := raftmeta.RegionMeta{
+		ID:       43,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	require.NoError(t, db.Close())
+
+	_, err := db.ExportSnapshot(region)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires open db")
+
+	_, err = db.InstallSnapshot([]byte("not-a-real-payload"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires open db")
+}
+
 func openSnapshotDB(t testing.TB) *NoKV.DB {
 	t.Helper()
 	opt := NoKV.NewDefaultOptions()

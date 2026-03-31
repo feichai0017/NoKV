@@ -99,8 +99,11 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 	}
 
 	renamed := false
+	closed := false
 	defer func() {
-		_ = tmp.Close()
+		if !closed {
+			_ = tmp.Close()
+		}
 		if err != nil && !renamed {
 			_ = fs.Remove(tmpPath)
 		}
@@ -112,6 +115,10 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 	if err := tmp.Sync(); err != nil {
 		return nil, fmt.Errorf("lsm: sync external sst %s: %w", tmpPath, err)
 	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("lsm: close external sst %s: %w", tmpPath, err)
+	}
+	closed = true
 	if err := fs.RenameNoReplace(tmpPath, path); err != nil {
 		return nil, fmt.Errorf("lsm: publish external sst %s: %w", path, err)
 	}
@@ -222,18 +229,19 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 		importedMetas  []*manifest.FileMeta
 		tempFIDs       []uint64
 		pathMappings   = make(map[string]string)
+		manifestLogged bool
 	)
 
 	rollback := func() {
-		for sourcePath, targetPath := range pathMappings {
-			if _, err := fs.Stat(targetPath); err == nil {
-				_ = fs.Rename(targetPath, sourcePath)
-			}
-		}
 		for _, tbl := range importedTables {
 			if tbl != nil {
 				lm.cache.delIndex(tbl.fid)
 				_ = tbl.closeHandle()
+			}
+		}
+		for sourcePath, targetPath := range pathMappings {
+			if _, err := fs.Stat(targetPath); err == nil {
+				_ = fs.Rename(targetPath, sourcePath)
 			}
 		}
 		for _, fid := range tempFIDs {
@@ -243,6 +251,9 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 			}
 		}
 
+		if !manifestLogged {
+			return
+		}
 		rollbackEdits := make([]manifest.Edit, len(importedMetas))
 		for i, meta := range importedMetas {
 			rollbackEdits[i] = manifest.Edit{
@@ -338,6 +349,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 		}
 	}
 
+	manifestLogged = true
 	if err := lm.manifestMgr.LogEdits(edits...); err != nil {
 		rollback()
 		return nil, fmt.Errorf("log manifest edits failed: %w", err)

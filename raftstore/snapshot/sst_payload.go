@@ -61,11 +61,11 @@ func ImportSSTPayload(dst installSink, workDir string, payload []byte, fs vfs.FS
 // higher-level metadata is published.
 func StageSnapshot(bridge Bridge, workDir string, payload []byte, fs vfs.FS) (*SSTImportResult, error) {
 	if bridge == nil {
-		return nil, fmt.Errorf("snapshot: stage snapshot requires engine")
+		return nil, fmt.Errorf("snapshot: stage snapshot requires bridge")
 	}
 	dst, ok := any(bridge).(installSink)
 	if !ok {
-		return nil, fmt.Errorf("snapshot: engine does not support staged snapshot install")
+		return nil, fmt.Errorf("snapshot: bridge does not support staged snapshot install")
 	}
 	return ImportSSTPayload(dst, workDir, payload, fs)
 }
@@ -160,7 +160,7 @@ func unpackSSTPayload(payload []byte, dir string, meta SSTMeta, fs vfs.FS) error
 			return fmt.Errorf("snapshot: read sst snapshot payload: %w", err)
 		}
 		name := filepath.Clean(hdr.Name)
-		if name == "." || strings.HasPrefix(name, "..") {
+		if name == "." || strings.HasPrefix(name, "..") || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
 			return fmt.Errorf("snapshot: invalid sst snapshot path %q", hdr.Name)
 		}
 		targetPath := filepath.Join(dir, name)

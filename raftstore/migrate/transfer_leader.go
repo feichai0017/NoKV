@@ -76,7 +76,7 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 		LeaderKnown:     resp.GetRegion() != nil,
 		LeaderRegion:    resp.GetRegion(),
 	}
-	if cfg.WorkDir != "" {
+	if cfg.WorkDir != "" && cfg.WaitTimeout > 0 {
 		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
 			Stage:        CheckpointTransferStarted,
 			RegionID:     cfg.RegionID,
@@ -98,6 +98,15 @@ func TransferLeader(ctx context.Context, cfg TransferLeaderConfig) (TransferLead
 	if cfg.TargetAdminAddr == "" {
 		if err := validateTransferLeaderResult(result); err != nil {
 			return result, err
+		}
+		if cfg.WorkDir != "" {
+			if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+				Stage:        CheckpointTransferReady,
+				RegionID:     cfg.RegionID,
+				TargetPeerID: cfg.PeerID,
+			}); err != nil {
+				return result, err
+			}
 		}
 		return result, nil
 	}
