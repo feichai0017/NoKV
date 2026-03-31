@@ -1,7 +1,9 @@
 package snapshot_test
 
 import (
+	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -36,22 +38,22 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	artifactDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
-	result, err := snapshot.ExportSST(srcDB, artifactDir, region, testSnapshotLSMOptions(t), nil)
+	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
+	result, err := snapshot.ExportSST(srcDB, snapshotDir, region, testSnapshotLSMOptions(t), nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), result.Manifest.EntryCount)
-	require.Equal(t, uint64(1), result.Manifest.TableCount)
-	require.True(t, result.Manifest.InlineValues)
+	require.Equal(t, uint64(3), result.Meta.EntryCount)
+	require.Equal(t, uint64(1), result.Meta.TableCount)
+	require.True(t, result.Meta.InlineValues)
 
-	manifest, err := snapshot.ReadSSTManifest(artifactDir, nil)
+	meta, err := snapshot.ReadSSTMeta(snapshotDir, nil)
 	require.NoError(t, err)
-	require.Equal(t, result.Manifest.EntryCount, manifest.EntryCount)
-	require.Len(t, manifest.Tables, 1)
-	require.FileExists(t, filepath.Join(artifactDir, manifest.Tables[0].RelativePath))
+	require.Equal(t, result.Meta.EntryCount, meta.EntryCount)
+	require.Len(t, meta.Tables, 1)
+	require.FileExists(t, filepath.Join(snapshotDir, meta.Tables[0].RelativePath))
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportSST(dstLSM, artifactDir, nil)
+	imported, err := snapshot.ImportSST(dstLSM, snapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
 	require.NotZero(t, imported.ImportedBytes)
@@ -87,15 +89,15 @@ func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	payload, manifest, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
+	payload, meta, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
-	require.Equal(t, uint64(2), manifest.EntryCount)
+	require.Equal(t, uint64(2), meta.EntryCount)
 
-	readManifest, err := snapshot.ReadSSTPayloadManifest(payload)
+	readMeta, err := snapshot.ReadSSTPayloadMeta(payload)
 	require.NoError(t, err)
-	require.Equal(t, manifest.EntryCount, readManifest.EntryCount)
-	require.Equal(t, manifest.Region.ID, readManifest.Region.ID)
+	require.Equal(t, meta.EntryCount, readMeta.EntryCount)
+	require.Equal(t, meta.Region.ID, readMeta.Region.ID)
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
@@ -151,6 +153,66 @@ func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
 	got, err = dstLSM.Get(entries[0].Key)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 	require.Nil(t, got)
+}
+
+func TestReadSSTPayloadMetaRejectsMissingMeta(t *testing.T) {
+	var payload bytes.Buffer
+	tw := tar.NewWriter(&payload)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "tables/000001.sst",
+		Mode: 0o600,
+		Size: 4,
+	}))
+	_, err := tw.Write([]byte("fake"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	_, err = snapshot.ReadSSTPayloadMeta(payload.Bytes())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing sst-snapshot.json")
+}
+
+func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
+	meta := snapshot.SSTMeta{
+		Version: 1,
+		Region: raftmeta.RegionMeta{
+			ID:       41,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			State:    raftmeta.RegionStateRunning,
+		},
+		EntryCount:   1,
+		TableCount:   1,
+		InlineValues: true,
+		Tables: []snapshot.SSTTableMeta{{
+			RelativePath: "tables/000001.sst",
+			SmallestKey:  []byte("a"),
+			LargestKey:   []byte("z"),
+			EntryCount:   1,
+			SizeBytes:    4,
+			ValueBytes:   1,
+		}},
+	}
+	metaBytes, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	var payload bytes.Buffer
+	tw := tar.NewWriter(&payload)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "sst-snapshot.json",
+		Mode: 0o600,
+		Size: int64(len(metaBytes)),
+	}))
+	_, err = tw.Write(metaBytes)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+
+	_, err = snapshot.ImportSSTPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing table")
 }
 
 func openSnapshotDB(t testing.TB) *NoKV.DB {

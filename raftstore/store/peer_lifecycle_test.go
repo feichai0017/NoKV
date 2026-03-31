@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 
+	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
@@ -11,6 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
+
+func testSSTApply(t *testing.T, db *NoKV.DB) peer.SnapshotApplyFunc {
+	t.Helper()
+	return func(payload []byte) (raftmeta.RegionMeta, error) {
+		result, err := snapshotpkg.ImportSSTPayload(db, db.WorkDir(), payload, nil)
+		if err != nil {
+			return raftmeta.RegionMeta{}, err
+		}
+		return result.Meta.Region, nil
+	}
+}
 
 func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 	sourceDB, _ := openStoreDB(t)
@@ -43,18 +55,12 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 				MaxInflightMsgs: 256,
 				PreVote:         true,
 			},
-			Transport: noopTransport{},
-			Apply:     func([]myraft.Entry) error { return nil },
-			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
-				if err != nil {
-					return raftmeta.RegionMeta{}, err
-				}
-				return result.Manifest.Region, nil
-			},
-			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
-			GroupID: meta.ID,
-			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+			Transport:     noopTransport{},
+			Apply:         func([]myraft.Entry) error { return nil },
+			SnapshotApply: testSSTApply(t, targetDB),
+			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID:       meta.ID,
+			Region:        raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{
@@ -126,18 +132,12 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 				MaxInflightMsgs: 256,
 				PreVote:         true,
 			},
-			Transport: noopTransport{},
-			Apply:     func([]myraft.Entry) error { return nil },
-			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
-				if err != nil {
-					return raftmeta.RegionMeta{}, err
-				}
-				return result.Manifest.Region, nil
-			},
-			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
-			GroupID: meta.ID,
-			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+			Transport:     noopTransport{},
+			Apply:         func([]myraft.Entry) error { return nil },
+			SnapshotApply: testSSTApply(t, targetDB),
+			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID:       meta.ID,
+			Region:        raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{
@@ -185,18 +185,12 @@ func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *te
 				MaxInflightMsgs: 256,
 				PreVote:         true,
 			},
-			Transport: noopTransport{},
-			Apply:     func([]myraft.Entry) error { return nil },
-			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
-				if err != nil {
-					return raftmeta.RegionMeta{}, err
-				}
-				return result.Manifest.Region, nil
-			},
-			Storage: mustPeerStorage(t, targetDB, targetMeta, meta.ID),
-			GroupID: meta.ID,
-			Region:  raftmeta.CloneRegionMetaPtr(&meta),
+			Transport:     noopTransport{},
+			Apply:         func([]myraft.Entry) error { return nil },
+			SnapshotApply: testSSTApply(t, targetDB),
+			Storage:       mustPeerStorage(t, targetDB, targetMeta, meta.ID),
+			GroupID:       meta.ID,
+			Region:        raftmeta.CloneRegionMetaPtr(&meta),
 		}, nil
 	}
 	st := NewStore(Config{StoreID: 2, LocalMeta: targetMeta, PeerBuilder: builder})

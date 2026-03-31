@@ -159,10 +159,7 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		}
 		var snapshotExport peer.SnapshotExportFunc
 		var snapshotApply peer.SnapshotApplyFunc
-		if payloadIO, ok := storage.MVCC.(interface {
-			ExportSSTPayload(raftmeta.RegionMeta) ([]byte, error)
-			ImportSSTPayload([]byte) (raftmeta.RegionMeta, error)
-		}); ok {
+		if payloadIO, ok := storage.MVCC.(snapshotpkg.PayloadIO); ok {
 			snapshotExport = payloadIO.ExportSSTPayload
 			snapshotApply = payloadIO.ImportSSTPayload
 		}
