@@ -180,8 +180,8 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewService(sourceStore)
-	targetSvc := NewService(targetStore)
+	sourceSvc := NewServiceWithSnapshotIO(sourceStore, sourceDB, sourceDB, sourceDB.SSTOptions(), nil)
+	targetSvc := NewServiceWithSnapshotIO(targetStore, targetDB, targetDB, targetDB.SSTOptions(), nil)
 
 	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{RegionId: region.ID})
 	require.NoError(t, err)
@@ -346,15 +346,12 @@ func TestServiceExportsAndInstallsRegionSSTSnapshot(t *testing.T) {
 
 	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &pb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,
-		Format:   pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, exported.GetSnapshot())
-	require.Equal(t, pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST, exported.GetFormat())
 
 	installed, err := targetSvc.InstallRegionSnapshot(context.Background(), &pb.InstallRegionSnapshotRequest{
 		Snapshot: exported.GetSnapshot(),
-		Format:   pb.RegionSnapshotFormat_REGION_SNAPSHOT_FORMAT_SST,
 	})
 	require.NoError(t, err)
 	require.Equal(t, region.ID, installed.GetRegion().GetId())

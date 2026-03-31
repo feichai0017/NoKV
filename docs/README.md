@@ -239,7 +239,7 @@ If you only read three pages, read these first:
   </div>
   <div class="doc-card">
     <h3><a href="migration.html">Migration</a></h3>
-    <p>Follow the standalone → seeded → cluster path, including logical snapshot export/install and membership rollout.</p>
+    <p>Follow the standalone → seeded → cluster path, including SST snapshot install and membership rollout.</p>
   </div>
   <div class="doc-card">
     <h3><a href="testing.html">Testing</a></h3>
