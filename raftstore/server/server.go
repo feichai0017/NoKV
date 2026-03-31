@@ -105,8 +105,8 @@ func New(cfg Config) (*Server, error) {
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
 	adminService := adminsvc.NewService(st)
-	if snapshotEngine, ok := cfg.Storage.MVCC.(snapshotpkg.Engine); ok {
-		adminService = adminsvc.NewServiceWithSnapshot(st, snapshotEngine, nil)
+	if snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.Bridge); ok {
+		adminService = adminsvc.NewServiceWithSnapshot(st, snapshotBridge, nil)
 	}
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
@@ -154,9 +154,9 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		}
 		var snapshotExport peer.SnapshotExportFunc
 		var snapshotApply peer.SnapshotApplyFunc
-		if snapshotIO, ok := storage.MVCC.(snapshotpkg.SnapshotIO); ok {
-			snapshotExport = snapshotIO.ExportSnapshot
-			snapshotApply = snapshotIO.InstallSnapshot
+		if snapshotBridge, ok := storage.MVCC.(snapshotpkg.Bridge); ok {
+			snapshotExport = snapshotBridge.ExportSnapshot
+			snapshotApply = snapshotBridge.InstallSnapshot
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),

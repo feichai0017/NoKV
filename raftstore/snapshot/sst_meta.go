@@ -7,10 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/lsm"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 )
 
@@ -19,12 +16,6 @@ const (
 	sstSnapshotName  = "sst-snapshot.json"
 	sstTablesDirName = "tables"
 )
-
-// Source exports detached internal entries over a bounded key range.
-type Source interface {
-	NewInternalIterator(opt *utils.Options) utils.Iterator
-	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
-}
 
 // SSTTableMeta describes one SST file inside a region snapshot.
 type SSTTableMeta struct {
@@ -52,26 +43,11 @@ type SSTExportResult struct {
 	Meta SSTMeta
 }
 
-// SSTSink installs external SST files into the target engine and can roll back
-// a completed ingest before higher-level metadata is published.
-type SSTSink interface {
-	ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
-	RollbackExternalSST(fileIDs []uint64) error
-}
-
-// SnapshotIO exposes region snapshot export/install helpers.
-type SnapshotIO interface {
+// Bridge is the high-level snapshot bridge exposed by the storage engine to
+// raftstore wiring.
+type Bridge interface {
 	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
 	InstallSnapshot(payload []byte) (raftmeta.RegionMeta, error)
-}
-
-// Engine is the full snapshot bridge exposed by the storage engine to
-// raftstore wiring.
-type Engine interface {
-	Source
-	SSTSink
-	SnapshotIO
-	SSTOptions() *lsm.Options
 }
 
 // SSTImportResult reports one successful SST snapshot install.

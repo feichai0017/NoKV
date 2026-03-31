@@ -271,15 +271,17 @@ Today NoKV's migration path uses one SST region snapshot primitive:
 - source side exports one region-scoped external SST snapshot
 - snapshot files are bundled into a transport-safe payload
 - target side imports that payload through the external SST install path
+- internal raft snapshot transport carries the same SST payload when a peer
+  needs snapshot-based catch-up instead of regular log replication
 
 This is a correctness-first choice.
 
 ### Why that choice is reasonable right now
 
-It keeps the first migration contract simple enough to validate:
+It keeps the promotion and replication contract simple enough to validate:
 
 - region-scoped
-- explicit manifest and checksum
+- explicit snapshot metadata and checksum
 - install-before-publish boundaries
 - retry and restart semantics that are testable
 

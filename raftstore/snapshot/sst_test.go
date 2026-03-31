@@ -39,7 +39,7 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 		State:    raftmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
-	result, err := snapshot.ExportSST(srcDB, snapshotDir, region, testSnapshotLSMOptions(t), nil)
+	result, err := snapshot.ExportSST(srcDB, snapshotDir, region, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), result.Meta.EntryCount)
 	require.Equal(t, uint64(1), result.Meta.TableCount)
@@ -89,7 +89,7 @@ func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	payload, meta, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
+	payload, meta, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 	require.Equal(t, uint64(2), meta.EntryCount)
@@ -134,7 +134,7 @@ func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    raftmeta.RegionStateRunning,
 	}
-	payload, _, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, testSnapshotLSMOptions(t), nil)
+	payload, _, err := snapshot.ExportSSTPayload(srcDB, t.TempDir(), region, nil)
 	require.NoError(t, err)
 
 	dstLSM := openSnapshotLSM(t)

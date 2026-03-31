@@ -1,5 +1,8 @@
 # SST Snapshot Install for Migration
 
+This note tracks the design and implementation behind GitHub issue `#28`:
+`[Feature Request] Implement SSTable-based Snapshot Install for RaftStore`.
+
 > Status: implemented in the migration path and the internal raft snapshot payload path.
 
 ## Why this matters
@@ -46,6 +49,15 @@ The current implementation is split across:
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_external_sst.go`
+
+The raftstore wiring now talks to a narrow snapshot bridge:
+
+- `ExportSnapshot(...)`
+- `InstallSnapshot(...)`
+
+That bridge keeps peer/admin wiring at the region-snapshot level while the LSM
+layer continues to own raw `ExportExternalSST(...)`,
+`ImportExternalSST(...)`, and `RollbackExternalSST(...)`.
 
 The important properties are:
 
