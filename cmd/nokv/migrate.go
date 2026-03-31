@@ -180,6 +180,19 @@ func runMigrateStatusCmd(w io.Writer, args []string) error {
 	if result.PeerID != 0 {
 		_, _ = fmt.Fprintf(w, "Peer     %d\n", result.PeerID)
 	}
+	if result.LocalCatalogRegions != 0 {
+		_, _ = fmt.Fprintf(w, "Catalog  %d region(s)\n", result.LocalCatalogRegions)
+	}
+	if result.SeedSnapshotDir != "" {
+		_, _ = fmt.Fprintf(w, "SeedDir  %s\n", result.SeedSnapshotDir)
+		_, _ = fmt.Fprintf(w, "Seeded   %t\n", result.SeedSnapshotPresent)
+	}
+	if len(result.Warnings) > 0 {
+		_, _ = fmt.Fprintf(w, "Warnings %s\n", strings.Join(result.Warnings, "; "))
+	}
+	if result.Next != "" {
+		_, _ = fmt.Fprintf(w, "Next     %s\n", result.Next)
+	}
 	return nil
 }
 

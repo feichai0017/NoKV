@@ -908,6 +908,9 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	status, err := migratepkg.ReadStatus(dir)
 	require.NoError(t, err)
 	require.Equal(t, migratepkg.ModeSeeded, status.Mode)
+	require.Equal(t, 1, status.LocalCatalogRegions)
+	require.True(t, status.SeedSnapshotPresent)
+	require.Contains(t, status.Next, "nokv serve")
 
 	metaStore, err := raftmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
@@ -930,6 +933,31 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), manifest.Region.ID)
 	require.Greater(t, manifest.EntryCount, uint64(0))
+}
+
+func TestRunMigrateStatusCmdSeededJSONIncludesOperationalHints(t *testing.T) {
+	dir := prepareDBWorkdir(t)
+	require.NoError(t, runMigrateInitCmd(&bytes.Buffer{}, []string{
+		"-workdir", dir,
+		"-store", "1",
+		"-region", "9",
+		"-peer", "109",
+	}))
+
+	var buf bytes.Buffer
+	err := runMigrateStatusCmd(&buf, []string{"-workdir", dir, "-json"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	require.Equal(t, "seeded", payload["mode"])
+	require.Equal(t, float64(1), payload["store_id"])
+	require.Equal(t, float64(9), payload["region_id"])
+	require.Equal(t, float64(109), payload["peer_id"])
+	require.Equal(t, float64(1), payload["local_catalog_regions"])
+	require.Equal(t, true, payload["seed_snapshot_present"])
+	require.Contains(t, payload["seed_snapshot_dir"], "RAFTSTORE_SNAPSHOTS")
+	require.Contains(t, payload["next"], "nokv serve")
 }
 
 func TestRunMigrateInitCmdIdempotentForSeededWorkdir(t *testing.T) {

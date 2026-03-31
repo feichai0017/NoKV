@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/../lib/common.sh"
@@ -50,6 +50,8 @@ RAFT_DEBUG=1
 TRANSFER_LEADER_PEER=""
 declare -a TARGET_SPECS=()
 declare -a REMOVE_PEERS=()
+CURRENT_STAGE="bootstrap"
+REPORT_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -164,6 +166,79 @@ run_cmd() {
   fi
 }
 
+stage() {
+  local title=$1
+  CURRENT_STAGE=$title
+  echo
+  echo "==> $title"
+}
+
+info() {
+  echo "[info] $*"
+}
+
+warn() {
+  echo "[warn] $*" >&2
+}
+
+show_local_status() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "+ nokv migrate status --workdir $WORKDIR"
+    return
+  fi
+  nokv migrate status --workdir "$WORKDIR" | sed 's/^/    /'
+}
+
+write_report() {
+  local report_dir="$ROOT_DIR/artifacts/migration"
+  REPORT_FILE="$report_dir/summary.txt"
+  mkdir -p "$report_dir"
+  {
+    echo "NoKV migration summary"
+    echo "======================"
+    echo "Config:            $CONFIG_PATH"
+    echo "Seed workdir:      $WORKDIR"
+    echo "Seed store:        $SEED_STORE_ID"
+    echo "Seed region:       $SEED_REGION_ID"
+    echo "Seed peer:         $SEED_PEER_ID"
+    echo "PD address:        $PD_LISTEN"
+    echo "Leader admin:      $leader_admin_addr"
+    echo "Wait timeout:      $WAIT_TIMEOUT"
+    echo "Poll interval:     $POLL_INTERVAL"
+    echo "Targets:"
+    for target in "${EXPAND_TARGETS[@]}"; do
+      echo "  - $target"
+    done
+    if [[ -n "$TRANSFER_LEADER_PEER" ]]; then
+      echo "Transfer leader:   $TRANSFER_LEADER_PEER"
+    fi
+    if [[ ${#REMOVE_PEERS[@]} -gt 0 ]]; then
+      echo "Removed peers:"
+      for peer in "${REMOVE_PEERS[@]}"; do
+        echo "  - $peer"
+      done
+    fi
+    echo
+    echo "Local migration status:"
+    if [[ $DRY_RUN -eq 0 ]]; then
+      nokv migrate status --workdir "$WORKDIR" | sed 's/^/  /'
+    else
+      echo "  dry-run: status not collected"
+    fi
+  } >"$REPORT_FILE"
+}
+
+on_error() {
+  local line=$1
+  warn "migration failed during stage: $CURRENT_STAGE (line $line)"
+  warn "inspect logs under $ROOT_DIR/artifacts/migration and target workdirs"
+  if [[ -n "$REPORT_FILE" ]]; then
+    warn "last summary report: $REPORT_FILE"
+  fi
+}
+
+trap 'on_error $LINENO' ERR
+
 start_with_logs() {
   local __pid_var=$1
   local prefix=$2
@@ -258,9 +333,6 @@ if [[ -f "$seed_lock_path" ]]; then
   rm -f "$seed_lock_path"
 fi
 
-run_cmd nokv migrate plan --workdir "$WORKDIR"
-run_cmd nokv migrate init --workdir "$WORKDIR" --store "$SEED_STORE_ID" --region "$SEED_REGION_ID" --peer "$SEED_PEER_ID"
-
 cleaned=0
 STORE_PIDS=()
 PD_PID=""
@@ -295,12 +367,25 @@ if [[ $RAFT_DEBUG -eq 1 ]]; then
 fi
 
 mkdir -p "$ROOT_DIR/artifacts/migration"
-echo "Starting PD service on ${PD_LISTEN}"
+
+stage "Preflight"
+info "seed workdir: $WORKDIR"
+info "targets: ${EXPAND_TARGETS[*]}"
+run_cmd nokv migrate plan --workdir "$WORKDIR"
+
+stage "Promote Standalone Workdir"
+run_cmd nokv migrate init --workdir "$WORKDIR" --store "$SEED_STORE_ID" --region "$SEED_REGION_ID" --peer "$SEED_PEER_ID"
+info "local status after init:"
+show_local_status
+
+stage "Start Control Plane"
+info "starting PD service on $PD_LISTEN"
 start_with_logs PD_PID "pd" "$ROOT_DIR/artifacts/migration/pd.log" \
   nokv pd --addr "$PD_LISTEN" --id-start 1 --ts-start 100 --workdir "$PD_WORKDIR"
 
 seed_log="$WORKDIR/server.log"
-echo "Starting seed store ${SEED_STORE_ID} (workdir=${WORKDIR})"
+stage "Start Seed Store"
+info "starting seed store ${SEED_STORE_ID} (workdir=${WORKDIR})"
 start_with_logs seed_pid "store-${SEED_STORE_ID}" "$seed_log" \
   "$ROOT_DIR/scripts/dev/serve-store.sh" \
   --config "$CONFIG_PATH" \
@@ -310,9 +395,10 @@ start_with_logs seed_pid "store-${SEED_STORE_ID}" "$seed_log" \
   "${serve_debug_args[@]}"
 STORE_PIDS+=("$seed_pid")
 
+stage "Start Target Stores"
 for target_store in "${TARGET_STORE_IDS[@]}"; do
   target_dir=${STORE_WORKDIR[$target_store]:-"$ROOT_DIR/artifacts/cluster/store-$target_store"}
-  echo "Starting target store ${target_store} (workdir=${target_dir})"
+  info "starting target store ${target_store} (workdir=${target_dir})"
   start_with_logs store_pid "store-${target_store}" "$target_dir/server.log" \
     "$ROOT_DIR/scripts/dev/serve-store.sh" \
     --config "$CONFIG_PATH" \
@@ -324,6 +410,7 @@ for target_store in "${TARGET_STORE_IDS[@]}"; do
 done
 
 if [[ $DRY_RUN -eq 0 ]]; then
+  stage "Wait For Services"
   nokv_wait_for_tcp "$PD_LISTEN" 30
   nokv_wait_for_tcp "$leader_admin_addr" 30
   for target_store in "${TARGET_STORE_IDS[@]}"; do
@@ -331,6 +418,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   done
 fi
 
+stage "Expand Seed Region"
 expand_cmd=(nokv migrate expand --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --wait "$WAIT_TIMEOUT" --poll-interval "$POLL_INTERVAL")
 for target in "${EXPAND_TARGETS[@]}"; do
   expand_cmd+=(--target "$target")
@@ -338,6 +426,7 @@ done
 run_cmd "${expand_cmd[@]}"
 
 if [[ -n "$TRANSFER_LEADER_PEER" ]]; then
+  stage "Transfer Leader"
   transfer_target_addr=${PEER_TO_ADMIN_ADDR[$TRANSFER_LEADER_PEER]:-}
   transfer_cmd=(nokv migrate transfer-leader
     --addr "$leader_admin_addr"
@@ -356,6 +445,7 @@ if [[ -n "$TRANSFER_LEADER_PEER" ]]; then
 fi
 
 for remove_peer in "${REMOVE_PEERS[@]}"; do
+  stage "Remove Peer $remove_peer"
   remove_target_addr=${PEER_TO_ADMIN_ADDR[$remove_peer]:-}
   if [[ -n "$remove_target_addr" ]]; then
     run_cmd nokv migrate remove-peer \
@@ -375,5 +465,10 @@ for remove_peer in "${REMOVE_PEERS[@]}"; do
   fi
 done
 
+stage "Migration Summary"
+write_report
+info "final local status:"
+show_local_status
+info "summary report written to $REPORT_FILE"
 echo "Migration flow completed. Cluster logs are streaming; press Ctrl+C to stop all spawned processes."
 wait
