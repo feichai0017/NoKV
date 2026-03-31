@@ -98,5 +98,5 @@ func (db *DB) ImportSSTPayload(payload []byte) (raftmeta.RegionMeta, error) {
 	if err != nil {
 		return raftmeta.RegionMeta{}, err
 	}
-	return result.Manifest.Region, nil
+	return result.Meta.Region, nil
 }

@@ -105,16 +105,7 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 		result.ResumeHint = resumeHint(result.Mode, checkpoint)
 	}
 
-	switch result.Mode {
-	case ModeStandalone:
-		result.Next = "nokv migrate plan"
-	case ModePreparing:
-		result.Next = "retry nokv migrate init after inspecting partial migration state"
-	case ModeSeeded:
-		result.Next = fmt.Sprintf("nokv serve --workdir %s --store-id %d --pd-addr <pd>", result.WorkDir, result.StoreID)
-	case ModeCluster:
-		result.Next = "nokv migrate expand | nokv migrate transfer-leader | nokv migrate remove-peer"
-	}
+	result.Next = describeMode(result, PlanResult{Eligible: result.Mode == ModeStandalone}).Next
 
 	if cfg.AdminAddr != "" {
 		regionID := effectiveStatusRegionID(cfg.RegionID, result.RegionID)

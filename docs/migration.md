@@ -225,7 +225,7 @@ At a high level it does this:
 
 1. write mode = `preparing`
 2. persist a full-range local `RegionMeta` in `raftstore/meta`
-3. export one full-range SST seed artifact from the standalone DB
+3. export one full-range SST seed snapshot from the standalone DB
 4. synthesize the initial raft durable state for a single local voter
 5. persist the local raft replay pointer
 6. write mode = `seeded`
@@ -266,11 +266,11 @@ This feature matters because migration is not implemented as a file dump or a se
 
 ### Current snapshot path
 
-Today NoKV's migration path uses an SST region snapshot primitive:
+Today NoKV's migration path uses one SST region snapshot primitive:
 
-- source side exports one region-scoped external SST artifact
-- payloads are bundled into a transport-safe snapshot package
-- target side imports the artifact through the external SST install path
+- source side exports one region-scoped external SST snapshot
+- snapshot files are bundled into a transport-safe payload
+- target side imports that payload through the external SST install path
 
 This is a correctness-first choice.
 

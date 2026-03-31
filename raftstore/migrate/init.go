@@ -36,7 +36,7 @@ type InitResult struct {
 }
 
 // Init converts a standalone workdir into a single-store seeded cluster
-// directory. It exports one full-range SST seed artifact, persists the local
+// directory. It exports one full-range SST seed snapshot, persists the local
 // region catalog, and initializes the raft durable metadata for the single
 // local peer.
 func Init(cfg InitConfig) (InitResult, error) {
@@ -242,7 +242,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}, nil
 }
 
-// SeedSnapshotDir returns the deterministic artifact directory used for the
+// SeedSnapshotDir returns the deterministic directory used for the
 // seeded region snapshot exported during standalone migration.
 func SeedSnapshotDir(workDir string, regionID uint64) string {
 	return filepath.Join(filepath.Clean(workDir), snapshotRootDirName, fmt.Sprintf("region-%020d", regionID))

@@ -929,10 +929,10 @@ func TestRunMigrateInitCmd(t *testing.T) {
 	require.Equal(t, uint64(1), ptr.SnapshotTerm)
 	require.Equal(t, uint64(1), ptr.Committed)
 
-	manifest, err := snapshotpkg.ReadSSTManifest(migratepkg.SeedSnapshotDir(dir, 2), nil)
+	snapshotMeta, err := snapshotpkg.ReadSSTMeta(migratepkg.SeedSnapshotDir(dir, 2), nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), manifest.Region.ID)
-	require.Greater(t, manifest.EntryCount, uint64(0))
+	require.Equal(t, uint64(2), snapshotMeta.Region.ID)
+	require.Greater(t, snapshotMeta.EntryCount, uint64(0))
 }
 
 func TestRunMigrateStatusCmdSeededJSONIncludesOperationalHints(t *testing.T) {

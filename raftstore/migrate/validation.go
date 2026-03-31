@@ -27,15 +27,15 @@ func validateSeedArtifacts(workDir string, storeID, regionID, peerID uint64) err
 			regionID, region.Peers[0].StoreID, region.Peers[0].PeerID, storeID, peerID)
 	}
 
-	manifest, err := snapshotpkg.ReadSSTManifest(SeedSnapshotDir(workDir, regionID), nil)
+	meta, err := snapshotpkg.ReadSSTMeta(SeedSnapshotDir(workDir, regionID), nil)
 	if err != nil {
-		return fmt.Errorf("migrate: validate seed snapshot manifest: %w", err)
+		return fmt.Errorf("migrate: validate seed snapshot meta: %w", err)
 	}
-	if manifest.Region.ID != regionID {
-		return fmt.Errorf("migrate: validate seed snapshot manifest: region id mismatch got=%d want=%d", manifest.Region.ID, regionID)
+	if meta.Region.ID != regionID {
+		return fmt.Errorf("migrate: validate seed snapshot meta: region id mismatch got=%d want=%d", meta.Region.ID, regionID)
 	}
-	if len(manifest.Region.Peers) != 1 || manifest.Region.Peers[0].StoreID != storeID || manifest.Region.Peers[0].PeerID != peerID {
-		return fmt.Errorf("migrate: validate seed snapshot manifest: peer mismatch")
+	if len(meta.Region.Peers) != 1 || meta.Region.Peers[0].StoreID != storeID || meta.Region.Peers[0].PeerID != peerID {
+		return fmt.Errorf("migrate: validate seed snapshot meta: peer mismatch")
 	}
 
 	if _, ok := localMeta.RaftPointer(regionID); !ok {
