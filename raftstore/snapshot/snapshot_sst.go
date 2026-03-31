@@ -55,7 +55,7 @@ type SSTExportResult struct {
 // SSTSink installs external SST files into the target engine and can roll back
 // a completed ingest before higher-level metadata is published.
 type SSTSink interface {
-	IngestExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
+	ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
 	RollbackExternalSST(fileIDs []uint64) error
 }
 
@@ -138,7 +138,7 @@ func ExportSST(src Source, dir string, region raftmeta.RegionMeta, opt *lsm.Opti
 			return nil, fmt.Errorf("snapshot: create sst tables dir %s: %w", tablesDir, err)
 		}
 		tablePath := filepath.Join(tablesDir, "000001.sst")
-		tableMeta, err := lsm.BuildExternalSST(tablePath, entries, opt)
+		tableMeta, err := lsm.ExportExternalSST(tablePath, entries, opt)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot: build export sst table: %w", err)
 		}
@@ -221,7 +221,7 @@ func ImportSST(dst SSTSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
 		ImportedTables: uint64(len(paths)),
 		ImportedBytes:  importedBytes,
 	}
-	imported, err := dst.IngestExternalSST(paths)
+	imported, err := dst.ImportExternalSST(paths)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: import sst artifact from %s: %w", dir, err)
 	}
