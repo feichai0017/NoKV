@@ -24,7 +24,6 @@ import (
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -364,18 +363,28 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 
 func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
-	if src, ok := any(node.DB).(snapshotpkg.Source); ok {
-		snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-			payload, _, err := snapshotpkg.ExportSSTPayload(src, node.DB.WorkDir(), region, node.DB.SSTOptions(), nil)
-			return payload, err
+	if payloadIO, ok := any(node.DB).(interface {
+		ExportSSTPayload(raftmeta.RegionMeta) ([]byte, error)
+		ImportSSTPayload([]byte) (raftmeta.RegionMeta, error)
+	}); ok {
+		snapshotExport = payloadIO.ExportSSTPayload
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              peerID,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport:      node.Server.Transport(),
+			Apply:          raftkv.NewEntryApplier(node.DB),
+			SnapshotExport: snapshotExport,
+			SnapshotApply:  payloadIO.ImportSSTPayload,
+			Storage:        storage,
+			GroupID:        meta.ID,
+			Region:         raftmeta.CloneRegionMetaPtr(&meta),
 		}
-	}
-	snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-		result, err := snapshotpkg.ImportSSTPayload(node.DB, node.DB.WorkDir(), payload, nil)
-		if err != nil {
-			return raftmeta.RegionMeta{}, err
-		}
-		return result.Manifest.Region, nil
 	}
 	return &peer.Config{
 		RaftConfig: myraft.Config{
@@ -386,13 +395,11 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		},
-		Transport:      node.Server.Transport(),
-		Apply:          raftkv.NewEntryApplier(node.DB),
-		SnapshotExport: snapshotExport,
-		SnapshotApply:  snapshotApply,
-		Storage:        storage,
-		GroupID:        meta.ID,
-		Region:         raftmeta.CloneRegionMetaPtr(&meta),
+		Transport: node.Server.Transport(),
+		Apply:     raftkv.NewEntryApplier(node.DB),
+		Storage:   storage,
+		GroupID:   meta.ID,
+		Region:    raftmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 
