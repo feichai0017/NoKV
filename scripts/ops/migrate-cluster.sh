@@ -52,6 +52,7 @@ declare -a TARGET_SPECS=()
 declare -a REMOVE_PEERS=()
 CURRENT_STAGE="bootstrap"
 REPORT_FILE=""
+REPORT_JSON_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -192,6 +193,7 @@ show_local_status() {
 write_report() {
   local report_dir="$ROOT_DIR/artifacts/migration"
   REPORT_FILE="$report_dir/summary.txt"
+  REPORT_JSON_FILE="$report_dir/summary.json"
   mkdir -p "$report_dir"
   {
     echo "NoKV migration summary"
@@ -219,13 +221,22 @@ write_report() {
       done
     fi
     echo
-    echo "Local migration status:"
+    echo "Migration report:"
     if [[ $DRY_RUN -eq 0 ]]; then
-      nokv migrate status --workdir "$WORKDIR" | sed 's/^/  /'
+      nokv migrate report --workdir "$WORKDIR" --addr "$leader_admin_addr" --region "$SEED_REGION_ID" | sed 's/^/  /'
     else
-      echo "  dry-run: status not collected"
+      echo "  dry-run: report not collected"
     fi
   } >"$REPORT_FILE"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    nokv migrate report --workdir "$WORKDIR" --addr "$leader_admin_addr" --region "$SEED_REGION_ID" --json >"$REPORT_JSON_FILE"
+  else
+    cat >"$REPORT_JSON_FILE" <<'EOF'
+{
+  "dry_run": true
+}
+EOF
+  fi
 }
 
 on_error() {
@@ -234,6 +245,9 @@ on_error() {
   warn "inspect logs under $ROOT_DIR/artifacts/migration and target workdirs"
   if [[ -n "$REPORT_FILE" ]]; then
     warn "last summary report: $REPORT_FILE"
+  fi
+  if [[ -n "$REPORT_JSON_FILE" ]]; then
+    warn "last machine-readable report: $REPORT_JSON_FILE"
   fi
 }
 
@@ -470,5 +484,6 @@ write_report
 info "final local status:"
 show_local_status
 info "summary report written to $REPORT_FILE"
+info "machine-readable report written to $REPORT_JSON_FILE"
 echo "Migration flow completed. Cluster logs are streaming; press Ctrl+C to stop all spawned processes."
 wait
