@@ -122,8 +122,10 @@ For local inspection and automation, the CLI also exposes:
 When `--addr` is set, the report includes a cluster-aware runtime view:
 
 - current leader peer
+- current leader store
 - whether the local store is hosted
 - current membership size
+- membership peer list
 - applied index / term on that store
 
 ## Lifecycle States
