@@ -170,11 +170,11 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 	if s.snapshotSSTSink == nil {
 		return nil, status.Error(codes.FailedPrecondition, "sst snapshot install is not configured")
 	}
-	manifest, manifestErr := snapshotpkg.ReadSSTPayloadManifest(snap.Data)
-	if manifestErr != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", manifestErr)
+	metaFile, metaErr := snapshotpkg.ReadSSTPayloadMeta(snap.Data)
+	if metaErr != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
 	}
-	meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), manifest.Region, func() (func() error, error) {
+	meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), metaFile.Region, func() (func() error, error) {
 		result, importErr := snapshotpkg.ImportSSTPayload(s.snapshotSSTSink, s.store.WorkDir(), snap.Data, s.snapshotFS)
 		if importErr != nil {
 			return nil, importErr

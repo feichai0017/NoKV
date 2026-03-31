@@ -1,5 +1,7 @@
 # SST Snapshot Install for Migration
 
+> Status: implemented in the migration path and the internal raft snapshot payload path.
+
 ## Why this matters
 
 NoKV already has a correct standalone-to-cluster promotion path:
@@ -15,7 +17,7 @@ That path is now documented, checkpointed, resumable, and validated. The next bo
 
 The original region bootstrap/install path was intentionally correctness-first:
 
-- `init` exported a region snapshot artifact into the local seed directory
+- `init` exported a region snapshot into the local seed directory
 - `expand` exported an in-memory snapshot payload
 - the target imported detached entries through the regular write/apply path
 
@@ -28,7 +30,7 @@ For larger regions, the current path pays for:
 - target-side replay through the regular write path
 - avoidable write amplification
 
-The next stage should upgrade the artifact and install pipeline without rewriting the migration story.
+That upgrade has now been implemented without rewriting the migration story.
 
 ## Current boundary
 
@@ -36,10 +38,14 @@ The next stage should upgrade the artifact and install pipeline without rewritin
 
 The current implementation is split across:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/snapshot_sst.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_meta.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_files.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_payload.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_external_sst.go`
 
 The important properties are:
 
@@ -47,25 +53,26 @@ The important properties are:
 2. target install happens before peer publish
 3. install currently assumes an empty peer target
 4. checkpoint/report/failpoint coverage already exists around publish/install boundaries
+5. publish-before-complete failures roll back imported external SST files
 
-That means the lifecycle contract is already good. The data artifact is what needs to change.
+That means the lifecycle contract survived the transport change. The data movement path is now SST-based.
 
 ### What the storage layer already gives us
 
 NoKV already has LSM ingest support:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/lsm.go:632`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/levels.go:467`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
 
-`ImportExternalSST(paths []string)` already handles:
+`ExportExternalSST(...)`, `ImportExternalSST(...)`, and `RollbackExternalSST(...)` now handle:
 
+- snapshot SST generation from materialized entries
 - input validation
 - key-range overlap checks between imported SSTs
 - overlap checks against existing L0
-- manifest logging
+- LSM manifest logging
 - rollback on failure
 
-This is valuable, but it is only the ingest primitive. It does not define a migration artifact.
+This is the storage primitive under the higher-level snapshot path. It is not the migration workflow by itself.
 
 ### The constraint that makes this non-trivial
 
@@ -81,7 +88,7 @@ Large values can be stored as `ValuePtr`, not inline user bytes. So “copy SSTs
 
 That is the main design constraint.
 
-## The design we should choose
+## The design we chose
 
 ### Design goal
 
@@ -95,11 +102,11 @@ Only replace the data movement pipeline.
 
 ### The key decision
 
-The first SST-based migration artifact should be:
+The first SST-based migration snapshot should be:
 
 > **region-scoped, self-contained, and independent from source-side vlog files**
 
-That means the snapshot SST export should materialize values inline inside the exported snapshot tables, even if the source DB currently stores some values behind `ValuePtr`.
+The implemented snapshot SST export materializes values inline inside the exported snapshot tables, even if the source DB currently stores some values behind `ValuePtr`.
 
 This avoids dragging value-log replication into phase one.
 
@@ -112,7 +119,7 @@ This is attractive but wrong for migration phase one.
 Problems:
 
 1. Existing SSTs are LSM/layout artifacts, not region snapshot artifacts.
-2. Existing SST boundaries do not necessarily align with the migration artifact boundary.
+2. Existing SST boundaries do not necessarily align with the region snapshot boundary.
 3. Existing SST entries may still reference source-side vlog segments.
 4. Reusing existing SSTs couples migration to compaction history instead of region truth.
 
@@ -124,10 +131,10 @@ This is also too heavy for phase one.
 
 Problems:
 
-1. The install artifact becomes cross-layer: SST files + vlog segments + head metadata.
+1. The install snapshot becomes cross-layer: SST files + vlog segments + head metadata.
 2. Import/recovery must now reason about both manifest edits and vlog ownership.
 3. Target-side cleanup/rollback gets much harder.
-4. The snapshot artifact stops being region-scoped in a clean way.
+4. The snapshot stops being region-scoped in a clean way.
 
 This may become interesting later for very large values, but it is the wrong first step.
 
@@ -137,21 +144,21 @@ Current migration intentionally promotes one full-range region first.
 
 Pulling split/re-shard into the same effort would mix:
 
-- artifact redesign
+- snapshot redesign
 - install semantics
 - region-layout evolution
 
 That is too much surface area for one iteration.
 
-## Proposed artifact
+## Snapshot Layout
 
 ### Artifact shape
 
-Phase-one SST snapshot artifact:
+The current SST snapshot directory looks like:
 
 ```text
 snapshot/
-  logical-snapshot.json
+  sst-snapshot.json
   tables/
     000001.sst
     000002.sst
@@ -160,10 +167,9 @@ snapshot/
 
 ### Manifest fields
 
-The SST manifest should carry at least:
+The SST snapshot meta carries:
 
-- `format_version`
-- `artifact_kind = "sst-inline-snapshot"`
+- `version`
 - `region`
 - `entry_count`
 - `table_count`
@@ -177,7 +183,7 @@ The SST manifest should carry at least:
   - size bytes
 - `created_at`
 
-This keeps the region contract explicit and makes target-side validation deterministic.
+This keeps the region contract explicit and makes target-side validation deterministic without overloading the LSM `MANIFEST` meaning.
 
 ## Export pipeline
 
@@ -192,24 +198,25 @@ That means:
 3. ensure exported entries are inline-value entries
 4. write snapshot-specific SST files
 
-This preserves the current semantic boundary while changing the artifact from `entries.bin` to `tables/*.sst`.
+This preserves the current semantic boundary while changing the snapshot payload from `entries.bin` to `tables/*.sst`.
 
-### Required implementation seam
+### Implementation seam
 
-We should not expose raw `tableBuilder` as a public migration API.
+We do not expose raw `tableBuilder` as a public migration API.
 
-Instead, add a narrow snapshot-side builder helper under one of:
+Instead the code is split across:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot`
-- or a small export helper in `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_files.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_payload.go`
 
-The helper should do only this:
+The narrow seam does only this:
 
 - take materialized internal entries
 - build one or more external SST files
 - return manifest metadata
 
-It should not become a second generic ingestion framework.
+It does not become a second generic ingestion framework.
 
 ## Install pipeline
 
@@ -234,7 +241,7 @@ The existing boundary failpoint still matters:
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
 - `AfterSnapshotApplyBeforePublish`
 
-The point of phase one is to preserve this install/publish boundary, not remove it.
+The point of the implementation is to preserve this install/publish boundary, not remove it.
 
 ## Transport shape
 
@@ -242,101 +249,68 @@ The point of phase one is to preserve this install/publish boundary, not remove 
 
 For local standalone-to-seed promotion:
 
-- export directly into the seed snapshot artifact directory in the same workdir
+- export directly into the seed snapshot directory in the same workdir
 
 No network transport change is needed.
 
 ### `expand`
 
-For seed-to-target install:
-
-Do not start with a giant single-byte payload again.
-
-Phase one should move to file-oriented transfer semantics:
-
-- export artifact directory on leader
-- transfer file chunks or file stream RPCs
-- reconstruct temp artifact on target
-- ingest from reconstructed files
-
-The leader RPC interface can still be admin-driven, but the artifact should no longer be represented as one monolithic detached-entry blob.
+For seed-to-target install, the current implementation keeps a transport payload for simplicity, but the payload now contains SST snapshot files instead of detached logical entries.
 
 ## The value-log decision
 
-### Strong recommendation
+### What the implementation does
 
-Phase-one SST snapshot export should force inline values in the exported SST artifact.
+The SST snapshot export forces inline values in the exported SST files.
 
 That means:
 
 - snapshot export materializes `ValuePtr` payloads back into value bytes
 - exported snapshot SSTs contain no source-side vlog dependency
 
-### Why this is the right first step
+### Why this was the right first step
 
-1. The artifact becomes self-contained.
+1. The snapshot becomes self-contained.
 2. Install can reuse existing LSM ingest without also rebuilding vlog ownership.
 3. Recovery remains much easier to reason about.
 4. The migration contract stays region-scoped and portable.
 
 ### Cost
 
-This does mean the artifact is not “copy existing SST files verbatim”.
+This does mean the snapshot is not “copy existing SST files verbatim”.
 
 That is acceptable. The goal is faster install and lower target-side write amplification, not absolute zero-copy on day one.
 
-## Phased rollout
+## What landed
 
-### Phase 1
+The implementation now covers:
 
-Implement SST snapshot export/import for:
-
-- full-range seed promotion
-- add-peer install
-
-Keep:
-
-- current migration CLI
-- current status/report/checkpoint model
-- current publish/install lifecycle
-- current empty-target requirement
-
-### Phase 2
-
-Add file streaming and chunked transfer polish:
-
-- per-file progress
-- checksums during transfer
-- artifact cleanup on failure
-
-### Phase 3
-
-Only after phase one is stable, evaluate:
-
-- partial inline / vlog-aware artifacts
-- larger region artifact tuning
-- split-aware snapshot/export
+- full-range seed promotion through SST snapshot files
+- `migrate expand` through SST payload install
+- internal raft peer snapshot payload export/apply through SST
+- rollback of imported SST files when install succeeds but publish fails
+- restart and interruption coverage in the integration suite
 
 ## Testing plan
 
-### Unit tests
+### Current tests
 
-1. export SST snapshot manifest round-trip
+1. SST meta round-trip and payload decode checks
 2. exported tables contain only keys in region range
 3. exported snapshot tables contain no `ValuePtr`
-4. target ingest installs all data correctly
-5. manifest/table checksum failure is detected
+4. target import installs all data correctly
+5. payloads missing meta or table files are rejected
 
 ### Integration tests
 
 1. seed promotion with low `ValueThreshold` still restores values correctly after SST export/import
-2. add-peer install with low `ValueThreshold` works with SST snapshot artifact
+2. add-peer install with low `ValueThreshold` works with SST snapshot payloads
 3. restart after ingest-before-publish behaves correctly
-4. failpoint before publish still leaves target unpublished
+4. failpoint before publish still leaves target unpublished and retries cleanly
 
 ### Recovery tests
 
-1. crash after artifact transfer but before ingest
+1. crash after snapshot payload transfer but before ingest
 2. crash after ingest but before publish
 3. repeated install attempt is safe or rejected clearly
 
@@ -347,8 +321,8 @@ flowchart TD
     A["Standalone / Leader Region"] --> B["Region-scoped iterator"]
     B --> C["Materialize internal entries"]
     C --> D["Build snapshot SST files with inline values"]
-    D --> E["logical-snapshot.json + tables/*.sst"]
-    E --> F["transfer artifact to target temp dir"]
+    D --> E["sst-snapshot.json + tables/*.sst"]
+    E --> F["transfer payload to target temp dir"]
     F --> G["Validate manifest and empty-peer target"]
     G --> H["ImportExternalSST(...)"]
     H --> I["publish hosted peer"]
@@ -362,18 +336,18 @@ flowchart TD
 - direct reuse of arbitrary existing SST layout
 - source vlog segment shipping
 
-## What this changes
+## What this changed
 
-If implemented this way, NoKV keeps the current migration story intact while upgrading the expensive part:
+NoKV now keeps the migration story intact while upgrading the expensive part:
 
 - logical region truth stays the source contract
 - install becomes file-oriented instead of entry-replay-oriented
 - target write amplification goes down
-- the artifact becomes more industrial without dragging split or vlog orchestration into the first SST phase
+- the snapshot path becomes more industrial without dragging split or vlog orchestration into the first SST phase
 
 ## What remains unsolved
 
-- whether a later phase should support vlog-aware artifact modes
-- whether the admin API should stream files or expose artifact pull endpoints
+- whether a later phase should support vlog-aware snapshot modes
+- whether the admin API should stream files or expose file pull endpoints
 - how much reusable builder surface should be exposed from the LSM layer
-- when it is worth introducing split-aware migration artifacts
+- when it is worth introducing split-aware migration snapshots
