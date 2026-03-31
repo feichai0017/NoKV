@@ -14,15 +14,27 @@ import (
 	"github.com/feichai0017/NoKV/vfs"
 )
 
+type exportSource interface {
+	NewInternalIterator(opt *utils.Options) utils.Iterator
+	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
+	SSTOptions() *lsm.Options
+}
+
+type installSink interface {
+	ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
+	RollbackExternalSST(fileIDs []uint64) error
+}
+
 // ExportSST persists one region snapshot as one or more self-contained
 // SST files. Phase one emits a single table with inline values only.
-func ExportSST(src Source, dir string, region raftmeta.RegionMeta, opt *lsm.Options, fs vfs.FS) (*SSTExportResult, error) {
+func ExportSST(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*SSTExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires source")
 	}
 	if dir == "" {
 		return nil, fmt.Errorf("snapshot: export sst requires dir")
 	}
+	opt := src.SSTOptions()
 	if opt == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires lsm options")
 	}
@@ -99,7 +111,7 @@ func ExportSST(src Source, dir string, region raftmeta.RegionMeta, opt *lsm.Opti
 
 // ImportSST installs one SST snapshot directory through the engine's external
 // table ingest path.
-func ImportSST(dst SSTSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
+func ImportSST(dst installSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst requires sink")
 	}
@@ -143,18 +155,22 @@ func ImportSST(dst SSTSink, dir string, fs vfs.FS) (*SSTImportResult, error) {
 	return result, nil
 }
 
-// Rollback removes previously imported SST tables from the destination sink.
-func (r *SSTImportResult) Rollback(dst SSTSink) error {
+// Rollback removes previously imported SST tables from the destination engine.
+func (r *SSTImportResult) Rollback(dst any) error {
 	if r == nil || len(r.ImportedFileIDs) == 0 {
 		return nil
 	}
 	if dst == nil {
-		return fmt.Errorf("snapshot: rollback sst import requires rollback sink")
+		return fmt.Errorf("snapshot: rollback sst import requires rollback target")
 	}
-	return dst.RollbackExternalSST(r.ImportedFileIDs)
+	sink, ok := dst.(installSink)
+	if !ok {
+		return fmt.Errorf("snapshot: rollback target does not support external sst rollback")
+	}
+	return sink.RollbackExternalSST(r.ImportedFileIDs)
 }
 
-func collectMaterializedEntries(src Source, region raftmeta.RegionMeta) ([]*kv.Entry, error) {
+func collectMaterializedEntries(src exportSource, region raftmeta.RegionMeta) ([]*kv.Entry, error) {
 	bounds := raftmeta.CloneRegionMeta(region)
 	iter := src.NewInternalIterator(&utils.Options{
 		IsAsc:      true,

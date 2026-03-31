@@ -168,7 +168,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := snapshotpkg.ExportSST(db, snapshotDir, region, db.SSTOptions(), nil); err != nil {
+	if _, err := snapshotpkg.ExportSST(db, snapshotDir, region, nil); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
 	}
 	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{

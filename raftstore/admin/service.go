@@ -18,7 +18,7 @@ import (
 type Service struct {
 	pb.UnimplementedRaftAdminServer
 	store      *store.Store
-	snapshot   snapshotpkg.Engine
+	snapshot   snapshotpkg.Bridge
 	snapshotFS vfs.FS
 }
 
@@ -29,7 +29,7 @@ func NewService(st *store.Store) *Service {
 
 // NewServiceWithSnapshot constructs an admin service with direct access to the
 // storage-side snapshot bridge needed for SST export/install.
-func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Engine, fs vfs.FS) *Service {
+func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Bridge, fs vfs.FS) *Service {
 	return &Service{
 		store:      st,
 		snapshot:   snapshot,
@@ -126,7 +126,7 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 	if s.snapshot == nil {
 		return nil, status.Error(codes.FailedPrecondition, "sst snapshot export is not configured")
 	}
-	payload, _, err := snapshotpkg.ExportSSTPayload(s.snapshot, s.store.WorkDir(), runtime.Meta, s.snapshot.SSTOptions(), s.snapshotFS)
+	payload, err := s.snapshot.ExportSnapshot(runtime.Meta)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
 	}
@@ -167,7 +167,7 @@ func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegi
 		return nil, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
 	}
 	meta, err = s.store.InstallRegionSSTSnapshot(raftpb.Snapshot(snap), metaFile.Region, func() (func() error, error) {
-		result, importErr := snapshotpkg.ImportSSTPayload(s.snapshot, s.store.WorkDir(), snap.Data, s.snapshotFS)
+		result, importErr := snapshotpkg.StageSnapshot(s.snapshot, s.store.WorkDir(), snap.Data, s.snapshotFS)
 		if importErr != nil {
 			return nil, importErr
 		}
