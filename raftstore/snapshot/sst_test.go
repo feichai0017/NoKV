@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotExportSSTArtifact(t *testing.T) {
+func TestExportFiles(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -69,7 +69,7 @@ func TestSnapshotExportSSTArtifact(t *testing.T) {
 	}
 }
 
-func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
+func TestExportPayloadRoundTrip(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -114,7 +114,7 @@ func TestSnapshotExportSSTPayloadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
+func TestImportPayloadRollback(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -154,7 +154,7 @@ func TestSnapshotImportSSTPayloadRollback(t *testing.T) {
 	require.Nil(t, got)
 }
 
-func TestReadSSTPayloadMetaRejectsMissingMeta(t *testing.T) {
+func TestReadPayloadMetaRejectsMissingMeta(t *testing.T) {
 	var payload bytes.Buffer
 	tw := tar.NewWriter(&payload)
 	require.NoError(t, tw.WriteHeader(&tar.Header{
@@ -171,7 +171,7 @@ func TestReadSSTPayloadMetaRejectsMissingMeta(t *testing.T) {
 	require.Contains(t, err.Error(), "missing sst-snapshot.json")
 }
 
-func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
+func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
 	meta := snapshot.Meta{
 		Version: 1,
 		Region: raftmeta.RegionMeta{
@@ -214,7 +214,7 @@ func TestImportSSTPayloadRejectsMissingTableFile(t *testing.T) {
 	require.Contains(t, err.Error(), "missing table")
 }
 
-func TestImportSSTPayloadRejectsAbsolutePath(t *testing.T) {
+func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 	meta := snapshot.Meta{
 		Version: 1,
 		Region: raftmeta.RegionMeta{
