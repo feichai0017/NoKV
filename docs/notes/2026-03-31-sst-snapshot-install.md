@@ -13,13 +13,13 @@ NoKV already has a correct standalone-to-cluster promotion path:
 
 That path is now documented, checkpointed, resumable, and validated. The next bottleneck is no longer workflow shape. It is data movement.
 
-Today the region bootstrap/install path is intentionally correctness-first:
+The original region bootstrap/install path was intentionally correctness-first:
 
-- `init` exports a logical region snapshot into a local artifact directory
-- `expand` exports a logical snapshot payload in memory
-- the target imports detached entries through the regular write/apply path
+- `init` exported a region snapshot artifact into the local seed directory
+- `expand` exported an in-memory snapshot payload
+- the target imported detached entries through the regular write/apply path
 
-This was the right first implementation. It kept lifecycle semantics clear and made recovery easy to reason about. It is not the final install pipeline.
+That was the right first implementation. It kept lifecycle semantics clear and made recovery easy to reason about. It is no longer the final install pipeline.
 
 For larger regions, the current path pays for:
 
@@ -36,7 +36,7 @@ The next stage should upgrade the artifact and install pipeline without rewritin
 
 The current implementation is split across:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/snapshot.go`
+- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/snapshot_sst.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go`
 - `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
@@ -259,7 +259,7 @@ Phase one should move to file-oriented transfer semantics:
 - reconstruct temp artifact on target
 - ingest from reconstructed files
 
-The leader RPC interface can still be admin-driven, but the artifact should no longer be represented as one logical snapshot blob.
+The leader RPC interface can still be admin-driven, but the artifact should no longer be represented as one monolithic detached-entry blob.
 
 ## The value-log decision
 

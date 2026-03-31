@@ -154,7 +154,7 @@ func TestPendingSnapshotPeekAndPop(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestEnsureEmptyLogicalSnapshotTargetAllowsRetry(t *testing.T) {
+func TestEnsureEmptySnapshotPayloadTargetAllowsRetry(t *testing.T) {
 	storage := newPayloadTestStorage()
 	require.NoError(t, storage.ApplySnapshot(myraft.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -171,7 +171,7 @@ func TestEnsureEmptyLogicalSnapshotTargetAllowsRetry(t *testing.T) {
 		storage:                   storage,
 		allowSnapshotInstallRetry: true,
 	}
-	require.NoError(t, p.ensureEmptyLogicalSnapshotTarget())
+	require.NoError(t, p.ensureEmptySnapshotPayloadTarget())
 }
 
 func mustNewRawNode(t *testing.T, id uint64, storage myraft.Storage) *myraft.RawNode {

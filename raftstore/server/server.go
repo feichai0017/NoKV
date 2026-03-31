@@ -8,7 +8,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -159,21 +158,28 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
 		var snapshotExport peer.SnapshotExportFunc
-		if src, ok := storage.MVCC.(interface {
-			NoKV.MVCCStore
-			MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
-		}); ok {
-			snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-				payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(src, region)
-				return payload, err
+		if src, ok := storage.MVCC.(snapshotpkg.Source); ok {
+			if optProvider, ok := storage.MVCC.(interface {
+				SSTOptions() *lsm.Options
+				WorkDir() string
+			}); ok {
+				snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
+					payload, _, err := snapshotpkg.ExportSSTPayload(src, optProvider.WorkDir(), region, optProvider.SSTOptions(), nil)
+					return payload, err
+				}
 			}
 		}
-		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-			result, err := snapshotpkg.ImportLogicalSnapshotPayload(storage.MVCC, payload)
-			if err != nil {
-				return raftmeta.RegionMeta{}, err
+		var snapshotApply peer.SnapshotApplyFunc
+		if sink, ok := storage.MVCC.(snapshotpkg.SSTSink); ok {
+			if dirProvider, ok := storage.MVCC.(interface{ WorkDir() string }); ok {
+				snapshotApply = func(payload []byte) (raftmeta.RegionMeta, error) {
+					result, err := snapshotpkg.ImportSSTPayload(sink, dirProvider.WorkDir(), payload, nil)
+					if err != nil {
+						return raftmeta.RegionMeta{}, err
+					}
+					return result.Manifest.Region, nil
+				}
 			}
-			return result.Manifest.Region, nil
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),

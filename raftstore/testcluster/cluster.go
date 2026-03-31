@@ -11,7 +11,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
@@ -365,17 +364,14 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 
 func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
-	if src, ok := any(node.DB).(interface {
-		NoKV.MVCCStore
-		MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
-	}); ok {
+	if src, ok := any(node.DB).(snapshotpkg.Source); ok {
 		snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-			payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(src, region)
+			payload, _, err := snapshotpkg.ExportSSTPayload(src, node.DB.WorkDir(), region, node.DB.SSTOptions(), nil)
 			return payload, err
 		}
 	}
 	snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-		result, err := snapshotpkg.ImportLogicalSnapshotPayload(node.DB, payload)
+		result, err := snapshotpkg.ImportSSTPayload(node.DB, node.DB.WorkDir(), payload, nil)
 		if err != nil {
 			return raftmeta.RegionMeta{}, err
 		}

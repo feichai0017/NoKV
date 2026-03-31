@@ -25,6 +25,12 @@ const (
 	sstTablesDirName = "tables"
 )
 
+// Source exports detached internal entries over a bounded key range.
+type Source interface {
+	NewInternalIterator(opt *utils.Options) utils.Iterator
+	MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error)
+}
+
 // SSTTableManifest describes one SST file inside a region snapshot artifact.
 type SSTTableManifest struct {
 	RelativePath string `json:"relative_path"`
@@ -333,6 +339,16 @@ func collectMaterializedEntries(src Source, region raftmeta.RegionMeta) ([]*kv.E
 		entries = append(entries, materialized)
 	}
 	return entries, nil
+}
+
+func keyInRegion(region raftmeta.RegionMeta, userKey []byte) bool {
+	if len(region.StartKey) > 0 && bytes.Compare(userKey, region.StartKey) < 0 {
+		return false
+	}
+	if len(region.EndKey) > 0 && bytes.Compare(userKey, region.EndKey) >= 0 {
+		return false
+	}
+	return true
 }
 
 func writeSSTManifest(path string, manifest *SSTManifest, fs vfs.FS) error {
