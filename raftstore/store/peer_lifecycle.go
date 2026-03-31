@@ -162,9 +162,9 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 	if _, ok := s.router.Peer(msg.To); ok {
 		return nil
 	}
-	manifest, err := snapshotpkg.ReadLogicalSnapshotPayloadManifest(msg.Snapshot.Data)
+	manifest, err := snapshotpkg.ReadSSTPayloadManifest(msg.Snapshot.Data)
 	if err != nil {
-		return fmt.Errorf("raftstore: decode snapshot payload manifest: %w", err)
+		return fmt.Errorf("raftstore: decode sst snapshot payload manifest: %w", err)
 	}
 	meta := manifest.Region
 	if meta.ID == 0 {
@@ -200,8 +200,8 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 }
 
 // InstallRegionSnapshot installs one leader-exported raft snapshot on the
-// local store, bootstrapping the target peer on demand from the logical
-// snapshot payload carried in Snapshot.Data.
+// local store, bootstrapping the target peer on demand from the snapshot
+// payload carried in Snapshot.Data.
 func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta, error) {
 	if s == nil {
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: store is nil")
@@ -210,11 +210,11 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires non-empty snapshot")
 	}
 	if len(snap.Data) == 0 {
-		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires logical snapshot payload")
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires snapshot payload")
 	}
-	manifest, err := snapshotpkg.ReadLogicalSnapshotPayloadManifest(snap.Data)
+	manifest, err := snapshotpkg.ReadSSTPayloadManifest(snap.Data)
 	if err != nil {
-		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: decode install snapshot payload: %w", err)
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: decode install sst snapshot payload: %w", err)
 	}
 	meta := manifest.Region
 	if meta.ID == 0 {

@@ -49,7 +49,7 @@ func TestPrepareMessagesAttachesSnapshotPayload(t *testing.T) {
 	require.Equal(t, []byte("payload"), msgs[0].Snapshot.Data)
 }
 
-func TestHandleReadyImportsLogicalSnapshotBeforeRaftSnapshot(t *testing.T) {
+func TestHandleReadyImportsSnapshotPayloadBeforeRaftSnapshot(t *testing.T) {
 	storage := newPayloadTestStorage()
 	imported := false
 	storage.onApply = func() {
@@ -79,7 +79,7 @@ func TestHandleReadyImportsLogicalSnapshotBeforeRaftSnapshot(t *testing.T) {
 	require.Equal(t, uint64(9), p.RegionMeta().ID)
 }
 
-func TestStepRejectsLogicalSnapshotOnNonEmptyPeer(t *testing.T) {
+func TestStepRejectsSnapshotPayloadOnNonEmptyPeer(t *testing.T) {
 	storage := newPayloadTestStorage()
 	p, err := NewPeer(&Config{
 		RaftConfig: myraft.Config{
@@ -119,7 +119,7 @@ func TestStepRejectsLogicalSnapshotOnNonEmptyPeer(t *testing.T) {
 	}
 	err = p.Step(msg)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "logical snapshot install requires empty peer state")
+	require.Contains(t, err.Error(), "snapshot payload install requires empty peer state")
 }
 
 type noopPayloadTransport struct{}

@@ -29,7 +29,7 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 		},
 		State: raftmeta.RegionStateRunning,
 	}
-	payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(sourceDB, region)
+	payload, _, err := snapshotpkg.ExportSSTPayload(sourceDB, sourceDB.WorkDir(), region, sourceDB.SSTOptions(), nil)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)
@@ -46,7 +46,7 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 			Transport: noopTransport{},
 			Apply:     func([]myraft.Entry) error { return nil },
 			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportLogicalSnapshotPayload(targetDB, payload)
+				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
 				if err != nil {
 					return raftmeta.RegionMeta{}, err
 				}
@@ -112,7 +112,7 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 		},
 		State: raftmeta.RegionStateRunning,
 	}
-	payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(sourceDB, region)
+	payload, _, err := snapshotpkg.ExportSSTPayload(sourceDB, sourceDB.WorkDir(), region, sourceDB.SSTOptions(), nil)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)
@@ -129,7 +129,7 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 			Transport: noopTransport{},
 			Apply:     func([]myraft.Entry) error { return nil },
 			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportLogicalSnapshotPayload(targetDB, payload)
+				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
 				if err != nil {
 					return raftmeta.RegionMeta{}, err
 				}
@@ -188,7 +188,7 @@ func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *te
 			Transport: noopTransport{},
 			Apply:     func([]myraft.Entry) error { return nil },
 			SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-				result, err := snapshotpkg.ImportLogicalSnapshotPayload(targetDB, payload)
+				result, err := snapshotpkg.ImportSSTPayload(targetDB, targetDB.WorkDir(), payload, nil)
 				if err != nil {
 					return raftmeta.RegionMeta{}, err
 				}

@@ -27,12 +27,12 @@ type ApplyFunc func(entries []myraft.Entry) error
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
 type AdminApplyFunc func(cmd *pb.AdminCommand) error
 
-// SnapshotExportFunc materializes logical region state for one outgoing raft
-// snapshot message.
+// SnapshotExportFunc materializes region state for one outgoing raft snapshot
+// message as an opaque payload.
 type SnapshotExportFunc func(region raftmeta.RegionMeta) ([]byte, error)
 
-// SnapshotApplyFunc imports logical region state from one incoming raft
-// snapshot payload and returns the region metadata carried by that payload.
+// SnapshotApplyFunc imports region state from one incoming raft snapshot
+// payload and returns the region metadata carried by that payload.
 type SnapshotApplyFunc func(payload []byte) (raftmeta.RegionMeta, error)
 
 // Peer wraps a RawNode with simple storage and apply plumbing.
@@ -213,7 +213,7 @@ func (p *Peer) Step(msg myraft.Message) error {
 		}
 	}
 	if msg.Type == myraft.MsgSnapshot && msg.Snapshot != nil && !myraft.IsEmptySnap(*msg.Snapshot) && len(msg.Snapshot.Data) > 0 {
-		if err := p.ensureEmptyLogicalSnapshotTarget(); err != nil {
+		if err := p.ensureEmptySnapshotPayloadTarget(); err != nil {
 			return err
 		}
 	}
@@ -322,8 +322,8 @@ func (p *Peer) Status() myraft.Status {
 	return p.node.Status()
 }
 
-// Snapshot returns the current raft snapshot enriched with the logical region
-// payload when snapshot export is configured.
+// Snapshot returns the current raft snapshot enriched with the configured
+// snapshot payload when snapshot export is configured.
 func (p *Peer) Snapshot() (myraft.Snapshot, error) {
 	if p == nil || p.storage == nil {
 		return myraft.Snapshot{}, fmt.Errorf("raftstore: peer snapshot requires storage")
@@ -356,7 +356,7 @@ func (p *Peer) Snapshot() (myraft.Snapshot, error) {
 	}
 	payload, err := p.snapshotExport(*meta)
 	if err != nil {
-		return myraft.Snapshot{}, fmt.Errorf("raftstore: export logical snapshot payload: %w", err)
+		return myraft.Snapshot{}, fmt.Errorf("raftstore: export snapshot payload: %w", err)
 	}
 	snap.Data = payload
 	return snap, nil
@@ -530,7 +530,7 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 	return nil
 }
 
-func (p *Peer) ensureEmptyLogicalSnapshotTarget() error {
+func (p *Peer) ensureEmptySnapshotPayloadTarget() error {
 	if p == nil || p.storage == nil {
 		return nil
 	}
@@ -542,14 +542,14 @@ func (p *Peer) ensureEmptyLogicalSnapshotTarget() error {
 		return fmt.Errorf("raftstore: inspect snapshot target state: %w", err)
 	}
 	if !myraft.IsEmptyHardState(hs) || len(cs.Voters) > 0 || len(cs.Learners) > 0 {
-		return fmt.Errorf("raftstore: logical snapshot install requires empty peer state")
+		return fmt.Errorf("raftstore: snapshot payload install requires empty peer state")
 	}
 	last, err := p.storage.LastIndex()
 	if err != nil {
 		return fmt.Errorf("raftstore: inspect snapshot target log: %w", err)
 	}
 	if last > 0 {
-		return fmt.Errorf("raftstore: logical snapshot install requires empty peer log")
+		return fmt.Errorf("raftstore: snapshot payload install requires empty peer log")
 	}
 	return nil
 }
@@ -569,7 +569,7 @@ func (p *Peer) prepareMessages(msgs []myraft.Message) error {
 		}
 		payload, err := p.snapshotExport(*meta)
 		if err != nil {
-			return fmt.Errorf("raftstore: export logical snapshot payload: %w", err)
+			return fmt.Errorf("raftstore: export snapshot payload: %w", err)
 		}
 		msg.Snapshot.Data = payload
 	}
