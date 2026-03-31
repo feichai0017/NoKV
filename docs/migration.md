@@ -225,7 +225,7 @@ At a high level it does this:
 
 1. write mode = `preparing`
 2. persist a full-range local `RegionMeta` in `raftstore/meta`
-3. export one logical region snapshot from the standalone DB
+3. export one full-range SST seed artifact from the standalone DB
 4. synthesize the initial raft durable state for a single local voter
 5. persist the local raft replay pointer
 6. write mode = `seeded`
@@ -248,7 +248,7 @@ Once the seed is healthy, normal distributed mechanisms take over:
 
 1. start empty target stores
 2. call `nokv migrate expand` against the current leader
-3. leader exports a logical region snapshot payload
+3. leader exports one SST snapshot payload
 4. target installs the snapshot on an empty peer
 5. leader publishes the new membership
 6. wait until the target store reports the peer as hosted
@@ -266,11 +266,11 @@ This feature matters because migration is not implemented as a file dump or a se
 
 ### Current snapshot path
 
-Today NoKV uses a logical region snapshot primitive:
+Today NoKV's migration path uses an SST region snapshot primitive:
 
-- source side exports internal entries over the region key range
-- payloads are materialized into a transport-safe snapshot artifact
-- target side replays them through the regular apply path
+- source side exports one region-scoped external SST artifact
+- payloads are bundled into a transport-safe snapshot package
+- target side imports the artifact through the external SST install path
 
 This is a correctness-first choice.
 
@@ -377,7 +377,7 @@ The first version is intentionally narrow.
 - offline standalone → seed promotion
 - one full-range seed region
 - explicit `plan/init/status/expand/remove-peer/transfer-leader`
-- logical region snapshot export/import
+- SST region snapshot export/install
 - recovery-aware mode gating
 
 ### Not in scope yet

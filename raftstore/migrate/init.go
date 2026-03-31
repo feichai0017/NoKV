@@ -36,9 +36,9 @@ type InitResult struct {
 }
 
 // Init converts a standalone workdir into a single-store seeded cluster
-// directory. It exports a logical full-range region snapshot, persists the
-// local region catalog, and initializes the raft durable metadata for the
-// single local peer.
+// directory. It exports one full-range SST seed artifact, persists the local
+// region catalog, and initializes the raft durable metadata for the single
+// local peer.
 func Init(cfg InitConfig) (InitResult, error) {
 	cfg.WorkDir = filepath.Clean(cfg.WorkDir)
 	if cfg.WorkDir == "" || cfg.WorkDir == "." {
@@ -168,7 +168,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := snapshotpkg.ExportLogicalSnapshot(db, snapshotDir, region, nil); err != nil {
+	if _, err := snapshotpkg.ExportSST(db, snapshotDir, region, db.SSTOptions(), nil); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
 	}
 	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
