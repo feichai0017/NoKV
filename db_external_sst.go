@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/feichai0017/NoKV/lsm"
+	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -74,4 +76,27 @@ func (db *DB) RollbackExternalSST(fileIDs []uint64) error {
 		return fmt.Errorf("db: external sst removal requires open lsm")
 	}
 	return db.lsm.RollbackExternalSST(fileIDs)
+}
+
+// ExportSSTPayload materializes one region-scoped SST snapshot payload using
+// the current DB's storage format and workdir.
+func (db *DB) ExportSSTPayload(region raftmeta.RegionMeta) ([]byte, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db: export sst payload requires open db")
+	}
+	payload, _, err := snapshotpkg.ExportSSTPayload(db, db.WorkDir(), region, db.SSTOptions(), nil)
+	return payload, err
+}
+
+// ImportSSTPayload installs one region-scoped SST snapshot payload into the
+// current DB and returns the region metadata carried by that payload.
+func (db *DB) ImportSSTPayload(payload []byte) (raftmeta.RegionMeta, error) {
+	if db == nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("db: import sst payload requires open db")
+	}
+	result, err := snapshotpkg.ImportSSTPayload(db, db.WorkDir(), payload, nil)
+	if err != nil {
+		return raftmeta.RegionMeta{}, err
+	}
+	return result.Manifest.Region, nil
 }
