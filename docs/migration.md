@@ -23,7 +23,7 @@ Most systems make you choose early:
 
 - start with an embedded engine, then migrate to a different distributed database later
 - start distributed from day one, even when the workload is still small
-- accept dump/import style migration as an operational tax
+- accept dump/import-style migration as an operational tax
 
 NoKV is aiming at a different story:
 

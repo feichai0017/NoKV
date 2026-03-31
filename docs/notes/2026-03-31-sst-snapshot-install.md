@@ -41,14 +41,14 @@ That upgrade has now been implemented without rewriting the migration story.
 
 The current implementation is split across:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_meta.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_files.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_payload.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/init.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/migrate/expand.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db_external_sst.go`
+- `raftstore/snapshot/sst_meta.go`
+- `raftstore/snapshot/sst_files.go`
+- `raftstore/snapshot/sst_payload.go`
+- `raftstore/migrate/init.go`
+- `raftstore/migrate/expand.go`
+- `raftstore/store/peer_lifecycle.go`
+- `lsm/external_sst.go`
+- `db_external_sst.go`
 
 The raftstore wiring now talks to a narrow snapshot bridge:
 
@@ -73,7 +73,7 @@ That means the lifecycle contract survived the transport change. The data moveme
 
 NoKV already has LSM ingest support:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
+- `lsm/external_sst.go`
 
 `ExportExternalSST(...)`, `ImportExternalSST(...)`, and `RollbackExternalSST(...)` now handle:
 
@@ -92,9 +92,9 @@ NoKV uses value separation.
 
 Relevant code:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/kv/value.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/db.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/vlog.go`
+- `kv/value.go`
+- `db.go`
+- `vlog.go`
 
 Large values can be stored as `ValuePtr`, not inline user bytes. So “copy SSTs and ingest them” is not automatically correct. The imported table may still point at source-side vlog segments.
 
@@ -186,13 +186,15 @@ The SST snapshot meta carries:
 - `entry_count`
 - `table_count`
 - `inline_values = true`
-- `payload_bytes`
+- aggregate `size_bytes`
+- aggregate `value_bytes`
 - per-table:
   - relative path
   - smallest key
   - largest key
-  - crc/checksum
+  - entry count
   - size bytes
+  - value bytes
 - `created_at`
 
 This keeps the region contract explicit and makes target-side validation deterministic without overloading the LSM `MANIFEST` meaning.
@@ -218,9 +220,9 @@ We do not expose raw `tableBuilder` as a public migration API.
 
 Instead the code is split across:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/lsm/external_sst.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_files.go`
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/snapshot/sst_payload.go`
+- `lsm/external_sst.go`
+- `raftstore/snapshot/sst_files.go`
+- `raftstore/snapshot/sst_payload.go`
 
 The narrow seam does only this:
 
@@ -250,7 +252,7 @@ Keep the current contract:
 
 The existing boundary failpoint still matters:
 
-- `/Volumes/mac Ds - Data/WorkSpace/GitHub/NoKV/raftstore/store/peer_lifecycle.go`
+- `raftstore/store/peer_lifecycle.go`
 - `AfterSnapshotApplyBeforePublish`
 
 The point of the implementation is to preserve this install/publish boundary, not remove it.

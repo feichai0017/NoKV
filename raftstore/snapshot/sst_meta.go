@@ -76,24 +76,40 @@ func ReadSSTMeta(dir string, fs vfs.FS) (SSTMeta, error) {
 }
 
 func writeSSTMeta(path string, meta *SSTMeta, fs vfs.FS) error {
+	fs = vfs.Ensure(fs)
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("snapshot: encode sst meta %s: %w", path, err)
 	}
-	f, err := fs.OpenFileHandle(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	parent := filepath.Dir(path)
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
+	f, err := fs.OpenFileHandle(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("snapshot: create sst meta %s: %w", path, err)
+		return fmt.Errorf("snapshot: create sst meta temp %s: %w", tmpPath, err)
 	}
+	published := false
+	defer func() {
+		if !published {
+			_ = fs.Remove(tmpPath)
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("snapshot: write sst meta %s: %w", path, err)
+		return fmt.Errorf("snapshot: write sst meta %s: %w", tmpPath, err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("snapshot: sync sst meta %s: %w", path, err)
+		return fmt.Errorf("snapshot: sync sst meta %s: %w", tmpPath, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("snapshot: close sst meta %s: %w", path, err)
+		return fmt.Errorf("snapshot: close sst meta %s: %w", tmpPath, err)
 	}
+	if err := fs.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("snapshot: publish sst meta %s: %w", path, err)
+	}
+	if err := vfs.SyncDir(fs, parent); err != nil {
+		return fmt.Errorf("snapshot: sync sst meta parent %s: %w", parent, err)
+	}
+	published = true
 	return nil
 }
