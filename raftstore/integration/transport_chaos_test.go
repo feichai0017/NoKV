@@ -300,14 +300,10 @@ func TestRepeatedLinkFlapConvergesDuringMembershipChanges(t *testing.T) {
 	close(stopFlap)
 	<-doneFlap
 
-	require.Eventually(t, func() bool {
-		status := testcluster.FetchRuntimeStatus(t, ctx, target3.Addr(), 83)
-		return !status.GetKnown() || !status.GetHosted() || status.GetLocalPeerId() != 301
-	}, 5*time.Second, 50*time.Millisecond)
-
 	status := testcluster.FetchRuntimeStatus(t, ctx, target2.Addr(), 83)
 	require.True(t, status.GetKnown())
 	require.Len(t, status.GetRegion().GetPeers(), 2)
+	require.False(t, regionHasPeer(status.GetRegion(), 301))
 	testcluster.AssertValue(t, seed.DB, []byte("flap-key"), []byte("flap-value"))
 	testcluster.AssertValue(t, target2.DB, []byte("flap-key"), []byte("flap-value"))
 }

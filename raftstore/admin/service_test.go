@@ -85,7 +85,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 				Transport: noopTransport{},
 				Apply:     func([]myraft.Entry) error { return nil },
 				SnapshotExport: func(region raftmeta.RegionMeta) ([]byte, error) {
-					payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
+					payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(sourceDB, region)
 					return payload, err
 				},
 				Storage: sourceStorage,
@@ -108,7 +108,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 		Transport: noopTransport{},
 		Apply:     func([]myraft.Entry) error { return nil },
 		SnapshotExport: func(region raftmeta.RegionMeta) ([]byte, error) {
-			payload, _, err := snapshotpkg.ExportPayload(sourceDB, region)
+			payload, _, err := snapshotpkg.ExportLogicalSnapshotPayload(sourceDB, region)
 			return payload, err
 		},
 		Storage: sourceStorage,
@@ -150,7 +150,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 				Transport: noopTransport{},
 				Apply:     func([]myraft.Entry) error { return nil },
 				SnapshotApply: func(payload []byte) (raftmeta.RegionMeta, error) {
-					result, err := snapshotpkg.ImportPayload(targetDB, payload)
+					result, err := snapshotpkg.ImportLogicalSnapshotPayload(targetDB, payload)
 					if err != nil {
 						return raftmeta.RegionMeta{}, err
 					}

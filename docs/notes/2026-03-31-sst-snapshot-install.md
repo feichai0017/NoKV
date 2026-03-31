@@ -151,7 +151,7 @@ Phase-one SST snapshot artifact:
 
 ```text
 snapshot/
-  manifest.json
+  logical-snapshot.json
   tables/
     000001.sst
     000002.sst
@@ -347,7 +347,7 @@ flowchart TD
     A["Standalone / Leader Region"] --> B["Region-scoped iterator"]
     B --> C["Materialize internal entries"]
     C --> D["Build snapshot SST files with inline values"]
-    D --> E["manifest.json + tables/*.sst"]
+    D --> E["logical-snapshot.json + tables/*.sst"]
     E --> F["transfer artifact to target temp dir"]
     F --> G["Validate manifest and empty-peer target"]
     G --> H["ImportExternalSST(...)"]
