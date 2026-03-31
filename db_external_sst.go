@@ -59,13 +59,13 @@ func (db *DB) SSTOptions() *lsm.Options {
 	return opt
 }
 
-// IngestExternalSST exposes tracked external SST ingestion so
+// ImportExternalSST exposes tracked external SST ingestion so
 // callers can roll back an install before publishing higher-level metadata.
-func (db *DB) IngestExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error) {
+func (db *DB) ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error) {
 	if db == nil || db.lsm == nil {
 		return nil, fmt.Errorf("db: external sst import requires open lsm")
 	}
-	return db.lsm.IngestExternalSST(paths)
+	return db.lsm.ImportExternalSST(paths)
 }
 
 // RollbackExternalSST removes previously imported SST tables from the live LSM.

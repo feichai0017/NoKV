@@ -34,10 +34,10 @@ type ExternalSSTImportResult struct {
 	ImportedBytes uint64   `json:"imported_bytes"`
 }
 
-// BuildExternalSST materializes one standalone SST file that can later be
+// ExportExternalSST materializes one standalone SST file that can later be
 // imported through ImportExternalSST. Entries must already be detached and
 // sorted by internal key order.
-func BuildExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *ExternalSSTMeta, err error) {
+func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *ExternalSSTMeta, err error) {
 	if path == "" {
 		return nil, fmt.Errorf("lsm: external sst path required")
 	}
@@ -134,17 +134,11 @@ func BuildExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Extern
 	}, nil
 }
 
-// ImportExternalSST ingests externally built SST files into the live LSM.
-func (lsm *LSM) ImportExternalSST(paths []string) error {
-	_, err := lsm.IngestExternalSST(paths)
-	return err
-}
-
-// IngestExternalSST ingests externally built SST files into the live LSM and
+// ImportExternalSST ingests externally built SST files into the live LSM and
 // reports the file IDs created by the ingest. Callers can later use
 // RollbackExternalSST to roll back a completed ingest before the new state is
 // published.
-func (lsm *LSM) IngestExternalSST(paths []string) (*ExternalSSTImportResult, error) {
+func (lsm *LSM) ImportExternalSST(paths []string) (*ExternalSSTImportResult, error) {
 	if lsm == nil {
 		return nil, ErrLSMNil
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildExternalSSTRoundTripImport(t *testing.T) {
+func TestExportExternalSSTRoundTripImport(t *testing.T) {
 	dir := t.TempDir()
 	opt := newTestLSMOptions(dir, nil)
 	lsm := buildTestLSM(t, opt)
@@ -28,14 +28,15 @@ func TestBuildExternalSSTRoundTripImport(t *testing.T) {
 	})
 
 	sstPath := filepath.Join(t.TempDir(), "external.sst")
-	meta, err := BuildExternalSST(sstPath, entries, opt)
+	meta, err := ExportExternalSST(sstPath, entries, opt)
 	require.NoError(t, err)
 	require.Equal(t, uint64(len(entries)), meta.EntryCount)
 	require.NotZero(t, meta.SizeBytes)
 	require.True(t, bytes.Equal(entries[0].Key, meta.SmallestKey))
 	require.True(t, bytes.Equal(entries[len(entries)-1].Key, meta.LargestKey))
 
-	require.NoError(t, lsm.ImportExternalSST([]string{sstPath}))
+	_, err = lsm.ImportExternalSST([]string{sstPath})
+	require.NoError(t, err)
 
 	for _, entry := range entries {
 		got, err := lsm.Get(entry.Key)
@@ -46,19 +47,19 @@ func TestBuildExternalSSTRoundTripImport(t *testing.T) {
 	}
 }
 
-func TestBuildExternalSSTRejectsUnsortedEntries(t *testing.T) {
+func TestExportExternalSSTRejectsUnsortedEntries(t *testing.T) {
 	opt := newTestLSMOptions(t.TempDir(), nil)
 	entries := []*kv.Entry{
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("beta"), 2), []byte("b")),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("alpha"), 3), []byte("a")),
 	}
 
-	_, err := BuildExternalSST(filepath.Join(t.TempDir(), "external.sst"), entries, opt)
+	_, err := ExportExternalSST(filepath.Join(t.TempDir(), "external.sst"), entries, opt)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not strictly increasing")
 }
 
-func TestIngestExternalSSTRollback(t *testing.T) {
+func TestImportExternalSSTRollback(t *testing.T) {
 	dir := t.TempDir()
 	opt := newTestLSMOptions(dir, nil)
 	lsm := buildTestLSM(t, opt)
@@ -73,10 +74,10 @@ func TestIngestExternalSSTRollback(t *testing.T) {
 	})
 
 	sstPath := filepath.Join(t.TempDir(), "external.sst")
-	_, err := BuildExternalSST(sstPath, entries, opt)
+	_, err := ExportExternalSST(sstPath, entries, opt)
 	require.NoError(t, err)
 
-	result, err := lsm.IngestExternalSST([]string{sstPath})
+	result, err := lsm.ImportExternalSST([]string{sstPath})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.FileIDs, 1)
