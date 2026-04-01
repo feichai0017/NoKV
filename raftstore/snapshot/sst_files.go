@@ -34,7 +34,7 @@ type installSink interface {
 }
 
 // ExportSnapshotDir persists one region snapshot as one or more self-contained
-// SST files. Phase one emits a single table with inline values only.
+// SST files. Values are materialized inline so the snapshot is self-contained.
 func ExportSnapshotDir(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires source")
@@ -84,21 +84,25 @@ func ExportSnapshotDir(src exportSource, dir string, region raftmeta.RegionMeta,
 		if err := fs.MkdirAll(tablesDir, 0o755); err != nil {
 			return nil, fmt.Errorf("snapshot: create sst tables dir %s: %w", tablesDir, err)
 		}
-		tablePath := filepath.Join(tablesDir, "000001.sst")
-		tableMeta, err := lsm.ExportExternalSST(tablePath, entries, opt)
-		if err != nil {
-			return nil, fmt.Errorf("snapshot: build export sst table: %w", err)
+		chunks := splitSnapshotEntries(entries, opt.SSTableMaxSz)
+		meta.Tables = make([]TableMeta, 0, len(chunks))
+		for i, chunk := range chunks {
+			tablePath := filepath.Join(tablesDir, fmt.Sprintf("%06d.sst", i+1))
+			tableMeta, err := lsm.ExportExternalSST(tablePath, chunk, opt)
+			if err != nil {
+				return nil, fmt.Errorf("snapshot: build export sst table %d: %w", i+1, err)
+			}
+			meta.EntryCount += tableMeta.EntryCount
+			meta.Tables = append(meta.Tables, TableMeta{
+				RelativePath: filepath.Join(sstTablesDirName, filepath.Base(tableMeta.Path)),
+				SmallestKey:  kv.SafeCopy(nil, tableMeta.SmallestKey),
+				LargestKey:   kv.SafeCopy(nil, tableMeta.LargestKey),
+				EntryCount:   tableMeta.EntryCount,
+				SizeBytes:    tableMeta.SizeBytes,
+				ValueBytes:   tableMeta.ValueBytes,
+			})
 		}
-		meta.EntryCount = tableMeta.EntryCount
-		meta.TableCount = 1
-		meta.Tables = []TableMeta{{
-			RelativePath: filepath.Join(sstTablesDirName, filepath.Base(tableMeta.Path)),
-			SmallestKey:  kv.SafeCopy(nil, tableMeta.SmallestKey),
-			LargestKey:   kv.SafeCopy(nil, tableMeta.LargestKey),
-			EntryCount:   tableMeta.EntryCount,
-			SizeBytes:    tableMeta.SizeBytes,
-			ValueBytes:   tableMeta.ValueBytes,
-		}}
+		meta.TableCount = uint64(len(meta.Tables))
 	}
 
 	if err := writeMeta(filepath.Join(tmpDir, sstSnapshotName), &meta, fs); err != nil {
@@ -212,6 +216,39 @@ func collectMaterializedEntries(src exportSource, region raftmeta.RegionMeta) ([
 		entries = append(entries, materialized)
 	}
 	return entries, nil
+}
+
+func splitSnapshotEntries(entries []*kv.Entry, targetTableBytes int64) [][]*kv.Entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	if targetTableBytes <= 0 {
+		return [][]*kv.Entry{entries}
+	}
+
+	var (
+		chunks      [][]*kv.Entry
+		current     []*kv.Entry
+		currentSize int64
+	)
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		chunks = append(chunks, current)
+		current = nil
+		currentSize = 0
+	}
+	for _, entry := range entries {
+		estimated := int64(kv.EstimateEncodeSize(entry))
+		if len(current) > 0 && currentSize+estimated > targetTableBytes {
+			flush()
+		}
+		current = append(current, entry)
+		currentSize += estimated
+	}
+	flush()
+	return chunks
 }
 
 func keyInRegion(region raftmeta.RegionMeta, userKey []byte) bool {
