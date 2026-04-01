@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExportSnapshotDir(t *testing.T) {
+func TestExportDir(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -54,7 +54,7 @@ func TestExportSnapshotDir(t *testing.T) {
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
+	imported, err := snapshot.ImportDir(dstLSM, snapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
 	require.NotZero(t, imported.ImportedBytes)
@@ -70,7 +70,7 @@ func TestExportSnapshotDir(t *testing.T) {
 	}
 }
 
-func TestExportSnapshotDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
+func TestExportDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
 	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
 		opt.SSTableMaxSz = 512
 	})
@@ -153,7 +153,7 @@ func TestExportPayloadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestWritePayloadAndImportPayloadFromRoundTrip(t *testing.T) {
+func TestExportPayloadToAndImportPayloadFromRoundTrip(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -408,7 +408,7 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	require.Contains(t, err.Error(), "requires open db")
 }
 
-func TestImportSnapshotDirRejectsIncompatibleTableFormat(t *testing.T) {
+func TestImportDirRejectsIncompatibleTableFormat(t *testing.T) {
 	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
 		opt.SSTableMaxSz = 1 << 20
 	})
@@ -433,12 +433,12 @@ func TestImportSnapshotDirRejectsIncompatibleTableFormat(t *testing.T) {
 	})
 	defer func() { require.NoError(t, dstLSM.Close()) }()
 
-	_, err = snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
+	_, err = snapshot.ImportDir(dstLSM, snapshotDir, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incompatible block size")
 }
 
-func TestImportSnapshotDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
+func TestImportDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
 	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
 		opt.SSTableMaxSz = 1 << 20
 	})
@@ -463,7 +463,7 @@ func TestImportSnapshotDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
 	})
 	defer func() { require.NoError(t, dstLSM.Close()) }()
 
-	_, err = snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
+	_, err = snapshot.ImportDir(dstLSM, snapshotDir, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incompatible bloom false positive")
 }

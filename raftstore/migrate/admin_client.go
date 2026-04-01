@@ -24,9 +24,7 @@ type AdminClient interface {
 	AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error)
 	RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error)
-	ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error)
 	ExportRegionSnapshotStream(ctx context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error)
-	ImportRegionSnapshot(ctx context.Context, req *pb.ImportRegionSnapshotRequest) (*pb.ImportRegionSnapshotResponse, error)
 	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error)
 	RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error)
 }
@@ -48,10 +46,6 @@ func (c *grpcAdminClient) RemovePeer(ctx context.Context, req *pb.RemovePeerRequ
 
 func (c *grpcAdminClient) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
 	return c.client.TransferLeader(ctx, req)
-}
-
-func (c *grpcAdminClient) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
-	return c.client.ExportRegionSnapshot(ctx, req)
 }
 
 func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
@@ -83,10 +77,6 @@ func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *p
 			buf:    append([]byte(nil), first.GetChunk()...),
 		},
 	}, nil
-}
-
-func (c *grpcAdminClient) ImportRegionSnapshot(ctx context.Context, req *pb.ImportRegionSnapshotRequest) (*pb.ImportRegionSnapshotResponse, error) {
-	return c.client.ImportRegionSnapshot(ctx, req)
 }
 
 func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error) {

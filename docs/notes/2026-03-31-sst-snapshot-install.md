@@ -41,9 +41,9 @@ That upgrade has now been implemented without rewriting the migration story.
 
 The current implementation is split across:
 
-- `raftstore/snapshot/sst_meta.go`
-- `raftstore/snapshot/sst_files.go`
-- `raftstore/snapshot/sst_payload.go`
+- `raftstore/snapshot/meta.go`
+- `raftstore/snapshot/dir.go`
+- `raftstore/snapshot/payload.go`
 - `raftstore/migrate/init.go`
 - `raftstore/migrate/expand.go`
 - `raftstore/store/peer_lifecycle.go`
@@ -252,8 +252,8 @@ We do not expose raw `tableBuilder` as a public migration API.
 Instead the code is split across:
 
 - `lsm/external_sst.go`
-- `raftstore/snapshot/sst_files.go`
-- `raftstore/snapshot/sst_payload.go`
+- `raftstore/snapshot/dir.go`
+- `raftstore/snapshot/payload.go`
 
 The narrow seam does only this:
 

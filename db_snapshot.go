@@ -73,7 +73,7 @@ func (db *DB) ExportSnapshotDir(dir string, region raftmeta.RegionMeta) (*snapsh
 	if err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ExportSnapshotDir(src, dir, region, nil)
+	return snapshotpkg.ExportDir(src, dir, region, nil)
 }
 
 // ImportSnapshotDir imports one region-scoped snapshot directory into the current DB.
@@ -82,7 +82,7 @@ func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ImportSnapshotDir(dst, dir, nil)
+	return snapshotpkg.ImportDir(dst, dir, nil)
 }
 
 // ExportSnapshot materializes one region-scoped snapshot payload using the
@@ -103,7 +103,7 @@ func (db *DB) ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (snapsho
 	if err != nil {
 		return snapshotpkg.Meta{}, err
 	}
-	return snapshotpkg.WritePayload(w, src, db.WorkDir(), region, nil)
+	return snapshotpkg.ExportPayloadTo(w, src, db.WorkDir(), region, nil)
 }
 
 // ImportSnapshot imports one region-scoped snapshot payload into the current
