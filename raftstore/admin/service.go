@@ -183,21 +183,6 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *pb.ImportRegion
 	return &pb.ImportRegionSnapshotResponse{Region: regionMetaToPB(meta)}, nil
 }
 
-// InstallRegionSnapshot is a wire-compatibility shim for older admin clients.
-// New callers should use ImportRegionSnapshot.
-func (s *Service) InstallRegionSnapshot(ctx context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "snapshot is required")
-	}
-	resp, err := s.ImportRegionSnapshot(ctx, &pb.ImportRegionSnapshotRequest{
-		Snapshot: req.GetSnapshot(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &pb.InstallRegionSnapshotResponse{Region: resp.GetRegion()}, nil
-}
-
 // ImportRegionSnapshotStream imports one leader-exported region snapshot from a
 // streamed payload. The first chunk must carry the raft snapshot header and
 // region metadata.
