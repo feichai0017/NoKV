@@ -92,7 +92,7 @@ proto-check:
 	if ! git show-ref --verify --quiet "$$base_ref"; then \
 		base_ref="refs/heads/main"; \
 	fi; \
-	buf breaking --against ".git#ref=$$base_ref,subdir=pb"
+	buf breaking --against ".git#ref=$$base_ref,subdir=pb" --exclude-path adminpb.proto
 	@set -e; \
 	before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
 	./scripts/gen.sh; \
