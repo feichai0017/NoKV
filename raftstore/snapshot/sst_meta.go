@@ -27,15 +27,23 @@ type TableMeta struct {
 	ValueBytes   uint64 `json:"value_bytes"`
 }
 
+// Compatibility records the minimum table-format settings that must match
+// before an SST snapshot can be imported safely.
+type Compatibility struct {
+	BlockSize          int     `json:"block_size"`
+	BloomFalsePositive float64 `json:"bloom_false_positive"`
+}
+
 // Meta describes one region-scoped SST snapshot.
 type Meta struct {
-	Version      uint32              `json:"version"`
-	Region       raftmeta.RegionMeta `json:"region"`
-	EntryCount   uint64              `json:"entry_count"`
-	TableCount   uint64              `json:"table_count"`
-	InlineValues bool                `json:"inline_values"`
-	Tables       []TableMeta         `json:"tables"`
-	CreatedAt    time.Time           `json:"created_at"`
+	Version       uint32              `json:"version"`
+	Region        raftmeta.RegionMeta `json:"region"`
+	EntryCount    uint64              `json:"entry_count"`
+	TableCount    uint64              `json:"table_count"`
+	InlineValues  bool                `json:"inline_values"`
+	Compatibility Compatibility       `json:"compatibility"`
+	Tables        []TableMeta         `json:"tables"`
+	CreatedAt     time.Time           `json:"created_at"`
 }
 
 // ExportResult reports the persisted snapshot metadata after a successful export.
