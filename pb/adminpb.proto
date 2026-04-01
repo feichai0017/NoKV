@@ -62,6 +62,18 @@ message ImportRegionSnapshotResponse {
   RegionMeta region = 1;
 }
 
+// InstallRegionSnapshotRequest is kept for wire-compatibility with older admin
+// clients. Prefer ImportRegionSnapshotRequest for new code.
+message InstallRegionSnapshotRequest {
+  bytes snapshot = 1;
+}
+
+// InstallRegionSnapshotResponse is kept for wire-compatibility with older
+// admin clients. Prefer ImportRegionSnapshotResponse for new code.
+message InstallRegionSnapshotResponse {
+  RegionMeta region = 1;
+}
+
 message ImportRegionSnapshotStreamRequest {
   bytes snapshot_header = 1;
   RegionMeta region = 2;
@@ -89,6 +101,7 @@ service RaftAdmin {
   rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
   rpc ExportRegionSnapshot(ExportRegionSnapshotRequest) returns (ExportRegionSnapshotResponse);
   rpc ExportRegionSnapshotStream(ExportRegionSnapshotStreamRequest) returns (stream ExportRegionSnapshotStreamResponse);
+  rpc InstallRegionSnapshot(InstallRegionSnapshotRequest) returns (InstallRegionSnapshotResponse);
   rpc ImportRegionSnapshot(ImportRegionSnapshotRequest) returns (ImportRegionSnapshotResponse);
   rpc ImportRegionSnapshotStream(stream ImportRegionSnapshotStreamRequest) returns (ImportRegionSnapshotResponse);
   rpc RegionRuntimeStatus(RegionRuntimeStatusRequest) returns (RegionRuntimeStatusResponse);
