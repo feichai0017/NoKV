@@ -146,3 +146,11 @@ func NewStore(cfg Config) *Store {
 	}
 	return s
 }
+
+// WorkDir returns the store-local workdir used for metadata and staging.
+func (s *Store) WorkDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.workDir
+}

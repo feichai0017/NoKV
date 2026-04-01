@@ -44,12 +44,28 @@ message ExportRegionSnapshotResponse {
   RegionMeta region = 2;
 }
 
-message InstallRegionSnapshotRequest {
+message ExportRegionSnapshotStreamRequest {
+  uint64 region_id = 1;
+}
+
+message ExportRegionSnapshotStreamResponse {
+  bytes snapshot_header = 1;
+  RegionMeta region = 2;
+  bytes chunk = 3;
+}
+
+message ImportRegionSnapshotRequest {
   bytes snapshot = 1;
 }
 
-message InstallRegionSnapshotResponse {
+message ImportRegionSnapshotResponse {
   RegionMeta region = 1;
+}
+
+message ImportRegionSnapshotStreamRequest {
+  bytes snapshot_header = 1;
+  RegionMeta region = 2;
+  bytes chunk = 3;
 }
 
 message RegionRuntimeStatusRequest {
@@ -72,6 +88,8 @@ service RaftAdmin {
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
   rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
   rpc ExportRegionSnapshot(ExportRegionSnapshotRequest) returns (ExportRegionSnapshotResponse);
-  rpc InstallRegionSnapshot(InstallRegionSnapshotRequest) returns (InstallRegionSnapshotResponse);
+  rpc ExportRegionSnapshotStream(ExportRegionSnapshotStreamRequest) returns (stream ExportRegionSnapshotStreamResponse);
+  rpc ImportRegionSnapshot(ImportRegionSnapshotRequest) returns (ImportRegionSnapshotResponse);
+  rpc ImportRegionSnapshotStream(stream ImportRegionSnapshotStreamRequest) returns (ImportRegionSnapshotResponse);
   rpc RegionRuntimeStatus(RegionRuntimeStatusRequest) returns (RegionRuntimeStatusResponse);
 }

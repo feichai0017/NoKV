@@ -15,15 +15,32 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	NoKV "github.com/feichai0017/NoKV"
+	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
+	"github.com/feichai0017/NoKV/raftstore/engine"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/utils"
 )
+
+type fakeMVCCStore struct{}
+
+func (fakeMVCCStore) ApplyInternalEntries(entries []*entrykv.Entry) error { return nil }
+func (fakeMVCCStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (fakeMVCCStore) NewInternalIterator(opt *utils.Options) utils.Iterator { return nil }
+
+type fakeRaftLog struct{}
+
+func (fakeRaftLog) Open(groupID uint64, meta *raftmeta.Store) (engine.PeerStorage, error) {
+	return nil, nil
+}
 
 func openTestDB(t *testing.T) (*NoKV.DB, *raftmeta.Store) {
 	t.Helper()
@@ -72,6 +89,22 @@ func TestServerStartsNoKVService(t *testing.T) {
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestServerRequiresSnapshotBridge(t *testing.T) {
+	srv, err := serverpkg.New(serverpkg.Config{
+		Storage: serverpkg.Storage{
+			MVCC: fakeMVCCStore{},
+			Raft: fakeRaftLog{},
+		},
+		Store: storepkg.Config{
+			StoreID: 1,
+		},
+		TransportAddr: "127.0.0.1:0",
+	})
+	require.Nil(t, srv)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot bridge")
 }
 
 func TestServerStartsRaftAdminService(t *testing.T) {

@@ -10,7 +10,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/vfs"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -36,9 +35,9 @@ type InitResult struct {
 }
 
 // Init converts a standalone workdir into a single-store seeded cluster
-// directory. It exports a logical full-range region snapshot, persists the
-// local region catalog, and initializes the raft durable metadata for the
-// single local peer.
+// directory. It exports one full-range SST seed snapshot, persists the local
+// region catalog, and initializes the raft durable metadata for the single
+// local peer.
 func Init(cfg InitConfig) (InitResult, error) {
 	cfg.WorkDir = filepath.Clean(cfg.WorkDir)
 	if cfg.WorkDir == "" || cfg.WorkDir == "." {
@@ -62,6 +61,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	case ModeStandalone:
 		if err := writeState(cfg.WorkDir, stateFile{
 			Mode:     ModePreparing,
+			StoreID:  cfg.StoreID,
+			RegionID: cfg.RegionID,
+			PeerID:   cfg.PeerID,
+		}); err != nil {
+			return InitResult{}, err
+		}
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:    CheckpointPreparingWritten,
 			StoreID:  cfg.StoreID,
 			RegionID: cfg.RegionID,
 			PeerID:   cfg.PeerID,
@@ -129,6 +136,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	if err := localMeta.SaveRegion(region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: save local catalog: %w", err)
 	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointCatalogPersisted,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
 	if failpoints.ShouldFailAfterInitCatalogPersist() {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init catalog persist")
 	}
@@ -152,8 +167,16 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := snapshotpkg.Export(db, snapshotDir, region, nil); err != nil {
+	if _, err := db.ExportSnapshotDir(snapshotDir, region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
+	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointSeedExported,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
 	}
 	if failpoints.ShouldFailAfterInitSeedSnapshot() {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init seed snapshot")
@@ -181,6 +204,14 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: set initial hard state: %w", err)
 	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointRaftSeeded,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
 	if err := writeState(cfg.WorkDir, stateFile{
 		Mode:     ModeSeeded,
 		StoreID:  cfg.StoreID,
@@ -188,6 +219,17 @@ func Init(cfg InitConfig) (InitResult, error) {
 		PeerID:   cfg.PeerID,
 	}); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: finalize seeded mode: %w", err)
+	}
+	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+		Stage:    CheckpointSeededFinalized,
+		StoreID:  cfg.StoreID,
+		RegionID: cfg.RegionID,
+		PeerID:   cfg.PeerID,
+	}); err != nil {
+		return InitResult{}, err
+	}
+	if err := validateSeedArtifacts(cfg.WorkDir, cfg.StoreID, cfg.RegionID, cfg.PeerID); err != nil {
+		return InitResult{}, err
 	}
 	return InitResult{
 		WorkDir:     cfg.WorkDir,
@@ -199,7 +241,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}, nil
 }
 
-// SeedSnapshotDir returns the deterministic artifact directory used for the
+// SeedSnapshotDir returns the deterministic directory used for the
 // seeded region snapshot exported during standalone migration.
 func SeedSnapshotDir(workDir string, regionID uint64) string {
 	return filepath.Join(filepath.Clean(workDir), snapshotRootDirName, fmt.Sprintf("region-%020d", regionID))

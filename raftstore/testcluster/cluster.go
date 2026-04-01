@@ -11,7 +11,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
@@ -274,21 +273,27 @@ func (n *Node) Close(tb testing.TB) {
 
 func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *pb.RegionRuntimeStatusResponse {
 	tb.Helper()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		tb.Fatalf("dial admin %s: %v", addr, err)
-	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			tb.Fatalf("close admin conn: %v", err)
-		}
-	}()
-	client := pb.NewRaftAdminClient(conn)
-	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	status, err := TryFetchRuntimeStatus(ctx, addr, regionID)
 	if err != nil {
 		tb.Fatalf("region runtime status: %v", err)
 	}
 	return status
+}
+
+func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*pb.RegionRuntimeStatusResponse, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("dial admin %s: %w", addr, err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
+	client := pb.NewRaftAdminClient(conn)
+	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	if err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
 func WaitForLeaderPeer(tb testing.TB, ctx context.Context, addr string, regionID, peerID uint64) {
@@ -359,21 +364,32 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 
 func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
-	if src, ok := any(node.DB).(interface {
-		NoKV.MVCCStore
-		MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
-	}); ok {
-		snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-			payload, _, err := snapshotpkg.ExportPayload(src, region)
-			return payload, err
+	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
+		snapshotExport = snapshotBridge.ExportSnapshot
+		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
+			result, err := snapshotBridge.ImportSnapshot(payload)
+			if err != nil {
+				return raftmeta.RegionMeta{}, err
+			}
+			return result.Meta.Region, nil
 		}
-	}
-	snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-		result, err := snapshotpkg.ImportPayload(node.DB, payload)
-		if err != nil {
-			return raftmeta.RegionMeta{}, err
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              peerID,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport:      node.Server.Transport(),
+			Apply:          raftkv.NewEntryApplier(node.DB),
+			SnapshotExport: snapshotExport,
+			SnapshotApply:  snapshotApply,
+			Storage:        storage,
+			GroupID:        meta.ID,
+			Region:         raftmeta.CloneRegionMetaPtr(&meta),
 		}
-		return result.Manifest.Region, nil
 	}
 	return &peer.Config{
 		RaftConfig: myraft.Config{
@@ -384,13 +400,11 @@ func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage eng
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		},
-		Transport:      node.Server.Transport(),
-		Apply:          raftkv.NewEntryApplier(node.DB),
-		SnapshotExport: snapshotExport,
-		SnapshotApply:  snapshotApply,
-		Storage:        storage,
-		GroupID:        meta.ID,
-		Region:         raftmeta.CloneRegionMetaPtr(&meta),
+		Transport: node.Server.Transport(),
+		Apply:     raftkv.NewEntryApplier(node.DB),
+		Storage:   storage,
+		GroupID:   meta.ID,
+		Region:    raftmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 
