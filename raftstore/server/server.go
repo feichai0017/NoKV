@@ -70,7 +70,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Storage.MVCC == nil {
 		return nil, fmt.Errorf("raftstore/server: MVCC storage is required")
 	}
-	snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.Bridge)
+	snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.SnapshotStore)
 	if !ok {
 		return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 	}
@@ -153,7 +153,7 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if err != nil {
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
-		snapshotBridge, ok := storage.MVCC.(snapshotpkg.Bridge)
+		snapshotBridge, ok := storage.MVCC.(snapshotpkg.SnapshotStore)
 		if !ok {
 			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 		}
