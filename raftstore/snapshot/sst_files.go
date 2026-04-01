@@ -29,6 +29,7 @@ type exportSource interface {
 // snapshot directory. Export is intentionally absent here because import and
 // rollback are the only destination-side actions.
 type installSink interface {
+	ExternalSSTOptions() *lsm.Options
 	ImportExternalSST(paths []string) (*lsm.ExternalSSTImportResult, error)
 	RollbackExternalSST(fileIDs []uint64) error
 }
@@ -73,10 +74,11 @@ func ExportSnapshotDir(src exportSource, dir string, region raftmeta.RegionMeta,
 		return nil, err
 	}
 	meta := Meta{
-		Version:      sstVersion,
-		Region:       raftmeta.CloneRegionMeta(region),
-		InlineValues: true,
-		CreatedAt:    time.Now().UTC(),
+		Version:       sstVersion,
+		Region:        raftmeta.CloneRegionMeta(region),
+		InlineValues:  true,
+		Compatibility: snapshotCompatibility(opt),
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	if len(entries) > 0 {
@@ -130,6 +132,9 @@ func ImportSnapshotDir(dst installSink, dir string, fs vfs.FS) (*ImportResult, e
 	fs = vfs.Ensure(fs)
 	meta, err := ReadMeta(dir, fs)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateSnapshotCompatibility(meta, dst.ExternalSSTOptions()); err != nil {
 		return nil, err
 	}
 	paths := make([]string, 0, len(meta.Tables))
@@ -216,6 +221,35 @@ func collectMaterializedEntries(src exportSource, region raftmeta.RegionMeta) ([
 		entries = append(entries, materialized)
 	}
 	return entries, nil
+}
+
+func snapshotCompatibility(opt *lsm.Options) Compatibility {
+	if opt == nil {
+		return Compatibility{}
+	}
+	return Compatibility{
+		BlockSize:          opt.BlockSize,
+		BloomFalsePositive: opt.BloomFalsePositive,
+	}
+}
+
+func validateSnapshotCompatibility(meta Meta, opt *lsm.Options) error {
+	expected := snapshotCompatibility(opt)
+	if meta.Compatibility.BlockSize != expected.BlockSize {
+		return fmt.Errorf(
+			"snapshot: incompatible block size: payload=%d target=%d",
+			meta.Compatibility.BlockSize,
+			expected.BlockSize,
+		)
+	}
+	if meta.Compatibility.BloomFalsePositive != expected.BloomFalsePositive {
+		return fmt.Errorf(
+			"snapshot: incompatible bloom false positive: payload=%g target=%g",
+			meta.Compatibility.BloomFalsePositive,
+			expected.BloomFalsePositive,
+		)
+	}
+	return nil
 }
 
 func splitSnapshotEntries(entries []*kv.Entry, targetTableBytes int64) [][]*kv.Entry {
