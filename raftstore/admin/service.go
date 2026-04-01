@@ -97,39 +97,37 @@ func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequ
 // encoded as one migration-only SST snapshot payload.
 func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
 	_ = ctx
-	runtime, snap, err := s.exportRegionSnapshot(req.GetRegionId())
+	region, header, err := s.prepareExportRegionSnapshot(req.GetRegionId())
 	if err != nil {
 		return nil, err
 	}
-	payload, err := s.snapshot.ExportSnapshot(runtime.Meta)
-	if err != nil {
+	var payload bytes.Buffer
+	if _, err := s.snapshot.ExportSnapshotTo(&payload, region); err != nil {
 		return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
 	}
-	snap.Data = payload
+	var snap raftpb.Snapshot
+	if err := snap.Unmarshal(header); err != nil {
+		return nil, status.Errorf(codes.Internal, "unmarshal region snapshot header: %v", err)
+	}
+	snap.Data = payload.Bytes()
 	data, err := (&snap).Marshal()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
 	}
-	return &pb.ExportRegionSnapshotResponse{Snapshot: data, Region: regionMetaToPB(runtime.Meta)}, nil
+	return &pb.ExportRegionSnapshotResponse{Snapshot: data, Region: regionMetaToPB(region)}, nil
 }
 
 // ExportRegionSnapshotStream streams one migration-only SST snapshot payload.
 // The first message carries the raft snapshot header and region metadata.
 func (s *Service) ExportRegionSnapshotStream(req *pb.ExportRegionSnapshotStreamRequest, stream pb.RaftAdmin_ExportRegionSnapshotStreamServer) error {
-	runtime, snap, err := s.exportRegionSnapshot(req.GetRegionId())
+	region, header, err := s.prepareExportRegionSnapshot(req.GetRegionId())
 	if err != nil {
 		return err
-	}
-	headerSnap := snap
-	headerSnap.Data = nil
-	header, err := (&headerSnap).Marshal()
-	if err != nil {
-		return status.Errorf(codes.Internal, "marshal region snapshot header: %v", err)
 	}
 	pr, pw := io.Pipe()
 	errCh := make(chan error, 1)
 	go func() {
-		_, writeErr := s.snapshot.ExportSnapshotTo(pw, runtime.Meta)
+		_, writeErr := s.snapshot.ExportSnapshotTo(pw, region)
 		_ = pw.CloseWithError(writeErr)
 		errCh <- writeErr
 	}()
@@ -141,7 +139,7 @@ func (s *Service) ExportRegionSnapshotStream(req *pb.ExportRegionSnapshotStreamR
 			resp := &pb.ExportRegionSnapshotStreamResponse{Chunk: append([]byte(nil), buf[:n]...)}
 			if first {
 				resp.SnapshotHeader = header
-				resp.Region = regionMetaToPB(runtime.Meta)
+				resp.Region = regionMetaToPB(region)
 				first = false
 			}
 			if err := stream.Send(resp); err != nil {
@@ -362,6 +360,20 @@ func matchesSnapshotRegion(header, payload raftmeta.RegionMeta) bool {
 		}
 	}
 	return true
+}
+
+func (s *Service) prepareExportRegionSnapshot(regionID uint64) (raftmeta.RegionMeta, []byte, error) {
+	runtime, snap, err := s.exportRegionSnapshot(regionID)
+	if err != nil {
+		return raftmeta.RegionMeta{}, nil, err
+	}
+	headerSnap := snap
+	headerSnap.Data = nil
+	header, err := (&headerSnap).Marshal()
+	if err != nil {
+		return raftmeta.RegionMeta{}, nil, status.Errorf(codes.Internal, "marshal region snapshot header: %v", err)
+	}
+	return runtime.Meta, header, nil
 }
 
 func (s *Service) exportRegionSnapshot(regionID uint64) (store.RegionRuntimeStatus, raftpb.Snapshot, error) {
