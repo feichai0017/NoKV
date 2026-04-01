@@ -77,10 +77,10 @@ func TestExportDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
 	defer func() { _ = srcDB.Close() }()
 
 	var entries []*kv.Entry
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		entry := kv.NewInternalEntry(
 			kv.CFDefault,
-			[]byte(fmt.Sprintf("key-%02d", i)),
+			fmt.Appendf(nil, "key-%02d", i),
 			uint64(100-i),
 			bytes.Repeat([]byte{byte('a' + i)}, 256),
 			0,
