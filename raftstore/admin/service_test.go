@@ -315,6 +315,32 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingRegion(t *testing.T) {
 	require.ErrorContains(t, err, "region is required")
 }
 
+func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
+	svc := &Service{store: &store.Store{}, snapshot: noopSnapshotStore{}}
+	header, err := (&raftpb.Snapshot{}).Marshal()
+	require.NoError(t, err)
+	stream := &importRegionSnapshotStreamFeed{
+		ctx: context.Background(),
+		reqs: []*pb.ImportRegionSnapshotStreamRequest{
+			{
+				SnapshotHeader: header,
+				Region: &pb.RegionMeta{
+					Id:       1,
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+				},
+			},
+			{
+				SnapshotHeader: header,
+				Chunk:          []byte("payload"),
+			},
+		},
+	}
+	err = svc.ImportRegionSnapshotStream(stream)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "snapshot header may only appear in the first chunk")
+}
+
 func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {

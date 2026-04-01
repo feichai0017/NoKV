@@ -258,10 +258,7 @@ func (s *Service) ImportRegionSnapshotStream(stream pb.RaftAdmin_ImportRegionSna
 		if len(req.GetSnapshotHeader()) != 0 || req.GetRegion() != nil {
 			streamErr := fmt.Errorf("snapshot header repeated")
 			_ = pw.CloseWithError(streamErr)
-			outcome := <-resultCh
-			if outcome.err != nil {
-				return outcome.err
-			}
+			<-resultCh
 			return status.Error(codes.InvalidArgument, "snapshot header may only appear in the first chunk")
 		}
 		if err := writeChunk(req.GetChunk()); err != nil {
