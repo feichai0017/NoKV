@@ -26,6 +26,7 @@ const (
 	RaftAdmin_TransferLeader_FullMethodName             = "/pb.RaftAdmin/TransferLeader"
 	RaftAdmin_ExportRegionSnapshot_FullMethodName       = "/pb.RaftAdmin/ExportRegionSnapshot"
 	RaftAdmin_ExportRegionSnapshotStream_FullMethodName = "/pb.RaftAdmin/ExportRegionSnapshotStream"
+	RaftAdmin_InstallRegionSnapshot_FullMethodName      = "/pb.RaftAdmin/InstallRegionSnapshot"
 	RaftAdmin_ImportRegionSnapshot_FullMethodName       = "/pb.RaftAdmin/ImportRegionSnapshot"
 	RaftAdmin_ImportRegionSnapshotStream_FullMethodName = "/pb.RaftAdmin/ImportRegionSnapshotStream"
 	RaftAdmin_RegionRuntimeStatus_FullMethodName        = "/pb.RaftAdmin/RegionRuntimeStatus"
@@ -40,6 +41,7 @@ type RaftAdminClient interface {
 	TransferLeader(ctx context.Context, in *TransferLeaderRequest, opts ...grpc.CallOption) (*TransferLeaderResponse, error)
 	ExportRegionSnapshot(ctx context.Context, in *ExportRegionSnapshotRequest, opts ...grpc.CallOption) (*ExportRegionSnapshotResponse, error)
 	ExportRegionSnapshotStream(ctx context.Context, in *ExportRegionSnapshotStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportRegionSnapshotStreamResponse], error)
+	InstallRegionSnapshot(ctx context.Context, in *InstallRegionSnapshotRequest, opts ...grpc.CallOption) (*InstallRegionSnapshotResponse, error)
 	ImportRegionSnapshot(ctx context.Context, in *ImportRegionSnapshotRequest, opts ...grpc.CallOption) (*ImportRegionSnapshotResponse, error)
 	ImportRegionSnapshotStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportRegionSnapshotStreamRequest, ImportRegionSnapshotResponse], error)
 	RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error)
@@ -112,6 +114,16 @@ func (c *raftAdminClient) ExportRegionSnapshotStream(ctx context.Context, in *Ex
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RaftAdmin_ExportRegionSnapshotStreamClient = grpc.ServerStreamingClient[ExportRegionSnapshotStreamResponse]
 
+func (c *raftAdminClient) InstallRegionSnapshot(ctx context.Context, in *InstallRegionSnapshotRequest, opts ...grpc.CallOption) (*InstallRegionSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallRegionSnapshotResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_InstallRegionSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *raftAdminClient) ImportRegionSnapshot(ctx context.Context, in *ImportRegionSnapshotRequest, opts ...grpc.CallOption) (*ImportRegionSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ImportRegionSnapshotResponse)
@@ -154,6 +166,7 @@ type RaftAdminServer interface {
 	TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error)
 	ExportRegionSnapshot(context.Context, *ExportRegionSnapshotRequest) (*ExportRegionSnapshotResponse, error)
 	ExportRegionSnapshotStream(*ExportRegionSnapshotStreamRequest, grpc.ServerStreamingServer[ExportRegionSnapshotStreamResponse]) error
+	InstallRegionSnapshot(context.Context, *InstallRegionSnapshotRequest) (*InstallRegionSnapshotResponse, error)
 	ImportRegionSnapshot(context.Context, *ImportRegionSnapshotRequest) (*ImportRegionSnapshotResponse, error)
 	ImportRegionSnapshotStream(grpc.ClientStreamingServer[ImportRegionSnapshotStreamRequest, ImportRegionSnapshotResponse]) error
 	RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error)
@@ -180,6 +193,9 @@ func (UnimplementedRaftAdminServer) ExportRegionSnapshot(context.Context, *Expor
 }
 func (UnimplementedRaftAdminServer) ExportRegionSnapshotStream(*ExportRegionSnapshotStreamRequest, grpc.ServerStreamingServer[ExportRegionSnapshotStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method ExportRegionSnapshotStream not implemented")
+}
+func (UnimplementedRaftAdminServer) InstallRegionSnapshot(context.Context, *InstallRegionSnapshotRequest) (*InstallRegionSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallRegionSnapshot not implemented")
 }
 func (UnimplementedRaftAdminServer) ImportRegionSnapshot(context.Context, *ImportRegionSnapshotRequest) (*ImportRegionSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ImportRegionSnapshot not implemented")
@@ -293,6 +309,24 @@ func _RaftAdmin_ExportRegionSnapshotStream_Handler(srv interface{}, stream grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RaftAdmin_ExportRegionSnapshotStreamServer = grpc.ServerStreamingServer[ExportRegionSnapshotStreamResponse]
 
+func _RaftAdmin_InstallRegionSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallRegionSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftAdminServer).InstallRegionSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftAdmin_InstallRegionSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftAdminServer).InstallRegionSnapshot(ctx, req.(*InstallRegionSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RaftAdmin_ImportRegionSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ImportRegionSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -358,6 +392,10 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExportRegionSnapshot",
 			Handler:    _RaftAdmin_ExportRegionSnapshot_Handler,
+		},
+		{
+			MethodName: "InstallRegionSnapshot",
+			Handler:    _RaftAdmin_InstallRegionSnapshot_Handler,
 		},
 		{
 			MethodName: "ImportRegionSnapshot",
