@@ -12,6 +12,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,25 @@ import (
 
 type noopTransport struct{}
 
+type noopSnapshotStore struct{}
+
 func (noopTransport) Send(context.Context, myraft.Message) {}
+
+func (noopSnapshotStore) ExportSnapshot(raftmeta.RegionMeta) ([]byte, error) {
+	return nil, nil
+}
+
+func (noopSnapshotStore) ImportSnapshot([]byte) (*snapshotpkg.ImportResult, error) {
+	return nil, nil
+}
+
+func (noopSnapshotStore) ExportSnapshotTo(io.Writer, raftmeta.RegionMeta) (snapshotpkg.Meta, error) {
+	return snapshotpkg.Meta{}, nil
+}
+
+func (noopSnapshotStore) ImportSnapshotFrom(io.Reader) (*snapshotpkg.ImportResult, error) {
+	return nil, nil
+}
 
 func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options)) (*NoKV.DB, *raftmeta.Store) {
 	t.Helper()
@@ -265,6 +284,36 @@ func (s *importRegionSnapshotStreamFeed) SetTrailer(metadata.MD)       {}
 func (s *importRegionSnapshotStreamFeed) Context() context.Context     { return s.ctx }
 func (s *importRegionSnapshotStreamFeed) SendMsg(any) error            { return nil }
 func (s *importRegionSnapshotStreamFeed) RecvMsg(any) error            { return nil }
+
+func TestServiceImportRegionSnapshotStreamRejectsMissingHeader(t *testing.T) {
+	svc := &Service{store: &store.Store{}, snapshot: noopSnapshotStore{}}
+	stream := &importRegionSnapshotStreamFeed{
+		ctx: context.Background(),
+		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
+			Region: &pb.RegionMeta{Id: 1},
+			Chunk:  []byte("payload"),
+		}},
+	}
+	err := svc.ImportRegionSnapshotStream(stream)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "snapshot_header is required")
+}
+
+func TestServiceImportRegionSnapshotStreamRejectsMissingRegion(t *testing.T) {
+	svc := &Service{store: &store.Store{}, snapshot: noopSnapshotStore{}}
+	header, err := (&raftpb.Snapshot{}).Marshal()
+	require.NoError(t, err)
+	stream := &importRegionSnapshotStreamFeed{
+		ctx: context.Background(),
+		reqs: []*pb.ImportRegionSnapshotStreamRequest{{
+			SnapshotHeader: header,
+			Chunk:          []byte("payload"),
+		}},
+	}
+	err = svc.ImportRegionSnapshotStream(stream)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "region is required")
+}
 
 func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	sourceDir := t.TempDir()
