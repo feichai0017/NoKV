@@ -17,7 +17,7 @@ import (
 type Service struct {
 	pb.UnimplementedRaftAdminServer
 	store    *store.Store
-	snapshot snapshotpkg.Bridge
+	snapshot snapshotpkg.SnapshotStore
 }
 
 // NewService constructs an admin service bound to one raftstore store.
@@ -27,7 +27,7 @@ func NewService(st *store.Store) *Service {
 
 // NewServiceWithSnapshot constructs an admin service with direct access to the
 // storage-side snapshot bridge needed for SST export/install.
-func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.Bridge) *Service {
+func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.SnapshotStore) *Service {
 	return &Service{
 		store:    st,
 		snapshot: snapshot,

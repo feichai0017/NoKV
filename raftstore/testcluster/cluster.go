@@ -364,7 +364,7 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 
 func peerConfig(node *Node, meta raftmeta.RegionMeta, peerID uint64, storage engine.PeerStorage) *peer.Config {
 	var snapshotExport peer.SnapshotExportFunc
-	if snapshotBridge, ok := any(node.DB).(snapshotpkg.Bridge); ok {
+	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
 		snapshotExport = snapshotBridge.ExportSnapshot
 		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
 			result, err := snapshotBridge.ImportSnapshot(payload)

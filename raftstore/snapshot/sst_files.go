@@ -33,9 +33,9 @@ type installSink interface {
 	RollbackExternalSST(fileIDs []uint64) error
 }
 
-// ExportFiles persists one region snapshot as one or more self-contained
+// ExportSnapshotDir persists one region snapshot as one or more self-contained
 // SST files. Phase one emits a single table with inline values only.
-func ExportFiles(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
+func ExportSnapshotDir(src exportSource, dir string, region raftmeta.RegionMeta, fs vfs.FS) (*ExportResult, error) {
 	if src == nil {
 		return nil, fmt.Errorf("snapshot: export sst requires source")
 	}
@@ -117,9 +117,9 @@ func ExportFiles(src exportSource, dir string, region raftmeta.RegionMeta, fs vf
 	return &ExportResult{Meta: meta}, nil
 }
 
-// ImportFiles installs one snapshot directory through the engine's external
+// ImportSnapshotDir installs one snapshot directory through the engine's external
 // table ingest path.
-func ImportFiles(dst installSink, dir string, fs vfs.FS) (*ImportResult, error) {
+func ImportSnapshotDir(dst installSink, dir string, fs vfs.FS) (*ImportResult, error) {
 	if dst == nil {
 		return nil, fmt.Errorf("snapshot: import sst requires sink")
 	}

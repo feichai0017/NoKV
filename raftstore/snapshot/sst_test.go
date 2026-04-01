@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExportFiles(t *testing.T) {
+func TestExportSnapshotDir(t *testing.T) {
 	srcDB := openSnapshotDB(t)
 	defer func() { _ = srcDB.Close() }()
 
@@ -39,7 +39,7 @@ func TestExportFiles(t *testing.T) {
 		State:    raftmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
-	result, err := srcDB.ExportFiles(snapshotDir, region)
+	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), result.Meta.EntryCount)
 	require.Equal(t, uint64(1), result.Meta.TableCount)
@@ -53,7 +53,7 @@ func TestExportFiles(t *testing.T) {
 
 	dstLSM := openSnapshotLSM(t)
 	defer func() { require.NoError(t, dstLSM.Close()) }()
-	imported, err := snapshot.ImportFiles(dstLSM, snapshotDir, nil)
+	imported, err := snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
 	require.NotZero(t, imported.ImportedBytes)
@@ -103,6 +103,52 @@ func TestExportPayloadRoundTrip(t *testing.T) {
 	imported, err := snapshot.ImportPayload(dstLSM, t.TempDir(), payload, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), imported.ImportedTables)
+	for _, entry := range entries {
+		expected, err := srcDB.MaterializeInternalEntry(entry)
+		require.NoError(t, err)
+		got, err := dstLSM.Get(entry.Key)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, expected.Value, got.Value)
+		got.DecrRef()
+	}
+}
+
+func TestWritePayloadAndImportPayloadFromRoundTrip(t *testing.T) {
+	srcDB := openSnapshotDB(t)
+	defer func() { _ = srcDB.Close() }()
+
+	entries := []*kv.Entry{
+		kv.NewInternalEntry(kv.CFDefault, []byte("alpha"), 3, []byte("a"), 0, 0),
+		kv.NewInternalEntry(kv.CFDefault, []byte("beta"), 2, bytes.Repeat([]byte("x"), 2048), 0, 0),
+	}
+	for _, entry := range entries {
+		defer entry.DecrRef()
+	}
+	require.NoError(t, srcDB.ApplyInternalEntries(entries))
+
+	region := raftmeta.RegionMeta{
+		ID:       23,
+		StartKey: []byte("alpha"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+
+	var payload bytes.Buffer
+	meta, err := srcDB.ExportSnapshotTo(&payload, region)
+	require.NoError(t, err)
+	require.Equal(t, region.ID, meta.Region.ID)
+
+	readMeta, err := snapshot.ReadPayloadMetaFrom(bytes.NewReader(payload.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, meta.EntryCount, readMeta.EntryCount)
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+	imported, err := snapshot.ImportPayloadFrom(dstLSM, t.TempDir(), bytes.NewReader(payload.Bytes()), nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), imported.ImportedTables)
+
 	for _, entry := range entries {
 		expected, err := srcDB.MaterializeInternalEntry(entry)
 		require.NoError(t, err)
