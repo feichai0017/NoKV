@@ -176,22 +176,29 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	if leaderRegion == nil {
 		return result, fmt.Errorf("migrate: leader region %d missing published metadata for peer %d", cfg.RegionID, target.PeerID)
 	}
-	snapshotResp, err := leaderClient.ExportRegionSnapshot(waitCtx, &pb.ExportRegionSnapshotRequest{
+	snapshotStream, err := leaderClient.ExportRegionSnapshotStream(waitCtx, &pb.ExportRegionSnapshotStreamRequest{
 		RegionId: cfg.RegionID,
 	})
 	if err != nil {
 		return result, fmt.Errorf("migrate: export region %d snapshot from %s: %w", cfg.RegionID, cfg.Addr, err)
 	}
-	if len(snapshotResp.GetSnapshot()) == 0 {
-		return result, fmt.Errorf("migrate: exported region %d snapshot from %s is empty", cfg.RegionID, cfg.Addr)
+	defer func() {
+		if snapshotStream != nil && snapshotStream.Reader != nil {
+			_ = snapshotStream.Reader.Close()
+		}
+	}()
+	if len(snapshotStream.Header) == 0 {
+		return result, fmt.Errorf("migrate: exported region %d snapshot header from %s is empty", cfg.RegionID, cfg.Addr)
 	}
-	if snapshotResp.GetRegion() != nil {
-		result.LeaderRegion = snapshotResp.GetRegion()
+	if snapshotStream.Region != nil {
+		result.LeaderRegion = snapshotStream.Region
 	}
-	if _, err := targetClient.InstallRegionSnapshot(waitCtx, &pb.InstallRegionSnapshotRequest{
-		Snapshot: snapshotResp.GetSnapshot(),
-	}); err != nil {
-		return result, fmt.Errorf("migrate: install region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
+	importRegion := leaderRegion
+	if snapshotStream.Region != nil {
+		importRegion = snapshotStream.Region
+	}
+	if _, err := targetClient.ImportRegionSnapshotStream(waitCtx, snapshotStream.Header, importRegion, snapshotStream.Reader); err != nil {
+		return result, fmt.Errorf("migrate: import region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
 	}
 	if err := waitForTargetHosted(waitCtx, targetClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err

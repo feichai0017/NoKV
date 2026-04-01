@@ -54,6 +54,8 @@ The raftstore wiring now talks to a narrow snapshot bridge:
 
 - `ExportSnapshot(...)`
 - `ImportSnapshot(...)`
+- `ExportSnapshotTo(...)`
+- `ImportSnapshotFrom(...)`
 
 That bridge keeps peer/admin wiring at the region-snapshot level while the LSM
 layer continues to own raw `ExportExternalSST(...)`,
@@ -66,6 +68,14 @@ The important properties are:
 3. install currently assumes an empty peer target
 4. checkpoint/report/failpoint coverage already exists around publish/install boundaries
 5. publish-before-complete failures roll back imported external SST files
+
+On the admin path, the region snapshot API now exists in both forms:
+
+- unary `ExportRegionSnapshot(...)` / `ImportRegionSnapshot(...)`
+- streaming `ExportRegionSnapshotStream(...)` / `ImportRegionSnapshotStream(...)`
+
+`migrate expand` now uses the streaming path so large region snapshots no
+longer have to move through one single admin RPC payload.
 
 That means the lifecycle contract survived the transport change. The data movement path is now SST-based.
 
