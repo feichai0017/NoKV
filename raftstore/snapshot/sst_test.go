@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -66,6 +67,44 @@ func TestExportSnapshotDir(t *testing.T) {
 		require.NotNil(t, got)
 		require.Equal(t, expected.Value, got.Value)
 		got.DecrRef()
+	}
+}
+
+func TestExportSnapshotDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+		opt.SSTableMaxSz = 512
+	})
+	defer func() { _ = srcDB.Close() }()
+
+	var entries []*kv.Entry
+	for i := 0; i < 12; i++ {
+		entry := kv.NewInternalEntry(
+			kv.CFDefault,
+			[]byte(fmt.Sprintf("key-%02d", i)),
+			uint64(100-i),
+			bytes.Repeat([]byte{byte('a' + i)}, 256),
+			0,
+			0,
+		)
+		entries = append(entries, entry)
+		defer entry.DecrRef()
+	}
+	require.NoError(t, srcDB.ApplyInternalEntries(entries))
+
+	region := raftmeta.RegionMeta{
+		ID:       8,
+		StartKey: []byte("key-"),
+		EndKey:   []byte("zzz"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	snapshotDir := filepath.Join(t.TempDir(), "region.multi.snapshot")
+	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	require.NoError(t, err)
+	require.Greater(t, result.Meta.TableCount, uint64(1))
+	require.Len(t, result.Meta.Tables, int(result.Meta.TableCount))
+	for i, table := range result.Meta.Tables {
+		require.Equal(t, filepath.Join("tables", fmt.Sprintf("%06d.sst", i+1)), table.RelativePath)
+		require.FileExists(t, filepath.Join(snapshotDir, table.RelativePath))
 	}
 }
 
@@ -320,10 +359,18 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 
 func openSnapshotDB(t testing.TB) *NoKV.DB {
 	t.Helper()
+	return openSnapshotDBWithTweak(t, nil)
+}
+
+func openSnapshotDBWithTweak(t testing.TB, tweak func(*NoKV.Options)) *NoKV.DB {
+	t.Helper()
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.SyncWrites = false
 	opt.ValueThreshold = 32
+	if tweak != nil {
+		tweak(opt)
+	}
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	return db
