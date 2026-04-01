@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -182,11 +183,14 @@ func unpackPayload(r io.Reader, dir string, fs vfs.FS) error {
 		if err != nil {
 			return fmt.Errorf("snapshot: read sst snapshot payload: %w", err)
 		}
-		name := filepath.Clean(hdr.Name)
-		if name == "." || strings.HasPrefix(name, "..") || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		name := path.Clean(filepath.ToSlash(hdr.Name))
+		if name == "." || strings.HasPrefix(name, "../") || name == ".." || path.IsAbs(name) {
 			return fmt.Errorf("snapshot: invalid sst snapshot path %q", hdr.Name)
 		}
-		targetPath := filepath.Join(dir, name)
+		targetPath, err := secureSnapshotPath(dir, name)
+		if err != nil {
+			return fmt.Errorf("snapshot: invalid sst snapshot path %q: %w", hdr.Name, err)
+		}
 		parent := filepath.Dir(targetPath)
 		if err := fs.MkdirAll(parent, 0o755); err != nil {
 			return fmt.Errorf("snapshot: create sst snapshot parent %s: %w", parent, err)
@@ -209,4 +213,24 @@ func unpackPayload(r io.Reader, dir string, fs vfs.FS) error {
 	}
 	_, err := ReadMeta(dir, fs)
 	return err
+}
+
+func secureSnapshotPath(baseDir, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	baseDir = filepath.Clean(baseDir)
+	targetPath := filepath.Join(baseDir, filepath.FromSlash(rel))
+	relative, err := filepath.Rel(baseDir, targetPath)
+	if err != nil {
+		return "", err
+	}
+	relative = filepath.Clean(relative)
+	if relative == "." || relative == "" {
+		return "", fmt.Errorf("path must resolve to a file")
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes snapshot dir")
+	}
+	return targetPath, nil
 }
