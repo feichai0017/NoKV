@@ -3,6 +3,7 @@ package snapshot
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -60,6 +61,8 @@ type ExportResult struct {
 type SnapshotStore interface {
 	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
 	ImportSnapshot(payload []byte) (*ImportResult, error)
+	ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (Meta, error)
+	ImportSnapshotFrom(r io.Reader) (*ImportResult, error)
 }
 
 // ImportResult reports one successful staged SST snapshot import.
