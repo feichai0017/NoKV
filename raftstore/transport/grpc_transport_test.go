@@ -1,6 +1,7 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -89,6 +90,17 @@ func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
 	reader := percolator.NewReader(db)
 	_, _, err := reader.GetValue(key, math.MaxUint64)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func requireVisibleValueEventually(t *testing.T, cluster *grpcTestCluster, id uint64, key, value []byte) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		cluster.tickMany(2)
+		cluster.flush()
+		reader := percolator.NewReader(cluster.db(id))
+		val, _, err := reader.GetValue(key, math.MaxUint64)
+		return err == nil && bytes.Equal(val, value)
+	}, 3*time.Second, 25*time.Millisecond)
 }
 
 func TestGRPCTransportReplicatesProposals(t *testing.T) {
@@ -246,8 +258,22 @@ func TestGRPCTransportFailpointBeforeSendRPCRecoversAfterClear(t *testing.T) {
 	cluster.tickMany(12)
 	cluster.flush()
 
-	requireVisibleValue(t, cluster.db(2), []byte("transport-failpoint"), []byte("delayed"))
-	requireVisibleValue(t, cluster.db(3), []byte("transport-failpoint"), []byte("delayed"))
+	require.Eventually(t, func() bool {
+		cluster.tickMany(2)
+		cluster.flush()
+		_, ok := cluster.leader()
+		return ok
+	}, 3*time.Second, 25*time.Millisecond)
+
+	leader, ok = cluster.leader()
+	require.True(t, ok)
+	recoveredPayload := mustEncodePutCommand(t, []byte("transport-recovered"), []byte("recovered"), 42)
+	require.NoError(t, cluster.propose(leader, recoveredPayload))
+	cluster.tickMany(6)
+	cluster.flush()
+
+	requireVisibleValueEventually(t, cluster, 2, []byte("transport-recovered"), []byte("recovered"))
+	requireVisibleValueEventually(t, cluster, 3, []byte("transport-recovered"), []byte("recovered"))
 }
 
 func TestGRPCTransportMetricsWatchdog(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	adminsvc "github.com/feichai0017/NoKV/raftstore/admin"
@@ -71,6 +70,10 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Storage.MVCC == nil {
 		return nil, fmt.Errorf("raftstore/server: MVCC storage is required")
 	}
+	snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.SnapshotStore)
+	if !ok {
+		return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
+	}
 	if cfg.Store.StoreID == 0 {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
 	}
@@ -105,7 +108,7 @@ func New(cfg Config) (*Server, error) {
 
 	st := store.NewStore(storeCfg)
 	service := kv.NewService(st)
-	adminService := adminsvc.NewService(st)
+	adminService := adminsvc.NewServiceWithSnapshot(st, snapshotBridge)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		pb.RegisterNoKVServer(reg, service)
 		pb.RegisterRaftAdminServer(reg, adminService)
@@ -150,28 +153,22 @@ func defaultPeerBuilder(storage Storage, localMeta *raftmeta.Store, storeID uint
 		if err != nil {
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
-		var snapshotExport peer.SnapshotExportFunc
-		if src, ok := storage.MVCC.(interface {
-			NoKV.MVCCStore
-			MaterializeInternalEntry(src *entrykv.Entry) (*entrykv.Entry, error)
-		}); ok {
-			snapshotExport = func(region raftmeta.RegionMeta) ([]byte, error) {
-				payload, _, err := snapshotpkg.ExportPayload(src, region)
-				return payload, err
-			}
+		snapshotBridge, ok := storage.MVCC.(snapshotpkg.SnapshotStore)
+		if !ok {
+			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
 		}
 		snapshotApply := func(payload []byte) (raftmeta.RegionMeta, error) {
-			result, err := snapshotpkg.ImportPayload(storage.MVCC, payload)
+			result, err := snapshotBridge.ImportSnapshot(payload)
 			if err != nil {
 				return raftmeta.RegionMeta{}, err
 			}
-			return result.Manifest.Region, nil
+			return result.Meta.Region, nil
 		}
 		return &peer.Config{
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
 			Transport:      tr,
 			Apply:          kv.NewEntryApplier(storage.MVCC),
-			SnapshotExport: snapshotExport,
+			SnapshotExport: snapshotBridge.ExportSnapshot,
 			SnapshotApply:  snapshotApply,
 			Storage:        peerStorage,
 			GroupID:        meta.ID,
