@@ -19,15 +19,15 @@ import (
 // a transport-safe payload.
 func ExportPayload(src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) ([]byte, Meta, error) {
 	var payload bytes.Buffer
-	meta, err := WritePayload(&payload, src, workDir, region, fs)
+	meta, err := ExportPayloadTo(&payload, src, workDir, region, fs)
 	if err != nil {
 		return nil, Meta{}, err
 	}
 	return payload.Bytes(), meta, nil
 }
 
-// WritePayload materializes one SST snapshot and writes its tar payload to w.
-func WritePayload(w io.Writer, src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) (Meta, error) {
+// ExportPayloadTo materializes one SST snapshot and writes its tar payload to w.
+func ExportPayloadTo(w io.Writer, src exportSource, workDir string, region raftmeta.RegionMeta, fs vfs.FS) (Meta, error) {
 	if w == nil {
 		return Meta{}, fmt.Errorf("snapshot: export payload requires writer")
 	}
@@ -37,7 +37,7 @@ func WritePayload(w io.Writer, src exportSource, workDir string, region raftmeta
 	}
 	defer cleanup()
 	snapshotDir := filepath.Join(dir, "snapshot")
-	result, err := ExportSnapshotDir(src, snapshotDir, region, fs)
+	result, err := ExportDir(src, snapshotDir, region, fs)
 	if err != nil {
 		return Meta{}, err
 	}
@@ -83,7 +83,7 @@ func ImportPayloadFrom(dst installSink, workDir string, r io.Reader, fs vfs.FS) 
 			return nil, fmt.Errorf("snapshot: unpacked sst snapshot missing table %s: %w", table.RelativePath, err)
 		}
 	}
-	return ImportSnapshotDir(dst, snapshotDir, fs)
+	return ImportDir(dst, snapshotDir, fs)
 }
 
 // ReadPayloadMeta decodes only the metadata embedded in one snapshot payload.

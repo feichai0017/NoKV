@@ -52,17 +52,6 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{}, nil
 }
 
-func (f *fakeAdminClient) ExportRegionSnapshot(_ context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
-	f.exportSnapshotReqs = append(f.exportSnapshotReqs, req)
-	if f.exportSnapshotErr != nil {
-		return nil, f.exportSnapshotErr
-	}
-	if f.exportSnapshotResp == nil {
-		return &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot")}, nil
-	}
-	return f.exportSnapshotResp, nil
-}
-
 func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
 	f.exportSnapshotReqs = append(f.exportSnapshotReqs, &pb.ExportRegionSnapshotRequest{RegionId: req.GetRegionId()})
 	if f.exportSnapshotErr != nil {
@@ -77,14 +66,6 @@ func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *pb.
 		Region: resp.GetRegion(),
 		Reader: io.NopCloser(bytes.NewReader(resp.GetSnapshot())),
 	}, nil
-}
-
-func (f *fakeAdminClient) ImportRegionSnapshot(_ context.Context, req *pb.ImportRegionSnapshotRequest) (*pb.ImportRegionSnapshotResponse, error) {
-	f.importSnapshotBytes = append(f.importSnapshotBytes, append([]byte(nil), req.GetSnapshot()...))
-	if f.importSnapshotErr != nil {
-		return nil, f.importSnapshotErr
-	}
-	return &pb.ImportRegionSnapshotResponse{}, nil
 }
 
 func (f *fakeAdminClient) ImportRegionSnapshotStream(_ context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error) {
