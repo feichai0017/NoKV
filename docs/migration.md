@@ -248,8 +248,8 @@ Once the seed is healthy, normal distributed mechanisms take over:
 
 1. start empty target stores
 2. call `nokv migrate expand` against the current leader
-3. leader exports one SST snapshot payload
-4. target installs the snapshot on an empty peer
+3. leader exports one SST snapshot stream
+4. target imports the streamed snapshot on an empty peer
 5. leader publishes the new membership
 6. wait until the target store reports the peer as hosted
 
