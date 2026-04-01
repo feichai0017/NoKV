@@ -13,6 +13,7 @@ import (
 	raftmeta "github.com/feichai0017/NoKV/raftstore/meta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/metadata"
@@ -423,4 +424,170 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	require.NotNil(t, got)
 	defer got.DecrRef()
 	require.Equal(t, valueBacked, got.Value)
+}
+
+func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing.T) {
+	sourceDir := t.TempDir()
+	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
+		opt.ValueThreshold = 16
+	})
+	defer func() {
+		require.NoError(t, sourceDB.Close())
+		require.NoError(t, sourceMeta.Close())
+	}()
+
+	valueBacked := bytes.Repeat([]byte("z"), 4096)
+	entry := entrykv.NewInternalEntry(entrykv.CFDefault, []byte("alpha"), 9, valueBacked, 0, 0)
+	defer entry.DecrRef()
+	require.NoError(t, sourceDB.ApplyInternalEntries([]*entrykv.Entry{entry}))
+
+	region := raftmeta.RegionMeta{
+		ID:       42,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    raftmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []raftmeta.PeerMeta{
+			{StoreID: 1, PeerID: 101},
+			{StoreID: 2, PeerID: 201},
+		},
+		State: raftmeta.RegionStateRunning,
+	}
+	require.NoError(t, sourceMeta.SaveRegion(region))
+
+	sourceStorage, err := sourceDB.RaftLog().Open(region.ID, sourceMeta)
+	require.NoError(t, err)
+	require.NoError(t, sourceStorage.ApplySnapshot(myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 1,
+			Term:  1,
+			ConfState: raftpb.ConfState{
+				Voters: []uint64{101},
+			},
+		},
+	}))
+
+	sourceStore := store.NewStore(store.Config{
+		StoreID:   1,
+		LocalMeta: sourceMeta,
+		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+			return &peer.Config{
+				RaftConfig: myraft.Config{
+					ID:              101,
+					ElectionTick:    5,
+					HeartbeatTick:   1,
+					MaxSizePerMsg:   1 << 20,
+					MaxInflightMsgs: 256,
+					PreVote:         true,
+				},
+				Transport:      noopTransport{},
+				Apply:          func([]myraft.Entry) error { return nil },
+				SnapshotExport: testSSTExport(sourceDB),
+				Storage:        sourceStorage,
+				GroupID:        meta.ID,
+				Region:         raftmeta.CloneRegionMetaPtr(&meta),
+			}, nil
+		},
+	})
+	defer sourceStore.Close()
+
+	sourcePeerCfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              101,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport:      noopTransport{},
+		Apply:          func([]myraft.Entry) error { return nil },
+		SnapshotExport: testSSTExport(sourceDB),
+		Storage:        sourceStorage,
+		GroupID:        region.ID,
+		Region:         raftmeta.CloneRegionMetaPtr(&region),
+	}
+	_, err = sourceStore.StartPeer(sourcePeerCfg, nil)
+	require.NoError(t, err)
+
+	sourcePeer, ok := sourceStore.Peer(101)
+	require.True(t, ok)
+	require.NoError(t, sourcePeer.Campaign())
+	require.Eventually(t, func() bool {
+		status, ok := sourceStore.RegionRuntimeStatus(region.ID)
+		return ok && status.Leader
+	}, 2_000_000_000, 20_000_000)
+
+	targetDir := t.TempDir()
+	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
+		opt.ValueThreshold = 16
+	})
+	defer func() {
+		require.NoError(t, targetDB.Close())
+		require.NoError(t, targetMeta.Close())
+	}()
+	targetStore := store.NewStore(store.Config{
+		StoreID:   2,
+		LocalMeta: targetMeta,
+		PeerBuilder: func(meta raftmeta.RegionMeta) (*peer.Config, error) {
+			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
+			require.NoError(t, err)
+			return &peer.Config{
+				RaftConfig: myraft.Config{
+					ID:              201,
+					ElectionTick:    5,
+					HeartbeatTick:   1,
+					MaxSizePerMsg:   1 << 20,
+					MaxInflightMsgs: 256,
+					PreVote:         true,
+				},
+				Transport:     noopTransport{},
+				Apply:         func([]myraft.Entry) error { return nil },
+				SnapshotApply: testSSTApply(targetDB),
+				Storage:       storage,
+				GroupID:       meta.ID,
+				Region:        raftmeta.CloneRegionMetaPtr(&meta),
+			}, nil
+		},
+	})
+	defer targetStore.Close()
+
+	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
+	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
+
+	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
+	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&pb.ExportRegionSnapshotStreamRequest{
+		RegionId: region.ID,
+	}, exportStream))
+	require.NotEmpty(t, exportStream.chunks)
+
+	importReqs := make([]*pb.ImportRegionSnapshotStreamRequest, 0, len(exportStream.chunks))
+	for i, chunk := range exportStream.chunks {
+		req := &pb.ImportRegionSnapshotStreamRequest{
+			SnapshotHeader: append([]byte(nil), chunk.GetSnapshotHeader()...),
+			Region:         chunk.GetRegion(),
+			Chunk:          append([]byte(nil), chunk.GetChunk()...),
+		}
+		if i == 0 {
+			req.Region = &pb.RegionMeta{
+				Id:               chunk.GetRegion().GetId(),
+				StartKey:         append([]byte(nil), chunk.GetRegion().GetStartKey()...),
+				EndKey:           []byte("zz"),
+				EpochVersion:     chunk.GetRegion().GetEpochVersion(),
+				EpochConfVersion: chunk.GetRegion().GetEpochConfVersion(),
+				Peers:            append([]*pb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
+			}
+		}
+		importReqs = append(importReqs, req)
+	}
+	importStream := &importRegionSnapshotStreamFeed{ctx: context.Background(), reqs: importReqs}
+	err = targetSvc.ImportRegionSnapshotStream(importStream)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "region snapshot metadata mismatch")
+
+	status, ok := targetStore.RegionRuntimeStatus(region.ID)
+	require.False(t, ok && status.Hosted)
+
+	got, err := targetDB.GetInternalEntry(entrykv.CFDefault, []byte("alpha"), 9)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	require.Nil(t, got)
 }
