@@ -346,6 +346,49 @@ func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid sst snapshot path")
 }
 
+func TestImportPayloadRejectsParentTraversalPath(t *testing.T) {
+	meta := snapshot.Meta{
+		Version: 1,
+		Region: raftmeta.RegionMeta{
+			ID:       46,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			State:    raftmeta.RegionStateRunning,
+		},
+		Compatibility: snapshot.Compatibility{
+			BlockSize:          lsm.DefaultBlockSize,
+			BloomFalsePositive: lsm.DefaultBloomFalsePositive,
+		},
+	}
+	metaBytes, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	var payload bytes.Buffer
+	tw := tar.NewWriter(&payload)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "sst-snapshot.json",
+		Mode: 0o600,
+		Size: int64(len(metaBytes)),
+	}))
+	_, err = tw.Write(metaBytes)
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "tables/../../escape.sst",
+		Mode: 0o600,
+		Size: 4,
+	}))
+	_, err = tw.Write([]byte("fake"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	dstLSM := openSnapshotLSM(t)
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+
+	_, err = snapshot.ImportPayload(dstLSM, t.TempDir(), payload.Bytes(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid sst snapshot path")
+}
+
 func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	db := openSnapshotDB(t)
 	region := raftmeta.RegionMeta{
