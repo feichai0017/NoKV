@@ -268,6 +268,10 @@ func TestImportPayloadRejectsMissingTableFile(t *testing.T) {
 		EntryCount:   1,
 		TableCount:   1,
 		InlineValues: true,
+		Compatibility: snapshot.Compatibility{
+			BlockSize:          lsm.DefaultBlockSize,
+			BloomFalsePositive: lsm.DefaultBloomFalsePositive,
+		},
 		Tables: []snapshot.TableMeta{{
 			RelativePath: "tables/000001.sst",
 			SmallestKey:  []byte("a"),
@@ -307,6 +311,10 @@ func TestImportPayloadRejectsAbsolutePath(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
 			State:    raftmeta.RegionStateRunning,
+		},
+		Compatibility: snapshot.Compatibility{
+			BlockSize:          lsm.DefaultBlockSize,
+			BloomFalsePositive: lsm.DefaultBloomFalsePositive,
 		},
 	}
 	metaBytes, err := json.Marshal(meta)
@@ -357,6 +365,36 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	require.Contains(t, err.Error(), "requires open db")
 }
 
+func TestImportSnapshotDirRejectsIncompatibleTableFormat(t *testing.T) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+		opt.SSTableMaxSz = 1 << 20
+	})
+	defer func() { _ = srcDB.Close() }()
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("alpha"), 3, []byte("a"), 0, 0)
+	defer entry.DecrRef()
+	require.NoError(t, srcDB.ApplyInternalEntries([]*kv.Entry{entry}))
+
+	region := raftmeta.RegionMeta{
+		ID:       44,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	snapshotDir := filepath.Join(t.TempDir(), "region.incompatible.snapshot")
+	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	require.NoError(t, err)
+
+	dstLSM := openSnapshotLSMWithTweak(t, func(opt *lsm.Options) {
+		opt.BlockSize = 2 << 10
+	})
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+
+	_, err = snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incompatible block size")
+}
+
 func openSnapshotDB(t testing.TB) *NoKV.DB {
 	t.Helper()
 	return openSnapshotDBWithTweak(t, nil)
@@ -376,14 +414,14 @@ func openSnapshotDBWithTweak(t testing.TB, tweak func(*NoKV.Options)) *NoKV.DB {
 	return db
 }
 
-func testSnapshotLSMOptions(t testing.TB) *lsm.Options {
+func testSnapshotLSMOptionsWithTweak(t testing.TB, tweak func(*lsm.Options)) *lsm.Options {
 	t.Helper()
-	return &lsm.Options{
+	opt := &lsm.Options{
 		WorkDir:             t.TempDir(),
 		MemTableSize:        1 << 20,
 		SSTableMaxSz:        1 << 20,
-		BlockSize:           4 << 10,
-		BloomFalsePositive:  0.01,
+		BlockSize:           lsm.DefaultBlockSize,
+		BloomFalsePositive:  lsm.DefaultBloomFalsePositive,
 		BaseLevelSize:       10 << 20,
 		LevelSizeMultiplier: 10,
 		BaseTableSize:       2 << 20,
@@ -392,11 +430,20 @@ func testSnapshotLSMOptions(t testing.TB) *lsm.Options {
 		MaxLevelNum:         7,
 		NumCompactors:       1,
 	}
+	if tweak != nil {
+		tweak(opt)
+	}
+	return opt
 }
 
 func openSnapshotLSM(t testing.TB) *lsm.LSM {
 	t.Helper()
-	opt := testSnapshotLSMOptions(t)
+	return openSnapshotLSMWithTweak(t, nil)
+}
+
+func openSnapshotLSMWithTweak(t testing.TB, tweak func(*lsm.Options)) *lsm.LSM {
+	t.Helper()
+	opt := testSnapshotLSMOptionsWithTweak(t, tweak)
 	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
 	require.NoError(t, err)
 	lsmInst, err := lsm.NewLSM(opt, wlog)

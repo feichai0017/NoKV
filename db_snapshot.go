@@ -36,6 +36,10 @@ func (dst snapshotTarget) ImportExternalSST(paths []string) (*lsm.ExternalSSTImp
 	return dst.lsm.ImportExternalSST(paths)
 }
 
+func (dst snapshotTarget) ExternalSSTOptions() *lsm.Options {
+	return dst.lsm.ExternalSSTOptions()
+}
+
 func (dst snapshotTarget) RollbackExternalSST(fileIDs []uint64) error {
 	return dst.lsm.RollbackExternalSST(fileIDs)
 }
