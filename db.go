@@ -187,44 +187,7 @@ func (db *DB) checkWorkDirMode() error {
 }
 
 func (db *DB) openEngine() error {
-	baseTableSize, baseLevelSize := db.levelSizes()
-	lsmCore, err := lsm.NewLSM(&lsm.Options{
-		FS:                            db.fs,
-		WorkDir:                       db.opt.WorkDir,
-		MemTableSize:                  db.opt.MemTableSize,
-		MemTableEngine:                string(db.opt.MemTableEngine),
-		SSTableMaxSz:                  db.opt.SSTableMaxSz,
-		BlockSize:                     8 * 1024,
-		BloomFalsePositive:            0.01,
-		BaseLevelSize:                 baseLevelSize,
-		LevelSizeMultiplier:           8,
-		BaseTableSize:                 baseTableSize,
-		TableSizeMultiplier:           2,
-		NumLevelZeroTables:            db.opt.NumLevelZeroTables,
-		L0SlowdownWritesTrigger:       db.opt.L0SlowdownWritesTrigger,
-		L0StopWritesTrigger:           db.opt.L0StopWritesTrigger,
-		L0ResumeWritesTrigger:         db.opt.L0ResumeWritesTrigger,
-		CompactionSlowdownTrigger:     db.opt.CompactionSlowdownTrigger,
-		CompactionStopTrigger:         db.opt.CompactionStopTrigger,
-		CompactionResumeTrigger:       db.opt.CompactionResumeTrigger,
-		MaxLevelNum:                   utils.MaxLevelNum,
-		NumCompactors:                 db.opt.NumCompactors,
-		CompactionPolicy:              string(db.opt.CompactionPolicy),
-		IngestCompactBatchSize:        db.opt.IngestCompactBatchSize,
-		IngestBacklogMergeScore:       db.opt.IngestBacklogMergeScore,
-		IngestShardParallelism:        db.opt.IngestShardParallelism,
-		WriteThrottleMinRate:          db.opt.WriteThrottleMinRate,
-		WriteThrottleMaxRate:          db.opt.WriteThrottleMaxRate,
-		CompactionValueWeight:         db.opt.CompactionValueWeight,
-		CompactionValueAlertThreshold: db.opt.CompactionValueAlertThreshold,
-		BlockCacheBytes:               db.opt.BlockCacheBytes,
-		IndexCacheBytes:               db.opt.IndexCacheBytes,
-		DiscardStatsCh:                &db.discardStatsCh,
-		ManifestSync:                  db.opt.ManifestSync,
-		ManifestRewriteThreshold:      db.opt.ManifestRewriteThreshold,
-		WALGCPolicy:                   newDBWALGCPolicy(db),
-		ThrottleCallback:              db.applyThrottle,
-	}, db.wal)
+	lsmCore, err := lsm.NewLSM(db.runtimeLSMOptions(), db.wal)
 	if err != nil {
 		return fmt.Errorf("open db: lsm init: %w", err)
 	}
@@ -289,6 +252,32 @@ func (db *DB) levelSizes() (int64, int64) {
 	}
 	baseLevelSize := max(baseTableSize*4, 32<<20)
 	return baseTableSize, baseLevelSize
+}
+
+func (db *DB) runtimeLSMOptions() *lsm.Options {
+	baseTableSize, baseLevelSize := db.levelSizes()
+	cfg := &lsm.Options{
+		FS:                       db.fs,
+		WorkDir:                  db.opt.WorkDir,
+		MemTableSize:             db.opt.MemTableSize,
+		MemTableEngine:           string(db.opt.MemTableEngine),
+		SSTableMaxSz:             db.opt.SSTableMaxSz,
+		BlockSize:                lsm.DefaultBlockSize,
+		BloomFalsePositive:       lsm.DefaultBloomFalsePositive,
+		BaseLevelSize:            baseLevelSize,
+		LevelSizeMultiplier:      lsm.DefaultLevelSizeMultiplier,
+		BaseTableSize:            baseTableSize,
+		TableSizeMultiplier:      lsm.DefaultTableSizeMultiplier,
+		MaxLevelNum:              utils.MaxLevelNum,
+		CompactionPolicy:         string(db.opt.CompactionPolicy),
+		DiscardStatsCh:           &db.discardStatsCh,
+		ManifestSync:             db.opt.ManifestSync,
+		ManifestRewriteThreshold: db.opt.ManifestRewriteThreshold,
+		WALGCPolicy:              newDBWALGCPolicy(db),
+		ThrottleCallback:         db.applyThrottle,
+	}
+	db.opt.applyLSMSharedOptions(cfg)
+	return cfg
 }
 
 func (l dbRaftLog) Open(groupID uint64, meta *raftmeta.Store) (engine.PeerStorage, error) {

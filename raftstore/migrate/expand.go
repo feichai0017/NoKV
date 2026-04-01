@@ -19,6 +19,7 @@ type PeerTarget struct {
 
 // ExpandConfig defines one seed-region expansion request.
 type ExpandConfig struct {
+	WorkDir      string
 	Addr         string
 	RegionID     uint64
 	WaitTimeout  time.Duration
@@ -81,11 +82,48 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 	}()
 
 	result := ExpandResultSet{Addr: cfg.Addr, RegionID: cfg.RegionID, Results: make([]ExpandResult, 0, len(cfg.Targets))}
-	for _, target := range cfg.Targets {
+	if cfg.WorkDir != "" {
+		if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+			Stage:            CheckpointExpandStarted,
+			RegionID:         cfg.RegionID,
+			CompletedTargets: 0,
+			TotalTargets:     len(cfg.Targets),
+		}); err != nil {
+			return result, err
+		}
+	}
+	for i, target := range cfg.Targets {
+		if cfg.WorkDir != "" {
+			if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+				Stage:            CheckpointExpandTarget,
+				RegionID:         cfg.RegionID,
+				TargetStoreID:    target.StoreID,
+				TargetPeerID:     target.PeerID,
+				CompletedTargets: i,
+				TotalTargets:     len(cfg.Targets),
+			}); err != nil {
+				return result, err
+			}
+		}
 		step, err := expandTargetWithLeaderClient(ctx, leaderClient, cfg, target)
 		result.Results = append(result.Results, step)
 		if err != nil {
 			return result, err
+		}
+		if err := validateExpandResult(step); err != nil {
+			return result, err
+		}
+		if cfg.WorkDir != "" {
+			if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
+				Stage:            CheckpointExpandHosted,
+				RegionID:         cfg.RegionID,
+				TargetStoreID:    target.StoreID,
+				TargetPeerID:     target.PeerID,
+				CompletedTargets: i + 1,
+				TotalTargets:     len(cfg.Targets),
+			}); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -138,18 +176,29 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	if leaderRegion == nil {
 		return result, fmt.Errorf("migrate: leader region %d missing published metadata for peer %d", cfg.RegionID, target.PeerID)
 	}
-	snapshotResp, err := leaderClient.ExportRegionSnapshot(waitCtx, &pb.ExportRegionSnapshotRequest{RegionId: cfg.RegionID})
+	snapshotStream, err := leaderClient.ExportRegionSnapshotStream(waitCtx, &pb.ExportRegionSnapshotStreamRequest{
+		RegionId: cfg.RegionID,
+	})
 	if err != nil {
 		return result, fmt.Errorf("migrate: export region %d snapshot from %s: %w", cfg.RegionID, cfg.Addr, err)
 	}
-	if len(snapshotResp.GetSnapshot()) == 0 {
-		return result, fmt.Errorf("migrate: exported region %d snapshot from %s is empty", cfg.RegionID, cfg.Addr)
+	defer func() {
+		if snapshotStream != nil && snapshotStream.Reader != nil {
+			_ = snapshotStream.Reader.Close()
+		}
+	}()
+	if len(snapshotStream.Header) == 0 {
+		return result, fmt.Errorf("migrate: exported region %d snapshot header from %s is empty", cfg.RegionID, cfg.Addr)
 	}
-	if snapshotResp.GetRegion() != nil {
-		result.LeaderRegion = snapshotResp.GetRegion()
+	if snapshotStream.Region != nil {
+		result.LeaderRegion = snapshotStream.Region
 	}
-	if _, err := targetClient.InstallRegionSnapshot(waitCtx, &pb.InstallRegionSnapshotRequest{Snapshot: snapshotResp.GetSnapshot()}); err != nil {
-		return result, fmt.Errorf("migrate: install region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
+	importRegion := leaderRegion
+	if snapshotStream.Region != nil {
+		importRegion = snapshotStream.Region
+	}
+	if _, err := targetClient.ImportRegionSnapshotStream(waitCtx, snapshotStream.Header, importRegion, snapshotStream.Reader); err != nil {
+		return result, fmt.Errorf("migrate: import region %d snapshot on %s: %w", cfg.RegionID, target.TargetAdminAddr, err)
 	}
 	if err := waitForTargetHosted(waitCtx, targetClient, cfg.RegionID, target.PeerID, cfg.PollInterval, &result); err != nil {
 		return result, err

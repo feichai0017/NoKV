@@ -1,7 +1,9 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -16,8 +18,11 @@ type fakeAdminClient struct {
 	transferErr         error
 	exportSnapshotResp  *pb.ExportRegionSnapshotResponse
 	exportSnapshotErr   error
-	installSnapshotErr  error
-	installSnapshotReqs []*pb.InstallRegionSnapshotRequest
+	exportSnapshotReqs  []*pb.ExportRegionSnapshotRequest
+	importSnapshotErr   error
+	importSnapshotHdrs  [][]byte
+	importSnapshotRegs  []*pb.RegionMeta
+	importSnapshotBytes [][]byte
 
 	statuses []*pb.RegionRuntimeStatusResponse
 	calls    int
@@ -47,7 +52,8 @@ func (f *fakeAdminClient) TransferLeader(context.Context, *pb.TransferLeaderRequ
 	return &pb.TransferLeaderResponse{}, nil
 }
 
-func (f *fakeAdminClient) ExportRegionSnapshot(context.Context, *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+func (f *fakeAdminClient) ExportRegionSnapshot(_ context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+	f.exportSnapshotReqs = append(f.exportSnapshotReqs, req)
 	if f.exportSnapshotErr != nil {
 		return nil, f.exportSnapshotErr
 	}
@@ -57,12 +63,42 @@ func (f *fakeAdminClient) ExportRegionSnapshot(context.Context, *pb.ExportRegion
 	return f.exportSnapshotResp, nil
 }
 
-func (f *fakeAdminClient) InstallRegionSnapshot(_ context.Context, req *pb.InstallRegionSnapshotRequest) (*pb.InstallRegionSnapshotResponse, error) {
-	f.installSnapshotReqs = append(f.installSnapshotReqs, req)
-	if f.installSnapshotErr != nil {
-		return nil, f.installSnapshotErr
+func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
+	f.exportSnapshotReqs = append(f.exportSnapshotReqs, &pb.ExportRegionSnapshotRequest{RegionId: req.GetRegionId()})
+	if f.exportSnapshotErr != nil {
+		return nil, f.exportSnapshotErr
 	}
-	return &pb.InstallRegionSnapshotResponse{}, nil
+	resp := f.exportSnapshotResp
+	if resp == nil {
+		resp = &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot")}
+	}
+	return &SnapshotExportStream{
+		Header: []byte("header"),
+		Region: resp.GetRegion(),
+		Reader: io.NopCloser(bytes.NewReader(resp.GetSnapshot())),
+	}, nil
+}
+
+func (f *fakeAdminClient) ImportRegionSnapshot(_ context.Context, req *pb.ImportRegionSnapshotRequest) (*pb.ImportRegionSnapshotResponse, error) {
+	f.importSnapshotBytes = append(f.importSnapshotBytes, append([]byte(nil), req.GetSnapshot()...))
+	if f.importSnapshotErr != nil {
+		return nil, f.importSnapshotErr
+	}
+	return &pb.ImportRegionSnapshotResponse{}, nil
+}
+
+func (f *fakeAdminClient) ImportRegionSnapshotStream(_ context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	f.importSnapshotHdrs = append(f.importSnapshotHdrs, append([]byte(nil), header...))
+	f.importSnapshotRegs = append(f.importSnapshotRegs, region)
+	f.importSnapshotBytes = append(f.importSnapshotBytes, data)
+	if f.importSnapshotErr != nil {
+		return nil, f.importSnapshotErr
+	}
+	return &pb.ImportRegionSnapshotResponse{}, nil
 }
 
 func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
@@ -126,8 +162,10 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 	require.True(t, result.Results[0].TargetHosted)
 	require.Equal(t, uint64(22), result.Results[0].TargetLocalPeerID)
 	require.Equal(t, uint64(1), result.Results[0].TargetAppliedIdx)
-	require.Len(t, target.installSnapshotReqs, 1)
-	require.Equal(t, []byte("snapshot-8"), target.installSnapshotReqs[0].GetSnapshot())
+	require.Len(t, leader.exportSnapshotReqs, 1)
+	require.Equal(t, uint64(8), leader.exportSnapshotReqs[0].GetRegionId())
+	require.Len(t, target.importSnapshotBytes, 1)
+	require.Equal(t, []byte("snapshot-8"), target.importSnapshotBytes[0])
 }
 
 func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
@@ -200,6 +238,101 @@ func TestExpandRollsTargetsSequentially(t *testing.T) {
 	require.True(t, result.Results[1].TargetHosted)
 }
 
+func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
+	workDir := prepareStandaloneWorkdir(t)
+	_, err := Init(InitConfig{WorkDir: workDir, StoreID: 1, RegionID: 15, PeerID: 115})
+	require.NoError(t, err)
+
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 15}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-15")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 15, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+		},
+	}
+	target := &fakeAdminClient{
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err = Expand(context.Background(), ExpandConfig{
+		WorkDir:      workDir,
+		Addr:         "leader",
+		RegionID:     15,
+		WaitTimeout:  time.Second,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"},
+		},
+	})
+	require.NoError(t, err)
+
+	status, err := ReadStatus(workDir)
+	require.NoError(t, err)
+	require.NotNil(t, status.Checkpoint)
+	require.Equal(t, CheckpointExpandHosted, status.Checkpoint.Stage)
+	require.Equal(t, uint64(2), status.Checkpoint.TargetStoreID)
+	require.Equal(t, uint64(22), status.Checkpoint.TargetPeerID)
+	require.Equal(t, 1, status.Checkpoint.CompletedTargets)
+	require.Equal(t, 1, status.Checkpoint.TotalTargets)
+	require.Contains(t, status.ResumeHint, "completed 1/1 target")
+}
+
+func TestExpandRequestsRegionSnapshot(t *testing.T) {
+	leader := &fakeAdminClient{
+		addResp:            &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 18}},
+		exportSnapshotResp: &pb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-18")},
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Region: &pb.RegionMeta{Id: 18, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 28}}}},
+		},
+	}
+	target := &fakeAdminClient{
+		statuses: []*pb.RegionRuntimeStatusResponse{
+			{Known: true, Hosted: true, LocalPeerId: 28, AppliedIndex: 1, AppliedTerm: 1},
+		},
+	}
+	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
+		switch addr {
+		case "leader":
+			return leader, func() error { return nil }, nil
+		case "target":
+			return target, func() error { return nil }, nil
+		default:
+			t.Fatalf("unexpected addr %q", addr)
+			return nil, nil, nil
+		}
+	}
+
+	_, err := Expand(context.Background(), ExpandConfig{
+		Addr:         "leader",
+		RegionID:     18,
+		WaitTimeout:  time.Second,
+		PollInterval: time.Millisecond,
+		Dial:         dial,
+		Targets: []PeerTarget{
+			{StoreID: 2, PeerID: 28, TargetAdminAddr: "target"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, leader.exportSnapshotReqs, 1)
+	require.Equal(t, uint64(18), leader.exportSnapshotReqs[0].GetRegionId())
+	require.Len(t, target.importSnapshotBytes, 1)
+	require.Equal(t, []byte("snapshot-18"), target.importSnapshotBytes[0])
+}
+
 func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp:           &pb.AddPeerResponse{Region: &pb.RegionMeta{Id: 12}},
@@ -231,7 +364,7 @@ func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "export region 12 snapshot")
-	require.Empty(t, target.installSnapshotReqs)
+	require.Empty(t, target.importSnapshotBytes)
 }
 
 func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
@@ -242,7 +375,7 @@ func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
 			{Known: true, Region: &pb.RegionMeta{Id: 13, Peers: []*pb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
-	target := &fakeAdminClient{installSnapshotErr: context.DeadlineExceeded}
+	target := &fakeAdminClient{importSnapshotErr: context.DeadlineExceeded}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
 		switch addr {
 		case "leader":
@@ -264,8 +397,8 @@ func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
 		Targets:      []PeerTarget{{StoreID: 2, PeerID: 22, TargetAdminAddr: "target"}},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "install region 13 snapshot")
-	require.Len(t, target.installSnapshotReqs, 1)
+	require.Contains(t, err.Error(), "import region 13 snapshot")
+	require.Len(t, target.importSnapshotBytes, 1)
 }
 
 func TestExpandTimesOutWhenLeaderNeverPublishesPeer(t *testing.T) {

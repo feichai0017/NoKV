@@ -25,8 +25,8 @@ const (
 	// AfterInitCatalogPersist simulates a crash after migration init has written
 	// local region catalog state but before seed snapshot export and seeded mode.
 	AfterInitCatalogPersist
-	// AfterInitSeedSnapshot simulates a crash after the seed logical snapshot has
-	// been exported but before raft seed state and MODE=seeded are finalized.
+	// AfterInitSeedSnapshot simulates a crash after the seed snapshot files
+	// has been exported but before raft seed state and MODE=seeded are finalized.
 	AfterInitSeedSnapshot
 	// AfterReadyAdvanceBeforeSend simulates a crash after a peer has advanced one
 	// Ready batch but before it sends the outbound raft messages derived from it.
@@ -80,7 +80,7 @@ func ShouldFailAfterInitCatalogPersist() bool {
 }
 
 // ShouldFailAfterInitSeedSnapshot reports whether migration init should stop
-// after exporting the seed logical snapshot but before seeded finalization.
+// after exporting the seed snapshot files but before seeded finalization.
 func ShouldFailAfterInitSeedSnapshot() bool {
 	return Current()&AfterInitSeedSnapshot != 0
 }

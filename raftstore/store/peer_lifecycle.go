@@ -162,11 +162,11 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 	if _, ok := s.router.Peer(msg.To); ok {
 		return nil
 	}
-	manifest, err := snapshotpkg.ReadPayloadManifest(msg.Snapshot.Data)
+	metaFile, err := snapshotpkg.ReadPayloadMeta(msg.Snapshot.Data)
 	if err != nil {
-		return fmt.Errorf("raftstore: decode snapshot payload manifest: %w", err)
+		return fmt.Errorf("raftstore: decode sst snapshot payload meta: %w", err)
 	}
-	meta := manifest.Region
+	meta := metaFile.Region
 	if meta.ID == 0 {
 		return fmt.Errorf("raftstore: snapshot payload missing region metadata")
 	}
@@ -200,8 +200,8 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 }
 
 // InstallRegionSnapshot installs one leader-exported raft snapshot on the
-// local store, bootstrapping the target peer on demand from the logical
-// snapshot payload carried in Snapshot.Data.
+// local store, bootstrapping the target peer on demand from the snapshot
+// payload carried in Snapshot.Data.
 func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta, error) {
 	if s == nil {
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: store is nil")
@@ -210,13 +210,13 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires non-empty snapshot")
 	}
 	if len(snap.Data) == 0 {
-		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires logical snapshot payload")
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region snapshot requires snapshot payload")
 	}
-	manifest, err := snapshotpkg.ReadPayloadManifest(snap.Data)
+	metaFile, err := snapshotpkg.ReadPayloadMeta(snap.Data)
 	if err != nil {
-		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: decode install snapshot payload: %w", err)
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: decode install sst snapshot payload: %w", err)
 	}
-	meta := manifest.Region
+	meta := metaFile.Region
 	if meta.ID == 0 {
 		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install snapshot payload missing region metadata")
 	}
@@ -274,6 +274,100 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (raftmeta.RegionMeta
 	}
 	s.regionMgr().setPeer(meta.ID, p)
 	if err := s.applyRegionMeta(meta); err != nil {
+		s.router.remove(localPeer.PeerID)
+		s.regionMgr().setPeer(meta.ID, nil)
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, err
+	}
+	return meta, nil
+}
+
+// InstallRegionSSTSnapshot installs one migration-only SST snapshot payload on
+// the local store. The raft snapshot metadata is applied to the peer storage
+// first, then SST files are ingested before the peer is published.
+func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta raftmeta.RegionMeta, install func() (func() error, error)) (raftmeta.RegionMeta, error) {
+	if s == nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: store is nil")
+	}
+	if myraft.IsEmptySnap(snap) {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region sst snapshot requires non-empty snapshot")
+	}
+	if meta.ID == 0 {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region sst snapshot requires region metadata")
+	}
+	if install == nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region sst snapshot requires install callback")
+	}
+	var localPeer raftmeta.PeerMeta
+	for _, peerMeta := range meta.Peers {
+		if peerMeta.StoreID == s.storeID {
+			localPeer = peerMeta
+			break
+		}
+	}
+	if localPeer.PeerID == 0 {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: region %d does not assign a peer to store %d", meta.ID, s.storeID)
+	}
+	if existing, ok := s.Peer(localPeer.PeerID); ok && existing != nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: peer %d already hosted for region %d", localPeer.PeerID, meta.ID)
+	}
+	if s.peerBuilder == nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install region sst snapshot requires peer builder")
+	}
+	cfg, err := s.peerBuilder(meta)
+	if err != nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: build install peer for region %d: %w", meta.ID, err)
+	}
+	if cfg == nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: peer builder returned nil config for region %d", meta.ID)
+	}
+	if cfg.RaftConfig.ID != localPeer.PeerID {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install sst snapshot peer mismatch want=%d got=%d", localPeer.PeerID, cfg.RaftConfig.ID)
+	}
+	cfgCopy := *cfg
+	cfgCopy.ConfChange = s.handlePeerConfChange
+	cfgCopy.AllowSnapshotInstallRetry = true
+	if cfgCopy.AdminApply == nil {
+		cfgCopy.AdminApply = s.handleAdminCommand
+	}
+	cfgCopy.Apply = func(entries []myraft.Entry) error {
+		return s.applyEntries(entries)
+	}
+	p, err := peer.NewPeer(&cfgCopy)
+	if err != nil {
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: new sst install peer %d for region %d: %w", localPeer.PeerID, meta.ID, err)
+	}
+	snapNoData := snap
+	snapNoData.Data = nil
+	msg := myraft.Message{Type: myraft.MsgSnapshot, To: localPeer.PeerID, Snapshot: &snapNoData}
+	if err := p.Step(msg); err != nil {
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, err
+	}
+	rollback, err := install()
+	if err != nil {
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: install sst payload for region %d: %w", meta.ID, err)
+	}
+	cleanup := func() {
+		if rollback != nil {
+			_ = rollback()
+		}
+	}
+	p.ApplyRegionMetaMirror(meta)
+	if failpoints.ShouldFailAfterSnapshotApplyBeforePublish() {
+		cleanup()
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, fmt.Errorf("raftstore: failpoint after snapshot apply before publish")
+	}
+	if err := s.router.add(p); err != nil {
+		cleanup()
+		_ = p.Close()
+		return raftmeta.RegionMeta{}, err
+	}
+	s.regionMgr().setPeer(meta.ID, p)
+	if err := s.applyRegionMeta(meta); err != nil {
+		cleanup()
 		s.router.remove(localPeer.PeerID)
 		s.regionMgr().setPeer(meta.ID, nil)
 		_ = p.Close()
