@@ -395,6 +395,36 @@ func TestImportSnapshotDirRejectsIncompatibleTableFormat(t *testing.T) {
 	require.Contains(t, err.Error(), "incompatible block size")
 }
 
+func TestImportSnapshotDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+		opt.SSTableMaxSz = 1 << 20
+	})
+	defer func() { _ = srcDB.Close() }()
+
+	entry := kv.NewInternalEntry(kv.CFDefault, []byte("alpha"), 3, []byte("a"), 0, 0)
+	defer entry.DecrRef()
+	require.NoError(t, srcDB.ApplyInternalEntries([]*kv.Entry{entry}))
+
+	region := raftmeta.RegionMeta{
+		ID:       45,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		State:    raftmeta.RegionStateRunning,
+	}
+	snapshotDir := filepath.Join(t.TempDir(), "region.bloom.incompatible.snapshot")
+	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	require.NoError(t, err)
+
+	dstLSM := openSnapshotLSMWithTweak(t, func(opt *lsm.Options) {
+		opt.BloomFalsePositive = 0.02
+	})
+	defer func() { require.NoError(t, dstLSM.Close()) }()
+
+	_, err = snapshot.ImportSnapshotDir(dstLSM, snapshotDir, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "incompatible bloom false positive")
+}
+
 func openSnapshotDB(t testing.TB) *NoKV.DB {
 	t.Helper()
 	return openSnapshotDBWithTweak(t, nil)
