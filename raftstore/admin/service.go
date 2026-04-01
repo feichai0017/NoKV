@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -342,6 +343,30 @@ func regionMetaFromPB(meta *pb.RegionMeta) (raftmeta.RegionMeta, error) {
 	}, nil
 }
 
+func matchesSnapshotRegion(header, payload raftmeta.RegionMeta) bool {
+	if header.ID != payload.ID {
+		return false
+	}
+	if !bytes.Equal(header.StartKey, payload.StartKey) {
+		return false
+	}
+	if !bytes.Equal(header.EndKey, payload.EndKey) {
+		return false
+	}
+	if header.Epoch != payload.Epoch {
+		return false
+	}
+	if len(header.Peers) != len(payload.Peers) {
+		return false
+	}
+	for i := range header.Peers {
+		if header.Peers[i] != payload.Peers[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) exportRegionSnapshot(regionID uint64) (store.RegionRuntimeStatus, raftpb.Snapshot, error) {
 	if s == nil || s.store == nil {
 		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -403,11 +428,11 @@ func (s *Service) importRegionSnapshot(snap raftpb.Snapshot, streamed *streamedI
 		if result == nil {
 			return nil, nil
 		}
-		if result.Meta.Region.ID != meta.ID {
+		if !matchesSnapshotRegion(meta, result.Meta.Region) {
 			if rollbackErr := result.Rollback(); rollbackErr != nil {
 				return nil, fmt.Errorf("region snapshot metadata mismatch and rollback failed: %w", rollbackErr)
 			}
-			return nil, fmt.Errorf("region snapshot metadata mismatch: header region=%d payload region=%d", meta.ID, result.Meta.Region.ID)
+			return nil, fmt.Errorf("region snapshot metadata mismatch: header=%+v payload=%+v", meta, result.Meta.Region)
 		}
 		if len(result.ImportedFileIDs) == 0 {
 			return nil, nil
