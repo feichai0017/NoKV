@@ -2,6 +2,7 @@ package NoKV
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/lsm"
@@ -62,22 +63,22 @@ func (db *DB) snapshotTarget() (snapshotTarget, error) {
 	return snapshotTarget{lsm: lsmCore}, nil
 }
 
-// ExportFiles persists one region-scoped snapshot directory in SST form.
-func (db *DB) ExportFiles(dir string, region raftmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
+// ExportSnapshotDir persists one region-scoped snapshot directory in SST form.
+func (db *DB) ExportSnapshotDir(dir string, region raftmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
 	src, err := db.snapshotSource()
 	if err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ExportFiles(src, dir, region, nil)
+	return snapshotpkg.ExportSnapshotDir(src, dir, region, nil)
 }
 
-// ImportFiles imports one region-scoped snapshot directory into the current DB.
-func (db *DB) ImportFiles(dir string) (*snapshotpkg.ImportResult, error) {
+// ImportSnapshotDir imports one region-scoped snapshot directory into the current DB.
+func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
 	dst, err := db.snapshotTarget()
 	if err != nil {
 		return nil, err
 	}
-	return snapshotpkg.ImportFiles(dst, dir, nil)
+	return snapshotpkg.ImportSnapshotDir(dst, dir, nil)
 }
 
 // ExportSnapshot materializes one region-scoped snapshot payload using the
@@ -89,6 +90,16 @@ func (db *DB) ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error) {
 	}
 	payload, _, err := snapshotpkg.ExportPayload(src, db.WorkDir(), region, nil)
 	return payload, err
+}
+
+// ExportSnapshotTo materializes one region-scoped snapshot payload and writes
+// it to w.
+func (db *DB) ExportSnapshotTo(w io.Writer, region raftmeta.RegionMeta) (snapshotpkg.Meta, error) {
+	src, err := db.snapshotSource()
+	if err != nil {
+		return snapshotpkg.Meta{}, err
+	}
+	return snapshotpkg.WritePayload(w, src, db.WorkDir(), region, nil)
 }
 
 // ImportSnapshot imports one region-scoped snapshot payload into the current
@@ -103,4 +114,14 @@ func (db *DB) ImportSnapshot(payload []byte) (*snapshotpkg.ImportResult, error) 
 		return nil, err
 	}
 	return snapshotpkg.ImportPayload(dst, db.WorkDir(), payload, nil)
+}
+
+// ImportSnapshotFrom imports one region-scoped snapshot payload from r into the
+// current DB and returns the full staged-import result.
+func (db *DB) ImportSnapshotFrom(r io.Reader) (*snapshotpkg.ImportResult, error) {
+	dst, err := db.snapshotTarget()
+	if err != nil {
+		return nil, err
+	}
+	return snapshotpkg.ImportPayloadFrom(dst, db.WorkDir(), r, nil)
 }

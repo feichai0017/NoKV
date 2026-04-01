@@ -43,13 +43,13 @@ type ExportResult struct {
 	Meta Meta
 }
 
-// Bridge is the high-level region-snapshot bridge exposed by the storage
+// SnapshotStore is the high-level region-snapshot bridge exposed by the storage
 // engine to raftstore wiring.
 //
 // ImportSnapshot returns the full staged-import result so callers that need a
 // simple region metadata view can read result.Meta.Region, while install paths
 // can still roll back imported SST files before peer publish completes.
-type Bridge interface {
+type SnapshotStore interface {
 	ExportSnapshot(region raftmeta.RegionMeta) ([]byte, error)
 	ImportSnapshot(payload []byte) (*ImportResult, error)
 }
