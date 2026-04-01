@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3045ff64.js";
+            window.path_to_searchindex_js = "searchindex-e2903395.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-b976cdea.js"></script>
@@ -6580,9 +6580,9 @@ func (f *faultFile) WriteAt(p []byte, off int64) (int, error) {
 <h3 id="what-exists-today"><a class="header" href="#what-exists-today">What exists today</a></h3>
 <p>The current implementation is split across:</p>
 <ul>
-<li><code>raftstore/snapshot/sst_meta.go</code></li>
-<li><code>raftstore/snapshot/sst_files.go</code></li>
-<li><code>raftstore/snapshot/sst_payload.go</code></li>
+<li><code>raftstore/snapshot/meta.go</code></li>
+<li><code>raftstore/snapshot/dir.go</code></li>
+<li><code>raftstore/snapshot/payload.go</code></li>
 <li><code>raftstore/migrate/init.go</code></li>
 <li><code>raftstore/migrate/expand.go</code></li>
 <li><code>raftstore/store/peer_lifecycle.go</code></li>
@@ -6753,8 +6753,8 @@ details to raftstore wiring, while simple callers can still just read
 <p>Instead the code is split across:</p>
 <ul>
 <li><code>lsm/external_sst.go</code></li>
-<li><code>raftstore/snapshot/sst_files.go</code></li>
-<li><code>raftstore/snapshot/sst_payload.go</code></li>
+<li><code>raftstore/snapshot/dir.go</code></li>
+<li><code>raftstore/snapshot/payload.go</code></li>
 </ul>
 <p>The narrow seam does only this:</p>
 <ul>
