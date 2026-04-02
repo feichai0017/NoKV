@@ -4,7 +4,7 @@ import (
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
@@ -156,7 +156,7 @@ func newServiceHarness(t *testing.T, cfg harnessConfig) serviceHarness {
 	service := kv.NewService(st)
 	ctx := &kvrpcpb.Context{
 		RegionId:    meta.ID,
-		RegionEpoch: &metapb.RegionEpoch{Version: cfg.epochVersion, ConfVer: cfg.epochConfVer},
+		RegionEpoch: &metapb.RegionEpoch{Version: cfg.epochVersion, ConfVersion: cfg.epochConfVer},
 		Peer:        &metapb.RegionPeer{StoreId: cfg.storeID, PeerId: cfg.peerID},
 	}
 	return serviceHarness{
@@ -243,7 +243,7 @@ func TestServicePrewriteCommit(t *testing.T) {
 	require.NoError(t, peer.Campaign())
 
 	service := kv.NewService(st)
-	ctx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVer: 1}}
+	ctx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}}
 	prewriteReq := &kvrpcpb.KvPrewriteRequest{
 		Context: ctx,
 		Request: &kvrpcpb.PrewriteRequest{
@@ -368,7 +368,7 @@ func TestServiceRegionEpochMismatch(t *testing.T) {
 	require.NoError(t, peer.Campaign())
 
 	service := kv.NewService(st)
-	badCtx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVer: 1}}
+	badCtx := &kvrpcpb.Context{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}}
 	resp, err := service.KvCommit(context.Background(), &kvrpcpb.KvCommitRequest{Context: badCtx, Request: &kvrpcpb.CommitRequest{StartVersion: 1}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetRegionError())

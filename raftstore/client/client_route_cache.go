@@ -6,7 +6,7 @@ import (
 	"fmt"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"time"
@@ -154,7 +154,7 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 			if meta == nil {
 				continue
 			}
-			desc := metacodec.DescriptorFromLegacyRegionMeta(meta)
+			desc := metacodec.DescriptorFromProto(meta)
 			c.upsertRegionLocked(desc, defaultLeaderStoreID(desc))
 		}
 		c.mu.Unlock()
@@ -275,8 +275,8 @@ func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 	return &kvrpcpb.Context{
 		RegionId: region.desc.RegionID,
 		RegionEpoch: &metapb.RegionEpoch{
-			Version: region.desc.Epoch.Version,
-			ConfVer: region.desc.Epoch.ConfVersion,
+			Version:     region.desc.Epoch.Version,
+			ConfVersion: region.desc.Epoch.ConfVersion,
 		},
 		Peer: peerMeta,
 	}, nil

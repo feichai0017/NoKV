@@ -9,7 +9,7 @@
 package adminpb
 
 import (
-	legacy "github.com/feichai0017/NoKV/pb/legacy"
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -86,7 +86,7 @@ func (x *AddPeerRequest) GetPeerId() uint64 {
 
 type AddPeerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -121,7 +121,7 @@ func (*AddPeerResponse) Descriptor() ([]byte, []int) {
 	return file_admin_admin_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *AddPeerResponse) GetRegion() *legacy.RegionMeta {
+func (x *AddPeerResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -182,7 +182,7 @@ func (x *RemovePeerRequest) GetPeerId() uint64 {
 
 type RemovePeerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -217,7 +217,7 @@ func (*RemovePeerResponse) Descriptor() ([]byte, []int) {
 	return file_admin_admin_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *RemovePeerResponse) GetRegion() *legacy.RegionMeta {
+func (x *RemovePeerResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -278,7 +278,7 @@ func (x *TransferLeaderRequest) GetPeerId() uint64 {
 
 type TransferLeaderResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -313,7 +313,7 @@ func (*TransferLeaderResponse) Descriptor() ([]byte, []int) {
 	return file_admin_admin_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *TransferLeaderResponse) GetRegion() *legacy.RegionMeta {
+func (x *TransferLeaderResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -367,7 +367,7 @@ func (x *ExportRegionSnapshotRequest) GetRegionId() uint64 {
 type ExportRegionSnapshotResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Snapshot      []byte                 `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -409,7 +409,7 @@ func (x *ExportRegionSnapshotResponse) GetSnapshot() []byte {
 	return nil
 }
 
-func (x *ExportRegionSnapshotResponse) GetRegion() *legacy.RegionMeta {
+func (x *ExportRegionSnapshotResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -463,7 +463,7 @@ func (x *ExportRegionSnapshotStreamRequest) GetRegionId() uint64 {
 type ExportRegionSnapshotStreamResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SnapshotHeader []byte                 `protobuf:"bytes,1,opt,name=snapshot_header,json=snapshotHeader,proto3" json:"snapshot_header,omitempty"`
-	Region         *legacy.RegionMeta     `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
+	Region         *meta.RegionDescriptor `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
 	Chunk          []byte                 `protobuf:"bytes,3,opt,name=chunk,proto3" json:"chunk,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -506,7 +506,7 @@ func (x *ExportRegionSnapshotStreamResponse) GetSnapshotHeader() []byte {
 	return nil
 }
 
-func (x *ExportRegionSnapshotStreamResponse) GetRegion() *legacy.RegionMeta {
+func (x *ExportRegionSnapshotStreamResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -566,7 +566,7 @@ func (x *ImportRegionSnapshotRequest) GetSnapshot() []byte {
 
 type ImportRegionSnapshotResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -601,7 +601,7 @@ func (*ImportRegionSnapshotResponse) Descriptor() ([]byte, []int) {
 	return file_admin_admin_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *ImportRegionSnapshotResponse) GetRegion() *legacy.RegionMeta {
+func (x *ImportRegionSnapshotResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -611,7 +611,7 @@ func (x *ImportRegionSnapshotResponse) GetRegion() *legacy.RegionMeta {
 type ImportRegionSnapshotStreamRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SnapshotHeader []byte                 `protobuf:"bytes,1,opt,name=snapshot_header,json=snapshotHeader,proto3" json:"snapshot_header,omitempty"`
-	Region         *legacy.RegionMeta     `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
+	Region         *meta.RegionDescriptor `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
 	Chunk          []byte                 `protobuf:"bytes,3,opt,name=chunk,proto3" json:"chunk,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -654,7 +654,7 @@ func (x *ImportRegionSnapshotStreamRequest) GetSnapshotHeader() []byte {
 	return nil
 }
 
-func (x *ImportRegionSnapshotStreamRequest) GetRegion() *legacy.RegionMeta {
+func (x *ImportRegionSnapshotStreamRequest) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -719,7 +719,7 @@ type RegionRuntimeStatusResponse struct {
 	LocalPeerId   uint64                 `protobuf:"varint,3,opt,name=local_peer_id,json=localPeerId,proto3" json:"local_peer_id,omitempty"`
 	LeaderPeerId  uint64                 `protobuf:"varint,4,opt,name=leader_peer_id,json=leaderPeerId,proto3" json:"leader_peer_id,omitempty"`
 	Leader        bool                   `protobuf:"varint,5,opt,name=leader,proto3" json:"leader,omitempty"`
-	Region        *legacy.RegionMeta     `protobuf:"bytes,6,opt,name=region,proto3" json:"region,omitempty"`
+	Region        *meta.RegionDescriptor `protobuf:"bytes,6,opt,name=region,proto3" json:"region,omitempty"`
 	AppliedIndex  uint64                 `protobuf:"varint,7,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
 	AppliedTerm   uint64                 `protobuf:"varint,8,opt,name=applied_term,json=appliedTerm,proto3" json:"applied_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -791,7 +791,7 @@ func (x *RegionRuntimeStatusResponse) GetLeader() bool {
 	return false
 }
 
-func (x *RegionRuntimeStatusResponse) GetRegion() *legacy.RegionMeta {
+func (x *RegionRuntimeStatusResponse) GetRegion() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Region
 	}
@@ -816,51 +816,51 @@ var File_admin_admin_proto protoreflect.FileDescriptor
 
 const file_admin_admin_proto_rawDesc = "" +
 	"\n" +
-	"\x11admin/admin.proto\x12\rnokv.admin.v1\x1a\x11legacy/meta.proto\"a\n" +
+	"\x11admin/admin.proto\x12\rnokv.admin.v1\x1a\x15meta/descriptor.proto\"a\n" +
 	"\x0eAddPeerRequest\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x19\n" +
 	"\bstore_id\x18\x02 \x01(\x04R\astoreId\x12\x17\n" +
-	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\"J\n" +
-	"\x0fAddPeerResponse\x127\n" +
-	"\x06region\x18\x01 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\"I\n" +
+	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\"I\n" +
+	"\x0fAddPeerResponse\x126\n" +
+	"\x06region\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\"I\n" +
 	"\x11RemovePeerRequest\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x17\n" +
-	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"M\n" +
-	"\x12RemovePeerResponse\x127\n" +
-	"\x06region\x18\x01 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\"M\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"L\n" +
+	"\x12RemovePeerResponse\x126\n" +
+	"\x06region\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\"M\n" +
 	"\x15TransferLeaderRequest\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x17\n" +
-	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"Q\n" +
-	"\x16TransferLeaderResponse\x127\n" +
-	"\x06region\x18\x01 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\":\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"P\n" +
+	"\x16TransferLeaderResponse\x126\n" +
+	"\x06region\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\":\n" +
 	"\x1bExportRegionSnapshotRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"s\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"r\n" +
 	"\x1cExportRegionSnapshotResponse\x12\x1a\n" +
-	"\bsnapshot\x18\x01 \x01(\fR\bsnapshot\x127\n" +
-	"\x06region\x18\x02 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\"@\n" +
+	"\bsnapshot\x18\x01 \x01(\fR\bsnapshot\x126\n" +
+	"\x06region\x18\x02 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\"@\n" +
 	"!ExportRegionSnapshotStreamRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x9c\x01\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\x9b\x01\n" +
 	"\"ExportRegionSnapshotStreamResponse\x12'\n" +
-	"\x0fsnapshot_header\x18\x01 \x01(\fR\x0esnapshotHeader\x127\n" +
-	"\x06region\x18\x02 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\x12\x14\n" +
+	"\x0fsnapshot_header\x18\x01 \x01(\fR\x0esnapshotHeader\x126\n" +
+	"\x06region\x18\x02 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\x12\x14\n" +
 	"\x05chunk\x18\x03 \x01(\fR\x05chunk\"9\n" +
 	"\x1bImportRegionSnapshotRequest\x12\x1a\n" +
-	"\bsnapshot\x18\x01 \x01(\fR\bsnapshot\"W\n" +
-	"\x1cImportRegionSnapshotResponse\x127\n" +
-	"\x06region\x18\x01 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\"\x9b\x01\n" +
+	"\bsnapshot\x18\x01 \x01(\fR\bsnapshot\"V\n" +
+	"\x1cImportRegionSnapshotResponse\x126\n" +
+	"\x06region\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\"\x9a\x01\n" +
 	"!ImportRegionSnapshotStreamRequest\x12'\n" +
-	"\x0fsnapshot_header\x18\x01 \x01(\fR\x0esnapshotHeader\x127\n" +
-	"\x06region\x18\x02 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\x12\x14\n" +
+	"\x0fsnapshot_header\x18\x01 \x01(\fR\x0esnapshotHeader\x126\n" +
+	"\x06region\x18\x02 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\x12\x14\n" +
 	"\x05chunk\x18\x03 \x01(\fR\x05chunk\"9\n" +
 	"\x1aRegionRuntimeStatusRequest\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\xae\x02\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"\xad\x02\n" +
 	"\x1bRegionRuntimeStatusResponse\x12\x14\n" +
 	"\x05known\x18\x01 \x01(\bR\x05known\x12\x16\n" +
 	"\x06hosted\x18\x02 \x01(\bR\x06hosted\x12\"\n" +
 	"\rlocal_peer_id\x18\x03 \x01(\x04R\vlocalPeerId\x12$\n" +
 	"\x0eleader_peer_id\x18\x04 \x01(\x04R\fleaderPeerId\x12\x16\n" +
-	"\x06leader\x18\x05 \x01(\bR\x06leader\x127\n" +
-	"\x06region\x18\x06 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x06region\x12#\n" +
+	"\x06leader\x18\x05 \x01(\bR\x06leader\x126\n" +
+	"\x06region\x18\x06 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x06region\x12#\n" +
 	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12!\n" +
 	"\fapplied_term\x18\b \x01(\x04R\vappliedTerm2\xdc\x06\n" +
 	"\tRaftAdmin\x12H\n" +
@@ -903,17 +903,17 @@ var file_admin_admin_proto_goTypes = []any{
 	(*ImportRegionSnapshotStreamRequest)(nil),  // 12: nokv.admin.v1.ImportRegionSnapshotStreamRequest
 	(*RegionRuntimeStatusRequest)(nil),         // 13: nokv.admin.v1.RegionRuntimeStatusRequest
 	(*RegionRuntimeStatusResponse)(nil),        // 14: nokv.admin.v1.RegionRuntimeStatusResponse
-	(*legacy.RegionMeta)(nil),                  // 15: nokv.meta.legacy.v1.RegionMeta
+	(*meta.RegionDescriptor)(nil),              // 15: nokv.meta.v1.RegionDescriptor
 }
 var file_admin_admin_proto_depIdxs = []int32{
-	15, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 3: nokv.admin.v1.ExportRegionSnapshotResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 4: nokv.admin.v1.ExportRegionSnapshotStreamResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 5: nokv.admin.v1.ImportRegionSnapshotResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 6: nokv.admin.v1.ImportRegionSnapshotStreamRequest.region:type_name -> nokv.meta.legacy.v1.RegionMeta
-	15, // 7: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.legacy.v1.RegionMeta
+	15, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 3: nokv.admin.v1.ExportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 4: nokv.admin.v1.ExportRegionSnapshotStreamResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 5: nokv.admin.v1.ImportRegionSnapshotResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 6: nokv.admin.v1.ImportRegionSnapshotStreamRequest.region:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 7: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
 	0,  // 8: nokv.admin.v1.RaftAdmin.AddPeer:input_type -> nokv.admin.v1.AddPeerRequest
 	2,  // 9: nokv.admin.v1.RaftAdmin.RemovePeer:input_type -> nokv.admin.v1.RemovePeerRequest
 	4,  // 10: nokv.admin.v1.RaftAdmin.TransferLeader:input_type -> nokv.admin.v1.TransferLeaderRequest

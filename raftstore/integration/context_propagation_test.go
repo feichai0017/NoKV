@@ -5,7 +5,7 @@ import (
 	"errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 	"time"
@@ -25,14 +25,14 @@ import (
 )
 
 type staticResolver struct {
-	regions []*metapb.RegionMeta
+	regions []*metapb.RegionDescriptor
 }
 
 func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
 			return &pdpb.GetRegionByKeyResponse{
-				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(region)),
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(region)),
 			}, nil
 		}
 	}
@@ -41,16 +41,15 @@ func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegion
 
 func (r *staticResolver) Close() error { return nil }
 
-func cloneRegionMeta(meta *metapb.RegionMeta) *metapb.RegionMeta {
+func cloneRegionMeta(meta *metapb.RegionDescriptor) *metapb.RegionDescriptor {
 	if meta == nil {
 		return nil
 	}
-	out := &metapb.RegionMeta{
-		Id:               meta.GetId(),
-		StartKey:         append([]byte(nil), meta.GetStartKey()...),
-		EndKey:           append([]byte(nil), meta.GetEndKey()...),
-		EpochVersion:     meta.GetEpochVersion(),
-		EpochConfVersion: meta.GetEpochConfVersion(),
+	out := &metapb.RegionDescriptor{
+		RegionId: meta.GetRegionId(),
+		StartKey: append([]byte(nil), meta.GetStartKey()...),
+		EndKey:   append([]byte(nil), meta.GetEndKey()...),
+		Epoch:    &metapb.RegionEpoch{Version: meta.GetEpoch().GetVersion(), ConfVersion: meta.GetEpoch().GetConfVersion()},
 	}
 	out.Peers = make([]*metapb.RegionPeer, 0, len(meta.GetPeers()))
 	for _, peer := range meta.GetPeers() {
@@ -65,7 +64,7 @@ func cloneRegionMeta(meta *metapb.RegionMeta) *metapb.RegionMeta {
 	return out
 }
 
-func regionMetaWithLeaderFirst(meta *metapb.RegionMeta, leaderStoreID uint64) *metapb.RegionMeta {
+func regionMetaWithLeaderFirst(meta *metapb.RegionDescriptor, leaderStoreID uint64) *metapb.RegionDescriptor {
 	out := cloneRegionMeta(meta)
 	if out == nil || leaderStoreID == 0 || len(out.Peers) < 2 {
 		return out
@@ -80,7 +79,7 @@ func regionMetaWithLeaderFirst(meta *metapb.RegionMeta, leaderStoreID uint64) *m
 	return out
 }
 
-func containsRegionKey(meta *metapb.RegionMeta, key []byte) bool {
+func containsRegionKey(meta *metapb.RegionDescriptor, key []byte) bool {
 	if meta == nil {
 		return false
 	}
@@ -138,7 +137,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*metapb.RegionMeta{leaderStatus.GetRegion()}},
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{leaderStatus.GetRegion()}},
 		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
 			MaxAttempts:                 1,
@@ -263,7 +262,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*metapb.RegionMeta{
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{
 			regionMetaWithLeaderFirst(parentStatus.GetRegion(), parentLeaderNode.StoreID),
 			regionMetaWithLeaderFirst(childSeedStatus.GetRegion(), childLeaderNode.StoreID),
 		}},

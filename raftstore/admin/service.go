@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"io"
 
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -54,7 +54,7 @@ func (s *Service) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*ad
 	if !ok {
 		return &adminpb.AddPeerResponse{}, nil
 	}
-	return &adminpb.AddPeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.AddPeerResponse{Region: metacodec.LocalRegionMetaToDescriptorProto(runtime.Meta)}, nil
 }
 
 // RemovePeer issues one raft configuration change removing the specified peer.
@@ -73,7 +73,7 @@ func (s *Service) RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest
 	if !ok {
 		return &adminpb.RemovePeerResponse{}, nil
 	}
-	return &adminpb.RemovePeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.RemovePeerResponse{Region: metacodec.LocalRegionMetaToDescriptorProto(runtime.Meta)}, nil
 }
 
 // TransferLeader requests leader transfer on the specified region.
@@ -92,7 +92,7 @@ func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeade
 	if !ok {
 		return &adminpb.TransferLeaderResponse{}, nil
 	}
-	return &adminpb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.TransferLeaderResponse{Region: metacodec.LocalRegionMetaToDescriptorProto(runtime.Meta)}, nil
 }
 
 // ExportRegionSnapshot returns the current region snapshot from the leader,
@@ -120,7 +120,7 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
 	}
-	return &adminpb.ExportRegionSnapshotResponse{Snapshot: data, Region: regionMetaToPB(region)}, nil
+	return &adminpb.ExportRegionSnapshotResponse{Snapshot: data, Region: metacodec.LocalRegionMetaToDescriptorProto(region)}, nil
 }
 
 // ExportRegionSnapshotStream streams one migration-only SST snapshot payload.
@@ -139,7 +139,7 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 			resp := &adminpb.ExportRegionSnapshotStreamResponse{Chunk: append([]byte(nil), buf[:n]...)}
 			if first {
 				resp.SnapshotHeader = header
-				resp.Region = regionMetaToPB(region)
+				resp.Region = metacodec.LocalRegionMetaToDescriptorProto(region)
 				first = false
 			}
 			if err := stream.Send(resp); err != nil {
@@ -177,7 +177,7 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportR
 	if err != nil {
 		return nil, err
 	}
-	return &adminpb.ImportRegionSnapshotResponse{Region: regionMetaToPB(meta)}, nil
+	return &adminpb.ImportRegionSnapshotResponse{Region: metacodec.LocalRegionMetaToDescriptorProto(meta)}, nil
 }
 
 // ImportRegionSnapshotStream imports one leader-exported region snapshot from a
@@ -207,7 +207,7 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 	if err := snap.Unmarshal(first.GetSnapshotHeader()); err != nil {
 		return status.Errorf(codes.InvalidArgument, "unmarshal region snapshot header: %v", err)
 	}
-	meta, err := regionMetaFromPB(first.GetRegion())
+	meta, err := metacodec.LocalRegionMetaFromDescriptorProto(first.GetRegion())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "decode region snapshot metadata: %v", err)
 	}
@@ -271,7 +271,7 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 	if outcome.err != nil {
 		return outcome.err
 	}
-	return stream.SendAndClose(&adminpb.ImportRegionSnapshotResponse{Region: regionMetaToPB(outcome.meta)})
+	return stream.SendAndClose(&adminpb.ImportRegionSnapshotResponse{Region: metacodec.LocalRegionMetaToDescriptorProto(outcome.meta)})
 }
 
 // RegionRuntimeStatus returns store-local runtime information for one region.
@@ -293,47 +293,9 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRu
 		LocalPeerId:  runtime.LocalPeerID,
 		LeaderPeerId: runtime.LeaderPeerID,
 		Leader:       runtime.Leader,
-		Region:       regionMetaToPB(runtime.Meta),
+		Region:       metacodec.LocalRegionMetaToDescriptorProto(runtime.Meta),
 		AppliedIndex: runtime.AppliedIndex,
 		AppliedTerm:  runtime.AppliedTerm,
-	}, nil
-}
-
-func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionMeta {
-	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
-	for _, p := range meta.Peers {
-		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
-	}
-	return &metapb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-		Peers:            peers,
-	}
-}
-
-func regionMetaFromPB(meta *metapb.RegionMeta) (localmeta.RegionMeta, error) {
-	if meta == nil {
-		return localmeta.RegionMeta{}, fmt.Errorf("region metadata is nil")
-	}
-	peers := make([]metaregion.Peer, 0, len(meta.GetPeers()))
-	for _, peerMeta := range meta.GetPeers() {
-		if peerMeta.GetStoreId() == 0 || peerMeta.GetPeerId() == 0 {
-			return localmeta.RegionMeta{}, fmt.Errorf("region peer metadata is incomplete")
-		}
-		peers = append(peers, metaregion.Peer{StoreID: peerMeta.GetStoreId(), PeerID: peerMeta.GetPeerId()})
-	}
-	return localmeta.RegionMeta{
-		ID:       meta.GetId(),
-		StartKey: append([]byte(nil), meta.GetStartKey()...),
-		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: metaregion.Epoch{
-			Version:     meta.GetEpochVersion(),
-			ConfVersion: meta.GetEpochConfVersion(),
-		},
-		Peers: peers,
 	}, nil
 }
 

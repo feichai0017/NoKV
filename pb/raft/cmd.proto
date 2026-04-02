@@ -5,14 +5,15 @@ package nokv.raft.v1;
 
 import "error/error.proto";
 import "kv/kv.proto";
-import "legacy/meta.proto";
+import "meta/descriptor.proto";
+import "meta/region.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/raft;raftcmdpb";
 
 message SplitCommand {
   uint64 parent_region_id = 1;
   bytes split_key = 2;
-  nokv.meta.legacy.v1.RegionMeta child = 3;
+  nokv.meta.v1.RegionDescriptor child = 3;
 }
 
 message MergeCommand {
@@ -35,7 +36,7 @@ message AdminCommand {
 // code 6 to 9 is under implementation, DO NOT use it.
 message CmdHeader {
   uint64 region_id = 1;
-  nokv.meta.legacy.v1.RegionEpoch region_epoch = 2;
+  nokv.meta.v1.RegionEpoch region_epoch = 2;
   uint64 peer_id = 3;
   bool read_quorum = 4;
   uint64 request_id = 5;

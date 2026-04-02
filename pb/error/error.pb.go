@@ -9,7 +9,7 @@
 package errorpb
 
 import (
-	legacy "github.com/feichai0017/NoKV/pb/legacy"
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -119,7 +119,7 @@ func (x *RegionError) GetKeyNotInRegion() *KeyNotInRegion {
 type NotLeader struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	Leader        *legacy.RegionPeer     `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
+	Leader        *meta.RegionPeer       `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -161,7 +161,7 @@ func (x *NotLeader) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *NotLeader) GetLeader() *legacy.RegionPeer {
+func (x *NotLeader) GetLeader() *meta.RegionPeer {
 	if x != nil {
 		return x.Leader
 	}
@@ -169,9 +169,9 @@ func (x *NotLeader) GetLeader() *legacy.RegionPeer {
 }
 
 type EpochNotMatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CurrentEpoch  *legacy.RegionEpoch    `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
-	Regions       []*legacy.RegionMeta   `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	CurrentEpoch  *meta.RegionEpoch        `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
+	Regions       []*meta.RegionDescriptor `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -206,14 +206,14 @@ func (*EpochNotMatch) Descriptor() ([]byte, []int) {
 	return file_error_error_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *EpochNotMatch) GetCurrentEpoch() *legacy.RegionEpoch {
+func (x *EpochNotMatch) GetCurrentEpoch() *meta.RegionEpoch {
 	if x != nil {
 		return x.CurrentEpoch
 	}
 	return nil
 }
 
-func (x *EpochNotMatch) GetRegions() []*legacy.RegionMeta {
+func (x *EpochNotMatch) GetRegions() []*meta.RegionDescriptor {
 	if x != nil {
 		return x.Regions
 	}
@@ -468,7 +468,7 @@ var File_error_error_proto protoreflect.FileDescriptor
 
 const file_error_error_proto_rawDesc = "" +
 	"\n" +
-	"\x11error/error.proto\x12\rnokv.error.v1\x1a\x11legacy/meta.proto\"\xf1\x03\n" +
+	"\x11error/error.proto\x12\rnokv.error.v1\x1a\x15meta/descriptor.proto\x1a\x11meta/region.proto\"\xf1\x03\n" +
 	"\vRegionError\x127\n" +
 	"\n" +
 	"not_leader\x18\x01 \x01(\v2\x18.nokv.error.v1.NotLeaderR\tnotLeader\x12D\n" +
@@ -477,13 +477,13 @@ const file_error_error_proto_rawDesc = "" +
 	"\x0fentry_too_large\x18\x04 \x01(\v2 .nokv.error.v1.RaftEntryTooLargeR\rentryTooLarge\x12D\n" +
 	"\x0fstore_not_match\x18\x05 \x01(\v2\x1c.nokv.error.v1.StoreNotMatchR\rstoreNotMatch\x12G\n" +
 	"\x10region_not_found\x18\x06 \x01(\v2\x1d.nokv.error.v1.RegionNotFoundR\x0eregionNotFound\x12H\n" +
-	"\x11key_not_in_region\x18\a \x01(\v2\x1d.nokv.error.v1.KeyNotInRegionR\x0ekeyNotInRegion\"a\n" +
+	"\x11key_not_in_region\x18\a \x01(\v2\x1d.nokv.error.v1.KeyNotInRegionR\x0ekeyNotInRegion\"Z\n" +
 	"\tNotLeader\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x127\n" +
-	"\x06leader\x18\x02 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionPeerR\x06leader\"\x91\x01\n" +
-	"\rEpochNotMatch\x12E\n" +
-	"\rcurrent_epoch\x18\x01 \x01(\v2 .nokv.meta.legacy.v1.RegionEpochR\fcurrentEpoch\x129\n" +
-	"\aregions\x18\x02 \x03(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\aregions\"\x0e\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x120\n" +
+	"\x06leader\x18\x02 \x01(\v2\x18.nokv.meta.v1.RegionPeerR\x06leader\"\x89\x01\n" +
+	"\rEpochNotMatch\x12>\n" +
+	"\rcurrent_epoch\x18\x01 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\fcurrentEpoch\x128\n" +
+	"\aregions\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\aregions\"\x0e\n" +
 	"\fStaleCommand\"0\n" +
 	"\x11RaftEntryTooLarge\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"a\n" +
@@ -512,17 +512,17 @@ func file_error_error_proto_rawDescGZIP() []byte {
 
 var file_error_error_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_error_error_proto_goTypes = []any{
-	(*RegionError)(nil),        // 0: nokv.error.v1.RegionError
-	(*NotLeader)(nil),          // 1: nokv.error.v1.NotLeader
-	(*EpochNotMatch)(nil),      // 2: nokv.error.v1.EpochNotMatch
-	(*StaleCommand)(nil),       // 3: nokv.error.v1.StaleCommand
-	(*RaftEntryTooLarge)(nil),  // 4: nokv.error.v1.RaftEntryTooLarge
-	(*StoreNotMatch)(nil),      // 5: nokv.error.v1.StoreNotMatch
-	(*RegionNotFound)(nil),     // 6: nokv.error.v1.RegionNotFound
-	(*KeyNotInRegion)(nil),     // 7: nokv.error.v1.KeyNotInRegion
-	(*legacy.RegionPeer)(nil),  // 8: nokv.meta.legacy.v1.RegionPeer
-	(*legacy.RegionEpoch)(nil), // 9: nokv.meta.legacy.v1.RegionEpoch
-	(*legacy.RegionMeta)(nil),  // 10: nokv.meta.legacy.v1.RegionMeta
+	(*RegionError)(nil),           // 0: nokv.error.v1.RegionError
+	(*NotLeader)(nil),             // 1: nokv.error.v1.NotLeader
+	(*EpochNotMatch)(nil),         // 2: nokv.error.v1.EpochNotMatch
+	(*StaleCommand)(nil),          // 3: nokv.error.v1.StaleCommand
+	(*RaftEntryTooLarge)(nil),     // 4: nokv.error.v1.RaftEntryTooLarge
+	(*StoreNotMatch)(nil),         // 5: nokv.error.v1.StoreNotMatch
+	(*RegionNotFound)(nil),        // 6: nokv.error.v1.RegionNotFound
+	(*KeyNotInRegion)(nil),        // 7: nokv.error.v1.KeyNotInRegion
+	(*meta.RegionPeer)(nil),       // 8: nokv.meta.v1.RegionPeer
+	(*meta.RegionEpoch)(nil),      // 9: nokv.meta.v1.RegionEpoch
+	(*meta.RegionDescriptor)(nil), // 10: nokv.meta.v1.RegionDescriptor
 }
 var file_error_error_proto_depIdxs = []int32{
 	1,  // 0: nokv.error.v1.RegionError.not_leader:type_name -> nokv.error.v1.NotLeader
@@ -532,9 +532,9 @@ var file_error_error_proto_depIdxs = []int32{
 	5,  // 4: nokv.error.v1.RegionError.store_not_match:type_name -> nokv.error.v1.StoreNotMatch
 	6,  // 5: nokv.error.v1.RegionError.region_not_found:type_name -> nokv.error.v1.RegionNotFound
 	7,  // 6: nokv.error.v1.RegionError.key_not_in_region:type_name -> nokv.error.v1.KeyNotInRegion
-	8,  // 7: nokv.error.v1.NotLeader.leader:type_name -> nokv.meta.legacy.v1.RegionPeer
-	9,  // 8: nokv.error.v1.EpochNotMatch.current_epoch:type_name -> nokv.meta.legacy.v1.RegionEpoch
-	10, // 9: nokv.error.v1.EpochNotMatch.regions:type_name -> nokv.meta.legacy.v1.RegionMeta
+	8,  // 7: nokv.error.v1.NotLeader.leader:type_name -> nokv.meta.v1.RegionPeer
+	9,  // 8: nokv.error.v1.EpochNotMatch.current_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	10, // 9: nokv.error.v1.EpochNotMatch.regions:type_name -> nokv.meta.v1.RegionDescriptor
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name

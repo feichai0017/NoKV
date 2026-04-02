@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"io"
 
 	"google.golang.org/grpc"
@@ -16,7 +16,7 @@ const adminSnapshotChunkSize = 64 << 10
 // SnapshotExportStream carries one exported region snapshot stream.
 type SnapshotExportStream struct {
 	Header []byte
-	Region *metapb.RegionMeta
+	Region *metapb.RegionDescriptor
 	Reader io.ReadCloser
 }
 
@@ -26,7 +26,7 @@ type AdminClient interface {
 	RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error)
 	TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error)
 	ExportRegionSnapshotStream(ctx context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error)
-	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionMeta, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error)
+	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionDescriptor, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error)
 	RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error)
 }
 
@@ -80,7 +80,7 @@ func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *a
 	}, nil
 }
 
-func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionMeta, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error) {
+func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionDescriptor, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error) {
 	if len(header) == 0 {
 		return nil, fmt.Errorf("migrate: import region snapshot stream requires snapshot header")
 	}

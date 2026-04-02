@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"net"
@@ -138,7 +138,7 @@ type stubPDServer struct {
 	pdpb.UnimplementedPDServer
 
 	mu         sync.Mutex
-	region     *metapb.RegionMeta
+	region     *metapb.RegionDescriptor
 	nextTS     uint64
 	tsoCalls   int
 	routeCalls int
@@ -179,11 +179,11 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKe
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pdpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(proto.Clone(s.region).(*metapb.RegionMeta))),
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(proto.Clone(s.region).(*metapb.RegionDescriptor))),
 	}, nil
 }
 
-func startStubPD(t *testing.T, region *metapb.RegionMeta) (addr string, srv *stubPDServer, shutdown func()) {
+func startStubPD(t *testing.T, region *metapb.RegionDescriptor) (addr string, srv *stubPDServer, shutdown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -214,13 +214,12 @@ func keyInRegion(key, start, end []byte) bool {
 	return true
 }
 
-func defaultPDRegionMeta() *metapb.RegionMeta {
-	return &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         nil,
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+func defaultPDRegionMeta() *metapb.RegionDescriptor {
+	return &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: nil,
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -267,12 +266,11 @@ func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	pdAddr, pd, stopPD := startStubPD(t, &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         nil,
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	pdAddr, pd, stopPD := startStubPD(t, &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: nil,
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -515,12 +513,11 @@ func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
 func TestRaftBackendTranslatesRegionNotFound(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	pdAddr, _, stopPD := startStubPD(t, &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           []byte("m"),
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	pdAddr, _, stopPD := startStubPD(t, &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},

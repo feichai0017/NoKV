@@ -6,7 +6,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"testing"
@@ -204,7 +204,7 @@ type testNode struct {
 }
 
 type staticRegionResolver struct {
-	regions []*metapb.RegionMeta
+	regions []*metapb.RegionDescriptor
 }
 
 func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
@@ -214,7 +214,7 @@ func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRe
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
 			return &pdpb.GetRegionByKeyResponse{
-				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(cloneRegionMetaPB(region))),
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}
@@ -303,12 +303,12 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 	}
 
 	stores := make([]client.StoreEndpoint, 0, len(nodes))
-	regions := make([]*metapb.RegionMeta, 0, len(nodes))
+	regions := make([]*metapb.RegionDescriptor, 0, len(nodes))
 	for _, n := range nodes {
 		stores = append(stores, client.StoreEndpoint{StoreID: n.storeID, Addr: n.addr})
 		regions = append(regions, regionMetaToPB(n.region))
 	}
-	sort.Slice(regions, func(i, j int) bool { return regions[i].GetId() < regions[j].GetId() })
+	sort.Slice(regions, func(i, j int) bool { return regions[i].GetRegionId() < regions[j].GetRegionId() })
 
 	cli, err := client.New(client.Config{
 		Stores:         stores,
@@ -379,29 +379,28 @@ func startRegionPeer(t *testing.T, n testNode) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionMeta {
+func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionDescriptor {
 	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
 		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
 	}
-	return &metapb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-		Peers:            peers,
+	return &metapb.RegionDescriptor{
+		RegionId: meta.ID,
+		StartKey: append([]byte(nil), meta.StartKey...),
+		EndKey:   append([]byte(nil), meta.EndKey...),
+		Epoch:    &metapb.RegionEpoch{Version: meta.Epoch.Version, ConfVersion: meta.Epoch.ConfVersion},
+		Peers:    peers,
 	}
 }
 
-func cloneRegionMetaPB(meta *metapb.RegionMeta) *metapb.RegionMeta {
+func cloneRegionMetaPB(meta *metapb.RegionDescriptor) *metapb.RegionDescriptor {
 	if meta == nil {
 		return nil
 	}
-	return proto.Clone(meta).(*metapb.RegionMeta)
+	return proto.Clone(meta).(*metapb.RegionDescriptor)
 }
 
-func regionContainsKey(meta *metapb.RegionMeta, key []byte) bool {
+func regionContainsKey(meta *metapb.RegionDescriptor, key []byte) bool {
 	if meta == nil {
 		return false
 	}

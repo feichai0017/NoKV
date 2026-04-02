@@ -3,7 +3,7 @@ package migrate
 import (
 	"context"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
@@ -14,8 +14,8 @@ import (
 func TestTransferLeaderWaitsForTargetLeadership(t *testing.T) {
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, LeaderPeerId: 11, Region: &metapb.RegionMeta{Id: 8}},
-			{Known: true, LeaderPeerId: 22, Region: &metapb.RegionMeta{Id: 8}},
+			{Known: true, LeaderPeerId: 11, Region: &metapb.RegionDescriptor{RegionId: 8}},
+			{Known: true, LeaderPeerId: 22, Region: &metapb.RegionDescriptor{RegionId: 8}},
 		},
 	}
 	target := &fakeAdminClient{
@@ -52,7 +52,7 @@ func TestTransferLeaderWaitsForTargetLeadership(t *testing.T) {
 
 func TestTransferLeaderTimesOutWhenLeaderDoesNotMove(t *testing.T) {
 	leader := &fakeAdminClient{
-		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, LeaderPeerId: 11, Region: &metapb.RegionMeta{Id: 8}}},
+		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, LeaderPeerId: 11, Region: &metapb.RegionDescriptor{RegionId: 8}}},
 	}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
 		require.Equal(t, "leader", addr)
@@ -73,7 +73,7 @@ func TestTransferLeaderTimesOutWhenLeaderDoesNotMove(t *testing.T) {
 
 func TestTransferLeaderTimesOutWhenTargetNeverBecomesLeader(t *testing.T) {
 	leader := &fakeAdminClient{
-		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, LeaderPeerId: 22, Region: &metapb.RegionMeta{Id: 8}}},
+		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, LeaderPeerId: 22, Region: &metapb.RegionDescriptor{RegionId: 8}}},
 	}
 	target := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, Leader: false}},
@@ -111,7 +111,7 @@ func TestTransferLeaderWritesWorkdirCheckpoint(t *testing.T) {
 
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, LeaderPeerId: 22, Region: &metapb.RegionMeta{Id: 8}},
+			{Known: true, LeaderPeerId: 22, Region: &metapb.RegionDescriptor{RegionId: 8}},
 		},
 	}
 	target := &fakeAdminClient{

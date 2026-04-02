@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"time"
 )
 
@@ -31,19 +31,19 @@ type ExpandConfig struct {
 
 // ExpandResult reports the observed state after one add-peer request.
 type ExpandResult struct {
-	Addr              string             `json:"addr"`
-	TargetAdminAddr   string             `json:"target_admin_addr,omitempty"`
-	RegionID          uint64             `json:"region_id"`
-	StoreID           uint64             `json:"store_id"`
-	PeerID            uint64             `json:"peer_id"`
-	LeaderKnown       bool               `json:"leader_known"`
-	LeaderRegion      *metapb.RegionMeta `json:"leader_region,omitempty"`
-	TargetKnown       bool               `json:"target_known"`
-	TargetHosted      bool               `json:"target_hosted"`
-	TargetLocalPeerID uint64             `json:"target_local_peer_id,omitempty"`
-	TargetAppliedIdx  uint64             `json:"target_applied_index,omitempty"`
-	TargetAppliedTerm uint64             `json:"target_applied_term,omitempty"`
-	Waited            bool               `json:"waited"`
+	Addr              string                   `json:"addr"`
+	TargetAdminAddr   string                   `json:"target_admin_addr,omitempty"`
+	RegionID          uint64                   `json:"region_id"`
+	StoreID           uint64                   `json:"store_id"`
+	PeerID            uint64                   `json:"peer_id"`
+	LeaderKnown       bool                     `json:"leader_known"`
+	LeaderRegion      *metapb.RegionDescriptor `json:"leader_region,omitempty"`
+	TargetKnown       bool                     `json:"target_known"`
+	TargetHosted      bool                     `json:"target_hosted"`
+	TargetLocalPeerID uint64                   `json:"target_local_peer_id,omitempty"`
+	TargetAppliedIdx  uint64                   `json:"target_applied_index,omitempty"`
+	TargetAppliedTerm uint64                   `json:"target_applied_term,omitempty"`
+	Waited            bool                     `json:"waited"`
 }
 
 // ExpandResultSet reports one sequential multi-peer rollout.
@@ -206,7 +206,7 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	return result, nil
 }
 
-func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*metapb.RegionMeta, error) {
+func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*metapb.RegionDescriptor, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -272,7 +272,7 @@ func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peer
 	}
 }
 
-func regionContainsPeer(meta *metapb.RegionMeta, peerID uint64) bool {
+func regionContainsPeer(meta *metapb.RegionDescriptor, peerID uint64) bool {
 	if meta == nil || peerID == 0 {
 		return false
 	}

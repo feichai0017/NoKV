@@ -11,7 +11,7 @@ package raftcmdpb
 import (
 	error1 "github.com/feichai0017/NoKV/pb/error"
 	kv "github.com/feichai0017/NoKV/pb/kv"
-	legacy "github.com/feichai0017/NoKV/pb/legacy"
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -143,7 +143,7 @@ type SplitCommand struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ParentRegionId uint64                 `protobuf:"varint,1,opt,name=parent_region_id,json=parentRegionId,proto3" json:"parent_region_id,omitempty"`
 	SplitKey       []byte                 `protobuf:"bytes,2,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
-	Child          *legacy.RegionMeta     `protobuf:"bytes,3,opt,name=child,proto3" json:"child,omitempty"`
+	Child          *meta.RegionDescriptor `protobuf:"bytes,3,opt,name=child,proto3" json:"child,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -192,7 +192,7 @@ func (x *SplitCommand) GetSplitKey() []byte {
 	return nil
 }
 
-func (x *SplitCommand) GetChild() *legacy.RegionMeta {
+func (x *SplitCommand) GetChild() *meta.RegionDescriptor {
 	if x != nil {
 		return x.Child
 	}
@@ -315,7 +315,7 @@ func (x *AdminCommand) GetMerge() *MergeCommand {
 type CmdHeader struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	RegionId          uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	RegionEpoch       *legacy.RegionEpoch    `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
+	RegionEpoch       *meta.RegionEpoch      `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
 	PeerId            uint64                 `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	ReadQuorum        bool                   `protobuf:"varint,4,opt,name=read_quorum,json=readQuorum,proto3" json:"read_quorum,omitempty"`
 	RequestId         uint64                 `protobuf:"varint,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -365,7 +365,7 @@ func (x *CmdHeader) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *CmdHeader) GetRegionEpoch() *legacy.RegionEpoch {
+func (x *CmdHeader) GetRegionEpoch() *meta.RegionEpoch {
 	if x != nil {
 		return x.RegionEpoch
 	}
@@ -876,11 +876,11 @@ var File_raft_cmd_proto protoreflect.FileDescriptor
 
 const file_raft_cmd_proto_rawDesc = "" +
 	"\n" +
-	"\x0eraft/cmd.proto\x12\fnokv.raft.v1\x1a\x11error/error.proto\x1a\vkv/kv.proto\x1a\x11legacy/meta.proto\"\x8c\x01\n" +
+	"\x0eraft/cmd.proto\x12\fnokv.raft.v1\x1a\x11error/error.proto\x1a\vkv/kv.proto\x1a\x15meta/descriptor.proto\x1a\x11meta/region.proto\"\x8b\x01\n" +
 	"\fSplitCommand\x12(\n" +
 	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
-	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x125\n" +
-	"\x05child\x18\x03 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x05child\"b\n" +
+	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x124\n" +
+	"\x05child\x18\x03 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x05child\"b\n" +
 	"\fMergeCommand\x12(\n" +
 	"\x10target_region_id\x18\x01 \x01(\x04R\x0etargetRegionId\x12(\n" +
 	"\x10source_region_id\x18\x02 \x01(\x04R\x0esourceRegionId\"\xd2\x01\n" +
@@ -891,10 +891,10 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x04Type\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\t\n" +
 	"\x05SPLIT\x10\x01\x12\t\n" +
-	"\x05MERGE\x10\x02\"\xca\x03\n" +
+	"\x05MERGE\x10\x02\"\xc3\x03\n" +
 	"\tCmdHeader\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12C\n" +
-	"\fregion_epoch\x18\x02 \x01(\v2 .nokv.meta.legacy.v1.RegionEpochR\vregionEpoch\x12\x17\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12<\n" +
+	"\fregion_epoch\x18\x02 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\vregionEpoch\x12\x17\n" +
 	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12\x1f\n" +
 	"\vread_quorum\x18\x04 \x01(\bR\n" +
 	"readQuorum\x12\x1d\n" +
@@ -968,8 +968,8 @@ var file_raft_cmd_proto_goTypes = []any{
 	(*Response)(nil),                  // 7: nokv.raft.v1.Response
 	(*RaftCmdRequest)(nil),            // 8: nokv.raft.v1.RaftCmdRequest
 	(*RaftCmdResponse)(nil),           // 9: nokv.raft.v1.RaftCmdResponse
-	(*legacy.RegionMeta)(nil),         // 10: nokv.meta.legacy.v1.RegionMeta
-	(*legacy.RegionEpoch)(nil),        // 11: nokv.meta.legacy.v1.RegionEpoch
+	(*meta.RegionDescriptor)(nil),     // 10: nokv.meta.v1.RegionDescriptor
+	(*meta.RegionEpoch)(nil),          // 11: nokv.meta.v1.RegionEpoch
 	(kv.ReadConsistency)(0),           // 12: nokv.kv.v1.ReadConsistency
 	(kv.ReadPreference)(0),            // 13: nokv.kv.v1.ReadPreference
 	(*kv.GetRequest)(nil),             // 14: nokv.kv.v1.GetRequest
@@ -989,11 +989,11 @@ var file_raft_cmd_proto_goTypes = []any{
 	(*error1.RegionError)(nil),        // 28: nokv.error.v1.RegionError
 }
 var file_raft_cmd_proto_depIdxs = []int32{
-	10, // 0: nokv.raft.v1.SplitCommand.child:type_name -> nokv.meta.legacy.v1.RegionMeta
+	10, // 0: nokv.raft.v1.SplitCommand.child:type_name -> nokv.meta.v1.RegionDescriptor
 	1,  // 1: nokv.raft.v1.AdminCommand.type:type_name -> nokv.raft.v1.AdminCommand.Type
 	2,  // 2: nokv.raft.v1.AdminCommand.split:type_name -> nokv.raft.v1.SplitCommand
 	3,  // 3: nokv.raft.v1.AdminCommand.merge:type_name -> nokv.raft.v1.MergeCommand
-	11, // 4: nokv.raft.v1.CmdHeader.region_epoch:type_name -> nokv.meta.legacy.v1.RegionEpoch
+	11, // 4: nokv.raft.v1.CmdHeader.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
 	12, // 5: nokv.raft.v1.CmdHeader.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
 	13, // 6: nokv.raft.v1.CmdHeader.read_preference:type_name -> nokv.kv.v1.ReadPreference
 	0,  // 7: nokv.raft.v1.Request.cmd_type:type_name -> nokv.raft.v1.CmdType

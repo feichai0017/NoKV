@@ -3,8 +3,9 @@ package store
 import (
 	"bytes"
 	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
@@ -101,7 +102,7 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, sp
 		Split: &raftcmdpb.SplitCommand{
 			ParentRegionId: parentID,
 			SplitKey:       append([]byte(nil), splitKey...),
-			Child:          regionMetaToPB(childMeta),
+			Child:          metacodec.LocalRegionMetaToDescriptorProto(childMeta),
 		},
 	}
 	data, err := proto.Marshal(cmd)
@@ -268,39 +269,10 @@ func regionPeersEqual(a, b []metaregion.Peer) bool {
 	return true
 }
 
-func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionMeta {
-	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
-	for _, p := range meta.Peers {
-		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
-	}
-	return &metapb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-		Peers:            peers,
-	}
-}
-
-func pbRegionMetaToManifest(pbMeta *metapb.RegionMeta) localmeta.RegionMeta {
+func pbRegionMetaToManifest(pbMeta *metapb.RegionDescriptor) localmeta.RegionMeta {
 	if pbMeta == nil {
 		return localmeta.RegionMeta{}
 	}
-	meta := localmeta.RegionMeta{
-		ID:       pbMeta.GetId(),
-		StartKey: append([]byte(nil), pbMeta.GetStartKey()...),
-		EndKey:   append([]byte(nil), pbMeta.GetEndKey()...),
-		Epoch: metaregion.Epoch{
-			Version:     pbMeta.GetEpochVersion(),
-			ConfVersion: pbMeta.GetEpochConfVersion(),
-		},
-	}
-	for _, peerPB := range pbMeta.GetPeers() {
-		meta.Peers = append(meta.Peers, metaregion.Peer{
-			StoreID: peerPB.GetStoreId(),
-			PeerID:  peerPB.GetPeerId(),
-		})
-	}
+	meta, _ := metacodec.LocalRegionMetaFromDescriptorProto(pbMeta)
 	return meta
 }
