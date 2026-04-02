@@ -5,7 +5,7 @@ import (
 	"errors"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"sort"
@@ -36,7 +36,7 @@ type clusterPending struct {
 }
 
 type clusterRegion struct {
-	meta         *metapb.RegionMeta
+	meta         *metapb.RegionDescriptor
 	leaderStore  uint64
 	pending      map[uint64]map[string]clusterPending // startVersion -> key
 	committed    map[string]clusterValue
@@ -64,12 +64,12 @@ func newMockCluster(regions ...clusterRegion) *mockCluster {
 		if region.committed == nil {
 			region.committed = make(map[string]clusterValue)
 		}
-		mc.regions[region.meta.GetId()] = &region
+		mc.regions[region.meta.GetRegionId()] = &region
 	}
 	return mc
 }
 
-func (mc *mockCluster) regionMeta(id uint64) (*metapb.RegionMeta, bool) {
+func (mc *mockCluster) regionMeta(id uint64) (*metapb.RegionDescriptor, bool) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	region, ok := mc.regions[id]
@@ -81,8 +81,8 @@ func (mc *mockCluster) regionMeta(id uint64) (*metapb.RegionMeta, bool) {
 
 type mockRegionResolver struct {
 	mu       sync.Mutex
-	region   *metapb.RegionMeta
-	regions  []*metapb.RegionMeta
+	region   *metapb.RegionDescriptor
+	regions  []*metapb.RegionDescriptor
 	err      error
 	errs     []error
 	calls    int
@@ -97,7 +97,7 @@ type blockingRegionResolver struct {
 type keyedBlockingResolver struct {
 	started     chan struct{}
 	blockedKeys map[string]struct{}
-	regions     []*metapb.RegionMeta
+	regions     []*metapb.RegionDescriptor
 }
 
 func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
@@ -119,13 +119,13 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetReg
 	}
 	if len(mr.regions) > 0 {
 		for _, meta := range mr.regions {
-			if meta != nil && containsKey(metacodec.DescriptorFromLegacyRegionMeta(meta), req.GetKey()) {
+			if meta != nil && containsKey(metacodec.DescriptorFromProto(meta), req.GetKey()) {
 				return routeResponse(meta), nil
 			}
 		}
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	if mr.region == nil || !containsKey(metacodec.DescriptorFromLegacyRegionMeta(mr.region), req.GetKey()) {
+	if mr.region == nil || !containsKey(metacodec.DescriptorFromProto(mr.region), req.GetKey()) {
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return routeResponse(mr.region), nil
@@ -164,7 +164,7 @@ func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pdpb.G
 			return nil, ctx.Err()
 		}
 		for _, meta := range kr.regions {
-			if meta != nil && containsKey(metacodec.DescriptorFromLegacyRegionMeta(meta), req.GetKey()) {
+			if meta != nil && containsKey(metacodec.DescriptorFromProto(meta), req.GetKey()) {
 				return routeResponse(meta), nil
 			}
 		}
@@ -177,7 +177,7 @@ func (kr *keyedBlockingResolver) Close() error { return nil }
 func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
 	cluster.mu.Lock()
 	defer cluster.mu.Unlock()
-	regions := make([]*metapb.RegionMeta, 0, len(cluster.regions))
+	regions := make([]*metapb.RegionDescriptor, 0, len(cluster.regions))
 	for _, region := range cluster.regions {
 		if region == nil || region.meta == nil {
 			continue
@@ -185,7 +185,7 @@ func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
 		regions = append(regions, protoClone(region.meta))
 	}
 	sort.Slice(regions, func(i, j int) bool {
-		return regions[i].GetId() < regions[j].GetId()
+		return regions[i].GetRegionId() < regions[j].GetRegionId()
 	})
 	return &mockRegionResolver{regions: regions}
 }
@@ -532,12 +532,11 @@ func startBlockingStore(t *testing.T, service kvrpcpb.NoKVServer) (string, func(
 func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 					{StoreId: 2, PeerId: 201},
@@ -546,12 +545,11 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               2,
-				StartKey:         []byte("m"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 102},
 					{StoreId: 2, PeerId: 202},
@@ -626,12 +624,11 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -639,12 +636,11 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               2,
-				StartKey:         []byte("m"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 201},
 				},
@@ -721,12 +717,11 @@ func TestNewRequiresRegionResolver(t *testing.T) {
 func TestClientRegionResolverLookupAndCache(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -829,12 +824,11 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 	addr, stop := startErrorStore(t)
 	defer stop()
 
-	meta := &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         nil,
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: nil,
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -859,12 +853,11 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 func TestClientRegionResolverLookupErrors(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -913,10 +906,9 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 }
 
 func TestClientRetriesRouteUnavailable(t *testing.T) {
-	meta := &metapb.RegionMeta{
-		Id:               1,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -954,10 +946,9 @@ func TestClientRetriesRouteUnavailable(t *testing.T) {
 }
 
 func TestClientRetriesTransportUnavailable(t *testing.T) {
-	meta := &metapb.RegionMeta{
-		Id:               1,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -989,12 +980,11 @@ func TestClientRetriesTransportUnavailable(t *testing.T) {
 func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -1036,12 +1026,11 @@ func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T)
 func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -1082,12 +1071,11 @@ func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -1127,12 +1115,11 @@ func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("z"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -1172,12 +1159,11 @@ func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
@@ -1188,12 +1174,11 @@ func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
 			},
 		},
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               2,
-				StartKey:         []byte("m"),
-				EndKey:           []byte("z"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   []byte("z"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 201},
 				},
@@ -1242,12 +1227,11 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),
 	}
-	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           []byte("z"),
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	cli.upsertRegionLocked(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
@@ -1255,22 +1239,20 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 	err := cli.handleRegionError(1, &errorpb.RegionError{
 		EpochNotMatch: &errorpb.EpochNotMatch{
-			Regions: []*metapb.RegionMeta{
+			Regions: []*metapb.RegionDescriptor{
 				{
-					Id:               11,
-					StartKey:         []byte("a"),
-					EndKey:           []byte("m"),
-					EpochVersion:     2,
-					EpochConfVersion: 1,
-					Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 111}},
+					RegionId: 11,
+					StartKey: []byte("a"),
+					EndKey:   []byte("m"),
+					Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+					Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 111}},
 				},
 				{
-					Id:               12,
-					StartKey:         []byte("m"),
-					EndKey:           []byte("z"),
-					EpochVersion:     2,
-					EpochConfVersion: 1,
-					Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 121}},
+					RegionId: 12,
+					StartKey: []byte("m"),
+					EndKey:   []byte("z"),
+					Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+					Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 121}},
 				},
 			},
 		},
@@ -1292,20 +1274,20 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 // Utility helpers
 
-func routeResponse(meta *metapb.RegionMeta) *pdpb.GetRegionByKeyResponse {
+func routeResponse(meta *metapb.RegionDescriptor) *pdpb.GetRegionByKeyResponse {
 	if meta == nil {
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}
 	}
 	return &pdpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(meta)),
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromProto(meta)),
 	}
 }
 
-func protoClone(meta *metapb.RegionMeta) *metapb.RegionMeta {
+func protoClone(meta *metapb.RegionDescriptor) *metapb.RegionDescriptor {
 	if meta == nil {
 		return nil
 	}
-	return proto.Clone(meta).(*metapb.RegionMeta)
+	return proto.Clone(meta).(*metapb.RegionDescriptor)
 }
 
 func protoClonePeer(peer *metapb.RegionPeer) *metapb.RegionPeer {
@@ -1318,13 +1300,13 @@ func protoClonePeer(peer *metapb.RegionPeer) *metapb.RegionPeer {
 func notLeaderError(region *clusterRegion) *errorpb.RegionError {
 	return &errorpb.RegionError{
 		NotLeader: &errorpb.NotLeader{
-			RegionId: region.meta.GetId(),
+			RegionId: region.meta.GetRegionId(),
 			Leader:   leaderPeer(region.meta, region.leaderStore),
 		},
 	}
 }
 
-func leaderPeer(meta *metapb.RegionMeta, storeID uint64) *metapb.RegionPeer {
+func leaderPeer(meta *metapb.RegionDescriptor, storeID uint64) *metapb.RegionPeer {
 	for _, peer := range meta.GetPeers() {
 		if peer.GetStoreId() == storeID {
 			return protoClonePeer(peer)
@@ -1350,12 +1332,12 @@ func statusInvalidArgument(msg string) error {
 func TestContainsKeyAndCompare(t *testing.T) {
 	require.False(t, containsKey(descriptor.Descriptor{}, []byte("a")))
 
-	meta := &metapb.RegionMeta{
-		Id:       1,
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
 		StartKey: []byte("b"),
 		EndKey:   []byte("d"),
 	}
-	desc := metacodec.DescriptorFromLegacyRegionMeta(meta)
+	desc := metacodec.DescriptorFromProto(meta)
 	require.False(t, containsKey(desc, []byte("a")))
 	require.True(t, containsKey(desc, []byte("b")))
 	require.True(t, containsKey(desc, []byte("c")))
@@ -1375,7 +1357,7 @@ func TestIncrementKey(t *testing.T) {
 }
 
 func TestCloneHelpers(t *testing.T) {
-	meta := &metapb.RegionMeta{StartKey: []byte("a"), EndKey: []byte("z")}
+	meta := &metapb.RegionDescriptor{StartKey: []byte("a"), EndKey: []byte("z")}
 	clone := protoClone(meta)
 	require.NotSame(t, meta, clone)
 	meta.StartKey[0] = 'b'
@@ -1415,9 +1397,9 @@ func TestNormalizeRPCError(t *testing.T) {
 
 func TestDefaultLeaderStoreID(t *testing.T) {
 	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
-	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{})))
-	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
-		Id: 1,
+	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{})))
+	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId: 1,
 		Peers: []*metapb.RegionPeer{
 			nil,
 			{StoreId: 9, PeerId: 90},
@@ -1427,12 +1409,11 @@ func TestDefaultLeaderStoreID(t *testing.T) {
 
 func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	resolver := &mockRegionResolver{
-		region: &metapb.RegionMeta{
-			Id:               1,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("z"),
-			EpochVersion:     2,
-			EpochConfVersion: 2,
+		region: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 2},
 			Peers: []*metapb.RegionPeer{
 				{StoreId: 2, PeerId: 201},
 				{StoreId: 3, PeerId: 301},
@@ -1450,12 +1431,11 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	cli.mu.Lock()
-	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           []byte("z"),
-		EpochVersion:     1,
-		EpochConfVersion: 1,
+	cli.upsertRegionLocked(metacodec.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 			{StoreId: 2, PeerId: 201},
@@ -1511,13 +1491,12 @@ func TestClientGetHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 }
 
 func TestClientGetHonorsCanceledContextDuringRPC(t *testing.T) {
-	meta := &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
-		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
 	service := &blockingService{started: make(chan struct{}, 1)}
 	addr, stop := startBlockingStore(t, service)
@@ -1603,13 +1582,12 @@ func TestClientPutHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 }
 
 func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
-	meta := &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
-		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	meta := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
 	service := &blockingService{started: make(chan struct{}, 1)}
 	addr, stop := startBlockingStore(t, service)
@@ -1657,26 +1635,24 @@ func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
 }
 
 func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t *testing.T) {
-	metaA := &metapb.RegionMeta{
-		Id:               1,
-		StartKey:         []byte("a"),
-		EndKey:           []byte("m"),
-		EpochVersion:     1,
-		EpochConfVersion: 1,
-		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	metaA := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
-	metaB := &metapb.RegionMeta{
-		Id:               2,
-		StartKey:         []byte("m"),
-		EndKey:           nil,
-		EpochVersion:     1,
-		EpochConfVersion: 1,
-		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+	metaB := &metapb.RegionDescriptor{
+		RegionId: 2,
+		StartKey: []byte("m"),
+		EndKey:   nil,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 	}
 	resolver := &keyedBlockingResolver{
 		started:     make(chan struct{}, 1),
 		blockedKeys: map[string]struct{}{"omega": {}},
-		regions:     []*metapb.RegionMeta{metaA, metaB},
+		regions:     []*metapb.RegionDescriptor{metaA, metaB},
 	}
 	cli, err := New(Config{
 		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
@@ -1719,24 +1695,22 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
-				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 			},
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               2,
-				StartKey:         []byte("m"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
-				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 			},
 			leaderStore: 1,
 		},
@@ -1795,24 +1769,22 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testin
 func TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               1,
-				StartKey:         []byte("a"),
-				EndKey:           []byte("m"),
-				EpochVersion:     1,
-				EpochConfVersion: 1,
-				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 			},
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &metapb.RegionMeta{
-				Id:               2,
-				StartKey:         []byte("m"),
-				EndKey:           nil,
-				EpochVersion:     1,
-				EpochConfVersion: 1,
-				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 			},
 			leaderStore: 1,
 		},

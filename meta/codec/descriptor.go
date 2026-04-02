@@ -2,7 +2,6 @@ package codec
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	legacypb "github.com/feichai0017/NoKV/pb/legacy"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
@@ -91,38 +90,5 @@ func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor 
 			out.Lineage = append(out.Lineage, lineage)
 		}
 	}
-	return out
-}
-
-// DescriptorFromLegacyRegionMeta converts the older RegionMeta wire shape into
-// a descriptor. Keep this only at compatibility boundaries such as RegionError
-// payloads and legacy test scaffolding.
-func DescriptorFromLegacyRegionMeta(meta *legacypb.RegionMeta) descriptor.Descriptor {
-	if meta == nil {
-		return descriptor.Descriptor{}
-	}
-	out := descriptor.Descriptor{
-		RegionID: meta.GetId(),
-		StartKey: append([]byte(nil), meta.GetStartKey()...),
-		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: metaregion.Epoch{
-			Version:     meta.GetEpochVersion(),
-			ConfVersion: meta.GetEpochConfVersion(),
-		},
-		State: metaregion.ReplicaStateRunning,
-	}
-	if peers := meta.GetPeers(); len(peers) > 0 {
-		out.Peers = make([]metaregion.Peer, 0, len(peers))
-		for _, peer := range peers {
-			if peer == nil {
-				continue
-			}
-			out.Peers = append(out.Peers, metaregion.Peer{
-				StoreID: peer.GetStoreId(),
-				PeerID:  peer.GetPeerId(),
-			})
-		}
-	}
-	out.EnsureHash()
 	return out
 }

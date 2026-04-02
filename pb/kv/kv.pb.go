@@ -10,7 +10,7 @@ package kvrpcpb
 
 import (
 	error1 "github.com/feichai0017/NoKV/pb/error"
-	legacy "github.com/feichai0017/NoKV/pb/legacy"
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -1369,8 +1369,8 @@ func (x *CheckTxnStatusResponse) GetAction() CheckTxnStatusAction {
 type Context struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	RegionId          uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	RegionEpoch       *legacy.RegionEpoch    `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
-	Peer              *legacy.RegionPeer     `protobuf:"bytes,3,opt,name=peer,proto3" json:"peer,omitempty"`
+	RegionEpoch       *meta.RegionEpoch      `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
+	Peer              *meta.RegionPeer       `protobuf:"bytes,3,opt,name=peer,proto3" json:"peer,omitempty"`
 	ReadConsistency   ReadConsistency        `protobuf:"varint,4,opt,name=read_consistency,json=readConsistency,proto3,enum=nokv.kv.v1.ReadConsistency" json:"read_consistency,omitempty"`
 	ReadPreference    ReadPreference         `protobuf:"varint,5,opt,name=read_preference,json=readPreference,proto3,enum=nokv.kv.v1.ReadPreference" json:"read_preference,omitempty"`
 	MaxStaleReadIndex uint64                 `protobuf:"varint,6,opt,name=max_stale_read_index,json=maxStaleReadIndex,proto3" json:"max_stale_read_index,omitempty"`
@@ -1416,14 +1416,14 @@ func (x *Context) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *Context) GetRegionEpoch() *legacy.RegionEpoch {
+func (x *Context) GetRegionEpoch() *meta.RegionEpoch {
 	if x != nil {
 		return x.RegionEpoch
 	}
 	return nil
 }
 
-func (x *Context) GetPeer() *legacy.RegionPeer {
+func (x *Context) GetPeer() *meta.RegionPeer {
 	if x != nil {
 		return x.Peer
 	}
@@ -2643,7 +2643,7 @@ var File_kv_kv_proto protoreflect.FileDescriptor
 const file_kv_kv_proto_rawDesc = "" +
 	"\n" +
 	"\vkv/kv.proto\x12\n" +
-	"nokv.kv.v1\x1a\x11error/error.proto\x1a\x11legacy/meta.proto\"\xb3\x01\n" +
+	"nokv.kv.v1\x1a\x11error/error.proto\x1a\x11meta/region.proto\"\xb3\x01\n" +
 	"\x02KV\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12\x1b\n" +
@@ -2732,11 +2732,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12\x19\n" +
 	"\block_ttl\x18\x02 \x01(\x04R\alockTtl\x12%\n" +
 	"\x0ecommit_version\x18\x03 \x01(\x04R\rcommitVersion\x128\n" +
-	"\x06action\x18\x04 \x01(\x0e2 .nokv.kv.v1.CheckTxnStatusActionR\x06action\"\x89\x03\n" +
+	"\x06action\x18\x04 \x01(\x0e2 .nokv.kv.v1.CheckTxnStatusActionR\x06action\"\xfb\x02\n" +
 	"\aContext\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12C\n" +
-	"\fregion_epoch\x18\x02 \x01(\v2 .nokv.meta.legacy.v1.RegionEpochR\vregionEpoch\x123\n" +
-	"\x04peer\x18\x03 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionPeerR\x04peer\x12F\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12<\n" +
+	"\fregion_epoch\x18\x02 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\vregionEpoch\x12,\n" +
+	"\x04peer\x18\x03 \x01(\v2\x18.nokv.meta.v1.RegionPeerR\x04peer\x12F\n" +
 	"\x10read_consistency\x18\x04 \x01(\x0e2\x1b.nokv.kv.v1.ReadConsistencyR\x0freadConsistency\x12C\n" +
 	"\x0fread_preference\x18\x05 \x01(\x0e2\x1a.nokv.kv.v1.ReadPreferenceR\x0ereadPreference\x12/\n" +
 	"\x14max_stale_read_index\x18\x06 \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
@@ -2899,8 +2899,8 @@ var file_kv_kv_proto_goTypes = []any{
 	(*WriteConflict)(nil),            // 42: nokv.kv.v1.WriteConflict
 	(*KeyAlreadyExists)(nil),         // 43: nokv.kv.v1.KeyAlreadyExists
 	(*CommitTsExpired)(nil),          // 44: nokv.kv.v1.CommitTsExpired
-	(*legacy.RegionEpoch)(nil),       // 45: nokv.meta.legacy.v1.RegionEpoch
-	(*legacy.RegionPeer)(nil),        // 46: nokv.meta.legacy.v1.RegionPeer
+	(*meta.RegionEpoch)(nil),         // 45: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),          // 46: nokv.meta.v1.RegionPeer
 	(*error1.RegionError)(nil),       // 47: nokv.error.v1.RegionError
 }
 var file_kv_kv_proto_depIdxs = []int32{
@@ -2918,8 +2918,8 @@ var file_kv_kv_proto_depIdxs = []int32{
 	40, // 11: nokv.kv.v1.ResolveLockResponse.error:type_name -> nokv.kv.v1.KeyError
 	40, // 12: nokv.kv.v1.CheckTxnStatusResponse.error:type_name -> nokv.kv.v1.KeyError
 	2,  // 13: nokv.kv.v1.CheckTxnStatusResponse.action:type_name -> nokv.kv.v1.CheckTxnStatusAction
-	45, // 14: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.legacy.v1.RegionEpoch
-	46, // 15: nokv.kv.v1.Context.peer:type_name -> nokv.meta.legacy.v1.RegionPeer
+	45, // 14: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	46, // 15: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
 	0,  // 16: nokv.kv.v1.Context.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
 	1,  // 17: nokv.kv.v1.Context.read_preference:type_name -> nokv.kv.v1.ReadPreference
 	23, // 18: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context

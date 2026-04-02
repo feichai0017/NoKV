@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
@@ -452,7 +453,7 @@ func TestStoreHandleSplitCommandReplayIsIdempotent(t *testing.T) {
 	cmd := &raftcmdpb.SplitCommand{
 		ParentRegionId: parentMeta.ID,
 		SplitKey:       []byte("m"),
-		Child:          regionMetaToPB(childMeta),
+		Child:          metacodec.LocalRegionMetaToDescriptorProto(childMeta),
 	}
 	require.NoError(t, rs.handleSplitCommand(cmd))
 

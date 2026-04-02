@@ -3,7 +3,7 @@ syntax = "proto3";
 
 package nokv.admin.v1;
 
-import "legacy/meta.proto";
+import "meta/descriptor.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/admin;adminpb";
 
@@ -14,7 +14,7 @@ message AddPeerRequest {
 }
 
 message AddPeerResponse {
-  nokv.meta.legacy.v1.RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region = 1;
 }
 
 message RemovePeerRequest {
@@ -23,7 +23,7 @@ message RemovePeerRequest {
 }
 
 message RemovePeerResponse {
-  nokv.meta.legacy.v1.RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region = 1;
 }
 
 message TransferLeaderRequest {
@@ -32,7 +32,7 @@ message TransferLeaderRequest {
 }
 
 message TransferLeaderResponse {
-  nokv.meta.legacy.v1.RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region = 1;
 }
 
 message ExportRegionSnapshotRequest {
@@ -41,7 +41,7 @@ message ExportRegionSnapshotRequest {
 
 message ExportRegionSnapshotResponse {
   bytes snapshot = 1;
-  nokv.meta.legacy.v1.RegionMeta region = 2;
+  nokv.meta.v1.RegionDescriptor region = 2;
 }
 
 message ExportRegionSnapshotStreamRequest {
@@ -50,7 +50,7 @@ message ExportRegionSnapshotStreamRequest {
 
 message ExportRegionSnapshotStreamResponse {
   bytes snapshot_header = 1;
-  nokv.meta.legacy.v1.RegionMeta region = 2;
+  nokv.meta.v1.RegionDescriptor region = 2;
   bytes chunk = 3;
 }
 
@@ -59,12 +59,12 @@ message ImportRegionSnapshotRequest {
 }
 
 message ImportRegionSnapshotResponse {
-  nokv.meta.legacy.v1.RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region = 1;
 }
 
 message ImportRegionSnapshotStreamRequest {
   bytes snapshot_header = 1;
-  nokv.meta.legacy.v1.RegionMeta region = 2;
+  nokv.meta.v1.RegionDescriptor region = 2;
   bytes chunk = 3;
 }
 
@@ -78,7 +78,7 @@ message RegionRuntimeStatusResponse {
   uint64 local_peer_id = 3;
   uint64 leader_peer_id = 4;
   bool leader = 5;
-  nokv.meta.legacy.v1.RegionMeta region = 6;
+  nokv.meta.v1.RegionDescriptor region = 6;
   uint64 applied_index = 7;
   uint64 applied_term = 8;
 }
