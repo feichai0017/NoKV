@@ -12,7 +12,6 @@ import (
 
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
-	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
 )
 
@@ -25,10 +24,6 @@ type fakeStorage struct {
 	saveErr     error
 	lastID      uint64
 	lastTS      uint64
-}
-
-func (f *fakeStorage) Load() (pdstorage.Snapshot, error) {
-	return pdstorage.Snapshot{}, nil
 }
 
 func (f *fakeStorage) SaveRegion(meta localmeta.RegionMeta) error {
