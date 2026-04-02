@@ -2,7 +2,7 @@ package server
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/pb"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"github.com/feichai0017/NoKV/pd/core"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
@@ -10,7 +10,7 @@ import (
 // planStoreOperations builds lightweight scheduling hints for the heartbeat
 // source store. This is a minimal heuristic to bootstrap PD-to-store
 // downlinks; it can be replaced by a richer scheduler in follow-up work.
-func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pb.SchedulerOperation {
+func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pdpb.SchedulerOperation {
 	if s == nil || s.cluster == nil || heartbeatStoreID == 0 {
 		return nil
 	}
@@ -27,7 +27,7 @@ func (s *Service) planStoreOperations(heartbeatStoreID uint64) []*pb.SchedulerOp
 	if !ok {
 		return nil
 	}
-	return []*pb.SchedulerOperation{op}
+	return []*pdpb.SchedulerOperation{op}
 }
 
 func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64) (core.StoreStats, core.StoreStats, bool) {
@@ -57,7 +57,7 @@ func selectLeaderRebalancePair(stores []core.StoreStats, heartbeatStoreID uint64
 	return src, dst, true
 }
 
-func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstStoreID uint64) (*pb.SchedulerOperation, bool) {
+func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstStoreID uint64) (*pdpb.SchedulerOperation, bool) {
 	if srcStoreID == 0 || dstStoreID == 0 {
 		return nil, false
 	}
@@ -77,7 +77,7 @@ func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstSto
 	return nil, false
 }
 
-func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
+func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pdpb.SchedulerOperation, bool) {
 	if desc.RegionID == 0 || len(desc.Peers) == 0 {
 		return nil, false
 	}
@@ -95,8 +95,8 @@ func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint
 	if srcPeerID == dstPeerID {
 		return nil, false
 	}
-	return &pb.SchedulerOperation{
-		Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
+	return &pdpb.SchedulerOperation{
+		Type:         pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
 		RegionId:     desc.RegionID,
 		SourcePeerId: srcPeerID,
 		TargetPeerId: dstPeerID,

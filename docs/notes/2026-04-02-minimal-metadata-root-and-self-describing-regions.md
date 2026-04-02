@@ -456,9 +456,9 @@ type Descriptor struct {
     RegionID    uint64
     StartKey    []byte
     EndKey      []byte
-    Epoch       localmeta.RegionEpoch
-    Peers       []localmeta.PeerMeta
-    State       localmeta.RegionState
+    Epoch       region.Epoch
+    Peers       []region.Peer
+    State       region.ReplicaState
     Parent      []LineageRef
     RootEpoch   uint64
     Hash        []byte
@@ -470,7 +470,7 @@ Suggested lineage types:
 ```go
 type LineageRef struct {
     RegionID uint64
-    Epoch    localmeta.RegionEpoch
+    Epoch    region.Epoch
     Hash     []byte
     Kind     LineageKind
 }
@@ -526,7 +526,7 @@ Suggested logical types:
 type ReplicaLocalState struct {
     RegionID     uint64
     LocalPeerID  uint64
-    State        localmeta.RegionState
+    State        region.ReplicaState
     Descriptor   *descriptor.Descriptor
     LastApplied  uint64
     LastTerm     uint64

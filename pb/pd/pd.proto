@@ -1,12 +1,12 @@
 // Use scripts/gen.sh to generate .pb.go files.
 syntax = "proto3";
 
-package pb;
+package nokv.pd.v1;
 
 import "meta/descriptor.proto";
 import "metapb.proto";
 
-option go_package = "github.com/feichai0017/NoKV/pb";
+option go_package = "github.com/feichai0017/NoKV/pb/pd;pdpb";
 
 // pdpb carries control-plane RPCs for PD-lite.
 

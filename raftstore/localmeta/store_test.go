@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +17,7 @@ func TestLocalStorePersistsRegions(t *testing.T) {
 		ID:       11,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch: RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},

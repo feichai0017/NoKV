@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
@@ -326,18 +327,18 @@ func regionMetaFromPB(meta *metapb.LocalRegionMeta) RegionMeta {
 		State:    regionStateFromPB(meta.State),
 	}
 	if meta.Epoch != nil {
-		out.Epoch = RegionEpoch{
+		out.Epoch = metaregion.Epoch{
 			Version:     meta.Epoch.Version,
 			ConfVersion: meta.Epoch.ConfVersion,
 		}
 	}
 	if len(meta.Peers) > 0 {
-		out.Peers = make([]PeerMeta, 0, len(meta.Peers))
+		out.Peers = make([]metaregion.Peer, 0, len(meta.Peers))
 		for _, peer := range meta.Peers {
 			if peer == nil {
 				continue
 			}
-			out.Peers = append(out.Peers, PeerMeta{
+			out.Peers = append(out.Peers, metaregion.Peer{
 				StoreID: peer.StoreId,
 				PeerID:  peer.PeerId,
 			})
@@ -383,7 +384,7 @@ func raftProgressFromPB(ptr *metapb.RaftProgress) RaftLogPointer {
 	}
 }
 
-func regionStateToPB(state RegionState) metapb.RegionReplicaState {
+func regionStateToPB(state metaregion.ReplicaState) metapb.RegionReplicaState {
 	switch state {
 	case RegionStateNew:
 		return metapb.RegionReplicaState_REGION_REPLICA_STATE_NEW
@@ -398,7 +399,7 @@ func regionStateToPB(state RegionState) metapb.RegionReplicaState {
 	}
 }
 
-func regionStateFromPB(state metapb.RegionReplicaState) RegionState {
+func regionStateFromPB(state metapb.RegionReplicaState) metaregion.ReplicaState {
 	switch state {
 	case metapb.RegionReplicaState_REGION_REPLICA_STATE_NEW:
 		return RegionStateNew

@@ -3,12 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"os"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
@@ -100,9 +101,9 @@ func TestStartStorePeersSkipsMissing(t *testing.T) {
 
 	meta := localmeta.RegionMeta{
 		ID:    10,
-		State: localmeta.RegionStateRunning,
-		Epoch: localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{{StoreID: 2, PeerID: 200}},
+		State: metaregion.ReplicaStateRunning,
+		Epoch: metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{{StoreID: 2, PeerID: 200}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
 
@@ -123,11 +124,11 @@ func TestStartStorePeersStartsPeer(t *testing.T) {
 
 	meta := localmeta.RegionMeta{
 		ID:       11,
-		State:    localmeta.RegionStateRunning,
+		State:    metaregion.ReplicaStateRunning,
 		StartKey: []byte("a"),
 		EndKey:   []byte("b"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 	}
 	require.NoError(t, localMeta.SaveRegion(meta))
 	require.NoError(t, server.Close())
@@ -171,19 +172,19 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		localMeta := openLocalMetaStore(t, dir)
 		require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
 			ID:       1,
-			State:    localmeta.RegionStateRunning,
+			State:    metaregion.ReplicaStateRunning,
 			StartKey: nil,
 			EndKey:   nil,
-			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-			Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+			Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 		}))
 		require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
 			ID:       2,
-			State:    localmeta.RegionStateRunning,
+			State:    metaregion.ReplicaStateRunning,
 			StartKey: []byte("b"),
 			EndKey:   []byte("c"),
-			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-			Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+			Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 201}},
 		}))
 
 		var buf bytes.Buffer
@@ -279,7 +280,7 @@ func startTestPDServer(t *testing.T) (addr string, stop func()) {
 
 	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	srv := grpc.NewServer()
-	pb.RegisterPDServer(srv, svc)
+	pdpb.RegisterPDServer(srv, svc)
 
 	go func() {
 		_ = srv.Serve(lis)

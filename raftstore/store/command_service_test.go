@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
@@ -24,8 +25,8 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 		ID:       101,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -118,8 +119,8 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 		ID:       777,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 17}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 17}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -193,8 +194,8 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 		ID:       202,
 		StartKey: []byte("k"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 5}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 5}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -235,8 +236,8 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 		ID:       303,
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
-		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 3, PeerID: 7}},
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 3, PeerID: 7}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -284,8 +285,8 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 		ID:       909,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 	}
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{ID: 1, ElectionTick: 5, HeartbeatTick: 1, MaxSizePerMsg: 1 << 20, MaxInflightMsgs: 256, PreVote: true},

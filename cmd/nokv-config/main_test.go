@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"io"
 	"os"
 	"path/filepath"
@@ -138,7 +139,7 @@ func TestRunRegionCatalogWritesRegion(t *testing.T) {
 	require.Equal(t, uint64(7), meta.Epoch.Version)
 	require.Equal(t, uint64(5), meta.Epoch.ConfVersion)
 	require.Len(t, meta.Peers, 2)
-	require.Equal(t, localmeta.PeerMeta{StoreID: 1, PeerID: 1001}, meta.Peers[0])
+	require.Equal(t, metaregion.Peer{StoreID: 1, PeerID: 1001}, meta.Peers[0])
 }
 
 func TestMainStoresCommand(t *testing.T) {
@@ -382,9 +383,9 @@ func TestParseUintErrors(t *testing.T) {
 }
 
 func TestParseRegionState(t *testing.T) {
-	require.Equal(t, localmeta.RegionStateRunning, parseRegionState(""))
-	require.Equal(t, localmeta.RegionStateTombstone, parseRegionState("tombstone"))
-	require.Equal(t, localmeta.RegionStateRunning, parseRegionState("unknown"))
+	require.Equal(t, metaregion.ReplicaStateRunning, parseRegionState(""))
+	require.Equal(t, metaregion.ReplicaStateTombstone, parseRegionState("tombstone"))
+	require.Equal(t, metaregion.ReplicaStateRunning, parseRegionState("unknown"))
 }
 
 func TestDecodeKeyInvalidHexPanics(t *testing.T) {

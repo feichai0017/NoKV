@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
@@ -33,7 +34,7 @@ func (s *Store) StartPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer) (*peer
 	var regionMeta *localmeta.RegionMeta
 	if cfg.Region != nil {
 		if cfg.Region.State == 0 {
-			cfg.Region.State = localmeta.RegionStateRunning
+			cfg.Region.State = metaregion.ReplicaStateRunning
 		}
 		regionMeta = localmeta.CloneRegionMetaPtr(cfg.Region)
 	}
@@ -89,7 +90,7 @@ func (s *Store) StopPeer(id uint64) {
 	}
 	if regionID != 0 {
 		s.regionMgr().setPeer(regionID, nil)
-		_ = s.applyRegionState(regionID, localmeta.RegionStateRemoving)
+		_ = s.applyRegionState(regionID, metaregion.ReplicaStateRemoving)
 	}
 	if p != nil {
 		_ = p.Close()
@@ -170,7 +171,7 @@ func (s *Store) startPeerFromSnapshot(msg myraft.Message) error {
 	if meta.ID == 0 {
 		return fmt.Errorf("raftstore: snapshot payload missing region metadata")
 	}
-	var localPeer localmeta.PeerMeta
+	var localPeer metaregion.Peer
 	for _, peerMeta := range meta.Peers {
 		if peerMeta.PeerID == msg.To {
 			localPeer = peerMeta
@@ -220,7 +221,7 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (localmeta.RegionMet
 	if meta.ID == 0 {
 		return localmeta.RegionMeta{}, fmt.Errorf("raftstore: install snapshot payload missing region metadata")
 	}
-	var localPeer localmeta.PeerMeta
+	var localPeer metaregion.Peer
 	for _, peerMeta := range meta.Peers {
 		if peerMeta.StoreID == s.storeID {
 			localPeer = peerMeta
@@ -298,7 +299,7 @@ func (s *Store) InstallRegionSSTSnapshot(snap myraft.Snapshot, meta localmeta.Re
 	if install == nil {
 		return localmeta.RegionMeta{}, fmt.Errorf("raftstore: install region sst snapshot requires install callback")
 	}
-	var localPeer localmeta.PeerMeta
+	var localPeer metaregion.Peer
 	for _, peerMeta := range meta.Peers {
 		if peerMeta.StoreID == s.storeID {
 			localPeer = peerMeta

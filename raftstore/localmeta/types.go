@@ -6,17 +6,11 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 )
 
-// Keep the store-local API stable while moving the underlying primitive region
-// types into a neutral metadata package shared by localmeta and descriptor.
-type PeerMeta = metaregion.Peer
-type RegionState = metaregion.ReplicaState
-type RegionEpoch = metaregion.Epoch
-
 const (
-	RegionStateNew       RegionState = metaregion.ReplicaStateNew
-	RegionStateRunning   RegionState = metaregion.ReplicaStateRunning
-	RegionStateRemoving  RegionState = metaregion.ReplicaStateRemoving
-	RegionStateTombstone RegionState = metaregion.ReplicaStateTombstone
+	RegionStateNew       metaregion.ReplicaState = metaregion.ReplicaStateNew
+	RegionStateRunning   metaregion.ReplicaState = metaregion.ReplicaStateRunning
+	RegionStateRemoving  metaregion.ReplicaState = metaregion.ReplicaStateRemoving
+	RegionStateTombstone metaregion.ReplicaState = metaregion.ReplicaStateTombstone
 )
 
 // RegionMeta captures the store-local runtime and recovery shape of one region.
@@ -25,12 +19,12 @@ const (
 // It is intentionally smaller than the distributed topology descriptor and must
 // not become control-plane authority.
 type RegionMeta struct {
-	ID       uint64      `json:"id"`
-	StartKey []byte      `json:"start_key,omitempty"`
-	EndKey   []byte      `json:"end_key,omitempty"`
-	Epoch    RegionEpoch `json:"epoch"`
-	Peers    []PeerMeta  `json:"peers,omitempty"`
-	State    RegionState `json:"state"`
+	ID       uint64                  `json:"id"`
+	StartKey []byte                  `json:"start_key,omitempty"`
+	EndKey   []byte                  `json:"end_key,omitempty"`
+	Epoch    metaregion.Epoch        `json:"epoch"`
+	Peers    []metaregion.Peer       `json:"peers,omitempty"`
+	State    metaregion.ReplicaState `json:"state"`
 }
 
 // CloneRegionMeta returns a deep copy of the provided region metadata.
@@ -43,7 +37,7 @@ func CloneRegionMeta(meta RegionMeta) RegionMeta {
 		cp.EndKey = append([]byte(nil), meta.EndKey...)
 	}
 	if len(meta.Peers) > 0 {
-		cp.Peers = append([]PeerMeta(nil), meta.Peers...)
+		cp.Peers = append([]metaregion.Peer(nil), meta.Peers...)
 	}
 	return cp
 }

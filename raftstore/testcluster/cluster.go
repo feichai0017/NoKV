@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"slices"
 	"testing"
@@ -127,7 +128,7 @@ func StartPD(tb testing.TB) *PD {
 	}
 	svc := pdserver.NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	grpcServer := grpc.NewServer()
-	pb.RegisterPDServer(grpcServer, svc)
+	pdpb.RegisterPDServer(grpcServer, svc)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()

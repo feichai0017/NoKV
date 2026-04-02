@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"io"
 
 	"github.com/feichai0017/NoKV/pb"
@@ -45,7 +46,7 @@ func (s *Service) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddP
 	if req.GetRegionId() == 0 || req.GetStoreId() == 0 || req.GetPeerId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "region_id, store_id, and peer_id are required")
 	}
-	if err := s.store.ProposeAddPeer(req.GetRegionId(), localmeta.PeerMeta{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
+	if err := s.store.ProposeAddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
@@ -316,18 +317,18 @@ func regionMetaFromPB(meta *pb.RegionMeta) (localmeta.RegionMeta, error) {
 	if meta == nil {
 		return localmeta.RegionMeta{}, fmt.Errorf("region metadata is nil")
 	}
-	peers := make([]localmeta.PeerMeta, 0, len(meta.GetPeers()))
+	peers := make([]metaregion.Peer, 0, len(meta.GetPeers()))
 	for _, peerMeta := range meta.GetPeers() {
 		if peerMeta.GetStoreId() == 0 || peerMeta.GetPeerId() == 0 {
 			return localmeta.RegionMeta{}, fmt.Errorf("region peer metadata is incomplete")
 		}
-		peers = append(peers, localmeta.PeerMeta{StoreID: peerMeta.GetStoreId(), PeerID: peerMeta.GetPeerId()})
+		peers = append(peers, metaregion.Peer{StoreID: peerMeta.GetStoreId(), PeerID: peerMeta.GetPeerId()})
 	}
 	return localmeta.RegionMeta{
 		ID:       meta.GetId(),
 		StartKey: append([]byte(nil), meta.GetStartKey()...),
 		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     meta.GetEpochVersion(),
 			ConfVersion: meta.GetEpochConfVersion(),
 		},

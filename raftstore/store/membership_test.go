@@ -1,6 +1,7 @@
 package store
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
@@ -28,8 +29,8 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 		Apply:     func([]myraft.Entry) error { return nil },
 		Region: &localmeta.RegionMeta{
 			ID:    regionID,
-			State: localmeta.RegionStateRunning,
-			Peers: []localmeta.PeerMeta{{StoreID: 1, PeerID: 1}},
+			State: metaregion.ReplicaStateRunning,
+			Peers: []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 		},
 	}
 
@@ -49,7 +50,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 			Changes: []raftpb.ConfChangeSingle{
 				{Type: raftpb.ConfChangeAddNode, NodeID: 2},
 			},
-			Context: encodeConfChangeContext([]localmeta.PeerMeta{{StoreID: 2, PeerID: 2}}),
+			Context: encodeConfChangeContext([]metaregion.Peer{{StoreID: 2, PeerID: 2}}),
 		},
 	}
 	require.NoError(t, rs.handlePeerConfChange(addEvent))
@@ -58,7 +59,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, meta.Peers, 2)
 	require.Equal(t, uint64(1), meta.Epoch.ConfVersion)
-	require.Contains(t, meta.Peers, localmeta.PeerMeta{StoreID: 2, PeerID: 2})
+	require.Contains(t, meta.Peers, metaregion.Peer{StoreID: 2, PeerID: 2})
 
 	removeEvent := peer.ConfChangeEvent{
 		Peer:       p,
@@ -67,7 +68,7 @@ func TestHandlePeerConfChangeUpdatesRegionMeta(t *testing.T) {
 			Changes: []raftpb.ConfChangeSingle{
 				{Type: raftpb.ConfChangeRemoveNode, NodeID: 1},
 			},
-			Context: encodeConfChangeContext([]localmeta.PeerMeta{{StoreID: 1, PeerID: 1}}),
+			Context: encodeConfChangeContext([]metaregion.Peer{{StoreID: 1, PeerID: 1}}),
 		},
 	}
 	require.NoError(t, rs.handlePeerConfChange(removeEvent))

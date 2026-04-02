@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"strconv"
 	"strings"
@@ -28,7 +29,7 @@ type timestampAllocator interface {
 }
 
 type pdTSOClient interface {
-	Tso(ctx context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error)
+	Tso(ctx context.Context, req *pdpb.TsoRequest) (*pdpb.TsoResponse, error)
 }
 
 type raftClient interface {
@@ -65,7 +66,7 @@ func (p *pdTSOAllocator) Reserve(n uint64) (uint64, error) {
 	}
 	ctx, cancel := contextWithTimeout(p.ctx, p.timeout)
 	defer cancel()
-	resp, err := p.client.Tso(ctx, &pb.TsoRequest{Count: n})
+	resp, err := p.client.Tso(ctx, &pdpb.TsoRequest{Count: n})
 	if err != nil {
 		return 0, fmt.Errorf("tso reserve: rpc failed: %w", err)
 	}

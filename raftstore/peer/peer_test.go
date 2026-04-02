@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 	"time"
 
@@ -76,7 +77,7 @@ func TestSnapshotExportsPayloadAndRefreshesMetadata(t *testing.T) {
 	p := newTestPeer(t, storage, nil)
 	p.region = &localmeta.RegionMeta{
 		ID: 7,
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 11},
 			{StoreID: 2, PeerID: 22},
 		},
@@ -200,7 +201,7 @@ func TestEnsureEmptySnapshotPayloadTargetAllowsRetry(t *testing.T) {
 
 func TestPrepareMessagesAttachesSnapshotPayload(t *testing.T) {
 	p := &Peer{
-		region: &localmeta.RegionMeta{ID: 7, State: localmeta.RegionStateRunning},
+		region: &localmeta.RegionMeta{ID: 7, State: metaregion.ReplicaStateRunning},
 		snapshotExport: func(region localmeta.RegionMeta) ([]byte, error) {
 			require.Equal(t, uint64(7), region.ID)
 			return []byte("payload"), nil
@@ -229,7 +230,7 @@ func TestHandleReadyImportsSnapshotPayloadBeforeRaftSnapshot(t *testing.T) {
 		snapshotApply: func(payload []byte) (localmeta.RegionMeta, error) {
 			require.Equal(t, []byte("payload"), payload)
 			imported = true
-			return localmeta.RegionMeta{ID: 9, State: localmeta.RegionStateRunning}, nil
+			return localmeta.RegionMeta{ID: 9, State: metaregion.ReplicaStateRunning}, nil
 		},
 	}
 	rd := myraft.Ready{
