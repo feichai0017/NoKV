@@ -88,6 +88,73 @@ func (s *Storage) Snapshot() (myraft.Snapshot, error) {
 	return s.mem.Snapshot()
 }
 
+func (s *Storage) CreateSnapshot(index uint64, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.mem.Snapshot()
+	if err != nil {
+		return err
+	}
+	snap, err := s.mem.CreateSnapshot(index, &current.Metadata.ConfState, data)
+	if err != nil {
+		return err
+	}
+	if s.disk != nil {
+		first, err := s.mem.FirstIndex()
+		if err != nil {
+			return err
+		}
+		last, err := s.mem.LastIndex()
+		if err != nil {
+			return err
+		}
+		var entries []myraft.Entry
+		if last >= first {
+			entries, err = s.mem.Entries(first, last+1, math.MaxUint64)
+			if err != nil {
+				return err
+			}
+		}
+		if err := s.disk.save(s.hard, snap, entries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Storage) Compact(index uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.mem.Compact(index); err != nil {
+		return err
+	}
+	if s.disk != nil {
+		first, err := s.mem.FirstIndex()
+		if err != nil {
+			return err
+		}
+		last, err := s.mem.LastIndex()
+		if err != nil {
+			return err
+		}
+		var entries []myraft.Entry
+		if last >= first {
+			entries, err = s.mem.Entries(first, last+1, math.MaxUint64)
+			if err != nil {
+				return err
+			}
+		}
+		snap, err := s.mem.Snapshot()
+		if err != nil {
+			return err
+		}
+		if err := s.disk.save(s.hard, snap, entries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Storage) AppendReady(rd myraft.Ready) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
