@@ -24,6 +24,9 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 
 	commit, err := store.Append(
 		rootpkg.Event{Kind: rootpkg.EventKindStoreJoined, StoreMembership: &rootpkg.StoreMembership{StoreID: 1, Address: "s1"}},
+		rootpkg.Event{Kind: rootpkg.EventKindRegionDescriptorPublished, RegionDescriptor: &rootpkg.RegionDescriptorRecord{
+			Descriptor: testDescriptor(10, []byte("a"), []byte("z")),
+		}},
 		rootpkg.Event{Kind: rootpkg.EventKindRegionSplitCommitted, RangeSplit: &rootpkg.RangeSplit{
 			ParentRegionID: 10,
 			SplitKey:       []byte("m"),
@@ -33,21 +36,23 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 		rootpkg.Event{Kind: rootpkg.EventKindPlacementPolicyChanged, PlacementPolicy: &rootpkg.PlacementPolicy{Name: "default", Version: 7}},
 	)
 	require.NoError(t, err)
-	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 3}, commit.Cursor)
+	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, commit.Cursor)
 	require.Equal(t, uint64(1), commit.State.MembershipEpoch)
-	require.Equal(t, uint64(1), commit.State.ClusterEpoch)
+	require.Equal(t, uint64(2), commit.State.ClusterEpoch)
 	require.Equal(t, uint64(7), commit.State.PolicyVersion)
 
 	events, tail, err := store.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
 	require.Equal(t, commit.Cursor, tail)
 	require.Equal(t, rootpkg.EventKindStoreJoined, events[0].Kind)
 	require.Equal(t, uint64(1), events[0].StoreMembership.StoreID)
-	require.Equal(t, []byte("m"), events[1].RangeSplit.SplitKey)
-	require.Equal(t, uint64(11), events[1].RangeSplit.Left.RegionID)
-	require.Equal(t, uint64(12), events[1].RangeSplit.Right.RegionID)
-	require.Equal(t, uint64(7), events[2].PlacementPolicy.Version)
+	require.Equal(t, rootpkg.EventKindRegionDescriptorPublished, events[1].Kind)
+	require.Equal(t, uint64(10), events[1].RegionDescriptor.Descriptor.RegionID)
+	require.Equal(t, []byte("m"), events[2].RangeSplit.SplitKey)
+	require.Equal(t, uint64(11), events[2].RangeSplit.Left.RegionID)
+	require.Equal(t, uint64(12), events[2].RangeSplit.Right.RegionID)
+	require.Equal(t, uint64(7), events[3].PlacementPolicy.Version)
 
 	reopened, err := Open(dir, nil)
 	require.NoError(t, err)
@@ -56,7 +61,7 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	require.Equal(t, commit.State, state)
 	events, tail, err = reopened.ReadSince(rootpkg.Cursor{Term: 1, Index: 1})
 	require.NoError(t, err)
-	require.Len(t, events, 2)
+	require.Len(t, events, 3)
 	require.Equal(t, commit.Cursor, tail)
 }
 
