@@ -96,7 +96,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.NoError(t, store.Close())
 
 	cluster := core.NewCluster()
-	loaded, err := restorePDRegions(cluster, snapshotState.Regions)
+	loaded, err := pdstorage.RestoreRegions(cluster, snapshotState.Regions)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
@@ -159,7 +159,7 @@ func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 		},
 	}
 
-	loaded, err := restorePDRegions(cluster, snapshot)
+	loaded, err := pdstorage.RestoreRegions(cluster, snapshot)
 	require.Error(t, err)
 	require.Equal(t, 1, loaded)
 	meta, ok := cluster.GetRegionByKey([]byte("b"))
