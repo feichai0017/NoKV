@@ -71,7 +71,7 @@ func TestMainPDCommand(t *testing.T) {
 
 func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	store, err := pdstorage.OpenLocalStore(dir, nil)
+	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
 	require.NoError(t, store.SaveRegion(localmeta.RegionMeta{
 		ID:       10,
@@ -118,7 +118,7 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	t.Cleanup(func() { pdNotifyContext = origNotify })
 
 	dir := t.TempDir()
-	store, err := pdstorage.OpenLocalStore(dir, nil)
+	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
 	require.NoError(t, store.SaveRegion(localmeta.RegionMeta{
 		ID:       31,
@@ -139,7 +139,7 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 		"-addr", "127.0.0.1:0",
 		"-workdir", dir,
 	}))
-	require.Contains(t, buf.String(), "PD restored 2 region(s) from local storage")
+	require.Contains(t, buf.String(), "PD restored 2 region(s) from metadata root")
 }
 
 func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
@@ -169,8 +169,8 @@ func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestPDLocalStoreSaveAndLoadAllocatorState(t *testing.T) {
-	store, err := pdstorage.OpenLocalStore(t.TempDir(), nil)
+func TestPDRootStoreSaveAndLoadAllocatorState(t *testing.T) {
+	store, err := pdstorage.OpenRootLocalStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, store.Close())
@@ -236,9 +236,9 @@ func TestRunPDCmdResolvesWorkdirFromConfig(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, runPDCmd(&buf, []string{"-addr", "127.0.0.1:0", "-config", cfgPath}))
-	require.Contains(t, buf.String(), "PD restored 0 region(s) from local storage")
+	require.Contains(t, buf.String(), "PD restored 0 region(s) from metadata root")
 	require.DirExists(t, cfg.PD.WorkDir)
-	store, err := pdstorage.OpenLocalStore(cfg.PD.WorkDir, nil)
+	store, err := pdstorage.OpenRootLocalStore(cfg.PD.WorkDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 }
