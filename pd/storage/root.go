@@ -40,13 +40,13 @@ func OpenRootLocalStore(workdir string) (*RootStore, error) {
 // Load returns the last reconstructed snapshot.
 func (s *RootStore) Load() (Snapshot, error) {
 	if s == nil {
-		return Snapshot{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
+		return Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Snapshot{
-		Regions:   localmeta.CloneRegionMetas(s.snapshot.Regions),
-		Allocator: s.snapshot.Allocator,
+		Descriptors: cloneDescriptors(s.snapshot.Descriptors),
+		Allocator:   s.snapshot.Allocator,
 	}, nil
 }
 
@@ -62,12 +62,11 @@ func (s *RootStore) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
 	desc := descriptor.FromRegionMeta(meta, state.ClusterEpoch+1)
 
 	s.mu.RLock()
-	prev, existed := s.snapshot.Regions[meta.ID]
+	prev, existed := s.snapshot.Descriptors[meta.ID]
 	s.mu.RUnlock()
 
 	if existed {
-		prevDesc := descriptor.FromRegionMeta(prev, state.ClusterEpoch)
-		if descriptorsEqual(prevDesc, desc) {
+		if descriptorsEqual(prev, desc) {
 			return nil
 		}
 	}
@@ -78,10 +77,10 @@ func (s *RootStore) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
 		return err
 	}
 	s.mu.Lock()
-	if s.snapshot.Regions == nil {
-		s.snapshot.Regions = make(map[uint64]localmeta.RegionMeta)
+	if s.snapshot.Descriptors == nil {
+		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	s.snapshot.Regions[meta.ID] = desc.ToRegionMeta()
+	s.snapshot.Descriptors[meta.ID] = desc.Clone()
 	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
 	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
 	s.mu.Unlock()
@@ -98,7 +97,7 @@ func (s *RootStore) TombstoneRegion(regionID uint64) error {
 		return err
 	}
 	s.mu.Lock()
-	delete(s.snapshot.Regions, regionID)
+	delete(s.snapshot.Descriptors, regionID)
 	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
 	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
 	s.mu.Unlock()
@@ -140,7 +139,7 @@ func (s *RootStore) reload() error {
 		return err
 	}
 	snapshot := Snapshot{
-		Regions: make(map[uint64]localmeta.RegionMeta),
+		Descriptors: make(map[uint64]descriptor.Descriptor),
 		Allocator: AllocatorState{
 			IDCurrent: state.IDFence,
 			TSCurrent: state.TSOFence,
@@ -161,23 +160,34 @@ func applyRootEvent(snapshot *Snapshot, event rootpkg.Event) {
 	}
 	switch {
 	case event.RegionDescriptor != nil:
-		snapshot.Regions[event.RegionDescriptor.Descriptor.RegionID] = event.RegionDescriptor.Descriptor.ToRegionMeta()
+		snapshot.Descriptors[event.RegionDescriptor.Descriptor.RegionID] = event.RegionDescriptor.Descriptor.Clone()
 	case event.RegionRemoval != nil:
-		delete(snapshot.Regions, event.RegionRemoval.RegionID)
+		delete(snapshot.Descriptors, event.RegionRemoval.RegionID)
 	case event.RangeSplit != nil:
-		delete(snapshot.Regions, event.RangeSplit.ParentRegionID)
-		snapshot.Regions[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.ToRegionMeta()
-		snapshot.Regions[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.ToRegionMeta()
+		delete(snapshot.Descriptors, event.RangeSplit.ParentRegionID)
+		snapshot.Descriptors[event.RangeSplit.Left.RegionID] = event.RangeSplit.Left.Clone()
+		snapshot.Descriptors[event.RangeSplit.Right.RegionID] = event.RangeSplit.Right.Clone()
 	case event.RangeMerge != nil:
-		delete(snapshot.Regions, event.RangeMerge.LeftRegionID)
-		delete(snapshot.Regions, event.RangeMerge.RightRegionID)
-		snapshot.Regions[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.ToRegionMeta()
+		delete(snapshot.Descriptors, event.RangeMerge.LeftRegionID)
+		delete(snapshot.Descriptors, event.RangeMerge.RightRegionID)
+		snapshot.Descriptors[event.RangeMerge.Merged.RegionID] = event.RangeMerge.Merged.Clone()
 	case event.PeerChange != nil:
-		snapshot.Regions[event.PeerChange.Region.RegionID] = event.PeerChange.Region.ToRegionMeta()
+		snapshot.Descriptors[event.PeerChange.Region.RegionID] = event.PeerChange.Region.Clone()
 	}
 }
 
-func regionEvent(prev localmeta.RegionMeta, existed bool, next descriptor.Descriptor) rootpkg.Event {
+func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
+	if len(in) == 0 {
+		return make(map[uint64]descriptor.Descriptor)
+	}
+	out := make(map[uint64]descriptor.Descriptor, len(in))
+	for id, desc := range in {
+		out[id] = desc.Clone()
+	}
+	return out
+}
+
+func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor) rootpkg.Event {
 	if !existed {
 		return rootpkg.RegionBootstrapped(next)
 	}

@@ -2,6 +2,7 @@ package core
 
 import (
 	pdview "github.com/feichai0017/NoKV/pd/view"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"time"
 )
@@ -60,6 +61,15 @@ func (c *Cluster) UpsertRegionHeartbeat(meta localmeta.RegionMeta) error {
 		return nil
 	}
 	return c.regions.Upsert(meta)
+}
+
+// PublishRegionDescriptor applies one rooted region descriptor into the runtime
+// PD route view.
+func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
+	if c == nil {
+		return nil
+	}
+	return c.regions.Upsert(desc.ToRegionMeta())
 }
 
 // RemoveRegion removes a region from PD metadata and reports whether the region existed before removal.

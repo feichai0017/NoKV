@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"math"
 	"slices"
@@ -15,8 +16,8 @@ type AllocatorState struct {
 // Snapshot is the reconstructed PD bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	Regions   map[uint64]localmeta.RegionMeta
-	Allocator AllocatorState
+	Descriptors map[uint64]descriptor.Descriptor
+	Allocator   AllocatorState
 }
 
 // BootstrapInfo captures rooted PD bootstrap results.
@@ -53,9 +54,9 @@ type Store interface {
 	Sink
 }
 
-// RegionCatalog accepts region descriptor updates during PD bootstrap.
-type RegionCatalog interface {
-	UpsertRegionHeartbeat(meta localmeta.RegionMeta) error
+// DescriptorCatalog accepts region descriptor updates during PD bootstrap.
+type DescriptorCatalog interface {
+	PublishRegionDescriptor(desc descriptor.Descriptor) error
 }
 
 // NoopStore is an in-memory/no-op storage implementation.
@@ -68,7 +69,7 @@ func NewNoopStore() Store {
 
 // Load returns an empty snapshot.
 func (NoopStore) Load() (Snapshot, error) {
-	return Snapshot{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
+	return Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
 }
 
 // PublishRegionDescriptor is a no-op.
@@ -111,13 +112,13 @@ func ResolveAllocatorStarts(idStart, tsStart uint64, state AllocatorState) (uint
 	return idStart, tsStart
 }
 
-// RestoreRegions replays a rooted region catalog into one runtime cluster view.
-func RestoreRegions(catalog RegionCatalog, regions map[uint64]localmeta.RegionMeta) (int, error) {
-	if catalog == nil || len(regions) == 0 {
+// RestoreDescriptors replays a rooted descriptor catalog into one runtime cluster view.
+func RestoreDescriptors(catalog DescriptorCatalog, descriptors map[uint64]descriptor.Descriptor) (int, error) {
+	if catalog == nil || len(descriptors) == 0 {
 		return 0, nil
 	}
-	ids := make([]uint64, 0, len(regions))
-	for id := range regions {
+	ids := make([]uint64, 0, len(descriptors))
+	for id := range descriptors {
 		if id == 0 {
 			continue
 		}
@@ -127,11 +128,11 @@ func RestoreRegions(catalog RegionCatalog, regions map[uint64]localmeta.RegionMe
 
 	loaded := 0
 	for _, id := range ids {
-		meta := regions[id]
-		if meta.ID == 0 {
+		desc := descriptors[id]
+		if desc.RegionID == 0 {
 			continue
 		}
-		if err := catalog.UpsertRegionHeartbeat(meta); err != nil {
+		if err := catalog.PublishRegionDescriptor(desc); err != nil {
 			return loaded, err
 		}
 		loaded++
@@ -141,7 +142,7 @@ func RestoreRegions(catalog RegionCatalog, regions map[uint64]localmeta.RegionMe
 
 // Bootstrap reconstructs one PD runtime view from rooted durable metadata and
 // resolves allocator starts against persisted fences.
-func Bootstrap(loader Loader, catalog RegionCatalog, idStart, tsStart uint64) (BootstrapInfo, error) {
+func Bootstrap(loader Loader, catalog DescriptorCatalog, idStart, tsStart uint64) (BootstrapInfo, error) {
 	if loader == nil {
 		return BootstrapInfo{IDStart: idStart, TSStart: tsStart}, nil
 	}
@@ -149,7 +150,7 @@ func Bootstrap(loader Loader, catalog RegionCatalog, idStart, tsStart uint64) (B
 	if err != nil {
 		return BootstrapInfo{}, err
 	}
-	loadedRegions, err := RestoreRegions(catalog, snapshot.Regions)
+	loadedRegions, err := RestoreDescriptors(catalog, snapshot.Descriptors)
 	if err != nil {
 		return BootstrapInfo{}, err
 	}
