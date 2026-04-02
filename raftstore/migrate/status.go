@@ -3,11 +3,12 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 )
@@ -23,17 +24,17 @@ type StatusConfig struct {
 }
 
 type RuntimeStatus struct {
-	Addr            string         `json:"addr"`
-	RegionID        uint64         `json:"region_id"`
-	Known           bool           `json:"known"`
-	Hosted          bool           `json:"hosted"`
-	LocalPeerID     uint64         `json:"local_peer_id,omitempty"`
-	LeaderPeerID    uint64         `json:"leader_peer_id,omitempty"`
-	Leader          bool           `json:"leader"`
-	MembershipPeers int            `json:"membership_peers,omitempty"`
-	Region          *pb.RegionMeta `json:"region,omitempty"`
-	AppliedIndex    uint64         `json:"applied_index,omitempty"`
-	AppliedTerm     uint64         `json:"applied_term,omitempty"`
+	Addr            string             `json:"addr"`
+	RegionID        uint64             `json:"region_id"`
+	Known           bool               `json:"known"`
+	Hosted          bool               `json:"hosted"`
+	LocalPeerID     uint64             `json:"local_peer_id,omitempty"`
+	LeaderPeerID    uint64             `json:"leader_peer_id,omitempty"`
+	Leader          bool               `json:"leader"`
+	MembershipPeers int                `json:"membership_peers,omitempty"`
+	Region          *metapb.RegionMeta `json:"region,omitempty"`
+	AppliedIndex    uint64             `json:"applied_index,omitempty"`
+	AppliedTerm     uint64             `json:"applied_term,omitempty"`
 }
 
 // StatusResult describes the current migration mode of one workdir.
@@ -164,7 +165,7 @@ func queryRuntimeStatus(cfg StatusConfig) (*RuntimeStatus, error) {
 		}
 	}()
 
-	resp, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: cfg.RegionID})
+	resp, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: cfg.RegionID})
 	if err != nil {
 		return nil, fmt.Errorf("migrate: query runtime status from %s for region %d: %w", cfg.AdminAddr, cfg.RegionID, err)
 	}

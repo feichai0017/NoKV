@@ -2,7 +2,7 @@ package codec
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/pb"
+	legacypb "github.com/feichai0017/NoKV/pb/legacy"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
@@ -97,7 +97,7 @@ func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor 
 // DescriptorFromLegacyRegionMeta converts the older RegionMeta wire shape into
 // a descriptor. Keep this only at compatibility boundaries such as RegionError
 // payloads and legacy test scaffolding.
-func DescriptorFromLegacyRegionMeta(meta *pb.RegionMeta) descriptor.Descriptor {
+func DescriptorFromLegacyRegionMeta(meta *legacypb.RegionMeta) descriptor.Descriptor {
 	if meta == nil {
 		return descriptor.Descriptor{}
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"slices"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	pdadapter "github.com/feichai0017/NoKV/pd/adapter"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -272,7 +272,7 @@ func (n *Node) Close(tb testing.TB) {
 	}
 }
 
-func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *pb.RegionRuntimeStatusResponse {
+func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionID uint64) *adminpb.RegionRuntimeStatusResponse {
 	tb.Helper()
 	status, err := TryFetchRuntimeStatus(ctx, addr, regionID)
 	if err != nil {
@@ -281,7 +281,7 @@ func FetchRuntimeStatus(tb testing.TB, ctx context.Context, addr string, regionI
 	return status
 }
 
-func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*pb.RegionRuntimeStatusResponse, error) {
+func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*adminpb.RegionRuntimeStatusResponse, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("dial admin %s: %w", addr, err)
@@ -289,8 +289,8 @@ func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*
 	defer func() {
 		_ = conn.Close()
 	}()
-	client := pb.NewRaftAdminClient(conn)
-	status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+	client := adminpb.NewRaftAdminClient(conn)
+	status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +336,7 @@ func WaitForNotHosted(tb testing.TB, ctx context.Context, addr string, regionID 
 	tb.Fatalf("timed out waiting for region %d at %s to become not hosted", regionID, addr)
 }
 
-func FindLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) (*Node, *pb.RegionRuntimeStatusResponse) {
+func FindLeader(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) (*Node, *adminpb.RegionRuntimeStatusResponse) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

@@ -1,12 +1,12 @@
 package lsm
 
 import (
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"sync"
 
 	"github.com/dgraph-io/ristretto/v2"
 
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/pb"
 	coreCache "github.com/feichai0017/NoKV/utils/cache"
 	"google.golang.org/protobuf/proto"
 )
@@ -54,14 +54,14 @@ func newCache(opt *Options) *cache {
 	}
 }
 
-func (c *cache) addIndex(fid uint64, idx *pb.TableIndex) {
+func (c *cache) addIndex(fid uint64, idx *storagepb.TableIndex) {
 	if c == nil || c.indexes == nil || idx == nil {
 		return
 	}
 	c.indexes.Set(fid, idx)
 }
 
-func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
+func (c *cache) getIndex(fid uint64) (*storagepb.TableIndex, bool) {
 	if c == nil || c.indexes == nil {
 		return nil, false
 	}
@@ -72,7 +72,7 @@ func (c *cache) getIndex(fid uint64) (*pb.TableIndex, bool) {
 	if !ok {
 		return nil, false
 	}
-	index, ok := val.(*pb.TableIndex)
+	index, ok := val.(*storagepb.TableIndex)
 	if !ok || index == nil {
 		return nil, false
 	}
@@ -119,7 +119,7 @@ func newIndexCache(budgetBytes int64) *coreCache.Cache {
 	}
 	estimatedItems := int(max(budgetBytes/defaultIndexCacheAdmissionSize, minCacheCounters))
 	return coreCache.NewWeightedCache(budgetBytes, estimatedItems, func(value any) int64 {
-		idx, _ := value.(*pb.TableIndex)
+		idx, _ := value.(*storagepb.TableIndex)
 		return indexCacheCost(idx)
 	})
 }
@@ -218,7 +218,7 @@ func (c *blockCache) close() {
 	c.rc.Close()
 }
 
-func indexCacheCost(idx *pb.TableIndex) int64 {
+func indexCacheCost(idx *storagepb.TableIndex) int64 {
 	if idx == nil {
 		return 0
 	}

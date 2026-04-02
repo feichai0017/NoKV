@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"net"
@@ -20,7 +22,6 @@ import (
 
 	"github.com/feichai0017/NoKV/config"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -30,7 +31,7 @@ import (
 )
 
 type stubNoKVServer struct {
-	pb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedNoKVServer
 
 	mu               sync.Mutex
 	prewriteAttempts int
@@ -39,10 +40,10 @@ type stubNoKVServer struct {
 	commitCalls      int
 	lockVersion      uint64
 	lockKey          []byte
-	responses        map[string]*pb.GetResponse
+	responses        map[string]*kvrpcpb.GetResponse
 }
 
-func (s *stubNoKVServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *stubNoKVServer) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prewriteAttempts++
@@ -57,50 +58,50 @@ func (s *stubNoKVServer) KvPrewrite(ctx context.Context, req *pb.KvPrewriteReque
 		}
 		primary := req.GetRequest().GetPrimaryLock()
 		s.lockKey = append([]byte(nil), key...)
-		lockedPrimary := &pb.KeyError{Locked: &pb.Locked{
+		lockedPrimary := &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
 			PrimaryLock: append([]byte(nil), primary...),
 			Key:         append([]byte(nil), key...),
 			LockVersion: s.lockVersion,
 			LockTtl:     1,
 		}}
-		return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{Errors: []*pb.KeyError{lockedPrimary}}}, nil
+		return &kvrpcpb.KvPrewriteResponse{Response: &kvrpcpb.PrewriteResponse{Errors: []*kvrpcpb.KeyError{lockedPrimary}}}, nil
 	}
-	return &pb.KvPrewriteResponse{Response: &pb.PrewriteResponse{}}, nil
+	return &kvrpcpb.KvPrewriteResponse{Response: &kvrpcpb.PrewriteResponse{}}, nil
 }
 
-func (s *stubNoKVServer) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+func (s *stubNoKVServer) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commitCalls++
-	return &pb.KvCommitResponse{Response: &pb.CommitResponse{}}, nil
+	return &kvrpcpb.KvCommitResponse{Response: &kvrpcpb.CommitResponse{}}, nil
 }
 
-func (s *stubNoKVServer) KvCheckTxnStatus(ctx context.Context, req *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
+func (s *stubNoKVServer) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checkCalls++
-	return &pb.KvCheckTxnStatusResponse{Response: &pb.CheckTxnStatusResponse{
-		Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+	return &kvrpcpb.KvCheckTxnStatusResponse{Response: &kvrpcpb.CheckTxnStatusResponse{
+		Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
 	}}, nil
 }
 
-func (s *stubNoKVServer) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
+func (s *stubNoKVServer) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolveCalls++
-	return &pb.KvResolveLockResponse{Response: &pb.ResolveLockResponse{
+	return &kvrpcpb.KvResolveLockResponse{Response: &kvrpcpb.ResolveLockResponse{
 		ResolvedLocks: uint64(len(req.GetRequest().GetKeys())),
 	}}, nil
 }
 
-func (s *stubNoKVServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
-	responses := make([]*pb.GetResponse, len(req.GetRequest().GetRequests()))
+func (s *stubNoKVServer) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+	responses := make([]*kvrpcpb.GetResponse, len(req.GetRequest().GetRequests()))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range responses {
 		getReq := req.GetRequest().GetRequests()[i]
 		if getReq == nil {
-			responses[i] = &pb.GetResponse{NotFound: true}
+			responses[i] = &kvrpcpb.GetResponse{NotFound: true}
 			continue
 		}
 		if s.responses != nil {
@@ -109,9 +110,9 @@ func (s *stubNoKVServer) KvBatchGet(ctx context.Context, req *pb.KvBatchGetReque
 				continue
 			}
 		}
-		responses[i] = &pb.GetResponse{NotFound: true}
+		responses[i] = &kvrpcpb.GetResponse{NotFound: true}
 	}
-	return &pb.KvBatchGetResponse{Response: &pb.BatchGetResponse{Responses: responses}}, nil
+	return &kvrpcpb.KvBatchGetResponse{Response: &kvrpcpb.BatchGetResponse{Responses: responses}}, nil
 }
 
 func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown func()) {
@@ -123,7 +124,7 @@ func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown fun
 	}
 	server := grpc.NewServer()
 	stub := &stubNoKVServer{}
-	pb.RegisterNoKVServer(server, stub)
+	kvrpcpb.RegisterNoKVServer(server, stub)
 	go func() {
 		_ = server.Serve(l)
 	}()
@@ -137,7 +138,7 @@ type stubPDServer struct {
 	pdpb.UnimplementedPDServer
 
 	mu         sync.Mutex
-	region     *pb.RegionMeta
+	region     *metapb.RegionMeta
 	nextTS     uint64
 	tsoCalls   int
 	routeCalls int
@@ -178,11 +179,11 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKe
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pdpb.GetRegionByKeyResponse{
-		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(proto.Clone(s.region).(*pb.RegionMeta))),
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(proto.Clone(s.region).(*metapb.RegionMeta))),
 	}, nil
 }
 
-func startStubPD(t *testing.T, region *pb.RegionMeta) (addr string, srv *stubPDServer, shutdown func()) {
+func startStubPD(t *testing.T, region *metapb.RegionMeta) (addr string, srv *stubPDServer, shutdown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -213,14 +214,14 @@ func keyInRegion(key, start, end []byte) bool {
 	return true
 }
 
-func defaultPDRegionMeta() *pb.RegionMeta {
-	return &pb.RegionMeta{
+func defaultPDRegionMeta() *metapb.RegionMeta {
+	return &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         nil,
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	}
@@ -266,13 +267,13 @@ func TestPDTSOAllocatorReserveMonotonic(t *testing.T) {
 func TestNewRaftBackendUsesDockerScopeAndTSO(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	pdAddr, pd, stopPD := startStubPD(t, &pb.RegionMeta{
+	pdAddr, pd, stopPD := startStubPD(t, &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         nil,
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	})
@@ -514,13 +515,13 @@ func TestRaftBackendTranslatesRouteUnavailable(t *testing.T) {
 func TestRaftBackendTranslatesRegionNotFound(t *testing.T) {
 	storeAddr, _, stopStore := startStubNoKV(t)
 	defer stopStore()
-	pdAddr, _, stopPD := startStubPD(t, &pb.RegionMeta{
+	pdAddr, _, stopPD := startStubPD(t, &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("m"),
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	})
@@ -637,7 +638,7 @@ func TestRaftBackendGetWithTTL(t *testing.T) {
 	expireAt := uint64(time.Now().Add(time.Hour).Unix())
 
 	stub.mu.Lock()
-	stub.responses = map[string]*pb.GetResponse{
+	stub.responses = map[string]*kvrpcpb.GetResponse{
 		valueKey: {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	stub.mu.Unlock()
@@ -673,7 +674,7 @@ func TestRaftBackendExpireCleanup(t *testing.T) {
 	expireAt := uint64(time.Now().Add(-time.Hour).Unix())
 
 	stub.mu.Lock()
-	stub.responses = map[string]*pb.GetResponse{
+	stub.responses = map[string]*kvrpcpb.GetResponse{
 		string(key): {Value: []byte("value"), ExpiresAt: expireAt},
 	}
 	before := stub.commitCalls
@@ -712,7 +713,7 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 
 	key := []byte("counter")
 	stub.mu.Lock()
-	stub.responses = map[string]*pb.GetResponse{
+	stub.responses = map[string]*kvrpcpb.GetResponse{
 		string(key): {Value: []byte("10")},
 	}
 	stub.mu.Unlock()
@@ -726,14 +727,14 @@ func TestRaftBackendIncrByAndErrors(t *testing.T) {
 	}
 
 	stub.mu.Lock()
-	stub.responses[string(key)] = &pb.GetResponse{Value: []byte("abc")}
+	stub.responses[string(key)] = &kvrpcpb.GetResponse{Value: []byte("abc")}
 	stub.mu.Unlock()
 	if _, err := backend.IncrBy(key, 1); err == nil {
 		t.Fatalf("expected non-integer error")
 	}
 
 	stub.mu.Lock()
-	stub.responses[string(key)] = &pb.GetResponse{Value: []byte(strconv.FormatInt(math.MaxInt64, 10))}
+	stub.responses[string(key)] = &kvrpcpb.GetResponse{Value: []byte(strconv.FormatInt(math.MaxInt64, 10))}
 	stub.mu.Unlock()
 	if _, err := backend.IncrBy(key, 1); err == nil {
 		t.Fatalf("expected overflow error")
@@ -762,7 +763,7 @@ func TestRaftBackendMGetAndExists(t *testing.T) {
 	pastExpireAt := uint64(time.Now().Add(-time.Hour).Unix())
 
 	stub.mu.Lock()
-	stub.responses = map[string]*pb.GetResponse{
+	stub.responses = map[string]*kvrpcpb.GetResponse{
 		string(key1): {Value: []byte("v1")},
 		string(key2): {Value: []byte("v2"), ExpiresAt: futureExpireAt},
 		string(key3): {Value: []byte("v3"), ExpiresAt: pastExpireAt},
@@ -826,7 +827,7 @@ func TestRaftBackendMSetAndDel(t *testing.T) {
 
 	stub.mu.Lock()
 	before := stub.commitCalls
-	stub.responses = map[string]*pb.GetResponse{
+	stub.responses = map[string]*kvrpcpb.GetResponse{
 		"a": {Value: []byte("1")},
 	}
 	stub.mu.Unlock()
@@ -902,14 +903,14 @@ func (s *stubTSO) Reserve(n uint64) (uint64, error) {
 }
 
 type stubRaftClient struct {
-	batchGet    map[string]*pb.GetResponse
+	batchGet    map[string]*kvrpcpb.GetResponse
 	batchGetErr error
-	batchGetFn  func(keys [][]byte) (map[string]*pb.GetResponse, error) // Custom BatchGet logic
+	batchGetFn  func(keys [][]byte) (map[string]*kvrpcpb.GetResponse, error) // Custom BatchGet logic
 	mutateErr   error
 	mutateFn    func() error
 	mutateCalls int
-	lastMuts    []*pb.Mutation
-	checkResp   *pb.CheckTxnStatusResponse
+	lastMuts    []*kvrpcpb.Mutation
+	checkResp   *kvrpcpb.CheckTxnStatusResponse
 	checkErr    error
 	checkCalls  int // Track CheckTxnStatus call count
 	resolveResp uint64
@@ -917,33 +918,33 @@ type stubRaftClient struct {
 	resolveKeys [][]byte
 }
 
-func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
+func (s *stubRaftClient) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error) {
 	if s.batchGetFn != nil {
 		return s.batchGetFn(keys)
 	}
 	if s.batchGetErr != nil {
 		return nil, s.batchGetErr
 	}
-	out := make(map[string]*pb.GetResponse, len(keys))
+	out := make(map[string]*kvrpcpb.GetResponse, len(keys))
 	for _, key := range keys {
 		k := string(key)
 		if resp, ok := s.batchGet[k]; ok {
 			out[k] = resp
 			continue
 		}
-		out[k] = &pb.GetResponse{NotFound: true}
+		out[k] = &kvrpcpb.GetResponse{NotFound: true}
 	}
 	return out, nil
 }
 
-func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	s.mutateCalls++
 	s.lastMuts = s.lastMuts[:0]
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
 		}
-		s.lastMuts = append(s.lastMuts, proto.Clone(mut).(*pb.Mutation))
+		s.lastMuts = append(s.lastMuts, proto.Clone(mut).(*kvrpcpb.Mutation))
 	}
 	if s.mutateFn != nil {
 		return s.mutateFn()
@@ -954,7 +955,7 @@ func (s *stubRaftClient) Mutate(ctx context.Context, primary []byte, mutations [
 	return nil
 }
 
-func (s *stubRaftClient) CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*pb.CheckTxnStatusResponse, error) {
+func (s *stubRaftClient) CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	s.checkCalls++
 	return s.checkResp, s.checkErr
 }
@@ -1106,7 +1107,7 @@ func TestRaftBackendSetBranches(t *testing.T) {
 	_, err := backend.Set(setArgs{Key: nil})
 	require.Error(t, err)
 
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"key": {Value: []byte("v")},
 	}
 	ok, err := backend.Set(setArgs{Key: []byte("key"), Value: []byte("v2"), NX: true})
@@ -1114,7 +1115,7 @@ func TestRaftBackendSetBranches(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, 0, stub.mutateCalls)
 
-	stub.batchGet = map[string]*pb.GetResponse{}
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{}
 	ok, err = backend.Set(setArgs{Key: []byte("missing"), Value: []byte("v"), XX: true})
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -1123,7 +1124,7 @@ func TestRaftBackendSetBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, stub.lastMuts, 1)
-	require.Equal(t, pb.Mutation_Put, stub.lastMuts[0].GetOp())
+	require.Equal(t, kvrpcpb.Mutation_Put, stub.lastMuts[0].GetOp())
 	require.Equal(t, uint64(123), stub.lastMuts[0].GetExpiresAt())
 
 	stub.mutateErr = errors.New("mutate")
@@ -1147,7 +1148,7 @@ func TestRaftBackendDelBranches(t *testing.T) {
 	require.Error(t, err)
 
 	stub.batchGetErr = nil
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"k": {Value: []byte("v")},
 	}
 	stub.mutateErr = errors.New("mutate")
@@ -1171,7 +1172,7 @@ func TestRaftBackendMGetErrors(t *testing.T) {
 	require.Error(t, err)
 
 	stub.batchGetErr = nil
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"k": {Value: []byte("v"), ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix())},
 	}
 	stub.mutateErr = errors.New("mutate")
@@ -1194,7 +1195,7 @@ func TestRaftBackendMSetBranches(t *testing.T) {
 
 func TestRaftBackendExists(t *testing.T) {
 	backend, stub, ts := newStubBackend()
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"a": {Value: []byte("1")},
 	}
 	count, err := backend.Exists([][]byte{[]byte("a"), []byte("b")})
@@ -1218,19 +1219,19 @@ func TestRaftBackendIncrByErrors(t *testing.T) {
 	require.Error(t, err)
 
 	stub.batchGetErr = nil
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"k": {Value: []byte("abc")},
 	}
 	_, err = backend.IncrBy([]byte("k"), 1)
 	require.ErrorIs(t, err, errNotInteger)
 
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"k": {Value: fmt.Appendf(nil, "%d", math.MaxInt64)},
 	}
 	_, err = backend.IncrBy([]byte("k"), 1)
 	require.ErrorIs(t, err, errOverflow)
 
-	stub.batchGet = map[string]*pb.GetResponse{
+	stub.batchGet = map[string]*kvrpcpb.GetResponse{
 		"k": {Value: fmt.Appendf(nil, "%d", math.MinInt64)},
 	}
 	_, err = backend.IncrBy([]byte("k"), -1)
@@ -1242,13 +1243,13 @@ func TestBuildValueAtVersionBranches(t *testing.T) {
 	key := []byte("k1")
 	futureExpire := uint64(time.Now().Unix() + 100)
 
-	val, err := backend.buildValueAtVersion(key, &pb.GetResponse{NotFound: true})
+	val, err := backend.buildValueAtVersion(key, &kvrpcpb.GetResponse{NotFound: true})
 	require.NoError(t, err)
 	require.False(t, val.Found)
 	require.Zero(t, stub.mutateCalls)
 
 	stub.mutateCalls = 0
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{
+	val, err = backend.buildValueAtVersion(key, &kvrpcpb.GetResponse{
 		Value:     []byte("v"),
 		ExpiresAt: uint64(time.Now().Add(-time.Hour).Unix()),
 	})
@@ -1257,7 +1258,7 @@ func TestBuildValueAtVersionBranches(t *testing.T) {
 	require.NotZero(t, stub.mutateCalls)
 
 	stub.mutateCalls = 0
-	val, err = backend.buildValueAtVersion(key, &pb.GetResponse{Value: []byte("v"), ExpiresAt: futureExpire})
+	val, err = backend.buildValueAtVersion(key, &kvrpcpb.GetResponse{Value: []byte("v"), ExpiresAt: futureExpire})
 	require.NoError(t, err)
 	require.True(t, val.Found)
 	require.Equal(t, []byte("v"), val.Value)
@@ -1269,29 +1270,29 @@ func TestMutatePaths(t *testing.T) {
 	require.NoError(t, backend.mutate([]byte("k")))
 
 	ts.err = errors.New("reserve")
-	err := backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	err := backend.mutate([]byte("k"), &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: []byte("k")})
 	require.Error(t, err)
 
 	ts.err = nil
 	stub.mutateErr = errors.New("boom")
-	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	err = backend.mutate([]byte("k"), &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: []byte("k")})
 	require.Error(t, err)
 
-	conflict := &client.KeyConflictError{Errors: []*pb.KeyError{{Locked: &pb.Locked{
+	conflict := &client.KeyConflictError{Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.Locked{
 		Key:         []byte("k"),
 		PrimaryLock: []byte("k"),
 		LockVersion: 1,
 	}}}}
 	stub.mutateErr = conflict
-	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
-	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction}
+	err = backend.mutate([]byte("k"), &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: []byte("k")})
 	require.Error(t, err)
 
 	stub.mutateErr = nil
 	stub.mutateFn = func() error { return conflict }
-	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
 	stub.resolveErr = nil
-	err = backend.mutate([]byte("k"), &pb.Mutation{Op: pb.Mutation_Put, Key: []byte("k")})
+	err = backend.mutate([]byte("k"), &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: []byte("k")})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "retries exhausted")
 }
@@ -1301,10 +1302,10 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 	require.Error(t, backend.resolveKeyConflicts(nil))
 	require.Error(t, backend.resolveKeyConflicts(&client.KeyConflictError{}))
 
-	conflicts := &client.KeyConflictError{Errors: []*pb.KeyError{nil, {}}}
+	conflicts := &client.KeyConflictError{Errors: []*kvrpcpb.KeyError{nil, {}}}
 	require.NoError(t, backend.resolveKeyConflicts(conflicts))
 
-	lock := &pb.Locked{
+	lock := &kvrpcpb.Locked{
 		PrimaryLock: []byte("p"),
 		Key:         []byte("k"),
 		LockVersion: 1,
@@ -1313,14 +1314,14 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 	require.Error(t, backend.resolveSingleLock(lock))
 
 	stub.checkErr = nil
-	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: 1}
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 1}
 	// The primary is committed, the lock should be resolved successfully
 	require.NoError(t, backend.resolveSingleLock(lock))
 
-	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction}
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction}
 	require.Error(t, backend.resolveSingleLock(lock))
 
-	stub.checkResp = &pb.CheckTxnStatusResponse{Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback}
 	stub.resolveErr = errors.New("resolve")
 	require.Error(t, backend.resolveSingleLock(lock))
 
@@ -1331,7 +1332,7 @@ func TestResolveKeyConflictsAndLocks(t *testing.T) {
 
 func TestResolveSingleLockTranslatesRouteUnavailable(t *testing.T) {
 	backend, stub, _ := newStubBackend()
-	lock := &pb.Locked{
+	lock := &kvrpcpb.Locked{
 		PrimaryLock: []byte("p"),
 		Key:         []byte("k"),
 		LockVersion: 1,
@@ -1368,9 +1369,9 @@ func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
 			return nil
 		}
 		return &client.KeyConflictError{
-			Errors: []*pb.KeyError{
+			Errors: []*kvrpcpb.KeyError{
 				{
-					Locked: &pb.Locked{
+					Locked: &kvrpcpb.Locked{
 						PrimaryLock: primaryKey,
 						Key:         secondaryKey,
 						LockVersion: lockVersion,
@@ -1382,13 +1383,13 @@ func TestConflictingTransactionWithCommittedPrimary(t *testing.T) {
 	}
 
 	// CheckTxnStatus returns: primary is already committed
-	stub.checkResp = &pb.CheckTxnStatusResponse{
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{
 		CommitVersion: commitVersion,
 	}
 
 	// Execute mutate - this will encounter the lock and try to resolve
-	err := backend.mutate(primaryKey, &pb.Mutation{
-		Op:    pb.Mutation_Put,
+	err := backend.mutate(primaryKey, &kvrpcpb.Mutation{
+		Op:    kvrpcpb.Mutation_Put,
 		Key:   primaryKey,
 		Value: []byte("value"),
 	})
@@ -1412,13 +1413,13 @@ func TestReadResolveSecondaryLockAfterPrimaryCommit(t *testing.T) {
 	callCount := 0
 
 	// Setup batchGetFn: first call returns lock conflict, after resolution returns value
-	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+	stub.batchGetFn = func(keys [][]byte) (map[string]*kvrpcpb.GetResponse, error) {
 		callCount++
 		for _, k := range keys {
 			if bytes.Equal(k, key) && !stub.keyResolved(k) {
 				return nil, &client.KeyConflictError{
-					Errors: []*pb.KeyError{{
-						Locked: &pb.Locked{
+					Errors: []*kvrpcpb.KeyError{{
+						Locked: &kvrpcpb.Locked{
 							PrimaryLock: primaryKey,
 							Key:         k,
 							LockVersion: lockVersion,
@@ -1428,19 +1429,19 @@ func TestReadResolveSecondaryLockAfterPrimaryCommit(t *testing.T) {
 				}
 			}
 		}
-		out := make(map[string]*pb.GetResponse)
+		out := make(map[string]*kvrpcpb.GetResponse)
 		for _, k := range keys {
 			if bytes.Equal(k, key) {
-				out[string(k)] = &pb.GetResponse{Value: []byte("committed-value")}
+				out[string(k)] = &kvrpcpb.GetResponse{Value: []byte("committed-value")}
 			} else {
-				out[string(k)] = &pb.GetResponse{NotFound: true}
+				out[string(k)] = &kvrpcpb.GetResponse{NotFound: true}
 			}
 		}
 		return out, nil
 	}
 
 	// CheckTxnStatus returns: primary is already committed
-	stub.checkResp = &pb.CheckTxnStatusResponse{CommitVersion: commitVersion}
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{CommitVersion: commitVersion}
 
 	val, err := backend.Get(key)
 	require.NoError(t, err)
@@ -1458,10 +1459,10 @@ func TestReadDoesNotResolveIfPrimaryAlive(t *testing.T) {
 	lockVersion := uint64(100)
 
 	// Always return lock conflict
-	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+	stub.batchGetFn = func(keys [][]byte) (map[string]*kvrpcpb.GetResponse, error) {
 		return nil, &client.KeyConflictError{
-			Errors: []*pb.KeyError{{
-				Locked: &pb.Locked{
+			Errors: []*kvrpcpb.KeyError{{
+				Locked: &kvrpcpb.Locked{
 					PrimaryLock: primaryKey,
 					Key:         key,
 					LockVersion: lockVersion,
@@ -1472,8 +1473,8 @@ func TestReadDoesNotResolveIfPrimaryAlive(t *testing.T) {
 	}
 
 	// CheckTxnStatus returns: primary is still alive (no action needed)
-	stub.checkResp = &pb.CheckTxnStatusResponse{
-		Action: pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{
+		Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction,
 	}
 
 	_, err := backend.Get(key)
@@ -1489,12 +1490,12 @@ func TestReadResolveRollback(t *testing.T) {
 	primaryKey := []byte("primary-key")
 	lockVersion := uint64(100)
 
-	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+	stub.batchGetFn = func(keys [][]byte) (map[string]*kvrpcpb.GetResponse, error) {
 		for _, k := range keys {
 			if bytes.Equal(k, secondaryKey) && !stub.keyResolved(k) {
 				return nil, &client.KeyConflictError{
-					Errors: []*pb.KeyError{{
-						Locked: &pb.Locked{
+					Errors: []*kvrpcpb.KeyError{{
+						Locked: &kvrpcpb.Locked{
 							PrimaryLock: primaryKey,
 							Key:         k,
 							LockVersion: lockVersion,
@@ -1504,16 +1505,16 @@ func TestReadResolveRollback(t *testing.T) {
 				}
 			}
 		}
-		out := make(map[string]*pb.GetResponse)
+		out := make(map[string]*kvrpcpb.GetResponse)
 		for _, k := range keys {
-			out[string(k)] = &pb.GetResponse{NotFound: true}
+			out[string(k)] = &kvrpcpb.GetResponse{NotFound: true}
 		}
 		return out, nil
 	}
 
 	// CheckTxnStatus returns: primary lock does not exist (rolled back)
-	stub.checkResp = &pb.CheckTxnStatusResponse{
-		Action: pb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback,
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{
+		Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback,
 	}
 
 	val, err := backend.Get(secondaryKey)
@@ -1530,12 +1531,12 @@ func TestReadResolveLockWhenTTLExpired(t *testing.T) {
 	primaryKey := []byte("primary-key")
 	lockVersion := uint64(100)
 
-	stub.batchGetFn = func(keys [][]byte) (map[string]*pb.GetResponse, error) {
+	stub.batchGetFn = func(keys [][]byte) (map[string]*kvrpcpb.GetResponse, error) {
 		for _, k := range keys {
 			if bytes.Equal(k, secondaryKey) && !stub.keyResolved(k) {
 				return nil, &client.KeyConflictError{
-					Errors: []*pb.KeyError{{
-						Locked: &pb.Locked{
+					Errors: []*kvrpcpb.KeyError{{
+						Locked: &kvrpcpb.Locked{
 							PrimaryLock: primaryKey,
 							Key:         k,
 							LockVersion: lockVersion,
@@ -1545,16 +1546,16 @@ func TestReadResolveLockWhenTTLExpired(t *testing.T) {
 				}
 			}
 		}
-		out := make(map[string]*pb.GetResponse)
+		out := make(map[string]*kvrpcpb.GetResponse)
 		for _, k := range keys {
-			out[string(k)] = &pb.GetResponse{NotFound: true}
+			out[string(k)] = &kvrpcpb.GetResponse{NotFound: true}
 		}
 		return out, nil
 	}
 
 	// CheckTxnStatus returns: TTL expired, should rollback
-	stub.checkResp = &pb.CheckTxnStatusResponse{
-		Action: pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+	stub.checkResp = &kvrpcpb.CheckTxnStatusResponse{
+		Action: kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
 	}
 
 	val, err := backend.Get(secondaryKey)

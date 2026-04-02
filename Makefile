@@ -94,9 +94,9 @@ proto-check:
 	fi; \
 	buf breaking --against ".git#ref=$$base_ref,subdir=pb"
 	@set -e; \
-	before="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
+	before="$$(find pb -type f \( -name '*.pb.go' -o -name '*_grpc.pb.go' \) | sort | xargs sha256sum)"; \
 	./scripts/gen.sh; \
-	after="$$(sha256sum pb/*.pb.go pb/*_grpc.pb.go)"; \
+	after="$$(find pb -type f \( -name '*.pb.go' -o -name '*_grpc.pb.go' \) | sort | xargs sha256sum)"; \
 	test "$$before" = "$$after"
 	@echo "✓ Proto checks passed"
 

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"time"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -131,7 +133,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	}, nil
 }
 
-func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
+func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) error {
 	if err == nil {
 		return nil
 	}
@@ -249,7 +251,7 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 	return context.WithCancel(parent)
 }
 
-func buildContext(region regionSnapshot) (*pb.Context, error) {
+func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 	if region.desc.RegionID == 0 {
 		return nil, errors.New("client: region meta missing")
 	}
@@ -260,19 +262,19 @@ func buildContext(region regionSnapshot) (*pb.Context, error) {
 	if leaderStoreID == 0 {
 		return nil, errors.New("client: leader unknown")
 	}
-	var peerMeta *pb.RegionPeer
+	var peerMeta *metapb.RegionPeer
 	for _, peer := range region.desc.Peers {
 		if peer.StoreID == leaderStoreID {
-			peerMeta = &pb.RegionPeer{StoreId: peer.StoreID, PeerId: peer.PeerID}
+			peerMeta = &metapb.RegionPeer{StoreId: peer.StoreID, PeerId: peer.PeerID}
 			break
 		}
 	}
 	if peerMeta == nil {
 		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", leaderStoreID, region.desc.RegionID)
 	}
-	return &pb.Context{
+	return &kvrpcpb.Context{
 		RegionId: region.desc.RegionID,
-		RegionEpoch: &pb.RegionEpoch{
+		RegionEpoch: &metapb.RegionEpoch{
 			Version: region.desc.Epoch.Version,
 			ConfVer: region.desc.Epoch.ConfVersion,
 		},

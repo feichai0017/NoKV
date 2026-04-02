@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/client"
 )
@@ -33,9 +33,9 @@ type pdTSOClient interface {
 }
 
 type raftClient interface {
-	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*pb.GetResponse, error)
-	Mutate(ctx context.Context, primary []byte, mutations []*pb.Mutation, startVersion, commitVersion, lockTTL uint64) error
-	CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*pb.CheckTxnStatusResponse, error)
+	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error)
+	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+	CheckTxnStatus(ctx context.Context, primary []byte, lockVersion, currentTS uint64) (*kvrpcpb.CheckTxnStatusResponse, error)
 	ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
 	Close() error
 }
@@ -207,8 +207,8 @@ func (b *raftBackend) Set(args setArgs) (bool, error) {
 			expireAt = uint64(now.Add(time.Second).Unix())
 		}
 	}
-	mutations := []*pb.Mutation{{
-		Op:        pb.Mutation_Put,
+	mutations := []*kvrpcpb.Mutation{{
+		Op:        kvrpcpb.Mutation_Put,
 		Key:       valueKey,
 		Value:     valueCopy,
 		ExpiresAt: expireAt,
@@ -234,7 +234,7 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 		return 0, err
 	}
 
-	mutations := make([]*pb.Mutation, 0, len(keys))
+	mutations := make([]*kvrpcpb.Mutation, 0, len(keys))
 	var removed int64
 	for _, key := range keys {
 		resp := resps[string(key)]
@@ -242,7 +242,7 @@ func (b *raftBackend) Del(keys [][]byte) (int64, error) {
 			removed++
 		}
 		valueKey := append([]byte(nil), key...)
-		mutations = append(mutations, &pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey})
+		mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: valueKey})
 	}
 	if len(mutations) == 0 {
 		return removed, nil
@@ -289,7 +289,7 @@ func (b *raftBackend) MSet(pairs [][2][]byte) error {
 	if len(pairs) == 0 {
 		return nil
 	}
-	mutations := make([]*pb.Mutation, 0, len(pairs))
+	mutations := make([]*kvrpcpb.Mutation, 0, len(pairs))
 	for _, pair := range pairs {
 		if len(pair[0]) == 0 {
 			return fmt.Errorf("empty key")
@@ -297,8 +297,8 @@ func (b *raftBackend) MSet(pairs [][2][]byte) error {
 		// MSET writes plain values and clears existing TTL by setting ExpiresAt=0.
 		valueKey := append([]byte(nil), pair[0]...)
 		valueCopy := append([]byte(nil), pair[1]...)
-		mutations = append(mutations, &pb.Mutation{
-			Op:        pb.Mutation_Put,
+		mutations = append(mutations, &kvrpcpb.Mutation{
+			Op:        kvrpcpb.Mutation_Put,
 			Key:       valueKey,
 			Value:     valueCopy,
 			ExpiresAt: 0,
@@ -420,8 +420,8 @@ func translateRaftClientError(op string, err error) error {
 	}
 }
 
-func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[string]*pb.GetResponse, error) {
-	var resps map[string]*pb.GetResponse
+func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error) {
+	var resps map[string]*kvrpcpb.GetResponse
 	err := b.retryWithConflictResolution(func() error {
 		ctx, cancel := b.context()
 		defer cancel()
@@ -437,7 +437,7 @@ func (b *raftBackend) batchGetWithRetry(keys [][]byte, version uint64) (map[stri
 
 // resolveLocks attempts to resolve all given locks.
 // Returns true if all locks were resolved successfully.
-func (b *raftBackend) resolveLocks(locks []*pb.Locked) error {
+func (b *raftBackend) resolveLocks(locks []*kvrpcpb.Locked) error {
 	for _, lock := range locks {
 		if err := b.resolveSingleLock(lock); err != nil {
 			return err
@@ -446,7 +446,7 @@ func (b *raftBackend) resolveLocks(locks []*pb.Locked) error {
 	return nil
 }
 
-func (b *raftBackend) buildValueAtVersion(key []byte, valueResp *pb.GetResponse) (*redisValue, error) {
+func (b *raftBackend) buildValueAtVersion(key []byte, valueResp *kvrpcpb.GetResponse) (*redisValue, error) {
 	if valueResp == nil || valueResp.GetNotFound() {
 		return &redisValue{Found: false}, nil
 	}
@@ -467,11 +467,11 @@ func (b *raftBackend) buildValueAtVersion(key []byte, valueResp *pb.GetResponse)
 func (b *raftBackend) deleteKey(key []byte) error {
 	valueKey := append([]byte(nil), key...)
 	return b.mutate(valueKey,
-		&pb.Mutation{Op: pb.Mutation_Delete, Key: valueKey},
+		&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: valueKey},
 	)
 }
 
-func (b *raftBackend) mutate(primary []byte, mutations ...*pb.Mutation) error {
+func (b *raftBackend) mutate(primary []byte, mutations ...*kvrpcpb.Mutation) error {
 	if len(mutations) == 0 {
 		return nil
 	}
@@ -509,8 +509,8 @@ func (b *raftBackend) resolveKeyConflicts(conflicts *client.KeyConflictError) er
 }
 
 // extractLocksFromKeyErrors extracts Locked entries from KeyError slice.
-func (b *raftBackend) extractLocksFromKeyErrors(keyErrors []*pb.KeyError) []*pb.Locked {
-	var locks []*pb.Locked
+func (b *raftBackend) extractLocksFromKeyErrors(keyErrors []*kvrpcpb.KeyError) []*kvrpcpb.Locked {
+	var locks []*kvrpcpb.Locked
 	for _, keyErr := range keyErrors {
 		if keyErr == nil {
 			continue
@@ -522,7 +522,7 @@ func (b *raftBackend) extractLocksFromKeyErrors(keyErrors []*pb.KeyError) []*pb.
 	return locks
 }
 
-func (b *raftBackend) resolveSingleLock(lock *pb.Locked) error {
+func (b *raftBackend) resolveSingleLock(lock *kvrpcpb.Locked) error {
 	if lock == nil {
 		return nil
 	}
@@ -543,11 +543,11 @@ func (b *raftBackend) resolveSingleLock(lock *pb.Locked) error {
 		return b.resolveLocksWithKey(lock.GetLockVersion(), resp.GetCommitVersion(), lock.GetKey())
 	}
 	switch resp.GetAction() {
-	case pb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
-		pb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
+	case kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+		kvrpcpb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
 		return b.resolveLocksWithKey(lock.GetLockVersion(), 0, lock.GetKey())
-	case pb.CheckTxnStatusAction_CheckTxnStatusNoAction,
-		pb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed:
+	case kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction,
+		kvrpcpb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed:
 		return fmt.Errorf("raft backend: lock resolution deferred")
 	default:
 		return fmt.Errorf("raft backend: unsupported lock status action %s", resp.GetAction().String())

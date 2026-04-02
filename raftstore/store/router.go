@@ -2,9 +2,9 @@ package store
 
 import (
 	"fmt"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -123,7 +123,7 @@ func (r *Router) SendPropose(id uint64, data []byte) error {
 }
 
 // SendCommand encodes the provided raft command and submits it to the peer.
-func (r *Router) SendCommand(id uint64, req *pb.RaftCmdRequest) error {
+func (r *Router) SendCommand(id uint64, req *raftcmdpb.RaftCmdRequest) error {
 	if req == nil {
 		return fmt.Errorf("raftstore: nil raft command request")
 	}

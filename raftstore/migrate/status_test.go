@@ -3,10 +3,11 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +17,7 @@ func TestReadStatusWithRuntimeUsesSeedRegionID(t *testing.T) {
 	require.NoError(t, err)
 
 	admin := &fakeAdminClient{
-		statuses: []*pb.RegionRuntimeStatusResponse{{
+		statuses: []*adminpb.RegionRuntimeStatusResponse{{
 			Known:        true,
 			Hosted:       true,
 			LocalPeerId:  109,
@@ -24,9 +25,9 @@ func TestReadStatusWithRuntimeUsesSeedRegionID(t *testing.T) {
 			Leader:       true,
 			AppliedIndex: 7,
 			AppliedTerm:  1,
-			Region: &pb.RegionMeta{
+			Region: &metapb.RegionMeta{
 				Id: 9,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 109},
 					{StoreId: 2, PeerId: 209},
 				},
@@ -83,7 +84,7 @@ func TestBuildReportIncludesClusterSummary(t *testing.T) {
 	require.NoError(t, err)
 
 	admin := &fakeAdminClient{
-		statuses: []*pb.RegionRuntimeStatusResponse{{
+		statuses: []*adminpb.RegionRuntimeStatusResponse{{
 			Known:        true,
 			Hosted:       true,
 			LocalPeerId:  109,
@@ -91,9 +92,9 @@ func TestBuildReportIncludesClusterSummary(t *testing.T) {
 			Leader:       false,
 			AppliedIndex: 7,
 			AppliedTerm:  1,
-			Region: &pb.RegionMeta{
+			Region: &metapb.RegionMeta{
 				Id: 9,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 109},
 					{StoreId: 2, PeerId: 209},
 					{StoreId: 3, PeerId: 309},

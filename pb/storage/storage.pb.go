@@ -4,9 +4,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: storagepb.proto
+// source: storage/storage.proto
 
-package pb
+package storagepb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -53,11 +53,11 @@ func (x ManifestChange_Operation) String() string {
 }
 
 func (ManifestChange_Operation) Descriptor() protoreflect.EnumDescriptor {
-	return file_storagepb_proto_enumTypes[0].Descriptor()
+	return file_storage_storage_proto_enumTypes[0].Descriptor()
 }
 
 func (ManifestChange_Operation) Type() protoreflect.EnumType {
-	return &file_storagepb_proto_enumTypes[0]
+	return &file_storage_storage_proto_enumTypes[0]
 }
 
 func (x ManifestChange_Operation) Number() protoreflect.EnumNumber {
@@ -66,7 +66,7 @@ func (x ManifestChange_Operation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ManifestChange_Operation.Descriptor instead.
 func (ManifestChange_Operation) EnumDescriptor() ([]byte, []int) {
-	return file_storagepb_proto_rawDescGZIP(), []int{1, 0}
+	return file_storage_storage_proto_rawDescGZIP(), []int{1, 0}
 }
 
 // ManifestChangeSet groups manifest edits that should be applied atomically.
@@ -80,7 +80,7 @@ type ManifestChangeSet struct {
 
 func (x *ManifestChangeSet) Reset() {
 	*x = ManifestChangeSet{}
-	mi := &file_storagepb_proto_msgTypes[0]
+	mi := &file_storage_storage_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -92,7 +92,7 @@ func (x *ManifestChangeSet) String() string {
 func (*ManifestChangeSet) ProtoMessage() {}
 
 func (x *ManifestChangeSet) ProtoReflect() protoreflect.Message {
-	mi := &file_storagepb_proto_msgTypes[0]
+	mi := &file_storage_storage_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -105,7 +105,7 @@ func (x *ManifestChangeSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ManifestChangeSet.ProtoReflect.Descriptor instead.
 func (*ManifestChangeSet) Descriptor() ([]byte, []int) {
-	return file_storagepb_proto_rawDescGZIP(), []int{0}
+	return file_storage_storage_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ManifestChangeSet) GetChanges() []*ManifestChange {
@@ -119,7 +119,7 @@ func (x *ManifestChangeSet) GetChanges() []*ManifestChange {
 type ManifestChange struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	Id            uint64                   `protobuf:"varint,1,opt,name=Id,proto3" json:"Id,omitempty"`
-	Op            ManifestChange_Operation `protobuf:"varint,2,opt,name=Op,proto3,enum=pb.ManifestChange_Operation" json:"Op,omitempty"`
+	Op            ManifestChange_Operation `protobuf:"varint,2,opt,name=Op,proto3,enum=nokv.storage.v1.ManifestChange_Operation" json:"Op,omitempty"`
 	Level         uint32                   `protobuf:"varint,3,opt,name=Level,proto3" json:"Level,omitempty"`      // Only used for CREATE
 	Checksum      []byte                   `protobuf:"bytes,4,opt,name=Checksum,proto3" json:"Checksum,omitempty"` // Only used for CREATE
 	unknownFields protoimpl.UnknownFields
@@ -128,7 +128,7 @@ type ManifestChange struct {
 
 func (x *ManifestChange) Reset() {
 	*x = ManifestChange{}
-	mi := &file_storagepb_proto_msgTypes[1]
+	mi := &file_storage_storage_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -140,7 +140,7 @@ func (x *ManifestChange) String() string {
 func (*ManifestChange) ProtoMessage() {}
 
 func (x *ManifestChange) ProtoReflect() protoreflect.Message {
-	mi := &file_storagepb_proto_msgTypes[1]
+	mi := &file_storage_storage_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -153,7 +153,7 @@ func (x *ManifestChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ManifestChange.ProtoReflect.Descriptor instead.
 func (*ManifestChange) Descriptor() ([]byte, []int) {
-	return file_storagepb_proto_rawDescGZIP(), []int{1}
+	return file_storage_storage_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ManifestChange) GetId() uint64 {
@@ -199,7 +199,7 @@ type TableIndex struct {
 
 func (x *TableIndex) Reset() {
 	*x = TableIndex{}
-	mi := &file_storagepb_proto_msgTypes[2]
+	mi := &file_storage_storage_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -211,7 +211,7 @@ func (x *TableIndex) String() string {
 func (*TableIndex) ProtoMessage() {}
 
 func (x *TableIndex) ProtoReflect() protoreflect.Message {
-	mi := &file_storagepb_proto_msgTypes[2]
+	mi := &file_storage_storage_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -224,7 +224,7 @@ func (x *TableIndex) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TableIndex.ProtoReflect.Descriptor instead.
 func (*TableIndex) Descriptor() ([]byte, []int) {
-	return file_storagepb_proto_rawDescGZIP(), []int{2}
+	return file_storage_storage_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TableIndex) GetOffsets() []*BlockOffset {
@@ -281,7 +281,7 @@ type BlockOffset struct {
 
 func (x *BlockOffset) Reset() {
 	*x = BlockOffset{}
-	mi := &file_storagepb_proto_msgTypes[3]
+	mi := &file_storage_storage_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +293,7 @@ func (x *BlockOffset) String() string {
 func (*BlockOffset) ProtoMessage() {}
 
 func (x *BlockOffset) ProtoReflect() protoreflect.Message {
-	mi := &file_storagepb_proto_msgTypes[3]
+	mi := &file_storage_storage_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +306,7 @@ func (x *BlockOffset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlockOffset.ProtoReflect.Descriptor instead.
 func (*BlockOffset) Descriptor() ([]byte, []int) {
-	return file_storagepb_proto_rawDescGZIP(), []int{3}
+	return file_storage_storage_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *BlockOffset) GetKey() []byte {
@@ -330,26 +330,26 @@ func (x *BlockOffset) GetLen() uint32 {
 	return 0
 }
 
-var File_storagepb_proto protoreflect.FileDescriptor
+var File_storage_storage_proto protoreflect.FileDescriptor
 
-const file_storagepb_proto_rawDesc = "" +
+const file_storage_storage_proto_rawDesc = "" +
 	"\n" +
-	"\x0fstoragepb.proto\x12\x02pb\"A\n" +
-	"\x11ManifestChangeSet\x12,\n" +
-	"\achanges\x18\x01 \x03(\v2\x12.pb.ManifestChangeR\achanges\"\xa5\x01\n" +
+	"\x15storage/storage.proto\x12\x0fnokv.storage.v1\"N\n" +
+	"\x11ManifestChangeSet\x129\n" +
+	"\achanges\x18\x01 \x03(\v2\x1f.nokv.storage.v1.ManifestChangeR\achanges\"\xb2\x01\n" +
 	"\x0eManifestChange\x12\x0e\n" +
-	"\x02Id\x18\x01 \x01(\x04R\x02Id\x12,\n" +
-	"\x02Op\x18\x02 \x01(\x0e2\x1c.pb.ManifestChange.OperationR\x02Op\x12\x14\n" +
+	"\x02Id\x18\x01 \x01(\x04R\x02Id\x129\n" +
+	"\x02Op\x18\x02 \x01(\x0e2).nokv.storage.v1.ManifestChange.OperationR\x02Op\x12\x14\n" +
 	"\x05Level\x18\x03 \x01(\rR\x05Level\x12\x1a\n" +
 	"\bChecksum\x18\x04 \x01(\fR\bChecksum\"#\n" +
 	"\tOperation\x12\n" +
 	"\n" +
 	"\x06CREATE\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"\xd9\x01\n" +
+	"\x06DELETE\x10\x01\"\xe6\x01\n" +
 	"\n" +
-	"TableIndex\x12)\n" +
-	"\aoffsets\x18\x01 \x03(\v2\x0f.pb.BlockOffsetR\aoffsets\x12 \n" +
+	"TableIndex\x126\n" +
+	"\aoffsets\x18\x01 \x03(\v2\x1c.nokv.storage.v1.BlockOffsetR\aoffsets\x12 \n" +
 	"\vbloomFilter\x18\x02 \x01(\fR\vbloomFilter\x12\x1e\n" +
 	"\n" +
 	"maxVersion\x18\x03 \x01(\x04R\n" +
@@ -360,33 +360,33 @@ const file_storagepb_proto_rawDesc = "" +
 	"\vBlockOffset\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x10\n" +
-	"\x03len\x18\x03 \x01(\rR\x03lenB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x03len\x18\x03 \x01(\rR\x03lenB2Z0github.com/feichai0017/NoKV/pb/storage;storagepbb\x06proto3"
 
 var (
-	file_storagepb_proto_rawDescOnce sync.Once
-	file_storagepb_proto_rawDescData []byte
+	file_storage_storage_proto_rawDescOnce sync.Once
+	file_storage_storage_proto_rawDescData []byte
 )
 
-func file_storagepb_proto_rawDescGZIP() []byte {
-	file_storagepb_proto_rawDescOnce.Do(func() {
-		file_storagepb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_storagepb_proto_rawDesc), len(file_storagepb_proto_rawDesc)))
+func file_storage_storage_proto_rawDescGZIP() []byte {
+	file_storage_storage_proto_rawDescOnce.Do(func() {
+		file_storage_storage_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_storage_storage_proto_rawDesc), len(file_storage_storage_proto_rawDesc)))
 	})
-	return file_storagepb_proto_rawDescData
+	return file_storage_storage_proto_rawDescData
 }
 
-var file_storagepb_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_storagepb_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_storagepb_proto_goTypes = []any{
-	(ManifestChange_Operation)(0), // 0: pb.ManifestChange.Operation
-	(*ManifestChangeSet)(nil),     // 1: pb.ManifestChangeSet
-	(*ManifestChange)(nil),        // 2: pb.ManifestChange
-	(*TableIndex)(nil),            // 3: pb.TableIndex
-	(*BlockOffset)(nil),           // 4: pb.BlockOffset
+var file_storage_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_storage_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_storage_storage_proto_goTypes = []any{
+	(ManifestChange_Operation)(0), // 0: nokv.storage.v1.ManifestChange.Operation
+	(*ManifestChangeSet)(nil),     // 1: nokv.storage.v1.ManifestChangeSet
+	(*ManifestChange)(nil),        // 2: nokv.storage.v1.ManifestChange
+	(*TableIndex)(nil),            // 3: nokv.storage.v1.TableIndex
+	(*BlockOffset)(nil),           // 4: nokv.storage.v1.BlockOffset
 }
-var file_storagepb_proto_depIdxs = []int32{
-	2, // 0: pb.ManifestChangeSet.changes:type_name -> pb.ManifestChange
-	0, // 1: pb.ManifestChange.Op:type_name -> pb.ManifestChange.Operation
-	4, // 2: pb.TableIndex.offsets:type_name -> pb.BlockOffset
+var file_storage_storage_proto_depIdxs = []int32{
+	2, // 0: nokv.storage.v1.ManifestChangeSet.changes:type_name -> nokv.storage.v1.ManifestChange
+	0, // 1: nokv.storage.v1.ManifestChange.Op:type_name -> nokv.storage.v1.ManifestChange.Operation
+	4, // 2: nokv.storage.v1.TableIndex.offsets:type_name -> nokv.storage.v1.BlockOffset
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
@@ -394,27 +394,27 @@ var file_storagepb_proto_depIdxs = []int32{
 	0, // [0:3] is the sub-list for field type_name
 }
 
-func init() { file_storagepb_proto_init() }
-func file_storagepb_proto_init() {
-	if File_storagepb_proto != nil {
+func init() { file_storage_storage_proto_init() }
+func file_storage_storage_proto_init() {
+	if File_storage_storage_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storagepb_proto_rawDesc), len(file_storagepb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_storage_proto_rawDesc), len(file_storage_storage_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_storagepb_proto_goTypes,
-		DependencyIndexes: file_storagepb_proto_depIdxs,
-		EnumInfos:         file_storagepb_proto_enumTypes,
-		MessageInfos:      file_storagepb_proto_msgTypes,
+		GoTypes:           file_storage_storage_proto_goTypes,
+		DependencyIndexes: file_storage_storage_proto_depIdxs,
+		EnumInfos:         file_storage_storage_proto_enumTypes,
+		MessageInfos:      file_storage_storage_proto_msgTypes,
 	}.Build()
-	File_storagepb_proto = out.File
-	file_storagepb_proto_goTypes = nil
-	file_storagepb_proto_depIdxs = nil
+	File_storage_storage_proto = out.File
+	file_storage_storage_proto_goTypes = nil
+	file_storage_storage_proto_depIdxs = nil
 }

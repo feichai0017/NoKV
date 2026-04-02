@@ -3,9 +3,9 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"time"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 const defaultExpandPollInterval = 200 * time.Millisecond
@@ -31,19 +31,19 @@ type ExpandConfig struct {
 
 // ExpandResult reports the observed state after one add-peer request.
 type ExpandResult struct {
-	Addr              string         `json:"addr"`
-	TargetAdminAddr   string         `json:"target_admin_addr,omitempty"`
-	RegionID          uint64         `json:"region_id"`
-	StoreID           uint64         `json:"store_id"`
-	PeerID            uint64         `json:"peer_id"`
-	LeaderKnown       bool           `json:"leader_known"`
-	LeaderRegion      *pb.RegionMeta `json:"leader_region,omitempty"`
-	TargetKnown       bool           `json:"target_known"`
-	TargetHosted      bool           `json:"target_hosted"`
-	TargetLocalPeerID uint64         `json:"target_local_peer_id,omitempty"`
-	TargetAppliedIdx  uint64         `json:"target_applied_index,omitempty"`
-	TargetAppliedTerm uint64         `json:"target_applied_term,omitempty"`
-	Waited            bool           `json:"waited"`
+	Addr              string             `json:"addr"`
+	TargetAdminAddr   string             `json:"target_admin_addr,omitempty"`
+	RegionID          uint64             `json:"region_id"`
+	StoreID           uint64             `json:"store_id"`
+	PeerID            uint64             `json:"peer_id"`
+	LeaderKnown       bool               `json:"leader_known"`
+	LeaderRegion      *metapb.RegionMeta `json:"leader_region,omitempty"`
+	TargetKnown       bool               `json:"target_known"`
+	TargetHosted      bool               `json:"target_hosted"`
+	TargetLocalPeerID uint64             `json:"target_local_peer_id,omitempty"`
+	TargetAppliedIdx  uint64             `json:"target_applied_index,omitempty"`
+	TargetAppliedTerm uint64             `json:"target_applied_term,omitempty"`
+	Waited            bool               `json:"waited"`
 }
 
 // ExpandResultSet reports one sequential multi-peer rollout.
@@ -130,7 +130,7 @@ func Expand(ctx context.Context, cfg ExpandConfig) (ExpandResultSet, error) {
 }
 
 func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient, cfg ExpandConfig, target PeerTarget) (ExpandResult, error) {
-	addResp, err := leaderClient.AddPeer(ctx, &pb.AddPeerRequest{
+	addResp, err := leaderClient.AddPeer(ctx, &adminpb.AddPeerRequest{
 		RegionId: cfg.RegionID,
 		StoreId:  target.StoreID,
 		PeerId:   target.PeerID,
@@ -176,7 +176,7 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	if leaderRegion == nil {
 		return result, fmt.Errorf("migrate: leader region %d missing published metadata for peer %d", cfg.RegionID, target.PeerID)
 	}
-	snapshotStream, err := leaderClient.ExportRegionSnapshotStream(waitCtx, &pb.ExportRegionSnapshotStreamRequest{
+	snapshotStream, err := leaderClient.ExportRegionSnapshotStream(waitCtx, &adminpb.ExportRegionSnapshotStreamRequest{
 		RegionId: cfg.RegionID,
 	})
 	if err != nil {
@@ -206,11 +206,11 @@ func expandTargetWithLeaderClient(ctx context.Context, leaderClient AdminClient,
 	return result, nil
 }
 
-func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*pb.RegionMeta, error) {
+func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) (*metapb.RegionMeta, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return nil, fmt.Errorf("migrate: poll leader region status: %w", err)
 		}
@@ -234,9 +234,9 @@ func waitForLeaderPeer(ctx context.Context, client AdminClient, regionID, peerID
 func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peerID uint64, interval time.Duration, result *ExpandResult) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	var lastStatus *pb.RegionRuntimeStatusResponse
+	var lastStatus *adminpb.RegionRuntimeStatusResponse
 	for {
-		status, err := client.RegionRuntimeStatus(ctx, &pb.RegionRuntimeStatusRequest{RegionId: regionID})
+		status, err := client.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		if err != nil {
 			return fmt.Errorf("migrate: poll target region status: %w", err)
 		}
@@ -272,7 +272,7 @@ func waitForTargetHosted(ctx context.Context, client AdminClient, regionID, peer
 	}
 }
 
-func regionContainsPeer(meta *pb.RegionMeta, peerID uint64) bool {
+func regionContainsPeer(meta *metapb.RegionMeta, peerID uint64) bool {
 	if meta == nil || peerID == 0 {
 		return false
 	}

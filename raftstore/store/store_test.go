@@ -3,10 +3,10 @@ package store
 import (
 	"bytes"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -449,7 +449,7 @@ func TestStoreHandleSplitCommandReplayIsIdempotent(t *testing.T) {
 	_, err := rs.splitRegionLocal(parentMeta.ID, childMeta)
 	require.NoError(t, err)
 
-	cmd := &pb.SplitCommand{
+	cmd := &raftcmdpb.SplitCommand{
 		ParentRegionId: parentMeta.ID,
 		SplitKey:       []byte("m"),
 		Child:          regionMetaToPB(childMeta),
@@ -490,7 +490,7 @@ func TestStoreHandleMergeCommandReplayIsIdempotent(t *testing.T) {
 	require.NoError(t, rs.applyRegionMeta(sourceMeta))
 	require.NoError(t, rs.applyRegionRemoval(sourceMeta.ID))
 
-	require.NoError(t, rs.handleMergeCommand(&pb.MergeCommand{
+	require.NoError(t, rs.handleMergeCommand(&raftcmdpb.MergeCommand{
 		TargetRegionId: parentMeta.ID,
 		SourceRegionId: sourceMeta.ID,
 	}))

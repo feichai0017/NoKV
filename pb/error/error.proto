@@ -1,11 +1,11 @@
 // Use scripts/gen.sh to generate .pb.go files.
 syntax = "proto3";
 
-package pb;
+package nokv.error.v1;
 
-import "metapb.proto";
+import "legacy/meta.proto";
 
-option go_package = "github.com/feichai0017/NoKV/pb";
+option go_package = "github.com/feichai0017/NoKV/pb/error;errorpb";
 
 // errorpb carries region/store routing errors returned by raftstore.
 
@@ -21,12 +21,12 @@ message RegionError {
 
 message NotLeader {
   uint64 region_id = 1;
-  RegionPeer leader = 2;
+  nokv.meta.legacy.v1.RegionPeer leader = 2;
 }
 
 message EpochNotMatch {
-  RegionEpoch current_epoch = 1;
-  repeated RegionMeta regions = 2;
+  nokv.meta.legacy.v1.RegionEpoch current_epoch = 1;
+  repeated nokv.meta.legacy.v1.RegionMeta regions = 2;
 }
 
 message StaleCommand {}

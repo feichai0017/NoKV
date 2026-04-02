@@ -4,11 +4,14 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: raftcmdpb.proto
+// source: raft/cmd.proto
 
-package pb
+package raftcmdpb
 
 import (
+	error1 "github.com/feichai0017/NoKV/pb/error"
+	kv "github.com/feichai0017/NoKV/pb/kv"
+	legacy "github.com/feichai0017/NoKV/pb/legacy"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -71,11 +74,11 @@ func (x CmdType) String() string {
 }
 
 func (CmdType) Descriptor() protoreflect.EnumDescriptor {
-	return file_raftcmdpb_proto_enumTypes[0].Descriptor()
+	return file_raft_cmd_proto_enumTypes[0].Descriptor()
 }
 
 func (CmdType) Type() protoreflect.EnumType {
-	return &file_raftcmdpb_proto_enumTypes[0]
+	return &file_raft_cmd_proto_enumTypes[0]
 }
 
 func (x CmdType) Number() protoreflect.EnumNumber {
@@ -84,7 +87,7 @@ func (x CmdType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CmdType.Descriptor instead.
 func (CmdType) EnumDescriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{0}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{0}
 }
 
 type AdminCommand_Type int32
@@ -120,11 +123,11 @@ func (x AdminCommand_Type) String() string {
 }
 
 func (AdminCommand_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_raftcmdpb_proto_enumTypes[1].Descriptor()
+	return file_raft_cmd_proto_enumTypes[1].Descriptor()
 }
 
 func (AdminCommand_Type) Type() protoreflect.EnumType {
-	return &file_raftcmdpb_proto_enumTypes[1]
+	return &file_raft_cmd_proto_enumTypes[1]
 }
 
 func (x AdminCommand_Type) Number() protoreflect.EnumNumber {
@@ -133,21 +136,21 @@ func (x AdminCommand_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AdminCommand_Type.Descriptor instead.
 func (AdminCommand_Type) EnumDescriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{2, 0}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{2, 0}
 }
 
 type SplitCommand struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ParentRegionId uint64                 `protobuf:"varint,1,opt,name=parent_region_id,json=parentRegionId,proto3" json:"parent_region_id,omitempty"`
 	SplitKey       []byte                 `protobuf:"bytes,2,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
-	Child          *RegionMeta            `protobuf:"bytes,3,opt,name=child,proto3" json:"child,omitempty"`
+	Child          *legacy.RegionMeta     `protobuf:"bytes,3,opt,name=child,proto3" json:"child,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SplitCommand) Reset() {
 	*x = SplitCommand{}
-	mi := &file_raftcmdpb_proto_msgTypes[0]
+	mi := &file_raft_cmd_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -159,7 +162,7 @@ func (x *SplitCommand) String() string {
 func (*SplitCommand) ProtoMessage() {}
 
 func (x *SplitCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[0]
+	mi := &file_raft_cmd_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -172,7 +175,7 @@ func (x *SplitCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SplitCommand.ProtoReflect.Descriptor instead.
 func (*SplitCommand) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{0}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *SplitCommand) GetParentRegionId() uint64 {
@@ -189,7 +192,7 @@ func (x *SplitCommand) GetSplitKey() []byte {
 	return nil
 }
 
-func (x *SplitCommand) GetChild() *RegionMeta {
+func (x *SplitCommand) GetChild() *legacy.RegionMeta {
 	if x != nil {
 		return x.Child
 	}
@@ -206,7 +209,7 @@ type MergeCommand struct {
 
 func (x *MergeCommand) Reset() {
 	*x = MergeCommand{}
-	mi := &file_raftcmdpb_proto_msgTypes[1]
+	mi := &file_raft_cmd_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +221,7 @@ func (x *MergeCommand) String() string {
 func (*MergeCommand) ProtoMessage() {}
 
 func (x *MergeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[1]
+	mi := &file_raft_cmd_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +234,7 @@ func (x *MergeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeCommand.ProtoReflect.Descriptor instead.
 func (*MergeCommand) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{1}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *MergeCommand) GetTargetRegionId() uint64 {
@@ -250,7 +253,7 @@ func (x *MergeCommand) GetSourceRegionId() uint64 {
 
 type AdminCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          AdminCommand_Type      `protobuf:"varint,1,opt,name=type,proto3,enum=pb.AdminCommand_Type" json:"type,omitempty"`
+	Type          AdminCommand_Type      `protobuf:"varint,1,opt,name=type,proto3,enum=nokv.raft.v1.AdminCommand_Type" json:"type,omitempty"`
 	Split         *SplitCommand          `protobuf:"bytes,2,opt,name=split,proto3" json:"split,omitempty"`
 	Merge         *MergeCommand          `protobuf:"bytes,3,opt,name=merge,proto3" json:"merge,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -259,7 +262,7 @@ type AdminCommand struct {
 
 func (x *AdminCommand) Reset() {
 	*x = AdminCommand{}
-	mi := &file_raftcmdpb_proto_msgTypes[2]
+	mi := &file_raft_cmd_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +274,7 @@ func (x *AdminCommand) String() string {
 func (*AdminCommand) ProtoMessage() {}
 
 func (x *AdminCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[2]
+	mi := &file_raft_cmd_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +287,7 @@ func (x *AdminCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminCommand.ProtoReflect.Descriptor instead.
 func (*AdminCommand) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{2}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AdminCommand) GetType() AdminCommand_Type {
@@ -312,12 +315,12 @@ func (x *AdminCommand) GetMerge() *MergeCommand {
 type CmdHeader struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	RegionId          uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	RegionEpoch       *RegionEpoch           `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
+	RegionEpoch       *legacy.RegionEpoch    `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch,proto3" json:"region_epoch,omitempty"`
 	PeerId            uint64                 `protobuf:"varint,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	ReadQuorum        bool                   `protobuf:"varint,4,opt,name=read_quorum,json=readQuorum,proto3" json:"read_quorum,omitempty"`
 	RequestId         uint64                 `protobuf:"varint,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	ReadConsistency   ReadConsistency        `protobuf:"varint,6,opt,name=read_consistency,json=readConsistency,proto3,enum=pb.ReadConsistency" json:"read_consistency,omitempty"`
-	ReadPreference    ReadPreference         `protobuf:"varint,7,opt,name=read_preference,json=readPreference,proto3,enum=pb.ReadPreference" json:"read_preference,omitempty"`
+	ReadConsistency   kv.ReadConsistency     `protobuf:"varint,6,opt,name=read_consistency,json=readConsistency,proto3,enum=nokv.kv.v1.ReadConsistency" json:"read_consistency,omitempty"`
+	ReadPreference    kv.ReadPreference      `protobuf:"varint,7,opt,name=read_preference,json=readPreference,proto3,enum=nokv.kv.v1.ReadPreference" json:"read_preference,omitempty"`
 	MaxStaleReadIndex uint64                 `protobuf:"varint,8,opt,name=max_stale_read_index,json=maxStaleReadIndex,proto3" json:"max_stale_read_index,omitempty"`
 	MaxStaleReadMs    uint64                 `protobuf:"varint,9,opt,name=max_stale_read_ms,json=maxStaleReadMs,proto3" json:"max_stale_read_ms,omitempty"`
 	StoreId           uint64                 `protobuf:"varint,10,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
@@ -327,7 +330,7 @@ type CmdHeader struct {
 
 func (x *CmdHeader) Reset() {
 	*x = CmdHeader{}
-	mi := &file_raftcmdpb_proto_msgTypes[3]
+	mi := &file_raft_cmd_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +342,7 @@ func (x *CmdHeader) String() string {
 func (*CmdHeader) ProtoMessage() {}
 
 func (x *CmdHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[3]
+	mi := &file_raft_cmd_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +355,7 @@ func (x *CmdHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CmdHeader.ProtoReflect.Descriptor instead.
 func (*CmdHeader) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{3}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CmdHeader) GetRegionId() uint64 {
@@ -362,7 +365,7 @@ func (x *CmdHeader) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *CmdHeader) GetRegionEpoch() *RegionEpoch {
+func (x *CmdHeader) GetRegionEpoch() *legacy.RegionEpoch {
 	if x != nil {
 		return x.RegionEpoch
 	}
@@ -390,18 +393,18 @@ func (x *CmdHeader) GetRequestId() uint64 {
 	return 0
 }
 
-func (x *CmdHeader) GetReadConsistency() ReadConsistency {
+func (x *CmdHeader) GetReadConsistency() kv.ReadConsistency {
 	if x != nil {
 		return x.ReadConsistency
 	}
-	return ReadConsistency_READ_CONSISTENCY_STRONG
+	return kv.ReadConsistency(0)
 }
 
-func (x *CmdHeader) GetReadPreference() ReadPreference {
+func (x *CmdHeader) GetReadPreference() kv.ReadPreference {
 	if x != nil {
 		return x.ReadPreference
 	}
-	return ReadPreference_READ_PREFERENCE_LEADER_ONLY
+	return kv.ReadPreference(0)
 }
 
 func (x *CmdHeader) GetMaxStaleReadIndex() uint64 {
@@ -427,7 +430,7 @@ func (x *CmdHeader) GetStoreId() uint64 {
 
 type Request struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
-	CmdType CmdType                `protobuf:"varint,1,opt,name=cmd_type,json=cmdType,proto3,enum=pb.CmdType" json:"cmd_type,omitempty"`
+	CmdType CmdType                `protobuf:"varint,1,opt,name=cmd_type,json=cmdType,proto3,enum=nokv.raft.v1.CmdType" json:"cmd_type,omitempty"`
 	// Types that are valid to be assigned to Cmd:
 	//
 	//	*Request_Get
@@ -444,7 +447,7 @@ type Request struct {
 
 func (x *Request) Reset() {
 	*x = Request{}
-	mi := &file_raftcmdpb_proto_msgTypes[4]
+	mi := &file_raft_cmd_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -456,7 +459,7 @@ func (x *Request) String() string {
 func (*Request) ProtoMessage() {}
 
 func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[4]
+	mi := &file_raft_cmd_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +472,7 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Request.ProtoReflect.Descriptor instead.
 func (*Request) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{4}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Request) GetCmdType() CmdType {
@@ -486,7 +489,7 @@ func (x *Request) GetCmd() isRequest_Cmd {
 	return nil
 }
 
-func (x *Request) GetGet() *GetRequest {
+func (x *Request) GetGet() *kv.GetRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_Get); ok {
 			return x.Get
@@ -495,7 +498,7 @@ func (x *Request) GetGet() *GetRequest {
 	return nil
 }
 
-func (x *Request) GetScan() *ScanRequest {
+func (x *Request) GetScan() *kv.ScanRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_Scan); ok {
 			return x.Scan
@@ -504,7 +507,7 @@ func (x *Request) GetScan() *ScanRequest {
 	return nil
 }
 
-func (x *Request) GetPrewrite() *PrewriteRequest {
+func (x *Request) GetPrewrite() *kv.PrewriteRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_Prewrite); ok {
 			return x.Prewrite
@@ -513,7 +516,7 @@ func (x *Request) GetPrewrite() *PrewriteRequest {
 	return nil
 }
 
-func (x *Request) GetCommit() *CommitRequest {
+func (x *Request) GetCommit() *kv.CommitRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_Commit); ok {
 			return x.Commit
@@ -522,7 +525,7 @@ func (x *Request) GetCommit() *CommitRequest {
 	return nil
 }
 
-func (x *Request) GetBatchRollback() *BatchRollbackRequest {
+func (x *Request) GetBatchRollback() *kv.BatchRollbackRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_BatchRollback); ok {
 			return x.BatchRollback
@@ -531,7 +534,7 @@ func (x *Request) GetBatchRollback() *BatchRollbackRequest {
 	return nil
 }
 
-func (x *Request) GetResolveLock() *ResolveLockRequest {
+func (x *Request) GetResolveLock() *kv.ResolveLockRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_ResolveLock); ok {
 			return x.ResolveLock
@@ -540,7 +543,7 @@ func (x *Request) GetResolveLock() *ResolveLockRequest {
 	return nil
 }
 
-func (x *Request) GetCheckTxnStatus() *CheckTxnStatusRequest {
+func (x *Request) GetCheckTxnStatus() *kv.CheckTxnStatusRequest {
 	if x != nil {
 		if x, ok := x.Cmd.(*Request_CheckTxnStatus); ok {
 			return x.CheckTxnStatus
@@ -554,31 +557,31 @@ type isRequest_Cmd interface {
 }
 
 type Request_Get struct {
-	Get *GetRequest `protobuf:"bytes,2,opt,name=get,proto3,oneof"`
+	Get *kv.GetRequest `protobuf:"bytes,2,opt,name=get,proto3,oneof"`
 }
 
 type Request_Scan struct {
-	Scan *ScanRequest `protobuf:"bytes,3,opt,name=scan,proto3,oneof"`
+	Scan *kv.ScanRequest `protobuf:"bytes,3,opt,name=scan,proto3,oneof"`
 }
 
 type Request_Prewrite struct {
-	Prewrite *PrewriteRequest `protobuf:"bytes,4,opt,name=prewrite,proto3,oneof"`
+	Prewrite *kv.PrewriteRequest `protobuf:"bytes,4,opt,name=prewrite,proto3,oneof"`
 }
 
 type Request_Commit struct {
-	Commit *CommitRequest `protobuf:"bytes,5,opt,name=commit,proto3,oneof"`
+	Commit *kv.CommitRequest `protobuf:"bytes,5,opt,name=commit,proto3,oneof"`
 }
 
 type Request_BatchRollback struct {
-	BatchRollback *BatchRollbackRequest `protobuf:"bytes,6,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
+	BatchRollback *kv.BatchRollbackRequest `protobuf:"bytes,6,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
 }
 
 type Request_ResolveLock struct {
-	ResolveLock *ResolveLockRequest `protobuf:"bytes,7,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
+	ResolveLock *kv.ResolveLockRequest `protobuf:"bytes,7,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
 }
 
 type Request_CheckTxnStatus struct {
-	CheckTxnStatus *CheckTxnStatusRequest `protobuf:"bytes,8,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
+	CheckTxnStatus *kv.CheckTxnStatusRequest `protobuf:"bytes,8,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
 }
 
 func (*Request_Get) isRequest_Cmd() {}
@@ -613,7 +616,7 @@ type Response struct {
 
 func (x *Response) Reset() {
 	*x = Response{}
-	mi := &file_raftcmdpb_proto_msgTypes[5]
+	mi := &file_raft_cmd_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +628,7 @@ func (x *Response) String() string {
 func (*Response) ProtoMessage() {}
 
 func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[5]
+	mi := &file_raft_cmd_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +641,7 @@ func (x *Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Response.ProtoReflect.Descriptor instead.
 func (*Response) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{5}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Response) GetCmd() isResponse_Cmd {
@@ -648,7 +651,7 @@ func (x *Response) GetCmd() isResponse_Cmd {
 	return nil
 }
 
-func (x *Response) GetGet() *GetResponse {
+func (x *Response) GetGet() *kv.GetResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_Get); ok {
 			return x.Get
@@ -657,7 +660,7 @@ func (x *Response) GetGet() *GetResponse {
 	return nil
 }
 
-func (x *Response) GetScan() *ScanResponse {
+func (x *Response) GetScan() *kv.ScanResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_Scan); ok {
 			return x.Scan
@@ -666,7 +669,7 @@ func (x *Response) GetScan() *ScanResponse {
 	return nil
 }
 
-func (x *Response) GetPrewrite() *PrewriteResponse {
+func (x *Response) GetPrewrite() *kv.PrewriteResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_Prewrite); ok {
 			return x.Prewrite
@@ -675,7 +678,7 @@ func (x *Response) GetPrewrite() *PrewriteResponse {
 	return nil
 }
 
-func (x *Response) GetCommit() *CommitResponse {
+func (x *Response) GetCommit() *kv.CommitResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_Commit); ok {
 			return x.Commit
@@ -684,7 +687,7 @@ func (x *Response) GetCommit() *CommitResponse {
 	return nil
 }
 
-func (x *Response) GetBatchRollback() *BatchRollbackResponse {
+func (x *Response) GetBatchRollback() *kv.BatchRollbackResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_BatchRollback); ok {
 			return x.BatchRollback
@@ -693,7 +696,7 @@ func (x *Response) GetBatchRollback() *BatchRollbackResponse {
 	return nil
 }
 
-func (x *Response) GetResolveLock() *ResolveLockResponse {
+func (x *Response) GetResolveLock() *kv.ResolveLockResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_ResolveLock); ok {
 			return x.ResolveLock
@@ -702,7 +705,7 @@ func (x *Response) GetResolveLock() *ResolveLockResponse {
 	return nil
 }
 
-func (x *Response) GetCheckTxnStatus() *CheckTxnStatusResponse {
+func (x *Response) GetCheckTxnStatus() *kv.CheckTxnStatusResponse {
 	if x != nil {
 		if x, ok := x.Cmd.(*Response_CheckTxnStatus); ok {
 			return x.CheckTxnStatus
@@ -716,31 +719,31 @@ type isResponse_Cmd interface {
 }
 
 type Response_Get struct {
-	Get *GetResponse `protobuf:"bytes,1,opt,name=get,proto3,oneof"`
+	Get *kv.GetResponse `protobuf:"bytes,1,opt,name=get,proto3,oneof"`
 }
 
 type Response_Scan struct {
-	Scan *ScanResponse `protobuf:"bytes,2,opt,name=scan,proto3,oneof"`
+	Scan *kv.ScanResponse `protobuf:"bytes,2,opt,name=scan,proto3,oneof"`
 }
 
 type Response_Prewrite struct {
-	Prewrite *PrewriteResponse `protobuf:"bytes,3,opt,name=prewrite,proto3,oneof"`
+	Prewrite *kv.PrewriteResponse `protobuf:"bytes,3,opt,name=prewrite,proto3,oneof"`
 }
 
 type Response_Commit struct {
-	Commit *CommitResponse `protobuf:"bytes,4,opt,name=commit,proto3,oneof"`
+	Commit *kv.CommitResponse `protobuf:"bytes,4,opt,name=commit,proto3,oneof"`
 }
 
 type Response_BatchRollback struct {
-	BatchRollback *BatchRollbackResponse `protobuf:"bytes,5,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
+	BatchRollback *kv.BatchRollbackResponse `protobuf:"bytes,5,opt,name=batch_rollback,json=batchRollback,proto3,oneof"`
 }
 
 type Response_ResolveLock struct {
-	ResolveLock *ResolveLockResponse `protobuf:"bytes,6,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
+	ResolveLock *kv.ResolveLockResponse `protobuf:"bytes,6,opt,name=resolve_lock,json=resolveLock,proto3,oneof"`
 }
 
 type Response_CheckTxnStatus struct {
-	CheckTxnStatus *CheckTxnStatusResponse `protobuf:"bytes,7,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
+	CheckTxnStatus *kv.CheckTxnStatusResponse `protobuf:"bytes,7,opt,name=check_txn_status,json=checkTxnStatus,proto3,oneof"`
 }
 
 func (*Response_Get) isResponse_Cmd() {}
@@ -767,7 +770,7 @@ type RaftCmdRequest struct {
 
 func (x *RaftCmdRequest) Reset() {
 	*x = RaftCmdRequest{}
-	mi := &file_raftcmdpb_proto_msgTypes[6]
+	mi := &file_raft_cmd_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -779,7 +782,7 @@ func (x *RaftCmdRequest) String() string {
 func (*RaftCmdRequest) ProtoMessage() {}
 
 func (x *RaftCmdRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[6]
+	mi := &file_raft_cmd_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -792,7 +795,7 @@ func (x *RaftCmdRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftCmdRequest.ProtoReflect.Descriptor instead.
 func (*RaftCmdRequest) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{6}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RaftCmdRequest) GetHeader() *CmdHeader {
@@ -813,14 +816,14 @@ type RaftCmdResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Header        *CmdHeader             `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	Responses     []*Response            `protobuf:"bytes,2,rep,name=responses,proto3" json:"responses,omitempty"`
-	RegionError   *RegionError           `protobuf:"bytes,3,opt,name=region_error,json=regionError,proto3" json:"region_error,omitempty"`
+	RegionError   *error1.RegionError    `protobuf:"bytes,3,opt,name=region_error,json=regionError,proto3" json:"region_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RaftCmdResponse) Reset() {
 	*x = RaftCmdResponse{}
-	mi := &file_raftcmdpb_proto_msgTypes[7]
+	mi := &file_raft_cmd_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -832,7 +835,7 @@ func (x *RaftCmdResponse) String() string {
 func (*RaftCmdResponse) ProtoMessage() {}
 
 func (x *RaftCmdResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_raftcmdpb_proto_msgTypes[7]
+	mi := &file_raft_cmd_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -845,7 +848,7 @@ func (x *RaftCmdResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftCmdResponse.ProtoReflect.Descriptor instead.
 func (*RaftCmdResponse) Descriptor() ([]byte, []int) {
-	return file_raftcmdpb_proto_rawDescGZIP(), []int{7}
+	return file_raft_cmd_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RaftCmdResponse) GetHeader() *CmdHeader {
@@ -862,73 +865,73 @@ func (x *RaftCmdResponse) GetResponses() []*Response {
 	return nil
 }
 
-func (x *RaftCmdResponse) GetRegionError() *RegionError {
+func (x *RaftCmdResponse) GetRegionError() *error1.RegionError {
 	if x != nil {
 		return x.RegionError
 	}
 	return nil
 }
 
-var File_raftcmdpb_proto protoreflect.FileDescriptor
+var File_raft_cmd_proto protoreflect.FileDescriptor
 
-const file_raftcmdpb_proto_rawDesc = "" +
+const file_raft_cmd_proto_rawDesc = "" +
 	"\n" +
-	"\x0fraftcmdpb.proto\x12\x02pb\x1a\rerrorpb.proto\x1a\rkvrpcpb.proto\x1a\fmetapb.proto\"{\n" +
+	"\x0eraft/cmd.proto\x12\fnokv.raft.v1\x1a\x11error/error.proto\x1a\vkv/kv.proto\x1a\x11legacy/meta.proto\"\x8c\x01\n" +
 	"\fSplitCommand\x12(\n" +
 	"\x10parent_region_id\x18\x01 \x01(\x04R\x0eparentRegionId\x12\x1b\n" +
-	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x12$\n" +
-	"\x05child\x18\x03 \x01(\v2\x0e.pb.RegionMetaR\x05child\"b\n" +
+	"\tsplit_key\x18\x02 \x01(\fR\bsplitKey\x125\n" +
+	"\x05child\x18\x03 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\x05child\"b\n" +
 	"\fMergeCommand\x12(\n" +
 	"\x10target_region_id\x18\x01 \x01(\x04R\x0etargetRegionId\x12(\n" +
-	"\x10source_region_id\x18\x02 \x01(\x04R\x0esourceRegionId\"\xb4\x01\n" +
-	"\fAdminCommand\x12)\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x15.pb.AdminCommand.TypeR\x04type\x12&\n" +
-	"\x05split\x18\x02 \x01(\v2\x10.pb.SplitCommandR\x05split\x12&\n" +
-	"\x05merge\x18\x03 \x01(\v2\x10.pb.MergeCommandR\x05merge\")\n" +
+	"\x10source_region_id\x18\x02 \x01(\x04R\x0esourceRegionId\"\xd2\x01\n" +
+	"\fAdminCommand\x123\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x1f.nokv.raft.v1.AdminCommand.TypeR\x04type\x120\n" +
+	"\x05split\x18\x02 \x01(\v2\x1a.nokv.raft.v1.SplitCommandR\x05split\x120\n" +
+	"\x05merge\x18\x03 \x01(\v2\x1a.nokv.raft.v1.MergeCommandR\x05merge\")\n" +
 	"\x04Type\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\t\n" +
 	"\x05SPLIT\x10\x01\x12\t\n" +
-	"\x05MERGE\x10\x02\"\xa9\x03\n" +
+	"\x05MERGE\x10\x02\"\xca\x03\n" +
 	"\tCmdHeader\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x122\n" +
-	"\fregion_epoch\x18\x02 \x01(\v2\x0f.pb.RegionEpochR\vregionEpoch\x12\x17\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12C\n" +
+	"\fregion_epoch\x18\x02 \x01(\v2 .nokv.meta.legacy.v1.RegionEpochR\vregionEpoch\x12\x17\n" +
 	"\apeer_id\x18\x03 \x01(\x04R\x06peerId\x12\x1f\n" +
 	"\vread_quorum\x18\x04 \x01(\bR\n" +
 	"readQuorum\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x05 \x01(\x04R\trequestId\x12>\n" +
-	"\x10read_consistency\x18\x06 \x01(\x0e2\x13.pb.ReadConsistencyR\x0freadConsistency\x12;\n" +
-	"\x0fread_preference\x18\a \x01(\x0e2\x12.pb.ReadPreferenceR\x0ereadPreference\x12/\n" +
+	"request_id\x18\x05 \x01(\x04R\trequestId\x12F\n" +
+	"\x10read_consistency\x18\x06 \x01(\x0e2\x1b.nokv.kv.v1.ReadConsistencyR\x0freadConsistency\x12C\n" +
+	"\x0fread_preference\x18\a \x01(\x0e2\x1a.nokv.kv.v1.ReadPreferenceR\x0ereadPreference\x12/\n" +
 	"\x14max_stale_read_index\x18\b \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
 	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\x12\x19\n" +
 	"\bstore_id\x18\n" +
-	" \x01(\x04R\astoreId\"\xaa\x03\n" +
-	"\aRequest\x12&\n" +
-	"\bcmd_type\x18\x01 \x01(\x0e2\v.pb.CmdTypeR\acmdType\x12\"\n" +
-	"\x03get\x18\x02 \x01(\v2\x0e.pb.GetRequestH\x00R\x03get\x12%\n" +
-	"\x04scan\x18\x03 \x01(\v2\x0f.pb.ScanRequestH\x00R\x04scan\x121\n" +
-	"\bprewrite\x18\x04 \x01(\v2\x13.pb.PrewriteRequestH\x00R\bprewrite\x12+\n" +
-	"\x06commit\x18\x05 \x01(\v2\x11.pb.CommitRequestH\x00R\x06commit\x12A\n" +
-	"\x0ebatch_rollback\x18\x06 \x01(\v2\x18.pb.BatchRollbackRequestH\x00R\rbatchRollback\x12;\n" +
-	"\fresolve_lock\x18\a \x01(\v2\x16.pb.ResolveLockRequestH\x00R\vresolveLock\x12E\n" +
-	"\x10check_txn_status\x18\b \x01(\v2\x19.pb.CheckTxnStatusRequestH\x00R\x0echeckTxnStatusB\x05\n" +
-	"\x03cmd\"\x8a\x03\n" +
-	"\bResponse\x12#\n" +
-	"\x03get\x18\x01 \x01(\v2\x0f.pb.GetResponseH\x00R\x03get\x12&\n" +
-	"\x04scan\x18\x02 \x01(\v2\x10.pb.ScanResponseH\x00R\x04scan\x122\n" +
-	"\bprewrite\x18\x03 \x01(\v2\x14.pb.PrewriteResponseH\x00R\bprewrite\x12,\n" +
-	"\x06commit\x18\x04 \x01(\v2\x12.pb.CommitResponseH\x00R\x06commit\x12B\n" +
-	"\x0ebatch_rollback\x18\x05 \x01(\v2\x19.pb.BatchRollbackResponseH\x00R\rbatchRollback\x12<\n" +
-	"\fresolve_lock\x18\x06 \x01(\v2\x17.pb.ResolveLockResponseH\x00R\vresolveLock\x12F\n" +
-	"\x10check_txn_status\x18\a \x01(\v2\x1a.pb.CheckTxnStatusResponseH\x00R\x0echeckTxnStatusB\x05\n" +
-	"\x03cmd\"`\n" +
-	"\x0eRaftCmdRequest\x12%\n" +
-	"\x06header\x18\x01 \x01(\v2\r.pb.CmdHeaderR\x06header\x12'\n" +
-	"\brequests\x18\x02 \x03(\v2\v.pb.RequestR\brequests\"\x98\x01\n" +
-	"\x0fRaftCmdResponse\x12%\n" +
-	"\x06header\x18\x01 \x01(\v2\r.pb.CmdHeaderR\x06header\x12*\n" +
-	"\tresponses\x18\x02 \x03(\v2\f.pb.ResponseR\tresponses\x122\n" +
-	"\fregion_error\x18\x03 \x01(\v2\x0f.pb.RegionErrorR\vregionError*\x9f\x01\n" +
+	" \x01(\x04R\astoreId\"\xec\x03\n" +
+	"\aRequest\x120\n" +
+	"\bcmd_type\x18\x01 \x01(\x0e2\x15.nokv.raft.v1.CmdTypeR\acmdType\x12*\n" +
+	"\x03get\x18\x02 \x01(\v2\x16.nokv.kv.v1.GetRequestH\x00R\x03get\x12-\n" +
+	"\x04scan\x18\x03 \x01(\v2\x17.nokv.kv.v1.ScanRequestH\x00R\x04scan\x129\n" +
+	"\bprewrite\x18\x04 \x01(\v2\x1b.nokv.kv.v1.PrewriteRequestH\x00R\bprewrite\x123\n" +
+	"\x06commit\x18\x05 \x01(\v2\x19.nokv.kv.v1.CommitRequestH\x00R\x06commit\x12I\n" +
+	"\x0ebatch_rollback\x18\x06 \x01(\v2 .nokv.kv.v1.BatchRollbackRequestH\x00R\rbatchRollback\x12C\n" +
+	"\fresolve_lock\x18\a \x01(\v2\x1e.nokv.kv.v1.ResolveLockRequestH\x00R\vresolveLock\x12M\n" +
+	"\x10check_txn_status\x18\b \x01(\v2!.nokv.kv.v1.CheckTxnStatusRequestH\x00R\x0echeckTxnStatusB\x05\n" +
+	"\x03cmd\"\xc2\x03\n" +
+	"\bResponse\x12+\n" +
+	"\x03get\x18\x01 \x01(\v2\x17.nokv.kv.v1.GetResponseH\x00R\x03get\x12.\n" +
+	"\x04scan\x18\x02 \x01(\v2\x18.nokv.kv.v1.ScanResponseH\x00R\x04scan\x12:\n" +
+	"\bprewrite\x18\x03 \x01(\v2\x1c.nokv.kv.v1.PrewriteResponseH\x00R\bprewrite\x124\n" +
+	"\x06commit\x18\x04 \x01(\v2\x1a.nokv.kv.v1.CommitResponseH\x00R\x06commit\x12J\n" +
+	"\x0ebatch_rollback\x18\x05 \x01(\v2!.nokv.kv.v1.BatchRollbackResponseH\x00R\rbatchRollback\x12D\n" +
+	"\fresolve_lock\x18\x06 \x01(\v2\x1f.nokv.kv.v1.ResolveLockResponseH\x00R\vresolveLock\x12N\n" +
+	"\x10check_txn_status\x18\a \x01(\v2\".nokv.kv.v1.CheckTxnStatusResponseH\x00R\x0echeckTxnStatusB\x05\n" +
+	"\x03cmd\"t\n" +
+	"\x0eRaftCmdRequest\x12/\n" +
+	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x121\n" +
+	"\brequests\x18\x02 \x03(\v2\x15.nokv.raft.v1.RequestR\brequests\"\xb7\x01\n" +
+	"\x0fRaftCmdResponse\x12/\n" +
+	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x124\n" +
+	"\tresponses\x18\x02 \x03(\v2\x16.nokv.raft.v1.ResponseR\tresponses\x12=\n" +
+	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError*\x9f\x01\n" +
 	"\aCmdType\x12\x0f\n" +
 	"\vCMD_INVALID\x10\x00\x12\v\n" +
 	"\aCMD_GET\x10\x01\x12\f\n" +
@@ -938,81 +941,81 @@ const file_raftcmdpb_proto_rawDesc = "" +
 	"CMD_COMMIT\x10\x04\x12\x16\n" +
 	"\x12CMD_BATCH_ROLLBACK\x10\x05\x12\x14\n" +
 	"\x10CMD_RESOLVE_LOCK\x10\x06\x12\x18\n" +
-	"\x14CMD_CHECK_TXN_STATUS\x10\aB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x14CMD_CHECK_TXN_STATUS\x10\aB/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
 
 var (
-	file_raftcmdpb_proto_rawDescOnce sync.Once
-	file_raftcmdpb_proto_rawDescData []byte
+	file_raft_cmd_proto_rawDescOnce sync.Once
+	file_raft_cmd_proto_rawDescData []byte
 )
 
-func file_raftcmdpb_proto_rawDescGZIP() []byte {
-	file_raftcmdpb_proto_rawDescOnce.Do(func() {
-		file_raftcmdpb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_raftcmdpb_proto_rawDesc), len(file_raftcmdpb_proto_rawDesc)))
+func file_raft_cmd_proto_rawDescGZIP() []byte {
+	file_raft_cmd_proto_rawDescOnce.Do(func() {
+		file_raft_cmd_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_raft_cmd_proto_rawDesc), len(file_raft_cmd_proto_rawDesc)))
 	})
-	return file_raftcmdpb_proto_rawDescData
+	return file_raft_cmd_proto_rawDescData
 }
 
-var file_raftcmdpb_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_raftcmdpb_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
-var file_raftcmdpb_proto_goTypes = []any{
-	(CmdType)(0),                   // 0: pb.CmdType
-	(AdminCommand_Type)(0),         // 1: pb.AdminCommand.Type
-	(*SplitCommand)(nil),           // 2: pb.SplitCommand
-	(*MergeCommand)(nil),           // 3: pb.MergeCommand
-	(*AdminCommand)(nil),           // 4: pb.AdminCommand
-	(*CmdHeader)(nil),              // 5: pb.CmdHeader
-	(*Request)(nil),                // 6: pb.Request
-	(*Response)(nil),               // 7: pb.Response
-	(*RaftCmdRequest)(nil),         // 8: pb.RaftCmdRequest
-	(*RaftCmdResponse)(nil),        // 9: pb.RaftCmdResponse
-	(*RegionMeta)(nil),             // 10: pb.RegionMeta
-	(*RegionEpoch)(nil),            // 11: pb.RegionEpoch
-	(ReadConsistency)(0),           // 12: pb.ReadConsistency
-	(ReadPreference)(0),            // 13: pb.ReadPreference
-	(*GetRequest)(nil),             // 14: pb.GetRequest
-	(*ScanRequest)(nil),            // 15: pb.ScanRequest
-	(*PrewriteRequest)(nil),        // 16: pb.PrewriteRequest
-	(*CommitRequest)(nil),          // 17: pb.CommitRequest
-	(*BatchRollbackRequest)(nil),   // 18: pb.BatchRollbackRequest
-	(*ResolveLockRequest)(nil),     // 19: pb.ResolveLockRequest
-	(*CheckTxnStatusRequest)(nil),  // 20: pb.CheckTxnStatusRequest
-	(*GetResponse)(nil),            // 21: pb.GetResponse
-	(*ScanResponse)(nil),           // 22: pb.ScanResponse
-	(*PrewriteResponse)(nil),       // 23: pb.PrewriteResponse
-	(*CommitResponse)(nil),         // 24: pb.CommitResponse
-	(*BatchRollbackResponse)(nil),  // 25: pb.BatchRollbackResponse
-	(*ResolveLockResponse)(nil),    // 26: pb.ResolveLockResponse
-	(*CheckTxnStatusResponse)(nil), // 27: pb.CheckTxnStatusResponse
-	(*RegionError)(nil),            // 28: pb.RegionError
+var file_raft_cmd_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_raft_cmd_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_raft_cmd_proto_goTypes = []any{
+	(CmdType)(0),                      // 0: nokv.raft.v1.CmdType
+	(AdminCommand_Type)(0),            // 1: nokv.raft.v1.AdminCommand.Type
+	(*SplitCommand)(nil),              // 2: nokv.raft.v1.SplitCommand
+	(*MergeCommand)(nil),              // 3: nokv.raft.v1.MergeCommand
+	(*AdminCommand)(nil),              // 4: nokv.raft.v1.AdminCommand
+	(*CmdHeader)(nil),                 // 5: nokv.raft.v1.CmdHeader
+	(*Request)(nil),                   // 6: nokv.raft.v1.Request
+	(*Response)(nil),                  // 7: nokv.raft.v1.Response
+	(*RaftCmdRequest)(nil),            // 8: nokv.raft.v1.RaftCmdRequest
+	(*RaftCmdResponse)(nil),           // 9: nokv.raft.v1.RaftCmdResponse
+	(*legacy.RegionMeta)(nil),         // 10: nokv.meta.legacy.v1.RegionMeta
+	(*legacy.RegionEpoch)(nil),        // 11: nokv.meta.legacy.v1.RegionEpoch
+	(kv.ReadConsistency)(0),           // 12: nokv.kv.v1.ReadConsistency
+	(kv.ReadPreference)(0),            // 13: nokv.kv.v1.ReadPreference
+	(*kv.GetRequest)(nil),             // 14: nokv.kv.v1.GetRequest
+	(*kv.ScanRequest)(nil),            // 15: nokv.kv.v1.ScanRequest
+	(*kv.PrewriteRequest)(nil),        // 16: nokv.kv.v1.PrewriteRequest
+	(*kv.CommitRequest)(nil),          // 17: nokv.kv.v1.CommitRequest
+	(*kv.BatchRollbackRequest)(nil),   // 18: nokv.kv.v1.BatchRollbackRequest
+	(*kv.ResolveLockRequest)(nil),     // 19: nokv.kv.v1.ResolveLockRequest
+	(*kv.CheckTxnStatusRequest)(nil),  // 20: nokv.kv.v1.CheckTxnStatusRequest
+	(*kv.GetResponse)(nil),            // 21: nokv.kv.v1.GetResponse
+	(*kv.ScanResponse)(nil),           // 22: nokv.kv.v1.ScanResponse
+	(*kv.PrewriteResponse)(nil),       // 23: nokv.kv.v1.PrewriteResponse
+	(*kv.CommitResponse)(nil),         // 24: nokv.kv.v1.CommitResponse
+	(*kv.BatchRollbackResponse)(nil),  // 25: nokv.kv.v1.BatchRollbackResponse
+	(*kv.ResolveLockResponse)(nil),    // 26: nokv.kv.v1.ResolveLockResponse
+	(*kv.CheckTxnStatusResponse)(nil), // 27: nokv.kv.v1.CheckTxnStatusResponse
+	(*error1.RegionError)(nil),        // 28: nokv.error.v1.RegionError
 }
-var file_raftcmdpb_proto_depIdxs = []int32{
-	10, // 0: pb.SplitCommand.child:type_name -> pb.RegionMeta
-	1,  // 1: pb.AdminCommand.type:type_name -> pb.AdminCommand.Type
-	2,  // 2: pb.AdminCommand.split:type_name -> pb.SplitCommand
-	3,  // 3: pb.AdminCommand.merge:type_name -> pb.MergeCommand
-	11, // 4: pb.CmdHeader.region_epoch:type_name -> pb.RegionEpoch
-	12, // 5: pb.CmdHeader.read_consistency:type_name -> pb.ReadConsistency
-	13, // 6: pb.CmdHeader.read_preference:type_name -> pb.ReadPreference
-	0,  // 7: pb.Request.cmd_type:type_name -> pb.CmdType
-	14, // 8: pb.Request.get:type_name -> pb.GetRequest
-	15, // 9: pb.Request.scan:type_name -> pb.ScanRequest
-	16, // 10: pb.Request.prewrite:type_name -> pb.PrewriteRequest
-	17, // 11: pb.Request.commit:type_name -> pb.CommitRequest
-	18, // 12: pb.Request.batch_rollback:type_name -> pb.BatchRollbackRequest
-	19, // 13: pb.Request.resolve_lock:type_name -> pb.ResolveLockRequest
-	20, // 14: pb.Request.check_txn_status:type_name -> pb.CheckTxnStatusRequest
-	21, // 15: pb.Response.get:type_name -> pb.GetResponse
-	22, // 16: pb.Response.scan:type_name -> pb.ScanResponse
-	23, // 17: pb.Response.prewrite:type_name -> pb.PrewriteResponse
-	24, // 18: pb.Response.commit:type_name -> pb.CommitResponse
-	25, // 19: pb.Response.batch_rollback:type_name -> pb.BatchRollbackResponse
-	26, // 20: pb.Response.resolve_lock:type_name -> pb.ResolveLockResponse
-	27, // 21: pb.Response.check_txn_status:type_name -> pb.CheckTxnStatusResponse
-	5,  // 22: pb.RaftCmdRequest.header:type_name -> pb.CmdHeader
-	6,  // 23: pb.RaftCmdRequest.requests:type_name -> pb.Request
-	5,  // 24: pb.RaftCmdResponse.header:type_name -> pb.CmdHeader
-	7,  // 25: pb.RaftCmdResponse.responses:type_name -> pb.Response
-	28, // 26: pb.RaftCmdResponse.region_error:type_name -> pb.RegionError
+var file_raft_cmd_proto_depIdxs = []int32{
+	10, // 0: nokv.raft.v1.SplitCommand.child:type_name -> nokv.meta.legacy.v1.RegionMeta
+	1,  // 1: nokv.raft.v1.AdminCommand.type:type_name -> nokv.raft.v1.AdminCommand.Type
+	2,  // 2: nokv.raft.v1.AdminCommand.split:type_name -> nokv.raft.v1.SplitCommand
+	3,  // 3: nokv.raft.v1.AdminCommand.merge:type_name -> nokv.raft.v1.MergeCommand
+	11, // 4: nokv.raft.v1.CmdHeader.region_epoch:type_name -> nokv.meta.legacy.v1.RegionEpoch
+	12, // 5: nokv.raft.v1.CmdHeader.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
+	13, // 6: nokv.raft.v1.CmdHeader.read_preference:type_name -> nokv.kv.v1.ReadPreference
+	0,  // 7: nokv.raft.v1.Request.cmd_type:type_name -> nokv.raft.v1.CmdType
+	14, // 8: nokv.raft.v1.Request.get:type_name -> nokv.kv.v1.GetRequest
+	15, // 9: nokv.raft.v1.Request.scan:type_name -> nokv.kv.v1.ScanRequest
+	16, // 10: nokv.raft.v1.Request.prewrite:type_name -> nokv.kv.v1.PrewriteRequest
+	17, // 11: nokv.raft.v1.Request.commit:type_name -> nokv.kv.v1.CommitRequest
+	18, // 12: nokv.raft.v1.Request.batch_rollback:type_name -> nokv.kv.v1.BatchRollbackRequest
+	19, // 13: nokv.raft.v1.Request.resolve_lock:type_name -> nokv.kv.v1.ResolveLockRequest
+	20, // 14: nokv.raft.v1.Request.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusRequest
+	21, // 15: nokv.raft.v1.Response.get:type_name -> nokv.kv.v1.GetResponse
+	22, // 16: nokv.raft.v1.Response.scan:type_name -> nokv.kv.v1.ScanResponse
+	23, // 17: nokv.raft.v1.Response.prewrite:type_name -> nokv.kv.v1.PrewriteResponse
+	24, // 18: nokv.raft.v1.Response.commit:type_name -> nokv.kv.v1.CommitResponse
+	25, // 19: nokv.raft.v1.Response.batch_rollback:type_name -> nokv.kv.v1.BatchRollbackResponse
+	26, // 20: nokv.raft.v1.Response.resolve_lock:type_name -> nokv.kv.v1.ResolveLockResponse
+	27, // 21: nokv.raft.v1.Response.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusResponse
+	5,  // 22: nokv.raft.v1.RaftCmdRequest.header:type_name -> nokv.raft.v1.CmdHeader
+	6,  // 23: nokv.raft.v1.RaftCmdRequest.requests:type_name -> nokv.raft.v1.Request
+	5,  // 24: nokv.raft.v1.RaftCmdResponse.header:type_name -> nokv.raft.v1.CmdHeader
+	7,  // 25: nokv.raft.v1.RaftCmdResponse.responses:type_name -> nokv.raft.v1.Response
+	28, // 26: nokv.raft.v1.RaftCmdResponse.region_error:type_name -> nokv.error.v1.RegionError
 	27, // [27:27] is the sub-list for method output_type
 	27, // [27:27] is the sub-list for method input_type
 	27, // [27:27] is the sub-list for extension type_name
@@ -1020,15 +1023,12 @@ var file_raftcmdpb_proto_depIdxs = []int32{
 	0,  // [0:27] is the sub-list for field type_name
 }
 
-func init() { file_raftcmdpb_proto_init() }
-func file_raftcmdpb_proto_init() {
-	if File_raftcmdpb_proto != nil {
+func init() { file_raft_cmd_proto_init() }
+func file_raft_cmd_proto_init() {
+	if File_raft_cmd_proto != nil {
 		return
 	}
-	file_errorpb_proto_init()
-	file_kvrpcpb_proto_init()
-	file_metapb_proto_init()
-	file_raftcmdpb_proto_msgTypes[4].OneofWrappers = []any{
+	file_raft_cmd_proto_msgTypes[4].OneofWrappers = []any{
 		(*Request_Get)(nil),
 		(*Request_Scan)(nil),
 		(*Request_Prewrite)(nil),
@@ -1037,7 +1037,7 @@ func file_raftcmdpb_proto_init() {
 		(*Request_ResolveLock)(nil),
 		(*Request_CheckTxnStatus)(nil),
 	}
-	file_raftcmdpb_proto_msgTypes[5].OneofWrappers = []any{
+	file_raft_cmd_proto_msgTypes[5].OneofWrappers = []any{
 		(*Response_Get)(nil),
 		(*Response_Scan)(nil),
 		(*Response_Prewrite)(nil),
@@ -1050,18 +1050,18 @@ func file_raftcmdpb_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raftcmdpb_proto_rawDesc), len(file_raftcmdpb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raft_cmd_proto_rawDesc), len(file_raft_cmd_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_raftcmdpb_proto_goTypes,
-		DependencyIndexes: file_raftcmdpb_proto_depIdxs,
-		EnumInfos:         file_raftcmdpb_proto_enumTypes,
-		MessageInfos:      file_raftcmdpb_proto_msgTypes,
+		GoTypes:           file_raft_cmd_proto_goTypes,
+		DependencyIndexes: file_raft_cmd_proto_depIdxs,
+		EnumInfos:         file_raft_cmd_proto_enumTypes,
+		MessageInfos:      file_raft_cmd_proto_msgTypes,
 	}.Build()
-	File_raftcmdpb_proto = out.File
-	file_raftcmdpb_proto_goTypes = nil
-	file_raftcmdpb_proto_depIdxs = nil
+	File_raft_cmd_proto = out.File
+	file_raft_cmd_proto_goTypes = nil
+	file_raft_cmd_proto_depIdxs = nil
 }

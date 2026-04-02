@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"io"
 
-	"github.com/feichai0017/NoKV/pb"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
@@ -21,7 +22,7 @@ const snapshotStreamChunkSize = 64 << 10
 // Service exposes raftstore admin operations needed for migration and
 // membership management.
 type Service struct {
-	pb.UnimplementedRaftAdminServer
+	adminpb.UnimplementedRaftAdminServer
 	store    *store.Store
 	snapshot snapshotpkg.SnapshotStore
 }
@@ -38,7 +39,7 @@ func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.SnapshotStore)
 }
 
 // AddPeer issues one raft configuration change on the region leader.
-func (s *Service) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error) {
+func (s *Service) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -51,13 +52,13 @@ func (s *Service) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddP
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
-		return &pb.AddPeerResponse{}, nil
+		return &adminpb.AddPeerResponse{}, nil
 	}
-	return &pb.AddPeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.AddPeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
 // RemovePeer issues one raft configuration change removing the specified peer.
-func (s *Service) RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error) {
+func (s *Service) RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -70,13 +71,13 @@ func (s *Service) RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*p
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
-		return &pb.RemovePeerResponse{}, nil
+		return &adminpb.RemovePeerResponse{}, nil
 	}
-	return &pb.RemovePeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.RemovePeerResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
 // TransferLeader requests leader transfer on the specified region.
-func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
+func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -89,14 +90,14 @@ func (s *Service) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequ
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
-		return &pb.TransferLeaderResponse{}, nil
+		return &adminpb.TransferLeaderResponse{}, nil
 	}
-	return &pb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
+	return &adminpb.TransferLeaderResponse{Region: regionMetaToPB(runtime.Meta)}, nil
 }
 
 // ExportRegionSnapshot returns the current region snapshot from the leader,
 // encoded as one migration-only SST snapshot payload.
-func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegionSnapshotRequest) (*pb.ExportRegionSnapshotResponse, error) {
+func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportRegionSnapshotRequest) (*adminpb.ExportRegionSnapshotResponse, error) {
 	_ = ctx
 	region, header, reader, waitExport, err := s.startExportRegionSnapshot(req.GetRegionId())
 	if err != nil {
@@ -119,12 +120,12 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *pb.ExportRegion
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
 	}
-	return &pb.ExportRegionSnapshotResponse{Snapshot: data, Region: regionMetaToPB(region)}, nil
+	return &adminpb.ExportRegionSnapshotResponse{Snapshot: data, Region: regionMetaToPB(region)}, nil
 }
 
 // ExportRegionSnapshotStream streams one migration-only SST snapshot payload.
 // The first message carries the raft snapshot header and region metadata.
-func (s *Service) ExportRegionSnapshotStream(req *pb.ExportRegionSnapshotStreamRequest, stream pb.RaftAdmin_ExportRegionSnapshotStreamServer) error {
+func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotStreamRequest, stream adminpb.RaftAdmin_ExportRegionSnapshotStreamServer) error {
 	region, header, reader, waitExport, err := s.startExportRegionSnapshot(req.GetRegionId())
 	if err != nil {
 		return err
@@ -135,7 +136,7 @@ func (s *Service) ExportRegionSnapshotStream(req *pb.ExportRegionSnapshotStreamR
 	for {
 		n, readErr := reader.Read(buf)
 		if n > 0 || first {
-			resp := &pb.ExportRegionSnapshotStreamResponse{Chunk: append([]byte(nil), buf[:n]...)}
+			resp := &adminpb.ExportRegionSnapshotStreamResponse{Chunk: append([]byte(nil), buf[:n]...)}
 			if first {
 				resp.SnapshotHeader = header
 				resp.Region = regionMetaToPB(region)
@@ -160,7 +161,7 @@ func (s *Service) ExportRegionSnapshotStream(req *pb.ExportRegionSnapshotStreamR
 
 // ImportRegionSnapshot imports one leader-exported region snapshot on the local
 // store. The local peer is bootstrapped on demand from the payload.
-func (s *Service) ImportRegionSnapshot(ctx context.Context, req *pb.ImportRegionSnapshotRequest) (*pb.ImportRegionSnapshotResponse, error) {
+func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportRegionSnapshotRequest) (*adminpb.ImportRegionSnapshotResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -176,13 +177,13 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *pb.ImportRegion
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ImportRegionSnapshotResponse{Region: regionMetaToPB(meta)}, nil
+	return &adminpb.ImportRegionSnapshotResponse{Region: regionMetaToPB(meta)}, nil
 }
 
 // ImportRegionSnapshotStream imports one leader-exported region snapshot from a
 // streamed payload. The first chunk must carry the raft snapshot header and
 // region metadata.
-func (s *Service) ImportRegionSnapshotStream(stream pb.RaftAdmin_ImportRegionSnapshotStreamServer) error {
+func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegionSnapshotStreamServer) error {
 	if s == nil || s.store == nil {
 		return status.Error(codes.FailedPrecondition, "raft admin service not configured")
 	}
@@ -270,11 +271,11 @@ func (s *Service) ImportRegionSnapshotStream(stream pb.RaftAdmin_ImportRegionSna
 	if outcome.err != nil {
 		return outcome.err
 	}
-	return stream.SendAndClose(&pb.ImportRegionSnapshotResponse{Region: regionMetaToPB(outcome.meta)})
+	return stream.SendAndClose(&adminpb.ImportRegionSnapshotResponse{Region: regionMetaToPB(outcome.meta)})
 }
 
 // RegionRuntimeStatus returns store-local runtime information for one region.
-func (s *Service) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
+func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
 	_ = ctx
 	if s == nil || s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
@@ -284,9 +285,9 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntime
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
-		return &pb.RegionRuntimeStatusResponse{}, nil
+		return &adminpb.RegionRuntimeStatusResponse{}, nil
 	}
-	return &pb.RegionRuntimeStatusResponse{
+	return &adminpb.RegionRuntimeStatusResponse{
 		Known:        true,
 		Hosted:       runtime.Hosted,
 		LocalPeerId:  runtime.LocalPeerID,
@@ -298,12 +299,12 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntime
 	}, nil
 }
 
-func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
-	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
+func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionMeta {
+	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
-		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
+		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
 	}
-	return &pb.RegionMeta{
+	return &metapb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),
 		EndKey:           append([]byte(nil), meta.EndKey...),
@@ -313,7 +314,7 @@ func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
 	}
 }
 
-func regionMetaFromPB(meta *pb.RegionMeta) (localmeta.RegionMeta, error) {
+func regionMetaFromPB(meta *metapb.RegionMeta) (localmeta.RegionMeta, error) {
 	if meta == nil {
 		return localmeta.RegionMeta{}, fmt.Errorf("region metadata is nil")
 	}
