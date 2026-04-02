@@ -1,9 +1,9 @@
 // Use scripts/gen.sh to generate .pb.go files.
 syntax = "proto3";
 
-package pb;
+package nokv.meta.v1;
 
-option go_package = "github.com/feichai0017/NoKV/pb";
+option go_package = "github.com/feichai0017/NoKV/pb/meta;metapb";
 
 enum AllocatorKind {
   ALLOCATOR_KIND_UNSPECIFIED = 0;

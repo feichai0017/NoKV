@@ -4,11 +4,12 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: descriptorpb.proto
+// source: raftstore/descriptor.proto
 
-package pb
+package raftstorepb
 
 import (
+	pb "github.com/feichai0017/NoKV/pb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -62,11 +63,11 @@ func (x RegionReplicaState) String() string {
 }
 
 func (RegionReplicaState) Descriptor() protoreflect.EnumDescriptor {
-	return file_descriptorpb_proto_enumTypes[0].Descriptor()
+	return file_raftstore_descriptor_proto_enumTypes[0].Descriptor()
 }
 
 func (RegionReplicaState) Type() protoreflect.EnumType {
-	return &file_descriptorpb_proto_enumTypes[0]
+	return &file_raftstore_descriptor_proto_enumTypes[0]
 }
 
 func (x RegionReplicaState) Number() protoreflect.EnumNumber {
@@ -75,7 +76,7 @@ func (x RegionReplicaState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RegionReplicaState.Descriptor instead.
 func (RegionReplicaState) EnumDescriptor() ([]byte, []int) {
-	return file_descriptorpb_proto_rawDescGZIP(), []int{0}
+	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{0}
 }
 
 type DescriptorLineageKind int32
@@ -111,11 +112,11 @@ func (x DescriptorLineageKind) String() string {
 }
 
 func (DescriptorLineageKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_descriptorpb_proto_enumTypes[1].Descriptor()
+	return file_raftstore_descriptor_proto_enumTypes[1].Descriptor()
 }
 
 func (DescriptorLineageKind) Type() protoreflect.EnumType {
-	return &file_descriptorpb_proto_enumTypes[1]
+	return &file_raftstore_descriptor_proto_enumTypes[1]
 }
 
 func (x DescriptorLineageKind) Number() protoreflect.EnumNumber {
@@ -124,22 +125,22 @@ func (x DescriptorLineageKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DescriptorLineageKind.Descriptor instead.
 func (DescriptorLineageKind) EnumDescriptor() ([]byte, []int) {
-	return file_descriptorpb_proto_rawDescGZIP(), []int{1}
+	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{1}
 }
 
 type DescriptorLineageRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	Epoch         *RegionEpoch           `protobuf:"bytes,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch         *pb.RegionEpoch        `protobuf:"bytes,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	Hash          []byte                 `protobuf:"bytes,3,opt,name=hash,proto3" json:"hash,omitempty"`
-	Kind          DescriptorLineageKind  `protobuf:"varint,4,opt,name=kind,proto3,enum=pb.DescriptorLineageKind" json:"kind,omitempty"`
+	Kind          DescriptorLineageKind  `protobuf:"varint,4,opt,name=kind,proto3,enum=nokv.raftstore.v1.DescriptorLineageKind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DescriptorLineageRef) Reset() {
 	*x = DescriptorLineageRef{}
-	mi := &file_descriptorpb_proto_msgTypes[0]
+	mi := &file_raftstore_descriptor_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -151,7 +152,7 @@ func (x *DescriptorLineageRef) String() string {
 func (*DescriptorLineageRef) ProtoMessage() {}
 
 func (x *DescriptorLineageRef) ProtoReflect() protoreflect.Message {
-	mi := &file_descriptorpb_proto_msgTypes[0]
+	mi := &file_raftstore_descriptor_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -164,7 +165,7 @@ func (x *DescriptorLineageRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DescriptorLineageRef.ProtoReflect.Descriptor instead.
 func (*DescriptorLineageRef) Descriptor() ([]byte, []int) {
-	return file_descriptorpb_proto_rawDescGZIP(), []int{0}
+	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *DescriptorLineageRef) GetRegionId() uint64 {
@@ -174,7 +175,7 @@ func (x *DescriptorLineageRef) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *DescriptorLineageRef) GetEpoch() *RegionEpoch {
+func (x *DescriptorLineageRef) GetEpoch() *pb.RegionEpoch {
 	if x != nil {
 		return x.Epoch
 	}
@@ -200,9 +201,9 @@ type RegionDescriptor struct {
 	RegionId      uint64                  `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	StartKey      []byte                  `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
 	EndKey        []byte                  `protobuf:"bytes,3,opt,name=end_key,json=endKey,proto3" json:"end_key,omitempty"`
-	Epoch         *RegionEpoch            `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	Peers         []*RegionPeer           `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
-	State         RegionReplicaState      `protobuf:"varint,6,opt,name=state,proto3,enum=pb.RegionReplicaState" json:"state,omitempty"`
+	Epoch         *pb.RegionEpoch         `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Peers         []*pb.RegionPeer        `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
+	State         RegionReplicaState      `protobuf:"varint,6,opt,name=state,proto3,enum=nokv.raftstore.v1.RegionReplicaState" json:"state,omitempty"`
 	Lineage       []*DescriptorLineageRef `protobuf:"bytes,7,rep,name=lineage,proto3" json:"lineage,omitempty"`
 	RootEpoch     uint64                  `protobuf:"varint,8,opt,name=root_epoch,json=rootEpoch,proto3" json:"root_epoch,omitempty"`
 	Hash          []byte                  `protobuf:"bytes,9,opt,name=hash,proto3" json:"hash,omitempty"`
@@ -212,7 +213,7 @@ type RegionDescriptor struct {
 
 func (x *RegionDescriptor) Reset() {
 	*x = RegionDescriptor{}
-	mi := &file_descriptorpb_proto_msgTypes[1]
+	mi := &file_raftstore_descriptor_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -224,7 +225,7 @@ func (x *RegionDescriptor) String() string {
 func (*RegionDescriptor) ProtoMessage() {}
 
 func (x *RegionDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_descriptorpb_proto_msgTypes[1]
+	mi := &file_raftstore_descriptor_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -237,7 +238,7 @@ func (x *RegionDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionDescriptor.ProtoReflect.Descriptor instead.
 func (*RegionDescriptor) Descriptor() ([]byte, []int) {
-	return file_descriptorpb_proto_rawDescGZIP(), []int{1}
+	return file_raftstore_descriptor_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RegionDescriptor) GetRegionId() uint64 {
@@ -261,14 +262,14 @@ func (x *RegionDescriptor) GetEndKey() []byte {
 	return nil
 }
 
-func (x *RegionDescriptor) GetEpoch() *RegionEpoch {
+func (x *RegionDescriptor) GetEpoch() *pb.RegionEpoch {
 	if x != nil {
 		return x.Epoch
 	}
 	return nil
 }
 
-func (x *RegionDescriptor) GetPeers() []*RegionPeer {
+func (x *RegionDescriptor) GetPeers() []*pb.RegionPeer {
 	if x != nil {
 		return x.Peers
 	}
@@ -303,24 +304,24 @@ func (x *RegionDescriptor) GetHash() []byte {
 	return nil
 }
 
-var File_descriptorpb_proto protoreflect.FileDescriptor
+var File_raftstore_descriptor_proto protoreflect.FileDescriptor
 
-const file_descriptorpb_proto_rawDesc = "" +
+const file_raftstore_descriptor_proto_rawDesc = "" +
 	"\n" +
-	"\x12descriptorpb.proto\x12\x02pb\x1a\fmetapb.proto\"\x9d\x01\n" +
+	"\x1araftstore/descriptor.proto\x12\x11nokv.raftstore.v1\x1a\fmetapb.proto\"\xac\x01\n" +
 	"\x14DescriptorLineageRef\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12%\n" +
 	"\x05epoch\x18\x02 \x01(\v2\x0f.pb.RegionEpochR\x05epoch\x12\x12\n" +
-	"\x04hash\x18\x03 \x01(\fR\x04hash\x12-\n" +
-	"\x04kind\x18\x04 \x01(\x0e2\x19.pb.DescriptorLineageKindR\x04kind\"\xc7\x02\n" +
+	"\x04hash\x18\x03 \x01(\fR\x04hash\x12<\n" +
+	"\x04kind\x18\x04 \x01(\x0e2(.nokv.raftstore.v1.DescriptorLineageKindR\x04kind\"\xe5\x02\n" +
 	"\x10RegionDescriptor\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x1b\n" +
 	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x17\n" +
 	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12%\n" +
 	"\x05epoch\x18\x04 \x01(\v2\x0f.pb.RegionEpochR\x05epoch\x12$\n" +
-	"\x05peers\x18\x05 \x03(\v2\x0e.pb.RegionPeerR\x05peers\x12,\n" +
-	"\x05state\x18\x06 \x01(\x0e2\x16.pb.RegionReplicaStateR\x05state\x122\n" +
-	"\alineage\x18\a \x03(\v2\x18.pb.DescriptorLineageRefR\alineage\x12\x1d\n" +
+	"\x05peers\x18\x05 \x03(\v2\x0e.pb.RegionPeerR\x05peers\x12;\n" +
+	"\x05state\x18\x06 \x01(\x0e2%.nokv.raftstore.v1.RegionReplicaStateR\x05state\x12A\n" +
+	"\alineage\x18\a \x03(\v2'.nokv.raftstore.v1.DescriptorLineageRefR\alineage\x12\x1d\n" +
 	"\n" +
 	"root_epoch\x18\b \x01(\x04R\trootEpoch\x12\x12\n" +
 	"\x04hash\x18\t \x01(\fR\x04hash*\xc1\x01\n" +
@@ -333,37 +334,37 @@ const file_descriptorpb_proto_rawDesc = "" +
 	"\x15DescriptorLineageKind\x12'\n" +
 	"#DESCRIPTOR_LINEAGE_KIND_UNSPECIFIED\x10\x00\x12(\n" +
 	"$DESCRIPTOR_LINEAGE_KIND_SPLIT_PARENT\x10\x01\x12(\n" +
-	"$DESCRIPTOR_LINEAGE_KIND_MERGE_SOURCE\x10\x02B Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"$DESCRIPTOR_LINEAGE_KIND_MERGE_SOURCE\x10\x02B6Z4github.com/feichai0017/NoKV/pb/raftstore;raftstorepbb\x06proto3"
 
 var (
-	file_descriptorpb_proto_rawDescOnce sync.Once
-	file_descriptorpb_proto_rawDescData []byte
+	file_raftstore_descriptor_proto_rawDescOnce sync.Once
+	file_raftstore_descriptor_proto_rawDescData []byte
 )
 
-func file_descriptorpb_proto_rawDescGZIP() []byte {
-	file_descriptorpb_proto_rawDescOnce.Do(func() {
-		file_descriptorpb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_descriptorpb_proto_rawDesc), len(file_descriptorpb_proto_rawDesc)))
+func file_raftstore_descriptor_proto_rawDescGZIP() []byte {
+	file_raftstore_descriptor_proto_rawDescOnce.Do(func() {
+		file_raftstore_descriptor_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_raftstore_descriptor_proto_rawDesc), len(file_raftstore_descriptor_proto_rawDesc)))
 	})
-	return file_descriptorpb_proto_rawDescData
+	return file_raftstore_descriptor_proto_rawDescData
 }
 
-var file_descriptorpb_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_descriptorpb_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_descriptorpb_proto_goTypes = []any{
-	(RegionReplicaState)(0),      // 0: pb.RegionReplicaState
-	(DescriptorLineageKind)(0),   // 1: pb.DescriptorLineageKind
-	(*DescriptorLineageRef)(nil), // 2: pb.DescriptorLineageRef
-	(*RegionDescriptor)(nil),     // 3: pb.RegionDescriptor
-	(*RegionEpoch)(nil),          // 4: pb.RegionEpoch
-	(*RegionPeer)(nil),           // 5: pb.RegionPeer
+var file_raftstore_descriptor_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_raftstore_descriptor_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_raftstore_descriptor_proto_goTypes = []any{
+	(RegionReplicaState)(0),      // 0: nokv.raftstore.v1.RegionReplicaState
+	(DescriptorLineageKind)(0),   // 1: nokv.raftstore.v1.DescriptorLineageKind
+	(*DescriptorLineageRef)(nil), // 2: nokv.raftstore.v1.DescriptorLineageRef
+	(*RegionDescriptor)(nil),     // 3: nokv.raftstore.v1.RegionDescriptor
+	(*pb.RegionEpoch)(nil),       // 4: pb.RegionEpoch
+	(*pb.RegionPeer)(nil),        // 5: pb.RegionPeer
 }
-var file_descriptorpb_proto_depIdxs = []int32{
-	4, // 0: pb.DescriptorLineageRef.epoch:type_name -> pb.RegionEpoch
-	1, // 1: pb.DescriptorLineageRef.kind:type_name -> pb.DescriptorLineageKind
-	4, // 2: pb.RegionDescriptor.epoch:type_name -> pb.RegionEpoch
-	5, // 3: pb.RegionDescriptor.peers:type_name -> pb.RegionPeer
-	0, // 4: pb.RegionDescriptor.state:type_name -> pb.RegionReplicaState
-	2, // 5: pb.RegionDescriptor.lineage:type_name -> pb.DescriptorLineageRef
+var file_raftstore_descriptor_proto_depIdxs = []int32{
+	4, // 0: nokv.raftstore.v1.DescriptorLineageRef.epoch:type_name -> pb.RegionEpoch
+	1, // 1: nokv.raftstore.v1.DescriptorLineageRef.kind:type_name -> nokv.raftstore.v1.DescriptorLineageKind
+	4, // 2: nokv.raftstore.v1.RegionDescriptor.epoch:type_name -> pb.RegionEpoch
+	5, // 3: nokv.raftstore.v1.RegionDescriptor.peers:type_name -> pb.RegionPeer
+	0, // 4: nokv.raftstore.v1.RegionDescriptor.state:type_name -> nokv.raftstore.v1.RegionReplicaState
+	2, // 5: nokv.raftstore.v1.RegionDescriptor.lineage:type_name -> nokv.raftstore.v1.DescriptorLineageRef
 	6, // [6:6] is the sub-list for method output_type
 	6, // [6:6] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
@@ -371,28 +372,27 @@ var file_descriptorpb_proto_depIdxs = []int32{
 	0, // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_descriptorpb_proto_init() }
-func file_descriptorpb_proto_init() {
-	if File_descriptorpb_proto != nil {
+func init() { file_raftstore_descriptor_proto_init() }
+func file_raftstore_descriptor_proto_init() {
+	if File_raftstore_descriptor_proto != nil {
 		return
 	}
-	file_metapb_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_descriptorpb_proto_rawDesc), len(file_descriptorpb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raftstore_descriptor_proto_rawDesc), len(file_raftstore_descriptor_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_descriptorpb_proto_goTypes,
-		DependencyIndexes: file_descriptorpb_proto_depIdxs,
-		EnumInfos:         file_descriptorpb_proto_enumTypes,
-		MessageInfos:      file_descriptorpb_proto_msgTypes,
+		GoTypes:           file_raftstore_descriptor_proto_goTypes,
+		DependencyIndexes: file_raftstore_descriptor_proto_depIdxs,
+		EnumInfos:         file_raftstore_descriptor_proto_enumTypes,
+		MessageInfos:      file_raftstore_descriptor_proto_msgTypes,
 	}.Build()
-	File_descriptorpb_proto = out.File
-	file_descriptorpb_proto_goTypes = nil
-	file_descriptorpb_proto_depIdxs = nil
+	File_raftstore_descriptor_proto = out.File
+	file_raftstore_descriptor_proto_goTypes = nil
+	file_raftstore_descriptor_proto_depIdxs = nil
 }
