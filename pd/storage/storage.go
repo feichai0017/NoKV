@@ -11,16 +11,23 @@ type AllocatorState struct {
 	TSCurrent uint64
 }
 
-// Snapshot contains persisted PD metadata loaded at startup.
+// Snapshot is the reconstructed PD bootstrap catalog derived from durable
+// metadata-root truth.
 type Snapshot struct {
 	Regions   map[uint64]localmeta.RegionMeta
 	Allocator AllocatorState
 }
 
-// Store defines PD persistence behavior.
-type Store interface {
-	// Load returns the persisted snapshot.
+// Loader reconstructs a bootstrap snapshot from durable metadata truth.
+type Loader interface {
+	// Load returns the reconstructed snapshot.
 	Load() (Snapshot, error)
+	// Close releases storage resources.
+	Close() error
+}
+
+// Sink persists control-plane mutations into durable metadata truth.
+type Sink interface {
 	// SaveRegion persists one region metadata update.
 	SaveRegion(meta localmeta.RegionMeta) error
 	// DeleteRegion persists one region metadata delete.
@@ -29,6 +36,12 @@ type Store interface {
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
 	// Close releases storage resources.
 	Close() error
+}
+
+// Store defines rooted PD persistence behavior.
+type Store interface {
+	Loader
+	Sink
 }
 
 // NoopStore is an in-memory/no-op storage implementation.
