@@ -4,8 +4,8 @@ import (
 	"bytes"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
 )
 
@@ -191,6 +191,12 @@ func cloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor
 }
 
 func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) rootpkg.Event {
+	if split, ok := classifySplitEventFromLineage(next, current); ok {
+		return split
+	}
+	if merge, ok := classifyMergeEventFromLineage(prev, existed, next, current); ok {
+		return merge
+	}
 	if split, ok := classifySplitEvent(prev, existed, next, current); ok {
 		return split
 	}
@@ -209,6 +215,41 @@ func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descr
 	default:
 		return rootpkg.RegionDescriptorPublished(next)
 	}
+}
+
+func classifySplitEventFromLineage(next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
+	for _, ref := range next.Lineage {
+		if ref.Kind != descriptor.LineageKindSplitParent || ref.RegionID == 0 || ref.RegionID == next.RegionID {
+			continue
+		}
+		parent, ok := current[ref.RegionID]
+		if !ok {
+			return rootpkg.Event{}, false
+		}
+		return rootpkg.RegionSplitCommitted(ref.RegionID, next.StartKey, parent.Clone(), next), true
+	}
+	return rootpkg.Event{}, false
+}
+
+func classifyMergeEventFromLineage(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
+	if !existed {
+		return rootpkg.Event{}, false
+	}
+	for _, ref := range next.Lineage {
+		if ref.Kind != descriptor.LineageKindMergeSource || ref.RegionID == 0 || ref.RegionID == next.RegionID {
+			continue
+		}
+		source, ok := current[ref.RegionID]
+		if !ok {
+			return rootpkg.Event{}, false
+		}
+		leftID, rightID := next.RegionID, source.RegionID
+		if bytes.Compare(source.StartKey, next.StartKey) < 0 {
+			leftID, rightID = source.RegionID, next.RegionID
+		}
+		return rootpkg.RegionMerged(leftID, rightID, next), true
+	}
+	return rootpkg.Event{}, false
 }
 
 func classifySplitEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {
@@ -289,9 +330,9 @@ func classifyMergeEvent(prev descriptor.Descriptor, existed bool, next descripto
 	return rootpkg.RegionMerged(leftID, rightID, next), true
 }
 
-func peerDelta(prev, next []localmeta.PeerMeta) (added, removed []localmeta.PeerMeta) {
-	prevSet := make(map[uint64]localmeta.PeerMeta, len(prev))
-	nextSet := make(map[uint64]localmeta.PeerMeta, len(next))
+func peerDelta(prev, next []metaregion.Peer) (added, removed []metaregion.Peer) {
+	prevSet := make(map[uint64]metaregion.Peer, len(prev))
+	nextSet := make(map[uint64]metaregion.Peer, len(next))
 	for _, peer := range prev {
 		prevSet[peer.PeerID] = peer
 	}

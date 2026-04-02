@@ -8,7 +8,7 @@ import (
 	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -28,7 +28,7 @@ const (
 type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
-	meta     localmeta.RegionMeta
+	desc     descriptor.Descriptor
 	seq      uint64
 }
 
@@ -177,8 +177,8 @@ func (s *Store) sendHeartbeats() {
 		return
 	}
 	ctx := s.runtimeContext()
-	for _, meta := range s.RegionMetas() {
-		s.schedulerClient().PublishRegion(ctx, meta)
+	for _, desc := range s.schedulerDescriptors() {
+		s.schedulerClient().PublishRegionDescriptor(ctx, desc)
 	}
 	if s.storeID == 0 {
 		return
@@ -194,11 +194,11 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 	switch ev.kind {
 	case regionEventApply:
-		if ev.meta.ID == 0 {
+		if ev.desc.RegionID == 0 {
 			return
 		}
-		ev.regionID = ev.meta.ID
-		ev.meta = localmeta.CloneRegionMeta(ev.meta)
+		ev.regionID = ev.desc.RegionID
+		ev.desc = ev.desc.Clone()
 	case regionEventRemove:
 		if ev.regionID == 0 {
 			return
@@ -207,8 +207,17 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 		return
 	}
 	s.sched.mu.Lock()
+	if s.sched.descriptors == nil {
+		s.sched.descriptors = make(map[uint64]descriptor.Descriptor)
+	}
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
+	}
+	switch ev.kind {
+	case regionEventApply:
+		s.sched.descriptors[ev.regionID] = ev.desc.Clone()
+	case regionEventRemove:
+		delete(s.sched.descriptors, ev.regionID)
 	}
 	s.sched.nextRegionSeq++
 	ev.seq = s.sched.nextRegionSeq
@@ -222,6 +231,36 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	case signal <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Store) schedulerDescriptors() []descriptor.Descriptor {
+	if s == nil {
+		return nil
+	}
+	metas := s.RegionMetas()
+	if s.sched == nil {
+		out := make([]descriptor.Descriptor, 0, len(metas))
+		for _, meta := range metas {
+			out = append(out, descriptor.FromRegionMeta(meta, 0))
+		}
+		return out
+	}
+	s.sched.mu.Lock()
+	cached := make(map[uint64]descriptor.Descriptor, len(s.sched.descriptors))
+	for regionID, desc := range s.sched.descriptors {
+		cached[regionID] = desc.Clone()
+	}
+	s.sched.mu.Unlock()
+
+	out := make([]descriptor.Descriptor, 0, len(metas))
+	for _, meta := range metas {
+		if desc, ok := cached[meta.ID]; ok {
+			out = append(out, desc)
+			continue
+		}
+		out = append(out, descriptor.FromRegionMeta(meta, 0))
+	}
+	return out
 }
 
 func (s *Store) flushRegionUpdates() {
@@ -245,7 +284,7 @@ func (s *Store) flushRegionUpdates() {
 	for _, ev := range pending {
 		switch ev.kind {
 		case regionEventApply:
-			s.schedulerClient().PublishRegion(ctx, ev.meta)
+			s.schedulerClient().PublishRegionDescriptor(ctx, ev.desc)
 		case regionEventRemove:
 			s.schedulerClient().RemoveRegion(ctx, ev.regionID)
 		}

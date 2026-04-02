@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/stretchr/testify/require"
@@ -43,15 +44,15 @@ func TestStoreSchedulerReceivesRegionHeartbeats(t *testing.T) {
 		snapshot = sink.RegionSnapshot()
 		return len(snapshot) == 1
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, uint64(42), snapshot[0].Meta.ID)
+	require.Equal(t, uint64(42), snapshot[0].Descriptor.RegionID)
 	require.False(t, snapshot[0].LastHeartbeat.IsZero())
 
 	require.NoError(t, rs.applyRegionState(42, localmeta.RegionStateRemoving))
 	require.Eventually(t, func() bool {
 		snapshot = sink.RegionSnapshot()
-		return len(snapshot) == 1 && snapshot[0].Meta.State == localmeta.RegionStateRemoving
+		return len(snapshot) == 1 && snapshot[0].Descriptor.State == localmeta.RegionStateRemoving
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, localmeta.RegionStateRemoving, snapshot[0].Meta.State)
+	require.Equal(t, localmeta.RegionStateRemoving, snapshot[0].Descriptor.State)
 
 	require.NoError(t, rs.applyRegionRemoval(42))
 	require.Eventually(t, func() bool {
@@ -92,7 +93,7 @@ func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
 	require.Less(t, elapsed, sink.publishDelay/2, "region apply path should not block on slow PD publish")
 	require.Eventually(t, func() bool {
 		snapshot := sink.RegionSnapshot()
-		return len(snapshot) == 1 && snapshot[0].Meta.ID == 88
+		return len(snapshot) == 1 && snapshot[0].Descriptor.RegionID == 88
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -143,7 +144,7 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 	require.Equal(t, uint64(1), storeSnap[0].LeaderNum)
 	regionSnap := coord.RegionSnapshot()
 	require.NotEmpty(t, regionSnap)
-	require.Equal(t, uint64(77), regionSnap[0].Meta.ID)
+	require.Equal(t, uint64(77), regionSnap[0].Descriptor.RegionID)
 	require.False(t, regionSnap[0].LastHeartbeat.IsZero())
 }
 
@@ -193,6 +194,20 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 	childUpdated, ok := rs.RegionMetaByID(childMeta.ID)
 	require.True(t, ok)
 	require.Equal(t, []byte("m"), childUpdated.StartKey)
+	require.Eventually(t, func() bool {
+		snapshot := sink.RegionSnapshot()
+		if len(snapshot) < 2 {
+			return false
+		}
+		for _, info := range snapshot {
+			if info.Descriptor.RegionID == childMeta.ID {
+				return len(info.Descriptor.Lineage) == 1 &&
+					info.Descriptor.Lineage[0].RegionID == parentMeta.ID &&
+					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindSplitParent
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
 			schedulerEvent{kind: "publish", regionID: parentMeta.ID},
@@ -256,6 +271,17 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 	if peer, exists := rs.Peer(sourceMeta.Peers[0].PeerID); exists {
 		rs.StopPeer(peer.ID())
 	}
+	require.Eventually(t, func() bool {
+		snapshot := sink.RegionSnapshot()
+		for _, info := range snapshot {
+			if info.Descriptor.RegionID == parentMeta.ID {
+				return len(info.Descriptor.Lineage) == 1 &&
+					info.Descriptor.Lineage[0].RegionID == sourceMeta.ID &&
+					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindMergeSource
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return hasSchedulerEventSubsequence(sink.EventHistory(),
 			schedulerEvent{kind: "publish", regionID: parentMeta.ID},

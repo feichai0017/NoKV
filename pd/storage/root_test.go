@@ -205,7 +205,13 @@ func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
 		},
 		State: localmeta.RegionStateRunning,
 	}
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(child, 0)))
+	childDesc := descriptor.FromRegionMeta(child, 0)
+	childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
+		RegionID: 51,
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Kind:     descriptor.LineageKindSplitParent,
+	})
+	require.NoError(t, store.PublishRegionDescriptor(childDesc))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)
@@ -248,7 +254,13 @@ func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
 
 	left.EndKey = []byte("z")
 	left.Epoch.Version = 2
-	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(left, 0)))
+	mergedDesc := descriptor.FromRegionMeta(left, 0)
+	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
+		RegionID: 62,
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Kind:     descriptor.LineageKindMergeSource,
+	})
+	require.NoError(t, store.PublishRegionDescriptor(mergedDesc))
 
 	events, _, err := root.ReadSince(rootpkg.Cursor{})
 	require.NoError(t, err)

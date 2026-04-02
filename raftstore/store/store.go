@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
@@ -45,6 +46,7 @@ type schedulerRuntime struct {
 	mu            sync.Mutex
 	pending       map[operationKey]struct{}
 	lastApply     map[operationKey]time.Time
+	descriptors   map[uint64]descriptor.Descriptor
 	regionUpdates map[uint64]regionEvent
 	nextRegionSeq uint64
 	dropped       uint64
@@ -114,6 +116,7 @@ func NewStore(cfg Config) *Store {
 			burst:         operationBurst,
 			pending:       make(map[operationKey]struct{}),
 			lastApply:     make(map[operationKey]time.Time),
+			descriptors:   make(map[uint64]descriptor.Descriptor),
 			regionUpdates: make(map[uint64]regionEvent),
 		},
 		cmds: &commandRuntime{

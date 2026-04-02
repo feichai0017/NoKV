@@ -1,33 +1,29 @@
 package localmeta
 
-import "maps"
+import (
+	"maps"
 
-// PeerMeta describes a peer replica for a region.
-type PeerMeta struct {
-	StoreID uint64 `json:"store_id"`
-	PeerID  uint64 `json:"peer_id"`
-}
-
-// RegionState enumerates the local lifecycle state of one region replica.
-type RegionState uint8
-
-const (
-	RegionStateNew RegionState = iota
-	RegionStateRunning
-	RegionStateRemoving
-	RegionStateTombstone
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 )
 
-// RegionEpoch tracks metadata versioning for one region.
-type RegionEpoch struct {
-	Version     uint64 `json:"version"`
-	ConfVersion uint64 `json:"conf_version"`
-}
+// Keep the store-local API stable while moving the underlying primitive region
+// types into a neutral metadata package shared by localmeta and descriptor.
+type PeerMeta = metaregion.Peer
+type RegionState = metaregion.ReplicaState
+type RegionEpoch = metaregion.Epoch
 
-// RegionMeta captures region key range and peer membership.
+const (
+	RegionStateNew       RegionState = metaregion.ReplicaStateNew
+	RegionStateRunning   RegionState = metaregion.ReplicaStateRunning
+	RegionStateRemoving  RegionState = metaregion.ReplicaStateRemoving
+	RegionStateTombstone RegionState = metaregion.ReplicaStateTombstone
+)
+
+// RegionMeta captures the store-local runtime and recovery shape of one region.
 //
-// This is shared by raftstore local recovery state and PD control-plane state.
-// It is not part of the single-node storage manifest.
+// It belongs to raftstore local state, peer lifecycle, and restart recovery.
+// It is intentionally smaller than the distributed topology descriptor and must
+// not become control-plane authority.
 type RegionMeta struct {
 	ID       uint64      `json:"id"`
 	StartKey []byte      `json:"start_key,omitempty"`

@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/engine"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -41,7 +42,7 @@ type degradedSchedulerSink struct {
 }
 
 type regionHeartbeat struct {
-	Meta          localmeta.RegionMeta
+	Descriptor    descriptor.Descriptor
 	LastHeartbeat time.Time
 }
 
@@ -57,16 +58,16 @@ func newTestSchedulerSink() *testSchedulerSink {
 	}
 }
 
-func (s *testSchedulerSink) PublishRegion(_ context.Context, meta localmeta.RegionMeta) {
-	if s == nil || meta.ID == 0 {
+func (s *testSchedulerSink) PublishRegionDescriptor(_ context.Context, desc descriptor.Descriptor) {
+	if s == nil || desc.RegionID == 0 {
 		return
 	}
 	s.mu.Lock()
-	s.regions[meta.ID] = regionHeartbeat{
-		Meta:          localmeta.CloneRegionMeta(meta),
+	s.regions[desc.RegionID] = regionHeartbeat{
+		Descriptor:    desc.Clone(),
 		LastHeartbeat: time.Now(),
 	}
-	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: meta.ID})
+	s.history = append(s.history, schedulerEvent{kind: "publish", regionID: desc.RegionID})
 	s.mu.Unlock()
 }
 
@@ -103,7 +104,7 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	out := make([]regionHeartbeat, 0, len(s.regions))
 	for _, info := range s.regions {
 		out = append(out, regionHeartbeat{
-			Meta:          localmeta.CloneRegionMeta(info.Meta),
+			Descriptor:    info.Descriptor.Clone(),
 			LastHeartbeat: info.LastHeartbeat,
 		})
 	}
@@ -164,7 +165,7 @@ func (s *degradedSchedulerSink) Status() SchedulerStatus {
 	return s.status
 }
 
-func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta localmeta.RegionMeta) {
+func (s *slowSchedulerSink) PublishRegionDescriptor(ctx context.Context, desc descriptor.Descriptor) {
 	if s.publishDelay > 0 {
 		select {
 		case <-time.After(s.publishDelay):
@@ -172,7 +173,7 @@ func (s *slowSchedulerSink) PublishRegion(ctx context.Context, meta localmeta.Re
 			return
 		}
 	}
-	s.testSchedulerSink.PublishRegion(ctx, meta)
+	s.testSchedulerSink.PublishRegionDescriptor(ctx, desc)
 }
 
 func (s *slowSchedulerSink) RemoveRegion(ctx context.Context, id uint64) {
