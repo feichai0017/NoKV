@@ -36,9 +36,9 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
-	got, ok := snapshot.Regions[meta.ID]
+	got, ok := snapshot.Descriptors[meta.ID]
 	require.True(t, ok)
-	require.Equal(t, meta.ID, got.ID)
+	require.Equal(t, meta.ID, got.RegionID)
 	require.Equal(t, meta.StartKey, got.StartKey)
 	require.Equal(t, meta.EndKey, got.EndKey)
 	require.Equal(t, meta.Peers, got.Peers)
@@ -49,7 +49,7 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 	require.NoError(t, err)
 	loaded, err := reopened.Load()
 	require.NoError(t, err)
-	require.Contains(t, loaded.Regions, meta.ID)
+	require.Contains(t, loaded.Descriptors, meta.ID)
 	require.Equal(t, uint64(123), loaded.Allocator.IDCurrent)
 	require.Equal(t, uint64(456), loaded.Allocator.TSCurrent)
 }
@@ -74,14 +74,14 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 
 	snapshot, err := store.Load()
 	require.NoError(t, err)
-	_, ok := snapshot.Regions[7]
+	_, ok := snapshot.Descriptors[7]
 	require.False(t, ok)
 
 	reopened, err := OpenRootStore(root)
 	require.NoError(t, err)
 	loaded, err := reopened.Load()
 	require.NoError(t, err)
-	_, ok = loaded.Regions[7]
+	_, ok = loaded.Descriptors[7]
 	require.False(t, ok)
 }
 
