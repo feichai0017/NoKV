@@ -968,7 +968,7 @@ Suggested outputs:
 Add:
 
 - `raftstore/descriptor`
-- `pb/raftstore/descriptor.proto`
+- `pb/meta/descriptor.proto`
 
 Integrate with:
 
@@ -980,7 +980,7 @@ Integrate with:
 Also add:
 
 - `raftstore/recovery`
-- `pb/raftstore/recovery.proto`
+- `pb/meta/recovery.proto`
 
 ## Phase 4: replace PD-local metadata authority with root + view
 
