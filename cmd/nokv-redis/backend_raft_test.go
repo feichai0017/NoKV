@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"math"
 	"net"
 	"os"
@@ -133,7 +134,7 @@ func startStubNoKV(t *testing.T) (addr string, srv *stubNoKVServer, shutdown fun
 }
 
 type stubPDServer struct {
-	pb.UnimplementedPDServer
+	pdpb.UnimplementedPDServer
 
 	mu         sync.Mutex
 	region     *pb.RegionMeta
@@ -144,7 +145,7 @@ type stubPDServer struct {
 	routeErr   error
 }
 
-func (s *stubPDServer) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error) {
+func (s *stubPDServer) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tsoCalls++
@@ -160,13 +161,13 @@ func (s *stubPDServer) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoRespon
 	}
 	first := s.nextTS
 	s.nextTS += count
-	return &pb.TsoResponse{
+	return &pdpb.TsoResponse{
 		Timestamp: first,
 		Count:     count,
 	}, nil
 }
 
-func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.routeCalls++
@@ -174,9 +175,9 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyR
 		return nil, s.routeErr
 	}
 	if req == nil || s.region == nil || !keyInRegion(req.GetKey(), s.region.GetStartKey(), s.region.GetEndKey()) {
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	return &pb.GetRegionByKeyResponse{
+	return &pdpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(proto.Clone(s.region).(*pb.RegionMeta))),
 	}, nil
 }
@@ -192,7 +193,7 @@ func startStubPD(t *testing.T, region *pb.RegionMeta) (addr string, srv *stubPDS
 		region: region,
 		nextTS: 100,
 	}
-	pb.RegisterPDServer(server, stub)
+	pdpb.RegisterPDServer(server, stub)
 	go func() {
 		_ = server.Serve(l)
 	}()

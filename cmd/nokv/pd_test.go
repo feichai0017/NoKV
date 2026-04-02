@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"os"
@@ -78,7 +79,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
@@ -87,7 +88,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 		ID:       20,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
@@ -125,13 +126,13 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 		ID:       31,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 1},
 	}, 0)))
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       32,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch:    localmeta.RegionEpoch{Version: 3, ConfVersion: 2},
+		Epoch:    metaregion.Epoch{Version: 3, ConfVersion: 2},
 	}, 0)))
 	require.NoError(t, store.Close())
 
@@ -150,13 +151,13 @@ func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 			RegionID: 10,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		},
 		20: {
 			RegionID: 20,
 			StartKey: []byte("l"),
 			EndKey:   []byte("z"),
-			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+			Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		},
 	}
 

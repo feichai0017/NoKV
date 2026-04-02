@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestStoreLocalSplitStartsChildPeer(t *testing.T) {
 		ID:       1000,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 1}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 1}},
 	}
 	parentCfg, err := peerBuilder(parentMeta)
 	require.NoError(t, err)
@@ -54,7 +55,7 @@ func TestStoreLocalSplitStartsChildPeer(t *testing.T) {
 		ID:       2000,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Peers:    []localmeta.PeerMeta{{StoreID: storeID, PeerID: 2}},
+		Peers:    []metaregion.Peer{{StoreID: storeID, PeerID: 2}},
 	}
 	childPeer, err := rs.splitRegionLocal(parentMeta.ID, childMeta)
 	require.NoError(t, err)

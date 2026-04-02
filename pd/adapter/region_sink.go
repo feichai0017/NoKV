@@ -2,12 +2,12 @@ package adapter
 
 import (
 	"context"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"log/slog"
 	"sync"
 	"time"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -58,7 +58,7 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{RegionDescriptor: metacodec.DescriptorToProto(desc)})
+	_, err := s.pd.RegionHeartbeat(ctx, &pdpb.RegionHeartbeatRequest{RegionDescriptor: metacodec.DescriptorToProto(desc)})
 	if err != nil {
 		s.recordError("RegionHeartbeat", err)
 		return
@@ -73,7 +73,7 @@ func (s *SchedulerClient) RemoveRegion(ctx context.Context, regionID uint64) {
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RemoveRegion(ctx, &pb.RemoveRegionRequest{RegionId: regionID})
+	_, err := s.pd.RemoveRegion(ctx, &pdpb.RemoveRegionRequest{RegionId: regionID})
 	if err != nil {
 		s.recordError("RemoveRegion", err)
 		return
@@ -89,7 +89,7 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	resp, err := s.pd.StoreHeartbeat(ctx, &pb.StoreHeartbeatRequest{
+	resp, err := s.pd.StoreHeartbeat(ctx, &pdpb.StoreHeartbeatRequest{
 		StoreId:   stats.StoreID,
 		RegionNum: stats.RegionNum,
 		LeaderNum: stats.LeaderNum,
@@ -114,7 +114,7 @@ func (s *SchedulerClient) Status() storepkg.SchedulerStatus {
 	return s.status
 }
 
-func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
+func fromPBOperations(ops []*pdpb.SchedulerOperation) []storepkg.Operation {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -130,12 +130,12 @@ func fromPBOperations(ops []*pb.SchedulerOperation) []storepkg.Operation {
 	return converted
 }
 
-func fromPBOperation(op *pb.SchedulerOperation) (storepkg.Operation, bool) {
+func fromPBOperation(op *pdpb.SchedulerOperation) (storepkg.Operation, bool) {
 	if op == nil {
 		return storepkg.Operation{}, false
 	}
 	switch op.GetType() {
-	case pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
+	case pdpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
 		if op.GetRegionId() == 0 || op.GetSourcePeerId() == 0 || op.GetTargetPeerId() == 0 {
 			return storepkg.Operation{}, false
 		}

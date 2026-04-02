@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,7 +257,7 @@ func runCatalog(args []string) error {
 	meta := localmeta.RegionMeta{
 		ID:    *regionID,
 		State: parseRegionState(*stateStr),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     *version,
 			ConfVersion: *confVer,
 		},
@@ -269,7 +270,7 @@ func runCatalog(args []string) error {
 		if err != nil {
 			return fmt.Errorf("parsing --peer %q: %w", entry, err)
 		}
-		meta.Peers = append(meta.Peers, localmeta.PeerMeta{
+		meta.Peers = append(meta.Peers, metaregion.Peer{
 			StoreID: storeID,
 			PeerID:  peerID,
 		})
@@ -339,14 +340,14 @@ func parseUint(value string) (uint64, error) {
 	return out, nil
 }
 
-func parseRegionState(state string) localmeta.RegionState {
+func parseRegionState(state string) metaregion.ReplicaState {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "", "running":
-		return localmeta.RegionStateRunning
+		return metaregion.ReplicaStateRunning
 	case "tombstone":
-		return localmeta.RegionStateTombstone
+		return metaregion.ReplicaStateTombstone
 	default:
-		return localmeta.RegionStateRunning
+		return metaregion.ReplicaStateRunning
 	}
 }
 

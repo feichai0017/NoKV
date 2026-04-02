@@ -4,9 +4,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             (unknown)
-// source: pdpb.proto
+// source: pd/pd.proto
 
-package pb
+package pdpb
 
 import (
 	context "context"
@@ -21,12 +21,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PD_StoreHeartbeat_FullMethodName  = "/pb.PD/StoreHeartbeat"
-	PD_RegionHeartbeat_FullMethodName = "/pb.PD/RegionHeartbeat"
-	PD_RemoveRegion_FullMethodName    = "/pb.PD/RemoveRegion"
-	PD_GetRegionByKey_FullMethodName  = "/pb.PD/GetRegionByKey"
-	PD_AllocID_FullMethodName         = "/pb.PD/AllocID"
-	PD_Tso_FullMethodName             = "/pb.PD/Tso"
+	PD_StoreHeartbeat_FullMethodName  = "/nokv.pd.v1.PD/StoreHeartbeat"
+	PD_RegionHeartbeat_FullMethodName = "/nokv.pd.v1.PD/RegionHeartbeat"
+	PD_RemoveRegion_FullMethodName    = "/nokv.pd.v1.PD/RemoveRegion"
+	PD_GetRegionByKey_FullMethodName  = "/nokv.pd.v1.PD/GetRegionByKey"
+	PD_AllocID_FullMethodName         = "/nokv.pd.v1.PD/AllocID"
+	PD_Tso_FullMethodName             = "/nokv.pd.v1.PD/Tso"
 )
 
 // PDClient is the client API for PD service.
@@ -278,7 +278,7 @@ func _PD_Tso_Handler(srv interface{}, ctx context.Context, dec func(interface{})
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var PD_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pb.PD",
+	ServiceName: "nokv.pd.v1.PD",
 	HandlerType: (*PDServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -307,5 +307,5 @@ var PD_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "pdpb.proto",
+	Metadata: "pd/pd.proto",
 }

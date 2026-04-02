@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	pdstorage "github.com/feichai0017/NoKV/pd/storage"
 	"github.com/feichai0017/NoKV/pd/tso"
@@ -15,7 +15,7 @@ import (
 
 // Service implements the PD-lite gRPC API.
 type Service struct {
-	pb.UnimplementedPDServer
+	pdpb.UnimplementedPDServer
 
 	cluster *core.Cluster
 	ids     *core.IDAllocator
@@ -53,7 +53,7 @@ func (s *Service) SetStorage(storage pdstorage.Sink) {
 }
 
 // StoreHeartbeat records store-level stats.
-func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatRequest) (*pb.StoreHeartbeatResponse, error) {
+func (s *Service) StoreHeartbeat(_ context.Context, req *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
@@ -70,14 +70,14 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatReques
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &pb.StoreHeartbeatResponse{
+	return &pdpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: s.planStoreOperations(req.GetStoreId()),
 	}, nil
 }
 
 // RegionHeartbeat records region-level metadata.
-func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequest) (*pb.RegionHeartbeatResponse, error) {
+func (s *Service) RegionHeartbeat(_ context.Context, req *pdpb.RegionHeartbeatRequest) (*pdpb.RegionHeartbeatResponse, error) {
 	if req == nil || req.GetRegionDescriptor() == nil {
 		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
 	}
@@ -98,11 +98,11 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
 		}
 	}
-	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
+	return &pdpb.RegionHeartbeatResponse{Accepted: true}, nil
 }
 
 // RemoveRegion deletes region metadata from the PD in-memory catalog.
-func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (*pb.RemoveRegionResponse, error) {
+func (s *Service) RemoveRegion(_ context.Context, req *pdpb.RemoveRegionRequest) (*pdpb.RemoveRegionResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
 	}
@@ -116,26 +116,26 @@ func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (
 			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
 		}
 	}
-	return &pb.RemoveRegionResponse{Removed: removed}, nil
+	return &pdpb.RemoveRegionResponse{Removed: removed}, nil
 }
 
 // GetRegionByKey returns region metadata for the specified key.
-func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (s *Service) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
-		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+		return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	return &pb.GetRegionByKeyResponse{
+	return &pdpb.GetRegionByKeyResponse{
 		RegionDescriptor: metacodec.DescriptorToProto(desc),
-		NotFound: false,
+		NotFound:         false,
 	}, nil
 }
 
 // AllocID allocates one or more globally unique ids.
-func (s *Service) AllocID(_ context.Context, req *pb.AllocIDRequest) (*pb.AllocIDResponse, error) {
+func (s *Service) AllocID(_ context.Context, req *pdpb.AllocIDRequest) (*pdpb.AllocIDResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
 	}
@@ -153,14 +153,14 @@ func (s *Service) AllocID(_ context.Context, req *pb.AllocIDRequest) (*pb.AllocI
 	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	return &pb.AllocIDResponse{
+	return &pdpb.AllocIDResponse{
 		FirstId: first,
 		Count:   count,
 	}, nil
 }
 
 // Tso allocates one or more timestamps.
-func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, error) {
+func (s *Service) Tso(_ context.Context, req *pdpb.TsoRequest) (*pdpb.TsoResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
 	}
@@ -178,7 +178,7 @@ func (s *Service) Tso(_ context.Context, req *pb.TsoRequest) (*pb.TsoResponse, e
 	if err := s.persistAllocatorState(); err != nil {
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	return &pb.TsoResponse{
+	return &pdpb.TsoResponse{
 		Timestamp: first,
 		Count:     got,
 	}, nil

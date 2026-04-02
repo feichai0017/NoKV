@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
@@ -33,7 +34,7 @@ func (s *Store) applyRegionRemoval(regionID uint64) error {
 	return s.regionMgr().applyRegionRemoval(regionID)
 }
 
-func (s *Store) applyRegionState(regionID uint64, state localmeta.RegionState) error {
+func (s *Store) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {
 	if s == nil {
 		return fmt.Errorf("raftstore: store is nil")
 	}

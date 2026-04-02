@@ -3,6 +3,8 @@ package server_test
 import (
 	"context"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"sort"
 	"testing"
 	"time"
@@ -135,8 +137,8 @@ func TestServerStartsRaftAdminService(t *testing.T) {
 		ID:       7,
 		StartKey: []byte("a"),
 		EndKey:   nil,
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 	}
 	startRegionPeer(t, testNode{
 		storeID:   1,
@@ -203,18 +205,18 @@ type staticRegionResolver struct {
 	regions []*pb.RegionMeta
 }
 
-func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("resolver: nil request")
 	}
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
-			return &pb.GetRegionByKeyResponse{
+			return &pdpb.GetRegionByKeyResponse{
 				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}
-	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticRegionResolver) Close() error { return nil }
@@ -228,8 +230,8 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 				ID:       1,
 				StartKey: []byte("a"),
 				EndKey:   []byte("m"),
-				Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+				Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+				Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 			},
 		},
 		{
@@ -239,8 +241,8 @@ func TestServerWithClientTwoPhaseCommit(t *testing.T) {
 				ID:       2,
 				StartKey: []byte("m"),
 				EndKey:   nil,
-				Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-				Peers:    []localmeta.PeerMeta{{StoreID: 2, PeerID: 201}},
+				Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+				Peers:    []metaregion.Peer{{StoreID: 2, PeerID: 201}},
 			},
 		},
 	}

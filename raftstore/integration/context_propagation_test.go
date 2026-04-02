@@ -3,6 +3,8 @@ package integration
 import (
 	"context"
 	"errors"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"testing"
 	"time"
 
@@ -25,15 +27,15 @@ type staticResolver struct {
 	regions []*pb.RegionMeta
 }
 
-func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
+func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
-			return &pb.GetRegionByKeyResponse{
+			return &pdpb.GetRegionByKeyResponse{
 				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(region)),
 			}, nil
 		}
 	}
-	return &pb.GetRegionByKeyResponse{NotFound: true}, nil
+	return &pdpb.GetRegionByKeyResponse{NotFound: true}, nil
 }
 
 func (r *staticResolver) Close() error { return nil }
@@ -233,11 +235,11 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		ID:       92,
 		StartKey: []byte("m"),
 		EndKey:   nil,
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 			{StoreID: 2, PeerID: 202},
 		},

@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"os"
 	"path/filepath"
 
@@ -110,15 +111,15 @@ func Init(cfg InitConfig) (InitResult, error) {
 		ID:       cfg.RegionID,
 		StartKey: nil,
 		EndKey:   nil,
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{{
+		Peers: []metaregion.Peer{{
 			StoreID: cfg.StoreID,
 			PeerID:  cfg.PeerID,
 		}},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 
 	localMeta, err := localmeta.OpenLocalStore(cfg.WorkDir, nil)
