@@ -4,9 +4,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: metapb.proto
+// source: legacy/meta.proto
 
-package pb
+package metapb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -33,7 +33,7 @@ type RegionPeer struct {
 
 func (x *RegionPeer) Reset() {
 	*x = RegionPeer{}
-	mi := &file_metapb_proto_msgTypes[0]
+	mi := &file_legacy_meta_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -45,7 +45,7 @@ func (x *RegionPeer) String() string {
 func (*RegionPeer) ProtoMessage() {}
 
 func (x *RegionPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_metapb_proto_msgTypes[0]
+	mi := &file_legacy_meta_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,7 +58,7 @@ func (x *RegionPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionPeer.ProtoReflect.Descriptor instead.
 func (*RegionPeer) Descriptor() ([]byte, []int) {
-	return file_metapb_proto_rawDescGZIP(), []int{0}
+	return file_legacy_meta_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RegionPeer) GetStoreId() uint64 {
@@ -89,7 +89,7 @@ type RegionMeta struct {
 
 func (x *RegionMeta) Reset() {
 	*x = RegionMeta{}
-	mi := &file_metapb_proto_msgTypes[1]
+	mi := &file_legacy_meta_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -101,7 +101,7 @@ func (x *RegionMeta) String() string {
 func (*RegionMeta) ProtoMessage() {}
 
 func (x *RegionMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_metapb_proto_msgTypes[1]
+	mi := &file_legacy_meta_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -114,7 +114,7 @@ func (x *RegionMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionMeta.ProtoReflect.Descriptor instead.
 func (*RegionMeta) Descriptor() ([]byte, []int) {
-	return file_metapb_proto_rawDescGZIP(), []int{1}
+	return file_legacy_meta_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RegionMeta) GetId() uint64 {
@@ -169,7 +169,7 @@ type RegionEpoch struct {
 
 func (x *RegionEpoch) Reset() {
 	*x = RegionEpoch{}
-	mi := &file_metapb_proto_msgTypes[2]
+	mi := &file_legacy_meta_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -181,7 +181,7 @@ func (x *RegionEpoch) String() string {
 func (*RegionEpoch) ProtoMessage() {}
 
 func (x *RegionEpoch) ProtoReflect() protoreflect.Message {
-	mi := &file_metapb_proto_msgTypes[2]
+	mi := &file_legacy_meta_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -194,7 +194,7 @@ func (x *RegionEpoch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionEpoch.ProtoReflect.Descriptor instead.
 func (*RegionEpoch) Descriptor() ([]byte, []int) {
-	return file_metapb_proto_rawDescGZIP(), []int{2}
+	return file_legacy_meta_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RegionEpoch) GetConfVer() uint64 {
@@ -211,47 +211,47 @@ func (x *RegionEpoch) GetVersion() uint64 {
 	return 0
 }
 
-var File_metapb_proto protoreflect.FileDescriptor
+var File_legacy_meta_proto protoreflect.FileDescriptor
 
-const file_metapb_proto_rawDesc = "" +
+const file_legacy_meta_proto_rawDesc = "" +
 	"\n" +
-	"\fmetapb.proto\x12\x02pb\"@\n" +
+	"\x11legacy/meta.proto\x12\x13nokv.meta.legacy.v1\"@\n" +
 	"\n" +
 	"RegionPeer\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x17\n" +
-	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"\xcb\x01\n" +
+	"\apeer_id\x18\x02 \x01(\x04R\x06peerId\"\xdc\x01\n" +
 	"\n" +
 	"RegionMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1b\n" +
 	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x17\n" +
 	"\aend_key\x18\x03 \x01(\fR\x06endKey\x12#\n" +
 	"\repoch_version\x18\x04 \x01(\x04R\fepochVersion\x12,\n" +
-	"\x12epoch_conf_version\x18\x05 \x01(\x04R\x10epochConfVersion\x12$\n" +
-	"\x05peers\x18\x06 \x03(\v2\x0e.pb.RegionPeerR\x05peers\"B\n" +
+	"\x12epoch_conf_version\x18\x05 \x01(\x04R\x10epochConfVersion\x125\n" +
+	"\x05peers\x18\x06 \x03(\v2\x1f.nokv.meta.legacy.v1.RegionPeerR\x05peers\"B\n" +
 	"\vRegionEpoch\x12\x19\n" +
 	"\bconf_ver\x18\x01 \x01(\x04R\aconfVer\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversionB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\aversion\x18\x02 \x01(\x04R\aversionB.Z,github.com/feichai0017/NoKV/pb/legacy;metapbb\x06proto3"
 
 var (
-	file_metapb_proto_rawDescOnce sync.Once
-	file_metapb_proto_rawDescData []byte
+	file_legacy_meta_proto_rawDescOnce sync.Once
+	file_legacy_meta_proto_rawDescData []byte
 )
 
-func file_metapb_proto_rawDescGZIP() []byte {
-	file_metapb_proto_rawDescOnce.Do(func() {
-		file_metapb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_metapb_proto_rawDesc), len(file_metapb_proto_rawDesc)))
+func file_legacy_meta_proto_rawDescGZIP() []byte {
+	file_legacy_meta_proto_rawDescOnce.Do(func() {
+		file_legacy_meta_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_legacy_meta_proto_rawDesc), len(file_legacy_meta_proto_rawDesc)))
 	})
-	return file_metapb_proto_rawDescData
+	return file_legacy_meta_proto_rawDescData
 }
 
-var file_metapb_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
-var file_metapb_proto_goTypes = []any{
-	(*RegionPeer)(nil),  // 0: pb.RegionPeer
-	(*RegionMeta)(nil),  // 1: pb.RegionMeta
-	(*RegionEpoch)(nil), // 2: pb.RegionEpoch
+var file_legacy_meta_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_legacy_meta_proto_goTypes = []any{
+	(*RegionPeer)(nil),  // 0: nokv.meta.legacy.v1.RegionPeer
+	(*RegionMeta)(nil),  // 1: nokv.meta.legacy.v1.RegionMeta
+	(*RegionEpoch)(nil), // 2: nokv.meta.legacy.v1.RegionEpoch
 }
-var file_metapb_proto_depIdxs = []int32{
-	0, // 0: pb.RegionMeta.peers:type_name -> pb.RegionPeer
+var file_legacy_meta_proto_depIdxs = []int32{
+	0, // 0: nokv.meta.legacy.v1.RegionMeta.peers:type_name -> nokv.meta.legacy.v1.RegionPeer
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -259,26 +259,26 @@ var file_metapb_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_metapb_proto_init() }
-func file_metapb_proto_init() {
-	if File_metapb_proto != nil {
+func init() { file_legacy_meta_proto_init() }
+func file_legacy_meta_proto_init() {
+	if File_legacy_meta_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_metapb_proto_rawDesc), len(file_metapb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_legacy_meta_proto_rawDesc), len(file_legacy_meta_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_metapb_proto_goTypes,
-		DependencyIndexes: file_metapb_proto_depIdxs,
-		MessageInfos:      file_metapb_proto_msgTypes,
+		GoTypes:           file_legacy_meta_proto_goTypes,
+		DependencyIndexes: file_legacy_meta_proto_depIdxs,
+		MessageInfos:      file_legacy_meta_proto_msgTypes,
 	}.Build()
-	File_metapb_proto = out.File
-	file_metapb_proto_goTypes = nil
-	file_metapb_proto_depIdxs = nil
+	File_legacy_meta_proto = out.File
+	file_legacy_meta_proto_goTypes = nil
+	file_legacy_meta_proto_depIdxs = nil
 }

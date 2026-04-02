@@ -4,9 +4,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             (unknown)
-// source: adminpb.proto
+// source: admin/admin.proto
 
-package pb
+package adminpb
 
 import (
 	context "context"
@@ -21,14 +21,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftAdmin_AddPeer_FullMethodName                    = "/pb.RaftAdmin/AddPeer"
-	RaftAdmin_RemovePeer_FullMethodName                 = "/pb.RaftAdmin/RemovePeer"
-	RaftAdmin_TransferLeader_FullMethodName             = "/pb.RaftAdmin/TransferLeader"
-	RaftAdmin_ExportRegionSnapshot_FullMethodName       = "/pb.RaftAdmin/ExportRegionSnapshot"
-	RaftAdmin_ExportRegionSnapshotStream_FullMethodName = "/pb.RaftAdmin/ExportRegionSnapshotStream"
-	RaftAdmin_ImportRegionSnapshot_FullMethodName       = "/pb.RaftAdmin/ImportRegionSnapshot"
-	RaftAdmin_ImportRegionSnapshotStream_FullMethodName = "/pb.RaftAdmin/ImportRegionSnapshotStream"
-	RaftAdmin_RegionRuntimeStatus_FullMethodName        = "/pb.RaftAdmin/RegionRuntimeStatus"
+	RaftAdmin_AddPeer_FullMethodName                    = "/nokv.admin.v1.RaftAdmin/AddPeer"
+	RaftAdmin_RemovePeer_FullMethodName                 = "/nokv.admin.v1.RaftAdmin/RemovePeer"
+	RaftAdmin_TransferLeader_FullMethodName             = "/nokv.admin.v1.RaftAdmin/TransferLeader"
+	RaftAdmin_ExportRegionSnapshot_FullMethodName       = "/nokv.admin.v1.RaftAdmin/ExportRegionSnapshot"
+	RaftAdmin_ExportRegionSnapshotStream_FullMethodName = "/nokv.admin.v1.RaftAdmin/ExportRegionSnapshotStream"
+	RaftAdmin_ImportRegionSnapshot_FullMethodName       = "/nokv.admin.v1.RaftAdmin/ImportRegionSnapshot"
+	RaftAdmin_ImportRegionSnapshotStream_FullMethodName = "/nokv.admin.v1.RaftAdmin/ImportRegionSnapshotStream"
+	RaftAdmin_RegionRuntimeStatus_FullMethodName        = "/nokv.admin.v1.RaftAdmin/RegionRuntimeStatus"
 )
 
 // RaftAdminClient is the client API for RaftAdmin service.
@@ -340,7 +340,7 @@ func _RaftAdmin_RegionRuntimeStatus_Handler(srv interface{}, ctx context.Context
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pb.RaftAdmin",
+	ServiceName: "nokv.admin.v1.RaftAdmin",
 	HandlerType: (*RaftAdminServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -380,5 +380,5 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "adminpb.proto",
+	Metadata: "admin/admin.proto",
 }

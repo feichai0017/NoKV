@@ -2,12 +2,12 @@ package lsm
 
 import (
 	"fmt"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
 	"github.com/feichai0017/NoKV/manifest"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/wal"
 	"github.com/stretchr/testify/require"
@@ -291,8 +291,8 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 }
 
 func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
-	index := &pb.TableIndex{
-		Offsets: []*pb.BlockOffset{
+	index := &storagepb.TableIndex{
+		Offsets: []*storagepb.BlockOffset{
 			{Key: kv.InternalKey(kv.CFDefault, []byte("z"), 5)},
 			{Key: kv.InternalKey(kv.CFLock, []byte("a"), 5)},
 			{Key: kv.InternalKey(kv.CFWrite, []byte("b"), 5)},

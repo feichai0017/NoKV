@@ -1,9 +1,9 @@
 package lsm
 
 import (
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"testing"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,7 +49,7 @@ func TestCacheIndex(t *testing.T) {
 		IndexCacheBytes: 1 << 20,
 	}
 	c := newCache(opt)
-	idx := &pb.TableIndex{KeyCount: 10}
+	idx := &storagepb.TableIndex{KeyCount: 10}
 	c.addIndex(1, idx)
 	got, ok := c.getIndex(1)
 	require.True(t, ok)
@@ -75,8 +75,8 @@ func TestBlockCacheOperations(t *testing.T) {
 }
 
 func TestIndexCacheEvictionByBudget(t *testing.T) {
-	idx1 := &pb.TableIndex{KeyCount: 1, BloomFilter: make([]byte, 64)}
-	idx2 := &pb.TableIndex{KeyCount: 2, BloomFilter: make([]byte, 64)}
+	idx1 := &storagepb.TableIndex{KeyCount: 1, BloomFilter: make([]byte, 64)}
+	idx2 := &storagepb.TableIndex{KeyCount: 2, BloomFilter: make([]byte, 64)}
 	budget := int64(proto.Size(idx1))
 	ic := newIndexCache(budget)
 	require.NotNil(t, ic)
@@ -88,7 +88,7 @@ func TestIndexCacheEvictionByBudget(t *testing.T) {
 	require.False(t, ok)
 	val, ok := ic.Get(2)
 	require.True(t, ok)
-	got := val.(*pb.TableIndex)
+	got := val.(*storagepb.TableIndex)
 	require.Equal(t, uint32(2), got.GetKeyCount())
 }
 

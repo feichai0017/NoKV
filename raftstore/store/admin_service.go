@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -95,9 +96,9 @@ func (s *Store) ProposeSplit(parentID uint64, childMeta localmeta.RegionMeta, sp
 	if status := parentPeer.Status(); status.RaftState != myraft.StateLeader {
 		return fmt.Errorf("raftstore: peer %d is not leader", parentPeer.ID())
 	}
-	cmd := &pb.AdminCommand{
-		Type: pb.AdminCommand_SPLIT,
-		Split: &pb.SplitCommand{
+	cmd := &raftcmdpb.AdminCommand{
+		Type: raftcmdpb.AdminCommand_SPLIT,
+		Split: &raftcmdpb.SplitCommand{
 			ParentRegionId: parentID,
 			SplitKey:       append([]byte(nil), splitKey...),
 			Child:          regionMetaToPB(childMeta),
@@ -125,9 +126,9 @@ func (s *Store) ProposeMerge(targetRegionID, sourceRegionID uint64) error {
 	if status := peer.Status(); status.RaftState != myraft.StateLeader {
 		return fmt.Errorf("raftstore: peer %d is not leader", peer.ID())
 	}
-	cmd := &pb.AdminCommand{
-		Type: pb.AdminCommand_MERGE,
-		Merge: &pb.MergeCommand{
+	cmd := &raftcmdpb.AdminCommand{
+		Type: raftcmdpb.AdminCommand_MERGE,
+		Merge: &raftcmdpb.MergeCommand{
 			TargetRegionId: targetRegionID,
 			SourceRegionId: sourceRegionID,
 		},
@@ -160,21 +161,21 @@ func (s *Store) buildChildPeerConfig(child localmeta.RegionMeta) (*peer.Config, 
 	return cfg, peers, nil
 }
 
-func (s *Store) handleAdminCommand(cmd *pb.AdminCommand) error {
+func (s *Store) handleAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 	if s == nil || cmd == nil {
 		return nil
 	}
 	switch cmd.Type {
-	case pb.AdminCommand_SPLIT:
+	case raftcmdpb.AdminCommand_SPLIT:
 		return s.handleSplitCommand(cmd.Split)
-	case pb.AdminCommand_MERGE:
+	case raftcmdpb.AdminCommand_MERGE:
 		return s.handleMergeCommand(cmd.Merge)
 	default:
 		return nil
 	}
 }
 
-func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
+func (s *Store) handleSplitCommand(split *raftcmdpb.SplitCommand) error {
 	if split == nil {
 		return fmt.Errorf("raftstore: split command missing payload")
 	}
@@ -190,7 +191,7 @@ func (s *Store) handleSplitCommand(split *pb.SplitCommand) error {
 	return err
 }
 
-func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
+func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 	if merge == nil {
 		return fmt.Errorf("raftstore: merge command missing payload")
 	}
@@ -267,12 +268,12 @@ func regionPeersEqual(a, b []metaregion.Peer) bool {
 	return true
 }
 
-func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
-	peers := make([]*pb.RegionPeer, 0, len(meta.Peers))
+func regionMetaToPB(meta localmeta.RegionMeta) *metapb.RegionMeta {
+	peers := make([]*metapb.RegionPeer, 0, len(meta.Peers))
 	for _, p := range meta.Peers {
-		peers = append(peers, &pb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
+		peers = append(peers, &metapb.RegionPeer{StoreId: p.StoreID, PeerId: p.PeerID})
 	}
-	return &pb.RegionMeta{
+	return &metapb.RegionMeta{
 		Id:               meta.ID,
 		StartKey:         append([]byte(nil), meta.StartKey...),
 		EndKey:           append([]byte(nil), meta.EndKey...),
@@ -282,7 +283,7 @@ func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
 	}
 }
 
-func pbRegionMetaToManifest(pbMeta *pb.RegionMeta) localmeta.RegionMeta {
+func pbRegionMetaToManifest(pbMeta *metapb.RegionMeta) localmeta.RegionMeta {
 	if pbMeta == nil {
 		return localmeta.RegionMeta{}
 	}

@@ -4,11 +4,12 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: errorpb.proto
+// source: error/error.proto
 
-package pb
+package errorpb
 
 import (
+	legacy "github.com/feichai0017/NoKV/pb/legacy"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -38,7 +39,7 @@ type RegionError struct {
 
 func (x *RegionError) Reset() {
 	*x = RegionError{}
-	mi := &file_errorpb_proto_msgTypes[0]
+	mi := &file_error_error_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +51,7 @@ func (x *RegionError) String() string {
 func (*RegionError) ProtoMessage() {}
 
 func (x *RegionError) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[0]
+	mi := &file_error_error_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +64,7 @@ func (x *RegionError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionError.ProtoReflect.Descriptor instead.
 func (*RegionError) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{0}
+	return file_error_error_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RegionError) GetNotLeader() *NotLeader {
@@ -118,14 +119,14 @@ func (x *RegionError) GetKeyNotInRegion() *KeyNotInRegion {
 type NotLeader struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	Leader        *RegionPeer            `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
+	Leader        *legacy.RegionPeer     `protobuf:"bytes,2,opt,name=leader,proto3" json:"leader,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NotLeader) Reset() {
 	*x = NotLeader{}
-	mi := &file_errorpb_proto_msgTypes[1]
+	mi := &file_error_error_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -137,7 +138,7 @@ func (x *NotLeader) String() string {
 func (*NotLeader) ProtoMessage() {}
 
 func (x *NotLeader) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[1]
+	mi := &file_error_error_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -150,7 +151,7 @@ func (x *NotLeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotLeader.ProtoReflect.Descriptor instead.
 func (*NotLeader) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{1}
+	return file_error_error_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *NotLeader) GetRegionId() uint64 {
@@ -160,7 +161,7 @@ func (x *NotLeader) GetRegionId() uint64 {
 	return 0
 }
 
-func (x *NotLeader) GetLeader() *RegionPeer {
+func (x *NotLeader) GetLeader() *legacy.RegionPeer {
 	if x != nil {
 		return x.Leader
 	}
@@ -169,15 +170,15 @@ func (x *NotLeader) GetLeader() *RegionPeer {
 
 type EpochNotMatch struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CurrentEpoch  *RegionEpoch           `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
-	Regions       []*RegionMeta          `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
+	CurrentEpoch  *legacy.RegionEpoch    `protobuf:"bytes,1,opt,name=current_epoch,json=currentEpoch,proto3" json:"current_epoch,omitempty"`
+	Regions       []*legacy.RegionMeta   `protobuf:"bytes,2,rep,name=regions,proto3" json:"regions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EpochNotMatch) Reset() {
 	*x = EpochNotMatch{}
-	mi := &file_errorpb_proto_msgTypes[2]
+	mi := &file_error_error_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -189,7 +190,7 @@ func (x *EpochNotMatch) String() string {
 func (*EpochNotMatch) ProtoMessage() {}
 
 func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[2]
+	mi := &file_error_error_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -202,17 +203,17 @@ func (x *EpochNotMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EpochNotMatch.ProtoReflect.Descriptor instead.
 func (*EpochNotMatch) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{2}
+	return file_error_error_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *EpochNotMatch) GetCurrentEpoch() *RegionEpoch {
+func (x *EpochNotMatch) GetCurrentEpoch() *legacy.RegionEpoch {
 	if x != nil {
 		return x.CurrentEpoch
 	}
 	return nil
 }
 
-func (x *EpochNotMatch) GetRegions() []*RegionMeta {
+func (x *EpochNotMatch) GetRegions() []*legacy.RegionMeta {
 	if x != nil {
 		return x.Regions
 	}
@@ -227,7 +228,7 @@ type StaleCommand struct {
 
 func (x *StaleCommand) Reset() {
 	*x = StaleCommand{}
-	mi := &file_errorpb_proto_msgTypes[3]
+	mi := &file_error_error_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -239,7 +240,7 @@ func (x *StaleCommand) String() string {
 func (*StaleCommand) ProtoMessage() {}
 
 func (x *StaleCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[3]
+	mi := &file_error_error_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -252,7 +253,7 @@ func (x *StaleCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StaleCommand.ProtoReflect.Descriptor instead.
 func (*StaleCommand) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{3}
+	return file_error_error_proto_rawDescGZIP(), []int{3}
 }
 
 type RaftEntryTooLarge struct {
@@ -264,7 +265,7 @@ type RaftEntryTooLarge struct {
 
 func (x *RaftEntryTooLarge) Reset() {
 	*x = RaftEntryTooLarge{}
-	mi := &file_errorpb_proto_msgTypes[4]
+	mi := &file_error_error_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -276,7 +277,7 @@ func (x *RaftEntryTooLarge) String() string {
 func (*RaftEntryTooLarge) ProtoMessage() {}
 
 func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[4]
+	mi := &file_error_error_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -289,7 +290,7 @@ func (x *RaftEntryTooLarge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftEntryTooLarge.ProtoReflect.Descriptor instead.
 func (*RaftEntryTooLarge) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{4}
+	return file_error_error_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RaftEntryTooLarge) GetRegionId() uint64 {
@@ -309,7 +310,7 @@ type StoreNotMatch struct {
 
 func (x *StoreNotMatch) Reset() {
 	*x = StoreNotMatch{}
-	mi := &file_errorpb_proto_msgTypes[5]
+	mi := &file_error_error_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -321,7 +322,7 @@ func (x *StoreNotMatch) String() string {
 func (*StoreNotMatch) ProtoMessage() {}
 
 func (x *StoreNotMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[5]
+	mi := &file_error_error_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -334,7 +335,7 @@ func (x *StoreNotMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoreNotMatch.ProtoReflect.Descriptor instead.
 func (*StoreNotMatch) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{5}
+	return file_error_error_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StoreNotMatch) GetRequestStoreId() uint64 {
@@ -360,7 +361,7 @@ type RegionNotFound struct {
 
 func (x *RegionNotFound) Reset() {
 	*x = RegionNotFound{}
-	mi := &file_errorpb_proto_msgTypes[6]
+	mi := &file_error_error_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -372,7 +373,7 @@ func (x *RegionNotFound) String() string {
 func (*RegionNotFound) ProtoMessage() {}
 
 func (x *RegionNotFound) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[6]
+	mi := &file_error_error_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -385,7 +386,7 @@ func (x *RegionNotFound) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionNotFound.ProtoReflect.Descriptor instead.
 func (*RegionNotFound) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{6}
+	return file_error_error_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegionNotFound) GetRegionId() uint64 {
@@ -407,7 +408,7 @@ type KeyNotInRegion struct {
 
 func (x *KeyNotInRegion) Reset() {
 	*x = KeyNotInRegion{}
-	mi := &file_errorpb_proto_msgTypes[7]
+	mi := &file_error_error_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +420,7 @@ func (x *KeyNotInRegion) String() string {
 func (*KeyNotInRegion) ProtoMessage() {}
 
 func (x *KeyNotInRegion) ProtoReflect() protoreflect.Message {
-	mi := &file_errorpb_proto_msgTypes[7]
+	mi := &file_error_error_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +433,7 @@ func (x *KeyNotInRegion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyNotInRegion.ProtoReflect.Descriptor instead.
 func (*KeyNotInRegion) Descriptor() ([]byte, []int) {
-	return file_errorpb_proto_rawDescGZIP(), []int{7}
+	return file_error_error_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *KeyNotInRegion) GetKey() []byte {
@@ -463,26 +464,26 @@ func (x *KeyNotInRegion) GetEndKey() []byte {
 	return nil
 }
 
-var File_errorpb_proto protoreflect.FileDescriptor
+var File_error_error_proto protoreflect.FileDescriptor
 
-const file_errorpb_proto_rawDesc = "" +
+const file_error_error_proto_rawDesc = "" +
 	"\n" +
-	"\rerrorpb.proto\x12\x02pb\x1a\fmetapb.proto\"\xa4\x03\n" +
-	"\vRegionError\x12,\n" +
+	"\x11error/error.proto\x12\rnokv.error.v1\x1a\x11legacy/meta.proto\"\xf1\x03\n" +
+	"\vRegionError\x127\n" +
 	"\n" +
-	"not_leader\x18\x01 \x01(\v2\r.pb.NotLeaderR\tnotLeader\x129\n" +
-	"\x0fepoch_not_match\x18\x02 \x01(\v2\x11.pb.EpochNotMatchR\repochNotMatch\x125\n" +
-	"\rstale_command\x18\x03 \x01(\v2\x10.pb.StaleCommandR\fstaleCommand\x12=\n" +
-	"\x0fentry_too_large\x18\x04 \x01(\v2\x15.pb.RaftEntryTooLargeR\rentryTooLarge\x129\n" +
-	"\x0fstore_not_match\x18\x05 \x01(\v2\x11.pb.StoreNotMatchR\rstoreNotMatch\x12<\n" +
-	"\x10region_not_found\x18\x06 \x01(\v2\x12.pb.RegionNotFoundR\x0eregionNotFound\x12=\n" +
-	"\x11key_not_in_region\x18\a \x01(\v2\x12.pb.KeyNotInRegionR\x0ekeyNotInRegion\"P\n" +
+	"not_leader\x18\x01 \x01(\v2\x18.nokv.error.v1.NotLeaderR\tnotLeader\x12D\n" +
+	"\x0fepoch_not_match\x18\x02 \x01(\v2\x1c.nokv.error.v1.EpochNotMatchR\repochNotMatch\x12@\n" +
+	"\rstale_command\x18\x03 \x01(\v2\x1b.nokv.error.v1.StaleCommandR\fstaleCommand\x12H\n" +
+	"\x0fentry_too_large\x18\x04 \x01(\v2 .nokv.error.v1.RaftEntryTooLargeR\rentryTooLarge\x12D\n" +
+	"\x0fstore_not_match\x18\x05 \x01(\v2\x1c.nokv.error.v1.StoreNotMatchR\rstoreNotMatch\x12G\n" +
+	"\x10region_not_found\x18\x06 \x01(\v2\x1d.nokv.error.v1.RegionNotFoundR\x0eregionNotFound\x12H\n" +
+	"\x11key_not_in_region\x18\a \x01(\v2\x1d.nokv.error.v1.KeyNotInRegionR\x0ekeyNotInRegion\"a\n" +
 	"\tNotLeader\x12\x1b\n" +
-	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12&\n" +
-	"\x06leader\x18\x02 \x01(\v2\x0e.pb.RegionPeerR\x06leader\"o\n" +
-	"\rEpochNotMatch\x124\n" +
-	"\rcurrent_epoch\x18\x01 \x01(\v2\x0f.pb.RegionEpochR\fcurrentEpoch\x12(\n" +
-	"\aregions\x18\x02 \x03(\v2\x0e.pb.RegionMetaR\aregions\"\x0e\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x127\n" +
+	"\x06leader\x18\x02 \x01(\v2\x1f.nokv.meta.legacy.v1.RegionPeerR\x06leader\"\x91\x01\n" +
+	"\rEpochNotMatch\x12E\n" +
+	"\rcurrent_epoch\x18\x01 \x01(\v2 .nokv.meta.legacy.v1.RegionEpochR\fcurrentEpoch\x129\n" +
+	"\aregions\x18\x02 \x03(\v2\x1f.nokv.meta.legacy.v1.RegionMetaR\aregions\"\x0e\n" +
 	"\fStaleCommand\"0\n" +
 	"\x11RaftEntryTooLarge\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\"a\n" +
@@ -495,45 +496,45 @@ const file_errorpb_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12\x1b\n" +
 	"\tstart_key\x18\x03 \x01(\fR\bstartKey\x12\x17\n" +
-	"\aend_key\x18\x04 \x01(\fR\x06endKeyB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\aend_key\x18\x04 \x01(\fR\x06endKeyB.Z,github.com/feichai0017/NoKV/pb/error;errorpbb\x06proto3"
 
 var (
-	file_errorpb_proto_rawDescOnce sync.Once
-	file_errorpb_proto_rawDescData []byte
+	file_error_error_proto_rawDescOnce sync.Once
+	file_error_error_proto_rawDescData []byte
 )
 
-func file_errorpb_proto_rawDescGZIP() []byte {
-	file_errorpb_proto_rawDescOnce.Do(func() {
-		file_errorpb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_errorpb_proto_rawDesc), len(file_errorpb_proto_rawDesc)))
+func file_error_error_proto_rawDescGZIP() []byte {
+	file_error_error_proto_rawDescOnce.Do(func() {
+		file_error_error_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_error_error_proto_rawDesc), len(file_error_error_proto_rawDesc)))
 	})
-	return file_errorpb_proto_rawDescData
+	return file_error_error_proto_rawDescData
 }
 
-var file_errorpb_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
-var file_errorpb_proto_goTypes = []any{
-	(*RegionError)(nil),       // 0: pb.RegionError
-	(*NotLeader)(nil),         // 1: pb.NotLeader
-	(*EpochNotMatch)(nil),     // 2: pb.EpochNotMatch
-	(*StaleCommand)(nil),      // 3: pb.StaleCommand
-	(*RaftEntryTooLarge)(nil), // 4: pb.RaftEntryTooLarge
-	(*StoreNotMatch)(nil),     // 5: pb.StoreNotMatch
-	(*RegionNotFound)(nil),    // 6: pb.RegionNotFound
-	(*KeyNotInRegion)(nil),    // 7: pb.KeyNotInRegion
-	(*RegionPeer)(nil),        // 8: pb.RegionPeer
-	(*RegionEpoch)(nil),       // 9: pb.RegionEpoch
-	(*RegionMeta)(nil),        // 10: pb.RegionMeta
+var file_error_error_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_error_error_proto_goTypes = []any{
+	(*RegionError)(nil),        // 0: nokv.error.v1.RegionError
+	(*NotLeader)(nil),          // 1: nokv.error.v1.NotLeader
+	(*EpochNotMatch)(nil),      // 2: nokv.error.v1.EpochNotMatch
+	(*StaleCommand)(nil),       // 3: nokv.error.v1.StaleCommand
+	(*RaftEntryTooLarge)(nil),  // 4: nokv.error.v1.RaftEntryTooLarge
+	(*StoreNotMatch)(nil),      // 5: nokv.error.v1.StoreNotMatch
+	(*RegionNotFound)(nil),     // 6: nokv.error.v1.RegionNotFound
+	(*KeyNotInRegion)(nil),     // 7: nokv.error.v1.KeyNotInRegion
+	(*legacy.RegionPeer)(nil),  // 8: nokv.meta.legacy.v1.RegionPeer
+	(*legacy.RegionEpoch)(nil), // 9: nokv.meta.legacy.v1.RegionEpoch
+	(*legacy.RegionMeta)(nil),  // 10: nokv.meta.legacy.v1.RegionMeta
 }
-var file_errorpb_proto_depIdxs = []int32{
-	1,  // 0: pb.RegionError.not_leader:type_name -> pb.NotLeader
-	2,  // 1: pb.RegionError.epoch_not_match:type_name -> pb.EpochNotMatch
-	3,  // 2: pb.RegionError.stale_command:type_name -> pb.StaleCommand
-	4,  // 3: pb.RegionError.entry_too_large:type_name -> pb.RaftEntryTooLarge
-	5,  // 4: pb.RegionError.store_not_match:type_name -> pb.StoreNotMatch
-	6,  // 5: pb.RegionError.region_not_found:type_name -> pb.RegionNotFound
-	7,  // 6: pb.RegionError.key_not_in_region:type_name -> pb.KeyNotInRegion
-	8,  // 7: pb.NotLeader.leader:type_name -> pb.RegionPeer
-	9,  // 8: pb.EpochNotMatch.current_epoch:type_name -> pb.RegionEpoch
-	10, // 9: pb.EpochNotMatch.regions:type_name -> pb.RegionMeta
+var file_error_error_proto_depIdxs = []int32{
+	1,  // 0: nokv.error.v1.RegionError.not_leader:type_name -> nokv.error.v1.NotLeader
+	2,  // 1: nokv.error.v1.RegionError.epoch_not_match:type_name -> nokv.error.v1.EpochNotMatch
+	3,  // 2: nokv.error.v1.RegionError.stale_command:type_name -> nokv.error.v1.StaleCommand
+	4,  // 3: nokv.error.v1.RegionError.entry_too_large:type_name -> nokv.error.v1.RaftEntryTooLarge
+	5,  // 4: nokv.error.v1.RegionError.store_not_match:type_name -> nokv.error.v1.StoreNotMatch
+	6,  // 5: nokv.error.v1.RegionError.region_not_found:type_name -> nokv.error.v1.RegionNotFound
+	7,  // 6: nokv.error.v1.RegionError.key_not_in_region:type_name -> nokv.error.v1.KeyNotInRegion
+	8,  // 7: nokv.error.v1.NotLeader.leader:type_name -> nokv.meta.legacy.v1.RegionPeer
+	9,  // 8: nokv.error.v1.EpochNotMatch.current_epoch:type_name -> nokv.meta.legacy.v1.RegionEpoch
+	10, // 9: nokv.error.v1.EpochNotMatch.regions:type_name -> nokv.meta.legacy.v1.RegionMeta
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -541,27 +542,26 @@ var file_errorpb_proto_depIdxs = []int32{
 	0,  // [0:10] is the sub-list for field type_name
 }
 
-func init() { file_errorpb_proto_init() }
-func file_errorpb_proto_init() {
-	if File_errorpb_proto != nil {
+func init() { file_error_error_proto_init() }
+func file_error_error_proto_init() {
+	if File_error_error_proto != nil {
 		return
 	}
-	file_metapb_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_errorpb_proto_rawDesc), len(file_errorpb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_error_error_proto_rawDesc), len(file_error_error_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_errorpb_proto_goTypes,
-		DependencyIndexes: file_errorpb_proto_depIdxs,
-		MessageInfos:      file_errorpb_proto_msgTypes,
+		GoTypes:           file_error_error_proto_goTypes,
+		DependencyIndexes: file_error_error_proto_depIdxs,
+		MessageInfos:      file_error_error_proto_msgTypes,
 	}.Build()
-	File_errorpb_proto = out.File
-	file_errorpb_proto_goTypes = nil
-	file_errorpb_proto_depIdxs = nil
+	File_error_error_proto = out.File
+	file_error_error_proto_goTypes = nil
+	file_error_error_proto_depIdxs = nil
 }

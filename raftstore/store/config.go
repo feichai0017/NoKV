@@ -2,9 +2,9 @@ package store
 
 import (
 	"context"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -92,6 +92,6 @@ type Config struct {
 	OperationCooldown  time.Duration
 	OperationInterval  time.Duration
 	OperationBurst     int
-	CommandApplier     func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error)
+	CommandApplier     func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
 }

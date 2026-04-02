@@ -10,6 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"math"
 	"math/big"
 	"net"
@@ -34,19 +36,17 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 
 	"google.golang.org/grpc/credentials"
-
-	"github.com/feichai0017/NoKV/pb"
 )
 
 func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) []byte {
 	t.Helper()
-	req := &pb.RaftCmdRequest{
-		Requests: []*pb.Request{
+	req := &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{
 			{
-				CmdType: pb.CmdType_CMD_PREWRITE,
-				Cmd: &pb.Request_Prewrite{Prewrite: &pb.PrewriteRequest{
-					Mutations: []*pb.Mutation{{
-						Op:    pb.Mutation_Put,
+				CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+				Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
+					Mutations: []*kvrpcpb.Mutation{{
+						Op:    kvrpcpb.Mutation_Put,
 						Key:   append([]byte(nil), key...),
 						Value: append([]byte(nil), value...),
 					}},
@@ -56,8 +56,8 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 				}},
 			},
 			{
-				CmdType: pb.CmdType_CMD_COMMIT,
-				Cmd: &pb.Request_Commit{Commit: &pb.CommitRequest{
+				CmdType: raftcmdpb.CmdType_CMD_COMMIT,
+				Cmd: &raftcmdpb.Request_Commit{Commit: &kvrpcpb.CommitRequest{
 					Keys:          [][]byte{append([]byte(nil), key...)},
 					StartVersion:  startVersion,
 					CommitVersion: startVersion + 1,

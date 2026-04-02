@@ -2,12 +2,12 @@ package lsm
 
 import (
 	"errors"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	"github.com/stretchr/testify/require"
@@ -30,7 +30,7 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 	require.NotNil(t, bd.index)
 	require.NotEmpty(t, bd.index)
 
-	var tableIndex pb.TableIndex
+	var tableIndex storagepb.TableIndex
 	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
 	require.Equal(t, uint32(builder.staleDataSize), tableIndex.GetStaleDataSize())
 	require.Equal(t, uint64(builder.valueSize), tableIndex.GetValueSize())

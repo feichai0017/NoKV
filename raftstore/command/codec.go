@@ -2,8 +2,8 @@ package command
 
 import (
 	"fmt"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
-	"github.com/feichai0017/NoKV/pb"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -20,7 +20,7 @@ const (
 
 // Encode serialises the provided RaftCmdRequest and prefixes it with the
 // command marker so peers can differentiate it from legacy payloads.
-func Encode(req *pb.RaftCmdRequest) ([]byte, error) {
+func Encode(req *raftcmdpb.RaftCmdRequest) ([]byte, error) {
 	if req == nil {
 		return nil, fmt.Errorf("raftstore: nil raft command")
 	}
@@ -44,11 +44,11 @@ func Encode(req *pb.RaftCmdRequest) ([]byte, error) {
 // Decode inspects the provided entry payload. When the command prefix is
 // present it unmarshals the embedded RaftCmdRequest and returns it alongside a
 // boolean indicating whether the payload contained a command.
-func Decode(data []byte) (*pb.RaftCmdRequest, bool, error) {
+func Decode(data []byte) (*raftcmdpb.RaftCmdRequest, bool, error) {
 	if len(data) == 0 || data[0] != PayloadPrefix {
 		return nil, false, nil
 	}
-	var req pb.RaftCmdRequest
+	var req raftcmdpb.RaftCmdRequest
 	if err := proto.Unmarshal(data[1:], &req); err != nil {
 		return nil, true, err
 	}

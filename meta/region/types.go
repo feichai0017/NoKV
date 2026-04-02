@@ -21,4 +21,3 @@ type Epoch struct {
 	Version     uint64 `json:"version"`
 	ConfVersion uint64 `json:"conf_version"`
 }
-

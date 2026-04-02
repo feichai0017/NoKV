@@ -4,9 +4,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             (unknown)
-// source: kvrpcpb.proto
+// source: kv/kv.proto
 
-package pb
+package kvrpcpb
 
 import (
 	context "context"
@@ -21,14 +21,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NoKV_KvGet_FullMethodName            = "/pb.NoKV/KvGet"
-	NoKV_KvBatchGet_FullMethodName       = "/pb.NoKV/KvBatchGet"
-	NoKV_KvScan_FullMethodName           = "/pb.NoKV/KvScan"
-	NoKV_KvPrewrite_FullMethodName       = "/pb.NoKV/KvPrewrite"
-	NoKV_KvCommit_FullMethodName         = "/pb.NoKV/KvCommit"
-	NoKV_KvBatchRollback_FullMethodName  = "/pb.NoKV/KvBatchRollback"
-	NoKV_KvResolveLock_FullMethodName    = "/pb.NoKV/KvResolveLock"
-	NoKV_KvCheckTxnStatus_FullMethodName = "/pb.NoKV/KvCheckTxnStatus"
+	NoKV_KvGet_FullMethodName            = "/nokv.kv.v1.NoKV/KvGet"
+	NoKV_KvBatchGet_FullMethodName       = "/nokv.kv.v1.NoKV/KvBatchGet"
+	NoKV_KvScan_FullMethodName           = "/nokv.kv.v1.NoKV/KvScan"
+	NoKV_KvPrewrite_FullMethodName       = "/nokv.kv.v1.NoKV/KvPrewrite"
+	NoKV_KvCommit_FullMethodName         = "/nokv.kv.v1.NoKV/KvCommit"
+	NoKV_KvBatchRollback_FullMethodName  = "/nokv.kv.v1.NoKV/KvBatchRollback"
+	NoKV_KvResolveLock_FullMethodName    = "/nokv.kv.v1.NoKV/KvResolveLock"
+	NoKV_KvCheckTxnStatus_FullMethodName = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
 )
 
 // NoKVClient is the client API for NoKV service.
@@ -346,7 +346,7 @@ func _NoKV_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec fu
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var NoKV_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pb.NoKV",
+	ServiceName: "nokv.kv.v1.NoKV",
 	HandlerType: (*NoKVServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -383,5 +383,5 @@ var NoKV_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "kvrpcpb.proto",
+	Metadata: "kv/kv.proto",
 }

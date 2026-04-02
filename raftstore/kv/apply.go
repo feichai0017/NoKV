@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/utils"
@@ -19,20 +20,20 @@ const defaultLatchSlots = 512
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Only MVCC prewrite/commit operations
 // are supported at the moment.
-func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("kv: nil raft command")
 	}
 	if latches == nil {
 		latches = latch.NewManager(defaultLatchSlots)
 	}
-	resp := &pb.RaftCmdResponse{Header: req.Header}
+	resp := &raftcmdpb.RaftCmdResponse{Header: req.Header}
 	for _, r := range req.Requests {
 		if r == nil {
 			continue
 		}
 		switch r.GetCmdType() {
-		case pb.CmdType_CMD_GET:
+		case raftcmdpb.CmdType_CMD_GET:
 			result, keyErr, err := handleGet(db, r.GetGet())
 			if err != nil {
 				return nil, err
@@ -40,28 +41,28 @@ func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *pb.RaftCmdRequest) (*
 			if keyErr != nil {
 				result.Error = keyErr
 			}
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Get{Get: result}})
-		case pb.CmdType_CMD_PREWRITE:
-			result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
-		case pb.CmdType_CMD_COMMIT:
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Get{Get: result}})
+		case raftcmdpb.CmdType_CMD_PREWRITE:
+			result := &kvrpcpb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: result}})
+		case raftcmdpb.CmdType_CMD_COMMIT:
 			err := percolator.Commit(db, latches, r.GetCommit())
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
-		case pb.CmdType_CMD_BATCH_ROLLBACK:
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: err}}})
+		case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
 			err := percolator.BatchRollback(db, latches, r.GetBatchRollback())
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_BatchRollback{BatchRollback: &pb.BatchRollbackResponse{Error: err}}})
-		case pb.CmdType_CMD_RESOLVE_LOCK:
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_BatchRollback{BatchRollback: &kvrpcpb.BatchRollbackResponse{Error: err}}})
+		case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
 			count, err := percolator.ResolveLock(db, latches, r.GetResolveLock())
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_ResolveLock{ResolveLock: &pb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
-		case pb.CmdType_CMD_CHECK_TXN_STATUS:
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
+		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_CheckTxnStatus{CheckTxnStatus: result}})
-		case pb.CmdType_CMD_SCAN:
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_CheckTxnStatus{CheckTxnStatus: result}})
+		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
 				return nil, err
 			}
-			resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Scan{Scan: result}})
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Scan{Scan: result}})
 		default:
 			return nil, fmt.Errorf("kv: unsupported command %v", r.GetCmdType())
 		}
@@ -71,18 +72,18 @@ func Apply(db NoKV.MVCCStore, latches *latch.Manager, req *pb.RaftCmdRequest) (*
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func NewApplier(db NoKV.MVCCStore, latches *latch.Manager) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if latches == nil {
 		latches = latch.NewManager(defaultLatchSlots)
 	}
-	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		return Apply(db, latches, req)
 	}
 }
 
-func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyError, error) {
+func handleGet(db NoKV.MVCCStore, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, *kvrpcpb.KeyError, error) {
 	if req == nil {
-		return &pb.GetResponse{NotFound: true}, nil, nil
+		return &kvrpcpb.GetResponse{NotFound: true}, nil, nil
 	}
 	reader := percolator.NewReader(db)
 	lock, err := reader.GetLock(req.GetKey())
@@ -90,7 +91,7 @@ func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyE
 		return nil, nil, err
 	}
 	if lock != nil && req.GetVersion() >= lock.Ts {
-		keyErr := &pb.KeyError{Locked: &pb.Locked{
+		keyErr := &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
 			PrimaryLock: lock.Primary,
 			Key:         kv.SafeCopy(nil, req.GetKey()),
 			LockVersion: lock.Ts,
@@ -98,21 +99,21 @@ func handleGet(db NoKV.MVCCStore, req *pb.GetRequest) (*pb.GetResponse, *pb.KeyE
 			LockType:    lock.Kind,
 			MinCommitTs: lock.MinCommitTs,
 		}}
-		return &pb.GetResponse{}, keyErr, nil
+		return &kvrpcpb.GetResponse{}, keyErr, nil
 	}
 	val, expiresAt, err := reader.GetValue(req.GetKey(), req.GetVersion())
 	if err != nil {
 		if errors.Is(err, utils.ErrKeyNotFound) {
-			return &pb.GetResponse{NotFound: true}, nil, nil
+			return &kvrpcpb.GetResponse{NotFound: true}, nil, nil
 		}
 		return nil, nil, err
 	}
-	return &pb.GetResponse{Value: val, ExpiresAt: expiresAt}, nil, nil
+	return &kvrpcpb.GetResponse{Value: val, ExpiresAt: expiresAt}, nil, nil
 }
 
-func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error) {
+func handleScan(db NoKV.MVCCStore, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	if req == nil {
-		return &pb.ScanResponse{}, nil
+		return &kvrpcpb.ScanResponse{}, nil
 	}
 	if req.GetReverse() {
 		return nil, fmt.Errorf("kv: reverse scan not supported")
@@ -132,7 +133,7 @@ func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error
 	includeStart := req.GetIncludeStart()
 	started := len(startKey) == 0
 
-	resp := &pb.ScanResponse{}
+	resp := &kvrpcpb.ScanResponse{}
 	iter.Seek(kv.InternalKey(kv.CFWrite, startKey, kv.MaxVersion))
 	reader := percolator.NewReader(db)
 	for iter.Valid() && len(resp.Kvs) < limit {
@@ -182,7 +183,7 @@ func handleScan(db NoKV.MVCCStore, req *pb.ScanRequest) (*pb.ScanResponse, error
 			return nil, err
 		}
 		if found {
-			resp.Kvs = append(resp.Kvs, &pb.KV{
+			resp.Kvs = append(resp.Kvs, &kvrpcpb.KV{
 				Key:       key,
 				Value:     value,
 				Version:   readTs,
@@ -247,7 +248,7 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 			return nil, 0, false, err
 		}
 		switch write.Kind {
-		case pb.Mutation_Delete, pb.Mutation_Rollback:
+		case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Rollback:
 			advanceToNextUserKey(iter, key)
 			return nil, 0, false, nil
 		default:
@@ -285,12 +286,12 @@ func collectVisibleValue(db NoKV.MVCCStore, iter utils.Iterator, key []byte, rea
 	return nil, 0, false, nil
 }
 
-func lockedError(key []byte, lock *percolator.Lock) *pb.KeyError {
+func lockedError(key []byte, lock *percolator.Lock) *kvrpcpb.KeyError {
 	if lock == nil {
 		return nil
 	}
-	return &pb.KeyError{
-		Locked: &pb.Locked{
+	return &kvrpcpb.KeyError{
+		Locked: &kvrpcpb.Locked{
 			PrimaryLock: lock.Primary,
 			Key:         kv.SafeCopy(nil, key),
 			LockVersion: lock.Ts,

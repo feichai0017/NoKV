@@ -1,11 +1,12 @@
 package kv
 
 import (
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -28,10 +29,10 @@ func TestNewEntryApplierAppliesEntries(t *testing.T) {
 
 	applier := NewEntryApplier(db)
 
-	raftReq := &pb.RaftCmdRequest{
-		Requests: []*pb.Request{{
-			CmdType: pb.CmdType_CMD_GET,
-			Cmd:     &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("k1"), Version: 1}},
+	raftReq := &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd:     &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("k1"), Version: 1}},
 		}},
 	}
 	raftData, err := command.Encode(raftReq)
@@ -53,10 +54,10 @@ func TestNewEntryApplierRejectsLegacyPayload(t *testing.T) {
 
 	applier := NewEntryApplier(db)
 
-	cmdData, err := command.Encode(&pb.RaftCmdRequest{
-		Requests: []*pb.Request{{
-			CmdType: pb.CmdType_CMD_GET,
-			Cmd:     &pb.Request_Get{Get: &pb.GetRequest{Key: []byte("k1"), Version: 1}},
+	cmdData, err := command.Encode(&raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd:     &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("k1"), Version: 1}},
 		}},
 	})
 	require.NoError(t, err)
@@ -75,7 +76,7 @@ func TestLockedErrorMapping(t *testing.T) {
 		Primary:     []byte("primary"),
 		Ts:          42,
 		TTL:         9000,
-		Kind:        pb.Mutation_Put,
+		Kind:        kvrpcpb.Mutation_Put,
 		MinCommitTs: 100,
 	}
 	keyErr := lockedError(key, lock)
@@ -101,14 +102,14 @@ func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 	commitTs := uint64(22)
 	expiresAt := ^uint64(0)
 	write := percolator.EncodeWrite(percolator.Write{
-		Kind:       pb.Mutation_Put,
+		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    startTs,
 		ShortValue: []byte("short-v"),
 		ExpiresAt:  expiresAt,
 	})
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, commitTs, write, 0, 0)
 
-	resp, err := handleScan(db, &pb.ScanRequest{
+	resp, err := handleScan(db, &kvrpcpb.ScanRequest{
 		StartKey:     key,
 		Limit:        1,
 		Version:      30,
@@ -131,14 +132,14 @@ func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
 
 	key := []byte("short-expired")
 	write := percolator.EncodeWrite(percolator.Write{
-		Kind:       pb.Mutation_Put,
+		Kind:       kvrpcpb.Mutation_Put,
 		StartTs:    11,
 		ShortValue: []byte("short-v"),
 		ExpiresAt:  1, // definitely expired
 	})
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 22, write, 0, 0)
 
-	resp, err := handleScan(db, &pb.ScanRequest{
+	resp, err := handleScan(db, &kvrpcpb.ScanRequest{
 		StartKey:     key,
 		Limit:        1,
 		Version:      30,

@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"fmt"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"io"
 	"math"
 	"os"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/feichai0017/NoKV/file"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/vfs"
 	proto "google.golang.org/protobuf/proto"
@@ -426,7 +426,7 @@ func (tb *tableBuilder) done() (buildData, error) {
 }
 
 func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32, error) {
-	tableIndex := &pb.TableIndex{}
+	tableIndex := &storagepb.TableIndex{}
 	if len(bloom) > 0 {
 		tableIndex.BloomFilter = bloom
 	}
@@ -452,9 +452,9 @@ func (tb *tableBuilder) buildIndex(bloom []byte) ([]byte, uint32, error) {
 	return data, dataSize, nil
 }
 
-func (tb *tableBuilder) writeBlockOffsets() []*pb.BlockOffset {
+func (tb *tableBuilder) writeBlockOffsets() []*storagepb.BlockOffset {
 	var startOffset uint32
-	var offsets []*pb.BlockOffset
+	var offsets []*storagepb.BlockOffset
 	for _, bl := range tb.blockList {
 		offset := tb.writeBlockOffset(bl, startOffset)
 		offsets = append(offsets, offset)
@@ -463,8 +463,8 @@ func (tb *tableBuilder) writeBlockOffsets() []*pb.BlockOffset {
 	return offsets
 }
 
-func (b *tableBuilder) writeBlockOffset(bl *block, startOffset uint32) *pb.BlockOffset {
-	offset := &pb.BlockOffset{}
+func (b *tableBuilder) writeBlockOffset(bl *block, startOffset uint32) *storagepb.BlockOffset {
+	offset := &storagepb.BlockOffset{}
 	offset.Key = bl.baseKey
 	offset.Len = uint32(bl.end)
 	offset.Offset = startOffset

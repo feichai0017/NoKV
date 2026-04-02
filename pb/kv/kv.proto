@@ -1,12 +1,12 @@
 // Use scripts/gen.sh to generate .pb.go files.
 syntax = "proto3";
 
-package pb;
+package nokv.kv.v1;
 
-import "errorpb.proto";
-import "metapb.proto";
+import "error/error.proto";
+import "legacy/meta.proto";
 
-option go_package = "github.com/feichai0017/NoKV/pb";
+option go_package = "github.com/feichai0017/NoKV/pb/kv;kvrpcpb";
 
 // Enum for read consistency control and read strategy options protocal
 enum ReadConsistency {
@@ -156,8 +156,8 @@ message CheckTxnStatusResponse {
 
 message Context {
   uint64 region_id = 1;
-  RegionEpoch region_epoch = 2;
-  RegionPeer peer = 3;
+  nokv.meta.legacy.v1.RegionEpoch region_epoch = 2;
+  nokv.meta.legacy.v1.RegionPeer peer = 3;
 
   ReadConsistency read_consistency = 4;
   ReadPreference read_preference = 5;
@@ -172,7 +172,7 @@ message KvGetRequest {
 
 message KvGetResponse {
   GetResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvBatchGetRequest {
@@ -182,7 +182,7 @@ message KvBatchGetRequest {
 
 message KvBatchGetResponse {
   BatchGetResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvScanRequest {
@@ -192,7 +192,7 @@ message KvScanRequest {
 
 message KvScanResponse {
   ScanResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvPrewriteRequest {
@@ -202,7 +202,7 @@ message KvPrewriteRequest {
 
 message KvPrewriteResponse {
   PrewriteResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvCommitRequest {
@@ -212,7 +212,7 @@ message KvCommitRequest {
 
 message KvCommitResponse {
   CommitResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvBatchRollbackRequest {
@@ -222,7 +222,7 @@ message KvBatchRollbackRequest {
 
 message KvBatchRollbackResponse {
   BatchRollbackResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvResolveLockRequest {
@@ -232,7 +232,7 @@ message KvResolveLockRequest {
 
 message KvResolveLockResponse {
   ResolveLockResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 message KvCheckTxnStatusRequest {
@@ -242,7 +242,7 @@ message KvCheckTxnStatusRequest {
 
 message KvCheckTxnStatusResponse {
   CheckTxnStatusResponse response = 1;
-  RegionError region_error = 2;
+  nokv.error.v1.RegionError region_error = 2;
 }
 
 service NoKV {

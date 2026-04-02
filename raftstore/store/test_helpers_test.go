@@ -3,12 +3,13 @@ package store
 import (
 	"context"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 	"testing"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -238,21 +239,21 @@ func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, grou
 	return storage
 }
 
-func newTestMVCCApplier(db NoKV.MVCCStore) func(*pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
+func newTestMVCCApplier(db NoKV.MVCCStore) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	latches := latch.NewManager(512)
-	return func(req *pb.RaftCmdRequest) (*pb.RaftCmdResponse, error) {
-		resp := &pb.RaftCmdResponse{Header: req.GetHeader()}
+	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		resp := &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}
 		for _, r := range req.GetRequests() {
 			if r == nil {
 				continue
 			}
 			switch r.GetCmdType() {
-			case pb.CmdType_CMD_PREWRITE:
-				result := &pb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
-				resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Prewrite{Prewrite: result}})
-			case pb.CmdType_CMD_COMMIT:
+			case raftcmdpb.CmdType_CMD_PREWRITE:
+				result := &kvrpcpb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: result}})
+			case raftcmdpb.CmdType_CMD_COMMIT:
 				err := percolator.Commit(db, latches, r.GetCommit())
-				resp.Responses = append(resp.Responses, &pb.Response{Cmd: &pb.Response_Commit{Commit: &pb.CommitResponse{Error: err}}})
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: err}}})
 			default:
 				return nil, fmt.Errorf("unsupported test command %v", r.GetCmdType())
 			}

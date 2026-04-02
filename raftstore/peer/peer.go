@@ -5,10 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/engine"
@@ -25,7 +25,7 @@ import (
 type ApplyFunc func(entries []myraft.Entry) error
 
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
-type AdminApplyFunc func(cmd *pb.AdminCommand) error
+type AdminApplyFunc func(cmd *raftcmdpb.AdminCommand) error
 
 // SnapshotExportFunc materializes region state for one outgoing raft snapshot
 // message as an opaque payload.
@@ -73,11 +73,11 @@ func isAdminEntry(data []byte) bool {
 	return len(data) > 0 && data[0] == adminCommandPrefix
 }
 
-func decodeAdminCommand(data []byte) (*pb.AdminCommand, error) {
+func decodeAdminCommand(data []byte) (*raftcmdpb.AdminCommand, error) {
 	if len(data) <= 1 {
 		return nil, fmt.Errorf("raftstore: admin command payload too short")
 	}
-	var cmd pb.AdminCommand
+	var cmd raftcmdpb.AdminCommand
 	if err := proto.Unmarshal(data[1:], &cmd); err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func (p *Peer) Propose(data []byte) error {
 
 // ProposeCommand encodes the provided raft command request and submits it to
 // the raft log.
-func (p *Peer) ProposeCommand(req *pb.RaftCmdRequest) error {
+func (p *Peer) ProposeCommand(req *raftcmdpb.RaftCmdRequest) error {
 	payload, err := command.Encode(req)
 	if err != nil {
 		return err
@@ -250,7 +250,7 @@ func (p *Peer) ProposeCommand(req *pb.RaftCmdRequest) error {
 	return p.Propose(payload)
 }
 
-// ProposeAdmin submits an admin command encoded as pb.AdminCommand payload.
+// ProposeAdmin submits an admin command encoded as raftcmdpb.AdminCommand payload.
 func (p *Peer) ProposeAdmin(cmdData []byte) error {
 	if len(cmdData) == 0 {
 		return fmt.Errorf("raftstore: empty admin command")
@@ -615,7 +615,7 @@ func (p *Peer) maybeCompact(applied uint64) error {
 	return ws.MaybeCompact(applied, p.logRetainEntries)
 }
 
-func (p *Peer) applyAdminCommand(cmd *pb.AdminCommand) error {
+func (p *Peer) applyAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 	if p == nil || cmd == nil {
 		return nil
 	}

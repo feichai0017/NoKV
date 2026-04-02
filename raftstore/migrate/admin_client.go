@@ -3,9 +3,10 @@ package migrate
 import (
 	"context"
 	"fmt"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	"io"
 
-	"github.com/feichai0017/NoKV/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -15,40 +16,40 @@ const adminSnapshotChunkSize = 64 << 10
 // SnapshotExportStream carries one exported region snapshot stream.
 type SnapshotExportStream struct {
 	Header []byte
-	Region *pb.RegionMeta
+	Region *metapb.RegionMeta
 	Reader io.ReadCloser
 }
 
 // AdminClient captures the admin control-plane calls used by migration.
 type AdminClient interface {
-	AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error)
-	RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error)
-	TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error)
-	ExportRegionSnapshotStream(ctx context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error)
-	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error)
-	RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error)
+	AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error)
+	RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error)
+	TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error)
+	ExportRegionSnapshotStream(ctx context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error)
+	ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionMeta, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error)
+	RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error)
 }
 
 // DialFunc connects one admin client to one store address.
 type DialFunc func(ctx context.Context, addr string) (AdminClient, func() error, error)
 
 type grpcAdminClient struct {
-	client pb.RaftAdminClient
+	client adminpb.RaftAdminClient
 }
 
-func (c *grpcAdminClient) AddPeer(ctx context.Context, req *pb.AddPeerRequest) (*pb.AddPeerResponse, error) {
+func (c *grpcAdminClient) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
 	return c.client.AddPeer(ctx, req)
 }
 
-func (c *grpcAdminClient) RemovePeer(ctx context.Context, req *pb.RemovePeerRequest) (*pb.RemovePeerResponse, error) {
+func (c *grpcAdminClient) RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
 	return c.client.RemovePeer(ctx, req)
 }
 
-func (c *grpcAdminClient) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
+func (c *grpcAdminClient) TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
 	return c.client.TransferLeader(ctx, req)
 }
 
-func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *pb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
+func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *adminpb.ExportRegionSnapshotStreamRequest) (*SnapshotExportStream, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream, err := c.client.ExportRegionSnapshotStream(streamCtx, req)
 	if err != nil {
@@ -79,7 +80,7 @@ func (c *grpcAdminClient) ExportRegionSnapshotStream(ctx context.Context, req *p
 	}, nil
 }
 
-func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header []byte, region *pb.RegionMeta, r io.Reader) (*pb.ImportRegionSnapshotResponse, error) {
+func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header []byte, region *metapb.RegionMeta, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error) {
 	if len(header) == 0 {
 		return nil, fmt.Errorf("migrate: import region snapshot stream requires snapshot header")
 	}
@@ -96,7 +97,7 @@ func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header
 	buf := make([]byte, adminSnapshotChunkSize)
 	first := true
 	sendChunk := func(chunk []byte) error {
-		req := &pb.ImportRegionSnapshotStreamRequest{Chunk: append([]byte(nil), chunk...)}
+		req := &adminpb.ImportRegionSnapshotStreamRequest{Chunk: append([]byte(nil), chunk...)}
 		if first {
 			req.SnapshotHeader = header
 			req.Region = region
@@ -121,7 +122,7 @@ func (c *grpcAdminClient) ImportRegionSnapshotStream(ctx context.Context, header
 	return stream.CloseAndRecv()
 }
 
-func (c *grpcAdminClient) RegionRuntimeStatus(ctx context.Context, req *pb.RegionRuntimeStatusRequest) (*pb.RegionRuntimeStatusResponse, error) {
+func (c *grpcAdminClient) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
 	return c.client.RegionRuntimeStatus(ctx, req)
 }
 
@@ -131,12 +132,12 @@ func defaultDial(ctx context.Context, addr string) (AdminClient, func() error, e
 		return nil, nil, err
 	}
 	closeFn := func() error { return conn.Close() }
-	return &grpcAdminClient{client: pb.NewRaftAdminClient(conn)}, closeFn, nil
+	return &grpcAdminClient{client: adminpb.NewRaftAdminClient(conn)}, closeFn, nil
 }
 
 type snapshotChunkReader struct {
 	cancel func()
-	stream pb.RaftAdmin_ExportRegionSnapshotStreamClient
+	stream adminpb.RaftAdmin_ExportRegionSnapshotStreamClient
 	buf    []byte
 	done   bool
 }

@@ -433,9 +433,9 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 		}}
 	case event.PeerChange != nil:
 		pbEvent.Payload = &metapb.RootEvent_PeerChange{PeerChange: &metapb.RootPeerChange{
-			RegionId:   event.PeerChange.RegionID,
-			StoreId:    event.PeerChange.StoreID,
-			PeerId:     event.PeerChange.PeerID,
+			RegionId:    event.PeerChange.RegionID,
+			StoreId:     event.PeerChange.StoreID,
+			PeerId:      event.PeerChange.PeerID,
 			Descriptor_: metacodec.DescriptorToProto(event.PeerChange.Region),
 		}}
 	case event.LeaderTransfer != nil:

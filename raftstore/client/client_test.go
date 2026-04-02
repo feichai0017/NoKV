@@ -3,6 +3,9 @@ package client
 import (
 	"context"
 	"errors"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/legacy"
 	pdpb "github.com/feichai0017/NoKV/pb/pd"
 	"net"
 	"sort"
@@ -19,7 +22,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
@@ -34,7 +36,7 @@ type clusterPending struct {
 }
 
 type clusterRegion struct {
-	meta         *pb.RegionMeta
+	meta         *metapb.RegionMeta
 	leaderStore  uint64
 	pending      map[uint64]map[string]clusterPending // startVersion -> key
 	committed    map[string]clusterValue
@@ -67,7 +69,7 @@ func newMockCluster(regions ...clusterRegion) *mockCluster {
 	return mc
 }
 
-func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
+func (mc *mockCluster) regionMeta(id uint64) (*metapb.RegionMeta, bool) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	region, ok := mc.regions[id]
@@ -79,8 +81,8 @@ func (mc *mockCluster) regionMeta(id uint64) (*pb.RegionMeta, bool) {
 
 type mockRegionResolver struct {
 	mu       sync.Mutex
-	region   *pb.RegionMeta
-	regions  []*pb.RegionMeta
+	region   *metapb.RegionMeta
+	regions  []*metapb.RegionMeta
 	err      error
 	errs     []error
 	calls    int
@@ -95,7 +97,7 @@ type blockingRegionResolver struct {
 type keyedBlockingResolver struct {
 	started     chan struct{}
 	blockedKeys map[string]struct{}
-	regions     []*pb.RegionMeta
+	regions     []*metapb.RegionMeta
 }
 
 func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pdpb.GetRegionByKeyRequest) (*pdpb.GetRegionByKeyResponse, error) {
@@ -175,7 +177,7 @@ func (kr *keyedBlockingResolver) Close() error { return nil }
 func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
 	cluster.mu.Lock()
 	defer cluster.mu.Unlock()
-	regions := make([]*pb.RegionMeta, 0, len(cluster.regions))
+	regions := make([]*metapb.RegionMeta, 0, len(cluster.regions))
 	for _, region := range cluster.regions {
 		if region == nil || region.meta == nil {
 			continue
@@ -188,7 +190,7 @@ func resolverFromCluster(cluster *mockCluster) *mockRegionResolver {
 	return &mockRegionResolver{regions: regions}
 }
 
-func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.PrewriteRequest) (*pb.PrewriteResponse, *pb.RegionError) {
+func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *kvrpcpb.PrewriteRequest) (*kvrpcpb.PrewriteResponse, *errorpb.RegionError) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	region, ok := mc.regions[regionID]
@@ -200,7 +202,7 @@ func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.Prewrit
 		return nil, notLeaderError(region)
 	}
 	if req == nil {
-		return &pb.PrewriteResponse{}, nil
+		return &kvrpcpb.PrewriteResponse{}, nil
 	}
 	pending := region.pending[req.GetStartVersion()]
 	if pending == nil {
@@ -209,21 +211,21 @@ func (mc *mockCluster) prewrite(storeID uint64, regionID uint64, req *pb.Prewrit
 	}
 	for _, mut := range req.GetMutations() {
 		switch mut.GetOp() {
-		case pb.Mutation_Put:
+		case kvrpcpb.Mutation_Put:
 			pending[string(mut.GetKey())] = clusterPending{value: append([]byte(nil), mut.GetValue()...)}
-		case pb.Mutation_Delete:
+		case kvrpcpb.Mutation_Delete:
 			pending[string(mut.GetKey())] = clusterPending{delete: true}
 		default:
-			return &pb.PrewriteResponse{
-				Errors: []*pb.KeyError{{Abort: "unsupported mutation"}},
+			return &kvrpcpb.PrewriteResponse{
+				Errors: []*kvrpcpb.KeyError{{Abort: "unsupported mutation"}},
 			}, nil
 		}
 	}
 	region.prewriteHits++
-	return &pb.PrewriteResponse{}, nil
+	return &kvrpcpb.PrewriteResponse{}, nil
 }
 
-func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *pb.CommitRequest) (*pb.CommitResponse, *pb.RegionError) {
+func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *kvrpcpb.CommitRequest) (*kvrpcpb.CommitResponse, *errorpb.RegionError) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	region, ok := mc.regions[regionID]
@@ -236,11 +238,11 @@ func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *pb.CommitReq
 		return nil, notLeaderError(region)
 	}
 	if req == nil {
-		return &pb.CommitResponse{}, nil
+		return &kvrpcpb.CommitResponse{}, nil
 	}
 	pending := region.pending[req.GetStartVersion()]
 	if pending == nil {
-		return &pb.CommitResponse{}, nil
+		return &kvrpcpb.CommitResponse{}, nil
 	}
 	for _, key := range req.GetKeys() {
 		pend, ok := pending[string(key)]
@@ -261,10 +263,10 @@ func (mc *mockCluster) commit(storeID uint64, regionID uint64, req *pb.CommitReq
 		delete(region.pending, req.GetStartVersion())
 	}
 	region.commitHits++
-	return &pb.CommitResponse{}, nil
+	return &kvrpcpb.CommitResponse{}, nil
 }
 
-func (mc *mockCluster) get(storeID uint64, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+func (mc *mockCluster) get(storeID uint64, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	ctx := req.GetContext()
 	if ctx == nil {
 		return nil, statusInvalidArgument("context missing")
@@ -278,24 +280,24 @@ func (mc *mockCluster) get(storeID uint64, req *pb.KvGetRequest) (*pb.KvGetRespo
 	}
 	if storeID != region.leaderStore {
 		atomic.AddInt32(&mc.notLeaderCount, 1)
-		return &pb.KvGetResponse{RegionError: notLeaderError(region)}, nil
+		return &kvrpcpb.KvGetResponse{RegionError: notLeaderError(region)}, nil
 	}
 	if req.GetRequest() == nil {
-		return &pb.KvGetResponse{}, nil
+		return &kvrpcpb.KvGetResponse{}, nil
 	}
 	key := req.GetRequest().GetKey()
 	version := req.GetRequest().GetVersion()
 	region.getHits++
 	val, ok := region.committed[string(key)]
 	if !ok || val.commitVersion > version {
-		return &pb.KvGetResponse{Response: &pb.GetResponse{NotFound: true}}, nil
+		return &kvrpcpb.KvGetResponse{Response: &kvrpcpb.GetResponse{NotFound: true}}, nil
 	}
-	return &pb.KvGetResponse{
-		Response: &pb.GetResponse{Value: append([]byte(nil), val.value...)},
+	return &kvrpcpb.KvGetResponse{
+		Response: &kvrpcpb.GetResponse{Value: append([]byte(nil), val.value...)},
 	}, nil
 }
 
-func (mc *mockCluster) scan(storeID uint64, req *pb.KvScanRequest) (*pb.KvScanResponse, error) {
+func (mc *mockCluster) scan(storeID uint64, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	ctx := req.GetContext()
 	if ctx == nil {
 		return nil, statusInvalidArgument("context missing")
@@ -309,11 +311,11 @@ func (mc *mockCluster) scan(storeID uint64, req *pb.KvScanRequest) (*pb.KvScanRe
 	}
 	if storeID != region.leaderStore {
 		atomic.AddInt32(&mc.notLeaderCount, 1)
-		return &pb.KvScanResponse{RegionError: notLeaderError(region)}, nil
+		return &kvrpcpb.KvScanResponse{RegionError: notLeaderError(region)}, nil
 	}
 	scanReq := req.GetRequest()
 	if scanReq == nil {
-		return &pb.KvScanResponse{Response: &pb.ScanResponse{}}, nil
+		return &kvrpcpb.KvScanResponse{Response: &kvrpcpb.ScanResponse{}}, nil
 	}
 	startKey := scanReq.GetStartKey()
 	version := scanReq.GetVersion()
@@ -328,7 +330,7 @@ func (mc *mockCluster) scan(storeID uint64, req *pb.KvScanRequest) (*pb.KvScanRe
 		}
 	}
 	sort.Strings(keys)
-	resp := &pb.ScanResponse{}
+	resp := &kvrpcpb.ScanResponse{}
 	for _, key := range keys {
 		if len(resp.Kvs) >= int(limit) {
 			break
@@ -337,13 +339,13 @@ func (mc *mockCluster) scan(storeID uint64, req *pb.KvScanRequest) (*pb.KvScanRe
 			continue
 		}
 		val := region.committed[key]
-		resp.Kvs = append(resp.Kvs, &pb.KV{
+		resp.Kvs = append(resp.Kvs, &kvrpcpb.KV{
 			Key:   []byte(key),
 			Value: append([]byte(nil), val.value...),
 		})
 	}
 	region.scanHits++
-	return &pb.KvScanResponse{Response: resp}, nil
+	return &kvrpcpb.KvScanResponse{Response: resp}, nil
 }
 
 type mockService struct {
@@ -352,7 +354,7 @@ type mockService struct {
 }
 
 type blockingService struct {
-	pb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedNoKVServer
 	started chan struct{}
 }
 
@@ -381,27 +383,27 @@ func (s *regionBlockingService) signal() {
 	}
 }
 
-func (s *mockService) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+func (s *mockService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	return s.cluster.get(s.storeID, req)
 }
 
-func (s *mockService) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest) (*pb.KvBatchGetResponse, error) {
+func (s *mockService) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
 	batch := req.GetRequest()
 	if batch == nil || len(batch.GetRequests()) == 0 {
-		return &pb.KvBatchGetResponse{
-			Response: &pb.BatchGetResponse{},
+		return &kvrpcpb.KvBatchGetResponse{
+			Response: &kvrpcpb.BatchGetResponse{},
 		}, nil
 	}
-	responses := make([]*pb.GetResponse, 0, len(batch.GetRequests()))
+	responses := make([]*kvrpcpb.GetResponse, 0, len(batch.GetRequests()))
 	for _, getReq := range batch.GetRequests() {
 		if getReq == nil {
-			responses = append(responses, &pb.GetResponse{NotFound: true})
+			responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
 			continue
 		}
-		resp, err := s.cluster.get(s.storeID, &pb.KvGetRequest{
+		resp, err := s.cluster.get(s.storeID, &kvrpcpb.KvGetRequest{
 			Context: req.GetContext(),
 			Request: getReq,
 		})
@@ -409,76 +411,76 @@ func (s *mockService) KvBatchGet(ctx context.Context, req *pb.KvBatchGetRequest)
 			return nil, err
 		}
 		if resp.GetRegionError() != nil {
-			return &pb.KvBatchGetResponse{RegionError: resp.GetRegionError()}, nil
+			return &kvrpcpb.KvBatchGetResponse{RegionError: resp.GetRegionError()}, nil
 		}
 		if resp.GetResponse() != nil {
 			responses = append(responses, resp.GetResponse())
 		} else {
-			responses = append(responses, &pb.GetResponse{NotFound: true})
+			responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
 		}
 	}
-	return &pb.KvBatchGetResponse{
-		Response: &pb.BatchGetResponse{Responses: responses},
+	return &kvrpcpb.KvBatchGetResponse{
+		Response: &kvrpcpb.BatchGetResponse{Responses: responses},
 	}, nil
 }
 
-func (s *mockService) KvScan(ctx context.Context, req *pb.KvScanRequest) (*pb.KvScanResponse, error) {
+func (s *mockService) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	return s.cluster.scan(s.storeID, req)
 }
 
-func (s *mockService) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *mockService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
 	resp, regionErr := s.cluster.prewrite(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
-	return &pb.KvPrewriteResponse{
+	return &kvrpcpb.KvPrewriteResponse{
 		Response:    resp,
 		RegionError: regionErr,
 	}, nil
 }
 
-func (s *mockService) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+func (s *mockService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
 	resp, regionErr := s.cluster.commit(s.storeID, req.GetContext().GetRegionId(), req.GetRequest())
-	return &pb.KvCommitResponse{
+	return &kvrpcpb.KvCommitResponse{
 		Response:    resp,
 		RegionError: regionErr,
 	}, nil
 }
 
-func (s *mockService) KvBatchRollback(context.Context, *pb.KvBatchRollbackRequest) (*pb.KvBatchRollbackResponse, error) {
-	return &pb.KvBatchRollbackResponse{}, nil
+func (s *mockService) KvBatchRollback(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+	return &kvrpcpb.KvBatchRollbackResponse{}, nil
 }
 
-func (s *mockService) KvResolveLock(context.Context, *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
-	return &pb.KvResolveLockResponse{}, nil
+func (s *mockService) KvResolveLock(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+	return &kvrpcpb.KvResolveLockResponse{}, nil
 }
 
-func (s *mockService) KvCheckTxnStatus(context.Context, *pb.KvCheckTxnStatusRequest) (*pb.KvCheckTxnStatusResponse, error) {
-	return &pb.KvCheckTxnStatusResponse{}, nil
+func (s *mockService) KvCheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+	return &kvrpcpb.KvCheckTxnStatusResponse{}, nil
 }
 
-func (s *blockingService) KvGet(ctx context.Context, req *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+func (s *blockingService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *blockingService) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *blockingService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *blockingService) KvCommit(ctx context.Context, req *pb.KvCommitRequest) (*pb.KvCommitResponse, error) {
+func (s *blockingService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *regionBlockingService) KvPrewrite(ctx context.Context, req *pb.KvPrewriteRequest) (*pb.KvPrewriteResponse, error) {
+func (s *regionBlockingService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockPrewriteOn {
 		s.signal()
 		<-ctx.Done()
@@ -487,7 +489,7 @@ func (s *regionBlockingService) KvPrewrite(ctx context.Context, req *pb.KvPrewri
 	return s.mockService.KvPrewrite(ctx, req)
 }
 
-func (s *regionBlockingService) KvResolveLock(ctx context.Context, req *pb.KvResolveLockRequest) (*pb.KvResolveLockResponse, error) {
+func (s *regionBlockingService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockResolveLockOn {
 		s.signal()
 		<-ctx.Done()
@@ -500,7 +502,7 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	t.Helper()
 	srv := grpc.NewServer()
 	service := &mockService{storeID: storeID, cluster: cluster}
-	pb.RegisterNoKVServer(srv, service)
+	kvrpcpb.RegisterNoKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -512,10 +514,10 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	}
 }
 
-func startBlockingStore(t *testing.T, service pb.NoKVServer) (string, func()) {
+func startBlockingStore(t *testing.T, service kvrpcpb.NoKVServer) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	pb.RegisterNoKVServer(srv, service)
+	kvrpcpb.RegisterNoKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -530,13 +532,13 @@ func startBlockingStore(t *testing.T, service pb.NoKVServer) (string, func()) {
 func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 					{StoreId: 2, PeerId: 201},
 				},
@@ -544,13 +546,13 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               2,
 				StartKey:         []byte("m"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 102},
 					{StoreId: 2, PeerId: 202},
 				},
@@ -597,9 +599,9 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	mutations := []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
-		{Op: pb.Mutation_Put, Key: []byte("zenith"), Value: []byte("value-z")},
+	mutations := []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("zenith"), Value: []byte("value-z")},
 	}
 	err = cli.TwoPhaseCommit(ctx, []byte("alfa"), mutations, 100, 150, 3000)
 	require.NoError(t, err)
@@ -624,26 +626,26 @@ func TestClientTwoPhaseCommitAndGet(t *testing.T) {
 func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               2,
 				StartKey:         []byte("m"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 201},
 				},
 			},
@@ -684,14 +686,14 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got["alfa"].GetNotFound())
 
-	err = cli.Mutate(ctx, []byte("primary"), []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("other"), Value: []byte("v")},
+	err = cli.Mutate(ctx, []byte("primary"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("other"), Value: []byte("v")},
 	}, 1, 2, 3000)
 	require.Error(t, err)
 
-	require.NoError(t, cli.Mutate(ctx, []byte("alfa"), []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v2")},
-		{Op: pb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v3")},
+	require.NoError(t, cli.Mutate(ctx, []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v2")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v3")},
 	}, 80, 81, 3000))
 
 	resp, err := cli.CheckTxnStatus(ctx, []byte("alfa"), 1, 2)
@@ -702,7 +704,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), resolved)
 
-	errStr := (&KeyConflictError{Errors: []*pb.KeyError{{Abort: "boom"}}}).Error()
+	errStr := (&KeyConflictError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
 	require.Contains(t, errStr, "client: prewrite key errors")
 }
 
@@ -719,13 +721,13 @@ func TestNewRequiresRegionResolver(t *testing.T) {
 func TestClientRegionResolverLookupAndCache(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -769,17 +771,17 @@ func TestClientRegionResolverLookupAndCache(t *testing.T) {
 }
 
 type errorService struct {
-	pb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedNoKVServer
 }
 
-func (s *errorService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+func (s *errorService) KvGet(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	return nil, status.Error(codes.Unavailable, "boom")
 }
 
 func startErrorStore(t *testing.T) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	pb.RegisterNoKVServer(srv, &errorService{})
+	kvrpcpb.RegisterNoKVServer(srv, &errorService{})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -792,26 +794,26 @@ func startErrorStore(t *testing.T) (string, func()) {
 }
 
 type flakyGetService struct {
-	pb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedNoKVServer
 	mu       sync.Mutex
 	failures int
-	resp     *pb.KvGetResponse
+	resp     *kvrpcpb.KvGetResponse
 }
 
-func (s *flakyGetService) KvGet(context.Context, *pb.KvGetRequest) (*pb.KvGetResponse, error) {
+func (s *flakyGetService) KvGet(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failures > 0 {
 		s.failures--
 		return nil, status.Error(codes.Unavailable, "boom")
 	}
-	return proto.Clone(s.resp).(*pb.KvGetResponse), nil
+	return proto.Clone(s.resp).(*kvrpcpb.KvGetResponse), nil
 }
 
-func startFlakyGetStore(t *testing.T, failures int, resp *pb.KvGetResponse) (string, func()) {
+func startFlakyGetStore(t *testing.T, failures int, resp *kvrpcpb.KvGetResponse) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	pb.RegisterNoKVServer(srv, &flakyGetService{failures: failures, resp: resp})
+	kvrpcpb.RegisterNoKVServer(srv, &flakyGetService{failures: failures, resp: resp})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -827,13 +829,13 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 	addr, stop := startErrorStore(t)
 	defer stop()
 
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         nil,
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	}
@@ -857,13 +859,13 @@ func TestNormalizeRPCErrorOnGet(t *testing.T) {
 func TestClientRegionResolverLookupErrors(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -911,16 +913,16 @@ func TestClientRegionResolverLookupErrors(t *testing.T) {
 }
 
 func TestClientRetriesRouteUnavailable(t *testing.T) {
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:               1,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	}
-	addr, stop := startFlakyGetStore(t, 0, &pb.KvGetResponse{
-		Response: &pb.GetResponse{Value: []byte("value-a")},
+	addr, stop := startFlakyGetStore(t, 0, &kvrpcpb.KvGetResponse{
+		Response: &kvrpcpb.GetResponse{Value: []byte("value-a")},
 	})
 	defer stop()
 
@@ -952,16 +954,16 @@ func TestClientRetriesRouteUnavailable(t *testing.T) {
 }
 
 func TestClientRetriesTransportUnavailable(t *testing.T) {
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:               1,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	}
-	addr, stop := startFlakyGetStore(t, 1, &pb.KvGetResponse{
-		Response: &pb.GetResponse{Value: []byte("value-a")},
+	addr, stop := startFlakyGetStore(t, 1, &kvrpcpb.KvGetResponse{
+		Response: &kvrpcpb.GetResponse{Value: []byte("value-a")},
 	})
 	defer stop()
 
@@ -987,13 +989,13 @@ func TestClientRetriesTransportUnavailable(t *testing.T) {
 func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -1021,8 +1023,8 @@ func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T)
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*pb.Mutation{
-		{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value-a")},
 	}, 10, 20, 3000)
 	require.NoError(t, err)
 
@@ -1034,13 +1036,13 @@ func TestClientTwoPhaseCommitRetriesRouteUnavailableDuringGrouping(t *testing.T)
 func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -1080,13 +1082,13 @@ func TestClientResolveLocksRetriesRouteUnavailableDuringGrouping(t *testing.T) {
 func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -1125,13 +1127,13 @@ func TestClientCheckTxnStatusRetriesRouteUnavailable(t *testing.T) {
 func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("z"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -1170,13 +1172,13 @@ func TestClientLazyDialSkipsUnusedStoreEndpoints(t *testing.T) {
 func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 101},
 				},
 			},
@@ -1186,13 +1188,13 @@ func TestClientRegionResolverLookupUsesIndexedCacheAcrossRegions(t *testing.T) {
 			},
 		},
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               2,
 				StartKey:         []byte("m"),
 				EndKey:           []byte("z"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers: []*pb.RegionPeer{
+				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 201},
 				},
 			},
@@ -1240,27 +1242,27 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),
 	}
-	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
+	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("z"),
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
 	}), 1)
 
-	err := cli.handleRegionError(1, &pb.RegionError{
-		EpochNotMatch: &pb.EpochNotMatch{
-			Regions: []*pb.RegionMeta{
+	err := cli.handleRegionError(1, &errorpb.RegionError{
+		EpochNotMatch: &errorpb.EpochNotMatch{
+			Regions: []*metapb.RegionMeta{
 				{
 					Id:               11,
 					StartKey:         []byte("a"),
 					EndKey:           []byte("m"),
 					EpochVersion:     2,
 					EpochConfVersion: 1,
-					Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 111}},
+					Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 111}},
 				},
 				{
 					Id:               12,
@@ -1268,7 +1270,7 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 					EndKey:           []byte("z"),
 					EpochVersion:     2,
 					EpochConfVersion: 1,
-					Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 121}},
+					Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 121}},
 				},
 			},
 		},
@@ -1290,7 +1292,7 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 // Utility helpers
 
-func routeResponse(meta *pb.RegionMeta) *pdpb.GetRegionByKeyResponse {
+func routeResponse(meta *metapb.RegionMeta) *pdpb.GetRegionByKeyResponse {
 	if meta == nil {
 		return &pdpb.GetRegionByKeyResponse{NotFound: true}
 	}
@@ -1299,30 +1301,30 @@ func routeResponse(meta *pb.RegionMeta) *pdpb.GetRegionByKeyResponse {
 	}
 }
 
-func protoClone(meta *pb.RegionMeta) *pb.RegionMeta {
+func protoClone(meta *metapb.RegionMeta) *metapb.RegionMeta {
 	if meta == nil {
 		return nil
 	}
-	return proto.Clone(meta).(*pb.RegionMeta)
+	return proto.Clone(meta).(*metapb.RegionMeta)
 }
 
-func protoClonePeer(peer *pb.RegionPeer) *pb.RegionPeer {
+func protoClonePeer(peer *metapb.RegionPeer) *metapb.RegionPeer {
 	if peer == nil {
 		return nil
 	}
-	return proto.Clone(peer).(*pb.RegionPeer)
+	return proto.Clone(peer).(*metapb.RegionPeer)
 }
 
-func notLeaderError(region *clusterRegion) *pb.RegionError {
-	return &pb.RegionError{
-		NotLeader: &pb.NotLeader{
+func notLeaderError(region *clusterRegion) *errorpb.RegionError {
+	return &errorpb.RegionError{
+		NotLeader: &errorpb.NotLeader{
 			RegionId: region.meta.GetId(),
 			Leader:   leaderPeer(region.meta, region.leaderStore),
 		},
 	}
 }
 
-func leaderPeer(meta *pb.RegionMeta, storeID uint64) *pb.RegionPeer {
+func leaderPeer(meta *metapb.RegionMeta, storeID uint64) *metapb.RegionPeer {
 	for _, peer := range meta.GetPeers() {
 		if peer.GetStoreId() == storeID {
 			return protoClonePeer(peer)
@@ -1331,9 +1333,9 @@ func leaderPeer(meta *pb.RegionMeta, storeID uint64) *pb.RegionPeer {
 	return nil
 }
 
-func epochNotMatch(regions map[uint64]*clusterRegion) *pb.RegionError {
-	resp := &pb.RegionError{
-		EpochNotMatch: &pb.EpochNotMatch{},
+func epochNotMatch(regions map[uint64]*clusterRegion) *errorpb.RegionError {
+	resp := &errorpb.RegionError{
+		EpochNotMatch: &errorpb.EpochNotMatch{},
 	}
 	for _, region := range regions {
 		resp.EpochNotMatch.Regions = append(resp.EpochNotMatch.Regions, protoClone(region.meta))
@@ -1348,7 +1350,7 @@ func statusInvalidArgument(msg string) error {
 func TestContainsKeyAndCompare(t *testing.T) {
 	require.False(t, containsKey(descriptor.Descriptor{}, []byte("a")))
 
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:       1,
 		StartKey: []byte("b"),
 		EndKey:   []byte("d"),
@@ -1373,13 +1375,13 @@ func TestIncrementKey(t *testing.T) {
 }
 
 func TestCloneHelpers(t *testing.T) {
-	meta := &pb.RegionMeta{StartKey: []byte("a"), EndKey: []byte("z")}
+	meta := &metapb.RegionMeta{StartKey: []byte("a"), EndKey: []byte("z")}
 	clone := protoClone(meta)
 	require.NotSame(t, meta, clone)
 	meta.StartKey[0] = 'b'
 	require.Equal(t, []byte("a"), clone.StartKey)
 
-	mut := &pb.Mutation{Key: []byte("k"), Value: []byte("v")}
+	mut := &kvrpcpb.Mutation{Key: []byte("k"), Value: []byte("v")}
 	mutClone := cloneMutation(mut)
 	require.NotSame(t, mut, mutClone)
 	mut.Key[0] = 'x'
@@ -1390,7 +1392,7 @@ func TestCloneHelpers(t *testing.T) {
 }
 
 func TestCollectKeysAndPrimary(t *testing.T) {
-	muts := []*pb.Mutation{
+	muts := []*kvrpcpb.Mutation{
 		{Key: []byte("a")},
 		nil,
 		{Key: []byte("b")},
@@ -1413,10 +1415,10 @@ func TestNormalizeRPCError(t *testing.T) {
 
 func TestDefaultLeaderStoreID(t *testing.T) {
 	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
-	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{})))
-	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
+	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{})))
+	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
 		Id: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			nil,
 			{StoreId: 9, PeerId: 90},
 		},
@@ -1425,13 +1427,13 @@ func TestDefaultLeaderStoreID(t *testing.T) {
 
 func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	resolver := &mockRegionResolver{
-		region: &pb.RegionMeta{
+		region: &metapb.RegionMeta{
 			Id:               1,
 			StartKey:         []byte("a"),
 			EndKey:           []byte("z"),
 			EpochVersion:     2,
 			EpochConfVersion: 2,
-			Peers: []*pb.RegionPeer{
+			Peers: []*metapb.RegionPeer{
 				{StoreId: 2, PeerId: 201},
 				{StoreId: 3, PeerId: 301},
 			},
@@ -1448,13 +1450,13 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	cli.mu.Lock()
-	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
+	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("z"),
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers: []*pb.RegionPeer{
+		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 			{StoreId: 2, PeerId: 201},
 		},
@@ -1509,13 +1511,13 @@ func TestClientGetHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 }
 
 func TestClientGetHonorsCanceledContextDuringRPC(t *testing.T) {
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
 	service := &blockingService{started: make(chan struct{}, 1)}
 	addr, stop := startBlockingStore(t, service)
@@ -1601,13 +1603,13 @@ func TestClientPutHonorsCanceledContextDuringRouteLookup(t *testing.T) {
 }
 
 func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
-	meta := &pb.RegionMeta{
+	meta := &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
 	service := &blockingService{started: make(chan struct{}, 1)}
 	addr, stop := startBlockingStore(t, service)
@@ -1655,26 +1657,26 @@ func TestClientPutHonorsCanceledContextDuringRPC(t *testing.T) {
 }
 
 func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t *testing.T) {
-	metaA := &pb.RegionMeta{
+	metaA := &metapb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("m"),
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 	}
-	metaB := &pb.RegionMeta{
+	metaB := &metapb.RegionMeta{
 		Id:               2,
 		StartKey:         []byte("m"),
 		EndKey:           nil,
 		EpochVersion:     1,
 		EpochConfVersion: 1,
-		Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+		Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 	}
 	resolver := &keyedBlockingResolver{
 		started:     make(chan struct{}, 1),
 		blockedKeys: map[string]struct{}{"omega": {}},
-		regions:     []*pb.RegionMeta{metaA, metaB},
+		regions:     []*metapb.RegionMeta{metaA, metaB},
 	}
 	cli, err := New(Config{
 		Stores:         []StoreEndpoint{{StoreID: 1, Addr: "127.0.0.1:1"}},
@@ -1691,9 +1693,9 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*pb.Mutation{
-			{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
-			{Op: pb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
 		}, 10, 11, 3000)
 	}()
 
@@ -1717,24 +1719,24 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRouteLookup(t
 func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 			},
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               2,
 				StartKey:         []byte("m"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 			},
 			leaderStore: 1,
 		},
@@ -1765,9 +1767,9 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*pb.Mutation{
-			{Op: pb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
-			{Op: pb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+		done <- cli.TwoPhaseCommit(ctx, []byte("alfa"), []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
 		}, 20, 21, 3000)
 	}()
 
@@ -1793,24 +1795,24 @@ func TestClientTwoPhaseCommitHonorsCanceledContextDuringMultiRegionRPC(t *testin
 func TestClientResolveLocksHonorsCanceledContextDuringMultiRegionRPC(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               1,
 				StartKey:         []byte("a"),
 				EndKey:           []byte("m"),
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 101}},
+				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
 			},
 			leaderStore: 1,
 		},
 		clusterRegion{
-			meta: &pb.RegionMeta{
+			meta: &metapb.RegionMeta{
 				Id:               2,
 				StartKey:         []byte("m"),
 				EndKey:           nil,
 				EpochVersion:     1,
 				EpochConfVersion: 1,
-				Peers:            []*pb.RegionPeer{{StoreId: 1, PeerId: 201}},
+				Peers:            []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
 			},
 			leaderStore: 1,
 		},

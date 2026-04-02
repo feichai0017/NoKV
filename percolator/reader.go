@@ -3,11 +3,11 @@ package percolator
 import (
 	"bytes"
 	"fmt"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/kv"
-	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -97,7 +97,7 @@ func (r *Reader) GetValue(key []byte, readTs uint64) ([]byte, uint64, error) {
 	if write == nil {
 		return nil, 0, utils.ErrKeyNotFound
 	}
-	if write.Kind == pb.Mutation_Delete || write.Kind == pb.Mutation_Rollback {
+	if write.Kind == kvrpcpb.Mutation_Delete || write.Kind == kvrpcpb.Mutation_Rollback {
 		return nil, 0, utils.ErrKeyNotFound
 	}
 	if len(write.ShortValue) > 0 {

@@ -9,7 +9,6 @@
 package pdpb
 
 import (
-	_ "github.com/feichai0017/NoKV/pb"
 	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -736,7 +735,7 @@ var File_pd_pd_proto protoreflect.FileDescriptor
 const file_pd_pd_proto_rawDesc = "" +
 	"\n" +
 	"\vpd/pd.proto\x12\n" +
-	"nokv.pd.v1\x1a\x15meta/descriptor.proto\x1a\fmetapb.proto\"\xaa\x01\n" +
+	"nokv.pd.v1\x1a\x15meta/descriptor.proto\"\xaa\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
