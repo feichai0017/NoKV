@@ -84,9 +84,9 @@ type RangeSplit struct {
 
 // RangeMerge describes one merge transition.
 type RangeMerge struct {
-	LeftRegionID   uint64
-	RightRegionID  uint64
-	Merged         descriptor.Descriptor
+	LeftRegionID  uint64
+	RightRegionID uint64
+	Merged        descriptor.Descriptor
 }
 
 // PeerChange describes one region membership mutation.
@@ -99,9 +99,9 @@ type PeerChange struct {
 
 // LeaderTransfer describes one leadership movement intent.
 type LeaderTransfer struct {
-	RegionID     uint64
-	FromPeerID   uint64
-	ToPeerID     uint64
+	RegionID      uint64
+	FromPeerID    uint64
+	ToPeerID      uint64
 	TargetStoreID uint64
 }
 
@@ -118,14 +118,134 @@ type PlacementPolicy struct {
 type Event struct {
 	Kind EventKind
 
-	StoreMembership *StoreMembership
+	StoreMembership  *StoreMembership
 	RegionDescriptor *RegionDescriptorRecord
-	RegionRemoval   *RegionRemoval
-	RangeSplit      *RangeSplit
-	RangeMerge      *RangeMerge
-	PeerChange      *PeerChange
-	LeaderTransfer  *LeaderTransfer
-	PlacementPolicy *PlacementPolicy
+	RegionRemoval    *RegionRemoval
+	RangeSplit       *RangeSplit
+	RangeMerge       *RangeMerge
+	PeerChange       *PeerChange
+	LeaderTransfer   *LeaderTransfer
+	PlacementPolicy  *PlacementPolicy
+}
+
+func StoreJoined(storeID uint64, address string) Event {
+	return Event{
+		Kind:            EventKindStoreJoined,
+		StoreMembership: &StoreMembership{StoreID: storeID, Address: address},
+	}
+}
+
+func StoreLeft(storeID uint64, address string) Event {
+	return Event{
+		Kind:            EventKindStoreLeft,
+		StoreMembership: &StoreMembership{StoreID: storeID, Address: address},
+	}
+}
+
+func StoreMarkedDraining(storeID uint64, address string) Event {
+	return Event{
+		Kind:            EventKindStoreMarkedDraining,
+		StoreMembership: &StoreMembership{StoreID: storeID, Address: address},
+	}
+}
+
+func RegionBootstrapped(desc descriptor.Descriptor) Event {
+	return Event{
+		Kind:             EventKindRegionBootstrap,
+		RegionDescriptor: &RegionDescriptorRecord{Descriptor: desc},
+	}
+}
+
+func RegionDescriptorPublished(desc descriptor.Descriptor) Event {
+	return Event{
+		Kind:             EventKindRegionDescriptorPublished,
+		RegionDescriptor: &RegionDescriptorRecord{Descriptor: desc},
+	}
+}
+
+func RegionTombstoned(regionID uint64) Event {
+	return Event{
+		Kind:          EventKindRegionTombstoned,
+		RegionRemoval: &RegionRemoval{RegionID: regionID},
+	}
+}
+
+func RegionSplitRequested(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
+	return Event{
+		Kind: EventKindRegionSplitRequested,
+		RangeSplit: &RangeSplit{
+			ParentRegionID: parentRegionID,
+			SplitKey:       append([]byte(nil), splitKey...),
+			Left:           left,
+			Right:          right,
+		},
+	}
+}
+
+func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
+	return Event{
+		Kind: EventKindRegionSplitCommitted,
+		RangeSplit: &RangeSplit{
+			ParentRegionID: parentRegionID,
+			SplitKey:       append([]byte(nil), splitKey...),
+			Left:           left,
+			Right:          right,
+		},
+	}
+}
+
+func RegionMerged(leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) Event {
+	return Event{
+		Kind: EventKindRegionMerged,
+		RangeMerge: &RangeMerge{
+			LeftRegionID:  leftRegionID,
+			RightRegionID: rightRegionID,
+			Merged:        merged,
+		},
+	}
+}
+
+func PeerAdded(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+	return Event{
+		Kind: EventKindPeerAdded,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+		},
+	}
+}
+
+func PeerRemoved(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+	return Event{
+		Kind: EventKindPeerRemoved,
+		PeerChange: &PeerChange{
+			RegionID: regionID,
+			StoreID:  storeID,
+			PeerID:   peerID,
+			Region:   region,
+		},
+	}
+}
+
+func LeaderTransferPlanned(regionID, fromPeerID, toPeerID, targetStoreID uint64) Event {
+	return Event{
+		Kind: EventKindLeaderTransferIntent,
+		LeaderTransfer: &LeaderTransfer{
+			RegionID:      regionID,
+			FromPeerID:    fromPeerID,
+			ToPeerID:      toPeerID,
+			TargetStoreID: targetStoreID,
+		},
+	}
+}
+
+func PlacementPolicyChanged(name string, version uint64) Event {
+	return Event{
+		Kind:            EventKindPlacementPolicyChanged,
+		PlacementPolicy: &PlacementPolicy{Name: name, Version: version},
+	}
 }
 
 // Root is the minimal interface exposed by a metadata-root implementation.

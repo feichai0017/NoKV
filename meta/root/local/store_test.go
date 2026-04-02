@@ -23,17 +23,10 @@ func TestStoreAppendReadAndReopen(t *testing.T) {
 	require.Equal(t, rootpkg.State{}, state)
 
 	commit, err := store.Append(
-		rootpkg.Event{Kind: rootpkg.EventKindStoreJoined, StoreMembership: &rootpkg.StoreMembership{StoreID: 1, Address: "s1"}},
-		rootpkg.Event{Kind: rootpkg.EventKindRegionDescriptorPublished, RegionDescriptor: &rootpkg.RegionDescriptorRecord{
-			Descriptor: testDescriptor(10, []byte("a"), []byte("z")),
-		}},
-		rootpkg.Event{Kind: rootpkg.EventKindRegionSplitCommitted, RangeSplit: &rootpkg.RangeSplit{
-			ParentRegionID: 10,
-			SplitKey:       []byte("m"),
-			Left:           testDescriptor(11, []byte("a"), []byte("m")),
-			Right:          testDescriptor(12, []byte("m"), []byte("z")),
-		}},
-		rootpkg.Event{Kind: rootpkg.EventKindPlacementPolicyChanged, PlacementPolicy: &rootpkg.PlacementPolicy{Name: "default", Version: 7}},
+		rootpkg.StoreJoined(1, "s1"),
+		rootpkg.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
+		rootpkg.RegionSplitCommitted(10, []byte("m"), testDescriptor(11, []byte("a"), []byte("m")), testDescriptor(12, []byte("m"), []byte("z"))),
+		rootpkg.PlacementPolicyChanged("default", 7),
 	)
 	require.NoError(t, err)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 4}, commit.Cursor)
@@ -93,7 +86,7 @@ func TestStoreIgnoresTruncatedLogTail(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
-	_, err = store.Append(rootpkg.Event{Kind: rootpkg.EventKindStoreJoined, StoreMembership: &rootpkg.StoreMembership{StoreID: 1, Address: "s1"}})
+	_, err = store.Append(rootpkg.StoreJoined(1, "s1"))
 	require.NoError(t, err)
 
 	f, err := os.OpenFile(filepath.Join(dir, LogFileName), os.O_WRONLY|os.O_APPEND, 0)
@@ -114,12 +107,7 @@ func TestStoreReplaysLogAfterStaleCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, nil)
 	require.NoError(t, err)
-	commit, err := store.Append(rootpkg.Event{Kind: rootpkg.EventKindPeerAdded, PeerChange: &rootpkg.PeerChange{
-		RegionID: 1,
-		StoreID:  2,
-		PeerID:   3,
-		Region:   testDescriptor(1, []byte("a"), []byte("z")),
-	}})
+	commit, err := store.Append(rootpkg.PeerAdded(1, 2, 3, testDescriptor(1, []byte("a"), []byte("z"))))
 	require.NoError(t, err)
 	require.Equal(t, rootpkg.Cursor{Term: 1, Index: 1}, commit.Cursor)
 
