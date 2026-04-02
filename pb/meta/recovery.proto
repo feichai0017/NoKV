@@ -17,6 +17,19 @@ message ReplicaLocalState {
   uint64 last_term = 6;
 }
 
+message LocalRegionMeta {
+  uint64 region_id = 1;
+  bytes start_key = 2;
+  bytes end_key = 3;
+  nokv.meta.v1.RegionEpoch epoch = 4;
+  repeated nokv.meta.v1.RegionPeer peers = 5;
+  nokv.meta.v1.RegionReplicaState state = 6;
+}
+
+message ReplicaLocalCatalog {
+  repeated LocalRegionMeta regions = 1;
+}
+
 message RaftProgress {
   uint64 group_id = 1;
   uint32 segment = 2;
@@ -30,4 +43,8 @@ message RaftProgress {
   uint64 truncated_term = 10;
   uint64 segment_index = 11;
   uint64 truncated_offset = 12;
+}
+
+message RaftProgressCatalog {
+  repeated RaftProgress entries = 1;
 }
