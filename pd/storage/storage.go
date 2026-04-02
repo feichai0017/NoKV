@@ -37,10 +37,10 @@ type Loader interface {
 
 // Sink persists control-plane mutations into durable metadata truth.
 type Sink interface {
-	// SaveRegion persists one region metadata update.
-	SaveRegion(meta localmeta.RegionMeta) error
-	// DeleteRegion persists one region metadata delete.
-	DeleteRegion(regionID uint64) error
+	// PublishRegionDescriptor persists one rooted region descriptor update.
+	PublishRegionDescriptor(meta localmeta.RegionMeta) error
+	// TombstoneRegion persists one rooted region removal.
+	TombstoneRegion(regionID uint64) error
 	// SaveAllocatorState persists latest allocator counters.
 	SaveAllocatorState(idCurrent, tsCurrent uint64) error
 	// Close releases storage resources.
@@ -71,13 +71,13 @@ func (NoopStore) Load() (Snapshot, error) {
 	return Snapshot{Regions: make(map[uint64]localmeta.RegionMeta)}, nil
 }
 
-// SaveRegion is a no-op.
-func (NoopStore) SaveRegion(localmeta.RegionMeta) error {
+// PublishRegionDescriptor is a no-op.
+func (NoopStore) PublishRegionDescriptor(localmeta.RegionMeta) error {
 	return nil
 }
 
-// DeleteRegion is a no-op.
-func (NoopStore) DeleteRegion(uint64) error {
+// TombstoneRegion is a no-op.
+func (NoopStore) TombstoneRegion(uint64) error {
 	return nil
 }
 

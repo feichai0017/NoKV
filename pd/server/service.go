@@ -94,8 +94,8 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 		}
 	}
 	if s.storage != nil {
-		if err := s.storage.SaveRegion(meta); err != nil {
-			return nil, status.Error(codes.Internal, "persist region metadata: "+err.Error())
+		if err := s.storage.PublishRegionDescriptor(meta); err != nil {
+			return nil, status.Error(codes.Internal, "publish region descriptor: "+err.Error())
 		}
 	}
 	return &pb.RegionHeartbeatResponse{Accepted: true}, nil
@@ -112,8 +112,8 @@ func (s *Service) RemoveRegion(_ context.Context, req *pb.RemoveRegionRequest) (
 	}
 	removed := s.cluster.RemoveRegion(regionID)
 	if removed && s.storage != nil {
-		if err := s.storage.DeleteRegion(regionID); err != nil {
-			return nil, status.Error(codes.Internal, "persist region delete: "+err.Error())
+		if err := s.storage.TombstoneRegion(regionID); err != nil {
+			return nil, status.Error(codes.Internal, "persist region tombstone: "+err.Error())
 		}
 	}
 	return &pb.RemoveRegionResponse{Removed: removed}, nil
