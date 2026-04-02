@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -81,7 +81,7 @@ func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequ
 	if req == nil || req.GetRegionDescriptor() == nil {
 		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
 	}
-	desc := descriptor.FromProto(req.GetRegionDescriptor())
+	desc := metacodec.DescriptorFromProto(req.GetRegionDescriptor())
 	err := s.cluster.PublishRegionDescriptor(desc)
 	if err != nil {
 		switch {
@@ -128,10 +128,10 @@ func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyReques
 	if !ok {
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-		return &pb.GetRegionByKeyResponse{
-			Region:   descriptorToRoutePB(desc),
-			NotFound: false,
-		}, nil
+	return &pb.GetRegionByKeyResponse{
+		RegionDescriptor: metacodec.DescriptorToProto(desc),
+		NotFound: false,
+	}, nil
 }
 
 // AllocID allocates one or more globally unique ids.
@@ -189,26 +189,4 @@ func (s *Service) persistAllocatorState() error {
 		return nil
 	}
 	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
-}
-
-// descriptorToRoutePB is the remaining RPC-boundary adapter for clients that
-// still fetch route results as pb.RegionMeta. PD runtime stays descriptor-first.
-func descriptorToRoutePB(desc descriptor.Descriptor) *pb.RegionMeta {
-	out := &pb.RegionMeta{
-		Id:               desc.RegionID,
-		StartKey:         append([]byte(nil), desc.StartKey...),
-		EndKey:           append([]byte(nil), desc.EndKey...),
-		EpochVersion:     desc.Epoch.Version,
-		EpochConfVersion: desc.Epoch.ConfVersion,
-	}
-	if len(desc.Peers) > 0 {
-		out.Peers = make([]*pb.RegionPeer, 0, len(desc.Peers))
-		for _, p := range desc.Peers {
-			out.Peers = append(out.Peers, &pb.RegionPeer{
-				StoreId: p.StoreID,
-				PeerId:  p.PeerID,
-			})
-		}
-	}
-	return out
 }

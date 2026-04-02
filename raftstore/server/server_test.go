@@ -16,6 +16,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/kv"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -209,7 +210,7 @@ func (r *staticRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegi
 	for _, region := range r.regions {
 		if regionContainsKey(region, req.GetKey()) {
 			return &pb.GetRegionByKeyResponse{
-				Region: cloneRegionMetaPB(region),
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(cloneRegionMetaPB(region))),
 			}, nil
 		}
 	}

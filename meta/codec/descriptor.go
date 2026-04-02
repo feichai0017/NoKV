@@ -1,12 +1,15 @@
-package descriptor
+package codec
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	"github.com/feichai0017/NoKV/pb"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
-// ToProto lifts one runtime descriptor into the shared metadata protobuf shape.
-func (d Descriptor) ToProto() *metapb.RegionDescriptor {
+// DescriptorToProto lifts one runtime descriptor into the shared metadata
+// protobuf shape.
+func DescriptorToProto(d descriptor.Descriptor) *metapb.RegionDescriptor {
 	pbDesc := &metapb.RegionDescriptor{
 		RegionId:  d.RegionID,
 		StartKey:  append([]byte(nil), d.StartKey...),
@@ -43,12 +46,13 @@ func (d Descriptor) ToProto() *metapb.RegionDescriptor {
 	return pbDesc
 }
 
-// FromProto converts the shared metadata protobuf shape into one runtime descriptor.
-func FromProto(pbDesc *metapb.RegionDescriptor) Descriptor {
+// DescriptorFromProto converts the shared metadata protobuf shape into one
+// runtime descriptor.
+func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor {
 	if pbDesc == nil {
-		return Descriptor{}
+		return descriptor.Descriptor{}
 	}
-	out := Descriptor{
+	out := descriptor.Descriptor{
 		RegionID:  pbDesc.RegionId,
 		StartKey:  append([]byte(nil), pbDesc.StartKey...),
 		EndKey:    append([]byte(nil), pbDesc.EndKey...),
@@ -70,15 +74,15 @@ func FromProto(pbDesc *metapb.RegionDescriptor) Descriptor {
 		}
 	}
 	if len(pbDesc.Lineage) > 0 {
-		out.Lineage = make([]LineageRef, 0, len(pbDesc.Lineage))
+		out.Lineage = make([]descriptor.LineageRef, 0, len(pbDesc.Lineage))
 		for _, ref := range pbDesc.Lineage {
 			if ref == nil {
 				continue
 			}
-			lineage := LineageRef{
+			lineage := descriptor.LineageRef{
 				RegionID: ref.RegionId,
 				Hash:     append([]byte(nil), ref.Hash...),
-				Kind:     LineageKind(ref.Kind),
+				Kind:     descriptor.LineageKind(ref.Kind),
 			}
 			if ref.Epoch != nil {
 				lineage.Epoch.Version = ref.Epoch.Version
@@ -87,5 +91,38 @@ func FromProto(pbDesc *metapb.RegionDescriptor) Descriptor {
 			out.Lineage = append(out.Lineage, lineage)
 		}
 	}
+	return out
+}
+
+// DescriptorFromLegacyRegionMeta converts the older RegionMeta wire shape into
+// a descriptor. Keep this only at compatibility boundaries such as RegionError
+// payloads and legacy test scaffolding.
+func DescriptorFromLegacyRegionMeta(meta *pb.RegionMeta) descriptor.Descriptor {
+	if meta == nil {
+		return descriptor.Descriptor{}
+	}
+	out := descriptor.Descriptor{
+		RegionID: meta.GetId(),
+		StartKey: append([]byte(nil), meta.GetStartKey()...),
+		EndKey:   append([]byte(nil), meta.GetEndKey()...),
+		Epoch: metaregion.Epoch{
+			Version:     meta.GetEpochVersion(),
+			ConfVersion: meta.GetEpochConfVersion(),
+		},
+		State: metaregion.ReplicaStateRunning,
+	}
+	if peers := meta.GetPeers(); len(peers) > 0 {
+		out.Peers = make([]metaregion.Peer, 0, len(peers))
+		for _, peer := range peers {
+			if peer == nil {
+				continue
+			}
+			out.Peers = append(out.Peers, metaregion.Peer{
+				StoreID: peer.GetStoreId(),
+				PeerID:  peer.GetPeerId(),
+			})
+		}
+	}
+	out.EnsureHash()
 	return out
 }

@@ -31,7 +31,7 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*pb.GetRe
 			return nil, err
 		}
 		if regionErr != nil {
-			lastErr = c.handleRegionError(region.meta.GetId(), regionErr)
+			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -77,7 +77,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			if err != nil {
 				return nil, err
 			}
-			regionID := region.meta.GetId()
+			regionID := region.desc.RegionID
 			group := groups[regionID]
 			if group == nil {
 				group = &regionBatch{region: region}
@@ -218,7 +218,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			return nil, err
 		}
 		if regionErr != nil {
-			if err := c.handleRegionError(region.meta.GetId(), regionErr); err != nil {
+			if err := c.handleRegionError(region.desc.RegionID, regionErr); err != nil {
 				return nil, err
 			}
 			if err := c.waitRetry(ctx, 0, retryRegionError); err != nil {
@@ -229,7 +229,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		kvs := resp.GetKvs()
 		collected = append(collected, kvs...)
 		if len(kvs) == 0 {
-			endKey := region.meta.GetEndKey()
+			endKey := region.desc.EndKey
 			if len(endKey) == 0 {
 				break
 			}
@@ -240,7 +240,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		if remaining == 0 {
 			break
 		}
-		endKey := region.meta.GetEndKey()
+		endKey := region.desc.EndKey
 		nextKey := incrementKey(kvs[len(kvs)-1].GetKey())
 		if len(endKey) > 0 && bytesCompare(nextKey, endKey) >= 0 {
 			currentKey = append([]byte(nil), endKey...)
@@ -330,14 +330,14 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		if err != nil {
 			return err
 		}
-		id := region.meta.GetId()
+		id := region.desc.RegionID
 		grouped[id] = append(grouped[id], cloneMutation(mut))
 	}
 	primaryRegion, err := c.routeKeyWithRetry(ctx, primary)
 	if err != nil {
 		return err
 	}
-	primaryID := primaryRegion.meta.GetId()
+	primaryID := primaryRegion.desc.RegionID
 	primaryMutations, ok := grouped[primaryID]
 	if !ok || len(primaryMutations) == 0 {
 		return fmt.Errorf("client: primary key %q missing from mutations", primary)
@@ -524,7 +524,7 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 			return nil, normalizeRPCError(err)
 		}
 		if regionErr := resp.GetRegionError(); regionErr != nil {
-			lastErr = c.handleRegionError(region.meta.GetId(), regionErr)
+			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -556,7 +556,7 @@ func (c *Client) ResolveLocks(ctx context.Context, startVersion, commitVersion u
 		if err != nil {
 			return 0, err
 		}
-		id := region.meta.GetId()
+		id := region.desc.RegionID
 		grouped[id] = append(grouped[id], append([]byte(nil), key...))
 	}
 	var resolved uint64
