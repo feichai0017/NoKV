@@ -3,6 +3,7 @@ syntax = "proto3";
 
 package pb;
 
+import "meta/descriptor.proto";
 import "metapb.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb";
@@ -35,7 +36,7 @@ message StoreHeartbeatResponse {
 }
 
 message RegionHeartbeatRequest {
-  RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region_descriptor = 1;
 }
 
 message RegionHeartbeatResponse {

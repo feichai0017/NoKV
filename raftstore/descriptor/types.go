@@ -1,6 +1,7 @@
 package descriptor
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
@@ -18,7 +19,7 @@ const (
 // descriptor.
 type LineageRef struct {
 	RegionID uint64
-	Epoch    localmeta.RegionEpoch
+	Epoch    metaregion.Epoch
 	Hash     []byte
 	Kind     LineageKind
 }
@@ -32,38 +33,25 @@ type Descriptor struct {
 	RegionID  uint64
 	StartKey  []byte
 	EndKey    []byte
-	Epoch     localmeta.RegionEpoch
-	Peers     []localmeta.PeerMeta
-	State     localmeta.RegionState
+	Epoch     metaregion.Epoch
+	Peers     []metaregion.Peer
+	State     metaregion.ReplicaState
 	Lineage   []LineageRef
 	RootEpoch uint64
 	Hash      []byte
 }
 
-// FromRegionMeta lifts store/local region metadata into a distributed
-// descriptor shape.
+// FromRegionMeta lifts store-local region state into the distributed topology
+// descriptor shape used by root, views, and routing.
 func FromRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) Descriptor {
 	return Descriptor{
 		RegionID:  meta.ID,
 		StartKey:  append([]byte(nil), meta.StartKey...),
 		EndKey:    append([]byte(nil), meta.EndKey...),
 		Epoch:     meta.Epoch,
-		Peers:     append([]localmeta.PeerMeta(nil), meta.Peers...),
+		Peers:     append([]metaregion.Peer(nil), meta.Peers...),
 		State:     meta.State,
 		RootEpoch: rootEpoch,
-	}
-}
-
-// ToRegionMeta drops one descriptor back to the region metadata shape used by
-// PD views and local recovery.
-func (d Descriptor) ToRegionMeta() localmeta.RegionMeta {
-	return localmeta.RegionMeta{
-		ID:       d.RegionID,
-		StartKey: append([]byte(nil), d.StartKey...),
-		EndKey:   append([]byte(nil), d.EndKey...),
-		Epoch:    d.Epoch,
-		Peers:    append([]localmeta.PeerMeta(nil), d.Peers...),
-		State:    d.State,
 	}
 }
 
@@ -77,7 +65,7 @@ func (d Descriptor) Clone() Descriptor {
 		cp.EndKey = append([]byte(nil), d.EndKey...)
 	}
 	if len(d.Peers) > 0 {
-		cp.Peers = append([]localmeta.PeerMeta(nil), d.Peers...)
+		cp.Peers = append([]metaregion.Peer(nil), d.Peers...)
 	}
 	if len(d.Lineage) > 0 {
 		cp.Lineage = append([]LineageRef(nil), d.Lineage...)

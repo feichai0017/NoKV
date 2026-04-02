@@ -11,8 +11,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/feichai0017/NoKV/pb"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/pd/core"
 	"github.com/feichai0017/NoKV/pd/tso"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 type fakeStorage struct {
@@ -59,6 +61,10 @@ func (f *fakeStorage) Close() error {
 	return nil
 }
 
+func testRegionDescriptorProto(meta localmeta.RegionMeta) *metapb.RegionDescriptor {
+	return descriptor.FromRegionMeta(meta, 0).ToProto()
+}
+
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 
@@ -73,16 +79,18 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               11,
-			StartKey:         []byte(""),
-			EndKey:           []byte("m"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-			Peers: []*pb.RegionPeer{
-				{StoreId: 1, PeerId: 101},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       11,
+			StartKey: []byte(""),
+			EndKey:   []byte("m"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
 			},
-		},
+			Peers: []localmeta.PeerMeta{
+				{StoreID: 1, PeerID: 101},
+			},
+		}),
 	})
 	require.NoError(t, err)
 
@@ -96,13 +104,15 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 func TestServiceRemoveRegion(t *testing.T) {
 	svc := NewService(core.NewCluster(), core.NewIDAllocator(1), tso.NewAllocator(1))
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               11,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("z"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       11,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+		}),
 	})
 	require.NoError(t, err)
 
@@ -122,36 +132,42 @@ func TestServiceRemoveRegion(t *testing.T) {
 func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               1,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("m"),
-			EpochVersion:     2,
-			EpochConfVersion: 2,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     2,
+				ConfVersion: 2,
+			},
+		}),
 	})
 	require.NoError(t, err)
 
 	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               1,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("m"),
-			EpochVersion:     1,
-			EpochConfVersion: 2,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 2,
+			},
+		}),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
 	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               2,
-			StartKey:         []byte("l"),
-			EndKey:           []byte("z"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       2,
+			StartKey: []byte("l"),
+			EndKey:   []byte("z"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+		}),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -202,17 +218,19 @@ func TestServiceRequestValidation(t *testing.T) {
 func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 	svc := NewService(core.NewCluster(), nil, nil)
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               100,
-			StartKey:         []byte(""),
-			EndKey:           []byte("z"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-			Peers: []*pb.RegionPeer{
-				{StoreId: 1, PeerId: 101},
-				{StoreId: 2, PeerId: 201},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       100,
+			StartKey: []byte(""),
+			EndKey:   []byte("z"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
 			},
-		},
+			Peers: []localmeta.PeerMeta{
+				{StoreID: 1, PeerID: 101},
+				{StoreID: 2, PeerID: 201},
+			},
+		}),
 	})
 	require.NoError(t, err)
 
@@ -244,13 +262,15 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 	svc.SetStorage(store)
 
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               42,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("z"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       42,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+		}),
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, store.updateCalls)
@@ -266,26 +286,30 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 	svc.SetStorage(store)
 
 	_, err := svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               8,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("m"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       8,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+		}),
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Internal, status.Code(err))
 
 	store.updateErr = nil
 	_, err = svc.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               8,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("m"),
-			EpochVersion:     2,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: testRegionDescriptorProto(localmeta.RegionMeta{
+			ID:       8,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     2,
+				ConfVersion: 1,
+			},
+		}),
 	})
 	require.NoError(t, err)
 	store.deleteErr = errors.New("persist delete failed")

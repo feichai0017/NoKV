@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -142,10 +143,13 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta) error {
 		rm.regionMetrics.RecordUpdate(metaCopy)
 	}
 	if rm.notify != nil {
+		// Lift the local region mutation into descriptor form once when it leaves
+		// the store-local catalog. Control-plane consumers should stay on
+		// descriptor semantics instead of feeding RegionMeta back in.
 		rm.notify(regionEvent{
 			kind:     regionEventApply,
 			regionID: metaCopy.ID,
-			meta:     metaCopy,
+			desc:     descriptor.FromRegionMeta(metaCopy, 0),
 		})
 	}
 	return nil

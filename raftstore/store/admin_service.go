@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/pb"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	proto "google.golang.org/protobuf/proto"
 )
@@ -57,6 +58,22 @@ func (s *Store) splitRegionLocal(parentID uint64, childMeta localmeta.RegionMeta
 	if err != nil {
 		_ = s.applyRegionMeta(originalParent)
 		return nil, err
+	}
+	if s.sched != nil {
+		parentDesc := descriptor.FromRegionMeta(newParent, 0)
+		childDesc := descriptor.FromRegionMeta(childMeta, 0)
+		parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
+			RegionID: originalParent.ID,
+			Epoch:    originalParent.Epoch,
+			Kind:     descriptor.LineageKindSplitParent,
+		})
+		childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
+			RegionID: originalParent.ID,
+			Epoch:    originalParent.Epoch,
+			Kind:     descriptor.LineageKindSplitParent,
+		})
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: parentDesc.RegionID, desc: parentDesc})
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: childDesc.RegionID, desc: childDesc})
 	}
 	return childPeer, nil
 }
@@ -197,6 +214,15 @@ func (s *Store) handleMergeCommand(merge *pb.MergeCommand) error {
 	}
 	if err := s.applyRegionMeta(updated); err != nil {
 		return err
+	}
+	if s.sched != nil {
+		mergedDesc := descriptor.FromRegionMeta(updated, 0)
+		mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
+			RegionID: sourceMeta.ID,
+			Epoch:    sourceMeta.Epoch,
+			Kind:     descriptor.LineageKindMergeSource,
+		})
+		s.enqueueRegionEvent(regionEvent{kind: regionEventApply, regionID: mergedDesc.RegionID, desc: mergedDesc})
 	}
 	if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
 		s.StopPeer(peer.ID())

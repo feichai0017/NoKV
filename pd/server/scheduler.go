@@ -1,10 +1,10 @@
 package server
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // planStoreOperations builds lightweight scheduling hints for the heartbeat
@@ -103,7 +103,7 @@ func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint
 	}, true
 }
 
-func peerIDOnStore(peers []localmeta.PeerMeta, storeID uint64) (uint64, bool) {
+func peerIDOnStore(peers []metaregion.Peer, storeID uint64) (uint64, bool) {
 	for _, p := range peers {
 		if p.StoreID == storeID && p.PeerID != 0 {
 			return p.PeerID, true

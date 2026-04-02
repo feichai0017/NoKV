@@ -3,12 +3,13 @@ package adapter
 import (
 	"context"
 	"errors"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -95,7 +96,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		},
 		Peers: []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
 	}
-	sink.PublishRegion(context.Background(), meta)
+	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(meta, 0))
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
 		StoreID:   1,
 		RegionNum: 3,
@@ -105,7 +106,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	})
 
 	require.Len(t, pd.regionReqs, 1)
-	require.Equal(t, uint64(10), pd.regionReqs[0].GetRegion().GetId())
+	require.Equal(t, uint64(10), pd.regionReqs[0].GetRegionDescriptor().GetRegionId())
 	require.Len(t, pd.storeReqs, 1)
 	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
 
@@ -133,7 +134,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	})
 
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
-	sink.PublishRegion(context.Background(), localmeta.RegionMeta{ID: 9})
+	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(localmeta.RegionMeta{ID: 9}, 0))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "RegionHeartbeat")
@@ -150,7 +151,7 @@ func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{PD: pd})
 	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
-	sink.PublishRegion(context.Background(), localmeta.RegionMeta{ID: 0})
+	sink.PublishRegionDescriptor(context.Background(), descriptor.Descriptor{})
 	sink.RemoveRegion(context.Background(), 0)
 	require.Empty(t, pd.storeReqs)
 	require.Empty(t, pd.regionReqs)
@@ -177,7 +178,7 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 			ConfVersion: 1,
 		},
 	}
-	sink.PublishRegion(context.Background(), meta)
+	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(meta, 0))
 
 	sink.RemoveRegion(context.Background(), 100)
 	require.Len(t, pd.removeReqs, 1)
