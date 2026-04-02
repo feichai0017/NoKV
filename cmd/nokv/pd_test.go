@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"os"
 	"path/filepath"
@@ -96,7 +97,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.NoError(t, store.Close())
 
 	cluster := core.NewCluster()
-	loaded, err := pdstorage.RestoreRegions(cluster, snapshotState.Regions)
+	loaded, err := pdstorage.RestoreDescriptors(cluster, snapshotState.Descriptors)
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
@@ -144,22 +145,22 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 
 func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 	cluster := core.NewCluster()
-	snapshot := map[uint64]localmeta.RegionMeta{
+	snapshot := map[uint64]descriptor.Descriptor{
 		10: {
-			ID:       10,
+			RegionID: 10,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
 			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 		},
 		20: {
-			ID:       20,
+			RegionID: 20,
 			StartKey: []byte("l"),
 			EndKey:   []byte("z"),
 			Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
 		},
 	}
 
-	loaded, err := pdstorage.RestoreRegions(cluster, snapshot)
+	loaded, err := pdstorage.RestoreDescriptors(cluster, snapshot)
 	require.Error(t, err)
 	require.Equal(t, 1, loaded)
 	meta, ok := cluster.GetRegionByKey([]byte("b"))
