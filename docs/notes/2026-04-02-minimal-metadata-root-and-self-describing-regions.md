@@ -1117,15 +1117,28 @@ The first implementation keeps the following split:
 
 ### Current implementation status
 
-The current code is intentionally minimal:
+The current code has moved beyond the first single-node skeleton:
 
-- in-memory raft storage only
-- single-node root adapter for end-to-end tests
-- no networked transport yet
-- no persisted raft WAL yet
+- persisted local raft state:
+  - `root-raft-wal`
+  - `root-raft-hardstate.pb`
+  - `root-raft-snapshot.pb`
+  - `root-raft-checkpoint.pb`
+- single-node root adapter for end-to-end tests and local restart recovery
+- in-memory multi-node transport for replication tests
+- 3-node election and descriptor replication tests
+- follower reopen and catch-up tests
 
-This is enough to lock the internal design:
+What is still intentionally missing:
+
+- networked transport
+- quorum-facing root service wrapper
+- snapshot shipping / compaction policy
+- PD wiring to use the replicated backend directly
+
+Even at this stage the package shape is already correct:
 
 - root commands are separate from data-plane commands
 - root state machine materializes descriptor truth and allocator fences
-- the eventual HA backend can extend this package instead of replacing it
+- restart recovery is aligned with checkpoint-applied cursors
+- the future HA backend can extend this package instead of replacing it

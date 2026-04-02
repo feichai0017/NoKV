@@ -43,6 +43,7 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 		ElectionTick:    cfg.ElectionTick,
 		HeartbeatTick:   cfg.HeartbeatTick,
 		Storage:         storage,
+		Applied:         checkpoint.State.LastCommitted.Index,
 		MaxSizePerMsg:   cfg.MaxSizePerMsg,
 		MaxInflightMsgs: cfg.MaxInflightMsgs,
 		PreVote:         true,
@@ -63,7 +64,7 @@ func OpenNode(cfg Config, checkpoint Checkpoint, transport Transport) (*Node, er
 		transport = nopTransport{}
 	}
 	node := &Node{cfg: cfg, raw: raw, storage: storage, machine: NewStateMachine(checkpoint), transport: transport, checkpoint: checkpointStore}
-	if cfg.Bootstrap {
+	if cfg.Bootstrap || raw.HasReady() {
 		if err := node.drainReady(); err != nil {
 			return nil, err
 		}
@@ -92,6 +93,18 @@ func (n *Node) Step(msg myraft.Message) error {
 
 func (n *Node) Current() rootpkg.State {
 	return n.machine.Current()
+}
+
+func (n *Node) ID() uint64 {
+	return n.cfg.NodeID
+}
+
+func (n *Node) Status() myraft.Status {
+	return n.raw.Status()
+}
+
+func (n *Node) IsLeader() bool {
+	return n.raw.Status().RaftState == myraft.StateLeader
 }
 
 func (n *Node) ReadSince(cursor rootpkg.Cursor) ([]rootpkg.Event, rootpkg.Cursor) {
@@ -157,14 +170,15 @@ func (n *Node) drainReadyWithCommit() (rootpkg.CommitInfo, error) {
 				return rootpkg.CommitInfo{}, ErrUnsupportedType
 			}
 		}
-		if len(rd.Messages) > 0 {
-			if err := n.transport.Send(rd.Messages); err != nil {
-				return rootpkg.CommitInfo{}, err
-			}
-		}
+		outbound := rd.Messages
 		n.raw.Advance(rd)
 		if n.checkpoint != nil {
 			if err := n.checkpoint.Save(n.machine.Snapshot()); err != nil {
+				return rootpkg.CommitInfo{}, err
+			}
+		}
+		if len(outbound) > 0 {
+			if err := n.transport.Send(outbound); err != nil {
 				return rootpkg.CommitInfo{}, err
 			}
 		}
