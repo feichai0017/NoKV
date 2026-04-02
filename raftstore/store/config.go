@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
@@ -70,7 +71,7 @@ type SchedulerStatus struct {
 // SchedulerClient publishes store state to the control plane and returns any
 // scheduling decisions that should be applied locally.
 type SchedulerClient interface {
-	PublishRegion(context.Context, localmeta.RegionMeta)
+	PublishRegionDescriptor(context.Context, descriptor.Descriptor)
 	RemoveRegion(context.Context, uint64)
 	StoreHeartbeat(context.Context, StoreStats) []Operation
 	Status() SchedulerStatus

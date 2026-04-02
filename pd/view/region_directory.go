@@ -3,8 +3,8 @@ package view
 import (
 	"bytes"
 	"fmt"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sort"
 	"sync"
 	"time"
@@ -165,7 +165,7 @@ func (v *RegionDirectoryView) rebuildIndexLocked() {
 	v.regionIndex = index
 }
 
-func isEpochStale(incoming, current localmeta.RegionEpoch) bool {
+func isEpochStale(incoming, current metaregion.Epoch) bool {
 	if incoming.Version < current.Version {
 		return true
 	}

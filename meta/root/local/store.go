@@ -14,7 +14,6 @@ import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
 )
@@ -413,7 +412,7 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{
-			RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: descriptorToPB(event.RegionDescriptor.Descriptor)},
+			RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: event.RegionDescriptor.Descriptor.ToProto()},
 		}
 	case event.RegionRemoval != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionRemoval{
@@ -423,21 +422,21 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_RangeSplit{RangeSplit: &metapb.RootRangeSplit{
 			ParentRegionId: event.RangeSplit.ParentRegionID,
 			SplitKey:       append([]byte(nil), event.RangeSplit.SplitKey...),
-			Left:           descriptorToPB(event.RangeSplit.Left),
-			Right:          descriptorToPB(event.RangeSplit.Right),
+			Left:           event.RangeSplit.Left.ToProto(),
+			Right:          event.RangeSplit.Right.ToProto(),
 		}}
 	case event.RangeMerge != nil:
 		pbEvent.Payload = &metapb.RootEvent_RangeMerge{RangeMerge: &metapb.RootRangeMerge{
 			LeftRegionId:  event.RangeMerge.LeftRegionID,
 			RightRegionId: event.RangeMerge.RightRegionID,
-			Merged:        descriptorToPB(event.RangeMerge.Merged),
+			Merged:        event.RangeMerge.Merged.ToProto(),
 		}}
 	case event.PeerChange != nil:
 		pbEvent.Payload = &metapb.RootEvent_PeerChange{PeerChange: &metapb.RootPeerChange{
 			RegionId:   event.PeerChange.RegionID,
 			StoreId:    event.PeerChange.StoreID,
 			PeerId:     event.PeerChange.PeerID,
-			Descriptor_: descriptorToPB(event.PeerChange.Region),
+			Descriptor_: event.PeerChange.Region.ToProto(),
 		}}
 	case event.LeaderTransfer != nil:
 		pbEvent.Payload = &metapb.RootEvent_LeaderTransfer{LeaderTransfer: &metapb.RootLeaderTransfer{RegionId: event.LeaderTransfer.RegionID, FromPeerId: event.LeaderTransfer.FromPeerID, ToPeerId: event.LeaderTransfer.ToPeerID, TargetStoreId: event.LeaderTransfer.TargetStoreID}}
@@ -456,7 +455,7 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 		event.StoreMembership = &rootpkg.StoreMembership{StoreID: body.StoreId, Address: body.Address}
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
-		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: descriptorFromPB(body.GetDescriptor_())}
+		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: descriptor.FromProto(body.GetDescriptor_())}
 	}
 	if body := pbEvent.GetRegionRemoval(); body != nil {
 		event.RegionRemoval = &rootpkg.RegionRemoval{RegionID: body.RegionId}
@@ -465,15 +464,15 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 		event.RangeSplit = &rootpkg.RangeSplit{
 			ParentRegionID: body.ParentRegionId,
 			SplitKey:       append([]byte(nil), body.SplitKey...),
-			Left:           descriptorFromPB(body.Left),
-			Right:          descriptorFromPB(body.Right),
+			Left:           descriptor.FromProto(body.Left),
+			Right:          descriptor.FromProto(body.Right),
 		}
 	}
 	if body := pbEvent.GetRangeMerge(); body != nil {
 		event.RangeMerge = &rootpkg.RangeMerge{
 			LeftRegionID:  body.LeftRegionId,
 			RightRegionID: body.RightRegionId,
-			Merged:        descriptorFromPB(body.Merged),
+			Merged:        descriptor.FromProto(body.Merged),
 		}
 	}
 	if body := pbEvent.GetPeerChange(); body != nil {
@@ -481,7 +480,7 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 			RegionID: body.RegionId,
 			StoreID:  body.StoreId,
 			PeerID:   body.PeerId,
-			Region:   descriptorFromPB(body.GetDescriptor_()),
+			Region:   descriptor.FromProto(body.GetDescriptor_()),
 		}
 	}
 	if body := pbEvent.GetLeaderTransfer(); body != nil {
@@ -491,92 +490,6 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 		event.PlacementPolicy = &rootpkg.PlacementPolicy{Version: body.Version, Name: body.Name}
 	}
 	return event
-}
-
-func descriptorToPB(in descriptor.Descriptor) *metapb.RegionDescriptor {
-	pbDesc := &metapb.RegionDescriptor{
-		RegionId: in.RegionID,
-		StartKey: append([]byte(nil), in.StartKey...),
-		EndKey:   append([]byte(nil), in.EndKey...),
-		Epoch: &metapb.RegionEpoch{
-			Version:     in.Epoch.Version,
-			ConfVersion: in.Epoch.ConfVersion,
-		},
-		State:     metapb.RegionReplicaState(in.State),
-		RootEpoch: in.RootEpoch,
-		Hash:      append([]byte(nil), in.Hash...),
-	}
-	if len(in.Peers) > 0 {
-		pbDesc.Peers = make([]*metapb.RegionPeer, 0, len(in.Peers))
-		for _, peer := range in.Peers {
-			pbDesc.Peers = append(pbDesc.Peers, &metapb.RegionPeer{
-				StoreId: peer.StoreID,
-				PeerId:  peer.PeerID,
-			})
-		}
-	}
-	if len(in.Lineage) > 0 {
-		pbDesc.Lineage = make([]*metapb.DescriptorLineageRef, 0, len(in.Lineage))
-		for _, ref := range in.Lineage {
-			pbRef := &metapb.DescriptorLineageRef{
-				RegionId: ref.RegionID,
-				Hash:     append([]byte(nil), ref.Hash...),
-				Kind:     metapb.DescriptorLineageKind(ref.Kind),
-			}
-			pbRef.Epoch = &metapb.RegionEpoch{
-				Version:     ref.Epoch.Version,
-				ConfVersion: ref.Epoch.ConfVersion,
-			}
-			pbDesc.Lineage = append(pbDesc.Lineage, pbRef)
-		}
-	}
-	return pbDesc
-}
-
-func descriptorFromPB(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor {
-	if pbDesc == nil {
-		return descriptor.Descriptor{}
-	}
-	out := descriptor.Descriptor{
-		RegionID:  pbDesc.RegionId,
-		StartKey:  append([]byte(nil), pbDesc.StartKey...),
-		EndKey:    append([]byte(nil), pbDesc.EndKey...),
-		State:     localmeta.RegionState(pbDesc.State),
-		RootEpoch: pbDesc.RootEpoch,
-		Hash:      append([]byte(nil), pbDesc.Hash...),
-	}
-	if pbDesc.Epoch != nil {
-		out.Epoch.Version = pbDesc.Epoch.Version
-		out.Epoch.ConfVersion = pbDesc.Epoch.ConfVersion
-	}
-	if len(pbDesc.Peers) > 0 {
-		out.Peers = make([]localmeta.PeerMeta, 0, len(pbDesc.Peers))
-		for _, peer := range pbDesc.Peers {
-			if peer == nil {
-				continue
-			}
-			out.Peers = append(out.Peers, localmeta.PeerMeta{StoreID: peer.StoreId, PeerID: peer.PeerId})
-		}
-	}
-	if len(pbDesc.Lineage) > 0 {
-		out.Lineage = make([]descriptor.LineageRef, 0, len(pbDesc.Lineage))
-		for _, ref := range pbDesc.Lineage {
-			if ref == nil {
-				continue
-			}
-			lineage := descriptor.LineageRef{
-				RegionID: ref.RegionId,
-				Hash:     append([]byte(nil), ref.Hash...),
-				Kind:     descriptor.LineageKind(ref.Kind),
-			}
-			if ref.Epoch != nil {
-				lineage.Epoch.Version = ref.Epoch.Version
-				lineage.Epoch.ConfVersion = ref.Epoch.ConfVersion
-			}
-			out.Lineage = append(out.Lineage, lineage)
-		}
-	}
-	return out
 }
 
 func eventKindToPB(kind rootpkg.EventKind) metapb.RootEventKind {

@@ -9,6 +9,7 @@
 package pb
 
 import (
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -266,10 +267,10 @@ func (x *StoreHeartbeatResponse) GetOperations() []*SchedulerOperation {
 }
 
 type RegionHeartbeatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *RegionMeta            `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RegionHeartbeatRequest) Reset() {
@@ -302,9 +303,9 @@ func (*RegionHeartbeatRequest) Descriptor() ([]byte, []int) {
 	return file_pdpb_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *RegionHeartbeatRequest) GetRegion() *RegionMeta {
+func (x *RegionHeartbeatRequest) GetRegionDescriptor() *meta.RegionDescriptor {
 	if x != nil {
-		return x.Region
+		return x.RegionDescriptor
 	}
 	return nil
 }
@@ -734,7 +735,7 @@ var File_pdpb_proto protoreflect.FileDescriptor
 const file_pdpb_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"pdpb.proto\x12\x02pb\x1a\fmetapb.proto\"\xaa\x01\n" +
+	"pdpb.proto\x12\x02pb\x1a\fmetapb.proto\x1a\x15meta/descriptor.proto\"\xaa\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -752,9 +753,9 @@ const file_pdpb_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x126\n" +
 	"\n" +
 	"operations\x18\x02 \x03(\v2\x16.pb.SchedulerOperationR\n" +
-	"operations\"@\n" +
-	"\x16RegionHeartbeatRequest\x12&\n" +
-	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\"5\n" +
+	"operations\"e\n" +
+	"\x16RegionHeartbeatRequest\x12K\n" +
+	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\"5\n" +
 	"\x17RegionHeartbeatResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"2\n" +
 	"\x13RemoveRegionRequest\x12\x1b\n" +
@@ -817,13 +818,14 @@ var file_pdpb_proto_goTypes = []any{
 	(*AllocIDResponse)(nil),         // 11: pb.AllocIDResponse
 	(*TsoRequest)(nil),              // 12: pb.TsoRequest
 	(*TsoResponse)(nil),             // 13: pb.TsoResponse
-	(*RegionMeta)(nil),              // 14: pb.RegionMeta
+	(*meta.RegionDescriptor)(nil),   // 14: nokv.meta.v1.RegionDescriptor
+	(*RegionMeta)(nil),              // 15: pb.RegionMeta
 }
 var file_pdpb_proto_depIdxs = []int32{
 	0,  // 0: pb.SchedulerOperation.type:type_name -> pb.SchedulerOperationType
 	2,  // 1: pb.StoreHeartbeatResponse.operations:type_name -> pb.SchedulerOperation
-	14, // 2: pb.RegionHeartbeatRequest.region:type_name -> pb.RegionMeta
-	14, // 3: pb.GetRegionByKeyResponse.region:type_name -> pb.RegionMeta
+	14, // 2: pb.RegionHeartbeatRequest.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	15, // 3: pb.GetRegionByKeyResponse.region:type_name -> pb.RegionMeta
 	1,  // 4: pb.PD.StoreHeartbeat:input_type -> pb.StoreHeartbeatRequest
 	4,  // 5: pb.PD.RegionHeartbeat:input_type -> pb.RegionHeartbeatRequest
 	6,  // 6: pb.PD.RemoveRegion:input_type -> pb.RemoveRegionRequest

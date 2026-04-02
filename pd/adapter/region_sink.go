@@ -2,13 +2,13 @@ package adapter
 
 import (
 	"context"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -50,14 +50,14 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 	}
 }
 
-// PublishRegion publishes region metadata to PD.
-func (s *SchedulerClient) PublishRegion(ctx context.Context, meta localmeta.RegionMeta) {
-	if s == nil || meta.ID == 0 || s.pd == nil {
+// PublishRegionDescriptor publishes one region descriptor to PD.
+func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc descriptor.Descriptor) {
+	if s == nil || desc.RegionID == 0 || s.pd == nil {
 		return
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{Region: toPBRegionMeta(meta)})
+	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{RegionDescriptor: desc.ToProto()})
 	if err != nil {
 		s.recordError("RegionHeartbeat", err)
 		return
@@ -190,25 +190,4 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 		return context.WithTimeout(parent, timeout)
 	}
 	return context.WithCancel(parent)
-}
-
-func toPBRegionMeta(meta localmeta.RegionMeta) *pb.RegionMeta {
-	out := &pb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
-	}
-	if len(meta.Peers) == 0 {
-		return out
-	}
-	out.Peers = make([]*pb.RegionPeer, 0, len(meta.Peers))
-	for _, p := range meta.Peers {
-		out.Peers = append(out.Peers, &pb.RegionPeer{
-			StoreId: p.StoreID,
-			PeerId:  p.PeerID,
-		})
-	}
-	return out
 }

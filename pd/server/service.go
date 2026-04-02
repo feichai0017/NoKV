@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
@@ -79,11 +78,10 @@ func (s *Service) StoreHeartbeat(_ context.Context, req *pb.StoreHeartbeatReques
 
 // RegionHeartbeat records region-level metadata.
 func (s *Service) RegionHeartbeat(_ context.Context, req *pb.RegionHeartbeatRequest) (*pb.RegionHeartbeatResponse, error) {
-	if req == nil || req.GetRegion() == nil {
-		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing region")
+	if req == nil || req.GetRegionDescriptor() == nil {
+		return nil, status.Error(codes.InvalidArgument, "region heartbeat request missing descriptor")
 	}
-	meta := pbToRegionMeta(req.GetRegion())
-	desc := descriptor.FromRegionMeta(meta, 0)
+	desc := descriptor.FromProto(req.GetRegionDescriptor())
 	err := s.cluster.PublishRegionDescriptor(desc)
 	if err != nil {
 		switch {
@@ -130,10 +128,10 @@ func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyReques
 	if !ok {
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	return &pb.GetRegionByKeyResponse{
-		Region:   descriptorToPB(desc),
-		NotFound: false,
-	}, nil
+		return &pb.GetRegionByKeyResponse{
+			Region:   descriptorToRoutePB(desc),
+			NotFound: false,
+		}, nil
 }
 
 // AllocID allocates one or more globally unique ids.
@@ -193,32 +191,9 @@ func (s *Service) persistAllocatorState() error {
 	return s.storage.SaveAllocatorState(s.ids.Current(), s.tso.Current())
 }
 
-func pbToRegionMeta(meta *pb.RegionMeta) localmeta.RegionMeta {
-	out := localmeta.RegionMeta{
-		ID:       meta.GetId(),
-		StartKey: append([]byte(nil), meta.GetStartKey()...),
-		EndKey:   append([]byte(nil), meta.GetEndKey()...),
-		Epoch: localmeta.RegionEpoch{
-			Version:     meta.GetEpochVersion(),
-			ConfVersion: meta.GetEpochConfVersion(),
-		},
-	}
-	if peers := meta.GetPeers(); len(peers) > 0 {
-		out.Peers = make([]localmeta.PeerMeta, 0, len(peers))
-		for _, p := range peers {
-			if p == nil {
-				continue
-			}
-			out.Peers = append(out.Peers, localmeta.PeerMeta{
-				StoreID: p.GetStoreId(),
-				PeerID:  p.GetPeerId(),
-			})
-		}
-	}
-	return out
-}
-
-func descriptorToPB(desc descriptor.Descriptor) *pb.RegionMeta {
+// descriptorToRoutePB is the remaining RPC-boundary adapter for clients that
+// still fetch route results as pb.RegionMeta. PD runtime stays descriptor-first.
+func descriptorToRoutePB(desc descriptor.Descriptor) *pb.RegionMeta {
 	out := &pb.RegionMeta{
 		Id:               desc.RegionID,
 		StartKey:         append([]byte(nil), desc.StartKey...),

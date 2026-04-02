@@ -15,6 +15,8 @@ import (
 	"github.com/feichai0017/NoKV/pd/core"
 	pdserver "github.com/feichai0017/NoKV/pd/server"
 	"github.com/feichai0017/NoKV/pd/tso"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 func TestNewGRPCClientEmptyAddress(t *testing.T) {
@@ -61,13 +63,15 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	_, err = cli.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		Region: &pb.RegionMeta{
-			Id:               11,
-			StartKey:         []byte("a"),
-			EndKey:           []byte("z"),
-			EpochVersion:     1,
-			EpochConfVersion: 1,
-		},
+		RegionDescriptor: descriptor.FromRegionMeta(localmeta.RegionMeta{
+			ID:       11,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch: localmeta.RegionEpoch{
+				Version:     1,
+				ConfVersion: 1,
+			},
+		}, 0).ToProto(),
 	})
 	require.NoError(t, err)
 
