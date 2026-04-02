@@ -1,4 +1,4 @@
-# 🚀 NoKV – One Storage Core, Two Deployment Shapes
+# 🚀 NoKV – High-performance distributed KV storage based on LSM Tree
 
 <div align="center">
   <img src="./img/logo.svg" width="220" alt="NoKV Logo" />
