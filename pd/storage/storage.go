@@ -5,13 +5,10 @@ import (
 	"math"
 )
 
-// StateFileName is the allocator checkpoint file name used by local storage.
-const StateFileName = "PD_STATE.json"
-
 // AllocatorState captures persisted counters for ID and TSO allocators.
 type AllocatorState struct {
-	IDCurrent uint64 `json:"id_current"`
-	TSCurrent uint64 `json:"ts_current"`
+	IDCurrent uint64
+	TSCurrent uint64
 }
 
 // Snapshot contains persisted PD metadata loaded at startup.
