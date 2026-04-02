@@ -66,3 +66,27 @@ func TestSingleNodeRootAppendAndFence(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(99), fence)
 }
+
+func TestOpenNodeRestoresPersistentState(t *testing.T) {
+	workdir := t.TempDir()
+
+	root, err := OpenSingleNode(Config{NodeID: 1, WorkDir: workdir})
+	require.NoError(t, err)
+
+	desc := testDescriptor(21, "a", "z")
+	_, err = root.Append(rootpkg.RegionDescriptorPublished(desc))
+	require.NoError(t, err)
+	_, err = root.FenceAllocator(rootpkg.AllocatorKindTSO, 1234)
+	require.NoError(t, err)
+
+	reopened, err := OpenNode(Config{NodeID: 1, WorkDir: workdir}, Checkpoint{}, nil)
+	require.NoError(t, err)
+
+	state := reopened.Current()
+	require.Equal(t, uint64(1), state.ClusterEpoch)
+	require.Equal(t, uint64(1234), state.TSOFence)
+
+	snap := reopened.Snapshot()
+	require.Contains(t, snap.Descriptors, uint64(21))
+	require.Equal(t, []byte("a"), snap.Descriptors[21].StartKey)
+}
