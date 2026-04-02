@@ -1,6 +1,7 @@
 package view
 
 import (
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 	"time"
@@ -28,44 +29,44 @@ func TestStoreHealthViewSnapshot(t *testing.T) {
 func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 	v := NewRegionDirectoryView()
 	now := time.Unix(200, 0)
-	require.NoError(t, v.UpsertAt(localmeta.RegionMeta{
+	require.NoError(t, v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       1,
 		StartKey: []byte(""),
 		EndKey:   []byte("m"),
 		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-	}, now))
-	require.NoError(t, v.UpsertAt(localmeta.RegionMeta{
+	}, 0), now))
+	require.NoError(t, v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       2,
 		StartKey: []byte("m"),
 		EndKey:   []byte(""),
 		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-	}, now))
+	}, 0), now))
 
-	meta, ok := v.Lookup([]byte("a"))
+	got, ok := v.LookupDescriptor([]byte("a"))
 	require.True(t, ok)
-	require.Equal(t, uint64(1), meta.ID)
+	require.Equal(t, uint64(1), got.RegionID)
 
-	meta, ok = v.Lookup([]byte("m"))
+	got, ok = v.LookupDescriptor([]byte("m"))
 	require.True(t, ok)
-	require.Equal(t, uint64(2), meta.ID)
+	require.Equal(t, uint64(2), got.RegionID)
 
 	ts, ok := v.LastHeartbeat(2)
 	require.True(t, ok)
 	require.Equal(t, now, ts)
 
-	err := v.UpsertAt(localmeta.RegionMeta{
+	err := v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       2,
 		StartKey: []byte("m"),
 		EndKey:   []byte(""),
 		Epoch:    localmeta.RegionEpoch{Version: 0, ConfVersion: 1},
-	}, now)
+	}, 0), now)
 	require.ErrorIs(t, err, ErrRegionHeartbeatStale)
 
-	err = v.UpsertAt(localmeta.RegionMeta{
+	err = v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       3,
 		StartKey: []byte("l"),
 		EndKey:   []byte("z"),
 		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-	}, now)
+	}, 0), now)
 	require.ErrorIs(t, err, ErrRegionRangeOverlap)
 }

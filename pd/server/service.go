@@ -126,12 +126,12 @@ func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyReques
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
-	meta, ok := s.cluster.GetRegionByKey(req.GetKey())
+	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pb.GetRegionByKeyResponse{
-		Region:   regionMetaToPB(meta),
+		Region:   regionMetaToPB(desc.ToRegionMeta()),
 		NotFound: false,
 	}, nil
 }

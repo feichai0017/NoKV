@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/pd/core"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
@@ -63,31 +64,31 @@ func chooseLeaderTransferOperation(regions []core.RegionInfo, srcStoreID, dstSto
 	// Prefer regions whose first peer belongs to the source store; this aligns
 	// with common bootstrap ordering and increases chance of immediate success.
 	for _, region := range regions {
-		if op, ok := buildLeaderTransfer(region.Meta, srcStoreID, dstStoreID, true); ok {
+		if op, ok := buildLeaderTransfer(region.Descriptor, srcStoreID, dstStoreID, true); ok {
 			return op, true
 		}
 	}
 	// Fallback to any region that has peers on both stores.
 	for _, region := range regions {
-		if op, ok := buildLeaderTransfer(region.Meta, srcStoreID, dstStoreID, false); ok {
+		if op, ok := buildLeaderTransfer(region.Descriptor, srcStoreID, dstStoreID, false); ok {
 			return op, true
 		}
 	}
 	return nil, false
 }
 
-func buildLeaderTransfer(meta localmeta.RegionMeta, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
-	if meta.ID == 0 || len(meta.Peers) == 0 {
+func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*pb.SchedulerOperation, bool) {
+	if desc.RegionID == 0 || len(desc.Peers) == 0 {
 		return nil, false
 	}
-	if requireFirstPeerSrc && meta.Peers[0].StoreID != srcStoreID {
+	if requireFirstPeerSrc && desc.Peers[0].StoreID != srcStoreID {
 		return nil, false
 	}
-	srcPeerID, ok := peerIDOnStore(meta.Peers, srcStoreID)
+	srcPeerID, ok := peerIDOnStore(desc.Peers, srcStoreID)
 	if !ok {
 		return nil, false
 	}
-	dstPeerID, ok := peerIDOnStore(meta.Peers, dstStoreID)
+	dstPeerID, ok := peerIDOnStore(desc.Peers, dstStoreID)
 	if !ok {
 		return nil, false
 	}
@@ -96,7 +97,7 @@ func buildLeaderTransfer(meta localmeta.RegionMeta, srcStoreID, dstStoreID uint6
 	}
 	return &pb.SchedulerOperation{
 		Type:         pb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER,
-		RegionId:     meta.ID,
+		RegionId:     desc.RegionID,
 		SourcePeerId: srcPeerID,
 		TargetPeerId: dstPeerID,
 	}, true

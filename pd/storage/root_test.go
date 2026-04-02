@@ -173,6 +173,93 @@ func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
 	require.Equal(t, uint64(201), events[1].PeerChange.PeerID)
 }
 
+func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
+	root, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+	store, err := OpenRootStore(root)
+	require.NoError(t, err)
+
+	parent := localmeta.RegionMeta{
+		ID:       51,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []localmeta.PeerMeta{
+			{StoreID: 1, PeerID: 101},
+		},
+		State: localmeta.RegionStateRunning,
+	}
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(parent, 0)))
+
+	parent.EndKey = []byte("m")
+	parent.Epoch.Version = 2
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(parent, 0)))
+
+	child := localmeta.RegionMeta{
+		ID:       52,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []localmeta.PeerMeta{
+			{StoreID: 1, PeerID: 102},
+		},
+		State: localmeta.RegionStateRunning,
+	}
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(child, 0)))
+
+	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.Equal(t, rootpkg.EventKindRegionSplitCommitted, events[2].Kind)
+	require.NotNil(t, events[2].RangeSplit)
+	require.Equal(t, uint64(51), events[2].RangeSplit.ParentRegionID)
+	require.Equal(t, uint64(51), events[2].RangeSplit.Left.RegionID)
+	require.Equal(t, uint64(52), events[2].RangeSplit.Right.RegionID)
+}
+
+func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
+	root, err := rootlocal.Open(t.TempDir(), nil)
+	require.NoError(t, err)
+	store, err := OpenRootStore(root)
+	require.NoError(t, err)
+
+	left := localmeta.RegionMeta{
+		ID:       61,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []localmeta.PeerMeta{
+			{StoreID: 1, PeerID: 101},
+		},
+		State: localmeta.RegionStateRunning,
+	}
+	right := localmeta.RegionMeta{
+		ID:       62,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []localmeta.PeerMeta{
+			{StoreID: 1, PeerID: 102},
+		},
+		State: localmeta.RegionStateRunning,
+	}
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(left, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(right, 0)))
+
+	left.EndKey = []byte("z")
+	left.Epoch.Version = 2
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(left, 0)))
+
+	events, _, err := root.ReadSince(rootpkg.Cursor{})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.Equal(t, rootpkg.EventKindRegionMerged, events[2].Kind)
+	require.NotNil(t, events[2].RangeMerge)
+	require.Equal(t, uint64(61), events[2].RangeMerge.LeftRegionID)
+	require.Equal(t, uint64(62), events[2].RangeMerge.RightRegionID)
+	require.Equal(t, uint64(61), events[2].RangeMerge.Merged.RegionID)
+}
+
 func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenRootLocalStore(dir)

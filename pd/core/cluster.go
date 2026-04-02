@@ -55,21 +55,13 @@ func (c *Cluster) StoreSnapshot() []StoreStats {
 	return c.stores.Snapshot()
 }
 
-// UpsertRegionHeartbeat updates region metadata from a region heartbeat.
-func (c *Cluster) UpsertRegionHeartbeat(meta localmeta.RegionMeta) error {
-	if c == nil {
-		return nil
-	}
-	return c.regions.Upsert(meta)
-}
-
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // PD route view.
 func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	if c == nil {
 		return nil
 	}
-	return c.regions.Upsert(desc.ToRegionMeta())
+	return c.regions.Upsert(desc)
 }
 
 // RemoveRegion removes a region from PD metadata and reports whether the region existed before removal.
@@ -90,10 +82,24 @@ func (c *Cluster) RegionSnapshot() []RegionInfo {
 
 // GetRegionByKey returns the region containing key ([start, end)).
 func (c *Cluster) GetRegionByKey(key []byte) (localmeta.RegionMeta, bool) {
-	if c == nil {
+	desc, ok := c.GetRegionDescriptorByKey(key)
+	if !ok {
 		return localmeta.RegionMeta{}, false
 	}
-	return c.regions.Lookup(key)
+	return desc.ToRegionMeta(), true
+}
+
+// GetRegionDescriptorByKey returns the rooted descriptor containing key
+// ([start, end)).
+func (c *Cluster) GetRegionDescriptorByKey(key []byte) (descriptor.Descriptor, bool) {
+	if c == nil {
+		return descriptor.Descriptor{}, false
+	}
+	desc, ok := c.regions.LookupDescriptor(key)
+	if !ok {
+		return descriptor.Descriptor{}, false
+	}
+	return desc, true
 }
 
 // RegionLastHeartbeat returns the latest heartbeat timestamp for regionID.
