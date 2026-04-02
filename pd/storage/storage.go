@@ -3,6 +3,7 @@ package storage
 import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"math"
+	"slices"
 )
 
 // AllocatorState captures persisted counters for ID and TSO allocators.
@@ -16,6 +17,14 @@ type AllocatorState struct {
 type Snapshot struct {
 	Regions   map[uint64]localmeta.RegionMeta
 	Allocator AllocatorState
+}
+
+// BootstrapInfo captures rooted PD bootstrap results.
+type BootstrapInfo struct {
+	LoadedRegions int
+	IDStart       uint64
+	TSStart       uint64
+	Snapshot      Snapshot
 }
 
 // Loader reconstructs a bootstrap snapshot from durable metadata truth.
@@ -42,6 +51,11 @@ type Sink interface {
 type Store interface {
 	Loader
 	Sink
+}
+
+// RegionCatalog accepts region descriptor updates during PD bootstrap.
+type RegionCatalog interface {
+	UpsertRegionHeartbeat(meta localmeta.RegionMeta) error
 }
 
 // NoopStore is an in-memory/no-op storage implementation.
@@ -95,4 +109,55 @@ func ResolveAllocatorStarts(idStart, tsStart uint64, state AllocatorState) (uint
 		tsStart = nextTS
 	}
 	return idStart, tsStart
+}
+
+// RestoreRegions replays a rooted region catalog into one runtime cluster view.
+func RestoreRegions(catalog RegionCatalog, regions map[uint64]localmeta.RegionMeta) (int, error) {
+	if catalog == nil || len(regions) == 0 {
+		return 0, nil
+	}
+	ids := make([]uint64, 0, len(regions))
+	for id := range regions {
+		if id == 0 {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	loaded := 0
+	for _, id := range ids {
+		meta := regions[id]
+		if meta.ID == 0 {
+			continue
+		}
+		if err := catalog.UpsertRegionHeartbeat(meta); err != nil {
+			return loaded, err
+		}
+		loaded++
+	}
+	return loaded, nil
+}
+
+// Bootstrap reconstructs one PD runtime view from rooted durable metadata and
+// resolves allocator starts against persisted fences.
+func Bootstrap(loader Loader, catalog RegionCatalog, idStart, tsStart uint64) (BootstrapInfo, error) {
+	if loader == nil {
+		return BootstrapInfo{IDStart: idStart, TSStart: tsStart}, nil
+	}
+	snapshot, err := loader.Load()
+	if err != nil {
+		return BootstrapInfo{}, err
+	}
+	loadedRegions, err := RestoreRegions(catalog, snapshot.Regions)
+	if err != nil {
+		return BootstrapInfo{}, err
+	}
+	idStart, tsStart = ResolveAllocatorStarts(idStart, tsStart, snapshot.Allocator)
+	return BootstrapInfo{
+		LoadedRegions: loadedRegions,
+		IDStart:       idStart,
+		TSStart:       tsStart,
+		Snapshot:      snapshot,
+	}, nil
 }

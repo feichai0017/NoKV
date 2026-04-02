@@ -5,12 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"io"
 	"net"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -82,16 +80,12 @@ func runPDCmd(w io.Writer, args []string) error {
 			return fmt.Errorf("pd open storage workdir %q: %w", workdirPath, err)
 		}
 		defer func() { _ = rootStore.Close() }()
-		snapshot, err := rootStore.Load()
+		bootstrap, err := pdstorage.Bootstrap(rootStore, cluster, *idStart, *tsStart)
 		if err != nil {
-			return fmt.Errorf("pd load snapshot from %q: %w", workdirPath, err)
+			return fmt.Errorf("pd bootstrap from %q: %w", workdirPath, err)
 		}
-		*idStart, *tsStart = pdstorage.ResolveAllocatorStarts(*idStart, *tsStart, snapshot.Allocator)
-
-		loadedRegions, err = restorePDRegions(cluster, snapshot.Regions)
-		if err != nil {
-			return fmt.Errorf("pd restore regions from %q: %w", workdirPath, err)
-		}
+		*idStart, *tsStart = bootstrap.IDStart, bootstrap.TSStart
+		loadedRegions = bootstrap.LoadedRegions
 		store = rootStore
 	}
 
@@ -155,31 +149,4 @@ func flagPassed(fs *flag.FlagSet, name string) bool {
 		}
 	})
 	return passed
-}
-
-func restorePDRegions(cluster *core.Cluster, snapshot map[uint64]localmeta.RegionMeta) (int, error) {
-	if cluster == nil || len(snapshot) == 0 {
-		return 0, nil
-	}
-	ids := make([]uint64, 0, len(snapshot))
-	for id := range snapshot {
-		if id == 0 {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-
-	loaded := 0
-	for _, id := range ids {
-		meta := snapshot[id]
-		if meta.ID == 0 {
-			continue
-		}
-		if err := cluster.UpsertRegionHeartbeat(meta); err != nil {
-			return loaded, err
-		}
-		loaded++
-	}
-	return loaded, nil
 }
