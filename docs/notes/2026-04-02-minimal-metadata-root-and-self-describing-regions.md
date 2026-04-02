@@ -198,6 +198,137 @@ But these views are rebuildable. They are not the only source of truth.
 
 ## Proposed modules
 
+Before defining packages, the terminology itself must become precise.
+
+Today the codebase still uses the word `meta` for several different kinds of
+state:
+
+- local recovery state
+- snapshot manifest state
+- PD control-plane state
+- region topology state
+
+That is acceptable during prototyping, but it is not good enough for the next
+phase. The design needs names that lock the boundaries in place.
+
+## Naming rules
+
+The following terms should be reserved:
+
+### `RegionDescriptor`
+
+Use this name for globally meaningful region topology state:
+
+- range ownership
+- epoch
+- peer membership
+- lineage
+- descriptor hash
+
+This replaces the vague use of `RegionMeta` when the meaning is really “the
+distributed descriptor of a range”.
+
+### `ReplicaLocalState`
+
+Use this name for one store's local recovery state for one hosted replica:
+
+- local replica lifecycle state
+- last applied information needed for restart
+- local-only recovery hints
+
+This is not cluster authority and should not be called `RegionMeta`.
+
+### `RaftProgress`
+
+Use this name for local raft/WAL/apply checkpoint information:
+
+- log pointer
+- applied index / term
+- committed index
+- snapshot/truncation markers
+
+This keeps raft-replay durability separate from replica catalog durability.
+
+### `RootState`
+
+Use this name for the minimal globally replicated metadata root checkpoint:
+
+- allocator fences
+- topology epoch
+- membership epoch
+- policy version
+- last committed root cursor
+
+### `RootEvent`
+
+Use this name for one globally ordered metadata mutation event.
+
+### `View`
+
+Use this term only for rebuildable control-plane projections:
+
+- region directory view
+- store health view
+- scheduler input view
+
+Views are allowed to be stale. Root state is not.
+
+## Suggested file names
+
+The file names should reflect those boundaries directly.
+
+### Files that can remain human-readable JSON
+
+These are small, non-hot, and operator-facing:
+
+- `MODE.json`
+- `MIGRATION_PROGRESS.json`
+- `sst-snapshot.json`
+
+These should remain JSON unless there is a compelling operational reason to
+change them.
+
+### Files that should evolve into typed binary metadata
+
+#### Store-local recovery files
+
+- `replica-local-state.pb`
+- `raft-progress.pb`
+
+These replace the current all-in-one `RAFTSTORE_STATE.json` direction.
+
+#### Region descriptor artifacts
+
+- `region-descriptor.pb`
+
+If descriptors are stored per-region on disk, prefer a layout like:
+
+- `regions/<region-id>/descriptor.pb`
+
+If a snapshot exports one descriptor alongside SST files, prefer:
+
+- `descriptor.pb`
+
+inside the snapshot directory.
+
+#### Metadata root durability
+
+- `metadata-root.log`
+- `metadata-root-checkpoint.pb`
+
+The log stores ordered root events.
+The checkpoint stores a compact root snapshot.
+
+#### Rebuildable control-plane views
+
+If a process wants local checkpoints for restart speed, keep them explicitly
+named as views:
+
+- `region-directory-view.pb`
+- `store-health-view.pb`
+
+These are caches, not truth.
+
 ## `meta/root`
 
 Suggested new package:
@@ -222,6 +353,29 @@ type Root interface {
 }
 ```
 
+Suggested logical types:
+
+```go
+type State struct {
+    ClusterEpoch     uint64
+    MembershipEpoch  uint64
+    PolicyVersion    uint64
+    LastCommitted    Cursor
+    IDFence          uint64
+    TSOFence         uint64
+}
+
+type Cursor struct {
+    Term  uint64
+    Index uint64
+}
+
+type CommitInfo struct {
+    Cursor Cursor
+    State  State
+}
+```
+
 Suggested durable state:
 
 - `cluster_epoch`
@@ -235,6 +389,7 @@ Suggested events:
 
 - `StoreJoined`
 - `StoreLeft`
+- `StoreMarkedDraining`
 - `RegionSplitRequested`
 - `RegionSplitCommitted`
 - `RegionMerged`
@@ -244,6 +399,42 @@ Suggested events:
 - `PlacementPolicyChanged`
 
 The root should stay small enough that a fresh node can replay it quickly.
+
+### What the root stores
+
+The root should store only globally serialized control data:
+
+- allocator fences
+- store membership events
+- topology events
+- placement policy version
+- cluster epoch
+
+The root should not store:
+
+- the full current runtime region map
+- per-store heartbeat history
+- every replica's local state
+- scheduler caches
+
+That is the entire point of the design.
+
+### Why the root still needs quorum
+
+This architecture still requires a strongly consistent root.
+The difference is that the root is now small and stable instead of a second
+large mutable metadata database.
+
+For a real HA deployment, the recommended baseline is still:
+
+- 3 root replicas
+- majority commit
+- one elected leader for appends
+
+This can be implemented with Raft or an equivalent quorum protocol.
+
+The innovation here is not “avoid consensus entirely”.
+It is “reduce the consensus surface to the smallest defensible root”.
 
 ## `raftstore/descriptor`
 
@@ -274,6 +465,19 @@ type Descriptor struct {
 }
 ```
 
+Suggested lineage types:
+
+```go
+type LineageRef struct {
+    RegionID uint64
+    Epoch    raftmeta.RegionEpoch
+    Hash     []byte
+    Kind     LineageKind
+}
+
+type LineageKind uint8
+```
+
 Lineage should make split/merge explicit:
 
 - split child descriptors reference parent descriptor hash/epoch
@@ -281,6 +485,71 @@ Lineage should make split/merge explicit:
 
 This gives NoKV a route to make region topology evolution auditable instead of
 implicitly buried in one control-plane table.
+
+### Descriptor invariants
+
+A valid descriptor must satisfy:
+
+1. `RegionID != 0`
+2. `StartKey < EndKey` when both bounds are present
+3. `Epoch.Version > 0`
+4. `len(Peers) > 0`
+5. peer identities are unique
+6. `RootEpoch` is not behind the topology event that created this descriptor
+7. `Hash` covers the canonical descriptor body, excluding transport wrappers
+
+### Descriptor ownership
+
+The descriptor is not a PD table row.
+It is a region-owned object that should be:
+
+- returned by region leaders
+- embedded in or referenced by snapshots
+- used by route caches
+- validated against root epochs when needed
+
+## `raftstore/recovery`
+
+Suggested new package:
+
+- `raftstore/recovery`
+
+Responsibility:
+
+- store-local replica catalog
+- store-local raft progress
+- restart recovery only
+
+Suggested logical types:
+
+```go
+type ReplicaLocalState struct {
+    RegionID     uint64
+    LocalPeerID  uint64
+    State        raftmeta.RegionState
+    Descriptor   *descriptor.Descriptor
+    LastApplied  uint64
+    LastTerm     uint64
+}
+
+type RaftProgress struct {
+    GroupID         uint64
+    Segment         uint32
+    Offset          uint64
+    AppliedIndex    uint64
+    AppliedTerm     uint64
+    Committed       uint64
+    SnapshotIndex   uint64
+    SnapshotTerm    uint64
+    TruncatedIndex  uint64
+    TruncatedTerm   uint64
+    SegmentIndex    uint64
+    TruncatedOffset uint64
+}
+```
+
+This package should replace the current ambiguous “state file contains
+everything” direction over time.
 
 ## `pd/view`
 
@@ -305,6 +574,17 @@ Suggested components:
 - `PlacementView`
 - `SchedulerInputView`
 
+### View input model
+
+Views should be rebuilt from:
+
+1. root events
+2. current root checkpoint
+3. live store heartbeats
+4. optional descriptor observations from region leaders
+
+This makes the control plane robust against cache loss.
+
 ## `raftstore/meta`
 
 Keep:
@@ -328,6 +608,11 @@ every update. The right direction is:
 - split region local state from raft pointers
 - use finer-grained records
 - keep store-local durability separate from cluster metadata durability
+
+In other words:
+
+- `raftstore/meta` should shrink toward a compatibility bridge
+- `raftstore/recovery` should become the real local durability package
 
 ## Data ownership
 
@@ -356,6 +641,19 @@ The design only works if ownership stays explicit.
 - operator-facing summaries
 
 Views may be stale. Root may not.
+
+## Responsibility matrix
+
+| Concern | Owner | Durable? | Strongly consistent? |
+| --- | --- | --- | --- |
+| user KV data | data plane | yes | per raft group |
+| region descriptor | region quorum | yes | yes |
+| split/merge ordering | metadata root | yes | yes |
+| allocator fences | metadata root | yes | yes |
+| store membership | metadata root | yes | yes |
+| store heartbeat stats | control-plane view | optional | no |
+| route cache | client/server cache | no | no |
+| replica restart state | store-local recovery | yes | local only |
 
 ## Routing model
 
@@ -386,6 +684,19 @@ sequenceDiagram
 This keeps the common path cheap while allowing the region to reject stale
 routing using its own descriptor epoch.
 
+### Route miss contract
+
+On a miss or stale descriptor:
+
+1. the resolver checks local cache
+2. on cache miss it asks a directory view
+3. the view refreshes from root cursor if needed
+4. the resulting descriptor is tried against the target region
+5. the region may reject with newer descriptor metadata
+
+That means the system does not need a central always-fresh routing oracle for
+every operation.
+
 ## Split / merge model
 
 The region topology path should be event-first, descriptor-second:
@@ -401,6 +712,29 @@ The important point is:
 > the root serializes the topology change, but the region descriptor is what
 > the data plane actually serves with.
 
+### Suggested split sequence
+
+```mermaid
+sequenceDiagram
+    participant Scheduler
+    participant Root
+    participant Parent as Parent Region
+    participant Child as Child Region
+    participant View
+
+    Scheduler->>Root: append split-request event
+    Root-->>Scheduler: committed root cursor
+    Scheduler->>Parent: propose split apply
+    Parent->>Child: create child descriptor
+    Parent-->>Scheduler: split applied
+    Scheduler->>Root: append split-committed event
+    Root-->>View: new topology cursor
+    View->>View: rebuild directory
+```
+
+The root orders the split.
+The region quorum produces the serving descriptors.
+
 ## Allocator model
 
 Allocator state should be separated from the rest of metadata.
@@ -414,6 +748,16 @@ The allocator service can cache ranges locally, but the globally replicated
 root must be the monotonic lower bound that prevents rollback after failover.
 
 This keeps allocator correctness independent from the full region catalog.
+
+### Suggested allocator strategy
+
+The root should allocate in fenced ranges, not one ID at a time:
+
+1. allocator service asks root to advance the fence
+2. root commits the new minimum durable bound
+3. allocator serves IDs or timestamps from the granted range locally
+
+This keeps root writes small while preserving monotonicity after failover.
 
 ## Migration and snapshot integration
 
@@ -442,6 +786,20 @@ That means migration becomes:
 
 This preserves the current good boundary instead of throwing it away.
 
+### Descriptor-in-snapshot rule
+
+Once descriptors exist, every exported region snapshot should carry the current
+descriptor explicitly.
+
+That lets install paths validate:
+
+- region bounds
+- peer membership
+- epoch
+- lineage if needed
+
+before publish completes.
+
 ## Bootstrap flow
 
 The bootstrap sequence should become:
@@ -460,6 +818,19 @@ flowchart TD
 
 The key change is that a seeded workdir should no longer imply that all future
 cluster truth lives in PD-local mutable maps.
+
+### Bootstrap root contents
+
+The initial bootstrap event should record at least:
+
+- cluster epoch = 1
+- initial membership epoch = 1
+- initial region descriptor reference
+- initial allocator fences
+- seed store membership
+
+That gives the cluster a durable root without inventing a second full metadata
+table at bootstrap time.
 
 ## Persistence strategy
 
@@ -487,6 +858,66 @@ The direction is not “ban JSON everywhere”.
 The direction is “stop rewriting full mutable metadata maps as the system
 grows”.
 
+## Physical encoding strategy
+
+The logical schemas should be explicit first.
+
+The recommended approach is:
+
+1. define logical schemas as typed protocol objects
+2. use protobuf-compatible message definitions for root state, root events,
+   descriptors, and recovery objects
+3. allow the physical on-disk encoding to evolve later if a hot path needs a
+   custom layout
+
+That means:
+
+- schema stability first
+- custom binary layout only where profiling proves it matters
+
+This is appropriate because these objects are control-plane and recovery-plane
+protocol objects, not SST blocks or WAL hot-path records.
+
+## PD role under this architecture
+
+PD still exists, but its role changes materially.
+
+### PD should do
+
+- propose root events
+- fence allocators
+- build materialized views
+- run scheduling logic
+- expose operator/admin APIs
+
+### PD should not do
+
+- own the only full mutable region map
+- act as the sole long-term copy of per-region truth
+- absorb store-local recovery metadata
+
+The distinction is important:
+
+> PD becomes a metadata-root manager and view builder, not a metadata database.
+
+## HA deployment shape
+
+The first real HA shape should be intentionally small:
+
+- 3 metadata-root replicas
+- 1 leader, 2 followers
+- majority commit
+- optional colocated PD API service on top of the same root replica set
+
+Suggested deployment choices:
+
+1. keep metadata-root replication separate from data-plane raft groups
+2. keep the root event schema very small
+3. do not colocate unrelated caches inside the root durability layer
+
+This gives NoKV one small strongly consistent control core instead of a large
+secondary metadata database.
+
 ## Phased implementation plan
 
 ## Phase 0: freeze current boundaries
@@ -502,6 +933,7 @@ Goal:
 Add:
 
 - `meta/root/types.go`
+- `meta/root/root.proto`
 
 Define:
 
@@ -510,6 +942,8 @@ Define:
 - `CommitInfo`
 - `State`
 - allocator fence model
+- event kinds
+- checkpoint schema
 
 No runtime wiring yet.
 
@@ -523,17 +957,29 @@ This is not the final HA backend.
 Its purpose is to make event and state shapes explicit before distributed
 replication is introduced.
 
+Suggested outputs:
+
+- `metadata-root.log`
+- `metadata-root-checkpoint.pb`
+
 ## Phase 3: add region descriptor module
 
 Add:
 
 - `raftstore/descriptor`
+- `raftstore/descriptor/descriptor.proto`
 
 Integrate with:
 
 - snapshot export/import
 - peer bootstrap
 - stale-route rejection hooks
+- route cache entries
+
+Also add:
+
+- `raftstore/recovery`
+- `raftstore/recovery/recovery.proto`
 
 ## Phase 4: replace PD-local metadata authority with root + view
 
@@ -547,6 +993,7 @@ So that PD becomes:
 - root event proposer
 - view builder
 - scheduler
+- allocator fence owner
 
 Instead of the owner of a full mutable region map.
 
@@ -569,6 +1016,27 @@ Only after the model is stable:
 - add a replicated backend for `meta/root`
 - keep the replicated state small
 - do not turn it into a second giant metadata database
+
+Suggested shape:
+
+- 3-node quorum
+- append-only root event log
+- periodic root checkpoint
+- explicit fencing on leader change
+
+## Implementation checklist
+
+The minimum useful engineering sequence is:
+
+1. define root schemas
+2. define descriptor schemas
+3. define recovery schemas
+4. add local root backend
+5. add descriptor validation helpers
+6. embed descriptors into snapshot export/import
+7. refactor PD into root + view roles
+8. wire migration events into root append path
+9. only then add HA root replication
 
 ## What this changes
 
@@ -594,5 +1062,7 @@ This note intentionally does not fully solve:
 - cache invalidation protocol
 - split/merge commit protocol details
 - the final replicated backend implementation for `meta/root`
+- exact protobuf package layout
+- exact leader-election and root-failover procedure
 
 Those should be designed next as separate technical notes.
