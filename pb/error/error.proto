@@ -3,7 +3,8 @@ syntax = "proto3";
 
 package nokv.error.v1;
 
-import "legacy/meta.proto";
+import "meta/descriptor.proto";
+import "meta/region.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/error;errorpb";
 
@@ -21,12 +22,12 @@ message RegionError {
 
 message NotLeader {
   uint64 region_id = 1;
-  nokv.meta.legacy.v1.RegionPeer leader = 2;
+  nokv.meta.v1.RegionPeer leader = 2;
 }
 
 message EpochNotMatch {
-  nokv.meta.legacy.v1.RegionEpoch current_epoch = 1;
-  repeated nokv.meta.legacy.v1.RegionMeta regions = 2;
+  nokv.meta.v1.RegionEpoch current_epoch = 1;
+  repeated nokv.meta.v1.RegionDescriptor regions = 2;
 }
 
 message StaleCommand {}

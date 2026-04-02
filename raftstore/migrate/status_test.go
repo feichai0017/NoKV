@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
@@ -25,8 +25,8 @@ func TestReadStatusWithRuntimeUsesSeedRegionID(t *testing.T) {
 			Leader:       true,
 			AppliedIndex: 7,
 			AppliedTerm:  1,
-			Region: &metapb.RegionMeta{
-				Id: 9,
+			Region: &metapb.RegionDescriptor{
+				RegionId: 9,
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 109},
 					{StoreId: 2, PeerId: 209},
@@ -92,8 +92,8 @@ func TestBuildReportIncludesClusterSummary(t *testing.T) {
 			Leader:       false,
 			AppliedIndex: 7,
 			AppliedTerm:  1,
-			Region: &metapb.RegionMeta{
-				Id: 9,
+			Region: &metapb.RegionDescriptor{
+				RegionId: 9,
 				Peers: []*metapb.RegionPeer{
 					{StoreId: 1, PeerId: 109},
 					{StoreId: 2, PeerId: 209},

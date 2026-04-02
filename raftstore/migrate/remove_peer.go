@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"time"
 )
 
@@ -23,17 +23,17 @@ type RemovePeerConfig struct {
 
 // RemovePeerResult reports the observed state after one remove-peer request.
 type RemovePeerResult struct {
-	Addr             string             `json:"addr"`
-	TargetAdminAddr  string             `json:"target_admin_addr,omitempty"`
-	RegionID         uint64             `json:"region_id"`
-	PeerID           uint64             `json:"peer_id"`
-	LeaderKnown      bool               `json:"leader_known"`
-	LeaderRegion     *metapb.RegionMeta `json:"leader_region,omitempty"`
-	TargetKnown      bool               `json:"target_known"`
-	TargetHosted     bool               `json:"target_hosted"`
-	TargetLocalPeer  uint64             `json:"target_local_peer_id,omitempty"`
-	TargetAppliedIdx uint64             `json:"target_applied_index,omitempty"`
-	Waited           bool               `json:"waited"`
+	Addr             string                   `json:"addr"`
+	TargetAdminAddr  string                   `json:"target_admin_addr,omitempty"`
+	RegionID         uint64                   `json:"region_id"`
+	PeerID           uint64                   `json:"peer_id"`
+	LeaderKnown      bool                     `json:"leader_known"`
+	LeaderRegion     *metapb.RegionDescriptor `json:"leader_region,omitempty"`
+	TargetKnown      bool                     `json:"target_known"`
+	TargetHosted     bool                     `json:"target_hosted"`
+	TargetLocalPeer  uint64                   `json:"target_local_peer_id,omitempty"`
+	TargetAppliedIdx uint64                   `json:"target_applied_index,omitempty"`
+	Waited           bool                     `json:"waited"`
 }
 
 // RemovePeer removes one peer from a region and optionally waits until the

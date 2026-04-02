@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"io"
 	"testing"
 	"time"
@@ -22,7 +22,7 @@ type fakeAdminClient struct {
 	exportSnapshotReqs  []*adminpb.ExportRegionSnapshotRequest
 	importSnapshotErr   error
 	importSnapshotHdrs  [][]byte
-	importSnapshotRegs  []*metapb.RegionMeta
+	importSnapshotRegs  []*metapb.RegionDescriptor
 	importSnapshotBytes [][]byte
 
 	statuses []*adminpb.RegionRuntimeStatusResponse
@@ -69,7 +69,7 @@ func (f *fakeAdminClient) ExportRegionSnapshotStream(_ context.Context, req *adm
 	}, nil
 }
 
-func (f *fakeAdminClient) ImportRegionSnapshotStream(_ context.Context, header []byte, region *metapb.RegionMeta, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error) {
+func (f *fakeAdminClient) ImportRegionSnapshotStream(_ context.Context, header []byte, region *metapb.RegionDescriptor, r io.Reader) (*adminpb.ImportRegionSnapshotResponse, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
@@ -98,15 +98,15 @@ func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *adminpb.RegionRu
 func TestExpandWaitsForTargetHosted(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &adminpb.AddPeerResponse{
-			Region: &metapb.RegionMeta{Id: 8},
+			Region: &metapb.RegionDescriptor{RegionId: 8},
 		},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{
 			Snapshot: []byte("snapshot-8"),
-			Region:   &metapb.RegionMeta{Id: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}},
+			Region:   &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}},
 		},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 8}},
-			{Known: true, Region: &metapb.RegionMeta{Id: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{
@@ -153,7 +153,7 @@ func TestExpandWaitsForTargetHosted(t *testing.T) {
 func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 	leader := &fakeAdminClient{
 		addResp: &adminpb.AddPeerResponse{
-			Region: &metapb.RegionMeta{Id: 9, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 33}}},
+			Region: &metapb.RegionDescriptor{RegionId: 9, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 33}}},
 		},
 	}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
@@ -179,11 +179,11 @@ func TestExpandWithoutWaitReturnsAfterAddPeer(t *testing.T) {
 
 func TestExpandRollsTargetsSequentially(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 11}},
+		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 11}},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-11")},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 11, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
-			{Known: true, Region: &metapb.RegionMeta{Id: 11, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}, {StoreId: 3, PeerId: 33}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 11, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 11, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}, {StoreId: 3, PeerId: 33}}}},
 		},
 	}
 	target2 := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1, AppliedTerm: 1}}}
@@ -226,10 +226,10 @@ func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	leader := &fakeAdminClient{
-		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 15}},
+		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 15}},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-15")},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 15, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 15, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{
@@ -275,10 +275,10 @@ func TestExpandWritesWorkdirCheckpoint(t *testing.T) {
 
 func TestExpandRequestsRegionSnapshot(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 18}},
+		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 18}},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-18")},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 18, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 28}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 18, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 28}}}},
 		},
 	}
 	target := &fakeAdminClient{
@@ -317,10 +317,10 @@ func TestExpandRequestsRegionSnapshot(t *testing.T) {
 
 func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp:           &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 12}},
+		addResp:           &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 12}},
 		exportSnapshotErr: context.DeadlineExceeded,
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 12, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 12, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{}
@@ -351,10 +351,10 @@ func TestExpandFailsWhenLeaderSnapshotExportFails(t *testing.T) {
 
 func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 13}},
+		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 13}},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-13")},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 13, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 13, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{importSnapshotErr: context.DeadlineExceeded}
@@ -385,9 +385,9 @@ func TestExpandFailsWhenTargetSnapshotInstallFails(t *testing.T) {
 
 func TestExpandTimesOutWhenLeaderNeverPublishesPeer(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp: &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 14}},
+		addResp: &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 14}},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 14}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 14}},
 		},
 	}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
@@ -409,10 +409,10 @@ func TestExpandTimesOutWhenLeaderNeverPublishesPeer(t *testing.T) {
 
 func TestExpandTimesOutWhenTargetNeverHostsPeer(t *testing.T) {
 	leader := &fakeAdminClient{
-		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionMeta{Id: 15}},
+		addResp:            &adminpb.AddPeerResponse{Region: &metapb.RegionDescriptor{RegionId: 15}},
 		exportSnapshotResp: &adminpb.ExportRegionSnapshotResponse{Snapshot: []byte("snapshot-15")},
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 15, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 15, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
 		},
 	}
 	target := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: false}}}

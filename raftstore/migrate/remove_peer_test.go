@@ -3,7 +3,7 @@ package migrate
 import (
 	"context"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
@@ -14,8 +14,8 @@ import (
 func TestRemovePeerWaitsForTargetDrop(t *testing.T) {
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
-			{Known: true, Region: &metapb.RegionMeta{Id: 8}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8}},
 		},
 	}
 	target := &fakeAdminClient{
@@ -51,7 +51,7 @@ func TestRemovePeerWaitsForTargetDrop(t *testing.T) {
 
 func TestRemovePeerTimesOutWhenLeaderStillPublishesPeer(t *testing.T) {
 	leader := &fakeAdminClient{
-		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionMeta{Id: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}}},
+		statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 2, PeerId: 22}}}}},
 	}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
 		require.Equal(t, "leader", addr)
@@ -73,7 +73,7 @@ func TestRemovePeerTimesOutWhenLeaderStillPublishesPeer(t *testing.T) {
 func TestRemovePeerTreatsLeaderDehostAsSuccess(t *testing.T) {
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 8, Peers: []*metapb.RegionPeer{{StoreId: 1, PeerId: 11}, {StoreId: 2, PeerId: 22}}}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8, Peers: []*metapb.RegionPeer{{StoreId: 1, PeerId: 11}, {StoreId: 2, PeerId: 22}}}},
 			{Known: false},
 		},
 	}
@@ -96,7 +96,7 @@ func TestRemovePeerTreatsLeaderDehostAsSuccess(t *testing.T) {
 }
 
 func TestRemovePeerTimesOutWhenTargetStillHosted(t *testing.T) {
-	leader := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionMeta{Id: 8}}}}
+	leader := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8}}}}
 	target := &fakeAdminClient{statuses: []*adminpb.RegionRuntimeStatusResponse{{Known: true, Hosted: true, LocalPeerId: 22, AppliedIndex: 1}}}
 	dial := func(ctx context.Context, addr string) (AdminClient, func() error, error) {
 		switch addr {
@@ -131,7 +131,7 @@ func TestRemovePeerWritesWorkdirCheckpoint(t *testing.T) {
 
 	leader := &fakeAdminClient{
 		statuses: []*adminpb.RegionRuntimeStatusResponse{
-			{Known: true, Region: &metapb.RegionMeta{Id: 8}},
+			{Known: true, Region: &metapb.RegionDescriptor{RegionId: 8}},
 		},
 	}
 	target := &fakeAdminClient{

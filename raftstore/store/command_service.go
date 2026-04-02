@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"time"
@@ -184,7 +185,7 @@ func validateRegionEpoch(reqEpoch *metapb.RegionEpoch, meta localmeta.RegionMeta
 	if reqEpoch == nil {
 		return epochNotMatchError(&meta)
 	}
-	if reqEpoch.GetConfVer() != meta.Epoch.ConfVersion || reqEpoch.GetVersion() != meta.Epoch.Version {
+	if reqEpoch.GetConfVersion() != meta.Epoch.ConfVersion || reqEpoch.GetVersion() != meta.Epoch.Version {
 		return epochNotMatchError(&meta)
 	}
 	return nil
@@ -300,13 +301,13 @@ func trimScanResponse(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest, 
 
 func epochNotMatchError(meta *localmeta.RegionMeta) *errorpb.RegionError {
 	var current *metapb.RegionEpoch
-	var regions []*metapb.RegionMeta
+	var regions []*metapb.RegionDescriptor
 	if meta != nil {
 		current = &metapb.RegionEpoch{
-			ConfVer: meta.Epoch.ConfVersion,
-			Version: meta.Epoch.Version,
+			ConfVersion: meta.Epoch.ConfVersion,
+			Version:     meta.Epoch.Version,
 		}
-		regions = append(regions, regionMetaToPB(*meta))
+		regions = append(regions, metacodec.LocalRegionMetaToDescriptorProto(*meta))
 	}
 	return &errorpb.RegionError{
 		EpochNotMatch: &errorpb.EpochNotMatch{

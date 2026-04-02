@@ -5,7 +5,7 @@ import (
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"io"
 	"testing"
 
@@ -213,7 +213,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 		Snapshot: exported.GetSnapshot(),
 	})
 	require.NoError(t, err)
-	require.Equal(t, region.ID, installed.GetRegion().GetId())
+	require.Equal(t, region.ID, installed.GetRegion().GetRegionId())
 
 	status, ok := targetStore.RegionRuntimeStatus(region.ID)
 	require.True(t, ok)
@@ -239,13 +239,12 @@ func (s *exportRegionSnapshotStreamCapture) Send(resp *adminpb.ExportRegionSnaps
 		Chunk:          append([]byte(nil), resp.GetChunk()...),
 	}
 	if resp.GetRegion() != nil {
-		copyResp.Region = &metapb.RegionMeta{
-			Id:               resp.GetRegion().GetId(),
-			StartKey:         append([]byte(nil), resp.GetRegion().GetStartKey()...),
-			EndKey:           append([]byte(nil), resp.GetRegion().GetEndKey()...),
-			EpochVersion:     resp.GetRegion().GetEpochVersion(),
-			EpochConfVersion: resp.GetRegion().GetEpochConfVersion(),
-			Peers:            append([]*metapb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
+		copyResp.Region = &metapb.RegionDescriptor{
+			RegionId: resp.GetRegion().GetRegionId(),
+			StartKey: append([]byte(nil), resp.GetRegion().GetStartKey()...),
+			EndKey:   append([]byte(nil), resp.GetRegion().GetEndKey()...),
+			Epoch:    &metapb.RegionEpoch{Version: resp.GetRegion().GetEpoch().GetVersion(), ConfVersion: resp.GetRegion().GetEpoch().GetConfVersion()},
+			Peers:    append([]*metapb.RegionPeer(nil), resp.GetRegion().GetPeers()...),
 		}
 	}
 	s.chunks = append(s.chunks, copyResp)
@@ -292,7 +291,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMissingHeader(t *testing.T) {
 	stream := &importRegionSnapshotStreamFeed{
 		ctx: context.Background(),
 		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{{
-			Region: &metapb.RegionMeta{Id: 1},
+			Region: &metapb.RegionDescriptor{RegionId: 1},
 			Chunk:  []byte("payload"),
 		}},
 	}
@@ -326,8 +325,8 @@ func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
 		reqs: []*adminpb.ImportRegionSnapshotStreamRequest{
 			{
 				SnapshotHeader: header,
-				Region: &metapb.RegionMeta{
-					Id:       1,
+				Region: &metapb.RegionDescriptor{
+					RegionId: 1,
 					StartKey: []byte("a"),
 					EndKey:   []byte("z"),
 				},
@@ -488,7 +487,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	importStream := &importRegionSnapshotStreamFeed{ctx: context.Background(), reqs: importReqs}
 	require.NoError(t, targetSvc.ImportRegionSnapshotStream(importStream))
 	require.NotNil(t, importStream.resp)
-	require.Equal(t, region.ID, importStream.resp.GetRegion().GetId())
+	require.Equal(t, region.ID, importStream.resp.GetRegion().GetRegionId())
 
 	status, ok := targetStore.RegionRuntimeStatus(region.ID)
 	require.True(t, ok)
@@ -645,13 +644,12 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 			Chunk:          append([]byte(nil), chunk.GetChunk()...),
 		}
 		if i == 0 {
-			req.Region = &metapb.RegionMeta{
-				Id:               chunk.GetRegion().GetId(),
-				StartKey:         append([]byte(nil), chunk.GetRegion().GetStartKey()...),
-				EndKey:           []byte("zz"),
-				EpochVersion:     chunk.GetRegion().GetEpochVersion(),
-				EpochConfVersion: chunk.GetRegion().GetEpochConfVersion(),
-				Peers:            append([]*metapb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
+			req.Region = &metapb.RegionDescriptor{
+				RegionId: chunk.GetRegion().GetRegionId(),
+				StartKey: append([]byte(nil), chunk.GetRegion().GetStartKey()...),
+				EndKey:   []byte("zz"),
+				Epoch:    &metapb.RegionEpoch{Version: chunk.GetRegion().GetEpoch().GetVersion(), ConfVersion: chunk.GetRegion().GetEpoch().GetConfVersion()},
+				Peers:    append([]*metapb.RegionPeer(nil), chunk.GetRegion().GetPeers()...),
 			}
 		}
 		importReqs = append(importReqs, req)

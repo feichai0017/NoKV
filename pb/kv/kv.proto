@@ -4,7 +4,7 @@ syntax = "proto3";
 package nokv.kv.v1;
 
 import "error/error.proto";
-import "legacy/meta.proto";
+import "meta/region.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/kv;kvrpcpb";
 
@@ -156,8 +156,8 @@ message CheckTxnStatusResponse {
 
 message Context {
   uint64 region_id = 1;
-  nokv.meta.legacy.v1.RegionEpoch region_epoch = 2;
-  nokv.meta.legacy.v1.RegionPeer peer = 3;
+  nokv.meta.v1.RegionEpoch region_epoch = 2;
+  nokv.meta.v1.RegionPeer peer = 3;
 
   ReadConsistency read_consistency = 4;
   ReadPreference read_preference = 5;

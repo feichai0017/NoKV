@@ -4,7 +4,7 @@ import (
 	"context"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/legacy"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"testing"
 	"time"
@@ -49,7 +49,7 @@ func TestStoreProposeCommandPrewriteCommit(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(peer.ID()) })
 	require.NoError(t, peer.Campaign())
 
-	epoch := &metapb.RegionEpoch{Version: 1, ConfVer: 1}
+	epoch := &metapb.RegionEpoch{Version: 1, ConfVersion: 1}
 	prewrite := &raftcmdpb.RaftCmdRequest{
 		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
 		Requests: []*raftcmdpb.Request{{
@@ -147,7 +147,7 @@ func TestStoreProposeCommandRejectsDuplicateRequestID(t *testing.T) {
 		return &raftcmdpb.RaftCmdRequest{
 			Header: &raftcmdpb.CmdHeader{
 				RegionId:    region.ID,
-				RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVer: 1},
+				RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 				RequestId:   9001,
 			},
 			Requests: []*raftcmdpb.Request{{
@@ -217,7 +217,7 @@ func TestStoreProposeCommandNotLeader(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(peer.ID()) })
 
 	req := &raftcmdpb.RaftCmdRequest{
-		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVer: 1}},
+		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}},
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
 			Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{StartVersion: 1}},
@@ -260,7 +260,7 @@ func TestStoreProposeCommandEpochMismatch(t *testing.T) {
 	require.NoError(t, peer.Campaign())
 
 	badReq := &raftcmdpb.RaftCmdRequest{
-		Header:   &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVer: 1}},
+		Header:   &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1}},
 		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_PREWRITE}},
 	}
 	resp, err := st.ProposeCommand(context.Background(), badReq)
@@ -302,7 +302,7 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	t.Cleanup(func() { st.StopPeer(p.ID()) })
 	require.NoError(t, p.Campaign())
 
-	epoch := &metapb.RegionEpoch{Version: 1, ConfVer: 1}
+	epoch := &metapb.RegionEpoch{Version: 1, ConfVersion: 1}
 	prewrite := &raftcmdpb.RaftCmdRequest{
 		Header: &raftcmdpb.CmdHeader{RegionId: region.ID, RegionEpoch: epoch},
 		Requests: []*raftcmdpb.Request{{CmdType: raftcmdpb.CmdType_CMD_PREWRITE, Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
