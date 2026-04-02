@@ -9,6 +9,7 @@
 package raftstorepb
 
 import (
+	meta "github.com/feichai0017/NoKV/pb/meta"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -24,13 +25,13 @@ const (
 )
 
 type ReplicaLocalState struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	LocalPeerId   uint64                 `protobuf:"varint,2,opt,name=local_peer_id,json=localPeerId,proto3" json:"local_peer_id,omitempty"`
-	State         RegionReplicaState     `protobuf:"varint,3,opt,name=state,proto3,enum=nokv.raftstore.v1.RegionReplicaState" json:"state,omitempty"`
-	Descriptor_   *RegionDescriptor      `protobuf:"bytes,4,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
-	LastApplied   uint64                 `protobuf:"varint,5,opt,name=last_applied,json=lastApplied,proto3" json:"last_applied,omitempty"`
-	LastTerm      uint64                 `protobuf:"varint,6,opt,name=last_term,json=lastTerm,proto3" json:"last_term,omitempty"`
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	RegionId      uint64                  `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	LocalPeerId   uint64                  `protobuf:"varint,2,opt,name=local_peer_id,json=localPeerId,proto3" json:"local_peer_id,omitempty"`
+	State         meta.RegionReplicaState `protobuf:"varint,3,opt,name=state,proto3,enum=nokv.meta.v1.RegionReplicaState" json:"state,omitempty"`
+	Descriptor_   *RegionDescriptor       `protobuf:"bytes,4,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
+	LastApplied   uint64                  `protobuf:"varint,5,opt,name=last_applied,json=lastApplied,proto3" json:"last_applied,omitempty"`
+	LastTerm      uint64                  `protobuf:"varint,6,opt,name=last_term,json=lastTerm,proto3" json:"last_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -79,11 +80,11 @@ func (x *ReplicaLocalState) GetLocalPeerId() uint64 {
 	return 0
 }
 
-func (x *ReplicaLocalState) GetState() RegionReplicaState {
+func (x *ReplicaLocalState) GetState() meta.RegionReplicaState {
 	if x != nil {
 		return x.State
 	}
-	return RegionReplicaState_REGION_REPLICA_STATE_UNSPECIFIED
+	return meta.RegionReplicaState(0)
 }
 
 func (x *ReplicaLocalState) GetDescriptor_() *RegionDescriptor {
@@ -243,11 +244,11 @@ var File_raftstore_recovery_proto protoreflect.FileDescriptor
 
 const file_raftstore_recovery_proto_rawDesc = "" +
 	"\n" +
-	"\x18raftstore/recovery.proto\x12\x11nokv.raftstore.v1\x1a\x1araftstore/descriptor.proto\"\x96\x02\n" +
+	"\x18raftstore/recovery.proto\x12\x11nokv.raftstore.v1\x1a\x11meta/region.proto\x1a\x1araftstore/descriptor.proto\"\x91\x02\n" +
 	"\x11ReplicaLocalState\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\"\n" +
-	"\rlocal_peer_id\x18\x02 \x01(\x04R\vlocalPeerId\x12;\n" +
-	"\x05state\x18\x03 \x01(\x0e2%.nokv.raftstore.v1.RegionReplicaStateR\x05state\x12C\n" +
+	"\rlocal_peer_id\x18\x02 \x01(\x04R\vlocalPeerId\x126\n" +
+	"\x05state\x18\x03 \x01(\x0e2 .nokv.meta.v1.RegionReplicaStateR\x05state\x12C\n" +
 	"\n" +
 	"descriptor\x18\x04 \x01(\v2#.nokv.raftstore.v1.RegionDescriptorR\n" +
 	"descriptor\x12!\n" +
@@ -282,13 +283,13 @@ func file_raftstore_recovery_proto_rawDescGZIP() []byte {
 
 var file_raftstore_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_raftstore_recovery_proto_goTypes = []any{
-	(*ReplicaLocalState)(nil), // 0: nokv.raftstore.v1.ReplicaLocalState
-	(*RaftProgress)(nil),      // 1: nokv.raftstore.v1.RaftProgress
-	(RegionReplicaState)(0),   // 2: nokv.raftstore.v1.RegionReplicaState
-	(*RegionDescriptor)(nil),  // 3: nokv.raftstore.v1.RegionDescriptor
+	(*ReplicaLocalState)(nil),    // 0: nokv.raftstore.v1.ReplicaLocalState
+	(*RaftProgress)(nil),         // 1: nokv.raftstore.v1.RaftProgress
+	(meta.RegionReplicaState)(0), // 2: nokv.meta.v1.RegionReplicaState
+	(*RegionDescriptor)(nil),     // 3: nokv.raftstore.v1.RegionDescriptor
 }
 var file_raftstore_recovery_proto_depIdxs = []int32{
-	2, // 0: nokv.raftstore.v1.ReplicaLocalState.state:type_name -> nokv.raftstore.v1.RegionReplicaState
+	2, // 0: nokv.raftstore.v1.ReplicaLocalState.state:type_name -> nokv.meta.v1.RegionReplicaState
 	3, // 1: nokv.raftstore.v1.ReplicaLocalState.descriptor:type_name -> nokv.raftstore.v1.RegionDescriptor
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type

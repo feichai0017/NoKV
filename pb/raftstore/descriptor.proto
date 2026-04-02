@@ -3,17 +3,9 @@ syntax = "proto3";
 
 package nokv.raftstore.v1;
 
-import "metapb.proto";
+import "meta/region.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/raftstore;raftstorepb";
-
-enum RegionReplicaState {
-  REGION_REPLICA_STATE_UNSPECIFIED = 0;
-  REGION_REPLICA_STATE_NEW = 1;
-  REGION_REPLICA_STATE_RUNNING = 2;
-  REGION_REPLICA_STATE_REMOVING = 3;
-  REGION_REPLICA_STATE_TOMBSTONE = 4;
-}
 
 enum DescriptorLineageKind {
   DESCRIPTOR_LINEAGE_KIND_UNSPECIFIED = 0;
@@ -23,7 +15,7 @@ enum DescriptorLineageKind {
 
 message DescriptorLineageRef {
   uint64 region_id = 1;
-  pb.RegionEpoch epoch = 2;
+  nokv.meta.v1.RegionEpoch epoch = 2;
   bytes hash = 3;
   DescriptorLineageKind kind = 4;
 }
@@ -32,9 +24,9 @@ message RegionDescriptor {
   uint64 region_id = 1;
   bytes start_key = 2;
   bytes end_key = 3;
-  pb.RegionEpoch epoch = 4;
-  repeated pb.RegionPeer peers = 5;
-  RegionReplicaState state = 6;
+  nokv.meta.v1.RegionEpoch epoch = 4;
+  repeated nokv.meta.v1.RegionPeer peers = 5;
+  nokv.meta.v1.RegionReplicaState state = 6;
   repeated DescriptorLineageRef lineage = 7;
   uint64 root_epoch = 8;
   bytes hash = 9;
