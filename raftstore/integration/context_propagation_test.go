@@ -7,6 +7,7 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -27,7 +28,9 @@ type staticResolver struct {
 func (r *staticResolver) GetRegionByKey(ctx context.Context, req *pb.GetRegionByKeyRequest) (*pb.GetRegionByKeyResponse, error) {
 	for _, region := range r.regions {
 		if region != nil && containsRegionKey(region, req.GetKey()) {
-			return &pb.GetRegionByKeyResponse{Region: cloneRegionMeta(region)}, nil
+			return &pb.GetRegionByKeyResponse{
+				RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(region)),
+			}, nil
 		}
 	}
 	return &pb.GetRegionByKeyResponse{NotFound: true}, nil

@@ -7,18 +7,18 @@ import (
 	"sort"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 type regionState struct {
-	meta   *pb.RegionMeta
+	desc   descriptor.Descriptor
 	leader uint64
 }
 
 type regionSnapshot struct {
-	meta   *pb.RegionMeta
+	desc   descriptor.Descriptor
 	leader uint64
 }
 
@@ -36,7 +36,7 @@ func (c *Client) regionSnapshot(regionID uint64) (regionSnapshot, bool) {
 		return regionSnapshot{}, false
 	}
 	return regionSnapshot{
-		meta:   cloneRegionMeta(state.meta),
+		desc:   state.desc.Clone(),
 		leader: state.leader,
 	}, true
 }
@@ -83,11 +83,11 @@ func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {
 	}
 	entry := c.regionIndex[idx]
 	region, ok := c.regions[entry.regionID]
-	if !ok || region == nil || !containsKey(region.meta, key) {
+	if !ok || region == nil || !containsKey(region.desc, key) {
 		return regionSnapshot{}, false
 	}
 	return regionSnapshot{
-		meta:   cloneRegionMeta(region.meta),
+		desc:   region.desc.Clone(),
 		leader: region.leader,
 	}, true
 }
@@ -104,28 +104,28 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 			Err: normalizeRPCError(err),
 		}
 	}
-	if resp == nil || resp.GetNotFound() || resp.GetRegion() == nil {
+	if resp == nil || resp.GetNotFound() || resp.GetRegionDescriptor() == nil {
 		return regionSnapshot{}, &RegionNotFoundError{Key: append([]byte(nil), key...)}
 	}
-	meta := cloneRegionMeta(resp.GetRegion())
-	if meta.GetId() == 0 {
+	desc := metacodec.DescriptorFromProto(resp.GetRegionDescriptor())
+	if desc.RegionID == 0 {
 		return regionSnapshot{}, errors.New("client: resolved region id missing")
 	}
-	if len(meta.GetPeers()) == 0 {
-		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", meta.GetId())
+	if len(desc.Peers) == 0 {
+		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", desc.RegionID)
 	}
-	leader := defaultLeaderStoreID(meta)
-	if old, ok := c.regionSnapshot(meta.GetId()); ok && old.leader != 0 && regionHasStoreID(meta, old.leader) {
+	leader := defaultLeaderStoreID(desc)
+	if old, ok := c.regionSnapshot(desc.RegionID); ok && old.leader != 0 && regionHasStoreID(desc, old.leader) {
 		leader = old.leader
 	}
 	c.mu.Lock()
-	c.upsertRegionLocked(meta, leader)
+	c.upsertRegionLocked(desc, leader)
 	c.mu.Unlock()
-	if !containsKey(meta, key) {
-		return regionSnapshot{}, fmt.Errorf("client: resolved region %d does not contain key %q", meta.GetId(), key)
+	if !containsKey(desc, key) {
+		return regionSnapshot{}, fmt.Errorf("client: resolved region %d does not contain key %q", desc.RegionID, key)
 	}
 	return regionSnapshot{
-		meta:   meta,
+		desc:   desc,
 		leader: leader,
 	}, nil
 }
@@ -151,7 +151,8 @@ func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
 			if meta == nil {
 				continue
 			}
-			c.upsertRegionLocked(meta, defaultLeaderStoreID(meta))
+			desc := metacodec.DescriptorFromLegacyRegionMeta(meta)
+			c.upsertRegionLocked(desc, defaultLeaderStoreID(desc))
 		}
 		c.mu.Unlock()
 		return nil
@@ -176,28 +177,28 @@ func (c *Client) handleRegionError(regionID uint64, err *pb.RegionError) error {
 	return fmt.Errorf("client: region %d error: %v", regionID, err)
 }
 
-func (c *Client) upsertRegionLocked(meta *pb.RegionMeta, leader uint64) {
-	if meta == nil || meta.GetId() == 0 {
+func (c *Client) upsertRegionLocked(desc descriptor.Descriptor, leader uint64) {
+	if desc.RegionID == 0 {
 		return
 	}
-	cloned := cloneRegionMeta(meta)
-	c.regions[cloned.GetId()] = &regionState{
-		meta:   cloned,
+	cloned := desc.Clone()
+	c.regions[cloned.RegionID] = &regionState{
+		desc:   cloned,
 		leader: leader,
 	}
 	entry := regionRange{
-		regionID: cloned.GetId(),
-		startKey: append([]byte(nil), cloned.GetStartKey()...),
-		endKey:   append([]byte(nil), cloned.GetEndKey()...),
+		regionID: cloned.RegionID,
+		startKey: append([]byte(nil), cloned.StartKey...),
+		endKey:   append([]byte(nil), cloned.EndKey...),
 	}
 	insertAt := sort.Search(len(c.regionIndex), func(i int) bool {
 		return bytesCompare(c.regionIndex[i].startKey, entry.startKey) >= 0
 	})
-	for insertAt < len(c.regionIndex) && c.regionIndex[insertAt].regionID != cloned.GetId() &&
+	for insertAt < len(c.regionIndex) && c.regionIndex[insertAt].regionID != cloned.RegionID &&
 		bytesCompare(c.regionIndex[insertAt].startKey, entry.startKey) == 0 {
 		insertAt++
 	}
-	if idx := c.regionIndexIndexByIDLocked(cloned.GetId()); idx >= 0 {
+	if idx := c.regionIndexIndexByIDLocked(cloned.RegionID); idx >= 0 {
 		c.regionIndex = append(c.regionIndex[:idx], c.regionIndex[idx+1:]...)
 		if idx < insertAt {
 			insertAt--
@@ -248,31 +249,31 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 }
 
 func buildContext(region regionSnapshot) (*pb.Context, error) {
-	if region.meta == nil {
+	if region.desc.RegionID == 0 {
 		return nil, errors.New("client: region meta missing")
 	}
 	leaderStoreID := region.leader
 	if leaderStoreID == 0 {
-		leaderStoreID = defaultLeaderStoreID(region.meta)
+		leaderStoreID = defaultLeaderStoreID(region.desc)
 	}
 	if leaderStoreID == 0 {
 		return nil, errors.New("client: leader unknown")
 	}
 	var peerMeta *pb.RegionPeer
-	for _, peer := range region.meta.GetPeers() {
-		if peer.GetStoreId() == leaderStoreID {
-			peerMeta = peer
+	for _, peer := range region.desc.Peers {
+		if peer.StoreID == leaderStoreID {
+			peerMeta = &pb.RegionPeer{StoreId: peer.StoreID, PeerId: peer.PeerID}
 			break
 		}
 	}
 	if peerMeta == nil {
-		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", leaderStoreID, region.meta.GetId())
+		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", leaderStoreID, region.desc.RegionID)
 	}
 	return &pb.Context{
-		RegionId: region.meta.GetId(),
+		RegionId: region.desc.RegionID,
 		RegionEpoch: &pb.RegionEpoch{
-			Version: region.meta.GetEpochVersion(),
-			ConfVer: region.meta.GetEpochConfVersion(),
+			Version: region.desc.Epoch.Version,
+			ConfVer: region.desc.Epoch.ConfVersion,
 		},
 		Peer: peerMeta,
 	}, nil
@@ -280,36 +281,36 @@ func buildContext(region regionSnapshot) (*pb.Context, error) {
 
 // defaultLeaderStoreID derives a usable leader store from Region peers when no
 // explicit leader information is available.
-func defaultLeaderStoreID(meta *pb.RegionMeta) uint64 {
-	if meta == nil {
+func defaultLeaderStoreID(desc descriptor.Descriptor) uint64 {
+	if desc.RegionID == 0 {
 		return 0
 	}
-	for _, peer := range meta.GetPeers() {
-		if peer != nil && peer.GetStoreId() != 0 {
-			return peer.GetStoreId()
+	for _, peer := range desc.Peers {
+		if peer.StoreID != 0 {
+			return peer.StoreID
 		}
 	}
 	return 0
 }
 
-func regionHasStoreID(meta *pb.RegionMeta, storeID uint64) bool {
-	if meta == nil || storeID == 0 {
+func regionHasStoreID(desc descriptor.Descriptor, storeID uint64) bool {
+	if desc.RegionID == 0 || storeID == 0 {
 		return false
 	}
-	for _, peer := range meta.GetPeers() {
-		if peer != nil && peer.GetStoreId() == storeID {
+	for _, peer := range desc.Peers {
+		if peer.StoreID == storeID {
 			return true
 		}
 	}
 	return false
 }
 
-func containsKey(meta *pb.RegionMeta, key []byte) bool {
-	if meta == nil {
+func containsKey(desc descriptor.Descriptor, key []byte) bool {
+	if desc.RegionID == 0 {
 		return false
 	}
-	start := meta.GetStartKey()
-	end := meta.GetEndKey()
+	start := desc.StartKey
+	end := desc.EndKey
 	if len(start) > 0 && bytesCompare(key, start) < 0 {
 		return false
 	}
@@ -348,11 +349,4 @@ func incrementKey(key []byte) []byte {
 		}
 	}
 	return append(out, 0)
-}
-
-func cloneRegionMeta(meta *pb.RegionMeta) *pb.RegionMeta {
-	if meta == nil {
-		return nil
-	}
-	return proto.Clone(meta).(*pb.RegionMeta)
 }

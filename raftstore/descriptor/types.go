@@ -1,6 +1,8 @@
 package descriptor
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/localmeta"
 )
@@ -44,7 +46,7 @@ type Descriptor struct {
 // FromRegionMeta lifts store-local region state into the distributed topology
 // descriptor shape used by root, views, and routing.
 func FromRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) Descriptor {
-	return Descriptor{
+	desc := Descriptor{
 		RegionID:  meta.ID,
 		StartKey:  append([]byte(nil), meta.StartKey...),
 		EndKey:    append([]byte(nil), meta.EndKey...),
@@ -53,6 +55,34 @@ func FromRegionMeta(meta localmeta.RegionMeta, rootEpoch uint64) Descriptor {
 		State:     meta.State,
 		RootEpoch: rootEpoch,
 	}
+	desc.EnsureHash()
+	return desc
+}
+
+// EnsureHash populates the descriptor hash if it is missing.
+func (d *Descriptor) EnsureHash() {
+	if d == nil || len(d.Hash) != 0 {
+		return
+	}
+	sum := sha256.New()
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, d.RegionID)
+	_, _ = sum.Write(buf)
+	_, _ = sum.Write(d.StartKey)
+	_, _ = sum.Write(d.EndKey)
+	binary.LittleEndian.PutUint64(buf, d.Epoch.Version)
+	_, _ = sum.Write(buf)
+	binary.LittleEndian.PutUint64(buf, d.Epoch.ConfVersion)
+	_, _ = sum.Write(buf)
+	for _, p := range d.Peers {
+		binary.LittleEndian.PutUint64(buf, p.StoreID)
+		_, _ = sum.Write(buf)
+		binary.LittleEndian.PutUint64(buf, p.PeerID)
+		_, _ = sum.Write(buf)
+	}
+	binary.LittleEndian.PutUint64(buf, uint64(d.State))
+	_, _ = sum.Write(buf)
+	d.Hash = sum.Sum(nil)
 }
 
 // Clone returns a detached copy of the descriptor.

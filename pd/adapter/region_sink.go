@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
 	pdclient "github.com/feichai0017/NoKV/pd/client"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -57,7 +58,7 @@ func (s *SchedulerClient) PublishRegionDescriptor(ctx context.Context, desc desc
 	}
 	ctx, cancel := contextWithTimeout(ctx, s.timeout)
 	defer cancel()
-	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{RegionDescriptor: desc.ToProto()})
+	_, err := s.pd.RegionHeartbeat(ctx, &pb.RegionHeartbeatRequest{RegionDescriptor: metacodec.DescriptorToProto(desc)})
 	if err != nil {
 		s.recordError("RegionHeartbeat", err)
 		return
