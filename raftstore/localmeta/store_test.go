@@ -34,7 +34,7 @@ func TestLocalStorePersistsRegions(t *testing.T) {
 	require.Equal(t, meta.ID, got.ID)
 	require.Equal(t, meta.StartKey, got.StartKey)
 	require.Equal(t, meta.EndKey, got.EndKey)
-	require.FileExists(t, filepath.Join(dir, StateFileName))
+	require.FileExists(t, filepath.Join(dir, ReplicaStateFileName))
 }
 
 func TestLocalStoreDeleteRegion(t *testing.T) {
@@ -77,4 +77,5 @@ func TestLocalStorePersistsRaftPointers(t *testing.T) {
 	got, ok := reopened.RaftPointer(ptr.GroupID)
 	require.True(t, ok)
 	require.Equal(t, ptr, got)
+	require.FileExists(t, filepath.Join(dir, RaftProgressFileName))
 }
