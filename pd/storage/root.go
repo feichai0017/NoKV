@@ -2,9 +2,9 @@ package storage
 
 import (
 	"bytes"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 )
@@ -197,11 +197,13 @@ func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descr
 	if merge, ok := classifyMergeEventFromLineage(prev, existed, next, current); ok {
 		return merge
 	}
-	if split, ok := classifySplitEvent(prev, existed, next, current); ok {
-		return split
-	}
-	if merge, ok := classifyMergeEvent(prev, existed, next, current); ok {
-		return merge
+	if !hasTopologyLineage(next) {
+		if split, ok := classifySplitEvent(prev, existed, next, current); ok {
+			return split
+		}
+		if merge, ok := classifyMergeEvent(prev, existed, next, current); ok {
+			return merge
+		}
 	}
 	if !existed {
 		return rootpkg.RegionBootstrapped(next)
@@ -215,6 +217,16 @@ func regionEvent(prev descriptor.Descriptor, existed bool, next descriptor.Descr
 	default:
 		return rootpkg.RegionDescriptorPublished(next)
 	}
+}
+
+func hasTopologyLineage(desc descriptor.Descriptor) bool {
+	for _, ref := range desc.Lineage {
+		switch ref.Kind {
+		case descriptor.LineageKindSplitParent, descriptor.LineageKindMergeSource:
+			return true
+		}
+	}
+	return false
 }
 
 func classifySplitEventFromLineage(next descriptor.Descriptor, current map[uint64]descriptor.Descriptor) (rootpkg.Event, bool) {

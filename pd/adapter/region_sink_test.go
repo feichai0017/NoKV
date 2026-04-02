@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -90,11 +91,11 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{{StoreID: 1, PeerID: 101}},
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 	}
 	sink.PublishRegionDescriptor(context.Background(), descriptor.FromRegionMeta(meta, 0))
 	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
@@ -173,7 +174,7 @@ func TestSchedulerClientRemoveRegionForwardsAndReportsErrors(t *testing.T) {
 		ID:       100,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},

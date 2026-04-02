@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -128,14 +129,14 @@ func testDescriptor(regionID uint64, start, end []byte) descriptor.Descriptor {
 		ID:       regionID,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: regionID*10 + 1},
 			{StoreID: 2, PeerID: regionID*10 + 2},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}, 1)
 }
