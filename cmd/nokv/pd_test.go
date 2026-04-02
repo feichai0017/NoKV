@@ -74,7 +74,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       10,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
@@ -82,8 +82,8 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 			Version:     1,
 			ConfVersion: 1,
 		},
-	}))
-	require.NoError(t, store.PublishRegionDescriptor(localmeta.RegionMeta{
+	}, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       20,
 		StartKey: []byte("m"),
 		EndKey:   nil,
@@ -91,7 +91,7 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 			Version:     1,
 			ConfVersion: 1,
 		},
-	}))
+	}, 0)))
 	snapshotState, err := store.Load()
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -121,18 +121,18 @@ func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
 	dir := t.TempDir()
 	store, err := pdstorage.OpenRootLocalStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, store.PublishRegionDescriptor(localmeta.RegionMeta{
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       31,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
 		Epoch:    localmeta.RegionEpoch{Version: 2, ConfVersion: 1},
-	}))
-	require.NoError(t, store.PublishRegionDescriptor(localmeta.RegionMeta{
+	}, 0)))
+	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       32,
 		StartKey: []byte("m"),
 		EndKey:   nil,
 		Epoch:    localmeta.RegionEpoch{Version: 3, ConfVersion: 2},
-	}))
+	}, 0)))
 	require.NoError(t, store.Close())
 
 	var buf bytes.Buffer

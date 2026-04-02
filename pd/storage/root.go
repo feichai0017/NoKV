@@ -51,18 +51,20 @@ func (s *RootStore) Load() (Snapshot, error) {
 }
 
 // PublishRegionDescriptor publishes the latest descriptor truth for one region.
-func (s *RootStore) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
-	if s == nil || meta.ID == 0 {
+func (s *RootStore) PublishRegionDescriptor(desc descriptor.Descriptor) error {
+	if s == nil || desc.RegionID == 0 {
 		return nil
 	}
 	state, err := s.root.Current()
 	if err != nil {
 		return err
 	}
-	desc := descriptor.FromRegionMeta(meta, state.ClusterEpoch+1)
+	if desc.RootEpoch == 0 {
+		desc.RootEpoch = state.ClusterEpoch + 1
+	}
 
 	s.mu.RLock()
-	prev, existed := s.snapshot.Descriptors[meta.ID]
+	prev, existed := s.snapshot.Descriptors[desc.RegionID]
 	s.mu.RUnlock()
 
 	if existed {
@@ -80,7 +82,7 @@ func (s *RootStore) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
 	if s.snapshot.Descriptors == nil {
 		s.snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
 	}
-	s.snapshot.Descriptors[meta.ID] = desc.Clone()
+	s.snapshot.Descriptors[desc.RegionID] = desc.Clone()
 	s.snapshot.Allocator.IDCurrent = commit.State.IDFence
 	s.snapshot.Allocator.TSCurrent = commit.State.TSOFence
 	s.mu.Unlock()

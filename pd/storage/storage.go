@@ -2,7 +2,6 @@ package storage
 
 import (
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"math"
 	"slices"
 )
@@ -39,7 +38,7 @@ type Loader interface {
 // Sink persists control-plane mutations into durable metadata truth.
 type Sink interface {
 	// PublishRegionDescriptor persists one rooted region descriptor update.
-	PublishRegionDescriptor(meta localmeta.RegionMeta) error
+	PublishRegionDescriptor(desc descriptor.Descriptor) error
 	// TombstoneRegion persists one rooted region removal.
 	TombstoneRegion(regionID uint64) error
 	// SaveAllocatorState persists latest allocator counters.
@@ -73,7 +72,7 @@ func (NoopStore) Load() (Snapshot, error) {
 }
 
 // PublishRegionDescriptor is a no-op.
-func (NoopStore) PublishRegionDescriptor(localmeta.RegionMeta) error {
+func (NoopStore) PublishRegionDescriptor(descriptor.Descriptor) error {
 	return nil
 }
 
