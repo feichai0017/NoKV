@@ -77,12 +77,12 @@ func runPDCmd(w io.Writer, args []string) error {
 	)
 	if strings.TrimSpace(*workdir) != "" {
 		workdirPath = strings.TrimSpace(*workdir)
-		localStore, err := pdstorage.OpenLocalStore(workdirPath, nil)
+		rootStore, err := pdstorage.OpenRootLocalStore(workdirPath)
 		if err != nil {
 			return fmt.Errorf("pd open storage workdir %q: %w", workdirPath, err)
 		}
-		defer func() { _ = localStore.Close() }()
-		snapshot, err := localStore.Load()
+		defer func() { _ = rootStore.Close() }()
+		snapshot, err := rootStore.Load()
 		if err != nil {
 			return fmt.Errorf("pd load snapshot from %q: %w", workdirPath, err)
 		}
@@ -92,7 +92,7 @@ func runPDCmd(w io.Writer, args []string) error {
 		if err != nil {
 			return fmt.Errorf("pd restore regions from %q: %w", workdirPath, err)
 		}
-		store = localStore
+		store = rootStore
 	}
 
 	ids := core.NewIDAllocator(*idStart)
@@ -118,7 +118,7 @@ func runPDCmd(w io.Writer, args []string) error {
 	}
 
 	if store != nil {
-		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from local storage: %s\n", loadedRegions, workdirPath)
+		_, _ = fmt.Fprintf(w, "PD restored %d region(s) from metadata root: %s\n", loadedRegions, workdirPath)
 		_, _ = fmt.Fprintf(w, "PD allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
 	}
 	_, _ = fmt.Fprintf(w, "PD-lite service listening on %s\n", lis.Addr().String())

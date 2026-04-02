@@ -37,7 +37,7 @@ flowchart LR
 Core implementation units:
 
 - `pd/core`: in-memory cluster metadata model + allocators.
-- `pd/storage`: persistence abstraction (`Store`) with local manifest+state implementation.
+- `pd/storage`: persistence abstraction (`Store`) backed by the metadata root.
 - `pd/server`: gRPC service + RPC validation/error mapping.
 - `pd/client`: client wrapper used by store/gateway.
 - `pd/adapter`: scheduler sink that forwards heartbeats into PD.
@@ -46,22 +46,29 @@ Core implementation units:
 
 ## 3. Persistence (`--workdir`)
 
-When `--workdir` is provided, PD-lite persists control-plane state in
-`PD_STATE.json`:
+When `--workdir` is provided, PD-lite persists durable control-plane truth on
+top of the metadata root:
 
-- **Region catalog** for route recovery.
-- **Allocator checkpoints**:
+- `metadata-root.log`
+- `metadata-root-checkpoint.pb`
+
+The PD storage layer rebuilds its region snapshot and allocator checkpoints by
+replaying root events:
+
+- **Region descriptor publish/tombstone** events rebuild the route catalog.
+- **Allocator fences** rebuild:
   - `id_current`
   - `ts_current`
 
 Startup flow:
 
-1. Open `pd/storage` with `--workdir`.
-2. Load snapshot (`regions` + allocator counters).
-3. Compute starts as `max(cli_start, checkpoint+1)`.
-4. Replay region snapshot into `pd/core.Cluster`.
+1. Open rooted `pd/storage` with `--workdir`.
+2. Replay the metadata root into a PD snapshot (`regions` + allocator fences).
+3. Compute starts as `max(cli_start, fence+1)`.
+4. Replay the rooted region snapshot into `pd/core.Cluster`.
 
-This avoids allocator rollback after restart and keeps route metadata stable.
+This avoids allocator rollback and removes the old parallel `PD_STATE.json`
+truth table.
 
 ### Region Truth Hierarchy
 
@@ -149,16 +156,16 @@ Related CLI behavior:
 
 ### NoKV PD-lite (current)
 
-- Single PD-lite process with optional local persistence (`--workdir`).
+- Single PD-lite process with rooted persistence (`--workdir`).
 - Sufficient for local clusters, testing, and architecture iteration.
 - API shape intentionally aligned with a PD-style control plane so migration to
   stronger HA semantics is incremental.
-- PD persistence is intentionally limited to control-plane state:
-  - region catalog snapshots learned from heartbeats
+- PD persistence is intentionally limited to durable control-plane truth:
+  - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
 - PD is not the durable owner of a store's local raft/region truth. Store
   restart truth remains in `raftstore/localmeta`, while PD keeps the routing and
-  scheduling view.
+  scheduling truth rooted in `meta/root`.
 
 ---
 

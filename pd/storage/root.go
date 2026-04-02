@@ -2,6 +2,7 @@ package storage
 
 import (
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
+	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
@@ -23,6 +24,16 @@ func OpenRootStore(root rootpkg.Root) (*RootStore, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// OpenRootLocalStore opens a PD storage backend backed by the local metadata
+// root files in workdir.
+func OpenRootLocalStore(workdir string) (*RootStore, error) {
+	root, err := rootlocal.Open(workdir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRootStore(root)
 }
 
 // Load returns the last reconstructed snapshot.

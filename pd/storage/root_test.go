@@ -3,6 +3,7 @@ package storage
 import (
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -81,4 +82,19 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = loaded.Regions[7]
 	require.False(t, ok)
+}
+
+func TestOpenRootLocalStoreCreatesMetadataRootFiles(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenRootLocalStore(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SaveAllocatorState(9, 17))
+
+	snapshot, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), snapshot.Allocator.IDCurrent)
+	require.Equal(t, uint64(17), snapshot.Allocator.TSCurrent)
+
+	require.FileExists(t, filepath.Join(dir, rootlocal.CheckpointFileName))
 }
