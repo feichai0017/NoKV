@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
@@ -176,7 +177,7 @@ func (s *stubPDServer) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyR
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pb.GetRegionByKeyResponse{
-		Region: proto.Clone(s.region).(*pb.RegionMeta),
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(proto.Clone(s.region).(*pb.RegionMeta))),
 	}, nil
 }
 

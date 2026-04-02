@@ -56,7 +56,7 @@ message GetRegionByKeyRequest {
 }
 
 message GetRegionByKeyResponse {
-  RegionMeta region = 1;
+  nokv.meta.v1.RegionDescriptor region_descriptor = 1;
   bool not_found = 2;
 }
 

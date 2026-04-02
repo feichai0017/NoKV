@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -63,7 +64,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, storeResp.GetAccepted())
 
 	_, err = cli.RegionHeartbeat(context.Background(), &pb.RegionHeartbeatRequest{
-		RegionDescriptor: descriptor.FromRegionMeta(localmeta.RegionMeta{
+		RegionDescriptor: metacodec.DescriptorToProto(descriptor.FromRegionMeta(localmeta.RegionMeta{
 			ID:       11,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
@@ -71,14 +72,14 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 				Version:     1,
 				ConfVersion: 1,
 			},
-		}, 0).ToProto(),
+		}, 0)),
 	})
 	require.NoError(t, err)
 
 	getResp, err := cli.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("m")})
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
-	require.Equal(t, uint64(11), getResp.GetRegion().GetId())
+	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
 
 	removeResp, err := cli.RemoveRegion(context.Background(), &pb.RemoveRegionRequest{RegionId: 11})
 	require.NoError(t, err)

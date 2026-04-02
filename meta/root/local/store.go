@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/vfs"
 	"google.golang.org/protobuf/proto"
 )
@@ -412,7 +412,7 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID, Address: event.StoreMembership.Address}}
 	case event.RegionDescriptor != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{
-			RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: event.RegionDescriptor.Descriptor.ToProto()},
+			RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: metacodec.DescriptorToProto(event.RegionDescriptor.Descriptor)},
 		}
 	case event.RegionRemoval != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionRemoval{
@@ -422,21 +422,21 @@ func eventToPB(event rootpkg.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_RangeSplit{RangeSplit: &metapb.RootRangeSplit{
 			ParentRegionId: event.RangeSplit.ParentRegionID,
 			SplitKey:       append([]byte(nil), event.RangeSplit.SplitKey...),
-			Left:           event.RangeSplit.Left.ToProto(),
-			Right:          event.RangeSplit.Right.ToProto(),
+			Left:           metacodec.DescriptorToProto(event.RangeSplit.Left),
+			Right:          metacodec.DescriptorToProto(event.RangeSplit.Right),
 		}}
 	case event.RangeMerge != nil:
 		pbEvent.Payload = &metapb.RootEvent_RangeMerge{RangeMerge: &metapb.RootRangeMerge{
 			LeftRegionId:  event.RangeMerge.LeftRegionID,
 			RightRegionId: event.RangeMerge.RightRegionID,
-			Merged:        event.RangeMerge.Merged.ToProto(),
+			Merged:        metacodec.DescriptorToProto(event.RangeMerge.Merged),
 		}}
 	case event.PeerChange != nil:
 		pbEvent.Payload = &metapb.RootEvent_PeerChange{PeerChange: &metapb.RootPeerChange{
 			RegionId:   event.PeerChange.RegionID,
 			StoreId:    event.PeerChange.StoreID,
 			PeerId:     event.PeerChange.PeerID,
-			Descriptor_: event.PeerChange.Region.ToProto(),
+			Descriptor_: metacodec.DescriptorToProto(event.PeerChange.Region),
 		}}
 	case event.LeaderTransfer != nil:
 		pbEvent.Payload = &metapb.RootEvent_LeaderTransfer{LeaderTransfer: &metapb.RootLeaderTransfer{RegionId: event.LeaderTransfer.RegionID, FromPeerId: event.LeaderTransfer.FromPeerID, ToPeerId: event.LeaderTransfer.ToPeerID, TargetStoreId: event.LeaderTransfer.TargetStoreID}}
@@ -455,7 +455,7 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 		event.StoreMembership = &rootpkg.StoreMembership{StoreID: body.StoreId, Address: body.Address}
 	}
 	if body := pbEvent.GetRegionDescriptor(); body != nil {
-		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: descriptor.FromProto(body.GetDescriptor_())}
+		event.RegionDescriptor = &rootpkg.RegionDescriptorRecord{Descriptor: metacodec.DescriptorFromProto(body.GetDescriptor_())}
 	}
 	if body := pbEvent.GetRegionRemoval(); body != nil {
 		event.RegionRemoval = &rootpkg.RegionRemoval{RegionID: body.RegionId}
@@ -464,15 +464,15 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 		event.RangeSplit = &rootpkg.RangeSplit{
 			ParentRegionID: body.ParentRegionId,
 			SplitKey:       append([]byte(nil), body.SplitKey...),
-			Left:           descriptor.FromProto(body.Left),
-			Right:          descriptor.FromProto(body.Right),
+			Left:           metacodec.DescriptorFromProto(body.Left),
+			Right:          metacodec.DescriptorFromProto(body.Right),
 		}
 	}
 	if body := pbEvent.GetRangeMerge(); body != nil {
 		event.RangeMerge = &rootpkg.RangeMerge{
 			LeftRegionID:  body.LeftRegionId,
 			RightRegionID: body.RightRegionId,
-			Merged:        descriptor.FromProto(body.Merged),
+			Merged:        metacodec.DescriptorFromProto(body.Merged),
 		}
 	}
 	if body := pbEvent.GetPeerChange(); body != nil {
@@ -480,7 +480,7 @@ func eventFromPB(pbEvent *metapb.RootEvent) rootpkg.Event {
 			RegionID: body.RegionId,
 			StoreID:  body.StoreId,
 			PeerID:   body.PeerId,
-			Region:   descriptor.FromProto(body.GetDescriptor_()),
+			Region:   metacodec.DescriptorFromProto(body.GetDescriptor_()),
 		}
 	}
 	if body := pbEvent.GetLeaderTransfer(); body != nil {

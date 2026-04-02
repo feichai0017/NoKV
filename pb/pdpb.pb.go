@@ -487,11 +487,11 @@ func (x *GetRegionByKeyRequest) GetKey() []byte {
 }
 
 type GetRegionByKeyResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Region        *RegionMeta            `protobuf:"bytes,1,opt,name=region,proto3" json:"region,omitempty"`
-	NotFound      bool                   `protobuf:"varint,2,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RegionDescriptor *meta.RegionDescriptor `protobuf:"bytes,1,opt,name=region_descriptor,json=regionDescriptor,proto3" json:"region_descriptor,omitempty"`
+	NotFound         bool                   `protobuf:"varint,2,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyResponse) Reset() {
@@ -524,9 +524,9 @@ func (*GetRegionByKeyResponse) Descriptor() ([]byte, []int) {
 	return file_pdpb_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *GetRegionByKeyResponse) GetRegion() *RegionMeta {
+func (x *GetRegionByKeyResponse) GetRegionDescriptor() *meta.RegionDescriptor {
 	if x != nil {
-		return x.Region
+		return x.RegionDescriptor
 	}
 	return nil
 }
@@ -735,7 +735,7 @@ var File_pdpb_proto protoreflect.FileDescriptor
 const file_pdpb_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"pdpb.proto\x12\x02pb\x1a\fmetapb.proto\x1a\x15meta/descriptor.proto\"\xaa\x01\n" +
+	"pdpb.proto\x12\x02pb\x1a\x15meta/descriptor.proto\x1a\fmetapb.proto\"\xaa\x01\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -763,9 +763,9 @@ const file_pdpb_proto_rawDesc = "" +
 	"\x14RemoveRegionResponse\x12\x18\n" +
 	"\aremoved\x18\x01 \x01(\bR\aremoved\")\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\"]\n" +
-	"\x16GetRegionByKeyResponse\x12&\n" +
-	"\x06region\x18\x01 \x01(\v2\x0e.pb.RegionMetaR\x06region\x12\x1b\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\"\x82\x01\n" +
+	"\x16GetRegionByKeyResponse\x12K\n" +
+	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\"B\n" +
@@ -819,13 +819,12 @@ var file_pdpb_proto_goTypes = []any{
 	(*TsoRequest)(nil),              // 12: pb.TsoRequest
 	(*TsoResponse)(nil),             // 13: pb.TsoResponse
 	(*meta.RegionDescriptor)(nil),   // 14: nokv.meta.v1.RegionDescriptor
-	(*RegionMeta)(nil),              // 15: pb.RegionMeta
 }
 var file_pdpb_proto_depIdxs = []int32{
 	0,  // 0: pb.SchedulerOperation.type:type_name -> pb.SchedulerOperationType
 	2,  // 1: pb.StoreHeartbeatResponse.operations:type_name -> pb.SchedulerOperation
 	14, // 2: pb.RegionHeartbeatRequest.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	15, // 3: pb.GetRegionByKeyResponse.region:type_name -> pb.RegionMeta
+	14, // 3: pb.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
 	1,  // 4: pb.PD.StoreHeartbeat:input_type -> pb.StoreHeartbeatRequest
 	4,  // 5: pb.PD.RegionHeartbeat:input_type -> pb.RegionHeartbeatRequest
 	6,  // 6: pb.PD.RemoveRegion:input_type -> pb.RemoveRegionRequest

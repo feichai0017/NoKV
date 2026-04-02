@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -62,7 +63,7 @@ func (f *fakeStorage) Close() error {
 }
 
 func testRegionDescriptorProto(meta localmeta.RegionMeta) *metapb.RegionDescriptor {
-	return descriptor.FromRegionMeta(meta, 0).ToProto()
+	return metacodec.DescriptorToProto(descriptor.FromRegionMeta(meta, 0))
 }
 
 func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
@@ -97,8 +98,8 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	getResp, err := svc.GetRegionByKey(context.Background(), &pb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
 	require.False(t, getResp.GetNotFound())
-	require.NotNil(t, getResp.GetRegion())
-	require.Equal(t, uint64(11), getResp.GetRegion().GetId())
+	require.NotNil(t, getResp.GetRegionDescriptor())
+	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
 }
 
 func TestServiceRemoveRegion(t *testing.T) {

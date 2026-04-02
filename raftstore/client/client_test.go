@@ -17,7 +17,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	metacodec "github.com/feichai0017/NoKV/meta/codec"
 	"github.com/feichai0017/NoKV/pb"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 type clusterValue struct {
@@ -114,18 +116,16 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *pb.GetRegio
 	}
 	if len(mr.regions) > 0 {
 		for _, meta := range mr.regions {
-			if meta != nil && containsKey(meta, req.GetKey()) {
-				return &pb.GetRegionByKeyResponse{Region: protoClone(meta)}, nil
+			if meta != nil && containsKey(metacodec.DescriptorFromLegacyRegionMeta(meta), req.GetKey()) {
+				return routeResponse(meta), nil
 			}
 		}
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	if mr.region == nil || !containsKey(mr.region, req.GetKey()) {
+	if mr.region == nil || !containsKey(metacodec.DescriptorFromLegacyRegionMeta(mr.region), req.GetKey()) {
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
-	return &pb.GetRegionByKeyResponse{
-		Region: protoClone(mr.region),
-	}, nil
+	return routeResponse(mr.region), nil
 }
 
 func (mr *mockRegionResolver) Close() error {
@@ -161,8 +161,8 @@ func (kr *keyedBlockingResolver) GetRegionByKey(ctx context.Context, req *pb.Get
 			return nil, ctx.Err()
 		}
 		for _, meta := range kr.regions {
-			if meta != nil && containsKey(meta, req.GetKey()) {
-				return &pb.GetRegionByKeyResponse{Region: protoClone(meta)}, nil
+			if meta != nil && containsKey(metacodec.DescriptorFromLegacyRegionMeta(meta), req.GetKey()) {
+				return routeResponse(meta), nil
 			}
 		}
 	}
@@ -1239,7 +1239,7 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),
 	}
-	cli.upsertRegionLocked(&pb.RegionMeta{
+	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("z"),
@@ -1248,7 +1248,7 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 		Peers: []*pb.RegionPeer{
 			{StoreId: 1, PeerId: 101},
 		},
-	}, 1)
+	}), 1)
 
 	err := cli.handleRegionError(1, &pb.RegionError{
 		EpochNotMatch: &pb.EpochNotMatch{
@@ -1280,14 +1280,23 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 
 	got, ok := cli.regionForKeyFromCache([]byte("beta"))
 	require.True(t, ok)
-	require.Equal(t, uint64(11), got.meta.GetId())
+	require.Equal(t, uint64(11), got.desc.RegionID)
 
 	got, ok = cli.regionForKeyFromCache([]byte("omega"))
 	require.True(t, ok)
-	require.Equal(t, uint64(12), got.meta.GetId())
+	require.Equal(t, uint64(12), got.desc.RegionID)
 }
 
 // Utility helpers
+
+func routeResponse(meta *pb.RegionMeta) *pb.GetRegionByKeyResponse {
+	if meta == nil {
+		return &pb.GetRegionByKeyResponse{NotFound: true}
+	}
+	return &pb.GetRegionByKeyResponse{
+		RegionDescriptor: metacodec.DescriptorToProto(metacodec.DescriptorFromLegacyRegionMeta(meta)),
+	}
+}
 
 func protoClone(meta *pb.RegionMeta) *pb.RegionMeta {
 	if meta == nil {
@@ -1336,16 +1345,18 @@ func statusInvalidArgument(msg string) error {
 }
 
 func TestContainsKeyAndCompare(t *testing.T) {
-	require.False(t, containsKey(nil, []byte("a")))
+	require.False(t, containsKey(descriptor.Descriptor{}, []byte("a")))
 
 	meta := &pb.RegionMeta{
+		Id:       1,
 		StartKey: []byte("b"),
 		EndKey:   []byte("d"),
 	}
-	require.False(t, containsKey(meta, []byte("a")))
-	require.True(t, containsKey(meta, []byte("b")))
-	require.True(t, containsKey(meta, []byte("c")))
-	require.False(t, containsKey(meta, []byte("d")))
+	desc := metacodec.DescriptorFromLegacyRegionMeta(meta)
+	require.False(t, containsKey(desc, []byte("a")))
+	require.True(t, containsKey(desc, []byte("b")))
+	require.True(t, containsKey(desc, []byte("c")))
+	require.False(t, containsKey(desc, []byte("d")))
 
 	require.Equal(t, 0, bytesCompare([]byte("a"), []byte("a")))
 	require.Equal(t, -1, bytesCompare([]byte("a"), []byte("b")))
@@ -1362,7 +1373,7 @@ func TestIncrementKey(t *testing.T) {
 
 func TestCloneHelpers(t *testing.T) {
 	meta := &pb.RegionMeta{StartKey: []byte("a"), EndKey: []byte("z")}
-	clone := cloneRegionMeta(meta)
+	clone := protoClone(meta)
 	require.NotSame(t, meta, clone)
 	meta.StartKey[0] = 'b'
 	require.Equal(t, []byte("a"), clone.StartKey)
@@ -1373,7 +1384,7 @@ func TestCloneHelpers(t *testing.T) {
 	mut.Key[0] = 'x'
 	require.Equal(t, []byte("k"), mutClone.Key)
 
-	require.Nil(t, cloneRegionMeta(nil))
+	require.Nil(t, protoClone(nil))
 	require.Nil(t, cloneMutation(nil))
 }
 
@@ -1400,14 +1411,15 @@ func TestNormalizeRPCError(t *testing.T) {
 }
 
 func TestDefaultLeaderStoreID(t *testing.T) {
-	require.Equal(t, uint64(0), defaultLeaderStoreID(nil))
-	require.Equal(t, uint64(0), defaultLeaderStoreID(&pb.RegionMeta{}))
-	require.Equal(t, uint64(9), defaultLeaderStoreID(&pb.RegionMeta{
+	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
+	require.Equal(t, uint64(0), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{})))
+	require.Equal(t, uint64(9), defaultLeaderStoreID(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
+		Id: 1,
 		Peers: []*pb.RegionPeer{
 			nil,
 			{StoreId: 9, PeerId: 90},
 		},
-	}))
+	})))
 }
 
 func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
@@ -1435,7 +1447,7 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	cli.mu.Lock()
-	cli.upsertRegionLocked(&pb.RegionMeta{
+	cli.upsertRegionLocked(metacodec.DescriptorFromLegacyRegionMeta(&pb.RegionMeta{
 		Id:               1,
 		StartKey:         []byte("a"),
 		EndKey:           []byte("z"),
@@ -1445,7 +1457,7 @@ func TestRegionForKeyFromResolverDropsStaleCachedLeader(t *testing.T) {
 			{StoreId: 1, PeerId: 101},
 			{StoreId: 2, PeerId: 201},
 		},
-	}, 1)
+	}), 1)
 	cli.mu.Unlock()
 
 	region, err := cli.regionForKeyFromResolver(context.Background(), []byte("m"))
