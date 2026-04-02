@@ -4,9 +4,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: recoverypb.proto
+// source: raftstore/recovery.proto
 
-package pb
+package raftstorepb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -27,7 +27,7 @@ type ReplicaLocalState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RegionId      uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 	LocalPeerId   uint64                 `protobuf:"varint,2,opt,name=local_peer_id,json=localPeerId,proto3" json:"local_peer_id,omitempty"`
-	State         RegionReplicaState     `protobuf:"varint,3,opt,name=state,proto3,enum=pb.RegionReplicaState" json:"state,omitempty"`
+	State         RegionReplicaState     `protobuf:"varint,3,opt,name=state,proto3,enum=nokv.raftstore.v1.RegionReplicaState" json:"state,omitempty"`
 	Descriptor_   *RegionDescriptor      `protobuf:"bytes,4,opt,name=descriptor,proto3" json:"descriptor,omitempty"`
 	LastApplied   uint64                 `protobuf:"varint,5,opt,name=last_applied,json=lastApplied,proto3" json:"last_applied,omitempty"`
 	LastTerm      uint64                 `protobuf:"varint,6,opt,name=last_term,json=lastTerm,proto3" json:"last_term,omitempty"`
@@ -37,7 +37,7 @@ type ReplicaLocalState struct {
 
 func (x *ReplicaLocalState) Reset() {
 	*x = ReplicaLocalState{}
-	mi := &file_recoverypb_proto_msgTypes[0]
+	mi := &file_raftstore_recovery_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -49,7 +49,7 @@ func (x *ReplicaLocalState) String() string {
 func (*ReplicaLocalState) ProtoMessage() {}
 
 func (x *ReplicaLocalState) ProtoReflect() protoreflect.Message {
-	mi := &file_recoverypb_proto_msgTypes[0]
+	mi := &file_raftstore_recovery_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -62,7 +62,7 @@ func (x *ReplicaLocalState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplicaLocalState.ProtoReflect.Descriptor instead.
 func (*ReplicaLocalState) Descriptor() ([]byte, []int) {
-	return file_recoverypb_proto_rawDescGZIP(), []int{0}
+	return file_raftstore_recovery_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ReplicaLocalState) GetRegionId() uint64 {
@@ -127,7 +127,7 @@ type RaftProgress struct {
 
 func (x *RaftProgress) Reset() {
 	*x = RaftProgress{}
-	mi := &file_recoverypb_proto_msgTypes[1]
+	mi := &file_raftstore_recovery_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +139,7 @@ func (x *RaftProgress) String() string {
 func (*RaftProgress) ProtoMessage() {}
 
 func (x *RaftProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_recoverypb_proto_msgTypes[1]
+	mi := &file_raftstore_recovery_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +152,7 @@ func (x *RaftProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaftProgress.ProtoReflect.Descriptor instead.
 func (*RaftProgress) Descriptor() ([]byte, []int) {
-	return file_recoverypb_proto_rawDescGZIP(), []int{1}
+	return file_raftstore_recovery_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RaftProgress) GetGroupId() uint64 {
@@ -239,17 +239,17 @@ func (x *RaftProgress) GetTruncatedOffset() uint64 {
 	return 0
 }
 
-var File_recoverypb_proto protoreflect.FileDescriptor
+var File_raftstore_recovery_proto protoreflect.FileDescriptor
 
-const file_recoverypb_proto_rawDesc = "" +
+const file_raftstore_recovery_proto_rawDesc = "" +
 	"\n" +
-	"\x10recoverypb.proto\x12\x02pb\x1a\x12descriptorpb.proto\"\xf8\x01\n" +
+	"\x18raftstore/recovery.proto\x12\x11nokv.raftstore.v1\x1a\x1araftstore/descriptor.proto\"\x96\x02\n" +
 	"\x11ReplicaLocalState\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\"\n" +
-	"\rlocal_peer_id\x18\x02 \x01(\x04R\vlocalPeerId\x12,\n" +
-	"\x05state\x18\x03 \x01(\x0e2\x16.pb.RegionReplicaStateR\x05state\x124\n" +
+	"\rlocal_peer_id\x18\x02 \x01(\x04R\vlocalPeerId\x12;\n" +
+	"\x05state\x18\x03 \x01(\x0e2%.nokv.raftstore.v1.RegionReplicaStateR\x05state\x12C\n" +
 	"\n" +
-	"descriptor\x18\x04 \x01(\v2\x14.pb.RegionDescriptorR\n" +
+	"descriptor\x18\x04 \x01(\v2#.nokv.raftstore.v1.RegionDescriptorR\n" +
 	"descriptor\x12!\n" +
 	"\flast_applied\x18\x05 \x01(\x04R\vlastApplied\x12\x1b\n" +
 	"\tlast_term\x18\x06 \x01(\x04R\blastTerm\"\xad\x03\n" +
@@ -266,30 +266,30 @@ const file_recoverypb_proto_rawDesc = "" +
 	"\x0etruncated_term\x18\n" +
 	" \x01(\x04R\rtruncatedTerm\x12#\n" +
 	"\rsegment_index\x18\v \x01(\x04R\fsegmentIndex\x12)\n" +
-	"\x10truncated_offset\x18\f \x01(\x04R\x0ftruncatedOffsetB Z\x1egithub.com/feichai0017/NoKV/pbb\x06proto3"
+	"\x10truncated_offset\x18\f \x01(\x04R\x0ftruncatedOffsetB6Z4github.com/feichai0017/NoKV/pb/raftstore;raftstorepbb\x06proto3"
 
 var (
-	file_recoverypb_proto_rawDescOnce sync.Once
-	file_recoverypb_proto_rawDescData []byte
+	file_raftstore_recovery_proto_rawDescOnce sync.Once
+	file_raftstore_recovery_proto_rawDescData []byte
 )
 
-func file_recoverypb_proto_rawDescGZIP() []byte {
-	file_recoverypb_proto_rawDescOnce.Do(func() {
-		file_recoverypb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_recoverypb_proto_rawDesc), len(file_recoverypb_proto_rawDesc)))
+func file_raftstore_recovery_proto_rawDescGZIP() []byte {
+	file_raftstore_recovery_proto_rawDescOnce.Do(func() {
+		file_raftstore_recovery_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_raftstore_recovery_proto_rawDesc), len(file_raftstore_recovery_proto_rawDesc)))
 	})
-	return file_recoverypb_proto_rawDescData
+	return file_raftstore_recovery_proto_rawDescData
 }
 
-var file_recoverypb_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_recoverypb_proto_goTypes = []any{
-	(*ReplicaLocalState)(nil), // 0: pb.ReplicaLocalState
-	(*RaftProgress)(nil),      // 1: pb.RaftProgress
-	(RegionReplicaState)(0),   // 2: pb.RegionReplicaState
-	(*RegionDescriptor)(nil),  // 3: pb.RegionDescriptor
+var file_raftstore_recovery_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_raftstore_recovery_proto_goTypes = []any{
+	(*ReplicaLocalState)(nil), // 0: nokv.raftstore.v1.ReplicaLocalState
+	(*RaftProgress)(nil),      // 1: nokv.raftstore.v1.RaftProgress
+	(RegionReplicaState)(0),   // 2: nokv.raftstore.v1.RegionReplicaState
+	(*RegionDescriptor)(nil),  // 3: nokv.raftstore.v1.RegionDescriptor
 }
-var file_recoverypb_proto_depIdxs = []int32{
-	2, // 0: pb.ReplicaLocalState.state:type_name -> pb.RegionReplicaState
-	3, // 1: pb.ReplicaLocalState.descriptor:type_name -> pb.RegionDescriptor
+var file_raftstore_recovery_proto_depIdxs = []int32{
+	2, // 0: nokv.raftstore.v1.ReplicaLocalState.state:type_name -> nokv.raftstore.v1.RegionReplicaState
+	3, // 1: nokv.raftstore.v1.ReplicaLocalState.descriptor:type_name -> nokv.raftstore.v1.RegionDescriptor
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -297,27 +297,27 @@ var file_recoverypb_proto_depIdxs = []int32{
 	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_recoverypb_proto_init() }
-func file_recoverypb_proto_init() {
-	if File_recoverypb_proto != nil {
+func init() { file_raftstore_recovery_proto_init() }
+func file_raftstore_recovery_proto_init() {
+	if File_raftstore_recovery_proto != nil {
 		return
 	}
-	file_descriptorpb_proto_init()
+	file_raftstore_descriptor_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_recoverypb_proto_rawDesc), len(file_recoverypb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raftstore_recovery_proto_rawDesc), len(file_raftstore_recovery_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_recoverypb_proto_goTypes,
-		DependencyIndexes: file_recoverypb_proto_depIdxs,
-		MessageInfos:      file_recoverypb_proto_msgTypes,
+		GoTypes:           file_raftstore_recovery_proto_goTypes,
+		DependencyIndexes: file_raftstore_recovery_proto_depIdxs,
+		MessageInfos:      file_raftstore_recovery_proto_msgTypes,
 	}.Build()
-	File_recoverypb_proto = out.File
-	file_recoverypb_proto_goTypes = nil
-	file_recoverypb_proto_depIdxs = nil
+	File_raftstore_recovery_proto = out.File
+	file_raftstore_recovery_proto_goTypes = nil
+	file_raftstore_recovery_proto_depIdxs = nil
 }

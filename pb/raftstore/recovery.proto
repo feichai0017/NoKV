@@ -1,11 +1,11 @@
 // Use scripts/gen.sh to generate .pb.go files.
 syntax = "proto3";
 
-package pb;
+package nokv.raftstore.v1;
 
-import "descriptorpb.proto";
+import "raftstore/descriptor.proto";
 
-option go_package = "github.com/feichai0017/NoKV/pb";
+option go_package = "github.com/feichai0017/NoKV/pb/raftstore;raftstorepb";
 
 message ReplicaLocalState {
   uint64 region_id = 1;
