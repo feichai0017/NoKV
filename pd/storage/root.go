@@ -59,12 +59,7 @@ func (s *RootStore) SaveRegion(meta localmeta.RegionMeta) error {
 		return err
 	}
 	desc := descriptor.FromRegionMeta(meta, state.ClusterEpoch+1)
-	commit, err := s.root.Append(rootpkg.Event{
-		Kind: rootpkg.EventKindRegionDescriptorPublished,
-		RegionDescriptor: &rootpkg.RegionDescriptorRecord{
-			Descriptor: desc,
-		},
-	})
+	commit, err := s.root.Append(rootpkg.RegionDescriptorPublished(desc))
 	if err != nil {
 		return err
 	}
@@ -84,10 +79,7 @@ func (s *RootStore) DeleteRegion(regionID uint64) error {
 	if s == nil || regionID == 0 {
 		return nil
 	}
-	commit, err := s.root.Append(rootpkg.Event{
-		Kind:          rootpkg.EventKindRegionTombstoned,
-		RegionRemoval: &rootpkg.RegionRemoval{RegionID: regionID},
-	})
+	commit, err := s.root.Append(rootpkg.RegionTombstoned(regionID))
 	if err != nil {
 		return err
 	}
