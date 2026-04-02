@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,12 +26,12 @@ type fakeStorage struct {
 	lastTS      uint64
 }
 
-func (f *fakeStorage) PublishRegionDescriptor(meta localmeta.RegionMeta) error {
+func (f *fakeStorage) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 	f.updateCalls++
 	if f.updateErr != nil {
 		return f.updateErr
 	}
-	if meta.ID == 0 {
+	if desc.RegionID == 0 {
 		return errors.New("invalid region id")
 	}
 	return nil
