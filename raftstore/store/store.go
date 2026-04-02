@@ -46,6 +46,7 @@ type schedulerRuntime struct {
 	pending       map[operationKey]struct{}
 	lastApply     map[operationKey]time.Time
 	regionUpdates map[uint64]regionEvent
+	nextRegionSeq uint64
 	dropped       uint64
 	degraded      bool
 	lastError     string

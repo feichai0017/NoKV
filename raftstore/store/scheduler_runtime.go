@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ type regionEvent struct {
 	kind     regionEventKind
 	regionID uint64
 	meta     localmeta.RegionMeta
+	seq      uint64
 }
 
 func (s *Store) schedulerClient() SchedulerClient {
@@ -208,6 +210,8 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	if s.sched.regionUpdates == nil {
 		s.sched.regionUpdates = make(map[uint64]regionEvent)
 	}
+	s.sched.nextRegionSeq++
+	ev.seq = s.sched.nextRegionSeq
 	s.sched.regionUpdates[ev.regionID] = ev
 	signal := s.sched.regionSignal
 	s.sched.mu.Unlock()
@@ -235,6 +239,7 @@ func (s *Store) flushRegionUpdates() {
 	}
 	clear(s.sched.regionUpdates)
 	s.sched.mu.Unlock()
+	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
 
 	ctx := s.runtimeContext()
 	for _, ev := range pending {

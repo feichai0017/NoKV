@@ -131,7 +131,7 @@ func (s *Service) GetRegionByKey(_ context.Context, req *pb.GetRegionByKeyReques
 		return &pb.GetRegionByKeyResponse{NotFound: true}, nil
 	}
 	return &pb.GetRegionByKeyResponse{
-		Region:   regionMetaToPB(desc.ToRegionMeta()),
+		Region:   descriptorToPB(desc),
 		NotFound: false,
 	}, nil
 }
@@ -218,17 +218,17 @@ func pbToRegionMeta(meta *pb.RegionMeta) localmeta.RegionMeta {
 	return out
 }
 
-func regionMetaToPB(meta localmeta.RegionMeta) *pb.RegionMeta {
+func descriptorToPB(desc descriptor.Descriptor) *pb.RegionMeta {
 	out := &pb.RegionMeta{
-		Id:               meta.ID,
-		StartKey:         append([]byte(nil), meta.StartKey...),
-		EndKey:           append([]byte(nil), meta.EndKey...),
-		EpochVersion:     meta.Epoch.Version,
-		EpochConfVersion: meta.Epoch.ConfVersion,
+		Id:               desc.RegionID,
+		StartKey:         append([]byte(nil), desc.StartKey...),
+		EndKey:           append([]byte(nil), desc.EndKey...),
+		EpochVersion:     desc.Epoch.Version,
+		EpochConfVersion: desc.Epoch.ConfVersion,
 	}
-	if len(meta.Peers) > 0 {
-		out.Peers = make([]*pb.RegionPeer, 0, len(meta.Peers))
-		for _, p := range meta.Peers {
+	if len(desc.Peers) > 0 {
+		out.Peers = make([]*pb.RegionPeer, 0, len(desc.Peers))
+		for _, p := range desc.Peers {
 			out.Peers = append(out.Peers, &pb.RegionPeer{
 				StoreId: p.StoreID,
 				PeerId:  p.PeerID,

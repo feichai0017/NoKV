@@ -149,7 +149,9 @@ func TestStoreSchedulerPeriodicHeartbeats(t *testing.T) {
 
 func TestStoreProposeSplitApplies(t *testing.T) {
 	storeID := uint64(11)
+	sink := newTestSchedulerSink()
 	rs := NewStore(Config{
+		Scheduler:         sink,
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -168,6 +170,8 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 	require.NoError(t, err)
 	defer rs.StopPeer(parentPeer.ID())
 	require.NoError(t, parentPeer.Campaign())
+	require.Eventually(t, func() bool { return len(sink.RegionSnapshot()) >= 1 }, time.Second, 10*time.Millisecond)
+	sink.ResetHistory()
 
 	childMeta := localmeta.RegionMeta{
 		ID:       3001,
@@ -189,11 +193,19 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 	childUpdated, ok := rs.RegionMetaByID(childMeta.ID)
 	require.True(t, ok)
 	require.Equal(t, []byte("m"), childUpdated.StartKey)
+	require.Eventually(t, func() bool {
+		return hasSchedulerEventSubsequence(sink.EventHistory(),
+			schedulerEvent{kind: "publish", regionID: parentMeta.ID},
+			schedulerEvent{kind: "publish", regionID: childMeta.ID},
+		)
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestStoreProposeMergeApplies(t *testing.T) {
 	storeID := uint64(12)
+	sink := newTestSchedulerSink()
 	rs := NewStore(Config{
+		Scheduler:         sink,
 		PeerBuilder:       testPeerBuilder(storeID),
 		StoreID:           storeID,
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -225,6 +237,8 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 	require.NoError(t, err)
 	defer rs.StopPeer(sourcePeer.ID())
 	require.NoError(t, sourcePeer.Campaign())
+	require.Eventually(t, func() bool { return len(sink.RegionSnapshot()) >= 2 }, time.Second, 10*time.Millisecond)
+	sink.ResetHistory()
 
 	require.NoError(t, rs.ProposeMerge(parentMeta.ID, sourceMeta.ID))
 
@@ -242,6 +256,28 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 	if peer, exists := rs.Peer(sourceMeta.Peers[0].PeerID); exists {
 		rs.StopPeer(peer.ID())
 	}
+	require.Eventually(t, func() bool {
+		return hasSchedulerEventSubsequence(sink.EventHistory(),
+			schedulerEvent{kind: "publish", regionID: parentMeta.ID},
+			schedulerEvent{kind: "remove", regionID: sourceMeta.ID},
+		)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func hasSchedulerEventSubsequence(history []schedulerEvent, want ...schedulerEvent) bool {
+	if len(want) == 0 {
+		return true
+	}
+	idx := 0
+	for _, got := range history {
+		if got == want[idx] {
+			idx++
+			if idx == len(want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestStoreSplitMergeLifecycle(t *testing.T) {

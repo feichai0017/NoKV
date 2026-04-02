@@ -101,12 +101,12 @@ func TestRestorePDRegionsFromLocalSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, loaded)
 
-	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	desc, ok := cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.True(t, ok)
-	require.Equal(t, uint64(10), meta.ID)
-	meta, ok = cluster.GetRegionByKey([]byte("z"))
+	require.Equal(t, uint64(10), desc.RegionID)
+	desc, ok = cluster.GetRegionDescriptorByKey([]byte("z"))
 	require.True(t, ok)
-	require.Equal(t, uint64(20), meta.ID)
+	require.Equal(t, uint64(20), desc.RegionID)
 }
 
 func TestRunPDCmdReloadsPersistedRegionCatalog(t *testing.T) {
@@ -163,10 +163,10 @@ func TestRestorePDRegionsRejectsDivergentOverlap(t *testing.T) {
 	loaded, err := pdstorage.RestoreDescriptors(cluster, snapshot)
 	require.Error(t, err)
 	require.Equal(t, 1, loaded)
-	meta, ok := cluster.GetRegionByKey([]byte("b"))
+	desc, ok := cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.True(t, ok)
-	require.Equal(t, uint64(10), meta.ID)
-	_, ok = cluster.GetRegionByKey([]byte("x"))
+	require.Equal(t, uint64(10), desc.RegionID)
+	_, ok = cluster.GetRegionDescriptorByKey([]byte("x"))
 	require.False(t, ok)
 }
 
