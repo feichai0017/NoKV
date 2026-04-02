@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"testing"
 
@@ -84,11 +85,11 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 			ID:       11,
 			StartKey: []byte(""),
 			EndKey:   []byte("m"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
-			Peers: []localmeta.PeerMeta{
+			Peers: []metaregion.Peer{
 				{StoreID: 1, PeerID: 101},
 			},
 		}),
@@ -109,7 +110,7 @@ func TestServiceRemoveRegion(t *testing.T) {
 			ID:       11,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
@@ -137,7 +138,7 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 			ID:       1,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     2,
 				ConfVersion: 2,
 			},
@@ -150,7 +151,7 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 			ID:       1,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 2,
 			},
@@ -164,7 +165,7 @@ func TestServiceRegionHeartbeatRejectsStaleAndOverlap(t *testing.T) {
 			ID:       2,
 			StartKey: []byte("l"),
 			EndKey:   []byte("z"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
@@ -223,11 +224,11 @@ func TestServiceStoreHeartbeatReturnsLeaderTransferHint(t *testing.T) {
 			ID:       100,
 			StartKey: []byte(""),
 			EndKey:   []byte("z"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
-			Peers: []localmeta.PeerMeta{
+			Peers: []metaregion.Peer{
 				{StoreID: 1, PeerID: 101},
 				{StoreID: 2, PeerID: 201},
 			},
@@ -267,7 +268,7 @@ func TestServicePersistsRegionCatalog(t *testing.T) {
 			ID:       42,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
@@ -291,7 +292,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 			ID:       8,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
@@ -306,7 +307,7 @@ func TestServiceRegionCatalogPersistenceErrors(t *testing.T) {
 			ID:       8,
 			StartKey: []byte("a"),
 			EndKey:   []byte("m"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     2,
 				ConfVersion: 1,
 			},

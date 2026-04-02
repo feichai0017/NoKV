@@ -1,6 +1,7 @@
 package view
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
@@ -33,13 +34,13 @@ func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 		ID:       1,
 		StartKey: []byte(""),
 		EndKey:   []byte("m"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 	}, 0), now))
 	require.NoError(t, v.UpsertAt(descriptor.FromRegionMeta(localmeta.RegionMeta{
 		ID:       2,
 		StartKey: []byte("m"),
 		EndKey:   []byte(""),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 	}, 0), now))
 
 	got, ok := v.LookupDescriptor([]byte("a"))
@@ -58,7 +59,7 @@ func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 		ID:       2,
 		StartKey: []byte("m"),
 		EndKey:   []byte(""),
-		Epoch:    localmeta.RegionEpoch{Version: 0, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 0, ConfVersion: 1},
 	}, 0), now)
 	require.ErrorIs(t, err, ErrRegionHeartbeatStale)
 
@@ -66,7 +67,7 @@ func TestRegionDirectoryViewLookupAndValidation(t *testing.T) {
 		ID:       3,
 		StartKey: []byte("l"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 	}, 0), now)
 	require.ErrorIs(t, err, ErrRegionRangeOverlap)
 }

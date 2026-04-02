@@ -1,6 +1,7 @@
 package storage
 
 import (
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootpkg "github.com/feichai0017/NoKV/meta/root"
 	rootlocal "github.com/feichai0017/NoKV/meta/root/local"
 	"github.com/feichai0017/NoKV/raftstore/descriptor"
@@ -22,15 +23,15 @@ func TestRootStorePersistsRegionsAndAllocator(t *testing.T) {
 		ID:       11,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		Peers: []localmeta.PeerMeta{
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	require.NoError(t, store.SaveAllocatorState(123, 456))
@@ -65,11 +66,11 @@ func TestRootStoreDeleteRegion(t *testing.T) {
 		ID:       7,
 		StartKey: []byte("x"),
 		EndKey:   []byte("z"),
-		Epoch: localmeta.RegionEpoch{
+		Epoch: metaregion.Epoch{
 			Version:     1,
 			ConfVersion: 1,
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}, 0)))
 	require.NoError(t, store.TombstoneRegion(7))
 
@@ -96,11 +97,11 @@ func TestRootStoreSkipsDuplicateRegionDescriptorHeartbeat(t *testing.T) {
 		ID:       21,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
@@ -121,14 +122,14 @@ func TestRootStoreEmitsPeerAddedEvent(t *testing.T) {
 		ID:       31,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
-	meta.Peers = append(meta.Peers, localmeta.PeerMeta{StoreID: 2, PeerID: 201})
+	meta.Peers = append(meta.Peers, metaregion.Peer{StoreID: 2, PeerID: 201})
 	meta.Epoch.ConfVersion = 2
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 
@@ -152,12 +153,12 @@ func TestRootStoreEmitsPeerRemovedEvent(t *testing.T) {
 		ID:       41,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 2},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 2},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 			{StoreID: 2, PeerID: 201},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(meta, 0)))
 	meta.Peers = meta.Peers[:1]
@@ -183,11 +184,11 @@ func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
 		ID:       51,
 		StartKey: []byte("a"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(parent, 0)))
 
@@ -199,16 +200,16 @@ func TestRootStoreEmitsSplitCommittedEvent(t *testing.T) {
 		ID:       52,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	childDesc := descriptor.FromRegionMeta(child, 0)
 	childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
 		RegionID: 51,
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		Kind:     descriptor.LineageKindSplitParent,
 	})
 	require.NoError(t, store.PublishRegionDescriptor(childDesc))
@@ -233,21 +234,21 @@ func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
 		ID:       61,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 101},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	right := localmeta.RegionMeta{
 		ID:       62,
 		StartKey: []byte("m"),
 		EndKey:   []byte("z"),
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers: []localmeta.PeerMeta{
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers: []metaregion.Peer{
 			{StoreID: 1, PeerID: 102},
 		},
-		State: localmeta.RegionStateRunning,
+		State: metaregion.ReplicaStateRunning,
 	}
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(left, 0)))
 	require.NoError(t, store.PublishRegionDescriptor(descriptor.FromRegionMeta(right, 0)))
@@ -257,7 +258,7 @@ func TestRootStoreEmitsRegionMergedEvent(t *testing.T) {
 	mergedDesc := descriptor.FromRegionMeta(left, 0)
 	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
 		RegionID: 62,
-		Epoch:    localmeta.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
 		Kind:     descriptor.LineageKindMergeSource,
 	})
 	require.NoError(t, store.PublishRegionDescriptor(mergedDesc))

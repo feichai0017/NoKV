@@ -7,6 +7,7 @@ import (
 	"time"
 
 	metacodec "github.com/feichai0017/NoKV/meta/codec"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -68,7 +69,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 			ID:       11,
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
-			Epoch: localmeta.RegionEpoch{
+			Epoch: metaregion.Epoch{
 				Version:     1,
 				ConfVersion: 1,
 			},
